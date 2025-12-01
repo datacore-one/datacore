@@ -35,18 +35,17 @@ cd ~/Data
 Copy template files to create your local configuration:
 
 ```bash
-# Root configuration
-cp CLAUDE.template.md CLAUDE.md
+# Installation manifest
 cp install.yaml.example install.yaml
-
-# Personal space configuration
-cp 0-personal/CLAUDE.template.md 0-personal/CLAUDE.md
 
 # GTD org files
 cp 0-personal/org/inbox.org.example 0-personal/org/inbox.org
 cp 0-personal/org/next_actions.org.example 0-personal/org/next_actions.org
 cp 0-personal/org/someday.org.example 0-personal/org/someday.org
 cp 0-personal/org/habits.org.example 0-personal/org/habits.org
+
+# Build CLAUDE.md from layers (see Layered Context Pattern below)
+python .datacore/lib/context_merge.py rebuild --path .
 ```
 
 ### Step 3: Configure install.yaml
@@ -74,9 +73,51 @@ modules:
   # - trading  # Uncomment to enable trading module
 ```
 
-### Step 4: Personalize CLAUDE.md
+### Step 4: Personalize Context (Layered Pattern)
 
-Edit `CLAUDE.md` to add your context:
+Datacore uses a **layered context pattern** (DIP-0002) for all configuration files:
+
+| Layer | Suffix | Purpose | Tracked |
+|-------|--------|---------|---------|
+| PUBLIC | `.base.md` | Generic methodology (PRable to upstream) | Yes |
+| ORG | `.org.md` | Organization-wide customizations | Yes (in fork) |
+| TEAM | `.team.md` | Team-specific additions | Optional |
+| PRIVATE | `.local.md` | Personal notes (never shared) | No |
+
+**To customize**, create a `.local.md` file with your personal additions:
+
+```bash
+# Create your private layer
+cat > CLAUDE.local.md << 'EOF'
+## My Focus Areas
+
+- **Trading**: Crypto perpetuals, momentum strategies
+- **Side projects**: AI tools, personal automation
+- **Health**: Longevity research, biometrics
+
+## Personal Preferences
+
+- Prefer concise communication
+- Morning focus time: 6-10am
+EOF
+
+# Rebuild composed CLAUDE.md
+python .datacore/lib/context_merge.py rebuild --path .
+```
+
+**To contribute improvements**, edit `.base.md` and submit PR:
+
+```bash
+# Make a generic improvement
+vim CLAUDE.base.md
+
+# Commit and PR to upstream
+git add CLAUDE.base.md
+git commit -m "Improve GTD workflow documentation"
+git push && gh pr create
+```
+
+Edit your context layers:
 
 1. **Root CLAUDE.md**: Add any personal workflows or system modifications
 2. **0-personal/CLAUDE.md**: Define your focus areas:
