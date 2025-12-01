@@ -113,10 +113,13 @@ cp install.yaml.example install.yaml
 
 ## Documentation
 
-- [docs/](docs/) - Full documentation
-  - [Commands Reference](docs/commands.md)
-  - [Agents Reference](docs/agents.md)
-  - [Modules](docs/modules.md)
+Documentation is part of the knowledge base at `0-personal/notes/pages/datacore-docs/`:
+
+- [Commands Reference](0-personal/notes/pages/datacore-docs/commands.md)
+- [Agents Reference](0-personal/notes/pages/datacore-docs/agents.md)
+- [Modules](0-personal/notes/pages/datacore-docs/modules.md)
+
+Open with Obsidian for wiki-link navigation, or browse markdown directly.
 
 ## Requirements
 
