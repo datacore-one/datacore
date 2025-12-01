@@ -24,9 +24,28 @@ Open an issue at [github.com/datacore-one/datacore/issues](https://github.com/da
 ### Develop Modules
 
 Create specialized modules for specific domains:
-- Clone to `.datacore/modules/[your-module]`
-- Follow the module structure (agents/, commands/, docs/)
-- Submit to datacore-one organization
+
+**Small improvements to existing modules:**
+1. Fork the module repo
+2. Make improvements
+3. Submit PR
+
+**Register a new module:**
+1. Create module structure (see `.datacore/CATALOG.md`)
+2. Use the `module-registrar` agent: `:AI:module:register:`
+3. Agent creates DIP (for significant changes), repo, and PR
+
+See [DIP-0001](dips/DIP-0001-contribution-model.md) for the full contribution model.
+
+### Significant Changes (DIP Process)
+
+For major changes, submit a Datacore Improvement Proposal:
+1. Copy `dips/DIP-0000-template.md`
+2. Fill in all sections
+3. Submit PR with status: Draft
+4. Iterate based on feedback
+
+See [dips/](dips/) for existing proposals.
 
 ## Privacy Policy
 

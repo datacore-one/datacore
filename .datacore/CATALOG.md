@@ -72,6 +72,7 @@ Modules extend Datacore with specialized functionality. They can be installed in
 | Module | Description | Repo | Visibility |
 |--------|-------------|------|------------|
 | trading | Position management, performance tracking, trading workflows | [datacore-one/datacore-trading](https://github.com/datacore-one/datacore-trading) | Private |
+| campaigns | Landing pages, deployment, analytics, A/B testing | [datacore-one/datacore-campaigns](https://github.com/datacore-one/datacore-campaigns) | Private |
 
 ### Installing Modules
 
@@ -161,7 +162,6 @@ Planned modules and spaces:
 | research | Module | Academic research workflows | Planned |
 | writing | Module | Long-form content creation | Planned |
 | finance | Module | Personal finance tracking | Planned |
-| campaigns | Module | Marketing campaign management | Draft |
 
 Want to propose a new module? See [DIPs](../dips/README.md).
 
