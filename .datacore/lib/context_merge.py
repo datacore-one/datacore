@@ -4,10 +4,10 @@ Layered Context Merge Utility
 
 Merges context files across permission levels:
 - .base.md   (PUBLIC)  - Generic template, PRable to upstream
+- .space.md  (SPACE)   - Space-specific, tracked in space repo
 - .local.md  (PRIVATE) - Personal customizations, always gitignored
 
 Future extensions (not currently used):
-- .org.md    (ORG)     - Organization customizations
 - .team.md   (TEAM)    - Team-specific additions
 
 Output: Composed .md file (gitignored, read at runtime)
@@ -22,10 +22,9 @@ from pathlib import Path
 from typing import Optional
 
 # Layer order (later layers extend/override earlier)
-# Currently only PUBLIC and PRIVATE are actively used
 LAYERS = [
     ("base", "PUBLIC"),    # Generic template - validated for private content
-    ("org", "ORG"),        # Future: org customizations
+    ("space", "SPACE"),    # Space-specific - tracked in space repo
     ("team", "TEAM"),      # Future: team additions
     ("local", "PRIVATE"),  # Personal - always gitignored, never validated
 ]
@@ -71,7 +70,7 @@ def merge_context(
     # Header
     if include_markers:
         content_parts.append(f"<!-- AUTO-GENERATED: Do not edit directly -->\n")
-        content_parts.append(f"<!-- Source: {name}.base.md + .org.md + .team.md + .local.md -->\n")
+        content_parts.append(f"<!-- Source: {name}.base.md + .space.md + .local.md -->\n")
         content_parts.append(f"<!-- Regenerate: datacore context rebuild -->\n\n")
 
     for layer_suffix, layer_level in LAYERS:

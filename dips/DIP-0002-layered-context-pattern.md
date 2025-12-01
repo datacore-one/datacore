@@ -16,7 +16,7 @@
 
 ## Summary
 
-A universal pattern for managing context files (CLAUDE.md, agents, commands) with clear separation between PUBLIC (shareable) and PRIVATE (personal) content. Facilitates contributions while protecting privacy.
+A universal pattern for managing context files (CLAUDE.md, agents, commands) with three layers: PUBLIC (upstream contributions), SPACE (space-specific), and PRIVATE (personal). Facilitates contributions while protecting privacy.
 
 ## Motivation
 
@@ -30,21 +30,21 @@ Current approach mixes public and private content, making contribution difficult
 
 ## Specification
 
-### Core Layers (Currently Implemented)
+### Core Layers
 
 | Level | Suffix | Visibility | Git Tracking | PR Target |
 |-------|--------|------------|--------------|-----------|
 | PUBLIC | `.base.md` | Everyone | Tracked | Upstream repo |
+| SPACE | `.space.md` | Space members | Tracked in space repo | None |
 | PRIVATE | `.local.md` | Only user | Never | None |
 
 ### Future Layers (Reserved)
 
 | Level | Suffix | Visibility | Git Tracking | PR Target |
 |-------|--------|------------|--------------|-----------|
-| ORG | `.org.md` | Organization | Tracked in fork | Org's fork |
 | TEAM | `.team.md` | Team members | Optional | Team repo |
 
-> **Note**: ORG and TEAM layers are reserved for future use when spaces support multiple teams.
+> **Note**: TEAM layer is reserved for future use when spaces support multiple teams.
 
 ### File Structure
 
@@ -52,7 +52,8 @@ Every configurable component follows this pattern:
 
 ```
 [component]/
-├── [NAME].base.md          # PUBLIC - generic template (tracked)
+├── [NAME].base.md          # PUBLIC - generic template (tracked upstream)
+├── [NAME].space.md         # SPACE - space customizations (tracked in space)
 ├── [NAME].local.md         # PRIVATE - personal notes (gitignored)
 └── [NAME].md               # Composed output (gitignored)
 ```
@@ -63,7 +64,8 @@ Files are merged in order (later extends earlier):
 
 ```
 [NAME].base.md      # Layer 1: System defaults (PUBLIC)
-  + [NAME].local.md # Layer 2: Personal notes (PRIVATE)
+  + [NAME].space.md # Layer 2: Space customizations (SPACE)
+  + [NAME].local.md # Layer 3: Personal notes (PRIVATE)
   ─────────────────
   = [NAME].md       # Output: Complete context
 ```
@@ -104,8 +106,9 @@ Standard `.gitignore` for all components:
 # Composed output - generated at runtime
 CLAUDE.md
 
-# PUBLIC layer is tracked:
-# *.base.md
+# PUBLIC and SPACE layers are tracked:
+# *.base.md   (tracked - PRable to upstream)
+# *.space.md  (tracked in space repo)
 ```
 
 ### Contribution Flow
@@ -114,6 +117,8 @@ CLAUDE.md
 User improves something
         │
         ├─► Generic improvement ──► Edit .base.md ──► PR to upstream
+        │
+        ├─► Space-specific ──► Edit .space.md ──► Commit to space repo
         │
         └─► Personal ──► Edit .local.md ──► Stays local
 ```
@@ -132,6 +137,8 @@ When `.base.md` changes:
 .datacore/modules/trading/
 ├── CLAUDE.base.md              # Generic trading methodology (PUBLIC)
 │   └── "Position sizing rules, risk management..."
+├── CLAUDE.space.md             # Space trading focus (SPACE)
+│   └── "We focus on crypto perpetuals..."
 ├── CLAUDE.local.md             # Personal settings (PRIVATE)
 │   └── "My risk tolerance: 2% per trade..."
 └── CLAUDE.md                   # Composed (gitignored)
@@ -139,6 +146,7 @@ When `.base.md` changes:
 
 ├── agents/
 │   ├── position-manager.base.md    # Generic agent (PUBLIC)
+│   ├── position-manager.space.md   # Space risk limits (SPACE)
 │   ├── position-manager.local.md   # My thresholds (PRIVATE)
 │   └── position-manager.md         # Composed
 ```
@@ -152,6 +160,7 @@ def merge_context(component_path: str, name: str = "CLAUDE") -> str:
     """Merge layered context files into single output."""
     layers = [
         f"{name}.base.md",   # PUBLIC
+        f"{name}.space.md",  # SPACE
         f"{name}.local.md",  # PRIVATE
     ]
 
@@ -184,10 +193,11 @@ datacore context trace "Position Sizing"
 
 ## Rationale
 
-**Why two levels (PUBLIC/PRIVATE)?**
-- Simplest model that solves the core problem
-- Clear mental model: "shareable" vs "personal"
-- ORG/TEAM layers reserved for future multi-team spaces
+**Why three levels (PUBLIC/SPACE/PRIVATE)?**
+- PUBLIC: Generic improvements that benefit everyone → PR upstream
+- SPACE: Space-specific context visible to all space members → tracked in space repo
+- PRIVATE: Personal customizations → never tracked
+- TEAM layer reserved for future multi-team spaces
 
 **Why file-based (not section-based)?**
 - Easier to enforce gitignore rules
