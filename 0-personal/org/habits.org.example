@@ -1,0 +1,23 @@
+#+TITLE: Habits
+#+FILETAGS: :habits:
+
+* Daily Habits
+** TODO Morning routine
+SCHEDULED: <2025-01-01 Wed .+1d>
+:PROPERTIES:
+:STYLE: habit
+:END:
+
+** TODO Evening review
+SCHEDULED: <2025-01-01 Wed .+1d>
+:PROPERTIES:
+:STYLE: habit
+:END:
+
+* Weekly Habits
+** TODO Weekly review
+SCHEDULED: <2025-01-05 Sun .+1w>
+:PROPERTIES:
+:STYLE: habit
+:END:
+

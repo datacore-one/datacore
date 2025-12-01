@@ -31,12 +31,14 @@ CLAUDE.md
 # -----------------------------------------------------------------------------
 # ALL ORG-MODE FILES AND FOLDERS (tasks, priorities, personal commitments)
 # -----------------------------------------------------------------------------
-# The entire org folder is private (contains scripts, templates, md files too)
-0-personal/org/
+# Org files contain personal tasks and priorities
 **/org/*.org
 **/org/*.org~
 **/org/*_archive
 **/*.backup*
+# Keep README and .example templates
+!**/org/README.md
+!**/org/*.example
 
 # -----------------------------------------------------------------------------
 # ALL PERSONAL NOTES CONTENT
