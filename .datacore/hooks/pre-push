@@ -1,0 +1,84 @@
+#!/bin/bash
+#
+# Pre-push hook for Datacore layered context validation (DIP-0002)
+#
+# Validates that all .base.md files being pushed don't contain private content.
+# This is a safety net — pre-commit catches most cases, but this covers
+# commits made with --no-verify or in other environments.
+#
+# Installation:
+#   ln -sf ../../.datacore/hooks/pre-push .git/hooks/pre-push
+#
+
+# Run git-lfs pre-push if available
+if command -v git-lfs >/dev/null 2>&1; then
+    git lfs pre-push "$@"
+    LFS_EXIT=$?
+    if [ $LFS_EXIT -ne 0 ]; then
+        exit $LFS_EXIT
+    fi
+fi
+
+# Find context_merge.py
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+MERGE_SCRIPT=""
+if [ -f "$REPO_ROOT/.datacore/lib/context_merge.py" ]; then
+    MERGE_SCRIPT="$REPO_ROOT/.datacore/lib/context_merge.py"
+elif [ -n "$DATACORE_ROOT" ] && [ -f "$DATACORE_ROOT/.datacore/lib/context_merge.py" ]; then
+    MERGE_SCRIPT="$DATACORE_ROOT/.datacore/lib/context_merge.py"
+elif [ -f "$HOME/Data/.datacore/lib/context_merge.py" ]; then
+    MERGE_SCRIPT="$HOME/Data/.datacore/lib/context_merge.py"
+fi
+
+if [ -z "$MERGE_SCRIPT" ]; then
+    # No script found, skip validation
+    exit 0
+fi
+
+# Read push info from stdin
+while read local_ref local_sha remote_ref remote_sha; do
+    if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+        # Branch deletion, skip
+        continue
+    fi
+
+    if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+        # New branch — check all commits
+        RANGE="$local_sha"
+    else
+        RANGE="$remote_sha..$local_sha"
+    fi
+
+    # Find .base.md files changed in the push range
+    BASE_FILES=$(git diff --name-only "$RANGE" 2>/dev/null | grep -E '\.base\.md$' || true)
+
+    if [ -z "$BASE_FILES" ]; then
+        continue
+    fi
+
+    echo "Pre-push: Validating .base.md files for private content..."
+
+    FAILED=0
+    for file in $BASE_FILES; do
+        if [ ! -f "$REPO_ROOT/$file" ]; then
+            continue
+        fi
+        dir=$(dirname "$file")
+        base_name=$(basename "$file" | sed 's/\.base\.md$//')
+
+        if ! python "$MERGE_SCRIPT" validate --path "$REPO_ROOT/$dir" --name "$base_name" 2>&1; then
+            FAILED=1
+        fi
+    done
+
+    if [ $FAILED -eq 1 ]; then
+        echo ""
+        echo "Push blocked: Private content detected in PUBLIC layer (.base.md)"
+        echo "Fix the issues and recommit before pushing"
+        exit 1
+    fi
+
+    echo "Pre-push validation passed"
+done
+
+exit 0

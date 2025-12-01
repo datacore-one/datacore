@@ -1,0 +1,32 @@
+meta:
+  name: "Jane's Datacore"
+  root: ~/Data
+  version: 1.0.0
+  role: pm  # project-manager
+
+user:
+  name: Jane Doe
+  email: jane@example.com
+  github: janedoe
+
+# Root-level modules (PM doesn't need trading)
+modules: []
+
+# Personal space (tracked in root repo)
+personal:
+  path: 0-personal
+  modules: []
+
+# Team spaces
+spaces:
+  teamspace:
+    repo: datacore-one/team-space
+    path: 1-teamspace
+    modules:
+      - repo: datacore-one/datacore-campaigns
+        path: .datacore/modules/campaigns
+        permission: read
+    projects:
+      - repo: your-org/project-alpha
+        path: 2-projects/project-alpha
+        primary: true  # Main focus project

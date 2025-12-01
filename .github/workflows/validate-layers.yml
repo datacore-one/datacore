@@ -1,0 +1,82 @@
+# Validate Layered Context Pattern (DIP-0002)
+#
+# Ensures PUBLIC layer (.base.md) files don't contain private content
+# before allowing PRs to merge.
+
+name: Validate Layers
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.base.md'
+  push:
+    branches: [main]
+    paths:
+      - '**.base.md'
+
+jobs:
+  validate-layers:
+    name: Validate PUBLIC Layer
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Find changed .base.md files
+        id: changed-files
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            # Get files changed in PR
+            FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | grep '\.base\.md$' || true)
+          else
+            # Get files changed in push
+            FILES=$(git diff --name-only HEAD~1 HEAD | grep '\.base\.md$' || true)
+          fi
+
+          if [ -z "$FILES" ]; then
+            echo "No .base.md files changed"
+            echo "files=" >> $GITHUB_OUTPUT
+          else
+            echo "Changed files:"
+            echo "$FILES"
+            # Convert to single line for output
+            echo "files<<EOF" >> $GITHUB_OUTPUT
+            echo "$FILES" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Validate PUBLIC layers
+        if: steps.changed-files.outputs.files != ''
+        run: |
+          FAILED=0
+
+          while IFS= read -r file; do
+            if [ -z "$file" ]; then
+              continue
+            fi
+
+            echo "Validating: $file"
+            dir=$(dirname "$file")
+            base_name=$(basename "$file" | sed 's/\.base\.md$//')
+
+            # Run validation
+            if ! python .datacore/lib/context_merge.py validate --path "$dir" --name "$base_name"; then
+              FAILED=1
+            fi
+          done <<< "${{ steps.changed-files.outputs.files }}"
+
+          if [ $FAILED -eq 1 ]; then
+            echo ""
+            echo "::error::Private content detected in PUBLIC layer (.base.md)"
+            echo "Move private content to .local.md files before merging"
+            exit 1
+          fi
+
+          echo "All PUBLIC layers validated successfully"

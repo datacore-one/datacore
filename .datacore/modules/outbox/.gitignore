@@ -1,0 +1,21 @@
+# Layered context (DIP-0002)
+CLAUDE.md
+CLAUDE.local.md
+CLAUDE.org.md
+CLAUDE.team.md
+
+# Local overrides
+*.local.md
+*.local.yaml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~

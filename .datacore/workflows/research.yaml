@@ -1,0 +1,57 @@
+# /research workflow
+# Multi-source research — discover, process, synthesize, optionally podcast
+name: research
+description: Multi-source research — discover, process, synthesize, optionally podcast
+command: /research
+version: 1.0.0
+
+phases:
+  - name: discover-sources
+    type: agent
+    invoke: research-orchestrator
+    action: discover
+    description: Fan out to configured sources for topic discovery
+
+  - name: user-select
+    type: interactive
+    description: User selects which sources to process
+
+  - name: process-sources
+    type: agent
+    invoke: knowledge-extractor
+    parallel: true
+    per: selected-source
+    description: Extract knowledge from each selected source
+
+  - name: synthesize
+    type: agent
+    invoke: research-synthesizer
+    description: Cross-source synthesis into unified report
+
+  - name: podcast
+    type: agent
+    invoke: podcast-creator
+    optional: true
+    condition: --podcast flag
+    description: Generate audio overview from research
+
+  - name: knowledge-inject
+    type: tool
+    invoke: datacore.capture
+    per: extracted-artifact
+    description: Capture zettels and literature notes to knowledge base
+
+trigger: manual
+depth_levels:
+  quick:
+    sources: [perplexity]
+    synthesis: inline
+    time: ~30s
+  standard:
+    sources: all-configured
+    synthesis: full-report
+    time: ~5min
+  deep:
+    sources: all-plus-gemini
+    synthesis: comprehensive
+    time: ~15min

@@ -1,0 +1,187 @@
+# Validate PR — DIP-0001 Contribution Pipeline
+#
+# Layer 1: Privacy validation (blocking)
+# Layer 2: Structural validation — tags, modules (blocking)
+# Layer 3: Deep review via pr_review.py (on label, advisory)
+
+name: Validate PR
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    branches: [main]
+
+jobs:
+  # ── Layer 1: Privacy & Context Validation ──────────────────────
+  validate-layers:
+    name: Validate PUBLIC Layers
+    if: >-
+      github.event.action != 'labeled' ||
+      github.event.label.name != 'ready-for-review'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate .base.md layers for private content
+        run: python .datacore/lib/context_merge.py validate --path .
+
+  # ── Layer 2: Structural Validation ─────────────────────────────
+  validate-tags:
+    name: Validate Tags
+    if: >-
+      github.event.action != 'labeled' ||
+      github.event.label.name != 'ready-for-review'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Validate tags
+        run: |
+          if [ -f .datacore/lib/tag_validator.py ]; then
+            python .datacore/lib/tag_validator.py --data-dir .
+          else
+            echo "tag_validator.py not found, skipping"
+          fi
+
+  validate-modules:
+    name: Validate Changed Modules
+    if: >-
+      github.event.action != 'labeled' ||
+      github.event.label.name != 'ready-for-review'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Detect changed modules and validate
+        run: |
+          CHANGED_MODULES=$(git diff --name-only origin/main...HEAD | grep '\.datacore/modules/.*/module\.yaml$' || true)
+          if [ -z "$CHANGED_MODULES" ]; then
+            echo "No module.yaml files changed, skipping module validation"
+            exit 0
+          fi
+          echo "Changed module files:"
+          echo "$CHANGED_MODULES"
+          FAILED=0
+          while IFS= read -r modfile; do
+            if [ -z "$modfile" ]; then
+              continue
+            fi
+            MOD_DIR=$(dirname "$modfile")
+            echo ""
+            echo "Validating module at: $MOD_DIR"
+            if ! python .datacore/lib/validate_module.py "$MOD_DIR"; then
+              FAILED=1
+            fi
+          done <<< "$CHANGED_MODULES"
+          if [ $FAILED -eq 1 ]; then
+            echo "::error::Module validation failed"
+            exit 1
+          fi
+          echo "All changed modules validated successfully"
+
+  # ── Layer 3: Deep Review (on label, advisory) ──────────────────
+  deep-review:
+    name: Deep PR Review
+    if: >-
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'ready-for-review'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Detect PR types from changed files
+        id: detect-types
+        run: |
+          TYPES=""
+          FILES=$(git diff --name-only origin/main...HEAD)
+          if echo "$FILES" | grep -q '\.datacore/modules/'; then
+            TYPES="${TYPES}module,"
+          fi
+          if echo "$FILES" | grep -q 'dips/'; then
+            TYPES="${TYPES}dip,"
+          fi
+          if echo "$FILES" | grep -q 'agents/'; then
+            TYPES="${TYPES}agent,"
+          fi
+          if echo "$FILES" | grep -q 'commands/'; then
+            TYPES="${TYPES}command,"
+          fi
+          if echo "$FILES" | grep -q '\.py$'; then
+            TYPES="${TYPES}python,"
+          fi
+          if echo "$FILES" | grep -q '\.ts$'; then
+            TYPES="${TYPES}typescript,"
+          fi
+          TYPES=$(echo "$TYPES" | sed 's/,$//')
+          echo "types=$TYPES" >> "$GITHUB_OUTPUT"
+
+      - name: Run PR review
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_REPO: ${{ github.repository }}
+          PR_TYPES: ${{ steps.detect-types.outputs.types }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE_B64=$(echo -n "$PR_TITLE" | base64)
+          REVIEW_OUTPUT=$(python .datacore/lib/pr_review.py \
+            --repo "$PR_REPO" \
+            --pr "$PR_NUMBER" \
+            --types "$PR_TYPES" \
+            --title-b64 "$TITLE_B64" \
+            --author "$PR_AUTHOR" 2>&1) || true
+          if [ -z "$REVIEW_OUTPUT" ]; then
+            REVIEW_OUTPUT="Review could not be completed. Please review manually."
+          fi
+          echo "$REVIEW_OUTPUT" > /tmp/review_body.txt
+
+      - name: Post review comment
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment "$PR_NUMBER" --body-file /tmp/review_body.txt

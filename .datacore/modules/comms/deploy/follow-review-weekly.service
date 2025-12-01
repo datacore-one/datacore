@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly follow review
+
+[Service]
+Type=oneshot
+User={{USERNAME}}
+WorkingDirectory=/home/{{USERNAME}}/Data
+ExecStart=/usr/bin/python3 .datacore/modules/comms/lib/run_follow_review.py
+EnvironmentFile=/home/{{USERNAME}}/config/nightshift.env
+TimeoutStartSec=3600

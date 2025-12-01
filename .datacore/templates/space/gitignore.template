@@ -1,0 +1,24 @@
+# Projects are separate repos
+2-projects/
+
+# Secrets, state, and learning (per-installation)
+.datacore/env/
+.datacore/state/
+.datacore/learning/
+
+# Composed context files (generated)
+CLAUDE.md
+SCAFFOLDING.md
+
+# Local layers (private)
+*.local.md
+
+# OS files
+.DS_Store
+**/.DS_Store
+
+# Editor files
+*.swp
+*~
+.idea/
+.vscode/

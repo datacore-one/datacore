@@ -1,0 +1,37 @@
+# Content campaign workflow
+# Quarterly → monthly → daily content pipeline
+name: content-campaign
+description: Quarterly → monthly → daily content pipeline
+version: 1.0.0
+
+phases:
+  - name: strategy
+    type: agent
+    invoke: campaign-planner
+    frequency: quarterly
+    description: Create quarterly campaign strategy with themes and objectives
+
+  - name: calendar
+    type: agent
+    invoke: content-planner
+    frequency: monthly
+    description: Generate monthly content calendar from strategy
+
+  - name: generate
+    type: agent
+    invoke: content-generator
+    frequency: daily
+    description: Generate platform-specific content from calendar
+
+  - name: validate
+    type: agent
+    invoke: voice-enforcer
+    description: Run viral checklist and voice enforcement
+
+  - name: publish
+    type: tool
+    invoke: datacore.comms.approve
+    description: Queue approved content for publishing
+
+trigger: scheduled-habit
+module: comms

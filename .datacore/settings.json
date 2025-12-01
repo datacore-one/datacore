@@ -1,0 +1,110 @@
+{
+  "enabledPlugins": {
+    "ralph-wiggum@claude-plugins-official": true
+  },
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "WebSearch",
+      "WebFetch",
+      "NotebookEdit",
+
+      "Bash(git *)",
+      "Bash(gh *)",
+      "Bash(GIT_LFS_SKIP_SMUDGE=* *)",
+
+      "Bash(python *)",
+      "Bash(python3 *)",
+      "Bash(PYTHONPATH=* python3 *)",
+      "Bash(node *)",
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(pnpm *)",
+      "Bash(bun *)",
+      "Bash(go *)",
+      "Bash(pip *)",
+      "Bash(pip3 *)",
+      "Bash(pyenv *)",
+
+      "Bash(ls *)",
+      "Bash(find *)",
+      "Bash(tree *)",
+      "Bash(du *)",
+      "Bash(wc *)",
+      "Bash(mkdir *)",
+      "Bash(cp *)",
+      "Bash(mv *)",
+      "Bash(ln *)",
+      "Bash(chmod *)",
+      "Bash(touch *)",
+      "Bash(open *)",
+      "Bash(unzip *)",
+
+      "Bash(cat *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(grep *)",
+      "Bash(awk *)",
+      "Bash(sed *)",
+      "Bash(jq *)",
+      "Bash(sort *)",
+      "Bash(paste *)",
+      "Bash(xargs *)",
+      "Bash(tee *)",
+      "Bash(cut *)",
+      "Bash(echo *)",
+
+      "Bash(lsof *)",
+      "Bash(pgrep *)",
+      "Bash(ps *)",
+
+      "Bash(pdftotext *)",
+      "Bash(pdftoppm *)",
+      "Bash(pandoc *)",
+
+      "Bash(date *)",
+      "Bash(/bin/date *)",
+      "Bash(test *)",
+      "Bash(source *)",
+
+      "Bash(for *)",
+      "Bash(while *)",
+      "Bash(if *)",
+      "Bash(cd *)",
+
+      "Bash(./sync*)",
+      "Bash(datacortex *)",
+
+      "mcp__datacore"
+    ],
+    "ask": [
+      "Bash(rm *)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(git reset --hard *)",
+      "Bash(git clean *)",
+      "Bash(git checkout -- *)"
+    ],
+    "deny": []
+  },
+  "enableAllProjectMcpServers": true,
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.datacore/lib/datacore_sync.py sync --quiet 2>&1 | tail -1",
+            "timeout": 300,
+            "statusMessage": "Syncing knowledge database..."
+          }
+        ]
+      }
+    ]
+  }
+}

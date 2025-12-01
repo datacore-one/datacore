@@ -1,0 +1,44 @@
+# Outbox Routing Configuration
+# Place in [space]/4-outbox/_routing.yaml to customize routing for this space
+
+# Default routing rules
+routing:
+  # Archive: content going to permanent storage
+  archive:
+    enabled: true
+    # Override default archive location for this space
+    # location: local  # or "server" (uses global setting if not set)
+
+    # Auto-archive rules (optional)
+    auto_rules:
+      # Example: auto-archive contracts expired > 1 year
+      # - pattern: "legal/contracts/**"
+      #   condition: "expired > 1 year"
+      #   action: archive
+
+  # Delivery: content for external handoff (TBD)
+  delivery:
+    enabled: false
+    # destinations:
+    #   - name: contractor-dropbox
+    #     type: folder
+    #     path: ~/Dropbox/Contractor-Deliveries
+
+  # Publish: content for public release (TBD)
+  publish:
+    enabled: false
+    # channels:
+    #   - name: blog
+    #     type: static-site
+    #     target: ~/Sites/blog/content
+
+  # Dispose: deletion queue (TBD)
+  dispose:
+    enabled: false
+    # retention_days: 30  # Days before permanent deletion
+
+# Notifications
+notify:
+  on_archive: false
+  on_delivery: true
+  on_publish: true

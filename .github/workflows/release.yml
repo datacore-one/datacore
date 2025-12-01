@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate tag matches version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/v}
+          echo "Release version: $TAG"
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          # Extract changes since last tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            CHANGES=$(git log --oneline $PREV_TAG..HEAD --no-merges)
+          else
+            CHANGES=$(git log --oneline -20 --no-merges)
+          fi
+          echo "changes<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## What's Changed
+
+            ${{ steps.notes.outputs.changes }}
+
+            ## Installation
+
+            See [INSTALL.md](INSTALL.md) for setup instructions.

@@ -1,0 +1,33 @@
+---
+title: {{SPACE_NAME}} Knowledge Base
+type: index
+created: {{DATE}}
+---
+
+# Knowledge Base
+
+Shared knowledge using Zettelkasten methodology.
+
+## Sections
+
+| Section | Purpose |
+|---------|---------|
+| [[pages/\|Pages]] | Wiki pages, strategic documents |
+| [[zettel/\|Zettel]] | Atomic concepts |
+| [[literature/\|Literature]] | Source summaries |
+| [[reference/\|Reference]] | People, companies, glossary |
+| [[insights.md\|Insights]] | Strategic observations |
+
+## Entry Points
+
+- **Strategic docs**: Start with pages/
+- **Atomic concepts**: See zettel/
+- **Insights/patterns**: See insights.md
+
+## Adding Knowledge
+
+1. Atomic ideas → `zettel/`
+2. Source summaries → `literature/`
+3. People/orgs → `reference/`
+4. Strategic docs → `pages/`
+5. Insights/patterns → `insights.md`

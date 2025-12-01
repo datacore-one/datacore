@@ -1,0 +1,739 @@
+#!/usr/bin/env python3
+"""
+Credential Manager - Query, search, audit, and rotate credentials.
+
+Per DIP-0018 Credential Management. Provides CLI access to
+.datacore/specs/credential-index.yaml for credential discoverability
+and .datacore/state/credential-index.yaml for rotation tracking.
+
+Usage:
+    python creds.py list                        # List all credentials
+    python creds.py list --category ai-services # Filter by category
+    python creds.py list --tier critical        # Filter by security tier
+    python creds.py list --format json          # JSON output
+    python creds.py show alchemy-sepolia-rpc    # Show credential details
+    python creds.py search "anthropic"          # Search all fields
+    python creds.py audit                       # Run audit checks
+    python creds.py rotate                      # Show overdue credentials
+    python creds.py rotate --all                # Show all credentials
+    python creds.py rotate --credential EXA     # Rotate specific credential
+    python creds.py rotate --bootstrap          # Bootstrap from .env
+    python creds.py rotate --all --format json  # JSON output for MCP/scripts
+"""
+
+import argparse
+import difflib
+import json
+import os
+import re
+import sys
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import yaml
+
+
+@dataclass
+class LocationEntry:
+    path: str
+    var_name: str
+    primary: bool = False
+    note: str = ""
+
+
+@dataclass
+class Credential:
+    id: str
+    name: str
+    type: str
+    security_tier: str
+    category: str
+    provider: str
+    locations: List[LocationEntry]
+    used_by: List[str] = field(default_factory=list)
+    description: str = ""
+    documentation: str = ""
+    note: str = ""
+    status: str = "active"
+    # Extra fields captured but not modeled
+    extra: Dict = field(default_factory=dict)
+
+
+@dataclass
+class AuditIssue:
+    severity: str  # error, warning, info
+    credential_id: str
+    message: str
+
+
+@dataclass
+class AuditResult:
+    issues: List[AuditIssue] = field(default_factory=list)
+    total_credentials: int = 0
+    checked: int = 0
+
+    @property
+    def errors(self) -> List[AuditIssue]:
+        return [i for i in self.issues if i.severity == "error"]
+
+    @property
+    def warnings(self) -> List[AuditIssue]:
+        return [i for i in self.issues if i.severity == "warning"]
+
+
+@dataclass
+class RotationEntry:
+    provider: str
+    provider_url: str
+    env_var: str
+    rotated_at: Optional[str] = None
+    rotated_by: str = "unknown"
+    next_rotation: Optional[str] = None
+    status: str = "unknown"  # active, expired, unknown
+
+    @property
+    def credential(self) -> str:
+        return self.env_var.lower().replace("_", "-")
+
+
+# Known provider patterns for bootstrap detection
+PROVIDER_PATTERNS = {
+    "ANTHROPIC": ("Anthropic", "https://console.anthropic.com/settings/keys"),
+    "OPENAI": ("OpenAI", "https://platform.openai.com/api-keys"),
+    "EXA": ("Exa", "https://dashboard.exa.ai/api-keys"),
+    "SERPAPI": ("SerpAPI", "https://serpapi.com/manage-api-key"),
+    "PERPLEXITY": ("Perplexity", "https://www.perplexity.ai/settings/api"),
+    "POSTHOG": ("PostHog", "https://app.posthog.com/project/settings"),
+    "GAMMA": ("Gamma", "https://gamma.app/settings"),
+    "GEMINI": ("Google Gemini", "https://aistudio.google.com/apikey"),
+    "ETHERSCAN": ("Etherscan", "https://etherscan.io/myapikey"),
+    "ALCHEMY": ("Alchemy", "https://dashboard.alchemy.com/apps"),
+    "APIFRAME": ("Apiframe", "https://apiframe.ai/dashboard"),
+    "LATE": ("Late.dev", "https://late.dev/settings"),
+    "TELEGRAM": ("Telegram", "https://t.me/BotFather"),
+    "DO_": ("DigitalOcean", "https://cloud.digitalocean.com/account/api/tokens"),
+    "XAI": ("x.ai", "https://console.x.ai/"),
+    "X_": ("X / Twitter", "https://developer.x.com/en/portal/dashboard"),
+    "JINA": ("Jina", "https://jina.ai/api-dashboard"),
+    "MIDJOURNEY": ("Discord/Midjourney", "https://discord.com/app"),
+}
+
+ROTATION_DAYS = 90
+
+
+class RotationIndex:
+    """Manages credential rotation state in .datacore/state/credential-index.yaml."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.entries: List[RotationEntry] = []
+        self._index: Dict[str, RotationEntry] = {}
+        self._load()
+
+    def _load(self):
+        if not self.path.exists():
+            return
+        with open(self.path) as f:
+            data = yaml.safe_load(f) or {}
+        for entry in data.get("credentials", []):
+            re = RotationEntry(
+                provider=entry.get("provider", ""),
+                provider_url=entry.get("provider_url", ""),
+                env_var=entry.get("env_var", ""),
+                rotated_at=entry.get("rotated_at"),
+                rotated_by=entry.get("rotated_by", "unknown"),
+                next_rotation=entry.get("next_rotation"),
+                status=entry.get("status", "unknown"),
+            )
+            self.entries.append(re)
+            self._index[re.env_var] = re
+
+    def save(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "version": "1.0",
+            "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "credentials": [
+                {
+                    "credential": e.credential,
+                    "provider": e.provider,
+                    "provider_url": e.provider_url,
+                    "env_var": e.env_var,
+                    "rotated_at": e.rotated_at,
+                    "rotated_by": e.rotated_by,
+                    "next_rotation": e.next_rotation,
+                    "status": e.status,
+                }
+                for e in self.entries
+            ],
+        }
+        with open(self.path, "w") as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+
+    def get(self, env_var: str) -> Optional[RotationEntry]:
+        return self._index.get(env_var)
+
+    def upsert(self, entry: RotationEntry):
+        for i, e in enumerate(self.entries):
+            if e.env_var == entry.env_var:
+                self.entries[i] = entry
+                self._index[entry.env_var] = entry
+                return
+        self.entries.append(entry)
+        self._index[entry.env_var] = entry
+
+    def stale(self, days: int = ROTATION_DAYS) -> List[RotationEntry]:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        result = []
+        for e in self.entries:
+            if not e.rotated_at:
+                result.append(e)
+                continue
+            try:
+                rotated = datetime.fromisoformat(e.rotated_at.replace("Z", "+00:00"))
+                if rotated < cutoff:
+                    result.append(e)
+            except (ValueError, AttributeError):
+                result.append(e)
+        return result
+
+
+class CredentialIndex:
+    """Loads and queries the credential index YAML."""
+
+    KNOWN_FIELDS = {
+        "id", "name", "type", "security_tier", "category", "provider",
+        "locations", "used_by", "description", "documentation", "note", "status"
+    }
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.credentials: List[Credential] = []
+        self.security_tiers: Dict = {}
+        self.categories: Dict = {}
+        self._load()
+
+    def _load(self):
+        with open(self.path) as f:
+            data = yaml.safe_load(f) or {}
+
+        self.security_tiers = data.get("security_tiers", {})
+        self.categories = data.get("categories", {})
+
+        for entry in data.get("credentials", []):
+            if entry is None:
+                continue
+            locations = []
+            for loc in entry.get("locations", []):
+                locations.append(LocationEntry(
+                    path=loc.get("path", ""),
+                    var_name=loc.get("var_name", ""),
+                    primary=loc.get("primary", False),
+                    note=loc.get("note", ""),
+                ))
+            extra = {k: v for k, v in entry.items() if k not in self.KNOWN_FIELDS}
+            self.credentials.append(Credential(
+                id=entry.get("id", "unknown"),
+                name=entry.get("name", ""),
+                type=entry.get("type", ""),
+                security_tier=entry.get("security_tier", ""),
+                category=entry.get("category", ""),
+                provider=entry.get("provider", ""),
+                locations=locations,
+                used_by=entry.get("used_by", []),
+                description=entry.get("description", ""),
+                documentation=entry.get("documentation", ""),
+                note=entry.get("note", ""),
+                status=entry.get("status", "active"),
+                extra=extra,
+            ))
+
+    def filter(self, category: str = None, tier: str = None,
+               status: str = None) -> List[Credential]:
+        result = self.credentials
+        if category:
+            result = [c for c in result if c.category == category]
+        if tier:
+            result = [c for c in result if c.security_tier == tier]
+        if status:
+            result = [c for c in result if c.status == status]
+        return result
+
+    def get(self, cred_id: str) -> Optional[Credential]:
+        for c in self.credentials:
+            if c.id == cred_id:
+                return c
+        return None
+
+    def search(self, query: str) -> List[Credential]:
+        q = query.lower()
+        results = []
+        for c in self.credentials:
+            searchable = " ".join([
+                c.id, c.name, c.type, c.category, c.provider,
+                c.description, c.note,
+                " ".join(c.used_by),
+                " ".join(loc.var_name for loc in c.locations),
+            ]).lower()
+            if q in searchable:
+                results.append(c)
+        return results
+
+    def did_you_mean(self, cred_id: str, n: int = 3) -> List[str]:
+        all_ids = [c.id for c in self.credentials]
+        return difflib.get_close_matches(cred_id, all_ids, n=n, cutoff=0.4)
+
+
+class CredentialManager:
+    """CLI operations for credential management."""
+
+    VALID_TIERS = {"critical", "high", "medium", "low"}
+    VALID_STATUSES = {"active", "missing", "revoked", "expired", "deprecated", "planned"}
+
+    def __init__(self, data_dir: str = None):
+        self.data_dir = Path(data_dir or os.environ.get(
+            "DATACORE_ROOT", os.path.expanduser("~/Data")))
+        self.index_path = self.data_dir / ".datacore" / "specs" / "credential-index.yaml"
+        self.example_path = self.data_dir / ".datacore" / "specs" / "credential-index.yaml.example"
+
+    def _load_index(self) -> Optional[CredentialIndex]:
+        if not self.index_path.exists():
+            return None
+        return CredentialIndex(self.index_path)
+
+    def cmd_list(self, category: str = None, tier: str = None,
+                 fmt: str = "table") -> int:
+        index = self._load_index()
+        if index is None:
+            self._print_bootstrap()
+            return 1
+
+        creds = index.filter(category=category, tier=tier)
+        if not creds:
+            print("No credentials match the filter.")
+            return 0
+
+        if fmt == "json":
+            print(json.dumps([self._cred_to_dict(c) for c in creds], indent=2))
+            return 0
+
+        # Table output
+        print(f"{'ID':<30} {'Tier':<10} {'Category':<20} {'Provider':<15}")
+        print("-" * 78)
+        for c in creds:
+            print(f"{c.id:<30} {c.security_tier:<10} {c.category:<20} {c.provider:<15}")
+        print(f"\n{len(creds)} credential(s)")
+        return 0
+
+    def cmd_show(self, cred_id: str) -> int:
+        index = self._load_index()
+        if index is None:
+            self._print_bootstrap()
+            return 1
+
+        cred = index.get(cred_id)
+        if cred is None:
+            suggestions = index.did_you_mean(cred_id)
+            print(f"Credential '{cred_id}' not found.")
+            if suggestions:
+                print(f"Did you mean: {', '.join(suggestions)}?")
+            return 1
+
+        print(f"ID:            {cred.id}")
+        print(f"Name:          {cred.name}")
+        print(f"Type:          {cred.type}")
+        print(f"Security Tier: {cred.security_tier}")
+        print(f"Category:      {cred.category}")
+        print(f"Provider:      {cred.provider}")
+        print(f"Status:        {cred.status}")
+        if cred.description:
+            print(f"Description:   {cred.description}")
+        if cred.documentation:
+            print(f"Docs:          {cred.documentation}")
+        if cred.note:
+            print(f"Note:          {cred.note}")
+
+        if cred.locations:
+            print(f"\nLocations:")
+            for loc in cred.locations:
+                primary = " (primary)" if loc.primary else ""
+                print(f"  {loc.path}: ${loc.var_name}{primary}")
+                if loc.note:
+                    print(f"    Note: {loc.note}")
+
+        if cred.used_by:
+            print(f"\nUsed by:")
+            for project in cred.used_by:
+                print(f"  - {project}")
+
+        if cred.extra:
+            print(f"\nAdditional fields:")
+            for k, v in cred.extra.items():
+                print(f"  {k}: {v}")
+
+        return 0
+
+    def cmd_search(self, query: str) -> int:
+        index = self._load_index()
+        if index is None:
+            self._print_bootstrap()
+            return 1
+
+        results = index.search(query)
+        if not results:
+            print(f"No credentials matching '{query}'.")
+            return 0
+
+        print(f"{'ID':<30} {'Name':<35} {'Tier':<10}")
+        print("-" * 75)
+        for c in results:
+            name = c.name[:33] + ".." if len(c.name) > 35 else c.name
+            print(f"{c.id:<30} {name:<35} {c.security_tier:<10}")
+        print(f"\n{len(results)} result(s)")
+        return 0
+
+    def cmd_audit(self) -> int:
+        index = self._load_index()
+        if index is None:
+            self._print_bootstrap()
+            return 1
+
+        result = AuditResult(total_credentials=len(index.credentials))
+
+        for cred in index.credentials:
+            result.checked += 1
+
+            # Check 1: Invalid status
+            if cred.status not in self.VALID_STATUSES:
+                result.issues.append(AuditIssue(
+                    severity="error",
+                    credential_id=cred.id,
+                    message=f"Invalid status '{cred.status}' (valid: {', '.join(sorted(self.VALID_STATUSES))})"
+                ))
+
+            # Check 2: Invalid tier
+            if cred.security_tier not in self.VALID_TIERS:
+                result.issues.append(AuditIssue(
+                    severity="error",
+                    credential_id=cred.id,
+                    message=f"Invalid security tier '{cred.security_tier}' (valid: {', '.join(sorted(self.VALID_TIERS))})"
+                ))
+
+            # Check 3: Missing primary location file
+            for loc in cred.locations:
+                if not loc.primary:
+                    continue
+                loc_path = loc.path
+                if loc_path.startswith("secrets-repo://"):
+                    continue  # Can't check remote paths
+                full_path = self.data_dir / loc_path
+                if not full_path.exists():
+                    result.issues.append(AuditIssue(
+                        severity="warning",
+                        credential_id=cred.id,
+                        message=f"Primary location file missing: {loc_path}"
+                    ))
+
+            # Check 4: No locations
+            if not cred.locations:
+                result.issues.append(AuditIssue(
+                    severity="error",
+                    credential_id=cred.id,
+                    message="No storage locations defined"
+                ))
+
+        # Check 5: Duplicate IDs
+        seen_ids = {}
+        for i, cred in enumerate(index.credentials):
+            if cred.id in seen_ids:
+                result.issues.append(AuditIssue(
+                    severity="error",
+                    credential_id=cred.id,
+                    message=f"Duplicate credential ID (first at index {seen_ids[cred.id]})"
+                ))
+            seen_ids[cred.id] = i
+
+        # Print results
+        print(f"Credential Audit — {result.total_credentials} credential(s) checked")
+        print("=" * 60)
+
+        if not result.issues:
+            print("All checks passed.")
+            return 0
+
+        for issue in sorted(result.issues, key=lambda i: (
+            {"error": 0, "warning": 1, "info": 2}[i.severity], i.credential_id
+        )):
+            icon = {"error": "E", "warning": "W", "info": "I"}[issue.severity]
+            print(f"[{icon}] {issue.credential_id}: {issue.message}")
+
+        print(f"\nSummary: {len(result.errors)} error(s), "
+              f"{len(result.warnings)} warning(s), "
+              f"{len([i for i in result.issues if i.severity == 'info'])} info")
+        return 1 if result.errors else 0
+
+    def cmd_rotate(self, credential: str = None, all_creds: bool = False,
+                   bootstrap: bool = False, fmt: str = "text") -> int:
+        rotation_path = self.data_dir / ".datacore" / "state" / "credential-index.yaml"
+        rotation = RotationIndex(rotation_path)
+
+        # Bootstrap from .env if requested or index is empty
+        env_path = self.data_dir / ".datacore" / "env" / ".env"
+        if bootstrap or (not rotation.entries and env_path.exists()):
+            if env_path.exists():
+                count = self._bootstrap_rotation(rotation, env_path)
+                print(f"Bootstrapped {count} credential(s) from {env_path}")
+                rotation.save()
+                if bootstrap:
+                    return 0
+            else:
+                print(f"No .env file found at {env_path}")
+                return 1
+
+        if not rotation.entries:
+            print("No credentials in rotation index.")
+            print(f"Run with --bootstrap to scan {env_path}")
+            return 1
+
+        # Filter entries
+        if credential:
+            entries = [e for e in rotation.entries if
+                       credential.lower() in e.env_var.lower() or
+                       credential.lower() in e.credential.lower()]
+            if not entries:
+                print(f"No credential matching '{credential}'.")
+                return 1
+        elif all_creds:
+            entries = rotation.entries
+        else:
+            entries = rotation.stale()
+            if not entries:
+                print("All credentials are within rotation window. Nothing to rotate.")
+                self._print_rotation_summary(rotation)
+                return 0
+
+        # JSON output — non-interactive, just dump the entries
+        if fmt == "json":
+            output = {
+                "total": len(rotation.entries),
+                "credentials": [
+                    {
+                        "env_var": e.env_var,
+                        "provider": e.provider,
+                        "provider_url": e.provider_url,
+                        "status": e.status,
+                        "rotated_at": e.rotated_at,
+                        "next_due": e.next_rotation or "unknown",
+                    }
+                    for e in entries
+                ],
+            }
+            print(json.dumps(output, indent=2))
+            return 0
+
+        # Display rotation checklist
+        print(f"Credential Rotation Checklist")
+        print(f"{'=' * 58}")
+        print(f"{len(entries)} credential(s) to review:\n")
+
+        for i, entry in enumerate(entries, 1):
+            age = self._rotation_age(entry)
+            flag = " ** OVERDUE" if age and age > ROTATION_DAYS else ""
+            print(f"  {i}. {entry.env_var}")
+            print(f"     Provider:  {entry.provider} ({entry.provider_url})")
+            print(f"     Status:    {entry.status}")
+            print(f"     Last rot:  {entry.rotated_at or 'never'}{flag}")
+            print(f"     Next due:  {entry.next_rotation or 'unknown'}")
+            print()
+
+        # Interactive confirmation
+        print("Rotation steps for each credential:")
+        print("  1. Visit the provider URL above")
+        print("  2. Generate a new key/token")
+        print("  3. Update the value in .datacore/env/.env")
+        print("  4. Deploy updated env to any servers")
+        print("  5. Confirm rotation below")
+        print()
+
+        try:
+            answer = input("Enter credential numbers to mark as rotated "
+                           "(comma-separated, or 'q' to quit): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nAborted.")
+            return 0
+
+        if answer.lower() in ("q", "quit", ""):
+            print("No changes made.")
+            return 0
+
+        now = datetime.now(timezone.utc)
+        rotated_count = 0
+        for part in answer.split(","):
+            part = part.strip()
+            if not part.isdigit():
+                continue
+            idx = int(part) - 1
+            if 0 <= idx < len(entries):
+                entry = entries[idx]
+                entry.rotated_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+                entry.rotated_by = "manual"
+                entry.next_rotation = (now + timedelta(days=ROTATION_DAYS)).strftime("%Y-%m-%d")
+                entry.status = "active"
+                rotation.upsert(entry)
+                rotated_count += 1
+                print(f"  Marked '{entry.env_var}' as rotated.")
+
+        if rotated_count:
+            rotation.save()
+            print(f"\nUpdated {rotated_count} credential(s) in {rotation_path}")
+        else:
+            print("No credentials were marked as rotated.")
+        return 0
+
+    def _bootstrap_rotation(self, rotation: RotationIndex, env_path: Path) -> int:
+        """Parse .env and create rotation entries from known patterns."""
+        count = 0
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                match = re.match(r'^([A-Z_][A-Z0-9_]*)=', line)
+                if not match:
+                    continue
+                var_name = match.group(1)
+                # Skip non-secret config values
+                if var_name in ("DO_DROPLET_ID", "DO_DROPLET_IP", "DO_SSH_KEY_ID",
+                                "POSTHOG_PROJECT_ID", "ENGAGEMENT_CHAT_ID",
+                                "DATA_ESCROW_ADDRESS_SEPOLIA", "MIDJOURNEY_CHANNEL_ID"):
+                    continue
+                provider, url = self._detect_provider(var_name)
+                existing = rotation.get(var_name)
+                if existing:
+                    continue
+                rotation.upsert(RotationEntry(
+                    provider=provider,
+                    provider_url=url,
+                    env_var=var_name,
+                    status="active",
+                ))
+                count += 1
+        return count
+
+    def _detect_provider(self, var_name: str) -> tuple:
+        """Match env var name to a known provider."""
+        for prefix, (name, url) in PROVIDER_PATTERNS.items():
+            if var_name.startswith(prefix):
+                return name, url
+        if "_PRIVATE_KEY" in var_name or "_SECRET" in var_name:
+            return "self-managed", ""
+        return "unknown", ""
+
+    def _rotation_age(self, entry: RotationEntry) -> Optional[int]:
+        if not entry.rotated_at:
+            return None
+        try:
+            rotated = datetime.fromisoformat(entry.rotated_at.replace("Z", "+00:00"))
+            return (datetime.now(timezone.utc) - rotated).days
+        except (ValueError, AttributeError):
+            return None
+
+    def _print_rotation_summary(self, rotation: RotationIndex):
+        print(f"\n{'Env Var':<40} {'Last Rotated':<22} {'Next Due':<12}")
+        print("-" * 74)
+        for e in rotation.entries:
+            rotated = e.rotated_at[:10] if e.rotated_at else "never"
+            due = e.next_rotation or "unknown"
+            print(f"{e.env_var:<40} {rotated:<22} {due:<12}")
+        print(f"\n{len(rotation.entries)} credential(s) tracked")
+
+    def _cred_to_dict(self, c: Credential) -> dict:
+        d = {
+            "id": c.id, "name": c.name, "type": c.type,
+            "security_tier": c.security_tier, "category": c.category,
+            "provider": c.provider, "status": c.status,
+            "description": c.description,
+            "locations": [
+                {"path": l.path, "var_name": l.var_name,
+                 "primary": l.primary, "note": l.note}
+                for l in c.locations
+            ],
+            "used_by": c.used_by,
+        }
+        if c.documentation:
+            d["documentation"] = c.documentation
+        if c.note:
+            d["note"] = c.note
+        if c.extra:
+            d.update(c.extra)
+        return d
+
+    def _print_bootstrap(self):
+        print("Credential index not found.")
+        print(f"\nTo set up, copy the example template:")
+        print(f"  cp {self.example_path} {self.index_path}")
+        print(f"\nThen edit {self.index_path} with your credentials.")
+        print(f"See DIP-0018 for schema documentation.")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Credential Manager — query and audit the credential index (DIP-0018)")
+    parser.add_argument("--data-dir", help="Datacore root directory")
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # list
+    list_p = subparsers.add_parser("list", help="List credentials")
+    list_p.add_argument("--category", help="Filter by category")
+    list_p.add_argument("--tier", help="Filter by security tier")
+    list_p.add_argument("--format", dest="fmt", default="table",
+                        choices=["table", "json"], help="Output format")
+
+    # show
+    show_p = subparsers.add_parser("show", help="Show credential details")
+    show_p.add_argument("id", help="Credential ID")
+
+    # search
+    search_p = subparsers.add_parser("search", help="Search credentials")
+    search_p.add_argument("query", help="Search query")
+
+    # audit
+    subparsers.add_parser("audit", help="Audit credential index")
+
+    # rotate
+    rotate_p = subparsers.add_parser("rotate", help="Guided credential rotation checklist")
+    rotate_p.add_argument("--credential", help="Filter to specific credential name or env var")
+    rotate_p.add_argument("--all", dest="all_creds", action="store_true",
+                          help="Show all credentials, not just overdue")
+    rotate_p.add_argument("--bootstrap", action="store_true",
+                          help="Bootstrap rotation index from .datacore/env/.env")
+    rotate_p.add_argument("--format", dest="fmt", default="text",
+                          choices=["text", "json"], help="Output format")
+
+    args = parser.parse_args()
+    if not args.command:
+        parser.print_help()
+        return 1
+
+    mgr = CredentialManager(data_dir=args.data_dir)
+
+    if args.command == "list":
+        return mgr.cmd_list(category=args.category, tier=args.tier, fmt=args.fmt)
+    elif args.command == "show":
+        return mgr.cmd_show(args.id)
+    elif args.command == "search":
+        return mgr.cmd_search(args.query)
+    elif args.command == "audit":
+        return mgr.cmd_audit()
+    elif args.command == "rotate":
+        return mgr.cmd_rotate(credential=args.credential,
+                              all_creds=args.all_creds,
+                              bootstrap=args.bootstrap,
+                              fmt=args.fmt)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)

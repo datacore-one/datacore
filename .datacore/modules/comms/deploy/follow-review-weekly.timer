@@ -1,0 +1,9 @@
+[Unit]
+Description=Weekly follow review — unfollow stale, check follow-backs
+
+[Timer]
+OnCalendar=Sun *-*-* 10:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

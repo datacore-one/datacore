@@ -1,0 +1,40 @@
+# /continue workflow
+# Session resume — find continuation tasks, load bootstrap, or suggest next actions
+name: continue
+description: Session resume — find continuation tasks, load bootstrap context, or suggest next actions
+command: /continue
+version: 1.0.0
+
+phases:
+  - name: scan-continuations
+    type: tool
+    invoke: datacore.gtd.task_search
+    params:
+      tags: [continuation]
+    description: Scan org files for :continuation: tagged tasks
+
+  - name: select-task
+    type: interactive
+    condition: multiple-matches
+    description: User selects which continuation to resume
+
+  - name: load-bootstrap
+    type: tool
+    invoke: datacore.gtd.read_task
+    condition: continuation-found
+    description: Read BOOTSTRAP property from selected task
+
+  - name: load-context
+    type: tool
+    invoke: datacore.search
+    params:
+      source: bootstrap-files
+    description: Read key files referenced in bootstrap
+
+  - name: suggest-actions
+    type: agent
+    invoke: strategic-prioritizer
+    condition: no-continuations
+    description: Analyze system for high-impact next actions
+
+trigger: manual

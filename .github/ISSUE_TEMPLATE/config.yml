@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: DIP Proposals
+    url: https://github.com/datacore-one/datacore/tree/main/.datacore/dips
+    about: For significant architectural changes, submit a Datacore Improvement Proposal (DIP)
+  - name: Discussions
+    url: https://github.com/datacore-one/datacore/discussions
+    about: Ask questions and share ideas

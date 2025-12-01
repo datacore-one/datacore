@@ -1,0 +1,37 @@
+# .datacore/modules/comms/config/anchor-accounts.yaml.example
+# Seed accounts for follow list building.
+#
+# STRATEGY: Use INDIVIDUAL INFLUENCERS, not organizations.
+# Orgs follow politicians, celebrities, media = noise.
+# Influencers follow people they find interesting = signal.
+# Reply targets = highest quality signal (active engagement).
+#
+# Overlap across anchors = strongest quality indicator.
+# An account followed by 3+ privacy influencers is almost certainly relevant.
+#
+# Copy this file to anchor-accounts.yaml and fill in real handles.
+
+clusters:
+  # Define clusters by topic area
+  example_cluster:
+    description: "Description of this cluster's focus area"
+    anchors:
+      - username: example_user_1
+        note: "Brief description of why this account is a good anchor"
+      - username: example_user_2
+        note: "Brief description"
+
+  another_cluster:
+    description: "Another topic area"
+    anchors:
+      - username: example_user_3
+        note: "Brief description"
+
+# NOTE: Add more anchors as you discover them through feed browsing.
+# Each anchor should be an INDIVIDUAL, not an organization.
+# Verify handle exists at https://x.com/{username} before adding.
+#
+# The builder does TWO things per anchor:
+# 1. Scrape following list (who they chose to follow)
+# 2. Scrape recent replies (who they actively engage with)
+# Both feed into the overlap scoring system.

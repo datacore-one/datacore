@@ -1,0 +1,23 @@
+space:
+  name: {{SPACE_NAME}}
+  type: {{SPACE_TYPE}}
+
+team:
+  members:
+    - id: {{AUTHOR_ID}}
+      name: {{AUTHOR_NAME}}
+      github: {{AUTHOR_GITHUB}}
+
+settings:
+  github_org: {{GITHUB_ORG}}
+  default_branch: main
+
+today:
+  time: "07:00"
+  include:
+    - team_status
+    - priorities
+    - github_activity
+    - resources
+  outputs:
+    - journal_entry

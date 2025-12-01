@@ -1,0 +1,36 @@
+{
+  "mcpServers": {
+    "gamma": {
+      "command": "node",
+      "args": [
+        "/path/to/Data/.datacore/modules/slides/mcp-server/dist/index.js"
+      ],
+      "env": {
+        "GAMMA_API_KEY": "your-gamma-api-key-here"
+      }
+    },
+    "perplexity": {
+      "command": "bash",
+      "args": ["-c", "set -a; [ -f .datacore/env/.env ] && source .datacore/env/.env; exec npx -y @perplexity-ai/mcp-server"],
+      "comment": "Requires PERPLEXITY_API_KEY in .datacore/env/.env"
+    },
+    "exa": {
+      "command": "bash",
+      "args": ["-c", "set -a; [ -f .datacore/env/.env ] && source .datacore/env/.env; exec npx -y exa-mcp-server"],
+      "comment": "Requires EXA_API_KEY in .datacore/env/.env"
+    },
+    "jina": {
+      "command": "bash",
+      "args": ["-c", "set -a; [ -f .datacore/env/.env ] && source .datacore/env/.env; exec npx -y jina-mcp-tools --transport stdio"],
+      "comment": "Requires JINA_API_KEY in .datacore/env/.env"
+    },
+    "gemini": {
+      "command": "bash",
+      "args": ["-c", "set -a; [ -f .datacore/env/.env ] && source .datacore/env/.env; exec npx -y @rlabs-inc/gemini-mcp"],
+      "env": {
+        "GEMINI_TOOL_PRESET": "research"
+      },
+      "comment": "Requires GOOGLE_API_KEY in .datacore/env/.env"
+    }
+  }
+}

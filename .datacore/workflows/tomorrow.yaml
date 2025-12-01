@@ -1,0 +1,35 @@
+# /tomorrow workflow
+# End-of-day — process inbox, delegate AI tasks, set overnight queue
+name: tomorrow
+description: End-of-day — process inbox, delegate AI tasks, set overnight queue
+command: /tomorrow
+version: 1.0.0
+
+phases:
+  - name: inbox-processing
+    type: agent
+    invoke: gtd-inbox-coordinator
+    description: Process pending inbox entries
+
+  - name: ai-delegation
+    type: agent
+    invoke: ai-task-executor
+    action: scan-and-queue
+    description: Scan for :AI: tasks and prepare nightshift queue
+
+  - name: nightshift-queue
+    type: agent
+    invoke: queue-optimizer
+    description: Optimize and finalize overnight task queue
+
+  - name: journal-update
+    type: agent
+    invoke: journal-coordinator
+    description: Write end-of-day journal entries
+
+  - name: sync-push
+    type: tool
+    invoke: sync push
+    description: Push all repos
+
+trigger: manual

@@ -1,0 +1,1 @@
+../modules/trading/commands/weekly-trading-review.md

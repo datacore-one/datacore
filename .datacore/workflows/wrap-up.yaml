@@ -1,0 +1,57 @@
+# /wrap-up workflow
+# Session close — learnings, journal, continuation, push
+name: wrap-up
+description: Session close — learnings, journal, continuation, push
+command: /wrap-up
+version: 1.0.0
+
+phases:
+  - name: session-summary
+    type: skill
+    invoke: session-summary
+    description: Infer and display session summary from conversation
+
+  - name: emotional-check
+    type: agent
+    invoke: coach
+    optional: true
+    description: Quick pulse check (1-10 scale)
+
+  - name: continuation-task
+    type: tool
+    invoke: datacore.gtd.add_task
+    condition: work-incomplete
+    description: Create continuation task with bootstrap context
+
+  - name: mark-completed
+    type: tool
+    invoke: datacore.gtd.complete_task
+    description: Mark completed tasks as DONE
+
+  - name: extract-learnings
+    type: agent
+    invoke: session-learning-coordinator
+    description: Extract patterns and learnings per space
+
+  - name: learning-review
+    type: agent
+    invoke: learning-reviewer
+    optional: true
+    description: Generate engram candidates from new patterns
+
+  - name: journal-update
+    type: agent
+    invoke: journal-coordinator
+    description: Write journal entries per space
+
+  - name: artifact-tracking
+    type: tool
+    invoke: datacore.index
+    description: Track knowledge artifacts created this session
+
+  - name: sync-push
+    type: tool
+    invoke: sync push
+    description: Push all repos
+
+trigger: manual

@@ -1,0 +1,1261 @@
+version: 2.0.0
+protocol: datacore-command-registry/v2
+commands:
+  today:
+    name: Daily Briefing
+    description: Generate daily briefing with priorities, calendar, nightshift results, and team updates
+    version: 1.0.0
+    status: active
+    source: .datacore/commands/today.md
+    invokes:
+    - agent: journal-coordinator
+      when: journal entry creation
+    - agent: coach
+      when: morning emotional check-in (optional)
+    reads:
+      required:
+      - org/next_actions.org
+      - .datacore/settings.yaml
+      - .datacore/modules/*/module.yaml
+      contextual:
+      - journal/*.md
+      - '*/0-inbox/nightshift-*.md'
+    writes:
+    - journal/{date}.md
+    - '{space}/today/{date}.md'
+    references:
+      dips:
+      - DIP-0009
+      - DIP-0011
+      - DIP-0004
+      specs: []
+    related:
+    - tomorrow
+    - gtd-daily-start
+    - wrap-up
+    - continue
+  continue:
+    name: Continue
+    description: Resume incomplete work or find highest-impact next action
+    version: 1.0.0
+    status: active
+    source: .datacore/commands/continue.md
+    invokes:
+    - agent: strategic-prioritizer
+      when: no continuations found, analyzing system
+    reads:
+      required:
+      - org/inbox.org
+      - org/next_actions.org
+      contextual:
+      - journal/*.md
+      - '{space}/org/*.org'
+    writes:
+    - org/next_actions.org
+    references:
+      dips:
+      - DIP-0009
+      - DIP-0016
+    related:
+    - wrap-up
+    - today
+    - tomorrow
+  tomorrow:
+    name: Evening Wrap-Up
+    description: End-of-day command that syncs repos, queues AI tasks, and prepares for tomorrow
+    version: 1.0.0
+    status: active
+    source: .datacore/commands/tomorrow.md
+    invokes:
+    - agent: session-learning-coordinator
+      when: pattern extraction
+    - agent: coach
+      when: evening REBT reflection (optional)
+    reads:
+      required:
+      - org/next_actions.org
+      - org/nightshift.org
+      - .datacore/settings.yaml
+    writes:
+    - org/nightshift.org
+    - journal/{date}.md
+    references:
+      dips:
+      - DIP-0011
+      - DIP-0009
+    related:
+    - today
+    - wrap-up
+    - gtd-daily-end
+  wrap-up:
+    name: Session Wrap-Up
+    description: Quick session close with learning capture, journal update, and continuation tasks
+    version: 1.0.0
+    status: active
+    source: .datacore/commands/wrap-up.md
+    invokes:
+    - agent: journal-coordinator
+      when: journal entry for session
+    - agent: session-learning-coordinator
+      when: pattern extraction
+    - agent: context-maintainer
+      when: context sync if changes
+    - agent: coach
+      when: quick emotional check (optional)
+    reads:
+      required:
+      - org/next_actions.org
+      contextual:
+      - journal/{date}.md
+    writes:
+    - org/next_actions.org
+    - journal/{date}.md
+    - '{space}/journal/{date}.md'
+    - .datacore/learning/patterns.md
+    references:
+      dips:
+      - DIP-0009
+      - DIP-0016
+    related:
+    - tomorrow
+    - today
+  gtd-daily-start:
+    name: GTD Morning Planning
+    description: Morning planning session with priority setting and focus selection
+    version: 1.0.0
+    status: demoted
+    trigger: plan my day|morning planning|set priorities
+    source: .datacore/commands/demoted/gtd-daily-start.md
+    invokes: []
+    reads:
+      required:
+      - org/inbox.org
+      - org/next_actions.org
+      - org/calendar.org
+      - .datacore/dips/DIP-0009-gtd-specification.md
+    writes:
+    - journal/{date}.md
+    references:
+      dips:
+      - DIP-0009
+    related:
+    - today
+    - gtd-daily-end
+    - gtd-weekly-review
+  gtd-daily-end:
+    name: GTD Evening Processing
+    description: Evening inbox processing and AI task delegation
+    version: 1.0.0
+    status: demoted
+    trigger: process inbox|delegate AI tasks|evening processing
+    merged_into: tomorrow
+    source: .datacore/commands/demoted/gtd-daily-end.md
+    invokes:
+    - agent: gtd-inbox-coordinator
+      when: inbox processing
+    reads:
+      required:
+      - org/inbox.org
+      - org/next_actions.org
+      - .datacore/dips/DIP-0009-gtd-specification.md
+    writes:
+    - org/inbox.org
+    - org/next_actions.org
+    - org/nightshift.org
+    references:
+      dips:
+      - DIP-0009
+      - DIP-0011
+    related:
+    - gtd-daily-start
+    - tomorrow
+  gtd-weekly-review:
+    name: GTD Weekly Review
+    description: Comprehensive weekly review following GTD methodology
+    version: 1.0.0
+    status: habit
+    trigger: weekly review|GTD review|let's do the weekly review
+    source: .datacore/commands/demoted/gtd-weekly-review.md
+    invokes:
+    - agent: scaffolding-auditor
+      when: knowledge scaffolding check
+    - agent: context-maintainer
+      when: CLAUDE.md health check
+    reads:
+      required:
+      - org/next_actions.org
+      - org/projects.org
+      - org/someday.org
+      - org/habits.org
+      - journal/*.md
+      - .datacore/dips/DIP-0009-gtd-specification.md
+      contextual:
+      - .datacore/modules/crm/**
+    writes:
+    - journal/{date}.md
+    - org/next_actions.org
+    - org/someday.org
+    references:
+      dips:
+      - DIP-0009
+      - DIP-0014
+    related:
+    - gtd-daily-start
+    - gtd-daily-end
+    - gtd-monthly-strategic
+  gtd-monthly-strategic:
+    name: GTD Monthly Strategic Planning
+    description: Monthly strategic review with goal alignment and horizon planning
+    version: 1.0.0
+    status: habit
+    trigger: monthly review|strategic planning|monthly strategic
+    source: .datacore/commands/demoted/gtd-monthly-strategic.md
+    invokes: []
+    reads:
+      required:
+      - org/projects.org
+      - org/someday.org
+      - .datacore/dips/DIP-0009-gtd-specification.md
+      contextual:
+      - journal/*.md
+    writes:
+    - journal/{date}.md
+    - org/projects.org
+    references:
+      dips:
+      - DIP-0009
+    related:
+    - gtd-weekly-review
+  sync:
+    name: Repository & Task Sync
+    description: Unified sync for repositories and external task systems
+    version: 1.0.0
+    status: demoted
+    trigger: sync repos|push changes|pull repos
+    source: .datacore/commands/demoted/sync.md
+    invokes: []
+    reads:
+      required:
+      - .datacore/settings.yaml
+      - org/inbox.org
+      - org/next_actions.org
+    writes:
+    - org/inbox.org
+    - org/next_actions.org
+    - .datacore/state/sync_history.db
+    references:
+      dips:
+      - DIP-0010
+    related:
+    - today
+    - wrap-up
+  diagnostic:
+    name: System Diagnostic
+    description: Comprehensive system health check and troubleshooting
+    version: 1.0.0
+    status: demoted
+    trigger: system healthy|check health|diagnostic|is everything ok
+    source: .datacore/commands/demoted/diagnostic.md
+    invokes:
+    - agent: context-maintainer
+      when: context validation
+    - agent: structural-integrity
+      when: folder structure check
+    reads:
+      required:
+      - .datacore/settings.yaml
+      - CLAUDE.md
+      - install.yaml
+    writes: []
+    references:
+      dips:
+      - DIP-0002
+      - DIP-0016
+    related:
+    - scaffolding-audit
+    - audit-agents
+  search:
+    name: Multi-Source Search
+    description: Semantic search across local knowledge (Datacortex) and web intelligence (Perplexity)
+    version: 2.0.0
+    status: demoted
+    trigger: search for|find|look up
+    mcp_tool: datacore.search
+    source: .datacore/commands/demoted/search.md
+    invokes: []
+    reads:
+      required:
+      - .datacore/registry/sources.yaml
+      - .datacore/settings.yaml
+      contextual:
+      - .datacore/state/datacortex.db
+    writes: []
+    references:
+      dips:
+      - DIP-0021
+      - DIP-0004
+    related:
+    - research
+  research:
+    name: Deep Research
+    description: 'Multi-source research pipeline: discover, gather, process, synthesize, and optionally generate audio'
+    version: 1.0.0
+    status: active
+    source: .datacore/commands/research.md
+    invokes:
+    - agent: research-orchestrator
+      when: always
+    - agent: knowledge-extractor
+      when: per-source processing (spawned by orchestrator)
+    - agent: research-synthesizer
+      when: multi-source synthesis (spawned by orchestrator)
+    - agent: podcast-creator
+      when: --podcast flag (spawned by orchestrator)
+    reads:
+      required:
+      - .datacore/registry/sources.yaml
+      - .datacore/settings.yaml
+    writes:
+    - content/reports/*.md
+    - content/summaries/*.md
+    - '*/3-knowledge/literature/*.md'
+    - '*/3-knowledge/zettel/*.md'
+    - content/podcasts/*.mp3
+    references:
+      dips:
+      - DIP-0021
+      - DIP-0004
+      - DIP-0009
+    related:
+    - search
+    - ingest
+  ingest:
+    name: File Ingestion
+    description: Process files from inbox folders with deep knowledge extraction
+    version: 2.0.0
+    status: demoted
+    trigger: process files|ingest|process inbox files
+    source: .datacore/commands/demoted/ingest.md
+    invokes:
+    - agent: ingest-orchestrator
+      when: always
+    - agent: knowledge-extractor
+      when: per-file processing (spawned by orchestrator)
+    - agent: docx-reader
+      when: DOCX file detected
+    reads:
+      required:
+      - .datacore/config/tags.yaml
+      - .datacore/dips/DIP-0015-semantic-organization.md
+    writes:
+    - 1-tracks/**
+    - 3-knowledge/**
+    - 4-archive/**
+    - org/inbox.org
+    references:
+      dips:
+      - DIP-0021
+      - DIP-0015
+      - DIP-0014
+    related:
+    - structural-integrity
+    - research
+  structural-integrity:
+    name: Structural Integrity Check
+    description: Audit and maintain Datacore folder structure
+    version: 1.0.0
+    status: demoted
+    trigger: check folder structure|structural integrity
+    source: .datacore/commands/demoted/structural-integrity.md
+    invokes:
+    - agent: structural-integrity
+      when: always
+    reads:
+      required:
+      - .datacore/dips/DIP-0015-semantic-organization.md
+      - .gitattributes
+    writes:
+    - _index.md
+    - .gitattributes
+    references:
+      dips:
+      - DIP-0015
+      - DIP-0002
+    related:
+    - ingest
+    - scaffolding-audit
+    - diagnostic
+  scaffolding-audit:
+    name: Knowledge Scaffolding Audit
+    description: Audit knowledge base structure and scaffolding completeness
+    version: 1.0.0
+    status: demoted
+    trigger: audit scaffolding|knowledge structure check
+    merged_into: diagnostic
+    source: .datacore/commands/demoted/scaffolding-audit.md
+    invokes:
+    - agent: scaffolding-auditor
+      when: always
+    reads:
+      required:
+      - .datacore/dips/DIP-0003-scaffolding-pattern.md
+      - 3-knowledge/**
+    writes: []
+    references:
+      dips:
+      - DIP-0003
+    related:
+    - structural-integrity
+    - gtd-weekly-review
+  create-module:
+    name: Create Module
+    description: Create, convert, or audit modules for spec alignment
+    version: 1.0.0
+    status: demoted
+    trigger: create a module|new module
+    source: .datacore/commands/demoted/create-module.md
+    invokes:
+    - agent: create-module
+      when: always
+    - agent: module-registrar
+      when: registration requested
+    reads:
+      required:
+      - .datacore/CATALOG.md
+    writes:
+    - .datacore/modules/{name}/**
+    - .datacore/CATALOG.md
+    references:
+      dips:
+      - DIP-0002
+      - DIP-0016
+    related:
+    - audit-agents
+  deploy-landing:
+    name: Deploy Landing Page
+    description: Generate and deploy landing pages to hosting
+    version: 1.0.0
+    status: demoted
+    trigger: deploy landing page|push landing page
+    source: .datacore/commands/demoted/deploy-landing.md
+    invokes:
+    - agent: landing-generator
+      when: always
+    reads:
+      required:
+      - .datacore/modules/landing/**
+    writes:
+    - content/landing/**
+    references:
+      dips: []
+    related: []
+  audit-agents:
+    name: Agent Registry Audit
+    description: Audit agents and commands for DIP-0016 compliance
+    version: 1.0.0
+    status: demoted
+    trigger: audit agents|check agent registry
+    merged_into: diagnostic
+    source: .datacore/commands/demoted/audit-agents.md
+    invokes:
+    - agent: agent-registry-auditor
+      when: always
+    reads:
+      required:
+      - .datacore/registry/agents.yaml
+      - .datacore/registry/commands.yaml
+      - .datacore/dips/DIP-0016-agent-registry.md
+      contextual:
+      - .datacore/agents/*.md
+      - .datacore/commands/*.md
+      - .datacore/modules/*/agents/*.md
+    writes:
+    - .datacore/registry/agents.yaml
+    - .datacore/registry/commands.yaml
+    - .datacore/agents/*.md
+    references:
+      dips:
+      - DIP-0016
+    related:
+    - diagnostic
+    - create-module
+module_commands:
+  start-trading:
+    name: Morning Trading Routine
+    description: Morning check-in with emotional state, metrics, and framework review
+    version: 1.0.0
+    status: demoted
+    trigger: morning trading|start trading|trading check-in
+    source: .datacore/modules/trading/commands/start-trading.md
+    module: trading
+    invokes:
+    - agent: emergency-stop-trader
+      when: emotional distress >8/10 or critical metrics
+    related:
+    - validate-trade
+    - close-trading
+    - check-position-health
+  validate-trade:
+    name: Pre-Trade Validation
+    description: Validates trade against framework rules before execution
+    version: 1.0.0
+    status: demoted
+    trigger: validate trade|check this trade|pre-trade check
+    source: .datacore/modules/trading/commands/validate-trade.md
+    module: trading
+    invokes:
+    - agent: emergency-stop-trader
+      when: repeated violations
+    related:
+    - start-trading
+    - log-trade
+  close-trading:
+    name: Evening Trading Review
+    description: End-of-day trading review and journal entry
+    version: 1.0.0
+    status: demoted
+    trigger: close trading|evening trading|trading review
+    source: .datacore/modules/trading/commands/close-trading.md
+    module: trading
+    related:
+    - start-trading
+    - journal-digest
+  check-position-health:
+    name: Position Health Check
+    description: Quick assessment of current position risk metrics
+    version: 1.0.0
+    status: demoted
+    trigger: position health|how's my position|check position
+    mcp_tool: datacore.trading.position_health
+    source: .datacore/modules/trading/skills/check-position-health/SKILL.md
+    module: trading
+    invokes:
+    - agent: emergency-stop-trader
+      when: critical metrics
+    related:
+    - start-trading
+  log-trade:
+    name: Trade Logger
+    description: Quick trade documentation for journal
+    version: 1.0.0
+    status: demoted
+    trigger: log trade|record trade|log this trade
+    source: .datacore/modules/trading/skills/log-trade/SKILL.md
+    module: trading
+    related:
+    - validate-trade
+    - journal-digest
+  weekly-trading-review:
+    name: Weekly Trading Review
+    description: Friday afternoon comprehensive trading analysis
+    version: 1.0.0
+    status: habit
+    trigger: weekly trading review|trading review
+    source: .datacore/modules/trading/commands/weekly-trading-review.md
+    module: trading
+    related:
+    - monthly-performance
+    - journal-digest
+  monthly-performance:
+    name: Monthly Trading Performance
+    description: Comprehensive monthly trading analysis and metrics
+    version: 1.0.0
+    status: habit
+    trigger: monthly trading performance|monthly performance
+    source: .datacore/modules/trading/commands/monthly-performance.md
+    module: trading
+    related:
+    - weekly-trading-review
+  market-briefing:
+    name: Daily Market Briefing
+    description: Daily market summary and outlook
+    version: 1.0.0
+    status: demoted
+    trigger: market briefing|market update|what's the market doing
+    source: .datacore/modules/trading/skills/market-briefing/SKILL.md
+    module: trading
+    related:
+    - start-trading
+    - analyze-market-phase
+  analyze-market-phase:
+    name: Wyckoff Market Phase Analysis
+    description: Wyckoff cycle assessment for current market
+    version: 1.0.0
+    status: demoted
+    trigger: Wyckoff phase|market phase|what phase
+    mcp_tool: datacore.trading.market_phase
+    source: .datacore/modules/trading/skills/analyze-market-phase/SKILL.md
+    module: trading
+    related:
+    - market-briefing
+  journal-digest:
+    name: Trading Journal Digest
+    description: Summary compilation of trading journal entries
+    version: 1.0.0
+    status: demoted
+    trigger: trading journal digest|summarize trading journal
+    source: .datacore/modules/trading/skills/journal-digest/SKILL.md
+    module: trading
+    related:
+    - weekly-trading-review
+    - close-trading
+  nightshift-status:
+    name: Nightshift Status
+    description: Check AI task queue and execution status
+    version: 1.0.0
+    source: .datacore/modules/nightshift/commands/nightshift-status.md
+    module: nightshift
+    invokes:
+    - agent: nightshift-orchestrator
+      when: status check
+    related:
+    - tomorrow
+    - today
+    status: demoted
+    trigger: nightshift status|AI queue status
+  nightshift-today-hook:
+    name: Nightshift Today Hook
+    description: Hook for /today command - shows nightshift results
+    version: 1.0.0
+    source: .datacore/modules/nightshift/commands/today-hook.md
+    module: nightshift
+    hook_for: today
+    status: hook
+  research-status:
+    name: Research Status
+    description: Show research queue and processing status
+    version: 1.0.0
+    source: .datacore/modules/research/commands/research-status.md
+    module: research
+    related:
+    - research-daily
+    status: demoted
+    trigger: research status|research queue
+  create-podcast:
+    name: Create Podcast
+    description: Create podcast using NotebookLM from research
+    version: 2.0.0
+    source: .datacore/modules/research/commands/create-podcast.md
+    module: research
+    invokes:
+    - agent: podcast-creator
+      when: always
+    status: demoted
+    trigger: create podcast|make a podcast
+  research-daily:
+    name: Daily Research Processing
+    description: Process daily research queue via nightshift
+    version: 2.0.0
+    source: .datacore/modules/research/commands/research-daily.md
+    module: research
+    invokes:
+    - agent: research-orchestrator
+      when: always
+    related:
+    - research-status
+    - research
+    status: demoted
+  standup:
+    name: Daily Standup
+    description: Generate daily standup content
+    version: 1.0.0
+    source: .datacore/modules/meetings/commands/standup.md
+    module: meetings
+    invokes:
+    - agent: standup-generator
+      when: always
+    status: demoted
+    trigger: generate standup|standup update
+  meeting-prep:
+    name: Meeting Preparation
+    description: Prepare for upcoming meeting with context and questions
+    version: 1.0.0
+    source: .datacore/modules/meetings/commands/meeting-prep.md
+    module: meetings
+    related:
+    - meeting-agenda
+    status: demoted
+    trigger: prep for meeting|prepare for call
+  meeting-agenda:
+    name: Meeting Agenda
+    description: Generate meeting agenda
+    version: 1.0.0
+    source: .datacore/modules/meetings/commands/_deprecated-meeting-agenda.md
+    deprecated: true
+    module: meetings
+    invokes:
+    - agent: agenda-generator
+      when: always
+    related:
+    - meeting-prep
+    status: demoted
+    trigger: meeting agenda|generate agenda
+  my-questions:
+    name: My Questions
+    description: Research answers for queued questions
+    version: 1.0.0
+    source: .datacore/modules/meetings/commands/my-questions.md
+    module: meetings
+    invokes:
+    - agent: question-researcher
+      when: always
+    status: demoted
+    trigger: my questions|pending questions
+  meeting-process:
+    name: Meeting Process
+    description: Process meeting transcription into notes
+    version: 1.0.0
+    source: .datacore/modules/meetings/commands/meeting-process.md
+    module: meetings
+    invokes:
+    - agent: transcription-processor
+      when: always
+    status: demoted
+    trigger: process transcript|meeting notes
+  meetings-today-hook:
+    name: Meetings Today Hook
+    description: Hook for /today - show today's meetings
+    version: 1.0.0
+    source: .datacore/modules/meetings/commands/today-hook.md
+    module: meetings
+    hook_for: today
+    status: hook
+  meetings-weekly-hook:
+    name: Meetings Weekly Hook
+    description: Hook for weekly review - meeting patterns
+    version: 1.0.0
+    source: .datacore/modules/meetings/commands/weekly-hook.md
+    module: meetings
+    hook_for: gtd-weekly-review
+    status: hook
+  crm:
+    name: CRM Dashboard
+    description: Contact relationship management dashboard
+    version: 1.0.0
+    source: .datacore/modules/crm/commands/crm.md
+    module: crm
+    invokes:
+    - agent: crm-contact-maintainer
+      when: always
+    status: demoted
+    trigger: CRM dashboard|look up contact
+  crm-nightshift-hook:
+    name: CRM Nightshift Hook
+    description: Hook for nightshift - relationship maintenance
+    version: 1.0.0
+    source: .datacore/modules/crm/commands/nightshift-hook.md
+    module: crm
+    hook_for: nightshift
+    status: hook
+  crm-today-hook:
+    name: CRM Today Hook
+    description: Hook for /today - relationship reminders
+    version: 1.0.0
+    source: .datacore/modules/crm/commands/today-hook.md
+    module: crm
+    hook_for: today
+    status: hook
+  crm-weekly-hook:
+    name: CRM Weekly Hook
+    description: Hook for weekly review - relationship health
+    version: 1.0.0
+    source: .datacore/modules/crm/commands/weekly-hook.md
+    module: crm
+    hook_for: gtd-weekly-review
+    status: hook
+  crm-research-hook:
+    name: CRM Research Hook
+    description: Hook for research - entity extraction
+    version: 1.0.0
+    source: .datacore/modules/crm/commands/research-hook.md
+    module: crm
+    hook_for: research
+    status: hook
+  health-today-hook:
+    name: Health Today Hook
+    description: Hook for /today - health reminders and metrics
+    version: 1.0.0
+    source: .datacore/modules/health/commands/today-hook.md
+    module: health
+    hook_for: today
+    status: hook
+  health-tomorrow-hook:
+    name: Health Tomorrow Hook
+    description: Hook for /tomorrow - health preparation
+    version: 1.0.0
+    source: .datacore/modules/health/commands/tomorrow-hook.md
+    module: health
+    hook_for: tomorrow
+    status: hook
+  coach:
+    name: REBT Daily Coaching
+    description: REBT-based coaching for emotional resilience - ABC analysis, disputation, imagery
+    version: 1.0.0
+    source: .datacore/modules/health/commands/coach.md
+    module: health
+    invokes:
+    - agent: coach
+      when: always
+    reads:
+      required: []
+      contextual:
+      - 0-personal/journal/*.md
+      - 0-personal/1-active/coach/sessions/*.md
+    writes:
+    - 0-personal/journal/{date}.md
+    - 0-personal/1-active/coach/sessions/*.md
+    references:
+      dips: []
+      specs: []
+    related:
+    - today
+    - tomorrow
+    - wrap-up
+    status: demoted
+    trigger: I'm stressed|coach me|ABC analysis
+  create-presentation:
+    name: Create Presentation
+    description: Generate presentation using Gamma.app
+    version: 1.0.0
+    source: .datacore/modules/slides/commands/create-presentation.md
+    module: slides
+    invokes:
+    - agent: gamma-presentation-generator
+      when: always
+    status: demoted
+    trigger: create presentation|make slides
+  index-presentation:
+    name: Index Presentation
+    description: Index and organize Gamma presentations
+    version: 1.0.0
+    source: .datacore/modules/slides/commands/index-presentation.md
+    module: slides
+    invokes:
+    - agent: gamma-slide-indexer
+      when: always
+    status: demoted
+    trigger: index presentations|organize slides
+  sync-gamma:
+    name: Sync Gamma
+    description: Synchronize Gamma presentations with local storage
+    version: 1.0.0
+    source: .datacore/modules/slides/commands/sync-gamma.md
+    module: slides
+    related:
+    - index-presentation
+    status: demoted
+    trigger: sync gamma|sync presentations
+  mails:
+    name: Email Management
+    description: Classify and prioritize emails
+    version: 1.0.0
+    source: .datacore/modules/mail/commands/mails.md
+    module: mail
+    invokes:
+    - agent: mail-classifier
+      when: always
+    status: demoted
+    trigger: check email|classify emails
+  news:
+    name: News Digest
+    description: Generate personalized news digest
+    version: 1.0.0
+    source: .datacore/modules/news/commands/news.md
+    module: news
+    status: demoted
+    trigger: what's in the news|news digest
+  news-today-hook:
+    name: News Today Hook
+    description: Hook for /today - relevant news items
+    version: 1.0.0
+    source: .datacore/modules/news/commands/today-hook.md
+    module: news
+    hook_for: today
+    status: hook
+  outbox:
+    name: Process Outbox
+    description: Route content from outbox to destinations (archive, delivery, publish)
+    version: 1.0.0
+    source: .datacore/modules/outbox/commands/outbox.md
+    module: outbox
+    invokes:
+    - agent: outbox-processor
+      when: always
+    - agent: archive-indexer
+      when: after archiving
+    reads:
+      required:
+      - .datacore/settings.yaml
+      - .datacore/dips/DIP-0017-outbox-archive-pattern.md
+      contextual:
+      - '*/4-outbox/archive/**'
+    writes:
+    - '[space]-archive/**'
+    - '*/4-outbox/_index.md'
+    references:
+      dips:
+      - DIP-0017
+      - DIP-0015
+    related:
+    - archive-search
+    - ingest
+    status: demoted
+    trigger: process outbox|check outbox
+  archive-search:
+    name: Archive Search
+    description: Semantic search across archived content using datacortex snapshots
+    version: 1.0.0
+    source: .datacore/modules/outbox/commands/archive-search.md
+    module: outbox
+    invokes:
+    - agent: archive-indexer
+      when: --reindex flag
+    reads:
+      required:
+      - .datacore/settings.yaml
+      - '[space]/.archive-snapshot/archive.db'
+    writes: []
+    references:
+      dips:
+      - DIP-0017
+      - DIP-0004
+    related:
+    - outbox
+    - search
+    status: demoted
+    trigger: search archive|find in archive
+  datacortex:
+    name: Knowledge Graph
+    description: Knowledge graph visualization and exploration
+    version: 1.0.0
+    source: .datacore/modules/datacortex/commands/datacortex.md
+    module: datacortex
+    related:
+    - search
+    status: demoted
+    trigger: knowledge graph|explore graph
+  deploy:
+    name: Deploy
+    description: Full deploy workflow with CI/CD monitoring and production verification
+    version: 1.0.0
+    source: .datacore/modules/dev/commands/deploy.md
+    module: dev
+    invokes: []
+    reads:
+      required:
+      - deploy.yaml
+      contextual:
+      - .datacore/modules/dev/CLAUDE.base.md
+    writes: []
+    references:
+      dips: []
+    related:
+    - deploy-status
+    status: demoted
+    trigger: deploy project|deploy to production
+  deploy-status:
+    name: Deploy Status
+    description: Quick CI/CD status check for a project
+    version: 1.0.0
+    source: .datacore/modules/dev/skills/deploy-status/SKILL.md
+    module: dev
+    invokes: []
+    reads:
+      required:
+      - deploy.yaml
+    writes: []
+    references:
+      dips: []
+    related:
+    - deploy
+    status: demoted
+    trigger: deploy status|CI status
+  campaign-plan:
+    name: Quarterly Campaign Planning
+    description: Create quarterly campaign strategy with themes, objectives, and content pillars
+    version: 1.0.0
+    source: .datacore/modules/comms/commands/campaign-plan.md
+    module: comms
+    invokes:
+    - agent: campaign-planner
+      when: always
+    reads:
+      required:
+      - 1-tracks/comms/positioning/**
+      - .datacore/modules/comms/CLAUDE.md
+      contextual:
+      - 1-tracks/comms/campaigns/**
+      - 3-knowledge/zettel/Content-Matrix-Framework.md
+    writes:
+    - 1-tracks/comms/campaigns/[quarter]/strategy.md
+    references:
+      dips: []
+    related:
+    - monthly-plan
+    - comms-status
+    status: demoted
+    trigger: quarterly campaign plan|campaign strategy
+  monthly-plan:
+    name: Monthly Content Calendar
+    description: Generate monthly content calendar with platform-specific drafts from quarterly strategy
+    version: 1.0.0
+    source: .datacore/modules/comms/commands/monthly-plan.md
+    module: comms
+    invokes:
+    - agent: campaign-planner
+      when: always
+    reads:
+      required:
+      - 1-tracks/comms/campaigns/[quarter]/strategy.md
+      - .datacore/modules/comms/CLAUDE.md
+    writes:
+    - 1-tracks/comms/campaigns/[quarter]/[month]/calendar.md
+    - 1-tracks/comms/campaigns/[quarter]/[month]/drafts/**
+    references:
+      dips: []
+    related:
+    - campaign-plan
+    - approve-content
+    status: demoted
+    trigger: monthly content calendar|content plan
+  approve-content:
+    name: Content Approval Queue
+    description: Review and approve pending content drafts for publishing
+    version: 1.0.0
+    source: .datacore/modules/comms/commands/approve-content.md
+    module: comms
+    invokes:
+    - agent: calendar-manager
+      when: always
+    reads:
+      required:
+      - 1-tracks/comms/campaigns/[quarter]/[month]/drafts/**
+    writes:
+    - 1-tracks/comms/campaigns/[quarter]/[month]/approved/**
+    references:
+      dips: []
+    related:
+    - monthly-plan
+    - comms-status
+    status: demoted
+    trigger: approve content|review drafts
+  comms-status:
+    name: Communications Dashboard
+    description: 'Show content queue status: drafts, approved, scheduled, posted'
+    version: 1.0.0
+    source: .datacore/modules/comms/commands/comms-status.md
+    module: comms
+    invokes:
+    - agent: calendar-manager
+      when: always
+    reads:
+      required:
+      - 1-tracks/comms/campaigns/**
+    writes: []
+    references:
+      dips: []
+    related:
+    - campaign-plan
+    - monthly-plan
+    - approve-content
+    status: demoted
+    trigger: comms dashboard|content queue status
+
+  # --- Meetings: additional commands ---
+  meetings-weekly:
+    name: Weekly Meeting
+    description: Prepare and schedule recurring weekly team meetings
+    version: 0.4.0
+    status: active
+    source: .datacore/modules/meetings/commands/weekly.md
+    module: meetings
+    invokes:
+    - agent: agenda-generator
+      when: always
+    reads:
+      required: []
+    writes: []
+    references:
+      dips:
+      - DIP-0013
+    related:
+    - meeting-prep
+    - meeting-agenda
+    trigger: weekly meeting|schedule weekly
+
+  # --- Comms: additional commands ---
+  comms-engagement:
+    name: Engagement Pipeline
+    description: X conversation engagement — discover, draft replies, send to Telegram for approval
+    version: 2.0.0
+    status: active
+    source: .datacore/modules/comms/commands/engagement.md
+    module: comms
+    invokes: []
+    reads:
+      required: []
+    writes: []
+    references:
+      dips: []
+    related:
+    - comms-status
+    trigger: run engagement|find conversations|engagement status
+
+  comms-engage:
+    name: X Feed Engagement
+    description: Launch Chrome-based X feed engagement agent — likes, follows, drafts replies via Telegram
+    version: 1.0.0
+    status: active
+    source: .datacore/modules/comms/commands/engage.md
+    module: comms
+    invokes: []
+    reads:
+      required: []
+      contextual:
+      - .datacore/state/reply-queue.jsonl
+      - .datacore/modules/comms/commands/feed-engage.md
+    writes:
+    - .datacore/state/engagement-state.json
+    - .datacore/state/reply-queue.jsonl
+    references:
+      dips: []
+    related:
+    - comms-engagement
+    - comms-status
+    trigger: /engage|start feed engagement|browse the feed|engage on X
+
+  comms-today-hook:
+    name: Comms Today Hook
+    description: Injects campaign dashboard section into /today briefing
+    version: 2.0.0
+    status: hook
+    source: .datacore/modules/comms/commands/today-hook.md
+    module: comms
+    type: hook
+    hook_target: today
+    invokes: []
+    reads:
+      required:
+      - "[project]/comms/state/campaign-state.json"
+    writes: []
+    references:
+      dips: []
+    related: []
+
+  # --- Verity: commands ---
+  verity:
+    name: Verity MCP Manager
+    description: MCP server config management — compose, validate, add, remove, enable, disable
+    version: 1.0.0
+    status: active
+    source: .datacore/modules/verity/commands/verity.md
+    module: verity
+    invokes: []
+    reads:
+      required: []
+    writes:
+    - .mcp.json
+    references:
+      dips: []
+    related: []
+    trigger: verity status|verity compose|manage mcp servers
+
+  verity-today-hook:
+    name: Verity Today Hook
+    description: Auto-compose MCP configuration on /today if source YAML files changed
+    version: 1.0.0
+    status: hook
+    source: .datacore/modules/verity/commands/today-hook.md
+    module: verity
+    type: hook
+    hook_target: today
+    invokes: []
+    reads:
+      required: []
+    writes:
+    - .mcp.json
+    references:
+      dips: []
+    related:
+    - verity
+
+  # --- Image Generation: commands ---
+  create-image:
+    name: Create Image
+    description: Interactive image generation via Midjourney or Gemini with archive management
+    version: 0.2.0
+    status: active
+    source: .datacore/modules/image-generation/commands/create-image.md
+    module: image-generation
+    invokes:
+    - agent: image-generator
+      when: always
+    reads:
+      required: []
+    writes:
+    - 0-personal/content/images/
+    references:
+      dips: []
+    related: []
+    trigger: create image|generate image
+
+  # --- WhatsApp: commands ---
+  whatsapp:
+    name: WhatsApp Integration
+    description: WhatsApp integration — import exports, sync contacts, manage gateway, send messages
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/whatsapp/commands/whatsapp.md
+    module: whatsapp
+    invokes:
+    - agent: whatsapp-import
+      when: import
+    - agent: whatsapp-sync
+      when: sync
+    reads:
+      required: []
+    writes: []
+    references:
+      dips:
+      - DIP-0020
+    related: []
+    trigger: whatsapp import|whatsapp sync|whatsapp stats
+
+  # --- Personal Finance: commands ---
+  personal-finance:
+    name: Personal Finance
+    description: Crypto finance interface — loans, transactions, holdings, reports
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/personal-finance/commands/personal-finance.md
+    module: personal-finance
+    invokes:
+    - agent: loan-tracker
+      when: loans
+    reads:
+      required: []
+    writes: []
+    references:
+      dips: []
+    related: []
+    trigger: personal finance|check loans|crypto holdings
+
+  # --- Research: additional hooks ---
+  research-today-hook:
+    name: Research Today Hook
+    description: Adds research status section to /today briefing
+    version: 0.2.0
+    status: hook
+    source: .datacore/modules/research/commands/today-hook.md
+    module: research
+    type: hook
+    hook_target: today
+    invokes: []
+    reads:
+      required: []
+    writes: []
+    references:
+      dips:
+      - DIP-0021
+    related:
+    - research-status

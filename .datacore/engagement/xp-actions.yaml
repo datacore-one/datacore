@@ -1,0 +1,55 @@
+version: 1
+actions:
+  engram_created:
+    xp: 10
+    trigger: datacore.learn
+    condition: status === active
+    description: Create a quality engram
+  engram_created_public:
+    xp: 20
+    trigger: datacore.learn
+    condition: visibility === public || visibility === template
+    description: Create a public/template engram
+  feedback_given:
+    xp: 5
+    trigger: datacore.feedback
+    daily_limit: 10
+    description: Give feedback on an injected engram
+  engram_promoted:
+    xp: 3
+    trigger: datacore.promote
+    description: Promote a candidate engram to active
+  engram_retired:
+    xp: 5
+    trigger: datacore.forget
+    cooldown_days: 7
+    description: Retire an engram after reflection (7-day cooldown)
+  pack_exported:
+    xp: 25
+    trigger: datacore.packs.export
+    condition: engram_count >= 5 && avg_fitness >= 0.6
+    description: Export a quality pack (5+ engrams, 0.6+ fitness)
+  new_domain:
+    xp: 15
+    trigger: datacore.learn
+    description: Create first engram in a new domain
+  reconsolidation_defend:
+    xp: 12
+    trigger: datacore.resolve
+    description: Defend an engram during contradiction challenge
+  reconsolidation_revise:
+    xp: 10
+    trigger: datacore.resolve
+    description: Revise an engram during contradiction challenge
+  reconsolidation_retire:
+    xp: 8
+    trigger: datacore.resolve
+    description: Retire an engram during contradiction challenge
+  discovery_explore:
+    xp: 20
+    trigger: datacore.resolve
+    description: Explore a cross-domain discovery
+  reconsolidation_expired:
+    xp: 3
+    trigger: system
+    description: Auto-expire an overdue reconsolidation

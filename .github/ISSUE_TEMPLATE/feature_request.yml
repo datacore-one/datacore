@@ -1,0 +1,48 @@
+name: Feature Request
+description: Suggest a new feature or improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature requests help improve Datacore. For significant changes, consider submitting a [DIP](/.datacore/dips/README.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem does this solve?
+      placeholder: I find it difficult to...
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How should this work?
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      description: How big is this change?
+      options:
+        - Small improvement (PR welcome)
+        - New feature (may need DIP)
+        - Architectural change (needs DIP)
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Core system
+        - GTD module
+        - Nightshift module
+        - Research module
+        - CRM module
+        - Meetings module
+        - Other module
+        - MCP server
+        - Documentation

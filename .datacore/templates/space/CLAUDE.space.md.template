@@ -1,0 +1,80 @@
+# {{SPACE_TITLE}} Space
+
+{{SPACE_DESCRIPTION}}
+
+## Overview
+
+[Describe the organization/team purpose and mission]
+
+## Key Projects
+
+| Project | Description | Status |
+|---------|-------------|--------|
+| [Project 1] | [Description] | Active |
+
+## Team
+
+| Name | Role | GitHub |
+|------|------|--------|
+| {{AUTHOR_NAME}} | [Role] | {{AUTHOR_GITHUB}} |
+
+## Important Links
+
+- GitHub: https://github.com/{{GITHUB_ORG}}
+- Website: [URL]
+
+## Current Focus
+
+1. [Priority 1]
+2. [Priority 2]
+
+## Structure
+
+```
+{{SPACE_NUMBER}}-{{SPACE_NAME}}/
+├── CLAUDE.md                     # Composed context (gitignored)
+├── CLAUDE.base.md                # PUBLIC layer - generic template
+├── CLAUDE.space.md               # SPACE layer - this file
+├── CLAUDE.local.md               # PRIVATE layer - personal notes
+├── _index.md                     # Space home page
+│
+├── .datacore/
+│   ├── config.yaml
+│   ├── commands/
+│   ├── agents/
+│   └── learning/                 # AI learning (gitignored)
+│
+├── org/                          # GTD tasks (AI coordination layer)
+├── 0-inbox/                      # Unprocessed notes
+├── journal/                      # Team activity log
+│
+├── 1-tracks/
+│   ├── ops/                      # Operations, coordination
+│   ├── product/                  # Product specs, roadmaps
+│   ├── dev/                      # Engineering
+│   ├── research/                 # Research
+│   └── comms/                    # Content, documentation
+│
+├── 2-projects/                   # Code repos (gitignored)
+│
+├── 3-knowledge/
+│   ├── pages/                    # Strategic documents
+│   ├── zettel/                   # Atomic concepts
+│   ├── literature/               # Source summaries
+│   ├── reference/                # People, companies, glossary
+│   └── insights.md               # Strategic insights log
+│
+└── 4-archive/                    # Historical content
+```
+
+## Task Management
+
+| Component | Purpose |
+|-----------|---------|
+| `org/inbox.org` | Task capture |
+| `org/next_actions.org` | AI task queue with :AI: tags |
+| GitHub Issues | External collaboration |
+
+## Parent Context
+
+For full Datacore documentation: `~/Data/CLAUDE.md`

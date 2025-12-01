@@ -1,0 +1,94 @@
+manifest_version: 2
+name: gtd
+version: 1.0.0
+description: "Getting Things Done — task capture, inbox processing, and org-mode management"
+author: datacore-one
+license: MIT
+builtin: true
+
+provides:
+  tools:
+    - name: inbox_count
+      description: "Count items in GTD inbox across spaces"
+      handler: tools/index.js
+    - name: add_task
+      description: "Add a task to inbox.org with proper org-mode formatting"
+      handler: tools/index.js
+    - name: list_next_actions
+      description: "List TODO/NEXT tasks from next_actions.org"
+      handler: tools/index.js
+    - name: complete_task
+      description: "Mark a task as DONE in next_actions.org"
+      handler: tools/index.js
+    - name: agenda_view
+      description: "Query tasks with flexible filters (state, tags, focus area, deadline)"
+      handler: tools/index.js
+    - name: deadline_warnings
+      description: "List tasks with upcoming or overdue deadlines"
+      handler: tools/index.js
+    - name: archive_tasks
+      description: "Archive DONE tasks older than N days"
+      handler: tools/index.js
+    - name: write_clock_entry
+      description: "Write a CLOCK time entry to a task LOGBOOK drawer"
+      handler: tools/index.js
+    - name: duplicate_check
+      description: "Check for duplicate or near-duplicate tasks"
+      handler: tools/index.js
+    - name: project_health
+      description: "Analyze project health: stuck projects, stale items"
+      handler: tools/index.js
+    - name: effort_aggregate
+      description: "Aggregate effort estimates by focus area and state"
+      handler: tools/index.js
+
+  skills:
+    - name: inbox-triage
+      file: skills/inbox-triage/SKILL.md
+
+  agents:
+    - name: gtd-inbox-processor
+      trigger: ":AI:gtd:"
+    - name: gtd-content-writer
+      trigger: ":AI:content:"
+    - name: gtd-data-analyzer
+      trigger: ":AI:data:"
+    - name: gtd-project-manager
+      trigger: ":AI:pm:"
+
+  commands:
+    - today
+    - tomorrow
+    - wrap-up
+    - continue
+
+  workflows:
+    - name: today
+      file: workflows/today.yaml
+      trigger: /today
+    - name: tomorrow
+      file: workflows/tomorrow.yaml
+      trigger: /tomorrow
+    - name: wrap-up
+      file: workflows/wrap-up.yaml
+      trigger: /wrap-up
+
+engrams:
+  namespace: gtd
+  starter_pack: engrams/starter-pack.yaml
+  injection_policy: on_match
+  match_terms: [inbox, task, todo, gtd, next action, review, weekly review, delegate]
+
+context:
+  priority: always
+  summary: "GTD methodology — task management, inbox processing, org-mode workflows"
+
+settings:
+  default_space: "0-personal"
+
+# Org files managed by the GTD module (per space)
+org_files:
+  - inbox.org        # Single capture point, process to zero
+  - next_actions.org # Actionable tasks with :AI: tags
+  - habits.org       # Recurring scheduled habits
+  - ideas.org        # Ideas staging area (DIP-0009 ideas pipeline)

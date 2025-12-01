@@ -1,0 +1,11 @@
+[Unit]
+Description=Autonomous engagement engine — discover, draft, auto-post
+
+[Timer]
+# Every 30 min but only during human hours (08:00-22:00 CET = 07:00-21:00 UTC)
+OnCalendar=*-*-* 07..20:0/30:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

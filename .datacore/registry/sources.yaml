@@ -1,0 +1,142 @@
+# Source Registry — pluggable data sources for search and research
+# Per DIP-0021: Search & Research Architecture
+#
+# Each source is an MCP server tool or API that provides search/discovery.
+# Agents read this registry to determine which sources to query.
+#
+# Schema fields:
+#   type           (required)  - internal, mcp, or api
+#   description    (required)  - Human-readable description
+#   tool           (required)  - MCP tool name or command to invoke
+#   layers         (required)  - Pipeline phases: search, research, gather, synthesize
+#   content_type   (required)  - documents (articles, papers) or structured_data (metrics, APIs)
+#   api_key        (optional)  - Env var name in .datacore/env/
+#   max_latency_ms (optional)  - Max response time; sources exceeding this skipped for /search
+#   authority      (optional)  - high (peer-reviewed), medium (established media), low (blogs)
+#   good_for       (optional)  - Advisory domain tags for source prioritization
+#   models         (optional)  - Named model variants (e.g., quick: sonar, deep: sonar-pro)
+#   opt_in         (optional)  - If true, requires explicit enable (privacy-sensitive)
+#   always_available (optional) - If true, never skipped (internal sources)
+#   enabled        (optional)  - Set to false to disable without removing
+#   note           (optional)  - Advisory annotation for humans
+
+sources:
+  # === INTERNAL ===
+  datacortex:
+    type: internal
+    description: "Semantic search over local Datacore knowledge base"
+    tool: datacortex search
+    layers: [search, research]
+    content_type: documents
+    cost_per_call: 0
+    always_available: true
+
+  # === GENERAL WEB ===
+  perplexity:
+    type: mcp
+    description: "AI-synthesized web search with citations"
+    tool: perplexity_search
+    layers: [search, research]
+    api_key: PERPLEXITY_API_KEY
+    max_latency_ms: 4000
+    content_type: documents
+    cost_per_call: 0.005
+    models:
+      quick: sonar
+      deep: sonar-pro
+    good_for: [general, technology, news, market-analysis]
+
+  exa:
+    type: mcp
+    description: "Semantic web discovery — finds content by meaning"
+    tool: web_search_exa
+    layers: [research]
+    api_key: EXA_API_KEY
+    content_type: documents
+    cost_per_call: 0.001
+    good_for: [general, technology, companies, papers, blogs]
+
+  # === ACADEMIC ===
+  google-scholar:
+    type: mcp
+    description: "Academic papers, citation graphs, peer review"
+    tool: search  # serpapi-mcp search tool with engine=google_scholar
+    layers: [research]
+    api_key: SERPAPI_API_KEY
+    content_type: documents
+    cost_per_call: 0.003
+    authority: high
+    good_for: [medical, academic, scientific, longevity]
+    enabled: true  # Requires serpapi-mcp Python package
+    note: "Install: pip install serpapi-mcp; see github.com/serpapi/serpapi-mcp"
+
+  # === CONTENT EXTRACTION ===
+  jina-reader:
+    type: mcp
+    description: "Clean content extraction from any URL or PDF"
+    tool: jina_reader
+    layers: [gather]
+    api_key: JINA_API_KEY
+    content_type: documents
+    cost_per_call: 0.001
+
+  # === SYNTHESIS ===
+  gemini:
+    type: mcp
+    description: "Large-context synthesis (2M tokens)"
+    tool: gemini-query
+    layers: [synthesize]
+    api_key: GEMINI_API_KEY
+    content_type: documents
+    cost_per_call: 0.01
+    opt_in: true  # Sends content to Google; requires explicit enable
+
+  # === FUTURE SOURCES ===
+  # Uncomment and configure as needed:
+  #
+  # pubmed:
+  #   type: mcp
+  #   description: "Biomedical literature database"
+  #   tool: pubmed_search
+  #   layers: [research]
+  #   api_key: NCBI_API_KEY
+  #   content_type: documents
+  #   authority: high
+  #   good_for: [medical, longevity, clinical-trials]
+  #
+  # crunchbase:
+  #   type: mcp
+  #   description: "Company and startup database"
+  #   tool: crunchbase_search
+  #   layers: [research]
+  #   api_key: CRUNCHBASE_API_KEY
+  #   content_type: structured_data
+  #   good_for: [market-analysis, competitors, fundraising]
+  #
+  # defillama:
+  #   type: mcp
+  #   description: "DeFi protocol TVL, yields, analytics"
+  #   tool: defillama_query
+  #   layers: [research]
+  #   content_type: structured_data
+  #   good_for: [crypto, defi, market-analysis]
+  #   note: "Free API, no key required"
+  #
+  # coinglass:
+  #   type: mcp
+  #   description: "Crypto derivatives data, funding rates, OI"
+  #   tool: coinglass_query
+  #   layers: [research]
+  #   api_key: COINGLASS_API_KEY
+  #   content_type: structured_data
+  #   good_for: [crypto, trading, derivatives]
+  #
+  # semantic-scholar:
+  #   type: mcp
+  #   description: "AI-powered academic search with citation context"
+  #   tool: s2_search
+  #   layers: [research]
+  #   api_key: S2_API_KEY
+  #   content_type: documents
+  #   authority: high
+  #   good_for: [academic, ai, computer-science]

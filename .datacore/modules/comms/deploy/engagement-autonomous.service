@@ -1,0 +1,10 @@
+[Unit]
+Description=Autonomous engagement engine run
+
+[Service]
+Type=oneshot
+User={{USERNAME}}
+WorkingDirectory=/home/{{USERNAME}}/Data
+ExecStart=/usr/bin/python3 .datacore/modules/comms/lib/engagement_engine.py --autonomous --no-escalate
+EnvironmentFile=/home/{{USERNAME}}/config/nightshift.env
+TimeoutStartSec=300

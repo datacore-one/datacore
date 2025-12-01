@@ -1,0 +1,150 @@
+# Datacore Settings (Base Defaults)
+# User overrides go in settings.local.yaml (gitignored)
+
+# Editor settings
+editor:
+  # Open generated markdown files in system default app (e.g., Typora)
+  open_markdown_on_generate: false
+  # Command to open files (uses system default if empty)
+  open_command: ""
+
+# Tag Registry
+# Canonical source for all tags - referenced by sync, agents, validation
+tags:
+  registry: config/tags.yaml  # Single source of truth for all tags
+
+# Sync settings
+sync:
+  # Auto-pull on /today
+  pull_on_today: true
+  # Auto-push on /wrap-up
+  push_on_wrap_up: true
+
+  # External task sync (DIP-0010)
+  tasks:
+    # Enable/disable external task sync
+    enabled: false  # Set to true in settings.local.yaml when ready
+    # How often to poll for changes (for future background sync)
+    poll_interval: 10m
+
+  # Conflict resolution strategies (DIP-0010 Phase 2)
+  # Options: org_wins, external_wins, merge, ask
+  conflict_resolution:
+    state: org_wins          # Agent decisions are authoritative
+    title: org_wins          # Org title takes precedence
+    description: merge       # Try to combine descriptions
+    priority: org_wins       # Agent triage is authoritative
+    deadline: org_wins       # Org deadlines take precedence
+    labels: merge            # Combine labels/tags
+    comments: external_wins  # Human discussion wins
+
+  # Sync adapters configuration
+  adapters:
+    github:
+      enabled: false  # Enable in settings.local.yaml
+      repos: []
+        # Example:
+        # - owner: datacore-one
+        #   repo: datacore
+      # Label mappings loaded from tags.registry (config/tags.yaml sync_label_mapping)
+      # Override specific mappings here if needed:
+      # label_mapping:
+      #   ":custom:": "custom-label"
+
+    calendar:
+      enabled: false  # Enable in settings.local.yaml
+      # Google Calendar ID (default: "primary")
+      calendar_id: "primary"
+      # Days to look ahead when syncing
+      days_ahead: 14
+      # Output file for calendar entries
+      org_file: "0-personal/org/calendar.org"
+      # Include events from these additional calendars
+      # additional_calendars: []
+      #   - "work@example.com"
+      #   - "family@example.com"
+
+  # Task routing rules
+  routing:
+    # AI tasks from GitHub go to next_actions.org
+    - source: github
+      condition: "labels contains 'ai-task'"
+      destination: next_actions.org
+      tags: [":AI:"]
+
+    # High priority tasks
+    - source: github
+      condition: "labels contains 'priority-high'"
+      destination: next_actions.org
+      state: "NEXT"
+
+    # Default: unassigned issues go to inbox
+    - source: "*"
+      condition: "true"
+      destination: inbox.org
+
+# Journal settings
+journal:
+  # Auto-open journal after updating
+  open_after_update: false
+
+# Module: datacortex (knowledge graph visualization)
+datacortex:
+  auto_serve: false      # Auto-start server when /datacortex invoked
+  default_space: null    # Default space (null = ask user)
+  open_browser: true     # Open browser after server starts
+  port: 8765
+
+# Module: outbox (content routing out)
+outbox:
+  # Archive location: "server" or "local"
+  archive_location: server
+  # Server host for archive repos (if archive_location=server)
+  server_host: ""  # Set in settings.local.yaml
+  # Local archive path (if archive_location=local)
+  local_archive_path: "~/.datacore/archives"
+  # Archive repo naming: [space]-archive.git
+  archive_repos: {}
+    # Configure in settings.local.yaml, e.g.:
+    # 0-personal: "Data/0-personal-archive.git"
+    # 1-teamspace: "Data/1-teamspace-archive.git"
+
+# Module: nightshift (autonomous AI task execution)
+nightshift:
+  # Enable/disable nightshift processing
+  enabled: true
+  # Minimum quality score for approval (0.0-1.0)
+  quality_threshold: 0.80
+  # Maximum retries for failed tasks
+  max_retries: 2
+  # Daily budget limit in USD (0 = unlimited)
+  budget_daily_usd: 0
+
+  # Server configuration (set in settings.local.yaml)
+  # servers:
+  #   personal:
+  #     host: "nightshift.example.com"
+  #     user: "deploy"
+  #     ssh_key: "~/.ssh/nightshift_deploy"
+  #     spaces: ["*"]  # "*" = all spaces, or list specific ones
+  #     is_default: true
+
+# Learning settings (DIP-0019)
+learning:
+  # Existing active engrams to re-evaluate per review cycle (legacy quality audit)
+  legacy_audit_rate: 3
+
+# Search layer (DIP-0021)
+search:
+  timeout_ms: 5000
+
+# Research layer (DIP-0021)
+research:
+  podcast:
+    auto_generate: true
+  max_sources_per_night: 20
+  relevance_threshold: 0.6
+
+# Ingest layer (DIP-0021)
+ingest:
+  content_reader: "jina"

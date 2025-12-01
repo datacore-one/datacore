@@ -1,0 +1,64 @@
+# GTD Trigger Lists — Mind-sweep prompts for weekly review
+# Per DIP-0009 Part 5 (Weekly Review)
+#
+# Usage: During weekly review, scan each category to capture incomplete loops.
+# Each item is a prompt, not a task. If it triggers something, capture to inbox.
+
+personal:
+  - Health appointments or screenings due
+  - Financial tasks (bills, investments, tax)
+  - Home maintenance or repairs needed
+  - Relationships to nurture (birthdays, catch-ups)
+  - Personal projects stalled or abandoned
+  - Books or courses started but not finished
+  - Exercise or diet commitments drifting
+  - Travel or vacation planning
+  - Legal or administrative paperwork
+  - Subscriptions to review or cancel
+
+professional:
+  - Promises made to others not yet fulfilled
+  - Meetings that need follow-up actions
+  - Emails or messages awaiting response
+  - Projects with unclear next actions
+  - Delegated tasks not yet checked on
+  - Deadlines approaching in next 2 weeks
+  - Skills or certifications to develop
+  - Networking contacts to follow up with
+  - Tools or processes that need improvement
+  - Documentation that needs updating
+
+datacore:
+  - DIPs in draft state needing attention
+  - Module updates or bugs reported
+  - Agent performance issues noticed
+  - Knowledge base gaps identified
+  - Nightshift failures to investigate
+  - Inbox items older than 7 days
+  - Stale branches in any repo
+  - Server maintenance tasks
+  - Community contributions pending review
+  - Integration tests failing
+
+creative:
+  - Blog posts or articles in progress
+  - Content calendar gaps
+  - Research topics to explore
+  - Presentations to prepare
+  - Design ideas captured but not developed
+  - Side projects with momentum
+
+financial:
+  - Trading journal up to date
+  - Portfolio rebalancing needed
+  - Expense tracking current
+  - Invoice or payment follow-ups
+  - Budget review for the month
+
+someday_maybe:
+  - Ideas parked that might be timely now
+  - Technologies to evaluate
+  - People to connect with
+  - Places to visit or events to attend
+  - Courses or certifications to pursue
+  - Business ideas to explore

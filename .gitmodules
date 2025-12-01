@@ -1,0 +1,3 @@
+[submodule ".datacore/dips"]
+	path = .datacore/dips
+	url = https://github.com/datacore-one/datacore-dips.git

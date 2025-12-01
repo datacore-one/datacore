@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily follow execution — cluster-diverse batch
+
+[Timer]
+# Once per day at a human-like time
+OnCalendar=*-*-* 09:00:00 UTC
+Persistent=true
+RandomizedDelaySec=3600
+
+[Install]
+WantedBy=timers.target

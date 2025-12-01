@@ -1,0 +1,184 @@
+# Annual Review Template
+# Per DIP-0009 Part 7: Higher Horizons Review
+#
+# Schedule: First week of January (or user-chosen anniversary date)
+# Duration: 2-3 hour focused session
+# Output: Written to 0-personal/org/analytics/annual-review-YYYY.md
+
+version: "1.0.0"
+references:
+  - DIP-0009  # GTD Specification, Part 7
+
+sections:
+
+  - name: year_in_review
+    title: "Year in Review"
+    description: "Quantitative summary of the past year"
+    data_sources:
+      - nightshift.task_metrics (days: 365)
+      - gtd.effort_aggregate
+      - journal entries (past 12 months)
+    template: |
+      ## Year in Review - {year}
+
+      ### Execution Summary
+      | Metric | Value |
+      |--------|-------|
+      | Tasks completed | {total_completed} |
+      | AI tasks executed | {ai_tasks} |
+      | AI approval rate | {approval_rate}% |
+      | Estimated AI time saved | {hours_saved}h |
+      | Estimated AI cost | ${total_cost} |
+
+      ### By Quarter
+      | Quarter | Completed | AI Tasks | Key Theme |
+      |---------|-----------|----------|-----------|
+      | Q1 | {q1_completed} | {q1_ai} | {q1_theme} |
+      | Q2 | {q2_completed} | {q2_ai} | {q2_theme} |
+      | Q3 | {q3_completed} | {q3_ai} | {q3_theme} |
+      | Q4 | {q4_completed} | {q4_ai} | {q4_theme} |
+
+  - name: projects_completed
+    title: "Projects Completed"
+    description: "All projects closed this year"
+    data_sources:
+      - gtd.project_health
+      - org/next_actions.org (DONE projects)
+    prompts:
+      - "Which project are you most proud of?"
+      - "Which project taught you the most?"
+      - "Any projects you wish you hadn't started?"
+
+  - name: goals_assessment
+    title: "Goals Assessment"
+    description: "Review goals set last year vs actual outcomes"
+    prompts:
+      - "What were your goals for {year}?"
+      - "Which goals did you achieve?"
+      - "Which goals did you abandon and why?"
+      - "What unexpected accomplishments emerged?"
+
+  - name: horizons_of_focus
+    title: "Horizons of Focus"
+    description: "GTD higher horizons review (30K-50K ft)"
+    subsections:
+      - name: purpose_principles
+        horizon: "50,000 ft - Purpose & Principles"
+        prompts:
+          - "What is your life purpose? Has it shifted?"
+          - "What core principles guide your decisions?"
+          - "Are your daily actions aligned with these?"
+
+      - name: vision
+        horizon: "40,000 ft - Vision (3-5 year)"
+        prompts:
+          - "Where do you want to be in 3-5 years?"
+          - "What does success look like?"
+          - "What capabilities do you need to develop?"
+
+      - name: goals
+        horizon: "30,000 ft - Goals (1-2 year)"
+        prompts:
+          - "What are your top 3-5 goals for next year?"
+          - "How do these connect to your 3-5 year vision?"
+          - "What measurable milestones will track progress?"
+
+      - name: areas_of_focus
+        horizon: "20,000 ft - Areas of Focus"
+        prompts:
+          - "Review each focus area in next_actions.org"
+          - "Any areas to add, rename, or retire?"
+          - "Are the focus area priorities (TIER 1/2/3) still correct?"
+
+  - name: intent_graph_review
+    title: "Intent Graph Review"
+    description: "Review strategic intent alignment"
+    data_sources:
+      - 2-datacore/1-tracks/ops/Intent-Graph.md
+      - nightshift.intent_score (aggregate)
+    prompts:
+      - "Are the intents in the Intent Graph still valid?"
+      - "Any new strategic intents to add?"
+      - "Which intent saw the most progress this year?"
+      - "Which intent was most neglected?"
+
+  - name: system_health
+    title: "System Health"
+    description: "GTD system and Datacore health check"
+    data_sources:
+      - structural_integrity audit
+      - CLAUDE.md health check
+      - agent registry audit
+    prompts:
+      - "Is the GTD system trustworthy?"
+      - "What system friction points emerged this year?"
+      - "What modules or tools should be added/removed?"
+      - "Is AI delegation working effectively?"
+
+  - name: someday_maybe_purge
+    title: "Someday/Maybe Annual Purge"
+    description: "Deep review and cleanup of someday list"
+    data_sources:
+      - org/someday.org
+    instructions: |
+      Review every item in someday.org. For each item:
+      1. Still interested? Keep.
+      2. No longer relevant? Delete.
+      3. Ready to commit? Promote to active project.
+      4. Belongs elsewhere? Move to reference or archive.
+
+      Target: Remove at least 30% of stale items.
+
+  - name: learning_review
+    title: "Learning & Growth"
+    description: "Review knowledge acquisition and engram quality"
+    data_sources:
+      - engrams.yaml (active engrams)
+      - 3-knowledge/ (items created this year)
+    prompts:
+      - "What were your most valuable learnings?"
+      - "Which engrams had the most impact?"
+      - "What skills did you develop?"
+      - "What do you want to learn next year?"
+
+  - name: relationships
+    title: "Relationship Review"
+    description: "CRM-informed relationship health"
+    data_sources:
+      - crm module (if installed)
+    prompts:
+      - "Who were your most important collaborators?"
+      - "Any relationships that need attention?"
+      - "Who do you want to connect with next year?"
+
+  - name: next_year_planning
+    title: "Next Year Planning"
+    description: "Set direction for the coming year"
+    template: |
+      ## {next_year} Direction
+
+      ### Theme
+      One word or phrase for the year: ___
+
+      ### Top 3 Goals
+      1. ___
+      2. ___
+      3. ___
+
+      ### Key Projects to Start
+      - ___
+
+      ### Key Habits to Build
+      - ___
+
+      ### Key Habits to Break
+      - ___
+
+      ### Q1 Focus
+      What will you focus on in the first quarter?
+      - ___
+
+output:
+  path: "0-personal/org/analytics/annual-review-{year}.md"
+  journal_entry: true
+  create_next_year_goals: true

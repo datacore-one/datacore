@@ -1,0 +1,107 @@
+# Decision Log
+# Managed by: session-learning agent
+# Queried by: strategic-prioritizer, gtd-inbox-processor, /today
+# Schema: see docs/plans/2026-02-22-brain-os-features-design.md
+#
+# Types: strategic | architectural | operational | tactical
+# Status: active | superseded | validated | invalidated
+# Scope: global | space:X | project:X
+
+decisions:
+  - id: DEC-2026-0222-001
+    date: 2026-02-22
+    type: architectural
+    scope: global
+    topic: "Voice encoding architecture: per-space + per-platform"
+    chosen: "YAML voice profiles in [space]/.datacore/voice.yaml with platform variants"
+    alternatives:
+      - option: "Personal-only voice profile"
+        reason_rejected: "Different spaces need different voices (Datafund vs personal)"
+      - option: "Per-space without platform variants"
+        reason_rejected: "X needs punchier tone than LinkedIn; platform matters"
+    reasoning: "Layered approach matches existing Datacore patterns. Space voice overrides personal default, platform variant adjusts specific dimensions."
+    confidence: 8
+    status: active
+    review_date: 2026-05-22
+    outcome: null
+    successor: null
+    engram_id: null
+    journal_ref: "0-personal/notes/journals/2026-02-22.md"
+
+  - id: DEC-2026-0222-002
+    date: 2026-02-22
+    type: architectural
+    scope: global
+    topic: "Decision log storage: journal + indexed YAML"
+    chosen: "Capture in journal, auto-extract to .datacore/state/decisions.yaml"
+    alternatives:
+      - option: "Journal only"
+        reason_rejected: "Not queryable by agents"
+      - option: ".datacore/state/ only"
+        reason_rejected: "Loses human-readable daily context"
+    reasoning: "Journal for narrative context, YAML for agent querying. Dual storage matches how engrams work (patterns.md + engrams.yaml)."
+    confidence: 8
+    status: active
+    review_date: 2026-05-22
+    outcome: null
+    successor: null
+    engram_id: null
+    journal_ref: "0-personal/notes/journals/2026-02-22.md"
+
+  - id: DEC-2026-0222-003
+    date: 2026-02-22
+    type: architectural
+    scope: global
+    topic: "Relationship between decisions, engrams, and ADRs"
+    chosen: "Decisions are raw material; engrams are extracted generalizations; ADRs are architectural views"
+    alternatives:
+      - option: "Merge decisions into engram system"
+        reason_rejected: "Decisions are contextual and time-bound; engrams are abstract and reusable"
+      - option: "Keep ADRs separate in project repos only"
+        reason_rejected: "Loses connection to decision reasoning and outcome tracking"
+    reasoning: "Three distinct concepts with clear lifecycle: decision -> reviewed -> outcome logged -> engram extracted if pattern emerges. ADRs are decisions filtered by type:architectural + project scope."
+    confidence: 9
+    status: active
+    review_date: 2026-05-22
+    outcome: null
+    successor: null
+    engram_id: null
+    journal_ref: "0-personal/notes/journals/2026-02-22.md"
+
+  - id: DEC-2026-0222-004
+    date: 2026-02-22
+    type: architectural
+    scope: global
+    topic: "Idea scoring: hybrid staging approach"
+    chosen: "Inbox processor scores and routes to ideas.org; ideas graduate to next_actions when threshold met"
+    alternatives:
+      - option: "Extend GTD inbox only"
+        reason_rejected: "No staging area for developing half-baked ideas"
+      - option: "New standalone ideas module"
+        reason_rejected: "Over-engineered; ideas should flow through GTD pipeline"
+    reasoning: "Hybrid captures ideas early without polluting next_actions, while using existing inbox processor as entry point."
+    confidence: 7
+    status: active
+    review_date: 2026-05-22
+    outcome: null
+    successor: null
+    engram_id: null
+    journal_ref: "0-personal/notes/journals/2026-02-22.md"
+
+  - id: DEC-2026-0222-005
+    date: 2026-02-22
+    type: operational
+    scope: global
+    topic: "Data safety pattern: backup/archive vs append-only JSONL"
+    chosen: "Continue with existing backup/archive approach"
+    alternatives:
+      - option: "Adopt append-only JSONL pattern from Brain OS"
+        reason_rejected: "User prefers backup/archive; Datacore already has archiving patterns (DIP-0017)"
+    reasoning: "Append-only is elegant but adds format constraint. Existing archive pattern is more flexible and already documented."
+    confidence: 7
+    status: active
+    review_date: 2026-05-22
+    outcome: null
+    successor: null
+    engram_id: null
+    journal_ref: "0-personal/notes/journals/2026-02-22.md"

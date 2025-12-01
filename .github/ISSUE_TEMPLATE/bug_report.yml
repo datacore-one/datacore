@@ -1,0 +1,54 @@
+name: Bug Report
+description: Report a bug in Datacore
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please fill in the details below.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened? What did you expect?
+      placeholder: Describe the bug...
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce this?
+      placeholder: |
+        1. Run `/today`
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Datacore Version
+      description: Output of `git log --oneline -1` in ~/Data
+      placeholder: "abc1234 feat: ..."
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Core system
+        - GTD module
+        - Nightshift module
+        - Research module
+        - CRM module
+        - Meetings module
+        - Other module
+        - MCP server
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs
+      description: Paste any error messages or logs
+      render: shell

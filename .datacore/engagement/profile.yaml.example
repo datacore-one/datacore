@@ -1,0 +1,75 @@
+version: 4
+identity:
+  mode: private
+  pseudonym: null
+  erc8004_address: null
+  erc8004_registered: false
+xp:
+  total: 0
+  this_week: 0
+  history: []
+tier:
+  current: Seed
+  achieved_at: null
+  history: []
+multipliers:
+  active: []
+  effective: 1
+consistency:
+  active_days_30: 0
+  best_run: 0
+  last_active: null
+challenges:
+  active: null
+  completed: 0
+  dismissed: 0
+  graduated: false
+  history: []
+reconsolidation:
+  pending: []
+  total_resolved: 0
+  outcomes:
+    defended: 0
+    revised: 0
+    retired: 0
+    dismissed: 0
+  response_rate: 0
+discoveries:
+  pending: []
+  total: 0
+  last_offered: null
+  explored: 0
+  noted: 0
+  explore_rate: 0
+ai_performance:
+  total_injections: 0
+  feedback_count: 0
+  helpful_ratio: 0
+  top_engrams: []
+  unused_60d: []
+reputation:
+  score: 0
+  components:
+    feedback_ratio: 0
+    stake_amount: 0
+    tenure_days: 0
+    reconsolidation_honesty: 0
+  last_calculated: null
+leaderboard:
+  mode: private
+  display_name: null
+  position: null
+badge:
+  preview_svg: null
+  nft_token_id: null
+  last_generated: null
+stats:
+  total_engrams_created: 0
+  total_feedback_given: 0
+  total_engrams_retired: 0
+  total_packs_exported: 0
+  total_feedback_received: 0
+  feedback_positive_ratio: 0
+  domains_covered: 0
+  public_engrams: 0
+  first_activity: null

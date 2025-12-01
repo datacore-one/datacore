@@ -1,0 +1,21 @@
+# Infrastructure Registry — servers, services, and deployment targets
+# Used by <!-- REGISTRY:infrastructure --> in CLAUDE.base.md
+#
+# Schema:
+#   servers:
+#     [name]:
+#       purpose:        What this server does
+#       ssh_alias:      SSH config alias (or - if N/A)
+#       deploy_method:  How code gets there (git pull, rsync, systemd, etc.)
+#       services:       List of services running on it
+#       notes:          Additional context
+
+servers:
+  nightshift:
+    purpose: "Overnight AI task execution (systemd timers)"
+    ssh_alias: "nightshift"
+    deploy_method: "git pull + systemctl restart"
+    services:
+      - nightshift-overnight.service
+      - nightshift-overnight.timer
+    notes: "Runs .datacore/modules/nightshift/ tasks on schedule"

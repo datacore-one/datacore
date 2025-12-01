@@ -1,0 +1,41 @@
+---
+title: {{SPACE_TITLE}} Space
+type: index
+created: {{DATE}}
+updated: {{DATE}}
+---
+
+# {{SPACE_TITLE}}
+
+> {{SPACE_DESCRIPTION}}
+
+## Quick Links
+
+| Area | Link |
+|------|------|
+| Projects | [[2-projects/_index]] |
+| Knowledge Base | [[3-knowledge/_index]] |
+| Tracks | [[1-tracks/_index]] |
+| Journal | [[journal/]] |
+
+## Current Focus
+
+1. [Add current priorities]
+
+## Key Projects
+
+| Project | Status | Description |
+|---------|--------|-------------|
+| [Project 1] | Active | [Description] |
+
+## Task Management
+
+| Component | Purpose |
+|-----------|---------|
+| [[org/inbox.org\|inbox.org]] | Task capture |
+| [[org/next_actions.org\|next_actions.org]] | AI task queue with :AI: tags |
+| GitHub Issues | External collaboration |
+
+---
+
+*Updated during weekly reviews.*

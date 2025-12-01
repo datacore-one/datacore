@@ -1,0 +1,11 @@
+[Unit]
+Description=Newsfeed monitor — like, score, quote-RT draft
+
+[Timer]
+# Offset from engagement timer (at :15 instead of :00), human hours only
+OnCalendar=*-*-* 07..20:15/30:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

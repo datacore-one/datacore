@@ -1,0 +1,10 @@
+[Unit]
+Description=Newsfeed monitor run
+
+[Service]
+Type=oneshot
+User={{USERNAME}}
+WorkingDirectory=/home/{{USERNAME}}/Data
+ExecStart=/usr/bin/python3 .datacore/modules/comms/lib/newsfeed_runner.py
+EnvironmentFile=/home/{{USERNAME}}/config/nightshift.env
+TimeoutStartSec=300

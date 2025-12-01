@@ -1,0 +1,26 @@
+# Datacore CODEOWNERS
+# These owners will be requested for review on PRs
+
+# Core system
+/.datacore/specs/          @datacore-one/maintainers
+/.datacore/dips/           @datacore-one/maintainers
+/.datacore/lib/            @datacore-one/maintainers
+/.datacore/registry/       @datacore-one/maintainers
+
+# Public modules
+/.datacore/modules/gtd/    @datacore-one/maintainers
+/.datacore/modules/nightshift/ @datacore-one/maintainers
+/.datacore/modules/research/   @datacore-one/maintainers
+/.datacore/modules/outbox/     @datacore-one/maintainers
+/.datacore/modules/datacortex/ @datacore-one/maintainers
+/.datacore/modules/crm/       @datacore-one/maintainers
+/.datacore/modules/meetings/   @datacore-one/maintainers
+/.datacore/modules/mail/       @datacore-one/maintainers
+
+# Documentation
+README.md                  @datacore-one/maintainers
+INSTALL.md                 @datacore-one/maintainers
+CONTRIBUTING.md            @datacore-one/maintainers
+
+# CI/CD
+/.github/                  @datacore-one/maintainers

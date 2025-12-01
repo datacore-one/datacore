@@ -1,0 +1,1277 @@
+# Datacore Tag Registry
+# Single source of truth for all tags across the system
+#
+# Referenced by:
+#   - Sync engine (label_mapping)
+#   - GTD agents (task routing)
+#   - Zettel processor (note classification)
+#   - Validation scripts
+#
+# NOTE: For agent routing, see .datacore/registry/agents.yaml (DIP-0016).
+#       The 'agent' field below is informational only; agents.yaml is authoritative.
+#
+# Format conventions:
+#   org-mode: :tag: (colons)
+#   hashtag:  #tag  (notes/zettels)
+#   yaml:     tag   (frontmatter)
+#   github:   tag   (labels)
+#
+# See DIP-0014 for full specification.
+
+# =============================================================================
+# AI DELEGATION TAGS
+# Used in org-mode to route tasks to AI agents
+# Routing is defined in agents.yaml (DIP-0016); these define semantics only.
+# =============================================================================
+ai_delegation:
+  AI:
+    description: "General AI-delegatable task"
+    org: ":AI:"
+    github: "ai-task"
+    agent: "ai-task-executor"  # informational, see agents.yaml
+    variants_to_avoid: ["ai", "AI-task", "automation"]
+
+  AI-content:
+    description: "Content generation (blog, email, docs, social)"
+    org: ":AI:content:"
+    github: "ai-content"
+    agent: "gtd-content-writer"
+
+  AI-research:
+    description: "Research, analysis, literature notes"
+    org: ":AI:research:"
+    github: "ai-research"
+    agent: "research-orchestrator"
+
+  AI-data:
+    description: "Data processing, metrics, reports"
+    org: ":AI:data:"
+    github: "ai-data"
+    agent: "gtd-data-analyzer"
+
+  AI-pm:
+    description: "Project management, status tracking"
+    org: ":AI:pm:"
+    github: "ai-pm"
+    agent: "gtd-project-manager"
+
+  AI-technical:
+    description: "Technical tasks requiring CTO review (not autonomous)"
+    org: ":AI:technical:"
+    github: "ai-technical"
+    agent: null  # Queued for human review
+    notes: "Not executed autonomously - flagged for CTO"
+
+  AI-module-register:
+    description: "Module registration tasks"
+    org: ":AI:module:register:"
+    github: "ai-module"
+    agent: "module-registrar"
+
+# =============================================================================
+# MODULE AI DELEGATION TAGS
+# Compound :AI: tags used by modules for agent routing.
+# Authoritative source: agents.yaml triggers + module.yaml tag fields.
+# =============================================================================
+module_ai_delegation:
+  AI-gtd:
+    description: "GTD module general task"
+    org: ":AI:gtd:"
+    agent: "ai-task-executor"
+
+  AI-strategy:
+    description: "Strategy and planning analysis"
+    org: ":AI:strategy:"
+    agent: "research-orchestrator"
+
+  AI-space-create:
+    description: "Create a new Datacore space"
+    org: ":AI:space:create:"
+    agent: "create-space"
+
+  AI-space-audit:
+    description: "Audit an existing space"
+    org: ":AI:space:audit:"
+    agent: "create-space"
+
+  AI-module-create:
+    description: "Create or scaffold a module"
+    org: ":AI:module:create:"
+    agent: "create-module"
+
+  AI-comms:
+    description: "Communications module general task"
+    org: ":AI:comms:"
+    agent: "comms-executor"
+
+  AI-comms-brand:
+    description: "Brand positioning and voice"
+    org: ":AI:comms:brand:"
+    agent: "brand-positioning-agent"
+
+  AI-comms-plan:
+    description: "Campaign and content planning"
+    org: ":AI:comms:plan:"
+    agent: "campaign-planner"
+
+  AI-comms-content:
+    description: "Content generation"
+    org: ":AI:comms:content:"
+    agent: "content-generator"
+
+  AI-comms-calendar:
+    description: "Content calendar management"
+    org: ":AI:comms:calendar:"
+    agent: "calendar-manager"
+
+  AI-comms-publish:
+    description: "Content publishing and scheduling"
+    org: ":AI:comms:publish:"
+    agent: "calendar-manager"
+
+  AI-comms-analytics:
+    description: "Campaign analytics and metrics"
+    org: ":AI:comms:analytics:"
+    agent: "metrics-analyzer"
+
+  AI-comms-adapt:
+    description: "Web3 content adaptation"
+    org: ":AI:comms:adapt:"
+    agent: "web3-adapter"
+
+  AI-comms-ads:
+    description: "Paid ads optimization"
+    org: ":AI:comms:ads:"
+    agent: "ads-optimizer"
+
+  AI-comms-landing:
+    description: "Landing page generation"
+    org: ":AI:comms:landing:"
+    agent: "landing-generator"
+
+  AI-forge-analyze:
+    description: "Forge market opportunity analysis"
+    org: ":AI:forge:analyze:"
+    agent: "forge-analyst"
+
+  AI-forge-generate:
+    description: "Forge digital product generation"
+    org: ":AI:forge:generate:"
+    agent: "forge-generator"
+
+  AI-forge-publish:
+    description: "Forge product listing and publishing"
+    org: ":AI:forge:publish:"
+    agent: "forge-publisher"
+
+  AI-forge-monitor:
+    description: "Forge sales monitoring"
+    org: ":AI:forge:monitor:"
+    agent: "forge-monitor"
+
+  AI-forge-strategy:
+    description: "Forge product strategy"
+    org: ":AI:forge:strategy:"
+    agent: "forge-strategist"
+
+  AI-forge-track:
+    description: "Forge product tracking"
+    org: ":AI:forge:track:"
+    agent: "forge-monitor"
+
+  AI-grants:
+    description: "Grant proposal writing"
+    org: ":AI:grants:"
+    agent: "grant-writer"
+
+  AI-grants-research:
+    description: "Grant call research"
+    org: ":AI:grants:research:"
+    agent: "grant-researcher"
+
+  AI-presentation:
+    description: "Presentation generation"
+    org: ":AI:presentation:"
+    agent: "presentation-generator"
+
+  AI-presentation-gamma:
+    description: "Gamma presentation generation"
+    org: ":AI:presentation:gamma:"
+    agent: "gamma-presentation-generator"
+
+  AI-presentation-index:
+    description: "Presentation indexing"
+    org: ":AI:presentation:index:"
+    agent: "gamma-slide-indexer"
+
+  AI-image:
+    description: "Image generation"
+    org: ":AI:image:"
+    agent: "image-generator"
+
+  AI-loans:
+    description: "Loan tracking and reconciliation"
+    org: ":AI:loans:"
+    agent: "loan-tracker"
+
+  AI-reconcile:
+    description: "Financial reconciliation"
+    org: ":AI:reconcile:"
+    agent: "loan-tracker"
+
+# =============================================================================
+# PRIORITY TAGS
+# Map between org-mode priorities and external systems
+# =============================================================================
+priority:
+  A:
+    description: "High priority - do today"
+    org: "[#A]"
+    github: "priority-high"
+    color: "#d73a4a"
+
+  B:
+    description: "Medium priority - do this week"
+    org: "[#B]"
+    github: "priority-medium"
+    color: "#fbca04"
+
+  C:
+    description: "Low priority - do when possible"
+    org: "[#C]"
+    github: "priority-low"
+    color: "#0e8a16"
+
+# =============================================================================
+# CONTEXT TAGS
+# Who/where/when contexts for GTD
+# =============================================================================
+context:
+  # People — configure team members in tags.local.yaml
+  # Example:
+  #   user1:
+  #     description: "Assigned to User1"
+  #     org: ":@user1:"
+  #     github: "assignee:ghuser1"
+
+  # Location/Mode contexts
+  computer:
+    description: "Requires computer/laptop"
+    org: ":@computer:"
+
+  home:
+    description: "Tasks to do at home"
+    org: ":@home:"
+
+  office:
+    description: "Tasks to do at office"
+    org: ":@office:"
+
+  online:
+    description: "Tasks requiring internet"
+    org: ":@online:"
+
+  phone:
+    description: "Can do on phone"
+    org: ":@phone:"
+
+  call:
+    description: "Requires phone call"
+    org: ":@call:"
+
+  errands:
+    description: "Tasks while out"
+    org: ":@errands:"
+
+  waiting:
+    description: "Waiting for someone"
+    org: ":@waiting:"
+
+  anywhere:
+    description: "No location constraint"
+    org: ":@anywhere:"
+
+# =============================================================================
+# STATUS TAGS
+# Task/content status indicators
+# =============================================================================
+status:
+  urgent:
+    description: "Needs immediate attention"
+    org: ":urgent:"
+    github: "urgent"
+
+  blocked:
+    description: "Blocked by dependency"
+    org: ":blocked:"
+    github: "blocked"
+
+  review:
+    description: "Needs review"
+    org: ":review:"
+    github: "needs-review"
+
+  stub:
+    description: "Placeholder content, needs expansion"
+    yaml: "stub"
+    hashtag: "#stub"
+
+  needs-content:
+    description: "Note needs content added"
+    yaml: "needs-content"
+
+  draft:
+    description: "Work in progress"
+    yaml: "draft"
+    synonyms: [wip, in-progress]
+
+  published:
+    description: "Ready for consumption"
+    yaml: "published"
+    synonyms: [final, complete]
+
+  archived:
+    description: "Historical, no longer active"
+    yaml: "archived"
+
+# =============================================================================
+# MATURITY TAGS
+# Knowledge maturity (Zettelkasten)
+# =============================================================================
+maturity:
+  seedling:
+    description: "Newly captured idea"
+    hashtag: "#seedling"
+    yaml: "seedling"
+
+  budding:
+    description: "Growing with connections"
+    hashtag: "#budding"
+    yaml: "budding"
+
+  evergreen:
+    description: "Stable, refined knowledge"
+    hashtag: "#evergreen"
+    yaml: "evergreen"
+
+# =============================================================================
+# DOMAIN TAGS
+# Subject area classification (for both org tasks and notes)
+# =============================================================================
+domains:
+  # Organization/Project domains — configure in tags.local.yaml
+  # Example:
+  #   mycompany:
+  #     description: "Company matters"
+  #     org: ":mycompany:"
+  #     hashtag: "#MyCompany"
+  #     yaml: "mycompany"
+
+  datacore:
+    description: "Datacore system"
+    org: ":datacore:"
+    hashtag: "#Datacore"
+    yaml: "datacore"
+
+  # Technology domains
+  AI:
+    description: "Artificial Intelligence topics"
+    org: ":ai:"
+    hashtag: "#AI"
+    yaml: "ai"
+    aliases: ["#LLM", "#ChatGPT"]
+
+  tech:
+    description: "Technology topics"
+    org: ":tech:"
+    hashtag: "#Tech"
+    yaml: "tech"
+
+  privacy-tech:
+    description: "Privacy-preserving technology"
+    org: ":privacy-tech:"
+    hashtag: "#PrivacyTech"
+    yaml: "privacy-tech"
+
+  ethereum:
+    description: "Ethereum blockchain"
+    org: ":ethereum:"
+    hashtag: "#Ethereum"
+    yaml: "ethereum"
+    aliases: ["#ethereum"]
+
+  web3:
+    description: "Web3/decentralized web"
+    org: ":web3:"
+    hashtag: "#Web3"
+    yaml: "web3"
+
+  blockchain:
+    description: "Blockchain technology"
+    org: ":blockchain:"
+    hashtag: "#Blockchain"
+    yaml: "blockchain"
+    aliases: ["#blockchain"]
+
+  privacy:
+    description: "Privacy topics"
+    org: ":privacy:"
+    hashtag: "#Privacy"
+    yaml: "privacy"
+
+  security:
+    description: "Security topics"
+    org: ":security:"
+    hashtag: "#Security"
+    yaml: "security"
+    aliases: ["#security", "#hacking", "#Hacking"]
+
+  defi:
+    description: "Decentralized finance"
+    org: ":defi:"
+    hashtag: "#DeFi"
+    yaml: "defi"
+
+  nft:
+    description: "Non-fungible tokens"
+    org: ":nft:"
+    hashtag: "#NFT"
+    yaml: "nft"
+
+  dao:
+    description: "Decentralized autonomous organizations"
+    org: ":dao:"
+    hashtag: "#DAO"
+    yaml: "dao"
+
+  crypto:
+    description: "Cryptocurrency and cryptography"
+    org: ":crypto:"
+    hashtag: "#Crypto"
+    yaml: "crypto"
+
+  rwa:
+    description: "Real-world assets (tokenization)"
+    org: ":rwa:"
+    hashtag: "#RWA"
+    yaml: "rwa"
+
+  data-economy:
+    description: "Data economy and fair data"
+    org: ":data-economy:"
+    hashtag: "#DataEconomy"
+    yaml: "data-economy"
+
+  # Personal domains
+  trading:
+    description: "Trading and markets"
+    org: ":trading:"
+    hashtag: "#Trading"
+    yaml: "trading"
+
+  health:
+    description: "Health and wellness"
+    org: ":health:"
+    hashtag: "#Health"
+    yaml: "health"
+    aliases: ["#Wellbeing", "#Healthcare", "#Medical"]
+
+  fitness:
+    description: "Fitness and exercise"
+    org: ":fitness:"
+    hashtag: "#Fitness"
+    yaml: "fitness"
+
+  healthcare:
+    description: "Healthcare system and providers"
+    org: ":healthcare:"
+    hashtag: "#Healthcare"
+    yaml: "healthcare"
+
+  stoicism:
+    description: "Stoic philosophy"
+    org: ":stoicism:"
+    hashtag: "#Stoicism"
+    yaml: "stoicism"
+
+  management:
+    description: "Management and leadership"
+    org: ":management:"
+    hashtag: "#Management"
+    yaml: "management"
+
+  # Business domains
+  strategy:
+    description: "Strategy and planning"
+    org: ":strategy:"
+    hashtag: "#Strategy"
+    yaml: "strategy"
+
+  partnerships:
+    description: "Partnership opportunities"
+    org: ":partnerships:"
+    hashtag: "#Partnerships"
+    yaml: "partnerships"
+
+  grants:
+    description: "Grant opportunities"
+    org: ":grants:"
+    hashtag: "#Grants"
+    yaml: "grants"
+
+  startups:
+    description: "Startup ecosystem"
+    org: ":startups:"
+    hashtag: "#Startups"
+    yaml: "startups"
+    aliases: ["#Startup"]
+
+  fundraising:
+    description: "Fundraising and investment"
+    org: ":fundraising:"
+    hashtag: "#Fundraising"
+    yaml: "fundraising"
+
+  product:
+    description: "Product development"
+    org: ":product:"
+    hashtag: "#Product"
+    yaml: "product"
+
+  # Organization-specific domains
+  datafund:
+    description: "Datafund organization"
+    org: ":datafund:"
+    hashtag: "#Datafund"
+    yaml: "datafund"
+
+  verity:
+    description: "Verity project"
+    org: ":verity:"
+    hashtag: "#Verity"
+    yaml: "verity"
+
+  fds:
+    description: "Fair Data Society"
+    org: ":fds:"
+    hashtag: "#FDS"
+    yaml: "fds"
+
+  fairdrop:
+    description: "Fairdrop product"
+    org: ":fairdrop:"
+    hashtag: "#Fairdrop"
+    yaml: "fairdrop"
+
+  fairdrive:
+    description: "Fairdrive product"
+    org: ":fairdrive:"
+    hashtag: "#Fairdrive"
+    yaml: "fairdrive"
+
+  swarm:
+    description: "Swarm/Ethswarm network"
+    org: ":swarm:"
+    hashtag: "#Swarm"
+    yaml: "swarm"
+
+  provenance:
+    description: "Data provenance"
+    org: ":provenance:"
+    hashtag: "#Provenance"
+    yaml: "provenance"
+
+  # Workflow/system tags (used as org segments in compound tags)
+  readwise:
+    description: "Imported via Readwise"
+    org: ":readwise:"
+
+  continuation:
+    description: "Continuation of previous work"
+    org: ":continuation:"
+
+  nightshift:
+    description: "Nightshift AI execution"
+    org: ":nightshift:"
+
+  inbox:
+    description: "Inbox item"
+    org: ":inbox:"
+
+  someday:
+    description: "Someday/maybe item"
+    org: ":someday:"
+
+  question:
+    description: "Question requiring answer"
+    org: ":question:"
+
+  questions:
+    description: "Questions collection"
+    org: ":questions:"
+
+  outreach:
+    description: "Outreach activity"
+    org: ":outreach:"
+
+  infrastructure:
+    description: "Infrastructure work"
+    org: ":infrastructure:"
+
+  dev:
+    description: "Development tasks"
+    org: ":dev:"
+
+  devops:
+    description: "DevOps and operations"
+    org: ":devops:"
+
+  publication:
+    description: "Publication and publishing"
+    org: ":publication:"
+
+  ingest:
+    description: "Content ingestion"
+    org: ":ingest:"
+
+  # Topic/subject segments (used in compound org tags)
+  pitchdeck:
+    description: "Pitch deck related"
+    org: ":pitchdeck:"
+
+  davos:
+    description: "Davos/WEF events"
+    org: ":davos:"
+
+  undavos:
+    description: "unDavos event"
+    org: ":undavos:"
+
+  read:
+    description: "Reading material"
+    org: ":read:"
+
+  reading:
+    description: "Reading/study activity"
+    org: ":reading:"
+
+  teo:
+    description: "TEO topic"
+    org: ":teo:"
+
+  mail:
+    description: "Email related"
+    org: ":mail:"
+
+  openai:
+    description: "OpenAI topics"
+    org: ":openai:"
+
+  buy:
+    description: "Purchase consideration"
+    org: ":buy:"
+
+  partnership:
+    description: "Partnership activities"
+    org: ":partnership:"
+
+  wellbeing:
+    description: "Wellbeing and self-care"
+    org: ":wellbeing:"
+
+  meta:
+    description: "Meta/system-level topics"
+    org: ":meta:"
+
+  tokenisation:
+    description: "Tokenisation topics"
+    org: ":tokenisation:"
+
+  tokenization:
+    description: "Tokenization topics (US spelling)"
+    org: ":tokenization:"
+
+  admin:
+    description: "Administrative tasks"
+    org: ":admin:"
+
+  architecture:
+    description: "Architecture and design"
+    org: ":architecture:"
+
+  ops:
+    description: "Operations"
+    org: ":ops:"
+
+  development:
+    description: "Development work"
+    org: ":development:"
+
+  watch:
+    description: "Watch/monitor items"
+    org: ":watch:"
+
+  campaign:
+    description: "Campaign activity"
+    org: ":campaign:"
+
+  campaigns:
+    description: "Campaigns (plural)"
+    org: ":campaigns:"
+
+  learning:
+    description: "Learning and education"
+    org: ":learning:"
+
+  dubai:
+    description: "Dubai location/events"
+    org: ":dubai:"
+
+  tools:
+    description: "Tools and utilities"
+    org: ":tools:"
+
+  medical:
+    description: "Medical topics"
+    org: ":medical:"
+
+  zero-knowledge:
+    description: "Zero-knowledge proofs"
+    org: ":zero-knowledge:"
+
+  chatgpt:
+    description: "ChatGPT/OpenAI topics"
+    org: ":chatgpt:"
+
+  dmcc:
+    description: "DMCC (Dubai Multi Commodities Centre)"
+    org: ":dmcc:"
+
+  infra:
+    description: "Infrastructure"
+    org: ":infra:"
+
+  fds-id:
+    description: "FDS ID system"
+    org: ":fds-id:"
+
+  travel:
+    description: "Travel related"
+    org: ":travel:"
+
+  linkedin:
+    description: "LinkedIn platform"
+    org: ":linkedin:"
+
+  slides:
+    description: "Slides/presentation content"
+    org: ":slides:"
+
+  competitor:
+    description: "Competitor analysis"
+    org: ":competitor:"
+
+  competitors:
+    description: "Competitor analysis (plural)"
+    org: ":competitors:"
+
+  ethics:
+    description: "Ethics topics"
+    org: ":ethics:"
+
+  longevity:
+    description: "Longevity and aging research"
+    org: ":longevity:"
+
+  to-do:
+    description: "To-do items"
+    org: ":to-do:"
+
+  coaching:
+    description: "Coaching activity"
+    org: ":coaching:"
+
+  agents:
+    description: "AI agents topic"
+    org: ":agents:"
+
+  social:
+    description: "Social media"
+    org: ":social:"
+
+  personal:
+    description: "Personal matters"
+    org: ":personal:"
+
+  contacts:
+    description: "Contact management"
+    org: ":contacts:"
+
+  finance:
+    description: "Finance and financial"
+    org: ":finance:"
+
+  telegram:
+    description: "Telegram platform"
+    org: ":telegram:"
+
+  news:
+    description: "News items"
+    org: ":news:"
+
+  daily:
+    description: "Daily recurring"
+    org: ":daily:"
+
+  cli:
+    description: "Command-line interface"
+    org: ":cli:"
+
+  tooling:
+    description: "Tooling and build systems"
+    org: ":tooling:"
+
+  demo:
+    description: "Demo/demonstration"
+    org: ":demo:"
+
+  network:
+    description: "Network topics"
+    org: ":network:"
+
+  etsy:
+    description: "Etsy marketplace"
+    org: ":etsy:"
+
+  design:
+    description: "Design work"
+    org: ":design:"
+
+  ci:
+    description: "Continuous integration"
+    org: ":ci:"
+
+  maintenance:
+    description: "Maintenance tasks"
+    org: ":maintenance:"
+
+  tags:
+    description: "Tag management"
+    org: ":tags:"
+
+  documentation:
+    description: "Documentation work"
+    org: ":documentation:"
+
+  enforcement:
+    description: "Policy enforcement"
+    org: ":enforcement:"
+
+  deploy:
+    description: "Deployment tasks"
+    org: ":deploy:"
+
+  feature:
+    description: "Feature development"
+    org: ":feature:"
+
+  roadmap:
+    description: "Roadmap planning"
+    org: ":roadmap:"
+
+  messaging:
+    description: "Messaging and communications"
+    org: ":messaging:"
+
+  mcp:
+    description: "MCP (Model Context Protocol)"
+    org: ":mcp:"
+
+  integration:
+    description: "Integration work"
+    org: ":integration:"
+
+  speaking:
+    description: "Speaking engagements"
+    org: ":speaking:"
+
+  advisor:
+    description: "Advisory activities"
+    org: ":advisor:"
+
+  strategic:
+    description: "Strategic initiatives"
+    org: ":strategic:"
+
+  escrow:
+    description: "Escrow mechanisms"
+    org: ":escrow:"
+
+  blocking:
+    description: "Blocking issue"
+    org: ":blocking:"
+
+  storage:
+    description: "Storage systems"
+    org: ":storage:"
+
+  community:
+    description: "Community engagement"
+    org: ":community:"
+
+  tokenholders:
+    description: "Token holder matters"
+    org: ":tokenholders:"
+
+  sakal:
+    description: "Sakal contact/project"
+    org: ":sakal:"
+
+  agent-economy:
+    description: "Agent economy topics"
+    org: ":agent-economy:"
+
+  domains:
+    description: "Domain management"
+    org: ":domains:"
+
+  gtd:
+    description: "GTD methodology"
+    org: ":gtd:"
+
+  market:
+    description: "Market analysis"
+    org: ":market:"
+
+  google:
+    description: "Google topics"
+    org: ":google:"
+
+  llm:
+    description: "Large language model topics"
+    org: ":llm:"
+
+  knowledge-management:
+    description: "Knowledge management"
+    org: ":knowledge-management:"
+
+  open-source:
+    description: "Open source topics"
+    org: ":open-source:"
+
+  data-provenance:
+    description: "Data provenance topics"
+    org: ":data-provenance:"
+
+  openclaw:
+    description: "OpenClaw project"
+    org: ":openclaw:"
+
+  accounting:
+    description: "Accounting and bookkeeping"
+    org: ":accounting:"
+
+  github:
+    description: "GitHub platform"
+    org: ":github:"
+
+  workflow:
+    description: "Workflow design"
+    org: ":workflow:"
+
+  fair-data-economy:
+    description: "Fair data economy concept"
+    org: ":fair-data-economy:"
+
+  copyright:
+    description: "Copyright and IP"
+    org: ":copyright:"
+
+  microsoft:
+    description: "Microsoft topics"
+    org: ":microsoft:"
+
+  eu:
+    description: "European Union"
+    org: ":eu:"
+
+  economics:
+    description: "Economics topics"
+    org: ":economics:"
+
+  engineering:
+    description: "Engineering topics"
+    org: ":engineering:"
+
+  marketing:
+    description: "Marketing topics"
+    org: ":marketing:"
+
+  process:
+    description: "Process improvement"
+    org: ":process:"
+
+  prompt:
+    description: "Prompt engineering"
+    org: ":prompt:"
+
+  tutorial:
+    description: "Tutorial content"
+    org: ":tutorial:"
+
+# =============================================================================
+# CONTENT TYPE TAGS
+# For classifying notes and content
+# =============================================================================
+content_types:
+  zettel:
+    description: "Atomic knowledge note"
+    hashtag: "#Zettel"
+    yaml: "zettel"
+
+  literature-note:
+    description: "Source material summary"
+    hashtag: "#LiteratureNote"
+    yaml: "literature-note"
+
+  clipping:
+    description: "Web clipping"
+    hashtag: "#Clipping"
+    yaml: "clipping"
+
+  journal:
+    description: "Daily journal entry"
+    hashtag: "#Journal"
+    yaml: "journal"
+
+  topic-note:
+    description: "Topic overview"
+    hashtag: "#TopicNote"
+    yaml: "topic-note"
+
+  project-note:
+    description: "Project documentation"
+    hashtag: "#ProjectNote"
+    yaml: "project-note"
+
+  canvas:
+    description: "Project charter"
+    hashtag: "#Canvas"
+    yaml: "canvas"
+
+  roadmap:
+    description: "Project roadmap"
+    hashtag: "#Roadmap"
+    yaml: "roadmap"
+
+  playbook:
+    description: "Operational process"
+    hashtag: "#Playbook"
+    yaml: "playbook"
+
+  contact:
+    description: "CRM contact (person or company)"
+    hashtag: "#Contact"
+    yaml: "contact"
+
+  article:
+    description: "Article or blog post"
+    hashtag: "#articles"
+    yaml: "article"
+
+  book:
+    description: "Book reference"
+    hashtag: "#Book"
+    yaml: "book"
+
+  movie:
+    description: "Movie reference"
+    hashtag: "#Movie"
+    yaml: "movie"
+
+  music:
+    description: "Music reference"
+    hashtag: "#Music"
+    yaml: "music"
+    aliases: ["#music", "#listen"]
+
+  quote:
+    description: "Quote or excerpt"
+    hashtag: "#Quotes"
+    yaml: "quote"
+
+  tutorial:
+    description: "Tutorial or how-to"
+    hashtag: "#Tutorial"
+    yaml: "tutorial"
+
+  tool:
+    description: "Tool or software"
+    hashtag: "#Tools"
+    yaml: "tool"
+
+  idea:
+    description: "Idea or concept"
+    hashtag: "#Ideas"
+    yaml: "idea"
+
+  principle:
+    description: "Principle or guideline"
+    hashtag: "#Principles"
+    yaml: "principle"
+
+# =============================================================================
+# SCAFFOLDING CATEGORY TAGS
+# Per DIP-0003 Scaffolding Pattern
+# =============================================================================
+scaffolding:
+  identity:
+    description: "Purpose, vision, mission, values"
+    yaml: "identity"
+
+  strategy:
+    description: "Strategic planning, positioning"
+    yaml: "strategy"
+
+  brand:
+    description: "Brand guidelines, voice"
+    yaml: "brand"
+
+  sensing:
+    description: "Market intelligence, competitors"
+    yaml: "sensing"
+
+  memory:
+    description: "Knowledge management"
+    yaml: "memory"
+
+  reasoning:
+    description: "Analysis frameworks"
+    yaml: "reasoning"
+
+  action:
+    description: "Playbooks, processes"
+    yaml: "action"
+
+  learning:
+    description: "Feedback, retrospectives"
+    yaml: "learning"
+
+  coordination:
+    description: "Communication, handoffs"
+    yaml: "coordination"
+
+  metrics:
+    description: "KPIs, OKRs, health metrics"
+    yaml: "metrics"
+
+# =============================================================================
+# ACTION TAGS
+# For marking items requiring action
+# =============================================================================
+actions:
+  read-later:
+    description: "Queue for reading"
+    hashtag: "#ReadLater"
+    yaml: "read-later"
+
+  buy:
+    description: "Purchase consideration"
+    hashtag: "#buy"
+    yaml: "buy"
+
+  watchlist:
+    description: "Watch/monitor"
+    hashtag: "#watchlist"
+    yaml: "watchlist"
+
+  watched:
+    description: "Already watched"
+    hashtag: "#watched"
+    yaml: "watched"
+
+  research:
+    description: "Needs research"
+    hashtag: "#Research"
+    yaml: "research"
+
+# =============================================================================
+# PHILOSOPHY/MINDSET TAGS
+# Personal development and philosophy
+# =============================================================================
+philosophy:
+  stoicism:
+    description: "Stoic philosophy"
+    hashtag: "#Stoicism"
+    yaml: "stoicism"
+
+  ethics:
+    description: "Ethics and values"
+    hashtag: "#Ethics"
+    yaml: "ethics"
+
+  principles:
+    description: "Life principles"
+    hashtag: "#Principles"
+    yaml: "principles"
+
+# =============================================================================
+# REVIEW CYCLE TAGS
+# For org-mode recurring tasks
+# =============================================================================
+review_cycles:
+  weekly:
+    description: "Weekly review item"
+    org: ":weekly:"
+
+  monthly:
+    description: "Monthly review item"
+    org: ":monthly:"
+
+  quarterly:
+    description: "Quarterly review item"
+    org: ":quarterly:"
+
+# =============================================================================
+# SYNC MAPPINGS
+# Quick reference for sync engine label_mapping
+# =============================================================================
+sync_label_mapping:
+  # AI tags -> GitHub labels
+  ":AI:": "ai-task"
+  ":AI:content:": "ai-content"
+  ":AI:research:": "ai-research"
+  ":AI:data:": "ai-data"
+  ":AI:pm:": "ai-pm"
+  ":AI:technical:": "ai-technical"
+  # Priority tags -> GitHub labels
+  "[#A]": "priority-high"
+  "[#B]": "priority-medium"
+  "[#C]": "priority-low"
+  # Status tags
+  ":urgent:": "urgent"
+  ":blocked:": "blocked"
+  # Domain tags - configure in tags.local.yaml
+  # ":mycompany:": "mycompany"
+
+# =============================================================================
+# VALIDATION RULES
+# Used by tag validation scripts
+# =============================================================================
+validation:
+  # Warn if these non-standard variants are found
+  warn_on_variants:
+    - ":ai:"           # Should be :AI:
+    - ":Ai:"           # Should be :AI:
+    - "#ai"            # Should be #AI
+    - ":AI-content:"   # Should be :AI:content:
+    - ":AIcontent:"    # Should be :AI:content:
+
+  # Auto-normalize these to canonical form
+  auto_normalize:
+    ":ai:": ":AI:"
+    "#ai": "#AI"
+    "#ethereum": "#Ethereum"
+
+  # Report weekly if new tags appear that aren't in registry
+  track_new_tags: true

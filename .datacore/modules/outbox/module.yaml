@@ -1,0 +1,79 @@
+manifest_version: 2
+name: outbox
+version: 1.1.0
+description: "Content routing out of active workspaces — archive, delivery, publish"
+author: datacore-one
+license: MIT
+builtin: true
+type: core
+dip: DIP-0017
+
+provides:
+  tools:
+    - name: pending
+      description: "List items pending in outbox across spaces"
+      handler: tools/index.js
+    - name: archive_search
+      description: "Search archived content on server"
+      handler: tools/index.js
+    - name: dispose
+      description: "Permanently delete files with logging (dry-run by default)"
+      handler: tools/index.js
+  skills:
+    - archive-search
+  agents:
+    - outbox-processor
+    - archive-indexer
+  commands:
+    - outbox
+
+dependencies:
+  - core@>=1.0.0
+
+optional:
+  - datacortex
+  - nightshift
+
+settings:
+  archive_location: server
+  server_host: ""
+  local_archive_path: "~/.datacore/archives"
+  dry_run_default: false
+  auto_index_after_archive: true
+  preserve_semantic_paths: true
+  search_threshold: 0.5
+  search_limit: 10
+
+destinations:
+  archive:
+    enabled: true
+    location: server
+  delivery:
+    enabled: false
+  publish:
+    enabled: false
+  dispose:
+    enabled: false
+
+nightshift:
+  tasks:
+    - name: process-outbox
+      schedule: "0 2 * * *"
+      agent: outbox-processor
+    - name: index-archives
+      schedule: "0 3 * * 0"
+      agent: archive-indexer
+
+hooks:
+  post_install: |
+    echo "Outbox module installed."
+    echo "Content in 4-outbox/archive/ will be routed to archive repos."
+
+# DIP-0022 context
+context:
+  priority: on_match
+
+# Engrams
+engrams:
+  namespace: outbox
+  scopes: [outbox, archive]
