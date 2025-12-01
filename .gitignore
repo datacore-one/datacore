@@ -43,15 +43,19 @@ CLAUDE.md
 # -----------------------------------------------------------------------------
 # ALL PERSONAL NOTES CONTENT
 # -----------------------------------------------------------------------------
-# Journals (daily reflections)
-**/journals/
-**/journal/
+# Journals (daily reflections) - preserve folder with .gitkeep
+**/journals/*
+!**/journals/.gitkeep
+**/journal/*
+!**/journal/.gitkeep
 
-# Wiki pages (personal knowledge)
-**/pages/
+# Wiki pages (personal knowledge) - preserve folder with .gitkeep
+**/pages/*
+!**/pages/.gitkeep
 
-# Web clippings (reading habits)
-**/Clippings/
+# Web clippings (reading habits) - preserve folder with .gitkeep
+**/Clippings/*
+!**/Clippings/.gitkeep
 
 # Knowledge base (personal insights)
 **/2-knowledge/zettel/
