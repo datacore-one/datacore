@@ -1,0 +1,30 @@
+meta:
+  name: "My Datacore"
+  root: ~/Data
+  version: 1.0.0
+
+# Root-level modules (optional)
+modules:
+  # - repo: datacore/module-core
+  #   path: .datacore/modules/core
+
+# Personal space (tracked in root repo)
+personal:
+  path: 0-personal
+  modules: []
+    # Example: private trading module
+    # - repo: username/module-trading
+    #   path: .datacore/modules/trading
+    #   private: true
+
+# Team spaces (each is a separate repo)
+spaces: {}
+  # Example team space:
+  # myteam:
+  #   repo: org/team-space
+  #   path: 1-myteam
+  #   modules:
+  #     - repo: datacore/module-comms
+  #   projects:
+  #     - repo: org/project1
+  #       path: projects/project1

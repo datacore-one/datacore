@@ -1,0 +1,1 @@
+../modules/trading/commands/market-briefing.md

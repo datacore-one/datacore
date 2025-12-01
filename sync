@@ -1,0 +1,51 @@
+#!/bin/bash
+# ~/Data/sync [pull|push|status]
+
+ACTION="${1:-pull}"
+
+echo "Datacore sync: $ACTION"
+
+sync_repo() {
+    local repo="$1"
+    local name="$2"
+
+    if [ ! -d "$repo/.git" ]; then
+        return
+    fi
+
+    if [ "$ACTION" = "pull" ]; then
+        echo "Pulling $name..."
+        git -C "$repo" pull --rebase 2>/dev/null || echo "  (no remote or error)"
+    elif [ "$ACTION" = "push" ]; then
+        echo "Pushing $name..."
+        git -C "$repo" add -A
+        git -C "$repo" diff --cached --quiet || git -C "$repo" commit -m "Sync: $(date +%Y-%m-%d)"
+        git -C "$repo" push 2>/dev/null || echo "  (no remote or error)"
+    elif [ "$ACTION" = "status" ]; then
+        echo "Status: $name"
+        git -C "$repo" status --short
+    fi
+}
+
+# Root repo
+sync_repo "." "root"
+
+# All spaces (numbered folders)
+for space in [0-9]-*/; do
+    if [ -d "$space" ]; then
+        sync_repo "$space" "space: $space"
+    fi
+done
+
+# All projects within spaces
+for space in [0-9]-*/; do
+    if [ -d "$space/projects" ]; then
+        for project in "$space"projects/*/; do
+            if [ -d "$project" ]; then
+                sync_repo "$project" "project: $project"
+            fi
+        done
+    fi
+done
+
+echo "Sync complete"

@@ -1,0 +1,1 @@
+../modules/trading/commands/analyze-market-phase.md

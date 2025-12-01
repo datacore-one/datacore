@@ -1,0 +1,1 @@
+../modules/trading/commands/journal-digest.md

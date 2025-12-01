@@ -1,0 +1,174 @@
+# =============================================================================
+# Datacore Privacy-Aware Gitignore
+# See .datacore/specs/privacy-policy.md for rationale
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# TEAM SPACES (separate repos, never tracked here)
+# -----------------------------------------------------------------------------
+/1-*/
+/2-*/
+/3-*/
+/4-*/
+/5-*/
+/6-*/
+/7-*/
+/8-*/
+/9-*/
+
+# -----------------------------------------------------------------------------
+# INSTALLATION CONFIG (contains personal identifiers)
+# -----------------------------------------------------------------------------
+# Use install.yaml.example as template
+install.yaml
+
+# CLAUDE.md files with personal content
+# Root CLAUDE.md describes THIS installation (personal)
+# Space CLAUDE.md files describe personal focus areas
+CLAUDE.md
+0-personal/CLAUDE.md
+
+# -----------------------------------------------------------------------------
+# ALL ORG-MODE FILES AND FOLDERS (tasks, priorities, personal commitments)
+# -----------------------------------------------------------------------------
+# The entire org folder is private (contains scripts, templates, md files too)
+0-personal/org/
+**/org/*.org
+**/org/*.org~
+**/org/*_archive
+**/*.backup*
+
+# -----------------------------------------------------------------------------
+# ALL PERSONAL NOTES CONTENT
+# -----------------------------------------------------------------------------
+# Journals (daily reflections)
+**/journals/
+**/journal/
+
+# Wiki pages (personal knowledge)
+**/pages/
+
+# Web clippings (reading habits)
+**/Clippings/
+
+# Knowledge base (personal insights)
+**/2-knowledge/zettel/
+**/2-knowledge/literature/
+**/2-knowledge/reference/
+**/2-knowledge/topics/
+**/2-knowledge/chatgpt*/
+**/2-knowledge/processed*/
+**/2-knowledge/_indexes/
+
+# Inbox content (only README tracked)
+**/0-inbox/*.md
+!**/0-inbox/README.md
+
+# Active focus areas content (all subfolders are personal)
+0-personal/notes/1-active/*/
+**/1-active/**/*.md
+!**/1-active/README.md
+!**/1-active/**/README.md
+
+# Archive content
+**/3-archive/
+
+# -----------------------------------------------------------------------------
+# CODE PROJECTS (separate repos or private)
+# -----------------------------------------------------------------------------
+0-personal/code/active/
+0-personal/code/archive/
+0-personal/code/dependencies/
+0-personal/code/experiments/
+0-personal/code/utilities/
+0-personal/code/trading/
+0-personal/code/mr-data/
+0-personal/code/personal/
+0-personal/code/projects/
+
+# -----------------------------------------------------------------------------
+# GENERATED CONTENT (personal outputs)
+# -----------------------------------------------------------------------------
+0-personal/content/
+**/content/intelligence/
+
+# -----------------------------------------------------------------------------
+# DATABASES (contain indexed personal content)
+# -----------------------------------------------------------------------------
+**/*.db
+**/*.db-journal
+**/*.db-wal
+**/*.db-shm
+
+# -----------------------------------------------------------------------------
+# LOCAL CONFIGURATION
+# -----------------------------------------------------------------------------
+.datacore/settings.local.json
+.datacore/comms/
+**/.datacore/learning/
+**/.datacore/marketplace/
+**/.datacore/env/
+**/.datacore/state/
+
+# Modules are cloned during install
+.datacore/modules/
+0-personal/.datacore/modules/
+0-personal/.datacore/
+0-personal/.claude
+
+# -----------------------------------------------------------------------------
+# SECRETS
+# -----------------------------------------------------------------------------
+**/*.key
+**/*.token
+**/.env*
+**/secrets/
+**/credentials/
+
+# -----------------------------------------------------------------------------
+# OBSIDIAN / LOGSEQ (editor state)
+# -----------------------------------------------------------------------------
+**/.obsidian/
+**/logseq/
+
+# -----------------------------------------------------------------------------
+# OS AND EDITOR
+# -----------------------------------------------------------------------------
+.DS_Store
+**/.DS_Store
+*~
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# -----------------------------------------------------------------------------
+# PYTHON
+# -----------------------------------------------------------------------------
+**/__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# -----------------------------------------------------------------------------
+# TEMPORARY AND BACKUP
+# -----------------------------------------------------------------------------
+**/tmp/
+**/temp/
+**/backup*/
+*.bak
+*.backup
+
+# =============================================================================
+# EXCEPTIONS (files to KEEP even if matched above)
+# =============================================================================
+
+# Preserve directory structure with .gitkeep
+!**/.gitkeep
+
+# README files that explain structure
+!**/README.md

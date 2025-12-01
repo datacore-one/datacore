@@ -1,0 +1,1 @@
+../modules/trading/agents/emergency-stop-trader.md

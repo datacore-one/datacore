@@ -1,0 +1,1 @@
+../modules/trading/commands/close-trading.md
