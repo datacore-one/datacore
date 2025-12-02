@@ -86,13 +86,25 @@ Repository Health....... [5/6 SYNCED]
 Space Integrity......... [ALL OPERATIONAL]
 DIP Compliance.......... [OK]
 
+Knowledge Database (DIP-0004):
+  Last sync............. 2 hours ago
+  Tasks indexed......... 234
+  Sessions today........ 3
+  Status: CURRENT
+
 [If issues found:]
 ⚠ Minor issues detected. Auto-heal? [Y/n]
+```
+
+**Run database stats:**
+```bash
+python ~/.datacore/lib/datacore_sync.py stats --quiet
 ```
 
 **Auto-heal actions:**
 - Rebuild composed CLAUDE.md files if stale
 - Fix obvious git issues (stale locks, etc.)
+- Re-sync database if stale (>24 hours)
 - Report what was fixed
 
 ### 4. Journal Entry

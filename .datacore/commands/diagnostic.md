@@ -320,7 +320,74 @@ Context Integrity: [OPTIMAL / MAINTENANCE REQUIRED / CRITICAL]
 - Line count elevated: "Context file exceeds optimal size. Review for consolidation."
 - Stale verification: "Verification date expired. Confirm counts and update."
 
-### 10. Final Assessment
+### 10. Knowledge Database (DIP-0004)
+
+**Check database health and sync status:**
+
+```bash
+python ~/.datacore/lib/datacore_sync.py diagnostic
+```
+
+**Report format:**
+```
+KNOWLEDGE DATABASE
+──────────────────
+Root DB: ~/.datacore/knowledge.db
+  Size................... [N] MB
+  Last sync.............. [timestamp]
+  Age.................... [N] hours
+  Status: [CURRENT (≤4h) / STALE (4-24h) / CRITICAL (>24h)]
+
+Sync History (last 7 days):
+  Full syncs............ [count]
+  Incremental syncs..... [count]
+  Errors................ [count]
+
+Index Statistics:
+  ┌─────────────────────────────────────────────┐
+  │ Content          │ Count  │ Δ 7d │ Space   │
+  ├─────────────────────────────────────────────┤
+  │ Files            │  [N]   │ [±N] │ all     │
+  │ Tasks            │  [N]   │ [±N] │ all     │
+  │ Sessions         │  [N]   │ [±N] │ all     │
+  │ Learning entries │  [N]   │ [±N] │ all     │
+  │ Links            │  [N]   │ [±N] │ all     │
+  └─────────────────────────────────────────────┘
+
+Health Checks:
+  FTS index.............. [OK / NEEDS REBUILD]
+  Link resolution........ [N]% ([N] unresolved)
+  Orphan notes........... [count]
+  Pending write-backs.... [count]
+  Failed write-backs..... [count]
+
+Space Coverage:
+  ┌─────────────────────────────────────────────┐
+  │ Space     │ Files │ Tasks │ Last Sync      │
+  ├─────────────────────────────────────────────┤
+  │ personal  │  [N]  │  [N]  │ [time ago]     │
+  │ datafund  │  [N]  │  [N]  │ [time ago]     │
+  │ datacore  │  [N]  │  [N]  │ [time ago]     │
+  └─────────────────────────────────────────────┘
+
+Database Status: [OPTIMAL / MAINTENANCE REQUIRED / CRITICAL]
+```
+
+**Alert thresholds:**
+| Metric | OK | Warning | Critical |
+|--------|-----|---------|----------|
+| DB age | ≤4 hours | 4-24 hours | >24 hours |
+| Unresolved links | <50 | 50-100 | >100 |
+| Orphan notes | <10 | 10-25 | >25 |
+| Pending writes | 0 | 1-5 | >5 |
+| Failed writes | 0 | 1 | >1 |
+
+**If issues detected:**
+- Stale DB: "Knowledge database needs sync. Run: python ~/.datacore/lib/datacore_sync.py sync"
+- High unresolved: "Many unresolved links. Run: python ~/.datacore/lib/zettel_processor.py --create-stubs"
+- Failed writes: "Write-back failures detected. Check pending_writes table."
+
+### 11. Final Assessment
 
 **Summarize overall status:**
 
@@ -335,6 +402,7 @@ Repository Status: [X/Y repos synced]
 Space Status: [X/Y spaces operational]
 DIP Compliance: [DIP-0002: X%, DIP-0003: X%]
 Context Integrity: [OPTIMAL / MAINTENANCE REQUIRED / CRITICAL]
+Knowledge Database: [OPTIMAL / STALE / CRITICAL] (DIP-0004)
 
 [If issues found:]
 Recommended Actions:

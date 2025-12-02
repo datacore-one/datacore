@@ -16,10 +16,26 @@ Generate the daily briefing and append it to today's journal.
 
    [If pull fails, retry twice. If still fails, warn and continue.]
    ```
-2. **Detect context**: Check if running from a space directory or root
-3. **Generate briefing**: Create Today content with relevant sections
-4. **Append to journal**: Add under `## Daily Briefing` heading in `notes/journals/YYYY-MM-DD.md`
-5. **No user prompts**: Write directly without asking for permission
+
+2. **Sync knowledge database** (DIP-0004): Update the database with any overnight changes
+   ```bash
+   python ~/.datacore/lib/datacore_sync.py sync --quiet
+   ```
+   ```
+   SYNCING DATABASE
+   ────────────────
+   Indexing changes...
+     Tasks: 234 (5 new)
+     Sessions: 156
+     Files: 847
+
+   [If sync fails, warn and continue - briefing still works from files]
+   ```
+
+3. **Detect context**: Check if running from a space directory or root
+4. **Generate briefing**: Create Today content with relevant sections
+5. **Append to journal**: Add under `## Daily Briefing` heading in `notes/journals/YYYY-MM-DD.md`
+6. **No user prompts**: Write directly without asking for permission
 
 ## Output Location
 

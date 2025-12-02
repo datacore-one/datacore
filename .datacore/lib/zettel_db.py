@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-Knowledge Database Manager
+Knowledge Database Manager (DIP-0004)
 
-Creates and manages SQLite databases for indexing ALL markdown files:
-- Zettels, pages, journals, clippings, notes, etc.
-- Links extracted from all files for comprehensive connectivity
+Unified database for ALL Datacore content:
+- Markdown files (zettels, pages, journals, notes)
+- Org-mode files (tasks, projects, inbox, habits)
+- System components (agents, commands, specs, DIPs)
+- Learning entries (patterns, corrections, preferences)
+
+Core Principle: Markdown/org files are source of truth. DB is derived index.
 
 Database hierarchy:
 - Root DB: ~/Data/.datacore/knowledge.db (all spaces, cross-space queries)
@@ -12,50 +16,79 @@ Database hierarchy:
 
 Usage:
     python zettel_db.py init [--space SPACE]
-    python zettel_db.py stats [--space SPACE]
+    python zettel_db.py rebuild [--space SPACE]
+    python zettel_db.py sync [--space SPACE] [--full]
+    python zettel_db.py stats [--space SPACE] [--json]
     python zettel_db.py search <query> [--space SPACE] [--type TYPE]
     python zettel_db.py unresolved [--space SPACE]
     python zettel_db.py orphans [--space SPACE]
+    python zettel_db.py validate [--fix]
 """
 
 import sqlite3
 import os
+import json
+import hashlib
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, date
 
 # Base paths
 DATA_ROOT = Path.home() / "Data"
 ROOT_DB_PATH = DATA_ROOT / ".datacore" / "knowledge.db"
 
-# Space configurations - ALL markdown locations
+# Space configurations - ALL content locations
 SPACES = {
     'personal': {
         'path': DATA_ROOT / '0-personal',
         'scan_paths': [
+            # Knowledge
             DATA_ROOT / '0-personal' / 'notes' / '2-knowledge' / 'zettel',
             DATA_ROOT / '0-personal' / 'notes' / 'pages',
-            DATA_ROOT / '0-personal' / 'notes' / 'journals',
             DATA_ROOT / '0-personal' / 'notes' / 'Clippings',
             DATA_ROOT / '0-personal' / 'notes' / '0-inbox',
             DATA_ROOT / '0-personal' / 'notes' / '1-active',
+            # Journals
+            DATA_ROOT / '0-personal' / 'notes' / 'journals',
         ],
+        'org_paths': [
+            DATA_ROOT / '0-personal' / 'org',
+        ],
+        'journal_path': DATA_ROOT / '0-personal' / 'notes' / 'journals',
     },
     'datafund': {
         'path': DATA_ROOT / '1-datafund',
         'scan_paths': [
-            DATA_ROOT / '1-datafund' / '2-knowledge' / 'zettel',
-            DATA_ROOT / '1-datafund' / '2-knowledge' / 'pages',
-            DATA_ROOT / '1-datafund' / '2-knowledge' / 'literature',
-            DATA_ROOT / '1-datafund' / 'departments' / 'research',
+            DATA_ROOT / '1-datafund' / '3-knowledge' / 'zettel',
+            DATA_ROOT / '1-datafund' / '3-knowledge' / 'pages',
+            DATA_ROOT / '1-datafund' / '3-knowledge' / 'literature',
+            DATA_ROOT / '1-datafund' / '1-tracks' / 'research',
         ],
+        'org_paths': [
+            DATA_ROOT / '1-datafund' / 'org',
+        ],
+        'journal_path': DATA_ROOT / '1-datafund' / 'journal',
     },
     'datacore': {
-        'path': DATA_ROOT / '0-datacore',
+        'path': DATA_ROOT / '2-datacore',
         'scan_paths': [
-            DATA_ROOT / '0-datacore' / '2-knowledge' / 'zettel',
-            DATA_ROOT / '0-datacore' / '2-knowledge' / 'pages',
+            DATA_ROOT / '2-datacore' / '3-knowledge' / 'zettel',
+            DATA_ROOT / '2-datacore' / '3-knowledge' / 'pages',
         ],
+        'org_paths': [
+            DATA_ROOT / '2-datacore' / 'org',
+        ],
+        'journal_path': DATA_ROOT / '2-datacore' / 'journal',
     },
+}
+
+# System paths (core datacore)
+SYSTEM_PATHS = {
+    'agents': DATA_ROOT / '.datacore' / 'agents',
+    'commands': DATA_ROOT / '.datacore' / 'commands',
+    'specs': DATA_ROOT / '.datacore' / 'specs',
+    'dips': DATA_ROOT / '.datacore' / 'dips',
+    'learning': DATA_ROOT / '.datacore' / 'learning',
+    'modules': DATA_ROOT / '.datacore' / 'modules',
 }
 
 # File type detection based on path and filename
@@ -309,6 +342,365 @@ def init_database(space=None):
             FOREIGN KEY (topic_id) REFERENCES topics(id) ON DELETE CASCADE,
             FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,
             UNIQUE(topic_id, file_id)
+        )
+    """)
+
+    # =========================================================================
+    # GTD TABLES (DIP-0004 Phase 1)
+    # =========================================================================
+
+    # Org-mode TODO items
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id TEXT REFERENCES files(id) ON DELETE CASCADE,
+            org_id TEXT,
+            state TEXT NOT NULL,
+            heading TEXT NOT NULL,
+            level INTEGER,
+            priority TEXT,
+            scheduled TEXT,
+            deadline TEXT,
+            closed_at TEXT,
+            category TEXT,
+            effort INTEGER,
+            tags TEXT,
+            properties TEXT,
+            parent_id INTEGER REFERENCES tasks(id),
+            project_id INTEGER REFERENCES projects(id),
+            space TEXT,
+            source_file TEXT NOT NULL,
+            line_number INTEGER,
+            checksum TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks(category)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_space ON tasks(space)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_scheduled ON tasks(scheduled)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_tags ON tasks(tags)")
+
+    # PROJECT entries
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id TEXT REFERENCES files(id),
+            org_id TEXT,
+            name TEXT NOT NULL,
+            status TEXT,
+            category TEXT,
+            outcome TEXT,
+            next_action_id INTEGER REFERENCES tasks(id),
+            oldest_task_date TEXT,
+            space TEXT,
+            source_file TEXT NOT NULL,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_space ON projects(space)")
+
+    # Inbox entries (before processing)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS inbox_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL,
+            source TEXT,
+            raw_content TEXT,
+            processed INTEGER DEFAULT 0,
+            processed_at TEXT,
+            routed_to TEXT,
+            routed_task_id INTEGER REFERENCES tasks(id),
+            space TEXT,
+            source_file TEXT,
+            line_number INTEGER,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_inbox_processed ON inbox_entries(processed)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_inbox_space ON inbox_entries(space)")
+
+    # Habit tracking
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS habits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id TEXT REFERENCES files(id),
+            name TEXT NOT NULL,
+            frequency TEXT,
+            scheduled_days TEXT,
+            last_completion TEXT,
+            streak INTEGER DEFAULT 0,
+            total_completions INTEGER DEFAULT 0,
+            space TEXT,
+            source_file TEXT,
+            created_at TEXT
+        )
+    """)
+
+    # =========================================================================
+    # JOURNAL TABLES (DIP-0004 Phase 2)
+    # =========================================================================
+
+    # Daily journal entries
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS journal_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id TEXT REFERENCES files(id),
+            date TEXT NOT NULL,
+            space TEXT,
+            type TEXT,
+            content TEXT,
+            word_count INTEGER,
+            session_count INTEGER,
+            source_file TEXT NOT NULL,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_journal_date ON journal_entries(date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_journal_space ON journal_entries(space)")
+
+    # Work sessions within journals
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            journal_id INTEGER REFERENCES journal_entries(id) ON DELETE CASCADE,
+            title TEXT,
+            goal TEXT,
+            started_at TEXT,
+            ended_at TEXT,
+            duration_minutes INTEGER,
+            space TEXT,
+            session_type TEXT,
+            content TEXT,
+            created_at TEXT
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_journal ON sessions(journal_id)")
+
+    # Accomplishments per session
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS accomplishments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+            description TEXT NOT NULL,
+            category TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Files modified per session
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS files_modified (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+            file_path TEXT NOT NULL,
+            change_type TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Decisions captured
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER REFERENCES sessions(id),
+            file_id TEXT REFERENCES files(id),
+            description TEXT NOT NULL,
+            rationale TEXT,
+            reversible INTEGER DEFAULT 1,
+            affects TEXT,
+            tags TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Trading journal entries
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS trading_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            journal_id INTEGER REFERENCES journal_entries(id),
+            date TEXT NOT NULL,
+            session_type TEXT,
+            emotional_state INTEGER,
+            emotional_notes TEXT,
+            framework_violations TEXT,
+            position_changes TEXT,
+            pnl_realized REAL,
+            pnl_unrealized REAL,
+            imr REAL,
+            phs INTEGER,
+            notes TEXT,
+            created_at TEXT
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_trading_date ON trading_entries(date)")
+
+    # =========================================================================
+    # SYSTEM TABLES (DIP-0004 Phase 3)
+    # =========================================================================
+
+    # Agents, commands, modules, workflows
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS system_components (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            type TEXT NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT,
+            path TEXT NOT NULL,
+            module TEXT,
+            provides TEXT,
+            dependencies TEXT,
+            triggers TEXT,
+            when_to_use TEXT,
+            space TEXT,
+            version TEXT,
+            source_file TEXT NOT NULL,
+            checksum TEXT,
+            created_at TEXT,
+            updated_at TEXT,
+            UNIQUE(type, name, space)
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_components_type ON system_components(type)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_components_name ON system_components(name)")
+
+    # Datacore Improvement Proposals
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS dips (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            number INTEGER UNIQUE NOT NULL,
+            title TEXT NOT NULL,
+            status TEXT,
+            abstract TEXT,
+            affects TEXT,
+            related_specs TEXT,
+            related_dips TEXT,
+            author TEXT,
+            source_file TEXT NOT NULL,
+            checksum TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_dips_status ON dips(status)")
+
+    # Specifications
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS specs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            category TEXT,
+            version TEXT,
+            content TEXT,
+            related_dips TEXT,
+            source_file TEXT NOT NULL,
+            checksum TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+
+    # Learning entries (patterns, corrections, preferences)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS learning_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            type TEXT NOT NULL,
+            title TEXT,
+            content TEXT NOT NULL,
+            source_session INTEGER REFERENCES sessions(id),
+            source_file TEXT,
+            tags TEXT,
+            applies_to TEXT,
+            priority INTEGER DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_learning_type ON learning_entries(type)")
+
+    # Scaffolding requirements (DIP-0003)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS scaffolding_requirements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            space TEXT NOT NULL,
+            category TEXT NOT NULL,
+            document TEXT NOT NULL,
+            status TEXT,
+            file_path TEXT,
+            coverage_score REAL,
+            last_checked TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_scaffolding_space ON scaffolding_requirements(space)")
+
+    # Context metadata (CLAUDE.md sync state)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS context_metadata (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            space TEXT,
+            file_path TEXT NOT NULL,
+            line_count INTEGER,
+            agent_count INTEGER,
+            command_count INTEGER,
+            module_count INTEGER,
+            checksum TEXT,
+            verified_date TEXT,
+            sync_status TEXT,
+            issues TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+
+    # =========================================================================
+    # SYNC TRACKING TABLES (DIP-0004 Phase 4)
+    # =========================================================================
+
+    # Track pending write-backs to source files
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pending_writes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            table_name TEXT NOT NULL,
+            record_id INTEGER NOT NULL,
+            operation TEXT NOT NULL,
+            changes TEXT,
+            target_file TEXT NOT NULL,
+            status TEXT DEFAULT 'pending',
+            error_message TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            applied_at TEXT
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pending_status ON pending_writes(status)")
+
+    # File change detection
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS file_checksums (
+            path TEXT PRIMARY KEY,
+            checksum TEXT NOT NULL,
+            indexed_at TEXT NOT NULL,
+            modified_at TEXT
+        )
+    """)
+
+    # Sync history
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sync_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sync_type TEXT,
+            started_at TEXT,
+            completed_at TEXT,
+            files_scanned INTEGER,
+            files_updated INTEGER,
+            writes_applied INTEGER,
+            errors TEXT,
+            status TEXT
         )
     """)
 

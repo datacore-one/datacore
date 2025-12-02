@@ -164,7 +164,28 @@ Automatic patterns captured.
 - `1-datafund/journal/YYYY-MM-DD.md`
 - `2-datacore/journal/YYYY-MM-DD.md`
 
-### 6. Push Changes to Repos
+### 6. Index Session to Database (DIP-0004)
+
+```
+INDEXING SESSION
+────────────────
+Updating knowledge database with session data...
+
+Session indexed:
+  - Goal: [session goal]
+  - Accomplishments: X
+  - Files modified: X
+  - Decisions: X
+
+[If index fails, warn and continue - data still in journal files]
+```
+
+**Run:**
+```bash
+python ~/.datacore/lib/journal_parser.py --sync --space personal
+```
+
+### 7. Push Changes to Repos
 
 **Uses `./sync push` with retry logic (up to 2 retries on failure).**
 
@@ -202,7 +223,7 @@ Session: [brief goal/topic]
   Your changes are committed locally.
 ```
 
-### 7. Context Sync (Automatic, Silent)
+### 8. Context Sync (Automatic, Silent)
 
 ```
 [Check if agents/commands changed during session]
@@ -210,7 +231,7 @@ Session: [brief goal/topic]
 [Log to journal if updates made]
 ```
 
-### 8. Quick AI Delegation Check (Optional)
+### 9. Quick AI Delegation Check (Optional)
 
 ```
 AI DELEGATION
@@ -226,7 +247,7 @@ Will be reviewed in /tomorrow for overnight execution.
 No new AI tasks.
 ```
 
-### 9. Close
+### 10. Close
 
 ```
 ═══════════════════════════════════════════════════
