@@ -1,0 +1,21 @@
+# Datacore Settings (Base Defaults)
+# User overrides go in settings.local.yaml (gitignored)
+
+# Editor settings
+editor:
+  # Open generated markdown files in system default app (e.g., Typora)
+  open_markdown_on_generate: false
+  # Command to open files (uses system default if empty)
+  open_command: ""
+
+# Sync settings
+sync:
+  # Auto-pull on /today
+  pull_on_today: true
+  # Auto-push on /wrap-up
+  push_on_wrap_up: true
+
+# Journal settings
+journal:
+  # Auto-open journal after updating
+  open_after_update: false

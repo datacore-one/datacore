@@ -31,6 +31,32 @@ This file provides guidance to Claude Code when working in this Datacore install
 └── sync                    # Sync script
 ```
 
+## Settings
+
+User preferences are configured via YAML files in `.datacore/`:
+
+| File | Purpose | Tracking |
+|------|---------|----------|
+| `settings.yaml` | Base defaults | Tracked |
+| `settings.local.yaml` | User overrides | Gitignored |
+
+**Available settings:**
+
+```yaml
+editor:
+  open_markdown_on_generate: true  # Open generated .md files in default app
+  open_command: ""                 # Custom open command (empty = system default)
+
+sync:
+  pull_on_today: true              # Auto-pull repos on /today
+  push_on_wrap_up: true            # Auto-push repos on /wrap-up
+
+journal:
+  open_after_update: false         # Open journal after updating
+```
+
+To customize, create `.datacore/settings.local.yaml` with your overrides.
+
 ## Built-in Commands
 
 **Daily Briefing:**

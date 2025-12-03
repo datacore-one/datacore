@@ -130,6 +130,7 @@ CLAUDE.md
 # LOCAL CONFIGURATION
 # -----------------------------------------------------------------------------
 .datacore/settings.local.json
+.datacore/settings.local.yaml
 .datacore/comms/
 **/.datacore/learning/
 **/.datacore/marketplace/
