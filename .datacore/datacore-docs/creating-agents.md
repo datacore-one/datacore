@@ -385,6 +385,30 @@ Break workflows into discrete steps. Easier to debug and maintain.
 4. Check output location
 5. Iterate on instructions
 
+## Coordinator-Subagent Pattern
+
+For multi-space operations, use the coordinator pattern:
+
+```
+command → coordinator → [discover spaces via [0-9]-*/]
+                     → subagent (space: 0-personal)
+                     → subagent (space: 1-[name])
+                     → subagent (space: 2-[name])
+```
+
+**Key principles:**
+- Coordinators discover spaces dynamically (never hardcode space names)
+- Spawn ALL subagents in parallel (single message with multiple Task calls)
+- Each subagent accepts `space` parameter and writes to space-specific files
+- Coordinator aggregates results and returns summary
+
+**Examples:**
+- `journal-coordinator` → `journal-entry-writer` × N
+- `session-learning-coordinator` → `session-learning` × N
+- `gtd-inbox-coordinator` → `gtd-inbox-processor` × N
+
+See [Agents Reference](agents.md) for full list.
+
 ## Next Steps
 
 - [Creating Commands](creating-commands.md) - User-triggered workflows
