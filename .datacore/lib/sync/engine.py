@@ -8,7 +8,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -18,11 +18,22 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from sync.adapters import (
     TaskSyncAdapter,
     OrgTask,
+    ExternalTask,
     TaskChange,
     SyncResult,
     ChangeType,
     get_adapter,
     list_adapters,
+)
+
+from sync.conflict import (
+    ConflictDetector,
+    ConflictResolver,
+    ConflictQueue,
+    Conflict,
+    ConflictResolution,
+    ConflictStrategy,
+    load_conflict_config,
 )
 
 
@@ -57,6 +68,11 @@ class SyncEngine:
         self.config: Dict[str, Any] = {}
         self._last_sync: Optional[datetime] = None
 
+        # Conflict resolution (Phase 2)
+        self.conflict_detector: Optional[ConflictDetector] = None
+        self.conflict_resolver: Optional[ConflictResolver] = None
+        self.conflict_queue: Optional[ConflictQueue] = None
+
     def load_config(self) -> bool:
         """
         Load sync configuration from settings.yaml.
@@ -83,6 +99,9 @@ class SyncEngine:
         # Initialize adapters from config
         self._init_adapters()
 
+        # Initialize conflict resolution
+        self._init_conflict_resolution()
+
         return True
 
     def _deep_merge(self, base: dict, override: dict):
@@ -108,6 +127,16 @@ class SyncEngine:
                     self.adapters[adapter_name] = adapter_class(adapter_config)
                 except Exception as e:
                     print(f"Warning: Failed to initialize {adapter_name} adapter: {e}")
+
+    def _init_conflict_resolution(self):
+        """Initialize conflict detection and resolution."""
+        # Load conflict config from settings
+        conflict_config = load_conflict_config()
+
+        # Initialize components
+        self.conflict_detector = ConflictDetector()
+        self.conflict_resolver = ConflictResolver(conflict_config)
+        self.conflict_queue = ConflictQueue()
 
     def is_enabled(self) -> bool:
         """Check if sync is enabled in config."""
@@ -193,6 +222,102 @@ class SyncEngine:
         result.success = result.items_failed == 0
         return result
 
+    def detect_conflicts(
+        self,
+        org_task: OrgTask,
+        external_task: ExternalTask
+    ) -> Optional[Conflict]:
+        """
+        Detect conflicts between org and external task.
+
+        Args:
+            org_task: The org-mode task
+            external_task: The corresponding external task
+
+        Returns:
+            Conflict if detected, None otherwise
+        """
+        if not self.conflict_detector:
+            return None
+
+        return self.conflict_detector.detect(
+            org_task,
+            external_task,
+            self._last_sync
+        )
+
+    def resolve_conflict(self, conflict: Conflict) -> ConflictResolution:
+        """
+        Resolve a conflict using configured strategies.
+
+        Args:
+            conflict: The conflict to resolve
+
+        Returns:
+            ConflictResolution with changes to apply
+        """
+        if not self.conflict_resolver:
+            raise RuntimeError("Conflict resolver not initialized")
+
+        resolution = self.conflict_resolver.resolve(conflict)
+
+        # If needs human review, add to queue
+        if resolution.needs_human_review and self.conflict_queue:
+            self.conflict_queue.add(conflict)
+
+        return resolution
+
+    def get_unresolved_conflicts(self, limit: int = 50) -> List[Conflict]:
+        """
+        Get unresolved conflicts from queue.
+
+        Args:
+            limit: Max number to return
+
+        Returns:
+            List of unresolved conflicts
+        """
+        if not self.conflict_queue:
+            return []
+
+        return self.conflict_queue.get_unresolved(limit)
+
+    def resolve_conflict_manually(
+        self,
+        conflict_id: int,
+        strategy: ConflictStrategy,
+        notes: str = ""
+    ) -> bool:
+        """
+        Manually resolve a conflict from the queue.
+
+        Args:
+            conflict_id: ID of conflict to resolve
+            strategy: Strategy to use
+            notes: Resolution notes
+
+        Returns:
+            True if resolved successfully
+        """
+        if not self.conflict_queue:
+            return False
+
+        return self.conflict_queue.resolve(
+            conflict_id,
+            strategy,
+            resolved_by="human",
+            notes=notes
+        )
+
+    def get_conflict_stats(self) -> Dict[str, Any]:
+        """Get conflict statistics for diagnostic."""
+        if not self.conflict_queue:
+            return {"enabled": False}
+
+        stats = self.conflict_queue.get_stats()
+        stats["enabled"] = True
+        return stats
+
     def sync(self) -> Dict[str, Any]:
         """
         Perform full bidirectional sync.
@@ -234,6 +359,7 @@ class SyncEngine:
             "enabled": self.is_enabled(),
             "adapters": {},
             "last_sync": self._last_sync.isoformat() if self._last_sync else None,
+            "conflicts": self.get_conflict_stats(),
         }
 
         for adapter_name, adapter in self.adapters.items():

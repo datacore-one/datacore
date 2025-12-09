@@ -27,6 +27,17 @@ sync:
     # How often to poll for changes (for future background sync)
     poll_interval: 10m
 
+  # Conflict resolution strategies (DIP-0010 Phase 2)
+  # Options: org_wins, external_wins, merge, ask
+  conflict_resolution:
+    state: org_wins          # Agent decisions are authoritative
+    title: org_wins          # Org title takes precedence
+    description: merge       # Try to combine descriptions
+    priority: org_wins       # Agent triage is authoritative
+    deadline: org_wins       # Org deadlines take precedence
+    labels: merge            # Combine labels/tags
+    comments: external_wins  # Human discussion wins
+
   # Sync adapters configuration
   adapters:
     github:

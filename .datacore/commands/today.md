@@ -73,6 +73,15 @@ Generate under `## Daily Briefing` heading:
 ### Needs Your Decision
 [Items flagged for human review by agents]
 
+**Sync Conflicts (DIP-0010 Phase 2):**
+If there are unresolved sync conflicts in the queue, list them:
+```
+Sync Conflicts Requiring Decision:
+- github:owner/repo#42: state conflict (org: DONE, external: open)
+- github:owner/repo#15: priority conflict (org: A, external: C)
+```
+Check via: `python .datacore/lib/sync/conflict.py --unresolved`
+
 ### This Week
 [Upcoming deadlines and scheduled reviews]
 

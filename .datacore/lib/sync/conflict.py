@@ -18,7 +18,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .adapters.base import OrgTask, ExternalTask, TaskState, Priority
+try:
+    from .adapters.base import OrgTask, ExternalTask, TaskState, Priority
+except ImportError:
+    from adapters.base import OrgTask, ExternalTask, TaskState, Priority
 
 
 class ConflictType(Enum):
@@ -787,3 +790,64 @@ def load_conflict_config() -> Dict[str, ConflictStrategy]:
                 pass
 
     return {}
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Sync Conflict Management")
+    parser.add_argument("--unresolved", action="store_true",
+                        help="List unresolved conflicts")
+    parser.add_argument("--stats", action="store_true",
+                        help="Show conflict statistics")
+    parser.add_argument("--resolve", type=int, metavar="ID",
+                        help="Resolve conflict by ID")
+    parser.add_argument("--strategy", choices=["org_wins", "external_wins"],
+                        help="Strategy for --resolve")
+
+    args = parser.parse_args()
+
+    queue = ConflictQueue()
+
+    if args.unresolved:
+        conflicts = queue.get_unresolved()
+        if not conflicts:
+            print("No unresolved conflicts.")
+        else:
+            print(f"Unresolved Conflicts ({len(conflicts)}):")
+            print("-" * 50)
+            for c in conflicts:
+                types = ", ".join(f.conflict_type.value for f in c.fields)
+                print(f"[{c.id}] {c.external_id}")
+                print(f"    Types: {types}")
+                print(f"    Detected: {c.detected_at.strftime('%Y-%m-%d %H:%M')}")
+                for f in c.fields:
+                    print(f"    - {f.field_name}: org={f.org_value}, external={f.external_value}")
+                print()
+
+    elif args.stats:
+        stats = queue.get_stats()
+        print("Conflict Statistics:")
+        print("-" * 30)
+        print(f"  Unresolved: {stats['unresolved']}")
+        print(f"  Resolved today: {stats['resolved_today']}")
+        if stats['oldest_unresolved']:
+            print(f"  Oldest unresolved: {stats['oldest_unresolved']}")
+        if stats['by_type']:
+            print("  By type:")
+            for ctype, count in stats['by_type'].items():
+                print(f"    - {ctype}: {count}")
+
+    elif args.resolve:
+        if not args.strategy:
+            print("Error: --strategy required with --resolve")
+            exit(1)
+        strategy = ConflictStrategy(args.strategy)
+        success = queue.resolve(args.resolve, strategy, resolved_by="cli")
+        if success:
+            print(f"Conflict {args.resolve} resolved with strategy: {args.strategy}")
+        else:
+            print(f"Failed to resolve conflict {args.resolve}")
+
+    else:
+        parser.print_help()
