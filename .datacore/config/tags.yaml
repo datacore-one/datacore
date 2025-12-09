@@ -1,0 +1,450 @@
+# Datacore Tag Registry
+# Single source of truth for all tags across the system
+#
+# Referenced by:
+#   - Sync engine (label_mapping)
+#   - GTD agents (task routing)
+#   - Zettel processor (note classification)
+#   - Validation scripts
+#
+# Format conventions:
+#   - org-mode: :tag: (colons)
+#   - hashtag:  #tag  (notes/zettels)
+#   - yaml:     tag   (frontmatter)
+#   - github:   tag   (labels)
+
+# =============================================================================
+# AI DELEGATION TAGS
+# Used in org-mode to route tasks to AI agents
+# =============================================================================
+ai_delegation:
+  AI:
+    description: "General AI-delegatable task"
+    org: ":AI:"
+    github: "ai-task"
+    agent: "ai-task-executor"
+    variants_to_avoid: ["ai", "AI-task", "automation"]
+
+  AI-content:
+    description: "Content generation (blog, email, docs, social)"
+    org: ":AI:content:"
+    github: "ai-content"
+    agent: "gtd-content-writer"
+
+  AI-research:
+    description: "Research, analysis, literature notes"
+    org: ":AI:research:"
+    github: "ai-research"
+    agent: "gtd-research-processor"
+
+  AI-data:
+    description: "Data processing, metrics, reports"
+    org: ":AI:data:"
+    github: "ai-data"
+    agent: "gtd-data-analyzer"
+
+  AI-pm:
+    description: "Project management, status tracking"
+    org: ":AI:pm:"
+    github: "ai-pm"
+    agent: "gtd-project-manager"
+
+  AI-technical:
+    description: "Technical tasks requiring CTO review (not autonomous)"
+    org: ":AI:technical:"
+    github: "ai-technical"
+    agent: null  # Queued for human review
+    notes: "Not executed autonomously - flagged for CTO"
+
+  AI-module-register:
+    description: "Module registration tasks"
+    org: ":AI:module:register:"
+    github: "ai-module"
+    agent: "module-registrar"
+
+# =============================================================================
+# PRIORITY TAGS
+# Map between org-mode priorities and external systems
+# =============================================================================
+priority:
+  A:
+    description: "High priority - do today"
+    org: "[#A]"
+    github: "priority-high"
+    color: "#d73a4a"
+
+  B:
+    description: "Medium priority - do this week"
+    org: "[#B]"
+    github: "priority-medium"
+    color: "#fbca04"
+
+  C:
+    description: "Low priority - do when possible"
+    org: "[#C]"
+    github: "priority-low"
+    color: "#0e8a16"
+
+# =============================================================================
+# CONTEXT TAGS
+# Who/where/when contexts for GTD
+# =============================================================================
+context:
+  # People
+  gregor:
+    description: "Assigned to Gregor"
+    org: ":@gregor:"
+    github: "assignee:gregor"
+
+  crt:
+    description: "Assigned to Crt"
+    org: ":@crt:"
+    github: "assignee:crtahlin"
+
+  # Location/Mode contexts
+  home:
+    description: "Tasks to do at home"
+    org: ":@home:"
+
+  office:
+    description: "Tasks to do at office"
+    org: ":@office:"
+
+  online:
+    description: "Tasks requiring internet"
+    org: ":@online:"
+
+  phone:
+    description: "Phone calls to make"
+    org: ":@phone:"
+
+  errands:
+    description: "Tasks while out"
+    org: ":@errands:"
+
+# =============================================================================
+# STATUS TAGS
+# Task/content status indicators
+# =============================================================================
+status:
+  urgent:
+    description: "Needs immediate attention"
+    org: ":urgent:"
+    github: "urgent"
+
+  blocked:
+    description: "Blocked by dependency"
+    org: ":blocked:"
+    github: "blocked"
+
+  review:
+    description: "Needs review"
+    org: ":review:"
+    github: "needs-review"
+
+  stub:
+    description: "Placeholder content, needs expansion"
+    yaml: "stub"
+    hashtag: "#stub"
+
+  needs-content:
+    description: "Note needs content added"
+    yaml: "needs-content"
+
+# =============================================================================
+# DOMAIN TAGS
+# Subject area classification (for both org tasks and notes)
+# =============================================================================
+domains:
+  # Company/Project domains
+  datafund:
+    description: "Datafund company matters"
+    org: ":datafund:"
+    hashtag: "#Datafund"
+    yaml: "datafund"
+    github: "datafund"
+
+  verity:
+    description: "Verity data marketplace project"
+    org: ":verity:"
+    hashtag: "#Verity"
+    yaml: "verity"
+    github: "verity"
+
+  datacore:
+    description: "Datacore/Mr Data system"
+    org: ":datacore:"
+    hashtag: "#Datacore"
+    yaml: "datacore"
+
+  fairdrive:
+    description: "Fairdrive product"
+    hashtag: "#Fairdrive"
+    yaml: "fairdrive"
+
+  fds:
+    description: "Fair Data Society"
+    hashtag: "#FDS"
+    yaml: "fds"
+    aliases: ["#FairDataSociety"]
+
+  swarm:
+    description: "Swarm/Ethereum storage"
+    hashtag: "#Swarm"
+    yaml: "swarm"
+
+  # Technology domains
+  AI:
+    description: "Artificial Intelligence topics"
+    hashtag: "#AI"
+    yaml: "ai"
+    aliases: ["#LLM", "#ChatGPT"]
+
+  ethereum:
+    description: "Ethereum blockchain"
+    hashtag: "#Ethereum"
+    yaml: "ethereum"
+    aliases: ["#ethereum"]
+
+  web3:
+    description: "Web3/decentralized web"
+    hashtag: "#Web3"
+    yaml: "web3"
+
+  blockchain:
+    description: "Blockchain technology"
+    hashtag: "#Blockchain"
+    yaml: "blockchain"
+    aliases: ["#blockchain"]
+
+  privacy:
+    description: "Privacy topics"
+    hashtag: "#Privacy"
+    yaml: "privacy"
+
+  security:
+    description: "Security topics"
+    hashtag: "#Security"
+    yaml: "security"
+    aliases: ["#security", "#hacking", "#Hacking"]
+
+  defi:
+    description: "Decentralized finance"
+    hashtag: "#DeFi"
+    yaml: "defi"
+
+  nft:
+    description: "Non-fungible tokens"
+    hashtag: "#NFT"
+    yaml: "nft"
+
+  dao:
+    description: "Decentralized autonomous organizations"
+    hashtag: "#DAO"
+    yaml: "dao"
+
+  # Personal domains
+  trading:
+    description: "Trading and markets"
+    org: ":trading:"
+    hashtag: "#Trading"
+    yaml: "trading"
+
+  health:
+    description: "Health and wellness"
+    org: ":health:"
+    hashtag: "#Health"
+    yaml: "health"
+    aliases: ["#Wellbeing", "#Healthcare", "#Medical"]
+
+  # Business domains
+  strategy:
+    description: "Strategy and planning"
+    hashtag: "#Strategy"
+    yaml: "strategy"
+
+  partnerships:
+    description: "Partnership opportunities"
+    hashtag: "#Partnerships"
+    yaml: "partnerships"
+
+  grants:
+    description: "Grant opportunities"
+    hashtag: "#Grants"
+    yaml: "grants"
+
+  startups:
+    description: "Startup ecosystem"
+    hashtag: "#Startups"
+    yaml: "startups"
+    aliases: ["#Startup"]
+
+# =============================================================================
+# CONTENT TYPE TAGS
+# For classifying notes and content
+# =============================================================================
+content_types:
+  article:
+    description: "Article or blog post"
+    hashtag: "#articles"
+    yaml: "article"
+
+  book:
+    description: "Book reference"
+    hashtag: "#Book"
+    yaml: "book"
+
+  movie:
+    description: "Movie reference"
+    hashtag: "#Movie"
+    yaml: "movie"
+
+  music:
+    description: "Music reference"
+    hashtag: "#Music"
+    yaml: "music"
+    aliases: ["#music", "#listen"]
+
+  quote:
+    description: "Quote or excerpt"
+    hashtag: "#Quotes"
+    yaml: "quote"
+
+  tutorial:
+    description: "Tutorial or how-to"
+    hashtag: "#Tutorial"
+    yaml: "tutorial"
+
+  tool:
+    description: "Tool or software"
+    hashtag: "#Tools"
+    yaml: "tool"
+
+  zettel:
+    description: "Atomic note/zettel"
+    hashtag: "#Zettel"
+    yaml: "zettel"
+
+  idea:
+    description: "Idea or concept"
+    hashtag: "#Ideas"
+    yaml: "idea"
+
+  principle:
+    description: "Principle or guideline"
+    hashtag: "#Principles"
+    yaml: "principle"
+
+# =============================================================================
+# ACTION TAGS
+# For marking items requiring action
+# =============================================================================
+actions:
+  read-later:
+    description: "Queue for reading"
+    hashtag: "#ReadLater"
+    yaml: "read-later"
+
+  buy:
+    description: "Purchase consideration"
+    hashtag: "#buy"
+    yaml: "buy"
+
+  watchlist:
+    description: "Watch/monitor"
+    hashtag: "#watchlist"
+    yaml: "watchlist"
+
+  watched:
+    description: "Already watched"
+    hashtag: "#watched"
+    yaml: "watched"
+
+  research:
+    description: "Needs research"
+    hashtag: "#Research"
+    yaml: "research"
+
+# =============================================================================
+# PHILOSOPHY/MINDSET TAGS
+# Personal development and philosophy
+# =============================================================================
+philosophy:
+  stoicism:
+    description: "Stoic philosophy"
+    hashtag: "#Stoicism"
+    yaml: "stoicism"
+
+  ethics:
+    description: "Ethics and values"
+    hashtag: "#Ethics"
+    yaml: "ethics"
+
+  principles:
+    description: "Life principles"
+    hashtag: "#Principles"
+    yaml: "principles"
+
+# =============================================================================
+# REVIEW CYCLE TAGS
+# For org-mode recurring tasks
+# =============================================================================
+review_cycles:
+  weekly:
+    description: "Weekly review item"
+    org: ":weekly:"
+
+  monthly:
+    description: "Monthly review item"
+    org: ":monthly:"
+
+  quarterly:
+    description: "Quarterly review item"
+    org: ":quarterly:"
+
+# =============================================================================
+# SYNC MAPPINGS
+# Quick reference for sync engine label_mapping
+# (This section is auto-generated from above for settings.yaml)
+# =============================================================================
+sync_label_mapping:
+  # AI tags -> GitHub labels
+  ":AI:": "ai-task"
+  ":AI:content:": "ai-content"
+  ":AI:research:": "ai-research"
+  ":AI:data:": "ai-data"
+  ":AI:pm:": "ai-pm"
+  ":AI:technical:": "ai-technical"
+  # Priority tags -> GitHub labels
+  "[#A]": "priority-high"
+  "[#B]": "priority-medium"
+  "[#C]": "priority-low"
+  # Status tags
+  ":urgent:": "urgent"
+  ":blocked:": "blocked"
+  # Domain tags
+  ":datafund:": "datafund"
+  ":verity:": "verity"
+
+# =============================================================================
+# VALIDATION RULES
+# Used by tag validation scripts
+# =============================================================================
+validation:
+  # Warn if these non-standard variants are found
+  warn_on_variants:
+    - ":ai:"           # Should be :AI:
+    - ":Ai:"           # Should be :AI:
+    - "#ai"            # Should be #AI
+    - ":AI-content:"   # Should be :AI:content:
+    - ":AIcontent:"    # Should be :AI:content:
+
+  # Auto-normalize these to canonical form
+  auto_normalize:
+    ":ai:": ":AI:"
+    "#ai": "#AI"
+    "#datafund": "#Datafund"
+    "#ethereum": "#Ethereum"
+
+  # Report weekly if new tags appear that aren't in registry
+  track_new_tags: true

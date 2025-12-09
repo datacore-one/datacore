@@ -8,12 +8,56 @@ editor:
   # Command to open files (uses system default if empty)
   open_command: ""
 
+# Tag Registry
+# Canonical source for all tags - referenced by sync, agents, validation
+tags:
+  registry: config/tags.yaml  # Single source of truth for all tags
+
 # Sync settings
 sync:
   # Auto-pull on /today
   pull_on_today: true
   # Auto-push on /wrap-up
   push_on_wrap_up: true
+
+  # External task sync (DIP-0010)
+  tasks:
+    # Enable/disable external task sync
+    enabled: false  # Set to true in settings.local.yaml when ready
+    # How often to poll for changes (for future background sync)
+    poll_interval: 10m
+
+  # Sync adapters configuration
+  adapters:
+    github:
+      enabled: false  # Enable in settings.local.yaml
+      repos: []
+        # Example:
+        # - owner: datacore-one
+        #   repo: datacore
+      # Label mappings loaded from tags.registry (config/tags.yaml sync_label_mapping)
+      # Override specific mappings here if needed:
+      # label_mapping:
+      #   ":custom:": "custom-label"
+
+  # Task routing rules
+  routing:
+    # AI tasks from GitHub go to next_actions.org
+    - source: github
+      condition: "labels contains 'ai-task'"
+      destination: next_actions.org
+      tags: [":AI:"]
+
+    # High priority tasks
+    - source: github
+      condition: "labels contains 'priority-high'"
+      destination: next_actions.org
+      state: "NEXT"
+
+    # Default: unassigned issues go to inbox
+    - source: "*"
+      condition: "true"
+      destination: inbox.org
 
 # Journal settings
 journal:

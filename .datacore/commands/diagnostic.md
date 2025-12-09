@@ -387,7 +387,69 @@ Database Status: [OPTIMAL / MAINTENANCE REQUIRED / CRITICAL]
 - High unresolved: "Many unresolved links. Run: python ~/.datacore/lib/zettel_processor.py --create-stubs"
 - Failed writes: "Write-back failures detected. Check pending_writes table."
 
-### 11. Final Assessment
+### 11. External Sync Health (DIP-0010)
+
+**Check sync adapter status and connectivity:**
+
+```bash
+python ~/.datacore/lib/sync/engine.py diagnostic
+```
+
+**Report format:**
+```
+EXTERNAL SYNC (DIP-0010)
+------------------------
+Sync Engine.............. [OPERATIONAL/OFFLINE/NOT CONFIGURED]
+
+GitHub Adapter:
+  Config................. [CONFIGURED/NOT CONFIGURED]
+  Authentication......... [VALID/INVALID/MISSING]
+  Test connection........ [OK/FAILED] (latency: [N]ms)
+  Configured repos....... [count]
+    - datacore-one/datacore: [SYNCED/PENDING/ERROR]
+    - datacore-one/datafund-space: [SYNCED/PENDING/ERROR]
+
+Last Sync:
+  Pull................... [timestamp] ([N] items)
+  Push................... [timestamp] ([N] items)
+  Errors................. [count]
+
+Sync History (last 7 days):
+  +---------------------------------------------+
+  | Direction  | Success | Failed | Items       |
+  +---------------------------------------------+
+  | Pull       |   [N]   |  [N]   |   [N]       |
+  | Push       |   [N]   |  [N]   |   [N]       |
+  +---------------------------------------------+
+
+Pending Sync:
+  - Org -> GitHub: [count] tasks with changes
+  - GitHub -> Org: [count] issues updated
+
+Conflicts:
+  - Unresolved: [count]
+  - Needs decision: [count]
+
+Calendar Adapter:
+  Status................. [NOT IMPLEMENTED / CONFIGURED]
+
+External Sync Status: [OPERATIONAL / DEGRADED / NOT CONFIGURED]
+```
+
+**Alert thresholds:**
+| Metric | OK | Warning | Critical |
+|--------|-----|---------|----------|
+| Last sync age | <=1 hour | 1-4 hours | >4 hours |
+| Unresolved conflicts | 0 | 1-3 | >3 |
+| Failed syncs | 0 | 1-2 | >2 |
+| Auth status | Valid | - | Invalid |
+
+**If issues detected:**
+- Auth invalid: "GitHub token expired or invalid. Run: gh auth login"
+- Sync stale: "External sync is stale. Run: /sync"
+- Conflicts: "[N] unresolved conflicts. Review in /today or run /sync status"
+
+### 12. Final Assessment
 
 **Summarize overall status:**
 
@@ -403,6 +465,7 @@ Space Status: [X/Y spaces operational]
 DIP Compliance: [DIP-0002: X%, DIP-0003: X%]
 Context Integrity: [OPTIMAL / MAINTENANCE REQUIRED / CRITICAL]
 Knowledge Database: [OPTIMAL / STALE / CRITICAL] (DIP-0004)
+External Sync: [OPERATIONAL / DEGRADED / NOT CONFIGURED] (DIP-0010)
 
 [If issues found:]
 Recommended Actions:
