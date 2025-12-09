@@ -75,7 +75,7 @@ except ImportError:
     pass  # GitHub adapter not available (missing dependencies)
 
 try:
-    from .calendar import GoogleCalendarAdapter
+    from .google_calendar import GoogleCalendarAdapter
     register_adapter("calendar", GoogleCalendarAdapter)
 except ImportError:
     pass  # Calendar adapter not available (missing dependencies)

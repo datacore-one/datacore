@@ -21,7 +21,7 @@ CREDS_DIR = Path(__file__).parent.parent.parent.parent / "env" / "credentials"
 TOKEN_FILE = CREDS_DIR / "google_calendar_token.pickle"
 CLIENT_SECRETS_FILE = CREDS_DIR / "google_calendar_client_secret.json"
 
-SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
+SCOPES = ['https://www.googleapis.com/auth/calendar']  # Full read/write access
 
 
 def get_credentials():

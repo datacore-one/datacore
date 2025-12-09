@@ -13,7 +13,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from sync.adapters.base import OrgCalendarEntry
-from sync.adapters.calendar import GoogleCalendarAdapter, CalendarEvent
+from sync.adapters.google_calendar import GoogleCalendarAdapter, CalendarEvent
 
 
 class TestOrgCalendarEntry:
