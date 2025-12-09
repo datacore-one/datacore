@@ -1,28 +1,48 @@
 """
-Sync adapters for external task management systems.
+Sync adapters for external services.
 
-DIP-0010: Task Sync Architecture
+DIP-0010: External Sync Architecture
+
+The sync infrastructure is payload-agnostic. Different adapters sync
+different content types:
+
+- OrgTask (next_actions.org) <-> GitHub Issues, Asana Tasks
+- OrgCalendarEntry (calendar.org) <-> Google Calendar events
 """
 
 from .base import (
-    TaskSyncAdapter,
+    # Abstract base
+    OrgEntry,
+    # Content types
     OrgTask,
+    OrgCalendarEntry,
+    # External representations
     ExternalTask,
     ExternalTaskRef,
+    # Sync primitives
+    TaskSyncAdapter,
     TaskChange,
     SyncResult,
+    # Enums
     TaskState,
     Priority,
     ChangeType,
 )
 
 __all__ = [
-    "TaskSyncAdapter",
+    # Abstract base
+    "OrgEntry",
+    # Content types
     "OrgTask",
+    "OrgCalendarEntry",
+    # External representations
     "ExternalTask",
     "ExternalTaskRef",
+    # Sync primitives
+    "TaskSyncAdapter",
     "TaskChange",
     "SyncResult",
+    # Enums
     "TaskState",
     "Priority",
     "ChangeType",

@@ -1,7 +1,16 @@
 """
-Base adapter interface for external task sync.
+Base adapter interface for external sync.
 
-DIP-0010: Task Sync Architecture
+DIP-0010: External Sync Architecture
+
+The sync infrastructure is payload-agnostic. Different adapters sync
+different content types:
+
+- GitHub adapter: OrgTask <-> GitHub Issues
+- Calendar adapter: OrgCalendarEntry <-> Google Calendar events
+- Asana adapter: OrgTask <-> Asana Tasks
+
+All content lives in org-mode. Adapters handle bidirectional sync.
 """
 
 from abc import ABC, abstractmethod
@@ -37,31 +46,97 @@ class ChangeType(Enum):
     CLOSED = "closed"
 
 
+# =============================================================================
+# Abstract Base: OrgEntry
+# =============================================================================
+
 @dataclass
-class OrgTask:
-    """Represents an org-mode task."""
+class OrgEntry:
+    """
+    Abstract base class for any org-mode entry.
+
+    All synced content types inherit from this base, providing
+    common fields for identity and sync metadata.
+    """
     id: str  # Unique identifier (heading path or generated)
     title: str
-    state: TaskState
-    priority: Optional[Priority] = None
-    deadline: Optional[datetime] = None
-    scheduled: Optional[datetime] = None
-    tags: List[str] = field(default_factory=list)
-    properties: Dict[str, str] = field(default_factory=dict)
     body: str = ""
     file_path: str = ""
     line_number: int = 0
+    properties: Dict[str, str] = field(default_factory=dict)
 
     # Sync metadata
-    external_id: Optional[str] = None  # e.g., "github:owner/repo#42"
+    external_id: Optional[str] = None  # e.g., "github:owner/repo#42", "calendar:primary/abc123"
     external_url: Optional[str] = None
     sync_status: Optional[str] = None  # "synced", "pending", "failed"
     sync_updated: Optional[datetime] = None
 
     @property
     def is_synced(self) -> bool:
-        """Check if task has external link."""
+        """Check if entry has external link."""
         return self.external_id is not None
+
+
+# =============================================================================
+# Task-specific: OrgTask (for next_actions.org)
+# =============================================================================
+
+@dataclass
+class OrgTask(OrgEntry):
+    """
+    Represents an org-mode task (TODO item).
+
+    Used for syncing with task management tools like GitHub Issues, Asana.
+    Lives in next_actions.org.
+    """
+    state: TaskState = TaskState.TODO
+    priority: Optional[Priority] = None
+    deadline: Optional[datetime] = None
+    scheduled: Optional[datetime] = None
+    tags: List[str] = field(default_factory=list)
+
+
+# =============================================================================
+# Calendar-specific: OrgCalendarEntry (for calendar.org)
+# =============================================================================
+
+@dataclass
+class OrgCalendarEntry(OrgEntry):
+    """
+    Represents an org-mode calendar entry (event/appointment).
+
+    Used for syncing with calendar services like Google Calendar.
+    Lives in calendar.org. Uses timestamps (<...>) not DEADLINE/SCHEDULED.
+
+    Example org entry:
+        * Meeting with investors
+          :PROPERTIES:
+          :EXTERNAL_ID: calendar:primary/abc123
+          :END:
+          <2025-12-10 Tue 10:00-11:00>
+          Discussion topics...
+    """
+    timestamp: Optional[datetime] = None  # Event start time
+    end_time: Optional[datetime] = None   # Event end time (optional)
+    repeater: Optional[str] = None        # e.g., "+1w", "+1m"
+    location: Optional[str] = None
+    attendees: List[str] = field(default_factory=list)
+    tags: List[str] = field(default_factory=list)
+
+    @property
+    def is_all_day(self) -> bool:
+        """Check if event is all-day (no time component)."""
+        if self.timestamp is None:
+            return True
+        return self.timestamp.hour == 0 and self.timestamp.minute == 0 and self.end_time is None
+
+    @property
+    def duration_minutes(self) -> Optional[int]:
+        """Calculate event duration in minutes."""
+        if self.timestamp and self.end_time:
+            delta = self.end_time - self.timestamp
+            return int(delta.total_seconds() / 60)
+        return None
 
 
 @dataclass

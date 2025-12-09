@@ -1287,9 +1287,19 @@ For important external content, create local reference notes with `type: externa
 | **Readwise** | Auto-sync to literature/ (planned) |
 | **Email/Telegram** | Capture to inbox (via n8n) |
 
-### Task Sync (DIP-0010)
+### External Sync (DIP-0010)
 
-Bidirectional sync between org-mode and external task management tools. Org-mode serves as the internal coordination layer for AI agents; external tools provide familiar UIs for humans.
+Bidirectional sync between org-mode and external services. Org-mode serves as the internal coordination layer and source of truth; external services provide familiar UIs for humans.
+
+**Abstract Payload Architecture:**
+
+The sync infrastructure is payload-agnostic. Different adapters sync different content types:
+
+| Adapter | Org File | Content Type | External Service |
+|---------|----------|--------------|------------------|
+| GitHub | `next_actions.org` | Tasks | GitHub Issues |
+| Calendar | `calendar.org` | Calendar entries | Google Calendar |
+| Asana | `next_actions.org` | Tasks | Asana Tasks |
 
 **Architecture:**
 
@@ -1298,11 +1308,13 @@ Bidirectional sync between org-mode and external task management tools. Org-mode
 │                      Sync Engine                             │
 │  .datacore/lib/sync/                                        │
 │  ├── engine.py      # Orchestration                         │
-│  ├── router.py      # Task routing rules                    │
+│  ├── router.py      # Entry routing rules                   │
 │  ├── history.py     # SQLite sync history                   │
-│  └── adapters/      # Platform-specific adapters            │
-│      ├── base.py    # TaskSyncAdapter interface             │
-│      └── github.py  # GitHub Issues (Phase 1 complete)      │
+│  ├── conflict.py    # Conflict detection/resolution         │
+│  └── adapters/      # Service-specific adapters             │
+│      ├── base.py    # SyncAdapter interface (abstract)      │
+│      ├── github.py  # GitHub Issues (tasks)                 │
+│      └── calendar.py # Google Calendar (calendar entries)   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -1313,7 +1325,7 @@ Bidirectional sync between org-mode and external task management tools. Org-mode
 | Phase 1 | GitHub adapter, sync engine, router | ✅ Complete |
 | Section 11 | Tag Governance (registry, validator, diagnostic) | ✅ Complete |
 | Phase 2 | Conflict resolution (detection, strategies, queue) | ✅ Complete |
-| Phase 3 | Calendar adapter | Planned |
+| Phase 3 | Calendar adapter, calendar.org | 🔄 Next |
 | Phase 4 | Additional adapters (Asana, Linear) | Future |
 
 **Key files:**
@@ -1322,7 +1334,7 @@ Bidirectional sync between org-mode and external task management tools. Org-mode
 - Conflict resolution: `.datacore/lib/sync/conflict.py`
 - Sync command: `/sync`
 
-**See:** [DIP-0010: Task Sync Architecture](../dips/DIP-0010-task-sync-architecture.md)
+**See:** [DIP-0010: External Sync Architecture](../dips/DIP-0010-external-sync-architecture.md)
 
 ### n8n Workflow Bridges
 
