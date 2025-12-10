@@ -103,11 +103,51 @@ for e in adapter.pull_events(days=1):
 "
 ```
 
-### Overnight AI Work
-[Summary of completed :AI: tasks from journal/org since last briefing]
+### Nightshift Results (DIP-0011)
+[Summary of overnight task execution with quality scores]
+
+**Format:**
+```
+NIGHTSHIFT RESULTS
+──────────────────
+Execution Window: [start] - [end]
+Tasks: [queued] queued, [completed] completed, [review] needs review
+
+✓ Completed
+| Task | Score | Output |
+|------|-------|--------|
+| Research competitor X | 0.85 | [[nightshift-001-research.md]] |
+| Q4 metrics analysis | 0.92 | [[nightshift-002-data.md]] |
+
+⚠ Needs Review
+| Task | Score | Reason |
+|------|-------|--------|
+| Blog post draft | 0.68 | Evaluator disagreement on tone |
+
+Cost: $0.48 | Duration: 2h 15m | Patterns applied: 5
+```
+
+**Check for results:**
+1. Look for DONE tasks with :NIGHTSHIFT_COMPLETED: property in past 24h
+2. Look for REVIEW tasks needing attention
+3. Read outputs from `[space]/0-inbox/nightshift-*.md`
+4. Summarize evaluator feedback for review items
+
+**If no nightshift ran**: "No nightshift execution overnight."
 
 ### Needs Your Decision
 [Items flagged for human review by agents]
+
+**Nightshift Review Items:**
+Tasks that completed but need human review (score < 0.70 or high evaluator variance):
+```
+⚠ Blog post draft needs review
+   Score: 0.68 (below threshold)
+   CEO: 0.82 "Good message"
+   Editor: 0.55 "Tone inconsistent with brand"
+   Output: 1-datafund/0-inbox/nightshift-003-content.md
+   [Review and provide feedback]
+```
 
 **Sync Conflicts (DIP-0010 Phase 2):**
 If there are unresolved sync conflicts in the queue, list them:

@@ -153,19 +153,30 @@ These will appear in tomorrow's /today briefing.
 - `0-personal/notes/journals/tomorrow-priorities.md` (temporary file)
 - Or append to tomorrow's journal entry if it exists
 
-### 6. AI Delegation Review
+### 6. AI Delegation Review (Nightshift Queue)
 
-**Main AI delegation happens here:**
+**Main AI delegation happens here via Nightshift module:**
 
 ```
-AI DELEGATION
-─────────────
-Let's review what AI should work on overnight.
+NIGHTSHIFT QUEUE
+────────────────
+Reviewing tasks for overnight AI execution.
 
-Current :AI: tagged tasks in queue:
-- [Task 1] :AI:research: - Priority A
-- [Task 2] :AI:content: - Priority B
-- [Task 3] :AI:data: - Priority B
+Current :AI: tagged tasks:
+┌─────────────────────────────────────────────────────────────────┐
+│ # │ Space    │ Task                      │ Type         │ Pri │
+├───┼──────────┼───────────────────────────┼──────────────┼─────┤
+│ 1 │ datafund │ Research competitor X     │ :AI:research:│  A  │
+│ 2 │ datafund │ Draft blog post           │ :AI:content: │  B  │
+│ 3 │ personal │ Organize reading list     │ :AI:        │  C  │
+└─────────────────────────────────────────────────────────────────┘
+
+Queue Optimization Preview:
+  1. Research competitor X - Impact: 9, Effort: 3, Score: 7.8
+  2. Draft blog post       - Impact: 6, Effort: 5, Score: 5.9
+  3. Organize reading list - Impact: 4, Effort: 2, Score: 3.8
+
+Estimated: 3 tasks, ~45 min, $0.35
 
 Add more tasks to delegate? (describe, or Enter to continue)
 > [user input]
@@ -173,19 +184,39 @@ Add more tasks to delegate? (describe, or Enter to continue)
 [If input provided:]
 Creating task with :AI: tag...
 
-Prioritize overnight work:
-1. Which is most important? [1/2/3/all]
-> [user input]
+Confirm queue for nightshift? [Y/n]
+> y
 
-AI Task Executor will process these overnight.
-Results will appear in tomorrow's /today briefing.
+Pushing changes to make available for server...
+Done. Triggering nightshift server...
 ```
 
+**Nightshift Pipeline (DIP-0011):**
+1. **Queue Optimizer** - Prioritizes by impact/effort/urgency
+2. **Context Enhancer** - Builds KB context (datacortex, patterns, journals)
+3. **Execution** - Specialized agents process each task
+4. **Evaluation Panel** - 6 core evaluators + domain experts review
+5. **Learning Extractor** - Captures patterns for improvement
+
+**Evaluators that will review outputs:**
+- Core: User, Critic, CEO, CTO, COO, Archivist (always)
+- Domain: Twain (content), Popper (research), etc. (by task type)
+
 **What gets delegated:**
-- Research tasks → `gtd-research-processor`
-- Content tasks → `gtd-content-writer`
-- Data tasks → `gtd-data-analyzer`
-- Project tasks → `gtd-project-manager`
+- `:AI:research:` → `gtd-research-processor`
+- `:AI:content:` → `gtd-content-writer`
+- `:AI:data:` → `gtd-data-analyzer`
+- `:AI:pm:` → `gtd-project-manager`
+
+**Server Configuration:**
+If server is configured (`.datacore/settings.local.yaml`):
+- Push triggers server execution
+- Server pulls, processes, pushes results
+- Results available in morning `/today`
+
+If no server:
+- Tasks queue for local execution
+- Manual trigger or scheduled local run
 
 ### 7. Tomorrow's Preview
 

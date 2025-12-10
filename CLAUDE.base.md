@@ -60,7 +60,8 @@ To customize, create `.datacore/settings.local.yaml` with your overrides.
 ## Built-in Commands
 
 **Daily Briefing:**
-- `/today` - Generate daily briefing with priorities, calendar, AI work summary
+- `/today` - Generate daily briefing with priorities, calendar, nightshift results
+- `/tomorrow` - End-of-day wrap-up, queue AI tasks for overnight execution
 
 **GTD Workflow:**
 - `/gtd-daily-start` - Morning planning
@@ -68,11 +69,9 @@ To customize, create `.datacore/settings.local.yaml` with your overrides.
 - `/gtd-weekly-review` - Weekly GTD review
 - `/gtd-monthly-strategic` - Monthly planning
 
-**Knowledge Search:**
-- `/search <query>` - Semantic search across knowledge base (RAG)
-
 **Modules:**
 - `/create-module` - Create, convert, or audit modules for spec alignment
+- `/nightshift-status` - Check AI task queue and execution status (nightshift module)
 
 ## Built-in Agents
 
