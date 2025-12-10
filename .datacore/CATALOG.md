@@ -71,7 +71,7 @@ Modules extend Datacore with specialized functionality. They can be installed in
 
 | Module | Description | Repo | Visibility |
 |--------|-------------|------|------------|
-| nightshift | Autonomous AI task execution with quality gates, multi-persona evaluation, and continuous learning | [datacore-one/datacore-nightshift](https://github.com/datacore-one/datacore-nightshift) | Private |
+| nightshift | Autonomous AI task execution with multi-persona evaluation and quality gates | [datacore-one/datacore-nightshift](https://github.com/datacore-one/datacore-nightshift) | Private |
 | trading | Position management, performance tracking, trading workflows | [datacore-one/datacore-trading](https://github.com/datacore-one/datacore-trading) | Private |
 | campaigns | Landing pages, deployment, analytics, A/B testing | [datacore-one/datacore-campaigns](https://github.com/datacore-one/datacore-campaigns) | Private |
 | mail | Email integration - Gmail adapter, classification, processing | [datacore-one/datacore-mail](https://github.com/datacore-one/datacore-mail) | Private |

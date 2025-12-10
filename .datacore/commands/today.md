@@ -4,18 +4,21 @@ Generate the daily briefing and append it to today's journal.
 
 ## Behavior
 
-1. **Sync repositories**: Pull latest changes from all repos
+1. **Sync repositories**: Pull latest changes from all repos (includes nightshift outputs from server)
    ```
    SYNCING REPOS
    ─────────────
    Pulling latest changes...
 
    datacore (root).......... [OK]
-   datafund-space........... [OK]
-   datacore-space........... [OK]
+   datafund-space........... [OK]  ← nightshift outputs appear here
+   datacore-space........... [OK]  ← nightshift outputs appear here
 
    [If pull fails, retry twice. If still fails, warn and continue.]
    ```
+
+   **Important**: Server nightshift executes overnight and commits results to team space repos.
+   Pulling brings those outputs to your local machine for review in `/today`.
 
 2. **Sync knowledge database** (DIP-0004): Update the database with any overnight changes
    ```bash
@@ -110,28 +113,51 @@ for e in adapter.pull_events(days=1):
 ```
 NIGHTSHIFT RESULTS
 ──────────────────
-Execution Window: [start] - [end]
-Tasks: [queued] queued, [completed] completed, [review] needs review
 
-✓ Completed
+📍 Local (0-personal)
+Tasks: 1 completed
 | Task | Score | Output |
 |------|-------|--------|
-| Research competitor X | 0.85 | [[nightshift-001-research.md]] |
-| Q4 metrics analysis | 0.92 | [[nightshift-002-data.md]] |
+| DIP-0010 sync test | 0.92 | [[nightshift-exec-2025-12-10-task.md]] |
 
-⚠ Needs Review
+📍 Server (1-datafund)
+Tasks: 5 completed, 2 needs review
+| Task | Score | Output |
+|------|-------|--------|
+| Research FineWeb | 0.88 | [[nightshift-001-research.md]] |
+| Review Mode Network | 0.91 | [[nightshift-002-research.md]] |
+| ... | ... | ... |
+
+⚠ Needs Review (1-datafund)
 | Task | Score | Reason |
 |------|-------|--------|
-| Blog post draft | 0.68 | Evaluator disagreement on tone |
+| Swarm grant research | 0.65 | Low confidence on grant eligibility |
 
-Cost: $0.48 | Duration: 2h 15m | Patterns applied: 5
+📍 Server (2-datacore)
+No nightshift tasks executed.
+
+──────────────────
+Total: 6 completed | 2 review | Cost: ~$1.20
 ```
 
 **Check for results:**
 1. Look for DONE tasks with :NIGHTSHIFT_COMPLETED: property in past 24h
 2. Look for REVIEW tasks needing attention
-3. Read outputs from `[space]/0-inbox/nightshift-*.md`
+3. Read outputs from ALL spaces' inboxes:
+   - `0-personal/0-inbox/nightshift-*.md` (local execution)
+   - `1-datafund/0-inbox/nightshift-*.md` (server execution)
+   - `2-datacore/0-inbox/nightshift-*.md` (server execution)
 4. Summarize evaluator feedback for review items
+5. Group results by space for clarity
+
+**To find nightshift outputs from all spaces:**
+```bash
+# Find all nightshift outputs from past 24 hours
+find ~/Data/*/0-inbox -name "nightshift-*.md" -mtime -1 2>/dev/null | while read f; do
+  echo "=== $f ==="
+  head -20 "$f"  # Read frontmatter for score/status
+done
+```
 
 **If no nightshift ran**: "No nightshift execution overnight."
 
