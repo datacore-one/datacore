@@ -68,6 +68,9 @@ To customize, create `.datacore/settings.local.yaml` with your overrides.
 - `/gtd-weekly-review` - Weekly GTD review
 - `/gtd-monthly-strategic` - Monthly planning
 
+**Modules:**
+- `/create-module` - Create, convert, or audit modules for spec alignment
+
 ## Built-in Agents
 
 - `ai-task-executor` - Routes :AI: tagged tasks to specialized agents
@@ -81,6 +84,8 @@ To customize, create `.datacore/settings.local.yaml` with your overrides.
 - `dip-preparer` - DIP creation, validation, and PR submission
 - `session-learning` - Extract patterns and learnings from sessions
 - `context-maintainer` - Validate and rebuild CLAUDE.md files
+- `create-module` - Scaffold, convert, audit modules for spec alignment
+- `module-registrar` - Register modules in CATALOG.md
 
 ## Optional Modules
 
