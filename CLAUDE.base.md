@@ -68,6 +68,9 @@ To customize, create `.datacore/settings.local.yaml` with your overrides.
 - `/gtd-weekly-review` - Weekly GTD review
 - `/gtd-monthly-strategic` - Monthly planning
 
+**Knowledge Search:**
+- `/search <query>` - Semantic search across knowledge base (RAG)
+
 **Modules:**
 - `/create-module` - Create, convert, or audit modules for spec alignment
 
