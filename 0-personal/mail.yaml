@@ -28,6 +28,20 @@ accounts:
         - "@investor.com"
         - "@anthropic.com"
 
+  # Swarm email - AI classification
+  - name: swarm
+    address: gregor@ethswarm.org
+    provider: gmail
+    processor: classifier
+    destination: org/inbox.org
+    labels:
+      - INBOX
+    settings:
+      # Swarm-specific priority senders
+      priority_senders:
+        - "@ethswarm.org"
+        - "@swarm.foundation"
+
   # Newsletters - just archive
   # - name: newsletters
   #   address: gregor+news@gmail.com
