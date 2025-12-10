@@ -1,0 +1,36 @@
+# Mail configuration for personal space
+# Configure email accounts to sync
+
+accounts:
+  # Personal email - AI classification to inbox
+  - name: personal
+    address: gregor@gmail.com
+    provider: gmail
+    processor: classifier
+    destination: org/inbox.org
+    labels:
+      - INBOX
+    settings:
+      # Auto-ignore patterns
+      auto_ignore:
+        senders:
+          - "noreply@"
+          - "notifications@github.com"
+          - "no-reply@"
+        domains:
+          - "mailchimp.com"
+          - "sendgrid.net"
+        keywords:
+          - "unsubscribe"
+          - "view in browser"
+      # Priority senders
+      priority_senders:
+        - "@investor.com"
+        - "@anthropic.com"
+
+  # Newsletters - just archive
+  # - name: newsletters
+  #   address: gregor+news@gmail.com
+  #   provider: gmail
+  #   processor: archive
+  #   auto_archive: true
