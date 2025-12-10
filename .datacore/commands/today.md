@@ -64,21 +64,43 @@ Generate under `## Daily Briefing` heading:
 - Include SCHEDULED items for today
 - Flag any OVERDUE items
 
-### Calendar
-[Today's calendar events from Google Calendar]
+### Today's Meetings
+[Today's calendar events - this section is REQUIRED if any meetings exist]
+
+Format meetings chronologically with time, duration, and attendees:
+```
+09:00 - 09:30  Weekly standup (Datafund team)
+11:00 - 12:00  Investor call with ABC Capital
+14:00 - 14:30  1:1 with @tfius
+16:00 - 17:00  Product review (Verity)
+```
+
+Include:
+- Meeting time and duration
+- Meeting title
+- Key attendees or context in parentheses
+- Flag any meetings requiring preparation: ⚠️ Prep needed
+
+If no meetings today: "No meetings scheduled - deep work day! 🎯"
 
 **To fetch events** (if calendar adapter enabled):
 ```python
-from sync.adapters.calendar import GoogleCalendarAdapter
+from sync.adapters.google_calendar import GoogleCalendarAdapter
 adapter = GoogleCalendarAdapter(calendar_id="gregor@datafund.io")
 events = adapter.pull_events(days=1)
 for e in events:
-    print(f"  {e.timestamp.strftime('%H:%M')} | {e.title}")
+    end_time = e.end_time.strftime('%H:%M') if e.end_time else ""
+    print(f"  {e.start_time.strftime('%H:%M')} - {end_time}  {e.title}")
 ```
 
-Or sync to org file:
+Or via CLI:
 ```bash
-python .datacore/lib/sync/adapters/calendar.py sync --calendar gregor@datafund.io --days 1
+PYTHONPATH=.datacore/lib python3 -c "
+from sync.adapters.google_calendar import GoogleCalendarAdapter
+adapter = GoogleCalendarAdapter(calendar_id='gregor@datafund.io')
+for e in adapter.pull_events(days=1):
+    print(f'{e.start_time.strftime(\"%H:%M\")} - {e.end_time.strftime(\"%H:%M\") if e.end_time else \"\"} {e.title}')
+"
 ```
 
 ### Overnight AI Work
@@ -104,6 +126,66 @@ Check via: `python .datacore/lib/sync/conflict.py --unresolved`
 
 ### Yesterday's Wins
 [Extract DONE items from yesterday's journal - celebrate accomplishments]
+
+### Team Spaces Update
+[Summary of activity across team spaces - show only if team spaces exist]
+
+For each numbered space (1-datafund, 2-datacore, etc.):
+- Recent commits (past 24h) with contributor names
+- Open PRs requiring attention
+- GitHub Issues activity (new, closed)
+- Any blockers flagged in org/next_actions.org
+
+**To gather team activity**:
+```bash
+# For each space directory
+for space in [1-9]-*; do
+  echo "=== $space ==="
+  cd "$space"
+
+  # Recent commits
+  git log --oneline --since="24 hours ago" --format="%h %an: %s"
+
+  # Open PRs (if gh available)
+  gh pr list --state open 2>/dev/null || echo "No gh access"
+
+  cd ..
+done
+```
+
+Format example:
+```
+### Team Spaces Update
+
+**1-datafund** (3 commits today)
+- @tfius: Fix API endpoint validation (abc1234)
+- @crt: Update documentation (def5678)
+- PR #42: Awaiting review (2 days)
+
+**2-datacore** (quiet - no commits today)
+- No recent activity
+```
+
+### New Modules Available
+[Check CATALOG.md roadmap for modules not yet installed]
+
+**To detect new modules**:
+1. Read `.datacore/CATALOG.md` for available modules
+2. Compare with installed modules in `.datacore/modules/`
+3. List any modules in catalog not yet installed
+
+Format example:
+```
+### New Modules Available
+
+📦 **research** - Academic research workflows (Status: Available)
+   Install: `git clone https://github.com/datacore-one/datacore-research .datacore/modules/research`
+
+📦 **finance** - Personal finance tracking (Status: Planned)
+   Coming soon - watch CATALOG.md for updates
+```
+
+If no new modules: skip this section entirely.
 
 ### Data's Observation
 [Playful insight from pattern analysis - written in Data's voice]
@@ -153,18 +235,26 @@ For team spaces, write to `[space]/today/YYYY-MM-DD.md`:
 5. Check for WAITING items needing follow-up
 6. Identify decisions pending human input
 7. **Extract yesterday's wins** - Read yesterday's journal for DONE items
-8. **Generate Data's observation** - Analyze patterns from past 7 days:
-   - Productivity patterns (time of day, day of week)
-   - Habit streaks (consecutive completions)
-   - Task completion trends
-   - Effort estimate accuracy
-   - Write in Data's voice (curious, analytical, no contractions)
-9. Generate markdown content
-10. **Write directly to file** (no user confirmation needed):
-    - Personal: Append `## Today` section to journal file
+8. **Gather team spaces update** (personal context only):
+   - List all numbered directories (1-*, 2-*, etc.)
+   - For each space: recent commits, open PRs, issue activity
+   - Flag any blockers from space org/next_actions.org
+9. **Check for new modules**:
+   - Read `.datacore/CATALOG.md` for available modules (Modules table + Roadmap)
+   - List installed modules from `.datacore/modules/`
+   - Report any catalog modules not yet installed
+10. **Generate Data's observation** - Analyze patterns from past 7 days:
+    - Productivity patterns (time of day, day of week)
+    - Habit streaks (consecutive completions)
+    - Task completion trends
+    - Effort estimate accuracy
+    - Write in Data's voice (curious, analytical, no contractions)
+11. Generate markdown content
+12. **Write directly to file** (no user confirmation needed):
+    - Personal: Append `## Daily Briefing` section to journal file
     - Space: Write to today/YYYY-MM-DD.md
-11. **Open journal for review**: `open <journal_path>` to launch in default editor
-12. Display brief console summary
+13. **Open journal for review**: `open <journal_path>` to launch in default editor
+14. Display brief console summary
 
 ## Journal File Handling
 
