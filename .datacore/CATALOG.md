@@ -73,6 +73,7 @@ Modules extend Datacore with specialized functionality. They can be installed in
 |--------|-------------|------|------------|
 | trading | Position management, performance tracking, trading workflows | [datacore-one/datacore-trading](https://github.com/datacore-one/datacore-trading) | Private |
 | campaigns | Landing pages, deployment, analytics, A/B testing | [datacore-one/datacore-campaigns](https://github.com/datacore-one/datacore-campaigns) | Private |
+| mail | Email integration - Gmail adapter, classification, processing | [datacore-one/datacore-mail](https://github.com/datacore-one/datacore-mail) | Private |
 
 ### Installing Modules
 
@@ -202,4 +203,4 @@ Want to propose a new module? See [DIPs](../dips/README.md).
 
 ---
 
-*Last updated: 2025-12-01*
+*Last updated: 2025-12-10*
