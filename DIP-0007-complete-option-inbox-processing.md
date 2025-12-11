@@ -1,4 +1,4 @@
-# DIP-0007: Add COMPLETE Option to Inbox Processing
+# DIP-0007: Add DONE Option to Inbox Processing
 
 **Status:** Draft
 **Author:** AI System
@@ -7,7 +7,7 @@
 
 ## Abstract
 
-Add an 8th processing option "COMPLETE" to the GTD inbox processing workflow to properly handle tasks that have already been accomplished, maintaining accomplishment records and preventing loss of completion data.
+Add an 8th processing option "DONE" to the GTD inbox processing workflow to properly handle tasks that have already been accomplished, maintaining accomplishment records and preventing loss of completion data.
 
 ## Motivation
 
@@ -28,21 +28,21 @@ Current inbox processing only offers 7 options (ACTION, PROJECT, REFERENCE, RESE
 - ACTION (incorrect - already done)
 - REFERENCE (not really reference material)
 
-**Missing Option**: COMPLETE (mark as accomplished with timestamp)
+**Missing Option**: DONE (mark as accomplished with timestamp)
 
 ## Specification
 
 ### New Processing Option
 
-Add **8. COMPLETE** to inbox processing with behavior:
+Add **8. DONE** to inbox processing with behavior:
 
 ```
-8. COMPLETE - Already accomplished (mark as DONE with timestamp)
+8. DONE - Already accomplished (mark as DONE with timestamp)
 ```
 
 ### Implementation Details
 
-**When user selects COMPLETE**:
+**When user selects DONE**:
 
 1. **Prompt for details**:
    ```
@@ -82,7 +82,7 @@ How should I process this?
 5. SOMEDAY - Maybe later (move to someday.org)
 6. WAITING - Blocked on someone/something (add to next_actions.org as WAITING)
 7. DELETE - Not needed (remove)
-8. COMPLETE - Already accomplished (mark as DONE with timestamp) ✅
+8. DONE - Already accomplished (mark as DONE with timestamp) ✅
 
 Your choice: [1-8]
 ```
@@ -104,7 +104,7 @@ Your choice: [1-8]
 ### Analytics Enhancement
 
 **Track completion data**:
-- Total tasks completed: +1 per COMPLETE selection
+- Total tasks completed: +1 per DONE selection
 - Completion patterns: When tasks actually get done vs when they were planned
 - Accomplishment velocity: Rate of task completion over time
 
@@ -118,7 +118,7 @@ Your choice: [1-8]
 
 ## Implementation Requirements
 
-**Phase 1: Basic COMPLETE Option**
+**Phase 1: Basic DONE Option**
 - Add option 8 to inbox processing flow
 - Prompt for completion date and notes
 - Add to journal accomplishments section
@@ -131,8 +131,8 @@ Your choice: [1-8]
 ## Compatibility
 
 Works with existing DIPs:
-- **DIP-0006**: Completed questions can be marked COMPLETE
-- **DIP-0005**: Onboarding tasks can be marked COMPLETE
+- **DIP-0006**: Completed questions can be marked DONE
+- **DIP-0005**: Onboarding tasks can be marked DONE
 - All existing GTD commands continue to work unchanged
 
 ## Example Usage
@@ -144,7 +144,7 @@ Options: 1-7 (user forced to DELETE even though it's done)
 Result: Lost accomplishment
 ```
 
-**After (with DIP-0007)**:
+**After (with DIP-0007 DONE option)**:
 ```
 Item: "Set up GTD system"
 Options: 1-8
@@ -158,9 +158,15 @@ Added to: Today's accomplishments in journal
 
 **Files to modify**:
 - `.datacore/commands/gtd-daily-end.md` - Add option 8
-- `.datacore/agents/gtd-inbox-processor.md` - Add COMPLETE handling
+- `.datacore/agents/gtd-inbox-processor.md` - Add DONE handling
 - Journal templates - Add completed tasks section
 
 ---
 
 **Implementation Status**: Draft - Ready for implementation and testing
+
+---
+
+## Changelog
+
+- **2025-12-11**: Renamed COMPLETE to DONE for consistency with DIP-0009 GTD specification (per PR review feedback)
