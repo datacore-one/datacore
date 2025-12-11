@@ -203,10 +203,13 @@ python .datacore/lib/context_merge.py validate --path .
 ### When Making System Changes
 
 For significant changes, create a DIP:
-1. Copy `dips/DIP-0000-template.md`
-2. Fill in specification
-3. Submit PR to datacore repo
-4. Reference DIP in implementation
+1. **Create separate branch**: `git checkout -b dip-XXXX-description`
+2. Copy `dips/DIP-0000-template.md`
+3. Fill in specification
+4. Submit PR to datacore repo from feature branch
+5. Reference DIP in implementation
+
+**Important**: Each DIP must be on its own feature branch to enable independent review and discussion.
 
 See `dips/README.md` for full DIP workflow.
 
