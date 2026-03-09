@@ -317,14 +317,15 @@ def run(dry_run: bool = False, autonomous: bool = False, no_escalate: bool = Fal
         state_mod.save(st, STATE_FILE, baseline=baseline)
         return
 
-    # Set up XPoster for autonomous posting
+    # Verify chrome_poster is available for autonomous posting
     poster = None
     if autonomous and not dry_run:
         try:
-            from x_poster import XPoster
-            poster = XPoster(account='fds', user_id=os.environ.get('FDS_X_USER_ID'))
+            from chrome_poster import post_reply as _chrome_post
+            poster = _chrome_post  # callable: post_reply(url, text) -> tweet_id
+            print("  Chrome poster ready")
         except Exception as e:
-            print(f"  WARNING: XPoster init failed: {e}", file=sys.stderr)
+            print(f"  WARNING: chrome_poster unavailable: {e}", file=sys.stderr)
 
     posted_this_cycle = 0
     escalated_today = _get_escalation_count(st)
@@ -500,14 +501,14 @@ def run(dry_run: bool = False, autonomous: bool = False, no_escalate: bool = Fal
             quotas = _get_daily_quotas(st)
             continue
 
-        # Auto-post
+        # Auto-post via Chrome
         if not poster:
-            print(f"    ERROR: No XPoster available for auto-posting")
+            print(f"    ERROR: chrome_poster not available")
             continue
 
         try:
-            post_result = poster.reply(draft, str(tweet_id))
-            our_tweet_id = post_result.get('data', {}).get('id', '')
+            tweet_url = conv.get("url") or f"https://x.com/i/status/{tweet_id}"
+            our_tweet_id = poster(tweet_url, draft)
             print(f"    AUTO-POSTED (tweet {our_tweet_id})")
 
             # Record in state
