@@ -17,7 +17,7 @@
     "exa": {
       "command": "bash",
       "args": ["-c", "set -a; [ -f .datacore/env/.env ] && source .datacore/env/.env; exec npx -y exa-mcp-server"],
-      "comment": "Requires EXA_API_KEY in .datacore/env/.env"
+      "comment": "Requires EXA_API_KEY in .datacore/env/.env. Local server unlocks all tools: company_research, code_context, deep_search, crawling, people_search"
     },
     "jina": {
       "command": "bash",

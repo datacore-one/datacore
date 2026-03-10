@@ -80,7 +80,7 @@ tools:
 
 ### Domain-Specific Source Routing
 
-Before querying sources, classify the research query intent into one or more domains: `medical`, `academic`, `scientific`, `technology`, `market-analysis`, `companies`, `news`, `general`, `crypto`, `longevity`.
+Before querying sources, classify the research query intent into one or more domains: `medical`, `academic`, `scientific`, `technology`, `market-analysis`, `companies`, `news`, `general`, `crypto`, `longevity`, `code`.
 
 **Routing procedure:**
 1. Extract intent keywords from the research topic
@@ -88,17 +88,19 @@ Before querying sources, classify the research query intent into one or more dom
 3. Skip sources with zero overlap between query intent and `good_for` tags
 4. Always include `datacortex` (internal, `always_available: true`) and at least one web source
 5. If no web source matches, fall back to `perplexity` (broadest coverage)
+6. **Budget check**: Before each source call, verify the source hasn't exceeded its monthly budget cap (see Budget Enforcement below)
 
 **Example routing decisions:**
 
 | Query | Intent | Sources |
 |-------|--------|---------|
 | "longevity research" | medical, longevity, scientific | datacortex + google-scholar + perplexity |
-| "competitor analysis" | companies, market-analysis | datacortex + exa + perplexity |
-| "code implementation" | technology | datacortex + exa |
-| "breaking news" | news | perplexity |
+| "competitor analysis" | companies, market-analysis | datacortex + exa + exa-companies + perplexity |
+| "code implementation" | technology, code | datacortex + exa + exa-code |
+| "breaking news" | news | perplexity + exa (category: news) |
 | "DeFi yield strategies" | crypto, market-analysis | datacortex + perplexity |
-| "peer-reviewed clinical trials" | medical, academic | datacortex + google-scholar |
+| "peer-reviewed clinical trials" | medical, academic | datacortex + google-scholar + exa (category: research paper) |
+| "VC firms investing in AI" | companies | datacortex + exa-companies + exa (category: company) |
 
 **Intent keyword mapping:**
 
@@ -106,10 +108,72 @@ Before querying sources, classify the research query intent into one or more dom
 |-------------------|---------------|
 | health, medical, clinical, longevity, biomarker, disease | medical, longevity |
 | paper, study, peer-reviewed, citation, journal, research | academic, scientific |
-| competitor, market, company, startup, fundraise, valuation | companies, market-analysis |
-| code, implementation, library, API, framework, bug, deploy | technology |
+| competitor, market, company, startup, fundraise, valuation, VC, investor | companies, market-analysis |
+| code, implementation, library, API, framework, bug, deploy, SDK | technology, code |
 | news, breaking, today, latest, announcement | news |
 | crypto, DeFi, blockchain, token, yield, TVL | crypto |
+
+### Exa Category Filters
+
+When calling `web_search_exa`, apply the `category` parameter based on query intent to dramatically improve result quality. Category mapping is defined in `sources.yaml` under `exa.category_filters`:
+
+| Query intent | Exa `category` param |
+|---|---|
+| medical, academic, scientific | `research paper` |
+| companies, market-analysis | `company` |
+| technology, code | `github` |
+| news | `news` |
+| general (or mixed) | (omit — no filter) |
+
+**When multiple intents map to different categories**, make separate Exa calls with appropriate categories rather than a single unfiltered call. For example, "AI companies publishing research papers" → one call with `category: company` + one with `category: research paper`.
+
+### Specialized Exa Sources
+
+Beyond `web_search_exa`, use purpose-built Exa tools when they match:
+
+| Source | Tool | When to use |
+|---|---|---|
+| `exa-companies` | `company_research_exa` | Company profiles, competitor analysis, market mapping |
+| `exa-code` | `get_code_context_exa` | API docs, code examples, library usage, SDK patterns |
+| `exa-deep` | `deep_search_exa` | Complex queries needing multi-step retrieval (nightshift preferred) |
+
+These are registered separately in sources.yaml for independent budget tracking.
+
+### Tiered Gemini Synthesis
+
+The synthesis phase uses a tiered Gemini model selection based on task complexity:
+
+| Tier | Model | Cost/synthesis | When |
+|---|---|---|---|
+| **Preprocessing** | Gemini 2.5 Flash | Free | Always. Extract highlights, filter noise before synthesis. |
+| **Standard** | Gemini 2.5 Pro | $0.11-0.35 | Default for all research synthesis. |
+| **Advanced** | Gemini 3.1 Pro | $0.16-0.52 | Tasks tagged `:AI:research:deep:` or complex multi-domain queries. |
+| **Autonomous** | Gemini 3.1 Pro DR | $2-5/task | Only when explicitly requested or `:deep:` tag with `opt_in` enabled. |
+
+**Selection procedure:**
+1. Check task tags: if `:AI:research:deep:` → use Gemini 3.1 Pro for synthesis
+2. Check interactive flag: if user requests "deep analysis" → use Gemini 3.1 Pro
+3. Otherwise → use Gemini 2.5 Pro (default)
+4. **Always** run Gemini 2.5 Flash as preprocessing step to extract highlights and reduce token count before Pro synthesis
+
+**Preprocessing with Flash:**
+Before passing gathered content to the synthesis model, send it through Gemini 2.5 Flash with a prompt to:
+- Extract key findings and data points
+- Remove boilerplate, navigation, and irrelevant sections
+- Produce a condensed version (~30-50% of original token count)
+This reduces Pro synthesis costs by 50-70% while maintaining quality.
+
+### Budget Enforcement
+
+Before each source call, check accumulated costs against monthly budget caps:
+
+1. Read `.datacore/state/source_costs.yaml`
+2. Read `budgets` section from `sources.yaml`
+3. If `calls.<source> * cost_per_call >= budgets.<source>`, skip the source
+4. Log a warning: "Source [name] over monthly budget ($X.XX / $Y.YY cap)"
+5. Fall back to next-best source for the same domain
+
+**Never fail the pipeline due to budget exhaustion** — always fall back to cheaper alternatives. Budget caps are advisory guardrails, not hard stops for the pipeline itself.
 
 ### Cost Monitoring
 

@@ -50,11 +50,51 @@ sources:
     type: mcp
     description: "Semantic web discovery — finds content by meaning"
     tool: web_search_exa
+    layers: [search, research]
+    api_key: EXA_API_KEY
+    content_type: documents
+    cost_per_call: 0.007
+    good_for: [general, technology, companies, papers, blogs]
+    category_filters:
+      medical: "research paper"
+      academic: "research paper"
+      scientific: "research paper"
+      companies: "company"
+      market-analysis: "company"
+      technology: "github"
+      code: "github"
+      news: "news"
+
+  exa-companies:
+    type: mcp
+    description: "Company intelligence — purpose-built company index"
+    tool: company_research_exa
     layers: [research]
     api_key: EXA_API_KEY
     content_type: documents
-    cost_per_call: 0.001
-    good_for: [general, technology, companies, papers, blogs]
+    cost_per_call: 0.007
+    good_for: [companies, market-analysis, competitors]
+
+  exa-code:
+    type: mcp
+    description: "Code search — GitHub repos, Stack Overflow, official docs"
+    tool: get_code_context_exa
+    layers: [research]
+    api_key: EXA_API_KEY
+    content_type: documents
+    cost_per_call: 0.007
+    good_for: [technology, code, implementations]
+
+  exa-deep:
+    type: mcp
+    description: "Agentic deep search — multi-step retrieval with synthesis"
+    tool: deep_search_exa
+    layers: [research]
+    api_key: EXA_API_KEY
+    content_type: documents
+    cost_per_call: 0.012
+    good_for: [general, technology, companies, papers]
+    note: "4-30s latency; prefer for nightshift/deep research tasks"
 
   # === ACADEMIC ===
   google-scholar:
@@ -81,15 +121,71 @@ sources:
     cost_per_call: 0.001
 
   # === SYNTHESIS ===
-  gemini:
+  gemini-flash:
     type: mcp
-    description: "Large-context synthesis (2M tokens)"
+    description: "Gemini 2.5 Flash — free preprocessing, extraction, highlights"
+    tool: gemini-query
+    layers: [gather, synthesize]
+    api_key: GEMINI_API_KEY
+    content_type: documents
+    cost_per_call: 0
+    models:
+      default: gemini-2.5-flash
+    good_for: [general, technology, academic]
+    note: "Free tier. Use for preprocessing before Pro synthesis."
+
+  gemini-pro:
+    type: mcp
+    description: "Gemini 2.5 Pro — standard research synthesis (1M context)"
     tool: gemini-query
     layers: [synthesize]
     api_key: GEMINI_API_KEY
     content_type: documents
-    cost_per_call: 0.01
-    opt_in: true  # Sends content to Google; requires explicit enable
+    cost_per_call: 0.15
+    models:
+      default: gemini-2.5-pro
+    good_for: [general, technology, academic, market-analysis]
+    note: "$1.25/M input, $10/M output. Default synthesis model."
+
+  gemini-pro-advanced:
+    type: mcp
+    description: "Gemini 3.1 Pro — complex reasoning and deep analysis (1M context)"
+    tool: gemini-query
+    layers: [synthesize]
+    api_key: GEMINI_API_KEY
+    content_type: documents
+    cost_per_call: 0.35
+    models:
+      default: gemini-3.1-pro-preview
+    good_for: [general, technology, academic, market-analysis]
+    note: "$2/M input, $12/M output. Use for :AI:research:deep: tasks only."
+
+  gemini-deep-research:
+    type: mcp
+    description: "Gemini 3.1 Pro Deep Research — autonomous multi-step research agent"
+    tool: gemini-deep-research
+    layers: [research, synthesize]
+    api_key: GEMINI_API_KEY
+    content_type: documents
+    cost_per_call: 3.50
+    opt_in: true  # Expensive ($2-5/task); requires explicit enable or :deep: tag
+    good_for: [general, technology, academic, market-analysis, companies]
+    note: "Autonomous agent. $2-5/task. Budget-gated."
+
+  # === BUDGET CAPS ===
+  # Monthly spending limits per source. Research-orchestrator checks accumulated
+  # costs in source_costs.yaml before each call and skips over-budget sources.
+budgets:
+  exa: 10.00
+  exa-companies: 5.00
+  exa-code: 5.00
+  exa-deep: 5.00
+  perplexity: 10.00
+  gemini-flash: 0        # Free tier, no cap needed
+  gemini-pro: 20.00
+  gemini-pro-advanced: 20.00
+  gemini-deep-research: 25.00
+  google-scholar: 5.00
 
   # === FUTURE SOURCES ===
   # Uncomment and configure as needed:

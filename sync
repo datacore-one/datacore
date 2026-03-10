@@ -32,7 +32,18 @@ sync_repo() {
     elif [ "$ACTION" = "push" ]; then
         echo "Pushing $name..."
         warn_branch
-        git -C "$repo" add -A
+        # Stage new and modified files only — NEVER stage deletions automatically.
+        # This prevents partial working copies (e.g. nightshift server) from
+        # deleting files they don't have locally. Use 'git rm' for intentional deletes.
+        git -C "$repo" add --ignore-removal . 2>/dev/null
+        # Safety check: abort if commit would delete more than 5 files
+        local del_count=$(git -C "$repo" diff --cached --diff-filter=D --name-only 2>/dev/null | wc -l | tr -d ' ')
+        if [ "$del_count" -gt 5 ]; then
+            echo "  ABORT: commit would delete $del_count files in $name"
+            echo "  This is likely a sync error. Review with: git -C $repo diff --cached --stat"
+            git -C "$repo" reset HEAD 2>/dev/null
+            return 1
+        fi
         git -C "$repo" diff --cached --quiet || git -C "$repo" commit -m "Sync: $(date +%Y-%m-%d)"
         git -C "$repo" push 2>/dev/null || echo "  (no remote or error)"
     elif [ "$ACTION" = "status" ]; then
