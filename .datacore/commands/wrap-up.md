@@ -73,9 +73,36 @@ You started this conversation with a goal. Work happened, insights emerged. Now 
 
 ## Sequence
 
-### 0. Create Tracked Checklist (MANDATORY FIRST STEP)
+### 0a. Recover Full Session Context (BEFORE ANYTHING ELSE)
 
-**Before doing anything else**, create a tracked task list for the wrap-up steps. This prevents silent step skipping — every step is visible and must be marked complete.
+Long sessions get compacted — earlier conversation turns are summarized, losing detail. External work (e.g., repos in `/tmp/`, worktrees) may not be visible from `~/Data/` alone. Before generating any wrap-up output, reconstruct the full picture:
+
+1. **Check for compaction**: If the conversation has been compacted (you see a summary of earlier work rather than the actual messages), read the full transcript file to recover details:
+   ```
+   # The transcript path is shown in the compaction summary
+   # Read it to recover: file paths, decisions, errors, accomplishments
+   ```
+
+2. **Check user-specified arguments**: If the user passed arguments to `/wrap-up` (e.g., `/wrap-up check also tmp/ for full session`), scan those locations:
+   ```bash
+   # Example: scan /tmp for session repos
+   ls -d /tmp/datacore-* /tmp/*-worktree* 2>/dev/null
+   # Check git log in any found repos for today's commits
+   git -C /tmp/found-repo log --oneline --since="today"
+   ```
+
+3. **Check additional working directories**: The environment may list additional working directories beyond `~/Data/`. Scan those for session work (git status, recent commits, modified files).
+
+4. **Build session inventory**: Before proceeding, compile a complete list of:
+   - All repos/directories where work happened (including `/tmp/`, worktrees)
+   - All files created or modified (use `git diff --stat` in each repo)
+   - Key decisions and errors from the full conversation history
+
+**Store this inventory internally** — every subsequent step draws from it. Without this step, wrap-up misses work done before compaction or in external directories.
+
+### 0b. Create Tracked Checklist (MANDATORY)
+
+**After context recovery**, create a tracked task list for the wrap-up steps. This prevents silent step skipping — every step is visible and must be marked complete.
 
 Use `TaskCreate` to create one task per non-automatic step:
 
@@ -703,20 +730,26 @@ ls -la ~/Data/1-teamspace/journal/$(date +%Y-%m-%d).md 2>/dev/null
 ls -la ~/Data/2-projectspace/journal/$(date +%Y-%m-%d).md 2>/dev/null
 ```
 
-### 16. Close
+### 16. Close — Consolidated Session Report
+
+**CRITICAL: Re-present ALL section outputs together.** During wrap-up, individual step outputs scroll past and get lost. The close step must collect and re-display every section's output in one consolidated block. This is the user's single point of review.
+
+**How to build the consolidated report:**
+- As you work through steps 1-15, store each section's output (the formatted blocks you display to the user) internally
+- At step 16, replay ALL of them in sequence inside a single consolidated report
+- The user should be able to read this one block and verify the entire wrap-up without scrolling back
 
 ```
 ═══════════════════════════════════════════════════
-SESSION COMPLETE
+SESSION COMPLETE — CONSOLIDATED REPORT
 ═══════════════════════════════════════════════════
 
 Session: [HH:MM] — [HH:MM] ([duration])
 Checklist: [X/16 items verified]
 
-SESSION NARRATIVE
-─────────────────
-[Structured bullet points — scannable, not prose.
-The user should verify everything was captured at a glance.]
+───────────────────────────────────────────────────
+1. SESSION NARRATIVE
+───────────────────────────────────────────────────
 
 Goal: [One line — what the session set out to do]
 
@@ -734,42 +767,86 @@ Rejected: [Alternative explored but not taken, and why]
 
 Next: [What follows — continuation task, or "complete"]
 
-Example:
+───────────────────────────────────────────────────
+2. CONTINUATION TASKS
+───────────────────────────────────────────────────
 
-Goal: Build Verity/Santorio cap table model
+[Replay step 3 output — tasks created, or "None needed"]
 
-Done:
-  - Created cap table from scratch with dilution scenarios
-  - Added vesting schedules and governance sheets
-  - Modeled ESOP allocation for both entities
+───────────────────────────────────────────────────
+3. TASKS COMPLETED
+───────────────────────────────────────────────────
 
-Decisions:
-  - 20% co-founder swap, dual-class voting
-  - 15% ESOP in both entities
-  - No cross-entity equity (Datafund debt risk)
+[Replay step 4 output — tasks marked DONE, or "None found"]
 
-Rejected: ESOP-instead-of-swap model (too complex)
+───────────────────────────────────────────────────
+4. LEARNING & JOURNALS
+───────────────────────────────────────────────────
 
-Next: Draft proposal for Zenel (continuation task, Monday)
+[Replay coordinator results from step 5:]
 
-FILES CREATED/MODIFIED
-──────────────────────
-[List all files created or meaningfully modified during the
-session, grouped by type. Mark new files with (NEW).]
+Journals updated:
+  - [space]/journal/YYYY-MM-DD.md ✓
+  ...
 
-  Created:
-    - path/to/new-file.xlsx (NEW)
-  Modified:
-    - path/to/existing-file.org
-    - path/to/another-file.md
+Learnings captured:
+  - [space]: X patterns, Y corrections
+  ...
 
-Stats:
+Engrams registered: [count] (ENG-IDs)
+
+───────────────────────────────────────────────────
+5. GTD TASKS EXTRACTED
+───────────────────────────────────────────────────
+
+[Replay step 7 output — new tasks added, or "None"]
+
+───────────────────────────────────────────────────
+6. INSIGHT VERIFICATION
+───────────────────────────────────────────────────
+
+[Replay step 8 output — the coverage table]
+
+───────────────────────────────────────────────────
+7. SESSION META-ANALYSIS
+───────────────────────────────────────────────────
+
+[Replay step 9 output — arc, corrections, insight density]
+
+───────────────────────────────────────────────────
+8. FILES CREATED/MODIFIED
+───────────────────────────────────────────────────
+
+[List ALL files from ALL working directories — ~/Data/,
+/tmp/ repos, worktrees, etc. Group by location.]
+
+  /tmp/project-repo/:
+    Created:
+      - lib/new-module.py (NEW)
+    Modified:
+      - tests/test_module.py
+
+  ~/Data/:
+    Modified:
+      - 0-personal/journal/YYYY-MM-DD.md
+
+───────────────────────────────────────────────────
+9. KNOWLEDGE ARTIFACTS
+───────────────────────────────────────────────────
+
+[Replay step 10 output — artifact table]
+
+───────────────────────────────────────────────────
+STATS
+───────────────────────────────────────────────────
+
 - Tasks completed: X
 - Continuation tasks: X (with bootstrap context)
 - Knowledge artifacts: X (with paths in journal)
-- Learnings captured: X patterns
+- Learnings captured: X patterns, Y corrections
+- Engrams: X registered
 - Journals updated: personal [+ teamspace] [+ projectspace]
-- All repos pushed: Yes
+- All repos pushed: Yes/No
 
 [If continuation task created:]
 Next session can run: /continue
@@ -778,6 +855,8 @@ Or search for :continuation: tagged tasks.
 Ready to close terminal.
 ═══════════════════════════════════════════════════
 ```
+
+**Why this matters:** In long sessions, individual step outputs scroll past hundreds of lines of tool calls, agent output, and status updates. By the time the user reaches step 16, they've lost track of what steps 1-8 produced. The consolidated report gives them everything in one place — a single scannable receipt of the entire session.
 
 **Session timing:**
 - Infer start time from the first user message timestamp in the conversation
@@ -793,10 +872,11 @@ Ready to close terminal.
 - "Next" is either a continuation task reference or "complete"
 
 **Files Created/Modified guidelines:**
-- List ALL files created or meaningfully modified by the session (not by background agents like journal/learning coordinators — those are reported in their own sections)
+- List ALL files created or meaningfully modified by the session across ALL working directories (not just `~/Data/` — include `/tmp/` repos, worktrees, any external locations from step 0a)
 - Mark new files with (NEW)
 - Include org-mode files, spreadsheets, code, documents — anything the user's work produced
 - Exclude temporary files, lock files (~$...), and auto-generated artifacts
+- Group by working directory when files span multiple locations
 - This is the user's "what did I produce today" receipt
 
 ## Key Concepts
@@ -829,9 +909,11 @@ Run `/tomorrow` once at end of day.
 ## Files Referenced
 
 **Read:**
-- Conversation context
+- Conversation context (including full transcript if compacted)
 - `org/next_actions.org` (for completed tasks)
 - Today's journal
+- External working directories (`/tmp/`, worktrees, repos specified in arguments)
+- Git status/log in all session-active repos
 
 **Update:**
 - `org/next_actions.org` (mark DONE, add continuations)
