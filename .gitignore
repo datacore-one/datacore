@@ -23,6 +23,9 @@
 # Use install.yaml.example as template
 install.yaml
 
+# Superpowers brainstorm sessions (ephemeral)
+.superpowers/
+
 # -----------------------------------------------------------------------------
 # LAYERED CONTEXT PATTERN (DIP-0002)
 # -----------------------------------------------------------------------------

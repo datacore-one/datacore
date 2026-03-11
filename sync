@@ -2,8 +2,16 @@
 # ~/Data/sync [pull|push|status]
 
 ACTION="${1:-pull}"
+ALERT_FILE="$HOME/Data/.datacore/state/sync-alerts.log"
 
 echo "Datacore sync: $ACTION"
+
+sync_alert() {
+    local msg="[$(date '+%Y-%m-%d %H:%M')] SYNC ALERT: $1"
+    echo "$msg" >&2
+    mkdir -p "$(dirname "$ALERT_FILE")"
+    echo "$msg" >> "$ALERT_FILE"
+}
 
 sync_repo() {
     local repo="$1"
@@ -39,8 +47,7 @@ sync_repo() {
         # Safety check: abort if commit would delete more than 5 files
         local del_count=$(git -C "$repo" diff --cached --diff-filter=D --name-only 2>/dev/null | wc -l | tr -d ' ')
         if [ "$del_count" -gt 5 ]; then
-            echo "  ABORT: commit would delete $del_count files in $name"
-            echo "  This is likely a sync error. Review with: git -C $repo diff --cached --stat"
+            sync_alert "ABORT push in $name — would delete $del_count files. Review: git -C $repo diff --cached --stat"
             git -C "$repo" reset HEAD 2>/dev/null
             return 1
         fi
