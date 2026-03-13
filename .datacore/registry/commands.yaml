@@ -278,10 +278,10 @@ commands:
     name: Multi-Source Search
     description: Semantic search across local knowledge (Datacortex) and web intelligence (Perplexity)
     version: 2.0.0
-    status: demoted
+    status: active
     trigger: search for|find|look up
     mcp_tool: datacore.search
-    source: .datacore/commands/demoted/search.md
+    source: .datacore/commands/search.md
     invokes: []
     reads:
       required:
