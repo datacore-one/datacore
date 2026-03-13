@@ -18,6 +18,7 @@ Usage:
     python zettel_processor.py --full-process [--space SPACE]
 """
 
+import json
 import os
 import re
 import sys
@@ -316,6 +317,14 @@ def save_to_database(file_data, space=None):
     conn = get_connection(space)
     cursor = conn.cursor()
 
+    # Ensure all string fields are actually strings (frontmatter can produce dicts/lists)
+    def _str(val):
+        if val is None:
+            return None
+        if isinstance(val, (dict, list)):
+            return json.dumps(val)
+        return str(val)
+
     cursor.execute("""
         INSERT OR REPLACE INTO files
         (id, path, space, type, title, content, summary, word_count, maturity, is_stub, author, created_at, updated_at, processed_at)
@@ -325,9 +334,9 @@ def save_to_database(file_data, space=None):
         file_data['path'],
         file_data['space'],
         file_data['type'],
-        file_data['title'],
-        file_data['content'],
-        file_data['summary'],
+        _str(file_data['title']),
+        _str(file_data['content']),
+        _str(file_data['summary']),
         file_data['word_count'],
         file_data['maturity'],
         file_data['is_stub'],
