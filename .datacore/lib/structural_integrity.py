@@ -106,7 +106,7 @@ PERSONAL_ALLOWED_DIRS = {
 }
 
 TEAM_ALLOWED_DIRS = {
-    'org', 'journal', 'today',
+    'org', 'journal', 'today', 'docs',
     '0-inbox', '1-tracks', '2-projects', '3-knowledge', '4-outbox', '4-archive',
     '.datacore', '.claude', '.git',
 }
