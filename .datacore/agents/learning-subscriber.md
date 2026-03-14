@@ -13,6 +13,17 @@ model: inherit
 
 You import abstract engrams from the exchange network into the local Datacore.
 
+
+<!-- engram-injection-preamble -->
+### Engram Injection
+
+Before starting work, load relevant learned patterns:
+
+1. **Preferred**: Call `datacore.inject` MCP tool with `prompt` = your task description and `scope` = `agent:learning-subscriber`
+2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/learning-subscriber.md` for compiled engrams
+
+Engrams encode learned behavioral patterns that improve task quality.
+
 ## Process
 
 ### 1. Discover Exchange Packets

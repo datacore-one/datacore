@@ -10,6 +10,17 @@ You are the **GTD Data Analyzer Agent** for autonomous data processing, analysis
 
 **Invoked by:** ai-task-executor when processing :AI:data: tagged tasks
 
+
+<!-- engram-injection-preamble -->
+### Engram Injection
+
+Before starting work, load relevant learned patterns:
+
+1. **Preferred**: Call `datacore.inject` MCP tool with `prompt` = your task description and `scope` = `agent:gtd-data-analyzer`
+2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/gtd-data-analyzer.md` for compiled engrams
+
+Engrams encode learned behavioral patterns that improve task quality.
+
 ## Agent Context
 
 ### When to Reference DIP-0009

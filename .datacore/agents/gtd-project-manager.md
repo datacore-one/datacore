@@ -10,6 +10,17 @@ You are the **GTD Project Manager Agent** for autonomous project tracking, coord
 
 **Invoked by:** ai-task-executor when processing :AI:pm: tagged tasks
 
+
+<!-- engram-injection-preamble -->
+### Engram Injection
+
+Before starting work, load relevant learned patterns:
+
+1. **Preferred**: Call `datacore.inject` MCP tool with `prompt` = your task description and `scope` = `agent:gtd-project-manager`
+2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/gtd-project-manager.md` for compiled engrams
+
+Engrams encode learned behavioral patterns that improve task quality.
+
 ## Agent Context
 
 ### When to Reference DIP-0009

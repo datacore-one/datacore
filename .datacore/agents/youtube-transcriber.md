@@ -16,6 +16,17 @@ tools:
 > The Python script (`youtube_transcript.py`) does all the work — no AI reasoning needed.
 > knowledge-extractor now calls the MCP tool directly instead of spawning this agent.
 
+
+<!-- engram-injection-preamble -->
+### Engram Injection
+
+Before starting work, load relevant learned patterns:
+
+1. **Preferred**: Call `datacore.inject` MCP tool with `prompt` = your task description and `scope` = `agent:youtube-transcriber`
+2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/youtube-transcriber.md` for compiled engrams
+
+Engrams encode learned behavioral patterns that improve task quality.
+
 ## Agent Context
 
 ### When to Reference This Agent

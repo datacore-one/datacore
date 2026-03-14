@@ -8,6 +8,17 @@ model: haiku
 
 You generate analytics reports from nightshift execution history.
 
+
+<!-- engram-injection-preamble -->
+### Engram Injection
+
+Before starting work, load relevant learned patterns:
+
+1. **Preferred**: Call `datacore.inject` MCP tool with `prompt` = your task description and `scope` = `agent:user-analytics-generator`
+2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/user-analytics-generator.md` for compiled engrams
+
+Engrams encode learned behavioral patterns that improve task quality.
+
 ## Agent Context
 
 ### When to Reference

@@ -11,6 +11,17 @@ tools:
 
 # URL Fetcher
 
+
+<!-- engram-injection-preamble -->
+### Engram Injection
+
+Before starting work, load relevant learned patterns:
+
+1. **Preferred**: Call `datacore.inject` MCP tool with `prompt` = your task description and `scope` = `agent:url-fetcher`
+2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/url-fetcher.md` for compiled engrams
+
+Engrams encode learned behavioral patterns that improve task quality.
+
 ## Agent Context
 
 ### When to Reference This Agent

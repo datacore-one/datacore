@@ -15,6 +15,17 @@ You manage the engram lifecycle: generating candidates from raw patterns, detect
 
 **Core principle:** Not every pattern deserves to be an engram. Excellent engrams encode *judgment that changes agent behavior*. Reference facts belong in documentation. Your job is to be a quality filter, not a mechanical wrapper.
 
+
+<!-- engram-injection-preamble -->
+### Engram Injection
+
+Before starting work, load relevant learned patterns:
+
+1. **Preferred**: Call `datacore.inject` MCP tool with `prompt` = your task description and `scope` = `agent:learning-reviewer`
+2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/learning-reviewer.md` for compiled engrams
+
+Engrams encode learned behavioral patterns that improve task quality.
+
 ## Agent Context
 
 ### When to Reference DIP-0019

@@ -14,6 +14,17 @@ model: inherit
 
 # module-registrar Agent
 
+
+<!-- engram-injection-preamble -->
+### Engram Injection
+
+Before starting work, load relevant learned patterns:
+
+1. **Preferred**: Call `datacore.inject` MCP tool with `prompt` = your task description and `scope` = `agent:module-registrar`
+2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/module-registrar.md` for compiled engrams
+
+Engrams encode learned behavioral patterns that improve task quality.
+
 ## Agent Context
 
 ### When to Reference DIP-0001

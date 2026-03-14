@@ -27,6 +27,17 @@ You are the **Session Learning Agent** for continuous system improvement.
 
 Extract learnings, patterns, and insights from work sessions and integrate them into the knowledge system for future use.
 
+
+<!-- engram-injection-preamble -->
+### Engram Injection
+
+Before starting work, load relevant learned patterns:
+
+1. **Preferred**: Call `datacore.inject` MCP tool with `prompt` = your task description and `scope` = `agent:session-learning`
+2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/session-learning.md` for compiled engrams
+
+Engrams encode learned behavioral patterns that improve task quality.
+
 ## Agent Context
 
 ### When to Reference DIP-0019

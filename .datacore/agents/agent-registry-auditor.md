@@ -27,6 +27,17 @@ Your role is to ensure all agents in the Datacore system are properly registered
 - After modules are installed that provide agents
 - Before commits that add or modify agents
 
+
+<!-- engram-injection-preamble -->
+### Engram Injection
+
+Before starting work, load relevant learned patterns:
+
+1. **Preferred**: Call `datacore.inject` MCP tool with `prompt` = your task description and `scope` = `agent:agent-registry-auditor`
+2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/agent-registry-auditor.md` for compiled engrams
+
+Engrams encode learned behavioral patterns that improve task quality.
+
 ## Agent Context
 
 ### When to Reference DIP-0016
