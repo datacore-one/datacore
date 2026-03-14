@@ -364,9 +364,9 @@ commands:
     name: Structural Integrity Check
     description: Audit and maintain Datacore folder structure
     version: 1.0.0
-    status: demoted
+    status: active
     trigger: check folder structure|structural integrity
-    source: .datacore/commands/demoted/structural-integrity.md
+    source: .datacore/commands/structural-integrity.md
     invokes:
     - agent: structural-integrity
       when: always
