@@ -85,6 +85,7 @@ PERSONAL_FOLDERS = {
     '2-code',
     '3-knowledge',
     '4-outbox',
+    '4-archive',
 }
 
 TEAM_FOLDERS = {
@@ -93,6 +94,49 @@ TEAM_FOLDERS = {
     '2-projects',
     '3-knowledge',
     '4-outbox',
+    '4-archive',
+}
+
+# Allowlists for top-level directories (DIP-0015 + agent definition)
+# Anything not in these sets at the space root is flagged as unexpected.
+PERSONAL_ALLOWED_DIRS = {
+    'org', 'journal', 'notes', 'content',
+    '0-inbox', '1-active', '2-code', '3-knowledge', '4-outbox', '4-archive',
+    '.obsidian', '.datacore', '.claude', '.git', '.lfs-cache',
+}
+
+TEAM_ALLOWED_DIRS = {
+    'org', 'journal', 'today',
+    '0-inbox', '1-tracks', '2-projects', '3-knowledge', '4-outbox', '4-archive',
+    '.datacore', '.claude', '.git',
+}
+
+ALLOWED_ROOT_FILES = {
+    '.gitignore', '.gitattributes', '_index.md',
+    'CLAUDE.md', 'CLAUDE.base.md', 'CLAUDE.org.md',
+    'CLAUDE.space.md', 'CLAUDE.template.md', 'CLAUDE.local.md',
+    'SCAFFOLDING.md', 'SCAFFOLDING.base.md', 'SCAFFOLDING.space.md',
+    'README.md', 'LICENSE', 'CODEOWNERS',
+    'knowledge.db',
+    '.DS_Store',
+}
+
+# Hints for where unexpected folders likely belong
+ROGUE_FOLDER_HINTS = {
+    'contacts': '3-knowledge/reference/people/',
+    'content': '1-tracks/comms/ or 4-outbox/',
+    'research': '1-tracks/research/',
+    'health': '1-active/health-longevity/ (personal)',
+    'coach': '1-active/ (personal)',
+    'code': '2-code/ or 2-projects/',
+    'inbox': '0-inbox/',
+    'notes': 'journal/ or 3-knowledge/pages/',
+    'products': '1-tracks/product/ or 2-projects/',
+    'sales': '1-tracks/comms/ or 1-tracks/ops/',
+    'reports': '1-tracks/ops/ or 3-knowledge/',
+    'opportunities': '1-tracks/research/',
+    'docs': '3-knowledge/pages/ or 1-tracks/dev/',
+    'today': 'journal/',
 }
 
 # Non-AI-readable formats that require companion markdown
@@ -197,15 +241,17 @@ class StructuralIntegrityChecker:
         """Verify expected numbered folders exist."""
         self.checks_run += 1
 
-        expected = PERSONAL_FOLDERS if self.space_type == 'personal' else TEAM_FOLDERS
+        all_valid = PERSONAL_FOLDERS if self.space_type == 'personal' else TEAM_FOLDERS
+        # Core folders that should always exist (archive/outbox are optional)
+        required = {f for f in all_valid if f not in ('4-archive', '4-outbox')}
         existing_numbered = set()
 
         for item in self.space_path.iterdir():
             if item.is_dir() and item.name[0].isdigit():
                 existing_numbered.add(item.name)
 
-        # Check for missing required folders
-        for folder in expected:
+        # Check for missing required folders (not optional ones)
+        for folder in required:
             if folder not in existing_numbered:
                 self.issues.append(Issue(
                     severity='warning',
@@ -218,15 +264,40 @@ class StructuralIntegrityChecker:
 
         # Check for unexpected numbered folders
         for folder in existing_numbered:
-            if folder not in expected:
-                # Allow numbered folders that follow pattern but aren't standard
-                # (e.g., user might have custom folders)
+            if folder not in all_valid:
                 self.issues.append(Issue(
                     severity='info',
                     check_type='folder_structure',
                     path=self.space_path / folder,
-                    message=f"Non-standard numbered folder: {folder}/ (expected: {expected})",
+                    message=f"Non-standard numbered folder: {folder}/ (expected: {all_valid})",
                 ))
+
+        # Check ALL top-level entries against allowlist (DIP-0015)
+        allowed_dirs = PERSONAL_ALLOWED_DIRS if self.space_type == 'personal' else TEAM_ALLOWED_DIRS
+        for item in self.space_path.iterdir():
+            name = item.name
+            if item.is_dir():
+                if name not in allowed_dirs and not name.startswith('.'):
+                    hint = ROGUE_FOLDER_HINTS.get(name, 'an appropriate location under 1-tracks/ or 3-knowledge/')
+                    self.issues.append(Issue(
+                        severity='warning',
+                        check_type='folder_structure',
+                        path=item,
+                        message=f"Unexpected top-level folder: {name}/ — not in DIP-0015 allowlist. Consider moving to {hint}",
+                        fix_suggestion=f"Move contents of {name}/ to {hint}",
+                    ))
+            elif item.is_file():
+                if name not in ALLOWED_ROOT_FILES and not name.startswith('.'):
+                    self.issues.append(Issue(
+                        severity='warning',
+                        check_type='folder_structure',
+                        path=item,
+                        message=f"Unexpected file at space root: {name} — should be in a semantic location",
+                        fix_suggestion=f"Move {name} to appropriate folder (0-inbox/ if unsure)",
+                    ))
+            elif item.is_symlink():
+                # Symlinks are allowed (e.g., contacts → 3-knowledge/reference)
+                pass
 
     # -------------------------------------------------------------------------
     # Check: Companion Files
@@ -246,8 +317,9 @@ class StructuralIntegrityChecker:
         # Find all files needing companions
         for ext in COMPANION_REQUIRED_EXTENSIONS:
             for file_path in self.space_path.rglob(f'*{ext}'):
-                # Skip hidden folders and .datacore
-                if any(p.startswith('.') for p in file_path.relative_to(self.space_path).parts):
+                # Skip hidden folders, .datacore, and node_modules
+                parts = file_path.relative_to(self.space_path).parts
+                if any(p.startswith('.') or p == 'node_modules' for p in parts):
                     continue
 
                 # Check for companion
@@ -271,9 +343,9 @@ class StructuralIntegrityChecker:
 
         for ext in COMPANION_REQUIRED_EXTENSIONS:
             for file_path in self.space_path.rglob(f'*{ext}'):
-                # Skip hidden folders and .datacore
+                # Skip hidden folders, .datacore, and node_modules
                 rel_path = file_path.relative_to(self.space_path)
-                if any(p.startswith('.') for p in rel_path.parts):
+                if any(p.startswith('.') or p == 'node_modules' for p in rel_path.parts):
                     continue
 
                 folder = file_path.parent
@@ -353,9 +425,9 @@ class StructuralIntegrityChecker:
         violations = []
 
         for item in self.space_path.rglob('*'):
-            # Skip hidden folders
+            # Skip hidden folders and node_modules
             rel_path = item.relative_to(self.space_path)
-            if any(p.startswith('.') for p in rel_path.parts):
+            if any(p.startswith('.') or p == 'node_modules' for p in rel_path.parts):
                 continue
 
             name = item.stem  # Name without extension
@@ -496,9 +568,9 @@ class StructuralIntegrityChecker:
             if not folder.is_dir():
                 continue
 
-            # Skip hidden folders
+            # Skip hidden folders and node_modules
             rel_path = folder.relative_to(self.space_path)
-            if any(p.startswith('.') for p in rel_path.parts):
+            if any(p.startswith('.') or p == 'node_modules' for p in rel_path.parts):
                 continue
 
             # Check if empty (ignoring hidden files and .DS_Store)
@@ -538,9 +610,9 @@ class StructuralIntegrityChecker:
         # Collect all valid link targets (markdown files without extension)
         valid_targets: Set[str] = set()
         for md_file in self.space_path.rglob('*.md'):
-            # Skip hidden folders
+            # Skip hidden folders and node_modules
             rel_path = md_file.relative_to(self.space_path)
-            if any(p.startswith('.') for p in rel_path.parts):
+            if any(p.startswith('.') or p == 'node_modules' for p in rel_path.parts):
                 continue
             # Add stem as valid target
             valid_targets.add(md_file.stem.lower())
@@ -553,7 +625,7 @@ class StructuralIntegrityChecker:
 
         for md_file in self.space_path.rglob('*.md'):
             rel_path = md_file.relative_to(self.space_path)
-            if any(p.startswith('.') for p in rel_path.parts):
+            if any(p.startswith('.') or p == 'node_modules' for p in rel_path.parts):
                 continue
 
             try:
@@ -604,9 +676,9 @@ class StructuralIntegrityChecker:
             if not file_path.is_file():
                 continue
 
-            # Skip hidden folders and .datacore
+            # Skip hidden folders, .datacore, and node_modules
             rel_path = file_path.relative_to(self.space_path)
-            if any(p.startswith('.') for p in rel_path.parts):
+            if any(p.startswith('.') or p == 'node_modules' for p in rel_path.parts):
                 continue
 
             # Skip large files
@@ -1074,10 +1146,40 @@ def format_briefing_section(results: List[AuditResult]) -> str:
 # CLI INTERFACE
 # =============================================================================
 
+def check_root_directory(data_root: Path) -> AuditResult:
+    """Check the Datacore root directory for unexpected entries."""
+    start_time = time.time()
+    issues = []
+    # Root should only contain numbered space dirs and system files/dirs
+    root_allowed_dirs = {'.datacore', '.git', '.claude', '.lfs-cache', '.obsidian', '.github', '.superpowers', '.worktrees', 'docs', 'dips'}
+    root_allowed_files = {'.gitignore', '.gitattributes', '.DS_Store', 'CLAUDE.md', 'CLAUDE.base.md', 'CLAUDE.org.md', 'CLAUDE.local.md', 'install.yaml', 'install.yaml.example', 'install.yaml.pm.example', 'datacore.lock.yaml', 'sync', 'README.md', 'LICENSE', 'CODEOWNERS', 'CHANGELOG.md', 'CONTRIBUTING.md', 'CODE_OF_CONDUCT.md', 'GETTING_STARTED.md', 'INSTALL.md', 'ROADMAP.md', 'SECURITY.md'}
+    for item in sorted(data_root.iterdir()):
+        name = item.name
+        if name.startswith('.') and name in root_allowed_dirs:
+            continue
+        if item.is_dir():
+            if name[0:1].isdigit():
+                continue  # numbered space — checked separately
+            if name in root_allowed_dirs:
+                continue
+            issues.append(Issue(severity='warning', check_type='folder_structure', path=item, message=f"Unexpected directory at Datacore root: {name}/ — root should only contain numbered spaces and system dirs", fix_suggestion=f"Move {name}/ into the appropriate space or remove"))
+        elif item.is_file():
+            if name in root_allowed_files:
+                continue
+            if name.startswith('.'):
+                continue
+            issues.append(Issue(severity='warning', check_type='folder_structure', path=item, message=f"Unexpected file at Datacore root: {name}", fix_suggestion=f"Move {name} into appropriate space"))
+    duration_ms = int((time.time() - start_time) * 1000)
+    return AuditResult(space='root', space_type='team', issues=issues, checks_run=1, duration_ms=duration_ms)
+
+
 def check_all_spaces(data_root: Path, quick_mode: bool = True,
                      companion_mode: str = 'index') -> List[AuditResult]:
-    """Check all spaces in Datacore."""
+    """Check all spaces in Datacore, including root directory."""
     results = []
+
+    # Check root directory first
+    results.append(check_root_directory(data_root))
 
     for space_dir in sorted(data_root.iterdir()):
         if not space_dir.is_dir():
