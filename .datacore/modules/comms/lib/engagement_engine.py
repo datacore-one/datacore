@@ -52,7 +52,7 @@ STATE_FILE = DATA_DIR / ".datacore" / "state" / "engagement-state.json"
 
 # Default limits
 DEFAULT_DAILY_REPLY_LIMIT = 85
-DEFAULT_MAX_PER_HOUR = 5      # Per 30min cycle: 3-4 replies average
+DEFAULT_MAX_PER_HOUR = 3      # Per 30min cycle (must fit in 900s timeout)
 DEFAULT_ESCALATION_MAX = 5    # Max Telegram escalations per day
 AUTONOMOUS_THRESHOLD = 0.75   # consensus ≥ this → auto-post (quality gate)
 ESCALATION_THRESHOLD = 0.45   # below this → auto-reject
@@ -349,17 +349,8 @@ def run(dry_run: bool = False, autonomous: bool = False, no_escalate: bool = Fal
             state_mod.mark_seen(st, tweet_id)
             continue
 
-        # Check reply permissions
-        if tweet_id and str(tweet_id) not in ("unknown", ""):
-            try:
-                from x_poster import XPoster
-                _checker = XPoster(account='fds', user_id=os.environ.get('FDS_X_USER_ID'))
-                if not _checker.can_reply(str(tweet_id)):
-                    print(f"    Skipping: replies restricted")
-                    state_mod.mark_seen(st, tweet_id)
-                    continue
-            except Exception:
-                pass  # Fail open
+        # Reply permissions checked at post time (draft_pipeline or poster.reply)
+        # Removed per-conversation API call to avoid X API rate limits
 
         # Draft
         print(f"    Drafting...")
