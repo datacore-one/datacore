@@ -1084,7 +1084,7 @@ For team spaces, write to `[space]/today/YYYY-MM-DD.md`:
     - Write in Data's voice (curious, analytical, no contractions)
 17. Generate markdown content
 18. **Write directly to file** (no user confirmation needed):
-    - Personal: Append `## Daily Briefing` section to journal file
+    - Personal: Insert `## Daily Briefing` at TOP of journal (after frontmatter), pushing existing content down
     - Space: Write to today/YYYY-MM-DD.md
 19. **Open journal for review**: `open <journal_path>` to launch in default editor
 20. Display brief console summary

@@ -118,11 +118,12 @@ Tasks to create (mark in_progress when starting, completed when done):
 7. "Insight verification" (activeForm: "Verifying insight capture")
 8. "Session meta-analysis" (activeForm: "Writing meta-analysis")
 9. "Artifact tracking" (activeForm: "Tracking knowledge artifacts")
-10. "Push repos" (activeForm: "Pushing repos")
-11. "Verify all checklist tasks completed" (activeForm: "Verifying checklist completion")
+10. "Kill orphaned dev servers" (activeForm: "Cleaning up dev servers")
+11. "Push repos" (activeForm: "Pushing repos")
+12. "Verify all checklist tasks completed" (activeForm: "Verifying checklist completion")
 ```
 
-**The final task (#11) is a gate:** Before marking it complete, run `TaskList` and verify every prior task shows `completed`. If any task is still `pending` or `in_progress`, go back and finish it. Do NOT mark #11 complete until all others are done.
+**The final task (#12) is a gate:** Before marking it complete, run `TaskList` and verify every prior task shows `completed`. If any task is still `pending` or `in_progress`, go back and finish it. Do NOT mark #12 complete until all others are done.
 
 **Why this exists:** Without tracked tasks, steps 6-9 are routinely skipped or compressed in long sessions. The agent rationalizes "no tasks to extract" or "nothing to verify" without actually scanning. Tracked tasks make each step visible and non-skippable.
 
@@ -610,9 +611,56 @@ Session indexed:
 python ~/.datacore/lib/journal_parser.py --sync --space personal
 ```
 
-### 12. Push Changes to Repos
+### 12. Kill Orphaned Dev Servers (Automatic)
+
+**Automatically find and kill dev servers spawned by Claude sessions.**
+
+Dev servers (Vite, Bun, Next.js, etc.) are often started by Claude for preview/testing but not cleaned up. Left running, they accumulate across sessions and burn CPU via file watchers. This step runs automatically without prompting.
+
+**How to identify session-owned processes:**
+
+1. Get the current Claude process PID (the `claude` process for this session)
+2. Find all dev server processes system-wide
+3. Check ancestry — if a dev server's PPID chain traces back to ANY `claude` process (current or previous sessions where parent is now PID 1 / orphaned), it's a Claude-spawned server
+4. Orphaned dev servers (PPID=1) that match dev server patterns are always safe to kill — they lost their parent session
+
+```bash
+# Find dev servers: vite, bun run, next dev, webpack, npm run dev
+ps -eo pid,ppid,etime,command | grep -E "vite|bun run (dev|server)|next dev|npm run dev|npm exec vite|webpack-dev-server" | grep -v grep
+
+# Orphaned ones (PPID=1) are from dead sessions — kill automatically
+# Current-session ones — kill automatically (session is ending)
+```
+
+```
+PROCESS CLEANUP
+───────────────
+Scanning for dev servers...
+
+[If found:]
+  Killed 3 orphaned dev servers:
+    PID 26939 (13h) — vite --host (megaphone-saas)
+    PID 32781 (2d)  — bun run server
+    PID 33001 (2d)  — vite (megaphone-websites)
+
+[If none found:]
+  No dev servers running. ✓
+```
+
+**What to kill:**
+- `vite` / `next dev` / `webpack-dev-server`
+- `bun run dev` / `bun run server`
+- `npm run dev` / `npm exec vite`
+- Any `node` process running from a project's `node_modules/.bin/` (e.g., esbuild child processes)
+
+**What to preserve:**
+- MCP server processes (datacore-mcp, exa-mcp-server) — these belong to active Claude sessions
+- Non-dev-server node processes (MCP tools, etc.)
+
+### 13. Push Changes to Repos
 
 **Push ALL repos including subprojects within spaces.**
+
 
 ```
 SAVING WORK
@@ -659,7 +707,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>
   Your changes are committed locally.
 ```
 
-### 13. Context Sync (Automatic, Silent)
+### 14. Context Sync (Automatic, Silent)
 
 ```
 [Check if agents/commands changed during session]
@@ -667,7 +715,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 [Log to journal if updates made]
 ```
 
-### 14. Quick AI Delegation Check (Optional)
+### 15. Quick AI Delegation Check (Optional)
 
 ```
 AI DELEGATION
@@ -683,7 +731,7 @@ Will be reviewed in /tomorrow for overnight execution.
 No new AI tasks.
 ```
 
-### 15. Completion Checklist (REQUIRED)
+### 16. Completion Checklist (REQUIRED)
 
 **Before closing, verify all steps are done:**
 
@@ -708,11 +756,12 @@ WRAP-UP CHECKLIST
        [ ] Team (1-teamspace/journal/) - if team work
        [ ] Project (2-projectspace/journal/) - if project work
        [ ] Journal includes "Artifacts Created" section
-[ ] 12. All repos pushed:
+[ ] 12. Orphaned dev servers killed
+[ ] 13. All repos pushed:
        [ ] Root & spaces (./sync push)
        [ ] Subproject repos (project-alpha, etc.)
-[ ] 13. Context sync completed
-[ ] 14. AI delegation captured (if any)
+[ ] 14. Context sync completed
+[ ] 15. AI delegation captured (if any)
 
 Note: Space journals only need updating if session involved that space.
       It's OK to skip a space journal if no relevant work was done.
@@ -730,14 +779,19 @@ ls -la ~/Data/1-teamspace/journal/$(date +%Y-%m-%d).md 2>/dev/null
 ls -la ~/Data/2-projectspace/journal/$(date +%Y-%m-%d).md 2>/dev/null
 ```
 
-### 16. Close — Consolidated Session Report
+### 17. Close — Consolidated Session Report (MANDATORY, NEVER SKIP)
 
-**CRITICAL: Re-present ALL section outputs together.** During wrap-up, individual step outputs scroll past and get lost. The close step must collect and re-display every section's output in one consolidated block. This is the user's single point of review.
+**This step is the ENTIRE POINT of /wrap-up for the user.** Everything before this is processing. This is the output. If you skip this step, the user gets nothing usable — they have to scroll through hundreds of lines of tool calls and agent output to piece together what happened. That is unacceptable.
+
+**HARD RULE: Step 17 must ALWAYS execute, regardless of session length, complexity, or context pressure.** If you are running low on context, compress other steps — never this one. If earlier steps were skipped or failed, still output this report with whatever information you have.
 
 **How to build the consolidated report:**
-- As you work through steps 1-15, store each section's output (the formatted blocks you display to the user) internally
-- At step 16, replay ALL of them in sequence inside a single consolidated report
-- The user should be able to read this one block and verify the entire wrap-up without scrolling back
+
+1. **As you work through steps 1-16**, after each step completes, write a brief summary line to a running internal list (e.g., "Continuation: 1 task created for Verity cap table", "Tasks completed: 2 marked DONE", "Dev servers: killed 3"). This is lightweight — just notes, not full output.
+
+2. **At step 17**, use those notes plus conversation context to compose the full consolidated report. Do NOT rely on being able to scroll back to earlier outputs — context compaction may have removed them.
+
+3. **Output the report as a single unbroken text block** — no tool calls in between, no "let me check one more thing". The user reads this block and is done.
 
 ```
 ═══════════════════════════════════════════════════
@@ -745,7 +799,7 @@ SESSION COMPLETE — CONSOLIDATED REPORT
 ═══════════════════════════════════════════════════
 
 Session: [HH:MM] — [HH:MM] ([duration])
-Checklist: [X/16 items verified]
+Checklist: [X/17 items verified]
 
 ───────────────────────────────────────────────────
 1. SESSION NARRATIVE
@@ -856,7 +910,13 @@ Ready to close terminal.
 ═══════════════════════════════════════════════════
 ```
 
-**Why this matters:** In long sessions, individual step outputs scroll past hundreds of lines of tool calls, agent output, and status updates. By the time the user reaches step 16, they've lost track of what steps 1-8 produced. The consolidated report gives them everything in one place — a single scannable receipt of the entire session.
+**Why this matters:** In long sessions, individual step outputs scroll past hundreds of lines of tool calls, agent output, and status updates. By the time the user reaches step 17, they've lost track of what earlier steps produced. The consolidated report gives them everything in one place — a single scannable receipt of the entire session.
+
+**Failure modes to avoid:**
+- "I'll just summarize briefly" — No. Output the full template with all sections.
+- "The user already saw this" — No. They saw it interleaved with tool calls 500 lines ago.
+- "Context is getting long, I'll skip the report" — No. Compress earlier steps instead.
+- Outputting the report in pieces with tool calls in between — No. Single unbroken block.
 
 **Session timing:**
 - Infer start time from the first user message timestamp in the conversation
@@ -941,11 +1001,12 @@ Run `/tomorrow` once at end of day.
 | 9 | Session meta-analysis | Automatic (written to personal journal) |
 | 10 | Artifact tracking | Semi-auto (scan + user confirms descriptions) |
 | 11 | Index session | Automatic (journal parser) |
-| 12 | Push to repos | Automatic (spaces via sync + subproject repos) |
-| 13 | Context sync | Automatic (silent) |
-| 14 | AI delegation | Optional (user-initiated) |
-| 15 | Completion checklist | Required (verify all steps done) |
-| 16 | Close (session narrative) | Automatic (inferred from conversation) |
+| 12 | Kill orphaned dev servers | Automatic (scan + kill, no prompt) |
+| 13 | Push to repos | Automatic (spaces via sync + subproject repos) |
+| 14 | Context sync | Automatic (silent) |
+| 15 | AI delegation | Optional (user-initiated) |
+| 16 | Completion checklist | Required (verify all steps done) |
+| 17 | Close (session narrative) | Automatic (inferred from conversation) |
 
 ## Related
 

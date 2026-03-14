@@ -393,6 +393,17 @@ pillar_source: [optional - filename of pillar content this was derived from]
 
 [Content here]
 
+
+<!-- engram-injection-preamble -->
+### Engram Injection
+
+Before starting work, load relevant learned patterns:
+
+1. **Preferred**: Call `datacore.inject` MCP tool with `prompt` = your task description and `scope` = `agent:content-generator`
+2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/content-generator.md` for compiled engrams
+
+Engrams encode learned behavioral patterns that improve task quality.
+
 ## Voice Notes
 [Any brand voice considerations]
 

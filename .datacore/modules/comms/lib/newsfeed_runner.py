@@ -33,26 +33,23 @@ if kill_switch.exists():
     print(f"Kill switch active: {kill_switch.read_text().strip()}")
     sys.exit(0)
 
-# Fetch home timeline
-bearer = os.environ.get("X_BEARER_TOKEN")
+# Fetch home timeline via OAuth 1.0a (user context required for this endpoint)
 user_id = os.environ.get("FDS_X_USER_ID")
-if not bearer or not user_id:
-    print("Missing X_BEARER_TOKEN or FDS_X_USER_ID")
+if not user_id:
+    print("Missing FDS_X_USER_ID")
     sys.exit(1)
 
+poster = XPoster(account='fds', user_id=user_id)
 url = (
     f"https://api.x.com/2/users/{user_id}/timelines/reverse_chronological"
     f"?max_results=50&tweet.fields=public_metrics,author_id"
 )
-req = Request(url)
-req.add_header("Authorization", f"Bearer {bearer}")
 
 try:
-    with urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read())
+    data = poster._oauth_get(url)
     tweets = data.get('data', [])
-except HTTPError as e:
-    print(f"Timeline fetch failed: {e.code}")
+except Exception as e:
+    print(f"Timeline fetch failed: {e}")
     sys.exit(1)
 
 if not tweets:
@@ -61,7 +58,6 @@ if not tweets:
 
 # Process
 db = FollowDB(DATA_DIR / ".datacore" / "state" / "follow-list.db")
-poster = XPoster(account='fds', user_id=user_id)
 monitor = NewsfeedMonitor(poster=poster, follow_db=db)
 result = monitor.process_timeline(tweets)
 print(f"Processed: {result['processed']} | Liked: {result['liked']}")

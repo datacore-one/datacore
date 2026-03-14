@@ -317,15 +317,20 @@ def run(dry_run: bool = False, autonomous: bool = False, no_escalate: bool = Fal
         state_mod.save(st, STATE_FILE, baseline=baseline)
         return
 
-    # Verify chrome_poster is available for autonomous posting
+    # Set up poster for autonomous posting (X API via OAuth)
     poster = None
     if autonomous and not dry_run:
         try:
-            from chrome_poster import post_reply as _chrome_post
-            poster = _chrome_post  # callable: post_reply(url, text) -> tweet_id
-            print("  Chrome poster ready")
+            from x_poster import XPoster
+            _xposter = XPoster(account='fds')
+            def poster(tweet_url, text):
+                # Extract tweet ID from URL
+                tid = tweet_url.rstrip('/').split('/')[-1]
+                res = _xposter.reply(text=text, reply_to_id=tid)
+                return res.get("data", {}).get("id", "unknown")
+            print("  X API poster ready")
         except Exception as e:
-            print(f"  WARNING: chrome_poster unavailable: {e}", file=sys.stderr)
+            print(f"  WARNING: XPoster unavailable: {e}", file=sys.stderr)
 
     posted_this_cycle = 0
     escalated_today = _get_escalation_count(st)
