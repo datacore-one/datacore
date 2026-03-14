@@ -8,7 +8,7 @@ import yaml
 from pathlib import Path
 from datetime import datetime
 
-PEOPLE_DIR = Path(os.environ.get("DATACORE_ROOT", os.path.expanduser("~/Data"))) / "0-personal/contacts/people"
+PEOPLE_DIR = Path(os.environ.get("DATACORE_ROOT", os.path.expanduser("~/Data"))) / "0-personal/3-knowledge/reference/people"
 
 # Priority companies for reconnection
 PRIORITY_COMPANIES = [

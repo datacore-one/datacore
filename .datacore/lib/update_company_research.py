@@ -14,7 +14,7 @@ from pathlib import Path
 from datetime import datetime
 
 DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", os.path.expanduser("~/Data")))
-COMPANIES_DIR = DATACORE_ROOT / "0-personal/contacts/companies"
+COMPANIES_DIR = DATACORE_ROOT / "0-personal/3-knowledge/reference/companies"
 DATA_FILE = DATACORE_ROOT / ".datacore/env/company_research_data.json"
 
 
