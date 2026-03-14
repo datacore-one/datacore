@@ -52,9 +52,9 @@ STATE_FILE = DATA_DIR / ".datacore" / "state" / "engagement-state.json"
 
 # Default limits
 DEFAULT_DAILY_REPLY_LIMIT = 85
-DEFAULT_MAX_PER_HOUR = 3      # Per 30min cycle (must fit in 900s timeout)
+DEFAULT_MAX_PER_HOUR = 5      # Per 30min cycle (must fit in 900s timeout)
 DEFAULT_ESCALATION_MAX = 5    # Max Telegram escalations per day
-AUTONOMOUS_THRESHOLD = 0.75   # consensus ≥ this → auto-post (quality gate)
+AUTONOMOUS_THRESHOLD = 0.70   # consensus ≥ this → auto-post (quality gate)
 ESCALATION_THRESHOLD = 0.45   # below this → auto-reject
 
 # Topic quota targets (daily soft limits)
@@ -317,50 +317,91 @@ def run(dry_run: bool = False, autonomous: bool = False, no_escalate: bool = Fal
         state_mod.save(st, STATE_FILE, baseline=baseline)
         return
 
-    # Set up poster for autonomous posting (X API via OAuth)
+    # Set up poster for autonomous posting
+    # Priority: chrome_poster (bypasses reply restrictions) → XPoster (API fallback)
     poster = None
+    poster_type = "none"
     if autonomous and not dry_run:
+        # Try chrome_poster first (works with restricted replies)
         try:
-            from x_poster import XPoster
-            _xposter = XPoster(account='fds')
-            def poster(tweet_url, text):
-                # Extract tweet ID from URL
-                tid = tweet_url.rstrip('/').split('/')[-1]
-                res = _xposter.reply(text=text, reply_to_id=tid)
-                return res.get("data", {}).get("id", "unknown")
-            print("  X API poster ready")
+            from chrome_poster import post_reply as _chrome_post
+            # Quick check: auth state exists
+            if (DATA_DIR / ".datacore" / "state" / "x-auth-state.json").exists():
+                def poster(tweet_url, text):
+                    return _chrome_post(tweet_url, text)
+                poster_type = "chrome"
+                print("  Chrome poster ready (browser-based)")
+            else:
+                raise FileNotFoundError("no auth state")
         except Exception as e:
-            print(f"  WARNING: XPoster unavailable: {e}", file=sys.stderr)
+            print(f"  Chrome poster unavailable ({e}), trying XPoster...")
+            try:
+                from x_poster import XPoster
+                _xposter = XPoster(account='fds')
+                def poster(tweet_url, text):
+                    tid = tweet_url.rstrip('/').split('/')[-1]
+                    res = _xposter.reply(text=text, reply_to_id=tid)
+                    return res.get("data", {}).get("id", "unknown")
+                poster_type = "api"
+                print("  X API poster ready (fallback)")
+            except Exception as e2:
+                print(f"  WARNING: No poster available: {e2}", file=sys.stderr)
 
     posted_this_cycle = 0
     escalated_today = _get_escalation_count(st)
 
-    for i, conv in enumerate(conversations[:slots]):
+    max_attempts = min(len(conversations), slots * 3)  # Try up to 3x slots to account for restricted replies
+    for i, conv in enumerate(conversations[:max_attempts]):
+        if posted_this_cycle >= slots:
+            break
         author = conv.get("author", "unknown")
         tweet_id = conv.get("tweet_id", "")
         topic_group = conv.get("topic_group", "")
 
-        print(f"\n  [{i+1}/{slots}] {author} ({topic_group})")
+        print(f"\n  [{i+1}] {author} ({topic_group}) [posted {posted_this_cycle}/{slots}]")
 
-        # Skip if recently replied to this author
-        cooldown = st.get("config", {}).get("cooldown_hours", 24)
-        if state_mod.recently_replied_to(st, author, cooldown):
-            print(f"    Skipping: replied within {cooldown}h")
+        # Account type safety filter (politicians, state media, etc.)
+        from engagement_discover import _is_blacklisted_account_type
+        bl_match = _is_blacklisted_account_type(
+            author, conv.get("author_bio", ""), conv.get("author_name", ""))
+        if bl_match:
+            print(f"    Skipping: blacklisted account type ({bl_match})")
             state_mod.mark_seen(st, tweet_id)
             continue
+
+        # Skip authors known to have restricted replies (only for API posting)
+        if poster_type == "api":
+            restricted_authors = st.get("restricted_authors", [])
+            if author in restricted_authors:
+                print(f"    Skipping: known restricted replies (API)")
+                state_mod.mark_seen(st, tweet_id)
+                continue
+
+        # Skip if recently replied to this author (but allow follow-ups — someone engaged with us)
+        is_follow_up = conv.get("is_follow_up", False)
+        if not is_follow_up:
+            cooldown = st.get("config", {}).get("cooldown_hours", 24)
+            if state_mod.recently_replied_to(st, author, cooldown):
+                print(f"    Skipping: replied within {cooldown}h")
+                state_mod.mark_seen(st, tweet_id)
+                continue
 
         # Reply permissions checked at post time (draft_pipeline or poster.reply)
         # Removed per-conversation API call to avoid X API rate limits
 
-        # Draft
-        print(f"    Drafting...")
-        try:
-            draft = draft_mod.draft_reply(conv)
-            print(f"    Draft ({len(draft)} chars): {draft[:80]}...")
-        except Exception as e:
-            print(f"    Draft failed: {e}", file=sys.stderr)
-            state_mod.mark_seen(st, tweet_id)
-            continue
+        # Draft (skip if monitor already drafted a follow-up)
+        if conv.get("draft_reply"):
+            draft = conv["draft_reply"]
+            print(f"    Pre-drafted ({len(draft)} chars): {draft[:80]}...")
+        else:
+            print(f"    Drafting...")
+            try:
+                draft = draft_mod.draft_reply(conv)
+                print(f"    Draft ({len(draft)} chars): {draft[:80]}...")
+            except Exception as e:
+                print(f"    Draft failed: {e}", file=sys.stderr)
+                state_mod.mark_seen(st, tweet_id)
+                continue
 
         # Validate draft
         bad_prefixes = (
@@ -541,8 +582,16 @@ def run(dry_run: bool = False, autonomous: bool = False, no_escalate: bool = Fal
 
         except Exception as e:
             err_msg = str(e)
-            if "403" in err_msg:
-                print(f"    Skipping (restricted replies)")
+            if "403" in err_msg and poster_type == "api":
+                print(f"    Skipping (restricted replies — API can't post)")
+                restricted = st.setdefault("restricted_authors", [])
+                if author not in restricted:
+                    restricted.append(author)
+                    st["restricted_authors"] = restricted[-500:]
+            elif "login" in err_msg.lower() or "auth" in err_msg.lower():
+                print(f"    Chrome auth expired — stopping cycle")
+                state_mod.save(st, STATE_FILE, baseline=baseline)
+                break
             else:
                 print(f"    Post failed: {err_msg[:100]}")
 
