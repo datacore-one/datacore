@@ -40,7 +40,7 @@
 
 ---
 
-Generate the daily briefing and append it to today's journal.
+Generate the daily briefing and insert it at the top of today's journal (after frontmatter).
 
 ## Step 0: Create Tracked Checklist (MANDATORY FIRST STEP)
 
@@ -256,9 +256,10 @@ Tasks to create (mark in_progress when starting, completed when done):
 ## Output Location
 
 **Personal (root or 0-personal/):**
-- Append to: `0-personal/journal/YYYY-MM-DD.md`
+- Insert at TOP of: `0-personal/journal/YYYY-MM-DD.md` (after frontmatter)
 - Add under heading: `## Daily Briefing`
 - Create journal file if it doesn't exist (with standard frontmatter)
+- If file already has content (e.g., late-night wrap-up session), push it below the briefing
 
 **Space (e.g., 1-teamspace/):**
 - Append to: `[space]/today/YYYY-MM-DD.md` (create if needed)
@@ -1091,7 +1092,9 @@ For team spaces, write to `[space]/today/YYYY-MM-DD.md`:
 
 ## Journal File Handling
 
-If journal file doesn't exist, create with frontmatter:
+**The Daily Briefing ALWAYS goes at the top of the journal file** (immediately after frontmatter). Late-night `/wrap-up` sessions may have already created the journal file with session entries before `/today` runs in the morning. The briefing must appear first so the user sees their day plan at the top, not buried below overnight session notes.
+
+**If journal file doesn't exist**, create with frontmatter + briefing:
 ```markdown
 ---
 type: journal
@@ -1102,9 +1105,41 @@ date: YYYY-MM-DD
 [generated content]
 ```
 
-If journal exists but has no `## Daily Briefing` section, append it.
+**If journal file exists but has no `## Daily Briefing` section**, insert it immediately after the frontmatter closing `---`, pushing all existing content (session entries, etc.) below:
+```markdown
+---
+type: journal
+date: YYYY-MM-DD
+---
 
-If `## Daily Briefing` section exists, replace it with fresh content.
+## Daily Briefing        ← INSERTED HERE
+[generated content]
+
+## Session 1: [topic]    ← existing content pushed down
+[wrap-up from last night]
+```
+
+**If `## Daily Briefing` section already exists**, replace it in-place with fresh content (preserve its position at the top).
+
+**Implementation:**
+```python
+# Parse frontmatter end position
+lines = content.split('\n')
+frontmatter_end = 0
+in_frontmatter = False
+for i, line in enumerate(lines):
+    if line.strip() == '---':
+        if not in_frontmatter:
+            in_frontmatter = True
+        else:
+            frontmatter_end = i + 1
+            break
+
+# Insert briefing after frontmatter, before existing content
+before = '\n'.join(lines[:frontmatter_end])
+after = '\n'.join(lines[frontmatter_end:])
+new_content = f"{before}\n\n## Daily Briefing\n\n{briefing_content}\n{after}"
+```
 
 ## Configuration
 
