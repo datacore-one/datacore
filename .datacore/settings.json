@@ -105,6 +105,17 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.datacore/hooks/org-date-fix.sh\""
+          }
+        ]
+      }
     ]
   }
 }
