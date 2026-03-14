@@ -13,6 +13,17 @@ Maintains searchable index in archive repos using datacortex embeddings.
 | **Model** | sonnet |
 | **DIP** | DIP-0017 |
 
+
+<!-- engram-injection-preamble -->
+### Engram Injection
+
+Before starting work, load relevant learned patterns:
+
+1. **Preferred**: Call `datacore.inject` MCP tool with `prompt` = your task description and `scope` = `agent:archive-indexer`
+2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/archive-indexer.md` for compiled engrams
+
+Engrams encode learned behavioral patterns that improve task quality.
+
 ## Agent Context
 
 This section helps you understand when and how to apply your capabilities.
