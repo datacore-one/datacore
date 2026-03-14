@@ -54,8 +54,8 @@ STATE_FILE = DATA_DIR / ".datacore" / "state" / "engagement-state.json"
 DEFAULT_DAILY_REPLY_LIMIT = 85
 DEFAULT_MAX_PER_HOUR = 5      # Per 30min cycle: 3-4 replies average
 DEFAULT_ESCALATION_MAX = 5    # Max Telegram escalations per day
-AUTONOMOUS_THRESHOLD = 0.65   # consensus ≥ this → auto-post
-ESCALATION_THRESHOLD = 0.50   # below this → auto-reject (if not ≥ autonomous)
+AUTONOMOUS_THRESHOLD = 0.75   # consensus ≥ this → auto-post (quality gate)
+ESCALATION_THRESHOLD = 0.45   # below this → auto-reject
 
 # Topic quota targets (daily soft limits)
 TOPIC_QUOTA_TARGETS = {

@@ -125,3 +125,43 @@ decisions:
     successor: null
     engram_id: null
     journal_ref: "0-personal/notes/journals/2026-03-14.md"
+
+  - id: DEC-2026-0314-002
+    date: 2026-03-14
+    type: operational
+    scope: space:0-personal
+    topic: "Use ffmpeg + ASS subtitles over CapCut UI automation for video captions"
+    chosen: "ffmpeg with ASS subtitle files burned in via subtitles filter"
+    alternatives:
+      - option: "CapCut web editor via Chrome automation (claude-in-chrome MCP)"
+        reason_rejected: "Too slow, fragile, dependent on CapCut UI stability — multiple elements failed to load or respond"
+      - option: "Manual CapCut editing by user"
+        reason_rejected: "Not automatable, defeats the purpose of agent-driven content pipeline"
+    reasoning: "ASS files are version-controllable, reproducible, and fast. ffmpeg processes locally without browser dependencies. The CapCut automation attempt wasted significant session time before switching."
+    confidence: 9
+    status: active
+    review_date: 2026-06-14
+    outcome: null
+    successor: null
+    engram_id: null
+    journal_ref: "0-personal/notes/journals/2026-03-14.md"
+
+  - id: DEC-2026-0314-003
+    date: 2026-03-14
+    type: operational
+    scope: space:3-fds
+    topic: "Use Late.dev API for X publishing instead of manual posting"
+    chosen: "Late.dev API with upload token flow and scheduled posting"
+    alternatives:
+      - option: "Manual X posting via browser"
+        reason_rejected: "Not automatable, no scheduling control"
+      - option: "X API directly"
+        reason_rejected: "Requires developer account setup, API key management; Late.dev already handles auth"
+    reasoning: "Late.dev provides a simple upload-then-schedule flow that integrates with the comms module pattern. API quirks are documentable and workable."
+    confidence: 7
+    status: active
+    review_date: 2026-04-14
+    outcome: null
+    successor: null
+    engram_id: null
+    journal_ref: "0-personal/notes/journals/2026-03-14.md"
