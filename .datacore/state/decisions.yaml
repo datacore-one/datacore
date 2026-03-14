@@ -105,3 +105,23 @@ decisions:
     successor: null
     engram_id: null
     journal_ref: "0-personal/notes/journals/2026-02-22.md"
+
+  - id: DEC-2026-0314-001
+    date: 2026-03-14
+    type: operational
+    scope: global
+    topic: "Uninstall ralph-loop plugin after infinite loop incident"
+    chosen: "Uninstall completely, reinstall only after upstream fix ships"
+    alternatives:
+      - option: "Maintain local patches to plugin cache files"
+        reason_rejected: "Cache files get overwritten on plugin sync — patches do not persist"
+      - option: "Disable only the stop hook, keep plugin installed"
+        reason_rejected: "Partial disable leaves residual state risk; known upstream bugs unresolved"
+    reasoning: "Plugin caused 10,567-iteration cross-session infinite loop across multiple sessions. Upstream issues #592, #370, #436 are unfixed. Local patches are ephemeral. Uninstall eliminates the risk; no active dependency on the plugin."
+    confidence: 9
+    status: active
+    review_date: 2026-06-14
+    outcome: null
+    successor: null
+    engram_id: null
+    journal_ref: "0-personal/notes/journals/2026-03-14.md"
