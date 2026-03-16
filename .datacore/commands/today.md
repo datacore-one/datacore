@@ -937,6 +937,28 @@ cmd_status(args)
 
 Or read from `.datacore/state/crm/contacts-index.yaml` if it exists.
 
+### Datacore Bench
+
+If a recent bench report exists (within 7 days), show a summary of A/B test results.
+
+**To generate:**
+```bash
+cd ~/Data/2-datacore/2-projects/datacore-bench && python3 -c "from lib.briefing import briefing_summary; s=briefing_summary(); print(s)" 2>/dev/null
+```
+
+If the script returns empty output or fails, skip this section silently.
+
+**Format:**
+```markdown
+### Datacore Bench
+
+Latest run: **2026-03-16** (claude-sonnet-4-6)
+- 12 scenarios: **10 Datacore wins**, 1 tie, 1 regression
+- Regression: **cold-coding** (cold) — baseline scored 0.85 vs 0.72
+```
+
+Only show regressions if any exist. Keep this section brief — 2-4 lines max.
+
 ### Knowledge Nugget
 [Surface recently extracted knowledge for spaced repetition]
 
