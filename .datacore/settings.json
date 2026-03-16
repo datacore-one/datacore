@@ -12,11 +12,9 @@
       "WebSearch",
       "WebFetch",
       "NotebookEdit",
-
       "Bash(git *)",
       "Bash(gh *)",
       "Bash(GIT_LFS_SKIP_SMUDGE=* *)",
-
       "Bash(python *)",
       "Bash(python3 *)",
       "Bash(PYTHONPATH=* python3 *)",
@@ -29,7 +27,6 @@
       "Bash(pip *)",
       "Bash(pip3 *)",
       "Bash(pyenv *)",
-
       "Bash(ls *)",
       "Bash(find *)",
       "Bash(tree *)",
@@ -43,7 +40,6 @@
       "Bash(touch *)",
       "Bash(open *)",
       "Bash(unzip *)",
-
       "Bash(cat *)",
       "Bash(head *)",
       "Bash(tail *)",
@@ -57,28 +53,22 @@
       "Bash(tee *)",
       "Bash(cut *)",
       "Bash(echo *)",
-
       "Bash(lsof *)",
       "Bash(pgrep *)",
       "Bash(ps *)",
-
       "Bash(pdftotext *)",
       "Bash(pdftoppm *)",
       "Bash(pandoc *)",
-
       "Bash(date *)",
       "Bash(/bin/date *)",
       "Bash(test *)",
       "Bash(source *)",
-
       "Bash(for *)",
       "Bash(while *)",
       "Bash(if *)",
       "Bash(cd *)",
-
       "Bash(./sync*)",
       "Bash(datacortex *)",
-
       "mcp__datacore"
     ],
     "ask": [
@@ -99,9 +89,66 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/.datacore/lib/datacore_sync.py sync --quiet 2>&1 | tail -1",
-            "timeout": 300,
-            "statusMessage": "Syncing knowledge database..."
+            "command": "python3 ~/Data/.datacore/lib/session_bootstrap.py",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/datacore_sync.py sync --quiet",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/session_firstmsg.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "EnterPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event plan_mode",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event skill",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event agent",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/org_guard.py",
+            "timeout": 5
           }
         ]
       }
@@ -112,7 +159,43 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.datacore/hooks/org-date-fix.sh\""
+            "command": "bash ~/Data/.datacore/hooks/org-date-fix.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event subagent",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "auto|manual",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event rehydrate",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/session_cleanup.py",
+            "timeout": 5
           }
         ]
       }

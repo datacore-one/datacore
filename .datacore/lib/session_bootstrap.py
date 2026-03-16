@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""SessionStart hook — lightweight bootstrap.
+
+Cleans up stale session state from crashed sessions.
+Outputs journal + candidate count as additionalContext.
+Does NOT inject engrams (no task context yet — that happens on first UserPromptSubmit).
+
+Input: JSON on stdin with {source: "startup"|"resume"|"clear"|"compact", ...}
+Output: JSON on stdout with {additionalContext} or empty (exit 0)
+"""
+import json, sys, os, glob
+from datetime import date
+
+sys.path.insert(0, os.path.join(os.path.expanduser("~/Data"), ".datacore", "lib"))
+from session_state import cleanup_session, _debug
+
+DATACORE_ROOT = os.path.expanduser("~/Data")
+
+def main():
+    try:
+        input_data = json.load(sys.stdin)
+    except (json.JSONDecodeError, EOFError):
+        input_data = {}
+
+    source = input_data.get("source", "startup")
+    _debug(f"session_bootstrap: source={source}")
+
+    # Clean stale state from previous session (crash recovery)
+    cleanup_session()
+
+    # Gather lightweight context (no engram injection)
+    lines = []
+
+    # Today's journal
+    today = date.today().isoformat()
+    journal_paths = [
+        os.path.join(DATACORE_ROOT, "0-personal", "notes", "journals", f"{today}.md"),
+        os.path.join(DATACORE_ROOT, "0-personal", "journal", f"{today}.md"),
+    ]
+    for jp in journal_paths:
+        if os.path.exists(jp):
+            lines.append(f"Journal today: {jp}")
+            break
+
+    # Count candidate engrams
+    engram_files = glob.glob(os.path.join(DATACORE_ROOT, ".datacore", "learning", "engrams.yaml"))
+    candidate_count = 0
+    try:
+        import yaml
+        for ef in engram_files:
+            with open(ef) as f:
+                data = yaml.safe_load(f) or {}
+                engs = data.get("engrams", []) if isinstance(data, dict) else data
+                candidate_count += sum(1 for e in engs if e.get("status") == "candidate")
+    except Exception:
+        pass
+
+    if candidate_count > 0:
+        lines.append(f"{candidate_count} candidate engram(s) awaiting review.")
+
+    lines.append("Datacore session initialized. Engrams will inject on first message.")
+
+    if lines:
+        context = "[Datacore Session Bootstrap]\n\n" + "\n".join(lines)
+        json.dump({"additionalContext": context}, sys.stdout)
+
+    sys.exit(0)
+
+if __name__ == "__main__":
+    main()

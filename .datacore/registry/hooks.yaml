@@ -1,0 +1,137 @@
+# =============================================================================
+# HOOKS REGISTRY
+# DIP-0024: Reactive Hooks Infrastructure
+# =============================================================================
+#
+# Central registry of all Claude Code and Git hooks.
+# Composed into .claude/settings.json by hooks_composer.py.
+#
+# Schema:
+#   event: Claude Code hook event type
+#   matcher: Regex matcher for the event (optional)
+#   type: command | prompt | agent
+#   command: Shell command to execute (for command type)
+#   purpose: Human-readable description
+#   declared_by: DIP number or module name
+#   priority: Execution order (lower = first, default 500)
+#   timeout: Timeout in seconds (default 10)
+#
+# =============================================================================
+
+version: "1.0.0"
+protocol: "DIP-0024"
+
+claude_code:
+  SessionStart:
+    - matcher: startup
+      type: command
+      command: "python3 ~/Data/.datacore/lib/session_bootstrap.py"
+      purpose: "Initialize session, clean stale state, output journal + candidates"
+      declared_by: DIP-0019
+      priority: 100
+      timeout: 10
+
+    - matcher: startup
+      type: command
+      command: "python3 ~/Data/.datacore/lib/datacore_sync.py sync --quiet"
+      purpose: "Sync knowledge database on session start"
+      declared_by: DIP-0004
+      priority: 200
+      timeout: 30
+
+  UserPromptSubmit:
+    - type: command
+      command: "python3 ~/Data/.datacore/lib/session_firstmsg.py"
+      purpose: "First message: inject engrams. Subsequent: skip (~1ms)."
+      declared_by: DIP-0019
+      priority: 100
+      timeout: 10
+
+  PreToolUse:
+    - matcher: EnterPlanMode
+      type: command
+      command: "python3 ~/Data/.datacore/lib/active_memory.py --event plan_mode"
+      purpose: "Full engram injection when entering plan mode"
+      declared_by: DIP-0019
+      priority: 100
+      timeout: 10
+
+    - matcher: Skill
+      type: command
+      command: "python3 ~/Data/.datacore/lib/active_memory.py --event skill"
+      purpose: "Domain engrams based on skill name"
+      declared_by: DIP-0019
+      priority: 200
+      timeout: 10
+
+    - matcher: Agent
+      type: command
+      command: "python3 ~/Data/.datacore/lib/active_memory.py --event agent"
+      purpose: "Agent-scoped engrams for spawned agent"
+      declared_by: DIP-0016
+      priority: 200
+      timeout: 10
+
+    - matcher: "Edit|Write"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/org_guard.py"
+      purpose: "Enforce org_workspace_adapter for org-mode files"
+      declared_by: DIP-0009
+      priority: 300
+      timeout: 5
+
+  PostToolUse:
+    - matcher: "Edit|Write"
+      type: command
+      command: "bash ~/Data/.datacore/hooks/org-date-fix.sh"
+      purpose: "Auto-fix org-mode date day-of-week after edits"
+      declared_by: DIP-0009
+      priority: 100
+      timeout: 10
+
+    # privacy_guard.py — Phase 3 (DIP-0002)
+    # Will validate no private content in .base.md files
+    # - matcher: "Write"
+    #   type: command
+    #   command: "python3 ~/Data/.datacore/lib/privacy_guard.py"
+    #   purpose: "Block private content in public layer (.base.md)"
+    #   declared_by: DIP-0002
+    #   priority: 300
+
+  SubagentStart:
+    - matcher: ".*"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/active_memory.py --event subagent"
+      purpose: "Inject agent-scoped engrams into subagent context"
+      declared_by: DIP-0016
+      priority: 100
+      timeout: 10
+
+  PostCompact:
+    - matcher: "auto|manual"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/active_memory.py --event rehydrate"
+      purpose: "Re-inject critical engrams after context compaction"
+      declared_by: DIP-0019
+      priority: 100
+      timeout: 15
+
+  SessionEnd:
+    - type: command
+      command: "python3 ~/Data/.datacore/lib/session_cleanup.py"
+      purpose: "Clean up session state file"
+      declared_by: DIP-0019
+      priority: 900
+      timeout: 5
+
+git:
+  pre-commit:
+    - source: .datacore/hooks/pre-commit
+      purpose: "DIP-0002 privacy + PII + secrets + root allowlist scan"
+      declared_by: DIP-0002
+      priority: 100
+
+    - source: .datacore/hooks/org-date-fix.sh
+      purpose: "Validate org-mode date accuracy"
+      declared_by: DIP-0009
+      priority: 200
