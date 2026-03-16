@@ -3,9 +3,14 @@
 name: continue
 description: Session resume — find continuation tasks, load bootstrap context, or suggest next actions
 command: /continue
-version: 1.0.0
+version: 1.1.0
 
 phases:
+  - name: inline-save
+    type: interactive
+    condition: conversational-trigger
+    description: Create continuation task mid-session without /wrap-up
+
   - name: scan-continuations
     type: tool
     invoke: datacore.gtd.task_search
@@ -18,10 +23,18 @@ phases:
     condition: multiple-matches
     description: User selects which continuation to resume
 
+  - name: fallback-search
+    type: tool
+    invoke: datacore.gtd.task_search
+    params:
+      tags: []
+    condition: no-continuation-match-with-search-term
+    description: Search ALL tasks matching search term when no :continuation: tags found
+
   - name: load-bootstrap
     type: tool
     invoke: datacore.gtd.read_task
-    condition: continuation-found
+    condition: task-found
     description: Read BOOTSTRAP property from selected task
 
   - name: load-context
@@ -34,7 +47,7 @@ phases:
   - name: suggest-actions
     type: agent
     invoke: strategic-prioritizer
-    condition: no-continuations
+    condition: no-tasks-found-and-no-search-term
     description: Analyze system for high-impact next actions
 
 trigger: manual

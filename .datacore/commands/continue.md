@@ -54,13 +54,14 @@ Resume incomplete work or find the highest-impact next action.
 **Also triggered by natural language:**
 - "continue" / "what should I work on" / "resume" / "what's next" → **Resume mode**
 - "save and continue later" / "park this" / "continue this tomorrow" → **Save mode**
+- "create continuation task" / "continuation task for this" → **Inline save mode** (creates task without full /wrap-up)
 
-**When**: Start of session (resume), or end of session (save)
-**Duration**: ~1-2 minutes (resume), ~3-5 minutes (save, includes wrap-up)
+**When**: Start of session (resume), or end of session (save), or mid-session (inline save)
+**Duration**: ~1-2 minutes (resume), ~3-5 minutes (save, includes wrap-up), ~30 seconds (inline save)
 
 ## Context
 
-This command has two modes:
+This command has three modes:
 
 **Resume mode** (default): You're starting a new session. Either:
 1. You have unfinished work from a previous session (continuation tasks)
@@ -70,6 +71,13 @@ This command has two modes:
 1. Creates a continuation task from current session context
 2. Schedules it on the next working day (skips weekends)
 3. Calls `/wrap-up` to complete the session
+
+**Inline save mode** (conversational): User says "create continuation task" mid-session. This:
+1. Creates a continuation task from current conversation context
+2. Schedules it on the next working day (skips weekends)
+3. Does NOT call `/wrap-up` — session continues
+4. Uses the same Rich Task Standard format as save mode
+5. Always adds `:continuation:` tag — this is critical for /continue to find it later
 
 ## Tracked Checklist Note
 
@@ -147,6 +155,34 @@ Launching /wrap-up...
 
 ---
 
+### 0b. Inline Save Mode (conversational "create continuation task")
+
+Triggered when the user says "create continuation task", "continuation task for this", or similar mid-session. This creates the task WITHOUT invoking /wrap-up — the session continues.
+
+**Steps:**
+
+1. **Extract context from conversation** — same as save mode step 1
+2. **Determine next working day** — same as save mode step 2
+3. **Create continuation task** in `0-personal/org/inbox.org` using Rich Task Standard — same format as save mode step 3. **CRITICAL: Always include the `:continuation:` tag on the heading.**
+4. **Confirm to user:**
+
+```
+CONTINUATION TASK CREATED
+─────────────────────────
+Task: Continue: [topic]
+Scheduled: <next-working-day>
+Location: 0-personal/org/inbox.org
+Tag: :continuation:
+
+Session continues.
+```
+
+**Key difference from save mode:** No /wrap-up invoked. Session stays active.
+
+**Key difference from regular task creation:** Always uses Rich Task Standard format with `:continuation:` tag, BOOTSTRAP property, and session context. A regular "create a task" request does NOT get continuation treatment unless the user explicitly says "continuation task".
+
+---
+
 ### 1. Resume Mode — Scan for Continuation Tasks
 
 ```
@@ -205,7 +241,44 @@ Blockers: [Any known blockers]
 Ready to continue. First step: [extracted from bootstrap]
 ```
 
-### 2b. If No Continuation Tasks (or none match search)
+### 2b. If No Continuation Tasks Match — Fallback Search
+
+**IMPORTANT: When a search term was provided but no `:continuation:` tasks match, search ALL tasks before falling back to suggestions.**
+
+This handles the common case: user says `/continue megaphone` but the task exists without `:continuation:` tag (created conversationally without /wrap-up).
+
+**Fallback search order:**
+1. Search `:continuation:` tagged tasks (exact match) ← already done in 2a
+2. **Search ALL tasks** in next_actions.org and inbox.org matching the search term (title, properties, body)
+3. If matches found → display them and offer to load context (same as 2a but note "no :continuation: tag")
+4. If still no matches → fall back to system analysis below
+
+```
+NO CONTINUATION TASKS MATCHING "{search_term}"
+───────────────────────────────────────────────
+
+Searching all tasks...
+
+[Grep org files for search_term in task headings, CONTEXT, KEY_FILES, BOOTSTRAP properties]
+
+[If matches found:]
+
+RELATED TASKS FOUND
+────────────────────
+┌───┬────────────────────────────────┬────────────┬──────────────┐
+│ # │ Task                           │ Status     │ Location     │
+├───┼────────────────────────────────┼────────────┼──────────────┤
+│ 1 │ Megaphone SaaS architecture    │ TODO       │ inbox.org    │
+│ 2 │ Evaluate Megaphone templates   │ NEXT       │ next_actions │
+└───┴────────────────────────────────┴────────────┴──────────────┘
+
+Select task to continue (1-2), or Enter for most recent:
+> [user input]
+
+[Load selected task's properties — BOOTSTRAP if available, otherwise CONTEXT + KEY_FILES]
+```
+
+**If no search term was provided AND no continuation tasks exist**, fall back to system analysis:
 
 **Tool usage for task discovery:**
 - Use `gtd.agenda_view` with `states: ['NEXT', 'TODO']` to get the full task list
@@ -215,7 +288,6 @@ Ready to continue. First step: [extracted from bootstrap]
 ```
 NO CONTINUATION TASKS
 ─────────────────────
-[No tasks found matching "{search_term}"]
 
 Analyzing system for high-impact next actions...
 
