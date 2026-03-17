@@ -78,6 +78,32 @@ def _load_yaml(path: Path) -> dict | list | None:
         return yaml.safe_load(f)
 
 
+def _parse_frontmatter(file_path: Path) -> dict:
+    """Parse YAML frontmatter from a markdown file (between --- markers)."""
+    if yaml is None or not file_path.exists():
+        return {}
+    try:
+        text = file_path.read_text()
+        if not text.startswith("---"):
+            return {}
+        end = text.index("---", 3)
+        fm_block = text[3:end].strip()
+        return yaml.safe_load(fm_block) or {}
+    except (ValueError, yaml.YAMLError):
+        return {}
+
+
+def _format_triggers(triggers: list, max_shown: int = 3) -> str:
+    """Format trigger list for table display, truncating if needed."""
+    if not triggers:
+        return "-"
+    shown = triggers[:max_shown]
+    result = ", ".join(shown)
+    if len(triggers) > max_shown:
+        result += ", ..."
+    return result
+
+
 def _generate_modules_table(modules_dir: Path) -> str:
     """Generate installed modules table from module.yaml files."""
     if not modules_dir.exists():
@@ -92,18 +118,25 @@ def _generate_modules_table(modules_dir: Path) -> str:
         version = data.get("version", "-")
         desc = _truncate(data.get("description", ""), 50)
         provides = data.get("provides", {})
-        tools_count = len(provides.get("tools", []))
-        skills_count = len(provides.get("skills", []))
         agents_count = len(provides.get("agents", []))
         commands_count = len(provides.get("commands", []))
         priority = data.get("context", {}).get("priority", "-") if isinstance(data.get("context"), dict) else "-"
-        rows.append(f"| {name} | {version} | {desc[:50]} | {tools_count} | {skills_count} | {agents_count} | {commands_count} | {priority} |")
+
+        # Enrich from CLAUDE.base.md frontmatter
+        fm = _parse_frontmatter(module_yaml.parent / "CLAUDE.base.md")
+        if fm.get("summary"):
+            desc = _truncate(fm["summary"], 50)
+        if fm.get("context"):
+            priority = fm["context"]
+        triggers = _format_triggers(fm.get("triggers", []))
+
+        rows.append(f"| {name} | {version} | {desc} | {triggers} | {agents_count} | {commands_count} | {priority} |")
 
     if not rows:
         return "_No modules installed._\n"
 
-    header = "| Module | Version | Description | Tools | Skills | Agents | Cmds | Context |\n"
-    header += "|--------|---------|-------------|-------|--------|--------|------|---------|"
+    header = "| Module | Version | Description | Triggers | Agents | Cmds | Context |\n"
+    header += "|--------|---------|-------------|----------|--------|------|---------|"
     return header + "\n" + "\n".join(rows) + "\n"
 
 

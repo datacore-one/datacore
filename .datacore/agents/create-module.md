@@ -564,6 +564,52 @@ Exit code 0 = PASS, Exit code 1 = FAIL
 
 **This validation MUST execute and PASS before Step 9.** Non-negotiable gate.
 
+### Step 8c: CLAUDE.base.md Template Audit
+
+Verify CLAUDE.base.md follows the standard template (`specs/module-claude-template.md`):
+
+```
+CLAUDE.base.md TEMPLATE AUDIT: <name>
+═══════════════════════════════════════
+
+Frontmatter:
+  [✓/✗] Has YAML frontmatter (--- delimiters)
+  [✓/✗] Has `summary` field (one-line description)
+  [✓/✗] Has `triggers` field (list of trigger phrases)
+  [✓/✗] Has `context` field (on_match or always)
+
+Required Sections:
+  [✓/✗] Has ## Purpose section (2-3 sentences)
+  [✓/✗] Has ## Quick Start section (with example triggers)
+  [✓/✗] Has ## How It Works section (workflows/operations)
+
+Engram Footer:
+  [✓/✗] Ends with engram footer note (italic line referencing
+        datacore.recall for learned behavior)
+
+Size:
+  [✓/✗] Within target range (40-150 lines)
+        Actual: [X] lines
+
+No Root Duplication:
+  [✓/✗] Does NOT contain GTD methodology explanations
+  [✓/✗] Does NOT contain org-mode syntax reference
+  [✓/✗] Does NOT describe general Datacore architecture
+  [✓/✗] Does NOT duplicate root CLAUDE.md content
+```
+
+**Duplication detection — scan for these red flags:**
+- References to `inbox.org`, GTD workflow steps, or inbox processing
+- org-mode syntax docs (heading hierarchy, TODO states, property drawers)
+- Explanations of layered context, DIP system, or space structure
+- Anything already covered in the root CLAUDE.md
+
+**If issues found:**
+1. List each with specific fix
+2. For duplication: suggest removing and linking to root CLAUDE.md
+3. For missing sections: provide template text from `specs/module-claude-template.md`
+4. For size violations: suggest moving content to `docs/` or engrams
+
 ### Validation Gate (Required Checkpoint)
 
 **CRITICAL: Do not proceed to Step 9 without passing validation.**
@@ -617,6 +663,13 @@ If yes, delegate to `module-registrar` agent which will:
 - [ ] Commands have `## Your Boundaries` section
 - [ ] Commands have error handling with solutions
 
+**CLAUDE.base.md Template (specs/module-claude-template.md):**
+- [ ] Has YAML frontmatter with `summary`, `triggers`, `context`
+- [ ] Has required sections: Purpose, Quick Start, How It Works
+- [ ] Has engram footer note
+- [ ] Is 40-150 lines (move excess to docs/ or engrams)
+- [ ] Does NOT duplicate root CLAUDE.md content
+
 **Learning Integration (DIP-0019):**
 - [ ] `module.yaml` has `learning:` section with scopes
 - [ ] If module has `learning/` dir, it contains `engrams.yaml`
@@ -638,6 +691,7 @@ When creating or auditing modules, reference these as examples:
 | Trading command | `.datacore/modules/trading/start-trading.md` | Conversational workflow, boundaries |
 | Module spec | `.datacore/specs/datacore-specification.md:170-220` | Required structure |
 | Conversational style | `.datacore/specs/datacore-specification.md:730-760` | DO/DON'T patterns |
+| CLAUDE.md template | `.datacore/specs/module-claude-template.md` | Frontmatter, required sections, sizing |
 
 ## Your Boundaries
 
