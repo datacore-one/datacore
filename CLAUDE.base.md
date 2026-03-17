@@ -1,12 +1,12 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code when working in this Datacore installation.
+This file teaches you how to work effectively in this Datacore installation.
 
 ## Your Memory
 
 You have persistent memory through Datacore MCP — **use it in every session**.
 
-Your memory contains ~327 personal engrams + 780 pack engrams covering infrastructure, past decisions, API quirks, user preferences, project conventions, debugging insights, and more. **This file describes HOW the system works. Your engrams contain WHAT you've learned.**
+Your memory contains ~330 personal engrams + 780 pack engrams covering infrastructure, past decisions, API quirks, user preferences, project conventions, debugging insights, and more. **This file describes HOW the system works. Your engrams contain WHAT you've learned.**
 
 ### Session lifecycle
 
@@ -18,73 +18,38 @@ Your memory contains ~327 personal engrams + 780 pack engrams covering infrastru
 
 ### What's in your memory
 
-| Domain | What you know | When to recall |
-|--------|--------------|----------------|
-| Infrastructure | Server IPs, SSH configs, deployment targets, service details | Asked about servers, deployment, SSH |
-| Past decisions | Design choices, architecture rationale, trade-offs | "What did we decide about X?" |
-| Corrections | API quirks, bugs discovered, wrong assumptions fixed | Working with specific APIs or tools |
-| Preferences | Formatting, tone, workflow patterns, tool choices | Generating content, formatting output |
-| Project patterns | Codebase conventions, deployment procedures | Working in specific projects |
-| System rules | DIPs, conventions, tag formats, file routing | Detailed Datacore conventions (also below) |
+| Domain | Examples | When to recall |
+|--------|---------|----------------|
+| Infrastructure | Server IPs, SSH configs, deployment targets | Asked about servers, deployment |
+| Decisions | Design choices, architecture rationale | "What did we decide about X?" |
+| Corrections | API quirks, bugs, wrong assumptions | Working with specific APIs/tools |
+| Preferences | Formatting, tone, workflow, tool choices | Generating content, formatting |
+| Conventions | DIPs, tag formats, file routing, org-mode rules | System conventions (also below) |
 
-**Do not rely on this file for factual recall.** Call `datacore.recall` or `datacore.search` instead. This file is a system guide, not a knowledge base.
+**Do not rely on this file for factual recall.** Call `datacore.recall` or `datacore.search` instead.
 
 ## Overview
 
-**Datacore** is a modular AI second brain system built on GTD methodology. This installation contains:
+**Datacore** is a modular AI second brain built on GTD methodology.
 
-- **0-personal/**: Personal space (GTD, PKM, personal projects)
+- **0-personal/**: Personal space (GTD, PKM, projects)
 - **[N]-[name]/**: Team spaces (separate repos)
 
-## Structure
+### Modules
+
+Datacore is extensible via **modules** — self-contained packages that add agents, commands, tools, and context. Each module lives in `.datacore/modules/<name>/` with a `module.yaml` manifest. Modules can hook into commands (e.g., adding a section to `/today`), register agents, and provide MCP tools. Use `datacore.modules.list` to see installed modules, `datacore.modules.info` for details.
+
+### Structure
 
 ```
 ~/Data/
-├── .datacore/              # Configuration and methodology
-│   ├── commands/           # Built-in + module commands
-│   ├── agents/             # Built-in + module agents
-│   ├── modules/            # Optional modules
-│   ├── specs/              # System specifications
-│   ├── lib/                # Utility scripts
-│   ├── env/                # Secrets (gitignored)
-│   └── state/              # Runtime state (gitignored)
-├── 0-personal/             # Personal space
-│   ├── org/                # GTD system
-│   ├── notes/              # Obsidian PKM
-│   ├── code/               # Personal projects
-│   └── content/            # Generated content
+├── .datacore/              # System: commands, agents, modules, specs, lib
+├── 0-personal/             # Personal: org/ (GTD), notes/ (PKM), code/
 ├── [N]-[name]/             # Team spaces (separate repos)
-├── install.yaml            # System manifest
-└── sync                    # Sync script
+└── sync                    # Repo sync script
 ```
 
-> Detailed structure conventions are also in your engram memory (DIP pack). For edge cases, call `datacore.recall`.
-
-## Settings
-
-User preferences are configured via YAML files in `.datacore/`:
-
-| File | Purpose | Tracking |
-|------|---------|----------|
-| `settings.yaml` | Base defaults | Tracked |
-| `settings.local.yaml` | User overrides | Gitignored |
-
-**Available settings:**
-
-```yaml
-editor:
-  open_markdown_on_generate: true  # Open generated .md files in default app
-  open_command: ""                 # Custom open command (empty = system default)
-
-sync:
-  pull_on_today: true              # Auto-pull repos on /today
-  push_on_wrap_up: true            # Auto-push repos on /wrap-up
-
-journal:
-  open_after_update: false         # Open journal after updating
-```
-
-To customize, create `.datacore/settings.local.yaml` with your overrides.
+> Detailed conventions are in your engram memory (DIP pack). Call `datacore.recall` for specifics.
 
 ## Commands
 
@@ -106,212 +71,71 @@ To customize, create `.datacore/settings.local.yaml` with your overrides.
 
 <!-- REGISTRY:infrastructure -->
 
-> Server IPs, SSH configs, deployment procedures, and service details are stored in your engram memory. Call `datacore.recall` with domain "infrastructure" for specifics. Do NOT guess IPs from memory — always verify via recall.
+> Server IPs, SSH configs, deployment procedures, and service details are in your engram memory. Call `datacore.recall` with domain "infrastructure". Do NOT guess IPs — always verify via recall.
 
 ## Working with Spaces
 
 ### Personal (0-personal/)
 
-Personal space uses full GTD methodology with direct org-mode access.
-
-**Key locations**:
-- `org/inbox.org` - Single capture point
-- `org/next_actions.org` - Tasks with :AI: tags for delegation
-- `notes/` - Obsidian PKM (journals, pages, knowledge)
-- `code/` - Personal projects
-
-**GTD Workflow**:
-- inbox.org is sacred - always return to clean state after processing
-- AI tasks tagged with :AI: are executed by agents overnight
-- Morning briefing shows completed AI work
+- `org/inbox.org` — single capture point (sacred — always return to clean)
+- `org/next_actions.org` — tasks with `:AI:` tags for overnight delegation
+- `notes/` — Obsidian PKM (journals, pages, knowledge)
 
 ### Team Spaces ([N]-[name]/)
 
-Team spaces are separate git repos. GitHub Issues are source of truth.
-
-**Key locations**:
-- `org/` - Internal AI coordination only
-- `today/` - Generated daily briefings
-- `research/` - Market research
-- `knowledge/` - Shared knowledge
-- `projects/` - Code repos
-
-**Team Workflow**:
-- GitHub Issues for all team tasks
-- org/ routes AI work, creates GitHub issues
-- Team members work in GitHub, not org files
+Separate git repos. GitHub Issues are source of truth. `org/` routes AI work only.
 
 ## org-mode Conventions
 
-- Heading hierarchy: `*` (one star per level)
-- TODO states: TODO, NEXT, WAITING, DONE
-- Property drawers: `:PROPERTIES:` ... `:END:`
-- Timestamps: `<2025-11-28 Fri>` or `[2025-11-28 Fri]`
-- Tags: `:tag1:tag2:`
-- Links: `[[link][description]]`
+- Headings: `*` per level. States: TODO, NEXT, WAITING, DONE
+- Properties: `:PROPERTIES:` ... `:END:`. Tags: `:tag1:tag2:`
+- Timestamps: `<2026-03-17 Tue>`. **Always verify day-of-week** — LLMs get these wrong:
+  `python3 -c "from datetime import date; print(date(YYYY,M,D).strftime('%a'))"`
 
-**Date accuracy (CRITICAL):**
-- LLMs frequently generate wrong day-of-week names. **Always verify** before writing.
-- Use `python3 -c "from datetime import date; print(date(YYYY,M,D).strftime('%a'))"` to get the correct day.
-- Or use: `python3 -c "from org_date_validator import org_date; print(org_date(2026,3,14))"` (from `.datacore/lib/`)
-- Wrong day names cause tasks to not appear in agenda views.
-- Validation script: `python3 .datacore/lib/org_date_validator.py check` (or `fix` to auto-correct)
+**AI Task Tags**: `:AI:` (general), `:AI:research:`, `:AI:content:`, `:AI:data:`, `:AI:pm:`, `:AI:technical:` (human review)
 
-**AI Task Tags**:
-- `:AI:` - General AI task
-- `:AI:research:` → research-orchestrator
-- `:AI:content:` → gtd-content-writer
-- `:AI:data:` → gtd-data-analyzer
-- `:AI:pm:` → gtd-project-manager
-- `:AI:technical:` → CTO queue (human review required)
+> Full org-mode and GTD conventions are in engram memory (DIP pack, 747 engrams). Call `datacore.recall` for detailed rules.
 
-> Full org-mode and GTD conventions are in your engram memory (DIP pack, 747 engrams). For detailed rules, call `datacore.recall`.
+## Notes & Tags
 
-## Notes Conventions
+- Wiki-links: `[[Page Name]]`. Journal: `YYYY-MM-DD.md`
+- Tags: inline `#tag` in PKM/CRM, `:tag:` in org-mode, single values in frontmatter (NOT arrays)
+- Registries: `.datacore/tags.yaml` (system), `[space]/.datacore/tags.yaml` (space)
 
-- Wiki-links: `[[Page Name]]`
-- Frontmatter: YAML for journals and clippings
-- Journal filename: `YYYY-MM-DD.md`
-- **Tags**: Inline `#tag` format at end of content (NOT frontmatter arrays)
-
-## Tag System
-
-Tags are core to Datacore - enabling holistic views of projects, cross-system queries, and unified reporting.
-
-**Registries**:
-- `.datacore/tags.yaml` - System-wide reserved tags
-- `[space]/.datacore/tags.yaml` - Space-specific tags
-
-**Format by system**:
-- Org-mode: `:tag1:tag2:` (hierarchical, e.g., `:project:ops:legal:`)
-- PKM/CRM: `#tag` inline at end of content
-- Frontmatter: Single values only (`type: zettel`), NOT arrays
-
-See [DIP-0014](dips/DIP-0014-tag-taxonomy.md) for full specification.
-
-## Sync
+## Sync & Bash
 
 ```bash
 ./sync          # Pull all repos
 ./sync push     # Commit and push all
-./sync status   # Show status
 ```
 
-## Bash Usage
-
-- **Never use multi-line Bash commands.** Chain with `&&` or make separate tool calls.
-- Use dedicated tools instead of Bash: `Glob` not `ls`/`find`, `Read` not `cat`/`sed`/`head`/`tail`, `Grep` not `grep`/`rg`.
+- **Never use multi-line Bash commands.** Chain with `&&`.
+- Use dedicated tools: `Glob` not `find`, `Read` not `cat`, `Grep` not `grep`.
 
 ## Key Principles
 
-- **Augment, don't replace** - Agents assist, humans decide
-- **Progressive processing** - Inbox → triage → knowledge → archive
-- **GitHub for teams** - External collaboration via GitHub Issues
-- **org-mode for AI** - Internal coordination and task routing
-- **Single capture point** - inbox.org, then route and remove
+- **Augment, don't replace** — agents assist, humans decide
+- **Progressive processing** — inbox → triage → knowledge → archive
+- **Single capture point** — inbox.org, then route and remove
+- **org-mode for AI** — internal coordination and task routing
+- **GitHub for teams** — external collaboration via Issues
 
 ## System Patterns (DIPs)
 
-Datacore follows documented patterns via **Datacore Improvement Proposals (DIPs)**:
+Datacore follows **Datacore Improvement Proposals** for system changes. 15 DIPs cover: contribution model, layered context, tag taxonomy, agent registry, knowledge management, GTD workflow, nightshift execution, and more. Located in `.datacore/dips/`.
 
-### Core Infrastructure
+To propose changes: branch → copy `DIP-0000-template.md` → fill in → PR.
 
-| DIP | Pattern | Summary |
-|-----|---------|---------|
-| [DIP-0001](dips/DIP-0001-contribution-model.md) | Contribution Model | Fork-and-overlay for privacy-safe contributions |
-| [DIP-0002](dips/DIP-0002-layered-context-pattern.md) | Layered Context | Four-level privacy for context files |
-| [DIP-0014](dips/DIP-0014-tag-taxonomy.md) | Tag Taxonomy | Unified tag system, namespaces, formats, registries |
-| [DIP-0016](dips/DIP-0016-agent-registry.md) | Agent Registry | Agent/command discoverability, registries, context patterns |
+> All DIP content is in your engram memory (dips-v1 pack, 747 engrams). Call `datacore.recall` with the relevant topic rather than reading DIP files for quick lookups.
 
-### Knowledge & Content
+### Layered Context (DIP-0002)
 
-| DIP | Pattern | Summary |
-|-----|---------|---------|
-| [DIP-0003](dips/DIP-0003-scaffolding-pattern.md) | Scaffolding Pattern | Knowledge base structure and organization |
-| [DIP-0004](dips/DIP-0004-knowledge-database.md) | Knowledge Database | Datacortex, embeddings, semantic search |
-| [DIP-0015](dips/DIP-0015-semantic-organization.md) | Semantic Organization | File handling, Git LFS, ingest workflow |
-| [DIP-0017](dips/DIP-0017-outbox-archive-pattern.md) | Outbox & Archive | Content routing out, archive to server |
-| [DIP-0019](dips/DIP-0019-learning-architecture.md) | Learning Architecture | Three-loop learning: capture, absorption, user learning |
-| [DIP-0021](dips/DIP-0021-search-research-architecture.md) | Search & Research | Three-layer search/research/ingest with pluggable sources |
-
-### GTD & Task Management
-
-| DIP | Pattern | Summary |
-|-----|---------|---------|
-| [DIP-0009](dips/DIP-0009-gtd-specification.md) | GTD Specification | Complete GTD workflow, agents, and coordination |
-| [DIP-0010](dips/DIP-0010-external-sync-architecture.md) | External Sync | Bidirectional sync between org-mode and external services |
-| [DIP-0011](dips/DIP-0011-nightshift-module.md) | Nightshift Module | Overnight AI task execution and evaluation |
-
-### Domain Modules
-
-| DIP | Pattern | Summary |
-|-----|---------|---------|
-| [DIP-0012](dips/DIP-0012-crm-module.md) | CRM Module | Contact relationship management |
-| [DIP-0013](dips/DIP-0013-meetings-module.md) | Meetings Module | Meeting preparation, transcription, follow-up |
-
-> All DIP content is available as engrams (dips-v1 pack, 747 engrams). For specific DIP rules, call `datacore.recall` with the relevant domain.
-
-### Registries
-
-Agent and command discovery uses central registries (per DIP-0016):
-
-| Registry | Purpose |
-|----------|---------|
-| `.datacore/registry/agents.yaml` | All agents with skills, triggers, relationships |
-| `.datacore/registry/commands.yaml` | All commands with invocations, hooks |
-| `.datacore/registry/sources.yaml` | Pluggable search/research source providers (DIP-0021) |
-
-### Layered Context Pattern (DIP-0002)
-
-All context files (CLAUDE.md, agents, commands) use layered privacy:
-
-| Layer | Suffix | Visibility | Tracking |
-|-------|--------|------------|----------|
-| PUBLIC | `.base.md` | Everyone | Tracked (PR to upstream) |
-| ORG | `.org.md` | Organization | Tracked in fork |
-| TEAM | `.team.md` | Team only | Optional |
-| PRIVATE | `.local.md` | Only you | Never tracked |
-
-**Composed file** (`.md`) is generated from layers and gitignored.
-
-```bash
-# Rebuild composed CLAUDE.md
-python .datacore/lib/context_merge.py rebuild --path .
-
-# Validate no private content in public layers
-python .datacore/lib/context_merge.py validate --path .
-```
-
-### When Making System Changes
-
-For significant changes, create a DIP:
-1. **Create separate branch**: `git checkout -b dip-XXXX-description`
-2. Copy `dips/DIP-0000-template.md`
-3. Fill in specification
-4. Submit PR to datacore repo from feature branch
-5. Reference DIP in implementation
-
-**Important**: Each DIP must be on its own feature branch to enable independent review and discussion.
-
-See `dips/README.md` for full DIP workflow.
+All context files use layered privacy: `.base.md` (public) → `.org.md` → `.team.md` → `.local.md` (private). Composed `.md` is gitignored. Rebuild: `python .datacore/lib/context_merge.py rebuild --path .`
 
 ## Privacy
 
-See `.datacore/specs/privacy-policy.md` for data classification and sharing guidelines.
-
-## Specifications
-
-DIPs are the primary specification format. The `specs/` directory contains:
-
-| Spec | Purpose | Status |
-|------|---------|--------|
-| `datacore-specification.md` | System overview and architecture | Overview (details in DIPs) |
-| `privacy-policy.md` | Data classification levels | Active (ref: DIP-0001, DIP-0002) |
-
-**Note**: For detailed specifications, always reference the relevant DIP. The main specification provides overview context; DIPs provide authoritative details.
+See `.datacore/specs/privacy-policy.md` for data classification.
 
 ---
 
-**This is CLAUDE.base.md** - the PUBLIC layer. Customize by creating:
-- `CLAUDE.org.md` - Organization-specific context
-- `CLAUDE.local.md` - Personal notes (gitignored)
+**This is CLAUDE.base.md** — the PUBLIC layer. Customize with `CLAUDE.org.md` or `CLAUDE.local.md` (gitignored).
