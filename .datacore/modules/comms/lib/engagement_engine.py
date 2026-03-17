@@ -50,23 +50,23 @@ from env_utils import load_env_files
 DATA_DIR = Path(os.environ.get("DATACORE_ROOT", os.path.expanduser("~/Data")))
 STATE_FILE = DATA_DIR / ".datacore" / "state" / "engagement-state.json"
 
-# Default limits
-DEFAULT_DAILY_REPLY_LIMIT = 85
-DEFAULT_MAX_PER_HOUR = 5      # Per 30min cycle (must fit in 900s timeout)
+# Default limits — feed-first model (3 cycles/day, ~$4/day target)
+DEFAULT_DAILY_REPLY_LIMIT = 15
+DEFAULT_MAX_PER_HOUR = 5      # Per cycle (must fit in 900s timeout)
 DEFAULT_ESCALATION_MAX = 5    # Max Telegram escalations per day
 AUTONOMOUS_THRESHOLD = 0.70   # consensus ≥ this → auto-post (quality gate)
 ESCALATION_THRESHOLD = 0.45   # below this → auto-reject
 
-# Topic quota targets (daily soft limits)
+# Topic quota targets (daily soft limits — feed-first, 15 replies/day)
 TOPIC_QUOTA_TARGETS = {
-    "privacy_arch": 25,
-    "surveillance": 20,
-    "fair_data": 20,
-    "regulatory": 15,
-    "ai_data": 15,
-    "ai_agents": 10,
-    "infrastructure": 5,
-    "fds_mentions": 10,
+    "ai_agents": 4,       # Primary growth topic
+    "ai_data": 3,         # AI + data custody
+    "provenance": 3,      # Data provenance / authenticity
+    "decentralized_ai": 2,  # Decentralized AI community
+    "privacy_arch": 2,    # Core privacy
+    "surveillance": 2,    # Surveillance
+    "fair_data": 2,       # Fair data economy
+    "fds_mentions": 5,    # Always respond to mentions
 }
 
 # Reply type quota: max 40% of daily posts from one type
