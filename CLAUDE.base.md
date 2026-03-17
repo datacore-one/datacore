@@ -51,13 +51,27 @@ Datacore is extensible via **modules** — self-contained packages that add agen
 
 > Detailed conventions are in your engram memory (DIP pack). Call `datacore.recall` for specifics.
 
-## Commands
+## Finding Things
 
-<!-- REGISTRY:commands -->
+### Commands & Agents
 
-## Agents
+Commands and agents are registered in `.datacore/registry/`. Don't memorize them — look them up:
+- `datacore.recall` for agent/command details by name or purpose
+- `.datacore/registry/commands.yaml` for all commands
+- `.datacore/registry/agents.yaml` for all agents (100+)
+- `datacore.modules.list` / `datacore.modules.info` for module capabilities
 
-<!-- REGISTRY:agents -->
+Slash commands (e.g., `/today`, `/research`, `/wrap-up`) are multi-phase workflows. Conversational commands work by saying what you need ("process inbox", "weekly review").
+
+### Knowledge Base
+
+When working on a task, check for relevant existing knowledge:
+- `datacore.search` or `datacore.recall` — search across engrams and knowledge
+- `[space]/3-knowledge/` — permanent knowledge (zettel, literature, reference, pages)
+- `[space]/notes/` or `[space]/journal/` — journals and working notes
+- `[space]/1-tracks/` or `[space]/1-active/` — active work by area
+
+Don't start from scratch when context might already exist.
 
 ## Installed Modules
 
