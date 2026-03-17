@@ -2,6 +2,33 @@
 
 This file provides guidance to Claude Code when working in this Datacore installation.
 
+## Your Memory
+
+You have persistent memory through Datacore MCP — **use it in every session**.
+
+Your memory contains ~327 personal engrams + 780 pack engrams covering infrastructure, past decisions, API quirks, user preferences, project conventions, debugging insights, and more. **This file describes HOW the system works. Your engrams contain WHAT you've learned.**
+
+### Session lifecycle
+
+1. **Start**: Call `datacore.session.start` with a brief task description — this injects relevant engrams
+2. **Recall**: Before answering factual questions (server IPs, past decisions, preferences), call `datacore.recall` — the answer is likely in memory, not in this file
+3. **Learn**: When corrected or discovering something new, call `datacore.learn`
+4. **Feedback**: Rate injected engrams with `datacore.feedback` — this trains relevance
+5. **End**: Call `datacore.session.end` with summary before the conversation ends
+
+### What's in your memory
+
+| Domain | What you know | When to recall |
+|--------|--------------|----------------|
+| Infrastructure | Server IPs, SSH configs, deployment targets, service details | Asked about servers, deployment, SSH |
+| Past decisions | Design choices, architecture rationale, trade-offs | "What did we decide about X?" |
+| Corrections | API quirks, bugs discovered, wrong assumptions fixed | Working with specific APIs or tools |
+| Preferences | Formatting, tone, workflow patterns, tool choices | Generating content, formatting output |
+| Project patterns | Codebase conventions, deployment procedures | Working in specific projects |
+| System rules | DIPs, conventions, tag formats, file routing | Detailed Datacore conventions (also below) |
+
+**Do not rely on this file for factual recall.** Call `datacore.recall` or `datacore.search` instead. This file is a system guide, not a knowledge base.
+
 ## Overview
 
 **Datacore** is a modular AI second brain system built on GTD methodology. This installation contains:
@@ -30,6 +57,8 @@ This file provides guidance to Claude Code when working in this Datacore install
 ├── install.yaml            # System manifest
 └── sync                    # Sync script
 ```
+
+> Detailed structure conventions are also in your engram memory (DIP pack). For edge cases, call `datacore.recall`.
 
 ## Settings
 
@@ -77,6 +106,8 @@ To customize, create `.datacore/settings.local.yaml` with your overrides.
 
 <!-- REGISTRY:infrastructure -->
 
+> Server IPs, SSH configs, deployment procedures, and service details are stored in your engram memory. Call `datacore.recall` with domain "infrastructure" for specifics. Do NOT guess IPs from memory — always verify via recall.
+
 ## Working with Spaces
 
 ### Personal (0-personal/)
@@ -115,9 +146,16 @@ Team spaces are separate git repos. GitHub Issues are source of truth.
 - Heading hierarchy: `*` (one star per level)
 - TODO states: TODO, NEXT, WAITING, DONE
 - Property drawers: `:PROPERTIES:` ... `:END:`
-- Timestamps: `<2025-11-28 Thu>` or `[2025-11-28 Thu]`
+- Timestamps: `<2025-11-28 Fri>` or `[2025-11-28 Fri]`
 - Tags: `:tag1:tag2:`
 - Links: `[[link][description]]`
+
+**Date accuracy (CRITICAL):**
+- LLMs frequently generate wrong day-of-week names. **Always verify** before writing.
+- Use `python3 -c "from datetime import date; print(date(YYYY,M,D).strftime('%a'))"` to get the correct day.
+- Or use: `python3 -c "from org_date_validator import org_date; print(org_date(2026,3,14))"` (from `.datacore/lib/`)
+- Wrong day names cause tasks to not appear in agenda views.
+- Validation script: `python3 .datacore/lib/org_date_validator.py check` (or `fix` to auto-correct)
 
 **AI Task Tags**:
 - `:AI:` - General AI task
@@ -126,6 +164,8 @@ Team spaces are separate git repos. GitHub Issues are source of truth.
 - `:AI:data:` → gtd-data-analyzer
 - `:AI:pm:` → gtd-project-manager
 - `:AI:technical:` → CTO queue (human review required)
+
+> Full org-mode and GTD conventions are in your engram memory (DIP pack, 747 engrams). For detailed rules, call `datacore.recall`.
 
 ## Notes Conventions
 
@@ -208,6 +248,8 @@ Datacore follows documented patterns via **Datacore Improvement Proposals (DIPs)
 |-----|---------|---------|
 | [DIP-0012](dips/DIP-0012-crm-module.md) | CRM Module | Contact relationship management |
 | [DIP-0013](dips/DIP-0013-meetings-module.md) | Meetings Module | Meeting preparation, transcription, follow-up |
+
+> All DIP content is available as engrams (dips-v1 pack, 747 engrams). For specific DIP rules, call `datacore.recall` with the relevant domain.
 
 ### Registries
 
