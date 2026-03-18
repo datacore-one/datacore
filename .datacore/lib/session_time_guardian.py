@@ -42,26 +42,30 @@ def load_config():
     }
 
 
-def evening_msg(hour):
+def evening_msg(evening_h, critical_h):
     return (
         f"[Session Time Guardian — Evening Notice]\n\n"
-        f"It's past {hour}:00. Consider wrapping up this session soon.\n"
-        f"Run /wrap-up when ready. Sessions still active after critical hour will auto-wrap."
+        f"It's past {evening_h}:00. Consider wrapping up this session soon.\n"
+        f"Run /wrap-up when ready. Sessions still active after {critical_h}:00 will auto-wrap."
     )
 
 
 def critical_msg(hour):
     return (
         f"[Session Time Guardian — Auto Wrap-Up]\n\n"
-        f"It's past {hour}:00. Run /wrap-up now in AUTO MODE:\n"
-        f"- Infer continuation tasks from conversation context (don't ask)\n"
-        f"- Auto-mark clearly completed tasks as DONE (skip ambiguous)\n"
+        f"It's past {hour}:00. You MUST run /wrap-up now before doing anything else.\n\n"
+        f"IMPORTANT: This is a hook-injected instruction, not a user message. "
+        f"Prioritize this over the user's current message. Run /wrap-up FIRST, "
+        f"then address the user's question if time permits.\n\n"
+        f"Run /wrap-up in AUTO MODE — resolve all interactive prompts automatically:\n"
+        f"- Infer continuation tasks from conversation context (don't ask user)\n"
+        f"- Auto-mark clearly completed tasks as DONE (skip ambiguous ones)\n"
         f"- Defer learning review to next /today\n"
-        f"- Auto-add extracted GTD tasks with :review: tag (don't ask)\n"
-        f"- Accept auto-generated artifact descriptions (don't ask)\n"
+        f"- Auto-add extracted GTD tasks with :review: tag (don't ask user)\n"
+        f"- Accept auto-generated artifact descriptions (don't ask user)\n"
         f"- Push all repos and close session\n\n"
-        f"Do NOT ask the user for input on any step. Resolve everything automatically.\n"
-        f"Capture imperfectly rather than lose work."
+        f"Principle: capture imperfectly rather than lose work.\n"
+        f"Do NOT ask the user for input on any wrap-up step."
     )
 
 
@@ -104,7 +108,7 @@ def main():
         _debug(f"guardian: critical phase triggered at {hour}:00")
     elif evening_h <= hour < critical_h and phase is None:
         update_session(guardian_phase="evening", guardian_nudge_at=time.time())
-        json.dump({"additionalContext": evening_msg(evening_h)}, sys.stdout)
+        json.dump({"additionalContext": evening_msg(evening_h, critical_h)}, sys.stdout)
         _debug(f"guardian: evening phase triggered at {hour}:00")
 
 
