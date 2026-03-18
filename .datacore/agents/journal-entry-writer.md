@@ -110,7 +110,9 @@ Use today's date for `YYYY-MM-DD`.
 ```markdown
 ---
 
-## Session: HH:MM - [Session Goal]
+## Session: [Session Goal]
+
+> **TL;DR**: [One sentence summary — what was done and the key outcome. Scannable in 3 seconds.]
 
 **Goal:** [session_goal]
 
@@ -118,9 +120,12 @@ Use today's date for `YYYY-MM-DD`.
 - [accomplishment 1]
 - [accomplishment 2]
 
-**Files Modified:**
-- [file 1]
-- [file 2]
+**Key Decisions:**
+- [decision 1 — what was decided and why]
+
+**Files Created/Modified:**
+- `path/to/file.py` (NEW) — [brief purpose]
+- `path/to/other.md` — [what changed]
 
 [If continuation provided:]
 **Continuation:**
@@ -129,7 +134,21 @@ Use today's date for `YYYY-MM-DD`.
 [If learnings provided:]
 **Learnings:**
 - [learning 1]
+
+#tag1, #tag2, #tag3
 ```
+
+**TL;DR rules:**
+- One sentence, max 20 words
+- Format: "[verb] [what] — [outcome/state]"
+- Examples: "Built voice terminal prototype — wake word + STT + org-mode working on Mac"
+- Examples: "Cleaned disk 72GB→45GB — LFS pruned, knowledge.db de-tracked"
+
+**Tags:**
+- Use inline `#tag` format at end of entry (per DIP-0014)
+- Include: project tag, activity type, domain
+- Call tag-suggester agent if available, otherwise infer from content
+- Examples: `#voice-terminal, #prototype, #hardware` or `#megaphone, #deployment, #typescript`
 
 ### Team Journal Format (Other Spaces)
 
@@ -142,15 +161,17 @@ Team journals use project-grouped, attributed entries:
 
 ### @[author] - [Brief Description] (HH:MM)
 
+> **TL;DR**: [One sentence summary]
+
 **Goal:** [session_goal]
 
 **Accomplished:**
 - [accomplishment 1]
 - [accomplishment 2]
 
-**Files Modified:**
-- [file 1]
-- [file 2]
+**Files Created/Modified:**
+- `path/to/file` (NEW) — [purpose]
+- `path/to/file` — [what changed]
 
 [If commits provided:]
 **Commits:** `abc1234`, `def5678`
@@ -165,6 +186,8 @@ Team journals use project-grouped, attributed entries:
 [If learnings provided:]
 **Learnings:**
 - [learning 1]
+
+#tag1, #tag2
 ```
 
 **Team Journal Rules:**

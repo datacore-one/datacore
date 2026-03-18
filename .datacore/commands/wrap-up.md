@@ -590,6 +590,31 @@ Are these descriptions accurate? (Enter to confirm, or correct)
 - Makes knowledge artifacts part of the searchable corpus
 - Creates audit trail of what was produced
 
+**Artifact Index (REQUIRED):**
+
+In addition to listing artifacts in the journal, append each artifact to the monthly artifact index at `0-personal/notes/artifact-index-YYYY-MM.md`. This file is the cross-session lookup table for "when did I work on X and where is it?"
+
+```markdown
+# Artifact Index — YYYY-MM
+
+| Date | Session | Type | Artifact | Path |
+|------|---------|------|----------|------|
+| 03-18 | Voice Terminal | module | Working voice prototype | .datacore/modules/voice-terminal/lib/voice_terminal.py |
+| 03-18 | Voice Terminal | project-doc | Comprehensive product spec | 0-personal/notes/pages/datacore-voice-terminal.md |
+| 03-18 | Voice Terminal | 3d-model | Blender model with components | 0-personal/notes/pages/datacore-voice-terminal.blend |
+| 03-18 | Voice Terminal | render | 40+ product concept renders | 0-personal/notes/pages/datacore-voice-terminal-render-v*.png |
+| 03-17 | FDS X Campaign | strategy | Campaign strategy v6 | 3-fds/1-tracks/comms/campaigns/.../campaign-strategy-v6.md |
+```
+
+**Artifact index rules:**
+- One file per month: `artifact-index-YYYY-MM.md`
+- Location: `0-personal/notes/`
+- Append-only (never rewrite existing rows)
+- Type column uses: `module`, `project-doc`, `report`, `zettel`, `render`, `3d-model`, `script`, `strategy`, `spec`, `style-guide`, `config`, `presentation`
+- Path column is relative to `~/Data/`
+- Use glob patterns for multiple files (e.g., `*-v*.png`)
+- Session column matches the `## Session:` header in the journal
+
 ### 11. Index Session to Database (DIP-0004)
 
 ```
@@ -912,11 +937,36 @@ Ready to close terminal.
 
 **Why this matters:** In long sessions, individual step outputs scroll past hundreds of lines of tool calls, agent output, and status updates. By the time the user reaches step 17, they've lost track of what earlier steps produced. The consolidated report gives them everything in one place — a single scannable receipt of the entire session.
 
+**PERSIST TO JOURNAL (REQUIRED):**
+
+After displaying the consolidated report to the user, **write a condensed version directly to the personal journal**. This replaces the coordinator-written entry as the authoritative session record. The main conversation has the best context — coordinator agents running in background have less.
+
+1. **Write session entry to journal** (`0-personal/notes/journals/YYYY-MM-DD.md`):
+   - Use the format from journal-entry-writer (TL;DR, Goal, Accomplished, Key Decisions, Files, Continuation, Learnings, Tags)
+   - Include the artifact table
+   - This is the **authoritative record** — better than what any subagent produces
+
+2. **Update Daily TL;DR** at the top of the journal file (after frontmatter):
+   ```markdown
+   ## Daily Summary
+   - [Session 1 name]: [one line from TL;DR]
+   - [Session 2 name]: [one line from TL;DR]
+   - [Session 3 name]: [one line from TL;DR]
+   ```
+   If a `## Daily Summary` section already exists, update it (add/replace the current session's line). If it doesn't exist, create it right after the frontmatter.
+
+3. **Append to artifact index** (`0-personal/notes/artifact-index-YYYY-MM.md`):
+   - Create file if it doesn't exist (with header row)
+   - Append one row per significant artifact created this session
+
+**Why persist from main conversation:** The journal-coordinator spawns subagents that have limited context (only what was passed in the prompt). The main conversation has the FULL context — every decision, every file, every nuance. Writing from step 17 produces a much higher quality journal entry than delegating to a subagent. The coordinator-written entry is a fallback, not the primary.
+
 **Failure modes to avoid:**
 - "I'll just summarize briefly" — No. Output the full template with all sections.
 - "The user already saw this" — No. They saw it interleaved with tool calls 500 lines ago.
 - "Context is getting long, I'll skip the report" — No. Compress earlier steps instead.
 - Outputting the report in pieces with tool calls in between — No. Single unbroken block.
+- "The coordinator already wrote the journal" — No. Your version is better. Write it anyway (append, don't overwrite).
 
 **Session timing:**
 - Infer start time from the first user message timestamp in the conversation

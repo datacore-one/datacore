@@ -12,7 +12,7 @@ import json, sys, os, glob
 from datetime import date
 
 sys.path.insert(0, os.path.join(os.path.expanduser("~/Data"), ".datacore", "lib"))
-from session_state import cleanup_session, _debug
+from session_state import cleanup_stale_sessions, _debug
 
 DATACORE_ROOT = os.path.expanduser("~/Data")
 
@@ -25,8 +25,8 @@ def main():
     source = input_data.get("source", "startup")
     _debug(f"session_bootstrap: source={source}")
 
-    # Clean stale state from previous session (crash recovery)
-    cleanup_session()
+    # Clean stale state from crashed sessions (older than 24h)
+    cleanup_stale_sessions()
 
     # Gather lightweight context (no engram injection)
     lines = []
