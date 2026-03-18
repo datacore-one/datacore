@@ -107,6 +107,11 @@
             "type": "command",
             "command": "python3 ~/Data/.datacore/lib/session_firstmsg.py",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/session_time_guardian.py",
+            "timeout": 5
           }
         ]
       }
