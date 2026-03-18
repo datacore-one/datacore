@@ -36,7 +36,7 @@ BATCH_SIZE = 50
 
 # Model tiering
 MODEL_FLASH = "gemini-2.5-flash"
-MODEL_PRO = "gemini-3.1-pro"
+MODEL_PRO = "gemini-3.1-pro-preview"
 
 STAGE1_PROMPT = """You are a knowledge base analyst. Given a concept name and excerpts from notes that reference it, write a factual summary.
 
