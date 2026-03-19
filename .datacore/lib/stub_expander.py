@@ -38,7 +38,7 @@ BATCH_SIZE = 50
 MODEL_FLASH = "gemini-2.5-flash"
 MODEL_PRO = "gemini-3.1-pro-preview"
 
-STAGE1_PROMPT = """You are a knowledge base analyst. Given a concept name and excerpts from notes that reference it, write a factual summary.
+STAGE1_PROMPT = """You are a Zettelkasten knowledge synthesis expert. Given a concept name and excerpts from notes that reference it, extract 2-5 atomic insights and create a hub note.
 
 Concept: {title}
 Number of referencing notes: {count}
@@ -46,42 +46,54 @@ Number of referencing notes: {count}
 Connected notes:
 {notes_content}
 
-Write a concise summary (200-400 words) of what this knowledge base says about "{title}".
-Extract 3-7 key themes as bullet points.
-For each connected note, write a one-line description of how it references this concept.
+Your job:
+1. Read all connected notes carefully
+2. Identify 2-5 distinct atomic insights — specific claims, patterns, or mechanisms (not summaries)
+3. Each insight should be a standalone idea expressible as a statement title
+4. Write each insight in personal, conversational voice — as if explaining to yourself why it matters
+5. Connect insights to practical relevance (projects, decisions, strategy)
 
 Output format (markdown, no fences):
-## Summary
-[summary]
 
-## Key Themes
-- [theme]
+## Insights
 
-## Connected Notes
-- [[note title]] — [one-line context]
+### [Insight title as a claim/statement]
+[2-4 sentences in personal voice. What is the insight? Why does it matter? How does it connect to real work?]
+Source: [which connected notes this came from]
+
+### [Next insight title]
+[2-4 sentences]
+Source: [which notes]
+
+## Related Notes
+- [[note title]] — [one-line HOW it relates, not just that it does]
 """
 
-STAGE2_PROMPT = """You are a knowledge synthesis expert. Given a concept, its summary, and the original source notes, identify emergent insights.
+STAGE2_PROMPT = """You are refining extracted Zettelkasten insights. For each insight below, deepen the analysis.
 
 Concept: {title}
-Summary: {summary}
+
+Extracted insights:
+{summary}
 
 Source notes:
 {notes_content}
 
-Look for:
-- Non-obvious patterns across the references
-- Cross-domain connections (e.g., a trading concept appearing in governance contexts)
-- Underlying themes that aren't stated explicitly in any single note
-- Potential relevance to active projects or strategic decisions
-- Contradictions or tensions between different references
-- "Aha" moments — what becomes visible only when seeing all references together
+For each insight:
+1. Check: is this genuinely atomic (one idea) or a bundled summary? Split if needed.
+2. Add cross-domain connections you see across the source notes
+3. Identify tensions or contradictions between insights
+4. Flag relevance to active projects: Datafund, Fairdrop, Fair Data Society, Verity, trading, health
+5. Write in personal voice — "we" not "one", "matters because" not "it is noteworthy that"
 
-Write 100-300 words of emergent insights. Be specific and substantive — don't just say "there are connections", explain what they are. If nothing genuinely emerges, say so briefly rather than fabricating.
+If an insight is too generic or obvious, drop it and explain why.
 
-Output format (markdown, no fences):
-## Emergent Insights
-[insights]
+Output the refined insights in the same format:
+
+### [Insight title as claim]
+[2-4 sentences, personal voice, with source and project relevance]
+Source: [notes]
+Related: [[Note]] — [how it relates]
 """
 
 
@@ -179,11 +191,43 @@ def call_gemini(prompt, model_name):
                 return None
 
 
+def parse_insights(text):
+    """Parse ### headed insights from AI output into list of (title, body) tuples."""
+    insights = []
+    current_title = None
+    current_body = []
+    for line in text.split('\n'):
+        if line.startswith('### '):
+            if current_title:
+                insights.append((current_title, '\n'.join(current_body).strip()))
+            current_title = line[4:].strip()
+            current_body = []
+        elif current_title:
+            current_body.append(line)
+    if current_title:
+        insights.append((current_title, '\n'.join(current_body).strip()))
+    return insights
+
+
+def title_to_filename(title):
+    """Convert insight title to a valid filename."""
+    # Remove quotes, parentheses, colons
+    clean = title.replace('"', '').replace("'", '').replace(':', '-').replace('/', '-')
+    clean = clean.replace('(', '').replace(')', '').replace(',', '')
+    # Replace spaces with hyphens, collapse multiples
+    import re
+    clean = re.sub(r'\s+', '-', clean.strip())
+    clean = re.sub(r'-+', '-', clean)
+    clean = clean.strip('-')
+    return clean
+
+
 def expand_stub(entry, db_path, dry_run=False):
-    """Expand a single stub through two-stage pipeline."""
+    """Expand a single stub: extract atomic zettels + convert stub to hub."""
     title = entry['title']
     links = entry['links']
     stub_path = Path(entry['path'])
+    zettel_dir = stub_path.parent
 
     # Get connected notes
     notes = get_connected_notes(db_path, title)
@@ -197,39 +241,78 @@ def expand_stub(entry, db_path, dry_run=False):
     if dry_run:
         return True, f"would expand: {len(notes)} notes, ~{len(notes_text)} chars"
 
-    # Stage 1: Summary (always Flash)
+    # Stage 1: Extract insights (always Flash — fast extraction)
     s1_prompt = STAGE1_PROMPT.format(title=title, count=len(notes), notes_content=notes_text)
     s1_model = select_model(links, stage=1)
     s1_result = call_gemini(s1_prompt, s1_model)
     if not s1_result:
         return False, "stage 1 failed"
 
-    # Stage 2: Emergent insights (tiered)
+    # Stage 2: Refine insights (tiered — deeper analysis)
     s2_model = select_model(links, stage=2)
     s2_prompt = STAGE2_PROMPT.format(title=title, summary=s1_result, notes_content=notes_text)
     s2_result = call_gemini(s2_prompt, s2_model)
 
-    # Compose final document
+    # Use stage 2 result if available, otherwise stage 1
+    final_insights_text = s2_result if s2_result else s1_result
+    insights = parse_insights(final_insights_text)
+
+    if not insights:
+        # Fallback: write stage 1 output directly
+        stub_path.write_text(f"# {title}\n\n{s1_result}\n\n#auto-synthesized\n")
+        return True, f"expanded flat ({s1_model}, {len(notes)} notes, no insights parsed)"
+
     today = date.today().isoformat()
-    emergent_section = ""
-    if s2_result:
-        emergent_section = f"\n{s2_result}\n"
-    else:
-        emergent_section = "\n## Emergent Insights\n\n_Stage 2 processing failed. Re-run with --resume to retry._\n"
 
-    output = f"""# {title}
+    # Create atomic zettel files
+    zettel_links = []
+    created = 0
+    for insight_title, insight_body in insights:
+        filename = title_to_filename(insight_title)
+        if not filename:
+            continue
+        zettel_path = zettel_dir / f"{filename}.md"
+        # Don't overwrite existing non-stub notes
+        if zettel_path.exists():
+            existing = zettel_path.read_text(errors='ignore')
+            if '#auto-synthesized' not in existing and '> This is a stub' not in existing:
+                zettel_links.append(f"- [[{insight_title}]]")
+                continue
 
-> Auto-synthesized from {len(notes)} connected notes on {today}.
-> Expanded by Datacore knowledge metabolism.
+        zettel_content = f"""# {insight_title}
 
-{s1_result}
-{emergent_section}
-#auto-synthesized #stub-expanded
+{insight_body}
+
+From: [[{title}]]
+
+#zettel #auto-synthesized
 """
+        zettel_path.write_text(zettel_content)
+        zettel_links.append(f"- [[{insight_title}]]")
+        created += 1
 
-    # Write to file (overwrite stub)
-    stub_path.write_text(output)
-    return True, f"expanded ({s1_model}/{s2_model}, {len(notes)} notes)"
+    # Convert original stub to hub note
+    # Extract related notes from stage 1 output
+    related_section = ""
+    if "## Related Notes" in s1_result:
+        related_section = s1_result[s1_result.index("## Related Notes"):]
+    elif "## Connected Notes" in s1_result:
+        related_section = s1_result[s1_result.index("## Connected Notes"):]
+
+    hub_content = f"""# {title}
+
+> Hub note — extracted {len(insights)} atomic insights from {len(notes)} connected notes on {today}.
+
+## Atomic Insights
+
+{chr(10).join(zettel_links)}
+
+{related_section}
+
+#hub #auto-synthesized
+"""
+    stub_path.write_text(hub_content)
+    return True, f"hub + {created} zettels ({s1_model}/{s2_model}, {len(notes)} notes)"
 
 
 def main():
