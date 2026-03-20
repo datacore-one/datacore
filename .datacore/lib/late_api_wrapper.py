@@ -90,9 +90,25 @@ class LateAPIClient:
 
         # Build request
         platforms = platforms or ['twitter']
+        # Late API requires platform + accountId per platform entry
+        # Account IDs are looked up from LATE_ACCOUNT_IDS env var (JSON)
+        # or fall back to known accounts
+        account_ids = {
+            "twitter": "6978cf6d77637c5c857c867d",  # @FairDataSociety
+        }
+        import os as _os
+        try:
+            custom = json.loads(_os.environ.get("LATE_ACCOUNT_IDS", "{}"))
+            account_ids.update(custom)
+        except Exception:
+            pass
+
         data = {
             "content": content,
-            "platforms": [{"name": p} for p in platforms],
+            "platforms": [
+                {"platform": p, "accountId": account_ids.get(p, "")}
+                for p in platforms
+            ],
         }
 
         if scheduled_time:
