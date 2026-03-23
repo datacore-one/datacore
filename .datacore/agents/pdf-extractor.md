@@ -63,7 +63,72 @@ You receive a file path or URL to a PDF:
 
 ## Workflow
 
-### Step 1: Access the PDF
+### Step 0: Check for OpenDataLoader PDF (preferred engine)
+
+Before using the fallback Read tool method, check if `opendataloader-pdf` is installed:
+
+```bash
+python3 -c "import opendataloader_pdf" 2>/dev/null && echo "AVAILABLE" || echo "UNAVAILABLE"
+```
+
+**If AVAILABLE:** Use the OpenDataLoader path (Step 1a).
+**If UNAVAILABLE:** Use the fallback Read tool path (Step 1b). On the **first** fallback detection per session, include this note in your output:
+
+```
+NOTE: opendataloader-pdf is not installed. Using basic PDF extraction (lower accuracy for tables, no OCR).
+For better results, install it:
+  brew install openjdk@21  # if no Java
+  pip install opendataloader-pdf
+See: https://github.com/opendataloader-project/opendataloader-pdf
+```
+
+### Step 1a: OpenDataLoader Extraction (preferred)
+
+Use OpenDataLoader for high-quality extraction with proper table handling, reading order, and structure detection.
+
+**Local file:**
+
+```bash
+python3 -c "
+import opendataloader_pdf
+opendataloader_pdf.convert(
+    input_path=['INPUT_PATH'],
+    output_dir='OUTPUT_DIR',
+    format='markdown'
+)
+"
+```
+
+Then read the generated markdown file from `OUTPUT_DIR`.
+
+**For complex documents** (borderless tables, scanned PDFs, formulas), if the hybrid backend is available:
+
+```bash
+python3 -c "
+import opendataloader_pdf
+opendataloader_pdf.convert(
+    input_path=['INPUT_PATH'],
+    output_dir='OUTPUT_DIR',
+    format='markdown',
+    hybrid='docling-fast'
+)
+"
+```
+
+**Key options:**
+- `format='markdown,json'` — get both markdown and structured JSON with bounding boxes
+- `use_struct_tree=True` — use native PDF structure tags when available
+- Batch multiple files: pass a list to `input_path`
+
+After extraction, read the output markdown and proceed to Step 3 (Assess Quality).
+
+**URL PDFs:**
+- If Jina Reader MCP tool is available, use it (best for PDF URLs)
+- Otherwise, download the PDF first with `curl -sL URL -o /tmp/pdf_extract.pdf`, then process with OpenDataLoader
+
+### Step 1b: Fallback — Read Tool Extraction
+
+Use when `opendataloader-pdf` is not installed.
 
 **Local file:**
 - Use the Read tool with the file path
@@ -74,7 +139,9 @@ You receive a file path or URL to a PDF:
 - If Jina Reader MCP tool is available, use it (best for PDF URLs)
 - Otherwise, note that URL PDFs need to be downloaded first
 
-### Step 2: Extract Content
+### Step 2: Extract Content (fallback path only)
+
+This step applies only when using the Read tool fallback. OpenDataLoader handles this automatically.
 
 Read the PDF and extract:
 
@@ -98,8 +165,8 @@ Read the PDF and extract:
 ### Step 3: Assess Quality
 
 Check extraction quality:
-- **Scanned/image PDF** — if text extraction yields garbled output or very few words relative to page count, flag as OCR-needed
-- **Multi-column layout** — detect and reorder columns (left-to-right, top-to-bottom)
+- **Scanned/image PDF** — if text extraction yields garbled output or very few words relative to page count, flag as OCR-needed. If using OpenDataLoader, suggest hybrid mode with `--force-ocr`.
+- **Multi-column layout** — detect and reorder columns (left-to-right, top-to-bottom). OpenDataLoader handles this automatically via XY-Cut++.
 - **Mixed content** — note sections with charts/images that couldn't be extracted
 - **Encoding issues** — detect and note character encoding problems
 
@@ -123,6 +190,7 @@ Extract from the PDF:
 - **has_tables** — boolean
 - **has_figures** — boolean (noted but not extractable)
 - **ocr_needed** — boolean (if scanned)
+- **extraction_engine** — "opendataloader-pdf" or "read-tool-fallback"
 - **extraction_quality** — high, medium, low (self-assessed)
 - **language** — detected language
 
@@ -139,6 +207,7 @@ Extract from the PDF:
 - **Words:** [word_count]
 - **Type:** [document_type]
 - **Tables:** [yes/no]
+- **Engine:** [opendataloader-pdf | read-tool-fallback]
 - **Extraction Quality:** [high/medium/low]
 - **Issues:** [none or comma-separated list]
 
@@ -166,18 +235,22 @@ If extraction fails:
 - Detect document type and quality issues
 - Handle multi-page documents in chunks
 - Convert PDF structure to markdown
+- Use OpenDataLoader for high-quality extraction when available
+- Perform OCR on scanned documents (via OpenDataLoader hybrid mode)
 
 **YOU CANNOT:**
 - Create notes, zettels, or knowledge artifacts
 - Extract images or figures (only note their presence)
-- Perform OCR on scanned documents (only flag the need)
 - Access encrypted/password-protected PDFs
 - Modify the source PDF
 
 **YOU MUST:**
+- Check for OpenDataLoader availability before falling back to Read tool
+- Suggest OpenDataLoader installation on first fallback detection
 - Preserve document structure faithfully
 - Report extraction quality honestly
+- Report which extraction engine was used
 - Flag OCR-needed documents
-- Handle large PDFs in chunks (max 20 pages per read)
+- Handle large PDFs in chunks (max 20 pages per read) when using fallback
 - Include all metadata fields
 - Return output in the exact format specified
