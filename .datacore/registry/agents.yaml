@@ -3423,6 +3423,69 @@ module_agents:
     can_be_called_by:
       - ai-task-executor
 
+# ===========================================================================
+# SOCIAL INTELLIGENCE
+# ===========================================================================
+
+  social-intel-analyzer:
+    description: "Core social intelligence agent — analyzes social media content, extracts entities, matches against intel targets, proposes routing plan"
+    version: "1.0.0"
+    source: ".datacore/agents/social-intel-analyzer.md"
+    model: "sonnet"
+    skills:
+      - social-media-analysis
+      - entity-extraction
+      - intel-targeting
+      - routing-planning
+    triggers:
+      tags: []
+      commands:
+        - "/intel"
+    reads:
+      required:
+        - "1-datafund/.datacore/intel-targets.yaml"
+        - ".datacore/settings.yaml"
+      contextual:
+        - "query: existing CRM contacts"
+        - "query: recent landscape entries"
+    writes:
+      - "1-datafund/3-knowledge/zettel/*.md"
+    references:
+      dips: []
+      specs: []
+    spawns:
+      - social-intel-writer
+      - knowledge-extractor
+    can_be_called_by:
+      - gtd-inbox-processor
+
+  social-intel-writer:
+    description: "Executes approved intel routing plans — creates CRM entries, updates outreach lists, populates landscape, generates zettels, creates GTD tasks"
+    version: "1.0.0"
+    source: ".datacore/agents/social-intel-writer.md"
+    model: "sonnet"
+    skills:
+      - crm-writing
+      - zettel-creation
+      - task-creation
+      - landscape-update
+    triggers:
+      tags: []
+      commands: []
+    reads:
+      required: []
+      contextual: []
+    writes:
+      - "*/3-knowledge/reference/*.md"
+      - "*/3-knowledge/zettel/*.md"
+      - "org/inbox.org"
+    references:
+      dips: []
+      specs: []
+    spawns: []
+    can_be_called_by:
+      - social-intel-analyzer
+
 # =============================================================================
 # KNOWLEDGE LOCATIONS
 # Semantic locations for common knowledge retrieval

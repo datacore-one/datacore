@@ -1240,6 +1240,35 @@ module_commands:
     related: []
     trigger: personal finance|check loans|crypto holdings
 
+  intel:
+    name: Social Intelligence
+    description: Analyze social media content (X posts, YouTube videos) and route intelligence to CRM, lists, landscape, and tasks
+    version: 1.0.0
+    status: active
+    source: .datacore/commands/intel.md
+    trigger: /intel|intel|analyze this post|analyze this tweet|social intel
+    invokes:
+    - agent: social-intel-analyzer
+      when: always
+    - agent: social-intel-writer
+      when: after plan approval
+    - agent: knowledge-extractor
+      when: deep content extraction needed
+    reads:
+      required:
+      - 1-datafund/.datacore/intel-targets.yaml
+      contextual:
+      - 1-datafund/3-knowledge/reference/*.md
+    writes:
+    - 1-datafund/3-knowledge/reference/*.md
+    - 1-datafund/3-knowledge/zettel/*.md
+    - org/inbox.org
+    references:
+      dips: []
+    related:
+    - research
+    - search
+
   # --- Research: additional hooks ---
   research-today-hook:
     name: Research Today Hook
