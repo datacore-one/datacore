@@ -94,6 +94,10 @@ Use `datacore.modules.list` for installed modules, `datacore.modules.info <name>
 
 > Server IPs, SSH configs, deployment procedures are in engram memory. Call `datacore.recall` with domain "infrastructure". Do NOT guess IPs — always verify via recall.
 
+**Deployment Resources**:
+- `.datacore/specs/module-deployment-checklist.md` — Universal server deployment & credential parity checklist
+- Module-specific: Check `[module]/SERVER.md` or `[module]/docs/` for detailed setup guides
+
 ## Conventions
 
 ### org-mode
