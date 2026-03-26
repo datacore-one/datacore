@@ -993,34 +993,39 @@ Only show regressions if any exist. Keep this section brief — 2-4 lines max.
 
 **To generate**:
 ```python
+import sys
 from pathlib import Path
-import yaml
-from datetime import datetime, timedelta
+sys.path.insert(0, str(Path.home() / 'Data' / '.datacore' / 'lib'))
+from knowledge_surfacing import KnowledgeSurfacing
 
-knowledge_root = Path.home() / 'Data/0-personal/3-knowledge'
-state_file = Path.home() / 'Data/.datacore/state/knowledge-surfacing.yaml'
+# Initialize knowledge surfacing system
+data_root = Path.home() / 'Data'
+surfacer = KnowledgeSurfacing(data_root)
 
-# Load surfacing state
-state = yaml.safe_load(state_file.read_text()) if state_file.exists() else {}
+# Select daily nugget (optionally pass calendar events for contextual surfacing)
+nugget = surfacer.select_daily_nugget(calendar_events=today_events if 'today_events' in locals() else None)
 
-# Find recent knowledge files (past 30 days)
-recent_cutoff = datetime.now() - timedelta(days=30)
-recent_files = []
-for f in knowledge_root.rglob('*.md'):
-    if f.stat().st_mtime > recent_cutoff.timestamp():
-        recent_files.append(f)
-
-# Select item not recently surfaced
-for f in sorted(recent_files, key=lambda x: state.get(str(x), {}).get('last_surfaced', '1970-01-01')):
-    # Extract excerpt and surface
-    content = f.read_text()
-    # ... generate nugget
-    break
-
-# Update state
-state[str(selected_file)] = {'last_surfaced': datetime.now().isoformat()}
-state_file.write_text(yaml.dump(state))
+if nugget:
+    # Format and include in briefing
+    nugget_section = surfacer.format_nugget(nugget)
+    print(nugget_section)
+else:
+    # Skip section if no knowledge items available
+    pass
 ```
+
+**The `select_daily_nugget()` method:**
+- Scans all `3-knowledge/` directories across all spaces (0-personal, 1-*, 2-*, etc.)
+- Finds files modified within rotation window (default: 30 days)
+- Excludes files surfaced too recently (min_days_between: 1 day)
+- Excludes files surfaced too many times (max_surfaces_per_item: 5)
+- Returns dict with: file_path, title, excerpt, age_days, source_type, wiki_link
+- Automatically updates state tracking in `.datacore/state/knowledge-surfacing.yaml`
+
+**State tracking prevents:**
+- Re-surfacing the same item every day
+- Exhausting items too quickly
+- Losing track of what's been shown
 
 **If no recent knowledge**: Skip this section entirely.
 
@@ -1099,18 +1104,24 @@ For team spaces, write to `[space]/today/YYYY-MM-DD.md`:
     - For each module in `.datacore/modules/`, read `module.yaml`
     - If `hooks.today` exists, include that module's section
     - CRM module adds: Meeting Context, Follow-ups Due, Attention Needed
-16. **Generate Data's observation** - Analyze patterns from past 7 days:
+16. **Generate Knowledge Nugget** (Layer 1 spaced repetition):
+    - Import `KnowledgeSurfacing` from `.datacore/lib/knowledge_surfacing.py`
+    - Call `select_daily_nugget(calendar_events=today_events)` for contextual surfacing
+    - If nugget returned: format with `format_nugget()` and include in briefing
+    - If no nugget available: skip section entirely
+    - State tracking automatically updates `.datacore/state/knowledge-surfacing.yaml`
+17. **Generate Data's observation** - Analyze patterns from past 7 days:
     - Productivity patterns (time of day, day of week)
     - Habit streaks (consecutive completions)
     - Task completion trends
     - Effort estimate accuracy
     - Write in Data's voice (curious, analytical, no contractions)
-17. Generate markdown content
-18. **Write directly to file** (no user confirmation needed):
+18. Generate markdown content
+19. **Write directly to file** (no user confirmation needed):
     - Personal: Insert `## Daily Briefing` at TOP of journal (after frontmatter), pushing existing content down
     - Space: Write to today/YYYY-MM-DD.md
-19. **Open journal for review**: `open <journal_path>` to launch in default editor
-20. Display brief console summary
+20. **Open journal for review**: `open <journal_path>` to launch in default editor
+21. Display brief console summary
 
 ## Journal File Handling
 
