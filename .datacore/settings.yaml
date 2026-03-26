@@ -120,6 +120,19 @@ nightshift:
   # Daily budget limit in USD (0 = unlimited)
   budget_daily_usd: 0
 
+  # Report archival settings
+  archival:
+    # Enable/disable automatic archival
+    enabled: true
+    # Days to keep execution logs in inbox before archiving
+    retention_days: 30
+    # Days to keep summary reports in inbox (longer retention)
+    summary_retention_days: 90
+    # Archive base path within each space
+    archive_base: "4-archive/nightshift"
+    # Log each archival operation
+    log_operations: true
+
   # Server configuration (set in settings.local.yaml)
   # servers:
   #   personal:
