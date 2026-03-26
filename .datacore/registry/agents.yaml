@@ -1655,8 +1655,8 @@ agents:
       - research-orchestrator
 
   ingest-orchestrator:
-    description: "Orchestrates file/folder ingestion with planning, processing, and cleanup"
-    version: "1.0.0"
+    description: "Orchestrates file/folder ingestion with planning, processing, validation, and cleanup. Includes content-review validation to extract actionable markers before archiving."
+    version: "1.1.0"
     source: ".datacore/agents/ingest-orchestrator.md"
     model: "sonnet"
     profile: ingest-pipeline
@@ -1664,13 +1664,18 @@ agents:
       - content-ingestion
       - batch-coordination
       - knowledge-extraction
+      - content-validation
+      - actionable-item-extraction
     triggers:
       tags: []
       commands:
         - "/ingest"
     reads:
       required: []
-      contextual: []
+      contextual:
+        - "content/reports/*.md"
+        - "content/reviews/*.md"
+        - "content/summaries/*.md"
     writes:
       - "*/1-tracks/**"
       - "*/3-knowledge/**"
@@ -1681,6 +1686,7 @@ agents:
       dips:
         - "DIP-0021"
         - "DIP-0015"
+        - "DIP-0009"
       specs: []
     spawns:
       - knowledge-extractor

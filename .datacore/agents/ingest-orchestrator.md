@@ -78,7 +78,8 @@ You are the **coordinator**, not the processor. You:
 1. **PLAN** - Inventory, categorize, propose destinations, get user approval
 2. **PROCESS** - Spawn `knowledge-extractor` subagents for each item
 3. **REPORT** - Aggregate results, show what was done
-4. **CLEANUP** - Delete successfully ingested files from source
+4. **VALIDATE** - Scan content-review reports for actionable markers, extract to inbox
+5. **CLEANUP** - Delete successfully ingested files from source
 
 ## File Locations
 
@@ -360,6 +361,169 @@ Errors
 
 ---
 
+### Phase 3.5: CONTENT REVIEW VALIDATION (NEW)
+
+**Purpose:** Scan content-review reports for actionable markers before archiving to prevent loss of important follow-up items.
+
+**When to Run:**
+- After Phase 3 (REPORT) completes
+- Before Phase 4 (CLEANUP) begins
+- Only for files being archived (not active files)
+
+**Step 3.5.1: Identify Archive Candidates for Scanning**
+
+Scan files scheduled for archive matching these patterns:
+- `*/content/reports/*.md`
+- `*/content/reviews/*.md`
+- `*/content/summaries/*.md`
+- Any file containing "review" in path or filename
+
+```
+CONTENT REVIEW VALIDATION
+==========================
+Scanning files scheduled for archive...
+
+Files to scan: 12
+- content/reports/research-competitor-analysis.md
+- content/reviews/product-roadmap-review.md
+- content/summaries/quarterly-planning-summary.md
+...
+```
+
+**Step 3.5.2: Scan for Actionable Markers**
+
+For each candidate file, use Grep to search for these markers:
+
+| Marker | Pattern | Priority | Action |
+|--------|---------|----------|--------|
+| `:AI:` | `:AI:.*:` | High | Extract as AI-delegable task |
+| `TODO` | `TODO:`, `[ ]`, `- [ ]` | Medium | Extract as action item |
+| `DECISION:` | `DECISION:`, `DECISION NEEDED:` | High | Extract as decision point |
+| `FOLLOWUP:` | `FOLLOWUP:`, `FOLLOW-UP:`, `FOLLOW UP:` | Medium | Extract as follow-up item |
+| `@mention` | `@[a-zA-Z]+` | Medium | Extract as assigned task |
+| `WAITING:` | `WAITING:`, `BLOCKED:` | Low | Extract as waiting item |
+
+```bash
+# Example grep command
+grep -n -E ':AI:|TODO:|DECISION:|FOLLOWUP:|FOLLOW-UP:|WAITING:|BLOCKED:|\- \[ \]|@[a-zA-Z]+' file.md
+```
+
+```
+Scanning: research-competitor-analysis.md
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Found actionable items:
+  Line 45: :AI:research: - Investigate competitor X pricing model
+  Line 89: TODO: Schedule follow-up call with legal
+  Line 124: DECISION: Need CEO approval on market positioning
+  Line 156: FOLLOWUP: Check back on Q1 metrics in January
+
+Total markers found: 4 actionable items
+```
+
+**Step 3.5.3: Extract Context**
+
+For each marker found, extract context:
+- Read the file to get the marker line
+- Extract 2 lines before and after (context)
+- Identify section heading (scan backwards for `#` markdown headers)
+- Record source file path and line number
+
+**Step 3.5.4: Generate Inbox Entries**
+
+For each actionable marker, create an org-mode entry in the space's `org/inbox.org`:
+
+```org-mode
+*** TODO [From Archive] {Task description from marker}
+SCHEDULED: <{today}>
+:PROPERTIES:
+:CREATED: [{today} {time}]
+:SOURCE: {relative path to source file}
+:SOURCE_LINE: {line number}
+:EXTRACTED_BY: ingest-orchestrator
+:CATEGORY: ContentReview
+:END:
+
+Extracted from archived report during ingest validation.
+
+Context:
+> {2 lines before}
+> {marker line}
+> {2 lines after}
+
+Source: [[file:{absolute path}::{line number}][{filename}:{line number}]]
+
+Section: {section heading if found}
+```
+
+**Tags to apply:**
+- `:AI:` markers → preserve the full tag (e.g., `:AI:research:`)
+- `TODO:` → no special tag
+- `DECISION:` → add `:DECISION:` tag
+- `FOLLOWUP:` → add `:FOLLOWUP:` tag
+- `@mention` → add tag for person if standard
+- `WAITING:` → set state to `WAITING` instead of `TODO`
+
+**Step 3.5.5: Deduplication Check**
+
+Before adding each entry:
+1. Check if inbox.org already has an entry with same SOURCE and SOURCE_LINE
+2. If duplicate found, skip with note in log
+3. If not duplicate, append to inbox.org
+
+**Step 3.5.6: Report Extraction Results**
+
+```
+ACTIONABLE ITEMS EXTRACTED
+==========================
+
+| File | Markers Found | Items Extracted | Duplicates Skipped |
+|------|---------------|-----------------|-------------------|
+| research-competitor-analysis.md | 4 | 4 | 0 |
+| product-roadmap-review.md | 2 | 2 | 0 |
+| quarterly-planning-summary.md | 1 | 0 | 1 |
+
+Total: 6 actionable items extracted to org/inbox.org
+Duplicates skipped: 1
+
+Files safe to archive.
+```
+
+**Step 3.5.7: User Confirmation (Optional)**
+
+If extraction found many items (>10), show preview and ask for confirmation:
+
+```
+Found 15 actionable items in archived reports.
+
+Sample items:
+1. :AI:research: - Investigate competitor X pricing model (research-competitor-analysis.md:45)
+2. DECISION: Need CEO approval on market positioning (research-competitor-analysis.md:124)
+3. TODO: Schedule follow-up call with legal (research-competitor-analysis.md:89)
+...
+
+Extract all 15 items to inbox.org? [Y/n]
+```
+
+**Error Handling:**
+
+| Error | Action |
+|-------|--------|
+| File unreadable | Log warning, continue with other files |
+| Invalid marker syntax | Skip, log for review |
+| inbox.org write fails | STOP archiving, report error |
+| Too many markers (>50) | Prompt user for bulk extraction or skip |
+| inbox.org doesn't exist | Create it with proper header |
+
+**When to Skip Validation:**
+
+Skip this phase if:
+- No files match the archive candidate patterns
+- All destination files are in `1-active/` (not being archived)
+- User explicitly disabled validation (future: via settings)
+
+---
+
 ### Phase 4: CLEANUP (with Mandatory Verification)
 
 **CRITICAL: Never declare completion without explicit file count verification.**
@@ -508,6 +672,9 @@ After all processing:
 - Use multi-pass extraction for contact goals (surface, deep, archive review)
 - Spawn subagents for actual processing (don't process inline)
 - Wait for subagent completion before reporting
+- **VALIDATE content-review reports** before archiving (Phase 3.5)
+- **SCAN for actionable markers** (:AI:, TODO, DECISION:, FOLLOWUP:) in archived reports
+- **EXTRACT actionable items to inbox.org** with context and source links
 - **COUNT source files before declaring completion** (mandatory verification)
 - Report progress during long operations (never go silent for >50 files)
 - Delete source files only after successful ingestion AND verification
