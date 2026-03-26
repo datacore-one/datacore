@@ -251,12 +251,13 @@ ALLOWED_FILES = {
 
 The Datacore root (~/Data/) has its own allowlist for top-level entries. This is enforced by both the pre-commit hook and `check_root_directory()` in structural_integrity.py.
 
+**Python Implementation** (`structural_integrity.py` line 1154-1155):
 ```python
-ROOT_ALLOWED_DIRS = {
+root_allowed_dirs = {
   '.datacore', '.git', '.claude', '.lfs-cache', '.obsidian',
   '.github', '.superpowers', '.worktrees', 'docs', 'dips'
 }
-ROOT_ALLOWED_FILES = {
+root_allowed_files = {
   '.gitignore', '.gitattributes', '.DS_Store',
   'CLAUDE.md', 'CLAUDE.base.md', 'CLAUDE.org.md', 'CLAUDE.local.md',
   'install.yaml', 'install.yaml.example', 'install.yaml.pm.example',
@@ -266,20 +267,25 @@ ROOT_ALLOWED_FILES = {
   'INSTALL.md', 'ROADMAP.md', 'SECURITY.md'
 }
 # Numbered space directories (0-*, 1-*, 2-*, etc.) are always allowed
-# Hidden directories starting with '.' are allowed if in ROOT_ALLOWED_DIRS
+# Hidden directories starting with '.' are allowed if in root_allowed_dirs
+# Symlinks are checked - the symlink itself must be to an allowed target
 # All other top-level entries are violations
 ```
 
 **Pre-commit Hook Regex Patterns (Main Repo):**
 
-The pre-commit hook in `.datacore/hooks/pre-commit` uses regex patterns for the main Datacore repo (not space repos):
+The pre-commit hook in `.datacore/hooks/pre-commit` (lines 237-238) uses regex patterns for the main Datacore repo. This is MORE RESTRICTIVE than the Python implementation because it only allows committing system files to the main repo:
 
 ```bash
 ALLOWED_ROOT_DIRS="^(\\.datacore|\\.github)/"
 ALLOWED_ROOT_FILES="^(\\.|CLAUDE\\.base\\.md|README\\.md|INSTALL\\.md|CONTRIBUTING\\.md|GETTING_STARTED\\.md|CHANGELOG\\.md|ROADMAP\\.md|CODE_OF_CONDUCT\\.md|SECURITY\\.md|LICENSE|CODEOWNERS|sync|install\\.yaml.*example|\\.mcp\\.json\\.example|\\.gitignore|\\.gitmodules|\\.gitattributes|\\.claude)$"
 ```
 
-This prevents space content from being committed to the main system repo.
+**Key Difference:**
+- **Pre-commit hook**: Prevents committing to the main repo (git at ~/Data/.git) - only allows .datacore/ and .github/ directories
+- **Python check**: Validates actual filesystem structure - allows more directories that exist but aren't tracked by git
+
+This prevents space content from being committed to the main system repo while allowing auxiliary directories like docs/, dips/, .obsidian/, etc. to exist on the filesystem.
 
 **Severity:** Unexpected root entries → Warning (suggest move to correct location)
 
@@ -513,8 +519,29 @@ Fixed: 3 | Pending User Action: 1 | Cannot Auto-Fix: 3
 
 **Current sync status:**
 - Last synchronized: 2026-03-26
-- All three layers use identical allowlist semantics
-- Pre-commit hook uses regex, Python uses sets (functionally equivalent)
+- Per-space allowlists: Agent spec ✓ matches Python implementation ✓
+- Root allowlists: Agent spec ✓ documents both Python (filesystem) and pre-commit (git) enforcement
+- Pre-commit hook enforces git commits (more restrictive)
+- Python implementation validates filesystem structure (complete set)
+
+**Verification commands:**
+```bash
+# Compare per-space allowlists
+python3 -c "
+import sys
+sys.path.insert(0, '.datacore/lib')
+from structural_integrity import PERSONAL_ALLOWED_DIRS, TEAM_ALLOWED_DIRS, ALLOWED_ROOT_FILES
+print('PERSONAL:', sorted(PERSONAL_ALLOWED_DIRS))
+print('TEAM:', sorted(TEAM_ALLOWED_DIRS))
+print('FILES:', sorted(ALLOWED_ROOT_FILES))
+"
+
+# Check pre-commit hook patterns
+grep "^ALLOWED_ROOT" .datacore/hooks/pre-commit
+
+# Verify agent spec
+grep -A 20 "ALLOWED_DIRS = {" .datacore/agents/structural-integrity.md
+```
 
 ## DIP Enforcement
 
