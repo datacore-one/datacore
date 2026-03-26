@@ -64,9 +64,31 @@ Engrams encode learned behavioral patterns that improve task quality.
 
 ### Integration Points
 
-- **DIP-0015** - Primary reference for structure
+- **DIP-0015** - Primary reference for structure (spec pending)
 - **Git LFS** - Validates large file tracking
 - **Nightshift** - Weekly scheduled audits
+- **Pre-commit hook** - Root-level enforcement for main repo
+
+### Known Limitations
+
+**Space-Internal Focus:**
+This agent checks folder structure WITHIN spaces (per-space allowlists) but does NOT detect unwanted folders/files at the Datacore root directory during normal space checks.
+
+**Root-level detection requires:**
+- Explicit `check_root_directory()` call in Python
+- Or `/structural-integrity` command without space argument
+- Or manual inspection of ~/Data/
+
+**Why this matters:**
+Root-level clutter accumulates when files/folders are created outside spaces. Examples:
+- Ad-hoc folders like `research/`, `content/`, `contacts/` at ~/Data/
+- Temporary files left at root
+- Unintentional git-tracked content
+
+**Mitigation:**
+- Pre-commit hook blocks commits to main repo
+- Weekly nightshift runs `check_all_spaces()` which includes root check
+- `/structural-integrity` without args checks root + all spaces
 
 ---
 
@@ -185,37 +207,79 @@ Check each space against expected structure (DIP-0015):
 
 **Root Folder Allowlists (per space type):**
 
+These allowlists match the enforcement in `structural_integrity.py` and must stay synchronized with the pre-commit hook.
+
 Personal space (0-personal/):
-```
+```python
 ALLOWED_DIRS = {
-  "org", "journal", "0-inbox", "1-active", "2-code",
-  "3-knowledge", "4-outbox", ".obsidian", ".datacore",
-  ".claude", ".git", ".lfs-cache"
+  'org', 'journal', 'notes', 'content',
+  '0-inbox', '1-active', '2-code', '3-knowledge', '4-outbox', '4-archive',
+  '.obsidian', '.datacore', '.claude', '.git', '.lfs-cache',
 }
 ALLOWED_FILES = {
-  ".gitignore", ".gitattributes", "_index.md",
-  "CLAUDE.md", "CLAUDE.base.md", "CLAUDE.org.md",
-  "CLAUDE.template.md", "CLAUDE.local.md",
-  ".DS_Store"
+  '.gitignore', '.gitattributes', '_index.md',
+  'CLAUDE.md', 'CLAUDE.base.md', 'CLAUDE.org.md',
+  'CLAUDE.space.md', 'CLAUDE.template.md', 'CLAUDE.local.md',
+  'SCAFFOLDING.md', 'SCAFFOLDING.base.md', 'SCAFFOLDING.space.md',
+  'README.md', 'LICENSE', 'CODEOWNERS',
+  'knowledge.db',
+  '.DS_Store',
 }
 # Symlinks are ALLOWED (e.g., contacts → 3-knowledge/reference)
 # but the symlink name must not duplicate an allowed dir name
 ```
 
 Team spaces ([N]-[name]/):
-```
+```python
 ALLOWED_DIRS = {
-  "org", "journal", "0-inbox", "1-tracks", "2-projects",
-  "3-knowledge", "4-archive", ".datacore", ".claude", ".git"
+  'org', 'journal', 'today', 'docs', 'contacts',
+  '0-inbox', '1-tracks', '2-projects', '3-knowledge', '4-outbox', '4-archive',
+  '.datacore', '.claude', '.git',
 }
 ALLOWED_FILES = {
-  ".gitignore", ".gitattributes", "_index.md",
-  "CLAUDE.md", "CLAUDE.base.md", "CLAUDE.space.md",
-  "CLAUDE.org.md", "CLAUDE.local.md",
-  "SCAFFOLDING.base.md", "SCAFFOLDING.space.md",
-  ".DS_Store"
+  '.gitignore', '.gitattributes', '_index.md',
+  'CLAUDE.md', 'CLAUDE.base.md', 'CLAUDE.org.md',
+  'CLAUDE.space.md', 'CLAUDE.template.md', 'CLAUDE.local.md',
+  'SCAFFOLDING.md', 'SCAFFOLDING.base.md', 'SCAFFOLDING.space.md',
+  'README.md', 'LICENSE', 'CODEOWNERS',
+  'knowledge.db',
+  '.DS_Store',
 }
 ```
+
+**Datacore Root Directory Allowlist:**
+
+The Datacore root (~/Data/) has its own allowlist for top-level entries. This is enforced by both the pre-commit hook and `check_root_directory()` in structural_integrity.py.
+
+```python
+ROOT_ALLOWED_DIRS = {
+  '.datacore', '.git', '.claude', '.lfs-cache', '.obsidian',
+  '.github', '.superpowers', '.worktrees', 'docs', 'dips'
+}
+ROOT_ALLOWED_FILES = {
+  '.gitignore', '.gitattributes', '.DS_Store',
+  'CLAUDE.md', 'CLAUDE.base.md', 'CLAUDE.org.md', 'CLAUDE.local.md',
+  'install.yaml', 'install.yaml.example', 'install.yaml.pm.example',
+  'datacore.lock.yaml', 'sync',
+  'README.md', 'LICENSE', 'CODEOWNERS', 'CHANGELOG.md',
+  'CONTRIBUTING.md', 'CODE_OF_CONDUCT.md', 'GETTING_STARTED.md',
+  'INSTALL.md', 'ROADMAP.md', 'SECURITY.md'
+}
+# Numbered space directories (0-*, 1-*, 2-*, etc.) are always allowed
+# Hidden directories starting with '.' are allowed if in ROOT_ALLOWED_DIRS
+# All other top-level entries are violations
+```
+
+**Pre-commit Hook Regex Patterns (Main Repo):**
+
+The pre-commit hook in `.datacore/hooks/pre-commit` uses regex patterns for the main Datacore repo (not space repos):
+
+```bash
+ALLOWED_ROOT_DIRS="^(\\.datacore|\\.github)/"
+ALLOWED_ROOT_FILES="^(\\.|CLAUDE\\.base\\.md|README\\.md|INSTALL\\.md|CONTRIBUTING\\.md|GETTING_STARTED\\.md|CHANGELOG\\.md|ROADMAP\\.md|CODE_OF_CONDUCT\\.md|SECURITY\\.md|LICENSE|CODEOWNERS|sync|install\\.yaml.*example|\\.mcp\\.json\\.example|\\.gitignore|\\.gitmodules|\\.gitattributes|\\.claude)$"
+```
+
+This prevents space content from being committed to the main system repo.
 
 **Severity:** Unexpected root entries → Warning (suggest move to correct location)
 
@@ -422,13 +486,43 @@ Fixed: 3 | Pending User Action: 1 | Cannot Auto-Fix: 3
 - Update .gitattributes
 - Fix naming violations (with confirmation)
 
+## Enforcement Layer Synchronization
+
+**Critical:** Three enforcement layers must stay synchronized:
+
+1. **Pre-commit hook** (`.datacore/hooks/pre-commit`)
+   - Prevents commits with unexpected root-level files
+   - Uses regex patterns for main repo
+   - Runs on every commit to system repo
+
+2. **Python implementation** (`structural_integrity.py`)
+   - Validates space structure and root directory
+   - Uses Python sets for allowlists
+   - Runs on-demand and via nightshift
+
+3. **Agent specification** (this file)
+   - Documents expected structure
+   - Guides agent behavior
+   - Reference for developers
+
+**When updating allowlists:**
+- Update all three layers simultaneously
+- Test with both pre-commit and Python checks
+- Document rationale in commit message
+- Consider if change requires DIP (if significant)
+
+**Current sync status:**
+- Last synchronized: 2026-03-26
+- All three layers use identical allowlist semantics
+- Pre-commit hook uses regex, Python uses sets (functionally equivalent)
+
 ## DIP Enforcement
 
 This agent enforces:
 
 | DIP | What It Checks |
 |-----|----------------|
-| **DIP-0015** | Folder hierarchy, companions, LFS tracking |
+| **DIP-0015** | Folder hierarchy, companions, LFS tracking (spec pending) |
 | **DIP-0014** | Tag format compliance |
 | **DIP-0002** | Layer file presence (.base.md, etc.) |
 
