@@ -9,8 +9,10 @@ import os
 import unicodedata
 from pathlib import Path
 
-ORG_FILE = os.path.expanduser("~/Data/0-personal/org/research_learning.org")
-OUTPUT_DIR = os.path.expanduser("~/Data/0-personal/3-knowledge/clippings/readwise")
+# Get absolute paths using DATACORE_ROOT
+DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
+ORG_FILE = DATACORE_ROOT / "0-personal" / "org" / "research_learning.org"
+OUTPUT_DIR = DATACORE_ROOT / "0-personal" / "3-knowledge" / "clippings" / "readwise"
 
 # Project relevance keywords (lowercase)
 RELEVANCE_MAP = {
@@ -103,7 +105,7 @@ def determine_relevance(title, summary, tags):
 
 def parse_readwise_items(filepath):
     """Parse all items from the Readwise Import sections."""
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(str(filepath), "r", encoding="utf-8") as f:
         content = f.read()
 
     items = []
@@ -331,7 +333,7 @@ def create_clipping(item, output_dir):
 
 
 def main():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"Parsing {ORG_FILE}...")
     items = parse_readwise_items(ORG_FILE)

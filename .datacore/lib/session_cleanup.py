@@ -10,19 +10,23 @@ Hebbian write-back is handled by MCP session.end, not this hook.
 import sys, os
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.expanduser("~/Data"), ".datacore", "lib"))
+# Get absolute paths using DATACORE_ROOT
+DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
+sys.path.insert(0, str(DATACORE_ROOT / ".datacore" / "lib"))
 from session_state import read_session, cleanup_session, _debug
 
 TZ = ZoneInfo("Europe/Berlin")
-UNWRAPPED_LOG = os.path.expanduser("~/Data/.datacore/state/unwrapped_sessions.log")
+UNWRAPPED_LOG = DATACORE_ROOT / ".datacore" / "state" / "unwrapped_sessions.log"
 
 
 def _log_unwrapped_session(state):
     """Log session that closed without wrap-up after critical hour."""
     try:
         import yaml
-        with open(os.path.expanduser("~/Data/.datacore/settings.local.yaml")) as f:
+        settings_file = DATACORE_ROOT / ".datacore" / "settings.local.yaml"
+        with open(settings_file) as f:
             settings = yaml.safe_load(f) or {}
         guardian = settings.get("guardian", {})
         if not guardian.get("enabled", False):
@@ -39,7 +43,7 @@ def _log_unwrapped_session(state):
     if hour >= critical_h and not wrapped and not suppressed and not (started_hour >= critical_h or started_hour < 4):
         prompt = state.get("first_prompt", "unknown")[:100]
         ts = datetime.now(TZ).strftime("%Y-%m-%d %H:%M")
-        os.makedirs(os.path.dirname(UNWRAPPED_LOG), exist_ok=True)
+        UNWRAPPED_LOG.parent.mkdir(parents=True, exist_ok=True)
         with open(UNWRAPPED_LOG, "a") as f:
             f.write(f"{ts} | {prompt}\n")
         _debug(f"session_cleanup: logged unwrapped session")

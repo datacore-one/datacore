@@ -7,8 +7,11 @@ Output: JSON on stdout with {additionalContext} or empty (exit 0)
 Latency: ~1ms on hot path (file existence check), ~500ms on first message.
 """
 import json, sys, os
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.expanduser("~/Data"), ".datacore", "lib"))
+# Get absolute paths using DATACORE_ROOT
+DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
+sys.path.insert(0, str(DATACORE_ROOT / ".datacore" / "lib"))
 from session_state import session_exists, create_session, _debug
 from engram_selector import select_engrams, format_injection
 

@@ -10,11 +10,12 @@ Output: JSON on stdout with {additionalContext} or empty (exit 0)
 """
 import json, sys, os, glob
 from datetime import date
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.expanduser("~/Data"), ".datacore", "lib"))
+# Get absolute paths using DATACORE_ROOT
+DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
+sys.path.insert(0, str(DATACORE_ROOT / ".datacore" / "lib"))
 from session_state import cleanup_stale_sessions, _debug
-
-DATACORE_ROOT = os.path.expanduser("~/Data")
 
 def main():
     try:
@@ -34,16 +35,16 @@ def main():
     # Today's journal
     today = date.today().isoformat()
     journal_paths = [
-        os.path.join(DATACORE_ROOT, "0-personal", "notes", "journals", f"{today}.md"),
-        os.path.join(DATACORE_ROOT, "0-personal", "journal", f"{today}.md"),
+        DATACORE_ROOT / "0-personal" / "notes" / "journals" / f"{today}.md",
+        DATACORE_ROOT / "0-personal" / "journal" / f"{today}.md",
     ]
     for jp in journal_paths:
-        if os.path.exists(jp):
+        if jp.exists():
             lines.append(f"Journal today: {jp}")
             break
 
     # Count candidate engrams
-    engram_files = glob.glob(os.path.join(DATACORE_ROOT, ".datacore", "learning", "engrams.yaml"))
+    engram_files = list(DATACORE_ROOT.glob(".datacore/learning/engrams.yaml"))
     candidate_count = 0
     try:
         import yaml

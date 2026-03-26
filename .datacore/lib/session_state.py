@@ -4,11 +4,14 @@
 Per-session state files keyed by CLAUDE_CODE_SESSION_ID to prevent
 cross-session interference (the ralph-loop class of bugs).
 
-State files: ~/Data/.datacore/state/sessions/{session_id}.json
+State files: {DATACORE_ROOT}/.datacore/state/sessions/{session_id}.json
 """
 import json, glob, os, sys, tempfile, time
+from pathlib import Path
 
-STATE_DIR = os.path.expanduser("~/Data/.datacore/state/sessions")
+# Get absolute paths using DATACORE_ROOT
+DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
+STATE_DIR = str(DATACORE_ROOT / ".datacore" / "state" / "sessions")
 DEBUG = os.environ.get("DATACORE_HOOKS_DEBUG") == "1"
 
 

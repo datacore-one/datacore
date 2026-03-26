@@ -12,8 +12,11 @@ Input: JSON on stdin (Claude Code hook input)
 Output: JSON on stdout with {additionalContext} or empty (exit 0)
 """
 import argparse, json, sys, os
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.expanduser("~/Data"), ".datacore", "lib"))
+# Get absolute paths using DATACORE_ROOT
+DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
+sys.path.insert(0, str(DATACORE_ROOT / ".datacore" / "lib"))
 from engram_selector import select_engrams, format_injection
 from session_state import read_session, _debug
 

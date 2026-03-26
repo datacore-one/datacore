@@ -6,14 +6,18 @@ weren't registered in engagement state because the manual workflow
 bypassed the pipeline.
 """
 
+import os
 import sys
-sys.path.insert(0, '.datacore/modules/comms/lib')
-import engagement_state as s
-from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from datetime import datetime, timezone, timedelta
 import uuid
 
-STATE_FILE = Path('.datacore/state/engagement-state.json')
+# Get absolute paths using DATACORE_ROOT
+DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
+sys.path.insert(0, str(DATACORE_ROOT / ".datacore" / "modules" / "comms" / "lib"))
+import engagement_state as s
+
+STATE_FILE = DATACORE_ROOT / ".datacore" / "state" / "engagement-state.json"
 
 # Today's confirmed replies from the Chrome session
 REPLIES = [

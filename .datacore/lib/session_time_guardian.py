@@ -17,12 +17,15 @@ Opt-in via settings.local.yaml:
 import json, sys, os, time
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.expanduser("~/Data"), ".datacore", "lib"))
+# Get absolute paths using DATACORE_ROOT
+DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
+sys.path.insert(0, str(DATACORE_ROOT / ".datacore" / "lib"))
 from session_state import session_exists, read_session, update_session, _debug
 
 TZ = ZoneInfo("Europe/Berlin")
-SETTINGS_FILE = os.path.expanduser("~/Data/.datacore/settings.local.yaml")
+SETTINGS_FILE = DATACORE_ROOT / ".datacore" / "settings.local.yaml"
 
 
 def load_config():
