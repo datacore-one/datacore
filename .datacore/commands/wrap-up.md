@@ -682,6 +682,60 @@ Scanning for dev servers...
 - MCP server processes (datacore-mcp, exa-mcp-server) — these belong to active Claude sessions
 - Non-dev-server node processes (MCP tools, etc.)
 
+### 12.5. Archive Old Nightshift Reports (Automatic)
+
+**Automatically archive nightshift reports older than 30 days.**
+
+Nightshift execution reports accumulate in inbox directories. This step moves reports older than the retention period to structured monthly archives, keeping inboxes clean while preserving historical data.
+
+```
+NIGHTSHIFT ARCHIVAL
+───────────────────
+Archiving old nightshift reports...
+
+[If reports found:]
+  Archived 15 reports from 0-personal/0-inbox → 4-archive/nightshift/2025-12/
+  Archived 8 reports from 1-datafund/0-inbox → 4-archive/nightshift/2025-12/
+  Total: 23 reports archived (>30 days old)
+
+[If none found:]
+  No old reports to archive. ✓
+```
+
+**Archive structure:**
+```
+[space]/4-archive/nightshift/
+├── 2025-11/  # November reports
+├── 2025-12/  # December reports
+└── 2026-01/  # January reports
+```
+
+**Retention policy:**
+- Execution logs: 30 days in inbox
+- Summary reports: 90 days in inbox (optional)
+- Archive location: `[space]/4-archive/nightshift/YYYY-MM/`
+
+**Configuration** (in `.datacore/settings.local.yaml`):
+```yaml
+nightshift:
+  archival:
+    enabled: true
+    retention_days: 30
+    summary_retention_days: 90
+```
+
+**Manual archival:**
+```bash
+# Archive all spaces
+python .datacore/lib/nightshift_archival.py --all-spaces
+
+# Archive specific space
+python .datacore/lib/nightshift_archival.py --space 0-personal
+
+# Preview without moving files
+python .datacore/lib/nightshift_archival.py --dry-run
+```
+
 ### 13. Push Changes to Repos
 
 **Push ALL repos including subprojects within spaces.**
@@ -782,6 +836,7 @@ WRAP-UP CHECKLIST
        [ ] Project (2-projectspace/journal/) - if project work
        [ ] Journal includes "Artifacts Created" section
 [ ] 12. Orphaned dev servers killed
+[ ] 12.5. Old nightshift reports archived (>30 days)
 [ ] 13. All repos pushed:
        [ ] Root & spaces (./sync push)
        [ ] Subproject repos (project-alpha, etc.)

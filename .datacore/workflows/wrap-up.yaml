@@ -49,6 +49,11 @@ phases:
     invoke: datacore.index
     description: Track knowledge artifacts created this session
 
+  - name: archive-nightshift-reports
+    type: script
+    invoke: python .datacore/lib/nightshift_archival.py --all-spaces
+    description: Archive old nightshift reports (>30 days)
+
   - name: sync-push
     type: tool
     invoke: sync push
