@@ -3549,6 +3549,42 @@ knowledge_locations:
       - "search archived content"
       - "archive embeddings and snapshots"
 
+  # ---------------------------------------------------------------------------
+  # gstack Module — Sprint Workflow Integration
+  # ---------------------------------------------------------------------------
+
+  gstack-gate-runner:
+    description: "Runs gstack quality gates (review + QA + security) for nightshift post-build"
+    version: "0.1.0"
+    source: ".datacore/modules/gstack/agents/gstack-gate-runner.md"
+    model: "sonnet"
+    profile: standard
+    skills:
+      - code-review
+      - qa-testing
+      - security-audit
+      - quality-gates
+      - sprint-workflow
+    triggers:
+      tags:
+        - ":AI:gate:"
+      commands:
+        - "/gate"
+    reads:
+      required:
+        - ".datacore/modules/gstack/CLAUDE.base.md"
+      contextual:
+        - "~/.gstack/projects/"
+    writes:
+      - "[space]/journal/"
+    spawns: []
+    can_be_called_by:
+      - nightshift-orchestrator
+      - ai-task-executor
+    references:
+      dips: []
+      specs: []
+
 # =============================================================================
 # VALIDATION RULES
 # Used by agent-registry-auditor
