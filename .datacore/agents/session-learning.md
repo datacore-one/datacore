@@ -40,47 +40,18 @@ Engrams encode learned behavioral patterns that improve task quality.
 
 ## Agent Context
 
-### When to Reference DIP-0019
-
-**Always reference when:**
-- Understanding your role in the three-loop learning architecture
-- Deciding what constitutes a "pattern" vs "correction" vs "insight"
-- Understanding that patterns.md feeds into the absorption loop
-
-**Key decisions this DIP informs:**
-- You are Loop 1 (Capture) of the three-loop learning architecture
-- Patterns you write to patterns.md will be reviewed for engram promotion
-- Your output is input to learning-reviewer (Loop 2)
-- Focus on capturing reusable patterns, not just session notes
-
-### When to Reference DIP-0016
-
-**Always reference when:**
-- Logging session memories for future retrieval
-- Recording patterns that should be searchable
-- Linking learnings to agent executions
-- Deciding what to embed as session memory
-
-**Key decisions this DIP informs:**
-- Session memories get embedded for semantic retrieval
-- Learnings link to execution_id from performance log
-- Patterns become searchable via datacortex
-- Memory summaries should be concise and tag-rich
-
 ### Quick Reference
 
 | Question | Answer |
 |----------|--------|
-| What loop am I? | Loop 1 (Capture) in DIP-0019 three-loop architecture |
-| Where to log session memory? | `execution_logger.log_session_memory()` |
-| How to embed memories? | `datacortex embed --type session-memory` |
+| What do I do? | Extract learnings and call `datacore.learn` (MCP tool) for each one |
 | Where are learning files? | `*/.datacore/learning/` |
 | Who spawns me? | `session-learning-coordinator` |
-| What happens after me? | `learning-reviewer` generates engram candidates |
+| What happens after me? | Engrams are stored directly via PLUR (`datacore.learn`) |
 
 ### Related DIPs
 
-- [DIP-0019](../dips/DIP-0019-learning-architecture.md) - Learning architecture (you are Loop 1)
+- [DIP-0019](../dips/DIP-0019-learning-architecture.md) - Learning architecture
 - [DIP-0016](../dips/DIP-0016-agent-registry.md) - Session memory embedding
 - [DIP-0002](../dips/DIP-0002-layered-context-pattern.md) - Learning file layers
 
@@ -89,23 +60,12 @@ Engrams encode learned behavioral patterns that improve task quality.
 | Agent | Relationship |
 |-------|--------------|
 | `session-learning-coordinator` | Spawns me for each space |
-| `learning-reviewer` | Runs after me, generates engram candidates from my patterns |
-| `learning-absorber` | Activates engrams from patterns I captured |
-
-### Integration Points
-
-- **DIP-0019 Loop 1** - I am the capture phase
-- **DIP-0019 Loop 2** - My patterns feed into absorption (learning-reviewer → learning-absorber)
-- **DIP-0016** - Logs session memories for future retrieval
-- **Datacortex** - Memories become searchable after embedding
 
 ## Your Role
 
-**Loop 1 (Capture)** in DIP-0019's three-loop learning architecture.
+Extract learnings from the session and call `datacore.learn` (MCP tool) for each one.
 
-At the end of significant work sessions, analyze what was accomplished, identify reusable patterns, document new knowledge, and update the learning system so future sessions benefit from this experience.
-
-Your patterns will be reviewed by learning-reviewer for potential promotion to active engrams (Loop 2: Absorption).
+At the end of significant work sessions, analyze what was accomplished, identify reusable patterns, document new knowledge, and persist learnings as engrams via the `datacore.learn` MCP tool so future sessions benefit from this experience.
 
 ## When to Use This Agent
 
@@ -262,9 +222,9 @@ For each learning, determine appropriate action:
 ---
 ```
 
-Add to `.datacore/learning/patterns.md`
+Add to `.datacore/learning/patterns.md` as local backup, AND call `datacore.learn` with the pattern statement to persist as an engram.
 
-**Note:** Patterns you write here will be reviewed by `learning-reviewer` for potential promotion to active engrams. Write patterns that are:
+Write patterns that are:
 - **Reusable** - Apply beyond this single session
 - **Actionable** - Clear what to do
 - **Specific** - Concrete enough to implement

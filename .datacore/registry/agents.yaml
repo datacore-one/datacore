@@ -610,8 +610,8 @@ agents:
   # ---------------------------------------------------------------------------
 
   session-learning:
-    description: "Extracts patterns, corrections, and preferences from work sessions"
-    version: "1.1.0"
+    description: "Extracts learnings from sessions and persists them as engrams via datacore.learn MCP tool"
+    version: "2.0.0"
     source: ".datacore/agents/session-learning.md"
     model: "inherit"
     profile: gtd-processor
@@ -666,118 +666,6 @@ agents:
       specs: []
     spawns:
       - session-learning
-      - learning-reviewer
-    can_be_called_by: []
-
-  learning-reviewer:
-    description: "Generates engram candidates from patterns, detects contradictions, applies decay"
-    version: "1.0.0"
-    source: ".datacore/agents/learning-reviewer.md"
-    model: "inherit"
-    profile: gtd-processor
-    skills:
-      - engram-generation
-      - contradiction-detection
-      - activation-decay
-      - pattern-analysis
-    triggers:
-      tags: []
-      commands:
-        - "/wrap-up"
-    reads:
-      required:
-        - "*/.datacore/learning/patterns.md"
-        - "*/.datacore/learning/engrams.yaml"
-      contextual: []
-    writes:
-      - "*/.datacore/learning/engrams.yaml"
-    references:
-      dips:
-        - "DIP-0019"
-      specs: []
-    spawns: []
-    can_be_called_by:
-      - session-learning-coordinator
-
-  learning-publisher:
-    description: "Promotes high-fitness abstract engrams to exchange-ready format"
-    version: "1.0.0"
-    source: ".datacore/agents/learning-publisher.md"
-    model: "inherit"
-    profile: system-maintenance
-    skills:
-      - engram-exchange
-      - fitness-calculation
-      - skill-promotion
-    triggers:
-      tags: []
-      commands: []
-    reads:
-      required:
-        - "*/.datacore/learning/engrams.yaml"
-      contextual: []
-    writes:
-      - ".datacore/learning/exchange/outbox/*.yaml"
-      - ".claude/skills/*"
-    references:
-      dips:
-        - "DIP-0019"
-      specs: []
-    spawns: []
-    can_be_called_by: []
-
-  learning-absorber:
-    description: "Activates approved engram candidates and archives absorbed patterns (Loop 2 of DIP-0019)"
-    version: "1.0.0"
-    source: ".datacore/agents/learning-absorber.md"
-    model: "inherit"
-    profile: system-maintenance
-    skills:
-      - engram-activation
-      - pattern-archival
-    triggers:
-      tags: []
-      commands: []
-    reads:
-      required:
-        - "*/.datacore/learning/engrams.yaml"
-        - "*/.datacore/learning/patterns.md"
-      contextual: []
-    writes:
-      - "*/.datacore/learning/engrams.yaml"
-      - "*/.datacore/learning/patterns.md"
-    references:
-      dips:
-        - "DIP-0019"
-      specs: []
-    spawns: []
-    can_be_called_by:
-      - learning-reviewer
-
-  learning-subscriber:
-    description: "Imports abstract engrams from exchange network as candidates"
-    version: "1.0.0"
-    source: ".datacore/agents/learning-subscriber.md"
-    model: "inherit"
-    profile: system-maintenance
-    skills:
-      - engram-import
-      - provenance-validation
-      - source-cap-enforcement
-    triggers:
-      tags: []
-      commands: []
-    reads:
-      required:
-        - ".datacore/learning/exchange/inbox/*.yaml"
-      contextual: []
-    writes:
-      - "*/.datacore/learning/engrams.yaml"
-    references:
-      dips:
-        - "DIP-0019"
-      specs: []
-    spawns: []
     can_be_called_by: []
 
   conversation-processor:
