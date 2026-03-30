@@ -118,36 +118,6 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "EnterPlanMode",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event plan_mode",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Skill",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event skill",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event agent",
-            "timeout": 10
-          }
-        ]
-      },
-      {
         "matcher": "Edit|Write",
         "hooks": [
           {
@@ -166,30 +136,6 @@
             "type": "command",
             "command": "bash ~/Data/.datacore/hooks/org-date-fix.sh",
             "timeout": 10
-          }
-        ]
-      }
-    ],
-    "SubagentStart": [
-      {
-        "matcher": ".*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event subagent",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "PostCompact": [
-      {
-        "matcher": "auto|manual",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event rehydrate",
-            "timeout": 15
           }
         ]
       }

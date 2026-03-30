@@ -47,31 +47,10 @@ claude_code:
       priority: 100
       timeout: 10
 
+  # NOTE: active_memory.py hooks (EnterPlanMode, Skill, Agent) removed.
+  # Engram injection now handled by PLUR via datacore MCP tools directly.
+
   PreToolUse:
-    - matcher: EnterPlanMode
-      type: command
-      command: "python3 ~/Data/.datacore/lib/active_memory.py --event plan_mode"
-      purpose: "Full engram injection when entering plan mode"
-      declared_by: DIP-0019
-      priority: 100
-      timeout: 10
-
-    - matcher: Skill
-      type: command
-      command: "python3 ~/Data/.datacore/lib/active_memory.py --event skill"
-      purpose: "Domain engrams based on skill name"
-      declared_by: DIP-0019
-      priority: 200
-      timeout: 10
-
-    - matcher: Agent
-      type: command
-      command: "python3 ~/Data/.datacore/lib/active_memory.py --event agent"
-      purpose: "Agent-scoped engrams for spawned agent"
-      declared_by: DIP-0016
-      priority: 200
-      timeout: 10
-
     - matcher: "Edit|Write"
       type: command
       command: "python3 ~/Data/.datacore/lib/org_guard.py"
@@ -98,23 +77,8 @@ claude_code:
     #   declared_by: DIP-0002
     #   priority: 300
 
-  SubagentStart:
-    - matcher: ".*"
-      type: command
-      command: "python3 ~/Data/.datacore/lib/active_memory.py --event subagent"
-      purpose: "Inject agent-scoped engrams into subagent context"
-      declared_by: DIP-0016
-      priority: 100
-      timeout: 10
-
-  PostCompact:
-    - matcher: "auto|manual"
-      type: command
-      command: "python3 ~/Data/.datacore/lib/active_memory.py --event rehydrate"
-      purpose: "Re-inject critical engrams after context compaction"
-      declared_by: DIP-0019
-      priority: 100
-      timeout: 15
+  # NOTE: SubagentStart and PostCompact active_memory.py hooks removed.
+  # Engram injection now handled by PLUR via datacore MCP tools directly.
 
   SessionEnd:
     - type: command
