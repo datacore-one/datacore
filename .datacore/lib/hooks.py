@@ -295,66 +295,38 @@ class HookExecutor:
 
     def _inject_engrams(self, agent_id: str, task_context: str) -> Optional[str]:
         """
-        Inject relevant engrams into agent context (DIP-0019 Layer 1).
+        Inject relevant engrams into agent context via PLUR CLI.
 
-        Tries runtime selection first (engram_selector), falls back to
-        compiled engram files in .datacore/state/agent-engrams/.
-        Also checks compiled file staleness and warns if outdated.
+        Uses `npx @plur-ai/cli inject` for runtime engram selection.
         """
-        engram_text = ""
-
-        # Try runtime selection (preferred — fresh results)
         try:
-            lib_dir = str(DATACORE_ROOT / ".datacore" / "lib")
-            if lib_dir not in sys.path:
-                sys.path.insert(0, lib_dir)
-            from engram_selector import select_engrams, format_injection
-            scope = f"agent:{agent_id}"
-            engrams = select_engrams(scope=scope, task_desc=task_context, limit=15)
-            engram_text = format_injection(engrams, limit=15)
-            self._log(f"    Injected {len(engrams)} engrams (runtime, scope={scope})")
-        except (ImportError, Exception) as e:
-            self._log(f"    Runtime engram selection failed: {e}")
+            import subprocess
+            result = subprocess.run(
+                ['npx', '@plur-ai/cli', 'inject', task_context, '--json'],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode != 0:
+                self._log(f"    PLUR inject failed: {result.stderr.strip()}")
+                return None
 
-        # Fallback to compiled engrams
-        if not engram_text:
-            compiled_path = DATACORE_ROOT / ".datacore" / "state" / "agent-engrams" / f"{agent_id}.md"
-            if compiled_path.exists():
-                try:
-                    engram_text = compiled_path.read_text()
-                    self._log(f"    Using compiled engrams (fallback)")
-                except OSError:
-                    pass
+            import json as _json
+            data = _json.loads(result.stdout)
+            engrams = data if isinstance(data, list) else data.get('engrams', [])
+            if not engrams:
+                self._log(f"    No engrams matched for agent {agent_id}")
+                return None
 
-        # Check compiled staleness (warn even when runtime succeeded)
-        self._check_compiled_staleness(agent_id)
-
-        if engram_text:
+            lines = []
+            for e in engrams:
+                eid = e.get('id', '?')
+                stmt = e.get('statement', e.get('text', ''))
+                lines.append(f"- [{eid}] {stmt}")
+            engram_text = '\n'.join(lines)
+            self._log(f"    Injected {len(engrams)} engrams via PLUR CLI")
             return f"## Applicable Engrams\n\n{engram_text}"
-        return None
-
-    def _check_compiled_staleness(self, agent_id: str) -> None:
-        """Check if compiled engrams are stale and log warning."""
-        compiled_path = DATACORE_ROOT / ".datacore" / "state" / "agent-engrams" / f"{agent_id}.md"
-        if not compiled_path.exists():
-            self._log(f"    Compiled engrams missing for {agent_id} — run compile_engrams.py")
-            return
-
-        try:
-            content = compiled_path.read_text()
-            match = re.search(r"source-hash: (\w+)", content)
-            if not match:
-                return
-            compiled_hash = match.group(1)
-
-            # Compute current hash
-            from compile_engrams import load_all_engrams, engrams_hash
-            current_hash = engrams_hash(load_all_engrams())
-            if compiled_hash != current_hash:
-                self._log(f"    WARNING: Compiled engrams stale for {agent_id} "
-                          f"(compiled={compiled_hash}, current={current_hash})")
-        except (ImportError, OSError, Exception):
-            pass  # Staleness check is advisory only
+        except Exception as e:
+            self._log(f"    Engram injection failed: {e}")
+            return None
 
     def _load_file(self, path: str) -> Optional[str]:
         """Load file content, handling relative paths."""

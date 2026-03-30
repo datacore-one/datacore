@@ -13,7 +13,7 @@ from pathlib import Path
 DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
 sys.path.insert(0, str(DATACORE_ROOT / ".datacore" / "lib"))
 from session_state import session_exists, create_session, _debug
-from engram_selector import select_engrams, format_injection
+import subprocess
 
 def main():
     # Hot path: session already started → exit immediately (~1ms)
@@ -37,14 +37,34 @@ def main():
         _debug("first message: empty prompt, session created without injection")
         sys.exit(0)
 
-    # Select and inject relevant engrams
-    engrams = select_engrams(scope="global", task_desc=prompt, limit=15)
+    # Select and inject relevant engrams via PLUR CLI
+    try:
+        result = subprocess.run(
+            ['npx', '@plur-ai/cli', 'inject', prompt, '--json'],
+            capture_output=True, text=True, timeout=15
+        )
+        if result.returncode != 0:
+            _debug(f"first message: PLUR inject failed: {result.stderr.strip()}")
+            sys.exit(0)
+
+        import json as _json
+        data = _json.loads(result.stdout)
+        engrams = data if isinstance(data, list) else data.get('engrams', [])
+    except Exception as e:
+        _debug(f"first message: engram injection error: {e}")
+        sys.exit(0)
+
     if not engrams:
         _debug("first message: no matching engrams")
         sys.exit(0)
 
-    context = format_injection(engrams)
-    _debug(f"first message: injected {len(engrams)} engrams")
+    lines = []
+    for e in engrams:
+        eid = e.get('id', '?')
+        stmt = e.get('statement', e.get('text', ''))
+        lines.append(f"- [{eid}] {stmt}")
+    context = '\n'.join(lines)
+    _debug(f"first message: injected {len(engrams)} engrams via PLUR CLI")
 
     # Output additionalContext for Claude
     output = {"additionalContext": f"[Datacore Active Memory — session started]\n\n{context}"}
