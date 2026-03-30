@@ -229,8 +229,8 @@ def _should_escalate(conv: dict, evaluation) -> tuple[bool, str]:
     return False, ""
 
 
-def run(dry_run: bool = False, autonomous: bool = False, no_escalate: bool = False):
-    """Run one cycle of the engagement engine."""
+def run(dry_run: bool = False, autonomous: bool = False, no_escalate: bool = False, account: str = 'fds'):
+    """Run one cycle of the engagement engine. account: 'fds', 'plur', etc."""
     load_env()
     now = datetime.now(timezone.utc)
     if autonomous and no_escalate:
@@ -337,7 +337,7 @@ def run(dry_run: bool = False, autonomous: bool = False, no_escalate: bool = Fal
             print(f"  Chrome poster unavailable ({e}), trying XPoster...")
             try:
                 from x_poster import XPoster
-                _xposter = XPoster(account='fds')
+                _xposter = XPoster(account=account)
                 def poster(tweet_url, text):
                     tid = tweet_url.rstrip('/').split('/')[-1]
                     res = _xposter.reply(text=text, reply_to_id=tid)
