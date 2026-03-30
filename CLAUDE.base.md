@@ -28,7 +28,7 @@ Datacore combines established methodologies with AI augmentation:
 
 - **GTD (Getting Things Done)** — task management. Single capture point (`inbox.org`), clarify/organize into `next_actions.org`, `:AI:` tags delegate to agents overnight. Weekly reviews maintain the system.
 - **Zettelkasten** — knowledge management. Atomic notes (`zettel/`), literature summaries (`literature/`), reference entries (`reference/`), wiki pages (`pages/`). Cross-linked for emergent connections.
-- **Engram memory** — AI learning. Corrections, preferences, and patterns persist across sessions via Datacore MCP. Three loops: capture → absorption → application.
+- **Engram memory** — AI learning. Corrections, preferences, and patterns persist across sessions via Datacore MCP (delegates to PLUR `@plur-ai/core` internally).
 - **Modular architecture** — extensibility. Self-contained modules add domain capabilities. Fork-and-overlay contribution model (DIP-0001).
 
 ## Spaces
@@ -171,5 +171,7 @@ Specific restrictions:
 - **Memory over repetition** — learn once, recall always
 
 ---
+
+<!-- TODO: Migrate engagement/XP tracking from legacy learning system to PLUR -->
 
 **This is CLAUDE.base.md** — the PUBLIC layer. Customize with `CLAUDE.local.md` (gitignored).
