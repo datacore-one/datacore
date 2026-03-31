@@ -4,17 +4,28 @@ This file teaches you how to work effectively in this Datacore installation.
 
 ## Your Memory
 
-You have persistent memory through Datacore MCP — **use it in every session**.
+You have persistent memory through **two MCP servers** — use both in every session.
 
-~330 personal engrams + 780 pack engrams covering infrastructure, past decisions, API quirks, user preferences, project conventions, and more. **This file describes HOW the system works. Your engrams contain WHAT you've learned.**
+**PLUR** (`plur_*` tools) — engram memory engine. Corrections, preferences, and patterns persist across sessions.
+**Datacore** (`datacore.*` tools) — GTD productivity, journal, knowledge files, modules.
 
-1. **Start**: Call `datacore.session.start` with task description — injects relevant engrams
-2. **Recall**: Before answering factual questions, call `datacore.recall` — the answer is in memory, not here
-3. **Learn**: When corrected or discovering something new, call `datacore.learn`
-4. **Feedback**: Rate injected engrams with `datacore.feedback` — trains relevance
-5. **End**: Call `datacore.session.end` with summary before conversation ends
+### Session Workflow
 
-| Domain | When to recall |
+1. **Start**: Call `plur_session_start` with task description — injects relevant engrams
+2. **Recall**: Before answering factual questions, call `plur_recall_hybrid` — the answer is in memory
+3. **Learn**: When corrected or discovering something new, call `plur_learn`
+4. **Feedback**: Rate injected engrams with `plur_feedback` — trains relevance
+5. **End**: Call `plur_session_end` with summary + engram suggestions, then `datacore.capture` for journal
+
+### Datacore Tools (productivity)
+
+- `datacore.capture` — write journal entries and knowledge notes
+- `datacore.search` — find information in journal and knowledge files
+- `datacore.ingest` — import content into knowledge base
+- `datacore.status` — system health
+- `datacore.modules.*` — manage installed modules
+
+| Domain | When to recall (plur_recall_hybrid) |
 |--------|----------------|
 | Infrastructure | Server IPs, SSH configs, deployment targets |
 | Decisions | Past design choices, architecture rationale |
@@ -28,7 +39,7 @@ Datacore combines established methodologies with AI augmentation:
 
 - **GTD (Getting Things Done)** — task management. Single capture point (`inbox.org`), clarify/organize into `next_actions.org`, `:AI:` tags delegate to agents overnight. Weekly reviews maintain the system.
 - **Zettelkasten** — knowledge management. Atomic notes (`zettel/`), literature summaries (`literature/`), reference entries (`reference/`), wiki pages (`pages/`). Cross-linked for emergent connections.
-- **Engram memory** — AI learning. Corrections, preferences, and patterns persist across sessions via Datacore MCP (delegates to PLUR `@plur-ai/core` internally).
+- **Engram memory** — AI learning via PLUR MCP. Corrections, preferences, and patterns persist across sessions. Engrams stored in `~/.plur/engrams.yaml`.
 - **Modular architecture** — extensibility. Self-contained modules add domain capabilities. Fork-and-overlay contribution model (DIP-0001).
 
 ## Spaces
@@ -58,7 +69,7 @@ GitHub Issues are source of truth. `org/` routes AI work only. `1-tracks/` organ
 ### Commands & Agents
 
 100+ agents and 40+ commands registered in `.datacore/registry/`. Don't memorize — look up:
-- `datacore.recall` — search by name or purpose
+- `plur_recall_hybrid` — search by name or purpose
 - `datacore.modules.info <name>` — module capabilities, agents, commands
 - `.datacore/registry/agents.yaml` / `commands.yaml` — full registries
 
@@ -68,7 +79,7 @@ Slash commands (`/today`, `/research`, `/wrap-up`) are multi-phase workflows. Co
 
 Before starting work, check for existing knowledge:
 - `datacore.search` — semantic search across engrams AND knowledge files (uses Datacortex embeddings)
-- `datacore.recall` — targeted engram retrieval by domain or keywords
+- `plur_recall_hybrid` — targeted engram retrieval by domain or keywords
 - `[space]/3-knowledge/` — permanent knowledge: `zettel/` (concepts), `literature/` (sources), `reference/` (people, companies), `pages/` (wiki)
 - `[space]/notes/` or `[space]/journal/` — working notes and daily journals
 
@@ -92,7 +103,7 @@ Use `datacore.modules.list` for installed modules, `datacore.modules.info <name>
 
 <!-- REGISTRY:infrastructure -->
 
-> Server IPs, SSH configs, deployment procedures are in engram memory. Call `datacore.recall` with domain "infrastructure". Do NOT guess IPs — always verify via recall.
+> Server IPs, SSH configs, deployment procedures are in engram memory. Call `plur_recall_hybrid` with domain "infrastructure". Do NOT guess IPs — always verify via recall.
 
 **Deployment Resources**:
 - `.datacore/specs/module-deployment-checklist.md` — Universal server deployment & credential parity checklist
@@ -119,13 +130,13 @@ Use `datacore.modules.list` for installed modules, `datacore.modules.info <name>
 - **Never multi-line Bash.** Chain with `&&`.
 - Use dedicated tools: `Glob` not `find`, `Read` not `cat`, `Grep` not `grep`.
 
-> Detailed conventions are in engram memory (DIP pack, 747 engrams). Call `datacore.recall` for specifics.
+> Detailed conventions are in engram memory (DIP pack, 747 engrams). Call `plur_recall_hybrid` for specifics.
 
 ## System Patterns (DIPs)
 
 Datacore Improvement Proposals define system patterns. 15+ DIPs cover: contribution model, layered context, tag taxonomy, agent registry, knowledge management, GTD workflow, nightshift execution. Located in `.datacore/dips/`.
 
-All DIP content is in engram memory (dips-v1 pack). Call `datacore.recall` for quick lookups.
+All DIP content is in engram memory (dips-v1 pack). Call `plur_recall_hybrid` for quick lookups.
 
 ### Layered Context (DIP-0002)
 
@@ -139,7 +150,7 @@ When recalling facts that will drive actions (server IPs, file paths, API endpoi
 3. If no engram matches, say "No engram found — verifying from filesystem" and check directly
 4. Never interpolate between two engrams to produce a "probably correct" composite
 
-When the user corrects a recalled fact: call `datacore.learn` immediately, then `datacore.feedback` with negative signal on the wrong engram, before continuing the task.
+When the user corrects a recalled fact: call `plur_learn` immediately, then `plur_feedback` with negative signal on the wrong engram, before continuing the task.
 
 ## Guardrails
 
@@ -153,7 +164,7 @@ If a task can be done in <20 lines of shell script, do that first. Propose the m
 
 ### Tool Selection Discipline
 Before invoking any MCP tool, apply the locality test:
-1. Is the answer already in engrams? → `datacore.recall`
+1. Is the answer already in engrams? → `plur_recall_hybrid`
 2. Is the answer in the local filesystem? → Read/Grep/Glob
 3. Is the answer derivable from context already loaded? → Just answer
 4. Only if 1-3 fail → Use external MCP tool
