@@ -74,4 +74,4 @@ Tag tasks with `:AI:subtag:` in `next_actions.org`. Nightshift picks them up ove
 
 ---
 
-*This file covers structure, capability, and stable configuration. Learned behavior, user corrections, and operational preferences live as engrams — call `datacore.recall` for those.*
+*This file covers structure, capability, and stable configuration. Learned behavior, user corrections, and operational preferences live as engrams — call `plur_recall_hybrid` for those.*
