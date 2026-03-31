@@ -311,18 +311,17 @@ class HookExecutor:
 
             import json as _json
             data = _json.loads(result.stdout)
-            engrams = data if isinstance(data, list) else data.get('engrams', [])
-            if not engrams:
+            # PLUR CLI returns {directives, consider, count, tokens_used}
+            context_parts = []
+            for key in ('directives', 'consider'):
+                text = data.get(key, '')
+                if text:
+                    context_parts.append(text)
+            if not context_parts:
                 self._log(f"    No engrams matched for agent {agent_id}")
                 return None
-
-            lines = []
-            for e in engrams:
-                eid = e.get('id', '?')
-                stmt = e.get('statement', e.get('text', ''))
-                lines.append(f"- [{eid}] {stmt}")
-            engram_text = '\n'.join(lines)
-            self._log(f"    Injected {len(engrams)} engrams via PLUR CLI")
+            engram_text = '\n'.join(context_parts)
+            self._log(f"    Injected {data.get('count', 0)} engrams via PLUR CLI")
             return f"## Applicable Engrams\n\n{engram_text}"
         except Exception as e:
             self._log(f"    Engram injection failed: {e}")

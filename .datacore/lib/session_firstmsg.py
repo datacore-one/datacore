@@ -49,22 +49,24 @@ def main():
 
         import json as _json
         data = _json.loads(result.stdout)
-        engrams = data if isinstance(data, list) else data.get('engrams', [])
+
+        # PLUR CLI returns {directives, consider, count, tokens_used}
+        # directives/consider are formatted strings with [ENG-ID] statement per line
+        context_parts = []
+        for key in ('directives', 'consider'):
+            text = data.get(key, '')
+            if text:
+                context_parts.append(text)
+        context = '\n'.join(context_parts)
+        count = data.get('count', 0)
     except Exception as e:
         _debug(f"first message: engram injection error: {e}")
         sys.exit(0)
 
-    if not engrams:
+    if not context:
         _debug("first message: no matching engrams")
         sys.exit(0)
-
-    lines = []
-    for e in engrams:
-        eid = e.get('id', '?')
-        stmt = e.get('statement', e.get('text', ''))
-        lines.append(f"- [{eid}] {stmt}")
-    context = '\n'.join(lines)
-    _debug(f"first message: injected {len(engrams)} engrams via PLUR CLI")
+    _debug(f"first message: injected {count} engrams via PLUR CLI")
 
     # Output additionalContext for Claude
     output = {"additionalContext": f"[Datacore Active Memory — session started]\n\n{context}"}
