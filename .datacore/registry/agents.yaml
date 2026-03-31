@@ -610,7 +610,7 @@ agents:
   # ---------------------------------------------------------------------------
 
   session-learning:
-    description: "Extracts learnings from sessions and persists them as engrams via datacore.learn MCP tool"
+    description: "Extracts learnings from sessions and persists them as engrams via plur_learn MCP tool"
     version: "2.0.0"
     source: ".datacore/agents/session-learning.md"
     model: "inherit"

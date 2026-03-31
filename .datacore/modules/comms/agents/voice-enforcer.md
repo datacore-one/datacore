@@ -375,7 +375,7 @@ VIRAL_PLAYBOOK.md                     # STEPPS reference
 
 Before starting work, load relevant learned patterns:
 
-1. **Preferred**: Call `datacore.inject` MCP tool with `prompt` = your task description and `scope` = `agent:voice-enforcer`
+1. **Preferred**: Call `plur_inject_hybrid` MCP tool with `prompt` = your task description and `scope` = `agent:voice-enforcer`
 2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/voice-enforcer.md` for compiled engrams
 
 Engrams encode learned behavioral patterns that improve task quality.
