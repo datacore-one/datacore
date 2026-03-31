@@ -19,7 +19,7 @@ tools:
 
 Before starting work, load relevant learned patterns:
 
-1. **Preferred**: Call `datacore.inject` MCP tool with `prompt` = your task description and `scope` = `agent:social-intel-writer`
+1. **Preferred**: Call `plur_inject_hybrid` MCP tool with `prompt` = your task description and `scope` = `agent:social-intel-writer`
 2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/social-intel-writer.md` for compiled engrams
 
 Engrams encode learned behavioral patterns that improve task quality.
@@ -47,7 +47,7 @@ Engrams encode learned behavioral patterns that improve task quality.
 | `intel-targets.yaml` | Read for target file format descriptions |
 | CRM reference files | Written by me (create new or update existing) |
 | `next_actions.org` | Append GTD tasks |
-| `datacore.learn` | Call when discovering format quirks worth remembering |
+| `plur_learn` | Call when discovering format quirks worth remembering |
 
 ### Related DIPs
 

@@ -639,7 +639,7 @@ If `learning.auto_defer_learning_review` is `true` in settings, engram candidate
 from yesterday's `/wrap-up` session are surfaced here for review.
 
 **Check for deferred candidates:**
-1. Call `datacore.inject` with prompt "deferred learning review" to load pending engrams
+1. Call `plur_inject_hybrid` with prompt "deferred learning review" to load pending engrams
 2. If candidates exist, present them for approval/dismissal
 3. Call `datacore.resolve` for each candidate with user's choice
 

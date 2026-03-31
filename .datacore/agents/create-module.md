@@ -24,7 +24,7 @@ model: inherit
 
 Before starting work, load relevant learned patterns:
 
-1. **Preferred**: Call `datacore.inject` MCP tool with `prompt` = your task description and `scope` = `agent:create-module`
+1. **Preferred**: Call `plur_inject_hybrid` MCP tool with `prompt` = your task description and `scope` = `agent:create-module`
 2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/create-module.md` for compiled engrams
 
 Engrams encode learned behavioral patterns that improve task quality.
@@ -585,7 +585,7 @@ Required Sections:
 
 Engram Footer:
   [✓/✗] Ends with engram footer note (italic line referencing
-        datacore.recall for learned behavior)
+        plur_recall_hybrid for learned behavior)
 
 Size:
   [✓/✗] Within target range (40-150 lines)

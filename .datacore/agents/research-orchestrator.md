@@ -20,7 +20,7 @@ tools:
 
 Before starting work, load relevant learned patterns:
 
-1. **Preferred**: Call `datacore.inject` MCP tool with `prompt` = your task description and `scope` = `agent:research-orchestrator`
+1. **Preferred**: Call `plur_inject_hybrid` MCP tool with `prompt` = your task description and `scope` = `agent:research-orchestrator`
 2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/research-orchestrator.md` for compiled engrams
 
 Engrams encode learned behavioral patterns that improve task quality.

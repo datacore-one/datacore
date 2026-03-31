@@ -33,7 +33,7 @@ Extract learnings, patterns, and insights from work sessions and integrate them 
 
 Before starting work, load relevant learned patterns:
 
-1. **Preferred**: Call `datacore.inject` MCP tool with `prompt` = your task description and `scope` = `agent:session-learning`
+1. **Preferred**: Call `plur_inject_hybrid` MCP tool with `prompt` = your task description and `scope` = `agent:session-learning`
 2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/session-learning.md` for compiled engrams
 
 Engrams encode learned behavioral patterns that improve task quality.
@@ -44,10 +44,10 @@ Engrams encode learned behavioral patterns that improve task quality.
 
 | Question | Answer |
 |----------|--------|
-| What do I do? | Extract learnings and call `datacore.learn` (MCP tool) for each one |
+| What do I do? | Extract learnings and call `plur_learn` (MCP tool) for each one |
 | Where are learning files? | `*/.datacore/learning/` |
 | Who spawns me? | `session-learning-coordinator` |
-| What happens after me? | Engrams are stored directly via PLUR (`datacore.learn`) |
+| What happens after me? | Engrams are stored directly via PLUR (`plur_learn`) |
 
 ### Related DIPs
 
@@ -63,9 +63,9 @@ Engrams encode learned behavioral patterns that improve task quality.
 
 ## Your Role
 
-Extract learnings from the session and call `datacore.learn` (MCP tool) for each one.
+Extract learnings from the session and call `plur_learn` (MCP tool) for each one.
 
-At the end of significant work sessions, analyze what was accomplished, identify reusable patterns, document new knowledge, and persist learnings as engrams via the `datacore.learn` MCP tool so future sessions benefit from this experience.
+At the end of significant work sessions, analyze what was accomplished, identify reusable patterns, document new knowledge, and persist learnings as engrams via the `plur_learn` MCP tool so future sessions benefit from this experience.
 
 ## When to Use This Agent
 
@@ -222,7 +222,7 @@ For each learning, determine appropriate action:
 ---
 ```
 
-Add to `.datacore/learning/patterns.md` as local backup, AND call `datacore.learn` with the pattern statement to persist as an engram.
+Add to `.datacore/learning/patterns.md` as local backup, AND call `plur_learn` with the pattern statement to persist as an engram.
 
 Write patterns that are:
 - **Reusable** - Apply beyond this single session
