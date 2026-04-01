@@ -1,0 +1,82 @@
+manifest_version: 2
+name: github
+version: 0.1.0
+description: |
+  GitHub collaboration hub — monitor repos, triage issues, surface decisions,
+  let agents respond to straightforward issues overnight.
+
+  Tagline: "Your GitHub pulse, triaged and actionable."
+
+author: datacore-one
+license: MIT
+
+dependencies:
+  - core@>=1.0.0
+  - gtd@>=1.0.0
+
+optional:
+  - nightshift@>=0.2.0
+
+provides:
+  skills:
+    - triage-github
+  agents:
+    - github-responder
+  commands:
+    - triage-github
+
+settings:
+  enabled:
+    description: "Enable GitHub monitoring"
+    default: true
+
+  username:
+    description: "GitHub username to monitor mentions for"
+    default: "plur9"
+
+  scan_hours:
+    description: "How far back to scan for activity (hours)"
+    default: 24
+
+  auto_task_create:
+    description: "Automatically create GTD tasks from actionable items"
+    default: true
+
+  confidence_threshold:
+    description: "Minimum confidence score (0-100) for auto-fix"
+    default: 80
+
+  max_change_lines:
+    description: "Maximum lines changed for simple classification"
+    default: 50
+
+  max_auto_prs:
+    description: "Circuit breaker: max PRs per nightshift run"
+    default: 5
+
+  protected_paths:
+    description: "Glob patterns — never auto-fix files matching these"
+    default:
+      - "*.test.*"
+      - "*.spec.*"
+      - ".github/**"
+      - "**/security*"
+      - "**/auth*"
+
+  exclude_repos:
+    description: "Repos to exclude from scanning (owner/name format)"
+    default: []
+
+  include_repos:
+    description: "Additional repos to include beyond auto-discovered (owner/name format)"
+    default: []
+
+hooks:
+  today: commands/today-hook.md
+
+context:
+  priority: on_match
+
+engrams:
+  namespace: github
+  scopes: [github, triage]
