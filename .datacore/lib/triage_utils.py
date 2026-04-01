@@ -42,8 +42,9 @@ def create_triage_task(
     if not adapter.exists():
         return {"success": False, "error": f"org_workspace_adapter.py not found at {adapter}"}
 
-    # Check if task with this ID already exists (idempotency)
-    task_id = properties.get("ID", "")
+    # Check if task with this TRIAGE_ID already exists (idempotency)
+    # We use TRIAGE_ID instead of ID because org_workspace manages :ID: internally
+    task_id = properties.get("TRIAGE_ID", "")
     if task_id:
         existing = _find_task_by_id(org_file, task_id)
         if existing:
@@ -88,11 +89,11 @@ def create_triage_task(
 
 
 def _find_task_by_id(org_file: Path, task_id: str) -> bool:
-    """Check if a task with given :ID: property exists in the file."""
+    """Check if a task with given :TRIAGE_ID: property exists in the file."""
     if not org_file.exists():
         return False
     content = org_file.read_text()
-    return f":ID:          {task_id}" in content or f":ID: {task_id}" in content
+    return f":TRIAGE_ID:" in content and task_id in content
 
 
 def _set_task_properties(org_file: Path, node_id: str, properties: dict[str, str]):

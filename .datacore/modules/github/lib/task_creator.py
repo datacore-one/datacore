@@ -19,7 +19,7 @@ from pathlib import Path
 
 # Add shared lib to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "lib"))
-from triage_utils import create_triage_task, _find_task_by_id
+from triage_utils import create_triage_task
 
 
 def _space_for_repo(repo_full_name: str, org_to_spaces: dict[str, list[str]]) -> str | None:
@@ -83,7 +83,7 @@ def create_tasks_from_scan(
 
         heading = f"Respond to {repo}#{number} — {title[:60]}"
         properties = {
-            "ID": task_id,
+            "TRIAGE_ID": task_id,
             "GITHUB_URL": url,
             "GITHUB_TYPE": "issue_mention",
             "SPACE": space,
@@ -130,7 +130,7 @@ def create_tasks_from_scan(
 
         heading = f"Review comment on {repo}#{number} — {title[:60]}"
         properties = {
-            "ID": task_id,
+            "TRIAGE_ID": task_id,
             "GITHUB_URL": url,
             "GITHUB_TYPE": "authored_comment",
             "SPACE": space,
