@@ -1,0 +1,92 @@
+# GTD Module — Starter Pack
+# Core Getting Things Done best practices as engrams.
+# Auto-imported when the GTD module is installed.
+engrams:
+  - id: ENG-GTD-0001
+    version: 2
+    status: active
+    type: behavioral
+    scope: global
+    visibility: public
+    statement: "Process inbox to zero daily — every item gets a decision, not just a glance"
+    rationale: "An unprocessed inbox erodes trust in the system; daily zero resets cognitive load"
+    domain: productivity.gtd
+    tags: [gtd, inbox, daily, processing]
+    activation: { retrieval_strength: 0.9, storage_strength: 0.9, frequency: 0, last_accessed: "2026-01-01" }
+    associations:
+      - { target_type: engram, target: ENG-GTD-0003, type: semantic, strength: 0.7 }
+      - { target_type: engram, target: ENG-GTD-0005, type: semantic, strength: 0.6 }
+    dual_coding:
+      example: "End of day: open inbox.org, process each entry — delete, delegate, defer, do, or file. Close with zero items remaining."
+    pack: gtd-starter-v1
+
+  - id: ENG-GTD-0002
+    version: 2
+    status: active
+    type: procedural
+    scope: global
+    visibility: public
+    statement: "Weekly review covers all horizons — ground-level actions through life purpose"
+    rationale: "Skipping horizons during review causes drift between daily actions and long-term goals"
+    domain: productivity.gtd
+    tags: [gtd, weekly-review, horizons, review]
+    activation: { retrieval_strength: 0.9, storage_strength: 0.9, frequency: 0, last_accessed: "2026-01-01" }
+    associations:
+      - { target_type: engram, target: ENG-GTD-0001, type: semantic, strength: 0.5 }
+      - { target_type: engram, target: ENG-GTD-0004, type: semantic, strength: 0.6 }
+    dual_coding:
+      analogy: "Like a pilot's pre-flight checklist — you check instruments (actions), systems (projects), flight plan (goals), and weather (vision). Skipping any layer risks the whole flight."
+    pack: gtd-starter-v1
+
+  - id: ENG-GTD-0003
+    version: 2
+    status: active
+    type: behavioral
+    scope: global
+    visibility: public
+    statement: "Two-minute rule: if it takes less than two minutes, do it now instead of deferring"
+    rationale: "The overhead of tracking a tiny task exceeds the effort of just completing it"
+    domain: productivity.gtd
+    tags: [gtd, two-minute-rule, efficiency, processing]
+    activation: { retrieval_strength: 0.9, storage_strength: 0.9, frequency: 0, last_accessed: "2026-01-01" }
+    associations:
+      - { target_type: engram, target: ENG-GTD-0001, type: semantic, strength: 0.7 }
+    dual_coding:
+      example: "Processing inbox: 'Reply to confirm meeting time' — takes 30 seconds, just do it now. Don't create a task for it."
+    pack: gtd-starter-v1
+
+  - id: ENG-GTD-0004
+    version: 2
+    status: active
+    type: procedural
+    scope: global
+    visibility: public
+    statement: "Next actions must be physical, visible, and specific — not vague intentions"
+    rationale: "Ambiguous tasks ('handle project X') create resistance; concrete actions ('email Jan the draft spec') invite completion"
+    domain: productivity.gtd
+    tags: [gtd, next-actions, clarity, specificity]
+    activation: { retrieval_strength: 0.9, storage_strength: 0.9, frequency: 0, last_accessed: "2026-01-01" }
+    associations:
+      - { target_type: engram, target: ENG-GTD-0002, type: semantic, strength: 0.6 }
+      - { target_type: engram, target: ENG-GTD-0005, type: semantic, strength: 0.5 }
+    dual_coding:
+      example: "Bad: 'Work on website'. Good: 'Draft homepage hero copy (3 variants) in Google Doc'. The second version tells you exactly what to do and where."
+    pack: gtd-starter-v1
+
+  - id: ENG-GTD-0005
+    version: 2
+    status: active
+    type: behavioral
+    scope: global
+    visibility: public
+    statement: "Capture everything to inbox first — never route or organize during capture"
+    rationale: "Mixing capture and organization creates decision fatigue and risks losing the thought entirely"
+    domain: productivity.gtd
+    tags: [gtd, capture, inbox, cognitive-load]
+    activation: { retrieval_strength: 0.9, storage_strength: 0.9, frequency: 0, last_accessed: "2026-01-01" }
+    associations:
+      - { target_type: engram, target: ENG-GTD-0001, type: semantic, strength: 0.6 }
+      - { target_type: engram, target: ENG-GTD-0003, type: semantic, strength: 0.5 }
+    dual_coding:
+      analogy: "Like a mail slot in a door — everything goes through the same slot regardless of priority. Sorting happens inside, later, when you're in processing mode."
+    pack: gtd-starter-v1

@@ -1,0 +1,15 @@
+[Unit]
+Description=FDS Engagement Analyzer — fetch 24hr metrics for posted replies
+After=network.target
+
+[Service]
+Type=oneshot
+User={{USERNAME}}
+WorkingDirectory=/home/{{USERNAME}}/Data
+ExecStart=/home/{{USERNAME}}/Data/.venv/bin/python3 /home/{{USERNAME}}/Data/.datacore/modules/comms/lib/engagement_analyzer.py
+EnvironmentFile=/home/{{USERNAME}}/config/nightshift.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

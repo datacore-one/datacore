@@ -1,0 +1,18 @@
+# Layered context (DIP-0002)
+CLAUDE.md
+*.space.md
+*.org.md
+*.local.md
+*.local.yaml
+
+# State files (managed by runtime)
+state/
+
+# Editor files
+.DS_Store
+*.swp
+*~
+
+# Python
+__pycache__/
+*.pyc

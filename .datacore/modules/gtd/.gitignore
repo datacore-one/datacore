@@ -1,0 +1,5 @@
+CLAUDE.md
+CLAUDE.local.md
+tools/*.js
+tools/*.js.map
+node_modules/

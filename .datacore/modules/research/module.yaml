@@ -1,0 +1,92 @@
+manifest_version: 2
+name: research
+version: 0.2.0
+description: |
+  Automated research processing system with NotebookLM podcast generation,
+  industry landscape building, and knowledge base integration.
+
+  Tagline: "Curate links. Wake up to podcasts and insights."
+
+author: datacore-one
+repository: https://github.com/datacore-one/module-research
+license: MIT
+builtin: true
+
+provides:
+  tools:
+    - name: queue
+      description: "List pending research links and their processing status"
+      handler: tools/index.js
+    - name: sources
+      description: "Manage and query research source registry"
+      handler: tools/index.js
+    - name: transcribe_youtube
+      description: "Extract transcript and metadata from YouTube video or playlist URL"
+      handler: tools/index.js
+  skills:
+    - research-status
+    - create-podcast
+  agents:
+    - research-orchestrator
+    - podcast-creator
+  commands:
+    - research-daily
+
+dependencies:
+  - core@>=1.0.0
+  - nightshift@>=0.1.0
+
+optional:
+  - crm@>=0.2.0
+
+settings:
+  enabled:
+    description: "Enable research module"
+    default: true
+  nlm_path:
+    description: "Path to nlm CLI binary (null = detect from PATH)"
+    default: null
+  podcast_output_dir:
+    description: "Directory for generated podcasts"
+    default: "0-personal/content/podcasts"
+  reports_output_dir:
+    description: "Directory for research reports"
+    default: "0-personal/content/reports"
+  literature_output_dir:
+    description: "Directory for literature notes"
+    default: "0-personal/notes/2-knowledge/literature"
+  zettel_output_dir:
+    description: "Directory for atomic zettels"
+    default: "0-personal/notes/2-knowledge/zettel"
+  industry_landscape_file:
+    description: "Path to industry landscape YAML"
+    default: "0-personal/notes/2-knowledge/industry-landscape.yaml"
+  research_org_file:
+    description: "Path to research_learning.org"
+    default: "0-personal/org/research_learning.org"
+  podcast_defaults:
+    description: "Default podcast settings"
+    default:
+      duration_target: "30min"
+      max_sources: 10
+      min_sources: 3
+  readwise:
+    description: "Readwise Reader sync settings"
+    default:
+      enabled: true
+      api_token_env: ".datacore/env/readwise.env"
+      locations: ["archive"]
+      categories: ["article", "pdf", "epub"]
+
+hooks:
+  today: "commands/today-hook.md"
+  nightshift_queue: "commands/nightshift-hook.md"
+
+# DIP-0022 context
+context:
+  priority: on_match
+
+# Engrams
+engrams:
+  namespace: research
+  scopes: [research, podcasts, readwise]

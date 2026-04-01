@@ -1,0 +1,15 @@
+[Unit]
+Description=FDS Engagement Pipeline Watchdog
+After=network.target
+
+[Service]
+Type=oneshot
+User={{USERNAME}}
+WorkingDirectory=/home/{{USERNAME}}/Data
+ExecStart=/home/{{USERNAME}}/Data/.venv/bin/python3 /home/{{USERNAME}}/Data/.datacore/modules/comms/lib/engagement_watchdog.py
+EnvironmentFile=/home/{{USERNAME}}/config/nightshift.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

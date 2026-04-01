@@ -1,0 +1,10 @@
+[Unit]
+Description=FDS X weekly deep analysis — every Sunday at 09:00 UTC
+Requires=x-weekly-analysis.service
+
+[Timer]
+OnCalendar=Sun *-*-* 09:00:00 UTC
+Persistent=false
+
+[Install]
+WantedBy=timers.target

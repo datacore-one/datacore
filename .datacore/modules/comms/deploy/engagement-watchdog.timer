@@ -1,0 +1,13 @@
+[Unit]
+Description=FDS Engagement Pipeline Watchdog — every 30 minutes, 07:00-21:00 UTC
+Requires=engagement-watchdog.service
+
+[Timer]
+# Run every 30 minutes
+OnCalendar=*-*-* 07,08,09,10,11,12,13,14,15,16,17,18,19,20,21:00,30:00
+# Do NOT use Persistent=true — would send false alerts after server reboot
+# (all timestamps would look stale after a fresh boot)
+Persistent=false
+
+[Install]
+WantedBy=timers.target

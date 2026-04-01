@@ -1,0 +1,11 @@
+[Unit]
+Description=FDS Engagement Analyzer — every hour at :30, 07:00-22:00 UTC
+Requires=engagement-analyzer.service
+
+[Timer]
+# Run at :30 past every hour between 07:00 and 22:00 UTC
+OnCalendar=*-*-* 07,08,09,10,11,12,13,14,15,16,17,18,19,20,21,22:30:00
+Persistent=false
+
+[Install]
+WantedBy=timers.target

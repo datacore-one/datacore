@@ -1,0 +1,67 @@
+manifest_version: 2
+name: personal-finance
+version: 0.1.0
+description: Personal cryptocurrency finance tracking - holdings, transactions, and loan reconciliation
+author: datacore
+repository: https://github.com/datacore-one/module-personal-finance
+license: MIT
+
+# Dependencies
+dependencies:
+  - core@>=1.0.0
+
+# Optional enhancements
+optional:
+  - trading    # Reuses Gate.io integration
+
+# Configurable settings
+settings:
+  # Data sources
+  kraken_enabled: true
+  gateio_enabled: true
+  etherscan_enabled: true
+
+  # Loan tracking
+  loan_threshold_usd: 100          # Minimum USD value to flag as potential loan
+  organization_counterparty: "Organization"
+
+  # Sync settings
+  sync_lookback_days: 365          # How far back to fetch on initial sync
+
+  # UX options (power users)
+  auto_sync: false                 # Skip sync confirmation prompts
+  default_view: null               # Default view when no intent (null = show menu)
+
+# What this module provides
+provides:
+  commands:
+    - personal-finance             # Conversational command with intent detection
+
+  agents:
+    - loan-tracker                 # Loan identification and tracking
+
+  templates:
+    - finance/                     # Finance folder structure
+
+# Use cases
+use_cases:
+  - Track crypto holdings across exchanges and wallets
+  - Reconcile loans given to organizations
+  - Generate transaction reports for accounting
+  - Monitor total portfolio value
+
+# Installation hooks
+hooks:
+  post_install: |
+    echo "Personal Finance module installed."
+    echo "Configure API keys in .datacore/env/.env"
+    echo "Run /personal-finance to start."
+
+# DIP-0022 context
+context:
+  priority: on_match
+
+# Engrams
+engrams:
+  namespace: personal-finance
+  scopes: [personal-finance]

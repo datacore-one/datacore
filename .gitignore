@@ -150,13 +150,8 @@ CLAUDE.md
 .datacore/mcp-servers.local.yaml
 .mcp.json
 
-# Modules are cloned during install (only in-tree modules tracked)
-.datacore/modules/
-!.datacore/modules/comms/
-!.datacore/modules/gtd/
-!.datacore/modules/outbox/
-!.datacore/modules/research/
-!.datacore/modules/github/
+# Modules tracked in git. Each module's own .gitignore handles private data.
+# (Previously only 5 modules were tracked — now all are.)
 0-personal/.datacore/modules/
 0-personal/.datacore/
 0-personal/.claude
