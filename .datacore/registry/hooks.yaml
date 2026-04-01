@@ -40,12 +40,9 @@ claude_code:
       timeout: 30
 
   UserPromptSubmit:
-    - type: command
-      command: "python3 ~/Data/.datacore/lib/session_firstmsg.py"
-      purpose: "First message: inject engrams. Subsequent: skip (~1ms)."
-      declared_by: DIP-0019
-      priority: 100
-      timeout: 10
+    # session_firstmsg.py removed — PLUR MCP now handles injection via
+    # plur_session_start. Hook caused double injection + 2-3s Node.js latency.
+    # Script kept at .datacore/lib/session_firstmsg.py for nightshift use.
 
   # NOTE: active_memory.py hooks (EnterPlanMode, Skill, Agent) removed.
   # Engram injection now handled by PLUR via datacore MCP tools directly.

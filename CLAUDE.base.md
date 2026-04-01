@@ -20,10 +20,12 @@ You have persistent memory through **two MCP servers** — use both in every ses
 ### Datacore Tools (productivity)
 
 - `datacore.capture` — write journal entries and knowledge notes
-- `datacore.search` — find information in journal and knowledge files
+- `datacore.search` — search journal and knowledge files (NOT engrams — use `plur_recall_hybrid` for engram memory)
 - `datacore.ingest` — import content into knowledge base
 - `datacore.status` — system health
 - `datacore.modules.*` — manage installed modules
+
+> **Recall split**: `plur_recall_hybrid` searches engram memory. `datacore.search` searches journal/knowledge files. For comprehensive results, call both.
 
 | Domain | When to recall (plur_recall_hybrid) |
 |--------|----------------|
@@ -78,7 +80,7 @@ Slash commands (`/today`, `/research`, `/wrap-up`) are multi-phase workflows. Co
 ### Knowledge Base
 
 Before starting work, check for existing knowledge:
-- `datacore.search` — semantic search across engrams AND knowledge files (uses Datacortex embeddings)
+- `datacore.search` — semantic search across journal and knowledge files (uses Datacortex embeddings)
 - `plur_recall_hybrid` — targeted engram retrieval by domain or keywords
 - `[space]/3-knowledge/` — permanent knowledge: `zettel/` (concepts), `literature/` (sources), `reference/` (people, companies), `pages/` (wiki)
 - `[space]/notes/` or `[space]/journal/` — working notes and daily journals
