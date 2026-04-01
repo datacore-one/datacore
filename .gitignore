@@ -156,6 +156,7 @@ CLAUDE.md
 !.datacore/modules/gtd/
 !.datacore/modules/outbox/
 !.datacore/modules/research/
+!.datacore/modules/github/
 0-personal/.datacore/modules/
 0-personal/.datacore/
 0-personal/.claude
