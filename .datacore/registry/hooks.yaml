@@ -40,14 +40,45 @@ claude_code:
       timeout: 30
 
   UserPromptSubmit:
-    # session_firstmsg.py removed — PLUR MCP now handles injection via
-    # plur_session_start. Hook caused double injection + 2-3s Node.js latency.
-    # Script kept at .datacore/lib/session_firstmsg.py for nightshift use.
+    - type: command
+      command: "python3 ~/Data/.datacore/lib/session_firstmsg.py"
+      purpose: "First message: inject engrams via PLUR CLI. Subsequent: skip (~1ms)."
+      declared_by: DIP-0019
+      priority: 100
+      timeout: 10
 
-  # NOTE: active_memory.py hooks (EnterPlanMode, Skill, Agent) removed.
-  # Engram injection now handled by PLUR via datacore MCP tools directly.
+    - type: command
+      command: "python3 ~/Data/.datacore/lib/session_time_guardian.py"
+      purpose: "Track session duration and prompt time awareness"
+      declared_by: DIP-0019
+      priority: 200
+      timeout: 5
 
   PreToolUse:
+    - matcher: EnterPlanMode
+      type: command
+      command: "python3 ~/Data/.datacore/lib/active_memory.py --event plan_mode"
+      purpose: "Full engram injection when entering plan mode"
+      declared_by: DIP-0019
+      priority: 100
+      timeout: 10
+
+    - matcher: Skill
+      type: command
+      command: "python3 ~/Data/.datacore/lib/active_memory.py --event skill"
+      purpose: "Domain engrams based on skill name"
+      declared_by: DIP-0019
+      priority: 200
+      timeout: 10
+
+    - matcher: Agent
+      type: command
+      command: "python3 ~/Data/.datacore/lib/active_memory.py --event agent"
+      purpose: "Agent-scoped engrams for spawned agent"
+      declared_by: DIP-0016
+      priority: 200
+      timeout: 10
+
     - matcher: "Edit|Write"
       type: command
       command: "python3 ~/Data/.datacore/lib/org_guard.py"
@@ -74,8 +105,23 @@ claude_code:
     #   declared_by: DIP-0002
     #   priority: 300
 
-  # NOTE: SubagentStart and PostCompact active_memory.py hooks removed.
-  # Engram injection now handled by PLUR via datacore MCP tools directly.
+  SubagentStart:
+    - matcher: ".*"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/active_memory.py --event subagent"
+      purpose: "Inject agent-scoped engrams into subagent context"
+      declared_by: DIP-0016
+      priority: 100
+      timeout: 10
+
+  PostCompact:
+    - matcher: "auto|manual"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/active_memory.py --event rehydrate"
+      purpose: "Re-inject critical engrams after context compaction"
+      declared_by: DIP-0019
+      priority: 100
+      timeout: 15
 
   SessionEnd:
     - type: command

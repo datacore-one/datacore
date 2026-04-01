@@ -105,6 +105,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/session_firstmsg.py",
+            "timeout": 10
+          },
+          {
+            "type": "command",
             "command": "python3 ~/Data/.datacore/lib/session_time_guardian.py",
             "timeout": 5
           }
@@ -113,12 +118,66 @@
     ],
     "PreToolUse": [
       {
+        "matcher": "EnterPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event plan_mode",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event skill",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event agent",
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
             "command": "python3 ~/Data/.datacore/lib/org_guard.py",
             "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event subagent",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "auto|manual",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event rehydrate",
+            "timeout": 15
           }
         ]
       }
