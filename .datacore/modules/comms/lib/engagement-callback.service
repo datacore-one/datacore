@@ -1,0 +1,23 @@
+[Unit]
+Description=Engagement Telegram Callback Handler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gregor
+WorkingDirectory=/home/gregor/Data
+ExecStart=/usr/bin/python3 -u /home/gregor/Data/.datacore/modules/comms/lib/engagement_callback.py --daemon
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/home/gregor/config/nightshift.env
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+# Safety limits
+MemoryMax=256M
+CPUQuota=10%
+
+[Install]
+WantedBy=multi-user.target

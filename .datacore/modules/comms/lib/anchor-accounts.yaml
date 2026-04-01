@@ -1,0 +1,82 @@
+# .datacore/modules/comms/config/anchor-accounts.yaml
+# Seed accounts for follow list building.
+#
+# STRATEGY: Use INDIVIDUAL INFLUENCERS, not organizations.
+# Orgs follow politicians, celebrities, media = noise.
+# Influencers follow people they find interesting = signal.
+# Reply targets = highest quality signal (active engagement).
+#
+# Overlap across anchors = strongest quality indicator.
+# An account followed by 3+ privacy influencers is almost certainly relevant.
+
+clusters:
+  privacy_security:
+    description: "Privacy researchers, infosec practitioners, digital rights voices"
+    anchors:
+      # VERIFIED handles from feed browsing 2026-03-04
+      - username: jsrailton
+        note: "Citizen Lab senior researcher — surveillance & spyware"
+      - username: lukOlejnik
+        note: "Privacy researcher, author, former W3C"
+      - username: evacide
+        note: "Eva Galperin — EFF Director of Cybersecurity"
+      - username: matthew_d_green
+        note: "Johns Hopkins cryptographer"
+      - username: kennwhite
+        note: "Security researcher, Open Crypto Audit"
+      - username: thegrugq
+        note: "Infosec legend, OPSEC culture"
+      - username: SwiftOnSecurity
+        note: "Security + sysadmin culture, 300K+ followers"
+      - username: runasand
+        note: "Runa Sandvik — press freedom, security"
+
+  web3_decentralized:
+    description: "Web3 builders focused on privacy, sovereignty, storage"
+    anchors:
+      # VERIFIED handles
+      - username: nicksdjohnson
+        note: "Nick Johnson — ENS lead, Ethereum naming"
+      - username: punk6529
+        note: "NFT/web3 thought leader, open metaverse"
+      - username: CryptoHayes
+        note: "Arthur Hayes — crypto macro, large following"
+      - username: marilyn100x
+        note: "ETH engineering advocate (from today's feed)"
+      - username: DBCrypto
+        note: "Ethereum ecosystem analysis (from today's feed)"
+      - username: ethswarm
+        note: "Swarm network — our base layer (org exception: small, curated)"
+
+  developer_oss:
+    description: "Privacy-aware devs, P2P builders, open source security"
+    anchors:
+      # VERIFIED handles
+      - username: FiloSottile
+        note: "Go security, age encryption author"
+      - username: alexstamos
+        note: "Alex Stamos — Stanford, ex-Facebook CISO"
+      - username: ErrataRob
+        note: "Robert Graham — security researcher"
+
+  journalist_activist:
+    description: "Privacy journalists, surveillance reporters"
+    anchors:
+      # VERIFIED handles
+      - username: lorenzofb
+        note: "Lorenzo Franceschi-Bicchierai — TechCrunch security"
+      - username: josephfcox
+        note: "Joseph Cox — 404 Media, surveillance"
+      - username: kimzetter
+        note: "Kim Zetter — Countdown to Zero Day author"
+      - username: a_greenberg
+        note: "Andy Greenberg — Wired, Sandworm author"
+
+# NOTE: Add more anchors as we discover them through feed browsing.
+# Each anchor should be an INDIVIDUAL, not an organization.
+# Verify handle exists at https://x.com/{username} before adding.
+#
+# The builder now does TWO things per anchor:
+# 1. Scrape following list (who they chose to follow)
+# 2. Scrape recent replies (who they actively engage with)
+# Both feed into the overlap scoring system.

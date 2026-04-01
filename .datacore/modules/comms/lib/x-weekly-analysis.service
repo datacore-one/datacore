@@ -1,0 +1,16 @@
+[Unit]
+Description=FDS X weekly deep analysis — generate HTML report + Telegram summary
+After=network.target
+
+[Service]
+Type=oneshot
+User=gregor
+WorkingDirectory=/home/gregor/Data
+ExecStart=/home/gregor/Data/.venv/bin/python3 /home/gregor/Data/.datacore/modules/comms/lib/x_weekly_analysis.py --days 7 --no-open --telegram
+EnvironmentFile=/home/gregor/config/nightshift.env
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
