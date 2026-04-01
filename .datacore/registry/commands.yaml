@@ -856,6 +856,26 @@ module_commands:
       when: always
     status: demoted
     trigger: check email|classify emails
+  triage-email:
+    name: Email Triage
+    description: Automated daily email triage — auto-archive noise, forward invoices, create tasks
+    version: 1.0.0
+    source: .datacore/modules/mail/commands/triage-email.md
+    module: mail
+    invokes:
+    - agent: mail-responder
+      when: creates :AI:mail: tasks for nightshift
+    reads:
+      required:
+      - .datacore/modules/mail/rules.base.yaml
+      contextual:
+      - .datacore/modules/mail/data/scan_cache.json
+      - '{space}/mail.yaml'
+    writes:
+    - '{space}/org/next_actions.org'
+    - .datacore/modules/mail/data/scan_cache.json
+    status: active
+    trigger: triage email|email triage|process email
   news:
     name: News Digest
     description: Generate personalized news digest

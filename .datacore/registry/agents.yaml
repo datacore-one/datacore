@@ -2628,6 +2628,32 @@ module_agents:
     spawns: []
     can_be_called_by: []
 
+  mail-responder:
+    description: "Responds to emails tagged :AI:mail: — drafts replies, creates CRM notes, escalates complex items"
+    version: "0.1.0"
+    source: ".datacore/modules/mail/agents/mail-responder.md"
+    module: "mail"
+    skills:
+      - email-triage
+      - draft-reply
+      - crm-creation
+    triggers:
+      tags: [":AI:mail:"]
+      commands: ["/triage-email"]
+    reads:
+      required:
+        - "{space}/org/next_actions.org"
+      contextual:
+        - ".datacore/modules/mail/rules.base.yaml"
+        - "{space}/mail.yaml"
+    writes:
+      - "{space}/org/next_actions.org"
+      - "{space}/3-knowledge/pages/General Contact - *.md"
+    spawns: []
+    can_be_called_by:
+      - ai-task-executor
+      - nightshift-orchestrator
+
   # ===========================================================================
   # OUTBOX MODULE
   # ===========================================================================
