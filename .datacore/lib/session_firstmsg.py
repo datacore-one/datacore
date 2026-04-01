@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook — first message triggers engram injection, subsequent skip.
+"""UserPromptSubmit hook — first message triggers engram injection, subsequent nudge.
+
+First message: inject engrams via PLUR CLI (~500ms).
+Subsequent messages: check if periodic PLUR reminder is due (~1ms).
 
 Input: JSON on stdin with {prompt, session_id, ...}
 Output: JSON on stdout with {additionalContext} or empty (exit 0)
-
-Latency: ~1ms on hot path (file existence check), ~500ms on first message.
 """
-import json, sys, os
+import json, sys, os, time
 from pathlib import Path
 
 # Get absolute paths using DATACORE_ROOT
@@ -15,9 +16,32 @@ sys.path.insert(0, str(DATACORE_ROOT / ".datacore" / "lib"))
 from session_state import session_exists, create_session, _debug
 import subprocess
 
+REMINDER_INTERVAL = 600  # 10 minutes
+
+def _reminder_path():
+    import tempfile
+    ppid = os.getppid()
+    d = Path(tempfile.gettempdir()) / "plur-sessions"
+    d.mkdir(exist_ok=True)
+    return d / f"{ppid}.reminded"
+
+def _is_reminder_due():
+    p = _reminder_path()
+    if not p.exists():
+        return True
+    return time.time() - p.stat().st_mtime > REMINDER_INTERVAL
+
+def _touch_reminder():
+    _reminder_path().write_text(str(time.time()))
+
 def main():
-    # Hot path: session already started → exit immediately (~1ms)
+    # Hot path: session already started
     if session_exists():
+        # Check if periodic reminder is due (~1ms)
+        if _is_reminder_due():
+            _touch_reminder()
+            output = {"additionalContext": "[PLUR Memory Reminder] If the user corrected you, stated a preference, or you discovered a pattern — call plur_learn now. Call plur_session_end with engram_suggestions before the conversation ends."}
+            json.dump(output, sys.stdout)
         sys.exit(0)
 
     # Cold path: first message → bootstrap session
