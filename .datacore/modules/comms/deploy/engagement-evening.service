@@ -1,0 +1,15 @@
+[Unit]
+Description=FDS Evening Engagement Summary — daily summary at 19:00 UTC
+After=network.target
+
+[Service]
+Type=oneshot
+User={{USERNAME}}
+WorkingDirectory=/home/{{USERNAME}}/Data
+ExecStart=/home/{{USERNAME}}/Data/.venv/bin/python3 /home/{{USERNAME}}/Data/.datacore/modules/comms/lib/morning_digest.py --evening
+EnvironmentFile=/home/{{USERNAME}}/config/nightshift.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

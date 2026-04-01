@@ -1,0 +1,10 @@
+[Unit]
+Description=FDS Morning Engagement Digest — daily at 07:30 UTC
+Requires=engagement-digest.service
+
+[Timer]
+OnCalendar=*-*-* 07:30:00
+Persistent=false
+
+[Install]
+WantedBy=timers.target

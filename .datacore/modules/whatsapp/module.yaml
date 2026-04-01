@@ -1,0 +1,105 @@
+manifest_version: 2
+name: whatsapp
+version: 0.1.0
+description: |
+  WhatsApp integration for Datacore.
+  Import contacts and track interactions via CRM adapter.
+  Bidirectional messaging gateway for commands and notifications.
+
+dip: DIP-0020
+
+provides:
+  commands:
+    - whatsapp
+  agents:
+    - whatsapp-import
+    - whatsapp-sync
+  crm_adapters:
+    - whatsapp
+
+dependencies:
+  modules:
+    - crm  # For CRMAdapter interface
+  python:
+    - aiohttp>=3.8.0
+    - pyyaml>=6.0
+
+settings:
+  waha_url:
+    description: "WAHA gateway URL"
+    type: string
+    default: "http://localhost:3000"
+
+  session_name:
+    description: "WAHA session identifier"
+    type: string
+    default: "default"
+
+  allowed_numbers:
+    description: "Phone numbers allowed to send commands"
+    type: list
+    default: []
+
+  owner_number:
+    description: "Phone number for outgoing notifications"
+    type: string
+    default: ""
+
+  auto_capture:
+    description: "Capture unrecognized messages to inbox"
+    type: boolean
+    default: true
+
+  morning_briefing:
+    description: "Send morning briefing via WhatsApp"
+    type: boolean
+    default: false
+
+  morning_briefing_time:
+    description: "Time to send morning briefing"
+    type: string
+    default: "07:00"
+
+  follow_up_reminders:
+    description: "Send contact follow-up reminders"
+    type: boolean
+    default: false
+
+  dormant_contact_days:
+    description: "Days before contact is considered dormant"
+    type: integer
+    default: 14
+
+  export_directory:
+    description: "Directory for WhatsApp exports"
+    type: string
+    default: ".datacore/state/whatsapp/exports"
+
+hooks:
+  today:
+    agent: whatsapp-notifications
+    description: "Optional morning briefing push"
+    enabled_setting: morning_briefing
+
+  nightshift_complete:
+    agent: whatsapp-notifications
+    description: "Notify when nightshift tasks complete"
+    enabled_setting: nightshift_alerts
+
+state:
+  directory: .datacore/state/whatsapp
+  files:
+    - exports/       # Drop .txt exports here
+    - processed/     # Moved after import
+    - sessions/      # WAHA session data
+    - phone-index.yaml  # Phone → contact mapping
+    - gateway.log    # Message log
+
+# DIP-0022 context
+context:
+  priority: on_match
+
+# Engrams
+engrams:
+  namespace: whatsapp
+  scopes: [whatsapp]

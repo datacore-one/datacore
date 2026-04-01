@@ -1,0 +1,75 @@
+# WAHA (WhatsApp HTTP API) Docker Compose
+#
+# Deploy WhatsApp gateway for Datacore integration.
+# Docs: https://waha.devlike.pro/
+#
+# Usage:
+#   cd .datacore/modules/whatsapp/templates
+#   docker-compose up -d
+#
+# First run:
+#   1. Start container: docker-compose up -d
+#   2. Check logs: docker-compose logs -f waha
+#   3. Get QR code: curl http://localhost:3000/api/default/auth/qr
+#   4. Scan QR code in WhatsApp mobile app
+#   5. Verify: curl http://localhost:3000/api/sessions/default
+
+version: '3.8'
+
+services:
+  waha:
+    image: devlikeapro/waha:latest
+    container_name: datacore-waha
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Session configuration
+      - WHATSAPP_DEFAULT_ENGINE=WEBJS
+      - WHATSAPP_RESTART_ALL_SESSIONS=true
+
+      # API configuration
+      - WHATSAPP_API_PORT=3000
+      - WHATSAPP_API_HOSTNAME=0.0.0.0
+
+      # Webhook configuration (optional - for incoming messages)
+      # Uncomment and set your webhook URL:
+      # - WHATSAPP_HOOK_URL=http://host.docker.internal:8080/webhook
+      # - WHATSAPP_HOOK_EVENTS=message,message.any,session.status
+
+      # Session persistence
+      - WHATSAPP_FILES_MIMETYPES=*
+
+      # Logging
+      - LOG_LEVEL=info
+
+    volumes:
+      # Persist session data across restarts
+      - waha-sessions:/app/.sessions
+
+      # Optional: map to Datacore state directory
+      # - ~/.datacore/state/whatsapp/sessions:/app/.sessions
+
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Resource limits (optional)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '1'
+    #       memory: 1G
+
+volumes:
+  waha-sessions:
+    driver: local
+
+# Network configuration (optional - for webhook server)
+# networks:
+#   default:
+#     name: datacore-network
+#     driver: bridge
