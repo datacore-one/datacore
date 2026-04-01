@@ -55,7 +55,8 @@ class KillSwitchActive(RuntimeError):
 
 class XPoster:
     def __init__(self, account: str, daily_limit: int = 50,
-                 user_id: str = None, state_dir: str = None):
+                 user_id: str = None, state_dir: str = None,
+                 verify_links: bool = True):
         prefix = ACCOUNT_PREFIXES.get(account)
         if not prefix:
             raise ValueError(
@@ -87,17 +88,39 @@ class XPoster:
         """)
         self._rate_db.commit()
 
+        # Link verification gate
+        self.verify_links = verify_links
+        self._verifier = None
+        if verify_links:
+            try:
+                import sys
+                sys.path.insert(0, str(Path(os.environ.get("DATACORE_ROOT", os.path.expanduser("~/Data"))) / ".datacore" / "lib"))
+                from link_verifier import LinkVerifier
+                self._verifier = LinkVerifier()
+            except ImportError:
+                import sys
+                print("Warning: link_verifier not found, link verification disabled", file=sys.stderr)
+                self.verify_links = False
+
     # --- Public API ---
 
-    def post(self, text: str) -> dict:
+    def _verify_text_links(self, text: str, skip_verification: bool = False):
+        """Verify all links in text before posting. Raises LinkVerificationError on failure."""
+        if skip_verification or not self.verify_links or not self._verifier:
+            return
+        self._verifier.verify_or_raise(text)
+
+    def post(self, text: str, skip_verification: bool = False) -> dict:
         """Post a standalone tweet."""
+        self._verify_text_links(text, skip_verification)
         self._check_rate_limit()
         result = self._oauth_post(TWEET_URL, {'text': text})
         self._increment_rate_count()
         return result
 
-    def reply(self, text: str, reply_to_id: str) -> dict:
+    def reply(self, text: str, reply_to_id: str, skip_verification: bool = False) -> dict:
         """Reply to a tweet."""
+        self._verify_text_links(text, skip_verification)
         self._check_rate_limit()
         result = self._oauth_post(TWEET_URL, {
             'text': text,
@@ -106,8 +129,9 @@ class XPoster:
         self._increment_rate_count()
         return result
 
-    def quote_rt(self, text: str, tweet_id: str) -> dict:
+    def quote_rt(self, text: str, tweet_id: str, skip_verification: bool = False) -> dict:
         """Quote retweet."""
+        self._verify_text_links(text, skip_verification)
         self._check_rate_limit()
         result = self._oauth_post(TWEET_URL, {
             'text': text,
