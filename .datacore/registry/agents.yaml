@@ -3167,6 +3167,37 @@ module_agents:
     called_by: ["ai-task-executor", "nightshift-orchestrator"]
 
   # ===========================================================================
+  # GITHUB MODULE
+  # ===========================================================================
+
+  github-responder:
+    description: "Responds to GitHub issues — auto-fixes simple issues via PR, proposes solutions for complex ones"
+    version: "0.1.0"
+    source: ".datacore/modules/github/agents/github-responder.md"
+    module: "github"
+    skills:
+      - github-triage
+      - issue-response
+      - pr-creation
+    triggers:
+      tags: [":AI:github:"]
+      commands: ["/triage-github"]
+    reads:
+      required:
+        - ".datacore/modules/github/CLAUDE.base.md"
+      contextual:
+        - "github issue response patterns"
+    writes:
+      - "[space]/org/next_actions.org"
+    references:
+      dips: []
+      specs:
+        - "2-datacore/3-knowledge/plans/2026-04-01-github-module-design.md"
+    spawns: []
+    can_be_called_by:
+      called_by: ["ai-task-executor", "nightshift-orchestrator"]
+
+  # ===========================================================================
   # GRANTS MODULE
   # ===========================================================================
 
