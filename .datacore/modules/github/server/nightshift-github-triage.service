@@ -1,0 +1,15 @@
+[Unit]
+Description=GitHub Triage Fallback — scans GitHub if nightshift missed overnight run
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=gregor
+Group=gregor
+WorkingDirectory=%h/Data
+EnvironmentFile=%h/config/nightshift.env
+ExecStart=/bin/bash %h/Data/.datacore/modules/github/server/triage-github.sh
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal
