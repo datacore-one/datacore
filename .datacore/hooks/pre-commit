@@ -177,7 +177,7 @@ if [ -n "$ALL_STAGED" ]; then
 
     # Secret pattern scan
     echo "Scanning for secret patterns..."
-    if scan_staged_files "$ALL_STAGED" "$BINARY_SKIP" '(API_KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL)\s*[=:]\s*['"'"'"]?[a-zA-Z0-9/+]{8,}' '\$\{|your_|example|placeholder|xxx|CHANGE_ME|_KEY\b|_TOKEN\b|_SECRET\b|_PASSWORD\b' "Potential secret" "Move credentials to .datacore/env/"; then
+    if scan_staged_files "$ALL_STAGED" "$BINARY_SKIP" '(API_KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL)\s*[=:]\s*['"'"'"]?[a-zA-Z0-9/+]{8,}' '\$\{|your_|example|placeholder|xxx|CHANGE_ME|_KEY\b|_TOKEN\b|_SECRET\b|_PASSWORD\b|_key\b|_token\b|_secret\b|_password\b|Optional\[|os\.getenv' "Potential secret" "Move credentials to .datacore/env/"; then
         :
     else
         echo ""
