@@ -327,16 +327,51 @@ class HookExecutor:
             self._log(f"    Engram injection failed: {e}")
             return None
 
+    # Allowed extensions for file loading via hooks
+    _ALLOWED_EXTENSIONS = {".md", ".yaml", ".yml", ".org", ".txt", ".py"}
+
     def _load_file(self, path: str) -> Optional[str]:
-        """Load file content, handling relative paths."""
+        """Load file content, handling relative paths.
+
+        Security: validates the resolved path is within DATACORE_ROOT,
+        blocks /env/ directory access, and restricts file extensions.
+        """
+        import logging
+
         if path.startswith("/"):
             full_path = Path(path)
         else:
             full_path = DATACORE_ROOT / path
 
-        if full_path.exists() and full_path.is_file():
+        # Resolve to canonical path (eliminates ../ traversal)
+        try:
+            resolved = full_path.resolve()
+        except (OSError, ValueError):
+            logging.warning("hooks._load_file: failed to resolve path: %s", path)
+            return None
+
+        # Must be within DATACORE_ROOT
+        try:
+            if not resolved.is_relative_to(DATACORE_ROOT.resolve()):
+                logging.warning("hooks._load_file: path outside DATACORE_ROOT blocked: %s", path)
+                return None
+        except (OSError, ValueError):
+            logging.warning("hooks._load_file: path validation failed: %s", path)
+            return None
+
+        # Block /env/ directory (secrets)
+        if "/env/" in str(resolved):
+            logging.warning("hooks._load_file: /env/ path blocked: %s", path)
+            return None
+
+        # Restrict to allowed extensions
+        if resolved.suffix.lower() not in self._ALLOWED_EXTENSIONS:
+            logging.warning("hooks._load_file: extension %s not allowed: %s", resolved.suffix, path)
+            return None
+
+        if resolved.exists() and resolved.is_file():
             try:
-                return full_path.read_text()
+                return resolved.read_text()
             except Exception:
                 return None
         return None
@@ -620,20 +655,20 @@ class HookExecutor:
 
         If the file is missing or corrupt the list starts empty.
         Parent directories are created automatically.
+        Uses atomic writes with advisory locking for crash safety.
         """
+        from file_utils import locked_read_modify_write_yaml
+
         path.parent.mkdir(parents=True, exist_ok=True)
-        existing: List[Dict[str, Any]] = []
-        if path.exists():
-            try:
-                with open(path, 'r') as f:
-                    loaded = yaml.safe_load(f)
-                    if isinstance(loaded, list):
-                        existing = loaded
-            except Exception:
-                pass
-        existing.extend(entries)
-        with open(path, 'w') as f:
-            yaml.safe_dump(existing, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+        def _modifier(existing_data):
+            existing = []
+            if isinstance(existing_data, list):
+                existing = existing_data
+            existing.extend(entries)
+            return existing
+
+        locked_read_modify_write_yaml(path, _modifier)
 
     def _hook_learning_extract(self, agent_id: str, result: Dict, config: Dict) -> HookResult:
         """
