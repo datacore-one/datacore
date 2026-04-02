@@ -1,7 +1,4 @@
 {
-  "enabledPlugins": {
-    "ralph-wiggum@claude-plugins-official": true
-  },
   "permissions": {
     "allow": [
       "Read",
@@ -71,6 +68,7 @@
       "Bash(datacortex *)",
       "mcp__datacore"
     ],
+    "deny": [],
     "ask": [
       "Bash(rm *)",
       "Bash(git push --force *)",
@@ -78,8 +76,7 @@
       "Bash(git reset --hard *)",
       "Bash(git clean *)",
       "Bash(git checkout -- *)"
-    ],
-    "deny": []
+    ]
   },
   "enableAllProjectMcpServers": true,
   "hooks": {
@@ -205,5 +202,6 @@
         ]
       }
     ]
-  }
+  },
+  "enabledPlugins": {}
 }
