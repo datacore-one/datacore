@@ -1605,6 +1605,64 @@ agents:
     can_be_called_by:
       - research-orchestrator
 
+  # ---------------------------------------------------------------------------
+  # Open Source & Release Pipeline
+  # ---------------------------------------------------------------------------
+
+  opensource-pipeline:
+    description: "Prepare projects for open-source release: strip secrets, sanitize, package"
+    version: "1.0.0"
+    source: ".datacore/agents/opensource-pipeline.md"
+    model: "sonnet"
+    skills:
+      - open-source-release
+      - secret-scanning
+      - documentation-generation
+    triggers:
+      tags: []
+      commands:
+        - "/opensource"
+        - "/release-oss"
+    reads:
+      required: []
+      contextual: []
+    writes:
+      - "/tmp/oss-*"
+    references:
+      dips: []
+      specs: []
+    spawns: []
+    can_be_called_by: []
+
+  # ---------------------------------------------------------------------------
+  # GAN Adversarial Harness
+  # ---------------------------------------------------------------------------
+
+  gan-harness:
+    description: "GAN-style adversarial multi-agent loop: Plan → Generate → Evaluate → iterate"
+    version: "1.0.0"
+    source: ".datacore/agents/gan-harness.md"
+    model: "opus"
+    skills:
+      - adversarial-generation
+      - multi-agent-orchestration
+      - quality-evaluation
+    triggers:
+      tags: []
+      commands:
+        - "/gan"
+        - "/build-adversarial"
+    reads:
+      required: []
+      contextual: []
+    writes: []
+    references:
+      dips: []
+      specs: []
+    spawns:
+      - general-purpose  # Planner, Generator, Evaluator subagents
+    can_be_called_by: []
+
 # =============================================================================
 # MODULE AGENTS
 # Agents provided by optional modules (auto-populated on module install)
