@@ -108,10 +108,10 @@ def sync_all(space: str = None, full: bool = False, verbose: bool = True) -> Dic
 
     if process_markdown:
         try:
-            # Note: process_markdown doesn't return stats, just processes
             for sp in spaces_to_sync:
                 if verbose:
                     print(f"  Processing {sp}...")
+                process_markdown(sp)
             stats['markdown'] = {'status': 'completed'}
         except Exception as e:
             stats['errors'].append(f"Markdown sync error: {e}")

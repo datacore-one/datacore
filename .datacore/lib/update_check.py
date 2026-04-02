@@ -16,7 +16,7 @@ Usage:
     updates = check_updates()
     # returns list of {"name": ..., "local": ..., "remote": ..., "install_hint": ...}
 """
-import json, os, re, subprocess, sys, tempfile, time
+import json, re, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -162,28 +162,17 @@ def _read_cache(pkg_name: str) -> dict | None:
 
 
 def _write_cache(pkg_name: str, status: str, local_ver: str, remote_ver: str):
-    """Atomic cache write: write to temp file, then rename."""
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    """Atomic cache write via file_utils."""
+    from file_utils import atomic_write_json
+
     cache_file = STATE_DIR / f"{pkg_name}.json"
-    content = json.dumps({
-        "status": status,
-        "local": local_ver,
-        "remote": remote_ver,
-        "ts": time.time(),
-    })
     try:
-        fd, tmp_path = tempfile.mkstemp(dir=STATE_DIR, suffix=".tmp")
-        try:
-            os.write(fd, content.encode())
-            os.close(fd)
-            os.rename(tmp_path, cache_file)
-        except Exception:
-            os.close(fd) if not os.get_inheritable(fd) else None
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+        atomic_write_json(cache_file, {
+            "status": status,
+            "local": local_ver,
+            "remote": remote_ver,
+            "ts": time.time(),
+        })
     except Exception as e:
         _log(f"cache write error for {pkg_name}: {e}")
 

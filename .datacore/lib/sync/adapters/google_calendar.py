@@ -13,8 +13,8 @@ Usage:
         events = adapter.pull_changes()
 """
 
+import json
 import os
-import pickle
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -34,7 +34,8 @@ from .base import (
 
 # Credentials paths
 CREDS_DIR = Path(__file__).parent.parent.parent.parent / "env" / "credentials"
-TOKEN_FILE = CREDS_DIR / "google_calendar_token.pickle"
+TOKEN_FILE = CREDS_DIR / "google_calendar_token.json"
+_LEGACY_PICKLE_FILE = CREDS_DIR / "google_calendar_token.pickle"
 CLIENT_SECRETS_FILE = CREDS_DIR / "google_calendar_client_secret.json"
 
 SCOPES = [
@@ -111,6 +112,21 @@ class GoogleCalendarAdapter(TaskSyncAdapter):
         except Exception as e:
             return False, f"Connection failed: {str(e)}"
 
+    def _migrate_pickle_token(self):
+        """Migrate legacy pickle token to JSON format if needed."""
+        if _LEGACY_PICKLE_FILE.exists() and not TOKEN_FILE.exists():
+            import pickle
+            import logging
+            try:
+                with open(_LEGACY_PICKLE_FILE, 'rb') as f:
+                    creds = pickle.load(f)
+                CREDS_DIR.mkdir(parents=True, exist_ok=True)
+                TOKEN_FILE.write_text(creds.to_json())
+                _LEGACY_PICKLE_FILE.rename(_LEGACY_PICKLE_FILE.with_suffix('.pickle.bak'))
+                logging.info(f"Migrated token from pickle to JSON: {TOKEN_FILE}")
+            except Exception as e:
+                logging.warning(f"Failed to migrate pickle token: {e}")
+
     def _get_credentials(self):
         """Get valid user credentials."""
         if self._credentials:
@@ -120,19 +136,26 @@ class GoogleCalendarAdapter(TaskSyncAdapter):
         from google.auth.transport.requests import Request
         import logging
 
+        # Migrate legacy pickle token if present
+        self._migrate_pickle_token()
+
         creds = None
 
         if TOKEN_FILE.exists():
-            with open(TOKEN_FILE, 'rb') as token:
-                creds = pickle.load(token)
+            try:
+                token_data = json.loads(TOKEN_FILE.read_text())
+                creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+            except Exception as e:
+                logging.warning(f"Failed to load token JSON: {e}")
+                creds = None
 
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 try:
                     creds.refresh(Request())
-                    # Save refreshed token
-                    with open(TOKEN_FILE, 'wb') as token:
-                        pickle.dump(creds, token)
+                    # Save refreshed token as JSON
+                    CREDS_DIR.mkdir(parents=True, exist_ok=True)
+                    TOKEN_FILE.write_text(creds.to_json())
                 except Exception as e:
                     # Log actionable guidance for refresh failures
                     logging.error(

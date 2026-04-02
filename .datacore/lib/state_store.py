@@ -6,6 +6,8 @@ import yaml
 from pathlib import Path
 from typing import Any
 
+from file_utils import atomic_write_yaml, locked_read_modify_write_yaml
+
 def _data_root() -> Path:
     return Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
 
@@ -34,21 +36,17 @@ class YamlStateStore:
 
     def save(self, data: Any) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.path, "w") as f:
-            yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+        atomic_write_yaml(self.path, data)
 
     def append_to_list(self, entries: list, max_size: int = 0) -> None:
         """Load a YAML file as a list, append entries, optionally cap size, and save."""
-        existing = []
-        if self.path.exists():
-            try:
-                with open(self.path) as f:
-                    loaded = yaml.safe_load(f)
-                    if isinstance(loaded, list):
-                        existing = loaded
-            except Exception:
-                pass
-        existing.extend(entries)
-        if max_size > 0:
-            existing = existing[-max_size:]
-        self.save(existing)
+        def _modifier(existing_data):
+            existing = []
+            if isinstance(existing_data, list):
+                existing = existing_data
+            existing.extend(entries)
+            if max_size > 0:
+                existing = existing[-max_size:]
+            return existing
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        locked_read_modify_write_yaml(self.path, _modifier)

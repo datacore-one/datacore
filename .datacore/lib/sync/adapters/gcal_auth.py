@@ -10,18 +10,34 @@ Usage:
     python gcal_auth.py list     # List today's events
 """
 
+import json
 import os
-import pickle
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta
 
 # Credentials storage
 CREDS_DIR = Path(__file__).parent.parent.parent.parent / "env" / "credentials"
-TOKEN_FILE = CREDS_DIR / "google_calendar_token.pickle"
+TOKEN_FILE = CREDS_DIR / "google_calendar_token.json"
+_LEGACY_PICKLE_FILE = CREDS_DIR / "google_calendar_token.pickle"
 CLIENT_SECRETS_FILE = CREDS_DIR / "google_calendar_client_secret.json"
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']  # Full read/write access
+
+
+def _migrate_pickle_token():
+    """Migrate legacy pickle token to JSON format if needed."""
+    if _LEGACY_PICKLE_FILE.exists() and not TOKEN_FILE.exists():
+        import pickle
+        try:
+            with open(_LEGACY_PICKLE_FILE, 'rb') as f:
+                creds = pickle.load(f)
+            CREDS_DIR.mkdir(parents=True, exist_ok=True)
+            TOKEN_FILE.write_text(creds.to_json())
+            _LEGACY_PICKLE_FILE.rename(_LEGACY_PICKLE_FILE.with_suffix('.pickle.bak'))
+            print(f"Migrated token from pickle to JSON: {TOKEN_FILE}")
+        except Exception as e:
+            print(f"WARNING: Failed to migrate pickle token: {e}")
 
 
 def get_credentials():
@@ -30,12 +46,19 @@ def get_credentials():
     from google_auth_oauthlib.flow import InstalledAppFlow
     from google.auth.transport.requests import Request
 
+    # Migrate legacy pickle token if present
+    _migrate_pickle_token()
+
     creds = None
 
-    # Load existing token
+    # Load existing token from JSON
     if TOKEN_FILE.exists():
-        with open(TOKEN_FILE, 'rb') as token:
-            creds = pickle.load(token)
+        try:
+            token_data = json.loads(TOKEN_FILE.read_text())
+            creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+        except Exception as e:
+            print(f"WARNING: Failed to load token JSON: {e}")
+            creds = None
 
     # If no valid credentials, run auth flow
     if not creds or not creds.valid:
@@ -68,10 +91,9 @@ def get_credentials():
                 str(CLIENT_SECRETS_FILE), SCOPES)
             creds = flow.run_local_server(port=0)
 
-        # Save the credentials for next run
+        # Save the credentials as JSON for next run
         CREDS_DIR.mkdir(parents=True, exist_ok=True)
-        with open(TOKEN_FILE, 'wb') as token:
-            pickle.dump(creds, token)
+        TOKEN_FILE.write_text(creds.to_json())
         print(f"Credentials saved to {TOKEN_FILE}")
 
     return creds

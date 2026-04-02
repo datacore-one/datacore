@@ -241,9 +241,9 @@ def _handle_tool(phase: Phase, context: dict[str, Any], wf: str, dry_run: bool) 
         logger.info("  [%s] (dry-run) %s", phase.name, detail)
         _update_phase_state(wf, phase.name, "dry-run", detail)
         return "completed"
-    logger.info("  [%s] %s — would call MCP tool (not executed)", phase.name, detail)
-    _update_phase_state(wf, phase.name, "completed", detail)
-    return "completed"
+    logger.warning("  [%s] %s — would call MCP tool (not executed)", phase.name, detail)
+    _update_phase_state(wf, phase.name, "skipped", detail)
+    return "skipped"
 
 
 def _handle_agent(phase: Phase, context: dict[str, Any], wf: str, dry_run: bool) -> str:
@@ -254,9 +254,9 @@ def _handle_agent(phase: Phase, context: dict[str, Any], wf: str, dry_run: bool)
         logger.info("  [%s] (dry-run) %s", phase.name, detail)
         _update_phase_state(wf, phase.name, "dry-run", detail)
         return "completed"
-    logger.info("  [%s] %s — would spawn agent (not executed)", phase.name, detail)
-    _update_phase_state(wf, phase.name, "completed", detail)
-    return "completed"
+    logger.warning("  [%s] %s — would spawn agent (not executed)", phase.name, detail)
+    _update_phase_state(wf, phase.name, "skipped", detail)
+    return "skipped"
 
 
 def _handle_interactive(phase: Phase, context: dict[str, Any], wf: str, dry_run: bool) -> str:
@@ -276,9 +276,9 @@ def _handle_output(phase: Phase, context: dict[str, Any], wf: str, dry_run: bool
         logger.info("  [%s] (dry-run) %s", phase.name, detail)
         _update_phase_state(wf, phase.name, "dry-run", detail)
         return "completed"
-    logger.info("  [%s] %s — would render output (not executed)", phase.name, detail)
-    _update_phase_state(wf, phase.name, "completed", detail)
-    return "completed"
+    logger.warning("  [%s] %s — would render output (not executed)", phase.name, detail)
+    _update_phase_state(wf, phase.name, "skipped", detail)
+    return "skipped"
 
 
 # ---------------------------------------------------------------------------

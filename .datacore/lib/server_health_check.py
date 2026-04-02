@@ -5,19 +5,33 @@ Generates comprehensive health metrics for Datacore installation
 """
 
 import os
+import re
 import subprocess
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 import json
 
+# Branch names must be safe for shell/git usage
+_SAFE_BRANCH_RE = re.compile(r"^[a-zA-Z0-9/_.\-]+$")
+
+
+def _validate_branch(name: str) -> str:
+    """Validate a git branch name. Raises ValueError if suspicious."""
+    name = name.strip()
+    if not name:
+        return name
+    if not _SAFE_BRANCH_RE.match(name):
+        raise ValueError(f"Rejected unsafe branch name: {name!r}")
+    return name
+
 
 def run_command(cmd, cwd=None):
-    """Run shell command and return output"""
+    """Run command as arg list (shell=False) and return output."""
     try:
         result = subprocess.run(
             cmd,
-            shell=True,
+            shell=False,
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -79,27 +93,31 @@ def get_git_status():
             }
 
             # Get branch
-            branch_output, _ = run_command("git branch --show-current", cwd=item)
+            branch_output, _ = run_command(["git", "branch", "--show-current"], cwd=item)
             repo_info["branch"] = branch_output
 
             # Get status
-            status_output, _ = run_command("git status --porcelain", cwd=item)
+            status_output, _ = run_command(["git", "status", "--porcelain"], cwd=item)
             repo_info["has_changes"] = bool(status_output)
             repo_info["change_count"] = len(status_output.split("\n")) if status_output else 0
 
-            # Get unpushed commits
-            unpushed_output, _ = run_command(
-                f"git log origin/{branch_output}..HEAD --oneline 2>/dev/null || echo ''",
-                cwd=item
-            )
-            repo_info["unpushed_commits"] = len(unpushed_output.split("\n")) if unpushed_output else 0
+            # Get unpushed commits (validate branch name first)
+            try:
+                safe_branch = _validate_branch(branch_output)
+                unpushed_output, _ = run_command(
+                    ["git", "log", f"origin/{safe_branch}..HEAD", "--oneline"],
+                    cwd=item
+                )
+                repo_info["unpushed_commits"] = len(unpushed_output.split("\n")) if unpushed_output else 0
+            except ValueError:
+                repo_info["unpushed_commits"] = 0
 
             # Get last commit
             last_commit, _ = run_command(
-                "git log -1 --format='%h - %s (%ar)' 2>/dev/null || echo 'No commits'",
+                ["git", "log", "-1", "--format=%h - %s (%ar)"],
                 cwd=item
             )
-            repo_info["last_commit"] = last_commit
+            repo_info["last_commit"] = last_commit or "No commits"
 
             repos.append(repo_info)
 
@@ -112,7 +130,7 @@ def get_running_services():
 
     # Check for systemd user services
     systemd_output, _ = run_command(
-        "systemctl --user list-units --type=service --state=running 2>/dev/null || echo 'systemd not available'"
+        ["systemctl", "--user", "list-units", "--type=service", "--state=running"]
     )
 
     # Check for relevant processes
@@ -124,9 +142,7 @@ def get_running_services():
     ]
 
     for pattern, description in process_patterns:
-        ps_output, _ = run_command(
-            f"ps aux | grep -E '{pattern}' | grep -v grep || echo ''"
-        )
+        ps_output, _ = run_command(["pgrep", "-af", pattern])
 
         if ps_output:
             lines = ps_output.strip().split("\n")
@@ -155,9 +171,7 @@ def get_process_start_times():
     ]
 
     for pattern, description in process_patterns:
-        ps_output, _ = run_command(
-            f"ps -eo pid,lstart,cmd | grep -E '{pattern}' | grep -v grep || echo ''"
-        )
+        ps_output, _ = run_command(["pgrep", "-af", pattern])
 
         if ps_output:
             lines = ps_output.strip().split("\n")
@@ -383,8 +397,8 @@ def generate_markdown_report(output_path):
         md_lines.extend(["", "---", ""])
 
     # System Information
-    uptime_output, _ = run_command("uptime -p")
-    kernel_output, _ = run_command("uname -r")
+    uptime_output, _ = run_command(["uptime", "-p"])
+    kernel_output, _ = run_command(["uname", "-r"])
 
     md_lines.extend([
         "## System Information",
