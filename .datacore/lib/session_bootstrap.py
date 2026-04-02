@@ -59,14 +59,15 @@ def main():
     if candidate_count > 0:
         lines.append(f"{candidate_count} candidate engram(s) awaiting review.")
 
-    # Check for package updates (cached, fast path)
+    # Check for package updates (cached, parallel, no code execution)
     try:
         from update_check import check_updates
         updates = check_updates()
         for u in updates:
+            # Values are pre-sanitized by update_check module
             lines.append(f"UPDATE AVAILABLE: {u['name']} {u['local']} -> {u['remote']}  Upgrade: {u['install_hint']}")
-    except Exception:
-        pass  # non-critical, never block session start
+    except Exception as e:
+        _debug(f"session_bootstrap: update check failed: {e}")
 
     lines.append("Datacore session initialized. Engrams will inject on first message.")
 
