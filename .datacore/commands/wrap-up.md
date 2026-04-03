@@ -986,6 +986,19 @@ STATS
 Next session can run: /continue
 Or search for :continuation: tagged tasks.
 
+───────────────────────────────────────────────────
+TOKEN COST
+───────────────────────────────────────────────────
+
+| Component              | Tokens  |
+|------------------------|---------|
+| journal-coordinator    | [N]     |
+| learning-coordinator   | [N]     |
+| [other subagents]      | [N]     |
+| **Subagent total**     | **[N]** |
+| Main conversation (est)| ~[N]K   |
+| **Session total (est)**| **~[N]K**|
+
 Ready to close terminal.
 ═══════════════════════════════════════════════════
 ```
@@ -999,6 +1012,7 @@ After displaying the consolidated report to the user, **write a condensed versio
 1. **Write session entry to journal** (`0-personal/notes/journals/YYYY-MM-DD.md`):
    - Use the format from journal-entry-writer (TL;DR, Goal, Accomplished, Key Decisions, Files, Continuation, Learnings, Tags)
    - Include the artifact table
+   - Include a `### Token Cost` section with the same table from the consolidated report (subagent tokens, main conversation estimate, session total)
    - This is the **authoritative record** — better than what any subagent produces
 
 2. **Update Daily TL;DR** at the top of the journal file (after frontmatter):
@@ -1043,6 +1057,12 @@ After displaying the consolidated report to the user, **write a condensed versio
 - Exclude temporary files, lock files (~$...), and auto-generated artifacts
 - Group by working directory when files span multiple locations
 - This is the user's "what did I produce today" receipt
+
+**Token Cost guidelines:**
+- Report token usage from all background agents spawned during wrap-up (journal-coordinator, session-learning-coordinator, and any others). Each agent's `<usage>` block in the task notification contains `total_tokens`.
+- Estimate main conversation tokens for the wrap-up portion (~tool calls from session_end through the consolidated report). This is approximate — state it as "~NK".
+- Sum subagent tokens (precise) + main conversation estimate for a session total.
+- This gives the user visibility into the cost of the wrap-up process itself.
 
 ## Key Concepts
 
@@ -1111,7 +1131,7 @@ Run `/tomorrow` once at end of day.
 | 14 | Context sync | Automatic (silent) |
 | 15 | AI delegation | Optional (user-initiated) |
 | 16 | Completion checklist | Required (verify all steps done) |
-| 17 | Close (session narrative) | Automatic (inferred from conversation) |
+| 17 | Close (session narrative + token cost) | Automatic (inferred from conversation + agent usage) |
 
 ## Related
 
