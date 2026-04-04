@@ -3622,6 +3622,36 @@ knowledge_locations:
       dips: []
       specs: []
 
+  knowledge-linter:
+    description: "Semantic health checks for knowledge base — orphans, completeness, staleness, contradictions"
+    version: "1.0.0"
+    source: ".datacore/agents/knowledge-linter.md"
+    model: "inherit"
+    profile: gtd-processor
+    skills:
+      - knowledge-quality
+      - semantic-linting
+      - contradiction-detection
+    triggers:
+      tags: []
+      commands:
+        - "/knowledge-lint"
+    reads:
+      required: []
+      contextual:
+        - "[space]/3-knowledge/zettel/*.md"
+        - "[space]/3-knowledge/literature/*.md"
+    writes:
+      - "[space]/3-knowledge/zettel/"
+      - "[space]/3-knowledge/literature/"
+    references:
+      dips: []
+      specs: []
+    spawns: []
+    can_be_called_by:
+      - user
+      - gtd-weekly-review
+
 # =============================================================================
 # VALIDATION RULES
 # Used by agent-registry-auditor
