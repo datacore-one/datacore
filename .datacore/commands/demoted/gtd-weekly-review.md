@@ -1014,6 +1014,8 @@ for item in recent_items:
 2. Mark items as "applied" when used
 3. Archive items no longer relevant
 4. Connect knowledge to current projects
+5. Run `/promote --period 7d` — scan this week's journals for knowledge promotion candidates
+6. Run `/knowledge-lint` — check for orphan zettels, incomplete literature notes, stale seedlings
 
 **Why This Matters:**
 - Knowledge extraction is expensive (time, context)
