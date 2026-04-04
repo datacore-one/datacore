@@ -185,7 +185,9 @@ If `coach.wrap_up_check: false`, skip entirely.
 
 ### 3. Continuation Tasks
 
-**If work is incomplete:**
+**If work is incomplete, delegate to `/continue --save` (inline mode).**
+
+The continuation task format (Rich Task Standard + `:BOOTSTRAP:` field) is defined once in the `/continue` command spec. Do NOT reimplement it here — use `/continue`'s inline save logic directly.
 
 ```
 CONTINUATION TASKS
@@ -195,43 +197,14 @@ This session's work appears incomplete. Let me capture what's needed to continue
 What remains to be done? (brief, or I'll infer from context)
 > [user input or auto-inferred]
 
-Creating continuation task with bootstrap context...
+[Use /continue inline-save logic to create the continuation task.
+ This creates a Rich Task Standard entry with :continuation: tag,
+ BOOTSTRAP property, scheduled on next working day.]
 ```
 
-**Bootstrap prompt format** (Rich Task Standard — DIP-0009 Part 3.5):
+**Why delegate:** The continuation task format (Rich Task Standard — DIP-0009 Part 3.5) with the `:BOOTSTRAP:` extension field is maintained in `/continue`. Duplicating it here creates drift — one spec gets updated, the other doesn't. `/continue` is the single source of truth for continuation task creation.
 
-```org
-*** TODO Continue: [task description]                    :continuation:
-SCHEDULED: <YYYY-MM-DD Day>
-:PROPERTIES:
-:CREATED: [YYYY-MM-DD Day HH:MM]
-:SOURCE:  conversation
-:EFFORT:  [Quick/Moderate/Significant — estimate remaining work]
-:CONTEXT: |
-  What was being worked on and why.
-  What prompted this work originally.
-:KEY_FILES: |
-  - path/to/file1.md
-  - path/to/file2.py
-:CURRENT_STATUS: |
-  What was accomplished this session.
-  Journal YYYY-MM-DD ## Session N: "Key progress summary"
-:ACCEPTANCE_CRITERIA: |
-  - What "done" looks like for the remaining work
-:TOOLS: |
-  - Approach hints for resuming
-:BOOTSTRAP: |
-  [Full bootstrap prompt for next session — enough context
-  to resume without re-reading the full conversation]
-  Next steps:
-  1. [Specific step 1]
-  2. [Specific step 2]
-  3. [Specific step 3]
-  Blockers: [Any known blockers]
-:END:
-```
-
-**The continuation task uses Rich Task Standard fields** (CONTEXT, KEY_FILES, CURRENT_STATUS, ACCEPTANCE_CRITERIA, TOOLS) plus the `:BOOTSTRAP:` extension field for session-specific resumption context. This means nightshift can execute continuation tasks with full context if they carry an `:AI:` tag.
+**What /wrap-up still owns:** Detecting that work is incomplete, asking the user what remains, and passing that context to the continuation task creation logic. The task format and scheduling logic belong to `/continue`.
 
 ### 4. Mark Completed Tasks
 
@@ -1068,13 +1041,9 @@ After displaying the consolidated report to the user, **write a condensed versio
 
 ### Bootstrap Prompts
 
-When work is incomplete, the continuation task includes a **bootstrap prompt** - a self-contained context block that enables the next session to understand:
-- What was the goal
-- What progress was made
-- What specifically needs to happen next
-- What files/context are relevant
+When work is incomplete, the continuation task includes a **bootstrap prompt** — a self-contained context block that enables the next session to understand what was done, what remains, and what files are relevant. This eliminates the "where was I?" problem when resuming work.
 
-This eliminates the "where was I?" problem when resuming work.
+The continuation task format (Rich Task Standard + `:BOOTSTRAP:` field) is defined in `/continue`. See `/continue` for the canonical format and scheduling logic. `/wrap-up` Step 3 delegates to `/continue`'s inline-save logic rather than reimplementing it.
 
 ### Session vs Day
 
