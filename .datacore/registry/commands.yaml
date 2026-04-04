@@ -1332,3 +1332,26 @@ module_commands:
     related:
     - research
     - search
+
+  knowledge-lint:
+    name: Knowledge Linter
+    description: Run semantic health checks on knowledge base
+    version: 1.0.0
+    status: active
+    source: .datacore/agents/knowledge-linter.md
+    invokes:
+    - agent: knowledge-linter
+      when: always
+    reads:
+      required: []
+      contextual:
+      - '[space]/3-knowledge/zettel/*.md'
+      - '[space]/3-knowledge/literature/*.md'
+    writes:
+    - '[space]/3-knowledge/zettel/'
+    - '[space]/3-knowledge/literature/'
+    references:
+      dips: []
+    related:
+    - structural-integrity
+    - promote
