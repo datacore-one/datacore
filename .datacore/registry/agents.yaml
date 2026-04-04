@@ -3588,6 +3588,40 @@ knowledge_locations:
       dips: []
       specs: []
 
+# ---------------------------------------------------------------------------
+  # Knowledge Management
+  # ---------------------------------------------------------------------------
+
+  knowledge-promoter:
+    description: "Scan journals for high-value content and promote to permanent knowledge via knowledge-extractor"
+    version: "1.0.0"
+    source: ".datacore/agents/knowledge-promoter.md"
+    model: "inherit"
+    profile: gtd-processor
+    skills:
+      - knowledge-promotion
+      - journal-analysis
+      - knowledge-extraction
+    triggers:
+      tags: []
+      commands:
+        - "/promote"
+    reads:
+      required: []
+      contextual:
+        - "[space]/journal/*.md"
+    writes:
+      - "[space]/3-knowledge/zettel/"
+      - "[space]/journal/"
+    spawns:
+      - knowledge-extractor
+    can_be_called_by:
+      - nightshift-orchestrator
+      - user
+    references:
+      dips: []
+      specs: []
+
 # =============================================================================
 # VALIDATION RULES
 # Used by agent-registry-auditor

@@ -1308,3 +1308,27 @@ module_commands:
       - DIP-0021
     related:
     - research-status
+
+  promote:
+    name: Knowledge Promoter
+    description: Scan recent journals and promote high-value sections to permanent knowledge
+    version: 1.0.0
+    status: active
+    source: .datacore/agents/knowledge-promoter.md
+    invokes:
+    - agent: knowledge-promoter
+      when: always
+    - agent: knowledge-extractor
+      when: for each approved promotion candidate
+    reads:
+      required: []
+      contextual:
+      - '[space]/journal/*.md'
+    writes:
+    - '[space]/3-knowledge/zettel/'
+    - '[space]/journal/'
+    references:
+      dips: []
+    related:
+    - research
+    - search
