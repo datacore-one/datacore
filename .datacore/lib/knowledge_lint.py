@@ -37,7 +37,11 @@ def _collect_wiki_links(knowledge_dir: Path) -> Set[str]:
     for md in knowledge_dir.rglob('*.md'):
         text = md.read_text(encoding='utf-8', errors='replace')
         for match in WIKI_LINK_RE.finditer(text):
-            targets.add(match.group(1).strip())
+            link = match.group(1).strip()
+            # Strip pipe alias: [[Target|Display Text]] -> Target
+            if '|' in link:
+                link = link.split('|')[0].strip()
+            targets.add(link)
     return targets
 
 
@@ -99,10 +103,19 @@ def check_staleness(knowledge_dir: Path, max_age_days: int = 180) -> List[LintIs
 
     for md in sorted(zettel_dir.glob('*.md')):
         text = md.read_text(encoding='utf-8', errors='replace')
-        if 'maturity: seedling' not in text:
+        # Only check frontmatter for maturity field
+        if text.startswith('---'):
+            end = text.find('---', 3)
+            if end == -1:
+                continue
+            frontmatter = text[:end]
+        else:
+            continue  # No frontmatter = skip
+        if 'maturity: seedling' not in frontmatter:
             continue
-        if os.path.getmtime(md) < cutoff:
-            age_days = int((time.time() - os.path.getmtime(md)) / 86400)
+        mtime = os.path.getmtime(md)
+        if mtime < cutoff:
+            age_days = int((time.time() - mtime) / 86400)
             issues.append(LintIssue(
                 severity='info',
                 check='staleness',
