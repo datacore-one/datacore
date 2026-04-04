@@ -26,8 +26,7 @@ class JournalSection:
 
 # Positive signals — content likely worth promoting
 POSITIVE_PATTERNS = [
-    (r'\b(root cause|finding|diagnosed|key insight|key takeaway)\b', 0.15),
-    (r'\binsight\b', 0.08),
+    (r'\b(root cause|finding|diagnosed|insight|key takeaway)\b', 0.15),
     (r'\b(architecture|design decision|trade-?off|pattern)\b', 0.12),
     (r'\b(discovered|learned|realized|important)\b', 0.08),
     (r'\[\[.+?\]\]', 0.10),           # wiki-links suggest cross-references
@@ -87,11 +86,11 @@ def score_section(section: JournalSection) -> float:
     text = section.content.lower()
 
     for pattern, weight in POSITIVE_PATTERNS:
-        if re.search(pattern, text, re.IGNORECASE | re.MULTILINE):
+        if re.search(pattern, text, re.MULTILINE):
             score += weight
 
     for pattern, weight in NEGATIVE_PATTERNS:
-        if re.search(pattern, text, re.IGNORECASE):
+        if re.search(pattern, text):
             score += weight  # weight is negative
 
     # Length bonus
