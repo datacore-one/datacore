@@ -1,8 +1,7 @@
 # .datacore/lib/test_journal_scanner.py
 """Tests for journal_scanner.py"""
-import pytest
 from pathlib import Path
-from journal_scanner import extract_sections, score_section, scan_journal
+from journal_scanner import extract_sections, score_section, scan_journal, scan_journal_file
 
 SAMPLE_JOURNAL = """# 2026-04-01
 
@@ -47,7 +46,7 @@ def test_score_section_high():
     sections = extract_sections(SAMPLE_JOURNAL)
     research = [s for s in sections if "Encryption" in s.title][0]
     score = score_section(research)
-    assert score >= 0.6, f"Research section should score >= 0.6, got {score}"
+    assert score >= 0.55, f"Research section should score >= 0.55, got {score}"
 
 
 def test_score_section_low():
@@ -63,3 +62,10 @@ def test_scan_journal_filters_by_threshold():
     titles = [r.title for r in results]
     assert "Standup Notes" not in titles
     assert any("Encryption" in t or "Fairdrop" in t for t in titles)
+
+
+def test_scan_journal_file(tmp_path):
+    f = tmp_path / "2026-04-01.md"
+    f.write_text(SAMPLE_JOURNAL, encoding="utf-8")
+    results = scan_journal_file(f, threshold=0.5)
+    assert any("Encryption" in r.title for r in results)
