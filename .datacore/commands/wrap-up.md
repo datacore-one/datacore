@@ -498,6 +498,37 @@ If found, add a TODO to inbox.org tagged `:datacore:dip:` with the gap descripti
 :END:
 ```
 
+### 9b. Postable Moment Detection (Build in Public)
+
+**Purpose:** Flag session moments worth sharing on X (@jssr). Show don't tell - short demos, absorptions, before/afters, surprising results.
+
+Scan the session for:
+- **Framework absorptions** - read something, integrated it, shipped it (with timing)
+- **Before/after moments** - friction that disappeared, workflow that clicked
+- **Surprising metrics** - unexpected numbers, performance gains
+- **Cool demos** - something that just works and looks impressive
+- **Contrarian insights** - something you believe that others don't
+
+```
+POSTABLE MOMENTS
+────────────────
+[If any found:]
+  Postable moment detected: [short description]
+  Format: [screenshot / screen recording / text-only]
+  Draft tweet? [suggest one, short and punchy, no hype words]
+
+[If none:]
+  No standout moments this session. That's fine.
+```
+
+**Guidelines:**
+- Max 1-2 suggestions per session (don't spam)
+- Tweet should stand alone without context
+- Prefer visual proof (screenshot/recording) over text claims
+- No em dashes, use hyphens
+- Match voice profile: punchy, confident, no hype words
+- If riding a wave (trending topic matches session work), note it
+
 ### 10. Knowledge Artifact Tracking (CRITICAL)
 
 **Purpose:** Ensure all knowledge artifacts created during the session are discoverable.
