@@ -8,22 +8,54 @@ An open-source framework for building AI-automated businesses. Datacore gives Cl
 
 ## Quick Start
 
+**Option 1: Let your AI install it**
+
+Tell Claude Code (or Cursor, Windsurf, OpenClaw):
+> "Go to datacore.one and install Datacore."
+
+**Option 2: CLI**
+
 ```bash
-mkdir ~/Data && cd ~/Data
-gh repo fork datacore-one/datacore --clone=false
-git clone https://github.com/YOUR-USERNAME/datacore.git .
-git remote add upstream https://github.com/datacore-one/datacore.git
-cp install.yaml.example install.yaml
-python .datacore/lib/context_merge.py rebuild --path .
+npx @datacore-one/cli init
 ```
 
-Then open Claude Code and try `/today` or `/continue`. See [GETTING_STARTED.md](GETTING_STARTED.md) for a walkthrough or [INSTALL.md](INSTALL.md) for the complete setup guide.
+Sets up `~/Data`, clones modules, and configures the MCP server automatically.
+
+**Option 3: MCP server only**
+
+```bash
+npx @datacore-one/mcp init
+```
+
+Then add to `.claude/mcp.json` or `.cursor/mcp.json`:
+
+```json
+"datacore": {
+  "command": "npx",
+  "args": ["-y", "@datacore-one/mcp"]
+}
+```
+
+Then open Claude Code and try `/today` or `/continue`. See [GETTING_STARTED.md](GETTING_STARTED.md) for a full walkthrough.
 
 ---
 
 ## What is Datacore?
 
-Datacore is an open-source AI system for running a business autonomously. Agents handle research, content, outreach, analysis, and coordination — queued during the day, executed overnight, reviewed in your morning briefing.
+It starts as an extended mind. It becomes an autonomous business.
+
+```
+Stage 1 — Extended mind        ← start here
+  AI that knows your work, remembers your decisions, surfaces what matters.
+  Persistent memory via PLUR. GTD task management. Zettelkasten knowledge base.
+
+Stage 2 — Autonomous business  ← where most users end up
+  Agents run day-to-day operations: content, research, outreach, coordination.
+  Queued during the day. Executed overnight. Reviewed in your morning briefing.
+
+Stage 3 — AI business network  ← the horizon
+  Agents from different businesses collaborating and exchanging value.
+```
 
 Your data stays on your drive. You control the agents. You set the direction.
 
@@ -34,19 +66,6 @@ At its core, it provides:
 - **Knowledge management** -- Zettelkasten-style notes, wiki-links, and semantic search across your knowledge base
 - **Modular architecture** -- Install only what you need; extend with community or custom modules
 - **Persistent memory** -- Powered by [PLUR](https://plur.ai) (preinstalled): corrections, preferences, and decisions survive across sessions
-
-### The Vision
-
-```
-Stage 1 — Extended mind
-  AI that knows your work, remembers decisions, surfaces what matters
-
-Stage 2 — Autonomous business  ← Datacore lives here
-  Agents run operations: content, research, outreach, coordination
-
-Stage 3 — AI business network
-  Agents from different businesses collaborating and exchanging value
-```
 
 ### How It Works
 
