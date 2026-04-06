@@ -1,8 +1,8 @@
 # Datacore
 
-**Your mind, extended.**
+**Own Your Intelligence.**
 
-Persistent memory and knowledge management for AI assistants. Datacore gives Claude (and other MCP-compatible agents) the ability to remember, learn, and work autonomously across sessions.
+An open-source framework for building AI-automated businesses. Datacore gives Claude (and other MCP-compatible agents) the context, structure, and autonomy to run day-to-day operations while you focus on strategy.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Python 3.8+](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org) [![Modules](https://img.shields.io/badge/Modules-21-green.svg)](.datacore/CATALOG.md) [![DIPs](https://img.shields.io/badge/DIPs-18-purple.svg)](.datacore/dips/README.md)
 
@@ -23,13 +23,30 @@ Then open Claude Code and try `/today` or `/continue`. See [GETTING_STARTED.md](
 
 ## What is Datacore?
 
-Datacore is an open-source AI memory system that turns AI assistants from stateless tools into persistent collaborators. At its core, it provides:
+Datacore is an open-source AI system for running a business autonomously. Agents handle research, content, outreach, analysis, and coordination — queued during the day, executed overnight, reviewed in your morning briefing.
 
-- **Persistent memory** -- Engrams (learned knowledge) survive across sessions and get injected when relevant
+Your data stays on your drive. You control the agents. You set the direction.
+
+At its core, it provides:
+
+- **Autonomous execution** -- Delegate tasks to AI agents overnight; wake up to a quality-evaluated briefing
 - **GTD task management** -- Capture, organize, and delegate tasks using Getting Things Done methodology with org-mode
 - **Knowledge management** -- Zettelkasten-style notes, wiki-links, and semantic search across your knowledge base
 - **Modular architecture** -- Install only what you need; extend with community or custom modules
-- **Overnight AI execution** -- Delegate tasks to AI agents that work while you sleep, with multi-persona quality evaluation
+- **Persistent memory** -- Powered by [PLUR](https://plur.ai) (preinstalled): corrections, preferences, and decisions survive across sessions
+
+### The Vision
+
+```
+Stage 1 — Extended mind
+  AI that knows your work, remembers decisions, surfaces what matters
+
+Stage 2 — Autonomous business  ← Datacore lives here
+  Agents run operations: content, research, outreach, coordination
+
+Stage 3 — AI business network
+  Agents from different businesses collaborating and exchanging value
+```
 
 ### How It Works
 
@@ -38,7 +55,7 @@ You capture ideas and tasks
         |
 Datacore organizes, links, and indexes them
         |
-AI assistants access your knowledge via MCP
+AI assistants access your knowledge and context via MCP
         |
 Agents execute delegated work overnight
         |
@@ -96,6 +113,8 @@ You review results in your morning briefing
 
 **Layered Context** -- Configuration files use a four-layer privacy model (public, org, team, private) so you can contribute improvements upstream without exposing personal data.
 
+**Memory** -- Persistent memory is handled by [PLUR](https://plur.ai), an open-source engram engine that comes preinstalled. Corrections, preferences, and decisions survive across sessions and are injected automatically — no setup needed.
+
 ---
 
 ## Modules
@@ -147,4 +166,4 @@ MIT License -- see [LICENSE](LICENSE) for details.
 
 *Datacore is built by Datacore. The AI system that bootstraps itself into existence.*
 
-**[github.com/datacore-one/datacore](https://github.com/datacore-one/datacore)**
+**[datacore.one](https://datacore.one) · [github.com/datacore-one/datacore](https://github.com/datacore-one/datacore)**
