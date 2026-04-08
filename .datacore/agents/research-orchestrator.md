@@ -281,6 +281,44 @@ Triggered by ai-task-executor or nightshift scheduler. Fully autonomous. Must co
 **If input is URL(s):**
 - Skip discovery, go directly to Phase 3 (Process)
 
+#### Ceiling/Floor Stopping Rule
+
+When sources have a popularity/engagement signal (view counts, citations, upvotes, share counts), apply this stopping heuristic instead of fixed top-N collection:
+
+1. **Identify the ceiling**: highest-engagement result returned by the source
+2. **Walk down the ranked list** collecting results
+3. **Stop when there is a >10x drop** in the engagement signal — that's the floor
+4. **Discard everything below the floor** as noise
+
+**Why**: Top-performing items establish the pattern worth learning from. A long tail of low-engagement items dilutes synthesis with noise. A 10x drop is the natural break point between "this resonates" and "this is filler". Source: Mitchell's 20-agent script writing system, applied to research source discovery.
+
+**Apply to**:
+- YouTube searches: viewcount-ranked
+- X/Twitter: engagement-sorted (likes + reposts + quote tweets, weighted toward quote tweets which signal controversy)
+- Reddit: upvote-ranked, also check downvote-controversy
+- HackerNews: points-ranked
+- Google Scholar: citation-ranked
+
+**Do NOT apply to**:
+- Datacortex (local knowledge — no engagement signal, take all relevant)
+- Perplexity / Exa semantic search (already relevance-ranked, not popularity-ranked)
+- arXiv/preprints (recency matters more than citations)
+
+**Example**:
+```
+YouTube search "AI agent architecture":
+  1. 1.5M views ← ceiling
+  2. 1.2M views
+  3. 890K views
+  4. 720K views
+  5. 45K views ← 10x drop, this is the floor
+  6. 32K views ← discard
+  7. ...
+Stop at #4. Collect 1-4, discard 5+.
+```
+
+When the ceiling/floor logic produces fewer than 3 sources, fall back to collecting top-5 by engagement (a 10x drop on the very first result is suspicious and probably means the top result is an outlier). Always log which heuristic was applied for traceability.
+
 ### Phase 2: Deduplicate and Present
 
 Apply deduplication strategy (DIP-0021 Section 3.7):
