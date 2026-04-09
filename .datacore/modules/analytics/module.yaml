@@ -1,0 +1,38 @@
+manifest_version: 2
+name: analytics
+version: "0.1.0"
+description: |
+  Website analytics via PostHog — daily metrics for all projects.
+  Tracks visitors, pageviews, sessions across Datacore, PLUR, Datafund.
+
+  Tagline: "Know your numbers."
+
+author: datacore
+license: MIT
+
+dependencies:
+  - core@>=1.0.0
+
+provides:
+  skills: []
+
+settings:
+  enabled:
+    description: "Enable analytics module"
+    default: true
+
+use_cases:
+  - "How many visitors did we get yesterday?"
+  - "Show me website traffic"
+  - "Analytics report"
+
+triggers:
+  - "website analytics"
+  - "posthog metrics"
+  - "visitor stats"
+  - "traffic report"
+
+context_loading: on_match
+
+hooks:
+  today: commands/today-hook.md
