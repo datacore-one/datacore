@@ -29,32 +29,36 @@ class BudgetConfig:
     ceiling: float
     ai_tokens: float = 0.0
     real_spend: float = 0.0
+    approval_threshold: float = 25.0
+    ledger: str = ".datacore/state/venture/budget-ledger.yaml"
 
 
 @dataclass
 class RoleConfig:
-    """A single agent role within a venture."""
+    """A named role within a venture, with cadences."""
 
-    id: str
-    agent: str
-    cadence: str  # e.g. "daily", "weekly", "monthly"
-    enabled: bool = True
+    description: str = ""
+    cadences: dict = field(default_factory=dict)  # {daily: [...], weekly: [...], ...}
+    budget_authority: float = 0
 
 
 @dataclass
 class RepoConfig:
     """A GitHub repository associated with a venture."""
 
-    name: str
-    role: str = ""  # e.g. "core", "output", "infra"
+    name: str = ""
+    role: str = ""
+    owner: str = ""
+    scan: bool = False
+    labels_ai: list = field(default_factory=list)
 
 
 @dataclass
 class GitHubConfig:
-    """GitHub organisation and repo list for a venture."""
+    """GitHub config for a venture."""
 
-    org: str
-    repos: list[RepoConfig] = field(default_factory=list)
+    org: str = ""
+    repos: list = field(default_factory=list)  # List[RepoConfig]
 
 
 @dataclass
@@ -64,24 +68,29 @@ class NightshiftConfig:
     enabled: bool = True
     max_parallel_agents: int = 2
     timeout_minutes: int = 60
+    priority: str = "normal"
 
 
 @dataclass
 class VentureConfig:
     """Full configuration for an autonomous venture."""
 
-    name: str
-    description: str
-    stage: str
-    space: str
-    autonomy: int
-    budget: BudgetConfig
+    name: str = ""
+    description: str = ""
+    stage: str = "discovery"
+    space: str = ""
+    autonomy: int = 0
+    budget: BudgetConfig = field(default_factory=lambda: BudgetConfig(ceiling=0))
     thesis: str = ""
-    roles: list[RoleConfig] = field(default_factory=list)
+    north_star: str = ""
+    target_customer: str = ""
+    roles: dict = field(default_factory=dict)  # {name: RoleConfig}
+    hypotheses_file: str = "hypotheses.yaml"
+    modules: dict = field(default_factory=dict)
+    tracks: list = field(default_factory=list)
     github: Optional[GitHubConfig] = None
     nightshift: Optional[NightshiftConfig] = None
-    tags: list[str] = field(default_factory=list)
-    meta: dict = field(default_factory=dict)
+    tags: list = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -96,31 +105,25 @@ def validate_venture(data: dict) -> list[str]:
     """
     errors: list[str] = []
 
-    # Required string fields
-    for required in ("name", "description", "stage", "space"):
+    for required in ("name",):
         if not data.get(required):
             errors.append(f"Missing required field: '{required}'")
 
-    # Stage must be one of VALID_STAGES
     stage = data.get("stage")
     if stage and stage not in VALID_STAGES:
         errors.append(
             f"Invalid stage '{stage}'. Must be one of: {', '.join(VALID_STAGES)}"
         )
 
-    # Autonomy must be 0–MAX_AUTONOMY
     autonomy = data.get("autonomy")
     if autonomy is not None:
         if not isinstance(autonomy, int) or autonomy < 0 or autonomy > MAX_AUTONOMY:
             errors.append(
-                f"Invalid autonomy '{autonomy}'. Must be an integer 0–{MAX_AUTONOMY}"
+                f"Invalid autonomy '{autonomy}'. Must be an integer 0-{MAX_AUTONOMY}"
             )
 
-    # Budget validation
     budget = data.get("budget")
-    if budget is None:
-        errors.append("Missing required field: 'budget'")
-    else:
+    if budget is not None:
         ceiling = budget.get("ceiling", 0.0)
         ai_tokens = budget.get("ai_tokens", 0.0)
         real_spend = budget.get("real_spend", 0.0)
@@ -143,28 +146,44 @@ def _parse_budget(data: dict) -> BudgetConfig:
         ceiling=float(data.get("ceiling", 0.0)),
         ai_tokens=float(data.get("ai_tokens", 0.0)),
         real_spend=float(data.get("real_spend", 0.0)),
+        approval_threshold=float(data.get("approval_threshold", 25.0)),
+        ledger=data.get("ledger", ".datacore/state/venture/budget-ledger.yaml"),
     )
 
 
-def _parse_role(data: dict) -> RoleConfig:
-    return RoleConfig(
-        id=data["id"],
-        agent=data["agent"],
-        cadence=data.get("cadence", "daily"),
-        enabled=bool(data.get("enabled", True)),
-    )
+def _parse_roles(roles_data) -> dict:
+    """Parse roles from venture.yaml. Accepts dict format:
+    roles:
+      operator:
+        description: "..."
+        cadences: {daily: [...], weekly: [...]}
+        budget_authority: 10
+    """
+    result = {}
+    if isinstance(roles_data, dict):
+        for name, rdata in roles_data.items():
+            if isinstance(rdata, dict):
+                result[name] = RoleConfig(
+                    description=rdata.get("description", ""),
+                    cadences=rdata.get("cadences", {}),
+                    budget_authority=float(rdata.get("budget_authority", 0)),
+                )
+    return result
 
 
 def _parse_repo(data: dict) -> RepoConfig:
     return RepoConfig(
-        name=data["name"],
+        name=data.get("name", ""),
         role=data.get("role", ""),
+        owner=data.get("owner", ""),
+        scan=bool(data.get("scan", False)),
+        labels_ai=list(data.get("labels_ai", [])),
     )
 
 
 def _parse_github(data: dict) -> GitHubConfig:
     return GitHubConfig(
-        org=data["org"],
+        org=data.get("org", ""),
         repos=[_parse_repo(r) for r in data.get("repos", [])],
     )
 
@@ -174,6 +193,7 @@ def _parse_nightshift(data: dict) -> NightshiftConfig:
         enabled=bool(data.get("enabled", True)),
         max_parallel_agents=int(data.get("max_parallel_agents", 2)),
         timeout_minutes=int(data.get("timeout_minutes", 60)),
+        priority=data.get("priority", "normal"),
     )
 
 
@@ -192,16 +212,20 @@ def load_venture(data: dict) -> VentureConfig:
     return VentureConfig(
         name=data["name"],
         description=data.get("description", ""),
-        stage=data["stage"],
-        space=data["space"],
+        stage=data.get("stage", "discovery"),
+        space=data.get("space", ""),
         autonomy=int(data.get("autonomy", 0)),
-        budget=_parse_budget(data["budget"]),
+        budget=_parse_budget(data["budget"]) if data.get("budget") else BudgetConfig(ceiling=0),
         thesis=data.get("thesis", ""),
-        roles=[_parse_role(r) for r in data.get("roles", [])],
+        north_star=data.get("north_star", ""),
+        target_customer=data.get("target_customer", ""),
+        roles=_parse_roles(data.get("roles", {})),
+        hypotheses_file=data.get("hypotheses_file", "hypotheses.yaml"),
+        modules=data.get("modules", {}),
+        tracks=data.get("tracks", []),
         github=_parse_github(github_raw) if github_raw else None,
         nightshift=_parse_nightshift(nightshift_raw) if nightshift_raw else None,
         tags=list(data.get("tags", [])),
-        meta=dict(data.get("meta", {})),
     )
 
 
