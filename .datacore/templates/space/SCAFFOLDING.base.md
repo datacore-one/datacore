@@ -211,6 +211,35 @@ How we measure - goals and health indicators.
 
 ---
 
+## 9. VENTURE (Autonomous Business — optional)
+
+For spaces with `venture: true` in config.yaml.
+
+### 9.1 Venture Constitution
+
+| Document | Path | Purpose |
+|----------|------|---------|
+| **Venture YAML** | `venture.yaml` | Autonomy, budget, roles, modules, cadences |
+| **Vision** | `VISION.md` | Operational constitution and strategic direction |
+| **Bootstrap** | `CEO_BOOTSTRAP.md` | Activation playbook for new ventures |
+| **Hypothesis Board** | `hypotheses.yaml` | Lean Startup experiment tracking |
+
+### 9.2 Venture Finance
+
+| Document | Path | Refresh |
+|----------|------|---------|
+| **Budget Ledger** | `.datacore/state/venture/budget-ledger.yaml` | Continuous |
+| **Unit Economics** | `1-tracks/ops/unit-economics.md` | Monthly |
+
+### 9.3 Venture Roles
+
+| Document | Path | Purpose |
+|----------|------|---------|
+| **Role Instances** | `.datacore/roles/*.md` | Venture-specific role context |
+| **Cadence Log** | `.datacore/state/venture/cadence-log.yaml` | Execution tracking |
+
+---
+
 ## PROJECT REQUIREMENTS
 
 Every project (in `2-projects/`) is a complete module with both code and documentation.

@@ -11,6 +11,7 @@ team:
 settings:
   github_org: {{GITHUB_ORG}}
   default_branch: main
+  venture: false
 
 today:
   time: "07:00"
