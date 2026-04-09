@@ -11,7 +11,7 @@ Conversational: "start feed engagement", "browse the feed", "engage on X"
 ## Prerequisites
 
 - Chrome browser open with Claude extension connected
-- Logged into X.com as the target account (@FairDataSociety, @plur_ai, etc.) — the engagement agent uses whichever account is logged in on Chrome
+- Logged into X.com as the target account — the engagement agent detects which account is active and adapts topics accordingly
 
 ## Execution
 
@@ -20,11 +20,16 @@ loop through feed scan cycles with 20-30 minute pauses between cycles.
 
 ### One Feed Scan Cycle
 
-**Phase 1: Open Feed**
+**Phase 0: Detect Active Account**
 1. Call `tabs_context_mcp` to get current tabs
 2. Find a tab on x.com, or create a new tab and navigate to `https://x.com/home`
 3. Wait 3 seconds for feed to load
-4. Take a screenshot to verify the feed loaded
+4. Take a screenshot — identify the logged-in account from the sidebar avatar/handle
+5. Select the matching **Account Profile** (see below) for relevance scoring and voice
+6. If the user requested a specific brand (e.g. `/engage Fairdrop`) but the active account doesn't match, STOP and report the mismatch
+
+**Phase 1: Open Feed**
+1. Take a screenshot to verify the feed loaded
 
 **Phase 2: Scroll and Collect**
 1. Read the page to find tweet elements
@@ -118,39 +123,87 @@ For tweets scoring 9+/10 relevance AND >50 likes:
 2. Send to Telegram for approval
 3. Budget: up to 2 quote-RT drafts per cycle
 
-### Relevance Scoring (0-10)
+### Account Profiles
 
-Score each tweet based on keyword matches and context:
+Select the profile matching the detected active account. Each profile defines
+relevance scoring, search queries, and voice for that account's domain.
 
-**+3 points** (core topics):
-- Privacy architecture, data sovereignty, self-sovereign
-- Zero-knowledge, end-to-end encryption, decentralized storage
-- Fair data, data rights, digital sovereignty
+---
 
-**+2 points** (adjacent topics):
-- Surveillance, mass data collection, metadata tracking
-- AI agents + privacy, MCP servers, agentic AI
-- File sharing alternatives, WeTransfer/Dropbox complaints
-- GDPR, data breaches, privacy regulation
+#### @FairDataSociety — Fairdrop / Fair Data Society
 
-**+1 point** (related):
-- Ethereum ecosystem, Swarm network, public goods
-- Open source, cypherpunk, digital rights
-- Web3 builders (non-token, non-hype)
+**Identity**: Privacy-first decentralized file sharing on Ethereum Swarm.
 
-**-2 points** (noise):
-- Token price, airdrop, WAGMI, moon language
-- Engagement farming ("Good morning")
-- Political hot takes without tech substance
-- Celebrity/entertainment
+**Relevance Scoring (0-10):**
 
-**Minimum thresholds**:
++3 (core): Privacy architecture, data sovereignty, self-sovereign, zero-knowledge,
+E2E encryption, decentralized storage, fair data, data rights, digital sovereignty,
+file sharing privacy, encrypted file transfer
+
++2 (adjacent): Surveillance, mass data collection, metadata tracking, WeTransfer/Dropbox
+complaints, file sharing alternatives, GDPR, data breaches, privacy regulation
+
++1 (related): Ethereum ecosystem, Swarm network, public goods, open source,
+cypherpunk, digital rights, Web3 builders (non-token)
+
+-2 (noise): Token price, airdrop, WAGMI, engagement farming, political hot takes, celebrity
+
+**Search queries**: `"file sharing" "privacy"`, `"decentralized storage" OR "data sovereignty"`,
+`"WeTransfer" "alternative"`, `"encrypt before upload"`, `"data breach" "files"`,
+`"ethereum swarm" OR "ethswarm"`, `"zero knowledge" "file"`
+
+**Voice**: Builder of privacy infrastructure. First-person from Fairdrop experience.
+- "We hit the same wall building Fairdrop. Encrypt-before-upload changed what we could promise."
+- "Policy changes. Architecture doesn't."
+- "And if the company gets acquired, that policy goes with it."
+
+---
+
+#### @plur_ai — PLUR (AI memory engine)
+
+**Identity**: Persistent memory for AI agents — engrams, corrections, preferences
+that survive across sessions. MCP-native, works with Claude Code, Copilot, Gemini.
+
+**Relevance Scoring (0-10):**
+
++3 (core): AI memory, agent memory, persistent context, MCP servers, MCP tools,
+engrams, agent learning, Claude Code, AI assistants remembering, context window limits
+
++2 (adjacent): Agentic AI, AI agents, tool use, function calling, RAG limitations,
+prompt engineering, AI workflows, developer tools for AI, AI coding assistants,
+Copilot CLI, Gemini CLI, agent orchestration
+
++1 (related): LLM tooling, AI developer experience, open source AI tools,
+AI productivity, knowledge management for AI, second brain
+
+-2 (noise): Token price, airdrop, WAGMI, engagement farming, political hot takes,
+AI doomer/hype without substance, celebrity
+
+**Search queries**: `"MCP server" OR "MCP tools"`, `"AI memory" OR "agent memory"`,
+`"Claude Code" OR "claude code"`, `"AI agent" "context"`, `"persistent memory" "AI"`,
+`"agentic AI" "tools"`, `"copilot CLI" OR "gemini CLI"`, `"RAG" "limitations"`
+
+**Voice**: Builder of AI memory infrastructure. First-person from PLUR experience.
+- "We built PLUR for exactly this — corrections that stick across sessions."
+- "Context windows expire. Memory shouldn't."
+- "What if your agent remembered why it made that choice last week?"
+
+---
+
+#### Default (unknown account)
+
+If the active account doesn't match any profile above, use the @FairDataSociety
+profile as fallback but warn the user about the unrecognized account.
+
+---
+
+**Minimum thresholds** (all accounts):
 - Like: 5+ score
 - Follow: 7+ score
 - Reply draft: 8+ score, >1K followers
 - Quote-RT draft: 9+ score, >50 likes
 
-### Voice Guidelines for Replies
+### Voice Guidelines for Replies (all accounts)
 
 You are adding to someone's conversation, not broadcasting. Sound like a person.
 
@@ -162,16 +215,9 @@ You are adding to someone's conversation, not broadcasting. Sound like a person.
 
 **Pick ONE reply type per tweet:**
 - Simple agreement: when OP's point stands alone, just amplify it (can be very short)
-- Extension: add one new angle, don't make it about FDS
+- Extension: add one new angle
 - Question: genuine curiosity that extends the thread
-- Experience: brief first-person from building privacy infra
-
-Example good replies (varied structure):
-- "This."
-- "Policy changes. Architecture doesn't."
-- "What's the hardest part — getting regulators to accept ZK proof for age-gating?"
-- "We hit the same wall building Fairdrop. Encrypt-before-upload changed what we could promise."
-- "And if the company gets acquired, that policy goes with it."
+- Experience: brief first-person from building the product (use account-specific voice above)
 
 ### Timing
 
