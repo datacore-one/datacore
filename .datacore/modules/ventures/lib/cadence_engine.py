@@ -172,3 +172,100 @@ def generate_cadence_task(entry: CadenceEntry, venture_name: str) -> dict:
             "DAYS_OVERDUE": entry.days_overdue,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Budget-aware filtering
+# ---------------------------------------------------------------------------
+
+
+def filter_by_budget(
+    overdue: list,
+    ledger,
+    monthly_ceiling: float,
+    ai_ceiling: float,
+    real_ceiling: float,
+) -> tuple:
+    """Filter overdue cadences based on remaining budget.
+
+    If AI budget remaining <= 0, only daily cadences are kept (they're essential).
+    Otherwise all overdue cadences pass through.
+
+    Returns (executable, skipped) — both lists of CadenceEntry.
+    """
+    from budget_tracker import get_remaining
+
+    remaining = get_remaining(ledger, monthly_ceiling, ai_ceiling, real_ceiling)
+    ai_remaining = remaining["ai"]
+
+    if ai_remaining <= 0:
+        executable = [e for e in overdue if e.frequency == "daily"]
+        skipped = [e for e in overdue if e.frequency != "daily"]
+    else:
+        executable = list(overdue)
+        skipped = []
+
+    return executable, skipped
+
+
+# ---------------------------------------------------------------------------
+# Rich task generation (nightshift)
+# ---------------------------------------------------------------------------
+
+
+def generate_rich_cadence_task(
+    entry: CadenceEntry,
+    venture_name: str,
+    venture_dir=None,
+) -> dict:
+    """Generate an enriched org task dict for nightshift execution.
+
+    Like generate_cadence_task but adds CONTEXT, BOOTSTRAP, EFFORT,
+    ACCEPTANCE_CRITERIA, and TOOLS properties that give nightshift agents
+    richer context for autonomous execution.
+
+    Args:
+        entry: The overdue cadence entry.
+        venture_name: Human-readable venture name.
+        venture_dir: Path to the venture's space directory (optional).
+    """
+    base = generate_cadence_task(entry, venture_name)
+
+    # Build context string pointing to venture space
+    context_parts = [f"Venture: {venture_name}"]
+    if venture_dir is not None:
+        context_parts.append(f"Space: {venture_dir}")
+        context_parts.append(f"Config: {venture_dir}/venture.yaml")
+    context = " | ".join(context_parts)
+
+    # Bootstrap: instructions for the nightshift agent to orient
+    bootstrap = (
+        f"Read venture.yaml and role '{entry.role}' definition. "
+        f"Check previous cadence results in .datacore/cadence-log.yaml. "
+        f"Execute '{entry.cadence_name}' for the {entry.role} role."
+    )
+
+    # Effort estimate based on frequency
+    effort_map = {"daily": "15min", "weekly": "30min", "monthly": "1h", "quarterly": "2h"}
+    effort = effort_map.get(entry.frequency, "30min")
+
+    # Acceptance criteria
+    acceptance = (
+        f"Cadence '{entry.cadence_name}' completed successfully. "
+        f"Results logged to cadence-log.yaml with status and summary."
+    )
+
+    # Suggested tools
+    tools = "plur_recall_hybrid, datacore.search, Read, Grep, Glob"
+
+    base["properties"].update(
+        {
+            "CONTEXT": context,
+            "BOOTSTRAP": bootstrap,
+            "EFFORT": effort,
+            "ACCEPTANCE_CRITERIA": acceptance,
+            "TOOLS": tools,
+        }
+    )
+
+    return base
