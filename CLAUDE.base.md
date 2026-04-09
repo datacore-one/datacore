@@ -23,7 +23,20 @@ You have persistent memory through **two MCP servers** — use both in every ses
 - `datacore.search` — search journal and knowledge files (NOT engrams — use `plur_recall_hybrid` for engram memory)
 - `datacore.ingest` — import content into knowledge base
 - `datacore.status` — system health
+- `datacore.date` — canonical date operations (today, dow, validate, add, parse, org-stamp)
 - `datacore.modules.*` — manage installed modules
+
+### Dates — NEVER type from memory
+
+LLMs hallucinate day-of-week names and anchor to training-era years. You will get dates wrong if you type them from memory. Rules:
+
+1. **Today's date**: use the date injected into your system prompt (e.g. "Today's date is 2026-04-08") — copy it literally. If unsure, call `datacore.date` with `op: today`.
+2. **Day-of-week for any date**: call `datacore.date` with `op: dow`. Never compute it in your head.
+3. **Relative dates** ("next Monday", "in 3 days"): call `datacore.date` with `op: parse`.
+4. **org-mode timestamps**: call `datacore.date` with `op: org-stamp` — returns `<YYYY-MM-DD Day>` correctly.
+5. **Before writing** a date+dow into any `.org` or `.md` file, mentally verify or validate with `datacore.date op:validate`. A PreToolUse hook will reject writes containing wrong day names — fix them before the write, don't fight the hook.
+
+The CLI equivalent is `python3 .datacore/lib/date_utils.py today|dow|validate|...` for shell scripts and subagents.
 
 > **Recall split**: `plur_recall_hybrid` searches engram memory. `datacore.search` searches journal/knowledge files. For comprehensive results, call both.
 
