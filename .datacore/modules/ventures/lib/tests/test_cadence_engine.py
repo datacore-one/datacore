@@ -210,3 +210,48 @@ def test_generate_cadence_task():
     assert props["CADENCE"] == "check-social"
     assert props["FREQUENCY"] == "daily"
     assert props["DAYS_OVERDUE"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Blocked cadence cooldown (Issue 2)
+# ---------------------------------------------------------------------------
+
+
+def test_blocked_cadence_within_cooldown():
+    """A blocked daily cadence within 7-day cooldown is NOT overdue."""
+    from datetime import timedelta
+    # Ran 3 days ago with result: blocked (via flat-key heartbeat format)
+    three_days_ago = str(TODAY - timedelta(days=3))
+    log = {
+        "cmo": {"daily": {"check-social": three_days_ago}},
+        "cmo.check-social": {"last_run": three_days_ago, "result": "blocked"},
+    }
+    result = find_overdue_cadences(ROLES, cadence_log=log, today=TODAY)
+    names = [e.cadence_name for e in result]
+    assert "check-social" not in names
+
+
+def test_blocked_cadence_past_cooldown():
+    """A blocked daily cadence past 7-day cooldown IS overdue (re-check)."""
+    from datetime import timedelta
+    eight_days_ago = str(TODAY - timedelta(days=8))
+    log = {
+        "cmo": {"daily": {"check-social": eight_days_ago}},
+        "cmo.check-social": {"last_run": eight_days_ago, "result": "blocked"},
+    }
+    result = find_overdue_cadences(ROLES, cadence_log=log, today=TODAY)
+    names = [e.cadence_name for e in result]
+    assert "check-social" in names
+
+
+def test_non_blocked_cadence_uses_normal_window():
+    """A non-blocked daily cadence uses its normal 1-day window, not cooldown."""
+    from datetime import timedelta
+    two_days_ago = str(TODAY - timedelta(days=2))
+    log = {
+        "cmo": {"daily": {"check-social": two_days_ago}},
+        "cmo.check-social": {"last_run": two_days_ago, "result": "ok"},
+    }
+    result = find_overdue_cadences(ROLES, cadence_log=log, today=TODAY)
+    names = [e.cadence_name for e in result]
+    assert "check-social" in names  # 2 days > 1-day window = overdue

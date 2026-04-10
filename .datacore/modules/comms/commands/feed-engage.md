@@ -69,7 +69,13 @@ For tweets scoring 8+/10 relevance AND from accounts with >1K followers:
    ```
    If `skip` → move to next tweet.
 
-2. **Get full tweet text** — navigate to tweet URL, use `get_page_text`. Note the tweet ID from URL.
+2. **Get tweet URL and full text** — MANDATORY before drafting:
+   1. Click through to the tweet (not just read from feed)
+   2. Copy the full URL from the browser (e.g. `https://x.com/author/status/1234567890`)
+   3. Extract the tweet ID from the URL (the number after `/status/`)
+   4. Use `get_page_text` to capture the full tweet content
+   5. **If you cannot get a valid URL with a numeric tweet ID, SKIP this tweet.**
+      Never submit a draft with `unknown` as tweet_id or URL — it can't be posted later.
 
 3. **Draft a reply** — follow voice guidelines below.
 

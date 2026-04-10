@@ -67,6 +67,9 @@ def save_cadence_log(log: dict, path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+BLOCKED_COOLDOWN_DAYS = 7
+
+
 def find_overdue_cadences(
     roles: dict,
     cadence_log: dict,
@@ -78,6 +81,11 @@ def find_overdue_cadences(
     - It has never run (not in cadence_log), OR
     - today - last_run >= frequency_window
 
+    Blocked cadences (result: blocked) get a 7-day cooldown: they won't
+    be flagged as overdue until 7 days after last_run, preventing
+    re-checking something the agent already determined is blocked while
+    still re-checking periodically in case the blocker is resolved.
+
     Returns a list of CadenceEntry sorted by:
     1. Frequency priority (daily first, then weekly, monthly, quarterly)
     2. Days overdue descending (most overdue first within same frequency)
@@ -85,6 +93,8 @@ def find_overdue_cadences(
     Args:
         roles: Role dict from venture.yaml (keyed by role id, each with "cadences" sub-dict).
         cadence_log: Nested dict: {role: {frequency: {cadence_name: "YYYY-MM-DD"}}}.
+            Also checks flat-key format {role.cadence_name: {last_run, result}}
+            written by the heartbeat system.
         today: Date to use as "today". Defaults to date.today().
     """
     if today is None:
@@ -107,6 +117,18 @@ def find_overdue_cadences(
             for name in cadence_names:
                 last_run_str = freq_log.get(name)
 
+                # Also check flat-key format from heartbeat: "role.cadence-name"
+                flat_key = f"{role_id}.{name}"
+                flat_entry = cadence_log.get(flat_key, {})
+
+                # Determine if blocked (from flat-key heartbeat log)
+                is_blocked = (isinstance(flat_entry, dict)
+                              and flat_entry.get("result") == "blocked")
+
+                # Use flat-key last_run if nested doesn't have it
+                if last_run_str is None and isinstance(flat_entry, dict):
+                    last_run_str = flat_entry.get("last_run")
+
                 if last_run_str is None:
                     # Never run — treat as maximally overdue
                     overdue.append(
@@ -120,7 +142,13 @@ def find_overdue_cadences(
                 else:
                     last_run = date.fromisoformat(str(last_run_str))
                     delta = (today - last_run).days
-                    if delta >= window.days:
+
+                    # Blocked cadences: apply cooldown before re-checking
+                    effective_window = (BLOCKED_COOLDOWN_DAYS
+                                        if is_blocked
+                                        else window.days)
+
+                    if delta >= effective_window:
                         overdue.append(
                             CadenceEntry(
                                 role=role_id,
