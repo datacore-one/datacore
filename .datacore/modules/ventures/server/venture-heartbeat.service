@@ -1,0 +1,28 @@
+[Unit]
+Description=Venture Heartbeat — autonomous 24/7 venture operator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gregor
+Group=gregor
+WorkingDirectory=/home/gregor/Data
+Environment="HOME=/home/gregor"
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/home/gregor/config/nightshift.env
+ExecStart=/bin/bash /home/gregor/Data/.datacore/modules/ventures/server/venture-heartbeat.sh
+Restart=always
+RestartSec=60
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=25%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=venture-heartbeat
+
+[Install]
+WantedBy=multi-user.target

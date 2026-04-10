@@ -46,6 +46,7 @@ phases:
 trigger: manual
 hooks:
   - nightshift-today-hook
+  - ventures-today-hook
   - meetings-today-hook
   - crm-today-hook
   - health-today-hook
