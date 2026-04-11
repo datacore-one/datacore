@@ -126,7 +126,31 @@ Use `datacore.modules.list` for installed modules, `datacore.modules.info <name>
 
 ## Conventions
 
-### org-mode
+### Tasks — org-workspace is mandatory
+
+**NEVER grep raw `.org` files for task queries.** Use org-workspace, which treats tasks as structured objects:
+
+```bash
+# CLI adapter (12 commands):
+python3 .datacore/lib/org_workspace_adapter.py list --file [path] --tags continuation --states TODO
+python3 .datacore/lib/org_workspace_adapter.py agenda --file [path] --days 7
+python3 .datacore/lib/org_workspace_adapter.py ensure-ids --file [path]
+```
+
+```python
+# Python (for complex queries):
+from org_workspace import OrgWorkspace, Query
+ws = OrgWorkspace()
+ws.load('/path/to/org/inbox.org')
+q = Query(ws)
+q.by_tag('continuation')  # by_state, agenda, deadlines, overdue, stale, ai_tasks
+```
+
+Each task is a **NodeView** with: `heading`, `todo`, `tags`, `scheduled`, `deadline`, `priority`, `properties`, `body`, `parent`, `children`, `id()`. Use `get_property('BOOTSTRAP')` for rich task properties.
+
+GTD MCP tools (`datacore.gtd.*`) are also available when the MCP server is running: `inbox_count`, `add_task`, `list_next_actions`, `complete_task`, `agenda_view`, `deadline_warnings`, `archive_tasks`, `project_health`, `effort_aggregate`, `duplicate_check`, `write_clock_entry`.
+
+### org-mode format
 
 - Headings: `*` per level. States: TODO, NEXT, WAITING, DONE
 - Properties: `:PROPERTIES:` ... `:END:`. Tags: `:tag1:tag2:`

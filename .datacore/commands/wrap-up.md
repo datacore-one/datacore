@@ -1,5 +1,35 @@
 # Session Wrap-Up
 
+## EXECUTION MODEL — SUBAGENT DISPATCH (MANDATORY)
+
+**DO NOT execute /wrap-up inline.** Always dispatch to the `wrap-up-executor` subagent.
+
+The main conversation agent has a documented pattern of compressing /wrap-up under context pressure (ENG-2026-0411-001, corrected 3+ times, locked behavioral engram). The ONLY reliable fix is running wrap-up in a fresh subagent with zero context pressure.
+
+### What the main conversation does:
+
+1. **Compile session context** — summarize the session into a structured prompt:
+   - Session start time (from first user message)
+   - Session goal
+   - Key accomplishments (bullet list)
+   - Files created/modified (from git diff or conversation memory)
+   - Decisions made
+   - Continuation tasks already created (if /continue --save ran first)
+   - Any user input for the wrap-up (e.g., additional notes)
+
+2. **Dispatch the subagent:**
+   ```
+   Agent tool:
+     subagent_type: wrap-up-executor
+     prompt: [compiled session context + "Read and execute ~/Data/.datacore/commands/wrap-up.md in full. All 17 steps. No compression."]
+   ```
+
+3. **Display the subagent's output** — the subagent returns the Step 17 consolidated report. Display it to the user as-is.
+
+**That's it. The main conversation does NOT read the steps below.** The steps below are for the subagent.
+
+---
+
 ## Command Context
 
 ### When to Reference DIP-0016

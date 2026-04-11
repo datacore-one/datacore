@@ -3712,3 +3712,33 @@ validation:
   source_must_exist: true
   spawns_must_exist: true
   circular_spawn_detection: true
+
+  - name: wrap-up-executor
+    description: "Executes full /wrap-up in fresh context — all 17 steps, no compression"
+    version: "1.0.0"
+    source: .datacore/agents/wrap-up-executor.md
+    skills:
+      - session-closure
+      - journal-writing
+      - learning-extraction
+    triggers:
+      commands:
+        - wrap-up
+    reads:
+      required:
+        - .datacore/commands/wrap-up.md
+      contextual:
+        - "session context from main conversation"
+    writes:
+      - "0-personal/notes/journals/YYYY-MM-DD.md"
+      - "*/journal/YYYY-MM-DD.md"
+      - ".datacore/learning/*.md"
+      - "0-personal/org/inbox.org"
+    references:
+      dips:
+        - DIP-0016
+        - DIP-0009
+    spawns:
+      - journal-coordinator
+      - session-learning-coordinator
+      - learning-reviewer
