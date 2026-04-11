@@ -1,32 +1,17 @@
 # Session Wrap-Up
 
-## EXECUTION MODEL — SUBAGENT DISPATCH (MANDATORY)
+## EXECUTION MODEL — INLINE WITH TRACKED CHECKLIST
 
-**DO NOT execute /wrap-up inline.** Always dispatch to the `wrap-up-executor` subagent.
+**Execute /wrap-up inline** in the main conversation. The tracked checklist (Step 0b) prevents
+step-skipping by making every step visible as a TaskCreate item that must be marked complete.
 
-The main conversation agent has a documented pattern of compressing /wrap-up under context pressure (ENG-2026-0411-001, corrected 3+ times, locked behavioral engram). The ONLY reliable fix is running wrap-up in a fresh subagent with zero context pressure.
+**Why not subagent:** Subagent dispatch (tried 2026-04-11) produces zero console output for
+15-20 minutes — unacceptable UX. The user sees nothing while the agent runs 170+ tool calls
+in the background. The tracked checklist is the actual compression guard, not process isolation.
 
-### What the main conversation does:
-
-1. **Compile session context** — summarize the session into a structured prompt:
-   - Session start time (from first user message)
-   - Session goal
-   - Key accomplishments (bullet list)
-   - Files created/modified (from git diff or conversation memory)
-   - Decisions made
-   - Continuation tasks already created (if /continue --save ran first)
-   - Any user input for the wrap-up (e.g., additional notes)
-
-2. **Dispatch the subagent:**
-   ```
-   Agent tool:
-     subagent_type: wrap-up-executor
-     prompt: [compiled session context + "Read and execute ~/Data/.datacore/commands/wrap-up.md in full. All 17 steps. No compression."]
-   ```
-
-3. **Display the subagent's output** — the subagent returns the Step 17 consolidated report. Display it to the user as-is.
-
-**That's it. The main conversation does NOT read the steps below.** The steps below are for the subagent.
+**Anti-compression rule:** If you feel tempted to skip steps 6-9 ("no tasks to extract",
+"nothing to verify"), STOP. The checklist forces you to mark each step in_progress and
+completed. You cannot skip what is tracked. This is the fix for ENG-2026-0411-001.
 
 ---
 
