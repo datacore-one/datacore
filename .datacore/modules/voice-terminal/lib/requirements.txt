@@ -1,5 +1,0 @@
-faster-whisper
-openwakeword
-piper-tts
-sounddevice
-numpy

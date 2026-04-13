@@ -150,14 +150,12 @@ CLAUDE.md
 .datacore/mcp-servers.local.yaml
 .mcp.json
 
-# Module tools need node_modules symlink to resolve shared deps (zod, etc.)
-.datacore/modules/node_modules
-
-# Modules tracked in git. Each module's own .gitignore handles private data.
-# (Previously only 5 modules were tracked — now all are.)
-0-personal/.datacore/modules/
-0-personal/.datacore/
-0-personal/.claude
+# Modules: only gtd, outbox, research are root-tracked.
+# All other modules are independent repos, cloned via module.yaml repository: field.
+.datacore/modules/*/
+!.datacore/modules/gtd/
+!.datacore/modules/outbox/
+!.datacore/modules/research/
 
 # -----------------------------------------------------------------------------
 # SECRETS
