@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body {
+      width: 260px;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      color: #1a1a1a;
+      margin: 0;
+    }
+    .status {
+      text-align: center;
+      margin-bottom: 12px;
+      min-height: 20px;
+    }
+    .status.error { color: #dc2626; }
+    .status.success { color: #16a34a; }
+    .buttons {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+    }
+    button {
+      padding: 8px 16px;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      background: #fff;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    button:hover { background: #f3f4f6; }
+    button.primary {
+      background: #2563eb;
+      color: #fff;
+      border-color: #2563eb;
+    }
+    button.primary:hover { background: #1d4ed8; }
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    #capture-btn { width: 100%; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div id="phase-capture">
+    <div class="status" id="capture-status">Capture all tabs to inbox?</div>
+    <div class="buttons">
+      <button id="capture-btn" class="primary">Capture</button>
+    </div>
+  </div>
+
+  <div id="phase-close" class="hidden">
+    <div class="status success" id="close-status"></div>
+    <div class="buttons">
+      <button id="close-yes">Close tabs</button>
+      <button id="close-no">Keep open</button>
+    </div>
+  </div>
+
+  <div id="phase-done" class="hidden">
+    <div class="status success" id="done-status"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "inbox_path": "~/Data/0-personal/org/inbox.org",
+  "filtered_prefixes": [
+    "brave://",
+    "chrome://",
+    "about:",
+    "chrome-extension://",
+    "devtools://"
+  ]
+}

@@ -1,0 +1,36 @@
+manifest_version: 2
+name: tab-capture
+version: "0.1.0"
+description: |
+  Browser tab capture to GTD inbox — one-click capture of all open tabs
+  into inbox.org as TODO entries via Chromium Native Messaging.
+  Works with Brave, Chrome, and Chromium.
+
+  Tagline: "Tabs are tasks. Capture them."
+
+author: datacore
+license: MIT
+
+dependencies:
+  - core@>=1.0.0
+
+provides:
+  skills: []
+
+settings:
+  enabled:
+    description: "Enable tab-capture module"
+    default: true
+
+use_cases:
+  - "Capture all browser tabs to inbox"
+  - "Process open tabs as GTD items"
+  - "Clear tab clutter into actionable tasks"
+
+triggers:
+  - "capture tabs"
+  - "browser tabs"
+  - "tab capture"
+  - "tabs to inbox"
+
+context_loading: on_match
