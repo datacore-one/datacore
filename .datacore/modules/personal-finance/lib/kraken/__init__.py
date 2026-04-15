@@ -1,1 +1,0 @@
-# Kraken API integration
