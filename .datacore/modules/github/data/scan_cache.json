@@ -1,0 +1,50 @@
+{
+  "scan_date": "2026-04-15",
+  "since": "2026-04-14",
+  "username": "plur9",
+  "mentions": [],
+  "authored": [],
+  "org_activity": {
+    "datacore-one": {
+      "org": "datacore-one",
+      "new_issues_count": 0,
+      "closed_issues_count": 0,
+      "merged_prs_count": 0,
+      "new_issues": [],
+      "merged_prs": []
+    },
+    "datafund": {
+      "org": "datafund",
+      "new_issues_count": 0,
+      "closed_issues_count": 0,
+      "merged_prs_count": 0,
+      "new_issues": [],
+      "merged_prs": []
+    },
+    "fairDataSociety": {
+      "org": "fairDataSociety",
+      "new_issues_count": 0,
+      "closed_issues_count": 0,
+      "merged_prs_count": 0,
+      "new_issues": [],
+      "merged_prs": []
+    },
+    "plur-ai": {
+      "org": "plur-ai",
+      "new_issues_count": 0,
+      "closed_issues_count": 0,
+      "merged_prs_count": 0,
+      "new_issues": [],
+      "merged_prs": []
+    },
+    "plur9": {
+      "org": "plur9",
+      "new_issues_count": 0,
+      "closed_issues_count": 0,
+      "merged_prs_count": 0,
+      "new_issues": [],
+      "merged_prs": []
+    }
+  },
+  "scanned_at": "2026-04-15T06:01:00.999149"
+}
