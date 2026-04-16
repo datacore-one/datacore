@@ -37,6 +37,37 @@
 
 Resume incomplete work or find the highest-impact next action.
 
+## CRITICAL: Task Access Pattern
+
+**ALWAYS use org-workspace for task operations. NEVER grep raw org files.**
+
+The GTD module's 11 MCP tools (listed in module.yaml) are NOT registered on any MCP server —
+they are phantom tools. Until they are wired into the datacore MCP server, access tasks via:
+
+1. **Python inline** (preferred for structured queries):
+   ```python
+   python3 -c "
+   from org_workspace import OrgWorkspace, Query
+   ws = OrgWorkspace()
+   ws.load('/path/to/org/inbox.org')
+   q = Query(ws)
+   tasks = q.by_tag('continuation')  # or by_state, agenda, deadlines, etc.
+   for t in tasks:
+       print(f'[{t.todo}] {t.heading} scheduled={t.scheduled}')
+   "
+   ```
+
+2. **CLI adapter** (for specific operations):
+   ```bash
+   python3 .datacore/lib/org_workspace_adapter.py list --file [path] --tags continuation --states TODO
+   python3 .datacore/lib/org_workspace_adapter.py agenda --file [path] --days 7
+   python3 .datacore/lib/org_workspace_adapter.py ensure-ids --file [path]
+   ```
+
+**Why not grep?** Grep fails silently on glob mismatches, can't parse properties/tags/state,
+and misses tasks. org-workspace returns structured NodeView objects with heading, todo, tags,
+scheduled, properties, body, parent, children — all parsed correctly.
+
 ## Usage
 
 ```
@@ -192,10 +223,40 @@ CONTINUE
 
 Scanning for continuation tasks...
 [Search term: {search_term or "all"}]
-
-[Grep org files for :continuation: tag]
-[Filter by search term if provided]
 ```
+
+**Use org-workspace to query tasks as structured objects — NEVER grep raw org files:**
+
+```python
+from org_workspace import OrgWorkspace, Query
+
+ws = OrgWorkspace()
+# Load all space org files
+for space_dir in glob('[0-9]-*/org/'):
+    for f in ['inbox.org', 'next_actions.org']:
+        path = space_dir / f
+        if path.exists():
+            ws.load(path)
+
+q = Query(ws)
+continuation_tasks = q.by_tag('continuation')
+todo_only = [n for n in continuation_tasks if n.todo == 'TODO']
+
+# Filter by search term if provided
+if search_term:
+    todo_only = [n for n in todo_only if search_term.lower() in n.heading.lower()]
+```
+
+**Shortcut CLI** (equivalent):
+```bash
+python3 .datacore/lib/org_workspace_adapter.py list \
+  --file [space]/org/inbox.org --tags continuation --states TODO
+```
+
+Each task is a **NodeView object** with structured access to:
+- `n.heading`, `n.todo`, `n.tags`, `n.scheduled`, `n.deadline`, `n.priority`
+- `n.properties` (dict), `n.get_property('BOOTSTRAP')`, `n.get_property('CONTEXT')`
+- `n.body`, `n.parent`, `n.children`, `n.id()`
 
 **Search locations:**
 - `0-personal/org/inbox.org`
@@ -259,7 +320,8 @@ NO CONTINUATION TASKS MATCHING "{search_term}"
 
 Searching all tasks...
 
-[Grep org files for search_term in task headings, CONTEXT, KEY_FILES, BOOTSTRAP properties]
+[Use org_workspace_adapter.py list --file [org files] to query tasks as objects]
+[Filter by search_term in heading, CONTEXT, KEY_FILES, BOOTSTRAP properties via NodeView]
 
 [If matches found:]
 

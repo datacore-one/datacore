@@ -23,7 +23,20 @@ You have persistent memory through **two MCP servers** — use both in every ses
 - `datacore.search` — search journal and knowledge files (NOT engrams — use `plur_recall_hybrid` for engram memory)
 - `datacore.ingest` — import content into knowledge base
 - `datacore.status` — system health
+- `datacore.date` — canonical date operations (today, dow, validate, add, parse, org-stamp)
 - `datacore.modules.*` — manage installed modules
+
+### Dates — NEVER type from memory
+
+LLMs hallucinate day-of-week names and anchor to training-era years. You will get dates wrong if you type them from memory. Rules:
+
+1. **Today's date**: use the date injected into your system prompt (e.g. "Today's date is 2026-04-08") — copy it literally. If unsure, call `datacore.date` with `op: today`.
+2. **Day-of-week for any date**: call `datacore.date` with `op: dow`. Never compute it in your head.
+3. **Relative dates** ("next Monday", "in 3 days"): call `datacore.date` with `op: parse`.
+4. **org-mode timestamps**: call `datacore.date` with `op: org-stamp` — returns `<YYYY-MM-DD Day>` correctly.
+5. **Before writing** a date+dow into any `.org` or `.md` file, mentally verify or validate with `datacore.date op:validate`. A PreToolUse hook will reject writes containing wrong day names — fix them before the write, don't fight the hook.
+
+The CLI equivalent is `python3 .datacore/lib/date_utils.py today|dow|validate|...` for shell scripts and subagents.
 
 > **Recall split**: `plur_recall_hybrid` searches engram memory. `datacore.search` searches journal/knowledge files. For comprehensive results, call both.
 
@@ -113,7 +126,31 @@ Use `datacore.modules.list` for installed modules, `datacore.modules.info <name>
 
 ## Conventions
 
-### org-mode
+### Tasks — org-workspace is mandatory
+
+**NEVER grep raw `.org` files for task queries.** Use org-workspace, which treats tasks as structured objects:
+
+```bash
+# CLI adapter (12 commands):
+python3 .datacore/lib/org_workspace_adapter.py list --file [path] --tags continuation --states TODO
+python3 .datacore/lib/org_workspace_adapter.py agenda --file [path] --days 7
+python3 .datacore/lib/org_workspace_adapter.py ensure-ids --file [path]
+```
+
+```python
+# Python (for complex queries):
+from org_workspace import OrgWorkspace, Query
+ws = OrgWorkspace()
+ws.load('/path/to/org/inbox.org')
+q = Query(ws)
+q.by_tag('continuation')  # by_state, agenda, deadlines, overdue, stale, ai_tasks
+```
+
+Each task is a **NodeView** with: `heading`, `todo`, `tags`, `scheduled`, `deadline`, `priority`, `properties`, `body`, `parent`, `children`, `id()`. Use `get_property('BOOTSTRAP')` for rich task properties.
+
+GTD MCP tools (`datacore.gtd.*`) are also available when the MCP server is running: `inbox_count`, `add_task`, `list_next_actions`, `complete_task`, `agenda_view`, `deadline_warnings`, `archive_tasks`, `project_health`, `effort_aggregate`, `duplicate_check`, `write_clock_entry`.
+
+### org-mode format
 
 - Headings: `*` per level. States: TODO, NEXT, WAITING, DONE
 - Properties: `:PROPERTIES:` ... `:END:`. Tags: `:tag1:tag2:`

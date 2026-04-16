@@ -82,6 +82,15 @@
   "hooks": {
     "SessionStart": [
       {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/hooks/plur_session_start_reminder.py",
+            "timeout": 3
+          }
+        ]
+      },
+      {
         "matcher": "startup",
         "hooks": [
           {
@@ -111,9 +120,28 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/hooks/plur_inject_wrapper.py",
+            "timeout": 15
+          }
+        ]
       }
     ],
     "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/hooks/plur_session_guard.py",
+            "timeout": 3
+          }
+        ]
+      },
       {
         "matcher": "EnterPlanMode",
         "hooks": [
@@ -153,6 +181,46 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "EnterPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx @plur-ai/cli hook-inject --event plan_mode",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx @plur-ai/cli hook-inject --event skill",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx @plur-ai/cli hook-inject --event agent",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Edit|Write|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx @plur-ai/cli hook-observe",
+            "timeout": 3
+          }
+        ]
       }
     ],
     "SubagentStart": [
@@ -162,6 +230,16 @@
           {
             "type": "command",
             "command": "python3 ~/Data/.datacore/lib/active_memory.py --event subagent",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx @plur-ai/cli hook-inject --event subagent",
             "timeout": 10
           }
         ]
@@ -177,9 +255,29 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "matcher": "auto|manual",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx @plur-ai/cli hook-inject --rehydrate",
+            "timeout": 15
+          }
+        ]
       }
     ],
     "PostToolUse": [
+      {
+        "matcher": "mcp__plur__plur_session_start",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/hooks/plur_session_mark.py",
+            "timeout": 3
+          }
+        ]
+      },
       {
         "matcher": "Edit|Write",
         "hooks": [
@@ -187,6 +285,16 @@
             "type": "command",
             "command": "bash ~/Data/.datacore/hooks/org-date-fix.sh",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Edit|Write|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx @plur-ai/cli hook-observe --post",
+            "timeout": 3
           }
         ]
       }
@@ -201,7 +309,28 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx @plur-ai/cli hook-learn-check",
+            "timeout": 2
+          }
+        ]
+      }
     ]
   },
-  "enabledPlugins": {}
+  "enabledPlugins": {},
+  "mcpServers": {
+    "plur": {
+      "command": "/bin/sh",
+      "args": [
+        "-lc",
+        "exec npx -y @plur-ai/mcp@latest"
+      ]
+    }
+  }
 }

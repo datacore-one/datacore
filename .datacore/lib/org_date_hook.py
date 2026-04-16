@@ -44,10 +44,25 @@ def fix_dates(filepath: str) -> int:
 
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
+    filepath = None
+    if len(sys.argv) >= 2:
+        filepath = sys.argv[1]
+    else:
+        # Read PostToolUse hook JSON from stdin
+        import json
+        try:
+            raw = sys.stdin.read(1024 * 1024)
+            data = json.loads(raw) if raw.strip() else {}
+            filepath = (
+                data.get("tool_input", {}).get("file_path")
+                or data.get("tool_input", {}).get("file")
+            )
+        except Exception:
+            pass
+
+    if not filepath:
         sys.exit(0)
 
-    filepath = sys.argv[1]
     fixes = fix_dates(filepath)
     if fixes > 0:
-        print(f"Auto-fixed {fixes} wrong day-of-week name(s) in {Path(filepath).name}")
+        print(f"Auto-fixed {fixes} wrong day-of-week name(s) in {Path(filepath).name}", file=sys.stderr)
