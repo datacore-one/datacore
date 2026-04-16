@@ -209,7 +209,11 @@ class ServerArchiver:
         """Get remote home directory path."""
         if not hasattr(self, '_remote_home'):
             success, output = self._ssh_command("echo $HOME")
+<<<<<<< Updated upstream
             self._remote_home = output.strip() if success else os.path.expanduser("~")
+=======
+            self._remote_home = output.strip() if success else "/home/gregor"
+>>>>>>> Stashed changes
         return self._remote_home
 
     def archive_item(self, item: ArchiveItem) -> Tuple[bool, str]:
