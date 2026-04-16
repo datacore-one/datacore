@@ -1,5 +1,20 @@
 # Session Wrap-Up
 
+## EXECUTION MODEL — INLINE WITH TRACKED CHECKLIST
+
+**Execute /wrap-up inline** in the main conversation. The tracked checklist (Step 0b) prevents
+step-skipping by making every step visible as a TaskCreate item that must be marked complete.
+
+**Why not subagent:** Subagent dispatch (tried 2026-04-11) produces zero console output for
+15-20 minutes — unacceptable UX. The user sees nothing while the agent runs 170+ tool calls
+in the background. The tracked checklist is the actual compression guard, not process isolation.
+
+**Anti-compression rule:** If you feel tempted to skip steps 6-9 ("no tasks to extract",
+"nothing to verify"), STOP. The checklist forces you to mark each step in_progress and
+completed. You cannot skip what is tracked. This is the fix for ENG-2026-0411-001.
+
+---
+
 ## Command Context
 
 ### When to Reference DIP-0016

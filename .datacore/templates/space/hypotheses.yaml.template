@@ -1,0 +1,6 @@
+venture: {{SPACE_NAME}}
+board:
+  backlog: []
+  active: []
+  validated: []
+  invalidated: []

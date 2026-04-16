@@ -3652,6 +3652,45 @@ knowledge_locations:
       - user
       - gtd-weekly-review
 
+  # ===========================================================================
+  # VENTURES MODULE
+  # ===========================================================================
+
+  venture-monitor:
+    description: "Daily heartbeat per venture — cadence status, budget health, hypothesis progress"
+    version: "0.1.0"
+    source: ".datacore/modules/ventures/agents/venture-monitor.md"
+    module: "ventures"
+    skills:
+      - venture-health
+      - cadence-tracking
+      - budget-monitoring
+      - hypothesis-tracking
+    triggers:
+      tags:
+        - ":AI:venture:monitor:"
+      commands: []
+      schedules:
+        - "daily"
+    reads:
+      required:
+        - ".datacore/modules/ventures/CLAUDE.base.md"
+        - "{space}/venture.yaml"
+        - ".datacore/state/venture/cadence-log.yaml"
+        - ".datacore/state/venture/budget-ledger.yaml"
+        - "{space}/hypotheses.yaml"
+      contextual: []
+    writes:
+      - "{space}/journal/YYYY-MM-DD.md"
+      - "{space}/org/inbox.org"
+    references:
+      dips: []
+      specs:
+        - "docs/superpowers/specs/2026-04-09-autonomous-venture-framework-design.md"
+    spawns: []
+    can_be_called_by:
+      - ai-task-executor
+
 # =============================================================================
 # VALIDATION RULES
 # Used by agent-registry-auditor
@@ -3673,3 +3712,33 @@ validation:
   source_must_exist: true
   spawns_must_exist: true
   circular_spawn_detection: true
+
+  - name: wrap-up-executor
+    description: "Executes full /wrap-up in fresh context — all 17 steps, no compression"
+    version: "1.0.0"
+    source: .datacore/agents/wrap-up-executor.md
+    skills:
+      - session-closure
+      - journal-writing
+      - learning-extraction
+    triggers:
+      commands:
+        - wrap-up
+    reads:
+      required:
+        - .datacore/commands/wrap-up.md
+      contextual:
+        - "session context from main conversation"
+    writes:
+      - "0-personal/notes/journals/YYYY-MM-DD.md"
+      - "*/journal/YYYY-MM-DD.md"
+      - ".datacore/learning/*.md"
+      - "0-personal/org/inbox.org"
+    references:
+      dips:
+        - DIP-0016
+        - DIP-0009
+    spawns:
+      - journal-coordinator
+      - session-learning-coordinator
+      - learning-reviewer

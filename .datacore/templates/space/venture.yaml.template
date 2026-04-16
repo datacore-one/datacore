@@ -1,0 +1,68 @@
+# venture.yaml — Autonomous Venture Configuration
+# Place at: [space]/venture.yaml
+#
+# Fields:
+#   name        - Short identifier (slug-style, lowercase, hyphens ok)
+#   description - One-sentence summary of the venture
+#   stage       - One of: discovery, validation, growth, maturity
+#   space       - Datacore space directory (e.g. "4-forge")
+#   autonomy    - AI autonomy level: 0=off, 1=suggest, 2=draft, 3=act
+#   thesis      - Core hypothesis being tested (optional)
+#   budget      - Spending limits (all in USD)
+#   roles       - Agent roles running in this venture
+#   github      - GitHub org and repos (optional)
+#   nightshift  - Nightshift execution config (optional)
+#   tags        - Discovery and filtering tags (optional)
+
+name: my-venture
+description: "One sentence describing what this venture does and why."
+stage: discovery  # discovery | validation | growth | maturity
+space: "0-personal"
+autonomy: 1  # 0=off, 1=suggest, 2=draft, 3=act (max)
+
+thesis: >
+  State the core hypothesis: what do you believe is true,
+  what would prove or disprove it, and what's the business model
+  if proven? Keep it to 2-3 sentences.
+
+budget:
+  ceiling: 50.0       # Hard monthly spend cap in USD
+  ai_tokens: 10.0     # Allocated for AI API calls
+  real_spend: 5.0     # Allocated for real-money actions (ads, hosting, etc.)
+  # Constraint: ai_tokens + real_spend must be <= ceiling
+
+roles:
+  # Each role maps to a registered Datacore agent.
+  # Cadence: daily | weekly | monthly
+  - id: researcher
+    agent: forge-researcher   # agent name from .datacore/registry/agents.yaml
+    cadence: weekly
+    enabled: true
+  - id: product_manager
+    agent: forge-pm
+    cadence: daily
+    enabled: false  # set to true when venture reaches validation stage
+
+# GitHub integration (optional)
+# github:
+#   org: my-github-org
+#   repos:
+#     - name: my-repo
+#       role: core       # core | output | infra | docs
+
+# Nightshift execution (optional — defaults shown)
+# nightshift:
+#   enabled: true
+#   max_parallel_agents: 2
+#   timeout_minutes: 60
+
+# Discovery tags — used for filtering in dashboards and reports
+tags:
+  - ecommerce
+  - ai-generated
+
+# Arbitrary metadata — passed through to agents as context
+# meta:
+#   market: etsy
+#   target_mrr: 500
+#   review_cadence: monthly
