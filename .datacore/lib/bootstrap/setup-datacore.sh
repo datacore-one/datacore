@@ -387,6 +387,26 @@ fi
 # Summary
 # --------------------------------------------------------------------------
 
+# --------------------------------------------------------------------------
+# Configure Claude Code hooks
+# --------------------------------------------------------------------------
+
+echo ""
+echo "=== Configuring Claude Code Hooks ==="
+echo ""
+
+# Install PLUR CLI (needed for session hooks)
+echo "Installing PLUR CLI..."
+npm_global_install @plur-ai/cli@latest
+
+# Initialize PLUR (registers MCP server + base hooks)
+echo "Initializing PLUR..."
+npx @plur-ai/cli init 2>/dev/null || true
+
+# Configure session enforcement hooks (guard, sentinel, reminder)
+echo "Configuring session enforcement hooks..."
+python3 "$DATACORE_PATH/.datacore/lib/bootstrap/configure-hooks.py" --datacore-root "$DATACORE_PATH"
+
 echo ""
 echo "=== Datacore setup complete! ==="
 echo ""
