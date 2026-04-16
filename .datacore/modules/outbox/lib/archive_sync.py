@@ -53,11 +53,19 @@ class OutboxConfig:
         self._config = self._load_config()
 
     def _load_config(self) -> dict:
-        """Load settings.yaml."""
-        if not self.settings_path.exists():
-            return {}
-        with open(self.settings_path) as f:
-            return yaml.safe_load(f) or {}
+        """Load settings.yaml merged with settings.local.yaml."""
+        config = {}
+        for name in ("settings.yaml", "settings.local.yaml"):
+            path = self.data_root / ".datacore" / name
+            if path.exists():
+                with open(path) as f:
+                    local = yaml.safe_load(f) or {}
+                    for key, val in local.items():
+                        if key in config and isinstance(config[key], dict) and isinstance(val, dict):
+                            config[key].update(val)
+                        else:
+                            config[key] = val
+        return config
 
     @property
     def archive_location(self) -> str:
@@ -172,14 +180,37 @@ class ServerArchiver:
         return success
 
     def ensure_repo_exists(self, space: str) -> bool:
-        """Ensure archive repo exists on server."""
+        """Ensure archive repo exists on server, create if missing."""
         repo_path = self.config.archive_repos.get(space)
         if not repo_path:
             return False
 
         # Check if repo exists
         success, _ = self._ssh_command(f"test -d ~/{shlex.quote(repo_path)}")
+        if not success:
+            # Create bare repo
+            self._ssh_command(f"mkdir -p ~/{shlex.quote(repo_path)} && git -C ~/{shlex.quote(repo_path)} init --bare")
+            success, _ = self._ssh_command(f"test -d ~/{shlex.quote(repo_path)}")
         return success
+
+    def list_archived_files(self, space: str) -> set:
+        """List files already in the archive repo on server."""
+        repo_path = self.config.archive_repos.get(space)
+        if not repo_path:
+            return set()
+        success, output = self._ssh_command(
+            f"cd ~/{shlex.quote(repo_path)} && git ls-tree -r --name-only HEAD 2>/dev/null"
+        )
+        if success and output.strip():
+            return set(output.strip().splitlines())
+        return set()
+
+    def _resolve_remote_home(self) -> str:
+        """Get remote home directory path."""
+        if not hasattr(self, '_remote_home'):
+            success, output = self._ssh_command("echo $HOME")
+            self._remote_home = output.strip() if success else os.path.expanduser("~")
+        return self._remote_home
 
     def archive_item(self, item: ArchiveItem) -> Tuple[bool, str]:
         """Archive a single item to server."""
@@ -187,26 +218,42 @@ class ServerArchiver:
         if not repo_path:
             return False, f"No archive repo configured for {item.space}"
 
+        home = self._resolve_remote_home()
+        abs_repo = f"{home}/{repo_path}"
+
         # Create destination directory
         dest_dir = os.path.dirname(item.archive_dest)
         if dest_dir:
-            self._ssh_command(f"mkdir -p ~/{shlex.quote(repo_path)}/{shlex.quote(dest_dir)}")
+            full_dir = f"{abs_repo}/{dest_dir}"
+            self._ssh_command(f"mkdir -p {shlex.quote(full_dir)}")
 
-        # Copy main file
-        remote_path = f"~/{shlex.quote(repo_path)}/{shlex.quote(item.archive_dest)}"
-        success, msg = self._scp_file(item.source_path, remote_path)
+        # Copy main file using rsync (handles spaces in paths)
+        full_dest = f"{abs_repo}/{item.archive_dest}"
+        success, msg = self._rsync_file(item.source_path, full_dest)
         if not success:
             return False, f"Failed to copy {item.source_path}: {msg}"
 
         # Copy companion if exists
         if item.companion_path:
-            companion_dest = f"{item.archive_dest}.companion.md"
-            remote_companion = f"~/{shlex.quote(repo_path)}/{shlex.quote(companion_dest)}"
-            success, msg = self._scp_file(item.companion_path, remote_companion)
+            companion_dest = f"{abs_repo}/{item.archive_dest}.companion.md"
+            success, msg = self._rsync_file(item.companion_path, companion_dest)
             if not success:
                 return False, f"Failed to copy companion: {msg}"
 
         return True, "OK"
+
+    def _rsync_file(self, local_path: Path, remote_abs_path: str) -> Tuple[bool, str]:
+        """Copy file to server via rsync (handles spaces in paths)."""
+        try:
+            result = subprocess.run(
+                ["rsync", "-a", str(local_path), f"{self.host}:{remote_abs_path}"],
+                capture_output=True, text=True, timeout=120
+            )
+            return result.returncode == 0, result.stdout + result.stderr
+        except subprocess.TimeoutExpired:
+            return False, "rsync timed out"
+        except Exception as e:
+            return False, str(e)
 
     def commit_changes(self, space: str, items: List[ArchiveItem]) -> Tuple[bool, str]:
         """Commit and push changes to archive repo."""
@@ -220,9 +267,11 @@ class ServerArchiver:
         commit_msg = f"Archive: {len(items)} items from {space}\n\n{file_list}"
 
         # Git add and commit
-        self._ssh_command(f"cd ~/{shlex.quote(repo_path)} && git add -A")
+        home = self._resolve_remote_home()
+        abs_repo = f"{home}/{repo_path}"
+        self._ssh_command(f"cd {shlex.quote(abs_repo)} && git add -A")
         escaped_msg = shlex.quote(commit_msg)
-        success, msg = self._ssh_command(f"cd ~/{shlex.quote(repo_path)} && git commit -m {escaped_msg}")
+        success, msg = self._ssh_command(f"cd {shlex.quote(abs_repo)} && git commit -m {escaped_msg}")
         if not success and "nothing to commit" not in msg:
             return False, f"Git commit failed: {msg}"
 
@@ -244,6 +293,22 @@ class LocalArchiver:
             # Initialize git repo
             subprocess.run(["git", "init"], cwd=repo_path, capture_output=True, timeout=30)
         return True
+
+    def list_archived_files(self, space: str) -> set:
+        """List files already in the local archive repo."""
+        repo_path = self.archive_base / f"{space}-archive"
+        if not repo_path.exists():
+            return set()
+        try:
+            result = subprocess.run(
+                ["git", "ls-tree", "-r", "--name-only", "HEAD"],
+                cwd=repo_path, capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return set(result.stdout.strip().splitlines())
+        except Exception:
+            pass
+        return set()
 
     def archive_item(self, item: ArchiveItem) -> Tuple[bool, str]:
         """Archive a single item locally."""
@@ -431,6 +496,14 @@ class OutboxProcessor:
 
         # Process each space
         for space, items in discovered.items():
+            # Filter out already-archived files
+            if hasattr(self.archiver, 'list_archived_files'):
+                existing = self.archiver.list_archived_files(space)
+                items = [i for i in items if i.relative_path not in existing]
+
+            if not items:
+                continue
+
             if dry_run:
                 result.by_space[space] = len(items)
                 result.items_processed += len(items)
