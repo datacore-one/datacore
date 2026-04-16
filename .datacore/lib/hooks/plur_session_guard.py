@@ -7,6 +7,7 @@ Created by: plur_session_mark.py (PostToolUse on plur_session_start)
 import json
 import os
 import sys
+import tempfile
 
 EXEMPT_TOOLS = {
     "mcp__plur__plur_session_start",
@@ -30,7 +31,7 @@ def main():
     if not session_id:
         return
 
-    sentinel = f"/tmp/plur-session-{session_id}"
+    sentinel = ff"{tempfile.gettempdir()}/plur-session-{session_id}"
     if os.path.exists(sentinel):
         return
 

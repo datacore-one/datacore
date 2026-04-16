@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 
 
 def main():
@@ -28,7 +29,7 @@ def main():
         output = {}
 
     # If session not started, prepend forceful reminder
-    sentinel = f"/tmp/plur-session-{session_id}" if session_id else ""
+    sentinel = f"{tempfile.gettempdir()}/plur-session-{session_id}" if session_id else ""
     if sentinel and not os.path.exists(sentinel):
         existing = output.get("additionalContext", "")
         reminder = (

@@ -3,6 +3,7 @@
 import json
 import sys
 import pathlib
+import tempfile
 
 
 def main():
@@ -15,7 +16,7 @@ def main():
     if not session_id:
         return
 
-    sentinel = pathlib.Path(f"/tmp/plur-session-{session_id}")
+    sentinel = pathlib.Path(f"{tempfile.gettempdir()}/plur-session-{session_id}")
     sentinel.touch()
 
 
