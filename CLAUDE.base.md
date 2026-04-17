@@ -164,6 +164,15 @@ GTD MCP tools (`datacore.gtd.*`) are also available when the MCP server is runni
 - Tags: `#tag` in PKM/CRM, `:tag:` in org-mode. NOT frontmatter arrays.
 - Registries: `.datacore/tags.yaml` (system), `[space]/.datacore/tags.yaml` (space)
 
+### Focus Mode
+
+When sessions start from `[space]/2-projects/[project]/`, focus mode activates automatically. A lightweight shim replaces the full Datacore context with just:
+- Space identity and journal path
+- Available commands: `/wrap-up`, `/continue`, `/standup`, `/today`
+- Journal schema reference
+
+Detection: `python3 .datacore/lib/focus_mode.py detect`
+
 ### Bash
 
 - **Never multi-line Bash.** Chain with `&&`.
