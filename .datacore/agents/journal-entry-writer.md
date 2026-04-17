@@ -152,18 +152,18 @@ Use today's date for `YYYY-MM-DD`.
 
 ### Team Journal Format (Other Spaces)
 
-Team journals use project-grouped, attributed entries:
+Team journals use contributor-grouped, narrative entries:
 
 ```markdown
 ---
 
-## [Project Name]
+## @[author]
 
-### @[author] - [Brief Description] (HH:MM)
+### [Topic] — [Brief Description]
+*Project: [project-name]*
 
-> **TL;DR**: [One sentence summary]
-
-**Goal:** [session_goal]
+[Narrative: what was done, why, decisions made, challenges.
+Focus on reasoning and context — this is where organizational learning happens.]
 
 **Accomplished:**
 - [accomplishment 1]
@@ -179,24 +179,50 @@ Team journals use project-grouped, attributed entries:
 [If issues provided:]
 **Issues:** #12, #13
 
-[If continuation provided:]
-**Continuation:**
-- [next step 1]
-
-[If learnings provided:]
-**Learnings:**
-- [learning 1]
+**Continuation:** [What's next, what's blocking — MANDATORY when work is incomplete]
 
 #tag1, #tag2
 ```
 
 **Team Journal Rules:**
-- Group by **project** first (use `## Project Name` headers)
-- Within project, attribute to **author** (use `### @username - Description`)
-- Include GitHub username with `@` prefix
+- Group by **contributor** first (use `## @username` headers)
+- Within contributor section, use `### Topic — Description` subheadings
+- Include `*Project: [project-name]*` line under each subheading
+- Write in imperative voice, focused on decisions and reasoning
 - Link commits and issues when available
-- If adding to existing project section, append under that section
-- If new project, create new `## Project` section
+- If adding to existing contributor section, append new `### Topic` subsection
+- If new contributor, create new `## @username` section
+- **Continuation:** block is mandatory when work is incomplete — it is read by `/continue`
+
+### Session Metadata Block
+
+After all contributor narrative sections, append a Session Metadata block:
+
+```markdown
+## Session Metadata
+<!-- Agent-consumable structured data. Humans can skip this section. -->
+```
+
+~~~yaml
+sessions:
+  - contributor: [author]
+    project: [project-name]
+    started: "ISO-8601 timestamp"
+    duration_minutes: N
+    artifacts:
+      - {type: pr|issue|file|deploy, ref: "owner/repo#N or path", action: created|merged|closed}
+    git_refs: [hash1, hash2]
+    tokens: {input: N, output: N}
+    tools_used: [Read, Edit, Bash]
+~~~
+
+**Metadata rules:**
+- YAML inside a fenced code block (~~~yaml)
+- One session entry per contributor per wrap-up
+- Artifacts track what was produced (PRs, issues, files, deploys)
+- Token counts are approximate
+- Appended on each wrap-up (multiple sessions per day are separate entries)
+- If a `## Session Metadata` section already exists, append a new entry to the `sessions:` list
 
 ## Workflow
 
@@ -234,7 +260,7 @@ For team spaces:
 ---
 type: team-journal
 date: YYYY-MM-DD
-space: [space-name]
+space: [space-name-without-number]
 contributors: [author]
 ---
 
