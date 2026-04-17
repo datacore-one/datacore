@@ -33,10 +33,20 @@ sync_repo() {
 
     if [ "$ACTION" = "pull" ]; then
         echo "Pulling $name..."
-        # Fetch all branches first
+        # Fetch all remotes
         git -C "$repo" fetch --all --prune 2>/dev/null
         warn_branch
-        git -C "$repo" pull --rebase --autostash 2>/dev/null || echo "  (no remote or error)"
+        # Fork-and-overlay model (DIP-0001): if 'upstream' remote exists,
+        # merge upstream first, then push to origin to keep fork in sync.
+        if git -C "$repo" remote get-url upstream &>/dev/null; then
+            git -C "$repo" merge upstream/main --autostash --no-edit 2>/dev/null \
+                && echo "  ✓ merged upstream" \
+                || echo "  ⚠️  upstream merge failed (resolve manually)"
+            # Push merged upstream changes to fork
+            git -C "$repo" push origin main 2>/dev/null || true
+        else
+            git -C "$repo" pull --rebase --autostash 2>/dev/null || echo "  (no remote or error)"
+        fi
     elif [ "$ACTION" = "push" ]; then
         echo "Pushing $name..."
         warn_branch
