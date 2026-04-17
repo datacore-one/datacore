@@ -115,6 +115,24 @@ Long sessions get compacted — earlier conversation turns are summarized, losin
 
 **Store this inventory internally** — every subsequent step draws from it. Without this step, wrap-up misses work done before compaction or in external directories.
 
+### 0a-bis. Detect Focus Mode
+
+Check if running from a project folder inside a Datacore space:
+
+```bash
+python3 ~/Data/.datacore/lib/focus_mode.py detect
+```
+
+**If `mode: focus`:**
+- Record space, project, and contributor from the output
+- These values are passed to `journal-coordinator` in Step 4
+- Journal entries will be written to the parent space's journal directory
+- Continuation tasks will be written to the parent space's org files
+- The session summary should note: `[Focus mode: {space_dir}/{project}]`
+
+**If `mode: full` or `mode: none`:**
+- Proceed as normal (current behavior)
+
 ### 0b. Create Tracked Checklist (MANDATORY)
 
 **After context recovery**, create a tracked task list for the wrap-up steps. This prevents silent step skipping — every step is visible and must be marked complete.
@@ -250,6 +268,19 @@ Found X tasks that appear complete:
 2. **`session-learning-coordinator`** - Discovers spaces, spawns session-learning per space
 
 > ⚠ **Always delegate to the coordinator agents. Never call `session-learning` or `journal-entry-writer` directly with a hardcoded space name.** Coordinators discover all relevant spaces automatically via `ls -d [0-9]-*/`. Bypassing them causes spaces with actual work (e.g., root system files in the Datacore space) to be silently skipped.
+
+**Focus mode context:** If focus mode was detected in Step 0a-bis, pass the following additional context to `journal-coordinator`:
+
+Focus mode active:
+  space: [space_dir from detection]
+  project: [project from detection]
+  contributor: [contributor from detection]
+  journal_path: [journal_path from detection]
+
+This session was run from a project folder. Write the team journal entry
+to the parent space's journal using the contributor and project info above.
+
+The coordinator uses this to skip space discovery (the space is already known) and passes the project/contributor directly to journal-entry-writer.
 
 ```
 SESSION LEARNING & JOURNALS
