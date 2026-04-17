@@ -29,7 +29,7 @@ The briefing tells a story in three acts:
 
 | Question | Answer |
 |----------|--------|
-| Output location? | `0-personal/notes/journals/YYYY-MM-DD.md` |
+| Output location? | Personal space journal: `[personal-space]/notes/journals/YYYY-MM-DD.md` or `[personal-space]/journal/YYYY-MM-DD.md` |
 | Nightshift outputs? | `*/0-inbox/nightshift-*.md` |
 | Calendar source? | Google Calendar (from `settings.local.yaml` → `sync.adapters.calendar.calendar_id`) |
 | What DIPs govern this? | DIP-0009 (GTD), DIP-0011 (Nightshift) |
