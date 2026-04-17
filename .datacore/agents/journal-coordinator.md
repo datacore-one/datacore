@@ -90,6 +90,19 @@ ls -d [0-9]-*/  # Returns all space directories
 
 **Always include:** `0-personal` (personal journal always gets updated)
 
+## Focus Mode Override
+
+If the prompt includes focus mode context (space, project, contributor), skip space discovery:
+
+1. **Do NOT run `ls -d [0-9]-*/`** — the space is already known
+2. Use the provided space directory, project name, and contributor
+3. Pass these directly to `journal-entry-writer`
+4. Personal journal (`0-personal`) still gets an entry (use git status to determine if there's content)
+
+**Detection:** Look for "Focus mode active:" in your prompt. If present, extract space, project, contributor, and journal_path values.
+
+**Why:** Focus mode sessions run from project folders and already know their parent space. Space discovery from CWD would fail because CWD is not `~/Data/`.
+
 ## Space Relevance Detection
 
 **Use git as ground truth, conversation for context.**
