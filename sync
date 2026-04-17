@@ -70,12 +70,24 @@ for space in [0-9]-*/; do
     fi
 done
 
+# Modules (independent repos under .datacore/modules/)
+for module in .datacore/modules/*/; do
+    if [ -d "$module/.git" ]; then
+        sync_repo "$module" "module: $(basename $module)"
+    fi
+done
+
+# DIPs (independent repo)
+if [ -d ".datacore/dips/.git" ]; then
+    sync_repo ".datacore/dips" "dips"
+fi
+
 # All projects within spaces
 for space in [0-9]-*/; do
-    if [ -d "$space/projects" ]; then
-        for project in "$space"projects/*/; do
-            if [ -d "$project" ]; then
-                sync_repo "$project" "project: $project"
+    if [ -d "$space/2-projects" ]; then
+        for project in "$space"2-projects/*/; do
+            if [ -d "$project/.git" ]; then
+                sync_repo "$project" "project: $(basename $project)"
             fi
         done
     fi
