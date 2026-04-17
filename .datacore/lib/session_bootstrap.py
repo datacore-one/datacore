@@ -69,7 +69,20 @@ def main():
     except Exception as e:
         _debug(f"session_bootstrap: update check failed: {e}")
 
-    lines.append("Datacore session initialized. Engrams will inject on first message.")
+    # Focus mode detection
+    try:
+        from focus_mode import detect as detect_focus, generate_shim
+        focus_info = detect_focus()
+        if focus_info.get("mode") == "focus":
+            shim = generate_shim(focus_info)
+            lines.append("")
+            lines.append(shim)
+            lines.append(f"Focus mode active: {focus_info['space_dir']}/{focus_info.get('project', '?')}")
+        else:
+            lines.append("Datacore session initialized. Engrams will inject on first message.")
+    except Exception as e:
+        _debug(f"session_bootstrap: focus mode detection failed: {e}")
+        lines.append("Datacore session initialized. Engrams will inject on first message.")
 
     if lines:
         context = "[Datacore Session Bootstrap]\n\n" + "\n".join(lines)
