@@ -331,8 +331,8 @@ The goal is **email inbox zero**. Data processes ALL emails, not just recent one
 | NPM publish | npm "Successfully published" | Archive |
 | GA4 reports | noreply-analytics@google | Archive |
 | Security advisories | GitHub security advisory | Route to GTD task |
-| Accounting/payroll | plurdoo.si, invoices, receipts, expenses | Keep -- accounting |
-| Team communication | @datafund.io, @ethswarm.org team | Keep -- actionable |
+| Accounting/payroll | Accounting service domains, invoices, receipts, expenses | Keep -- accounting |
+| Team communication | Team member domains (from space configs) | Keep -- actionable |
 | External outreach | Unknown senders, pitches | Keep -- needs decision |
 | Calendar updates | Google Calendar invitations | Archive (in calendar) |
 | Releases | GitHub Release notifications | Archive |
@@ -359,18 +359,18 @@ Format as a timeline when meetings exist:
 ### Your Agenda
 
 **Morning**
-- 09:00–09:30 Weekly standup (@crt, @tadej) — Prep: share DIP-0017 status
-- [#A] Continue: Datacore infrastructure — central git origin (scheduled today)
-- Reply to [sender] re: [subject] (flagged urgent)
+- 09:00-09:30 Weekly standup (@teammate1, @teammate2) -- Prep: share project status
+- [#A] Top priority task from next_actions.org (scheduled today)
+- Reply to [sender] re: [subject] (flagged urgent email)
 
 **Afternoon**
-- 14:00–14:30 1:1 with @teammate
-- Review PR #42 in 2-datacore (2 days waiting)
-- [#A] QVAC PoC — 3 days overdue, ship or renegotiate
+- 14:00-14:30 1:1 with @teammate
+- Review PR #N in [space] (N days waiting)
+- [#A] Overdue task -- N days past deadline, needs resolution
 
 **Decisions Needed**
-- Nightshift output: blog post draft (score 0.68) — review and approve/reject
-- Sync conflict: github:owner/repo#42 state mismatch
+- Nightshift output needing review (score below threshold)
+- Email thread needing human decision (partnership, invitation, etc.)
 
 **Inbox** (3 items — process or delegate)
 ```
@@ -396,15 +396,14 @@ For each numbered space with activity in the past 24h:
 ```markdown
 ### Spaces
 
-**1-datafund** — 5 commits, 1 PR open
-Crt backfilled journal entries (Jan-Apr). New highlevel intro deck for
-government meetings (7 slides, locked). PR #15 needs review: API docs update.
+**1-[teamspace]** -- 5 commits, 1 PR open
+@contributor backfilled journal entries. New presentation shipped (7 slides).
+PR #15 needs review: API docs update.
 
-**2-datacore** — 4 commits
-Data platform + services pages shipped. "AI Chief of Staff" landing page
-preview live. DIP-0017 archive processed.
+**2-[projectspace]** -- 4 commits
+Platform pages shipped. DIP-0017 archive processed.
 
-**5-plur** — quiet
+**5-[space]** -- quiet
 Sync only. No active work.
 ```
 
@@ -417,10 +416,10 @@ Include for each active space:
 - Open PRs requiring attention (with age)
 - GitHub Issues: only those needing human decision
 - Venture status (if venture.yaml exists): cadences, hypotheses, budget
-- Trading details under 6-meridian (bots, positions, paper trading, dashboard link)
+- Trading details under the trading venture space (if trading module installed)
 - Blockers from `org/next_actions.org`
 
-Group quiet spaces: "3-fds, 4-forge, 7-megaphone: routing only."
+Group quiet spaces: "[space-a], [space-b]: routing only."
 
 #### Horizon
 
@@ -433,9 +432,9 @@ Separate section with its own H2 -- these are action items, not informational.]
 
 **This Week**
 [Use datacore.date to verify all day names. Never type from memory.]
-- Apr 18: Monitor venture heartbeat, Reddit repost
-- Apr 20: Forge variants, cap table continuation
-- Apr 22: Thomas Fundneider follow-up, Dubai RWA pilot
+- [Date]: Scheduled task from next_actions.org
+- [Date]: Deadline approaching
+- [Date]: Follow-up meeting or review
 
 **Strategic Priorities**
 Three things that matter beyond today.
@@ -527,7 +526,7 @@ hook output in the appropriate section slot.
 |--------|------|-----------------|
 | health | Good Morning | Oura vitals, capacity level |
 | news | The World | Synthesized news narrative |
-| trading | The World (prices) + Spaces/Meridian (bots, positions) | Market signals in news; detailed trading under 6-meridian |
+| trading | The World (prices) + Spaces/[venture] (bots, positions) | Market signals in news; detailed trading under venture space |
 | mail | Agenda (actionable only) | Processed inbox, only remaining items shown |
 | github | Spaces (per-space triage) | PRs, issues, security alerts integrated per space |
 | nightshift | Agenda + Spaces | Task results woven into relevant sections |
