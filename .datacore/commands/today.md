@@ -228,41 +228,51 @@ principal — direct, personal, occasionally coaching.
 
 ### Briefing Structure
 
+The goal is **inbox zero across all inboxes** (email, GitHub, GTD org).
+Data processes everything proactively -- archive noise, route to org/research,
+create tasks. The briefing only shows what remains for the user.
+
+There is NO dedicated "What Data Did" section. The work is visible throughout:
+email is already triaged (counts inline in Good Morning, actionable items in Agenda),
+GitHub is already processed (integrated into Spaces), research outputs appear
+in The World or linked as podcasts. The proof of work is that everything is handled.
+
+**Data is proactive by default.** It identifies what the user needs and does it
+in advance. Only suggest (don't act) when:
+- Sending external communications (emails, messages)
+- Financial decisions or transactions
+- Deleting/archiving content the user created
+- Anything irreversible affecting other people
+
 ```markdown
 ## Daily Briefing
 
-### Good Morning
-[Coach-like opening. 2-3 sentences. Reference vitals, yesterday's wins,
-set the tone for the day. This is the "human" moment.]
+## Good Morning
+[Coach-like opening. Reference vitals, yesterday, what was handled overnight.]
 
-### The World
-[News synthesis — what happened overnight. 2-3 narrative paragraphs.
-Macro → crypto → tech/AI. Bloomberg analyst tone.
-Include trading-relevant signals if trading module active.]
+## The World
+[News synthesis + market prices. Research outputs/podcasts if generated.]
 
-### What Data Did Overnight
-[Everything accomplished while you slept. Nightshift results,
-email auto-processing, research completed, podcasts generated.
-This is the "chief of staff report" — proving value.]
+## Your Agenda
+[What needs YOU today. Meetings + tasks + actionable emails + GitHub items.
+Everything else already handled. Capacity-adjusted.]
 
-### Your Agenda
-[Chronological timeline merging meetings + priority tasks.
-Capacity-adjusted. Includes email items needing attention,
-GitHub PRs to review, and decisions pending.]
+## Spaces
+[Per-space: work done + GitHub triage + priorities + venture status.]
+### [space-name]
+[Narrative context, not commit hashes.]
 
-### Spaces
-[Team activity with context. Not just commit hashes —
-what happened, what matters, what needs you.
-GitHub Issues/PRs requiring attention per space.]
+## Decisions Due
+[Formal decisions + email decisions needing human input.]
 
-### Horizon
-[This week's deadlines and upcoming events.
-Strategic priorities — what matters beyond today.
-Decisions due for review.]
+## Horizon
+[This week + strategic priorities.]
 
-### Data's Observation
-[Always last. Playful pattern analysis in Data's voice.
-No contractions. Curious and analytical.]
+## Proactive Suggestions
+[Things Data can do tonight with approval. External comms = draft only.]
+
+## Data's Observation
+[Always last. Pattern analysis in Data's voice.]
 ```
 
 ---
@@ -306,35 +316,38 @@ If stale (>4h), fetch first: `python3 .datacore/modules/news/lib/feed_fetcher.py
 
 **Tone:** Analytical, concise, professional. Like a Bloomberg terminal morning note.
 
-#### What Data Did Overnight
+#### Email Processing (Step 1d, expanded)
 
-Show everything accomplished autonomously. This section proves the value of
-the AI Chief of Staff. Format:
+The goal is **email inbox zero**. Data processes ALL emails, not just recent ones.
 
-```markdown
-### What Data Did Overnight
+**Classification rules** (apply to every message):
 
-**Nightshift** (N tasks completed, M need review)
-- Research: [topic] — [quality score] — [[link to output]]
-- Content: [draft] — [quality score] — [[link]]
+| Category | Pattern | Action |
+|----------|---------|--------|
+| CI notifications | GitHub "Run failed/passed", own repos | Archive |
+| Dependabot PRs | dependabot[bot] sender | Archive (tracked in GitHub) |
+| Newsletters | beehiiv, substack, known newsletter senders | Archive, route interesting to research |
+| Marketing/promo | Hotels, OKX, Swisscom, SaaS upsells | Archive |
+| NPM publish | npm "Successfully published" | Archive |
+| GA4 reports | noreply-analytics@google | Archive |
+| Security advisories | GitHub security advisory | Route to GTD task |
+| Accounting/payroll | plurdoo.si, invoices, receipts, expenses | Keep -- accounting |
+| Team communication | @datafund.io, @ethswarm.org team | Keep -- actionable |
+| External outreach | Unknown senders, pitches | Keep -- needs decision |
+| Calendar updates | Google Calendar invitations | Archive (in calendar) |
+| Releases | GitHub Release notifications | Archive |
 
-**Email** (N processed, M need your attention)
-- Auto-archived: 15 newsletters, 8 notifications
-- Drafts prepared: 2 replies ready for review
-- Flagged urgent: 1 from [sender] re: [subject]
+**Processing flow:**
+1. Fetch ALL inbox messages (paginate if >100)
+2. Classify each by rules above
+3. Archive via Gmail API (remove INBOX label, batch of 50)
+4. Create GTD tasks for security alerts and assigned issues
+5. Report inline: "Email: 244 to 39 (205 archived)"
 
-**Research & Podcasts**
-- Daily news podcast ready: [[link]] (12 min)
-- Deep-dive: [topic] — [[link]] (18 min)
-- Readwise: 5 items pending import
-
-**GitHub**
-- CI: all green across repos
-- Auto-merged: dependabot PRs in [repo]
-```
-
-If nothing ran overnight: "Quiet night — no nightshift tasks were queued.
-Consider adding :AI: tasks before bed for overnight execution."
+**Actionable emails appear in Agenda** grouped as:
+- Quick wins (reply/forward, under 5 min each)
+- Needs decision (partnerships, invitations, outreach)
+- Team (delegate or acknowledge)
 
 #### Your Agenda
 
@@ -395,34 +408,41 @@ preview live. DIP-0017 archive processed.
 Sync only. No active work.
 ```
 
-Include for each space:
-- Recent commits with **context** (not just hashes)
-- Open PRs requiring attention
-- GitHub Issues activity
-- Blockers from `org/next_actions.org`
-- What's the space's current priority/focus
+**GitHub triage is integrated here, not in a separate section.**
+Data proactively: marks read release/CI notifications, creates GTD tasks for
+security alerts, groups quiet spaces together.
 
-Skip quiet spaces or group them: "3-fds, 4-forge, 6-meridian, 7-megaphone: DIP-0017 routing only."
+Include for each active space:
+- Recent commits with **narrative context** (not hashes)
+- Open PRs requiring attention (with age)
+- GitHub Issues: only those needing human decision
+- Venture status (if venture.yaml exists): cadences, hypotheses, budget
+- Trading details under 6-meridian (bots, positions, paper trading, dashboard link)
+- Blockers from `org/next_actions.org`
+
+Group quiet spaces: "3-fds, 4-forge, 7-megaphone: routing only."
 
 #### Horizon
 
 ```markdown
-### Horizon
+## Decisions Due
+[Formal decisions from decisions.yaml + email decisions needing human input.
+Separate section with its own H2 -- these are action items, not informational.]
+
+## Horizon
 
 **This Week**
-- Fri Apr 18: Monitor venture heartbeat, Reddit repost
-- Sun Apr 20: Forge variants + A/B check-in, cap table continuation
-- Tue Apr 22: Thomas Fundneider follow-up, Dubai RWA pilot
+[Use datacore.date to verify all day names. Never type from memory.]
+- Apr 18: Monitor venture heartbeat, Reddit repost
+- Apr 20: Forge variants, cap table continuation
+- Apr 22: Thomas Fundneider follow-up, Dubai RWA pilot
 
 **Strategic Priorities**
-Three things that matter beyond today:
-1. QVAC PoC — overdue, blocks partnership momentum
-2. Nightshift research pipeline — stalled, needs tasks queued
-3. Calendar + email integration — now working, wire into nightshift
+Three things that matter beyond today.
 
-**Decisions Due**
-- DEC-2026-0314-003: Late.dev API (overdue 3 days, no outcome)
-- 3 architectural decisions approaching May 22 review
+## Proactive Suggestions
+[Things Data can do overnight with approval. Format: description + trigger phrase.
+External communications = draft only, never send.]
 ```
 
 #### Data's Observation
@@ -507,11 +527,11 @@ hook output in the appropriate section slot.
 |--------|------|-----------------|
 | health | Good Morning | Oura vitals, capacity level |
 | news | The World | Synthesized news narrative |
-| trading | The World (prices) + Spaces/Meridian (positions, bots) | Market signals woven into news; detailed bot/position status under 6-meridian |
-| nightshift | What Data Did | Overnight task results |
-| mail | What Data Did + Agenda | Email triage, flagged items |
-| github | What Data Did + Agenda | PRs, issues, CI status |
-| research | What Data Did | Completed research, podcasts |
+| trading | The World (prices) + Spaces/Meridian (bots, positions) | Market signals in news; detailed trading under 6-meridian |
+| mail | Agenda (actionable only) | Processed inbox, only remaining items shown |
+| github | Spaces (per-space triage) | PRs, issues, security alerts integrated per space |
+| nightshift | Agenda + Spaces | Task results woven into relevant sections |
+| research | The World + Agenda | Outputs/podcasts in world, pending reviews in agenda |
 | meetings | Agenda | Meeting prep, standup preview |
 | crm | Agenda | Attendee context, follow-ups due |
 | ventures | Spaces | Venture portfolio status |
