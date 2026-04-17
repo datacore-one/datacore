@@ -239,10 +239,10 @@ What remains to be done? (brief, or I'll infer from context)
 
 **What /wrap-up still owns:** Detecting that work is incomplete, asking the user what remains, and passing that context to the continuation task creation logic. The task format and scheduling logic belong to `/continue`.
 
-### 4. Mark Completed Tasks
+### 4. Mark Completed Tasks (and Retroactive Task Creation)
 
 **Tools to use:**
-- Use `gtd.write_clock_entry` for tasks worked during the session (infer start/end times from conversation message timestamps — first mention to last mention of each task)
+- Use `gtd.write_clock_entry` for tasks worked during the session (infer start/end times from conversation message timestamps -- first mention to last mention of each task)
 - Use `gtd.duplicate_check` before creating any new tasks (continuation or GTD tasks) to avoid near-duplicates
 
 ```
@@ -254,10 +254,63 @@ Checking for completed tasks from this session...
 [Log CLOCK entries for tasks worked on using write_clock_entry]
 
 Found X tasks that appear complete:
-- [ ] Task 1 → Mark DONE? [Y/n]
-- [ ] Task 2 → Mark DONE? [Y/n]
+- [ ] Task 1 -> Mark DONE? [Y/n]
+- [ ] Task 2 -> Mark DONE? [Y/n]
 
 [Update org-mode states]
+```
+
+**Ad-hoc Task Gap Detection:**
+
+Many sessions start with ad-hoc work (user dives into a task without a pre-existing
+org entry). If Step 4 finds **no matching task** for the session's primary work:
+
+1. **Create a retroactive task** in `next_actions.org` under the appropriate focus area:
+   - Heading: session goal (from Step 1 summary)
+   - State: DONE
+   - Tags: inferred from session context
+   - Properties: CREATED (session start time), EFFORT (estimated from session duration)
+   - CLOSED: session end time
+
+2. **Add a CLOCK entry** with actual session duration:
+   ```
+   :LOGBOOK:
+   CLOCK: [start-timestamp]--[end-timestamp] => H:MM
+   :END:
+   ```
+   Use `datacore.date` to get correct day names for timestamps. Never type from memory.
+
+3. **Log it transparently:**
+   ```
+   No existing task found for this session's work.
+   Created retroactive task: "Redesign /today daily briefing spec"
+     State: DONE | Duration: 2:30 | Focus area: /Datacore
+   ```
+
+**Why this matters:** Without retroactive task creation, ad-hoc sessions are invisible
+to productivity tracking. The daily score in `/tomorrow` needs completed task data.
+Journal entries capture WHAT was done, but org tasks capture HOW MUCH and WHERE,
+enabling trend analysis over time.
+
+**Implementation:**
+```python
+from org_workspace import OrgWorkspace, Query
+from org_workspace.log import add_clock_entry
+
+ws = OrgWorkspace()
+ws.load(next_actions_path)
+
+# Create the retroactive task
+node = ws.create_node(
+    file=next_actions_path,
+    heading=session_goal,
+    state="DONE",
+    tags=inferred_tags,
+    EFFORT=estimated_effort,
+)
+ws.set_closed(node, session_end_time)
+add_clock_entry(node.node, session_start_time, session_end_time)
+ws.save()
 ```
 
 ### 5. Session Learning & Journal Update (Coordinator Pattern)
