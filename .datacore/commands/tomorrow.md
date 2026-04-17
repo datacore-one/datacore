@@ -70,13 +70,14 @@ Tasks to create (mark in_progress when starting, completed when done):
 
 1. "Sync and inbox status" (activeForm: "Checking sync and inbox")
 2. "Quick diagnostics" (activeForm: "Running diagnostics")
-3. "Journal entry" (activeForm: "Writing journal entry")
-4. "Evening coaching" (activeForm: "Running evening check-in")
-5. "DIP gap detection" (activeForm: "Scanning for DIP gaps")
-6. "Task housekeeping + priorities" (activeForm: "Processing tasks")
-7. "AI delegation review" (activeForm: "Reviewing AI task queue")
-8. "Tomorrow preview + final status" (activeForm: "Generating preview")
-9. "Verify all checklist tasks completed" (activeForm: "Verifying checklist completion")
+3. "Day summary and goal achievement" (activeForm: "Computing daily score")
+4. "Journal entry" (activeForm: "Writing journal entry")
+5. "Evening coaching" (activeForm: "Running evening check-in")
+6. "DIP gap detection" (activeForm: "Scanning for DIP gaps")
+7. "Task housekeeping + priorities" (activeForm: "Processing tasks")
+8. "AI delegation review" (activeForm: "Reviewing AI task queue")
+9. "Tomorrow preview + final status" (activeForm: "Generating preview")
+10. "Verify all checklist tasks completed" (activeForm: "Verifying checklist completion")
 ```
 
 **The final task (#9) is a gate:** Before marking it complete, run `TaskList` and verify every prior task shows `completed`. If any task is still `pending` or `in_progress`, go back and finish it.
@@ -169,34 +170,106 @@ python ~/.datacore/lib/datacore_sync.py stats --quiet
 - Re-sync database if stale (>24 hours)
 - Report what was fixed
 
-### 4. Journal Entry
+### 4. Day Summary and Goal Achievement
 
-**Update today's journal with wrap-up:**
+**The core new section.** Compare the morning briefing priorities against actual accomplishments.
 
 ```
-JOURNAL UPDATE
---------------
-Adding end-of-day entry to journal...
+DAY SUMMARY
+───────────
+Comparing morning plan vs actual work...
 
-What did you accomplish today? (brief, or press Enter to skip)
-> [user input]
+Morning Must-do:
+  [x] Datacore infrastructure -- central git origin (DONE, 2:30h)
+  [ ] QVAC PoC -- overdue, not addressed today
+  [x] Reply to Polona re: payroll (DONE, 0:05)
 
-Any blockers or open items? (brief, or press Enter to skip)
-> [user input]
+Morning Should-do:
+  [x] Numina.rs website continuation (DONE, 1:45h)
+  [x] Crt's PLUR hook-inject bug (DONE, 0:45)
+  [ ] Stefan outreach -- not reviewed
+
+Morning Could-do:
+  [ ] Venture heartbeat -- deferred
+  [ ] Reddit repost -- deferred
+
+Ad-hoc (not planned):
+  [x] /today briefing redesign (3:00h) -- emerged from morning review
+  [x] Email inbox processing (0:30h) -- proactive
+  [x] Trading dashboard P&L fix (0:15h) -- discovered bug
+
+DAILY SCORE
+───────────
+  Must-do:  2/3 (67%)
+  Should-do: 2/3 (67%)
+  Could-do: 0/2 (0%)
+  Ad-hoc:   3 tasks (valuable but unplanned)
+
+  Planned completion: 4/8 (50%)
+  Total tasks completed: 7
+  Alignment: REACTIVE -- more ad-hoc work than planned work
+
+  Trend: [sparkline or 7-day rolling average]
 ```
 
-**Append to journal:**
+**How to compute:**
+
+1. Read the morning briefing from today's journal (`## Daily Briefing` > `## Your Agenda`)
+2. Parse Must-do / Should-do / Could-do items
+3. Match against DONE tasks in `next_actions.org` (CLOSED timestamp = today)
+4. Also count tasks completed today that were NOT in the morning plan (ad-hoc)
+5. Calculate scores
+
+**Alignment categories:**
+- **FOCUSED** (>70% planned completion, ad-hoc < planned) -- doing what you set out to do
+- **PRODUCTIVE** (many completions but <50% planned) -- busy but reactive
+- **REACTIVE** (more ad-hoc than planned, <50% planned) -- day driven by events
+- **LIGHT** (few completions overall) -- rest day or meetings-heavy
+
+**Persist to state:**
+
+Write daily score to `0-personal/.datacore/state/daily-scores.yaml`:
+
+```yaml
+scores:
+  - date: "2026-04-17"
+    must_do: [2, 3]      # completed, total
+    should_do: [2, 3]
+    could_do: [0, 2]
+    adhoc: 3
+    total_completed: 7
+    planned_pct: 50
+    alignment: reactive
+    readiness: 82         # from Oura (links capacity to output)
+```
+
+This enables trend analysis in `/today` morning briefing and weekly review.
+
+### 4b. Journal Entry
+
+**Update today's journal with the day summary:**
+
+Append to journal under `## End of Day`:
+
 ```markdown
 ## End of Day
 
-**Accomplished:**
-- [user input or auto-generated from commits]
+**Daily Score:** 50% planned | 7 tasks completed | Alignment: REACTIVE
+
+**Must-do:** 2/3 -- QVAC still overdue (3rd consecutive day)
+**Ad-hoc:** /today redesign, email triage, trading P&L fix
 
 **Open Items:**
-- [user input]
+- QVAC PoC -- still not addressed, now 4 days overdue
+- Stefan outreach emails -- needs decision
 
-**System Status:** All repos synced, diagnostics passed
+**Reflection:** [user input if provided, or auto-generated]
 ```
+
+The daily score appears in tomorrow's `/today` briefing as part of "Good Morning":
+"Yesterday you hit 50% of planned goals. The QVAC PoC has been overdue for 3 days
+now -- it keeps not making the cut. Either do it first thing tomorrow or formally
+renegotiate."
 
 ### 5. Evening Coaching Reflection (Optional)
 
