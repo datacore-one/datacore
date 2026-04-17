@@ -184,6 +184,13 @@ Launching /wrap-up...
 
 5. **Invoke `/wrap-up`** — this handles journals, learnings, sync.
 
+#### Focus Mode Override (Save)
+
+**If `mode: focus`:**
+- Create continuation task in `{org_path}/inbox.org` (parent space's inbox, not personal)
+- Set `:ASSIGNEE:` property to the contributor name
+- Proceed to `/wrap-up` which will also use focus mode
+
 ---
 
 ### 0b. Inline Save Mode (conversational "create continuation task")
@@ -215,6 +222,24 @@ Session continues.
 ---
 
 ### 1. Resume Mode — Scan for Continuation Tasks
+
+#### Focus Mode Override (Resume)
+
+If running from a project folder, detect focus mode first:
+
+```bash
+python3 ~/Data/.datacore/lib/focus_mode.py detect
+```
+
+**If `mode: focus`:**
+1. Read yesterday's journal from the parent space: `{journal_path}/YYYY-MM-DD.md`
+2. Find the contributor's `## @{contributor}` section
+3. Extract the `**Continuation:**` block
+4. Present continuation context to the user
+5. Also check `{org_path}/next_actions.org` for `:continuation:` tasks assigned to the contributor
+
+**If `mode: full` or `mode: none`:**
+- Proceed as normal (current behavior — scan personal org files)
 
 ```
 ═══════════════════════════════════════════════════
