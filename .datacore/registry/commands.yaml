@@ -230,9 +230,9 @@ commands:
     name: Repository & Task Sync
     description: Unified sync for repositories and external task systems
     version: 1.0.0
-    status: demoted
+    status: active
     trigger: sync repos|push changes|pull repos
-    source: .datacore/commands/demoted/sync.md
+    source: .datacore/commands/sync.md
     invokes: []
     reads:
       required:
@@ -253,9 +253,9 @@ commands:
     name: System Diagnostic
     description: Comprehensive system health check and troubleshooting
     version: 1.0.0
-    status: demoted
+    status: active
     trigger: system healthy|check health|diagnostic|is everything ok
-    source: .datacore/commands/demoted/diagnostic.md
+    source: .datacore/commands/diagnostic.md
     invokes:
     - agent: context-maintainer
       when: context validation
@@ -333,9 +333,9 @@ commands:
     name: File Ingestion
     description: Process files from inbox folders with deep knowledge extraction
     version: 2.0.0
-    status: demoted
+    status: active
     trigger: process files|ingest|process inbox files
-    source: .datacore/commands/demoted/ingest.md
+    source: .datacore/commands/ingest.md
     invokes:
     - agent: ingest-orchestrator
       when: always
@@ -411,9 +411,9 @@ commands:
     name: Create Module
     description: Create, convert, or audit modules for spec alignment
     version: 1.0.0
-    status: demoted
-    trigger: create a module|new module
-    source: .datacore/commands/demoted/create-module.md
+    status: active
+    trigger: create a module|new module|audit module|/create-module
+    source: .datacore/commands/create-module.md
     invokes:
     - agent: create-module
       when: always
@@ -453,10 +453,9 @@ commands:
     name: Agent Registry Audit
     description: Audit agents and commands for DIP-0016 compliance
     version: 1.0.0
-    status: demoted
+    status: active
     trigger: audit agents|check agent registry
-    merged_into: diagnostic
-    source: .datacore/commands/demoted/audit-agents.md
+    source: .datacore/commands/audit-agents.md
     invokes:
     - agent: agent-registry-auditor
       when: always
