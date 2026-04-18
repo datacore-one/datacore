@@ -13,6 +13,31 @@ from typing import Optional
 import yaml
 
 
+TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent.parent / "templates" / "cadences"
+
+
+def load_cadence_template(cadence_name: str, templates_dir: Path = None) -> Optional[str]:
+    """Load a cadence template markdown file, stripping YAML frontmatter.
+    Returns the template body text, or None if no template exists.
+    """
+    if templates_dir is None:
+        templates_dir = TEMPLATES_DIR
+    template_path = templates_dir / f"{cadence_name}.md"
+    if not template_path.exists():
+        return None
+    content = template_path.read_text(encoding="utf-8")
+    lines = content.split("\n")
+    if lines and lines[0].strip() == "---":
+        end_idx = None
+        for i, line in enumerate(lines[1:], 1):
+            if line.strip() == "---":
+                end_idx = i
+                break
+        if end_idx is not None:
+            content = "\n".join(lines[end_idx + 1:]).strip()
+    return content
+
+
 FREQUENCY_WINDOWS = {
     "daily": timedelta(days=1),
     "weekly": timedelta(days=7),
@@ -266,12 +291,22 @@ def generate_rich_cadence_task(
         context_parts.append(f"Config: {venture_dir}/venture.yaml")
     context = " | ".join(context_parts)
 
+    # Load cadence template if available
+    template = load_cadence_template(entry.cadence_name)
+
     # Bootstrap: instructions for the nightshift agent to orient
-    bootstrap = (
-        f"Read venture.yaml and role '{entry.role}' definition. "
-        f"Check previous cadence results in .datacore/cadence-log.yaml. "
-        f"Execute '{entry.cadence_name}' for the {entry.role} role."
-    )
+    if template:
+        bootstrap = (
+            f"Read venture.yaml and role '{entry.role}' definition. "
+            f"Check previous cadence results in .datacore/cadence-log.yaml. "
+            f"Follow the cadence template below for '{entry.cadence_name}'."
+        )
+    else:
+        bootstrap = (
+            f"Read venture.yaml and role '{entry.role}' definition. "
+            f"Check previous cadence results in .datacore/cadence-log.yaml. "
+            f"Execute '{entry.cadence_name}' for the {entry.role} role."
+        )
 
     # Effort estimate based on frequency
     effort_map = {"daily": "15min", "weekly": "30min", "monthly": "1h", "quarterly": "2h"}
@@ -295,5 +330,8 @@ def generate_rich_cadence_task(
             "TOOLS": tools,
         }
     )
+
+    if template:
+        base["body"] = template
 
     return base

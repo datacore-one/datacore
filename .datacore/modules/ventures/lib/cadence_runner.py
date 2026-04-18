@@ -122,6 +122,11 @@ def _append_raw_org(org_file: Path, task: dict) -> None:
             lines.append(f":{key}: {value}")
         lines.append(":END:")
 
+    body = task.get("body")
+    if body:
+        for body_line in body.split("\n"):
+            lines.append(f"  {body_line}")
+
     with open(org_file, "a") as f:
         f.write("\n".join(lines) + "\n")
 
