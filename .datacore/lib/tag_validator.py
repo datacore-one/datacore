@@ -266,7 +266,7 @@ class TagValidator:
                     # Check YAML frontmatter tags
                     yaml_tags = self.find_yaml_tags(content)
                     for tag in yaml_tags:
-                        if tag not in self.known_yaml_tags and tag not in ('stub', 'needs-content'):
+                        if tag not in self.known_yaml_tags:
                             issues[str(md_file)].append((tag, 1, "unknown yaml tag"))
 
                 except Exception as e:

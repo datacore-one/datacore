@@ -273,6 +273,7 @@ def init_database(space=None):
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_terms_term ON terms(term)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_terms_file ON terms(file_id)")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_terms_unique ON terms(file_id, term)")
 
     # Links/References between files (many-to-many - every reference is a row)
     # Roam-style: [[link]], #tag, #[[tag]] are all page references
@@ -301,6 +302,7 @@ def init_database(space=None):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_title ON links(target_title)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_syntax ON links(syntax)")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_links_unique ON links(source_id, target_title, syntax)")
 
     # Tags table for tag analysis and normalization
     cursor.execute("""
@@ -315,6 +317,7 @@ def init_database(space=None):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_tags_normalized ON tags(normalized_tag)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_tags_file ON tags(file_id)")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_unique ON tags(file_id, tag)")
 
     # Topic clusters (for future topic-weaver)
     cursor.execute("""

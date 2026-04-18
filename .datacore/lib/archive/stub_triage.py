@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 """
+ARCHIVED 2026-04-18 — Stubs removed from Datacore.
+
+Stubs were auto-generated empty .md files for every unresolved [[wikilink]].
+14,389 stubs were deleted; unresolved links are now tracked via resolved=0
+in the knowledge.db links table. See session journal 2026-04-18 for details.
+
+Original description:
 Stub Triage — Classify stubs into delete/keep/expand categories.
 
 Usage:
