@@ -268,8 +268,16 @@ def build_agent_prompt(state: dict, space_dir: Path) -> str:
     overdue_text = ""
     if state["overdue_cadences"]:
         overdue_text = "Overdue cadences:\n"
+        try:
+            from ventures.lib.cadence_engine import load_cadence_template
+        except ImportError:
+            from cadence_engine import load_cadence_template
         for c in state["overdue_cadences"]:
-            overdue_text += f"  - {c['role']}: {c['name']} ({c['frequency']}, {c['days_overdue']}d overdue)\n"
+            template = load_cadence_template(c['name'])
+            if template:
+                overdue_text += f"\n### {c['role']}: {c['name']} ({c['frequency']}, {c['days_overdue']}d overdue)\n\n{template}\n"
+            else:
+                overdue_text += f"  - {c['role']}: {c['name']} ({c['frequency']}, {c['days_overdue']}d overdue) — no template, use role context\n"
 
     budget = state["budget_remaining"]
     budget_text = f"Budget remaining: ${budget.get('ai', 0):.0f} AI / ${budget.get('real', 0):.0f} real"
