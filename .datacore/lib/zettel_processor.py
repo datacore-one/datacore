@@ -350,13 +350,13 @@ def save_to_database(file_data, space=None):
     cursor.execute("DELETE FROM terms WHERE file_id = ?", (file_data['id'],))
     for term, freq in file_data['terms'].items():
         cursor.execute("""
-            INSERT INTO terms (file_id, term, frequency, is_entity, entity_type)
+            INSERT OR IGNORE INTO terms (file_id, term, frequency, is_entity, entity_type)
             VALUES (?, ?, ?, 0, NULL)
         """, (file_data['id'], term, freq))
 
     for entity in file_data['entities']:
         cursor.execute("""
-            INSERT INTO terms (file_id, term, frequency, is_entity, entity_type)
+            INSERT OR REPLACE INTO terms (file_id, term, frequency, is_entity, entity_type)
             VALUES (?, ?, 1, 1, ?)
         """, (file_data['id'], entity['term'], entity['type']))
 
@@ -372,7 +372,7 @@ def save_to_database(file_data, space=None):
     cursor.execute("DELETE FROM tags WHERE file_id = ?", (file_data['id'],))
     for tag_info in file_data.get('tags', []):
         cursor.execute("""
-            INSERT INTO tags (file_id, tag, normalized_tag)
+            INSERT OR IGNORE INTO tags (file_id, tag, normalized_tag)
             VALUES (?, ?, ?)
         """, (file_data['id'], tag_info['original'], tag_info['normalized']))
 
@@ -520,8 +520,15 @@ def inject_backlinks(file_path, space=None):
     if detect_file_type(path) != 'zettel':
         return False
 
-    with open(path, 'r', encoding='utf-8') as f:
-        content = f.read()
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except UnicodeDecodeError:
+        try:
+            with open(path, 'r', encoding='latin-1') as f:
+                content = f.read()
+        except Exception:
+            return False
 
     frontmatter, body = parse_frontmatter(content)
     file_id = generate_file_id(path, frontmatter)
@@ -633,8 +640,13 @@ def scan_space(space, verbose=True):
     return processed
 
 
-def full_process(space=None, create_stubs_flag=True, inject_backlinks_flag=True):
-    """Full processing pipeline."""
+def full_process(space=None, create_stubs_flag=False, inject_backlinks_flag=True):
+    """Full processing pipeline.
+
+    Note: create_stubs_flag defaults to False. Stubs are no longer created on disk —
+    unresolved links are tracked in the DB links table (resolved=0) instead.
+    The old stub system created 14k+ empty .md files that polluted the knowledge graph.
+    """
     print(f"\n{'='*60}")
     print(f"KNOWLEDGE DATABASE PROCESSING")
     print(f"{'='*60}")
@@ -650,40 +662,29 @@ def full_process(space=None, create_stubs_flag=True, inject_backlinks_flag=True)
         spaces_to_process = list(SPACES.keys())
 
     # Scan all spaces
-    print("\n[1/6] Scanning files...")
+    print("\n[1/4] Scanning files...")
     for sp in spaces_to_process:
         print(f"\n--- {sp.upper()} ---")
         scan_space(sp)
 
     # Resolve links
-    print("\n[2/6] Resolving links...")
+    print("\n[2/4] Resolving links...")
     for sp in spaces_to_process:
         resolve_links(sp)
 
-    # Create stubs
+    # Create stubs (DISABLED by default — stubs are tracked as unresolved links in DB)
     if create_stubs_flag:
-        print("\n[3/6] Creating stubs for unresolved links...")
-        for sp in spaces_to_process:
-            create_stubs_for_unresolved(sp, min_references=2)
-
-        # Re-scan to pick up stubs
-        print("\n[4/6] Re-scanning to include stubs...")
-        for sp in spaces_to_process:
-            scan_space(sp, verbose=False)
-
-        # Resolve again
-        print("\n[5/6] Resolving links (including stubs)...")
-        for sp in spaces_to_process:
-            resolve_links(sp)
+        print("\n[WARNING] Stub creation is deprecated. Unresolved links stay in DB.")
+        print("  Use --create-stubs explicitly if you really want stub files.")
 
     # Inject backlinks
     if inject_backlinks_flag:
-        print("\n[6/6] Injecting backlinks...")
+        print("\n[3/4] Injecting backlinks...")
         for sp in spaces_to_process:
             inject_all_backlinks(sp)
 
     # Sync to root
-    print("\n--- Syncing to root DB ---")
+    print("\n[4/4] Syncing to root DB ---")
     for sp in spaces_to_process:
         sync_to_root(sp)
 
