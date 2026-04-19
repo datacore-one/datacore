@@ -1,6 +1,6 @@
 manifest_version: 2
 name: voice-terminal
-version: 0.1.0
+version: 0.2.0
 description: "Privacy-first voice assistant — wake word, STT, TTS, Datacore integration. No cloud for audio."
 author: datacore-one
 license: MIT
@@ -11,12 +11,37 @@ provides:
   commands: []
   skills: []
 
+hooks:
+  today:
+    slot: post
+    description: "Generate spoken briefing and send as Telegram voice message"
+    instructions: |
+      After writing the journal, generate a spoken briefing summary:
+
+      1. Write a butler-style spoken summary to {journal_dir}/{date}_spoken.txt
+         - Use the SUMMARIZE_PROMPT from speak_brief.py as your guide
+         - Voice of "Data" — trusted butler/chief of staff. Think Jarvis or Alfred.
+         - DON'T read numbers dry. Translate to natural language.
+         - Use dots instead of commas for TTS pacing. Short sentences.
+         - Use full crypto names (Solana not SOL. Bitcoin not BTC. Ethereum not ETH).
+         - 120-180 words. Cover: health, top priorities, overdue items, meetings, urgent emails (reply-needed, partnership decisions, security alerts), urgent GitHub items (PRs needing review, security issues, assigned issues), a market highlight, something stimulating from metacognition, a stoic or mindful observation, a wry closing thought.
+         - End with "Your full report is on your desk" or a natural variant.
+         - No markdown. No bullets. No emoji. Pure spoken text.
+
+      2. Generate audio and send to Telegram:
+         ```bash
+         python3 .datacore/modules/voice-terminal/lib/speak_brief.py {date} --telegram
+         ```
+
 settings:
   wake_word: "hey_datacore"
   stt_model: "medium"
-  tts_voice: "en_US-lessac-medium"
+  tts_engine: "kokoro"
+  tts_voice: "af_heart"
+  tts_speed: 1.0
   language: "en"
   brain: "local"  # local (Mac) or network (Blackpi IP)
+  telegram_delivery: true
 
 dependencies:
   - core
