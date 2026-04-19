@@ -31,7 +31,7 @@ def main():
     if not session_id:
         return
 
-    sentinel = ff"{tempfile.gettempdir()}/plur-session-{session_id}"
+    sentinel = f"{tempfile.gettempdir()}/plur-session-{session_id}"
     if os.path.exists(sentinel):
         return
 
