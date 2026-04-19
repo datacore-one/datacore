@@ -537,6 +537,7 @@ hook output in the appropriate section slot.
 | analytics | Spaces | Website metrics summary |
 | verity | Spaces | MCP server health |
 | comms | Horizon | Content calendar items due |
+| voice-terminal | post (after journal write) | Spoken briefing via Kokoro TTS + Telegram voice message |
 | whatsapp | (notification) | Push briefing to mobile |
 
 **Future slots:**
