@@ -1,0 +1,15 @@
+#+TITLE: Inbox
+* Inbox
+** TODO Simple inbox item
+   :PROPERTIES:
+   :ID: inbox-001
+   :CREATED: [2026-04-20 Mon]
+   :END:
+   Body of simple item.
+** TODO Rich inbox item
+   :PROPERTIES:
+   :ID: inbox-002
+   :CREATED: [2026-04-20 Mon]
+   :CONTEXT: Demo is recorded and working.
+   :END:
+   After video published, review for secrets.
