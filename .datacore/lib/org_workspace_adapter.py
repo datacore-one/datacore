@@ -129,12 +129,38 @@ def cmd_add(args):
     # Priority belongs in the heading as [#A], not in PROPERTIES
     heading = f"[#{args.priority}] {args.heading}" if args.priority else args.heading
 
-    # Find the first level-1 heading to use as parent → creates level-2 child
+    # Find parent node
     parent_node = None
-    for n in ws.all_nodes():
-        if n.level == 1:
-            parent_node = n
-            break
+    if getattr(args, 'parent_id', None):
+        parent_node = ws.find_by_id(args.parent_id)
+        if parent_node is None:
+            return {"error": f"Parent ID not found: {args.parent_id}"}
+    elif getattr(args, 'parent', None):
+        search = args.parent.lower()
+        for n in ws.all_nodes():
+            if n.heading.lower() == search:
+                parent_node = n
+                break
+        if parent_node is None:
+            return {"error": f"Parent heading not found: {args.parent}"}
+    else:
+        # Default: first level-1 heading
+        for n in ws.all_nodes():
+            if n.level == 1:
+                parent_node = n
+                break
+
+    # Build extra properties
+    extra_props = {}
+    extra_props["CREATED"] = created
+    if getattr(args, 'property', None):
+        for prop in args.property:
+            if "=" in prop:
+                k, v = prop.split("=", 1)
+                extra_props[k] = v
+
+    # Body text
+    body = getattr(args, 'body', None)
 
     node = ws.create_node(
         file_path,
@@ -142,14 +168,13 @@ def cmd_add(args):
         state=args.state or "TODO",
         tags=tags,
         parent=parent_node,
-        CREATED=created,
+        body=body,
+        **extra_props,
     )
 
     node_id = node.id()
 
     # SCHEDULED must be a planning keyword BEFORE :PROPERTIES:, not inside it.
-    # Patch the file: find the :PROPERTIES: line belonging to our node and
-    # insert SCHEDULED immediately before it.
     if args.scheduled:
         try:
             sched_dt = datetime.strptime(args.scheduled, "%Y-%m-%d")
@@ -159,14 +184,13 @@ def cmd_add(args):
         day_name = _wdays[sched_dt.weekday()]
         sched_line = f"SCHEDULED: <{args.scheduled} {day_name}>"
 
-        ws.save(file_path)  # flush create_node to disk before reading back
+        ws.save(file_path)
         lines = file_path.read_text().split("\n")
         id_line_idx = next(
             (i for i, l in enumerate(lines) if f":ID: {node_id}" in l), None
         )
         if id_line_idx is None:
             return {"error": "SCHEDULED not inserted: could not locate node ID in file after creation", "id": node_id}
-        # Walk back from :ID: line to find :PROPERTIES:
         for j in range(id_line_idx, -1, -1):
             if ":PROPERTIES:" in lines[j]:
                 lines.insert(j, sched_line)
@@ -607,6 +631,165 @@ def cmd_write_clock(args):
 
 
 # ---------------------------------------------------------------------------
+# move
+# ---------------------------------------------------------------------------
+
+def cmd_move(args):
+    """Move a task from one file to another, preserving all properties and body."""
+    from_path = Path(args.source).resolve()
+    to_path = Path(args.target).resolve()
+
+    ws = _load_ws(args.source, args.target)
+
+    # Find node in source
+    node = None
+    if getattr(args, 'id', None):
+        node = ws.find_by_id(args.id)
+    elif getattr(args, 'title', None):
+        search = args.title.lower()
+        for n in ws.all_nodes():
+            if n.path == from_path and n.todo and search in n.heading.lower():
+                node = n
+                break
+
+    if node is None:
+        return {"error": f"Task not found in {args.source}: '{args.id or args.title}'"}
+
+    if node.path != from_path:
+        return {"error": f"Task found but not in source file {args.source}"}
+
+    # Find target parent
+    target_parent = None
+    if getattr(args, 'parent_id', None):
+        target_parent = ws.find_by_id(args.parent_id)
+        if target_parent is None:
+            return {"error": f"Target parent ID not found: {args.parent_id}"}
+    elif getattr(args, 'parent', None):
+        search = args.parent.lower()
+        for n in ws.all_nodes():
+            if n.path == to_path and n.heading.lower() == search:
+                target_parent = n
+                break
+        if target_parent is None:
+            return {"error": f"Target parent not found in {args.target}: '{args.parent}'"}
+
+    # Capture parent heading before refile (refile reloads, making NodeViews stale)
+    parent_heading = target_parent.heading if target_parent else None
+
+    # Refile
+    refiled = ws.refile(node, to_path, target_parent)
+    ws.save_all()
+
+    return {
+        "moved": True,
+        "id": refiled.id(),
+        "heading": refiled.heading,
+        "from": str(from_path),
+        "to": str(to_path),
+        "parent": parent_heading,
+    }
+
+
+# ---------------------------------------------------------------------------
+# show
+# ---------------------------------------------------------------------------
+
+def cmd_show(args):
+    """Show full details of a task including body and all properties."""
+    ws = _load_ws(args.file)
+
+    node = None
+    if getattr(args, 'id', None):
+        node = ws.find_by_id(args.id)
+    elif getattr(args, 'title', None):
+        search = args.title.lower()
+        for n in ws.all_nodes():
+            if n.todo and search in n.heading.lower():
+                node = n
+                break
+
+    if node is None:
+        return {"error": f"Task not found: '{args.id or args.title}'"}
+
+    result = _node_to_dict(node)
+    result["body"] = node.body.strip() if node.body else ""
+    result["children"] = [
+        {"heading": c.heading, "state": c.todo, "id": c.id()}
+        for c in node.children
+    ]
+    return result
+
+
+# ---------------------------------------------------------------------------
+# update
+# ---------------------------------------------------------------------------
+
+def cmd_update(args):
+    """Update fields on an existing task."""
+    ws = _load_ws(args.file)
+    file_path = Path(args.file).resolve()
+
+    # Find node
+    node = None
+    if getattr(args, 'id', None):
+        node = ws.find_by_id(args.id)
+    elif getattr(args, 'title', None):
+        search = args.title.lower()
+        for n in ws.all_nodes():
+            if n.todo and search in n.heading.lower():
+                node = n
+                break
+
+    if node is None:
+        return {"error": f"Task not found: '{args.id or args.title}'"}
+
+    changes = []
+
+    # State transition
+    if args.state:
+        ws.transition(node, args.state)
+        changes.append(f"state→{args.state}")
+
+    # Tags
+    if args.tags:
+        raw = args.tags.strip(":")
+        tag_list = [t for t in raw.replace(",", ":").split(":") if t]
+        ws.set_tags(node, tag_list)
+        changes.append(f"tags→{tag_list}")
+
+    # Properties
+    if getattr(args, 'property', None):
+        for prop in args.property:
+            if "=" in prop:
+                k, v = prop.split("=", 1)
+                ws.set_property(node, k, v)
+                changes.append(f"{k}={v}")
+
+    # Scheduled
+    if args.scheduled:
+        try:
+            sched_dt = datetime.strptime(args.scheduled, "%Y-%m-%d").date()
+        except ValueError:
+            return {"error": f"Invalid date: '{args.scheduled}'. Use YYYY-MM-DD."}
+        ws.set_scheduled(node, sched_dt)
+        changes.append(f"scheduled→{args.scheduled}")
+
+    # Heading
+    if getattr(args, 'new_heading', None):
+        ws.set_heading(node, args.new_heading)
+        changes.append(f"heading→{args.new_heading}")
+
+    ws.save(file_path)
+
+    return {
+        "updated": True,
+        "id": node.id(),
+        "heading": node.heading,
+        "changes": changes,
+    }
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -636,6 +819,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scheduled", help="YYYY-MM-DD")
     p.add_argument("--priority", choices=["A", "B", "C"])
     p.add_argument("--created", help="Override CREATED timestamp")
+    p.add_argument("--body", help="Task body text (use \\n for newlines)")
+    p.add_argument("--property", action="append", metavar="KEY=VALUE",
+                   help="Extra property (repeatable)")
+    p.add_argument("--parent", help="Parent heading to nest under")
+    p.add_argument("--parent-id", dest="parent_id", help="Parent node ID to nest under")
 
     # complete
     p = sub.add_parser("complete", help="Mark task DONE")
@@ -688,6 +876,33 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--start", required=True, help="ISO datetime: YYYY-MM-DDTHH:MM")
     p.add_argument("--end", required=True, help="ISO datetime: YYYY-MM-DDTHH:MM")
 
+    # move
+    p = sub.add_parser("move", help="Move task between files")
+    p.add_argument("--from", required=True, dest="source", help="Source org file")
+    p.add_argument("--to", required=True, dest="target", help="Target org file")
+    p.add_argument("--title", help="Title substring to match in source")
+    p.add_argument("--id", help="Task :ID: to match in source")
+    p.add_argument("--parent", help="Target parent heading")
+    p.add_argument("--parent-id", dest="parent_id", help="Target parent node ID")
+
+    # show
+    p = sub.add_parser("show", help="Show full task details")
+    p.add_argument("--file", required=True)
+    p.add_argument("--title", help="Title substring to match")
+    p.add_argument("--id", help="Task :ID: to match")
+
+    # update
+    p = sub.add_parser("update", help="Update fields on existing task")
+    p.add_argument("--file", required=True)
+    p.add_argument("--title", help="Title substring to match")
+    p.add_argument("--id", help="Task :ID: to match")
+    p.add_argument("--state", help="New state (TODO, NEXT, WAITING, DONE)")
+    p.add_argument("--tags", help="Replace tags (:tag1:tag2: format)")
+    p.add_argument("--scheduled", help="YYYY-MM-DD")
+    p.add_argument("--heading", dest="new_heading", help="New heading text")
+    p.add_argument("--property", action="append", metavar="KEY=VALUE",
+                   help="Set property (repeatable)")
+
     return parser
 
 
@@ -704,6 +919,9 @@ COMMAND_MAP = {
     "duplicates": cmd_duplicates,
     "ensure-ids": cmd_ensure_ids,
     "write-clock": cmd_write_clock,
+    "move": cmd_move,
+    "show": cmd_show,
+    "update": cmd_update,
 }
 
 
