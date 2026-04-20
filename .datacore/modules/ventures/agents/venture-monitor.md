@@ -53,7 +53,7 @@ If no TESTING hypotheses: show "No active experiments."
 ## Integration
 
 - Runs during `/today` via `commands/today-hook.md`
-- Generates org tasks for overdue cadences (one `TODO` task per overdue item tagged `:venture:cadence:`)
+- Generates org tasks for overdue cadences (one `TODO` task per overdue item tagged `:AI:venture:{role}:` — the `:AI:` tag is REQUIRED for nightshift pickup)
 - Writes status to venture journal at `[space]/journal/YYYY-MM-DD.md`
 
 ## Error Handling
