@@ -119,6 +119,8 @@ nightshift:
   max_retries: 2
   # Daily budget limit in USD (0 = unlimited)
   budget_daily_usd: 0
+  # Maximum tasks per run (was 5, raised to 20 to clear cadence backlogs)
+  max_tasks_per_run: 20
 
   # Report archival settings
   archival:
