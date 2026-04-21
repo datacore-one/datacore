@@ -1,19 +1,8 @@
 {
-  "scan_date": "2026-04-20",
-  "since": "2026-04-19",
+  "scan_date": "2026-04-21",
+  "since": "2026-04-20",
   "username": "plur9",
-  "mentions": [
-    {
-      "repo": "fairDataSociety/fdp-storage",
-      "number": 257,
-      "title": "Account gets corrupted after deleting a pod",
-      "url": "https://github.com/fairDataSociety/fdp-storage/issues/257",
-      "state": "closed",
-      "updated_at": "2026-04-20T03:05:28Z",
-      "type": "issue",
-      "scan_type": "mention"
-    }
-  ],
+  "mentions": [],
   "authored": [],
   "org_activity": {
     "datacore-one": {
@@ -35,17 +24,10 @@
     "fairDataSociety": {
       "org": "fairDataSociety",
       "new_issues_count": 0,
-      "closed_issues_count": 3,
-      "merged_prs_count": 1,
+      "closed_issues_count": 0,
+      "merged_prs_count": 0,
       "new_issues": [],
-      "merged_prs": [
-        {
-          "repo": "fairDataSociety/fdp-storage",
-          "number": 304,
-          "title": "Fix critical pod lifecycle bugs (#259, #257)",
-          "url": "https://github.com/fairDataSociety/fdp-storage/pull/304"
-        }
-      ]
+      "merged_prs": []
     },
     "plur-ai": {
       "org": "plur-ai",
@@ -64,5 +46,5 @@
       "merged_prs": []
     }
   },
-  "scanned_at": "2026-04-20T06:01:09.223400"
+  "scanned_at": "2026-04-21T06:00:25.766730"
 }
