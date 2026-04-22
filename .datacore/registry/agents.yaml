@@ -668,6 +668,42 @@ agents:
       - session-learning
     can_be_called_by: []
 
+  learning-classifier:
+    description: "Classify new learning entries — dedup, create engrams, detect recurrences"
+    version: "1.0.0"
+    source: ".datacore/agents/learning-classifier.md"
+    model: "sonnet"
+    profile: classifier
+    skills:
+      - similarity-search
+      - engram-creation
+      - deduplication
+    triggers:
+      tags: []
+      commands:
+        - "/wrap-up"
+    reads:
+      required:
+        - ".datacore/state/learning_classifier_cursor.yaml"
+      contextual:
+        - ".datacore/learning/patterns.md"
+        - ".datacore/learning/corrections.md"
+        - "*/.datacore/learning/patterns.md"
+        - "*/.datacore/learning/corrections.md"
+    writes:
+      - ".datacore/state/learning_classifier_cursor.yaml"
+    references:
+      dips: []
+      specs: []
+    spawns: []
+    can_be_called_by:
+      - wrap-up
+      - session-learning-coordinator
+    requires_tools:
+      - plur_similarity_search
+      - plur_learn
+      - plur_feedback
+
   conversation-processor:
     description: "[DEPRECATED] Use knowledge-extractor instead"
     version: "0.0.0"
