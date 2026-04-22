@@ -222,7 +222,7 @@ For each learning, determine appropriate action:
 ---
 ```
 
-Add to `.datacore/learning/patterns.md` as local backup, AND call `plur_learn` with the pattern statement to persist as an engram.
+Add to `.datacore/learning/patterns.md` as local backup, AND call `plur_learn` with the pattern statement to persist as an engram (see **Engram Field Mapping** below for required fields).
 
 Write patterns that are:
 - **Reusable** - Apply beyond this single session
@@ -304,6 +304,51 @@ If session revealed system-level improvement:
 1. Document in session notes
 2. Create draft DIP if significant
 3. Add to `0-inbox/` for review
+
+### Engram Field Mapping
+
+When calling `plur_learn` for each extracted learning, pass the correct fields based on the learning type:
+
+| Learning type | type | polarity | tags |
+|---------------|------|----------|------|
+| Correction (from "What Happened" / mistake) | behavioral | dont | ['correction'] |
+| Pattern (from "Rule" / successful approach) | procedural | do | ['pattern'] |
+| Preference (from user preference / style) | behavioral | do | ['preference'] |
+
+**Rationale field**: Always pass a `rationale` field that combines the Context and Rule/Correction sections from the extracted learning. This gives the engram enough background for future retrieval and injection relevance scoring.
+
+Example `plur_learn` call for a correction:
+```
+plur_learn(
+  statement: "Never use git add -A in repos with .env files — it stages secrets",
+  type: "behavioral",
+  polarity: "dont",
+  tags: ["correction"],
+  rationale: "During deploy session, accidentally staged .env with credentials. Rule: always use explicit file paths with git add."
+)
+```
+
+Example `plur_learn` call for a pattern:
+```
+plur_learn(
+  statement: "Use org-workspace Query.by_tag() for task filtering instead of grep",
+  type: "procedural",
+  polarity: "do",
+  tags: ["pattern"],
+  rationale: "Grep on raw .org files misses folded headings and properties. org-workspace treats tasks as structured objects with reliable filtering."
+)
+```
+
+### Engram Feedback Step
+
+After extracting learnings, review the engrams that were injected at session start (via `plur_inject_hybrid` or hook injection) and call `plur_feedback` for each relevant one:
+
+- **positive** for engrams that prevented a mistake or informed a decision during the session
+- **negative** for engrams that were completely irrelevant to the session's work
+
+Skip engrams that were merely neutral (present but neither helpful nor distracting). Only rate the clear signal — engrams that clearly helped or clearly had no business being injected.
+
+This feedback loop trains the relevance scoring so future sessions get better-targeted injections.
 
 ### Phase 4: Decision Extraction
 
