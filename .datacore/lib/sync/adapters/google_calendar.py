@@ -70,20 +70,23 @@ class GoogleCalendarAdapter(TaskSyncAdapter):
     """
     Google Calendar adapter for syncing calendar.org with Google Calendar.
 
+    Supports multiple Google accounts via named tokens.
     Maps:
         OrgCalendarEntry (calendar.org) <-> Google Calendar Event
     """
 
-    def __init__(self, calendar_id: str = "primary", config: Dict = None):
+    def __init__(self, calendar_id: str = "primary", config: Dict = None, account: str = None):
         """
         Initialize the adapter.
 
         Args:
             calendar_id: Google Calendar ID (default: "primary")
             config: Optional configuration dict
+            account: Named account for multi-account support (uses separate token file)
         """
         self.calendar_id = calendar_id
         self.config = config or {}
+        self.account = account
         self._service = None
         self._credentials = None
 
@@ -127,6 +130,12 @@ class GoogleCalendarAdapter(TaskSyncAdapter):
             except Exception as e:
                 logging.warning(f"Failed to migrate pickle token: {e}")
 
+    def _token_file(self):
+        """Get token file path for this adapter's account."""
+        if not self.account or self.account == "default":
+            return TOKEN_FILE
+        return CREDS_DIR / f"google_calendar_token_{self.account}.json"
+
     def _get_credentials(self):
         """Get valid user credentials."""
         if self._credentials:
@@ -136,14 +145,17 @@ class GoogleCalendarAdapter(TaskSyncAdapter):
         from google.auth.transport.requests import Request
         import logging
 
-        # Migrate legacy pickle token if present
-        self._migrate_pickle_token()
+        token_file = self._token_file()
+
+        # Migrate legacy pickle token for default account only
+        if not self.account or self.account == "default":
+            self._migrate_pickle_token()
 
         creds = None
 
-        if TOKEN_FILE.exists():
+        if token_file.exists():
             try:
-                token_data = json.loads(TOKEN_FILE.read_text())
+                token_data = json.loads(token_file.read_text())
                 creds = Credentials.from_authorized_user_info(token_data, SCOPES)
             except Exception as e:
                 logging.warning(f"Failed to load token JSON: {e}")
@@ -153,17 +165,12 @@ class GoogleCalendarAdapter(TaskSyncAdapter):
             if creds and creds.expired and creds.refresh_token:
                 try:
                     creds.refresh(Request())
-                    # Save refreshed token as JSON
                     CREDS_DIR.mkdir(parents=True, exist_ok=True)
-                    TOKEN_FILE.write_text(creds.to_json())
+                    token_file.write_text(creds.to_json())
                 except Exception as e:
-                    # Log actionable guidance for refresh failures
                     logging.error(
-                        f"OAuth token refresh failed for Google Calendar: {e}\n"
-                        f"Token may be expired or revoked. To re-authenticate:\n"
-                        f"  1. Delete the token file: {TOKEN_FILE}\n"
-                        f"  2. Re-run setup: python {__file__} setup\n"
-                        f"  3. Complete the OAuth flow in your browser"
+                        f"OAuth token refresh failed for Google Calendar ({self.account or 'default'}): {e}\n"
+                        f"Re-authenticate: python gcal_auth.py setup --account {self.account or 'default'}"
                     )
                     return None
             else:
