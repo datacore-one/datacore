@@ -234,7 +234,7 @@ fi
 # which are private and gitignored. This prevents ad-hoc directories
 # from being committed at root level.
 
-ALLOWED_ROOT_DIRS="^(\\.datacore|\\.github)/"
+ALLOWED_ROOT_DIRS="^(\\.datacore|\\.github|\\.plur)/"
 ALLOWED_ROOT_FILES="^(\\.|CLAUDE\\.base\\.md|README\\.md|INSTALL\\.md|CONTRIBUTING\\.md|GETTING_STARTED\\.md|CHANGELOG\\.md|ROADMAP\\.md|CODE_OF_CONDUCT\\.md|SECURITY\\.md|LICENSE|CODEOWNERS|sync|install\\.yaml.*example|\\.mcp\\.json\\.example|\\.gitignore|\\.gitmodules|\\.gitattributes|\\.claude)$"
 
 if [ -n "$ALL_STAGED" ]; then
