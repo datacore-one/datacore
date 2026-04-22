@@ -29,38 +29,53 @@ The briefing tells a story in three acts:
 
 | Question | Answer |
 |----------|--------|
-| Output location? | Personal space journal: `[personal-space]/notes/journals/YYYY-MM-DD.md` or `[personal-space]/journal/YYYY-MM-DD.md` |
+| Output location? | Personal space journal: `0-personal/notes/journals/YYYY-MM-DD.md` |
 | Nightshift outputs? | `*/0-inbox/nightshift-*.md` |
-| Calendar source? | Google Calendar (from `settings.local.yaml` → `sync.adapters.calendar.calendar_id`) |
+| Calendar source? | Google Calendar — multiple accounts (from `settings.local.yaml`) |
+| Market phase? | Pre-computed by nightshift cron at 05:30 UTC |
 | What DIPs govern this? | DIP-0009 (GTD), DIP-0011 (Nightshift) |
 
-### Agents This Command Invokes
+### Cron Schedule (nightshift server, UTC)
 
-| Agent | Purpose |
-|-------|---------|
-| `journal-coordinator` | Journal entry creation |
-| `coach` | Morning emotional check-in (optional) |
-
----
-
-## Step 0: Create Tracked Checklist (MANDATORY FIRST STEP)
-
-**Before doing anything else**, create a tracked task list for the /today phases.
-
-Use `TaskCreate` to create one task per major phase:
-
-```
-1. "Sync and gather data" (activeForm: "Syncing repos, vitals, calendar, email, GitHub")
-2. "Generate briefing" (activeForm: "Generating morning briefing")
-3. "Write to journal" (activeForm: "Writing journal entry")
-4. "Verify completion" (activeForm: "Verifying all steps done")
-```
+| Time | CEST | Job |
+|------|------|-----|
+| 05:30 | 07:30 | `/analyze-market-phase` — trading signals for briefing |
+| 06:00 | 08:00 | `/today` — morning briefing generation |
 
 ---
 
-## Step 0b: Check for Existing Briefing (Incremental Mode)
+## Step 1: Create Tracked Checklist
 
-Before running the full pipeline, check if today's briefing already exists:
+**Before doing anything else**, create a tracked task list for each step.
+
+Use `TaskCreate` to create one task per step:
+
+```
+1. "Check for existing briefing"
+2. "Sync repositories"
+3. "Fetch Oura vitals"
+4. "Fetch calendar events"
+5. "Scan email"
+6. "Scan GitHub"
+7. "Collect nightshift results"
+8. "Compute GTD health"
+9. "Fetch news headlines"
+10. "Gather trading data"
+11. "Gather venture data"
+12. "Check research outputs"
+13. "Execute inline module hooks"
+14. "Generate briefing"
+15. "Write to journal"
+16. "Generate standup drafts"
+17. "Execute post-hooks (audio + notifications)"
+18. "Verify completion"
+```
+
+---
+
+## Step 2: Check for Existing Briefing
+
+Check if today's briefing already exists:
 
 ```bash
 python3 -c "
@@ -70,7 +85,7 @@ today = date.today().isoformat()
 journal = Path.home() / 'Data' / '0-personal' / 'notes' / 'journals' / f'{today}.md'
 if journal.exists():
     content = journal.read_text()
-    if '## Daily Briefing' in content or '## Today' in content:
+    if '## Daily Briefing' in content:
         print('EXISTS')
     else:
         print('NO_BRIEFING')
@@ -80,23 +95,19 @@ else:
 ```
 
 **If EXISTS (incremental mode):**
-1. Pull repos (quick sync only)
+1. Pull repos (quick sync only — step 3)
 2. Read and display the existing briefing
 3. Check for new commits since the briefing was written
 4. If new activity found, append `## Updates since briefing` section
-5. Skip to step 11-bis (standup generation) — this is always interactive
+5. Skip to step 16 (standup generation) — this is always interactive
 6. Start interactive session
 
 **If NO_BRIEFING or NO_FILE:**
-Proceed with full briefing generation (steps 1 onward).
+Proceed with full briefing generation (step 3 onward).
 
 ---
 
-## Step 1: Sync and Gather Data
-
-All data gathering happens first. Run these in parallel where possible.
-
-### 1a. Sync repositories
+## Step 3: Sync Repositories
 
 Pull latest from all repos (brings nightshift outputs from server).
 
@@ -109,9 +120,12 @@ for each space in [root, 0-personal, 1-* through 7-*]:
 - Team spaces sync with GitHub
 - If pull fails after 2 retries, warn and continue
 
-### 1b. Fetch Oura vitals
+---
 
-Read token from `.datacore/env/oura.env`, fetch from Oura API v2:
+## Step 4: Fetch Oura Vitals
+
+Read token from `.datacore/env/oura.env` (var: `OURA_PERSONAL_ACCESS_TOKEN`),
+fetch from Oura API v2:
 - `daily_readiness` → score, contributors (hrv_balance, resting_heart_rate, recovery_index, sleep_balance)
 - `daily_sleep` → score, contributors (total_sleep, efficiency, deep_sleep, rem_sleep, restfulness)
 - `daily_activity` → score, steps, active_calories
@@ -127,54 +141,99 @@ Use today's record; fall back to yesterday's.
 | 55-69 | Low | 2-3h | Light only | 1-2 max |
 | <55 | Recovery | 1h max | Rest | Reschedule |
 
-### 1c. Fetch calendar events
+---
 
-Use Google Calendar adapter (`.datacore/lib/sync/adapters/google_calendar.py`).
-Calendar ID: from `settings.local.yaml` → `sync.adapters.calendar.calendar_id`.
+## Step 5: Fetch Calendar Events
+
+Query ALL configured Google Calendar accounts from `settings.local.yaml`.
 
 ```python
-import sys
-sys.path.insert(0, str(Path.home() / 'Data' / '.datacore' / 'lib'))
+import yaml
+from pathlib import Path
+
+settings = yaml.safe_load((Path.home() / 'Data' / '.datacore' / 'settings.local.yaml').read_text())
+accounts = settings['sync']['adapters']['calendar'].get('accounts', [])
+
+# For each account, create adapter and fetch events
 from sync.adapters.google_calendar import GoogleCalendarAdapter
 
-adapter = GoogleCalendarAdapter(calendar_id=CALENDAR_ID)
-service = adapter._get_service()
-# Fetch today's events AND next 7 days
+all_events = []
+for acct in accounts:
+    adapter = GoogleCalendarAdapter(
+        calendar_id=acct['calendar_id'],
+        account=acct.get('name')
+    )
+    service = adapter._get_service()
+    if service:
+        # Fetch today + next 7 days, merge into all_events
+        # Deduplicate by event ID (same event may appear on shared calendars)
 ```
 
 Include attendee names, meeting duration, and flag prep-needed meetings.
 
-### 1d. Scan email
+**Event classification** — use Google Calendar `responseStatus` and metadata:
+
+| responseStatus | Attendees | Recurring + self-created | Display as |
+|----------------|-----------|--------------------------|------------|
+| `accepted` | >0 | any | **Confirmed** — show in agenda timeline |
+| `tentative` | >0 | any | **Tentative** — flag for decision |
+| `needsAction` | >0 | any | **Unconfirmed** — highlight, needs RSVP |
+| `declined` | >0 | any | Skip — don't show |
+| `self-created` | 0 | yes | **Time block** — show as background context, not a meeting |
+| `self-created` | 0 | no | **Personal** — show in agenda |
+
+In the briefing agenda, prefix each meeting:
+- `[C]` Confirmed → just show time + title + attendees
+- `[?]` Unconfirmed → "RSVP needed" callout, include in Decisions Due
+- `[T]` Tentative → mention but don't plan around it
+- Time blocks → group separately: "Blocked: 17:00 Iva (recurring)"
+
+---
+
+## Step 6: Scan Email
 
 Use the mail module scanner to get inbox summary:
 
 ```python
-sys.path.insert(0, str(Path.home() / 'Data' / '.datacore' / 'modules' / 'mail' / 'adapters'))
-from gmail import GmailAdapter
-
+from mail.adapters.gmail import GmailAdapter
 adapter = GmailAdapter({'address': GMAIL_ADDRESS})  # from settings.local.yaml
 service = adapter._get_service()
-# Get inbox count, recent messages (past 24h), flagged/important
 ```
 
-Classify into: NEEDS ATTENTION (urgent/important), INFORMATIONAL (FYI), AUTO-PROCESSED (by nightshift).
+**Goal: email inbox zero.** Classify and auto-archive noise.
 
-### 1e. Scan GitHub
+| Category | Pattern | Action |
+|----------|---------|--------|
+| CI notifications | GitHub "Run failed/passed", own repos | Archive |
+| Dependabot PRs | dependabot[bot] sender | Archive |
+| Newsletters | beehiiv, substack, known senders | Archive, route interesting to research |
+| Marketing/promo | Hotels, OKX, Swisscom, SaaS upsells | Archive |
+| NPM publish | npm "Successfully published" | Archive |
+| GA4 reports | noreply-analytics@google | Archive |
+| Security advisories | GitHub security advisory | Route to GTD task |
+| Accounting/payroll | Invoices, receipts, expenses | Keep — accounting |
+| Team communication | Team member domains | Keep — actionable |
+| External outreach | Unknown senders, pitches | Keep — needs decision |
+| Calendar updates | Google Calendar invitations | Archive (in calendar) |
+| Releases | GitHub Release notifications | Archive |
+
+Report inline: "Email: 244 → 39 (205 archived)"
+
+---
+
+## Step 7: Scan GitHub
 
 Use `gh` CLI across all spaces:
 
 ```bash
-# PRs needing review
 gh pr list --search "review-requested:@me" --json title,url,updatedAt 2>/dev/null
-
-# PRs I authored
 gh pr list --author @me --json title,url,state 2>/dev/null
-
-# Recent issues activity (past 24h)
 gh api notifications --jq '.[] | select(.unread)' 2>/dev/null
 ```
 
-### 1f. Collect nightshift results
+---
+
+## Step 8: Collect Nightshift Results
 
 Check all spaces for overnight execution:
 - DONE tasks with :NIGHTSHIFT_COMPLETED: property in past 24h
@@ -182,18 +241,20 @@ Check all spaces for overnight execution:
 - Output files: `*/0-inbox/nightshift-*.md`
 - Summarize with quality scores
 
-### 1g. Compute GTD health
+---
+
+## Step 9: Compute GTD Health
 
 ```python
-# Inbox count (** headings in inbox.org)
-# Completed yesterday (CLOSED timestamps from yesterday)
-# Total open tasks (TODO/NEXT/WAITING headings)
-# Oldest open task (earliest CREATED property)
-# Overdue deadlines
-# Scheduled for today
+# Inbox count, completed yesterday, total open, oldest open,
+# overdue deadlines, scheduled for today
 ```
 
-### 1h. Fetch news headlines
+Use `org_workspace_adapter.py` — never grep raw .org files.
+
+---
+
+## Step 10: Fetch News Headlines
 
 ```bash
 python3 .datacore/modules/news/lib/feed_fetcher.py  # if >4h stale
@@ -201,26 +262,67 @@ python3 .datacore/modules/news/lib/feed_fetcher.py  # if >4h stale
 
 Read from `.datacore/modules/news/data/headlines.json`.
 
-### 1i. Gather trading data (if trading module installed)
+---
+
+## Step 11: Gather Trading Data
+
+If trading module installed:
 
 ```bash
 python3 ~/.datacore/modules/trading/lib/gateio/today_summary.py --remote
 ```
 
-### 1j. Gather venture data (if ventures module installed)
+Also read market phase analysis output (pre-computed by nightshift cron at 05:30 UTC).
+Check `0-personal/0-inbox/` for market phase report. Integrate signals and
+suggestions into the briefing's trading section.
 
-Read `venture.yaml` from each venture space. Check cadence health, hypothesis status, budget.
+---
 
-### 1k. Check research outputs
+## Step 12: Gather Venture Data
+
+If ventures module installed, read `venture.yaml` from each venture space.
+Check cadence health, hypothesis status, budget.
+
+---
+
+## Step 13: Check Research Outputs
 
 Look for completed research tasks and generated podcasts:
 - `*/0-inbox/nightshift-*-research.md`
 - Podcast files from NotebookLM pipeline
-- Readwise Reader pending items
 
 ---
 
-## Step 2: Generate Briefing
+## Step 14: Execute Inline Module Hooks
+
+Discover and execute all module hooks with `slot: inline` that contribute
+content TO the briefing. Their output is woven into the appropriate section.
+
+```python
+from pathlib import Path
+import yaml
+
+modules_dir = Path.home() / "Data" / ".datacore" / "modules"
+for module_yaml in modules_dir.glob("*/module.yaml"):
+    with open(module_yaml) as f:
+        manifest = yaml.safe_load(f)
+    hook = (manifest.get("hooks") or {}).get("today")
+    if hook:
+        slot = hook.get("slot", "inline") if isinstance(hook, dict) else "inline"
+        if slot == "inline":
+            # Read hook instructions and execute
+            # Output feeds into the briefing section matching the module's slot
+```
+
+**Currently registered inline hooks:**
+
+| Module | Briefing section |
+|--------|-----------------|
+| metacognition | Knowledge base pulse — file counts, stubs, suggested command |
+
+---
+
+## Step 15: Generate Briefing
 
 Compose the briefing sections in this order. **Every section is adjusted to the
 capacity level from Oura.** The tone is a chief of staff speaking to their
@@ -229,16 +331,12 @@ principal — direct, personal, occasionally coaching.
 ### Briefing Structure
 
 The goal is **inbox zero across all inboxes** (email, GitHub, GTD org).
-Data processes everything proactively -- archive noise, route to org/research,
+Data processes everything proactively — archive noise, route to org/research,
 create tasks. The briefing only shows what remains for the user.
 
-There is NO dedicated "What Data Did" section. The work is visible throughout:
-email is already triaged (counts inline in Good Morning, actionable items in Agenda),
-GitHub is already processed (integrated into Spaces), research outputs appear
-in The World or linked as podcasts. The proof of work is that everything is handled.
+There is NO dedicated "What Data Did" section. The work is visible throughout.
 
-**Data is proactive by default.** It identifies what the user needs and does it
-in advance. Only suggest (don't act) when:
+**Data is proactive by default.** Only suggest (don't act) when:
 - Sending external communications (emails, messages)
 - Financial decisions or transactions
 - Deleting/archiving content the user created
@@ -251,7 +349,7 @@ in advance. Only suggest (don't act) when:
 [Coach-like opening. Reference vitals, yesterday, what was handled overnight.]
 
 ## The World
-[News synthesis + market prices. Research outputs/podcasts if generated.]
+[News synthesis + market prices + trading signals. Research outputs/podcasts.]
 
 ## Your Agenda
 [What needs YOU today. Meetings + tasks + actionable emails + GitHub items.
@@ -259,8 +357,6 @@ Everything else already handled. Capacity-adjusted.]
 
 ## Spaces
 [Per-space: work done + GitHub triage + priorities + venture status.]
-### [space-name]
-[Narrative context, not commit hashes.]
 
 ## Decisions Due
 [Formal decisions + email decisions needing human input.]
@@ -271,28 +367,18 @@ Everything else already handled. Capacity-adjusted.]
 ## Proactive Suggestions
 [Things Data can do tonight with approval. External comms = draft only.]
 
+### Metacognition
+[Knowledge base pulse from inline hook. File counts, stubs, suggested command.]
+
 ## Data's Observation
 [Always last. Pattern analysis in Data's voice.]
 ```
-
----
 
 ### Section Details
 
 #### Good Morning
 
-A warm, personalized opening. Reference:
-- Vitals: "Your body recovered well — readiness 85, deep sleep was excellent."
-- Yesterday: "Yesterday was a 20-completion day. Don't try to repeat that."
-- Capacity nudge: "Moderate capacity today. Front-load the hard thing."
-- Coach element: If low readiness, gently recommend rest. If high, encourage ambition.
-
-If `coach.morning_checkin: true` in settings, include:
-```
-How are you feeling this morning? (1-10, or Enter to skip)
-```
-
-Keep this to 3-5 sentences max. Set the emotional tone for the day.
+3-5 sentences max. Reference vitals, yesterday, capacity nudge, coach element.
 
 **Vitals detail block** (compact, below the narrative):
 ```
@@ -302,168 +388,61 @@ Deep work: 4-5h | Workout: Normal | Meetings: 3-4 max
 
 #### The World
 
-Synthesized narrative, not bullet points. Structure:
+Synthesized narrative, not bullet points:
 1. Opening: Overall sentiment, major macro theme
-2. Middle: Crypto, tech/AI developments
+2. Middle: Crypto, tech/AI developments, trading signals from market phase analysis
 3. Closing: Key theme to watch today
-
-**Trading signals** (if trading module installed):
-Weave in market-relevant data — SOL price action, BTC trend, volume signals.
-Don't create a separate trading section; integrate into the world narrative.
-
-**Source:** `.datacore/modules/news/data/headlines.json` grouped by category.
-If stale (>4h), fetch first: `python3 .datacore/modules/news/lib/feed_fetcher.py`
 
 **Tone:** Analytical, concise, professional. Like a Bloomberg terminal morning note.
 
-#### Email Processing (Step 1d, expanded)
-
-The goal is **email inbox zero**. Data processes ALL emails, not just recent ones.
-
-**Classification rules** (apply to every message):
-
-| Category | Pattern | Action |
-|----------|---------|--------|
-| CI notifications | GitHub "Run failed/passed", own repos | Archive |
-| Dependabot PRs | dependabot[bot] sender | Archive (tracked in GitHub) |
-| Newsletters | beehiiv, substack, known newsletter senders | Archive, route interesting to research |
-| Marketing/promo | Hotels, OKX, Swisscom, SaaS upsells | Archive |
-| NPM publish | npm "Successfully published" | Archive |
-| GA4 reports | noreply-analytics@google | Archive |
-| Security advisories | GitHub security advisory | Route to GTD task |
-| Accounting/payroll | Accounting service domains, invoices, receipts, expenses | Keep -- accounting |
-| Team communication | Team member domains (from space configs) | Keep -- actionable |
-| External outreach | Unknown senders, pitches | Keep -- needs decision |
-| Calendar updates | Google Calendar invitations | Archive (in calendar) |
-| Releases | GitHub Release notifications | Archive |
-
-**Processing flow:**
-1. Fetch ALL inbox messages (paginate if >100)
-2. Classify each by rules above
-3. Archive via Gmail API (remove INBOX label, batch of 50)
-4. Create GTD tasks for security alerts and assigned issues
-5. Report inline: "Email: 244 to 39 (205 archived)"
-
-**Actionable emails appear in Agenda** grouped as:
-- Quick wins (reply/forward, under 5 min each)
-- Needs decision (partnerships, invitations, outreach)
-- Team (delegate or acknowledge)
-
 #### Your Agenda
 
-**This is the core actionable section.** Merge meetings, priority tasks,
-email items, and GitHub items into one chronological + priority view.
-
-Format as a timeline when meetings exist:
-```markdown
-### Your Agenda
-
-**Morning**
-- 09:00-09:30 Weekly standup (@teammate1, @teammate2) -- Prep: share project status
-- [#A] Top priority task from next_actions.org (scheduled today)
-- Reply to [sender] re: [subject] (flagged urgent email)
-
-**Afternoon**
-- 14:00-14:30 1:1 with @teammate
-- Review PR #N in [space] (N days waiting)
-- [#A] Overdue task -- N days past deadline, needs resolution
-
-**Decisions Needed**
-- Nightshift output needing review (score below threshold)
-- Email thread needing human decision (partnership, invitation, etc.)
-
-**Inbox** (3 items — process or delegate)
-```
-
-When no meetings: organize by priority blocks (Must-do / Should-do / Could-do),
-still capacity-adjusted.
+Merge meetings (from ALL calendar accounts), priority tasks, email items,
+and GitHub items into one chronological + priority view.
 
 **Capacity adjustment:**
-- High (85+): 5-7 items, ambitious scope
-- Moderate (70-84): 3-5 items, standard
-- Low (55-69): 2-3 items, protect time
-- Recovery (<55): 1-2 admin only, suggest day off
+- High (85+): 5-7 items
+- Moderate (70-84): 3-5 items
+- Low (55-69): 2-3 items
+- Recovery (<55): 1-2 admin only
 
-**GTD health** — compact inline, not a separate section:
+**GTD health** — compact inline:
 ```
 GTD: 3 inbox | 236 open | 20 done yesterday | oldest: 461d (archive candidate)
 ```
 
 #### Spaces
 
-For each numbered space with activity in the past 24h:
-
-```markdown
-### Spaces
-
-**1-[teamspace]** -- 5 commits, 1 PR open
-@contributor backfilled journal entries. New presentation shipped (7 slides).
-PR #15 needs review: API docs update.
-
-**2-[projectspace]** -- 4 commits
-Platform pages shipped. DIP-0017 archive processed.
-
-**5-[space]** -- quiet
-Sync only. No active work.
-```
-
-**GitHub triage is integrated here, not in a separate section.**
-Data proactively: marks read release/CI notifications, creates GTD tasks for
-security alerts, groups quiet spaces together.
-
-Include for each active space:
-- Recent commits with **narrative context** (not hashes)
-- Open PRs requiring attention (with age)
-- GitHub Issues: only those needing human decision
-- Venture status (if venture.yaml exists): cadences, hypotheses, budget
-- Trading details under the trading venture space (if trading module installed)
-- Blockers from `org/next_actions.org`
-
-Group quiet spaces: "[space-a], [space-b]: routing only."
+Per-space with narrative context (not commit hashes). GitHub triage integrated.
+Group quiet spaces. Include venture status where applicable.
 
 #### Horizon
 
-```markdown
-## Decisions Due
-[Formal decisions from decisions.yaml + email decisions needing human input.
-Separate section with its own H2 -- these are action items, not informational.]
-
-## Horizon
-
-**This Week**
-[Use datacore.date to verify all day names. Never type from memory.]
-- [Date]: Scheduled task from next_actions.org
-- [Date]: Deadline approaching
-- [Date]: Follow-up meeting or review
-
-**Strategic Priorities**
-Three things that matter beyond today.
-
-## Proactive Suggestions
-[Things Data can do overnight with approval. Format: description + trigger phrase.
-External communications = draft only, never send.]
-```
+This week (verify all day names via `datacore.date`), strategic priorities,
+proactive suggestions for overnight work.
 
 #### Data's Observation
 
-Always the last section. Written in Data's voice — curious, analytical,
-no contractions, occasionally playful.
-
-Pattern sources (past 7 days):
-- Productivity patterns (time of day, day of week)
-- Habit streaks (consecutive completions)
-- Task completion trends
-- Effort estimate accuracy
-- Readiness-to-output correlation
-
-Examples:
-- "Fascinating. Your productivity peaks between 9-11 AM. I recommend scheduling deep work during this window."
-- "I observe you have completed 3 consecutive days of morning routines. The evidence suggests habit formation is progressing."
-- "Your research tasks consistently exceed estimated effort by 40%. Adjusting future estimates would improve planning accuracy."
+Always last. Curious, analytical, no contractions, occasionally playful.
+Pattern sources: productivity, habit streaks, task trends, readiness correlation.
 
 ---
 
-## Step 11-bis: Generate Standup Drafts (Interactive — Never Skipped)
+## Step 16: Write to Journal
+
+**Output location:** `0-personal/notes/journals/YYYY-MM-DD.md`
+
+**The Daily Briefing ALWAYS goes at the top** (after frontmatter).
+
+**If file doesn't exist:** Create with frontmatter + briefing.
+**If file exists but no `## Daily Briefing`:** Insert after frontmatter.
+**If `## Daily Briefing` exists:** Replace in-place with fresh content.
+
+**After writing:** `open <journal_path>` to launch in default editor.
+
+---
+
+## Step 17: Generate Standup Drafts (Interactive — Never Skipped)
 
 For each team space where the user is a contributor:
 
@@ -481,69 +460,70 @@ For each team space where the user is a contributor:
 
 ---
 
-## Step 3: Write to Journal
+## Step 18: Execute Post-Hooks
 
-**Output location:** `0-personal/notes/journals/YYYY-MM-DD.md`
+Discover and execute all module hooks with `slot: post`. These run AFTER
+the briefing is written.
 
-**The Daily Briefing ALWAYS goes at the top** (after frontmatter). Late-night
-`/wrap-up` sessions may have created the file already — push existing content
-below the briefing.
+For each module with `slot: post`:
+1. Read the hook's `instructions` field or referenced command file
+2. Execute the instructions
+3. Log success/failure — don't block on errors
 
-**If file doesn't exist:** Create with frontmatter + briefing.
-**If file exists but no `## Daily Briefing`:** Insert after frontmatter.
-**If `## Daily Briefing` exists:** Replace in-place with fresh content.
+**Currently registered post-hooks:**
 
-```python
-lines = content.split('\n')
-frontmatter_end = 0
-in_frontmatter = False
-for i, line in enumerate(lines):
-    if line.strip() == '---':
-        if not in_frontmatter:
-            in_frontmatter = True
-        else:
-            frontmatter_end = i + 1
-            break
+| Module | What it does |
+|--------|-------------|
+| voice-terminal | Write `_spoken.txt` → Kokoro TTS → Telegram voice message |
+| whatsapp | Push briefing notification to mobile |
 
-before = '\n'.join(lines[:frontmatter_end])
-after = '\n'.join(lines[frontmatter_end:])
-new_content = f"{before}\n\n## Daily Briefing\n\n{briefing_content}\n{after}"
-```
+**Voice-terminal instructions:**
+1. Write butler-style spoken summary to `{journal_dir}/{date}_spoken.txt`
+   - Voice of "Data" — trusted chief of staff. 120-180 words.
+   - Cover: health, top priorities, meetings, market highlight, closing thought.
+   - End with "Your full report is on your desk" or variant.
+2. Generate audio and send:
+   ```bash
+   python3 .datacore/modules/voice-terminal/lib/speak_brief.py {date} --telegram
+   ```
 
-**After writing:** `open <journal_path>` to launch in default editor.
+---
+
+## Step 19: Verify Completion
+
+Check all steps completed. Print console summary of top 3 priorities.
 
 ---
 
 ## Module Hook System
 
 Each installed module with a `hooks.today` entry contributes content.
-The briefing orchestrator reads `module.yaml` for each module and includes
-hook output in the appropriate section slot.
 
-**Slot mapping** — modules map to briefing sections:
+**Slot mapping:**
 
 | Module | Slot | What it provides |
 |--------|------|-----------------|
 | health | Good Morning | Oura vitals, capacity level |
 | news | The World | Synthesized news narrative |
-| trading | The World (prices) + Spaces/[venture] (bots, positions) | Market signals in news; detailed trading under venture space |
-| mail | Agenda (actionable only) | Processed inbox, only remaining items shown |
-| github | Spaces (per-space triage) | PRs, issues, security alerts integrated per space |
-| nightshift | Agenda + Spaces | Task results woven into relevant sections |
-| research | The World + Agenda | Outputs/podcasts in world, pending reviews in agenda |
+| trading | The World + Spaces | Market signals + bot status |
+| mail | Agenda | Processed inbox, remaining items |
+| github | Spaces | PRs, issues, security alerts |
+| nightshift | Agenda + Spaces | Task results |
+| research | The World + Agenda | Outputs, pending reviews |
 | meetings | Agenda | Meeting prep, standup preview |
-| crm | Agenda | Attendee context, follow-ups due |
+| crm | Agenda | Attendee context, follow-ups |
 | ventures | Spaces | Venture portfolio status |
-| analytics | Spaces | Website metrics summary |
+| analytics | Spaces | Website metrics |
 | verity | Spaces | MCP server health |
-| comms | Horizon | Content calendar items due |
-| voice-terminal | post (after journal write) | Spoken briefing via Kokoro TTS + Telegram voice message |
-| whatsapp | (notification) | Push briefing to mobile |
+| comms | Horizon | Content calendar items |
+| metacognition | inline (after Observation) | Knowledge base pulse |
+| voice-terminal | post | Spoken briefing → Telegram |
+| whatsapp | post | Push notification |
 
 **Future slots:**
-- `family` → Good Morning + Agenda (family calendar, kids activities)
-- `personal-finance` → The World (portfolio, crypto holdings)
-- `coach` → Good Morning (REBT check-in, intention setting)
+- `family` → Good Morning + Agenda
+- `personal-finance` → The World
+- `coach` → Good Morning
 
 ---
 
@@ -556,7 +536,11 @@ sync:
   adapters:
     calendar:
       enabled: true
-      calendar_id: YOUR_CALENDAR_ID  # set in settings.local.yaml
+      accounts:
+        - name: default
+          calendar_id: YOUR_PRIMARY_CALENDAR_ID
+        - name: secondary
+          calendar_id: YOUR_SECONDARY_CALENDAR_ID
       days_ahead: 14
 
 coach:
@@ -564,16 +548,9 @@ coach:
   morning_checkin: true
 
 today:
-  time: "06:00"
+  time: "06:00"  # UTC (08:00 CEST)
   include:
-    - all  # or list specific sections
-```
-
-## Cron Usage
-
-```bash
-# Personal briefing at 6 AM
-0 6 * * * cd ~/Data && claude -p "/today"
+    - all
 ```
 
 ## Output
@@ -581,4 +558,5 @@ today:
 - Content written directly to journal (no user confirmation needed)
 - Journal opened in default editor for review
 - Brief console summary of top 3 priorities
-- No downstream prompts or questions
+- Audio briefing sent to Telegram
+- No downstream prompts or questions (except standup review)
