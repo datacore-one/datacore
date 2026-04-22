@@ -47,7 +47,7 @@ completed. You cannot skip what is tracked. This is the fix for ENG-2026-0411-00
 | `session-learning-coordinator` | Pattern extraction |
 | `context-maintainer` | Context sync if changes |
 | `coach` | Quick emotional check (optional) |
-| `learning-reviewer` | Engram candidate generation (DIP-0019) |
+| `learning-classifier` | Engram classification, dedup, promotion (DIP-0019) |
 
 ### Integration Points
 
@@ -382,9 +382,11 @@ Learnings captured:
 
 **After step 5 coordinators complete, run learning review:**
 
-> ⚠ **Spawning `learning-reviewer` is mandatory — it is not optional and must not be deferred.** The agent always runs. What is optional is the *interactive review* of candidates afterwards (the user can skip or defer that part). Never skip spawning the agent on the grounds of "deferring" — candidates will not exist to defer unless the agent runs.
+> ⚠ **Spawning `learning-classifier` is mandatory — it is not optional and must not be deferred.** The agent always runs. What is optional is the *interactive review* of contradictions afterwards (the user can skip or defer that part). Never skip spawning the agent on the grounds of "deferring" — engrams will not be classified unless the agent runs.
+>
+> ⚠ **Sequential dependency:** `learning-classifier` MUST wait for step 5 (session-learning) to complete before starting. Session-learning writes to patterns.md/corrections.md AND calls plur_learn directly. The classifier then reads those files and deduplicates against PLUR.
 
-1. **Generate engram candidates**: Spawn `learning-reviewer` agent for each space that had patterns captured. This reads new patterns.md entries, generates candidate engrams, detects contradictions, and applies decay.
+1. **Classify new learnings**: Spawn `learning-classifier` agent. This reads new patterns.md/corrections.md entries since last cursor position, deduplicates via `plur_similarity_search`, creates engrams with proper type/polarity/tags, and detects recurrences and contradictions.
 
 2. **Present review to user** (interactive, skippable):
 
@@ -430,8 +432,8 @@ learning:
 
 If `learning.auto_defer_learning_review: true`, skip the interactive prompt entirely. Candidates will surface in next `/today`.
 
-**Agents spawned:** `learning-reviewer` (per space with new patterns)
-**Skills used:** `/daily-review` (if user chooses to review now)
+**Agents spawned:** `learning-classifier` (processes all spaces with new entries)
+**Skills used:** `/daily-review` (if user chooses to review contradictions now)
 
 ### 7. GTD Task Extraction from Session Insights
 
