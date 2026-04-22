@@ -1,6 +1,6 @@
 {
-  "scan_date": "2026-04-21",
-  "since": "2026-04-20",
+  "scan_date": "2026-04-22",
+  "since": "2026-04-21",
   "username": "plur9",
   "mentions": [],
   "authored": [],
@@ -31,11 +31,25 @@
     },
     "plur-ai": {
       "org": "plur-ai",
-      "new_issues_count": 0,
+      "new_issues_count": 1,
       "closed_issues_count": 0,
-      "merged_prs_count": 0,
-      "new_issues": [],
-      "merged_prs": []
+      "merged_prs_count": 1,
+      "new_issues": [
+        {
+          "repo": "plur-ai/plur",
+          "number": 25,
+          "title": "Flaky CI: sp2-failure-evolution and sp2-tools intermittently fail with 'Engram not found'",
+          "url": "https://github.com/plur-ai/plur/issues/25"
+        }
+      ],
+      "merged_prs": [
+        {
+          "repo": "plur-ai/plur",
+          "number": 23,
+          "title": "docs: opt-in engagement telemetry design proposal (v0.9.x)",
+          "url": "https://github.com/plur-ai/plur/pull/23"
+        }
+      ]
     },
     "plur9": {
       "org": "plur9",
@@ -46,5 +60,5 @@
       "merged_prs": []
     }
   },
-  "scanned_at": "2026-04-21T06:00:25.766730"
+  "scanned_at": "2026-04-22T06:00:48.379066"
 }
