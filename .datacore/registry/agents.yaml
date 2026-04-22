@@ -1520,8 +1520,10 @@ agents:
     triggers:
       tags:
         - ":AI:research:"
+        - ":AI:ai:research:"
       commands:
         - "/research"
+        - "/research-daily"
       schedules:
         - "nightshift"
     reads:
