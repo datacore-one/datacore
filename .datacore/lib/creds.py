@@ -592,6 +592,28 @@ class CredentialManager:
             print("No credentials were marked as rotated.")
         return 0
 
+    def cmd_sync(self, instance: str = None) -> int:
+        """Run sync.sh from the secrets repo."""
+        secrets_dir = self.data_dir / ".datacore" / "secrets"
+        sync_script = secrets_dir / "scripts" / "sync.sh"
+
+        if not secrets_dir.exists():
+            print("Secrets repo not found at .datacore/secrets/")
+            print("Bootstrap with: git clone gregor@blackpi.local:~/secrets.git .datacore/secrets")
+            return 1
+
+        if not sync_script.exists():
+            print("sync.sh not found. Is the secrets repo properly initialized?")
+            return 1
+
+        import subprocess
+        cmd = [str(sync_script)]
+        if instance:
+            cmd.append(instance)
+
+        result = subprocess.run(cmd, cwd=str(secrets_dir))
+        return result.returncode
+
     def _bootstrap_rotation(self, rotation: RotationIndex, env_path: Path) -> int:
         """Parse .env and create rotation entries from known patterns."""
         count = 0
@@ -712,6 +734,10 @@ def main():
     rotate_p.add_argument("--format", dest="fmt", default="text",
                           choices=["text", "json"], help="Output format")
 
+    # sync
+    sync_p = subparsers.add_parser("sync", help="Sync credentials from central repo")
+    sync_p.add_argument("--instance", help="Instance name (auto-detected if not given)")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -732,6 +758,8 @@ def main():
                               all_creds=args.all_creds,
                               bootstrap=args.bootstrap,
                               fmt=args.fmt)
+    elif args.command == "sync":
+        return mgr.cmd_sync(instance=getattr(args, 'instance', None))
     return 1
 
 
