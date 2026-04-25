@@ -31,6 +31,10 @@ def main():
     if not session_id:
         return
 
+    # Skip guard for non-interactive sessions (bots, Agent SDK, subagents, nightshift)
+    if os.environ.get("CLAUDE_AGENT_SDK") or os.environ.get("OPENCLAW_SESSION") or os.environ.get("NIGHTSHIFT_RUN"):
+        return
+
     sentinel = f"{tempfile.gettempdir()}/plur-session-{session_id}"
     if os.path.exists(sentinel):
         return
