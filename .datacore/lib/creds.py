@@ -238,7 +238,7 @@ class CredentialIndex:
                 id=entry.get("id", "unknown"),
                 name=entry.get("name", ""),
                 type=entry.get("type", ""),
-                security_tier=entry.get("security_tier", ""),
+                security_tier=entry.get("security_tier", "") or entry.get("tier", ""),
                 category=entry.get("category", ""),
                 provider=entry.get("provider", ""),
                 locations=locations,
@@ -436,12 +436,13 @@ class CredentialManager:
                         message=f"Primary location file missing: {loc_path}"
                     ))
 
-            # Check 4: No locations
-            if not cred.locations:
+            # Check 4: No locations or var_name
+            has_location = bool(cred.locations) or cred.extra.get("var_name") or cred.extra.get("vars")
+            if not has_location:
                 result.issues.append(AuditIssue(
                     severity="error",
                     credential_id=cred.id,
-                    message="No storage locations defined"
+                    message="No storage locations or var_name defined"
                 ))
 
         # Check 5: Duplicate IDs
@@ -692,6 +693,129 @@ class CredentialManager:
             d.update(c.extra)
         return d
 
+    def cmd_add(self, cred_id: str, var_name: str = None, value: str = None,
+                scope: str = None, space: str = None, project: str = None,
+                tier: str = None, category: str = None, provider: str = None,
+                description: str = None) -> int:
+        """Add a credential to the secrets repo and index."""
+        secrets_dir = self.data_dir / ".datacore" / "secrets"
+        if not secrets_dir.exists():
+            print("Secrets repo not found at .datacore/secrets/")
+            return 1
+
+        # Interactive prompts for missing fields
+        if not var_name:
+            var_name = input("Environment variable name (e.g. MY_API_KEY): ").strip()
+            if not var_name:
+                print("Variable name is required.")
+                return 1
+
+        if not value:
+            value = input(f"Value for {var_name}: ").strip()
+            if not value:
+                print("Value is required.")
+                return 1
+
+        if not scope:
+            print("\nScope:")
+            print("  1. global  — all instances get this")
+            print("  2. space   — only instances working in a specific space")
+            print("  3. project — project-specific credential")
+            choice = input("Select scope (1/2/3): ").strip()
+            scope = {"1": "global", "2": "space", "3": "project"}.get(choice)
+            if not scope:
+                print("Invalid scope.")
+                return 1
+
+        if scope == "space" and not space:
+            spaces = sorted([f.stem for f in (secrets_dir / "spaces").glob("*.env")])
+            print("\nAvailable spaces:")
+            for i, s in enumerate(spaces, 1):
+                print(f"  {i}. {s}")
+            choice = input("Select space number: ").strip()
+            try:
+                space = spaces[int(choice) - 1]
+            except (ValueError, IndexError):
+                print("Invalid selection.")
+                return 1
+
+        if scope == "project" and not project:
+            project = input("Project path (e.g. 3-fds/fairdrop): ").strip()
+            if not project:
+                print("Project path is required.")
+                return 1
+
+        if not tier:
+            tier = input("Security tier (critical/high/medium/low) [medium]: ").strip() or "medium"
+        if not category:
+            category = input("Category (e.g. ai-services, trading, social): ").strip() or "general"
+        if not provider:
+            provider = input("Provider (e.g. anthropic, gateio): ").strip() or "unknown"
+        if not description:
+            description = input("Description: ").strip() or ""
+
+        # Determine target env file
+        if scope == "global":
+            env_file = secrets_dir / "global.env"
+        elif scope == "space":
+            env_file = secrets_dir / "spaces" / f"{space}.env"
+        elif scope == "project":
+            env_file = secrets_dir / "projects" / f"{project}.env"
+            env_file.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            print(f"Unknown scope: {scope}")
+            return 1
+
+        if not env_file.exists():
+            print(f"Target file does not exist: {env_file}")
+            return 1
+
+        # Append to env file
+        with open(env_file, "a") as f:
+            f.write(f"\n{var_name}={value}\n")
+        print(f"Added {var_name} to {env_file.relative_to(secrets_dir)}")
+
+        # Add to credential index
+        index_file = secrets_dir / "credential-index.yaml"
+        if index_file.exists():
+            with open(index_file) as f:
+                index_data = yaml.safe_load(f) or {}
+            entry = {
+                "id": cred_id,
+                "name": description or cred_id,
+                "type": "api_key",
+                "tier": tier,
+                "scope": scope,
+                "category": category,
+                "provider": provider,
+                "var_name": var_name,
+                "description": description,
+            }
+            if scope == "space":
+                entry["space"] = space
+            if scope == "project":
+                entry["project"] = project
+            index_data.setdefault("credentials", []).append(entry)
+            with open(index_file, "w") as f:
+                yaml.dump(index_data, f, default_flow_style=False, sort_keys=False)
+            # Also update the specs copy
+            specs_index = self.data_dir / ".datacore" / "specs" / "credential-index.yaml"
+            if specs_index.exists():
+                import shutil
+                shutil.copy2(index_file, specs_index)
+            print(f"Added to credential index")
+
+        # Commit in secrets repo
+        import subprocess
+        subprocess.run(["git", "add", "-A"], cwd=str(secrets_dir), capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", f"feat: add credential {cred_id}"],
+            cwd=str(secrets_dir), capture_output=True
+        )
+        print(f"Committed to secrets repo")
+        print(f"\nNext: run 'creds sync' to assemble, then push to BlackPi")
+        return 0
+
     def _print_bootstrap(self):
         print("Credential index not found.")
         print(f"\nTo set up, copy the example template:")
@@ -734,6 +858,19 @@ def main():
     rotate_p.add_argument("--format", dest="fmt", default="text",
                           choices=["text", "json"], help="Output format")
 
+    # add
+    add_p = subparsers.add_parser("add", help="Add a credential to the secrets repo")
+    add_p.add_argument("id", help="Credential ID (e.g. my-api-key)")
+    add_p.add_argument("--var", dest="var_name", help="Environment variable name")
+    add_p.add_argument("--value", help="Credential value")
+    add_p.add_argument("--scope", choices=["global", "space", "project"], help="Scope")
+    add_p.add_argument("--space", help="Space name (for scope=space)")
+    add_p.add_argument("--project", help="Project path (for scope=project)")
+    add_p.add_argument("--tier", choices=["critical", "high", "medium", "low"], help="Security tier")
+    add_p.add_argument("--category", help="Category")
+    add_p.add_argument("--provider", help="Provider name")
+    add_p.add_argument("--description", help="Description")
+
     # sync
     sync_p = subparsers.add_parser("sync", help="Sync credentials from central repo")
     sync_p.add_argument("--instance", help="Instance name (auto-detected if not given)")
@@ -758,6 +895,12 @@ def main():
                               all_creds=args.all_creds,
                               bootstrap=args.bootstrap,
                               fmt=args.fmt)
+    elif args.command == "add":
+        return mgr.cmd_add(
+            cred_id=args.id, var_name=args.var_name, value=args.value,
+            scope=args.scope, space=args.space, project=args.project,
+            tier=args.tier, category=args.category, provider=args.provider,
+            description=args.description)
     elif args.command == "sync":
         return mgr.cmd_sync(instance=getattr(args, 'instance', None))
     return 1

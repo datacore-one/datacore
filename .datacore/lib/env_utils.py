@@ -44,7 +44,7 @@ def load_env_files(paths: Optional[List[Path]] = None, override: bool = False) -
         root = _data_root()
         paths = [
             root / ".datacore" / "env" / ".env",
-            Path.home() / "config" / "nightshift.env",
+            root / ".datacore" / "env" / "local.env",
         ]
 
     loaded = {}
