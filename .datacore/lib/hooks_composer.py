@@ -7,7 +7,8 @@ Usage:
 
 Per DIP-0024: Reactive Hooks Infrastructure.
 """
-import argparse, glob, json, os, sys
+import argparse, glob, json, os, shlex, sys
+from pathlib import Path
 
 try:
     import yaml
@@ -15,18 +16,50 @@ except ImportError:
     print("PyYAML required: pip install pyyaml", file=sys.stderr)
     sys.exit(1)
 
-DATACORE_ROOT = os.path.expanduser("~/Data")
-REGISTRY_PATH = os.path.join(DATACORE_ROOT, ".datacore", "registry", "hooks.yaml")
-MODULES_GLOB = os.path.join(DATACORE_ROOT, ".datacore", "modules", "*", "module.yaml")
-OUTPUT_PATH = os.path.join(DATACORE_ROOT, ".claude", "settings.json")
+def detect_datacore_root() -> Path:
+    configured = os.environ.get("DATACORE_ROOT") or os.environ.get("DATACORE_PATH")
+    if configured:
+        return Path(os.path.expanduser(configured)).resolve()
+
+    repo_root = Path(__file__).resolve().parents[2]
+    if (repo_root / ".datacore").exists():
+        return repo_root
+
+    return (Path.home() / "Data").resolve()
+
+
+DATACORE_ROOT = detect_datacore_root()
+REGISTRY_PATH = DATACORE_ROOT / ".datacore" / "registry" / "hooks.yaml"
+MODULES_GLOB = str(DATACORE_ROOT / ".datacore" / "modules" / "*" / "module.yaml")
+OUTPUT_PATH = DATACORE_ROOT / ".claude" / "settings.json"
+
+
+def render_command(command: str) -> str:
+    """Rewrite ~/Data hook commands to the resolved install root."""
+    if not command or "~/Data" not in command:
+        return command
+
+    root = shlex.quote(str(DATACORE_ROOT))
+    rendered = command.replace("~/Data", root)
+    if rendered.startswith(("python3 ", "bash ")) and "DATACORE_ROOT=" not in rendered:
+        return f"DATACORE_ROOT={root} {rendered}"
+    return rendered
+
+
+def extract_script_path(command: str) -> Path | None:
+    """Resolve the first script path from a hook command for validation."""
+    for part in shlex.split(render_command(command)):
+        if part.endswith((".py", ".sh")):
+            return Path(os.path.expanduser(part)).resolve()
+    return None
 
 
 def load_registry():
     """Load core hooks from registry/hooks.yaml."""
-    if not os.path.exists(REGISTRY_PATH):
+    if not REGISTRY_PATH.exists():
         print(f"Warning: registry not found at {REGISTRY_PATH}", file=sys.stderr)
         return {}
-    with open(REGISTRY_PATH) as f:
+    with REGISTRY_PATH.open() as f:
         data = yaml.safe_load(f) or {}
     return data.get("claude_code", {})
 
@@ -108,7 +141,7 @@ def compose_claude_settings(merged):
             for hook in hooks:
                 hook_def = {"type": hook.get("type", "command")}
                 if hook.get("command"):
-                    hook_def["command"] = hook["command"]
+                    hook_def["command"] = render_command(hook["command"])
                 if hook.get("prompt"):
                     hook_def["prompt"] = hook["prompt"]
                 if hook.get("timeout"):
@@ -133,16 +166,9 @@ def validate(merged):
             cmd = hook.get("command", "")
             if cmd:
                 # Extract script path from command (e.g., "python3 .datacore/lib/foo.py --bar")
-                parts = cmd.split()
-                script = None
-                for part in parts:
-                    if part.endswith(".py") or part.endswith(".sh"):
-                        script = part
-                        break
-                if script:
-                    full_path = os.path.join(DATACORE_ROOT, script)
-                    if not os.path.exists(full_path):
-                        errors.append(f"[{event}] Script not found: {full_path} (declared by {hook.get('declared_by', '?')})")
+                script_path = extract_script_path(cmd)
+                if script_path and not script_path.exists():
+                    errors.append(f"[{event}] Script not found: {script_path} (declared by {hook.get('declared_by', '?')})")
 
             # Check priority conflicts
             matcher = hook.get("matcher", "__none__")
@@ -178,9 +204,9 @@ def rebuild(dry_run=False):
 
     # Read existing settings to preserve non-hook config
     existing = {}
-    if os.path.exists(OUTPUT_PATH):
+    if OUTPUT_PATH.exists():
         try:
-            with open(OUTPUT_PATH) as f:
+            with OUTPUT_PATH.open() as f:
                 existing = json.load(f)
         except (json.JSONDecodeError, OSError):
             pass
@@ -188,8 +214,8 @@ def rebuild(dry_run=False):
     # Merge: replace hooks, keep everything else
     existing["hooks"] = settings["hooks"]
 
-    os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
-    with open(OUTPUT_PATH, "w") as f:
+    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with OUTPUT_PATH.open("w") as f:
         json.dump(existing, f, indent=2)
         f.write("\n")
 

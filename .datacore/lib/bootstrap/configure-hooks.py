@@ -9,10 +9,17 @@ Usage:
 """
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
+
+
+def root_aware_command(datacore_root: str, script_path: str) -> str:
+    root = shlex.quote(datacore_root)
+    script = shlex.quote(script_path)
+    return f"DATACORE_ROOT={root} python3 {script}"
 
 
 def detect_datacore_root():
@@ -38,7 +45,7 @@ def build_required_hooks(datacore_root: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": f"python3 {hooks_dir}/plur_session_start_reminder.py",
+                        "command": root_aware_command(datacore_root, f"{hooks_dir}/plur_session_start_reminder.py"),
                         "timeout": 3,
                     }
                 ]
@@ -50,7 +57,7 @@ def build_required_hooks(datacore_root: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": f"python3 {hooks_dir}/plur_session_guard.py",
+                        "command": root_aware_command(datacore_root, f"{hooks_dir}/plur_session_guard.py"),
                         "timeout": 3,
                     }
                 ],
@@ -62,7 +69,7 @@ def build_required_hooks(datacore_root: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": f"python3 {hooks_dir}/plur_session_mark.py",
+                        "command": root_aware_command(datacore_root, f"{hooks_dir}/plur_session_mark.py"),
                         "timeout": 3,
                     }
                 ],
@@ -73,7 +80,7 @@ def build_required_hooks(datacore_root: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": f"python3 {hooks_dir}/plur_inject_wrapper.py",
+                        "command": root_aware_command(datacore_root, f"{hooks_dir}/plur_inject_wrapper.py"),
                         "timeout": 15,
                     }
                 ]
