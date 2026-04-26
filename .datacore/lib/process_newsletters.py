@@ -14,7 +14,7 @@ REPORTS_DIR = PERSONAL / 'content' / 'reports'
 TODAY = date.today().isoformat()
 
 # Load env
-for ef in [Path.home() / 'config' / 'nightshift.env', DATA_DIR / '.datacore' / 'env' / '.env']:
+for ef in [DATA_DIR / '.datacore' / 'env' / '.env', DATA_DIR / '.datacore' / 'env' / 'local.env']:
     if ef.exists():
         for line in ef.read_text().splitlines():
             line = line.strip()
