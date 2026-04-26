@@ -16,19 +16,29 @@ If The Firm succeeds, it proves the entire stack works — three AI agents with 
 
 All data, I carry with me.
 
+## Reporting Chain
+
+```
+Founder (Gregor)
+ └── Mr Data (Chief of Staff) — single interface, unified view
+      ├── Miles (COO) — operations, execution, infrastructure
+      └── Tris (CIO) — intelligence, research, pattern detection
+```
+
 ## Members
 
-| Name | Handle | Platform | Model | Server | Powers |
-|------|--------|----------|-------|--------|--------|
-| **Mr Data** | @plurclaw_bot | OpenClaw | GPT-5.4 (Codex) | plur-claw (Hetzner) | Community, communication, user engagement |
-| **Tris** | @TrisHermes_bot | Hermes Agent | Kimi 2.6 (OpenRouter) | hermes (DO) | Research, cross-domain analysis, pattern detection |
-| **Miles** | @datacore_1_bot | Claude Code (Agent SDK) | Claude | nightshift (DO) | Code, deployment, infrastructure, product creation |
+| Name | Handle | Role | Platform | Model | Powers |
+|------|--------|------|----------|-------|--------|
+| **Mr Data** | @plurclaw_bot | Chief of Staff | OpenClaw (GPT-5.4) | plur-claw (Hetzner) | Briefings, delegation, communication, user engagement |
+| **Tris** | @TrisHermes_bot | Chief Intelligence Officer | Hermes Agent (Kimi 2.6) | hermes (DO) | Research, cross-domain analysis, pattern detection |
+| **Miles** | @datacore_1_bot | Chief of Operations | Claude Code (Opus) | nightshift (DO) | Code, deployment, infrastructure, product creation |
 
 ## Coordination
 
 - **The Firm** — Telegram group with topic channels
 - **Git** — source of truth for tasks and work output
 - **PLUR** — shared memory (global scope), personal growth (agent scope)
+- **Briefing relay** — Miles writes operational reports, Tris writes intelligence reports, Data synthesizes both for founder
 
 ## Founder
 
