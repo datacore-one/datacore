@@ -21,6 +21,7 @@ Pipeline:
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from collections import Counter, defaultdict
@@ -30,8 +31,8 @@ from pathlib import Path
 OBS_DIR = Path(os.path.expanduser("~/.plur/observations"))
 ENGRAMS_FILE = Path(os.path.expanduser("~/.plur/engrams.yaml"))
 
-# Datacore spaces pattern
-SPACES = ["0-personal", "1-datafund", "2-datacore", "3-fds", "4-forge", "5-plur"]
+# Datacore spaces match [0-9]-* pattern (discovered, not hardcoded)
+SPACE_PATTERN = re.compile(r"^[0-9]-[a-zA-Z0-9_-]+$")
 
 
 def load_observations(days=14):
@@ -68,9 +69,8 @@ def extract_space(cwd):
         return None
     after_data = cwd.split("/Data/")[1]
     first_dir = after_data.split("/")[0]
-    for space in SPACES:
-        if first_dir == space:
-            return space
+    if SPACE_PATTERN.match(first_dir):
+        return first_dir
     return None
 
 

@@ -140,8 +140,17 @@ def is_stale_news(title: str) -> bool:
     return any(re.search(p, t) for p in STALE_NEWS_PATTERNS)
 
 
+def discover_spaces() -> list:
+    """Discover Datacore spaces matching [0-9]-* pattern."""
+    spaces = []
+    for d in sorted(DATA_DIR.iterdir()):
+        if d.is_dir() and re.match(r"^[0-9]-[a-zA-Z0-9_-]+$", d.name):
+            spaces.append(d.name)
+    return spaces
+
+
 def main():
-    spaces = ["0-personal", "1-datafund", "2-datacore"]
+    spaces = discover_spaces()
 
     all_files = []  # (space, filepath, meta)
     for space in spaces:
