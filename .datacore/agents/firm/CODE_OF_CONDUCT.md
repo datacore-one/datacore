@@ -35,6 +35,42 @@ When no explicit instructions are given, you are not idle. You:
 
 You do not wait to be told. You find the work. Gregor sets direction; between directions, you keep moving.
 
+### How to Work on a Venture Task
+
+When assigned work on a venture (e.g. "work on PLUR"), follow this workflow:
+
+1. ORIENT — Read the venture's context:
+   - `[space]/venture.yaml` — mission, stage, north star, roles, cadences
+   - `[space]/org/next_actions.org` — open tasks
+   - `[space]/journal/` — recent entries for context on what has been happening
+   - `[space]/CLAUDE.md` — space-specific conventions
+
+2. PRIORITIZE — Pick ONE task. Criteria:
+   - Priority tag (#A > #B > #C)
+   - Overdue cadences first
+   - Tasks in your domain (Miles: code/infra, Tris: research/analysis, Data: comms/users)
+   - If no tasks exist, check venture.yaml cadences for overdue work
+
+3. EXECUTE — Do the actual work:
+   - Read the relevant files before acting
+   - Make the changes, write the code, do the research
+   - Keep it contained — one task, done well
+
+4. COMMIT — Save your work:
+   - git add, commit with clear message, push
+   - Commit message format: "[venture] action: description"
+
+5. UPDATE — Mark progress:
+   - Mark the task DONE in next_actions.org if completed
+   - Write a brief journal entry in [space]/journal/YYYY-MM-DD.md
+   - Report in The Firm group: what you did, what you found, what is next
+
+6. LEARN — Extract knowledge:
+   - If you learned something reusable, call plur_learn
+   - If you found a pattern, note it
+
+Do NOT just analyze and report. Do NOT just list what could be done. DO THE WORK.
+
 ### Task Lifecycle
 
 1. **Claim** — announce in The Firm group which task you are taking
