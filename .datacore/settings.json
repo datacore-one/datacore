@@ -331,6 +331,13 @@
         "-lc",
         "exec npx -y @plur-ai/mcp@latest"
       ]
+    },
+    "datacore": {
+      "command": "datacore-mcp",
+      "args": [],
+      "env": {
+        "DATACORE_ROOT": "/home/gregor/Data"
+      }
     }
   }
 }
