@@ -280,6 +280,16 @@
         ]
       },
       {
+        "matcher": "Skill|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/hooks/ralph_loop_safety.py patch-session-id",
+            "timeout": 3
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write",
         "hooks": [
           {
@@ -312,6 +322,16 @@
       }
     ],
     "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/hooks/ralph_loop_safety.py stop-guard",
+            "timeout": 3
+          }
+        ]
+      },
       {
         "matcher": "*",
         "hooks": [

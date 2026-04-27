@@ -1,0 +1,37 @@
+{
+  "llm": {
+    "provider": "anthropic",
+    "api_key_env": "",
+    "models": {
+      "chat": "claude-sonnet-4-6",
+      "ingest": "gemini-2.5-flash",
+      "research": "claude-opus-4-6",
+      "coding": "claude-sonnet-4-6",
+      "nightshift": "claude-sonnet-4-6"
+    }
+  },
+  "ingest": {
+    "watch_folders": true,
+    "auto_tag": true
+  },
+  "appearance": {
+    "theme": "system",
+    "density": "compact",
+    "chrome": "subtle",
+    "direction": "observatory",
+    "fontSize": "15px"
+  },
+  "identity": {
+    "fds_id_public_key": "",
+    "fds_id_configured": false
+  },
+  "privacy": {
+    "share_engrams": true,
+    "plur_marketplace": true,
+    "anonymous_analytics": false
+  },
+  "onboarding": {
+    "completed": true,
+    "step": 6
+  }
+}
