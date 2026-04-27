@@ -1,5 +1,5 @@
 #!/bin/bash
-# Venture heartbeat wrapper
+# Venture heartbeat wrapper — Miles (Chief of Operations)
 # Uses OAuth/subscription auth (NOT API key) to avoid burning credits.
 # Claude Code finds credentials at ~/.claude/.credentials.json
 export HOME=/home/gregor
@@ -11,5 +11,11 @@ set -a
 source /home/gregor/config/nightshift.env
 set +a
 unset ANTHROPIC_API_KEY
+
+# Miles identity for git commits
+export GIT_AUTHOR_NAME="Miles"
+export GIT_AUTHOR_EMAIL="gregor+miles@datafund.io"
+export GIT_COMMITTER_NAME="Miles"
+export GIT_COMMITTER_EMAIL="gregor+miles@datafund.io"
 
 exec /usr/bin/python3 -u /home/gregor/Data/.datacore/modules/ventures/lib/venture_heartbeat.py --interval=900
