@@ -241,6 +241,26 @@ Check all spaces for overnight execution:
 - Output files: `*/0-inbox/nightshift-*.md`
 - Summarize with quality scores
 
+### Bot & Automated Commit Activity
+
+Show what bots and automated processes committed across all spaces in the past 24h.
+This gives the user visibility into what changed while they weren't looking.
+
+```bash
+# For each space directory (root, 0-personal, 1-* through 8-*):
+git -C [space] log --since="24 hours ago" --oneline --all 2>/dev/null
+```
+
+Group commits by actor (nightshift, plur, bots) and by space. Present as a compact
+summary in the Spaces section, e.g.:
+
+```
+**Overnight commits**: nightshift: 12 (0-personal: 6, 6-meridian: 4, 3-fds: 2) ·
+plur: 3 (5-plur: 2, 2-datacore: 1) · miles: 1 (8-firm)
+```
+
+Show the commit messages (abbreviated) so the user knows WHAT changed, not just counts.
+
 ---
 
 ## Step 9: Compute GTD Health
@@ -275,6 +295,21 @@ python3 ~/.datacore/modules/trading/lib/gateio/today_summary.py --remote
 Also read market phase analysis output (pre-computed by nightshift cron at 05:30 UTC).
 Check `0-personal/0-inbox/` for market phase report. Integrate signals and
 suggestions into the briefing's trading section.
+
+**IMPORTANT — Educational tone for trading data:**
+The user is learning trading. Raw monitoring jargon is NOT helpful. When presenting
+trading data (especially BZZ anchor-drift, monitoring bands, bid-ask compression,
+pattern density, etc.), always:
+1. **Explain what each metric means** in plain English first
+2. **Say what it means for the user's money** — is it good, bad, neutral?
+3. **Give the "so what"** — does the user need to do anything?
+4. Use analogies where helpful (e.g., "anchor-drift is how far BZZ price has drifted
+   from your average buy price — like being underwater on a mortgage")
+5. Keep raw numbers but wrap them in context: "Anchor-drift at -16.2% (your BZZ
+   holdings are worth 16% less than what you paid — still in the caution zone but
+   improving toward the -15% comfort threshold)"
+
+Never output raw monitoring vocabulary without translation.
 
 ---
 
