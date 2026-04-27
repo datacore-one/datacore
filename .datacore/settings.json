@@ -66,11 +66,12 @@
       "Bash(cd *)",
       "Bash(./sync*)",
       "Bash(datacortex *)",
+      "Bash(rm *)",
+      "Bash(ssh *)",
       "mcp__datacore"
     ],
     "deny": [],
     "ask": [
-      "Bash(rm *)",
       "Bash(git push --force *)",
       "Bash(git push -f *)",
       "Bash(git reset --hard *)",
