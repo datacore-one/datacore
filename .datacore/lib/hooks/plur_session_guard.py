@@ -31,8 +31,15 @@ def main():
     if not session_id:
         return
 
-    # Skip guard for non-interactive sessions (bots, Agent SDK, subagents, nightshift)
-    if os.environ.get("CLAUDE_AGENT_SDK") or os.environ.get("OPENCLAW_SESSION") or os.environ.get("NIGHTSHIFT_RUN"):
+    # Skip guard for non-interactive sessions (bots, Agent SDK, subagents,
+    # nightshift, chat-sidecar/headless). DATACORE_HEADLESS covers the
+    # datacore-app chat panel which bootstraps plur_session_start itself.
+    if (
+        os.environ.get("CLAUDE_AGENT_SDK")
+        or os.environ.get("OPENCLAW_SESSION")
+        or os.environ.get("NIGHTSHIFT_RUN")
+        or os.environ.get("DATACORE_HEADLESS")
+    ):
         return
 
     sentinel = f"{tempfile.gettempdir()}/plur-session-{session_id}"

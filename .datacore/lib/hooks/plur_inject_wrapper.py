@@ -28,9 +28,11 @@ def main():
     except json.JSONDecodeError:
         output = {}
 
-    # If session not started, prepend forceful reminder
+    # If session not started, prepend forceful reminder. Skip reminder in
+    # headless contexts (chat-sidecar bootstraps the session itself); the
+    # injection itself still runs.
     sentinel = f"{tempfile.gettempdir()}/plur-session-{session_id}" if session_id else ""
-    if sentinel and not os.path.exists(sentinel):
+    if sentinel and not os.path.exists(sentinel) and not os.environ.get("DATACORE_HEADLESS"):
         existing = output.get("additionalContext", "")
         reminder = (
             ">>> MANDATORY: Call plur_session_start IMMEDIATELY before any other action. "
