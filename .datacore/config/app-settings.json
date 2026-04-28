@@ -16,9 +16,9 @@
   },
   "appearance": {
     "theme": "system",
-    "density": "compact",
+    "density": "comfortable",
     "chrome": "subtle",
-    "direction": "observatory",
+    "direction": "bridge",
     "fontSize": "15px"
   },
   "identity": {
