@@ -5,8 +5,16 @@ Sends a macOS notification when Claude finishes responding.
 Useful when running long tasks — get notified without watching the terminal.
 """
 import json
+import os
 import subprocess
 import sys
+
+# Headless guard: chat-sidecar and other no-TTY runners set DATACORE_HEADLESS
+# or DATACORE_NO_DESKTOP_NOTIFY. Skip notification but preserve stdin
+# passthrough so downstream hooks/SDK get the same payload.
+if os.environ.get("DATACORE_NO_DESKTOP_NOTIFY") or os.environ.get("DATACORE_HEADLESS"):
+    sys.stdout.write(sys.stdin.read())
+    sys.exit(0)
 
 
 def notify_macos(title, body):
