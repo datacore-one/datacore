@@ -347,11 +347,11 @@
   "enabledPlugins": {},
   "mcpServers": {
     "plur": {
-      "command": "/bin/sh",
-      "args": [
-        "-lc",
-        "exec npx -y @plur-ai/mcp@latest"
-      ]
+      "command": "plur-mcp",
+      "args": [],
+      "env": {
+        "PLUR_PATH": "/home/gregor/.plur"
+      }
     },
     "datacore": {
       "command": "datacore-mcp",

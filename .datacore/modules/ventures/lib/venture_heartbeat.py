@@ -294,19 +294,7 @@ def build_agent_prompt(state: dict, space_dir: Path) -> str:
         for i in normal:
             github_text += f"  - {i['key']}: {i['title']}\n"
 
-    # Load Miles personality for venture operations
-    miles_personality = ""
-    miles_file = data_dir / ".datacore" / "agents" / "firm" / "miles.md"
-    if miles_file.exists():
-        try:
-            miles_personality = miles_file.read_text()[:500]
-        except:
-            pass
-
-    prompt = f"""## Identity
-{miles_personality}
-
-You are operating the **{venture}** venture (stage: {stage}).
+    prompt = f"""You are the autonomous operator for the **{venture}** venture (stage: {stage}).
 
 ## Your Role Context
 {role_context}

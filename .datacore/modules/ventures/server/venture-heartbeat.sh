@@ -13,9 +13,9 @@ set +a
 unset ANTHROPIC_API_KEY
 
 # Miles identity for git commits
-export GIT_AUTHOR_NAME="Miles"
-export GIT_AUTHOR_EMAIL="gregor+miles@datafund.io"
-export GIT_COMMITTER_NAME="Miles"
-export GIT_COMMITTER_EMAIL="gregor+miles@datafund.io"
+export GIT_AUTHOR_NAME="nightshift"
+export GIT_AUTHOR_EMAIL="nightshift@datacore.one"
+export GIT_COMMITTER_NAME="nightshift"
+export GIT_COMMITTER_EMAIL="nightshift@datacore.one"
 
 exec /usr/bin/python3 -u /home/gregor/Data/.datacore/modules/ventures/lib/venture_heartbeat.py --interval=900
