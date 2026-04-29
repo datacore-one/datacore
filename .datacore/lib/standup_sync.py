@@ -60,38 +60,116 @@ def get_yesterday_standup(space_path: str, contributor: str) -> list[dict]:
 
 
 def parse_standup_items(journal_file: Path, contributor: str) -> list[dict]:
-    """Extract standup checkbox items for a contributor from a journal file."""
-    content = journal_file.read_text()
-    items = []
+    """Extract standup items for a contributor from a journal file.
 
-    # Find the Standup section
+    Handles two journal formats:
+    1. /standup-generated: ``## Standup`` -> ``### @user`` -> ``- [ ] / - [x]`` items
+    2. /wrap-up-generated: ``## Updates from @user`` -> prose with **Accomplishments:** bullets
+
+    Format 1 preserves checkbox state and task IDs. Format 2 treats accomplishment
+    bullets as completed items (they're past-tense by convention) and produces no
+    carry-over since the format doesn't track unfinished items.
+    """
+    content = journal_file.read_text()
+
+    # Format 1: structured standup (preferred when present)
+    items = _parse_standup_format(content, contributor)
+    if items:
+        return items
+
+    # Format 2: journal-entry-writer "Updates from" block
+    return _parse_updates_format(content, contributor)
+
+
+def _parse_standup_format(content: str, contributor: str) -> list[dict]:
+    """Parse ``## Standup`` -> ``### @contributor`` -> checkbox-item format.
+
+    Within a contributor's section, ``#### Yesterday`` / ``#### Today`` /
+    ``#### Blockers`` subheadings group items. Items under ``#### Today`` are
+    treated as planned (carry-over candidates if unchecked); items under
+    ``#### Yesterday`` are treated as historical (completed if checked).
+    """
     standup_match = re.search(r"## Standup\s*\n(.*?)(?=\n## [^#]|\Z)", content, re.DOTALL)
     if not standup_match:
         return []
 
     standup_text = standup_match.group(1)
-
-    # Find the contributor's subsection within Standup
-    pattern = rf"### @{re.escape(contributor)}\s*\n((?:- \[[ x]\] .+\n?)*)"
-    contrib_match = re.search(pattern, standup_text, re.IGNORECASE)
+    contrib_pattern = (
+        rf"### @{re.escape(contributor)}\s*\n"
+        r"(.*?)(?=\n### @|\Z)"
+    )
+    contrib_match = re.search(contrib_pattern, standup_text, re.IGNORECASE | re.DOTALL)
     if not contrib_match:
         return []
 
-    for line in contrib_match.group(1).strip().split("\n"):
+    items = []
+    for line in contrib_match.group(1).split("\n"):
         line = line.strip()
         if not line.startswith("- ["):
             continue
-        checked = line.startswith("- [x]")
-        # Extract ID from comment
+        if not (line.startswith("- [ ]") or line.startswith("- [x]") or line.startswith("- [X]")):
+            continue
+        checked = line.lower().startswith("- [x]")
         id_match = re.search(r"<!-- :ID: (.+?) -->", line)
         task_id = id_match.group(1) if id_match else None
-        # Extract text (between checkbox and comment)
         text = re.sub(r"\s*<!-- :ID: .+? -->", "", line[6:]).strip()
-        items.append({
-            "text": text,
-            "checked": checked,
-            "id": task_id,
-        })
+        items.append({"text": text, "checked": checked, "id": task_id})
+    return items
+
+
+def _parse_updates_format(content: str, contributor: str) -> list[dict]:
+    """Parse journal-entry-writer sections owned by ``contributor``.
+
+    Two ownership conventions are recognised:
+    1. Heading-attributed: ``## Updates from @contributor``
+    2. Property-attributed: any ``## ...`` section followed by ``**Author:** contributor``
+
+    Within an owned section, every ``**Accomplishments:**`` bullet list is
+    extracted as completed items (past-tense by convention).
+    """
+    items = []
+    seen_blocks: set[str] = set()
+
+    # Collect candidate section bodies
+    sections: list[str] = []
+
+    # Convention 1: explicit "## Updates from @user"
+    for m in re.finditer(
+        rf"## Updates from @{re.escape(contributor)}\s*\n(.*?)(?=\n## [^#]|\Z)",
+        content,
+        re.IGNORECASE | re.DOTALL,
+    ):
+        sections.append(m.group(1))
+
+    # Convention 2: any "## ..." section whose body declares "**Author:** contributor"
+    for m in re.finditer(r"## [^\n]+\n(.*?)(?=\n## [^#]|\Z)", content, re.DOTALL):
+        body = m.group(1)
+        if re.search(
+            rf"\*\*Author:?\*\*\s*@?{re.escape(contributor)}\b",
+            body,
+            re.IGNORECASE,
+        ):
+            sections.append(body)
+
+    # Match either bold ("**Accomplishments:**") or markdown heading ("### Accomplishments")
+    accomp_re = re.compile(
+        r"(?:\*\*Accomplishments:?\*\*|#{2,4}\s+Accomplishments:?)\s*\n"
+        r"((?:\s*-\s+.+\n?)+)",
+        re.IGNORECASE,
+    )
+
+    for body in sections:
+        for block in accomp_re.findall(body):
+            if block in seen_blocks:
+                continue
+            seen_blocks.add(block)
+            for line in block.strip().split("\n"):
+                line = line.strip()
+                if not line.startswith("- "):
+                    continue
+                text = line[2:].strip()
+                if text:
+                    items.append({"text": text, "checked": True, "id": None})
     return items
 
 

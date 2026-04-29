@@ -248,3 +248,4 @@ datacore.lock.yaml
 # Comms anchor accounts (contains real social media handles)
 .datacore/modules/comms/config/anchor-accounts.yaml
 node_modules/
+.context/
