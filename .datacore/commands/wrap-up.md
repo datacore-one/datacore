@@ -1092,6 +1092,32 @@ Next session can run: /continue
 Or search for :continuation: tagged tasks.
 
 ───────────────────────────────────────────────────
+10. SOCIAL POSTS (draft for immediate posting)
+───────────────────────────────────────────────────
+
+Generate 3 social media post drafts from this session using the content engine:
+
+```bash
+python3 .datacore/modules/comms/lib/content_engine.py session-posts "SESSION_SUMMARY_HERE"
+```
+
+Or if the script is unavailable, generate manually:
+
+**Personal X (@greaborisa)** — building in public, casual, what you worked on.
+Max 280 chars. Specific, authentic.
+
+**Project X (@FairDataSociety or @plur_ai)** — what shipped or what's interesting
+to that community. Max 280 chars.
+
+**LinkedIn** — 150-300 words. Professional but authentic. Strong hook.
+Short paragraphs. End with a question. 2-3 hashtags.
+
+Present all 3 drafts in the report. The user can:
+- Post immediately (copy-paste)
+- Schedule for later
+- Skip
+
+───────────────────────────────────────────────────
 TOKEN COST
 ───────────────────────────────────────────────────
 

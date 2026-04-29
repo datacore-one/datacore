@@ -91,6 +91,13 @@ You will receive the following in your prompt:
 - **issues**: List of GitHub issue numbers (optional)
 - **continuation**: Next steps (if incomplete)
 - **learnings**: Brief learnings captured
+- **accomplishment_task_id_map** (team journals only): list of
+  `accomplishment text -> org-id` pairs. Use the org-id when present in the
+  Standup block's `<!-- :ID: ... -->` comment. Empty `[]` is valid.
+- **planned_today** (team journals only): list of
+  `task heading -> org-id` pairs to fill the Standup `#### Today` list.
+- **blockers** (team journals only): list of `heading -> since-date` pairs to
+  fill the Standup `#### Blockers` list.
 
 ## Journal Location Resolution
 
@@ -194,9 +201,57 @@ Focus on reasoning and context — this is where organizational learning happens
 - If new contributor, create new `## @username` section
 - **Continuation:** block is mandatory when work is incomplete — it is read by `/continue`
 
+### Standup Block (Team Journals)
+
+**ALWAYS** emit/upsert a `## Standup` block in team journals alongside the prose
+section. This enables `/today` to compute carryover with task IDs and checkbox
+state — the prose form alone cannot carry that signal.
+
+```markdown
+## Standup
+
+### @[author]
+
+#### Yesterday
+- [x] [accomplishment 1] <!-- :ID: org-id-if-known -->
+- [x] [accomplishment 2]
+
+#### Today
+- [ ] [planned task 1] <!-- :ID: org-task-id -->
+
+#### Blockers
+- WAITING: [blocker description] (since [YYYY-MM-DD])
+```
+
+**Standup block rules:**
+
+- **Upsert, do not duplicate**: if `## Standup` already exists in today's
+  journal, find or create the `### @{author}` subsection and append to its
+  `#### Yesterday` list. Do not create a second `## Standup` section. If
+  `### @{author}` already exists, merge: append items, dedupe by org-id when
+  present and by exact text otherwise.
+- **Yesterday list**: every entry in `accomplishments` becomes a `- [x]`
+  item (past-tense by convention — accomplishments are completed). Look up
+  the org-id from `accomplishment_task_id_map`; when present, append
+  `<!-- :ID: <org-id> -->`. Items without an org link are still valid.
+- **Today list**: emit `#### Today` only if `planned_today` is non-empty.
+  Each item is `- [ ] <heading> <!-- :ID: <org-id> -->` (unchecked). If
+  `continuation` is provided but `planned_today` is empty, render the
+  continuation as one `- [ ]` line without an ID.
+- **Blockers list**: emit `#### Blockers` only if `blockers` is non-empty.
+  Each item is `- WAITING: <heading> (since YYYY-MM-DD)`.
+- Omit empty subsections.
+- The Standup block lives **between** the contributor narrative sections and
+  the `## Session Metadata` block.
+
+This block is the input for `python3 .datacore/lib/standup_sync.py carryover`,
+which reads `<!-- :ID: ... -->` comments to cross-reference org-mode state and
+detects unchecked `#### Today` items as carry-over candidates.
+
 ### Session Metadata Block
 
-After all contributor narrative sections, append a Session Metadata block:
+After the Standup block (if team journal) and all contributor narrative
+sections, append a Session Metadata block:
 
 ```markdown
 ## Session Metadata
@@ -231,7 +286,11 @@ sessions:
 3. **Get current time**: Use current hour:minute for session timestamp
 4. **Format entry**: Structure the session data into proper format
 5. **Append entry**: Add separator (`---`) and session entry to file
-6. **Return confirmation**: Report success with path and entry summary
+6. **Upsert Standup block** (team journals only): if `## Standup` exists,
+   merge `### @{author}` items into it; otherwise insert a new block before
+   `## Session Metadata`. Each accomplishment from this session becomes an
+   ``- [x]`` item under `#### Yesterday`.
+7. **Return confirmation**: Report success with path and entry summary
 
 ## Entry Guidelines
 

@@ -285,9 +285,76 @@ Task(
   Continuation: {continuation_if_any}
 
   Learnings: {learnings_if_any}
+
+  # Standup block inputs (mandatory — drives /today carryover)
+  Accomplishment org task IDs:
+  {accomplishment_task_id_map}
+
+  Planned today (today list for tomorrow's standup):
+  {planned_today}
+
+  Blockers (WAITING-state items referenced this session):
+  {blockers}
   """
 )
 ```
+
+### Step 5b: Build Standup Block Inputs (deterministic helper)
+
+Before spawning the team-space journal-entry-writer, call the helper script
+`.datacore/lib/standup_inputs.py` to derive the three Standup-block fields.
+This is a **deterministic substitute** for in-prompt logic — do not
+re-implement scoring, matching, or filtering yourself.
+
+**Workflow:**
+
+1. Write the session's accomplishments to a temp file, one per line:
+
+   ```bash
+   ACCS=$(mktemp)
+   cat > "$ACCS" <<'EOF'
+   <accomplishment 1>
+   <accomplishment 2>
+   ...
+   EOF
+   ```
+
+2. Invoke the helper:
+
+   ```bash
+   python3 .datacore/lib/standup_inputs.py \
+     --space {space} \
+     --contributor {contributor} \
+     --accomplishments-file "$ACCS" \
+     --continuation "{continuation_or_empty}" \
+     --blocker-threshold 3
+   ```
+
+3. Parse the JSON output. It contains exactly the three fields the
+   journal-entry-writer needs:
+
+   ```json
+   {
+     "accomplishment_task_id_map": [...],
+     "planned_today": [...],
+     "blockers": [...],
+     "stats": {...}
+   }
+   ```
+
+4. Pass each list verbatim into the prompt template (see Step 5).
+
+**What the helper does (for reference, not for re-implementation):**
+
+- Token-overlap Jaccard scoring (stop-words removed) maps accomplishments
+  to org task headings; ties resolved toward recently-closed DONE tasks.
+- `planned_today` = `--continuation` (if provided) ⊕ NEXT-state tasks
+  tagged `:standup:` assigned to `{contributor}`.
+- `blockers` = WAITING-state tasks tagged `:standup:` for `{contributor}`
+  with `CREATED ≥ 3 days ago`.
+
+If the helper fails (missing org file, etc.), fall through with empty
+lists — the writer will omit the affected subsections.
 
 **IMPORTANT:** Spawn ALL subagents in a SINGLE message with multiple Task tool calls for parallel execution.
 
