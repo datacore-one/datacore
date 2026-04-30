@@ -15,10 +15,10 @@
     "auto_tag": true
   },
   "appearance": {
-    "theme": "system",
+    "theme": "light",
     "density": "comfortable",
     "chrome": "glass",
-    "direction": "atelier",
+    "direction": "bridge",
     "fontSize": "15px"
   },
   "identity": {

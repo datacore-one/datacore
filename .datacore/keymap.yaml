@@ -1,0 +1,77 @@
+# Canonical Datacore keymap — Wave-28 (iter-18 #6).
+#
+# Cross-app shortcut contract: Datacore main app, datacore-health, and any
+# future Datacore-installed app should honor this keymap. When the same
+# physical key combination fires the SAME action across apps, the user
+# never has to "context-switch their hands."
+#
+# Source-of-truth file. Implementations SHOULD read this and either
+# (a) wire shortcuts directly from it, or (b) document the divergence in
+# their app's keyboard-shortcuts module.
+
+version: 1
+
+# Universal — every app implements these identically.
+universal:
+  - keys: ["⌘K", "Ctrl+K"]
+    action: open_command_palette_or_chat
+    description: "Open the AI command palette / chat. Apps without chat fall back to a search palette."
+  - keys: ["⌘⇧R", "Ctrl+Shift+R"]
+    action: refresh_data
+    description: "Refresh all live data widgets without reloading the page."
+  - keys: ["?"]
+    action: show_keyboard_cheatsheet
+    description: "Toggle the keyboard-shortcut cheat-sheet overlay."
+  - keys: [","]
+    action: open_settings
+    description: "Open the settings panel."
+  - keys: ["Escape"]
+    action: close_top_overlay
+    description: "Close any open modal / overlay; never modifies state."
+
+# Navigation — vim-style g+letter for any-page jumping (scales beyond 1-9).
+# Apps that don't have a particular page surface ignore the binding silently.
+nav_jump:
+  prefix: "g"
+  bindings:
+    - keys: ["g", "h"]
+      action: nav_today
+      description: "Today / home"
+    - keys: ["g", "d"]
+      action: nav_dashboard
+      description: "Dashboard"
+    - keys: ["g", "c"]
+      action: nav_cardio
+      description: "Cardio (health) / Calendar (datacore)"
+    - keys: ["g", "s"]
+      action: nav_sleep
+      description: "Sleep (health) / Search (datacore)"
+    - keys: ["g", "b"]
+      action: nav_blood
+      description: "Blood / Biomarkers (health) / Bookmarks (datacore)"
+    - keys: ["g", "t"]
+      action: nav_training
+      description: "Training (health) / Tasks (datacore)"
+    - keys: ["g", "n"]
+      action: nav_nutrition
+      description: "Nutrition (health) / Notes (datacore)"
+    - keys: ["g", "p"]
+      action: nav_protocol
+      description: "Protocol (health) / Projects (datacore)"
+
+# Number-key fallback — kept for backwards compat. Maps to first 9 nav items.
+nav_numeric_fallback:
+  - keys: ["1"]
+    action: nav_first_item
+  - keys: ["2"]
+    action: nav_second_item
+  - keys: ["9"]
+    action: nav_ninth_item
+
+# Global notes:
+# - Shortcuts MUST NOT fire while focus is in an editable input
+#   (input/textarea/contenteditable/select). Always.
+# - The "g" prefix has a 1.5s timeout — pressing g without a follow-up
+#   key returns to normal mode silently.
+# - ⌘⇧R is preferred over ⌘R because ⌘R must remain available for
+#   browser/WebView reload.
