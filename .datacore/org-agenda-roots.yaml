@@ -1,0 +1,27 @@
+version: 1
+roots:
+- path: /private/var/folders/t7/yl6m_hl11nvcsrkf4d426k1r0000gn/T/pytest-of-gregor/pytest-390/test_protocol_writes_to_filesy0/protocol
+  kind: scheduled
+  source: health-protocol
+  recursive: true
+  glob: '*.org'
+- path: /private/var/folders/t7/yl6m_hl11nvcsrkf4d426k1r0000gn/T/pytest-of-gregor/pytest-393/test_protocol_writes_to_filesy0/protocol
+  kind: scheduled
+  source: health-protocol
+  recursive: true
+  glob: '*.org'
+- path: /private/var/folders/t7/yl6m_hl11nvcsrkf4d426k1r0000gn/T/pytest-of-gregor/pytest-396/test_protocol_writes_to_filesy0/protocol
+  kind: scheduled
+  source: health-protocol
+  recursive: true
+  glob: '*.org'
+- path: /private/var/folders/t7/yl6m_hl11nvcsrkf4d426k1r0000gn/T/pytest-of-gregor/pytest-397/test_protocol_writes_to_filesy0/protocol
+  kind: scheduled
+  source: health-protocol
+  recursive: true
+  glob: '*.org'
+- path: /private/var/folders/t7/yl6m_hl11nvcsrkf4d426k1r0000gn/T/pytest-of-gregor/pytest-398/test_protocol_writes_to_filesy0/protocol
+  kind: scheduled
+  source: health-protocol
+  recursive: true
+  glob: '*.org'
