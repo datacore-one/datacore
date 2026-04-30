@@ -17,7 +17,7 @@
   "appearance": {
     "theme": "light",
     "density": "comfortable",
-    "chrome": "glass",
+    "chrome": "subtle",
     "direction": "bridge",
     "fontSize": "15px"
   },
