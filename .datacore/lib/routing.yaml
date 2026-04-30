@@ -1,0 +1,91 @@
+# Model Routing Policy for The Firm
+# Privacy-graded, cost-aware model selection
+#
+# Classes: sensitive → local only, internal → open-weight, public-bulk → cheap frontier,
+#          reasoning → mid-tier, high-stakes → premium frontier
+
+classes:
+  sensitive:
+    # Raw client data, PII, credentials — never leaves local
+    models:
+      - ollama/qwen2.5-7b
+      - ollama/llama3.2-3b
+    description: "Local-only processing for sensitive data"
+
+  internal:
+    # Aggregated data, internal docs — open-weight models OK
+    models:
+      - ollama/qwen2.5-7b
+      - google/gemini-2.5-flash
+      - anthropic/claude-haiku-4-5
+    description: "Internal work, open-weight preferred"
+
+  public-bulk:
+    # High volume, low stakes — optimize for cost
+    models:
+      - google/gemini-2.5-flash
+      - anthropic/claude-haiku-4-5
+      - openai/gpt-4o-mini
+    description: "Bulk processing, cost-optimized"
+
+  reasoning:
+    # Analysis, synthesis, moderate complexity
+    models:
+      - anthropic/claude-sonnet-4-6
+      - google/gemini-2.5-pro
+      - openai/gpt-5
+      - moonshot/kimi-2.6
+    description: "Mid-tier reasoning tasks"
+
+  high-stakes:
+    # Critical decisions, complex code, important comms
+    models:
+      - anthropic/claude-opus-4-7
+      - openai/gpt-5.4
+      - google/gemini-3-pro
+      - moonshot/kimi-2.6
+    description: "Premium models for critical work"
+
+# Venture-specific routing policies
+ventures:
+  megaphone:
+    budget: 100  # USD/month
+    default_class: public-bulk
+    escalations:
+      content-strategy: reasoning
+      campaign-analysis: reasoning
+
+  forge:
+    budget: 150  # USD/month
+    default_class: public-bulk
+    escalations:
+      product-design: reasoning
+      listing-optimization: reasoning
+
+  dmcc:
+    budget: 500  # USD/month — client pilot
+    default_class: internal
+    escalations:
+      client-report: reasoning
+      contract-review: high-stakes
+    privacy_floor: internal  # Never use public models
+
+  verity:
+    budget: 200  # USD/month
+    default_class: reasoning
+    escalations:
+      smart-contract: high-stakes
+      security-audit: high-stakes
+
+  plur:
+    budget: 150  # USD/month
+    default_class: reasoning
+    escalations:
+      architecture: high-stakes
+      pack-curation: reasoning
+
+# Privacy hierarchy (higher index = more restrictive)
+privacy_levels:
+  - public-bulk
+  - internal
+  - sensitive
