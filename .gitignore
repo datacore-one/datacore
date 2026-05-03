@@ -134,6 +134,11 @@ CLAUDE.md
 # RUNTIME DATA (pulses, state, databases)
 # -----------------------------------------------------------------------------
 .datacore/pulses/
+.datacore/scheduled_tasks.lock
+# Module-agnostic agenda registry — written by register_agenda_root() at
+# runtime (datacore-health and any future module). Contains absolute paths
+# including pytest tmpdirs and personal-space paths; per-machine, not a spec.
+.datacore/org-agenda-roots.yaml
 
 # -----------------------------------------------------------------------------
 # LOCAL CONFIGURATION
