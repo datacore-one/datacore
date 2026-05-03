@@ -10,10 +10,10 @@ spaces:
       last_hash: "00000000"
   0-personal:
     patterns:
-      last_date: "2026-04-30"
+      last_date: "2026-05-02"
       last_hash: "00000000"
     corrections:
-      last_date: "2026-04-30"
+      last_date: "2026-05-02"
       last_hash: "00000000"
     preferences:
       last_date: "2026-04-30"
