@@ -55,14 +55,24 @@ def _write_task_via_adapter(
 ) -> bool:
     """Write a task to an org file using org_workspace_adapter.py.
 
-    Falls back to raw org text append if the adapter fails.
+    Properties are MANDATORY for nightshift execution (CONTEXT and
+    ACCEPTANCE_CRITERIA are checked by the executor — without them tasks
+    get rejected with category=specification, retryable=false). They are
+    passed through the adapter as --property KEY=VALUE so the heading,
+    body, and properties land in one atomic call.
+
+    Falls back to raw org text append if the adapter call fails (e.g.,
+    when the org file has parse errors and adapter cannot load it).
+
     Returns True on success.
     """
     heading = task["heading"]
     tags = task["tags_str"]
     state = task["state"]
+    properties = task.get("properties", {})
+    body = task.get("body")
 
-    # Try subprocess call to adapter
+    # Build adapter command with properties baked in
     cmd = [
         sys.executable,
         str(adapter_path),
@@ -72,42 +82,24 @@ def _write_task_via_adapter(
         f"--state={state}",
         f"--tags={tags}",
     ]
+    for key, value in properties.items():
+        # Adapter accepts repeatable --property KEY=VALUE
+        cmd.append(f"--property={key}={value}")
+    if body:
+        cmd.append(f"--body={body}")
 
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=30
         )
         if result.returncode == 0:
-            # Task created — now try to set properties via org_workspace
-            _set_properties_via_workspace(org_file, heading, task["properties"])
             return True
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
 
-    # Fallback: append raw org text
+    # Fallback: append raw org text (preserves all properties)
     _append_raw_org(org_file, task)
     return True
-
-
-def _set_properties_via_workspace(
-    org_file: Path,
-    heading: str,
-    properties: dict,
-) -> None:
-    """Set properties on a task via org_workspace (best-effort)."""
-    try:
-        from org_workspace import OrgWorkspace
-
-        ws = OrgWorkspace()
-        ws.load(org_file)
-        for node in ws.all_nodes():
-            if node.heading == heading:
-                for key, value in properties.items():
-                    node.set_property(key, str(value))
-                ws.save()
-                return
-    except Exception:
-        pass  # Properties are nice-to-have; task heading is enough
 
 
 def _append_raw_org(org_file: Path, task: dict) -> None:
@@ -201,6 +193,15 @@ def run(
             "tasks_written": 0,
             "errors": [],
         }
+
+        # Skip archived ventures (Phase A.0.2 state-machine gate). Archived
+        # ventures keep their venture.yaml but must not generate new cadence
+        # tasks — restoring transitions stage back to discovery.
+        venture_stage = (vs.config.stage if vs.config else "").lower()
+        if venture_stage == "archived":
+            venture_result["skipped_reason"] = "stage=archived"
+            summary["ventures"].append(venture_result)
+            continue
 
         # Load roles from raw YAML (dict format required)
         venture_yaml = vs.space_dir / "venture.yaml"

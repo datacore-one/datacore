@@ -4,66 +4,136 @@ venture_loader.py — Load and validate venture.yaml configuration files.
 This is the foundation of the Autonomous Venture Framework. All other
 components (cadence engine, budget tracker, hypothesis tracker) depend
 on VentureConfig.
-"""
 
-from dataclasses import dataclass, field
+Migrated to Pydantic v2 in 2026-05-05 (Phase A.0.1) to unlock:
+  * model_json_schema() for the codegen pipeline (pydantic2ts → TS types)
+  * built-in validation at construction
+  * direct use as FastAPI request/response models
+
+Backward compatibility:
+  * load_venture() still raises ValueError on invalid input (existing
+    callers catch ValueError, not pydantic.ValidationError).
+  * validate_venture() still returns list[str] for cross-field rules.
+  * Field access via dot notation is unchanged.
+
+Extra-field policy:
+  * Top-level VentureConfig: extra="allow" — real venture.yaml files carry
+    user-defined fields (audit_trail, hmm_live_prerequisites, etc.) that
+    we must preserve.
+  * Sub-blocks (BudgetConfig, RoleConfig, GitHubConfig, NightshiftConfig,
+    RepoConfig): extra="forbid" — typos in well-defined sub-blocks should
+    surface as errors, not silently drop.
+"""
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import yaml
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+# ── Stage state machine (Phase A.0.2) ────────────────────────────────────────
 
-VALID_STAGES = ("discovery", "validation", "growth", "maturity")
+VALID_STAGES: tuple[str, ...] = (
+    "proposed",
+    "discovery",
+    "validation",
+    "growth",
+    "maturity",
+    "archived",
+)
+
+# Allowed transitions out of each stage. "archived" can only go back to
+# "discovery" (restore). Any stage can be archived.
+ALLOWED_TRANSITIONS: dict[str, set[str]] = {
+    "proposed": {"discovery", "archived"},
+    "discovery": {"validation", "archived"},
+    "validation": {"growth", "discovery", "archived"},
+    "growth": {"maturity", "validation", "archived"},
+    "maturity": {"growth", "archived"},
+    "archived": {"discovery"},
+}
+
 MAX_AUTONOMY = 3
 
 
-# ---------------------------------------------------------------------------
-# Dataclasses
-# ---------------------------------------------------------------------------
+def validate_transition(from_stage: str, to_stage: str) -> Optional[str]:
+    """Check if a stage transition is allowed.
+
+    Returns None if the transition is valid, or an error string explaining why
+    it is not. A no-op transition (from == to) is always allowed.
+    """
+    if from_stage == to_stage:
+        return None
+    if from_stage not in VALID_STAGES:
+        return f"Unknown source stage: '{from_stage}'"
+    if to_stage not in VALID_STAGES:
+        return f"Unknown target stage: '{to_stage}'"
+    allowed = ALLOWED_TRANSITIONS.get(from_stage, set())
+    if to_stage not in allowed:
+        return (
+            f"Transition not allowed: '{from_stage}' → '{to_stage}'. "
+            f"Allowed from '{from_stage}': {sorted(allowed) or '(none)'}"
+        )
+    return None
 
 
-@dataclass
-class BudgetConfig:
+# ── Sub-models (extra="forbid" — typos are errors) ───────────────────────────
+
+
+class BudgetConfig(BaseModel):
     """Budget limits for a venture."""
 
-    ceiling: float
+    model_config = ConfigDict(extra="forbid")
+
+    ceiling: float = 0.0
     ai_tokens: float = 0.0
     real_spend: float = 0.0
     approval_threshold: float = 25.0
     ledger: str = ".datacore/state/venture/budget-ledger.yaml"
 
 
-@dataclass
-class RoleConfig:
-    """A named role within a venture, with cadences."""
+class RoleConfig(BaseModel):
+    """A named role within a venture, with cadences.
+
+    extra="allow" because real venture.yaml files extend roles with
+    documentation fields (agent, decisions, receives, responsibilities,
+    boundary, metrics) that aren't part of the cadence-engine contract
+    but should round-trip cleanly.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     description: str = ""
-    cadences: dict = field(default_factory=dict)  # {daily: [...], weekly: [...], ...}
-    budget_authority: float = 0
+    cadences: dict[str, list[str]] = Field(default_factory=dict)
+    budget_authority: float = 0.0
 
 
-@dataclass
-class RepoConfig:
+class RepoConfig(BaseModel):
     """A GitHub repository associated with a venture."""
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str = ""
     role: str = ""
     owner: str = ""
     scan: bool = False
-    labels_ai: list = field(default_factory=list)
+    labels_ai: list[str] = Field(default_factory=list)
 
 
-@dataclass
-class GitHubConfig:
+class GitHubConfig(BaseModel):
     """GitHub config for a venture."""
 
+    model_config = ConfigDict(extra="forbid")
+
     org: str = ""
-    repos: list = field(default_factory=list)  # List[RepoConfig]
+    repos: list[RepoConfig] = Field(default_factory=list)
 
 
-@dataclass
-class NightshiftConfig:
+class NightshiftConfig(BaseModel):
     """Nightshift execution settings for a venture."""
+
+    model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
     max_parallel_agents: int = 2
@@ -71,43 +141,56 @@ class NightshiftConfig:
     priority: str = "normal"
 
 
-@dataclass
-class VentureConfig:
-    """Full configuration for an autonomous venture."""
+# ── Top-level model (extra="allow" — preserve user-added fields) ─────────────
+
+
+class VentureConfig(BaseModel):
+    """Full configuration for an autonomous venture.
+
+    Top-level extras are preserved (`extra="allow"`) — real venture.yaml files
+    carry domain-specific fields (e.g. `audit_trail`, `hmm_live_prerequisites`)
+    that the loader must round-trip without dropping.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     name: str = ""
     description: str = ""
     stage: str = "discovery"
     space: str = ""
     autonomy: int = 0
-    budget: BudgetConfig = field(default_factory=lambda: BudgetConfig(ceiling=0))
+    budget: BudgetConfig = Field(default_factory=BudgetConfig)
     thesis: str = ""
     north_star: str = ""
     target_customer: str = ""
-    roles: dict = field(default_factory=dict)  # {name: RoleConfig}
+    roles: dict[str, RoleConfig] = Field(default_factory=dict)
     hypotheses_file: str = "hypotheses.yaml"
-    modules: dict = field(default_factory=dict)
-    tracks: list = field(default_factory=list)
+    modules: dict[str, Any] = Field(default_factory=dict)
+    # tracks is heterogeneous in real yamls — sometimes plain strings ("ops"),
+    # sometimes dicts like {"marketing": ["content", "social"]}. Accept Any.
+    tracks: list[Any] = Field(default_factory=list)
     github: Optional[GitHubConfig] = None
     nightshift: Optional[NightshiftConfig] = None
-    tags: list = field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
+# ── Validation (cross-field rules + back-compat shape) ───────────────────────
 
 
 def validate_venture(data: dict) -> list[str]:
     """Validate a raw venture dict.
 
     Returns a list of error strings. An empty list means the data is valid.
+
+    Pydantic field-level validation runs at construction; this function adds
+    cross-field rules (budget sum constraint) and the historical "name is
+    required" check (Pydantic would default to empty string, but the daemon
+    contract is that name must be non-empty).
     """
     errors: list[str] = []
 
-    for required in ("name",):
-        if not data.get(required):
-            errors.append(f"Missing required field: '{required}'")
+    if not data.get("name"):
+        errors.append("Missing required field: 'name'")
 
     stage = data.get("stage")
     if stage and stage not in VALID_STAGES:
@@ -136,97 +219,28 @@ def validate_venture(data: dict) -> list[str]:
     return errors
 
 
-# ---------------------------------------------------------------------------
-# Loaders
-# ---------------------------------------------------------------------------
-
-
-def _parse_budget(data: dict) -> BudgetConfig:
-    return BudgetConfig(
-        ceiling=float(data.get("ceiling", 0.0)),
-        ai_tokens=float(data.get("ai_tokens", 0.0)),
-        real_spend=float(data.get("real_spend", 0.0)),
-        approval_threshold=float(data.get("approval_threshold", 25.0)),
-        ledger=data.get("ledger", ".datacore/state/venture/budget-ledger.yaml"),
-    )
-
-
-def _parse_roles(roles_data) -> dict:
-    """Parse roles from venture.yaml. Accepts dict format:
-    roles:
-      operator:
-        description: "..."
-        cadences: {daily: [...], weekly: [...]}
-        budget_authority: 10
-    """
-    result = {}
-    if isinstance(roles_data, dict):
-        for name, rdata in roles_data.items():
-            if isinstance(rdata, dict):
-                result[name] = RoleConfig(
-                    description=rdata.get("description", ""),
-                    cadences=rdata.get("cadences", {}),
-                    budget_authority=float(rdata.get("budget_authority", 0)),
-                )
-    return result
-
-
-def _parse_repo(data: dict) -> RepoConfig:
-    return RepoConfig(
-        name=data.get("name", ""),
-        role=data.get("role", ""),
-        owner=data.get("owner", ""),
-        scan=bool(data.get("scan", False)),
-        labels_ai=list(data.get("labels_ai", [])),
-    )
-
-
-def _parse_github(data: dict) -> GitHubConfig:
-    return GitHubConfig(
-        org=data.get("org", ""),
-        repos=[_parse_repo(r) for r in data.get("repos", [])],
-    )
-
-
-def _parse_nightshift(data: dict) -> NightshiftConfig:
-    return NightshiftConfig(
-        enabled=bool(data.get("enabled", True)),
-        max_parallel_agents=int(data.get("max_parallel_agents", 2)),
-        timeout_minutes=int(data.get("timeout_minutes", 60)),
-        priority=data.get("priority", "normal"),
-    )
+# ── Loaders ──────────────────────────────────────────────────────────────────
 
 
 def load_venture(data: dict) -> VentureConfig:
     """Parse a raw venture dict into a VentureConfig.
 
     Raises ValueError with all validation errors if the data is invalid.
+
+    Two validation passes:
+      1. Cross-field rules via validate_venture() — emits aggregated errors.
+      2. Pydantic construction — emits field-type errors (translated to
+         ValueError so existing callers catch consistently).
     """
     errors = validate_venture(data)
     if errors:
-        raise ValueError("Invalid venture configuration:\n" + "\n".join(f"  - {e}" for e in errors))
-
-    github_raw = data.get("github")
-    nightshift_raw = data.get("nightshift")
-
-    return VentureConfig(
-        name=data["name"],
-        description=data.get("description", ""),
-        stage=data.get("stage", "discovery"),
-        space=data.get("space", ""),
-        autonomy=int(data.get("autonomy", 0)),
-        budget=_parse_budget(data["budget"]) if data.get("budget") else BudgetConfig(ceiling=0),
-        thesis=data.get("thesis", ""),
-        north_star=data.get("north_star", ""),
-        target_customer=data.get("target_customer", ""),
-        roles=_parse_roles(data.get("roles", {})),
-        hypotheses_file=data.get("hypotheses_file", "hypotheses.yaml"),
-        modules=data.get("modules", {}),
-        tracks=data.get("tracks", []),
-        github=_parse_github(github_raw) if github_raw else None,
-        nightshift=_parse_nightshift(nightshift_raw) if nightshift_raw else None,
-        tags=list(data.get("tags", [])),
-    )
+        raise ValueError(
+            "Invalid venture configuration:\n" + "\n".join(f"  - {e}" for e in errors)
+        )
+    try:
+        return VentureConfig.model_validate(data)
+    except ValidationError as exc:
+        raise ValueError(f"Invalid venture configuration: {exc}") from exc
 
 
 def load_venture_file(path: Path) -> VentureConfig:
@@ -243,6 +257,8 @@ def load_venture_file(path: Path) -> VentureConfig:
         data = yaml.safe_load(f)
 
     if not isinstance(data, dict):
-        raise ValueError(f"Venture file must be a YAML mapping, got: {type(data).__name__}")
+        raise ValueError(
+            f"Venture file must be a YAML mapping, got: {type(data).__name__}"
+        )
 
     return load_venture(data)
