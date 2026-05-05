@@ -1,0 +1,11 @@
+{
+  "name": "@datacore-one/modules-deps",
+  "version": "1.0.0",
+  "description": "Shared runtime deps for Datacore modules' tools/index.js. Resolved by Node's ESM walk from .datacore/modules/<name>/tools/index.js.",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "js-yaml": "^4.1.0",
+    "zod": "^3.23.0"
+  }
+}
