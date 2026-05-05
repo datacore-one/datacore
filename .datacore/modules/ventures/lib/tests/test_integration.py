@@ -63,14 +63,16 @@ def test_full_cadence_cycle(tmp_path):
             "ai_tokens": 0,
             "real_spend": 0,
         },
-        "roles": [
-            {
-                "id": "operator",
-                "agent": "operator-agent",
-                "cadence": "daily",
-                "enabled": True,
+        # Roles use the dict format documented in venture.yaml schema.
+        # The previous list-of-dicts shape was silently dropped by the
+        # pre-Pydantic loader; Pydantic v2 enforces the correct shape.
+        "roles": {
+            "operator": {
+                "description": "Does everything",
+                "cadences": {"daily": ["check-email"]},
+                "budget_authority": 10,
             }
-        ],
+        },
         "nightshift": {
             "enabled": True,
         },
