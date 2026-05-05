@@ -1,6 +1,6 @@
 {
-  "scan_date": "2026-04-24",
-  "since": "2026-04-23",
+  "scan_date": "2026-05-05",
+  "since": "2026-05-04",
   "username": "plur9",
   "mentions": [],
   "authored": [],
@@ -23,45 +23,19 @@
     },
     "fairDataSociety": {
       "org": "fairDataSociety",
-      "new_issues_count": 2,
+      "new_issues_count": 0,
       "closed_issues_count": 0,
       "merged_prs_count": 0,
-      "new_issues": [
-        {
-          "repo": "fairDataSociety/Fairdrop",
-          "number": 464,
-          "title": "E2E: FDS-ID account creation doesn't complete in __TEST_MODE__ (blocks upload-success + future authed specs)",
-          "url": "https://github.com/fairDataSociety/Fairdrop/issues/464"
-        },
-        {
-          "repo": "fairDataSociety/Fairdrop",
-          "number": 463,
-          "title": "E2E: Download page doesn't render filename from mock-Swarm in upload\u2192download roundtrip",
-          "url": "https://github.com/fairDataSociety/Fairdrop/issues/463"
-        }
-      ],
+      "new_issues": [],
       "merged_prs": []
     },
     "plur-ai": {
       "org": "plur-ai",
       "new_issues_count": 0,
       "closed_issues_count": 0,
-      "merged_prs_count": 2,
+      "merged_prs_count": 0,
       "new_issues": [],
-      "merged_prs": [
-        {
-          "repo": "plur-ai/website",
-          "number": 1,
-          "title": "docs: retire 86.7% benchmark-as-headline from landing + llms.txt",
-          "url": "https://github.com/plur-ai/website/pull/1"
-        },
-        {
-          "repo": "plur-ai/plur",
-          "number": 57,
-          "title": "docs: retire 86.7% benchmark-as-headline from README",
-          "url": "https://github.com/plur-ai/plur/pull/57"
-        }
-      ]
+      "merged_prs": []
     },
     "plur9": {
       "org": "plur9",
@@ -72,5 +46,5 @@
       "merged_prs": []
     }
   },
-  "scanned_at": "2026-04-24T06:00:31.590326"
+  "scanned_at": "2026-05-05T06:00:43.989885"
 }

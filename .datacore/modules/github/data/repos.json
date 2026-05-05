@@ -9,6 +9,27 @@
   "repos": {
     "datacore-one": [
       {
+        "name": "datacore",
+        "full_name": "datacore-one/datacore",
+        "url": "https://github.com/datacore-one/datacore",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datacore-trading",
+        "full_name": "datacore-one/datacore-trading",
+        "url": "https://github.com/datacore-one/datacore-trading",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datacore-space",
+        "full_name": "datacore-one/datacore-space",
+        "url": "https://github.com/datacore-one/datacore-space",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
         "name": "datacore-app",
         "full_name": "datacore-one/datacore-app",
         "url": "https://github.com/datacore-one/datacore-app",
@@ -16,9 +37,58 @@
         "default_branch": "main"
       },
       {
-        "name": "website",
-        "full_name": "datacore-one/website",
-        "url": "https://github.com/datacore-one/website",
+        "name": "datacore-lens",
+        "full_name": "datacore-one/datacore-lens",
+        "url": "https://github.com/datacore-one/datacore-lens",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datacore-dips",
+        "full_name": "datacore-one/datacore-dips",
+        "url": "https://github.com/datacore-one/datacore-dips",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "megaphone-saas",
+        "full_name": "datacore-one/megaphone-saas",
+        "url": "https://github.com/datacore-one/megaphone-saas",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "megaphone-websites",
+        "full_name": "datacore-one/megaphone-websites",
+        "url": "https://github.com/datacore-one/megaphone-websites",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datacore-cli",
+        "full_name": "datacore-one/datacore-cli",
+        "url": "https://github.com/datacore-one/datacore-cli",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datacore-nightshift",
+        "full_name": "datacore-one/datacore-nightshift",
+        "url": "https://github.com/datacore-one/datacore-nightshift",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datacore-chief-of-staff",
+        "full_name": "datacore-one/datacore-chief-of-staff",
+        "url": "https://github.com/datacore-one/datacore-chief-of-staff",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datacore-ventures",
+        "full_name": "datacore-one/datacore-ventures",
+        "url": "https://github.com/datacore-one/datacore-ventures",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -26,6 +96,20 @@
         "name": "org-workspace",
         "full_name": "datacore-one/org-workspace",
         "url": "https://github.com/datacore-one/org-workspace",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datacore-mail",
+        "full_name": "datacore-one/datacore-mail",
+        "url": "https://github.com/datacore-one/datacore-mail",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "website",
+        "full_name": "datacore-one/website",
+        "url": "https://github.com/datacore-one/website",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -44,30 +128,9 @@
         "default_branch": "main"
       },
       {
-        "name": "datacore-ventures",
-        "full_name": "datacore-one/datacore-ventures",
-        "url": "https://github.com/datacore-one/datacore-ventures",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "datacore-trading",
-        "full_name": "datacore-one/datacore-trading",
-        "url": "https://github.com/datacore-one/datacore-trading",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
         "name": "datacore-telegram",
         "full_name": "datacore-one/datacore-telegram",
         "url": "https://github.com/datacore-one/datacore-telegram",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "datacore-nightshift",
-        "full_name": "datacore-one/datacore-nightshift",
-        "url": "https://github.com/datacore-one/datacore-nightshift",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -82,13 +145,6 @@
         "name": "datacore-meetings",
         "full_name": "datacore-one/datacore-meetings",
         "url": "https://github.com/datacore-one/datacore-meetings",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "datacore-mail",
-        "full_name": "datacore-one/datacore-mail",
-        "url": "https://github.com/datacore-one/datacore-mail",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -121,41 +177,6 @@
         "default_branch": "main"
       },
       {
-        "name": "datacore",
-        "full_name": "datacore-one/datacore",
-        "url": "https://github.com/datacore-one/datacore",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "datacore-dips",
-        "full_name": "datacore-one/datacore-dips",
-        "url": "https://github.com/datacore-one/datacore-dips",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "megaphone-saas",
-        "full_name": "datacore-one/megaphone-saas",
-        "url": "https://github.com/datacore-one/megaphone-saas",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "megaphone-websites",
-        "full_name": "datacore-one/megaphone-websites",
-        "url": "https://github.com/datacore-one/megaphone-websites",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "datacore-space",
-        "full_name": "datacore-one/datacore-space",
-        "url": "https://github.com/datacore-one/datacore-space",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
         "name": "datacore-comms",
         "full_name": "datacore-one/datacore-comms",
         "url": "https://github.com/datacore-one/datacore-comms",
@@ -180,13 +201,6 @@
         "name": ".github",
         "full_name": "datacore-one/.github",
         "url": "https://github.com/datacore-one/.github",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "datacore-cli",
-        "full_name": "datacore-one/datacore-cli",
-        "url": "https://github.com/datacore-one/datacore-cli",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -221,6 +235,83 @@
     ],
     "datafund": [
       {
+        "name": "swarm-space",
+        "full_name": "datafund/swarm-space",
+        "url": "https://github.com/datafund/swarm-space",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datafund-space",
+        "full_name": "datafund/datafund-space",
+        "url": "https://github.com/datafund/datafund-space",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "util_haproxy_rpchealth",
+        "full_name": "datafund/util_haproxy_rpchealth",
+        "url": "https://github.com/datafund/util_haproxy_rpchealth",
+        "is_fork": false,
+        "default_branch": "master"
+      },
+      {
+        "name": "swarm_provenance_MCP",
+        "full_name": "datafund/swarm_provenance_MCP",
+        "url": "https://github.com/datafund/swarm_provenance_MCP",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "swarm_provenance_CLI",
+        "full_name": "datafund/swarm_provenance_CLI",
+        "url": "https://github.com/datafund/swarm_provenance_CLI",
+        "is_fork": true,
+        "default_branch": "main"
+      },
+      {
+        "name": "provenance",
+        "full_name": "datafund/provenance",
+        "url": "https://github.com/datafund/provenance",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "provenance-smasher",
+        "full_name": "datafund/provenance-smasher",
+        "url": "https://github.com/datafund/provenance-smasher",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "provenance-fellowship",
+        "full_name": "datafund/provenance-fellowship",
+        "url": "https://github.com/datafund/provenance-fellowship",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "website",
+        "full_name": "datafund/website",
+        "url": "https://github.com/datafund/website",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "provenance-space",
+        "full_name": "datafund/provenance-space",
+        "url": "https://github.com/datafund/provenance-space",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datacortex",
+        "full_name": "datafund/datacortex",
+        "url": "https://github.com/datafund/datacortex",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
         "name": "Agent-Data-Exchange",
         "full_name": "datafund/Agent-Data-Exchange",
         "url": "https://github.com/datafund/Agent-Data-Exchange",
@@ -231,13 +322,6 @@
         "name": "ade",
         "full_name": "datafund/ade",
         "url": "https://github.com/datafund/ade",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "website",
-        "full_name": "datafund/website",
-        "url": "https://github.com/datafund/website",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -256,20 +340,6 @@
         "default_branch": "main"
       },
       {
-        "name": "datacortex",
-        "full_name": "datafund/datacortex",
-        "url": "https://github.com/datafund/datacortex",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "datafund-space",
-        "full_name": "datafund/datafund-space",
-        "url": "https://github.com/datafund/datafund-space",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
         "name": "swarm_connect",
         "full_name": "datafund/swarm_connect",
         "url": "https://github.com/datafund/swarm_connect",
@@ -284,45 +354,10 @@
         "default_branch": "main"
       },
       {
-        "name": "swarm-space",
-        "full_name": "datafund/swarm-space",
-        "url": "https://github.com/datafund/swarm-space",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "provenance",
-        "full_name": "datafund/provenance",
-        "url": "https://github.com/datafund/provenance",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "provenance-smasher",
-        "full_name": "datafund/provenance-smasher",
-        "url": "https://github.com/datafund/provenance-smasher",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "swarm_provenance_MCP",
-        "full_name": "datafund/swarm_provenance_MCP",
-        "url": "https://github.com/datafund/swarm_provenance_MCP",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
         "name": "swarm_provenance_SDK",
         "full_name": "datafund/swarm_provenance_SDK",
         "url": "https://github.com/datafund/swarm_provenance_SDK",
         "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "swarm_provenance_CLI",
-        "full_name": "datafund/swarm_provenance_CLI",
-        "url": "https://github.com/datafund/swarm_provenance_CLI",
-        "is_fork": true,
         "default_branch": "main"
       },
       {
@@ -340,25 +375,11 @@
         "default_branch": "main"
       },
       {
-        "name": "provenance-space",
-        "full_name": "datafund/provenance-space",
-        "url": "https://github.com/datafund/provenance-space",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
         "name": "mcp-registry",
         "full_name": "datafund/mcp-registry",
         "url": "https://github.com/datafund/mcp-registry",
         "is_fork": true,
         "default_branch": "main"
-      },
-      {
-        "name": "util_haproxy_rpchealth",
-        "full_name": "datafund/util_haproxy_rpchealth",
-        "url": "https://github.com/datafund/util_haproxy_rpchealth",
-        "is_fork": false,
-        "default_branch": "master"
       },
       {
         "name": "nexus",
@@ -392,13 +413,6 @@
         "name": "bm-coco-inference",
         "full_name": "datafund/bm-coco-inference",
         "url": "https://github.com/datafund/bm-coco-inference",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "provenance-fellowship",
-        "full_name": "datafund/provenance-fellowship",
-        "url": "https://github.com/datafund/provenance-fellowship",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -923,6 +937,34 @@
     ],
     "fairDataSociety": [
       {
+        "name": "fds-space",
+        "full_name": "fairDataSociety/fds-space",
+        "url": "https://github.com/fairDataSociety/fds-space",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "fds-ts",
+        "full_name": "fairDataSociety/fds-ts",
+        "url": "https://github.com/fairDataSociety/fds-ts",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "Fairdrop",
+        "full_name": "fairDataSociety/Fairdrop",
+        "url": "https://github.com/fairDataSociety/Fairdrop",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "fdp-storage",
+        "full_name": "fairDataSociety/fdp-storage",
+        "url": "https://github.com/fairDataSociety/fdp-storage",
+        "is_fork": false,
+        "default_branch": "master"
+      },
+      {
         "name": "guardian",
         "full_name": "fairDataSociety/guardian",
         "url": "https://github.com/fairDataSociety/guardian",
@@ -940,20 +982,6 @@
         "name": "fairdrive-website",
         "full_name": "fairDataSociety/fairdrive-website",
         "url": "https://github.com/fairDataSociety/fairdrive-website",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "Fairdrop",
-        "full_name": "fairDataSociety/Fairdrop",
-        "url": "https://github.com/fairDataSociety/Fairdrop",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "fds-space",
-        "full_name": "fairDataSociety/fds-space",
-        "url": "https://github.com/fairDataSociety/fds-space",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -1059,13 +1087,6 @@
         "name": "fdp-contracts",
         "full_name": "fairDataSociety/fdp-contracts",
         "url": "https://github.com/fairDataSociety/fdp-contracts",
-        "is_fork": false,
-        "default_branch": "master"
-      },
-      {
-        "name": "fdp-storage",
-        "full_name": "fairDataSociety/fdp-storage",
-        "url": "https://github.com/fairDataSociety/fdp-storage",
         "is_fork": false,
         "default_branch": "master"
       },
@@ -1614,16 +1635,16 @@
         "url": "https://github.com/fairDataSociety/FairOsUI",
         "is_fork": false,
         "default_branch": "master"
-      },
-      {
-        "name": "vulnerability-disclosure-policy",
-        "full_name": "fairDataSociety/vulnerability-disclosure-policy",
-        "url": "https://github.com/fairDataSociety/vulnerability-disclosure-policy",
-        "is_fork": false,
-        "default_branch": "master"
       }
     ],
     "plur-ai": [
+      {
+        "name": "plur-space",
+        "full_name": "plur-ai/plur-space",
+        "url": "https://github.com/plur-ai/plur-space",
+        "is_fork": false,
+        "default_branch": "main"
+      },
       {
         "name": "website",
         "full_name": "plur-ai/website",
@@ -1639,21 +1660,77 @@
         "default_branch": "main"
       },
       {
+        "name": "enterprise",
+        "full_name": "plur-ai/enterprise",
+        "url": "https://github.com/plur-ai/enterprise",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
         "name": "hub",
         "full_name": "plur-ai/hub",
         "url": "https://github.com/plur-ai/hub",
         "is_fork": false,
         "default_branch": "main"
-      },
-      {
-        "name": "plur-space",
-        "full_name": "plur-ai/plur-space",
-        "url": "https://github.com/plur-ai/plur-space",
-        "is_fork": false,
-        "default_branch": "main"
       }
     ],
     "plur9": [
+      {
+        "name": "the-firm-space",
+        "full_name": "plur9/the-firm-space",
+        "url": "https://github.com/plur9/the-firm-space",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "meridian-space",
+        "full_name": "plur9/meridian-space",
+        "url": "https://github.com/plur9/meridian-space",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "plur-buzz",
+        "full_name": "plur9/plur-buzz",
+        "url": "https://github.com/plur9/plur-buzz",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "forge-space",
+        "full_name": "plur9/forge-space",
+        "url": "https://github.com/plur9/forge-space",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "megaphone-space",
+        "full_name": "plur9/megaphone-space",
+        "url": "https://github.com/plur9/megaphone-space",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "miles-space",
+        "full_name": "plur9/miles-space",
+        "url": "https://github.com/plur9/miles-space",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "awesome-mcp-servers",
+        "full_name": "plur9/awesome-mcp-servers",
+        "url": "https://github.com/plur9/awesome-mcp-servers",
+        "is_fork": true,
+        "default_branch": "main"
+      },
+      {
+        "name": "qvac-knowledge-exchange",
+        "full_name": "plur9/qvac-knowledge-exchange",
+        "url": "https://github.com/plur9/qvac-knowledge-exchange",
+        "is_fork": false,
+        "default_branch": "main"
+      },
       {
         "name": "verity-demo",
         "full_name": "plur9/verity-demo",
@@ -1674,27 +1751,6 @@
         "url": "https://github.com/plur9/Agent-Data-Exchange",
         "is_fork": false,
         "default_branch": "enterprise"
-      },
-      {
-        "name": "meridian-space",
-        "full_name": "plur9/meridian-space",
-        "url": "https://github.com/plur9/meridian-space",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "megaphone-space",
-        "full_name": "plur9/megaphone-space",
-        "url": "https://github.com/plur9/megaphone-space",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "forge-space",
-        "full_name": "plur9/forge-space",
-        "url": "https://github.com/plur9/forge-space",
-        "is_fork": false,
-        "default_branch": "main"
       },
       {
         "name": "module-personal-finance",
@@ -1778,13 +1834,6 @@
         "full_name": "plur9/datacore",
         "url": "https://github.com/plur9/datacore",
         "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "awesome-mcp-servers",
-        "full_name": "plur9/awesome-mcp-servers",
-        "url": "https://github.com/plur9/awesome-mcp-servers",
-        "is_fork": true,
         "default_branch": "main"
       },
       {
@@ -1891,20 +1940,22 @@
     "fairDataSociety": [
       "3-fds"
     ],
-    "plur9": [
-      "4-forge"
-    ],
     "plur-ai": [
       "5-plur"
+    ],
+    "plur9": [
+      "7-megaphone",
+      "8-firm"
     ]
   },
   "space_to_org": {
     "1-datafund": "datafund",
     "2-datacore": "datacore-one",
     "3-fds": "fairDataSociety",
-    "4-forge": "plur9",
     "5-plur": "plur-ai",
+    "7-megaphone": "plur9",
+    "8-firm": "plur9",
     "root": "datacore-one"
   },
-  "updated_at": "2026-04-18T10:54:05.215719"
+  "updated_at": "2026-05-05T06:00:27.144930"
 }
