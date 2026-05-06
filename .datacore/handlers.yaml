@@ -1,0 +1,169 @@
+# Datacore handler registry.
+#
+# Maps artifact types (task, markdown, trade, vital, etc.) to the apps
+# that handle them. Modeled on macOS Launch Services / XDG MIME — the
+# user picks which app opens which type, with sensible defaults.
+#
+# Resolution order (most specific wins):
+#   1. ~/.datacore/handlers.local.yaml  (per-user override, gitignored)
+#   2. [space]/.datacore/handlers.yaml  (per-space override)
+#   3. .datacore/handlers.yaml          (this file — public defaults)
+#   4. Datacore-app fallback (always-available primary)
+#
+# Each handler entry:
+#   id:           stable handler identifier
+#   name:         human label shown in the picker
+#   exec:         shell template; {url} or {path} or {line} are filled
+#                 in by the resolver. macOS `open -a` for app bundles,
+#                 raw URL for web, raw command for CLI tools.
+#   detect:       optional probe — file path, command, or app bundle
+#                 used at first-run to decide whether to expose this
+#                 handler in the picker. Missing = always exposed.
+#   needs:        optional list of required env vars / config keys.
+
+defaults:
+  task:
+    primary: datacore-app
+    alternatives:
+      - emacs            # power-user handoff via emacsclient
+      - obsidian         # for users with the org-mode plugin
+
+  markdown:
+    primary: datacore-app
+    alternatives:
+      - obsidian
+      - typora
+      - vscode
+
+  pdf:
+    primary: preview
+    alternatives:
+      - chrome
+
+  image:
+    primary: preview
+    alternatives:
+      - figma
+
+  venture:
+    primary: datacore-app
+    alternatives: []
+
+  trade:
+    primary: meridian-dashboard
+    alternatives:
+      - tradingview
+      - hyperliquid
+
+  vital:
+    primary: oura-web
+    alternatives:
+      - apple-health
+      - withings-web
+
+  email-thread:
+    primary: gmail-web
+    alternatives:
+      - mail-app
+
+  goal:
+    primary: datacore-app
+    alternatives: []
+
+  decision:
+    primary: datacore-app
+    alternatives: []
+
+# Handler definitions — each one is a recipe for "open this artifact"
+handlers:
+
+  datacore-app:
+    name: Datacore (in-app)
+    # No exec — the frontend handles in-app navigation directly.
+    in_app: true
+
+  emacs:
+    name: Emacs
+    # emacsclient -n raises Emacs if running, opens new frame if not.
+    # +line is org-mode's standard "jump to line" syntax.
+    exec: "emacsclient -n +{line} {path}"
+    detect: "command -v emacsclient"
+
+  obsidian:
+    name: Obsidian
+    # Obsidian's URI scheme — opens the vault and the file inside it.
+    # The path is converted to obsidian://open?vault=<vault>&file=<rel>.
+    exec: "open obsidian://open?path={path_url}"
+    detect: "test -d /Applications/Obsidian.app"
+
+  typora:
+    name: Typora
+    exec: "open -a Typora {path}"
+    detect: "test -d /Applications/Typora.app"
+
+  vscode:
+    name: VS Code
+    exec: "code --goto {path}:{line}"
+    detect: "command -v code"
+
+  preview:
+    name: Preview
+    exec: "open -a Preview {path}"
+    detect: "test -d /System/Applications/Preview.app"
+
+  chrome:
+    name: Chrome
+    exec: "open -a 'Google Chrome' {url}"
+    detect: "test -d /Applications/Google\\ Chrome.app"
+
+  figma:
+    name: Figma
+    exec: "open -a Figma {path}"
+    detect: "test -d /Applications/Figma.app"
+
+  meridian-dashboard:
+    name: Meridian dashboard
+    # Local Flask dashboard for trading bots (the user's existing setup).
+    exec: "open http://127.0.0.1:5050/"
+    detect: "test -f ~/Data/.datacore/state/trading/data/hmm/portfolio_state.json"
+
+  tradingview:
+    name: TradingView
+    exec: "open https://www.tradingview.com/chart/"
+    detect: ""  # web — always available
+
+  hyperliquid:
+    name: Hyperliquid
+    exec: "open https://app.hyperliquid.xyz/trade"
+    detect: ""
+
+  oura-web:
+    name: Oura
+    exec: "open https://cloud.ouraring.com/"
+    detect: ""
+
+  apple-health:
+    name: Apple Health
+    # macOS Health app exists but isn't directly URL-launchable from
+    # the desktop — fall back to opening the iOS Health app via URL
+    # scheme, which the user can deep-link if they want.
+    exec: "open x-apple-health://"
+    detect: ""
+
+  withings-web:
+    name: Withings
+    exec: "open https://account.withings.com/"
+    detect: ""
+
+  gmail-web:
+    name: Gmail
+    # The thread_id arrives as the artifact id; gmail.com/<id> opens it.
+    exec: "open https://mail.google.com/mail/u/0/#all/{id}"
+    detect: ""
+
+  mail-app:
+    name: Mail
+    # macOS Mail.app accepts message:// URLs but only with full
+    # message-id. We open the inbox as a soft fallback.
+    exec: "open mailto:"
+    detect: "test -d /System/Applications/Mail.app"
