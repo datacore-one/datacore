@@ -29,11 +29,19 @@ defaults:
       - obsidian         # for users with the org-mode plugin
 
   markdown:
-    primary: datacore-app
+    # Obsidian is the daily-driver notes app on this machine (existing
+    # vault), so it's the primary. Typora is the alternative for users
+    # who prefer the live-preview WYSIWYG style. ⌘-click the
+    # OpenInButton picker to switch per-instance, or set a per-user
+    # default in handlers.local.yaml:
+    #   defaults:
+    #     markdown:
+    #       primary: typora
+    primary: obsidian
     alternatives:
-      - obsidian
       - typora
       - vscode
+      - datacore-app
 
   pdf:
     primary: preview
@@ -56,8 +64,14 @@ defaults:
       - hyperliquid
 
   vital:
-    primary: oura-web
+    # Health dashboard is the local cross-source view (Oura + Withings +
+    # Apple Health merged). The user said "vitals should open the
+    # health dashboard, not Oura" — Oura is one source; the dashboard
+    # is the briefing surface. Single-source wearable web UIs are
+    # alternatives for when you want to drill into raw data.
+    primary: health-dashboard
     alternatives:
+      - oura-web
       - apple-health
       - withings-web
 
@@ -136,6 +150,16 @@ handlers:
     name: Hyperliquid
     exec: "open https://app.hyperliquid.xyz/trade"
     detect: ""
+
+  health-dashboard:
+    name: Health dashboard
+    # Local Flask dashboard from the health module — merged Oura +
+    # Withings + Apple Health view. Same port as the trading dashboard
+    # in this user's setup; if the user runs both, they alternate per
+    # session (whichever started first wins port :5050). Path is /v3
+    # so we hit the canonical dashboard route, not the legacy /simple.
+    exec: "open http://localhost:5050/v3"
+    detect: "test -f ~/Data/.datacore/modules/health/lib/dashboard/app.py"
 
   oura-web:
     name: Oura
