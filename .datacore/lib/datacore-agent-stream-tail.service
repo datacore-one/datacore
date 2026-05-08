@@ -1,0 +1,28 @@
+[Unit]
+Description=Datacore agent-stream sidecar tailer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=<HOME>/.datacore/agent-stream-tail/config.env
+ExecStart=/usr/bin/python3 <HOME>/.datacore/agent-stream-tail/agent_stream_tail.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits — this is a tiny tailer
+MemoryHigh=64M
+MemoryMax=128M
+LimitNOFILE=2048
+
+# Mild hardening — read-only access to agent log dirs is enough
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=<HOME>/.datacore
+
+[Install]
+WantedBy=default.target
