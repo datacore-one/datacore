@@ -83,11 +83,23 @@ Per `~/Data/docs/superpowers/specs/2026-05-07-plur-enterprise-sprint-execution-d
    - Edit sprint.yaml: backlog item state from `claimed` to `review`
    - Push the state-change commit
 
-8. **When PR merges** (separate cadence cycle, possibly next day):
+8. **Multi-actor / dependency block** — if you can't progress the item without input from another actor (e.g., B1 needs Crt for cross-user verify; B6 needs SMTP creds from plur9; B7 needs Tailscale auth from plur9):
+   - Do every part you CAN do solo (write your half of the test, scaffold the cron without creds, document what's missing in a PR comment)
+   - Edit sprint.yaml: state from `claimed` to `blocked`, add a `:BLOCKER:` note in the org task explaining what's needed and from whom
+   - Post to Telegram with the block + who unblocks it
+   - **Then immediately re-run step 2** (`claim.py --find-next`) and pick up the next ready item — don't sit idle until tomorrow's cadence
+   - Repeat steps 3-8 for that item
+
+9. **When PR merges** (separate cadence cycle, possibly next day):
    ```bash
    python3 "$ENTERPRISE/scripts/claim.py" --done "$ACTIVE" "$ORG_FILE" "$ITEM" \
      --result "<one-line summary>" --commit "<merge sha>"
    ```
+
+10. **Continue until exhausted** — within the cadence's duration budget, keep cycling: claim → work → ship-or-block → next. Stop only when:
+    - `--find-next` returns exit 8 (no ready items remaining for this role) — sprint backlog drained for engineering
+    - `--find-next` returns exit 7 (you have an active claim that's actually progressing — i.e., you transitioned previous to `review` not `blocked`)
+    - Cadence duration budget exhausted (60 min default; extend if a single item's PR is in flight)
 
 ## Output
 
