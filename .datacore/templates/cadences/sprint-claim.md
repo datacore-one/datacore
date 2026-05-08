@@ -1,10 +1,12 @@
 ---
-cadence: sflag-sprint-claim
+cadence: sprint-claim
 role: cto
-frequency: daily
+frequency: hourly
 duration: 60min
 tools: [Bash, Read, Edit, Write]
 ---
+
+> Note on frequency: `hourly` matches Miles's actual heartbeat rhythm (~30 min between cycles per the heartbeat-* logs). At hourly, Miles can ship several PRs per active day. Relax to `every-2h` or `daily` if PR review queue overruns. Sprint 1 cap is unbounded so even bursty hourly claims work.
 
 ## Objective
 
