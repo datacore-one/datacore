@@ -98,7 +98,7 @@ Per `~/Data/docs/superpowers/specs/2026-05-07-plur-enterprise-sprint-execution-d
 
 10. **Continue until exhausted** — within the cadence's duration budget, keep cycling: claim → work → ship-or-block → next. Stop only when:
     - `--find-next` returns exit 8 (no ready items remaining for this role) — sprint backlog drained for engineering
-    - `--find-next` returns exit 7 (you have an active claim that's actually progressing — i.e., you transitioned previous to `review` not `blocked`)
+    - `--find-next` returns exit 7 (in-flight cap reached — you have N items in `claimed` or `in-progress` and the sprint's `limits.max_in_flight_per_actor` is N). Items in `review` or `blocked` do NOT count — finish-then-park lets you claim the next one.
     - Cadence duration budget exhausted (60 min default; extend if a single item's PR is in flight)
 
 ## Output
