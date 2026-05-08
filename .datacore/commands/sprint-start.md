@@ -153,41 +153,135 @@ When the user confirms (d):
 
 ### Step 6: Launch splash
 
-Print ceremonial banner:
+Print the ceremonial three-frame liftoff sequence, then the big banner.
 
+**Frame 1 — countdown / ignition check**
 ```
-                                       ____
-                                       \   \
-                                        \   \  ___
-                                         \  /\ \ \
-                                ____      \ \  \_\
-                                \   \      \ \
-                                 \   \      \ \
-                                  \   \      \ \
-                                  /   /       \ \    SPRINT <N>
-                                 /   /         \ \
-                                /   /           \ \  GO
-                               /___/             \ \
-                                                  \ \
-                                                   \_\
+                                          █
+                                         ███
+                                        █████
+                                        █ ▓ █
+                                        █▓▓▓█
+                                        █▓▓▓█
+                                        █▓▓▓█
+                                        █▓▓▓█
+                                        █████
+                                        █▒▒▒█
+                                        █████
+                                       ▓█████▓
+                                      ▓███████▓
+                                      ─────────
+                                      ─────────
+                                      ─────────
+                                      LAUNCHPAD
+                                  T-3  T-2  T-1
+                                       ─────
+                                       READY
+```
 
-  SPRINT <sprint_id> — ACTIVE
-  Goal: <goal first line>
-  ...
-  Miles is on watch. Next nightshift cycle picks up the first item.
+**Frame 2 — ignition**
+```
+                                          █
+                                         ███
+                                        █████
+                                        █ ▓ █
+                                        █▓▓▓█
+                                        █▓▓▓█
+                                        █▓▓▓█
+                                        █████
+                                        █▒▒▒█
+                                        █████
+                                       ▓█████▓
+                                      ▓███████▓
+                                       ╲ ╱ ╲ ╱
+                                        ▓ ▓ ▓
+                                       ▓▓▓▓▓▓▓
+                                      ▓▓▓▓▓▓▓▓▓
+                                       ─ ─ ─ ─
+                                  IGNITION  ⚡
 ```
 
-Then a short status line:
+**Frame 3 — liftoff!**
 ```
-✓ sprint.yaml status: active
-✓ committed and ready to push
-✓ claim.py --verify: green
+                                          █              ✦
+                                         ███       ✦
+                                        █████              ·
+                                        █ ▓ █     ·
+                                        █▓▓▓█
+                                        █▓▓▓█        ✦
+                                        █████  ·
+                                        █▒▒▒█
+                                        █████
+                                       ▓█████▓
+                                      ▓███████▓
+                                       ╲ ╱ ╲ ╱           ✦
+                                        ▓ ▓ ▓
+                                       ▓▓▓▓▓▓▓
+                                      ▓▓▓▓▓▓▓▓▓     ·
+                                     ▓▓▓▓▓▓▓▓▓▓▓
+                                      ▓▓▓▓▓▓▓▓▓
+                                       ▓▓▓▓▓▓▓
+                                        ▓▓▓▓▓
+                                         ▓▓▓
+                                          ▓
+                                          ·
+                                          ·
+                                  LIFTOFF — Sprint <N>
+```
 
-Next:
-  - First Miles overnight cycle: ~22:00 UTC tonight
-  - Daily standup: 09:00 +02 (data-on-claw posts)
-  - Retro: <retro_datetime> (data-on-laptop facilitates with plur9)
+**Final banner** — big ASCII "SPRINT <N> GO" using block characters:
 ```
+   ███████╗██████╗ ██████╗ ██╗███╗   ██╗████████╗     <N>     ██████╗  ██████╗
+   ██╔════╝██╔══██╗██╔══██╗██║████╗  ██║╚══██╔══╝              ██╔════╝ ██╔═══██╗
+   ███████╗██████╔╝██████╔╝██║██╔██╗ ██║   ██║                 ██║  ███╗██║   ██║
+   ╚════██║██╔═══╝ ██╔══██╗██║██║╚██╗██║   ██║                 ██║   ██║██║   ██║
+   ███████║██║     ██║  ██║██║██║ ╚████║   ██║                 ╚██████╔╝╚██████╔╝
+   ╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝   ╚═╝                  ╚═════╝  ╚═════╝
+```
+
+Replace `<N>` with the sprint number (extract from sprint_id, e.g. "2026-W20-sprint1" → "1").
+
+**Status block** (after the banner):
+```
+   ╭───────────────────────────────────────────────────────────────────╮
+   │                                                                    │
+   │   🚀  SPRINT <sprint_id> — ACTIVE                                  │
+   │                                                                    │
+   │   GOAL                                                             │
+   │     <goal first line>                                              │
+   │                                                                    │
+   │   BACKLOG                                                          │
+   │     <X> must  ·  <Y> should  ·  <Z> stretch                        │
+   │     In-flight cap: <max_in_flight or "unbounded">                  │
+   │                                                                    │
+   │   ✓  sprint.yaml status: active                                    │
+   │   ✓  claim.py --verify: green                                      │
+   │   ✓  cto.daily.sprint-claim cadence: armed (hourly)                │
+   │                                                                    │
+   │   NEXT                                                             │
+   │     ⏳  First Miles cycle: ~next hour                              │
+   │     📣  Daily standup: 09:00 +02 (data-on-claw → Telegram)         │
+   │     🎯  Retro: <retro_datetime> (data-on-laptop with plur9)        │
+   │                                                                    │
+   │   Miles is on watch. The Firm is open for business.               │
+   │                                                                    │
+   ╰───────────────────────────────────────────────────────────────────╯
+
+                              ✦   ·   ✦   ·   ✦
+                            *   ALL SYSTEMS GO   *
+                              ✦   ·   ✦   ·   ✦
+```
+
+**ANSI color hint** (apply if terminal supports — render via `\033[...]` escape codes):
+- Frame 1 LAUNCHPAD: dim grey
+- Frame 2 IGNITION + ⚡: yellow / orange
+- Frame 3 stars + LIFTOFF: cyan + bold
+- Final banner SPRINT/GO letters: green bold
+- Status block borders: cyan
+- ✓ checkmarks: green
+- "ALL SYSTEMS GO": magenta bold + blink (sparingly)
+
+If output is plain markdown (e.g., the slash command renders into a chat UI without ANSI), skip the color codes; the ASCII alone carries the moment.
 
 ### Step 7: Announce (optional, with founder approval)
 
