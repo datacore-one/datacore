@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Mac launchd plist for the agent-stream rsync poll. Pulls the JSONL
+  from nightshift every 30 seconds. The Mac's datacored
+  (services/agent_stream.JsonlAppendWatcher) picks up any changes and
+  republishes them on the /events WebSocket the Today panel listens to.
+
+  Install:
+      cp ~/Data/.datacore/lib/com.datacore.agent-stream-rsync.plist \
+         ~/Library/LaunchAgents/
+      launchctl load ~/Library/LaunchAgents/com.datacore.agent-stream-rsync.plist
+
+  Verify:
+      launchctl list | grep agent-stream
+      tail -f /tmp/datacore-agent-stream-rsync.log
+
+  Edit AGENT_STREAM_REMOTE_HOST / REMOTE_USER below if your nightshift
+  alias or deploy account differs.
+
+  Uninstall:
+      launchctl unload ~/Library/LaunchAgents/com.datacore.agent-stream-rsync.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.datacore.agent-stream-rsync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>${HOME}/Data/.datacore/lib/agent_stream_rsync.sh</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>AGENT_STREAM_REMOTE_HOST</key>
+        <string>nightshift</string>
+        <key>AGENT_STREAM_REMOTE_USER</key>
+        <string>deploy</string>
+        <key>AGENT_STREAM_REMOTE_PATH</key>
+        <string><NIGHTSHIFT_HOME>/.datacore/cos/agent-stream/</string>
+        <key>PATH</key>
+        <string>/usr/bin:/usr/local/bin:/opt/homebrew/bin</string>
+    </dict>
+
+    <!-- Run every 30 seconds. ThrottleInterval is the minimum gap
+         between launches; KeepAlive=false means we exit after each
+         rsync rather than re-running in a loop. -->
+    <key>StartInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/datacore-agent-stream-rsync.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/datacore-agent-stream-rsync.log</string>
+
+    <!-- Don't run while system is at full battery-saving hibernation. -->
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
