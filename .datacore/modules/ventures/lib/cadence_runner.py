@@ -167,6 +167,13 @@ def run(
     )
     from budget_tracker import load_ledger
 
+    # Best-effort live agent stream emitter (.datacore/lib was added above).
+    try:
+        from agent_emit import emit as _emit
+    except Exception:
+        def _emit(*_a, **_kw):
+            return {}
+
     today = date.today()
     adapter_path = data_dir / ".datacore" / "lib" / "org_workspace_adapter.py"
 
@@ -271,6 +278,27 @@ def run(
         if not dry_run and tasks_written > 0:
             cadence_log = _update_cadence_log(cadence_log, executable, today)
             save_cadence_log(cadence_log, cadence_log_path)
+
+        # Stream a single per-venture summary so the agent feed shows
+        # cadence activity (one line per venture per run, not per task).
+        if not dry_run and tasks_written > 0:
+            cadence_names = ", ".join(e.cadence_name for e in executable[:3])
+            if len(executable) > 3:
+                cadence_names += f", +{len(executable) - 3} more"
+            _emit(
+                "ventures.cadences.queued",
+                agent=vs.name,
+                summary=(f"Queued {tasks_written} cadence task(s) for {vs.name}"
+                         f": {cadence_names}"),
+                severity="success",
+                details={
+                    "venture": vs.name,
+                    "tasks_written": tasks_written,
+                    "overdue": len(overdue),
+                    "skipped": len(skipped),
+                    "stage": venture_stage or None,
+                },
+            )
 
         summary["ventures"].append(venture_result)
 
