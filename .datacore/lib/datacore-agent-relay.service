@@ -1,0 +1,46 @@
+# systemd unit for the Datacore Agent Stream Relay on nightshift.
+#
+# Install on nightshift:
+#     sudo cp datacore-agent-relay.service /etc/systemd/system/
+#     sudo systemctl daemon-reload
+#     sudo systemctl enable --now datacore-agent-relay
+#     sudo systemctl status datacore-agent-relay
+#
+# First start generates the bearer token at:
+#     <HOME>/.datacore/cos/agent-stream/relay.token
+# Copy it to the Mac (or to wherever the agents pick up env vars):
+#     scp nightshift:.datacore/cos/agent-stream/relay.token \
+#         ~/Data/.datacore/env/agent-stream-relay.token
+#
+# Tail the log:
+#     journalctl -u datacore-agent-relay -f
+
+[Unit]
+Description=Datacore Agent Stream Relay
+After=network.target
+Documentation=file://<HOME>/Data/.datacore/lib/agent_stream_relay.py
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=<HOME>
+ExecStart=/usr/bin/python3 <HOME>/Data/.datacore/lib/agent_stream_relay.py
+Restart=always
+RestartSec=5
+Environment=PORT=18891
+Environment=HOST=0.0.0.0
+
+# Keep the process under reasonable limits — the relay is tiny but
+# misbehaving agents could spam it.
+LimitNOFILE=4096
+MemoryHigh=128M
+MemoryMax=256M
+
+# Storage and token live under the deploy user's home; nothing system-wide.
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=<HOME>/.datacore
+
+[Install]
+WantedBy=multi-user.target
