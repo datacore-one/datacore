@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # agent_stream_rsync.sh — pull the agent-stream JSONL from nightshift to
 # the local Mac so the datacore-app daemon's JsonlAppendWatcher sees it.
 #

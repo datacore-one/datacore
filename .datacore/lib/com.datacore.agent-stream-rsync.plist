@@ -40,7 +40,7 @@
         <key>AGENT_STREAM_REMOTE_PATH</key>
         <string><NIGHTSHIFT_HOME>/.datacore/cos/agent-stream/</string>
         <key>PATH</key>
-        <string>/usr/bin:/usr/local/bin:/opt/homebrew/bin</string>
+        <string>/bin:/usr/bin:/usr/local/bin:/opt/homebrew/bin</string>
     </dict>
 
     <!-- Run every 30 seconds. ThrottleInterval is the minimum gap
