@@ -1,8 +1,19 @@
 {
-  "scan_date": "2026-05-08",
-  "since": "2026-05-07",
+  "scan_date": "2026-05-09",
+  "since": "2026-05-08",
   "username": "plur9",
-  "mentions": [],
+  "mentions": [
+    {
+      "repo": "fairDataSociety/Fairdrop",
+      "number": 482,
+      "title": "Security: fast-uri path traversal in vendored OpenZeppelin lockfile (high, dev-scope) \u2014 Dependabot auto-PR or single-line lockfile bump",
+      "url": "https://github.com/fairDataSociety/Fairdrop/issues/482",
+      "state": "open",
+      "updated_at": "2026-05-09T03:15:31Z",
+      "type": "issue",
+      "scan_type": "mention"
+    }
+  ],
   "authored": [],
   "org_activity": {
     "datacore-one": {
@@ -23,17 +34,10 @@
     },
     "fairDataSociety": {
       "org": "fairDataSociety",
-      "new_issues_count": 1,
+      "new_issues_count": 0,
       "closed_issues_count": 0,
       "merged_prs_count": 0,
-      "new_issues": [
-        {
-          "repo": "fairDataSociety/Fairdrop",
-          "number": 475,
-          "title": "Security: 3 unfiled medium-severity runtime alerts (follow-redirects, vite, @hono/node-server)",
-          "url": "https://github.com/fairDataSociety/Fairdrop/issues/475"
-        }
-      ],
+      "new_issues": [],
       "merged_prs": []
     },
     "plur-ai": {
@@ -53,5 +57,5 @@
       "merged_prs": []
     }
   },
-  "scanned_at": "2026-05-08T06:00:55.683540"
+  "scanned_at": "2026-05-09T06:00:44.944682"
 }
