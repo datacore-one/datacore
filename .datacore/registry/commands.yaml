@@ -863,7 +863,7 @@ module_commands:
     module: mail
     invokes:
     - agent: mail-responder
-      when: creates :AI:mail: tasks for nightshift
+      when: "creates :AI:mail: tasks for nightshift"
     reads:
       required:
       - .datacore/modules/mail/rules.base.yaml

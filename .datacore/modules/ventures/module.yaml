@@ -17,6 +17,20 @@ provides:
     - name: venture-monitor
       trigger: ":AI:venture:monitor:"
       description: Daily heartbeat per venture — cadence status, budget, hypothesis progress
+  # CLI / open-source surface (loaded by datacore-mcp from tools/index.js).
+  # Read-only and safe-to-write-without-daemon. Mutations with safety
+  # gates, checkpoints, locking, and event emission are exposed by
+  # app-tools/index.mjs (loaded only by datacore-app's app-mcp-server,
+  # which routes through the daemon — see DIP for the split surface).
+  tools:
+    - name: list_ventures
+      description: List ventures with stage, autonomy, north star, last activity
+    - name: read_venture
+      description: Read a venture.yaml in full (roles, cadences, budget, modules)
+    - name: list_hypotheses
+      description: Read a venture's hypotheses.yaml (optional status filter)
+    - name: venture_status
+      description: Quick status — stage, hypothesis counts, budget burn for one venture
 
 settings:
   state_dir: .datacore/state/venture/

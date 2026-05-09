@@ -38,10 +38,7 @@ TOKEN_FILE = CREDS_DIR / "google_calendar_token.json"
 _LEGACY_PICKLE_FILE = CREDS_DIR / "google_calendar_token.pickle"
 CLIENT_SECRETS_FILE = CREDS_DIR / "google_calendar_client_secret.json"
 
-SCOPES = [
-    'https://www.googleapis.com/auth/calendar.readonly',
-    'https://www.googleapis.com/auth/calendar.events',
-]
+SCOPES = ['https://www.googleapis.com/auth/calendar']  # Match gcal_auth.py — single broad scope
 
 
 @dataclass

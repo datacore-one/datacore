@@ -103,21 +103,29 @@ def _write_task_via_adapter(
 
 
 def _append_raw_org(org_file: Path, task: dict) -> None:
-    """Append a task as raw org-mode text (fallback)."""
+    """Append a task as raw org-mode text (fallback when adapter fails).
+
+    Drawer + property indentation matches what org-workspace produces
+    (2-space indent under the heading) so emacs `org-agenda` parses
+    properties as belonging to the task. Earlier versions wrote
+    properties at column 0 — that broke drawer pairing and was the
+    original source of the leaked-property corruption (ENG-2026-0504-025).
+    """
     org_file.parent.mkdir(parents=True, exist_ok=True)
 
+    indent = "  "
     lines = [f"\n** {task['state']} {task['heading']} {task['tags_str']}"]
     props = task.get("properties", {})
     if props:
-        lines.append(":PROPERTIES:")
+        lines.append(f"{indent}:PROPERTIES:")
         for key, value in props.items():
-            lines.append(f":{key}: {value}")
-        lines.append(":END:")
+            lines.append(f"{indent}:{key}: {value}")
+        lines.append(f"{indent}:END:")
 
     body = task.get("body")
     if body:
         for body_line in body.split("\n"):
-            lines.append(f"  {body_line}")
+            lines.append(f"{indent}{body_line}")
 
     with open(org_file, "a") as f:
         f.write("\n".join(lines) + "\n")
