@@ -1127,12 +1127,54 @@ TOKEN COST
 | learning-coordinator   | [N]     |
 | [other subagents]      | [N]     |
 | **Subagent total**     | **[N]** |
-| Main conversation (est)| ~[N]K   |
-| **Session total (est)**| **~[N]K**|
+| Main conversation      | [N]     |
+| **Session total**      | **[N]** |
 
 Ready to close terminal.
 ═══════════════════════════════════════════════════
 ```
+
+**HOW to fill the Main conversation row — DO NOT estimate.**
+
+Run this command to read the current session's transcript and produce
+exact counts (no estimation, no vibes):
+
+```bash
+python3 ~/Data/.datacore/lib/session_token_count.py --json
+```
+
+The output gives you `input_tokens` (uncached), `cache_creation_input_tokens`
+(cached, billed at ~125%), `cache_read_input_tokens` (cache hits, billed
+at ~10%), `output_tokens`, and a `total_billable_estimate` that applies
+the cache multipliers.
+
+Use the `total_billable_estimate` field in the Main conversation row.
+Also report the breakdown beneath the table so the user can see how much
+of the cost was cache amortization:
+
+```
+Main conversation breakdown:
+  Turns:       N
+  Input fresh: N
+  Cache write: N
+  Cache read:  N
+  Output:      N
+```
+
+**Historical context (why this is now mandatory):** before this
+instrument existed, /wrap-up estimated main-conversation tokens by
+guessing — and was once off by ~5,000× (estimated 150K, actual 737M
+total processed across 1,316 turns). The transcript file has the
+exact API-returned usage per turn; there is no excuse to guess.
+
+If the script ever fails, fall back to a Fermi estimate WITH the
+arithmetic shown:
+```
+Cannot read transcript (reason: ...). Fermi-estimate floor:
+  N turns × ~50K avg = ~XM tokens.
+This is a lower bound, not a measurement.
+```
+Never report a single point estimate without instrument or arithmetic.
 
 **Why this matters:** In long sessions, individual step outputs scroll past hundreds of lines of tool calls, agent output, and status updates. By the time the user reaches step 17, they've lost track of what earlier steps produced. The consolidated report gives them everything in one place — a single scannable receipt of the entire session.
 
