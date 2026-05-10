@@ -573,6 +573,82 @@ def heartbeat_tick(data_dir: Path, venture_filter: str = None, dry_run: bool = F
     with open(log_dir / "heartbeat.log", "a") as f:
         f.write(f"{timestamp} active={active} idle={idle} ventures={len(ventures)}\n")
 
+    # ---- Self-report layer for the desktop app's Firm Status panel ----
+    # Per contract specified by the parallel datacore-app session:
+    # write per-venture heartbeat.json + crew miles.json after each tick.
+    # Wrapped in try/except — must never break the main heartbeat loop.
+    try:
+        from datetime import timezone as _tz
+        utc_now = datetime.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # 6-meridian is monitored separately (trading state out of scope here)
+        HEARTBEAT_SKIP = {"6-meridian"}
+
+        for vs in ventures:
+            if vs.space_dir.name in HEARTBEAT_SKIP:
+                continue
+            try:
+                tick = next((t for t in ticks if t.get("venture") == vs.config.name), {})
+                tick_status = tick.get("status") or "ok"
+                if tick_status in ("sense_error", "error", "timeout"):
+                    last_status = "error"
+                    last_error = (tick.get("error") or tick_status)[:300]
+                elif tick_status == "blocked":
+                    last_status = "blocked"
+                    last_error = tick.get("reason", "blocked")
+                else:
+                    last_status = "ok"
+                    last_error = None
+
+                hb_path = vs.space_dir / ".datacore" / "state" / "heartbeat.json"
+                hb_path.parent.mkdir(parents=True, exist_ok=True)
+                # Preserve fields written by cadence_runner (next_due, fire counts,
+                # decisions_pending) when present — only update what the heartbeat
+                # owns: last_fire + last_status + last_error.
+                existing = {}
+                if hb_path.exists():
+                    try:
+                        with open(hb_path) as f:
+                            existing = json.load(f)
+                    except Exception:
+                        existing = {}
+                payload = {
+                    "venture": vs.space_dir.name,
+                    "last_fire": utc_now,
+                    "last_status": last_status,
+                    "last_error": last_error,
+                    "next_due": existing.get("next_due"),
+                    "cadences_fired_24h": existing.get("cadences_fired_24h", 0),
+                    "cadences_overdue": existing.get("cadences_overdue", 0),
+                    "decisions_pending": existing.get("decisions_pending", []),
+                }
+                tmp = hb_path.with_suffix(".json.tmp")
+                with open(tmp, "w") as f:
+                    json.dump(payload, f, indent=2)
+                    f.write("\n")
+                tmp.replace(hb_path)
+            except Exception:
+                pass  # never break main loop on a single venture's write failure
+
+        # Crew self-report: Miles is the heartbeat agent itself
+        miles_path = data_dir / ".datacore" / "state" / "agents" / "miles.json"
+        miles_path.parent.mkdir(parents=True, exist_ok=True)
+        summary = f"Heartbeat tick: {active} active, {idle} idle, {len(ventures)} ventures observed"
+        miles_payload = {
+            "name": "Miles",
+            "last_activity": utc_now,
+            "last_status": "ok",
+            "last_error": None,
+            "last_summary": summary,
+        }
+        tmp = miles_path.with_suffix(".json.tmp")
+        with open(tmp, "w") as f:
+            json.dump(miles_payload, f, indent=2)
+            f.write("\n")
+        tmp.replace(miles_path)
+    except Exception:
+        pass  # self-report layer is always best-effort
+
     return {
         "timestamp": timestamp,
         "status": "active" if active > 0 else "idle",

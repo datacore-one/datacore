@@ -14,10 +14,19 @@ import argparse
 import json
 import subprocess
 import sys
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat self-report — skip list
+# ---------------------------------------------------------------------------
+# Ventures whose heartbeat.json must NOT be written by this runner.
+# The desktop app's Firm Status panel labels these "monitored separately"
+# and expects no heartbeat.json present. Per parallel-session contract.
+HEARTBEAT_SKIP_VENTURES = frozenset({"6-meridian"})
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +155,127 @@ def _update_cadence_log(
     return cadence_log
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _compute_next_due(roles: dict, cadence_log: dict, today: date) -> str | None:
+    """Soonest upcoming cadence across all roles. Returns ISO Z timestamp.
+
+    For each cadence in the venture's roles, compute when it next becomes due
+    (last_run + frequency_window). If never run, treat as due now. Pick the
+    earliest such timestamp.
+    """
+    freq_days = {"daily": 1, "weekly": 7, "monthly": 30, "quarterly": 90}
+    earliest: date | None = None
+
+    for role_id, role_data in roles.items():
+        cadences = role_data.get("cadences", {}) or {}
+        role_log = cadence_log.get(role_id, {}) or {}
+        for frequency, names in cadences.items():
+            window = freq_days.get(frequency)
+            if window is None:
+                continue
+            freq_log = role_log.get(frequency, {}) or {}
+            names_list = names if isinstance(names, list) else []
+            for name in names_list:
+                last_run_str = freq_log.get(name)
+                if last_run_str:
+                    try:
+                        last_run = date.fromisoformat(str(last_run_str))
+                        next_due = last_run + timedelta(days=window)
+                    except ValueError:
+                        next_due = today
+                else:
+                    next_due = today  # never run → due now
+                if earliest is None or next_due < earliest:
+                    earliest = next_due
+
+    if earliest is None:
+        return None
+    # 09:00 UTC is when the FDS daily cadence has historically fired; use that
+    # as a reasonable hour-of-day for the dashboard's overdue countdown.
+    return earliest.strftime("%Y-%m-%dT09:00:00Z")
+
+
+def _count_24h_fires(cadence_log: dict, today: date) -> int:
+    """Count entries in the cadence log dated within the last 24h.
+
+    Accepts the nested format {role: {frequency: {cadence: 'YYYY-MM-DD'}}}.
+    """
+    cutoff = today - timedelta(days=1)
+    count = 0
+    for role_data in cadence_log.values():
+        if not isinstance(role_data, dict):
+            continue
+        for freq_data in role_data.values():
+            if not isinstance(freq_data, dict):
+                continue
+            for date_str in freq_data.values():
+                try:
+                    if date.fromisoformat(str(date_str)) > cutoff:
+                        count += 1
+                except (ValueError, TypeError):
+                    pass
+    return count
+
+
+def _write_heartbeat_json(
+    space_dir: Path,
+    venture_name: str,
+    last_status: str,
+    last_error: str | None,
+    next_due: str | None,
+    cadences_fired_24h: int,
+    cadences_overdue: int,
+) -> Path:
+    """Write the per-venture heartbeat.json under the contract the desktop app reads.
+
+    Schema (verbatim, the daemon parses these field names):
+        venture, last_fire, last_status, last_error, next_due,
+        cadences_fired_24h, cadences_overdue, decisions_pending[]
+    """
+    target = space_dir / ".datacore" / "state" / "heartbeat.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = {
+        "venture": venture_name,
+        "last_fire": _now_iso(),
+        "last_status": last_status,
+        "last_error": last_error,
+        "next_due": next_due,
+        "cadences_fired_24h": cadences_fired_24h,
+        "cadences_overdue": cadences_overdue,
+        "decisions_pending": [],
+    }
+
+    tmp = target.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    tmp.replace(target)
+    return target
+
+
+def _seed_auto_defaults_if_missing(space_dir: Path) -> None:
+    """Create an empty auto-defaults.yaml if the venture lacks one.
+
+    Empty `defaults: []` is valid per the dashboard contract — the venture
+    simply has no auto-resolution rules yet. Real rules can land later.
+    """
+    target = space_dir / ".datacore" / "policies" / "auto-defaults.yaml"
+    if target.exists():
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        "# auto-defaults.yaml — venture decision policies\n"
+        "# Empty defaults means no auto-resolution rules yet.\n"
+        "# See ~/Data/.datacore/templates/auto-defaults.example.yaml for a fuller template.\n"
+        "defaults: []\n",
+        encoding="utf-8",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main runner
 # ---------------------------------------------------------------------------
@@ -198,6 +328,43 @@ def run(
         "ventures": [],
     }
 
+    def _finalize(
+        venture_result: dict,
+        space_dir: Path,
+        venture_name: str,
+        last_status: str,
+        last_error: str | None = None,
+        roles: dict | None = None,
+        cadence_log: dict | None = None,
+    ) -> None:
+        """Write per-venture heartbeat.json + seed auto-defaults.yaml, then
+        append to summary. Skipped for ventures in HEARTBEAT_SKIP_VENTURES
+        (e.g. 6-meridian — monitored separately) and during dry-run.
+        """
+        if not dry_run and venture_name not in HEARTBEAT_SKIP_VENTURES:
+            try:
+                fired_24h = _count_24h_fires(cadence_log or {}, today)
+                next_due = (
+                    _compute_next_due(roles, cadence_log or {}, today)
+                    if roles is not None
+                    else None
+                )
+                _write_heartbeat_json(
+                    space_dir=space_dir,
+                    venture_name=venture_name,
+                    last_status=last_status,
+                    last_error=last_error,
+                    next_due=next_due,
+                    cadences_fired_24h=fired_24h,
+                    cadences_overdue=venture_result.get("overdue", 0),
+                )
+                _seed_auto_defaults_if_missing(space_dir)
+            except Exception as exc:
+                venture_result.setdefault("errors", []).append(
+                    f"Heartbeat write failed: {exc}"
+                )
+        summary["ventures"].append(venture_result)
+
     for vs in ventures:
         venture_result = {
             "name": vs.name,
@@ -211,7 +378,8 @@ def run(
 
         # Skip archived ventures (Phase A.0.2 state-machine gate). Archived
         # ventures keep their venture.yaml but must not generate new cadence
-        # tasks — restoring transitions stage back to discovery.
+        # tasks — restoring transitions stage back to discovery. No heartbeat
+        # write either (the venture is intentionally inert).
         venture_stage = (vs.config.stage if vs.config else "").lower()
         if venture_stage == "archived":
             venture_result["skipped_reason"] = "stage=archived"
@@ -225,19 +393,45 @@ def run(
             venture_result["errors"].append(
                 "Roles not in dict format or missing — skipping cadence processing"
             )
-            summary["ventures"].append(venture_result)
+            _finalize(
+                venture_result,
+                vs.space_dir,
+                vs.name,
+                last_status="error",
+                last_error=venture_result["errors"][0],
+            )
             continue
 
-        # Load cadence log
-        cadence_log_path = vs.space_dir / ".datacore" / "cadence-log.yaml"
-        cadence_log = load_cadence_log(cadence_log_path)
+        # Load cadence log. Canonical path is .datacore/state/venture/
+        # cadence-log.yaml (matches venture_heartbeat.py). The legacy path
+        # at .datacore/cadence-log.yaml is read as fallback for installs
+        # that haven't migrated yet.
+        cadence_log_path = vs.space_dir / ".datacore" / "state" / "venture" / "cadence-log.yaml"
+        legacy_log_path = vs.space_dir / ".datacore" / "cadence-log.yaml"
+        if cadence_log_path.exists():
+            try:
+                cadence_log = load_cadence_log(cadence_log_path)
+            except Exception:
+                cadence_log = {}  # malformed YAML — heartbeat will surface as error
+        elif legacy_log_path.exists():
+            cadence_log = load_cadence_log(legacy_log_path)
+        else:
+            cadence_log = {}
 
         # Find overdue cadences
         overdue = find_overdue_cadences(roles, cadence_log, today=today)
         venture_result["overdue"] = len(overdue)
 
         if not overdue:
-            summary["ventures"].append(venture_result)
+            # Healthy: nothing overdue, nothing to fire.
+            _finalize(
+                venture_result,
+                vs.space_dir,
+                vs.name,
+                last_status="ok",
+                roles=roles,
+                cadence_log=cadence_log,
+            )
             continue
 
         # Budget filtering
@@ -254,7 +448,17 @@ def run(
         venture_result["skipped"] = len(skipped)
 
         if not executable:
-            summary["ventures"].append(venture_result)
+            # Budget-blocked: there is overdue work but no AI budget to spend
+            # on it. Surface as "blocked" so the dashboard renders red.
+            _finalize(
+                venture_result,
+                vs.space_dir,
+                vs.name,
+                last_status="blocked",
+                last_error="Budget exhausted — only daily cadences eligible and none overdue",
+                roles=roles,
+                cadence_log=cadence_log,
+            )
             continue
 
         # Generate rich tasks and write to org file
@@ -308,7 +512,28 @@ def run(
                 },
             )
 
-        summary["ventures"].append(venture_result)
+        # Normal end of per-venture path — write heartbeat and append.
+        # If any task-write errors occurred, surface as "error"; otherwise
+        # the venture is healthy.
+        if venture_result.get("errors"):
+            _finalize(
+                venture_result,
+                vs.space_dir,
+                vs.name,
+                last_status="error",
+                last_error=venture_result["errors"][0],
+                roles=roles,
+                cadence_log=cadence_log,
+            )
+        else:
+            _finalize(
+                venture_result,
+                vs.space_dir,
+                vs.name,
+                last_status="ok",
+                roles=roles,
+                cadence_log=cadence_log,
+            )
 
     return summary
 
