@@ -108,7 +108,7 @@ def get_credentials(account=None):
 
         CREDS_DIR.mkdir(parents=True, exist_ok=True)
         token_file.write_text(creds.to_json())
-        print(f"Credentials saved to {token_file}")
+        print(f"Credentials saved to {token_file}", file=sys.stderr)
 
     return creds
 
