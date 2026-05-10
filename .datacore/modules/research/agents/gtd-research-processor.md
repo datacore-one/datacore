@@ -175,9 +175,11 @@ Generate literature note in Obsidian format:
 type: literature-note
 source: [URL]
 created: [YYYY-MM-DD]
-tags: [category, topic, research, auto-generated]
 related-to: [work area - Organization/Project Alpha/Trading]
 ---
+
+<!-- Tags as inline #tag tokens at bottom of file per DIP-0014, e.g. -->
+<!-- #category #topic #research #auto-generated -->
 
 # [Article/Document Title]
 
@@ -250,9 +252,11 @@ If content contains distinct atomic concepts, create separate zettels:
 ---
 type: zettel
 created: [YYYY-MM-DD]
-tags: [concept-tag, work-area, auto-generated]
 source: [[Literature Note Name]]
 ---
+
+<!-- Tags as inline #tag tokens at bottom of file per DIP-0014, e.g. -->
+<!-- #concept-tag #work-area #auto-generated -->
 
 # [Atomic Concept Name]
 

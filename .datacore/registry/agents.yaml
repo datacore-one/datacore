@@ -1701,6 +1701,43 @@ agents:
       - general-purpose  # Planner, Generator, Evaluator subagents
     can_be_called_by: []
 
+  # ---------------------------------------------------------------------------
+  # Session Closure
+  # ---------------------------------------------------------------------------
+
+  wrap-up-executor:
+    description: "Executes full /wrap-up in fresh context — all 17 steps, no compression"
+    version: "1.0.0"
+    source: ".datacore/agents/wrap-up-executor.md"
+    model: "inherit"
+    skills:
+      - session-closure
+      - journal-writing
+      - learning-extraction
+    triggers:
+      commands:
+        - wrap-up
+    reads:
+      required:
+        - ".datacore/commands/wrap-up.md"
+      contextual:
+        - "session context from main conversation"
+    writes:
+      - "0-personal/notes/journals/YYYY-MM-DD.md"
+      - "*/journal/YYYY-MM-DD.md"
+      - ".datacore/learning/*.md"
+      - "0-personal/org/inbox.org"
+    references:
+      dips:
+        - "DIP-0016"
+        - "DIP-0009"
+      specs: []
+    spawns:
+      - journal-coordinator
+      - session-learning-coordinator
+    can_be_called_by:
+      - user
+
 # =============================================================================
 # MODULE AGENTS
 # Agents provided by optional modules (auto-populated on module install)
@@ -3533,65 +3570,232 @@ module_agents:
     can_be_called_by:
       - social-intel-analyzer
 
-# =============================================================================
-# KNOWLEDGE LOCATIONS
-# Semantic locations for common knowledge retrieval
-# =============================================================================
+  # ===========================================================================
+  # MEGAPHONE WEBSITES MODULE
+  # ===========================================================================
 
-knowledge_locations:
-  gtd:
-    description: "GTD methodology and workflows"
-    paths:
-      - ".datacore/dips/DIP-0009-gtd-specification.md"
-      - ".datacore/commands/gtd-*.md"
-    queries:
-      - "GTD workflow and principles"
+  campaign-orchestrator:
+    description: "Coordinates the megaphone cold-outreach campaign — research → demo → offer → send → pipeline"
+    version: "1.0.0"
+    source: ".datacore/modules/megaphone-websites/agents/campaign-orchestrator.md"
+    module: "megaphone-websites"
+    model: "inherit"
+    skills:
+      - campaign-orchestration
+      - cold-outreach
+    triggers:
+      tags:
+        - ":AI:megaphone:campaign:"
+    reads:
+      required:
+        - "7-megaphone/venture.yaml"
+      contextual:
+        - "7-megaphone/1-tracks/prospect/"
+    writes:
+      - "7-megaphone/journal/*.md"
+      - "7-megaphone/1-tracks/outreach/"
+    references:
+      dips: []
+      specs: []
+    spawns:
+      - prospect-researcher
+      - demo-builder
+      - offer-generator
+      - outreach-sender
+      - pipeline-manager
+    can_be_called_by:
+      - ai-task-executor
+      - venture-monitor
 
-  tags:
-    description: "Tag taxonomy and conventions"
-    paths:
-      - ".datacore/dips/DIP-0014-tag-taxonomy.md"
-      - ".datacore/tags.yaml"
-    queries:
-      - "tag conventions and formats"
+  prospect-researcher:
+    description: "Scrapes prospect company website, extracts services, contacts, branding, pain points"
+    version: "1.0.0"
+    source: ".datacore/modules/megaphone-websites/agents/prospect-researcher.md"
+    module: "megaphone-websites"
+    model: "inherit"
+    skills:
+      - web-scraping
+      - prospect-research
+    triggers:
+      tags:
+        - ":AI:megaphone:research:"
+    reads:
+      required:
+        - "7-megaphone/1-tracks/prospect/"
+      contextual: []
+    writes:
+      - "7-megaphone/1-tracks/prospect/"
+    references:
+      dips: []
+      specs: []
+    spawns: []
+    can_be_called_by:
+      - campaign-orchestrator
+      - ai-task-executor
 
-  privacy:
-    description: "Privacy policy and data handling"
-    paths:
-      - ".datacore/specs/privacy-policy.md"
-      - ".datacore/dips/DIP-0002-layered-context-pattern.md"
-    queries:
-      - "privacy levels and data classification"
+  demo-builder:
+    description: "Generates premium single-page demo website from prospect research"
+    version: "1.0.0"
+    source: ".datacore/modules/megaphone-websites/agents/demo-builder.md"
+    module: "megaphone-websites"
+    model: "inherit"
+    skills:
+      - web-development
+      - demo-generation
+    triggers:
+      tags:
+        - ":AI:megaphone:build:"
+    reads:
+      required:
+        - "7-megaphone/1-tracks/prospect/"
+      contextual: []
+    writes:
+      - "7-megaphone/1-tracks/demo/"
+    references:
+      dips: []
+      specs: []
+    spawns: []
+    can_be_called_by:
+      - campaign-orchestrator
+      - ai-task-executor
 
-  agents:
-    description: "Agent patterns and registry"
-    paths:
-      - ".datacore/dips/DIP-0016-agent-registry.md"
-      - ".datacore/registry/agents.yaml"
-    queries:
-      - "agent capabilities and routing"
+  offer-generator:
+    description: "Creates slide deck offer using Nano Banana (Gemini) from demo"
+    version: "1.0.0"
+    source: ".datacore/modules/megaphone-websites/agents/offer-generator.md"
+    module: "megaphone-websites"
+    model: "inherit"
+    skills:
+      - slide-generation
+      - offer-design
+    triggers:
+      tags:
+        - ":AI:megaphone:offer:"
+    reads:
+      required:
+        - "7-megaphone/1-tracks/demo/"
+      contextual: []
+    writes:
+      - "7-megaphone/1-tracks/outreach/"
+    references:
+      dips: []
+      specs: []
+    spawns: []
+    can_be_called_by:
+      - campaign-orchestrator
+      - ai-task-executor
 
-  outbox:
-    description: "Outbox and archive patterns"
-    paths:
-      - ".datacore/dips/DIP-0017-outbox-archive-pattern.md"
-      - ".datacore/modules/outbox/CLAUDE.base.md"
-      - ".datacore/modules/outbox/commands/outbox.md"
-    queries:
-      - "archive workflow and routing"
-      - "outbox processing"
+  outreach-sender:
+    description: "Composes and sends personalized cold email with offer and demo attachments"
+    version: "1.0.0"
+    source: ".datacore/modules/megaphone-websites/agents/outreach-sender.md"
+    module: "megaphone-websites"
+    model: "inherit"
+    skills:
+      - email-composition
+      - cold-outreach
+    triggers:
+      tags:
+        - ":AI:megaphone:send:"
+    reads:
+      required:
+        - "7-megaphone/1-tracks/outreach/"
+      contextual: []
+    writes:
+      - "7-megaphone/1-tracks/outreach/"
+    references:
+      dips: []
+      specs: []
+    spawns: []
+    can_be_called_by:
+      - campaign-orchestrator
+      - ai-task-executor
 
-  archives:
-    description: "Archived content and search"
-    paths:
-      - ".datacore/modules/outbox/commands/archive-search.md"
-      - ".datacore/modules/outbox/agents/archive-indexer.md"
-    queries:
-      - "search archived content"
-      - "archive embeddings and snapshots"
+  pipeline-manager:
+    description: "Tracks prospects through funnel stages, schedules follow-ups"
+    version: "1.0.0"
+    source: ".datacore/modules/megaphone-websites/agents/pipeline-manager.md"
+    module: "megaphone-websites"
+    model: "inherit"
+    skills:
+      - pipeline-tracking
+      - crm-update
+    triggers:
+      tags:
+        - ":AI:megaphone:pipeline:"
+    reads:
+      required:
+        - "7-megaphone/1-tracks/outreach/"
+      contextual: []
+    writes:
+      - "7-megaphone/1-tracks/outreach/"
+    references:
+      dips: []
+      specs: []
+    spawns: []
+    can_be_called_by:
+      - campaign-orchestrator
+      - ai-task-executor
+
+  # ===========================================================================
+  # DATACORE APPBUILDER MODULE
+  # ===========================================================================
+
+  audit-app:
+    description: "Audits an existing Datacore app against the canonical appbuilder scaffold"
+    version: "1.0.0"
+    source: ".datacore/modules/datacore-appbuilder/agents/audit-app.md"
+    module: "datacore-appbuilder"
+    model: "inherit"
+    skills:
+      - app-audit
+      - scaffold-validation
+    triggers:
+      commands:
+        - audit-app
+    reads:
+      required:
+        - ".datacore/modules/datacore-appbuilder/scaffold/"
+      contextual: []
+    writes:
+      - "audit-report.md"
+    references:
+      dips: []
+      specs: []
+    spawns: []
+    can_be_called_by:
+      - user
+
+  scaffold-app:
+    description: "Interactive scaffolder for new Datacore apps (desktop/saas/panel)"
+    version: "1.0.0"
+    source: ".datacore/modules/datacore-appbuilder/agents/scaffold-app.md"
+    module: "datacore-appbuilder"
+    model: "inherit"
+    skills:
+      - app-scaffolding
+      - project-bootstrap
+    triggers:
+      commands:
+        - scaffold-app
+    reads:
+      required:
+        - ".datacore/modules/datacore-appbuilder/scaffold/"
+      contextual: []
+    writes:
+      - "datacore.config.ts"
+      - "package.json"
+      - "Cargo.toml"
+    references:
+      dips: []
+      specs: []
+    spawns: []
+    can_be_called_by:
+      - user
+
 
   # ---------------------------------------------------------------------------
-  # gstack Module — Sprint Workflow Integration
+  # Recovered from knowledge_locations: mis-placement (2026-05-10)
   # ---------------------------------------------------------------------------
 
   gstack-gate-runner:
@@ -3734,6 +3938,62 @@ knowledge_locations:
 # Used by agent-registry-auditor
 # =============================================================================
 
+# =============================================================================
+# KNOWLEDGE LOCATIONS
+# Semantic locations for common knowledge retrieval
+# =============================================================================
+
+knowledge_locations:
+  gtd:
+    description: "GTD methodology and workflows"
+    paths:
+      - ".datacore/dips/DIP-0009-gtd-specification.md"
+      - ".datacore/commands/gtd-*.md"
+    queries:
+      - "GTD workflow and principles"
+
+  tags:
+    description: "Tag taxonomy and conventions"
+    paths:
+      - ".datacore/dips/DIP-0014-tag-taxonomy.md"
+      - ".datacore/tags.yaml"
+    queries:
+      - "tag conventions and formats"
+
+  privacy:
+    description: "Privacy policy and data handling"
+    paths:
+      - ".datacore/specs/privacy-policy.md"
+      - ".datacore/dips/DIP-0002-layered-context-pattern.md"
+    queries:
+      - "privacy levels and data classification"
+
+  agents:
+    description: "Agent patterns and registry"
+    paths:
+      - ".datacore/dips/DIP-0016-agent-registry.md"
+      - ".datacore/registry/agents.yaml"
+    queries:
+      - "agent capabilities and routing"
+
+  outbox:
+    description: "Outbox and archive patterns"
+    paths:
+      - ".datacore/dips/DIP-0017-outbox-archive-pattern.md"
+      - ".datacore/modules/outbox/CLAUDE.base.md"
+      - ".datacore/modules/outbox/commands/outbox.md"
+    queries:
+      - "archive workflow and routing"
+      - "outbox processing"
+
+  archives:
+    description: "Archived content and search"
+    paths:
+      - ".datacore/modules/outbox/commands/archive-search.md"
+      - ".datacore/modules/outbox/agents/archive-indexer.md"
+    queries:
+      - "search archived content"
+      - "archive embeddings and snapshots"
 validation:
   required_fields:
     - name
@@ -3750,33 +4010,3 @@ validation:
   source_must_exist: true
   spawns_must_exist: true
   circular_spawn_detection: true
-
-  - name: wrap-up-executor
-    description: "Executes full /wrap-up in fresh context — all 17 steps, no compression"
-    version: "1.0.0"
-    source: .datacore/agents/wrap-up-executor.md
-    skills:
-      - session-closure
-      - journal-writing
-      - learning-extraction
-    triggers:
-      commands:
-        - wrap-up
-    reads:
-      required:
-        - .datacore/commands/wrap-up.md
-      contextual:
-        - "session context from main conversation"
-    writes:
-      - "0-personal/notes/journals/YYYY-MM-DD.md"
-      - "*/journal/YYYY-MM-DD.md"
-      - ".datacore/learning/*.md"
-      - "0-personal/org/inbox.org"
-    references:
-      dips:
-        - DIP-0016
-        - DIP-0009
-    spawns:
-      - journal-coordinator
-      - session-learning-coordinator
-      - learning-reviewer
