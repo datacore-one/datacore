@@ -1,19 +1,8 @@
 {
-  "scan_date": "2026-05-09",
-  "since": "2026-05-08",
+  "scan_date": "2026-05-10",
+  "since": "2026-05-09",
   "username": "plur9",
-  "mentions": [
-    {
-      "repo": "fairDataSociety/Fairdrop",
-      "number": 482,
-      "title": "Security: fast-uri path traversal in vendored OpenZeppelin lockfile (high, dev-scope) \u2014 Dependabot auto-PR or single-line lockfile bump",
-      "url": "https://github.com/fairDataSociety/Fairdrop/issues/482",
-      "state": "open",
-      "updated_at": "2026-05-09T03:15:31Z",
-      "type": "issue",
-      "scan_type": "mention"
-    }
-  ],
+  "mentions": [],
   "authored": [],
   "org_activity": {
     "datacore-one": {
@@ -57,5 +46,5 @@
       "merged_prs": []
     }
   },
-  "scanned_at": "2026-05-09T06:00:44.944682"
+  "scanned_at": "2026-05-10T06:00:32.514772"
 }
