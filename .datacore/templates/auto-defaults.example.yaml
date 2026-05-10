@@ -1,0 +1,70 @@
+# auto-defaults.yaml — venture decision policies (TEMPLATE)
+#
+# Copy to [space]/.datacore/policies/auto-defaults.yaml and customize per venture.
+#
+# Each rule defines:
+#   sla_hours       — how long the heartbeat waits before applying the default
+#   default_action  — what the heartbeat does if SLA expires
+#   rationale       — why this default is right for this venture (be specific!)
+#   on_default      — concrete steps the heartbeat performs
+#   override        — conditions that prevent the default from firing
+#
+# Tone: defaults should embody "what's the safe action when nobody answers?"
+# For most ventures, safe = kill/rollback/throttle (cheap to undo).
+# For trading/capital ventures, safe = NO-ACTION (expensive to undo).
+# See 6-meridian/.datacore/roles/cio.md for the inverse pattern.
+
+falsified_hypothesis:
+  description: "Hypothesis fails all gates at the configured sample size."
+  sla_hours: 48
+  default_action: kill
+  rationale: |
+    EDIT ME — explain why kill is the right default for this venture.
+    Indecision after falsification is usually more expensive than reframing
+    later, but explain the venture-specific reason.
+  on_default:
+    - update hypothesis status to "killed"
+    - write verdict reasoning to venture journal
+    - capture follow-up CEO task: "review killed H{id}, decide next hypothesis"
+  override:
+    - human_verdict_within_sla
+    - human_filed_replacement_hypothesis_within_sla
+
+drift_catch:
+  description: "Pre-flight detects content/queue drift from venture truth."
+  sla_hours: 2
+  default_action: rollback
+  rationale: |
+    EDIT ME — for comms ventures, rollback prevents brand damage.
+    For technical ventures (e.g. PR drift), the equivalent is revert+rerun.
+  on_default:
+    - delete flagged item from queue
+    - write rollback reasoning to ops journal
+    - capture follow-up task: "rebuild flagged item from truth"
+  override:
+    - human_approved_within_sla
+
+budget_overage:
+  description: "Monthly AI or real spend ceiling reached."
+  sla_hours: 24
+  default_action: throttle_to_daily_only
+  rationale: |
+    EDIT ME — when budget is exhausted, drop weekly+ cadences.
+  on_default:
+    - write [space]/.datacore/state/budget-throttle.flag
+    - cadence engine filter_by_budget() drops weekly+ entries
+    - capture follow-up CEO task: "review budget reallocation"
+  override:
+    - human_reallocates_budget_within_sla
+
+escalation_unread:
+  description: "Escalation memo or pending-decision aged past SLA."
+  sla_hours: 72
+  default_action: re_ping_then_default
+  rationale: |
+    Re-ping at SLA-1h, then apply the kind-specific default at SLA.
+  on_default:
+    - re-ping at sla_hours - 1
+    - apply kind-specific default if no human action by sla_hours
+  override:
+    - human_acts_on_escalation_within_sla
