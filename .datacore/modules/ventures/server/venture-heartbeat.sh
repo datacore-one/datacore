@@ -12,10 +12,12 @@ source "$HOME/Data/.datacore/env/.env"
 set +a
 unset ANTHROPIC_API_KEY
 
-# Miles identity for git commits
-export GIT_AUTHOR_NAME="nightshift"
-export GIT_AUTHOR_EMAIL="nightshift@datacore.one"
-export GIT_COMMITTER_NAME="nightshift"
-export GIT_COMMITTER_EMAIL="nightshift@datacore.one"
+# Miles identity for git commits (per ENG-2026-0511-009 — supersedes earlier
+# "nightshift infrastructure identity" pattern; meeting decision 2026-05-11
+# routes ALL heartbeat operations through Miles for consistent attribution)
+export GIT_AUTHOR_NAME="Miles"
+export GIT_AUTHOR_EMAIL="gregor+miles@datafund.io"
+export GIT_COMMITTER_NAME="Miles"
+export GIT_COMMITTER_EMAIL="gregor+miles@datafund.io"
 
 exec /usr/bin/python3 -u "$HOME/Data/.datacore/modules/ventures/lib/venture_heartbeat.py" --interval=900
