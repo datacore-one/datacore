@@ -12,9 +12,13 @@ source "$HOME/Data/.datacore/env/.env"
 set +a
 unset ANTHROPIC_API_KEY
 
+<<<<<<< Updated upstream
 # Miles identity for git commits (per ENG-2026-0511-009 — supersedes earlier
 # "nightshift infrastructure identity" pattern; meeting decision 2026-05-11
 # routes ALL heartbeat operations through Miles for consistent attribution)
+=======
+# Miles identity for git commits
+>>>>>>> Stashed changes
 export GIT_AUTHOR_NAME="Miles"
 export GIT_AUTHOR_EMAIL="gregor+miles@datafund.io"
 export GIT_COMMITTER_NAME="Miles"
