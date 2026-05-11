@@ -201,6 +201,22 @@ def find_overdue_cadences(
 # ---------------------------------------------------------------------------
 
 
+def _stable_task_id(entry: CadenceEntry, venture_name: str) -> str:
+    """Build a stable, line-independent ID for a cadence task.
+
+    Format: ``cadence-{venture-slug}-{cadence-slug}-{YYYY-MM-DD}``.
+
+    Stable IDs replace the parser's ``next_actions-L<line>`` fallback so the
+    claim mechanism keys on identity, not file position. Two cadence runs on
+    the same day for the same cadence/venture intentionally collide on ID —
+    the writer treats that as idempotent (no duplicate task).
+    """
+    def slug(s: str) -> str:
+        return ''.join(c if c.isalnum() else '-' for c in s.lower()).strip('-')
+    today = date.today().isoformat()
+    return f"cadence-{slug(venture_name)}-{slug(entry.cadence_name)}-{today}"
+
+
 def generate_cadence_task(entry: CadenceEntry, venture_name: str) -> dict:
     """Generate a simple org task dict for an overdue cadence entry.
 
@@ -208,7 +224,7 @@ def generate_cadence_task(entry: CadenceEntry, venture_name: str) -> dict:
         heading   — task title
         state     — "TODO"
         tags_str  — org-mode tag string e.g. ":AI:venture:cmo:"
-        properties — dict with ROLE, VENTURE, CADENCE, FREQUENCY, DAYS_OVERDUE
+        properties — dict with ID, ROLE, VENTURE, CADENCE, FREQUENCY, DAYS_OVERDUE
     """
     heading = f"[{venture_name}] {entry.cadence_name} ({entry.frequency})"
     tags_str = f":AI:venture:{entry.role}:"
@@ -218,6 +234,7 @@ def generate_cadence_task(entry: CadenceEntry, venture_name: str) -> dict:
         "state": "TODO",
         "tags_str": tags_str,
         "properties": {
+            "ID": _stable_task_id(entry, venture_name),
             "ROLE": entry.role,
             "VENTURE": venture_name,
             "CADENCE": entry.cadence_name,
