@@ -425,7 +425,7 @@ Map common phrases to GTD contexts:
 - "email/write/send/reply" -> `@computer`
 - "call/phone/ring" -> `@call`
 - "buy/pick up/grab" -> `@errands`
-- "read/review/check out" -> route to `research_learning.org`
+- "read/review/check out/research" -> route to `research_learning.org`
 - "schedule/book/arrange" -> `@computer` with calendar context
 - "ask [person]" -> `@agenda:[person]` (waiting for next meeting)
 - "fix/debug/deploy" -> `@computer` with technical context
