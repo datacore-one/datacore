@@ -103,3 +103,10 @@ context:
 engrams:
   namespace: whatsapp
   scopes: [whatsapp]
+
+recall:
+  # DIP-0029 — module-level engram scope; composes with command-level recall:.
+  scopes:
+    - module:whatsapp
+  tags:
+    - whatsapp
