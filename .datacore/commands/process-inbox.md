@@ -1,3 +1,14 @@
+---
+name: process-inbox
+description: process-inbox command
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:process-inbox
+  tags:
+    - process-inbox
+---
+
 # /process-inbox
 
 Automated inbox processing — classify and route all entries from inbox.org.

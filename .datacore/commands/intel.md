@@ -6,6 +6,12 @@ triggers:
   - analyze this post
   - analyze this tweet
   - social intel
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:intel
+  tags:
+    - intel
 ---
 
 # /intel Command

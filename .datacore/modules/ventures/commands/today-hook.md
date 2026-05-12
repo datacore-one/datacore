@@ -3,6 +3,12 @@ hook: today
 module: ventures
 priority: 80
 section: "Venture Portfolio"
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:today-hook
+  tags:
+    - today-hook
 ---
 
 ## Venture Portfolio Status

@@ -1,3 +1,14 @@
+---
+name: research-status
+description: research-status command
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:research-status
+  tags:
+    - research-status
+---
+
 # /research-status
 
 ## Command Context

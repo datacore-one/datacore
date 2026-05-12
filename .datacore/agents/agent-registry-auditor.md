@@ -69,6 +69,36 @@ Engrams encode learned behavioral patterns that improve task quality.
 - [DIP-0002](../dips/DIP-0002-layered-context-pattern.md) - Layered context patterns
 - [DIP-0009](../dips/DIP-0009-gtd-specification.md) - GTD task routing
 
+## DIP-0029 — Recall Coverage Audit
+
+When auditing the system, run the recall-coverage check as a first-class step:
+
+```bash
+python3 .datacore/lib/audit_recall_coverage.py
+# Machine-readable:
+python3 .datacore/lib/audit_recall_coverage.py --json
+# Strict (exit 1 on drift):
+python3 .datacore/lib/audit_recall_coverage.py --strict
+```
+
+The audit reports three drift categories:
+
+1. **missing-recall** — file has no `recall:` frontmatter block
+2. **empty-recall** — has `recall:` but no `ids/scopes/tags/query` populated
+3. **failure-mode-uncovered** — a failure-mode engram (scope/domain/tag matches
+   the command name, type is behavioral/corrective/operational) is NOT in the
+   command's declared `recall.ids`
+
+Triage rules:
+- Missing or empty: add a default block via
+  `python3 .datacore/lib/migrate_recall.py --paths <path>`
+- Failure-mode uncovered: ALWAYS surface to the user. These are engrams the
+  command should explicitly declare; auto-fix is unsafe because false positives
+  on tag matches happen.
+
+Include the audit in any weekly review report. Treat failure-mode-uncovered
+counts as a quality metric — trend should be flat or shrinking.
+
 ## Audit Workflow
 
 ### Step 1: Scan System State

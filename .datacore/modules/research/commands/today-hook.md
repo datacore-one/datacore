@@ -1,3 +1,14 @@
+---
+name: today-hook
+description: today-hook command
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:today-hook
+  tags:
+    - today-hook
+---
+
 # Research Hook: /today Integration
 
 ## Command Context

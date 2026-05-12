@@ -2,6 +2,12 @@
 name: opensource
 description: Prepare a project or module for open-source release. 3-phase pipeline - strip secrets, sanitize, package with docs.
 user_invocable: true
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:opensource
+  tags:
+    - opensource
 ---
 
 # /opensource Command

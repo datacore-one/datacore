@@ -1,3 +1,14 @@
+---
+name: create-module
+description: create-module command
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:create-module
+  tags:
+    - create-module
+---
+
 # /create-module
 
 ## Command Context

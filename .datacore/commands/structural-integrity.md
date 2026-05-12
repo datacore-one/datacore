@@ -4,6 +4,12 @@ description: Audit and maintain Datacore folder structure, detect issues, option
 user_invocable: true
 aliases:
   - sif
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:structural-integrity
+  tags:
+    - structural-integrity
 ---
 
 # /structural-integrity Command

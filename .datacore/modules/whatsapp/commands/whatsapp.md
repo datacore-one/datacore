@@ -1,3 +1,14 @@
+---
+name: whatsapp
+description: whatsapp command
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:whatsapp
+  tags:
+    - whatsapp
+---
+
 # /whatsapp
 
 WhatsApp integration menu for Datacore.

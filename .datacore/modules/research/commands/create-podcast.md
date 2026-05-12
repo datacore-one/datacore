@@ -1,3 +1,14 @@
+---
+name: create-podcast
+description: create-podcast command
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:create-podcast
+  tags:
+    - create-podcast
+---
+
 # Create Podcast Command
 
 ## Command Context

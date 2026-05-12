@@ -2,6 +2,12 @@
 name: archive-search
 description: Search archived content using datacortex snapshots
 user_invocable: true
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:archive-search
+  tags:
+    - archive-search
 ---
 
 # Command: /archive-search
