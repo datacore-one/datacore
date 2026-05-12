@@ -1,3 +1,18 @@
+---
+name: today
+description: Your AI Chief of Staff's morning briefing — the main product deliverable of Data
+recall:
+  # Per DIP-0029, engrams matching these references are injected before this command runs.
+  scopes:
+    - command:today
+  tags:
+    - today
+    - daily-briefing
+  query:
+    - "/today briefing structure"
+    - "/today personalization"
+---
+
 # Today
 
 Your AI Chief of Staff's morning briefing. The main product deliverable of Data.

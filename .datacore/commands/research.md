@@ -2,6 +2,16 @@
 name: research
 description: Deep multi-source research pipeline. Discovers sources, processes content, synthesizes reports, and optionally generates podcasts.
 user_invocable: true
+recall:
+  # Per DIP-0029
+  scopes:
+    - command:research
+  tags:
+    - research
+    - research-pipeline
+  query:
+    - "/research source discovery"
+    - "/research synthesis quality"
 ---
 
 # /research Command

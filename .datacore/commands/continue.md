@@ -1,3 +1,19 @@
+---
+name: continue
+description: Resume incomplete work from continuation tasks, or find the highest-impact next action
+recall:
+  # Per DIP-0029
+  scopes:
+    - command:continue
+  tags:
+    - continue
+    - continuation
+    - bootstrap
+  query:
+    - "continuation task bootstrap"
+    - "/continue resume"
+---
+
 # Continue
 
 ## Command Context
