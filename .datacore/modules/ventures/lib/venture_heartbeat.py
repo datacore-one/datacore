@@ -319,9 +319,19 @@ Consider:
 4. Non-critical GitHub issues — investigate and fix or propose solutions
 5. Patterns you notice in the data — opportunities or risks
 
-For GitHub issues: use `gh issue view <number> --repo <owner/repo>` to read the full issue,
-then investigate the root cause, fix it if you can (deploy included), and comment on the issue
-with your findings. Close the issue if fully resolved.
+**Pick ONE action and do it well.** Use your own judgment about scope — there is no fixed time target. The heartbeat is a monitor-and-dispatch pattern, not a long-running worker. Pick what fits naturally in a single tick.
+
+Classify the action by **response shape**, not time:
+
+- **Inline action** (single-file change, status report, simple comment, reconciliation, a small fix you can ship and commit) — do it, commit, report.
+- **Triage / comment** — leave a comment or note that unblocks the next step (links, scope clarification, decision request) and assign/label/tag appropriately.
+- **Substantive work that belongs elsewhere** (multi-hour research, large multi-file refactor, anything that's truly nightshift-batch material — deep paper synthesis, full strategy promotion, anything needing isolation + retries + evaluation) — open a `:AI:venture:` tagged sub-task in `org/next_actions.org` with enough context for nightshift to pick it up. For GitHub issues, also comment with the plan and link the sub-task.
+
+The routing rule: heartbeat does what fits a single working session. Nightshift handles work that benefits from isolation, longer budgets, retries, and evaluator review. Both venues are first-class — choose the right one for the work.
+
+For **cadences**: most cadences fit naturally in a tick (status reports, reconciliations, triage). For cadences that imply nightshift-batch work (research, multi-paper evaluation, deep audit), emit a sub-task — the cadence-log gets updated either way. Don't try to clear multiple overdue cadences in one tick; prioritize the highest-value one.
+
+For GitHub issues: use `gh issue view <number> --repo <owner/repo>` to read the full issue, then act per the response-shape rules above.
 
 Then **execute that action**. Do the actual work — don't just plan or describe it.
 
@@ -335,7 +345,7 @@ NEXT: [what should happen next time, or "none"]
 ```
 
 **Rules:**
-- You have 10 minutes max. Pick ONE action, do it well.
+- Pick ONE action, do it well. Use judgment about scope — the heartbeat has a generous ceiling (30 min) but most real ticks finish in 1-5 min. If you genuinely need longer, route it to nightshift via a sub-task instead.
 - If nothing needs attention, just reply: HEARTBEAT_OK
 - Read files before acting. Don't assume — verify.
 - If you need to create content, use the venture's voice and style.
@@ -376,7 +386,7 @@ def wake_agent(state: dict, space_dir: Path, data_dir: Path, dry_run: bool = Fal
             cwd=str(space_dir),
             capture_output=True,
             text=True,
-            timeout=600,  # 10 minute timeout
+            timeout=1800,  # 30 minute timeout (raised from 600 — see ENG-2026-0512 / heartbeat-bound-removal)
             env=os.environ.copy(),
         )
 
