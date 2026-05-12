@@ -1,3 +1,19 @@
+---
+name: tomorrow
+description: End-of-day review and AI delegation — queue overnight nightshift work
+recall:
+  # Per DIP-0029
+  scopes:
+    - command:tomorrow
+  tags:
+    - tomorrow
+    - nightshift
+    - delegation
+  query:
+    - "/tomorrow priorities AI delegation"
+    - "nightshift task tagging"
+---
+
 # Tomorrow
 
 ## Command Context

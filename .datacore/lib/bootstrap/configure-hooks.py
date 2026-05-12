@@ -54,7 +54,19 @@ def build_required_hooks(datacore_root: str) -> dict:
                         "timeout": 3,
                     }
                 ],
-            }
+            },
+            {
+                # DIP-0029: inject command-scoped engrams on Skill/SlashCommand/Agent invocation.
+                # Fallback layer for harnesses that don't parse `recall:` frontmatter on commands.
+                "matcher": "Skill|SlashCommand|Agent",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": f"python3 {hooks_dir}/command_recall_inject.py",
+                        "timeout": 3,
+                    }
+                ],
+            },
         ],
         "PostToolUse": [
             {
@@ -141,6 +153,7 @@ def main():
         "plur_session_guard.py",
         "plur_session_mark.py",
         "plur_inject_wrapper.py",
+        "command_recall_inject.py",  # DIP-0029
     ]
     missing = [s for s in required_scripts if not (hooks_dir / s).exists()]
     if missing:

@@ -1,3 +1,23 @@
+---
+name: wrap-up
+description: Session wrap-up before closing a Claude Code conversation
+recall:
+  # Failure-mode engrams that MUST be in context before /wrap-up runs.
+  # Per DIP-0029, the harness injects matching engrams as "## Relevant memory"
+  # before this command body. PreToolUse hook command_recall_inject.py also
+  # injects via plur_recall_hybrid on Skill invocation for non-Datacore harnesses.
+  ids:
+    - ENG-2026-0411-001   # Subagent dispatch produces zero output for 15-20min — execute inline
+    - ENG-2026-0505-029   # Token cost in /wrap-up was estimated 5000x too low
+    - ENG-2026-0512-038   # Token cost MUST use session_token_count.py; never Fermi-estimate
+    - ENG-2026-0512-039   # /wrap-up checklist must name coordinators as separate tracked items
+  scopes:
+    - command:wrap-up
+  tags:
+    - wrap-up
+    - session-close
+---
+
 # Session Wrap-Up
 
 ## EXECUTION MODEL — INLINE WITH TRACKED CHECKLIST
