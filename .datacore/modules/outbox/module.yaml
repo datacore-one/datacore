@@ -77,3 +77,10 @@ context:
 engrams:
   namespace: outbox
   scopes: [outbox, archive]
+
+recall:
+  # DIP-0029 — module-level engram scope; composes with command-level recall:.
+  scopes:
+    - module:outbox
+  tags:
+    - outbox

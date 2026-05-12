@@ -1,3 +1,14 @@
+---
+name: audit-agents
+description: audit-agents command
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:audit-agents
+  tags:
+    - audit-agents
+---
+
 # /audit-agents
 
 ## Command Context

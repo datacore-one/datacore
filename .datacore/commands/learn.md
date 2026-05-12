@@ -1,3 +1,14 @@
+---
+name: learn
+description: learn command
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:learn
+  tags:
+    - learn
+---
+
 # /learn
 
 Capture an engram into PLUR memory.

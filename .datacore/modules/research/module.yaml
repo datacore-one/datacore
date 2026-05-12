@@ -90,3 +90,10 @@ context:
 engrams:
   namespace: research
   scopes: [research, podcasts, readwise]
+
+recall:
+  # DIP-0029 — module-level engram scope; composes with command-level recall:.
+  scopes:
+    - module:research
+  tags:
+    - research

@@ -2,6 +2,12 @@
 name: ingest
 description: Process files from inbox folders or external sources into Datacore with deep knowledge extraction
 user_invocable: true
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:ingest
+  tags:
+    - ingest
 ---
 
 # /ingest Command

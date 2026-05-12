@@ -1,3 +1,14 @@
+---
+name: research-daily
+description: research-daily command
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:research-daily
+  tags:
+    - research-daily
+---
+
 # /research-daily
 
 ## Command Context

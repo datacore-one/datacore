@@ -2,6 +2,12 @@
 name: search
 description: Multi-source semantic search across local knowledge (Datacortex) and web intelligence (Perplexity)
 user_invocable: true
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:search
+  tags:
+    - search
 ---
 
 # Search

@@ -1,3 +1,14 @@
+---
+name: sprint-start
+description: sprint-start command
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:sprint-start
+  tags:
+    - sprint-start
+---
+
 # Sprint Start — Ceremonial Kickoff
 
 ## Command Context

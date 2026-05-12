@@ -2,6 +2,12 @@
 name: outbox
 description: Process the outbox queue and route content to destinations (archive, delivery, publish)
 user_invocable: true
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:outbox
+  tags:
+    - outbox
 ---
 
 # /outbox Command

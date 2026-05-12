@@ -2,6 +2,12 @@
 name: gan
 description: Adversarial multi-agent build loop. Plan → Generate → Evaluate → iterate. Pairs with /office-hours for ideation and /plan-ceo-review for scope.
 user_invocable: true
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:gan
+  tags:
+    - gan
 ---
 
 # /gan Command

@@ -1,3 +1,14 @@
+---
+name: nightshift-hook
+description: nightshift-hook command
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:nightshift-hook
+  tags:
+    - nightshift-hook
+---
+
 # Research Hook: Nightshift Integration
 
 ## Command Context

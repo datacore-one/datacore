@@ -1,3 +1,14 @@
+---
+name: diagnostic
+description: diagnostic command
+recall:
+  # DIP-0029 default — engrams scoped to this command + tag-matched.
+  scopes:
+    - command:diagnostic
+  tags:
+    - diagnostic
+---
+
 # Diagnostic
 
 ## Command Context
