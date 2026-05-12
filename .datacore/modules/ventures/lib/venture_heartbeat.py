@@ -372,7 +372,7 @@ def wake_agent(state: dict, space_dir: Path, data_dir: Path, dry_run: bool = Fal
             prompt_text = f.read()
 
         result = subprocess.run(
-            ['claude', '-p', '--dangerously-skip-permissions', prompt_text],
+            ['claude', '-p', '--dangerously-skip-permissions', '--model', 'sonnet', prompt_text],
             cwd=str(space_dir),
             capture_output=True,
             text=True,
