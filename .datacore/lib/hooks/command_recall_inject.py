@@ -76,13 +76,18 @@ def _extract_name(payload: dict) -> str | None:
 
 
 def _recall_via_mcp_cli(name: str) -> list[dict]:
-    """Call PLUR via the local MCP server CLI if available. Returns empty on any error."""
+    """Call PLUR via a local CLI if directly available. Skips slow npx fallback.
+
+    Hook timeout budget is 3s. `npx -y @plur-ai/cli` cold-start can take 5-15s
+    on first invocation (download + node startup) — busts the budget. If no
+    direct CLI is on the local PATH, return empty and let the YAML grep handle
+    it (~100ms against the engram store).
+    """
     plur_cli = Path.home() / ".plur" / "bin" / "plur"
     if not plur_cli.exists():
-        # Fall back to npx invocation (works if @plur-ai/mcp is installed globally)
-        cmd = ["npx", "-y", "@plur-ai/cli", "recall", "--query", name, "--k", str(MAX_RESULTS), "--format", "json"]
-    else:
-        cmd = [str(plur_cli), "recall", "--query", name, "--k", str(MAX_RESULTS), "--format", "json"]
+        return []
+
+    cmd = [str(plur_cli), "recall", "--query", name, "--k", str(MAX_RESULTS), "--format", "json"]
 
     try:
         result = subprocess.run(
