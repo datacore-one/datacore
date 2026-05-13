@@ -29,12 +29,13 @@ Review all open pull requests across venture repos — assess code quality, chec
    ```bash
    gh pr checks {number} --repo {org}/{repo}
    ```
-   If all CI checks pass, approve and merge:
+   If all CI checks pass, approve and tag plur9 for merge — **do not merge yourself**:
    ```bash
-   gh pr review {number} --repo {org}/{repo} --approve --body "CI passing, automated update approved."
-   gh pr merge {number} --repo {org}/{repo} --squash
+   gh pr review {number} --repo {org}/{repo} --approve --body "CI passing, automated update approved. @plur9 ready for merge."
    ```
    If CI fails, add a comment noting the failure and skip.
+
+   **Policy:** Agents open and review PRs. Humans merge. This applies to **all** PRs — bot, human, and agent-authored. Do not run `gh pr merge`. Branch protection on main will reject it; this is the corresponding behavioral rule.
 
 5. **Review human PRs**: For each human PR:
    - Read the diff:
@@ -60,14 +61,15 @@ Review all open pull requests across venture repos — assess code quality, chec
 
 ## Output
 
-- All automated PRs with passing CI approved and merged
+- All automated PRs with passing CI approved and tagged for human merge
 - Human PRs reviewed with actionable feedback comments
 - Stale PRs flagged with nudge comments
-- Summary: total PRs reviewed, merged count, feedback given, stale count
+- Summary: total PRs reviewed, approved count, feedback given, stale count
 
 ## Success Criteria
 
-- No automated PR with passing CI left unmerged
+- No automated PR with passing CI left without approval
 - Every human PR has at least one review comment or approval
 - Stale PRs (>7 days) are identified and authors notified
 - No security issues in reviewed diffs go uncommented
+- Zero merges executed by the agent — merge is human-only
