@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# pre-push: block pushes to protected public repos that contain forbidden paths/content.
+#
+# Born out of a 2026-05-14 sync incident. Provides per-clone protection layered
+# on top of .gitignore (which is reactive) and the audit script (which runs
+# post-hoc on heartbeat).
+#
+# Activate by setting in any local clone:
+#     git config --local core.hooksPath /Users/gregor/Data/.githooks
+# OR globally:
+#     git config --global core.hooksPath /Users/gregor/Data/.githooks
+#
+# Reads denylist from .datacore/config/public-repo-denylist.yaml.
+# Skips silently for non-protected remotes.
+#
+# Bypass (use with extreme care): SKIP_PRE_PUSH=1 git push ...
+
+set -e
+
+REMOTE="$1"
+URL="$2"
+
+# Quick bypass for emergencies; logs to stderr
+if [ "${SKIP_PRE_PUSH:-0}" = "1" ]; then
+    echo "pre-push: BYPASSED via SKIP_PRE_PUSH=1 → push proceeding without check" >&2
+    exit 0
+fi
+
+DATA_DIR="${DATA_DIR:-$HOME/Data}"
+DENYLIST="$DATA_DIR/.datacore/config/public-repo-denylist.yaml"
+AUDIT_SCRIPT="$DATA_DIR/.datacore/lib/audit_public_repos.py"
+
+if [ ! -f "$DENYLIST" ]; then
+    # No denylist = no policy = silent pass
+    exit 0
+fi
+
+# Extract repo identifier (org/name) from remote URL.
+# Handles: git@github.com:org/repo.git, https://github.com/org/repo.git, https://github.com/org/repo
+REPO=$(echo "$URL" | sed -E 's#^(git@github.com:|https://github.com/)##; s#\.git$##')
+
+# Check if this remote is in protected_repos
+IS_PROTECTED=$(python3 -c "
+import sys, yaml
+with open('$DENYLIST') as f:
+    d = yaml.safe_load(f)
+print('1' if '$REPO' in d.get('protected_repos', []) else '0')
+" 2>/dev/null || echo "0")
+
+if [ "$IS_PROTECTED" != "1" ]; then
+    # Not a protected public repo, no check needed
+    exit 0
+fi
+
+echo "pre-push: $REPO is protected — running policy check…" >&2
+
+# Read each ref being pushed from stdin
+# Format: <local-ref> <local-sha> <remote-ref> <remote-sha>
+HITS=0
+HITS_DETAIL=""
+
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+    # Skip deletions
+    if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+        continue
+    fi
+
+    # Determine commit range to check
+    if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+        # New branch — diff against the closest remote-tracking branch (default branch first)
+        BASE=""
+        for candidate in "${REMOTE}/main" "${REMOTE}/master" "${REMOTE}/develop"; do
+            if git rev-parse --verify "$candidate" >/dev/null 2>&1; then
+                BASE="$candidate"
+                break
+            fi
+        done
+        if [ -n "$BASE" ]; then
+            RANGE=$(git rev-list "${BASE}..${local_sha}" 2>/dev/null)
+        else
+            # No remote default known — check the most recent N commits as a safety net
+            RANGE=$(git rev-list "$local_sha" 2>/dev/null | head -50)
+        fi
+    else
+        RANGE=$(git rev-list "${remote_sha}..${local_sha}" 2>/dev/null)
+    fi
+
+    if [ -z "$RANGE" ]; then
+        continue
+    fi
+
+    # Get all paths ADDED or MODIFIED in those commits.
+    # Deletions don't expose new content; --diff-filter=AM excludes D (delete), R (rename out), C (copy out).
+    # --root makes initial-commit (no parent) diffs work — compares against empty tree.
+    PATHS=$(echo "$RANGE" | xargs -I {} git diff-tree --no-commit-id --name-only --diff-filter=AM --root -r {} 2>/dev/null | sort -u)
+
+    if [ -z "$PATHS" ]; then
+        continue
+    fi
+
+    # Check each path against denylist via Python
+    REPORT=$(echo "$PATHS" | python3 -c "
+import sys, yaml, fnmatch
+with open('$DENYLIST') as f:
+    d = yaml.safe_load(f)
+forbidden = d.get('forbidden_paths', [])
+warnings = d.get('warning_patterns', {}).get('paths', [])
+hits = []
+warns = []
+for line in sys.stdin:
+    p = line.strip()
+    if not p:
+        continue
+    for pat in forbidden:
+        if (fnmatch.fnmatch(p, pat) or
+            (pat.startswith('**/') and fnmatch.fnmatch(p, pat[3:])) or
+            (pat.endswith('/**') and (p == pat[:-3] or p.startswith(pat[:-3] + '/')))):
+            hits.append((p, pat))
+            break
+    else:
+        for pat in warnings:
+            if (fnmatch.fnmatch(p, pat) or
+                (pat.startswith('**/') and fnmatch.fnmatch(p, pat[3:])) or
+                (pat.endswith('/**') and (p == pat[:-3] or p.startswith(pat[:-3] + '/')))):
+                warns.append((p, pat))
+                break
+for p, pat in hits:
+    print(f'BLOCK\t{p}\t{pat}')
+for p, pat in warns:
+    print(f'WARN\t{p}\t{pat}')
+")
+
+    while IFS=$'\t' read -r severity path pattern; do
+        if [ "$severity" = "BLOCK" ]; then
+            HITS=$((HITS + 1))
+            HITS_DETAIL="${HITS_DETAIL}  ✗ ${path}  (matched: ${pattern})\n"
+        elif [ "$severity" = "WARN" ]; then
+            echo "  ⚠ pre-push: $path matches warning pattern: $pattern (push allowed)" >&2
+        fi
+    done <<< "$REPORT"
+done
+
+if [ "$HITS" -gt 0 ]; then
+    echo "" >&2
+    echo "═══════════════════════════════════════════════════════════════" >&2
+    echo "PUSH BLOCKED: $HITS path(s) match forbidden patterns for $REPO" >&2
+    echo "═══════════════════════════════════════════════════════════════" >&2
+    printf "%b" "$HITS_DETAIL" >&2
+    echo "" >&2
+    echo "These paths are confidential and must not reach a public repository." >&2
+    echo "Move them to a private repo (plur-ai/enterprise, plur-ai/plur-space)." >&2
+    echo "" >&2
+    echo "If this is a false positive, edit:" >&2
+    echo "  $DENYLIST" >&2
+    echo "" >&2
+    echo "Emergency bypass (use with care):" >&2
+    echo "  SKIP_PRE_PUSH=1 git push ..." >&2
+    echo "═══════════════════════════════════════════════════════════════" >&2
+    exit 1
+fi
+
+echo "pre-push: ✓ no forbidden patterns in pushed commits" >&2
+exit 0

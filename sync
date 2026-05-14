@@ -61,6 +61,45 @@ sync_repo() {
             git -C "$repo" reset HEAD 2>/dev/null
             return 1
         fi
+        # Confidentiality check: if remote is a protected (public) repo, ensure no
+        # forbidden paths got staged. Born from a 2026-05-14 sync incident — the sync
+        # used to push everything in the working tree, including customer materials.
+        local remote_url=$(git -C "$repo" remote get-url origin 2>/dev/null || echo "")
+        local protected_repo=$(echo "$remote_url" | sed -E 's#^(git@github.com:|https://github.com/)##; s#\.git$##')
+        if [ -n "$protected_repo" ] && [ -f "$HOME/Data/.datacore/config/public-repo-denylist.yaml" ]; then
+            local is_protected=$(python3 -c "
+import yaml
+with open('$HOME/Data/.datacore/config/public-repo-denylist.yaml') as f:
+    d = yaml.safe_load(f)
+print('1' if '$protected_repo' in d.get('protected_repos', []) else '0')
+" 2>/dev/null || echo "0")
+            if [ "$is_protected" = "1" ]; then
+                local forbidden=$(git -C "$repo" diff --cached --name-only --diff-filter=AM 2>/dev/null | python3 -c "
+import sys, yaml, fnmatch
+with open('$HOME/Data/.datacore/config/public-repo-denylist.yaml') as f:
+    d = yaml.safe_load(f)
+patterns = d.get('forbidden_paths', [])
+for line in sys.stdin:
+    p = line.strip()
+    if not p: continue
+    for pat in patterns:
+        if (fnmatch.fnmatch(p, pat) or
+            (pat.startswith('**/') and fnmatch.fnmatch(p, pat[3:])) or
+            (pat.endswith('/**') and (p == pat[:-3] or p.startswith(pat[:-3] + '/')))):
+            print(f'{p}\t{pat}')
+            break
+" 2>/dev/null)
+                if [ -n "$forbidden" ]; then
+                    sync_alert "ABORT push in $name — staged confidential paths for protected repo $protected_repo:"
+                    while IFS=$'\t' read -r path pattern; do
+                        sync_alert "  $path  (matched: $pattern)"
+                    done <<< "$forbidden"
+                    sync_alert "Move to private storage or add to .gitignore. Then retry."
+                    git -C "$repo" reset HEAD 2>/dev/null
+                    return 1
+                fi
+            fi
+        fi
         git -C "$repo" diff --cached --quiet || git -C "$repo" commit -m "Sync: $(date +%Y-%m-%d)"
         git -C "$repo" push 2>/dev/null || echo "  (no remote or error)"
     elif [ "$ACTION" = "status" ]; then
