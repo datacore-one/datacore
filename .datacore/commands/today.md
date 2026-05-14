@@ -558,7 +558,7 @@ Each installed module with a `hooks.today` entry contributes content.
 | trading | The World + Spaces | Market signals + bot status |
 | mail | Agenda | Processed inbox, remaining items |
 | github | Spaces | PRs, issues, security alerts |
-| nightshift | Agenda + Spaces | Task results |
+| nightshift | Agenda + Spaces + Ops Health | Task results + public-repo audit status |
 | research | The World + Agenda | Outputs, pending reviews |
 | meetings | Agenda | Meeting prep, standup preview |
 | crm | Agenda | Attendee context, follow-ups |
