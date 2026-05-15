@@ -2,7 +2,7 @@
 """
 Audit public repos against the confidentiality denylist.
 
-Reads .datacore/state/public-repo-denylist.yaml and scans every repo
+Reads .datacore/config/public-repo-denylist.yaml and scans every repo
 listed under `protected_repos` for any file path matching `forbidden_paths`
 or any text content matching `forbidden_content`. Exits non-zero on hit
 so it can fail loudly when run from a heartbeat / cron / CI.
@@ -44,7 +44,7 @@ except ImportError:
     sys.exit(2)
 
 
-DENYLIST_PATH = Path(__file__).resolve().parent.parent / "state" / "public-repo-denylist.yaml"
+DENYLIST_PATH = Path(__file__).resolve().parent.parent / "config" / "public-repo-denylist.yaml"
 
 
 @dataclass
