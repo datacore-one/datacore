@@ -2,7 +2,7 @@
 # Wrapper: runs audit_public_repos.py and converts any forbidden hits
 # into sync-alerts.log entries so they surface in /today's ops-health section.
 #
-# Born out of a 2026-05-14 sync incident — see .datacore/state/public-repo-denylist.yaml.
+# Born out of a 2026-05-14 sync incident — see .datacore/config/public-repo-denylist.yaml.
 #
 # Exit codes:
 #   0 — audit ran (with or without hits; hits are alerted, not failed)
