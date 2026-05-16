@@ -62,8 +62,7 @@ sync_repo() {
             return 1
         fi
         # Confidentiality check: if remote is a protected (public) repo, ensure no
-        # forbidden paths got staged. Born from a 2026-05-14 sync incident — the sync
-        # used to push everything in the working tree, including customer materials.
+        # forbidden paths got staged.
         local remote_url=$(git -C "$repo" remote get-url origin 2>/dev/null || echo "")
         local protected_repo=$(echo "$remote_url" | sed -E 's#^(git@github.com:|https://github.com/)##; s#\.git$##')
         if [ -n "$protected_repo" ] && [ -f "$HOME/Data/.datacore/config/public-repo-denylist.yaml" ]; then

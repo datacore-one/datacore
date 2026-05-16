@@ -7,9 +7,8 @@ listed under `protected_repos` for any file path matching `forbidden_paths`
 or any text content matching `forbidden_content`. Exits non-zero on hit
 so it can fail loudly when run from a heartbeat / cron / CI.
 
-Born out of a 2026-05-14 sync incident — automated sync pushed customer-named
-files to plur-ai/plur (public). This is the post-hoc detector that would
-have caught it inside the next heartbeat cycle.
+Post-hoc detector layered on top of pre-push and pre-stage guards. Runs
+on heartbeat to catch any drift that slipped past the proactive controls.
 
 Usage:
     python audit_public_repos.py                  # scan all protected repos

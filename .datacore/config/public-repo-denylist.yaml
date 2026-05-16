@@ -8,13 +8,17 @@
 #
 # Patterns are checked against repository file paths AND file contents.
 # Matching is case-insensitive for content; case-sensitive (glob) for paths.
+#
+# Customer-specific patterns are loaded from an optional private file
+# referenced by `private_patterns_file` below. That file must live outside
+# any git repo to avoid re-leaking the names it protects against.
 
 version: 1
-last_updated: 2026-05-14
-incident_origin: |
-  Private materials leaked to a public repo via automated sync.
-  Caught and scrubbed 2026-05-14. This denylist exists to prevent
-  recurrence. See journal/2026-05-14.md for full incident notes.
+last_updated: 2026-05-16
+
+# Optional path to a private patterns file. If it exists, its forbidden_paths
+# and forbidden_content arrays are unioned with the public ones at runtime.
+private_patterns_file: ~/.datacore/private/customer-denylist.yaml
 
 # Public repos in our orgs that this denylist protects.
 protected_repos:
@@ -25,11 +29,6 @@ protected_repos:
 # Path patterns that must not exist on protected_repos.
 # Glob-style. Matches against full path inside the repo.
 forbidden_paths:
-  # Customer-named anything
-  - "**/**"
-  - "**/*--*"
-  - "**/*-.*"
-
   # Enterprise / customer-facing offer materials
   - "docs/enterprise/**"
   - "docs/architecture/plur-geo-tech-brief.md"
@@ -62,18 +61,8 @@ forbidden_paths:
 
 # Content patterns that must not appear inside any file on protected_repos.
 # Substring or regex search. Case-insensitive.
+# Customer-specific content patterns live in private_patterns_file above.
 forbidden_content:
-  # Customer references that signal customer-confidential context
-  - "customer"
-  - "private pilot"
-  - "plur-geo-addendum"
-  - "plur-enterprise-proposal"
-
-  # Architecture artefacts forwarded by customers (ChatGPT outputs etc.)
-  - "Geo-AIF"
-  - "Prototip Geo Slovenija"
-  - "skupna_prijava_IPCEI_AI"
-
   # Generic high-risk patterns — use realistic-secret regexes, not bare names,
   # so legitimate documentation and test code that mentions the env var name
   # in a comment or in usage docs is not flagged.

@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # pre-push: block pushes to protected public repos that contain forbidden paths/content.
 #
-# Born out of a 2026-05-14 sync incident. Provides per-clone protection layered
-# on top of .gitignore (which is reactive) and the audit script (which runs
-# post-hoc on heartbeat).
+# Provides per-clone protection layered on top of .gitignore (which is
+# reactive) and the audit script (which runs post-hoc on heartbeat).
 #
 # Activate by setting in any local clone:
 #     git config --local core.hooksPath /Users/gregor/Data/.githooks
