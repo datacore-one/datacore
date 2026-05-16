@@ -15,20 +15,24 @@
     "auto_tag": true
   },
   "appearance": {
-    "theme": "dark",
+    "theme": "light",
     "density": "comfortable",
     "chrome": "subtle",
-    "direction": "atelier",
-    "fontSize": "15px"
+    "direction": "bridge",
+    "fontSize": "15px",
+    "today_layout": "power"
   },
   "identity": {
     "fds_id_public_key": "",
-    "fds_id_configured": false
+    "fds_id_configured": false,
+    "display_name": "Gregor"
   },
   "privacy": {
     "share_engrams": true,
     "plur_marketplace": true,
-    "anonymous_analytics": false
+    "anonymous_analytics": true,
+    "lens_enabled": true,
+    "lens_consent_shown": true
   },
   "onboarding": {
     "completed": true,

@@ -17,6 +17,19 @@ provides:
     - name: venture-monitor
       trigger: ":AI:venture:monitor:"
       description: Daily heartbeat per venture — cadence status, budget, hypothesis progress
+  commands:
+    - name: scaffolding-audit
+      description: Audit a venture for missing structural elements
+    - name: today-hook
+      description: Hook into /today briefing — surface venture cadence status
+    - name: office-hours
+      description: YC-style six-forcing-question diagnostic for new ideas — produces a design doc, never code
+    - name: retro
+      description: Sprint retrospective with team-aware growth notes, HITL classification, engram capture
+    - name: ceo-review
+      description: CEO-mode plan review — challenge premise, find 10-star product, expand scope when scope creates leverage
+    - name: eng-review
+      description: Engineering plan lock-in — architecture, code quality, test-coverage diagram, failure modes
   # CLI / open-source surface (loaded by datacore-mcp from tools/index.js).
   # Read-only and safe-to-write-without-daemon. Mutations with safety
   # gates, checkpoints, locking, and event emission are exposed by
