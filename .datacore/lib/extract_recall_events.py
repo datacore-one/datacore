@@ -16,13 +16,22 @@ OUTPUT
       "ts":              "2026-05-17T12:34:56.789Z",
       "session":         "b1c30f97-fc29-475a-b6ac-20c2242da634",
       "session_project": "-Users-gregor-Data",
-      "tool":            "mcp__plur__plur_recall_hybrid",
+      "source":          "tool" | "hook",
+      "tool":            "mcp__plur__plur_recall_hybrid" | "hook_attachment",
       "query":           "first 200 chars of args.query or args.task",
       "engram_ids":      ["ENG-2026-...","ABS-..."],
       "engram_count":    7,
       "turn_index":      4287,
       "cwd":             "&lt;cwd from session metadata&gt;"
     }
+
+  source="tool" → engram IDs came back as the result of an explicit
+  plur_recall* MCP call.
+  source="hook" → engram IDs were injected via PLUR's UserPromptSubmit /
+  command-recall-inject hooks (appears as "attachment" type messages in
+  the Claude Code transcript, not as tool_use). These were invisible to
+  the previous version of this extractor — about 3× the volume of tool
+  recalls on a heavy session.
 
 USAGE
   # One-shot: parse everything in the trace backup
@@ -96,7 +105,7 @@ def extract_engram_ids_from_result(text: str) -> list[str]:
 
 
 def parse_session(transcript_path: Path) -> list[dict]:
-    """Walk a session transcript; emit one record per recall call."""
+    """Walk a session transcript; emit one record per recall call OR hook injection."""
     session_id = transcript_path.stem  # uuid without .jsonl
     project_dir = transcript_path.parent.name
 
@@ -108,12 +117,35 @@ def parse_session(transcript_path: Path) -> list[dict]:
     for turn_idx, msg in enumerate(iter_session_lines(transcript_path)):
         mtype = msg.get("type")
         message = msg.get("message", {})
+        # attachment-type messages put the engram text in the top-level "text" field
         content = message.get("content", []) if isinstance(message, dict) else []
         if not isinstance(content, list):
             content = []
 
         ts = msg.get("timestamp", "")
         cwd = msg.get("cwd", "")
+
+        # Hook injections: PLUR's UserPromptSubmit + command_recall_inject hooks
+        # emit additionalContext that Claude Code stores as type="attachment".
+        # These are NOT tool calls — they're synthetic context blobs.
+        if mtype == "attachment":
+            blob = json.dumps(msg)  # safest: scan whole record
+            ids = extract_engram_ids_from_result(blob)
+            if ids:
+                out.append({
+                    "ts": ts,
+                    "session": session_id,
+                    "session_project": project_dir,
+                    "source": "hook",
+                    "tool": "hook_attachment",
+                    "query": (message.get("text", "") if isinstance(message, dict) else "")[:200],
+                    "engram_ids": ids,
+                    "engram_count": len(ids),
+                    "turn_index": turn_idx,
+                    "cwd": cwd,
+                    "scope": None,
+                })
+            continue
 
         if mtype == "assistant":
             for block in content:
@@ -136,6 +168,7 @@ def parse_session(transcript_path: Path) -> list[dict]:
                     "ts": ts,
                     "session": session_id,
                     "session_project": project_dir,
+                    "source": "tool",
                     "tool": name,
                     "query": (query or "")[:200],
                     "turn_index": turn_idx,
@@ -250,7 +283,9 @@ def main(argv):
     written = 0
     for d, recs in sorted(by_date.items()):
         out_path = OBSERVATIONS_DIR / f"recall-{d.isoformat()}.jsonl"
-        # Idempotent: dedup by (session, turn_index, tool) — last write wins
+        # Idempotent: dedup by (session, turn_index, source) — last write wins.
+        # Tuple includes source so a hook injection + tool recall at the same
+        # turn (rare but possible) don't overwrite each other.
         existing: dict[tuple, dict] = {}
         if out_path.exists():
             for ln in out_path.read_text().splitlines():
@@ -259,12 +294,12 @@ def main(argv):
                     continue
                 try:
                     o = json.loads(ln)
-                    key = (o.get("session"), o.get("turn_index"), o.get("tool"))
+                    key = (o.get("session"), o.get("turn_index"), o.get("source", "tool"))
                     existing[key] = o
                 except json.JSONDecodeError:
                     pass
         for rec in recs:
-            key = (rec["session"], rec["turn_index"], rec["tool"])
+            key = (rec["session"], rec["turn_index"], rec.get("source", "tool"))
             existing[key] = rec
         # Write sorted by ts
         ordered = sorted(existing.values(), key=lambda r: r.get("ts", ""))

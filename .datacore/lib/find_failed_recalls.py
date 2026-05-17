@@ -75,7 +75,7 @@ def find_session(uuid: str) -> Path | None:
 
 
 def keyword_overlap(a: str, b: str) -> float:
-    """Jaccard over content-words. Cheap stand-in for semantic similarity."""
+    """Jaccard over content-words. Fallback if embeddings unavailable."""
     def tok(s: str) -> set:
         return {
             w for w in re.findall(r"[A-Za-z]{4,}", (s or "").lower())
@@ -94,6 +94,45 @@ STOP = {
     "about","other","some","more","most","like","such","because","using",
     "before","after","without","while","make","made","needs","need","note",
 }
+
+# Embedding model — lazy-loaded, shared across calls in one run.
+_EMBEDDER = None
+
+
+def get_embedder():
+    """Load sentence-transformers all-MiniLM-L6-v2 once. None on failure."""
+    global _EMBEDDER
+    if _EMBEDDER is False:
+        return None
+    if _EMBEDDER is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+            _EMBEDDER = SentenceTransformer("all-MiniLM-L6-v2")
+        except Exception as e:
+            print(f"warn: embeddings unavailable ({e}); falling back to Jaccard",
+                  file=sys.stderr)
+            _EMBEDDER = False
+            return None
+    return _EMBEDDER
+
+
+def semantic_overlap(a: str, b: str) -> float:
+    """Cosine similarity over MiniLM embeddings; falls back to Jaccard."""
+    emb = get_embedder()
+    if emb is None:
+        return keyword_overlap(a, b)
+    try:
+        # Truncate the recall blob: too long inflates cost without changing
+        # signal much (engram statements rarely match passages > 2KB anyway).
+        a = (a or "")[:1500]
+        b = (b or "")[:8000]
+        if not a.strip() or not b.strip():
+            return 0.0
+        va, vb = emb.encode([a, b], convert_to_numpy=True, normalize_embeddings=True)
+        return float(va @ vb)  # cosine since normalized
+    except Exception as e:
+        print(f"warn: embed failed ({e}); falling back to Jaccard", file=sys.stderr)
+        return keyword_overlap(a, b)
 
 
 def analyze(transcript: Path) -> list[dict]:
@@ -221,10 +260,14 @@ def classify_learn(*, statement: str, last_recall: dict | None,
             "rediscovery_msg_count": spent_msgs,
             "creation_context_sample": recent_user_msg,
         }
-    overlap = keyword_overlap(statement, last_recall["result_blob"])
+    overlap = semantic_overlap(statement, last_recall["result_blob"])
+    # Threshold tuned for MiniLM cosine: 0.35 separates "topically related"
+    # from "covered the same concept". Lower than Jaccard's 0.10 because
+    # cosine on this model ranges narrower.
     return {
-        "type": "near-miss" if overlap < 0.10 else "covered",
+        "type": "near-miss" if overlap < 0.35 else "covered",
         "overlap_with_recall": round(overlap, 3),
+        "similarity_metric": "cosine" if get_embedder() is not None else "jaccard",
         "engram_statement": statement[:200],
         "preceding_recall_turn": last_recall["turn"],
         "engram_creation_turn": current_turn,
