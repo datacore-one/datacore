@@ -126,25 +126,48 @@ def parse_session(transcript_path: Path) -> list[dict]:
         cwd = msg.get("cwd", "")
 
         # Hook injections: PLUR's UserPromptSubmit + command_recall_inject hooks
-        # emit additionalContext that Claude Code stores as type="attachment".
-        # These are NOT tool calls — they're synthetic context blobs.
+        # emit additionalContext that Claude Code stores as type="attachment"
+        # with attachment.type="hook_success". These are NOT tool calls — they
+        # are synthetic context blobs that put engrams directly into the
+        # model's context window.
+        #
+        # We only count attachment messages with attachment.type=="hook_success"
+        # AND that contain engram IDs. Other attachment subtypes (skill_listing,
+        # task_reminder, edited_text_file, queued_command) may incidentally
+        # mention an engram ID in unrelated content — that's a REFERENCE, not
+        # an injection. Counting those would inflate the injection count.
         if mtype == "attachment":
-            blob = json.dumps(msg)  # safest: scan whole record
-            ids = extract_engram_ids_from_result(blob)
-            if ids:
-                out.append({
-                    "ts": ts,
-                    "session": session_id,
-                    "session_project": project_dir,
-                    "source": "hook",
-                    "tool": "hook_attachment",
-                    "query": (message.get("text", "") if isinstance(message, dict) else "")[:200],
-                    "engram_ids": ids,
-                    "engram_count": len(ids),
-                    "turn_index": turn_idx,
-                    "cwd": cwd,
-                    "scope": None,
-                })
+            attachment = msg.get("attachment", {})
+            att_type = attachment.get("type", "") if isinstance(attachment, dict) else ""
+            if att_type != "hook_success":
+                continue
+            att_content = attachment.get("content", "") if isinstance(attachment, dict) else ""
+            ids = extract_engram_ids_from_result(att_content)
+            if not ids:
+                continue
+            # Sub-classify which hook fired. PLUR's session-start injection
+            # uses DIRECTIVES/CONSTRAINTS/ALSO CONSIDER headers;
+            # command_recall_inject uses "## Relevant memory (engrams)".
+            if "Relevant memory" in att_content or "## Memory" in att_content:
+                subtype = "hook_command"
+            elif "DIRECTIVES" in att_content or "ALSO CONSIDER" in att_content:
+                subtype = "hook_session"
+            else:
+                subtype = "hook_other"
+            out.append({
+                "ts": ts,
+                "session": session_id,
+                "session_project": project_dir,
+                "source": "hook",
+                "source_subtype": subtype,
+                "tool": "hook_attachment",
+                "query": "",
+                "engram_ids": ids,
+                "engram_count": len(ids),
+                "turn_index": turn_idx,
+                "cwd": cwd,
+                "scope": None,
+            })
             continue
 
         if mtype == "assistant":
@@ -164,11 +187,20 @@ def parse_session(transcript_path: Path) -> list[dict]:
                     or args.get("prompt")
                     or ""
                 )
+                # Tool-source subtype: differentiate explicit recall calls from
+                # session_start (auto-fires once) and inject (variant of recall).
+                if "session_start" in name:
+                    tsubtype = "tool_session_start"
+                elif "inject" in name:
+                    tsubtype = "tool_inject"
+                else:
+                    tsubtype = "tool_recall"
                 pending[tool_use_id] = {
                     "ts": ts,
                     "session": session_id,
                     "session_project": project_dir,
                     "source": "tool",
+                    "source_subtype": tsubtype,
                     "tool": name,
                     "query": (query or "")[:200],
                     "turn_index": turn_idx,
