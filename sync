@@ -54,12 +54,47 @@ sync_repo() {
         # This prevents partial working copies (e.g. nightshift server) from
         # deleting files they don't have locally. Use 'git rm' for intentional deletes.
         git -C "$repo" add --ignore-removal . 2>/dev/null
-        # Safety check: abort if commit would delete more than 5 files
+        # Safety check 1: abort if commit would delete more than 5 files
         local del_count=$(git -C "$repo" diff --cached --diff-filter=D --name-only 2>/dev/null | wc -l | tr -d ' ')
         if [ "$del_count" -gt 5 ]; then
             sync_alert "ABORT push in $name — would delete $del_count files. Review: git -C $repo diff --cached --stat"
             git -C "$repo" reset HEAD 2>/dev/null
             return 1
+        fi
+
+        # Safety check 2: abort if any single modified file would lose a huge
+        # number of lines. Catches the case where a script truncated a file
+        # (e.g. org-workspace data-loss bug, 2026-05-16). Trips when a file
+        # loses >500 lines AND those losses are >40% of its HEAD size.
+        # Override with DATACORE_SYNC_FORCE=1 for intentional large changes.
+        if [ "${DATACORE_SYNC_FORCE:-0}" != "1" ]; then
+            local shrink_alert=""
+            while IFS=$'\t' read -r added removed path; do
+                # Skip binary files (- -) and new files (no HEAD version)
+                [ "$added" = "-" ] && continue
+                [ -z "$path" ] && continue
+                # Only check modifications, not adds/deletes
+                local change_type=$(git -C "$repo" diff --cached --name-status -- "$path" 2>/dev/null | awk '{print $1}')
+                [ "$change_type" != "M" ] && continue
+                # HEAD line count
+                local head_lines=$(git -C "$repo" show "HEAD:$path" 2>/dev/null | wc -l | tr -d ' ')
+                [ -z "$head_lines" ] || [ "$head_lines" -eq 0 ] && continue
+                # Trip if removed > 500 AND removed/head_lines > 40%
+                if [ "$removed" -gt 500 ]; then
+                    # Integer percent: removed * 100 / head_lines
+                    local pct=$((removed * 100 / head_lines))
+                    if [ "$pct" -gt 40 ]; then
+                        shrink_alert="${shrink_alert}\n  $path: -$removed lines (${pct}% of $head_lines)"
+                    fi
+                fi
+            done < <(git -C "$repo" diff --cached --numstat 2>/dev/null)
+            if [ -n "$shrink_alert" ]; then
+                sync_alert "ABORT push in $name — suspicious large shrink in modified file(s):$(printf '%b' "$shrink_alert")"
+                sync_alert "  Review: git -C $repo diff --cached --stat"
+                sync_alert "  If intentional, retry with: DATACORE_SYNC_FORCE=1 ./sync push"
+                git -C "$repo" reset HEAD 2>/dev/null
+                return 1
+            fi
         fi
         # Confidentiality check: if remote is a protected (public) repo, ensure no
         # forbidden paths got staged.
