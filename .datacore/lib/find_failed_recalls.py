@@ -136,16 +136,23 @@ def semantic_overlap(a: str, b: str) -> float:
 
 
 def analyze(transcript: Path) -> list[dict]:
-    """Walk the session; for each plur_learn, decide near-miss vs no-recall."""
+    """Walk the session; for each plur_learn, decide near-miss vs covered.
+
+    "Recall" sources considered (both inject engrams into the model's context):
+      - Explicit plur_recall* / plur_session_start tool_results.
+      - PLUR hook injections — attachment.type='hook_success' with engrams
+        in attachment.stdout. These fire on every UserPromptSubmit and are
+        the dominant injection path (~85% of all injections).
+
+    Without including hook injections, classification was misleading
+    (artificially 100% near-miss) because the model HAD engrams in context
+    from hooks, just not from explicit tool calls.
+    """
     findings: list[dict] = []
-    # Running counter of tokens — we'll snapshot at recall + learn boundaries.
     running_tokens = 0  # output + cache_creation
     running_msgs = 0
-    # Track the most recent recall AND the most recent learn separately.
-    # Rediscovery cost is bounded by tokens since the *closer* of the two —
-    # otherwise we mis-attribute many hours of unrelated work to one engram.
     last_recall: dict | None = None
-    last_anchor_tokens: int = 0  # max(last_recall.tokens_at, last_learn.tokens_at)
+    last_anchor_tokens: int = 0
     last_anchor_msgs:   int = 0
     pending: dict[str, tuple[str, dict]] = {}
     recent_user_msg = ""
@@ -155,6 +162,23 @@ def analyze(transcript: Path) -> list[dict]:
         mtype = msg.get("type")
         message = msg.get("message", {}) if isinstance(msg.get("message"), dict) else {}
         content = message.get("content", [])
+
+        # Hook injection: treat attachment.stdout content as a "recall result"
+        # so subsequent plur_learn calls have something to compare against.
+        if mtype == "attachment":
+            att = msg.get("attachment", {})
+            if isinstance(att, dict) and att.get("type") == "hook_success":
+                stdout = att.get("stdout", "") or ""
+                if "ENG-" in stdout or "ABS-" in stdout or "META-" in stdout:
+                    last_recall = {
+                        "turn": turn_idx,
+                        "tokens_at": running_tokens,
+                        "result_blob": stdout,
+                        "query": "hook:UserPromptSubmit",
+                    }
+                    last_anchor_tokens = running_tokens
+                    last_anchor_msgs   = running_msgs
+            continue
 
         # Count tokens on assistant turns
         if mtype == "assistant":
