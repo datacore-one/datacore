@@ -141,10 +141,17 @@ def parse_session(transcript_path: Path) -> list[dict]:
             att_type = attachment.get("type", "") if isinstance(attachment, dict) else ""
             if att_type != "hook_success":
                 continue
-            att_content = attachment.get("content", "") if isinstance(attachment, dict) else ""
-            ids = extract_engram_ids_from_result(att_content)
+            # hook_success attachments put the hook's actual stdout under
+            # attachment.stdout (where PLUR's additionalContext payload
+            # lands). attachment.content is the structured wrapper used by
+            # OTHER attachment kinds (skill_listing, queued_command, etc.).
+            # PLUR's UserPromptSubmit hook emits its engram block to stdout,
+            # so this is where the engram IDs live for injection events.
+            att_stdout = attachment.get("stdout", "") if isinstance(attachment, dict) else ""
+            ids = extract_engram_ids_from_result(att_stdout)
             if not ids:
                 continue
+            att_content = att_stdout  # for subtype classification heuristics below
             # Sub-classify which hook fired. PLUR's session-start injection
             # uses DIRECTIVES/CONSTRAINTS/ALSO CONSIDER headers;
             # command_recall_inject uses "## Relevant memory (engrams)".
