@@ -121,38 +121,39 @@ def main():
         days_left = delta.total_seconds() / 86400
 
         # First: classify by clock state
+        # If --refresh, always attempt a refresh: that proves the refresh_token
+        # still works AND keeps it warm (Google invalidates refresh tokens
+        # after ~7 days idle in Testing-mode apps).
+        if args.refresh and has_refresh:
+            ok, new_exp, err = try_refresh(d, f)
+            if ok:
+                rows.append((f.name, 'OK', f"refreshed; new access-token expiry {new_exp.isoformat() if new_exp else '?'}"))
+                continue
+            else:
+                rows.append((f.name, 'REFRESH_FAILED', err))
+                problems.append(f"{f.name}: refresh failed — manual re-auth needed: {err}")
+                exit_code = max(exit_code, 1)
+                continue
+
+        # No --refresh: classify by stored access-token expiry only.
         if days_left < 0:
-            # Expired. Try refresh to know whether it's truly broken or just stale-but-fixable.
-            if args.refresh and has_refresh:
+            if has_refresh:
                 ok, new_exp, err = try_refresh(d, f)
                 if ok:
-                    rows.append((f.name, 'REFRESHED', f"new expiry {new_exp.isoformat()}"))
-                    continue
+                    rows.append((f.name, 'EXPIRED_FIXABLE', "refresh works; run with --refresh to persist"))
+                    problems.append(f"{f.name}: expired but refresh works — run with --refresh")
+                    exit_code = max(exit_code, 2)
                 else:
-                    rows.append((f.name, 'REFRESH_FAILED', err))
-                    problems.append(f"{f.name}: refresh failed — {err}")
+                    rows.append((f.name, 'EXPIRED_BROKEN', err))
+                    problems.append(f"{f.name}: expired AND refresh broken — manual re-auth needed: {err}")
                     exit_code = max(exit_code, 1)
             else:
-                # Even without --refresh, try a refresh to learn whether the
-                # token is fixable. We only WRITE if --refresh was set.
-                if has_refresh:
-                    ok, new_exp, err = try_refresh(d, f)
-                    if ok:
-                        rows.append((f.name, 'EXPIRED_FIXABLE', f"refresh works; re-auth not needed (run with --refresh to persist)"))
-                        problems.append(f"{f.name}: expired but refresh works — run with --refresh")
-                        exit_code = max(exit_code, 2)
-                    else:
-                        rows.append((f.name, 'EXPIRED_BROKEN', err))
-                        problems.append(f"{f.name}: expired AND refresh broken — manual re-auth needed: {err}")
-                        exit_code = max(exit_code, 1)
-                else:
-                    rows.append((f.name, 'EXPIRED_NO_REFRESH', 'no refresh_token in file'))
-                    problems.append(f"{f.name}: expired and has no refresh_token")
-                    exit_code = max(exit_code, 1)
+                rows.append((f.name, 'EXPIRED_NO_REFRESH', 'no refresh_token in file'))
+                problems.append(f"{f.name}: expired and has no refresh_token")
+                exit_code = max(exit_code, 1)
         elif days_left < args.warn_days:
-            rows.append((f.name, 'WARN', f"{days_left:.1f} days left"))
-            problems.append(f"{f.name}: expires in {days_left:.1f} days")
-            exit_code = max(exit_code, 2)
+            rows.append((f.name, 'WARN', f"{days_left:.1f} days left (access-token expiry)"))
+            # WARN on access-token expiry is informational only; not a problem if refresh works.
         else:
             rows.append((f.name, 'OK', f"{days_left:.1f} days left"))
 
