@@ -64,7 +64,7 @@ Datacore combines established methodologies with AI augmentation:
 | **0-personal** | GTD, PKM, personal projects | Trading, health tracking |
 | **1-datafund** | Fair data economy, data tokenization | Verity (data marketplace), Santorio, Dubai pilot |
 | **2-datacore** | AI second brain system development | datacore-mcp, org-workspace, datacore-bench |
-| **3-fds** | Fair Data Society — data sovereignty building blocks | Fairdrop, ADE (agent data exchange), FDS-ID |
+| **3-fds** | Fair Data Society — data sovereignty building blocks | Fairdrop, FDS-ID, DataEscrow (FDS MCP) |
 | **4-forge** | Autonomous digital product business | Etsy products, AI-generated goods |
 
 Each space is a separate git repo with its own CLAUDE.md, org files, knowledge base, and journal. When working in a space, its CLAUDE.md loads automatically with space-specific context.
