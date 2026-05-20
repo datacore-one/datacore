@@ -1,6 +1,6 @@
 {
-  "scan_date": "2026-05-17",
-  "since": "2026-05-16",
+  "scan_date": "2026-05-20",
+  "since": "2026-05-19",
   "username": "plur9",
   "mentions": [],
   "authored": [],
@@ -46,5 +46,5 @@
       "merged_prs": []
     }
   },
-  "scanned_at": "2026-05-17T04:30:45.623163"
+  "scanned_at": "2026-05-20T04:31:08.314834"
 }
