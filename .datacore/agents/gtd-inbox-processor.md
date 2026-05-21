@@ -163,15 +163,26 @@ For projects.org entries, additional required properties:
 
 The three exceptions above are *not* vibes — they're explicit signals (the user said "this is a continuation", or "do this weekly", or "deadline Thursday") that the task is already committed to this week.
 
-## Context Tags (DIP-???? — add this when implementing)
+## Context Tags (registered in .datacore/tags.yaml::context)
 
-Every routed task gets exactly one **context tag** for the @-discipline:
-- `:ctx-laptop:` — needs a working laptop (most dev/writing work)
-- `:ctx-phone:` — quick mobile work (texts, brief reviews, calls)
-- `:ctx-errands:` — out-of-house tasks (buy X, pick up Y)
-- `:ctx-deep:` — needs >60 min uninterrupted focus
-- `:ctx-admin:` — routine bureaucracy (forms, receipts, filings)
-- `:ctx-decision:` — needs a human decision (no execution), short
+Every routed task gets exactly one **context tag** for the @-discipline. Use the
+existing org-mode `:@xxx:` convention (already in the tag registry):
+
+- `:@laptop:` — needs a working laptop (most dev/writing work)
+- `:@phone:` — quick mobile work (texts, brief reviews, calls)
+- `:@call:` — requires phone call
+- `:@errands:` — out-of-house tasks (buy X, pick up Y)
+- `:@deep:` — needs >60 min uninterrupted focus
+- `:@admin:` — routine bureaucracy (forms, receipts, filings)
+- `:@decision:` — needs a human decision (no execution), short
+- `:@home:` / `:@office:` — location-bound
+- `:@anywhere:` — no location constraint
+
+Plus **discipline tags** (also registered):
+- `:next-week:` — explicitly stated this-week priority
+- `:interrupt:` — same-day capture, drops after EOD
+- `:recurring:` — has a +Nd/+Nw/+Nm repeater
+- `:needs-clarify:` — captured without enough context
 
 Domain tags (`:fds:`, `:plur:`, etc.) remain ADDITIVE — context tags don't replace them.
 

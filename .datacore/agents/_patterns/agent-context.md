@@ -67,15 +67,21 @@ The Agent Context section serves multiple purposes:
 ### When to Reference DIP-0009
 
 **Always reference when:**
-- Processing :AI:research: tagged tasks
+- Processing `:AI:research:` tagged tasks in `ai.org` or `nightshift.org`
 - Creating literature notes from URLs
 - Generating atomic zettels from content
 - Updating research_learning.org
 
 **Key decisions this DIP informs:**
-- Task routing based on AI tags
+- Task routing: file location (ai.org / nightshift.org) is primary;
+  `:AI:type:` tags within those files are sub-agent dispatch markers
 - Output location for research artifacts
 - Integration with GTD daily workflow
+
+> **2026-05-20 architecture note**: `next_actions.org` is human work only.
+> AI tasks live in `ai.org` (realtime) or `nightshift.org` (deliberation).
+> The `:AI:type:` tag now dispatches to a specific sub-agent within those
+> files; it is no longer the "is this for AI?" router.
 
 ### Quick Reference
 

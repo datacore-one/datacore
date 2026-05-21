@@ -57,8 +57,12 @@ sync:
       calendar_id: "primary"
       # Days to look ahead when syncing
       days_ahead: 14
-      # Output file for calendar entries
-      org_file: "0-personal/org/calendar.org"
+      # NOTE 2026-05-21: calendar.org file model retired. Google Calendar
+      # is now the source of truth (queried live by /today). The
+      # sync.adapters.calendar block remains for events-list API use, but
+      # no org file is written. To re-enable a local org mirror, set
+      # `org_file: "0-personal/org/calendar.org"` and create the file.
+      org_file: null
       # Include events from these additional calendars
       # additional_calendars: []
       #   - "work@example.com"

@@ -291,6 +291,48 @@ context:
     description: "No location constraint"
     org: ":@anywhere:"
 
+  # 2026-05-20 GTD architecture additions — see DIP-0009 v2
+  laptop:
+    description: "Requires a working laptop (most dev/writing)"
+    org: ":@laptop:"
+
+  deep:
+    description: "Needs >60 min uninterrupted focus block"
+    org: ":@deep:"
+
+  admin:
+    description: "Routine bureaucracy (forms, receipts, filings)"
+    org: ":@admin:"
+
+  decision:
+    description: "Needs a human decision (no execution), short"
+    org: ":@decision:"
+
+# =============================================================================
+# DISCIPLINE TAGS
+# Markers for GTD discipline + this-week routing
+# =============================================================================
+discipline:
+  next-week:
+    description: "Explicitly listed as this-week priority by user"
+    org: ":next-week:"
+
+  interrupt:
+    description: "Same-day capture needing human hands, drops after EOD"
+    org: ":interrupt:"
+
+  recurring:
+    description: "Has a SCHEDULED with +Nd/+Nw/+Nm repeater; auto-advances on DONE"
+    org: ":recurring:"
+
+  needs-clarify:
+    description: "Captured without sufficient context; revisit at next inbox processing"
+    org: ":needs-clarify:"
+
+  setup-cron:
+    description: "One-off task to create a systemd timer (the deliverable is the cron, not the task itself)"
+    org: ":setup-cron:"
+
 # =============================================================================
 # STATUS TAGS
 # Task/content status indicators
