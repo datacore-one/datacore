@@ -169,7 +169,7 @@ Adding sources to notebook [notebook-id]...
 Create the podcast with custom instructions:
 
 ```bash
-nlm audio-create [notebook-id] "[instructions]"
+nlm create-audio [notebook-id] "[instructions]"
 ```
 
 **Default instructions by type:**
@@ -209,7 +209,7 @@ Make the content memorable and actionable.
 Audio generation takes time. Monitor status:
 
 ```bash
-nlm audio-list [notebook-id]
+nlm audio list [notebook-id]
 ```
 
 **Status progression:**
@@ -235,7 +235,7 @@ Progress: [if available]
 Once ready, download the audio file:
 
 ```bash
-nlm audio-download [notebook-id] "[output_path]/[filename].mp3" --direct-rpc
+nlm audio download [notebook-id] "[output_path]/[filename].mp3" --direct-rpc
 ```
 
 **Filename conventions:**
@@ -297,10 +297,10 @@ nlm rm-source [id] [src-id] # Remove source
 
 **Audio Commands:**
 ```bash
-nlm audio-list [id]         # List audio with status
-nlm audio-create [id] "instructions"  # Generate audio
-nlm audio-download [id] [filename]    # Download (needs --direct-rpc)
-nlm audio-rm [id]           # Delete audio
+nlm audio list [id]         # List audio with status
+nlm create-audio [id] "instructions"  # Generate audio
+nlm audio download [id] [filename]    # Download (needs --direct-rpc)
+nlm audio delete [id]           # Delete audio
 ```
 
 ## Quality Guidelines

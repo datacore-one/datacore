@@ -118,8 +118,8 @@ The module uses `nlm` CLI for NotebookLM integration:
 nlm list                    # List notebooks
 nlm create "Title"          # Create notebook
 nlm add [id] [url]          # Add source
-nlm audio-create [id] "..."  # Generate podcast
-nlm audio-download [id] file # Download audio
+nlm create-audio [id] "..."  # Generate podcast
+nlm audio download [id] file # Download audio
 ```
 
 ## Integration with Nightshift
