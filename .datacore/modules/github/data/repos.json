@@ -277,20 +277,6 @@
         "default_branch": "main"
       },
       {
-        "name": "Agent-Data-Exchange",
-        "full_name": "datafund/Agent-Data-Exchange",
-        "url": "https://github.com/datafund/Agent-Data-Exchange",
-        "is_fork": false,
-        "default_branch": "molt"
-      },
-      {
-        "name": "ade",
-        "full_name": "datafund/ade",
-        "url": "https://github.com/datafund/ade",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
         "name": "swarm_connect",
         "full_name": "datafund/swarm_connect",
         "url": "https://github.com/datafund/swarm_connect",
