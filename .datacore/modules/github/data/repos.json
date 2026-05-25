@@ -9,20 +9,6 @@
   "repos": {
     "datacore-one": [
       {
-        "name": "datacore",
-        "full_name": "datacore-one/datacore",
-        "url": "https://github.com/datacore-one/datacore",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "datacore-app",
-        "full_name": "datacore-one/datacore-app",
-        "url": "https://github.com/datacore-one/datacore-app",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
         "name": "datacore-space",
         "full_name": "datacore-one/datacore-space",
         "url": "https://github.com/datacore-one/datacore-space",
@@ -30,16 +16,16 @@
         "default_branch": "main"
       },
       {
-        "name": "datacore-trading",
-        "full_name": "datacore-one/datacore-trading",
-        "url": "https://github.com/datacore-one/datacore-trading",
+        "name": "datacore",
+        "full_name": "datacore-one/datacore",
+        "url": "https://github.com/datacore-one/datacore",
         "is_fork": false,
         "default_branch": "main"
       },
       {
-        "name": "datacore-ventures",
-        "full_name": "datacore-one/datacore-ventures",
-        "url": "https://github.com/datacore-one/datacore-ventures",
+        "name": "datacore-slides",
+        "full_name": "datacore-one/datacore-slides",
+        "url": "https://github.com/datacore-one/datacore-slides",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -58,6 +44,48 @@
         "default_branch": "main"
       },
       {
+        "name": "org-workspace",
+        "full_name": "datacore-one/org-workspace",
+        "url": "https://github.com/datacore-one/org-workspace",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datacore-mail",
+        "full_name": "datacore-one/datacore-mail",
+        "url": "https://github.com/datacore-one/datacore-mail",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datacore-trading",
+        "full_name": "datacore-one/datacore-trading",
+        "url": "https://github.com/datacore-one/datacore-trading",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datacore-image-generation",
+        "full_name": "datacore-one/datacore-image-generation",
+        "url": "https://github.com/datacore-one/datacore-image-generation",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datacore-app",
+        "full_name": "datacore-one/datacore-app",
+        "url": "https://github.com/datacore-one/datacore-app",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datacore-ventures",
+        "full_name": "datacore-one/datacore-ventures",
+        "url": "https://github.com/datacore-one/datacore-ventures",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
         "name": "datacore-verity",
         "full_name": "datacore-one/datacore-verity",
         "url": "https://github.com/datacore-one/datacore-verity",
@@ -68,13 +96,6 @@
         "name": "datacore-telegram",
         "full_name": "datacore-one/datacore-telegram",
         "url": "https://github.com/datacore-one/datacore-telegram",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "datacore-slides",
-        "full_name": "datacore-one/datacore-slides",
-        "url": "https://github.com/datacore-one/datacore-slides",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -100,23 +121,9 @@
         "default_branch": "main"
       },
       {
-        "name": "datacore-mail",
-        "full_name": "datacore-one/datacore-mail",
-        "url": "https://github.com/datacore-one/datacore-mail",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
         "name": "datacore-lens",
         "full_name": "datacore-one/datacore-lens",
         "url": "https://github.com/datacore-one/datacore-lens",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "datacore-image-generation",
-        "full_name": "datacore-one/datacore-image-generation",
-        "url": "https://github.com/datacore-one/datacore-image-generation",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -173,13 +180,6 @@
         "name": "datacore-cli",
         "full_name": "datacore-one/datacore-cli",
         "url": "https://github.com/datacore-one/datacore-cli",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "org-workspace",
-        "full_name": "datacore-one/org-workspace",
-        "url": "https://github.com/datacore-one/org-workspace",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -249,6 +249,13 @@
         "default_branch": "main"
       },
       {
+        "name": "datacore-messaging",
+        "full_name": "datafund/datacore-messaging",
+        "url": "https://github.com/datafund/datacore-messaging",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
         "name": "util_haproxy_rpchealth",
         "full_name": "datafund/util_haproxy_rpchealth",
         "url": "https://github.com/datafund/util_haproxy_rpchealth",
@@ -263,9 +270,23 @@
         "default_branch": "main"
       },
       {
+        "name": "swarm_provenance_SDK",
+        "full_name": "datafund/swarm_provenance_SDK",
+        "url": "https://github.com/datafund/swarm_provenance_SDK",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
         "name": "swarm_provenance_CLI",
         "full_name": "datafund/swarm_provenance_CLI",
         "url": "https://github.com/datafund/swarm_provenance_CLI",
+        "is_fork": true,
+        "default_branch": "main"
+      },
+      {
+        "name": "swarm_connect",
+        "full_name": "datafund/swarm_connect",
+        "url": "https://github.com/datafund/swarm_connect",
         "is_fork": true,
         "default_branch": "main"
       },
@@ -277,20 +298,6 @@
         "default_branch": "main"
       },
       {
-        "name": "swarm_connect",
-        "full_name": "datafund/swarm_connect",
-        "url": "https://github.com/datafund/swarm_connect",
-        "is_fork": true,
-        "default_branch": "main"
-      },
-      {
-        "name": "swarm_provenance_SDK",
-        "full_name": "datafund/swarm_provenance_SDK",
-        "url": "https://github.com/datafund/swarm_provenance_SDK",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
         "name": "ConsentsBasedDataProvenance",
         "full_name": "datafund/ConsentsBasedDataProvenance",
         "url": "https://github.com/datafund/ConsentsBasedDataProvenance",
@@ -298,31 +305,17 @@
         "default_branch": "main"
       },
       {
+        "name": "util_swarmsync",
+        "full_name": "datafund/util_swarmsync",
+        "url": "https://github.com/datafund/util_swarmsync",
+        "is_fork": false,
+        "default_branch": "master"
+      },
+      {
         "name": "mcp-registry",
         "full_name": "datafund/mcp-registry",
         "url": "https://github.com/datafund/mcp-registry",
         "is_fork": true,
-        "default_branch": "main"
-      },
-      {
-        "name": "datacore-open-questions",
-        "full_name": "datafund/datacore-open-questions",
-        "url": "https://github.com/datafund/datacore-open-questions",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "datacore-messaging",
-        "full_name": "datafund/datacore-messaging",
-        "url": "https://github.com/datafund/datacore-messaging",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "module-accounting",
-        "full_name": "datafund/module-accounting",
-        "url": "https://github.com/datafund/module-accounting",
-        "is_fork": false,
         "default_branch": "main"
       },
       {
@@ -333,11 +326,18 @@
         "default_branch": "master"
       },
       {
-        "name": "util_swarmsync",
-        "full_name": "datafund/util_swarmsync",
-        "url": "https://github.com/datafund/util_swarmsync",
+        "name": "datacore-open-questions",
+        "full_name": "datafund/datacore-open-questions",
+        "url": "https://github.com/datafund/datacore-open-questions",
         "is_fork": false,
-        "default_branch": "master"
+        "default_branch": "main"
+      },
+      {
+        "name": "module-accounting",
+        "full_name": "datafund/module-accounting",
+        "url": "https://github.com/datafund/module-accounting",
+        "is_fork": false,
+        "default_branch": "main"
       },
       {
         "name": "x-go",
@@ -496,6 +496,13 @@
         "default_branch": "main"
       },
       {
+        "name": "Fairdrop",
+        "full_name": "fairDataSociety/Fairdrop",
+        "url": "https://github.com/fairDataSociety/Fairdrop",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
         "name": "fds-id-spec",
         "full_name": "fairDataSociety/fds-id-spec",
         "url": "https://github.com/fairDataSociety/fds-id-spec",
@@ -517,13 +524,6 @@
         "default_branch": "main"
       },
       {
-        "name": "Fairdrop",
-        "full_name": "fairDataSociety/Fairdrop",
-        "url": "https://github.com/fairDataSociety/Fairdrop",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
         "name": "fdp-storage",
         "full_name": "fairDataSociety/fdp-storage",
         "url": "https://github.com/fairDataSociety/fdp-storage",
@@ -531,16 +531,16 @@
         "default_branch": "master"
       },
       {
-        "name": "guardian",
-        "full_name": "fairDataSociety/guardian",
-        "url": "https://github.com/fairDataSociety/guardian",
+        "name": "fds-id-ts",
+        "full_name": "fairDataSociety/fds-id-ts",
+        "url": "https://github.com/fairDataSociety/fds-id-ts",
         "is_fork": false,
         "default_branch": "main"
       },
       {
-        "name": "fds-id-ts",
-        "full_name": "fairDataSociety/fds-id-ts",
-        "url": "https://github.com/fairDataSociety/fds-id-ts",
+        "name": "guardian",
+        "full_name": "fairDataSociety/guardian",
+        "url": "https://github.com/fairDataSociety/guardian",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -559,9 +559,16 @@
         "default_branch": "master"
       },
       {
-        "name": "fdp-play",
-        "full_name": "fairDataSociety/fdp-play",
-        "url": "https://github.com/fairDataSociety/fdp-play",
+        "name": "fairdrive-docs",
+        "full_name": "fairDataSociety/fairdrive-docs",
+        "url": "https://github.com/fairDataSociety/fairdrive-docs",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "fairOS-docs",
+        "full_name": "fairDataSociety/fairOS-docs",
+        "url": "https://github.com/fairDataSociety/fairOS-docs",
         "is_fork": false,
         "default_branch": "master"
       },
@@ -573,9 +580,9 @@
         "default_branch": "master"
       },
       {
-        "name": "fairdrive-landing-page",
-        "full_name": "fairDataSociety/fairdrive-landing-page",
-        "url": "https://github.com/fairDataSociety/fairdrive-landing-page",
+        "name": "FairOsUI",
+        "full_name": "fairDataSociety/FairOsUI",
+        "url": "https://github.com/fairDataSociety/FairOsUI",
         "is_fork": false,
         "default_branch": "master"
       },
@@ -587,16 +594,23 @@
         "default_branch": "master"
       },
       {
-        "name": "fairdrive-desktop-app",
-        "full_name": "fairDataSociety/fairdrive-desktop-app",
-        "url": "https://github.com/fairDataSociety/fairdrive-desktop-app",
+        "name": "fdp-play",
+        "full_name": "fairDataSociety/fdp-play",
+        "url": "https://github.com/fairDataSociety/fdp-play",
         "is_fork": false,
         "default_branch": "master"
       },
       {
-        "name": "fairOS-docs",
-        "full_name": "fairDataSociety/fairOS-docs",
-        "url": "https://github.com/fairDataSociety/fairOS-docs",
+        "name": "fairdrive-landing-page",
+        "full_name": "fairDataSociety/fairdrive-landing-page",
+        "url": "https://github.com/fairDataSociety/fairdrive-landing-page",
+        "is_fork": false,
+        "default_branch": "master"
+      },
+      {
+        "name": "fairdrive-desktop-app",
+        "full_name": "fairDataSociety/fairdrive-desktop-app",
+        "url": "https://github.com/fairDataSociety/fairdrive-desktop-app",
         "is_fork": false,
         "default_branch": "master"
       },
@@ -839,13 +853,6 @@
         "default_branch": "master"
       },
       {
-        "name": "public-demo-app",
-        "full_name": "fairDataSociety/public-demo-app",
-        "url": "https://github.com/fairDataSociety/public-demo-app",
-        "is_fork": false,
-        "default_branch": "master"
-      },
-      {
         "name": "fds.js",
         "full_name": "fairDataSociety/fds.js",
         "url": "https://github.com/fairDataSociety/fds.js",
@@ -916,13 +923,6 @@
         "default_branch": "master"
       },
       {
-        "name": "fairdrive-docs",
-        "full_name": "fairDataSociety/fairdrive-docs",
-        "url": "https://github.com/fairDataSociety/fairdrive-docs",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
         "name": "fdp-personal-sc",
         "full_name": "fairDataSociety/fdp-personal-sc",
         "url": "https://github.com/fairDataSociety/fdp-personal-sc",
@@ -965,13 +965,6 @@
         "default_branch": "master"
       },
       {
-        "name": "fds-faucet",
-        "full_name": "fairDataSociety/fds-faucet",
-        "url": "https://github.com/fairDataSociety/fds-faucet",
-        "is_fork": false,
-        "default_branch": "master"
-      },
-      {
         "name": "fds-test-suite",
         "full_name": "fairDataSociety/fds-test-suite",
         "url": "https://github.com/fairDataSociety/fds-test-suite",
@@ -982,13 +975,6 @@
         "name": "fdp-solid-rest-adapter",
         "full_name": "fairDataSociety/fdp-solid-rest-adapter",
         "url": "https://github.com/fairDataSociety/fdp-solid-rest-adapter",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "great-data-upload",
-        "full_name": "fairDataSociety/great-data-upload",
-        "url": "https://github.com/fairDataSociety/great-data-upload",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -1042,20 +1028,6 @@
         "default_branch": "main"
       },
       {
-        "name": "bounties-internal",
-        "full_name": "fairDataSociety/bounties-internal",
-        "url": "https://github.com/fairDataSociety/bounties-internal",
-        "is_fork": false,
-        "default_branch": ""
-      },
-      {
-        "name": "fdp-internal",
-        "full_name": "fairDataSociety/fdp-internal",
-        "url": "https://github.com/fairDataSociety/fdp-internal",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
         "name": "supertodos",
         "full_name": "fairDataSociety/supertodos",
         "url": "https://github.com/fairDataSociety/supertodos",
@@ -1098,13 +1070,6 @@
         "default_branch": "main"
       },
       {
-        "name": "fairdrive-internal",
-        "full_name": "fairDataSociety/fairdrive-internal",
-        "url": "https://github.com/fairDataSociety/fairdrive-internal",
-        "is_fork": false,
-        "default_branch": ""
-      },
-      {
         "name": "wiki-at-swarm",
         "full_name": "fairDataSociety/wiki-at-swarm",
         "url": "https://github.com/fairDataSociety/wiki-at-swarm",
@@ -1133,13 +1098,6 @@
         "default_branch": "main"
       },
       {
-        "name": "pinning-server",
-        "full_name": "fairDataSociety/pinning-server",
-        "url": "https://github.com/fairDataSociety/pinning-server",
-        "is_fork": false,
-        "default_branch": "master"
-      },
-      {
         "name": "fairdrive-apps-markdown",
         "full_name": "fairDataSociety/fairdrive-apps-markdown",
         "url": "https://github.com/fairDataSociety/fairdrive-apps-markdown",
@@ -1152,13 +1110,6 @@
         "url": "https://github.com/fairDataSociety/stampkeeper",
         "is_fork": false,
         "default_branch": "master"
-      },
-      {
-        "name": "multibox-light",
-        "full_name": "fairDataSociety/multibox-light",
-        "url": "https://github.com/fairDataSociety/multibox-light",
-        "is_fork": false,
-        "default_branch": "main"
       },
       {
         "name": "fairOS-js",
@@ -1175,28 +1126,28 @@
         "default_branch": "master"
       },
       {
-        "name": "bigbang-signup-contract",
-        "full_name": "fairDataSociety/bigbang-signup-contract",
-        "url": "https://github.com/fairDataSociety/bigbang-signup-contract",
+        "name": "vulnerability-disclosure-policy",
+        "full_name": "fairDataSociety/vulnerability-disclosure-policy",
+        "url": "https://github.com/fairDataSociety/vulnerability-disclosure-policy",
         "is_fork": false,
         "default_branch": "master"
       },
       {
-        "name": "FairOsUI",
-        "full_name": "fairDataSociety/FairOsUI",
-        "url": "https://github.com/fairDataSociety/FairOsUI",
+        "name": "fairOS",
+        "full_name": "fairDataSociety/fairOS",
+        "url": "https://github.com/fairDataSociety/fairOS",
+        "is_fork": false,
+        "default_branch": "master"
+      },
+      {
+        "name": "fairOS-engine",
+        "full_name": "fairDataSociety/fairOS-engine",
+        "url": "https://github.com/fairDataSociety/fairOS-engine",
         "is_fork": false,
         "default_branch": "master"
       }
     ],
     "plur-ai": [
-      {
-        "name": "enterprise",
-        "full_name": "plur-ai/enterprise",
-        "url": "https://github.com/plur-ai/enterprise",
-        "is_fork": false,
-        "default_branch": "main"
-      },
       {
         "name": "plur-space",
         "full_name": "plur-ai/plur-space",
@@ -1208,6 +1159,13 @@
         "name": "plur",
         "full_name": "plur-ai/plur",
         "url": "https://github.com/plur-ai/plur",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "enterprise",
+        "full_name": "plur-ai/enterprise",
+        "url": "https://github.com/plur-ai/enterprise",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -1240,6 +1198,13 @@
         "url": "https://github.com/plur9/meridian-space",
         "is_fork": false,
         "default_branch": "main"
+      },
+      {
+        "name": "fdp-storage",
+        "full_name": "plur9/fdp-storage",
+        "url": "https://github.com/plur9/fdp-storage",
+        "is_fork": true,
+        "default_branch": "master"
       },
       {
         "name": "megaphone-space",
@@ -1284,16 +1249,16 @@
         "default_branch": "main"
       },
       {
-        "name": "awesome-openclaw-samurai",
-        "full_name": "plur9/awesome-openclaw-samurai",
-        "url": "https://github.com/plur9/awesome-openclaw-samurai",
+        "name": "awesome-hermes-agent",
+        "full_name": "plur9/awesome-hermes-agent",
+        "url": "https://github.com/plur9/awesome-hermes-agent",
         "is_fork": true,
         "default_branch": "main"
       },
       {
-        "name": "awesome-hermes-agent",
-        "full_name": "plur9/awesome-hermes-agent",
-        "url": "https://github.com/plur9/awesome-hermes-agent",
+        "name": "awesome-openclaw-samurai",
+        "full_name": "plur9/awesome-openclaw-samurai",
+        "url": "https://github.com/plur9/awesome-openclaw-samurai",
         "is_fork": true,
         "default_branch": "main"
       },
@@ -1310,13 +1275,6 @@
         "url": "https://github.com/plur9/awesome-openclaw",
         "is_fork": true,
         "default_branch": "main"
-      },
-      {
-        "name": "fdp-storage",
-        "full_name": "plur9/fdp-storage",
-        "url": "https://github.com/plur9/fdp-storage",
-        "is_fork": true,
-        "default_branch": "master"
       },
       {
         "name": "util_swarmsync",
@@ -1425,5 +1383,5 @@
     "8-firm": "plur9",
     "root": "datacore-one"
   },
-  "updated_at": "2026-05-17T04:30:32.632027"
+  "updated_at": "2026-05-25T04:30:38.824480"
 }
