@@ -155,34 +155,55 @@ python3 ~/Data/.datacore/lib/focus_mode.py detect
 
 ### 0b. Create Tracked Checklist (MANDATORY)
 
-**After context recovery**, create a tracked task list for the wrap-up steps. This prevents silent step skipping — every step is visible and must be marked complete.
+**After context recovery**, create a tracked task list — **one TaskCreate per spec step. NO CLUSTERING.**
 
-Use `TaskCreate` to create one task per non-automatic step:
+**HARD RULE — one-to-one mapping:** The spec has 18 numbered steps (1-17 plus the new 18). Create EXACTLY 18 tasks, in order. Do not combine "GTD extraction + insight verification" into one task. Do not bundle "meta-analysis + artifact tracking." Each spec step gets its own task. Clustering is where skipping hides: once "X + Y" is one task you can do X, mark it done, and silently drop Y. With one task per step you cannot fake completion.
 
 ```
-Tasks to create (mark in_progress when starting, completed when done):
+Tasks to create (one per spec step, mark in_progress when starting, completed when done):
 
-1. "Session summary" (activeForm: "Generating session summary")
-2. "Continuation tasks" (activeForm: "Capturing continuation tasks")
-3. "Mark completed tasks" (activeForm: "Marking completed tasks")
-4. "Spawn coordinators (journal + learning)" (activeForm: "Spawning coordinators")
-5. "Learning review" (activeForm: "Reviewing learning candidates")
-6. "GTD task extraction" (activeForm: "Extracting GTD tasks")
-7. "Insight verification" (activeForm: "Verifying insight capture")
-8. "Session meta-analysis" (activeForm: "Writing meta-analysis")
-9. "Artifact tracking" (activeForm: "Tracking knowledge artifacts")
-10. "Kill orphaned dev servers" (activeForm: "Cleaning up dev servers")
-11. "Push repos" (activeForm: "Pushing repos")
-12. "Verify all checklist tasks completed" (activeForm: "Verifying checklist completion")
+ 1. "Step 1 — Session summary"
+ 2. "Step 2 — Emotional check (ask user, do not pre-skip)"
+ 3. "Step 3 — Continuation tasks"
+ 4. "Step 4 — Mark completed tasks (+ retroactive task)"
+ 5. "Step 5 — Spawn journal-coordinator + session-learning-coordinator"
+ 6. "Step 6 — Learning review (spawn learning-classifier)"
+ 7. "Step 7 — GTD task extraction from session insights"
+ 8. "Step 8 — Insight verification checklist (≥1 layer per insight)"
+ 9. "Step 9 — Session meta-analysis (write to personal journal)"
+10. "Step 10 — Knowledge artifact tracking (artifact index)"
+11. "Step 11 — Index session to journal DB"
+12. "Step 12 — Kill orphaned dev servers"
+13. "Step 12.5 — Archive old nightshift reports"
+14. "Step 13 — Push ALL repos (./sync push + subprojects)"
+15. "Step 14 — Context sync (CLAUDE.md tables)"
+16. "Step 15 — Quick AI delegation check (ask user, do not pre-skip)"
+17. "Step 17 — Consolidated report + persist authoritative journal + social posts + exact token cost"
+18. "Step 18 — Wrap-up checklist self-audit (REQUIRED — produces 'Wrap-up Checklist Audit' section)"
 ```
 
-**The final task (#12) is a gate:** Before marking it complete, run `TaskList` and verify every prior task shows `completed`. If any task is still `pending` or `in_progress`, go back and finish it. Do NOT mark #12 complete until all others are done.
+**Step 18 is the gate.** Before marking it complete, run `TaskList` and verify every prior task is `completed`. Then write the `## Wrap-up Checklist Audit` section to today's personal journal listing each step's actual status: `run`, `skipped-by-user`, `not-applicable-because-X`. The PreToolUse hook `wrap_up_checklist_check.py` blocks `plur_session_end` until that section exists in the journal.
 
-**Why this exists:** Without tracked tasks, steps 6-9 are routinely skipped or compressed in long sessions. The agent rationalizes "no tasks to extract" or "nothing to verify" without actually scanning. Tracked tasks make each step visible and non-skippable.
+**Why this exists:** Spec step counts in past sessions: 17 spec steps, 9 tasks created, 6 silently skipped (observed 2026-05-29 SMK wrap-up; previously documented as ENG-2026-0512-044 on 2026-05-12 but recurred 17 days later). Memory engrams alone are insufficient — execution-time discipline failure. The hook is the structural defense; one-task-per-step is the readability defense.
 
-**CRITICAL:** Steps 4-5 must use `journal-coordinator` and `session-learning-coordinator` — NEVER spawn `journal-entry-writer` or `session-learning` directly with a hardcoded space name. Coordinators discover all relevant spaces automatically. Bypassing them silently skips spaces with actual work.
+**CRITICAL:** Steps 5-6 must use `journal-coordinator` and `session-learning-coordinator` — NEVER spawn `journal-entry-writer` or `session-learning` directly with a hardcoded space name. Coordinators discover all relevant spaces automatically. Bypassing them silently skips spaces with actual work.
 
-### 1. Session Summary (Automatic)
+### 0c. Optional ≠ Agent-Skippable (MANDATORY READ)
+
+Several spec steps say "optional," "or skip," "ask user." Those are **user-skippable, not agent-skippable.** The agent's job is to surface the prompt; the *user* decides whether to skip.
+
+| Wording in spec | Means |
+|---|---|
+| "Optional (user-initiated)" | Ask the user. Don't pre-decide. |
+| "or Enter to skip" | The user gets to press Enter, not you. |
+| "If user is in a hurry" | Not a condition the agent infers. Only if the user says so. |
+| "Automatic (silent)" | Run silently — still RUN. Not "skip without telling user." |
+
+If the agent reads "the talk shipped, user said it went well" and concludes "they don't need a coaching check / AI delegation / social posts" — that's pattern-matching to please-the-user, not following spec. Surface the prompt. Let the user skip.
+
+### 1. Session Summary
+
+> Run silently — no user prompt. Output the summary block below. Do not skip on the grounds that it is "automatic."
 
 ```
 ═══════════════════════════════════════════════════
@@ -202,7 +223,9 @@ Work completed:
 
 **Note:** Record the session start time here (from first user message). It's needed at close for the duration calculation.
 
-### 2. Quick Emotional Check (Optional)
+### 2. Quick Emotional Check
+
+> Surface the prompt below. The user may skip with Enter. The agent does NOT pre-decide that the user is in a hurry / tired / done.
 
 **Brief coaching check-in at session end:**
 
@@ -761,7 +784,9 @@ Session indexed:
 python ~/.datacore/lib/journal_parser.py --sync --space personal
 ```
 
-### 12. Kill Orphaned Dev Servers (Automatic)
+### 12. Kill Orphaned Dev Servers
+
+> Run silently. "Run silently" ≠ "skip." Execute the scan and kill. Report results in the consolidated report.
 
 **Automatically find and kill dev servers spawned by Claude sessions.**
 
@@ -807,7 +832,9 @@ Scanning for dev servers...
 - MCP server processes (datacore-mcp, exa-mcp-server) — these belong to active Claude sessions
 - Non-dev-server node processes (MCP tools, etc.)
 
-### 12.5. Archive Old Nightshift Reports (Automatic)
+### 12.5. Archive Old Nightshift Reports
+
+> Run the archival script. "Run silently" ≠ "skip." If the script is missing, report that explicitly in the consolidated report rather than silently dropping the step.
 
 **Automatically archive nightshift reports older than 30 days.**
 
@@ -911,7 +938,9 @@ Co-Authored-By: Claude <noreply@anthropic.com>
   Your changes are committed locally.
 ```
 
-### 14. Context Sync (Automatic, Silent)
+### 14. Context Sync
+
+> Run the check. Even if nothing changed, run the verification command and record the result in the consolidated report ("no agent/command registry changes — context already in sync ✓"). Do not skip on the assumption that nothing changed.
 
 ```
 [Check if agents/commands changed during session]
@@ -919,7 +948,9 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 [Log to journal if updates made]
 ```
 
-### 15. Quick AI Delegation Check (Optional)
+### 15. Quick AI Delegation Check
+
+> Surface the prompt. The user may decline. The agent does NOT pre-decide that nothing needs delegating just because the session feels "complete." Time-sensitive opportunities (e.g. social posts about a just-shipped product) decay fast. Always ask.
 
 ```
 AI DELEGATION
@@ -1257,6 +1288,62 @@ After displaying the consolidated report to the user, **write a condensed versio
 - Sum subagent tokens (precise) + main conversation estimate for a session total.
 - This gives the user visibility into the cost of the wrap-up process itself.
 
+### 18. Wrap-up Checklist Self-Audit (MANDATORY, HOOK-ENFORCED)
+
+**This step is the structural defense against silent skipping.** Before plur_session_end can succeed, today's personal journal MUST contain a `## Wrap-up Checklist Audit` section listing every spec step and its actual outcome. The PreToolUse hook `wrap_up_checklist_check.py` enforces this — it reads the journal and refuses to allow session_end if the section is missing.
+
+**Format — exactly one row per spec step, no clustering:**
+
+```markdown
+## Wrap-up Checklist Audit
+
+| Step | Title                                         | Status |
+|------|-----------------------------------------------|--------|
+|  1   | Session summary                                | run ✓ |
+|  2   | Emotional check                                | skipped-by-user (declined prompt) |
+|  3   | Continuation tasks                             | not-applicable (work complete) |
+|  4   | Mark completed tasks                           | run ✓ — 1 task marked DONE (org-XXX) |
+|  5   | Journal + learning coordinators                | run ✓ — 3 journals, 14 engrams |
+|  6   | Learning review                                | run ✓ — 0 contradictions |
+|  7   | GTD task extraction                            | run ✓ — 4 surfaced, 2 added to next_actions |
+|  8   | Insight verification                           | run ✓ — coverage table in §6 of report |
+|  9   | Session meta-analysis                          | run ✓ — appended to today's personal journal |
+|  10  | Knowledge artifact tracking                    | run ✓ — 13 rows appended to artifact-index-2026-05.md |
+|  11  | Index session to journal DB                    | run ✓ — journal_parser.py --sync |
+|  12  | Kill orphaned dev servers                      | run ✓ — killed PID 50706 (http.server 8099) |
+| 12.5 | Archive nightshift reports                     | run ✓ — 0 archived (all within retention) |
+|  13  | Push all repos                                 | run ✓ — ./sync push + smk2026 plur-branding |
+|  14  | Context sync                                   | run ✓ — no registry changes |
+|  15  | AI delegation check                            | run ✓ — user queued 2 tasks |
+|  17  | Consolidated report + journal persist + social | run ✓ — report output, journal written, 3 social drafts |
+|  18  | This audit                                     | run ✓ |
+
+Skips (with reasons):
+- Step 2: user declined emotional check prompt
+- Step 3: no continuation tasks needed (work complete)
+- (Be explicit. "I felt the user was done" is NOT a valid reason — that's a self-serving compression, see /wrap-up §0c.)
+```
+
+**Statuses allowed:**
+- `run ✓` — step executed
+- `skipped-by-user` — user explicitly declined (e.g. via AskUserQuestion answer)
+- `not-applicable (REASON)` — concrete factual reason (e.g. "no continuation tasks because work is complete")
+
+**Statuses NOT allowed:**
+- "skipped" without reason
+- "skipped because user is tired" / "in a hurry" / "shipped already" — these are agent inferences, not user statements
+- "automatic so I didn't run it" — Automatic means run silently, not skip
+- Missing rows entirely
+
+**Why this exists:** Past wrap-up sessions documented in engram ENG-2026-0512-044 (2026-05-12) and ENG-2026-0529 (SMK 2026 wrap-up): steps 11, 12.5, 14, 15, plus parts of 17 were silently skipped. The agent rationalized that the user was "done" and dropped time-sensitive items (e.g. social posts about a just-shipped product). The skipped social posts cost user a viral LinkedIn moment about the SMK 2026 agent-claim demo. Memory engrams were insufficient — same failure repeated 17 days later. Step 18 + hook = structural enforcement.
+
+**Hook behavior:**
+- File: `~/Data/.datacore/lib/hooks/wrap_up_checklist_check.py`
+- Trigger: PreToolUse on `mcp__plur__plur_session_end`
+- Required journal sections: `Wrap-up Checklist Audit`, `Token Cost`, `Session Meta-Analysis`
+- If any missing → `{"decision": "block", "reason": "..."}` returned on stdout
+- Tool call refused; model must fix and retry
+
 ## Key Concepts
 
 ### Bootstrap Prompts
@@ -1300,27 +1387,32 @@ Run `/tomorrow` once at end of day.
 - Continuation tasks with bootstrap prompts
 - Backup in `.datacore/state/` (if context changed)
 
-## Automation Level
+## Step Status Reference
 
-| # | Step | Automation |
-|---|------|------------|
-| 1 | Session summary | Automatic (inferred from context) |
-| 2 | Emotional check | Optional (user-initiated, skippable) |
-| 3 | Continuation tasks | Semi-auto (user confirms/adds context) |
-| 4 | Task completion | Semi-auto (user confirms) |
-| 5 | Learning & journal coordinators | Mostly auto (background, optional user input) |
-| 6 | Learning review | Semi-auto (candidates reviewed/deferred) |
-| 7 | GTD task extraction | Semi-auto (AI proposes, user confirms) |
-| 8 | Insight verification | Automatic (checklist generated, gaps flagged) |
-| 9 | Session meta-analysis | Automatic (written to personal journal) |
-| 10 | Artifact tracking | Semi-auto (scan + user confirms descriptions) |
-| 11 | Index session | Automatic (journal parser) |
-| 12 | Kill orphaned dev servers | Automatic (scan + kill, no prompt) |
-| 13 | Push to repos | Automatic (spaces via sync + subproject repos) |
-| 14 | Context sync | Automatic (silent) |
-| 15 | AI delegation | Optional (user-initiated) |
-| 16 | Completion checklist | Required (verify all steps done) |
-| 17 | Close (session narrative + token cost) | Automatic (inferred from conversation + agent usage) |
+**All 18 steps are REQUIRED to run.** This table describes whether each step prompts the user or runs silently — both categories must execute.
+
+| # | Step | User interaction |
+|---|------|------------------|
+| 1 | Session summary | silent |
+| 2 | Emotional check | prompt — user may decline |
+| 3 | Continuation tasks | prompt — user confirms or "no continuation needed" |
+| 4 | Mark completed tasks | semi (scan + user confirms each candidate) |
+| 5 | Journal + learning coordinators | silent (background subagents) |
+| 6 | Learning review | semi (candidates surfaced, user may review or defer) |
+| 7 | GTD task extraction | semi (agent proposes, user confirms) |
+| 8 | Insight verification | silent (gaps flagged in report) |
+| 9 | Session meta-analysis | silent (written to personal journal) |
+| 10 | Artifact tracking | semi (scan + user confirms descriptions) |
+| 11 | Index session to DB | silent |
+| 12 | Kill orphaned dev servers | silent |
+| 12.5 | Archive nightshift reports | silent |
+| 13 | Push all repos | silent |
+| 14 | Context sync | silent |
+| 15 | AI delegation | prompt — user queues or declines |
+| 17 | Consolidated report + persist + social posts + exact token cost | silent (writes), then surfaces drafts to user |
+| 18 | Wrap-up checklist self-audit | silent (writes audit section to journal — HOOK-ENFORCED) |
+
+**"silent" ≠ "skip."** Every silent step still executes. The user just doesn't get a prompt. If the agent reads "silent" as permission not to run, see §0c.
 
 ## Related
 
