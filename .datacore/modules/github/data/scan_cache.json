@@ -1,24 +1,155 @@
 {
   "scan_date": "2026-06-01",
-  "since": "2026-05-31",
+  "since": "2026-05-25",
   "username": "plur9",
-  "mentions": [],
-  "authored": [],
-  "org_activity": {
-    "datacore-one": {
-      "org": "datacore-one",
-      "new_issues_count": 0,
-      "closed_issues_count": 0,
-      "merged_prs_count": 0,
-      "new_issues": [],
-      "merged_prs": []
+  "mentions": [
+    {
+      "repo": "plur-ai/enterprise",
+      "number": 246,
+      "title": "pgvector: fix Docker image blocker + wire into PostgresStore",
+      "url": "https://github.com/plur-ai/enterprise/issues/246",
+      "state": "open",
+      "updated_at": "2026-05-29T18:34:26Z",
+      "type": "issue",
+      "scan_type": "mention"
     },
+    {
+      "repo": "datafund/offers",
+      "number": 2,
+      "title": "IGEA offer review: product accuracy, commitments, and risk assessment",
+      "url": "https://github.com/datafund/offers/issues/2",
+      "state": "open",
+      "updated_at": "2026-06-01T09:30:30Z",
+      "type": "issue",
+      "scan_type": "mention"
+    },
+    {
+      "repo": "plur-ai/plur",
+      "number": 240,
+      "title": "feat: temporal-aware tension detection \u2014 distinguish contradictions from evolution",
+      "url": "https://github.com/plur-ai/plur/issues/240",
+      "state": "open",
+      "updated_at": "2026-05-27T14:41:07Z",
+      "type": "issue",
+      "scan_type": "mention"
+    },
+    {
+      "repo": "plur-ai/enterprise",
+      "number": 120,
+      "title": "Epic: First Customer MVP \u2014 minimum to onboard a paying client",
+      "url": "https://github.com/plur-ai/enterprise/issues/120",
+      "state": "open",
+      "updated_at": "2026-05-27T12:46:41Z",
+      "type": "issue",
+      "scan_type": "mention"
+    },
+    {
+      "repo": "plur-ai/plur",
+      "number": 176,
+      "title": "Engrams fail to prevent repeated mistakes \u2014 injection timing and scope gap",
+      "url": "https://github.com/plur-ai/plur/issues/176",
+      "state": "closed",
+      "updated_at": "2026-05-27T11:31:23Z",
+      "type": "issue",
+      "scan_type": "mention"
+    },
+    {
+      "repo": "plur-ai/enterprise",
+      "number": 81,
+      "title": "Customer feedback channel \u2014 per-customer private repo model",
+      "url": "https://github.com/plur-ai/enterprise/issues/81",
+      "state": "open",
+      "updated_at": "2026-05-27T12:50:44Z",
+      "type": "issue",
+      "scan_type": "mention"
+    }
+  ],
+  "authored": [
+    {
+      "repo": "plur-ai/enterprise",
+      "number": 16,
+      "title": "Test: migration plan dry-run with Crt + Tadej (real users, not just docs)",
+      "url": "https://github.com/plur-ai/enterprise/issues/16",
+      "state": "open",
+      "updated_at": "2026-05-27T12:36:42Z",
+      "comment_count": 2,
+      "scan_type": "authored",
+      "latest_commenter": "crtahlin",
+      "latest_comment_body": "## Onboarding feedback from Crt\n\n### Discovery problem\n\nI didn't know this doc existed before starting onboarding. I followed `docs/onboarding-team-member.md` (linked from #42). This migration doc is "
+    },
+    {
+      "repo": "plur-ai/enterprise",
+      "number": 7,
+      "title": "Test: side-by-side local + enterprise PLUR (the migration story)",
+      "url": "https://github.com/plur-ai/enterprise/issues/7",
+      "state": "closed",
+      "updated_at": "2026-05-27T12:42:20Z",
+      "comment_count": 2,
+      "scan_type": "authored",
+      "latest_commenter": "miles-on-nightshift",
+      "latest_comment_body": "## Pre-flight check by miles-on-nightshift (sprint B25)\n\nRunning the preliminary checks before the full 1-day test can begin.\n\n### Infrastructure verified \u2705\n\n| Check | Status | Detail |\n|---|---|---|\n"
+    },
+    {
+      "repo": "plur-ai/enterprise",
+      "number": 5,
+      "title": "Test: API key round-trip in Claude Code + Cursor",
+      "url": "https://github.com/plur-ai/enterprise/issues/5",
+      "state": "open",
+      "updated_at": "2026-05-27T12:46:01Z",
+      "comment_count": 1,
+      "scan_type": "authored",
+      "latest_commenter": "crtahlin",
+      "latest_comment_body": "## Update \u2014 steps 1-6 validated through daily use\n\nAPI key auth in Claude Code has been working in production for weeks. This session (2026-05-27) used `plur-enterprise` tools (`plur_stores_list`, `pl"
+    }
+  ],
+  "org_activity": {
     "datafund": {
       "org": "datafund",
-      "new_issues_count": 0,
+      "new_issues_count": 1,
+      "closed_issues_count": 0,
+      "merged_prs_count": 1,
+      "new_issues": [
+        {
+          "repo": "datafund/offers",
+          "number": 2,
+          "title": "IGEA offer review: product accuracy, commitments, and risk assessment",
+          "url": "https://github.com/datafund/offers/issues/2"
+        }
+      ],
+      "merged_prs": [
+        {
+          "repo": "datafund/offers",
+          "number": 1,
+          "title": "Slovenian quality pass: fix calques and anglicisms",
+          "url": "https://github.com/datafund/offers/pull/1"
+        }
+      ]
+    },
+    "datacore-one": {
+      "org": "datacore-one",
+      "new_issues_count": 3,
       "closed_issues_count": 0,
       "merged_prs_count": 0,
-      "new_issues": [],
+      "new_issues": [
+        {
+          "repo": "datacore-one/datacore",
+          "number": 26,
+          "title": "/today silently degrades when a configured capability fails or is absent \u2014 add capability preflight + surface/confirm",
+          "url": "https://github.com/datacore-one/datacore/issues/26"
+        },
+        {
+          "repo": "datacore-one/datacore",
+          "number": 25,
+          "title": "Remove redundant PLUR session-enforcement hooks \u2014 defer to @plur-ai/cli (dead code?)",
+          "url": "https://github.com/datacore-one/datacore/issues/25"
+        },
+        {
+          "repo": "datacore-one/datacore",
+          "number": 23,
+          "title": "PLUR session-start guard can spiral into runaway calls / indefinite block (deferred-tool race)",
+          "url": "https://github.com/datacore-one/datacore/issues/23"
+        }
+      ],
       "merged_prs": []
     },
     "fairDataSociety": {
@@ -31,11 +162,907 @@
     },
     "plur-ai": {
       "org": "plur-ai",
-      "new_issues_count": 0,
-      "closed_issues_count": 0,
-      "merged_prs_count": 0,
-      "new_issues": [],
-      "merged_prs": []
+      "new_issues_count": 91,
+      "closed_issues_count": 85,
+      "merged_prs_count": 58,
+      "new_issues": [
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 257,
+          "title": "Deploy drift: production is ? commits behind main \u2014 2026-06-01",
+          "url": "https://github.com/plur-ai/enterprise/issues/257"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 283,
+          "title": "Session-start guard + reminder can spiral into repeated plur_session_start calls (deferred-tool race)",
+          "url": "https://github.com/plur-ai/plur/issues/283"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 281,
+          "title": "plur_learn: misleading 'statement: Required' error causes silent memory loss in multi-agent orchestration",
+          "url": "https://github.com/plur-ai/plur/issues/281"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 273,
+          "title": "Iter-2 followup: plur doctor 10s embedder probe timeout too short for cold downloads",
+          "url": "https://github.com/plur-ai/plur/issues/273"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 272,
+          "title": "Iter-2 followup: Plur.sync({reembed}) swallows reembed errors silently",
+          "url": "https://github.com/plur-ai/plur/issues/272"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 271,
+          "title": "Iter-2 followup: AsyncMutex.run order-of-operations clarification",
+          "url": "https://github.com/plur-ai/plur/issues/271"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 270,
+          "title": "Iter-2 followup: EmbeddingGemma pooling verification + Phase C eval",
+          "url": "https://github.com/plur-ai/plur/issues/270"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 269,
+          "title": "Iter-2 followup: OpenAI embedder needs timeout, retry, batching, 8191-token check",
+          "url": "https://github.com/plur-ai/plur/issues/269"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 268,
+          "title": "Comms: publish first benchmark blog post and submit to Hacker News",
+          "url": "https://github.com/plur-ai/plur/issues/268"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 267,
+          "title": "Comms: create examples/ directory with runnable getting-started scripts",
+          "url": "https://github.com/plur-ai/plur/issues/267"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 266,
+          "title": "Comms: add plugin directories (.claude-plugin, .openclaw-plugin) to repo",
+          "url": "https://github.com/plur-ai/plur/issues/266"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 265,
+          "title": "Comms: publish Python package on PyPI (plur-ai)",
+          "url": "https://github.com/plur-ai/plur/issues/265"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 264,
+          "title": "Comms: add benchmark callout table above-the-fold in README",
+          "url": "https://github.com/plur-ai/plur/issues/264"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 263,
+          "title": "Comms: create README banner image for visual first impression",
+          "url": "https://github.com/plur-ai/plur/issues/263"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 262,
+          "title": "Comms: add shields badges (npm, license, CI, Discord, stars) to README",
+          "url": "https://github.com/plur-ai/plur/issues/262"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 261,
+          "title": "Comms: add Discord badge and link to README header",
+          "url": "https://github.com/plur-ai/plur/issues/261"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 260,
+          "title": "Comms: set repository homepage URL to https://plur.ai",
+          "url": "https://github.com/plur-ai/plur/issues/260"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 258,
+          "title": "Comms: add GitHub topics for discoverability",
+          "url": "https://github.com/plur-ai/plur/issues/258"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 257,
+          "title": "Cross-agent unified graph memory: shared engram graph across the agent ecosystem",
+          "url": "https://github.com/plur-ai/plur/issues/257"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 256,
+          "title": "Hypergraph edges: multi-way relationships between engrams",
+          "url": "https://github.com/plur-ai/plur/issues/256"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 255,
+          "title": "Semantic lossless compression for engram serialization",
+          "url": "https://github.com/plur-ai/plur/issues/255"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 254,
+          "title": "Multimodal engrams: image, audio, and video memory attachments",
+          "url": "https://github.com/plur-ai/plur/issues/254"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 249,
+          "title": "Test invariant: YAML as source of truth \u2014 enforce in CI",
+          "url": "https://github.com/plur-ai/plur/issues/249"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 255,
+          "title": "Enable nightly + PR comment triggers for e2e.yml workflow",
+          "url": "https://github.com/plur-ai/enterprise/issues/255"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 251,
+          "title": "CLI: standalone customer-owned ETL extraction tool",
+          "url": "https://github.com/plur-ai/enterprise/issues/251"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 250,
+          "title": "Engrams: automatic correction-to-signal pipeline (no explicit tool call required)",
+          "url": "https://github.com/plur-ai/enterprise/issues/250"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 249,
+          "title": "Audit: tamper-resistant signed audit trail (prev_hash + HMAC + append-only)",
+          "url": "https://github.com/plur-ai/enterprise/issues/249"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 248,
+          "title": "Graph: GraphQL API surface over knowledge graph",
+          "url": "https://github.com/plur-ai/enterprise/issues/248"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 247,
+          "title": "Graph: Convention/Decision/Entity node types + ingest pipeline",
+          "url": "https://github.com/plur-ai/enterprise/issues/247"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 246,
+          "title": "pgvector: fix Docker image blocker + wire into PostgresStore",
+          "url": "https://github.com/plur-ai/enterprise/issues/246"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 241,
+          "title": "bug: pending reviews page shows oldest-first, new drafts invisible when >50 pending",
+          "url": "https://github.com/plur-ai/enterprise/issues/241"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 247,
+          "title": "isPlurConfigured() always returns true when hooks are installed globally",
+          "url": "https://github.com/plur-ai/plur/issues/247"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 230,
+          "title": "Pending tab: comprehensive review workflow tests \u2014 policy gating, visibility, and lifecycle",
+          "url": "https://github.com/plur-ai/enterprise/issues/230"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 229,
+          "title": "Members section: read-only clarification, engram count scope, and comprehensive tests",
+          "url": "https://github.com/plur-ai/enterprise/issues/229"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 228,
+          "title": "Sessions page: add explanation + comprehensive tests",
+          "url": "https://github.com/plur-ai/enterprise/issues/228"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 227,
+          "title": "Engrams section: comprehensive Playwright + integration tests for all 8 tabs",
+          "url": "https://github.com/plur-ai/enterprise/issues/227"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 226,
+          "title": "Engrams section: UX review \u2014 Triage vs Reviews placement + explanations for all tabs",
+          "url": "https://github.com/plur-ai/enterprise/issues/226"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 225,
+          "title": "Insights tabs: comprehensive tests + add explanations to each tab",
+          "url": "https://github.com/plur-ai/enterprise/issues/225"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 224,
+          "title": "Insights: identify and deduplicate overlapping content with Overview dashboard",
+          "url": "https://github.com/plur-ai/enterprise/issues/224"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 223,
+          "title": "System tab: 'rows tracked' shows 10^18 \u2014 bigint string concatenation bug",
+          "url": "https://github.com/plur-ai/enterprise/issues/223"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 222,
+          "title": "Overview dashboard: comprehensive end-to-end tests for all UI elements",
+          "url": "https://github.com/plur-ai/enterprise/issues/222"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 221,
+          "title": "Compliance page: review categories, add explanations, fix GDPR framing",
+          "url": "https://github.com/plur-ai/enterprise/issues/221"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 220,
+          "title": "Audit log: comprehensive Playwright + integration tests",
+          "url": "https://github.com/plur-ai/enterprise/issues/220"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 219,
+          "title": "Audit log: add page description + UX improvements",
+          "url": "https://github.com/plur-ai/enterprise/issues/219"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 218,
+          "title": "Audit log: date filter bug \u2014 'until' excludes same-day events",
+          "url": "https://github.com/plur-ai/enterprise/issues/218"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 217,
+          "title": "bug: Google Fonts blocked by CSP (style-src missing fonts.googleapis.com)",
+          "url": "https://github.com/plur-ai/enterprise/issues/217"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 216,
+          "title": "bug: /me/webhooks returns 503 when webhook dispatcher not configured",
+          "url": "https://github.com/plur-ai/enterprise/issues/216"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 215,
+          "title": "bug: /admin/saml-providers returns 503 when SAML not configured",
+          "url": "https://github.com/plur-ai/enterprise/issues/215"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 214,
+          "title": "bug: /admin/oidc-providers returns 503 when OIDC not configured",
+          "url": "https://github.com/plur-ai/enterprise/issues/214"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 212,
+          "title": "Playwright: tiered test strategy \u2014 fast CI + on-demand full suite",
+          "url": "https://github.com/plur-ai/enterprise/issues/212"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 211,
+          "title": "Playwright: auth flows \u2014 OAuth initiation, callback errors, logout",
+          "url": "https://github.com/plur-ai/enterprise/issues/211"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 210,
+          "title": "Playwright: /me \u2014 profile, API keys, webhooks",
+          "url": "https://github.com/plur-ai/enterprise/issues/210"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 209,
+          "title": "Playwright: pack builder \u2014 create, preview, export, delete",
+          "url": "https://github.com/plur-ai/enterprise/issues/209"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 208,
+          "title": "Playwright: audit log \u2014 filters, CSV/JSONL export",
+          "url": "https://github.com/plur-ai/enterprise/issues/208"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 207,
+          "title": "Playwright: teams \u2014 list, detail, scope debugger",
+          "url": "https://github.com/plur-ai/enterprise/issues/207"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 206,
+          "title": "Playwright: settings \u2014 OIDC, SAML, SCIM, service accounts",
+          "url": "https://github.com/plur-ai/enterprise/issues/206"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 205,
+          "title": "Playwright: compliance \u2014 dashboard, retention, forget user",
+          "url": "https://github.com/plur-ai/enterprise/issues/205"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 204,
+          "title": "Playwright: insights \u2014 ROI, activity, people, quality, system, topics, ask",
+          "url": "https://github.com/plur-ai/enterprise/issues/204"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 203,
+          "title": "Playwright: triage queue \u2014 promote, dismiss, retire",
+          "url": "https://github.com/plur-ai/enterprise/issues/203"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 202,
+          "title": "Playwright: engrams browser \u2014 list, detail, bulk, pin, scope",
+          "url": "https://github.com/plur-ai/enterprise/issues/202"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 201,
+          "title": "Playwright: overview dashboard",
+          "url": "https://github.com/plur-ai/enterprise/issues/201"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 200,
+          "title": "Playwright: retire + reactivate round-trip",
+          "url": "https://github.com/plur-ai/enterprise/issues/200"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 199,
+          "title": "Playwright: review workflow \u2014 approve, reject, policies",
+          "url": "https://github.com/plur-ai/enterprise/issues/199"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 198,
+          "title": "Playwright setup: config, helpers, global setup/teardown",
+          "url": "https://github.com/plur-ai/enterprise/issues/198"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 197,
+          "title": "Epic: Playwright e2e test suite for admin UI",
+          "url": "https://github.com/plur-ai/enterprise/issues/197"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 195,
+          "title": "Admin UI: add Reactivate button for retired engrams",
+          "url": "https://github.com/plur-ai/enterprise/issues/195"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 194,
+          "title": "feat(admin): manual team/scope assignment for OIDC-only customers",
+          "url": "https://github.com/plur-ai/enterprise/issues/194"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 192,
+          "title": "CI: automated GHCR publish on release tags",
+          "url": "https://github.com/plur-ai/enterprise/issues/192"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 191,
+          "title": "Migrate 23 inline event handlers to nonce-protected scripts (CSP compliance)",
+          "url": "https://github.com/plur-ai/enterprise/issues/191"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 188,
+          "title": "E2E tests: ROPC broken after admin API password reset (GitLab #429484)",
+          "url": "https://github.com/plur-ai/enterprise/issues/188"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 243,
+          "title": "Feature: dynamic session scope adjustment \u2014 narrow, expand, or switch mid-session",
+          "url": "https://github.com/plur-ai/plur/issues/243"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 187,
+          "title": "Migration 14+: legacy servers need GRANT CREATE on org_* schema to plur_app",
+          "url": "https://github.com/plur-ai/enterprise/issues/187"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 186,
+          "title": "Deploy failed: 0db4d05 \u2014 2026-05-27",
+          "url": "https://github.com/plur-ai/enterprise/issues/186"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 182,
+          "title": "Deploy failed: 0db641e \u2014 2026-05-27",
+          "url": "https://github.com/plur-ai/enterprise/issues/182"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 180,
+          "title": "Deploy failed: d53ab38 \u2014 2026-05-27",
+          "url": "https://github.com/plur-ai/enterprise/issues/180"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 179,
+          "title": "Local dev stack: docker-compose with Postgres + App + Caddy (HTTPS)",
+          "url": "https://github.com/plur-ai/enterprise/issues/179"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 240,
+          "title": "feat: temporal-aware tension detection \u2014 distinguish contradictions from evolution",
+          "url": "https://github.com/plur-ai/plur/issues/240"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 176,
+          "title": "Deploy failed: b93ac4c \u2014 2026-05-27",
+          "url": "https://github.com/plur-ai/enterprise/issues/176"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 175,
+          "title": "Deploy failed: b93ac4c \u2014 2026-05-27",
+          "url": "https://github.com/plur-ai/enterprise/issues/175"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 174,
+          "title": "Container Registry feature \u2014 push-image.sh + PLUR_REGISTRY config (dropped from #163)",
+          "url": "https://github.com/plur-ai/enterprise/issues/174"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 173,
+          "title": "Deploy failed: 4589b70 \u2014 2026-05-27",
+          "url": "https://github.com/plur-ai/enterprise/issues/173"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 172,
+          "title": "Deploy SSH to production has never worked \u2014 needs server-side verification",
+          "url": "https://github.com/plur-ai/enterprise/issues/172"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 171,
+          "title": "Require Deploy workflow as branch protection status check",
+          "url": "https://github.com/plur-ai/enterprise/issues/171"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 169,
+          "title": "Deploy pipeline broken since May 15 \u2014 startup_failure on every push to main",
+          "url": "https://github.com/plur-ai/enterprise/issues/169"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 237,
+          "title": "test+fix: PR #227 inject default protocol \u2014 dead flags check + missing tests",
+          "url": "https://github.com/plur-ai/plur/issues/237"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 236,
+          "title": "Docs review \u2014 homepage framing, agent-consumption gaps, and quick wins",
+          "url": "https://github.com/plur-ai/plur/issues/236"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 235,
+          "title": "Remote store engrams missing from first injection (cold-start race)",
+          "url": "https://github.com/plur-ai/plur/issues/235"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 234,
+          "title": "MCP server launch still uses npx \u2014 same ENOTEMPTY risk as #178",
+          "url": "https://github.com/plur-ai/plur/issues/234"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 231,
+          "title": "plur_session_end crashes with unhelpful error when engram_suggestions contains strings instead of objects",
+          "url": "https://github.com/plur-ai/plur/issues/231"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 229,
+          "title": "Feature: surface remote store scopes in session_start so AI callers route engrams correctly",
+          "url": "https://github.com/plur-ai/plur/issues/229"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 228,
+          "title": "Bug: plur_stores_list returns stale engram_count for remote stores after successful write",
+          "url": "https://github.com/plur-ai/plur/issues/228"
+        }
+      ],
+      "merged_prs": [
+        {
+          "repo": "plur-ai/plur",
+          "number": 286,
+          "title": "feat(benchmark): --plur-path for store reuse across runs",
+          "url": "https://github.com/plur-ai/plur/pull/286"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 282,
+          "title": "fix(core): PGLite hybrid recall fetch sizing \u2014 close Q1 regression",
+          "url": "https://github.com/plur-ai/plur/pull/282"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 280,
+          "title": "feat(retrieval): cross-encoder reranker stage (closes #220)",
+          "url": "https://github.com/plur-ai/plur/pull/280"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 279,
+          "title": "feat(retrieval): intent-aware query rewriting (closes #224)",
+          "url": "https://github.com/plur-ai/plur/pull/279"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 278,
+          "title": "feat(benchmark): import real LongMemEval-S corpus (closes part of #46)",
+          "url": "https://github.com/plur-ai/plur/pull/278"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 277,
+          "title": "fix(benchmark): allow openai-3-large in the harness",
+          "url": "https://github.com/plur-ai/plur/pull/277"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 275,
+          "title": "fix(audit-iter-4): close convergent iter-3 findings before merge",
+          "url": "https://github.com/plur-ai/plur/pull/275"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 274,
+          "title": "fix(audit-iter-2): close BLOCKER + MAJOR findings from Sprint 0 iter 1",
+          "url": "https://github.com/plur-ai/plur/pull/274"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 259,
+          "title": "feat(embedders): EmbeddingGemma as default + OpenAI tier + reembed migration (closes #219)",
+          "url": "https://github.com/plur-ai/plur/pull/259"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 253,
+          "title": "feat(embedders): four ONNX adapters + bake-off harness (closes #219 partially)",
+          "url": "https://github.com/plur-ai/plur/pull/253"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 252,
+          "title": "feat(core): PGLite adapter with YAML-first write order (closes #226)",
+          "url": "https://github.com/plur-ai/plur/pull/252"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 251,
+          "title": "feat(benchmark): extend harness to N=500, latency, footprint, multi-embedder (closes #46 partially)",
+          "url": "https://github.com/plur-ai/plur/pull/251"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 250,
+          "title": "test(core): YAML-as-truth invariants (Test A + Test B) \u2014 closes #249",
+          "url": "https://github.com/plur-ai/plur/pull/250"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 256,
+          "title": "fix: resolve all Playwright failures \u2014 viewer RBAC bug + test fixes",
+          "url": "https://github.com/plur-ai/enterprise/pull/256"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 254,
+          "title": "infra(e2e): tiered test strategy \u2014 script, workflow, smoke tags (#212)",
+          "url": "https://github.com/plur-ai/enterprise/pull/254"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 245,
+          "title": "test(audit): comprehensive Playwright tests for audit log (#220)",
+          "url": "https://github.com/plur-ai/enterprise/pull/245"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 244,
+          "title": "test(overview): comprehensive Playwright tests for all dashboard sections",
+          "url": "https://github.com/plur-ai/enterprise/pull/244"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 243,
+          "title": "test(engrams): comprehensive Playwright tests for all 8 tabs (#227)",
+          "url": "https://github.com/plur-ai/enterprise/pull/243"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 242,
+          "title": "fix: pending reviews sort newest-first, show overflow count",
+          "url": "https://github.com/plur-ai/enterprise/pull/242"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 240,
+          "title": "test(review): comprehensive review workflow tests (#230)",
+          "url": "https://github.com/plur-ai/enterprise/pull/240"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 239,
+          "title": "fix(admin): engram section UX \u2014 move Reviews to tab strip, add explanations (#226)",
+          "url": "https://github.com/plur-ai/enterprise/pull/239"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 238,
+          "title": "fix(admin): add audit log page description (#219)",
+          "url": "https://github.com/plur-ai/enterprise/pull/238"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 237,
+          "title": "fix(admin): add read-only explanation to members section (#229)",
+          "url": "https://github.com/plur-ai/enterprise/pull/237"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 236,
+          "title": "fix(admin): improve sessions page explanation and column tooltips (#228)",
+          "url": "https://github.com/plur-ai/enterprise/pull/236"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 235,
+          "title": "fix(admin): add explanations to all 7 Insights tabs (#225)",
+          "url": "https://github.com/plur-ai/enterprise/pull/235"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 234,
+          "title": "fix(admin): add Google Fonts to CSP style-src/font-src (#217)",
+          "url": "https://github.com/plur-ai/enterprise/pull/234"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 233,
+          "title": "fix(admin): graceful degradation for unconfigured SSO and webhooks (#214 #215 #216)",
+          "url": "https://github.com/plur-ai/enterprise/pull/233"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 232,
+          "title": "fix(admin): audit log 'until' filter excludes same-day events (#218)",
+          "url": "https://github.com/plur-ai/enterprise/pull/232"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 231,
+          "title": "fix(admin): bigint string concatenation in system tab rows tracked (#223)",
+          "url": "https://github.com/plur-ai/enterprise/pull/231"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 213,
+          "title": "feat(test): Playwright smoke tests \u2014 58 passing across all admin pages",
+          "url": "https://github.com/plur-ai/enterprise/pull/213"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 246,
+          "title": "Audit iter 1-6: cross-scope recurrence hardening",
+          "url": "https://github.com/plur-ai/plur/pull/246"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 196,
+          "title": "feat(admin): add Reactivate button for retired engrams",
+          "url": "https://github.com/plur-ai/enterprise/pull/196"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 193,
+          "title": "feat(ci): GHCR publish on release tags",
+          "url": "https://github.com/plur-ai/enterprise/pull/193"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 190,
+          "title": "fix: admin approve/reject broken for group-scoped drafts",
+          "url": "https://github.com/plur-ai/enterprise/pull/190"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 189,
+          "title": "fix(test): migrate e2e tests from ROPC to PAT-based auth",
+          "url": "https://github.com/plur-ai/enterprise/pull/189"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 245,
+          "title": "feat(core): cross-scope recurrence detection \u2014 engrams graduate to universal (closes #176)",
+          "url": "https://github.com/plur-ai/plur/pull/245"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 244,
+          "title": "fix(mcp): session_start auto-detects project scope from .plur.yaml (closes #177)",
+          "url": "https://github.com/plur-ai/plur/pull/244"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 242,
+          "title": "fix(cli,mcp): replace npx with local shim for MCP server launch (closes #234)",
+          "url": "https://github.com/plur-ai/plur/pull/242"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 185,
+          "title": "fix(ci): deploy app-ready budget 180s \u2192 300s + progress logs (#172)",
+          "url": "https://github.com/plur-ai/enterprise/pull/185"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 184,
+          "title": "feat: local dev stack with HTTPS + admin review e2e tests",
+          "url": "https://github.com/plur-ai/enterprise/pull/184"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 183,
+          "title": "fix(ci): bump deploy app-ready wait to 180s (#172)",
+          "url": "https://github.com/plur-ai/enterprise/pull/183"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 241,
+          "title": "feat(core): store validation (#93) + CI smoke workflow + test pyramid docs (closes #92, #93)",
+          "url": "https://github.com/plur-ai/plur/pull/241"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 181,
+          "title": "fix(ci): wait for app to bind :3000 before deploy step returns (#172)",
+          "url": "https://github.com/plur-ai/enterprise/pull/181"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 178,
+          "title": "fix(ci): deploy health check follows HTTP\u2192HTTPS redirect (#172)",
+          "url": "https://github.com/plur-ai/enterprise/pull/178"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 177,
+          "title": "feat: container registry \u2014 PLUR_REGISTRY config + push-image.sh + customer docs",
+          "url": "https://github.com/plur-ai/enterprise/pull/177"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 239,
+          "title": "feat(core): route setPinned/updateEngram/reportFailure to remote stores (closes #185, finishes #86)",
+          "url": "https://github.com/plur-ai/plur/pull/239"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 238,
+          "title": "feat(core): reference-counted content-addressed dedup (closes #107)",
+          "url": "https://github.com/plur-ai/plur/pull/238"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 170,
+          "title": "fix(ci): grant actions:write to deploy reusable workflow call",
+          "url": "https://github.com/plur-ai/enterprise/pull/170"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 233,
+          "title": "chore: claw 0.9.16 + hermes 0.9.10 \u2014 pick up 0.9.11 core/CLI",
+          "url": "https://github.com/plur-ai/plur/pull/233"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 232,
+          "title": "fix: 0.9.11 bug sweep \u2014 session_end shape (#231), listStores async (#184), doctor isolation (#197)",
+          "url": "https://github.com/plur-ai/plur/pull/232"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 230,
+          "title": "feat: surface remote store scopes in session_start (#229)",
+          "url": "https://github.com/plur-ai/plur/pull/230"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 167,
+          "title": "chore(deps): bump qs from 6.15.1 to 6.15.2",
+          "url": "https://github.com/plur-ai/enterprise/pull/167"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 166,
+          "title": "feat: MVP ops docs \u2014 health check, SERVICES.md, sizing guide, upgrade runbook + tests (#72 #70 #64 #59)",
+          "url": "https://github.com/plur-ai/enterprise/pull/166"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 164,
+          "title": "feat: server-side session timeout \u2014 auto wrap-up after inactivity (#162)",
+          "url": "https://github.com/plur-ai/enterprise/pull/164"
+        },
+        {
+          "repo": "plur-ai/plur",
+          "number": 218,
+          "title": "feat: session checkpoint + deferred wrap-up detection (#215, #216)",
+          "url": "https://github.com/plur-ai/plur/pull/218"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 154,
+          "title": "feat: backup product feature \u2014 local target with encryption, restore, verify (#149)",
+          "url": "https://github.com/plur-ai/enterprise/pull/154"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 153,
+          "title": "test(infra): GitLab integration test stack \u2014 scripts, docs, npm commands (#144)",
+          "url": "https://github.com/plur-ai/enterprise/pull/153"
+        },
+        {
+          "repo": "plur-ai/enterprise",
+          "number": 131,
+          "title": "feat(auth): wire GitLab OAuth routes \u2014 /auth/gitlab, callback, webhook, sync",
+          "url": "https://github.com/plur-ai/enterprise/pull/131"
+        }
+      ]
     },
     "plur9": {
       "org": "plur9",
@@ -46,5 +1073,5 @@
       "merged_prs": []
     }
   },
-  "scanned_at": "2026-06-01T04:30:24.686655"
+  "scanned_at": "2026-06-01T12:19:34.404503"
 }

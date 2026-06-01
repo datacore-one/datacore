@@ -9,13 +9,6 @@
   "repos": {
     "datacore-one": [
       {
-        "name": "datacore-space",
-        "full_name": "datacore-one/datacore-space",
-        "url": "https://github.com/datacore-one/datacore-space",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
         "name": "datacore",
         "full_name": "datacore-one/datacore",
         "url": "https://github.com/datacore-one/datacore",
@@ -23,9 +16,9 @@
         "default_branch": "main"
       },
       {
-        "name": "datacore-slides",
-        "full_name": "datacore-one/datacore-slides",
-        "url": "https://github.com/datacore-one/datacore-slides",
+        "name": "datacore-mail",
+        "full_name": "datacore-one/datacore-mail",
+        "url": "https://github.com/datacore-one/datacore-mail",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -33,6 +26,27 @@
         "name": "datacore-nightshift",
         "full_name": "datacore-one/datacore-nightshift",
         "url": "https://github.com/datacore-one/datacore-nightshift",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datacore-news",
+        "full_name": "datacore-one/datacore-news",
+        "url": "https://github.com/datacore-one/datacore-news",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datacore-space",
+        "full_name": "datacore-one/datacore-space",
+        "url": "https://github.com/datacore-one/datacore-space",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datacore-slides",
+        "full_name": "datacore-one/datacore-slides",
+        "url": "https://github.com/datacore-one/datacore-slides",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -47,13 +61,6 @@
         "name": "org-workspace",
         "full_name": "datacore-one/org-workspace",
         "url": "https://github.com/datacore-one/org-workspace",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "datacore-mail",
-        "full_name": "datacore-one/datacore-mail",
-        "url": "https://github.com/datacore-one/datacore-mail",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -96,13 +103,6 @@
         "name": "datacore-telegram",
         "full_name": "datacore-one/datacore-telegram",
         "url": "https://github.com/datacore-one/datacore-telegram",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "datacore-news",
-        "full_name": "datacore-one/datacore-news",
-        "url": "https://github.com/datacore-one/datacore-news",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -233,260 +233,7 @@
         "default_branch": "main"
       }
     ],
-    "datafund": [
-      {
-        "name": "datafund-space",
-        "full_name": "datafund/datafund-space",
-        "url": "https://github.com/datafund/datafund-space",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "datacortex",
-        "full_name": "datafund/datacortex",
-        "url": "https://github.com/datafund/datacortex",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "datacore-messaging",
-        "full_name": "datafund/datacore-messaging",
-        "url": "https://github.com/datafund/datacore-messaging",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "util_haproxy_rpchealth",
-        "full_name": "datafund/util_haproxy_rpchealth",
-        "url": "https://github.com/datafund/util_haproxy_rpchealth",
-        "is_fork": false,
-        "default_branch": "master"
-      },
-      {
-        "name": "swarm_provenance_MCP",
-        "full_name": "datafund/swarm_provenance_MCP",
-        "url": "https://github.com/datafund/swarm_provenance_MCP",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "swarm_provenance_SDK",
-        "full_name": "datafund/swarm_provenance_SDK",
-        "url": "https://github.com/datafund/swarm_provenance_SDK",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "swarm_provenance_CLI",
-        "full_name": "datafund/swarm_provenance_CLI",
-        "url": "https://github.com/datafund/swarm_provenance_CLI",
-        "is_fork": true,
-        "default_branch": "main"
-      },
-      {
-        "name": "swarm_connect",
-        "full_name": "datafund/swarm_connect",
-        "url": "https://github.com/datafund/swarm_connect",
-        "is_fork": true,
-        "default_branch": "main"
-      },
-      {
-        "name": "provenance",
-        "full_name": "datafund/provenance",
-        "url": "https://github.com/datafund/provenance",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "ConsentsBasedDataProvenance",
-        "full_name": "datafund/ConsentsBasedDataProvenance",
-        "url": "https://github.com/datafund/ConsentsBasedDataProvenance",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "util_swarmsync",
-        "full_name": "datafund/util_swarmsync",
-        "url": "https://github.com/datafund/util_swarmsync",
-        "is_fork": false,
-        "default_branch": "master"
-      },
-      {
-        "name": "mcp-registry",
-        "full_name": "datafund/mcp-registry",
-        "url": "https://github.com/datafund/mcp-registry",
-        "is_fork": true,
-        "default_branch": "main"
-      },
-      {
-        "name": "dr-viewer",
-        "full_name": "datafund/dr-viewer",
-        "url": "https://github.com/datafund/dr-viewer",
-        "is_fork": false,
-        "default_branch": "master"
-      },
-      {
-        "name": "datacore-open-questions",
-        "full_name": "datafund/datacore-open-questions",
-        "url": "https://github.com/datafund/datacore-open-questions",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "module-accounting",
-        "full_name": "datafund/module-accounting",
-        "url": "https://github.com/datafund/module-accounting",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "x-go",
-        "full_name": "datafund/x-go",
-        "url": "https://github.com/datafund/x-go",
-        "is_fork": false,
-        "default_branch": "master"
-      },
-      {
-        "name": "Evolutionary-Programming-Networks-POC",
-        "full_name": "datafund/Evolutionary-Programming-Networks-POC",
-        "url": "https://github.com/datafund/Evolutionary-Programming-Networks-POC",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "auto-code-update",
-        "full_name": "datafund/auto-code-update",
-        "url": "https://github.com/datafund/auto-code-update",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "bee_scale",
-        "full_name": "datafund/bee_scale",
-        "url": "https://github.com/datafund/bee_scale",
-        "is_fork": false,
-        "default_branch": "master"
-      },
-      {
-        "name": "tests_chunktest",
-        "full_name": "datafund/tests_chunktest",
-        "url": "https://github.com/datafund/tests_chunktest",
-        "is_fork": false,
-        "default_branch": "master"
-      },
-      {
-        "name": "storage-incentives",
-        "full_name": "datafund/storage-incentives",
-        "url": "https://github.com/datafund/storage-incentives",
-        "is_fork": true,
-        "default_branch": "master"
-      },
-      {
-        "name": "grafana-dashboards",
-        "full_name": "datafund/grafana-dashboards",
-        "url": "https://github.com/datafund/grafana-dashboards",
-        "is_fork": true,
-        "default_branch": "master"
-      },
-      {
-        "name": "df-fds-consent-manager",
-        "full_name": "datafund/df-fds-consent-manager",
-        "url": "https://github.com/datafund/df-fds-consent-manager",
-        "is_fork": false,
-        "default_branch": "master"
-      },
-      {
-        "name": "dr-summary",
-        "full_name": "datafund/dr-summary",
-        "url": "https://github.com/datafund/dr-summary",
-        "is_fork": false,
-        "default_branch": "master"
-      },
-      {
-        "name": "dr-generator",
-        "full_name": "datafund/dr-generator",
-        "url": "https://github.com/datafund/dr-generator",
-        "is_fork": false,
-        "default_branch": "master"
-      },
-      {
-        "name": "dr-editor-sample",
-        "full_name": "datafund/dr-editor-sample",
-        "url": "https://github.com/datafund/dr-editor-sample",
-        "is_fork": false,
-        "default_branch": "master"
-      },
-      {
-        "name": "UExperience",
-        "full_name": "datafund/UExperience",
-        "url": "https://github.com/datafund/UExperience",
-        "is_fork": false,
-        "default_branch": "master"
-      },
-      {
-        "name": "datareceipt.js",
-        "full_name": "datafund/datareceipt.js",
-        "url": "https://github.com/datafund/datareceipt.js",
-        "is_fork": false,
-        "default_branch": "master"
-      },
-      {
-        "name": "dr-api-server",
-        "full_name": "datafund/dr-api-server",
-        "url": "https://github.com/datafund/dr-api-server",
-        "is_fork": false,
-        "default_branch": "master"
-      },
-      {
-        "name": "SmartEnergy",
-        "full_name": "datafund/SmartEnergy",
-        "url": "https://github.com/datafund/SmartEnergy",
-        "is_fork": true,
-        "default_branch": "master"
-      },
-      {
-        "name": "web_devconagenda",
-        "full_name": "datafund/web_devconagenda",
-        "url": "https://github.com/datafund/web_devconagenda",
-        "is_fork": false,
-        "default_branch": "main"
-      },
-      {
-        "name": "bee-factory",
-        "full_name": "datafund/bee-factory",
-        "url": "https://github.com/datafund/bee-factory",
-        "is_fork": true,
-        "default_branch": "master"
-      },
-      {
-        "name": "swent-docs",
-        "full_name": "datafund/swent-docs",
-        "url": "https://github.com/datafund/swent-docs",
-        "is_fork": true,
-        "default_branch": "master"
-      },
-      {
-        "name": "bee",
-        "full_name": "datafund/bee",
-        "url": "https://github.com/datafund/bee",
-        "is_fork": true,
-        "default_branch": "master"
-      },
-      {
-        "name": "datafund.github.io",
-        "full_name": "datafund/datafund.github.io",
-        "url": "https://github.com/datafund/datafund.github.io",
-        "is_fork": false,
-        "default_branch": "master"
-      },
-      {
-        "name": "data-receipt",
-        "full_name": "datafund/data-receipt",
-        "url": "https://github.com/datafund/data-receipt",
-        "is_fork": false,
-        "default_branch": "master"
-      }
-    ],
+    "datafund": [],
     "fairDataSociety": [
       {
         "name": "fds-space",
@@ -1149,16 +896,16 @@
     ],
     "plur-ai": [
       {
-        "name": "plur-space",
-        "full_name": "plur-ai/plur-space",
-        "url": "https://github.com/plur-ai/plur-space",
+        "name": "plur",
+        "full_name": "plur-ai/plur",
+        "url": "https://github.com/plur-ai/plur",
         "is_fork": false,
         "default_branch": "main"
       },
       {
-        "name": "plur",
-        "full_name": "plur-ai/plur",
-        "url": "https://github.com/plur-ai/plur",
+        "name": "plur-space",
+        "full_name": "plur-ai/plur-space",
+        "url": "https://github.com/plur-ai/plur-space",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -1170,25 +917,25 @@
         "default_branch": "main"
       },
       {
-        "name": "website",
-        "full_name": "plur-ai/website",
-        "url": "https://github.com/plur-ai/website",
+        "name": "hub",
+        "full_name": "plur-ai/hub",
+        "url": "https://github.com/plur-ai/hub",
         "is_fork": false,
         "default_branch": "main"
       },
       {
-        "name": "hub",
-        "full_name": "plur-ai/hub",
-        "url": "https://github.com/plur-ai/hub",
+        "name": "website",
+        "full_name": "plur-ai/website",
+        "url": "https://github.com/plur-ai/website",
         "is_fork": false,
         "default_branch": "main"
       }
     ],
     "plur9": [
       {
-        "name": "the-firm-space",
-        "full_name": "plur9/the-firm-space",
-        "url": "https://github.com/plur9/the-firm-space",
+        "name": "smk2026",
+        "full_name": "plur9/smk2026",
+        "url": "https://github.com/plur9/smk2026",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -1200,6 +947,13 @@
         "default_branch": "main"
       },
       {
+        "name": "the-firm-space",
+        "full_name": "plur9/the-firm-space",
+        "url": "https://github.com/plur9/the-firm-space",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
         "name": "fdp-storage",
         "full_name": "plur9/fdp-storage",
         "url": "https://github.com/plur9/fdp-storage",
@@ -1207,9 +961,44 @@
         "default_branch": "master"
       },
       {
+        "name": "module-personal-finance",
+        "full_name": "plur9/module-personal-finance",
+        "url": "https://github.com/plur9/module-personal-finance",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "datacore-health",
+        "full_name": "plur9/datacore-health",
+        "url": "https://github.com/plur9/datacore-health",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
         "name": "megaphone-space",
         "full_name": "plur9/megaphone-space",
         "url": "https://github.com/plur9/megaphone-space",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "Fairdrop",
+        "full_name": "plur9/Fairdrop",
+        "url": "https://github.com/plur9/Fairdrop",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "plur-buzz",
+        "full_name": "plur9/plur-buzz",
+        "url": "https://github.com/plur9/plur-buzz",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "fairdrive",
+        "full_name": "plur9/fairdrive",
+        "url": "https://github.com/plur9/fairdrive",
         "is_fork": false,
         "default_branch": "main"
       },
@@ -1235,11 +1024,25 @@
         "default_branch": "main"
       },
       {
+        "name": "qvac-knowledge-exchange",
+        "full_name": "plur9/qvac-knowledge-exchange",
+        "url": "https://github.com/plur9/qvac-knowledge-exchange",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
         "name": "verity-demo",
         "full_name": "plur9/verity-demo",
         "url": "https://github.com/plur9/verity-demo",
         "is_fork": false,
         "default_branch": "main"
+      },
+      {
+        "name": "Agent-Data-Exchange",
+        "full_name": "plur9/Agent-Data-Exchange",
+        "url": "https://github.com/plur9/Agent-Data-Exchange",
+        "is_fork": false,
+        "default_branch": "enterprise"
       },
       {
         "name": "awesome-mcp-servers-1",
@@ -1277,6 +1080,34 @@
         "default_branch": "main"
       },
       {
+        "name": "BZZ-earnings-analysis",
+        "full_name": "plur9/BZZ-earnings-analysis",
+        "url": "https://github.com/plur9/BZZ-earnings-analysis",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "gordon",
+        "full_name": "plur9/gordon",
+        "url": "https://github.com/plur9/gordon",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
+        "name": "fds-mcp",
+        "full_name": "plur9/fds-mcp",
+        "url": "https://github.com/plur9/fds-mcp",
+        "is_fork": false,
+        "default_branch": ""
+      },
+      {
+        "name": "datacore",
+        "full_name": "plur9/datacore",
+        "url": "https://github.com/plur9/datacore",
+        "is_fork": false,
+        "default_branch": "main"
+      },
+      {
         "name": "util_swarmsync",
         "full_name": "plur9/util_swarmsync",
         "url": "https://github.com/plur9/util_swarmsync",
@@ -1309,6 +1140,13 @@
         "full_name": "plur9/schulze",
         "url": "https://github.com/plur9/schulze",
         "is_fork": true,
+        "default_branch": "main"
+      },
+      {
+        "name": "logseq",
+        "full_name": "plur9/logseq",
+        "url": "https://github.com/plur9/logseq",
+        "is_fork": false,
         "default_branch": "main"
       },
       {
@@ -1370,7 +1208,6 @@
       "5-plur"
     ],
     "plur9": [
-      "7-megaphone",
       "8-firm"
     ]
   },
@@ -1379,9 +1216,8 @@
     "2-datacore": "datacore-one",
     "3-fds": "fairDataSociety",
     "5-plur": "plur-ai",
-    "7-megaphone": "plur9",
     "8-firm": "plur9",
     "root": "datacore-one"
   },
-  "updated_at": "2026-05-25T04:30:38.824480"
+  "updated_at": "2026-06-01T12:18:08.916944"
 }
