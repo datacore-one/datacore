@@ -161,7 +161,12 @@ if [ -n "$ALL_STAGED" ]; then
         esac
         DIFF_CONTENT=$(get_staged_additions "$staged_file")
         [ -z "$DIFF_CONTENT" ] && continue
-        PATH_HITS=$(echo "$DIFF_CONTENT" | grep -E '/Users/[a-zA-Z]|/home/[a-zA-Z]' | grep -v '^\+\s*#' || true)
+        # Match /Users/<user>/ and /home/<user>/ but exclude template/CI usernames:
+        #   - /home/deploy   = server deploy template (per ENG-2026-0511-083)
+        #   - /home/runner   = GitHub Actions runner
+        #   - /home/user     = generic doc example
+        #   - /Users/runner  = macOS GitHub Actions runner
+        PATH_HITS=$(echo "$DIFF_CONTENT" | grep -P '/Users/(?!runner/)[a-zA-Z]|/home/(?!deploy/|runner/|user/)[a-zA-Z]' | grep -v '^\+\s*#' || true)
         if [ -n "$PATH_HITS" ]; then
             echo "  WARNING: Absolute personal path(s) in $staged_file:"
             echo "$PATH_HITS" | head -3 | while read -r line; do echo "    $line"; done

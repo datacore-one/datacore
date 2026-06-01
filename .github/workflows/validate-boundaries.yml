@@ -97,8 +97,14 @@ jobs:
         run: |
           echo "Scanning tracked files for absolute personal paths..."
 
-          PATH_PATTERN='/Users/[a-zA-Z]|/home/[a-zA-Z]'
-          HITS=$(git ls-files -z | xargs -0 grep -lE "$PATH_PATTERN" 2>/dev/null | grep -v '.example$' | grep -v '.github/workflows/' | grep -v '.datacore/hooks/' || true)
+          # Match /Users/<user>/ and /home/<user>/ but EXCLUDE template/CI
+          # usernames that are legitimate in a public OSS repo:
+          #   - /home/deploy   = server deploy template (per ENG-2026-0511-083)
+          #   - /home/runner   = GitHub Actions runner
+          #   - /home/user     = generic doc example
+          #   - /Users/runner  = macOS GitHub Actions runner
+          PATH_PATTERN='/Users/(?!runner/)[a-zA-Z]|/home/(?!deploy/|runner/|user/)[a-zA-Z]'
+          HITS=$(git ls-files -z | xargs -0 grep -lP "$PATH_PATTERN" 2>/dev/null | grep -v '.example$' | grep -v '.github/workflows/' | grep -v '.datacore/hooks/' || true)
 
           if [ -n "$HITS" ]; then
             echo "::error::Absolute personal paths found in tracked files"
@@ -106,7 +112,7 @@ jobs:
             # Show the offending lines
             for f in $HITS; do
               echo "--- $f ---"
-              grep -nE '/Users/[a-zA-Z]|/home/[a-zA-Z]' "$f" | head -3
+              grep -nP "$PATH_PATTERN" "$f" | head -3
             done
             exit 1
           fi

@@ -5,9 +5,9 @@
 # reactive) and the audit script (which runs post-hoc on heartbeat).
 #
 # Activate by setting in any local clone:
-#     git config --local core.hooksPath /Users/gregor/Data/.githooks
-# OR globally:
-#     git config --global core.hooksPath /Users/gregor/Data/.githooks
+#     git config --local core.hooksPath "$(git rev-parse --show-toplevel)/.githooks"
+# OR globally (pointing at your primary Datacore checkout):
+#     git config --global core.hooksPath "$HOME/Data/.githooks"
 #
 # Reads denylist from .datacore/config/public-repo-denylist.yaml.
 # Skips silently for non-protected remotes.
