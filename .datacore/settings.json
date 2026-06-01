@@ -348,17 +348,11 @@
   "mcpServers": {
     "plur": {
       "command": "plur-mcp",
-      "args": [],
-      "env": {
-        "PLUR_PATH": "/home/gregor/.plur"
-      }
+      "args": []
     },
     "datacore": {
       "command": "datacore-mcp",
-      "args": [],
-      "env": {
-        "DATACORE_ROOT": "/home/gregor/Data"
-      }
+      "args": []
     }
   }
 }

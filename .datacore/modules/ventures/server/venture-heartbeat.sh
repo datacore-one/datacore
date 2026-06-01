@@ -2,7 +2,7 @@
 # Venture heartbeat wrapper — Miles (Chief of Operations)
 # Uses OAuth/subscription auth (NOT API key) to avoid burning credits.
 # Claude Code finds credentials at ~/.claude/.credentials.json
-export HOME=/home/gregor
+export HOME=/home/deploy
 export PATH=/usr/local/bin:/usr/bin:/bin
 
 # Source nightshift env for non-Claude vars (TELEGRAM_BOT_TOKEN etc.)
