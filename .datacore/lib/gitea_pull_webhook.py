@@ -2,7 +2,7 @@
 matched repo when Gitea POSTs a push event.
 
 Routes:
-  POST /pull/<space-name>  — pulls /home/gregor/Data/<space-name>
+  POST /pull/<space-name>  — pulls $DATACORE_ROOT/<space-name>
                             Body can be the Gitea push payload (ignored)
                             or empty.
 
@@ -25,7 +25,7 @@ from urllib.parse import urlparse, parse_qs
 BIND = os.environ.get("PULL_WEBHOOK_BIND", "100.101.159.42")
 PORT = int(os.environ.get("PULL_WEBHOOK_PORT", "8765"))
 SECRET = os.environ.get("PULL_WEBHOOK_SECRET", "")
-DATA_DIR = Path("/home/gregor/Data")
+DATA_DIR = Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
 ALLOWED_SPACES = {"0-personal", "1-datafund", "2-datacore", "3-fds",
                   "4-forge", "5-plur", "6-meridian", "7-megaphone", "8-firm"}
 

@@ -5,13 +5,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=gregor
-Group=gregor
-WorkingDirectory=/home/gregor/Data
-Environment="HOME=/home/gregor"
+User=deploy
+Group=deploy
+WorkingDirectory=/home/deploy/Data
+Environment="HOME=/home/deploy"
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
-EnvironmentFile=/home/gregor/config/nightshift.env
-ExecStart=/bin/bash /home/gregor/Data/.datacore/modules/ventures/server/venture-heartbeat.sh
+EnvironmentFile=/home/deploy/config/nightshift.env
+ExecStart=/bin/bash /home/deploy/Data/.datacore/modules/ventures/server/venture-heartbeat.sh
 Restart=always
 RestartSec=60
 
