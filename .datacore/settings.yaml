@@ -152,6 +152,37 @@ nightshift:
 learning:
   # Existing active engrams to re-evaluate per review cycle (legacy quality audit)
   legacy_audit_rate: 3
+  # Default policy for /wrap-up §6 engram review: surface candidates in the consolidated
+  # report and queue them for next /today daily-review, rather than blocking with an
+  # interactive prompt. Flip to `false` to restore the legacy mid-flow prompt.
+  auto_defer_learning_review: true
+
+# Wrap-up command behavior (see .datacore/commands/wrap-up.md §0d)
+wrap_up:
+  # Default mode when no flag is passed. `normal` keeps the pulse (§2) and feedback
+  # gate (§17.5). `fast` skips both — zero prompts unless §16.5 safety triggers.
+  default_mode: normal              # normal | fast
+
+  # Master switch for the inference-first model (spec §0c).
+  # `auto` = infer + report + feedback gate (current default).
+  # `off`  = restore legacy per-step prompts (~8 mid-flow interruptions).
+  inference_mode: auto              # auto | off
+
+  # Show the final §17.5 bulk-feedback prompt in normal mode.
+  # Set false to make normal mode behave like fast mode for the gate
+  # (still keeps the §2 pulse). Useful when you trust the agent's inferences
+  # and don't want any prompt after the report.
+  feedback_gate: true
+
+  # Tag applied to tasks created by §7 GTD extraction so they're trivially
+  # greppable for batch review later (e.g. during /gtd-weekly-review).
+  tag_extracted_tasks_with: wrap-up-extracted
+
+# Coach module (used by /wrap-up §2 pulse and /tomorrow evening reflection)
+coach:
+  # Show the 1-line pulse prompt at /wrap-up §2 in normal mode.
+  # Set false to skip the pulse even in normal mode.
+  wrap_up_check: true
 
 # Search layer (DIP-0021)
 search:

@@ -16,9 +16,19 @@ Required journal sections (case-insensitive substring match):
   - "Token Cost"
   - "Session Meta-Analysis"
 
-If ANY is missing, the hook outputs a `decision: block` JSON response on
-stdout, which Claude Code surfaces to the model and refuses the tool call.
-The model must then complete the missing section(s) before retrying.
+Allowed status values in the audit table (the hook does NOT enforce these
+syntactically — it relies on the spec at .datacore/commands/wrap-up.md §18
+for validation, but agents should use these statuses when writing the audit):
+  - `run ✓` — step executed
+  - `skipped-by-user` — user explicitly declined via prompt
+  - `skipped-by-mode-fast` — suppressed by `/wrap-up fast`
+  - `not-applicable (REASON)` — concrete factual reason
+  - `inferred-and-reported (DESCRIPTION)` — inference-first mode default
+  - `applied-from-feedback (N CORRECTIONS)` — §17.5 feedback gate applied edits
+
+If any required section is missing, the hook outputs a `decision: block` JSON
+response on stdout, which Claude Code surfaces to the model and refuses the
+tool call. The model must then complete the missing section(s) before retrying.
 
 Pass-through otherwise.
 """
@@ -92,8 +102,11 @@ def main() -> None:
                 "Wrap-up checklist enforcement: today's personal journal is missing required "
                 f"section(s): {', '.join(repr(s) for s in missing)}. "
                 "Step 17 of /wrap-up requires an authoritative journal entry written from the "
-                "main conversation. Step 18 requires an explicit checklist audit showing every "
-                "spec step's status (run, skipped-with-reason, or not-applicable). "
+                "main conversation. Step 18 requires an explicit checklist audit listing every "
+                "spec step (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 12.5, 13, 14, 15, 16.5, 17, "
+                "17.5, 18) with one of these statuses: 'run ✓', 'skipped-by-user', "
+                "'skipped-by-mode-fast', 'not-applicable (REASON)', "
+                "'inferred-and-reported (DESCRIPTION)', or 'applied-from-feedback (N CORRECTIONS)'. "
                 "Append the missing section(s) to the journal and retry plur_session_end. "
                 "See ENG-2026-0512-044 for context on why this is enforced."
             ),

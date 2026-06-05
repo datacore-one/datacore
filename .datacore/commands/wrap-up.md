@@ -157,49 +157,89 @@ python3 ~/Data/.datacore/lib/focus_mode.py detect
 
 **After context recovery**, create a tracked task list — **one TaskCreate per spec step. NO CLUSTERING.**
 
-**HARD RULE — one-to-one mapping:** The spec has 18 numbered steps (1-17 plus the new 18). Create EXACTLY 18 tasks, in order. Do not combine "GTD extraction + insight verification" into one task. Do not bundle "meta-analysis + artifact tracking." Each spec step gets its own task. Clustering is where skipping hides: once "X + Y" is one task you can do X, mark it done, and silently drop Y. With one task per step you cannot fake completion.
+**HARD RULE — one-to-one mapping:** The spec has 20 tracked steps (1-18 plus the inserted §16.5 safety and §17.5 feedback gate). Create EXACTLY 20 tasks, in order. Do not combine "GTD extraction + insight verification" into one task. Do not bundle "meta-analysis + artifact tracking." Each spec step gets its own task. Clustering is where skipping hides: once "X + Y" is one task you can do X, mark it done, and silently drop Y. With one task per step you cannot fake completion.
 
 ```
 Tasks to create (one per spec step, mark in_progress when starting, completed when done):
 
  1. "Step 1 — Session summary"
- 2. "Step 2 — Emotional check (ask user, do not pre-skip)"
- 3. "Step 3 — Continuation tasks"
- 4. "Step 4 — Mark completed tasks (+ retroactive task)"
+ 2. "Step 2 — Pulse prompt (skip if fast mode or coach.wrap_up_check=false)"
+ 3. "Step 3 — Continuation tasks (inferred — no prompt)"
+ 4. "Step 4 — Mark completed tasks (auto-mark high-conf, surface med-conf)"
  5. "Step 5 — Spawn journal-coordinator + session-learning-coordinator"
- 6. "Step 6 — Learning review (spawn learning-classifier)"
- 7. "Step 7 — GTD task extraction from session insights"
+ 6. "Step 6 — Learning review (spawn learning-classifier; defer to /today)"
+ 7. "Step 7 — GTD task extraction (auto-add with :wrap-up-extracted: tag)"
  8. "Step 8 — Insight verification checklist (≥1 layer per insight)"
  9. "Step 9 — Session meta-analysis (write to personal journal)"
-10. "Step 10 — Knowledge artifact tracking (artifact index)"
+10. "Step 10 — Knowledge artifact tracking (auto-trust descriptions)"
 11. "Step 11 — Index session to journal DB"
 12. "Step 12 — Kill orphaned dev servers"
 13. "Step 12.5 — Archive old nightshift reports"
 14. "Step 13 — Push ALL repos (./sync push + subprojects)"
 15. "Step 14 — Context sync (CLAUDE.md tables)"
-16. "Step 15 — Quick AI delegation check (ask user, do not pre-skip)"
-17. "Step 17 — Consolidated report + persist authoritative journal + social posts + exact token cost"
-18. "Step 18 — Wrap-up checklist self-audit (REQUIRED — produces 'Wrap-up Checklist Audit' section)"
+16. "Step 15 — AI delegation opportunities (inferred — surface, no auto-add)"
+17. "Step 16.5 — Safety boundaries (prompt iff destructive/external/credential)"
+18. "Step 17 — Consolidated report + persist authoritative journal + social posts + exact token cost"
+19. "Step 17.5 — Feedback gate (bulk corrections; skip if fast mode)"
+20. "Step 18 — Wrap-up checklist self-audit (REQUIRED — produces 'Wrap-up Checklist Audit' section)"
 ```
 
-**Step 18 is the gate.** Before marking it complete, run `TaskList` and verify every prior task is `completed`. Then write the `## Wrap-up Checklist Audit` section to today's personal journal listing each step's actual status: `run`, `skipped-by-user`, `not-applicable-because-X`. The PreToolUse hook `wrap_up_checklist_check.py` blocks `plur_session_end` until that section exists in the journal.
+**Step 18 is the gate.** Before marking it complete, run `TaskList` and verify every prior task is `completed`. Then write the `## Wrap-up Checklist Audit` section to today's personal journal listing each step's actual status using the §18 allowed statuses: `run ✓`, `skipped-by-user`, `skipped-by-mode-fast`, `not-applicable (REASON)`, `inferred-and-reported (DESCRIPTION)`, or `applied-from-feedback (N CORRECTIONS)`. The PreToolUse hook `wrap_up_checklist_check.py` blocks `plur_session_end` until that section exists in the journal.
 
 **Why this exists:** Spec step counts in past sessions: 17 spec steps, 9 tasks created, 6 silently skipped (observed 2026-05-29 SMK wrap-up; previously documented as ENG-2026-0512-044 on 2026-05-12 but recurred 17 days later). Memory engrams alone are insufficient — execution-time discipline failure. The hook is the structural defense; one-task-per-step is the readability defense.
 
 **CRITICAL:** Steps 5-6 must use `journal-coordinator` and `session-learning-coordinator` — NEVER spawn `journal-entry-writer` or `session-learning` directly with a hardcoded space name. Coordinators discover all relevant spaces automatically. Bypassing them silently skips spaces with actual work.
 
-### 0c. Optional ≠ Agent-Skippable (MANDATORY READ)
+### 0c. Inference-First Model (MANDATORY READ — supersedes the old "always prompt" rule)
 
-Several spec steps say "optional," "or skip," "ask user." Those are **user-skippable, not agent-skippable.** The agent's job is to surface the prompt; the *user* decides whether to skip.
+The previous version of this spec required surfacing a prompt at every decision point (~8 separate interruptions). That was strictly worse than the current model. The new rule:
 
-| Wording in spec | Means |
+**Run every step. Infer every answer you can. Surface ONE bulk feedback gate at the end (§16.5). Let the user veto in bulk.**
+
+For each step that previously asked the user a question:
+
+| Wording in spec | Means under inference-first |
 |---|---|
-| "Optional (user-initiated)" | Ask the user. Don't pre-decide. |
-| "or Enter to skip" | The user gets to press Enter, not you. |
-| "If user is in a hurry" | Not a condition the agent infers. Only if the user says so. |
-| "Automatic (silent)" | Run silently — still RUN. Not "skip without telling user." |
+| "ask user" / "prompt user" | **Infer.** Apply the inferred answer. List in §17 report. User vetoes via §16.5 if wrong. |
+| "Optional (user-initiated)" | **Infer + apply.** The default is "do the cheap reversible thing." |
+| "or Enter to skip" | **Apply silently.** Surface only as a line in the report. |
+| "Automatic (silent)" | **Run silently — still RUN.** Unchanged. Not "skip without telling user." |
 
-If the agent reads "the talk shipped, user said it went well" and concludes "they don't need a coaching check / AI delegation / social posts" — that's pattern-matching to please-the-user, not following spec. Surface the prompt. Let the user skip.
+Only **three** mid-flow prompts remain (§17.5 safety boundaries — force-push, external comms, credentials). Everything else is inferred.
+
+If the agent reads "the talk shipped, user said it went well" and concludes "they don't need a coaching check / AI delegation / social posts" — that's still wrong. The new fix is not "ask harder" but "do the thing silently, then surface what you did so the user can veto." Skipping an entire step requires an explicit reason in the §18 audit table.
+
+### 0d. Flags
+
+`/wrap-up` accepts these forms:
+
+```
+/wrap-up                  # normal mode: one pulse prompt at §1.5, then silent, then §16.5 feedback gate
+/wrap-up fast             # zero prompts: skip pulse, skip §16.5 gate. Pure silent run.
+/wrap-up --fast           # alias for `fast`
+/wrap-up check also tmp/  # pass-through args for §0a context recovery
+```
+
+**Mode behaviors:**
+
+| Mode | §1.5 pulse prompt | §16.5 feedback gate | Inference defaults |
+|------|---|---|---|
+| `normal` | 1 prompt (1-10, instant) | Single bulk prompt at end | Apply all (user vetoes in bulk) |
+| `fast`   | none | none (Enter-to-accept implied) | Apply all |
+
+In both modes, §17.5 safety prompts can still fire if the agent detects a destructive/external/credential action.
+
+**Settings overrides** (in `.datacore/settings.local.yaml`):
+
+```yaml
+wrap_up:
+  default_mode: normal              # or 'fast' — applies when no flag passed
+  inference_mode: auto              # or 'off' (restores legacy per-step prompts)
+  feedback_gate: true               # set false to skip §16.5 even in normal mode
+  tag_extracted_tasks_with: wrap-up-extracted   # so they're trivial to grep/review
+```
+
+When `inference_mode: off`, the spec falls back to the legacy per-step prompts (kept for users who want the old behavior).
 
 ### 1. Session Summary
 
@@ -223,64 +263,67 @@ Work completed:
 
 **Note:** Record the session start time here (from first user message). It's needed at close for the duration calculation.
 
-### 2. Quick Emotional Check
+### 2. Pulse (the only mid-flow prompt in normal mode)
 
-> Surface the prompt below. The user may skip with Enter. The agent does NOT pre-decide that the user is in a hurry / tired / done.
+> Fire this immediately after the §1 summary. ONE single-line `AskUserQuestion`. No follow-up branches mid-flow. If user scored 1-4 they can attach a note via the Other field on the same prompt; the agent records it for /tomorrow without asking again.
 
-**Brief coaching check-in at session end:**
+**Skip entirely when:**
+- mode = `fast`
+- `coach.wrap_up_check: false` in settings
+- `wrap_up.inference_mode: off` (legacy mode — falls back to the old multi-prompt flow further down)
+
+**Prompt format** (using AskUserQuestion):
 
 ```
-QUICK CHECK
-───────────
-How are you feeling after this session? (1-10, or Enter to skip)
-> [user input]
-
-[If 1-4:]
-  Something weighing on you? (brief, or skip for /tomorrow)
-  > [user input or skip]
-
-  [If input: note for evening reflection]
-
-[If 5-10:]
-  Great. Moving on.
+Q: Pulse — how was this session?
+Options:
+  - 8-10 (good)               [Recommended]
+  - 6-7 (fine)
+  - 1-5 (heavy — Other for note)
+  - Skip
 ```
 
 **Behavior:**
-- Ultra-brief - just a pulse check
-- If low, offer to note for evening `/tomorrow` processing
-- Don't do full ABC here - save for evening
-- Skip if user is in a hurry
+- Capture the score immediately. No second prompt for the note — if user picks 1-5 they use the Other field to add free-text in one shot.
+- If a note exists, append it verbatim to `0-personal/0-inbox/coach-pending.md` for /tomorrow's coach session to pick up. Do NOT escalate the conversation here.
+- Record the score in §17 report and §18 audit.
 
 **Configuration** (in `.datacore/settings.local.yaml`):
 ```yaml
 coach:
-  wrap_up_check: true  # Include in /wrap-up
+  wrap_up_check: true  # Include the pulse in /wrap-up (default true)
 ```
 
-If `coach.wrap_up_check: false`, skip entirely.
+If `coach.wrap_up_check: false` → no pulse, audit row reads `not-applicable (coach.wrap_up_check=false)`.
 
-### 3. Continuation Tasks
+### 3. Continuation Tasks (inferred — no prompt)
 
-**If work is incomplete, delegate to `/continue --save` (inline mode).**
+**Infer-and-create.** Do NOT ask "What remains to be done?" — derive it from the session.
 
-The continuation task format (Rich Task Standard + `:BOOTSTRAP:` field) is defined once in the `/continue` command spec. Do NOT reimplement it here — use `/continue`'s inline save logic directly.
+**Inference signals** (any one of these is sufficient to trigger continuation creation):
 
+1. **Git state** — `git status --short` in any session-active repo shows uncommitted/unstaged hunks that aren't intentional WIP
+2. **TODO comments** added during the session (grep diffs for `TODO|FIXME|XXX`)
+3. **Conversation phrases** like "let me finish X tomorrow", "we'll do Y next", "this needs a follow-up", "leaving Z for another session"
+4. **Files in mid-state** — e.g., a function with `pass`/`raise NotImplementedError`, a test file with `# placeholder`, a spec section with `[TBD]`
+5. **Explicit user instruction** in the conversation: "remember to come back to this"
+6. **/continue inline save was invoked** during the session
+
+**If ANY signal exists:** call `/continue --save` inline-mode to create the continuation task. Compose the bootstrap context from the conversation + signals above. Tag `:continuation:`, schedule next working day.
+
+**If NO signal exists:** no continuation task. §17 report shows `Continuation: none (work appears complete)`. §18 audit row reads `not-applicable (no incomplete-work signal)`.
+
+**Surface in §17, not before:**
+- The created continuation task heading + ID + scheduled date
+- The signals that triggered it (so user can veto in §16.5: "actually that's done, drop it")
+
+**Delegation reference:** The continuation task format (Rich Task Standard — DIP-0009 Part 3.5) with the `:BOOTSTRAP:` extension field is maintained in `/continue`. Use `/continue --save` inline; do not reimplement.
+
+**Legacy prompt** (only when `wrap_up.inference_mode: off`):
 ```
-CONTINUATION TASKS
-──────────────────
-This session's work appears incomplete. Let me capture what's needed to continue.
-
-What remains to be done? (brief, or I'll infer from context)
+This session's work appears incomplete. What remains? (brief, or I'll infer)
 > [user input or auto-inferred]
-
-[Use /continue inline-save logic to create the continuation task.
- This creates a Rich Task Standard entry with :continuation: tag,
- BOOTSTRAP property, scheduled on next working day.]
 ```
-
-**Why delegate:** The continuation task format (Rich Task Standard — DIP-0009 Part 3.5) with the `:BOOTSTRAP:` extension field is maintained in `/continue`. Duplicating it here creates drift — one spec gets updated, the other doesn't. `/continue` is the single source of truth for continuation task creation.
-
-**What /wrap-up still owns:** Detecting that work is incomplete, asking the user what remains, and passing that context to the continuation task creation logic. The task format and scheduling logic belong to `/continue`.
 
 ### 4. Mark Completed Tasks (and Retroactive Task Creation)
 
@@ -288,20 +331,34 @@ What remains to be done? (brief, or I'll infer from context)
 - Use `gtd.write_clock_entry` for tasks worked during the session (infer start/end times from conversation message timestamps -- first mention to last mention of each task)
 - Use `gtd.duplicate_check` before creating any new tasks (continuation or GTD tasks) to avoid near-duplicates
 
+**Inference-first: auto-mark high-confidence, defer low-confidence to §16.5 bulk review.**
+
 ```
-TASK COMPLETION
-───────────────
-Checking for completed tasks from this session...
-
-[Scan next_actions.org for tasks related to session work]
-[Log CLOCK entries for tasks worked on using write_clock_entry]
-
-Found X tasks that appear complete:
-- [ ] Task 1 -> Mark DONE? [Y/n]
-- [ ] Task 2 -> Mark DONE? [Y/n]
-
-[Update org-mode states]
+TASK COMPLETION (silent — surfaced in §17 report)
+─────────────────────────────────────────────────
+1. Scan next_actions.org for tasks related to session work
+2. For each candidate compute a match score (heuristic):
+     +3 if task heading matches session goal (semantic overlap)
+     +2 if KEY_FILES property overlaps with files modified this session
+     +1 if any CLOCK timestamp from this session falls inside session window
+     +1 if conversation explicitly references the task ID or near-verbatim heading
+3. Auto-mark DONE for tasks with score ≥ 4 (high confidence)
+4. Add CLOCK entries via gtd.write_clock_entry using inferred start/end times
+5. Tasks with score 2-3 → "Suggested DONE" list in §17 report — user vetoes/confirms in §16.5
+6. Tasks with score < 2 → ignored (not surfaced; too noisy)
 ```
+
+**Report rendering** (§17):
+```
+Auto-marked DONE (high confidence):
+  - org-XXX | "Task heading" — matched files: [...]
+  - org-YYY | "Task heading" — matched goal verbatim
+
+Suggested DONE (medium confidence — confirm in §16.5):
+  - org-ZZZ | "Task heading" — score 3 (file overlap only)
+```
+
+**§16.5 corrections** can include "actually task org-ZZZ isn't done, undo" or "yes confirm all suggested" — applied in one pass.
 
 **Ad-hoc Task Gap Detection:**
 
@@ -416,8 +473,7 @@ Learnings captured:
 - Insights → `[space]/3-knowledge/insights.md`
 - Journal entry → `[space]/journal/YYYY-MM-DD.md`
 
-**Any additional insights to capture?** (brief, or Enter to skip)
-> [user input - passed to coordinators]
+**No "additional insights" prompt.** Coordinators already extract from the conversation. If the user wants to add a missed insight, they do it via §16.5 bulk feedback: *"also capture: the rebase-on-fork pattern for stale dependency PRs"* — the agent then appends to the right learning file in a single pass.
 
 > **Parallel execution:** While coordinators run in background, immediately proceed to steps 7-9 (GTD task extraction, insight verification, session meta-analysis). These steps work from conversation context and do NOT depend on coordinator output. Step 6 (learning review) is the only step that must wait for step 5 to complete.
 
@@ -431,49 +487,35 @@ Learnings captured:
 
 1. **Classify new learnings**: Spawn `learning-classifier` agent. This reads new patterns.md/corrections.md entries since last cursor position, deduplicates via `plur_similarity_search`, creates engrams with proper type/polarity/tags, and detects recurrences and contradictions.
 
-2. **Present review to user** (interactive, skippable):
+2. **Inference-first: default to defer.** No "Review now? [Y/skip/defer]" prompt. Candidates surface in §17 report and §16.5 lets the user override.
 
 ```
-LEARNING REVIEW
-───────────────
-[If candidates exist:]
+LEARNING REVIEW (silent — surfaced in §17 report)
+─────────────────────────────────────────────────
+[After learning-classifier completes:]
   Patterns evaluated: N
-  Passed quality gates → candidates: N
+  Passed quality gates → candidates: N (queued for /today daily-review)
   Failed → reference.md: N
   Failed → reinforced existing: N
 
-  Candidates:
-  1. [type] "Statement summary..."
-     Value: {value_proposition from _review_metadata}
-     Confidence: {quality_confidence}/10
-
-  2. [type] "Statement summary..."
-     Value: {value_proposition}
-     Confidence: {quality_confidence}/10
+  Top candidates (full list in §17):
+  1. [type] "Statement summary..." — confidence X/10
+  2. [type] "Statement summary..." — confidence X/10
 
   [If legacy audit flagged engrams:]
-  Legacy audit (N re-evaluated):
-  ⚠ ENG-XXXX-XXXX-XXX: "Statement..." — fails {gate}, consider retiring
-
-  Review now? [Y/skip/defer]
-
-  [If Y: invoke /daily-review skill for interactive review]
-  [If skip: candidates persist for next session]
-  [If defer: reviewed at next /today]
-
-[If no candidates:]
-  Patterns evaluated: N — none passed quality gates.
-  (N routed to reference.md, M reinforced existing engrams)
+  ⚠ ENG-XXXX-XXXX-XXX: "Statement..." — fails {gate}, consider retiring (surface in §17)
 ```
+
+**§16.5 corrections** can include "actually review the engrams now" (triggers `/daily-review` after the wrap-up closes) or "drop candidate 2 — that's not a real pattern".
 
 **Configuration** (in `.datacore/settings.local.yaml`):
 ```yaml
 learning:
-  auto_defer_learning_review: false  # true = always defer to /today
+  auto_defer_learning_review: true   # default flipped to true — matches inference-first model
   daily_review_max_items: 5
 ```
 
-If `learning.auto_defer_learning_review: true`, skip the interactive prompt entirely. Candidates will surface in next `/today`.
+If `learning.auto_defer_learning_review: false`, restore the legacy interactive prompt.
 
 **Agents spawned:** `learning-classifier` (processes all spaces with new entries)
 **Skills used:** `/daily-review` (if user chooses to review contradictions now)
@@ -484,18 +526,31 @@ If `learning.auto_defer_learning_review: true`, skip the interactive prompt enti
 
 Review the session's insights, decisions, and next steps. Identify items that should become tasks in `next_actions.org` — things that aren't continuation of current work (those go in step 3) but are *new* actionable items that emerged from the session.
 
+**Inference-first: auto-add with a removable tag, surface in report, let user veto in §16.5.**
+
 ```
-GTD TASK EXTRACTION
-───────────────────
+GTD TASK EXTRACTION (silent — surfaced in §17 report)
+─────────────────────────────────────────────────────
 Reviewing session for actionable items beyond continuation tasks...
 
-New tasks identified:
-  1. [#A] Task from insight X → Growth section
-  2. [#B] Task from decision Y → Product section
-  3. [#B] Task from discovery Z → Engineering section
-
-Add these to next_actions.org? [Y/n/edit]
+New tasks identified and added to next_actions.org with :wrap-up-extracted: tag:
+  1. org-YYYYMMDD-HHMMSS-aaaa | [#A] Task from insight X → Growth section
+  2. org-YYYYMMDD-HHMMSS-bbbb | [#B] Task from decision Y → Product section
+  3. org-YYYYMMDD-HHMMSS-cccc | [#B] Task from discovery Z → Engineering section
 ```
+
+**Why auto-add with a tag instead of asking:**
+- Adding an org task is cheap and reversible (1-line edit)
+- The `:wrap-up-extracted:` tag (configurable via `wrap_up.tag_extracted_tasks_with`) makes them trivially greppable for batch review later
+- §16.5 lets the user say "drop task 2, change task 3 to priority A, add another: research X" in one shot
+- Not adding loses time-sensitive items the agent correctly identified
+
+**§16.5 corrections** for this step:
+- `drop task <n>` → delete the task by ID
+- `change task <n> priority to <A/B/C>` → update priority cookie
+- `change task <n> tag <add/remove> <tag>` → tag mutations
+- `move task <n> to <section>` → re-route within next_actions.org
+- `add task: <free text>` → create new task in the same wrap-up-extracted batch
 
 **What qualifies:**
 - Strategic decisions that need follow-up work (but aren't the current task)
@@ -689,7 +744,7 @@ Scanning for artifacts created this session...
   - [space]/notes/            (topic notes, literature)
   - [space]/content/reports/  (analysis reports)
 
-Artifacts found:
+Artifacts found (descriptions inferred from file frontmatter + first heading + session context):
   ┌─────────────────────────────────────────────────────────────┐
   │ TYPE          │ PATH                        │ DESCRIPTION   │
   ├───────────────┼─────────────────────────────┼───────────────┤
@@ -697,11 +752,9 @@ Artifacts found:
   │ Zettel        │ 3-knowledge/zettel/Y.md     │ Concept Y     │
   │ Report        │ content/reports/Z.md        │ Analysis of Z │
   └─────────────────────────────────────────────────────────────┘
-
-[If artifacts found, prompt:]
-Are these descriptions accurate? (Enter to confirm, or correct)
->
 ```
+
+**Inference-first: no per-artifact prompt.** Descriptions are auto-applied to the journal artifact table and the monthly artifact index. The full table appears in §17 — if a description is wrong the user fixes it in §16.5 with `artifact <n> description: <new text>`.
 
 **What gets tracked:**
 
@@ -948,22 +1001,40 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 [Log to journal if updates made]
 ```
 
-### 15. Quick AI Delegation Check
+### 15. AI Delegation Opportunities (inferred — no prompt)
 
-> Surface the prompt. The user may decline. The agent does NOT pre-decide that nothing needs delegating just because the session feels "complete." Time-sensitive opportunities (e.g. social posts about a just-shipped product) decay fast. Always ask.
+**Inference-first: scan the session for delegation candidates, surface them in §17 as suggestions. The user opts IN via §16.5 ("delegate task 1 and 3 tonight"). No tasks are auto-tagged `:AI:` here** — that's a heavier commitment because nightshift will actually execute. Surface, don't auto-execute.
 
+**What to look for** (delegation candidates):
+
+- **Research questions** the user voiced but didn't pursue: "I wonder if X..."
+- **Time-sensitive opportunities** mentioned but parked: just-shipped feature → social posts; market signal → research deep-dive; competitor news → competitive brief
+- **Repetitive maintenance** that's overdue per other GTD signals: "those 5 stale PRs need triage"
+- **Content drafts** mentioned: "I should write about Y"
+- **Outreach** that's been sitting: "I need to follow up with Z"
+
+**Report rendering** (§17):
 ```
-AI DELEGATION
-─────────────
+DELEGATION OPPORTUNITIES (suggestions — opt in via §16.5):
+  1. Research: "x402 vs ERC-8004 — which agentic-payment standard wins?"
+     Why: session mentioned twice, no action taken
+     If approved: would be added with :AI:research: tag
+  2. Content: short post about today's [client]-space verification flow
+     Why: time-sensitive, build-in-public momentum
+     If approved: would be added with :AI:content: tag
+  3. ...
+```
+
+**§16.5 corrections:**
+- `delegate 1 and 3` → add those with appropriate `:AI:*:` tags
+- `delegate all` → add all suggestions
+- `delegate none` (default) → no AI tasks created
+- `delegate: <free text>` → add a user-composed AI task
+
+**Legacy prompt** (only when `wrap_up.inference_mode: off`):
+```
 Any quick tasks to delegate to AI? (brief, or Enter to skip)
 > [user input]
-
-[If input:]
-Added to next_actions.org with :AI: tag.
-Will be reviewed in /tomorrow for overnight execution.
-
-[If skipped:]
-No new AI tasks.
 ```
 
 ### 16. Completion Checklist (REQUIRED)
@@ -1014,6 +1085,18 @@ ls -la ~/Data/0-personal/journal/$(date +%Y-%m-%d).md
 ls -la ~/Data/1-teamspace/journal/$(date +%Y-%m-%d).md 2>/dev/null
 ls -la ~/Data/2-projectspace/journal/$(date +%Y-%m-%d).md 2>/dev/null
 ```
+
+### 16.5. Inference Safety Boundaries (mid-flow prompts allowed ONLY here)
+
+These three categories of action are NOT auto-inferred. If the agent's inference logic during any prior step would trigger one of these, the agent MUST surface a prompt before proceeding. This is the only sanctioned mid-flow interruption in inference-first mode.
+
+| Category | Examples | Action |
+|---|---|---|
+| **Destructive git** | force-push, `--force-with-lease` to protected branch, `git reset --hard` to discard committed work | AskUserQuestion: explicit Y/N before executing |
+| **External communication** | `:AI:send:` task that fires real email/post tonight, posting to social media before review, sending Telegram/WhatsApp | AskUserQuestion: confirm send target + content |
+| **Credential decisions** | rotating a token, changing OAuth scopes, prompting for new auth on a service mid-wrap-up | AskUserQuestion: explicit confirmation |
+
+These are the *only* prompts allowed between §2 (pulse) and §17.5 (feedback gate). If the agent finds itself about to add a fourth prompt category here, it's wrong — the right answer is "infer, apply, surface in §17, let user veto in §17.5 feedback gate" instead.
 
 ### 17. Close — Consolidated Session Report (MANDATORY, NEVER SKIP)
 
@@ -1288,6 +1371,69 @@ After displaying the consolidated report to the user, **write a condensed versio
 - Sum subagent tokens (precise) + main conversation estimate for a session total.
 - This gives the user visibility into the cost of the wrap-up process itself.
 
+### 17.5. Feedback Gate (single bulk-correction prompt — normal mode only)
+
+**The entire point of inference-first.** After §17 outputs the consolidated report, the agent surfaces ONE final prompt asking for bulk corrections. The user can either press Enter to accept everything as-is, or type a free-text instruction containing any number of corrections, which the agent then parses and applies in a single pass.
+
+**Skip the gate when:**
+- mode = `fast`
+- `wrap_up.feedback_gate: false` in settings
+- `wrap_up.inference_mode: off` (legacy mode never hit §17.5)
+
+**Prompt format:**
+
+```
+═══ FEEDBACK ═══
+
+Inferred actions applied (see §17 above for full report):
+  - Pulse: {score}
+  - Continuation: {none | task ID}
+  - DONE auto-marked: N high-confidence | M suggested for review
+  - GTD extracted: N tasks (tag :wrap-up-extracted:)
+  - Engrams: N candidates queued for /today daily-review
+  - Artifacts: N tracked in index
+  - Delegation: N opportunities surfaced (none auto-added)
+
+Anything to change? (Enter to accept all, or bulk instructions)
+>
+```
+
+**Vocabulary the agent must parse** (case-insensitive, comma-separated, line-separated, or natural language — all accepted):
+
+| Pattern | Action |
+|---|---|
+| `drop task <n>` / `remove task <n>` | Delete extracted task n from next_actions.org |
+| `change task <n> priority to <A/B/C>` | Update priority cookie |
+| `change task <n> tag add/remove <tag>` | Tag mutation |
+| `move task <n> to <section>` | Re-route within next_actions.org |
+| `add task: <text>` | Create new task (same wrap-up-extracted batch) |
+| `confirm DONE <n>` / `confirm suggested` | Apply DONE to medium-confidence candidates |
+| `undo DONE <n>` / `undo done org-XXX` | Revert auto-marked DONE |
+| `delegate <n>` / `delegate <n> and <m>` / `delegate all` | Add suggested delegation candidates as :AI:*: tasks |
+| `delegate: <text>` | Add user-composed AI task |
+| `drop engram candidate <n>` | Remove from /daily-review queue |
+| `review engrams now` | Trigger /daily-review skill after wrap-up closes |
+| `artifact <n> description: <text>` | Overwrite inferred artifact description |
+| `add insight: <text>` | Append to space's patterns.md (agent picks the right space) |
+| `drop continuation` / `continuation is done` | Delete the continuation task that was auto-created |
+| `note for tomorrow: <text>` | Append to coach-pending.md for /tomorrow processing |
+
+The agent processes ALL parsed instructions in a single batch, then prints a one-line confirmation per applied edit:
+
+```
+Applied:
+  ✓ Dropped task 3 (org-YYYY...)
+  ✓ Task 2 → priority A
+  ✓ Added 1 delegation task: org-YYYY...
+  ✓ Dropped engram candidate 4
+
+Close confirmed.
+```
+
+**If user types nothing parseable** (e.g., raw question or vague comment), the agent treats it as a `note for tomorrow:` append rather than blocking on clarification. The point is to NOT re-prompt — capture the input, route it, close.
+
+**Audit row:** §18 records `applied-from-feedback (N corrections)` when corrections were applied, or `run ✓ — no corrections` when user pressed Enter.
+
 ### 18. Wrap-up Checklist Self-Audit (MANDATORY, HOOK-ENFORCED)
 
 **This step is the structural defense against silent skipping.** Before plur_session_end can succeed, today's personal journal MUST contain a `## Wrap-up Checklist Audit` section listing every spec step and its actual outcome. The PreToolUse hook `wrap_up_checklist_check.py` enforces this — it reads the journal and refuses to allow session_end if the section is missing.
@@ -1300,34 +1446,41 @@ After displaying the consolidated report to the user, **write a condensed versio
 | Step | Title                                         | Status |
 |------|-----------------------------------------------|--------|
 |  1   | Session summary                                | run ✓ |
-|  2   | Emotional check                                | skipped-by-user (declined prompt) |
-|  3   | Continuation tasks                             | not-applicable (work complete) |
-|  4   | Mark completed tasks                           | run ✓ — 1 task marked DONE (org-XXX) |
+|  2   | Pulse                                          | run ✓ (score 8, no note) |
+|  3   | Continuation tasks                             | inferred-and-reported (none — work complete) |
+|  4   | Mark completed tasks                           | inferred-and-reported (1 auto-marked DONE, 2 surfaced for review) |
 |  5   | Journal + learning coordinators                | run ✓ — 3 journals, 14 engrams |
-|  6   | Learning review                                | run ✓ — 0 contradictions |
-|  7   | GTD task extraction                            | run ✓ — 4 surfaced, 2 added to next_actions |
+|  6   | Learning review                                | inferred-and-reported (8 candidates queued for /today, 0 contradictions) |
+|  7   | GTD task extraction                            | inferred-and-reported (4 added with :wrap-up-extracted:) |
 |  8   | Insight verification                           | run ✓ — coverage table in §6 of report |
 |  9   | Session meta-analysis                          | run ✓ — appended to today's personal journal |
-|  10  | Knowledge artifact tracking                    | run ✓ — 13 rows appended to artifact-index-2026-05.md |
+|  10  | Knowledge artifact tracking                    | inferred-and-reported (13 artifacts, descriptions auto-trusted) |
 |  11  | Index session to journal DB                    | run ✓ — journal_parser.py --sync |
 |  12  | Kill orphaned dev servers                      | run ✓ — killed PID 50706 (http.server 8099) |
 | 12.5 | Archive nightshift reports                     | run ✓ — 0 archived (all within retention) |
 |  13  | Push all repos                                 | run ✓ — ./sync push + smk2026 plur-branding |
 |  14  | Context sync                                   | run ✓ — no registry changes |
-|  15  | AI delegation check                            | run ✓ — user queued 2 tasks |
+|  15  | AI delegation                                  | inferred-and-reported (3 opportunities surfaced, awaiting opt-in) |
+| 16.5 | Safety boundaries                              | not-applicable (no destructive/external/credential action triggered) |
 |  17  | Consolidated report + journal persist + social | run ✓ — report output, journal written, 3 social drafts |
+| 17.5 | Feedback gate                                  | applied-from-feedback (2 corrections: dropped task 3, delegated 1 AI task) |
 |  18  | This audit                                     | run ✓ |
 
-Skips (with reasons):
-- Step 2: user declined emotional check prompt
-- Step 3: no continuation tasks needed (work complete)
-- (Be explicit. "I felt the user was done" is NOT a valid reason — that's a self-serving compression, see /wrap-up §0c.)
+Notes (use only when status alone isn't self-explanatory):
+- Step 2: user picked 8 (good) — pulse complete, no follow-up needed
+- Step 3: no continuation tasks needed (work complete) — see §17 report
+- Step 15: opportunities surfaced; user opted in to 1 via §17.5
+
+(Be explicit. "I felt the user was done" is NOT a valid reason — that's a self-serving compression, see /wrap-up §0c. Likewise "I figured we could infer it" is not a §15 reason — that's the *point*; the reason must be specific.)
 ```
 
 **Statuses allowed:**
 - `run ✓` — step executed
 - `skipped-by-user` — user explicitly declined (e.g. via AskUserQuestion answer)
+- `skipped-by-mode-fast` — step was suppressed by `/wrap-up fast` (e.g. pulse, feedback gate)
 - `not-applicable (REASON)` — concrete factual reason (e.g. "no continuation tasks because work is complete")
+- `inferred-and-reported (DESCRIPTION)` — inference-first model: agent made decisions, applied them, surfaced in §17 report. Example: `inferred-and-reported (1 task auto-marked DONE, 2 surfaced for review)`
+- `applied-from-feedback (N CORRECTIONS)` — §17.5 feedback gate received corrections and applied them. Example: `applied-from-feedback (dropped 1 task, bumped 1 priority)`
 
 **Statuses NOT allowed:**
 - "skipped" without reason
@@ -1389,30 +1542,38 @@ Run `/tomorrow` once at end of day.
 
 ## Step Status Reference
 
-**All 18 steps are REQUIRED to run.** This table describes whether each step prompts the user or runs silently — both categories must execute.
+**All 19 steps are REQUIRED to run** (1-18 plus §16.5 safety, §17.5 feedback). This table describes whether each step prompts the user or runs silently — both categories must execute.
 
-| # | Step | User interaction |
-|---|------|------------------|
-| 1 | Session summary | silent |
-| 2 | Emotional check | prompt — user may decline |
-| 3 | Continuation tasks | prompt — user confirms or "no continuation needed" |
-| 4 | Mark completed tasks | semi (scan + user confirms each candidate) |
-| 5 | Journal + learning coordinators | silent (background subagents) |
-| 6 | Learning review | semi (candidates surfaced, user may review or defer) |
-| 7 | GTD task extraction | semi (agent proposes, user confirms) |
-| 8 | Insight verification | silent (gaps flagged in report) |
-| 9 | Session meta-analysis | silent (written to personal journal) |
-| 10 | Artifact tracking | semi (scan + user confirms descriptions) |
-| 11 | Index session to DB | silent |
-| 12 | Kill orphaned dev servers | silent |
-| 12.5 | Archive nightshift reports | silent |
-| 13 | Push all repos | silent |
-| 14 | Context sync | silent |
-| 15 | AI delegation | prompt — user queues or declines |
-| 17 | Consolidated report + persist + social posts + exact token cost | silent (writes), then surfaces drafts to user |
-| 18 | Wrap-up checklist self-audit | silent (writes audit section to journal — HOOK-ENFORCED) |
+| # | Step | Normal mode | Fast mode |
+|---|------|------|------|
+| 1   | Session summary | silent | silent |
+| 2   | Pulse (1-10) | **1 prompt** (only mid-flow prompt in normal) | skipped-by-mode-fast |
+| 3   | Continuation tasks | inferred-and-reported | inferred-and-reported |
+| 4   | Mark completed tasks | inferred (high-conf auto-mark, med-conf surfaced) | same |
+| 5   | Journal + learning coordinators | silent (background subagents) | silent |
+| 6   | Learning review | inferred (defer to /today, listed in report) | same |
+| 7   | GTD task extraction | inferred (auto-add with :wrap-up-extracted: tag) | same |
+| 8   | Insight verification | silent (gaps flagged in report) | silent |
+| 9   | Session meta-analysis | silent (written to personal journal) | silent |
+| 10  | Artifact tracking | inferred (auto-trust descriptions, listed in report) | same |
+| 11  | Index session to DB | silent | silent |
+| 12  | Kill orphaned dev servers | silent | silent |
+| 12.5 | Archive nightshift reports | silent | silent |
+| 13  | Push all repos | silent | silent |
+| 14  | Context sync | silent | silent |
+| 15  | AI delegation | inferred (opportunities surfaced — opt-in via §17.5) | same (no opt-in path) |
+| 16  | Completion checklist | silent | silent |
+| 16.5 | Safety boundaries | **prompt iff triggered** (destructive git / external comm / credential) | same |
+| 17  | Consolidated report + persist | silent (writes), then surfaces report to user | same |
+| 17.5 | Feedback gate (bulk corrections) | **1 prompt** (Enter to accept) | skipped-by-mode-fast |
+| 18  | Wrap-up checklist self-audit | silent (writes audit section to journal — HOOK-ENFORCED) | silent |
 
-**"silent" ≠ "skip."** Every silent step still executes. The user just doesn't get a prompt. If the agent reads "silent" as permission not to run, see §0c.
+**Prompt count totals:**
+- Normal mode: **2 prompts** (pulse at §2, feedback at §17.5) + §16.5 only-if-triggered safety
+- Fast mode: **0 prompts** + §16.5 only-if-triggered safety
+- Legacy mode (`inference_mode: off`): 8 prompts (the original spec)
+
+**"silent" ≠ "skip."** Every silent step still executes. The user just doesn't get a prompt. **"inferred" ≠ "skip" either** — the agent does the work, applies the decision, lists the result in §17. If the agent reads "inferred" as permission not to run, see §0c.
 
 ## Related
 
