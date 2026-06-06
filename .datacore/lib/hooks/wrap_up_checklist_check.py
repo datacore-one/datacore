@@ -34,7 +34,7 @@ Pass-through otherwise.
 """
 import json
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 
@@ -45,12 +45,22 @@ REQUIRED_SECTIONS = (
 )
 
 
-def journal_paths_today() -> list[Path]:
-    today = date.today().isoformat()
-    return [
-        Path.home() / "Data" / "0-personal" / "notes" / "journals" / f"{today}.md",
-        Path.home() / "Data" / "0-personal" / "journal" / f"{today}.md",
-    ]
+def journal_paths_recent() -> list[Path]:
+    """Today's journal AND yesterday's.
+
+    Sessions that roll past midnight legitimately have their wrap-up content
+    on yesterday's journal (the session-start date). The hook should accept
+    either, so we don't force a thin handoff entry on today's journal just
+    to satisfy a date check.
+    """
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    paths = []
+    for d in (today, yesterday):
+        iso = d.isoformat()
+        paths.append(Path.home() / "Data" / "0-personal" / "notes" / "journals" / f"{iso}.md")
+        paths.append(Path.home() / "Data" / "0-personal" / "journal" / f"{iso}.md")
+    return paths
 
 
 def find_missing_sections(content: str) -> list[str]:
@@ -70,51 +80,64 @@ def main() -> None:
         sys.stdout.write(raw)
         return
 
-    # Find today's journal (try both layouts)
+    # Find a journal with the required sections — accept today OR yesterday.
+    # Sessions that roll past midnight have content on the session-start date,
+    # not today's date. Check both, accept the first that satisfies.
     journal_content = ""
-    for jp in journal_paths_today():
-        if jp.exists():
-            try:
-                journal_content = jp.read_text(encoding="utf-8", errors="replace")
-                break
-            except Exception:
-                continue
+    missing_per_journal: list[tuple[str, list[str]]] = []
+    for jp in journal_paths_recent():
+        if not jp.exists():
+            continue
+        try:
+            content = jp.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        missing = find_missing_sections(content)
+        if not missing:
+            # All sections present in this one — accept
+            journal_content = content
+            break
+        missing_per_journal.append((str(jp), missing))
 
-    if not journal_content:
-        # No journal yet — block with a clear message
+    if journal_content:
+        # All required sections present somewhere recent — pass through
+        sys.stdout.write(raw)
+        return
+
+    if not missing_per_journal:
+        # No journal at all in the last 2 days — block
         sys.stdout.write(json.dumps({
             "decision": "block",
             "reason": (
-                "Wrap-up checklist enforcement: no personal journal entry exists for today. "
-                "Run /wrap-up properly and ensure step 17 persists an authoritative entry to "
-                "0-personal/notes/journals/YYYY-MM-DD.md with three sections: "
-                "'Wrap-up Checklist Audit', 'Token Cost', 'Session Meta-Analysis'. "
+                "Wrap-up checklist enforcement: no personal journal entry exists for today "
+                "or yesterday. Run /wrap-up properly and ensure step 17 persists an "
+                "authoritative entry to 0-personal/notes/journals/YYYY-MM-DD.md with three "
+                "sections: 'Wrap-up Checklist Audit', 'Token Cost', 'Session Meta-Analysis'. "
                 "Then retry plur_session_end."
             ),
         }))
         return
 
-    missing = find_missing_sections(journal_content)
-    if missing:
-        sys.stdout.write(json.dumps({
-            "decision": "block",
-            "reason": (
-                "Wrap-up checklist enforcement: today's personal journal is missing required "
-                f"section(s): {', '.join(repr(s) for s in missing)}. "
-                "Step 17 of /wrap-up requires an authoritative journal entry written from the "
-                "main conversation. Step 18 requires an explicit checklist audit listing every "
-                "spec step (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 12.5, 13, 14, 15, 16.5, 17, "
-                "17.5, 18) with one of these statuses: 'run ✓', 'skipped-by-user', "
-                "'skipped-by-mode-fast', 'not-applicable (REASON)', "
-                "'inferred-and-reported (DESCRIPTION)', or 'applied-from-feedback (N CORRECTIONS)'. "
-                "Append the missing section(s) to the journal and retry plur_session_end. "
-                "See ENG-2026-0512-044 for context on why this is enforced."
-            ),
-        }))
-        return
-
-    # All required sections present — pass through
-    sys.stdout.write(raw)
+    # Some journal exists but is missing sections — report which ones
+    # (use the journal with the fewest missing sections — likely the active one)
+    missing_per_journal.sort(key=lambda x: len(x[1]))
+    best_path, missing = missing_per_journal[0]
+    sys.stdout.write(json.dumps({
+        "decision": "block",
+        "reason": (
+            f"Wrap-up checklist enforcement: journal at {best_path} is missing required "
+            f"section(s): {', '.join(repr(s) for s in missing)}. "
+            "Step 17 of /wrap-up requires an authoritative journal entry written from the "
+            "main conversation. Step 18 requires an explicit checklist audit listing every "
+            "spec step (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 12.5, 13, 14, 15, 16.5, 17, "
+            "17.5, 18) with one of these statuses: 'run ✓', 'skipped-by-user', "
+            "'skipped-by-mode-fast', 'not-applicable (REASON)', "
+            "'inferred-and-reported (DESCRIPTION)', or 'applied-from-feedback (N CORRECTIONS)'. "
+            "Sessions that roll past midnight can keep the audit on the session-start date — "
+            "this hook accepts today's OR yesterday's journal. Append the missing section(s) "
+            "and retry plur_session_end. See ENG-2026-0512-044 for context on why this is enforced."
+        ),
+    }))
 
 
 if __name__ == "__main__":
