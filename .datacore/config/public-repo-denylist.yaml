@@ -23,6 +23,11 @@ private_patterns_file: ~/.datacore/private/customer-denylist.yaml
 # Public repos in our orgs that this denylist protects.
 protected_repos:
   - plur-ai/plur
+  # Datacore public skeleton + spec repos (added 2026-06-10 after the
+  # state/nightshift near-leak — exec records carry task titles):
+  - datacore-one/datacore
+  - datacore-one/datacore-dips
+  - datacore-one/datacore-org
   # Add more as needed: datafund/datacortex, datafund/Agent-Data-Exchange, etc.
   # Conservative: only repos we publish for end-users belong here.
 
@@ -39,6 +44,14 @@ forbidden_paths:
   - "**/confidential/**"
   - "**/internal/**"
   - "**/customer/**"
+
+  # Machine state — execution records contain task titles + error strings
+  - "**/.datacore/state/**"
+  # Personal/team content must never reach the public skeleton repos
+  - "**/org/*.org"
+  - "notes/**"
+  - "journal/**"
+  - "**/0-inbox/**"
 
   # Backups + working copies that may contain secrets
   # NOTE: deliberately avoiding '**/secrets.*' / '**/credentials.*' globs —
