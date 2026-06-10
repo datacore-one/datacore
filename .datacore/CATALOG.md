@@ -230,3 +230,62 @@ Same fork-and-PR model as space templates:
 ---
 
 *Last updated: 2026-03-04*
+
+## Modules (registry)
+
+<!-- MODULES-TABLE:START -->
+_Generated 2026-06-10 by `.datacore/lib/catalog_update.py` — do not hand-edit._
+
+| Module | Version | Description | Repo | Host | Last commit |
+|--------|---------|-------------|------|------|-------------|
+| analytics | 0.1.0 | Website analytics via PostHog — daily metrics for all projects.
+Tracks visitors, | — | local-only | — |
+| chief-of-staff | 0.1.0 | Chief of Staff substrate — observes autonomous system activity (nightshift
+caden | datacore-one/datacore-chief-of-staff | datacore-one | 2026-06-10 |
+| comms | 2.0.0 | Communications infrastructure — brand, content, scheduling, engagement, landing  | datacore-one/datacore-comms | datacore-one | 2026-06-04 |
+| crm | 0.3.0 | Network Intelligence for Datacore.
+Track entities (people, companies, projects,  | datacore-one/datacore-crm | datacore-one | 2026-05-12 |
+| datacore-appbuilder | 0.2.0 | Framework for building Datacore apps — desktop (Tauri v2 default, Wails alternat | — | local-only | — |
+| datacortex | 0.2.0 | Knowledge graph — semantic search, graph statistics, link analysis, and visualiz | datafund/datacortex | datafund | 2026-05-12 |
+| decisions | 0.1.0 | Decisions log — markdown files per decision under [space]/3-knowledge/decisions/ | — | local-only | — |
+| dev | 1.0.0 | Development workflows — deployment, CI/CD monitoring, production verification | — | local-only | — |
+| forge | 0.1.0 | Autonomous digital product business — discover, generate, list, track, iterate | datacore-one/datacore-forge | datacore-one | 2026-05-12 |
+| github | 0.1.0 | GitHub collaboration hub — monitor repos, triage issues, surface decisions,
+let  | — | local-only | — |
+| goals | 0.1.0 | Goals + OKR tracking — yaml-based hierarchical horizons (5y/year/quarter/month/w | — | local-only | — |
+| grants | 1.0.0 | Grant proposal writing and management for EU/NGI and similar funding programs | datacore-one/module-grants | datacore-one | 2026-05-12 |
+| gstack | 0.1.0 | Sprint workflow integration powered by gstack (Garry Tan) -- persistent memory,  | datacore-one/datacore-gstack | datacore-one | 2026-05-12 |
+| gtd | 1.0.0 | Getting Things Done — task capture, inbox processing, and org-mode management | — | local-only | — |
+| health | 0.3.0 | Privacy-first, agent-driven health management system.
+Tracks biometrics, fitness | plur9/datacore-health | plur9 | 2026-06-10 |
+| image-generation | 0.2.0 | Unified image generation - Midjourney (via Apiframe API) and Gemini AI with prom | datacore-one/datacore-image-generation | datacore-one | 2026-05-17 |
+| lens | 0.1.0 | Behavioural observation, personalisation, and metacognition primitive
+for the Da | datacore-one/datacore-lens | datacore-one | 2026-05-12 |
+| mail | 1.2.0 | Email integration — Gmail adapter, AI classification, routing, task creation,
+an | datacore-one/datacore-mail | datacore-one | 2026-06-04 |
+| meetings | 0.5.0 | Meeting lifecycle management for Datacore.
+Automates standup generation, meeting | datacore-one/module-meetings | datacore-one | 2026-05-12 |
+| megaphone-websites | 0.1.0 | Cold outreach website business — research prospect, build demo, generate offer,  | datacore-one/megaphone-websites | datacore-one | 2026-05-12 |
+| metacognition | 0.1.0 | Thinking tools for metacognitive introspection — treating your knowledge base
+as | — | local-only | — |
+| news | 0.2.0 | On-demand news aggregation with AI-scored relevance.
+Fetches RSS feeds, scores b | datacore-one/datacore-news | datacore-one | 2026-05-25 |
+| nightshift | 0.1.0 | Autonomous task execution system that processes :AI: tagged tasks
+with quality g | datacore-one/datacore-nightshift | datacore-one | 2026-06-10 |
+| outbox | 1.1.0 | Content routing out of active workspaces — archive, delivery, publish | — | local-only | — |
+| personal-finance | 0.1.0 | Personal cryptocurrency finance tracking - holdings, transactions, and loan reco | plur9/module-personal-finance | plur9 | 2026-05-12 |
+| research | 0.2.0 | Automated research processing system with NotebookLM podcast generation,
+industr | — | local-only | — |
+| slides | 1.0.0 | Visual content generation - presentations (Gamma.app) with AI-powered background | datacore-one/datacore-slides | datacore-one | 2026-06-05 |
+| tab-capture | 0.1.0 | Browser tab capture to GTD inbox — one-click capture of all open tabs
+into inbox | — | local-only | — |
+| telegram | 0.1.0 | Telegram bot interface for Datacore.
+Run Claude Code sessions via Telegram for m | datacore-one/datacore-telegram | datacore-one | 2026-05-12 |
+| trading | 1.1.0 | Trading workflows — position management, risk monitoring, performance tracking,  | datacore-one/datacore-trading | datacore-one | 2026-06-09 |
+| ventures | 0.1.0 | Autonomous venture framework — roles, cadences, budgets, hypotheses | datacore-one/datacore-ventures | datacore-one | 2026-06-10 |
+| verity | 1.0.0 | Verity - Trusted data services for the fair data exchange.
+Manages MCP server co | datacore-one/datacore-verity | datacore-one | 2026-05-12 |
+| voice-terminal | 0.2.0 | Privacy-first voice assistant — wake word, STT, TTS, Datacore integration. No cl | — | local-only | — |
+| whatsapp | 0.1.0 | WhatsApp integration for Datacore.
+Import contacts and track interactions via CR | — | local-only | — |
+<!-- MODULES-TABLE:END -->
