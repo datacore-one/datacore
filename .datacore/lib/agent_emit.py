@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,6 +56,22 @@ _VALID_SEVERITIES = {"info", "success", "warning", "error"}
 # agent's environment (systemd EnvironmentFile, .env, shell rc).
 _RELAY_URL = os.environ.get("AGENT_STREAM_RELAY_URL", "").rstrip("/")
 _RELAY_TOKEN = os.environ.get("AGENT_STREAM_RELAY_TOKEN", "")
+
+
+_relay_fallback_warned = False
+
+
+def _warn_relay_down(reason: str) -> None:
+    """One warning per process when a configured relay stops accepting
+    events. The local-file fallback preserves the events, but the
+    operator should learn the relay is down from the logs — not from
+    noticing the stream went quiet days later."""
+    global _relay_fallback_warned
+    if not _relay_fallback_warned:
+        print(f"[agent-stream] WARNING: relay {_RELAY_URL} unreachable "
+              f"({reason}); falling back to local file append for the "
+              f"rest of this process", file=sys.stderr)
+        _relay_fallback_warned = True
 
 
 def _post_to_relay(ev: dict[str, Any]) -> bool:
@@ -76,10 +93,15 @@ def _post_to_relay(ev: dict[str, Any]) -> bool:
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=3) as resp:
-            return 200 <= resp.status < 300
-    except (urllib.error.URLError, OSError, ValueError):
+            ok = 200 <= resp.status < 300
+            if not ok:
+                _warn_relay_down(f"HTTP {resp.status}")
+            return ok
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        _warn_relay_down(f"{type(exc).__name__}: {exc}")
         return False
-    except Exception:
+    except Exception as exc:
+        _warn_relay_down(f"{type(exc).__name__}: {exc}")
         return False
 
 

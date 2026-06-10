@@ -149,7 +149,13 @@ CLAUDE.md
 **/.datacore/learning/
 **/.datacore/marketplace/
 **/.datacore/env/
-**/.datacore/state/
+# state/ is machine-local EXCEPT nightshift execution records: those are
+# written on the server (append-only, unique filenames — no conflict risk)
+# and must reach local for CoS cadence-triage + failure analytics.
+# Before 2026-06-10 the blanket state/ ignore kept them server-only, so
+# local analytics always saw zero runs.
+**/.datacore/state/*
+!**/.datacore/state/nightshift
 
 # MCP module (DIP-0002 PRIVATE layer)
 .datacore/mcp-servers.local.yaml
