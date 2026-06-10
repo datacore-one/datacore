@@ -28,7 +28,7 @@ if [ -n "$repo_root" ] && [ -f "$repo_root/.datacore/structure-allow" ]; then
 fi
 
 staged=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null)
-[ -z "$staged" ] && { command -v git-lfs >/dev/null 2>&1 && git lfs pre-commit "$@"; exit $?; }
+[ -z "$staged" ] && exit 0
 
 vfile=$(mktemp)
 sfile=$(mktemp)
@@ -92,6 +92,4 @@ if [ -s "$sfile" ]; then
 fi
 [ "$fail" = "1" ] && { printf "\nTo bypass (emergency): git commit --no-verify\n"; exit 1; }
 
-# Chain to LFS pre-commit if it exists (3-fds uses LFS)
-command -v git-lfs >/dev/null 2>&1 && git lfs pre-commit "$@"
 exit 0

@@ -29,8 +29,26 @@ DATA_DIR="${DATA_DIR:-$HOME/Data}"
 DENYLIST="$DATA_DIR/.datacore/config/public-repo-denylist.yaml"
 AUDIT_SCRIPT="$DATA_DIR/.datacore/lib/audit_public_repos.py"
 
+# Capture the ref list once — both the policy check and git-lfs need it.
+# core.hooksPath routes ALL repos here, bypassing per-repo .git/hooks/ —
+# including the LFS pre-push hook. Without explicit chaining, new LFS
+# objects are never uploaded (3-fds silently accumulated 460 objects /
+# 824 MB unpushed by 2026-06-10 exactly this way; pushes then fail with
+# "pre-receive hook declined" on the remote).
+REFS_INPUT=$(cat || true)
+
+lfs_chain() {
+    if command -v git-lfs >/dev/null 2>&1 && [ -n "$REFS_INPUT" ]; then
+        printf '%s\n' "$REFS_INPUT" | git lfs pre-push "$REMOTE" "$URL" || {
+            echo "pre-push: git-lfs upload failed" >&2
+            exit 2
+        }
+    fi
+}
+
 if [ ! -f "$DENYLIST" ]; then
-    # No denylist = no policy = silent pass
+    # No denylist = no policy = pass (still chain LFS)
+    lfs_chain
     exit 0
 fi
 
@@ -47,7 +65,8 @@ print('1' if '$REPO' in d.get('protected_repos', []) else '0')
 " 2>/dev/null || echo "0")
 
 if [ "$IS_PROTECTED" != "1" ]; then
-    # Not a protected public repo, no check needed
+    # Not a protected public repo, no policy check needed (still chain LFS)
+    lfs_chain
     exit 0
 fi
 
@@ -59,6 +78,7 @@ HITS=0
 HITS_DETAIL=""
 
 while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+    [ -z "$local_ref" ] && continue
     # Skip deletions
     if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
         continue
@@ -137,7 +157,7 @@ for p, pat in warns:
             echo "  ⚠ pre-push: $path matches warning pattern: $pattern (push allowed)" >&2
         fi
     done <<< "$REPORT"
-done
+done <<< "$REFS_INPUT"
 
 if [ "$HITS" -gt 0 ]; then
     echo "" >&2
@@ -159,4 +179,5 @@ if [ "$HITS" -gt 0 ]; then
 fi
 
 echo "pre-push: ✓ no forbidden patterns in pushed commits" >&2
+lfs_chain
 exit 0
