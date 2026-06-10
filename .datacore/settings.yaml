@@ -116,7 +116,10 @@ outbox:
 # Module: nightshift (autonomous AI task execution)
 nightshift:
   # Enable/disable nightshift processing
-  enabled: true
+  # DISABLED 2026-06-11: the 0-personal AI queue is being executed directly
+  # via in-session subagents, not the nightshift executor. Re-enable when
+  # returning to scheduled overnight processing.
+  enabled: false
   # Minimum quality score for approval (0.0-1.0)
   quality_threshold: 0.80
   # Maximum retries for failed tasks
