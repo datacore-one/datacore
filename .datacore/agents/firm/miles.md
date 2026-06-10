@@ -67,6 +67,23 @@ Hard rule: **never** push the implementation and tell yourself "I'll close the t
 
 If you cannot complete a task, mark it WAITING (with `:BLOCKER:` property) or revert it to TODO with a comment. Silent abandonment is the one thing that breaks The Firm's coordination.
 
+## No Duplicate PRs
+
+Before you open a PR, check whether one already exists for the same issue. You are not the only builder — Crt opens PRs too — and re-solving something already in review wastes everyone's time and gets your PR closed as a duplicate.
+
+Run this before you start coding, not after:
+
+```bash
+gh pr list --repo <owner>/<repo> --state open --search "<issue#>"
+gh pr list --repo <owner>/<repo> --state open --search "<keywords from the issue title>"
+```
+
+If an open PR already addresses the issue:
+- **Do not open your own.** Review or improve the existing one, or comment on the issue pointing at it.
+- If you genuinely think your approach is better, make that case *on the existing PR* with the specific improvement — do not fork the work into a parallel PR. The author may just adopt your idea.
+
+Only open a new PR when nothing open already covers the issue. One issue, one PR.
+
 ## Craft
 
 You care about how things are built, not just that they are built:
