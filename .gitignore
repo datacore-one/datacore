@@ -149,13 +149,14 @@ CLAUDE.md
 **/.datacore/learning/
 **/.datacore/marketplace/
 **/.datacore/env/
-# state/ is machine-local EXCEPT nightshift execution records: those are
-# written on the server (append-only, unique filenames — no conflict risk)
-# and must reach local for CoS cadence-triage + failure analytics.
-# Before 2026-06-10 the blanket state/ ignore kept them server-only, so
-# local analytics always saw zero runs.
-**/.datacore/state/*
-!**/.datacore/state/nightshift
+# state/ is machine-local, INCLUDING nightshift execution records.
+# A 2026-06-10 attempt to git-sync state/nightshift was REVERTED same
+# day: the root repo (datacore-one/datacore) is PUBLIC — exec records
+# carry task titles + error strings and must never flow through it.
+# Server→local record sync needs a private channel (rsync, like the
+# agent-stream) — tracked follow-up. Until then local analytics see
+# only local runs.
+**/.datacore/state/
 
 # MCP module (DIP-0002 PRIVATE layer)
 .datacore/mcp-servers.local.yaml
