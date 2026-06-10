@@ -1,0 +1,97 @@
+#!/bin/sh
+# Space-repo pre-commit hook — structural + safety checks.
+#
+# Installed into each [0-9]-*/.git/hooks/pre-commit by
+# .datacore/lib/install_space_hooks.py (idempotent; re-run weekly by
+# nightshift Phase 9.5 so the server's space repos get it too).
+#
+# Combines:
+#   A. DIP-0015 root allowlist (was previously deployed to only 2 of 9
+#      spaces) — blocks NEW files/dirs at space root. Spaces with legacy
+#      top-level dirs grandfather them via .datacore/structure-allow
+#      (one name per line); migrating those stays a structural-integrity
+#      task, but new drift is stopped at commit time.
+#   B. Safety checks: committed git conflict markers (corrupted org
+#      files more than once), DIP-0002 private layer files, obvious
+#      credential patterns.
+#
+# Emergency bypass: git commit --no-verify
+
+ALLOWED_DIRS="org journal today 0-inbox 1-tracks 2-projects 3-knowledge 4-outbox 4-archive notes .datacore .claude .git .github"
+ALLOWED_FILES=".gitignore .gitattributes .gitmodules _index.md README.md CLAUDE.md CLAUDE.base.md CLAUDE.space.md CLAUDE.org.md CLAUDE.team.md CLAUDE.local.md SCAFFOLDING.md SCAFFOLDING.base.md SCAFFOLDING.space.md SCAFFOLDING.local.md venture.yaml hypotheses.yaml mail.yaml VISION.md CEO_BOOTSTRAP.md dashboard.md strategy.yaml .DS_Store"
+
+# Per-space grandfathered entries (legacy dirs/files, one per line)
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
+extra_allow=""
+if [ -n "$repo_root" ] && [ -f "$repo_root/.datacore/structure-allow" ]; then
+  extra_allow=$(grep -v '^#' "$repo_root/.datacore/structure-allow" 2>/dev/null)
+fi
+
+staged=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null)
+[ -z "$staged" ] && { command -v git-lfs >/dev/null 2>&1 && git lfs pre-commit "$@"; exit $?; }
+
+vfile=$(mktemp)
+sfile=$(mktemp)
+trap 'rm -f "$vfile" "$sfile"' EXIT
+
+_allowed() {
+  # $1 = name, $2 = list
+  echo "$2" | tr ' ' '\n' | grep -qx "$1" && return 0
+  [ -n "$extra_allow" ] && echo "$extra_allow" | grep -qx "$1" && return 0
+  return 1
+}
+
+# --- A. DIP-0015 root allowlist ----------------------------------------------
+# SAFETY_ONLY=1 (set by the central githooks dispatcher for non-space
+# repos like app/module/project repos) skips the space-structure check.
+[ "${SAFETY_ONLY:-0}" = "1" ] || echo "$staged" | while IFS= read -r file; do
+  [ -z "$file" ] && continue
+  top=$(echo "$file" | cut -d'/' -f1)
+  if ! echo "$file" | grep -q '/'; then
+    _allowed "$top" "$ALLOWED_FILES" && continue
+    printf "  %s (unexpected root file)\n" "$file" >> "$vfile"
+    continue
+  fi
+  _allowed "$top" "$ALLOWED_DIRS" && continue
+  printf "  %s (unexpected root directory: %s/)\n" "$file" "$top" >> "$vfile"
+done
+
+# --- B. Safety checks ----------------------------------------------------------
+cred_pattern='(AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|sk-ant-[A-Za-z0-9-]{20,}|xox[bap]-[0-9A-Za-z-]{10,})'
+echo "$staged" | while IFS= read -r file; do
+  [ -z "$file" ] && continue
+  [ -f "$file" ] || continue
+  case "$file" in
+    *.local.md)
+      printf "  %s (PRIVATE layer *.local.md, DIP-0002 — never committed)\n" "$file" >> "$sfile"
+      continue ;;
+  esac
+  blob=$(git show ":$file" 2>/dev/null) || continue
+  if echo "$blob" | grep -qE '^(<{7}( |$)|={7}$|>{7}( |$))'; then
+    printf "  %s (git conflict markers — committed markers corrupt org parsing)\n" "$file" >> "$sfile"
+  fi
+  if echo "$blob" | grep -qE "$cred_pattern"; then
+    printf "  %s (credential pattern — move secrets to .datacore/env/)\n" "$file" >> "$sfile"
+  fi
+done
+
+fail=0
+if [ -s "$vfile" ]; then
+  printf "\033[1;31mSTRUCTURAL INTEGRITY VIOLATION\033[0m\n"
+  printf "Files in unexpected root locations:\n\n"
+  cat "$vfile"
+  printf "\nAllowed root dirs: %s\n" "$ALLOWED_DIRS"
+  printf "Grandfathered (this space): %s\n" "$(echo "$extra_allow" | tr '\n' ' ')"
+  printf "Move files to the correct DIP-0015 location, or grandfather in .datacore/structure-allow.\n"
+  fail=1
+fi
+if [ -s "$sfile" ]; then
+  printf "\033[1;31mSAFETY VIOLATION\033[0m\n\n"
+  cat "$sfile"
+  fail=1
+fi
+[ "$fail" = "1" ] && { printf "\nTo bypass (emergency): git commit --no-verify\n"; exit 1; }
+
+# Chain to LFS pre-commit if it exists (3-fds uses LFS)
+command -v git-lfs >/dev/null 2>&1 && git lfs pre-commit "$@"
+exit 0

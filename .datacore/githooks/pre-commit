@@ -1,0 +1,48 @@
+#!/bin/sh
+# Central pre-commit dispatcher.
+#
+# Global git config sets core.hooksPath to this directory, which means
+# per-repo .git/hooks/ are NEVER consulted on this machine. Before
+# 2026-06-10 this directory contained only pre-push — so NO pre-commit
+# validation ran anywhere (the root repo's layer validator and the
+# space hooks were all silently inert since core.hooksPath was set on
+# 2026-06-01).
+#
+# Routing by repo:
+#   Data root repo          -> .datacore/hooks/pre-commit (DIP-0002 layer
+#                              validation + root allowlist)
+#   [0-9]-* space repos     -> .datacore/hooks/space-pre-commit (DIP-0015
+#                              allowlist + safety checks)
+#   any other repo          -> space-pre-commit in SAFETY_ONLY mode
+#                              (conflict markers, *.local.md, credentials)
+#
+# DATA root is derived from this file's location so the same dispatcher
+# works on the server (different $HOME).
+
+hook_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+data_root=$(dirname "$(dirname "$hook_dir")")
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+
+case "$repo_root" in
+  "$data_root")
+    if [ -x "$data_root/.datacore/hooks/pre-commit" ]; then
+      exec "$data_root/.datacore/hooks/pre-commit" "$@"
+    fi
+    exit 0
+    ;;
+  "$data_root"/[0-9]-*)
+    # direct child space repos only (not nested project repos)
+    rel=${repo_root#"$data_root"/}
+    case "$rel" in
+      */*) SAFETY_ONLY=1; export SAFETY_ONLY ;;
+      *)   : ;;
+    esac
+    exec "$data_root/.datacore/hooks/space-pre-commit" "$@"
+    ;;
+  *)
+    SAFETY_ONLY=1
+    export SAFETY_ONLY
+    exec "$data_root/.datacore/hooks/space-pre-commit" "$@"
+    ;;
+esac
