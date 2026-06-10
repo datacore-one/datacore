@@ -166,7 +166,12 @@ if [ -n "$ALL_STAGED" ]; then
         #   - /home/runner   = GitHub Actions runner
         #   - /home/user     = generic doc example
         #   - /Users/runner  = macOS GitHub Actions runner
-        PATH_HITS=$(echo "$DIFF_CONTENT" | grep -P '/Users/(?!runner\b)[a-zA-Z]|/home/(?!(?:deploy|runner|user)\b)[a-zA-Z]' | grep -v '^\+\s*#' || true)
+        # NOTE: BSD grep (macOS) has no -P; the original perl-regex version
+        # errored on EVERY commit and the scan silently passed (fail-open,
+        # found 2026-06-10). POSIX-ERE match + negative filter instead.
+        PATH_HITS=$(echo "$DIFF_CONTENT" | grep -E '/(Users|home)/[a-zA-Z]' \
+            | grep -vE '/Users/runner\b|/home/(deploy|runner|user)\b' \
+            | grep -v '^\+\s*#' || true)
         if [ -n "$PATH_HITS" ]; then
             echo "  WARNING: Absolute personal path(s) in $staged_file:"
             echo "$PATH_HITS" | head -3 | while read -r line; do echo "    $line"; done
