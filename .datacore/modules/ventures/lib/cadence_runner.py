@@ -19,6 +19,11 @@ from pathlib import Path
 
 import yaml
 
+# Ensure sibling lib imports work whether this file is run as a script,
+# imported flat (tests), or imported from elsewhere.
+_LIB_DIR = Path(__file__).resolve().parent
+if str(_LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(_LIB_DIR))
 
 # ---------------------------------------------------------------------------
 # Heartbeat self-report — skip list
@@ -26,7 +31,9 @@ import yaml
 # Ventures whose heartbeat.json must NOT be written by this runner.
 # The desktop app's Firm Status panel labels these "monitored separately"
 # and expects no heartbeat.json present. Per parallel-session contract.
-HEARTBEAT_SKIP_VENTURES = frozenset({"6-meridian"})
+# Single definition lives in cadence_engine (audit A9) — re-exported here
+# for existing importers.
+from cadence_engine import HEARTBEAT_SKIP_VENTURES  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +172,11 @@ def _compute_next_due(roles: dict, cadence_log: dict, today: date) -> str | None
     For each cadence in the venture's roles, compute when it next becomes due
     (last_run + frequency_window). If never run, treat as due now. Pick the
     earliest such timestamp.
+
+    Reads both cadence-log formats (audit A6): the nested format
+    {role: {frequency: {cadence: 'YYYY-MM-DD'}}} written by this runner and
+    the flat-key format {"role.cadence": {"last_run": ..., ...}} written by
+    the heartbeat.
     """
     freq_days = {"daily": 1, "weekly": 7, "monthly": 30, "quarterly": 90}
     earliest: date | None = None
@@ -180,6 +192,11 @@ def _compute_next_due(roles: dict, cadence_log: dict, today: date) -> str | None
             names_list = names if isinstance(names, list) else []
             for name in names_list:
                 last_run_str = freq_log.get(name)
+                if last_run_str is None:
+                    # Flat-key format from the heartbeat
+                    flat_entry = cadence_log.get(f"{role_id}.{name}")
+                    if isinstance(flat_entry, dict):
+                        last_run_str = flat_entry.get("last_run")
                 if last_run_str:
                     try:
                         last_run = date.fromisoformat(str(last_run_str))
@@ -201,23 +218,19 @@ def _compute_next_due(roles: dict, cadence_log: dict, today: date) -> str | None
 def _count_24h_fires(cadence_log: dict, today: date) -> int:
     """Count entries in the cadence log dated within the last 24h.
 
-    Accepts the nested format {role: {frequency: {cadence: 'YYYY-MM-DD'}}}.
+    Delegates to state_writer.compute_24h_fire_count, which accepts both
+    the nested format {role: {frequency: {cadence: 'YYYY-MM-DD'}}} written
+    by this runner and the flat-key format
+    {"role.cadence": {"last_run": 'YYYY-MM-DD', ...}} written by the
+    heartbeat (audit A6 — flat-format fires used to read as 0).
     """
-    cutoff = today - timedelta(days=1)
-    count = 0
-    for role_data in cadence_log.values():
-        if not isinstance(role_data, dict):
-            continue
-        for freq_data in role_data.values():
-            if not isinstance(freq_data, dict):
-                continue
-            for date_str in freq_data.values():
-                try:
-                    if date.fromisoformat(str(date_str)) > cutoff:
-                        count += 1
-                except (ValueError, TypeError):
-                    pass
-    return count
+    from state_writer import compute_24h_fire_count
+
+    # compute_24h_fire_count counts dates >= (now - 24h).date(). Anchor
+    # "now" at the start of tomorrow so dates >= today count — same
+    # semantics as the previous nested-only implementation.
+    now = datetime(today.year, today.month, today.day, tzinfo=timezone.utc) + timedelta(days=1)
+    return compute_24h_fire_count(cadence_log, now)
 
 
 def _write_heartbeat_json(
@@ -234,9 +247,25 @@ def _write_heartbeat_json(
     Schema (verbatim, the daemon parses these field names):
         venture, last_fire, last_status, last_error, next_due,
         cadences_fired_24h, cadences_overdue, decisions_pending[]
+
+    decisions_pending is owned by other writers (the heartbeat agent,
+    auto-defaults escalations) — this runner preserves whatever is already
+    there instead of clobbering it (audit A1). Mirrors the
+    venture_heartbeat.py self-report path.
     """
     target = space_dir / ".datacore" / "state" / "heartbeat.json"
     target.parent.mkdir(parents=True, exist_ok=True)
+
+    existing = {}
+    if target.exists():
+        try:
+            with open(target, encoding="utf-8") as f:
+                existing = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            existing = {}
+    decisions_pending = existing.get("decisions_pending")
+    if not isinstance(decisions_pending, list):
+        decisions_pending = []
 
     payload = {
         "venture": venture_name,
@@ -246,7 +275,7 @@ def _write_heartbeat_json(
         "next_due": next_due,
         "cadences_fired_24h": cadences_fired_24h,
         "cadences_overdue": cadences_overdue,
-        "decisions_pending": [],
+        "decisions_pending": decisions_pending,
     }
 
     tmp = target.with_suffix(".json.tmp")
@@ -255,6 +284,25 @@ def _write_heartbeat_json(
         f.write("\n")
     tmp.replace(target)
     return target
+
+
+def _resolve_budget_ledger_path(space_dir: Path, configured_ledger: str | None) -> Path:
+    """Resolve the venture's budget ledger path (audit A5).
+
+    Canonical is .datacore/state/venture/budget-ledger.yaml — what
+    venture_status.py reads and the BudgetConfig default. An explicit
+    budget.ledger key in venture.yaml is honored. The legacy
+    .datacore/budget-ledger.yaml is used only when the resolved path is
+    missing but the legacy file exists.
+    """
+    resolved = space_dir / (
+        configured_ledger or ".datacore/state/venture/budget-ledger.yaml"
+    )
+    if not resolved.exists():
+        legacy = space_dir / ".datacore" / "budget-ledger.yaml"
+        if legacy.exists():
+            return legacy
+    return resolved
 
 
 def _seed_auto_defaults_if_missing(space_dir: Path) -> None:
@@ -297,10 +345,11 @@ def run(
 
     from venture_discovery import discover_ventures
     from cadence_engine import (
+        cadence_log_path_for,
         find_overdue_cadences,
         filter_by_budget,
         generate_rich_cadence_task,
-        load_cadence_log,
+        load_cadence_log_safe,
         save_cadence_log,
     )
     from budget_tracker import load_ledger
@@ -403,20 +452,11 @@ def run(
             continue
 
         # Load cadence log. Canonical path is .datacore/state/venture/
-        # cadence-log.yaml (matches venture_heartbeat.py). The legacy path
-        # at .datacore/cadence-log.yaml is read as fallback for installs
-        # that haven't migrated yet.
-        cadence_log_path = vs.space_dir / ".datacore" / "state" / "venture" / "cadence-log.yaml"
-        legacy_log_path = vs.space_dir / ".datacore" / "cadence-log.yaml"
-        if cadence_log_path.exists():
-            try:
-                cadence_log = load_cadence_log(cadence_log_path)
-            except Exception:
-                cadence_log = {}  # malformed YAML — heartbeat will surface as error
-        elif legacy_log_path.exists():
-            cadence_log = load_cadence_log(legacy_log_path)
-        else:
-            cadence_log = {}
+        # cadence-log.yaml (matches venture_heartbeat.py); legacy logs at
+        # .datacore/cadence-log.yaml are migrated on read (audit A8) and
+        # corrupt logs are quarantined instead of silently ignored (A3).
+        cadence_log_path = cadence_log_path_for(vs.space_dir)
+        cadence_log = load_cadence_log_safe(cadence_log_path)
 
         # Find overdue cadences
         overdue = find_overdue_cadences(roles, cadence_log, today=today)
@@ -434,8 +474,11 @@ def run(
             )
             continue
 
-        # Budget filtering
-        budget_ledger_path = vs.space_dir / ".datacore" / "budget-ledger.yaml"
+        # Budget filtering — canonical ledger path with legacy fallback,
+        # honoring an explicit budget.ledger key in venture.yaml (audit A5)
+        budget_ledger_path = _resolve_budget_ledger_path(
+            vs.space_dir, vs.config.budget.ledger
+        )
         ledger = load_ledger(budget_ledger_path)
         ceiling = vs.config.budget.ceiling
         ai_ceiling = vs.config.budget.ai_tokens

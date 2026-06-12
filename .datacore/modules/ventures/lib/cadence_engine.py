@@ -5,15 +5,31 @@ Reads role cadences from a venture's roles dict (matching venture.yaml format),
 checks a cadence-log.yaml for last run times, and returns what's overdue.
 """
 
+import logging
+import re
+import shutil
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
 import yaml
 
 
+logger = logging.getLogger(__name__)
+
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent.parent / "templates" / "cadences"
+
+# Ventures whose heartbeat.json must NOT be written by the heartbeat or the
+# cadence runner. The desktop app's Firm Status panel labels these
+# "monitored separately" and expects no heartbeat.json present.
+# Single definition (audit A9) — imported by cadence_runner.py and
+# venture_heartbeat.py.
+HEARTBEAT_SKIP_VENTURES = frozenset({"6-meridian"})
+
+# org-mode states meaning a task is finished. Tasks in these states must
+# NOT suppress cadence re-fires (audit A4).
+COMPLETED_TASK_STATES = frozenset({"DONE", "CANCELLED", "CANCELED", "KILLED"})
 
 
 def load_cadence_template(cadence_name: str, templates_dir: Path = None) -> Optional[str]:
@@ -85,6 +101,97 @@ def save_cadence_log(log: dict, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         yaml.safe_dump(log, f, default_flow_style=False, allow_unicode=True)
+
+
+def cadence_log_path_for(space_dir: Path) -> Path:
+    """Resolve the canonical cadence-log path for a venture space.
+
+    Canonical: [space]/.datacore/state/venture/cadence-log.yaml
+    Legacy:    [space]/.datacore/cadence-log.yaml
+
+    Migrate-on-read: if the canonical file is missing but the legacy one
+    exists, the legacy log is copied to the canonical location so all
+    readers and writers converge on one path (audit A8 — forge's log lived
+    at the legacy path only, making every cadence look overdue every tick).
+    """
+    space_dir = Path(space_dir)
+    canonical = space_dir / ".datacore" / "state" / "venture" / "cadence-log.yaml"
+    legacy = space_dir / ".datacore" / "cadence-log.yaml"
+    if not canonical.exists() and legacy.exists():
+        try:
+            canonical.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(legacy, canonical)
+            logger.warning(
+                "Migrated legacy cadence log %s -> %s", legacy, canonical
+            )
+        except OSError as exc:
+            logger.error(
+                "Failed to migrate legacy cadence log %s -> %s: %s",
+                legacy, canonical, exc,
+            )
+            return legacy
+    return canonical
+
+
+def load_cadence_log_safe(path: Path) -> dict:
+    """Load a cadence log, quarantining the file if it is corrupt.
+
+    A malformed cadence log must never kill a venture (audit A3 — a YAML
+    error in 5-plur's log surfaced as a permanent sense_error and the
+    venture never woke for a month). On parse failure the file is renamed
+    to [name].broken-[UTC timestamp].bak next to the original, the error
+    is logged loudly, and an empty log is returned so cadences fire fresh.
+    """
+    path = Path(path)
+    try:
+        return load_cadence_log(path)
+    except Exception as exc:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        quarantine = path.with_name(f"{path.name}.broken-{stamp}.bak")
+        try:
+            path.rename(quarantine)
+            logger.error(
+                "CORRUPT cadence log %s (%s) — quarantined to %s, starting fresh",
+                path, exc, quarantine,
+            )
+        except OSError as rename_exc:
+            logger.error(
+                "CORRUPT cadence log %s (%s) — quarantine rename failed (%s); "
+                "ignoring file and starting fresh",
+                path, exc, rename_exc,
+            )
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Org-file dedup helpers
+# ---------------------------------------------------------------------------
+
+
+_HEADING_STATE_RE = re.compile(r"^\*+\s+([A-Z]+)\b")
+_CADENCE_PROP_RE = re.compile(r"^\s*:CADENCE:\s*(\S.*)")
+
+
+def collect_active_cadences(org_content: str) -> set:
+    """Collect :CADENCE: property values for tasks that are still open.
+
+    Walks org content line by line, tracking each heading's TODO state.
+    CADENCE properties under DONE/CANCELLED headings are excluded so a
+    completed cadence task no longer suppresses re-fires forever
+    (audit A4). Properties under headings with no recognised state are
+    kept — conservative: suppression stays when the state is unknown.
+    """
+    active = set()
+    current_state = None
+    for line in org_content.splitlines():
+        if line.startswith("*"):
+            match = _HEADING_STATE_RE.match(line)
+            current_state = match.group(1) if match else None
+            continue
+        match = _CADENCE_PROP_RE.match(line)
+        if match and current_state not in COMPLETED_TASK_STATES:
+            active.add(match.group(1).strip())
+    return active
 
 
 # ---------------------------------------------------------------------------

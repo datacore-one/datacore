@@ -21,10 +21,12 @@ Per `~/Data/docs/superpowers/specs/2026-05-07-plur-enterprise-sprint-execution-d
 
 ## Steps
 
-1. **Find the active sprint file**:
+1. **Find the active sprint file** (any week file matches — `2026-W*.yaml`;
+   the flat glob never descends into `sprints/_archive/`, so archived
+   sprints are excluded automatically):
    ```bash
    ENTERPRISE=~/Data/5-plur/2-projects/enterprise
-   ACTIVE=$(ls -t "$ENTERPRISE"/sprints/2026-W*-sprint*.yaml 2>/dev/null | head -1)
+   ACTIVE=$(ls -t "$ENTERPRISE"/sprints/2026-W*.yaml 2>/dev/null | head -1)
    if [ -z "$ACTIVE" ]; then
      echo "No sprint files found; cadence skipped"
      exit 0

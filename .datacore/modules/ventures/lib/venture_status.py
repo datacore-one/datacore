@@ -15,7 +15,11 @@ if str(_module_root.parent) not in sys.path:
     sys.path.insert(0, str(_module_root.parent))
 
 from ventures.lib.venture_discovery import discover_ventures
-from ventures.lib.cadence_engine import find_overdue_cadences, load_cadence_log
+from ventures.lib.cadence_engine import (
+    cadence_log_path_for,
+    find_overdue_cadences,
+    load_cadence_log_safe,
+)
 from ventures.lib.budget_tracker import load_ledger, get_remaining
 from ventures.lib.hypothesis_tracker import load_hypotheses_file, summary as hyp_summary
 
@@ -55,9 +59,9 @@ def _collect_venture_data(vs, today: date) -> dict:
     """Collect all status data for a single VentureSpace."""
     cfg = vs.config
 
-    # --- Cadences ---
-    cadence_log_path = vs.space_dir / ".datacore" / "state" / "venture" / "cadence-log.yaml"
-    cadence_log = load_cadence_log(cadence_log_path)
+    # --- Cadences --- (canonical path with legacy migration — audit A8)
+    cadence_log_path = cadence_log_path_for(vs.space_dir)
+    cadence_log = load_cadence_log_safe(cadence_log_path)
     roles_dict = _load_roles_dict(vs.space_dir / "venture.yaml")
     overdue = find_overdue_cadences(roles_dict, cadence_log, today=today)
 

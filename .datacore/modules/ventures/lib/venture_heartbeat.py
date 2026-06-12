@@ -128,7 +128,12 @@ def sense_venture(space_dir: Path, today: date = None) -> dict:
     Zero LLM cost — only reads YAML/org files.
     """
     import yaml
-    from ventures.lib.cadence_engine import find_overdue_cadences, load_cadence_log
+    from ventures.lib.cadence_engine import (
+        cadence_log_path_for,
+        collect_active_cadences,
+        find_overdue_cadences,
+        load_cadence_log_safe,
+    )
     from ventures.lib.budget_tracker import load_ledger, get_remaining
 
     if today is None:
@@ -152,24 +157,25 @@ def sense_venture(space_dir: Path, today: date = None) -> dict:
     if remaining.get("ai", 0) <= 0:
         return {"needs_attention": False, "reason": "budget_exhausted", "venture": name}
 
-    # Overdue cadences
+    # Overdue cadences. Path resolution handles legacy-log migration (A8);
+    # the safe loader quarantines corrupt YAML instead of raising (A3 —
+    # a parse error here used to become a permanent sense_error).
     roles_raw = raw.get("roles", {})
-    cadence_log_path = space_dir / ".datacore" / "state" / "venture" / "cadence-log.yaml"
-    cadence_log = load_cadence_log(cadence_log_path)
+    cadence_log_path = cadence_log_path_for(space_dir)
+    cadence_log = load_cadence_log_safe(cadence_log_path)
     overdue = []
     if isinstance(roles_raw, dict):
-        from ventures.lib.cadence_engine import find_overdue_cadences
         overdue = find_overdue_cadences(roles_raw, cadence_log, today)
 
-    # Check for pending tasks (already queued)
+    # Check for pending tasks (already queued). Only OPEN tasks suppress
+    # re-fires — DONE/CANCELLED cadence tasks must not block forever (A4).
     org_file = space_dir / "org" / "next_actions.org"
     pending_venture_tasks = 0
     existing_cadences = set()
     if org_file.exists():
         content = org_file.read_text()
         pending_venture_tasks = content.count(":AI:venture:")
-        for match in re.finditer(r':CADENCE:\s*(.+)', content):
-            existing_cadences.add(match.group(1).strip())
+        existing_cadences = collect_active_cadences(content)
 
     # Filter overdue to truly new (not already queued)
     new_overdue = [c for c in overdue if c.cadence_name not in existing_cadences]
@@ -468,7 +474,11 @@ def _sanitize_cadence_key(raw: str) -> list:
 
 def post_execution(result: dict, space_dir: Path):
     """Update venture state after agent execution."""
-    from ventures.lib.cadence_engine import load_cadence_log, save_cadence_log
+    from ventures.lib.cadence_engine import (
+        cadence_log_path_for,
+        load_cadence_log_safe,
+        save_cadence_log,
+    )
 
     today_iso = date.today().isoformat()
 
@@ -477,8 +487,8 @@ def post_execution(result: dict, space_dir: Path):
     if cadence_raw and cadence_raw.strip().lower() != "none":
         cadence_keys = _sanitize_cadence_key(cadence_raw)
         if cadence_keys:
-            cadence_log_path = space_dir / ".datacore" / "state" / "venture" / "cadence-log.yaml"
-            log = load_cadence_log(cadence_log_path)
+            cadence_log_path = cadence_log_path_for(space_dir)
+            log = load_cadence_log_safe(cadence_log_path)
             for key in cadence_keys:
                 log[key] = {
                     "last_run": today_iso,
@@ -591,8 +601,11 @@ def heartbeat_tick(data_dir: Path, venture_filter: str = None, dry_run: bool = F
         from datetime import timezone as _tz
         utc_now = datetime.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        # 6-meridian is monitored separately (trading state out of scope here)
-        HEARTBEAT_SKIP = {"6-meridian"}
+        # 6-meridian is monitored separately (trading state out of scope here).
+        # Single definition lives in cadence_engine (audit A9).
+        from ventures.lib.cadence_engine import (
+            HEARTBEAT_SKIP_VENTURES as HEARTBEAT_SKIP,
+        )
 
         for vs in ventures:
             if vs.space_dir.name in HEARTBEAT_SKIP:

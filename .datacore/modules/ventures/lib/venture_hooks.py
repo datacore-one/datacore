@@ -25,7 +25,11 @@ def on_task_complete(task_properties: dict, space_dir: Path, success: bool = Tru
         space_dir: Path to the venture space (e.g., ~/Data/3-fds)
         success: whether the task executed successfully
     """
-    from ventures.lib.cadence_engine import load_cadence_log, save_cadence_log
+    from ventures.lib.cadence_engine import (
+        cadence_log_path_for,
+        load_cadence_log_safe,
+        save_cadence_log,
+    )
 
     venture = task_properties.get("VENTURE", "")
     role = task_properties.get("ROLE", "")
@@ -34,8 +38,8 @@ def on_task_complete(task_properties: dict, space_dir: Path, success: bool = Tru
     if not all([venture, role, cadence]):
         return  # Not a venture cadence task
 
-    cadence_log_path = space_dir / ".datacore" / "state" / "venture" / "cadence-log.yaml"
-    log = load_cadence_log(cadence_log_path)
+    cadence_log_path = cadence_log_path_for(space_dir)
+    log = load_cadence_log_safe(cadence_log_path)
 
     log_key = f"{role}.{cadence}"
     log[log_key] = {
@@ -58,8 +62,10 @@ def heartbeat(data_dir: Path, dry_run: bool = False) -> dict:
     import yaml
     from ventures.lib.venture_discovery import discover_ventures
     from ventures.lib.cadence_engine import (
+        cadence_log_path_for,
+        collect_active_cadences,
         find_overdue_cadences,
-        load_cadence_log,
+        load_cadence_log_safe,
         save_cadence_log,
         generate_rich_cadence_task,
     )
@@ -78,36 +84,22 @@ def heartbeat(data_dir: Path, dry_run: bool = False) -> dict:
         if not isinstance(roles_raw, dict):
             continue
 
-        # Find overdue
-        cadence_log_path = vs.space_dir / ".datacore" / "state" / "venture" / "cadence-log.yaml"
-        cadence_log = load_cadence_log(cadence_log_path)
+        # Find overdue (canonical log path with legacy migration + corrupt-
+        # file quarantine — audits A3/A8)
+        cadence_log_path = cadence_log_path_for(vs.space_dir)
+        cadence_log = load_cadence_log_safe(cadence_log_path)
         overdue = find_overdue_cadences(roles_raw, cadence_log, today)
 
         if not overdue:
             results.append({"venture": vs.config.name, "new_tasks": 0})
             continue
 
-        # Dedup: check which cadences already have pending tasks in org file
+        # Dedup: only OPEN tasks suppress re-fires. DONE/CANCELLED cadence
+        # tasks must not block a cadence from firing again (audit A4).
         org_file = vs.space_dir / "org" / "next_actions.org"
         existing_cadences = set()
         if org_file.exists():
-            content = org_file.read_text()
-            for line in content.split("\n"):
-                if ":AI:venture:" in line and "TODO" in line:
-                    # Extract cadence name from heading pattern: [venture] role: cadence-name
-                    parts = line.split(":")
-                    for part in parts:
-                        part = part.strip()
-                        if part and not part.startswith("AI") and not part.startswith("venture"):
-                            # Try to match "role: cadence" from heading
-                            pass
-                    # Simpler: check CADENCE property in following lines
-                    pass
-
-            # Better approach: scan for CADENCE properties
-            import re
-            for match in re.finditer(r':CADENCE:\s*(.+)', content):
-                existing_cadences.add(match.group(1).strip())
+            existing_cadences = collect_active_cadences(org_file.read_text())
 
         # Filter out cadences that already have pending tasks
         new_overdue = [c for c in overdue if c.cadence_name not in existing_cadences]
