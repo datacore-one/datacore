@@ -261,3 +261,4 @@ datacore.lock.yaml
 .datacore/modules/comms/config/anchor-accounts.yaml
 node_modules/
 .context/
+.gstack/
