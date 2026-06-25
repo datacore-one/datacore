@@ -1237,7 +1237,7 @@ python3 .datacore/modules/comms/lib/content_engine.py session-posts "SESSION_SUM
 
 Or if the script is unavailable, generate manually:
 
-**Personal X (@greaborisa)** — building in public, casual, what you worked on.
+**Personal X (@jssr)** — building in public, casual, what you worked on.
 Max 280 chars. Specific, authentic.
 
 **Project X (@FairDataSociety or @plur_ai)** — what shipped or what's interesting
