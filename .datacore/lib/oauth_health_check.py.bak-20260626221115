@@ -29,7 +29,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 CREDS_DIR = Path(__file__).parent.parent / "env" / "credentials"
-CLAUDE_CRED = Path.home() / ".claude" / ".credentials.json"
 
 
 def parse_expiry(expiry_str: str):
@@ -74,37 +73,6 @@ def send_telegram(text: str):
         urllib.request.urlopen(req, timeout=10)
     except Exception:
         pass
-
-
-def check_claude_token(now, warn_days):
-    """Check the Claude Code (Anthropic Max) OAuth token that powers Miles.
-
-    Unlike the Google tokens, this one cannot be refreshed non-interactively
-    once its refresh token is rotated/revoked. Recovery is interactive:
-    `ssh nightshift` then `claude setup-token`. So we only monitor + alert.
-    Returns (row_tuple_or_None, problem_str_or_None, exit_contribution_int).
-    """
-    name = "claude_code_oauth (Miles)"
-    if not CLAUDE_CRED.exists():
-        return ((name, 'MISSING', f'no file at {CLAUDE_CRED}'),
-                f"{name}: credentials file missing — run `claude setup-token` on nightshift", 1)
-    try:
-        d = json.loads(CLAUDE_CRED.read_text())
-        o = d.get('claudeAiOauth', {})
-        exp_ms = o.get('expiresAt')
-    except Exception as e:
-        return ((name, 'UNREADABLE', str(e)), f"{name}: unreadable ({e})", 1)
-    if not exp_ms:
-        return ((name, 'NO_EXPIRY', 'no expiresAt (long-lived token?)'), None, 0)
-    expiry = datetime.fromtimestamp(exp_ms / 1000, timezone.utc)
-    days_left = (expiry - now).total_seconds() / 86400
-    if days_left < 0:
-        return ((name, 'EXPIRED', f'expired {(-days_left):.1f}d ago'),
-                f"{name}: EXPIRED — Miles bot is down. Re-auth: ssh nightshift then `claude setup-token`", 1)
-    if days_left < warn_days:
-        return ((name, 'WARN', f'{days_left:.1f} days left'),
-                f"{name}: expires in {days_left:.1f}d — re-auth soon: `claude setup-token` on nightshift", 2)
-    return ((name, 'OK', f'{days_left:.1f} days left'), None, 0)
 
 
 def main():
@@ -191,14 +159,6 @@ def main():
 
     for p in pickle_files:
         rows.append((p.name, 'LEGACY_PICKLE', 'consider migrating to JSON'))
-
-    # --- Claude Code (Anthropic Max) OAuth token that powers Miles ---
-    crow, cproblem, cexit = check_claude_token(now, args.warn_days)
-    if crow:
-        rows.append(crow)
-    if cproblem:
-        problems.append(cproblem)
-    exit_code = max(exit_code, cexit)
 
     # Render report
     width = max(len(r[0]) for r in rows) if rows else 30
