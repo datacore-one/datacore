@@ -21,7 +21,7 @@ def main():
     # Run the original hook-inject
     result = subprocess.run(
         ["npx", "@plur-ai/cli", "hook-inject"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True, text=True, timeout=30,
     )
     try:
         output = json.loads(result.stdout) if result.stdout.strip() else {}

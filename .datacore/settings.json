@@ -127,7 +127,7 @@
           {
             "type": "command",
             "command": "python3 ~/Data/.datacore/lib/hooks/plur_inject_wrapper.py",
-            "timeout": 15
+            "timeout": 30
           }
         ]
       }
