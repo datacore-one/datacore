@@ -1,5 +1,16 @@
+# Full voice terminal (wake word + STT)
 faster-whisper
 openwakeword
 piper-tts
 sounddevice
 numpy
+
+# speak_brief.py — daily audio briefing delivery
+# Tier 1 (high quality, local): kokoro_onnx + soundfile + model files in models/
+# Install: pip install kokoro-onnx soundfile
+# Models: kokoro-v1.0.onnx + voices-v1.0.bin in voice-terminal/models/ (not in git, ~350MB)
+#
+# Tier 2 (cloud fallback, no models needed): gTTS + ffmpeg system package
+# Install: pip install gTTS
+# ffmpeg for OGG conversion (optional — sendAudio fallback works without it)
+gTTS
