@@ -90,6 +90,8 @@ GitHub Issues are source of truth. `org/` routes AI work only. `1-tracks/` organ
 
 Slash commands (`/today`, `/research`, `/wrap-up`) are multi-phase workflows. Conversational commands work naturally — "process inbox", "weekly review", "sync repos".
 
+**Invoking commands via MCP (any harness):** When the user types a slash command (e.g. `/today`, `/tomorrow`, `/wrap-up`, `/continue`, `/process-inbox`), call `datacore_command_run` with the command name. It returns the full workflow instructions — execute each step using your available tools and write output to the specified location. Call `datacore_command_list` to discover available commands. Similarly, `datacore_agent_list` and `datacore_agent_run` load agent prompt templates for task routing. This works identically in any MCP-compatible harness.
+
 ### Knowledge Base
 
 Before starting work, check for existing knowledge:

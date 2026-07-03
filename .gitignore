@@ -239,6 +239,9 @@ content/
 /docs/
 .datacore/plans/
 
+# Hermes agent session plans (ephemeral, machine-local — same rationale as .datacore/plans/)
+.hermes/
+
 # Engagement data (private user profiles)
 .datacore/engagement/profile.yaml
 
