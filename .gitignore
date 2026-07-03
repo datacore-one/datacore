@@ -164,10 +164,12 @@ CLAUDE.md
 
 # Modules: only gtd, outbox, research are root-tracked.
 # All other modules are independent repos, cloned via module.yaml repository: field.
+# voice-terminal is local-only (no repository: field) — keep it tracked.
 .datacore/modules/*/
 !.datacore/modules/gtd/
 !.datacore/modules/outbox/
 !.datacore/modules/research/
+!.datacore/modules/voice-terminal/
 
 # -----------------------------------------------------------------------------
 # SECRETS
