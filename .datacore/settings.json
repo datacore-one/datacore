@@ -113,7 +113,8 @@
           {
             "type": "command",
             "command": "python3 ~/Data/.datacore/lib/session_firstmsg.py",
-            "timeout": 10
+            "timeout": 90,
+            "async": true
           },
           {
             "type": "command",
