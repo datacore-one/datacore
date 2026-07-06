@@ -271,3 +271,4 @@ node_modules/
 # Personal PLUR engram store — must NOT be tracked in this public repo (leak #34).
 # Engrams live in the local global store (~/.plur/engrams.yaml).
 .plur/engrams.yaml
+.datacore/modules/voice-terminal/models/

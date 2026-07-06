@@ -858,6 +858,15 @@ ps -eo pid,ppid,etime,command | grep -E "vite|bun run (dev|server)|next dev|npm 
 
 # Orphaned ones (PPID=1) are from dead sessions — kill automatically
 # Current-session ones — kill automatically (session is ending)
+
+# ALSO: orphaned hook/CLI worker processes (2026-07-06 incident: 24 immortal
+# `plur hook-inject` orphans on a degraded network drove a 16GB machine to
+# 17.4GB swap — the old dev-server-only pattern looked right past them).
+# ANY node process with PPID=1 whose command is a hook or one-shot CLI worker
+# is a leak: hooks/workers should live seconds, not minutes.
+ps -eo pid,ppid,etime,command | awk '$2==1' | grep -E "plur hook-|hook-inject|hook-observe|@plur-ai/cli" | grep -v grep
+# Kill all matches. Additionally FLAG (don't kill) any ppid=1 node process
+# older than 1 hour that isn't a known MCP server — report it for review.
 ```
 
 ```
@@ -880,10 +889,11 @@ Scanning for dev servers...
 - `bun run dev` / `bun run server`
 - `npm run dev` / `npm exec vite`
 - Any `node` process running from a project's `node_modules/.bin/` (e.g., esbuild child processes)
+- **Orphaned (PPID=1) hook/CLI workers**: `plur hook-inject`, `plur hook-observe`, any `@plur-ai/cli` one-shot — these should live seconds; an orphaned one is a leak (see plur-ai/plur#504)
 
 **What to preserve:**
-- MCP server processes (datacore-mcp, exa-mcp-server) — these belong to active Claude sessions
-- Non-dev-server node processes (MCP tools, etc.)
+- MCP server processes (datacore-mcp, exa-mcp-server, plur-mcp) — these belong to active Claude sessions (they have a live claude parent, NOT ppid=1)
+- Non-dev-server node processes with live parents
 
 ### 12.5. Archive Old Nightshift Reports
 

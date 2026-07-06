@@ -86,7 +86,14 @@ def build_required_hooks(datacore_root: str) -> dict:
                     {
                         "type": "command",
                         "command": f"python3 {hooks_dir}/plur_inject_wrapper.py",
-                        "timeout": 15,
+                        # async+90s (2026-07-06, matches PLUR PR #502): the CLI cold-start
+                        # loads the BGE embedder for hybrid search (~20s once the store
+                        # passes a few thousand engrams) — a sync 15s timeout gets killed
+                        # before it finishes, discarding the injection. plur_inject_wrapper.py
+                        # itself already documents this contract; this entry just wasn't
+                        # updated to match when the wrapper was fixed.
+                        "timeout": 90,
+                        "async": True,
                     }
                 ]
             }
@@ -98,7 +105,8 @@ def build_required_hooks(datacore_root: str) -> dict:
                     {
                         "type": "command",
                         "command": "npx @plur-ai/cli hook-inject --rehydrate",
-                        "timeout": 15,
+                        "timeout": 90,
+                        "async": True,
                     }
                 ],
             }
@@ -106,8 +114,8 @@ def build_required_hooks(datacore_root: str) -> dict:
     }
 
 
-def hook_already_exists(existing_entries: list, new_entry: dict) -> bool:
-    """Check if a hook entry (by matcher + command) already exists."""
+def _find_matching_entry(existing_entries: list, new_entry: dict) -> dict | None:
+    """Find an existing entry with the same matcher + overlapping command(s), if any."""
     new_matcher = new_entry.get("matcher", "")
     new_commands = {h.get("command", "") for h in new_entry.get("hooks", [])}
 
@@ -116,31 +124,45 @@ def hook_already_exists(existing_entries: list, new_entry: dict) -> bool:
             continue
         existing_commands = {h.get("command", "") for h in entry.get("hooks", [])}
         if new_commands & existing_commands:
-            return True
-    return False
+            return entry
+    return None
 
 
-def merge_hooks(settings: dict, required: dict) -> tuple[dict, list[str]]:
-    """Merge required hooks into settings, returning (updated, added_list)."""
+def merge_hooks(settings: dict, required: dict) -> tuple[dict, list[str], list[str]]:
+    """Merge required hooks into settings, returning (updated, added_list, upgraded_list).
+
+    A matching entry (same matcher + command) whose config (timeout/async/type)
+    differs from what's required gets REPLACED, not skipped — this was the bug
+    (2026-07-06): the old command-only equality check treated an entry as
+    "already exists" even when its timeout/async fields were stale, so fixing
+    build_required_hooks() alone never propagated to an already-configured
+    settings.json. PLUR's own `plur init` hit and fixed this identical class
+    of bug earlier (strip-then-reinstall, not skip-if-exists) — same fix here.
+    """
     if "hooks" not in settings:
         settings["hooks"] = {}
 
     added = []
+    upgraded = []
     for event, entries in required.items():
         if event not in settings["hooks"]:
             settings["hooks"][event] = []
 
         for entry in entries:
-            if not hook_already_exists(settings["hooks"][event], entry):
+            existing = _find_matching_entry(settings["hooks"][event], entry)
+            desc = entry.get("matcher", "default")
+            if existing is None:
                 # PreToolUse guard must be first to block before other hooks run
                 if event == "PreToolUse" and entry.get("matcher") == "*":
                     settings["hooks"][event].insert(0, entry)
                 else:
                     settings["hooks"][event].append(entry)
-                desc = entry.get("matcher", "default")
                 added.append(f"  {event} ({desc})")
+            elif existing.get("hooks") != entry.get("hooks"):
+                existing["hooks"] = entry["hooks"]
+                upgraded.append(f"  {event} ({desc})")
 
-    return settings, added
+    return settings, added, upgraded
 
 
 def main():
@@ -174,9 +196,9 @@ def main():
         settings = {}
 
     required = build_required_hooks(datacore_root)
-    settings, added = merge_hooks(settings, required)
+    settings, added, upgraded = merge_hooks(settings, required)
 
-    if not added:
+    if not added and not upgraded:
         print("✓ All PLUR session hooks already configured")
         return
 
@@ -185,9 +207,14 @@ def main():
         json.dump(settings, f, indent=2)
         f.write("\n")
 
-    print("✓ Configured PLUR session hooks in ~/.claude/settings.json:")
-    for a in added:
-        print(a)
+    if added:
+        print("✓ Configured PLUR session hooks in ~/.claude/settings.json:")
+        for a in added:
+            print(a)
+    if upgraded:
+        print("✓ Upgraded stale PLUR session hooks in ~/.claude/settings.json:")
+        for u in upgraded:
+            print(u)
     print()
     print("These hooks enforce plur_session_start at the beginning of every session.")
     print("Restart Claude Code for changes to take effect.")
