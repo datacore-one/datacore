@@ -121,16 +121,6 @@
             "timeout": 5
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/hooks/plur_inject_wrapper.py",
-            "timeout": 90,
-            "async": true
-          }
-        ]
       }
     ],
     "PreToolUse": [
