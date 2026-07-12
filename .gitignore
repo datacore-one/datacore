@@ -272,3 +272,8 @@ node_modules/
 # Engrams live in the local global store (~/.plur/engrams.yaml).
 .plur/engrams.yaml
 .datacore/modules/voice-terminal/models/
+
+# GitHub module runtime scan caches — machine-local state, not source.
+# Tracking these made every replica (cos-server) permanently dirty.
+.datacore/modules/github/data/repos.json
+.datacore/modules/github/data/scan_cache.json
