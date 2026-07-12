@@ -277,3 +277,10 @@ node_modules/
 # Tracking these made every replica (cos-server) permanently dirty.
 .datacore/modules/github/data/repos.json
 .datacore/modules/github/data/scan_cache.json
+
+# Machine-local operational scripts — private, never tracked here.
+.datacore/lib/cos_*
+.datacore/lib/winston_*
+.datacore/lib/data_deliver.*
+.datacore/lib/lens_analyze.py
+.datacore/lib/ws_chat_test.py
