@@ -31,6 +31,34 @@ sync_repo() {
         fi
     }
 
+    # Safety check 0: refuse to PUSH from a non-default branch.
+    #
+    # This used to be warn_branch alone — an echo into a log nobody reads, on a
+    # server, at 2am. It fired correctly for two months while 610 commits piled
+    # up on ops/b17-sprint-claim in 5-plur: 52 zettels, 19 literature notes,
+    # every weekly content calendar since mid-June, 15 journal entries. All
+    # pushed. None on main. None visible to anyone.
+    #
+    # The asymmetry was the bug. This same function hard-ABORTS if a commit would
+    # delete >5 files, or if one file loses >500 lines — but merely muttered when
+    # the entire push was destined for a branch nobody would ever read. The second
+    # is the more expensive failure, so it gets the same treatment as the first.
+    #
+    # Abort rather than auto-checkout: a push is not the moment to move someone's
+    # HEAD out from under them. Alerting is the point — silent stranding is what
+    # cost us two months.
+    #
+    # Legitimate feature-branch work: push it yourself, or open a PR.
+    # Override for a deliberate one-off with DATACORE_SYNC_ALLOW_BRANCH=1.
+    abort_if_stray_branch() {
+        [ -z "$current_branch" ] && return 0
+        [ "$current_branch" = "main" ] || [ "$current_branch" = "master" ] && return 0
+        [ "${DATACORE_SYNC_ALLOW_BRANCH:-0}" = "1" ] && return 0
+
+        sync_alert "ABORT push in $name — HEAD is on '$current_branch', not the default branch. Anything pushed from here lands where no one reads it. Either merge to main, open a PR, or re-run with DATACORE_SYNC_ALLOW_BRANCH=1."
+        return 1
+    }
+
     if [ "$ACTION" = "pull" ]; then
         echo "Pulling $name..."
         # Fetch all remotes
@@ -50,6 +78,7 @@ sync_repo() {
     elif [ "$ACTION" = "push" ]; then
         echo "Pushing $name..."
         warn_branch
+        abort_if_stray_branch || return 1
         # Stage new and modified files only — NEVER stage deletions automatically.
         # This prevents partial working copies (e.g. nightshift server) from
         # deleting files they don't have locally. Use 'git rm' for intentional deletes.
