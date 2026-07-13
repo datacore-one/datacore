@@ -245,12 +245,13 @@ def commit_knowledge(repo: Path, paths, message: str, push: bool = True) -> dict
 
 
 def main() -> int:
-    if len(sys.argv) < 4:
+    argv = [a for a in sys.argv[1:] if not a.startswith('--')]
+    if len(argv) < 3:
         print(__doc__)
-        print("Usage: knowledge_commit.py <repo> <message> <path> [path...]")
+        print("Usage: knowledge_commit.py <repo> <message> <path> [path...] [--no-push]")
         return 2
 
-    repo, message, paths = Path(sys.argv[1]), sys.argv[2], sys.argv[3:]
+    repo, message, paths = Path(argv[0]), argv[1], argv[2:]
     r = commit_knowledge(repo, paths, message, push='--no-push' not in sys.argv)
 
     print(f"{r['repo']}: HEAD={r['head']} -> knowledge landed on {r['default_branch']}")
