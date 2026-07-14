@@ -122,13 +122,45 @@ nlm create-audio [id] "..."  # Generate podcast
 nlm audio download [id] file # Download audio
 ```
 
+## Pipeline Entrypoint (canonical since 2026-07-14)
+
+The full pipeline implementation lives HERE, in `lib/research_orchestrator.py`
+(moved from the nightshift module, which keeps only a forwarding shim):
+
+```bash
+python3 .datacore/modules/research/lib/research_orchestrator.py [--limit N] [--dry-run] [--no-podcast]
+```
+
+- Parses url-bearing TODOs from research_learning.org (all collected, sorted
+  [#A] first, capped at --limit; URL-less reading digests never consume slots)
+- Fetch chain: subscription cookies → Jina → direct → Wayback
+- Writes literature notes, zettels, CRM entities, landscape rows; marks items DONE
+- Podcast: creates a NotebookLM notebook via `nlm` (old-style syntax ONLY —
+  `nlm create`, not `nlm notebook create`; the server binary has no new-style
+  commands), adds sources, queues the audio overview
+- Config: module.yaml settings (`nlm_path`, `podcast_output_dir`,
+  `reports_output_dir`, `literature_output_dir`, `zettel_output_dir`,
+  `research_org_file`) are wired with fail-safe fallbacks; `NLM_BIN` env
+  overrides `nlm_path`
+
+### Agent usage (Winston / Miles / any agent)
+
+- **Run it**: invoke the entrypoint above; `--dry-run` is safe reconnaissance.
+- **Check output**: podcasts land in `0-personal/content/podcasts/`, notes per
+  Output Locations. A run that reports `Processed: 0` with a non-empty queue,
+  or a skipped podcast stage, is a FAILURE signal — surface it, don't stay silent.
+- **Update it**: this module is tracked in the root Data repo
+  (datacore-one/datacore) — commit + push there. The nightshift repo needs no
+  changes for research behavior.
+- **Auth**: nlm auth is cookie-derived and expires (see engrams
+  ENG-2026-0714-048): re-auth locally with `nlm auth Default`, copy
+  `~/.nlm/env` to the server.
+
 ## Integration with Nightshift
 
-The module integrates with nightshift for overnight processing:
-1. Nightshift triggers `daily-research-processor` agent
-2. Agent processes research_learning.org
-3. Generates podcasts and notes
-4. Updates morning briefing
+Nightshift is scheduling only: `nightshift-research.timer` (02:00 UTC) runs
+`nightshift run --command=/research-daily`, which dispatches to the entrypoint
+above. Results feed the morning briefing.
 
 ## Focus Areas in research_learning.org
 
