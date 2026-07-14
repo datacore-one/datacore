@@ -1,7 +1,7 @@
 manifest_version: 2
 name: voice-terminal
-version: 0.2.0
-description: "Privacy-first voice assistant — wake word, STT, TTS, Datacore integration. No cloud for audio."
+version: 0.3.0
+description: "Privacy-first voice assistant — wake word, STT, TTS, Datacore integration, Telegram audio delivery. No cloud for audio (except gTTS fallback)."
 author: datacore-one
 license: MIT
 builtin: true

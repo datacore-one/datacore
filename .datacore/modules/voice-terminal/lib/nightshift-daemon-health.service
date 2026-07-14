@@ -1,0 +1,19 @@
+[Unit]
+Description=Nightshift Daemon Health Endpoint (M4 remote-connect support)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gregor
+Group=gregor
+WorkingDirectory=/home/gregor/Data
+EnvironmentFile=/home/gregor/config/nightshift.env
+ExecStart=/usr/bin/python3 /home/gregor/Data/.datacore/modules/voice-terminal/lib/daemon_health.py --bind 127.0.0.1 --port 8899
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
