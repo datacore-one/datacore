@@ -15,18 +15,18 @@ Claim the next ready engineering item from the active PLUR Enterprise sprint and
 ## Context
 
 Per `~/Data/docs/superpowers/specs/2026-05-07-plur-enterprise-sprint-execution-design.md`:
-- Sprint state of truth: `~/Data/5-plur/2-projects/enterprise/sprints/<active>.yaml`
+- Sprint state of truth: `~/Data/5-plur/2-projects/enterprise/sprints/<active>/sprint.yaml` (or flat `<active>.yaml` for older format)
 - Claim helper: `~/Data/5-plur/2-projects/enterprise/scripts/claim.py`
 - HITL gates: see CANVAS.md § HITL escalation list
 
 ## Steps
 
-1. **Find the active sprint file** (any week file matches — `2026-W*.yaml`;
-   the flat glob never descends into `sprints/_archive/`, so archived
-   sprints are excluded automatically):
+1. **Find the active sprint file** (matches both flat `2026-W*.yaml` files and
+   subdirectory-based `2026-W*/sprint.yaml` files; never descends into
+   `sprints/_archive/`, so archived sprints are excluded automatically):
    ```bash
    ENTERPRISE=~/Data/5-plur/2-projects/enterprise
-   ACTIVE=$(ls -t "$ENTERPRISE"/sprints/2026-W*.yaml 2>/dev/null | head -1)
+   ACTIVE=$(ls -t "$ENTERPRISE"/sprints/2026-W*.yaml "$ENTERPRISE"/sprints/2026-W*/sprint.yaml 2>/dev/null | head -1)
    if [ -z "$ACTIVE" ]; then
      echo "No sprint files found; cadence skipped"
      exit 0
