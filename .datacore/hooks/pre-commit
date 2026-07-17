@@ -79,7 +79,10 @@ scan_staged_files() {
 # ========================================================
 ALL_STAGED=$(git diff --cached --name-only --diff-filter=ACM || true)
 STAGED_BASE=$(echo "$ALL_STAGED" | grep -E '\.base\.md$' || true)
-STAGED_MD=$(echo "$ALL_STAGED" | grep -E '\.md$' || true)
+# PII scan targets: markdown AND structured config formats (yaml/json/toml
+# carried real names in the 2026-07-16 cos/priorities.yaml leak — .md-only
+# scanning missed it).
+STAGED_PII=$(echo "$ALL_STAGED" | grep -E '\.(md|ya?ml|json|toml)$' || true)
 STAGED_ORG_TEAM=$(echo "$ALL_STAGED" | grep -E '\.(org|team)\.md$' || true)
 STAGED_ENV=$(echo "$ALL_STAGED" | grep -E '\.env$' || true)
 
@@ -115,22 +118,27 @@ if [ -n "$STAGED_BASE" ]; then
 fi
 
 # ========================================================
-# PII Scan: check staged markdown files for personal data
+# PII Scan: staged markdown + yaml/yml/json/toml files
 # ========================================================
 
 ALLOWED_EMAILS="@example\.com|dev@datacore\.one|nightshift@datacore\.one|security@datacore\.one|noreply@|git@github\.com"
 
-if [ -n "$STAGED_MD" ]; then
-    echo "Scanning staged markdown files for PII..."
+if [ -n "$STAGED_PII" ]; then
+    echo "Scanning staged md/yaml/json/toml files for PII..."
     PII_FOUND=0
 
-    for mdfile in $STAGED_MD; do
-        DIFF_CONTENT=$(get_staged_additions "$mdfile")
+    for piifile in $STAGED_PII; do
+        # package-lock and similar machine files: emails there are upstream
+        # metadata, not PII we introduced
+        case "$piifile" in
+            *package-lock.json|*yarn.lock) continue ;;
+        esac
+        DIFF_CONTENT=$(get_staged_additions "$piifile")
         [ -z "$DIFF_CONTENT" ] && continue
 
         EMAIL_HITS=$(echo "$DIFF_CONTENT" | grep -oE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' | grep -vE "$ALLOWED_EMAILS" || true)
         if [ -n "$EMAIL_HITS" ]; then
-            echo "  WARNING: Potential personal email(s) in $mdfile:"
+            echo "  WARNING: Potential personal email(s) in $piifile:"
             echo "$EMAIL_HITS" | while read -r addr; do echo "    - $addr"; done
             PII_FOUND=1
         fi

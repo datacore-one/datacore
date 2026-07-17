@@ -285,7 +285,8 @@ node_modules/
 .datacore/lib/lens_analyze.py
 .datacore/lib/ws_chat_test.py
 
-# Personal CoS config — NEVER in the public repo (moved 2026-07-16;
-# deliver to replicas via chief-of-staff module deploy, like cos_* scripts)
-.datacore/cos/priorities.yaml
-.datacore/cos/briefing.yaml
+# Personal CoS config — NEVER in the public repo (2026-07-16 incident;
+# deliver to replicas via chief-of-staff module deploy, like cos_* scripts).
+# Whole directory ignored; only sanitized *.example templates are tracked.
+.datacore/cos/*
+!.datacore/cos/*.example

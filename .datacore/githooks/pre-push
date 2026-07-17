@@ -1,183 +1,208 @@
 #!/usr/bin/env bash
-# pre-push: block pushes to protected public repos that contain forbidden paths/content.
+# pre-push: block pushes to protected public repos that contain forbidden
+# paths, forbidden content, or disallowed new .datacore/ files.
 #
-# Provides per-clone protection layered on top of .gitignore (which is
-# reactive) and the audit script (which runs post-hoc on heartbeat).
+# Layered on top of .gitignore (reactive) and the audit script (post-hoc).
+# Policy: .datacore/config/public-repo-denylist.yaml
+# Scanner: .datacore/lib/pre_push_scan.py (paths + content + new-file gate;
+#          also reads the PRIVATE customer denylist at runtime from
+#          ~/.datacore/private/customer-denylist.yaml if present).
 #
-# Activate by setting in any local clone:
-#     git config --local core.hooksPath "$(git rev-parse --show-toplevel)/.githooks"
-# OR globally (pointing at your primary Datacore checkout):
-#     git config --global core.hooksPath "$HOME/Data/.githooks"
+# Failure modes (2026-07-17 hardening):
+#   - Every exit is preceded by a diagnostic (fail LOUD).
+#   - Protected repo + missing python3/pyyaml/denylist/scanner = push
+#     BLOCKED (fail CLOSED). Non-protected repos are unaffected.
+#   - Unknown remote SHA (force-push with stale tracking refs) no longer
+#     silently skips the scan — falls back to commits not on any tracking
+#     ref of the remote.
 #
-# Reads denylist from .datacore/config/public-repo-denylist.yaml.
-# Skips silently for non-protected remotes.
-#
-# Bypass (use with extreme care): SKIP_PRE_PUSH=1 git push ...
+# Activate globally:  git config --global core.hooksPath "$HOME/Data/.datacore/githooks"
+# Bypass (extreme care): SKIP_PRE_PUSH=1 git push ...
 
 set -e
+trap 'echo "pre-push: UNEXPECTED ERROR (line $LINENO) — failing CLOSED, push blocked. Debug: bash -x $0" >&2' ERR
 
 REMOTE="$1"
 URL="$2"
 
-# Quick bypass for emergencies; logs to stderr
 if [ "${SKIP_PRE_PUSH:-0}" = "1" ]; then
-    echo "pre-push: BYPASSED via SKIP_PRE_PUSH=1 → push proceeding without check" >&2
+    echo "pre-push: ⚠ BYPASSED via SKIP_PRE_PUSH=1 → push proceeding WITHOUT policy check" >&2
     exit 0
 fi
 
 DATA_DIR="${DATA_DIR:-$HOME/Data}"
 DENYLIST="$DATA_DIR/.datacore/config/public-repo-denylist.yaml"
-AUDIT_SCRIPT="$DATA_DIR/.datacore/lib/audit_public_repos.py"
+SCANNER="$DATA_DIR/.datacore/lib/pre_push_scan.py"
+
+# Fallback protection list, used ONLY when the denylist file is missing.
+# These are our public end-user repos; better to block a push here than
+# to fail open because a checkout is incomplete.
+FALLBACK_PROTECTED="plur-ai/plur datacore-one/datacore datacore-one/datacore-dips datacore-one/datacore-org"
 
 # Capture the ref list once — both the policy check and git-lfs need it.
 # core.hooksPath routes ALL repos here, bypassing per-repo .git/hooks/ —
 # including the LFS pre-push hook. Without explicit chaining, new LFS
 # objects are never uploaded (3-fds silently accumulated 460 objects /
-# 824 MB unpushed by 2026-06-10 exactly this way; pushes then fail with
-# "pre-receive hook declined" on the remote).
+# 824 MB unpushed by 2026-06-10 exactly this way).
 REFS_INPUT=$(cat || true)
 
 lfs_chain() {
     if command -v git-lfs >/dev/null 2>&1 && [ -n "$REFS_INPUT" ]; then
         printf '%s\n' "$REFS_INPUT" | git lfs pre-push "$REMOTE" "$URL" || {
-            echo "pre-push: git-lfs upload failed" >&2
+            echo "pre-push: ✗ git-lfs upload failed — push blocked" >&2
             exit 2
         }
     fi
 }
 
-if [ ! -f "$DENYLIST" ]; then
-    # No denylist = no policy = pass (still chain LFS)
-    lfs_chain
-    exit 0
-fi
+fail_closed() {
+    echo "" >&2
+    echo "═══════════════════════════════════════════════════════════════" >&2
+    echo "PUSH BLOCKED (fail closed): $REPO is a PROTECTED public repo" >&2
+    echo "but the policy chain cannot run:" >&2
+    echo "  $1" >&2
+    echo "" >&2
+    echo "Fix the tooling (do NOT bypass casually):" >&2
+    echo "  - python3 + pyyaml:  pip3 install pyyaml" >&2
+    echo "  - denylist:          $DENYLIST" >&2
+    echo "  - scanner:           $SCANNER" >&2
+    echo "Emergency bypass (extreme care): SKIP_PRE_PUSH=1 git push ..." >&2
+    echo "═══════════════════════════════════════════════════════════════" >&2
+    exit 1
+}
 
 # Extract repo identifier (org/name) from remote URL.
-# Handles: git@github.com:org/repo.git, https://github.com/org/repo.git, https://github.com/org/repo
-REPO=$(echo "$URL" | sed -E 's#^(git@github.com:|https://github.com/)##; s#\.git$##')
+REPO=$(echo "$URL" | sed -E 's#^(git@github.com:|https://github.com/|ssh://git@github.com/)##; s#\.git$##')
 
-# Check if this remote is in protected_repos
-IS_PROTECTED=$(python3 -c "
+# ---- Determine whether this remote is protected ---------------------------
+PYTHON_OK=1
+command -v python3 >/dev/null 2>&1 || PYTHON_OK=0
+if [ "$PYTHON_OK" = "1" ]; then
+    python3 -c "import yaml" >/dev/null 2>&1 || PYTHON_OK=0
+fi
+
+IS_PROTECTED=0
+if [ -f "$DENYLIST" ]; then
+    if [ "$PYTHON_OK" = "1" ]; then
+        IS_PROTECTED=$(python3 -c "
 import sys, yaml
 with open('$DENYLIST') as f:
     d = yaml.safe_load(f)
 print('1' if '$REPO' in d.get('protected_repos', []) else '0')
-" 2>/dev/null || echo "0")
+" 2>/dev/null) || IS_PROTECTED=""
+        if [ -z "$IS_PROTECTED" ]; then
+            echo "pre-push: ⚠ python/yaml parse of denylist FAILED — using grep fallback to determine protection" >&2
+            PYTHON_OK=0
+        fi
+    fi
+    if [ "$PYTHON_OK" = "0" ]; then
+        # Conservative grep fallback: any listed occurrence of the repo name
+        # in the denylist counts as protected (fail toward protection).
+        if grep -qE "^[[:space:]]*-[[:space:]]*${REPO}[[:space:]]*$" "$DENYLIST" 2>/dev/null; then
+            IS_PROTECTED=1
+        else
+            IS_PROTECTED=0
+        fi
+    fi
+else
+    echo "pre-push: ⚠ denylist NOT FOUND at $DENYLIST — using built-in fallback protected list" >&2
+    case " $FALLBACK_PROTECTED " in
+        *" $REPO "*) IS_PROTECTED=1 ;;
+        *)           IS_PROTECTED=0 ;;
+    esac
+fi
 
 if [ "$IS_PROTECTED" != "1" ]; then
-    # Not a protected public repo, no policy check needed (still chain LFS)
+    echo "pre-push: $REPO not a protected public repo — policy check skipped (LFS still chained)" >&2
     lfs_chain
     exit 0
 fi
 
-echo "pre-push: $REPO is protected — running policy check…" >&2
+echo "pre-push: $REPO is PROTECTED — running policy chain…" >&2
 
-# Read each ref being pushed from stdin
-# Format: <local-ref> <local-sha> <remote-ref> <remote-sha>
-HITS=0
-HITS_DETAIL=""
+# Protected repo: everything must be in place or we fail closed.
+[ -f "$DENYLIST" ]  || fail_closed "denylist file missing"
+[ "$PYTHON_OK" = "1" ] || fail_closed "python3 with pyyaml not available"
+[ -f "$SCANNER" ]   || fail_closed "scanner script missing"
 
+# ---- Collect outgoing commit range per ref --------------------------------
+ALL_RANGE=""
 while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
     [ -z "$local_ref" ] && continue
-    # Skip deletions
     if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+        echo "pre-push: $remote_ref is a deletion — nothing to scan" >&2
         continue
     fi
 
-    # Determine commit range to check
     if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
-        # New branch — diff against the closest remote-tracking branch (default branch first)
+        # New branch — diff against the closest remote-tracking branch
         BASE=""
         for candidate in "${REMOTE}/main" "${REMOTE}/master" "${REMOTE}/develop"; do
-            if git rev-parse --verify "$candidate" >/dev/null 2>&1; then
+            if git rev-parse --quiet --verify "$candidate" >/dev/null 2>&1; then
                 BASE="$candidate"
                 break
             fi
         done
         if [ -n "$BASE" ]; then
-            RANGE=$(git rev-list "${BASE}..${local_sha}" 2>/dev/null)
+            RANGE=$(git rev-list "${BASE}..${local_sha}" 2>/dev/null || true)
         else
-            # No remote default known — check the most recent N commits as a safety net
-            RANGE=$(git rev-list "$local_sha" 2>/dev/null | head -50)
+            echo "pre-push: ⚠ new branch, no ${REMOTE} tracking base found — scanning last 50 commits as safety net" >&2
+            RANGE=$(git rev-list "$local_sha" 2>/dev/null | head -50 || true)
         fi
+    elif git rev-parse --quiet --verify "${remote_sha}^{commit}" >/dev/null 2>&1; then
+        RANGE=$(git rev-list "${remote_sha}..${local_sha}" 2>/dev/null || true)
     else
-        RANGE=$(git rev-list "${remote_sha}..${local_sha}" 2>/dev/null)
-    fi
-
-    if [ -z "$RANGE" ]; then
-        continue
-    fi
-
-    # Get all paths ADDED or MODIFIED in those commits.
-    # Deletions don't expose new content; --diff-filter=AM excludes D (delete), R (rename out), C (copy out).
-    # --root makes initial-commit (no parent) diffs work — compares against empty tree.
-    PATHS=$(echo "$RANGE" | xargs -I {} git diff-tree --no-commit-id --name-only --diff-filter=AM --root -r {} 2>/dev/null | sort -u)
-
-    if [ -z "$PATHS" ]; then
-        continue
-    fi
-
-    # Check each path against denylist via Python
-    REPORT=$(echo "$PATHS" | python3 -c "
-import sys, yaml, fnmatch
-with open('$DENYLIST') as f:
-    d = yaml.safe_load(f)
-forbidden = d.get('forbidden_paths', [])
-warnings = d.get('warning_patterns', {}).get('paths', [])
-hits = []
-warns = []
-for line in sys.stdin:
-    p = line.strip()
-    if not p:
-        continue
-    for pat in forbidden:
-        if (fnmatch.fnmatch(p, pat) or
-            (pat.startswith('**/') and fnmatch.fnmatch(p, pat[3:])) or
-            (pat.endswith('/**') and (p == pat[:-3] or p.startswith(pat[:-3] + '/')))):
-            hits.append((p, pat))
-            break
-    else:
-        for pat in warnings:
-            if (fnmatch.fnmatch(p, pat) or
-                (pat.startswith('**/') and fnmatch.fnmatch(p, pat[3:])) or
-                (pat.endswith('/**') and (p == pat[:-3] or p.startswith(pat[:-3] + '/')))):
-                warns.append((p, pat))
-                break
-for p, pat in hits:
-    print(f'BLOCK\t{p}\t{pat}')
-for p, pat in warns:
-    print(f'WARN\t{p}\t{pat}')
-")
-
-    while IFS=$'\t' read -r severity path pattern; do
-        if [ "$severity" = "BLOCK" ]; then
-            HITS=$((HITS + 1))
-            HITS_DETAIL="${HITS_DETAIL}  ✗ ${path}  (matched: ${pattern})\n"
-        elif [ "$severity" = "WARN" ]; then
-            echo "  ⚠ pre-push: $path matches warning pattern: $pattern (push allowed)" >&2
+        # Remote SHA not present locally (force-push over unknown history /
+        # stale tracking refs). Previously this crashed rev-list and the
+        # scan was SILENTLY SKIPPED. Now: scan everything not already on a
+        # tracking ref of this remote.
+        echo "pre-push: ⚠ remote SHA ${remote_sha:0:12} not present locally — scanning commits not on any ${REMOTE} tracking ref" >&2
+        if git for-each-ref --format='x' "refs/remotes/${REMOTE}" 2>/dev/null | grep -q x; then
+            RANGE=$(git rev-list "$local_sha" --not --remotes="$REMOTE" 2>/dev/null || true)
+            if [ -z "$RANGE" ]; then
+                echo "pre-push: all commits of ${local_sha:0:12} already covered by ${REMOTE} tracking refs — nothing new exposed" >&2
+            fi
+        else
+            echo "pre-push: ⚠ no ${REMOTE} tracking refs at all — scanning last 50 commits as safety net" >&2
+            RANGE=$(git rev-list "$local_sha" 2>/dev/null | head -50 || true)
         fi
-    done <<< "$REPORT"
+    fi
+
+    [ -n "$RANGE" ] && ALL_RANGE="${ALL_RANGE}${RANGE}
+"
 done <<< "$REFS_INPUT"
 
-if [ "$HITS" -gt 0 ]; then
+if [ -z "$ALL_RANGE" ]; then
+    echo "pre-push: ✓ no outgoing commits to scan" >&2
+    lfs_chain
+    exit 0
+fi
+
+# ---- Run the scanner (paths + content + new-file gate) --------------------
+# (run inside an if-condition so the ERR trap doesn't fire on an expected
+# nonzero exit — the scanner's exit code IS the verdict, not an error)
+if printf '%s' "$ALL_RANGE" | DATA_DIR="$DATA_DIR" python3 "$SCANNER" --repo "$REPO" --denylist "$DENYLIST" >&2; then
+    SCAN_EXIT=0
+else
+    SCAN_EXIT=$?
+fi
+
+if [ "$SCAN_EXIT" = "2" ]; then
+    fail_closed "scanner reported an internal error (exit 2) — see output above"
+elif [ "$SCAN_EXIT" != "0" ]; then
     echo "" >&2
     echo "═══════════════════════════════════════════════════════════════" >&2
-    echo "PUSH BLOCKED: $HITS path(s) match forbidden patterns for $REPO" >&2
+    echo "PUSH BLOCKED: policy violations for $REPO (see ✗ lines above)" >&2
     echo "═══════════════════════════════════════════════════════════════" >&2
-    printf "%b" "$HITS_DETAIL" >&2
+    echo "These paths/contents are confidential and must not reach a" >&2
+    echo "public repository. Move them to a private repo or fix the diff." >&2
     echo "" >&2
-    echo "These paths are confidential and must not reach a public repository." >&2
-    echo "Move them to a private repo (plur-ai/enterprise, plur-ai/plur-space)." >&2
-    echo "" >&2
-    echo "If this is a false positive, edit:" >&2
-    echo "  $DENYLIST" >&2
-    echo "" >&2
-    echo "Emergency bypass (use with care):" >&2
-    echo "  SKIP_PRE_PUSH=1 git push ..." >&2
+    echo "False positive? Edit: $DENYLIST" >&2
+    echo "Emergency bypass (extreme care): SKIP_PRE_PUSH=1 git push ..." >&2
     echo "═══════════════════════════════════════════════════════════════" >&2
     exit 1
 fi
 
-echo "pre-push: ✓ no forbidden patterns in pushed commits" >&2
+echo "pre-push: ✓ policy chain passed for $REPO" >&2
 lfs_chain
 exit 0

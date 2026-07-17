@@ -1,0 +1,24 @@
+# Chief of Staff standup — YOUR customization.
+#
+# TEMPLATE: copy to standup.yaml and customize.
+# The real standup.yaml is machine-local and gitignored — it may contain
+# team/client context and must NEVER be committed to a public repo.
+#
+# Shapes the standup the CoS generates (see meetings module /standup).
+
+# Sections to include, in order. The CoS fills each with real content.
+sections:
+  - yesterday        # what shipped / moved since the last standup
+  - today            # planned focus, drawn from next actions + calendar
+  - blockers         # anything stuck, aging, or waiting on someone
+
+# Sources the CoS may draw from when composing the standup.
+sources:
+  - journal          # yesterday's journal entries across spaces
+  - next_actions     # NEXT/TODO tasks scheduled for today
+  - meetings         # today's calendar / meeting prep
+
+# Standing requests — instructions the CoS honors every standup.
+additions:
+  - "Example: keep it under N lines."
+  - "Example: flag any task that has been in blockers for more than 3 days."

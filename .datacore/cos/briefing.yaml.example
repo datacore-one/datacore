@@ -1,0 +1,24 @@
+# Chief of Staff daily briefing — YOUR customization.
+#
+# TEMPLATE: copy to briefing.yaml and customize.
+# The real briefing.yaml is machine-local and gitignored — it may contain
+# personal standing requests and must NEVER be committed to a public repo.
+#
+# Edit freely; it syncs to your CoS server and shapes every morning's briefing.
+
+# Sections to include, in order. The CoS fills each with real content.
+sections:
+  - good_morning     # health: readiness, sleep, HRV, capacity
+  - the_world        # what moved: news + market, tied to your work
+  - the_ask          # decisions that need YOUR verdict today
+  - focus            # 3-5 things that deserve your attention
+  - priority_pulse   # are your priorities moving or stalled?
+  - delegate         # what agents handle tonight
+  - watch            # aging/at-risk items
+  - observation      # the CoS's narrative read of the day
+
+# Standing requests — the CoS honors every one, every day.
+# Add your own; these are instructions, not suggestions.
+additions:
+  - "Example: always call out <project> status if there's any movement or block."
+  - "Example: end with a one-line summary in a specific tone or voice."

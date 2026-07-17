@@ -1,0 +1,46 @@
+# Stated priorities — the Chief of Staff reasons from these.
+#
+# TEMPLATE: copy to priorities.yaml and fill in your own priorities.
+# The real priorities.yaml is machine-local and gitignored — it contains
+# personal/business context and must NEVER be committed to a public repo.
+#
+# This file is YOUR voice in the briefing. The CoS weighs every signal
+# (journals, tasks, ventures, engrams, metacognition) against these
+# priorities and explains its recommendations in terms of them.
+#
+# Edit freely; the CoS picks up changes on the next briefing generation.
+# If this file goes stale (>30d untouched), the CoS will ask you to
+# reconfirm rather than silently assume it still holds.
+#
+# Fields:
+#   rank      — 1 is highest; ties allowed
+#   priority  — short name the CoS uses when referencing it
+#   why       — your reasoning, so the CoS can apply judgment, not keywords
+#   success   — what "moving" looks like; the CoS measures signals against this
+#   keywords  — help the CoS connect tasks/journals/ventures to this priority
+
+updated: 1970-01-01
+
+priorities:
+  - rank: 1
+    priority: "Your top priority — one short phrase"
+    why: >-
+      Explain why this matters most right now, in your own words.
+      Include enough reasoning that the CoS can apply judgment when
+      new signals arrive, rather than matching keywords blindly.
+    success: >-
+      Describe what visible progress looks like — shipped milestones,
+      signed agreements, metrics moving — so the CoS can tell whether
+      this priority is advancing or stalled.
+    keywords: [example, placeholder, project-name, milestone]
+
+  - rank: 2
+    priority: "Your second priority"
+    why: >-
+      Reasoning for the second priority.
+    success: >-
+      Observable success criteria for the second priority.
+    keywords: [another, set, of, keywords]
+
+# Anything not covered above is context, not priority. The CoS may
+# surface it under "watch" but should not let it displace focus.

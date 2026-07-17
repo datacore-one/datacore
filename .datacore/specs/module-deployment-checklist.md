@@ -114,6 +114,14 @@ Ensure git behavior is consistent:
   - Both: `git config --global push.autoSetupRemote true`
   - **Impact if missing**: Merge conflicts, push failures
 
+- [ ] **Git hooks installed + core.hooksPath set** (EVERY host that can push)
+  - Both: `git config --global core.hooksPath` must print `<Data root>/.datacore/githooks`
+  - Set with: `git config --global core.hooksPath "$HOME/Data/.datacore/githooks"` (adjust root on servers, e.g. `/root/Data/...`)
+  - Hook scripts + public denylist ship with the datacore repo (`.datacore/githooks/`, `.datacore/hooks/`, `.datacore/config/public-repo-denylist.yaml`) — a current clone has them; verify `python3 -c 'import yaml'` works (pre-push fails CLOSED on protected repos without it)
+  - Optional: provision `~/.datacore/private/customer-denylist.yaml` (NEVER via git) — without it the pre-push content scan skips customer-name patterns and logs a loud notice
+  - Verify with a dry run: `cd ~/Data && echo "refs/heads/main $(git rev-parse HEAD) refs/heads/main $(git rev-parse origin/main)" | .datacore/githooks/pre-push origin "$(git remote get-url origin)"`
+  - **Impact if missing**: pushes from that host bypass the entire public-repo leak guard (this is how the 2026-07-16 cos/priorities.yaml leak shipped)
+
 ### Repository Architecture
 
 Verify repo structure matches:
