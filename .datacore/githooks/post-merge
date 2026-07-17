@@ -1,0 +1,5 @@
+#!/bin/sh
+# Global dispatcher: chain git-lfs post-merge for repos that use LFS.
+# (core.hooksPath bypasses per-repo .git/hooks, including LFS hooks.)
+command -v git-lfs >/dev/null 2>&1 || exit 0
+git lfs post-merge "$@"
