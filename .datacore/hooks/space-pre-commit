@@ -70,6 +70,16 @@ echo "$staged" | while IFS= read -r file; do
   if echo "$blob" | grep -qE '^(<{7}( |$)|={7}$|>{7}( |$))'; then
     printf "  %s (git conflict markers — committed markers corrupt org parsing)\n" "$file" >> "$sfile"
   fi
+  # Test fixtures legitimately carry fake credential-shaped strings (e.g. a
+  # sk-ant-oat01-TESTTOKEN in an OAuth-flow test that exercises the real
+  # extraction regex). Exempt test paths from the credential-PATTERN rule
+  # only — conflict-marker and *.local.md checks above still apply. Mirrors
+  # how gitleaks/trufflehog allowlist test paths; real secrets live in
+  # product code, not fixtures.
+  case "$file" in
+    */tests/*|*/test/*|*/__tests__/*|*/testdata/*|*/fixtures/*)
+      continue ;;
+  esac
   if echo "$blob" | grep -qE "$cred_pattern"; then
     printf "  %s (credential pattern — move secrets to .datacore/env/)\n" "$file" >> "$sfile"
   fi
