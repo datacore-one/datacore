@@ -14,7 +14,7 @@ Usage:
 
 Models:
     perplexity  -> sonar-pro (override with --pplx-model, e.g. sonar-deep-research)
-    gemini      -> gemini-3-pro-preview (override with --gemini-model)
+    gemini      -> gemini-3.1-pro-preview (override with --gemini-model)
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ PPLX_URL = "https://api.perplexity.ai/chat/completions"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 DEFAULT_PPLX_MODEL = "sonar-pro"
-DEFAULT_GEMINI_MODEL = "gemini-3-pro-preview"
+DEFAULT_GEMINI_MODEL = "gemini-3.1-pro-preview"
 
 
 def load_env() -> None:
