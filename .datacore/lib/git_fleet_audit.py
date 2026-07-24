@@ -55,6 +55,11 @@ def audit_repo(repo: Path) -> dict:
     default = default_branch(repo)
 
     dirty = [l for l in git(repo, 'status', '--porcelain').splitlines() if l.strip()]
+    # Deletions get their own count. A large batch of pending deletions is the
+    # fingerprint of the git_fleet_sync failure that wiped 110 files from
+    # datafund-space (caa7d58, 2026-07-21); buried inside a single "N uncommitted
+    # files" line it read as ordinary strandage and drew no attention.
+    deletions = [l for l in dirty if 'D' in l[:2]]
 
     # Commits on HEAD that no remote branch contains — the unpushed set.
     unpushed = git(repo, 'log', '--oneline', '--not', '--remotes')
@@ -81,7 +86,9 @@ def audit_repo(repo: Path) -> dict:
     if unpushed_commits:
         problems.append(f'{len(unpushed_commits)} UNPUSHED commit(s)')
     if dirty:
-        problems.append(f'{len(dirty)} UNCOMMITTED file(s)')
+        problems.append(
+            f'{len(dirty)} UNCOMMITTED file(s)'
+            + (f' — {len(deletions)} DELETION(S)' if deletions else ''))
 
     return {
         'repo': str(repo),
@@ -91,6 +98,7 @@ def audit_repo(repo: Path) -> dict:
         'stray': on_stray,
         'detached': detached,
         'dirty_files': len(dirty),
+        'deleted_files': len(deletions),
         'unpushed': len(unpushed_commits),
         'ahead_of_default': ahead,
         'behind_default': behind,
