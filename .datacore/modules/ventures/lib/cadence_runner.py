@@ -129,8 +129,19 @@ def _append_raw_org(org_file: Path, task: dict) -> None:
     """
     org_file.parent.mkdir(parents=True, exist_ok=True)
 
+    # DIP-0009 v1.1 chokepoint rule: never compose "** STATE Heading" with a
+    # heading that may itself start with a state keyword — that is how
+    # stacked-keyword corruption ("NEXT WORKING ...") forms. Strip leading
+    # state keywords from the heading before composing.
+    _STATE_KEYWORDS = ('TODO', 'NEXT', 'WAITING', 'DEFERRED', 'QUEUED',
+                       'WORKING', 'REVIEW', 'DONE', 'FAILED', 'CANCELLED',
+                       'EXECUTING')
+    heading = task['heading']
+    while heading.split(' ', 1)[0] in _STATE_KEYWORDS:
+        heading = heading.split(' ', 1)[1].lstrip() if ' ' in heading else ''
+
     indent = "  "
-    lines = [f"\n** {task['state']} {task['heading']} {task['tags_str']}"]
+    lines = [f"\n** {task['state']} {heading} {task['tags_str']}"]
     props = task.get("properties", {})
     if props:
         lines.append(f"{indent}:PROPERTIES:")
