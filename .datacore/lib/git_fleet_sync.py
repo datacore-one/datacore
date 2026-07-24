@@ -149,7 +149,17 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
     for line in porcelain.splitlines():
         if not line.strip():
             continue
+        xy = line[:2]
         path = line[3:].strip().strip('"')
+        # A "land trapped work" sweep must NEVER propagate a deletion. A tracked
+        # file missing on one host is almost always a local defect — an incomplete
+        # checkout, a crashed process, an agent that removed it — not work to
+        # broadcast. `git add`-ing a ' D' porcelain entry stages the deletion and
+        # pushes it to everyone: this is exactly how caa7d58 wiped 110 files from
+        # datafund-space on 2026-07-21. Skip deletions; surface them for a human.
+        if 'D' in xy:
+            result['skipped'].append((path, 'DELETION — not auto-committed (needs a human)'))
+            continue
         reason = is_junk(repo, path, tracked)
         if reason:
             result['skipped'].append((path, reason))
