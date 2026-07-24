@@ -1632,6 +1632,40 @@ agents:
     can_be_called_by:
     - user
 
+  # ---------------------------------------------------------------------------
+  # Fundraising (5-plur space)
+  # ---------------------------------------------------------------------------
+
+  gordon:
+    description: "PLUR fundraising chief of staff — Gekko-persona guide that pushes raise preparation, asks the founder questions, creates Firm tasks, escalates decisions. Every number traces to the claims ledger; terms/cap-table refused in all sessions."
+    version: "1.0.0"
+    source: "5-plur/.datacore/agents/gordon.md"
+    skills:
+    - fundraising
+    - diligence-preparation
+    - task-delegation
+    - claims-discipline
+    triggers:
+      tags:
+      - ":AI:fundraising:"
+      commands:
+      - "/gordon"
+    reads:
+      required:
+      - "5-plur/1-tracks/business/fundraising/claims-ledger.md"
+      - "5-plur/1-tracks/business/fundraising/WORKPLAN.md"
+      contextual: []
+    writes:
+    - "5-plur/org/next_actions.org"
+    - "5-plur/1-tracks/business/fundraising/WORKPLAN.md"
+    references:
+      dips:
+      - "DIP-0016"
+      specs: []
+    spawns: []
+    can_be_called_by:
+    - ai-task-executor
+
 # =============================================================================
 # MODULE AGENTS
 # Agents provided by optional modules (auto-populated on module install)
