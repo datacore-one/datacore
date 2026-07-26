@@ -57,6 +57,13 @@ def try_refresh(token_data: dict, token_path: Path):
         if not creds.refresh_token:
             return False, None, "no refresh_token in file"
         creds.refresh(Request())
+        # PERSIST the refreshed token back to disk — without this the refresh is
+        # in-memory only: the file stays stale and every other consumer keeps
+        # reading an expired access token. This was the real bug.
+        try:
+            token_path.write_text(creds.to_json())
+        except Exception as e:
+            return False, creds.expiry, f"refreshed but FAILED to persist: {e}"
         return True, creds.expiry, None
     except Exception as e:
         return False, None, str(e)
@@ -97,14 +104,22 @@ def check_claude_token(now, warn_days):
     if not exp_ms:
         return ((name, 'NO_EXPIRY', 'no expiresAt (long-lived token?)'), None, 0)
     expiry = datetime.fromtimestamp(exp_ms / 1000, timezone.utc)
-    days_left = (expiry - now).total_seconds() / 86400
-    if days_left < 0:
-        return ((name, 'EXPIRED', f'expired {(-days_left):.1f}d ago'),
-                f"{name}: EXPIRED — Miles bot is down. Re-auth: ssh nightshift then `claude setup-token`", 1)
-    if days_left < warn_days:
-        return ((name, 'WARN', f'{days_left:.1f} days left'),
-                f"{name}: expires in {days_left:.1f}d — re-auth soon: `claude setup-token` on nightshift", 2)
-    return ((name, 'OK', f'{days_left:.1f} days left'), None, 0)
+    hours_left = (expiry - now).total_seconds() / 3600
+    has_refresh = bool(o.get('refreshToken'))
+
+    # `expiresAt` is the SHORT-LIVED access token (rolls ~daily). On a Max
+    # subscription the Claude Code client auto-refreshes it using the refresh
+    # token — so a near/just-passed access-token expiry is NORMAL, not a fault.
+    # Only alert when re-auth is genuinely required:
+    #   - no refresh token present (nothing to refresh with), or
+    #   - access token expired hard (>12h past) → refresh is actually broken.
+    if hours_left < -12:
+        return ((name, 'EXPIRED', f'expired {(-hours_left):.1f}h ago; refresh not working'),
+                f"{name}: token stale and NOT auto-refreshing — re-auth: ssh nightshift then `claude setup-token`", 1)
+    if not has_refresh:
+        return ((name, 'NO_REFRESH', f'{hours_left:.1f}h left, no refresh token'),
+                f"{name}: no refresh token — will die at expiry; run `claude setup-token` on nightshift", 2)
+    return ((name, 'OK', f'access token {hours_left:.1f}h left; auto-refreshes (Max, refresh token present)'), None, 0)
 
 
 def main():
