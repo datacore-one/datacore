@@ -184,7 +184,7 @@ Detection: `python3 .datacore/lib/focus_mode.py detect`
 
 ## System Patterns (DIPs)
 
-Datacore Improvement Proposals define system patterns. 15+ DIPs cover: contribution model, layered context, tag taxonomy, agent registry, knowledge management, GTD workflow, nightshift execution. Located in `.datacore/dips/`.
+Datacore Improvement Proposals define system patterns. 30+ DIPs cover: contribution model, layered context, tag taxonomy, agent registry, knowledge management, GTD workflow, nightshift execution, learning architecture, reliability, egress enforcement. Located in `.datacore/dips/` (own repo). Governance note: `Implemented`/`Accepted` status requires owner ratification — auto-generated DIPs stay `Draft` until reviewed.
 
 All DIP content is in engram memory (dips-v1 pack). Call `plur_recall_hybrid` for quick lookups.
 
