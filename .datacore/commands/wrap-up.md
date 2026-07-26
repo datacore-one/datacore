@@ -168,7 +168,7 @@ Tasks to create (one per spec step, mark in_progress when starting, completed wh
  4. "Step 4 — Mark completed tasks (auto-mark high-conf, surface med-conf)"
  5. "Step 5 — Spawn journal-coordinator + session-learning-coordinator"
  6. "Step 6 — Learning review (spawn learning-classifier; defer to /today)"
- 7. "Step 7 — GTD task extraction (auto-add with :wrap-up-extracted: tag)"
+ 7. "Step 7 — GTD task extraction (auto-add with :wrap_up_extracted: tag)"
  8. "Step 8 — Insight verification checklist (≥1 layer per insight)"
  9. "Step 9 — Session meta-analysis (write to personal journal)"
 10. "Step 10 — Knowledge artifact tracking (auto-trust descriptions)"
@@ -236,7 +236,7 @@ wrap_up:
   default_mode: normal              # or 'fast' — applies when no flag passed
   inference_mode: auto              # or 'off' (restores legacy per-step prompts)
   feedback_gate: true               # set false to skip §16.5 even in normal mode
-  tag_extracted_tasks_with: wrap-up-extracted   # so they're trivial to grep/review
+  tag_extracted_tasks_with: wrap_up_extracted   # so they're trivial to grep/review
 ```
 
 When `inference_mode: off`, the spec falls back to the legacy per-step prompts (kept for users who want the old behavior).
@@ -533,7 +533,7 @@ GTD TASK EXTRACTION (silent — surfaced in §17 report)
 ─────────────────────────────────────────────────────
 Reviewing session for actionable items beyond continuation tasks...
 
-New tasks identified and added to next_actions.org with :wrap-up-extracted: tag:
+New tasks identified and added to next_actions.org with :wrap_up_extracted: tag:
   1. org-YYYYMMDD-HHMMSS-aaaa | [#A] Task from insight X → Growth section
   2. org-YYYYMMDD-HHMMSS-bbbb | [#B] Task from decision Y → Product section
   3. org-YYYYMMDD-HHMMSS-cccc | [#B] Task from discovery Z → Engineering section
@@ -541,7 +541,7 @@ New tasks identified and added to next_actions.org with :wrap-up-extracted: tag:
 
 **Why auto-add with a tag instead of asking:**
 - Adding an org task is cheap and reversible (1-line edit)
-- The `:wrap-up-extracted:` tag (configurable via `wrap_up.tag_extracted_tasks_with`) makes them trivially greppable for batch review later
+- The `:wrap_up_extracted:` tag (configurable via `wrap_up.tag_extracted_tasks_with`) makes them trivially greppable for batch review later
 - §16.5 lets the user say "drop task 2, change task 3 to priority A, add another: research X" in one shot
 - Not adding loses time-sensitive items the agent correctly identified
 
@@ -550,7 +550,7 @@ New tasks identified and added to next_actions.org with :wrap-up-extracted: tag:
 - `change task <n> priority to <A/B/C>` → update priority cookie
 - `change task <n> tag <add/remove> <tag>` → tag mutations
 - `move task <n> to <section>` → re-route within next_actions.org
-- `add task: <free text>` → create new task in the same wrap-up-extracted batch
+- `add task: <free text>` → create new task in the same wrap_up_extracted batch
 
 **What qualifies:**
 - Strategic decisions that need follow-up work (but aren't the current task)
@@ -1399,7 +1399,7 @@ Inferred actions applied (see §17 above for full report):
   - Pulse: {score}
   - Continuation: {none | task ID}
   - DONE auto-marked: N high-confidence | M suggested for review
-  - GTD extracted: N tasks (tag :wrap-up-extracted:)
+  - GTD extracted: N tasks (tag :wrap_up_extracted:)
   - Engrams: N candidates queued for /today daily-review
   - Artifacts: N tracked in index
   - Delegation: N opportunities surfaced (none auto-added)
@@ -1416,7 +1416,7 @@ Anything to change? (Enter to accept all, or bulk instructions)
 | `change task <n> priority to <A/B/C>` | Update priority cookie |
 | `change task <n> tag add/remove <tag>` | Tag mutation |
 | `move task <n> to <section>` | Re-route within next_actions.org |
-| `add task: <text>` | Create new task (same wrap-up-extracted batch) |
+| `add task: <text>` | Create new task (same wrap_up_extracted batch) |
 | `confirm DONE <n>` / `confirm suggested` | Apply DONE to medium-confidence candidates |
 | `undo DONE <n>` / `undo done org-XXX` | Revert auto-marked DONE |
 | `delegate <n>` / `delegate <n> and <m>` / `delegate all` | Add suggested delegation candidates as :AI:*: tasks |
@@ -1461,7 +1461,7 @@ Close confirmed.
 |  4   | Mark completed tasks                           | inferred-and-reported (1 auto-marked DONE, 2 surfaced for review) |
 |  5   | Journal + learning coordinators                | run ✓ — 3 journals, 14 engrams |
 |  6   | Learning review                                | inferred-and-reported (8 candidates queued for /today, 0 contradictions) |
-|  7   | GTD task extraction                            | inferred-and-reported (4 added with :wrap-up-extracted:) |
+|  7   | GTD task extraction                            | inferred-and-reported (4 added with :wrap_up_extracted:) |
 |  8   | Insight verification                           | run ✓ — coverage table in §6 of report |
 |  9   | Session meta-analysis                          | run ✓ — appended to today's personal journal |
 |  10  | Knowledge artifact tracking                    | inferred-and-reported (13 artifacts, descriptions auto-trusted) |
@@ -1562,7 +1562,7 @@ Run `/tomorrow` once at end of day.
 | 4   | Mark completed tasks | inferred (high-conf auto-mark, med-conf surfaced) | same |
 | 5   | Journal + learning coordinators | silent (background subagents) | silent |
 | 6   | Learning review | inferred (defer to /today, listed in report) | same |
-| 7   | GTD task extraction | inferred (auto-add with :wrap-up-extracted: tag) | same |
+| 7   | GTD task extraction | inferred (auto-add with :wrap_up_extracted: tag) | same |
 | 8   | Insight verification | silent (gaps flagged in report) | silent |
 | 9   | Session meta-analysis | silent (written to personal journal) | silent |
 | 10  | Artifact tracking | inferred (auto-trust descriptions, listed in report) | same |

@@ -118,6 +118,12 @@ ALLOWED_ROOT_FILES = {
     'SCAFFOLDING.md', 'SCAFFOLDING.base.md', 'SCAFFOLDING.space.md',
     'README.md', 'LICENSE', 'CODEOWNERS',
     'knowledge.db',
+    # Written by the goals module — its module.yaml declares
+    # `goals_path: 0-personal/goals.yaml`, i.e. the space root is the intended
+    # location, not drift. Added 2026-07-26 after this guard aborted
+    # `./sync push` for 0-personal on two consecutive wrap-ups, forcing a manual
+    # commit each time. If the goals module ever relocates the file, drop this.
+    'goals.yaml',
     '.DS_Store',
 }
 

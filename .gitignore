@@ -290,3 +290,7 @@ node_modules/
 # Whole directory ignored; only sanitized *.example templates are tracked.
 .datacore/cos/*
 !.datacore/cos/*.example
+
+# session-local artifacts
+.datacore/logs/
+.mcp.json.bak-*

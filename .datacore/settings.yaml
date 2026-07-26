@@ -179,7 +179,7 @@ wrap_up:
 
   # Tag applied to tasks created by §7 GTD extraction so they're trivially
   # greppable for batch review later (e.g. during /gtd-weekly-review).
-  tag_extracted_tasks_with: wrap-up-extracted
+  tag_extracted_tasks_with: wrap_up_extracted
 
 # Coach module (used by /wrap-up §2 pulse and /tomorrow evening reflection)
 coach:
