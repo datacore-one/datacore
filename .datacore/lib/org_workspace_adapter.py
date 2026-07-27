@@ -30,6 +30,9 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from tag_utils import sanitize_org_tags  # noqa: E402
+
 
 def _load_ws(*paths: str, state_config=None):
     """Load an OrgWorkspace from one or more file paths."""
@@ -120,11 +123,12 @@ def cmd_add(args):
         _days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
         created = f"[{now.strftime('%Y-%m-%d')} {_days[now.weekday()]} {now.strftime('%H:%M')}]"
 
-    # Parse tags
+    # Parse tags. Sanitised before they reach the file: an org tag carrying a
+    # hyphen voids the entire tag string on that heading, silently.
     tags = None
     if args.tags:
         raw = args.tags.strip(":")
-        tags = [t for t in raw.replace(",", ":").split(":") if t]
+        tags = sanitize_org_tags(raw.replace(",", ":").split(":")) or None
 
     # Priority belongs in the heading as [#A], not in PROPERTIES
     heading = f"[#{args.priority}] {args.heading}" if args.priority else args.heading

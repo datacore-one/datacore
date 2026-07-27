@@ -85,7 +85,51 @@ echo "$staged" | while IFS= read -r file; do
   fi
 done
 
+# --- C. Org tag validity ------------------------------------------------------
+# Org tags may contain ONLY [a-zA-Z0-9_@#%]. One invalid tag voids the ENTIRE
+# trailing tag string on that heading — siblings included — so the heading looks
+# correctly tagged in the file and answers no query. That is how 343 headings
+# accumulated unnoticed across 20 files before 2026-07-27.
+#
+# This is the backstop that makes the class of bug non-recurring: it does not
+# matter which writer produced the line (a script, an agent, a hand edit), an
+# invalid org tag cannot reach a commit. Canonical kebab-case is still correct
+# for markdown #tags — only the org spelling must use underscores
+# (tag_utils.to_org_tag).
+tagfile=$(mktemp)
+trap 'rm -f "$vfile" "$sfile" "$tagfile"' EXIT
+echo "$staged" | while IFS= read -r file; do
+  [ -z "$file" ] && continue
+  case "$file" in *.org) ;; *) continue ;; esac
+  git show ":$file" 2>/dev/null | awk -v f="$file" '
+    /^\*+[ \t]/ {
+      line = $0
+      # Strip org links first — their URLs are full of colons.
+      gsub(/\[\[[^]]*\](\[[^]]*\])?\]/, " ", line)
+      # Trailing tag string: :a:b:c: at end of line.
+      if (match(line, /:[^ \t:]+(:[^ \t:]+)*:[ \t]*$/)) {
+        tags = substr(line, RSTART, RLENGTH)
+        gsub(/[ \t]+$/, "", tags)
+        n = split(substr(tags, 2, length(tags) - 2), parts, ":")
+        for (i = 1; i <= n; i++) {
+          if (parts[i] != "" && parts[i] !~ /^[A-Za-z0-9_@#%]+$/) {
+            printf "  %s:%d  invalid org tag \"%s\" (voids ALL tags on this heading)\n", f, NR, parts[i]
+          }
+        }
+      }
+    }' >> "$tagfile"
+done
+
 fail=0
+if [ -s "$tagfile" ]; then
+  printf "\033[1;31mINVALID ORG TAGS\033[0m\n\n"
+  cat "$tagfile"
+  printf "\nOrg tags allow only [a-zA-Z0-9_@#%%] — a hyphen silently voids every tag\n"
+  printf "on the heading. Repair with:\n"
+  printf "  python3 .datacore/lib/org_tag_normalize.py --dry-run\n"
+  printf "  python3 .datacore/lib/org_tag_normalize.py --apply\n"
+  fail=1
+fi
 if [ -s "$vfile" ]; then
   printf "\033[1;31mSTRUCTURAL INTEGRITY VIOLATION\033[0m\n"
   printf "Files in unexpected root locations:\n\n"

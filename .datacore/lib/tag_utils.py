@@ -248,6 +248,40 @@ def to_org_tag(tag: str) -> str:
     return tag.replace('-', '_') if tag else ""
 
 
+def sanitize_org_tags(tags) -> list:
+    """Make a tag list safe to write into an org heading.
+
+    Every write path into an org file should pass through this. A single tag
+    carrying a character org rejects voids the ENTIRE trailing tag string on
+    that heading — the siblings vanish from every query too — and the file
+    still *looks* correctly tagged, so the damage is invisible until someone
+    notices a query returning nothing.
+
+    Hyphens become underscores (the canonical kebab-case spelling is preserved
+    for markdown; see to_org_tag). Any other illegal character is dropped
+    rather than guessed at. Tags that reduce to nothing are removed.
+
+    Examples:
+        >>> sanitize_org_tags(['privacy-tech', 'ops'])
+        ['privacy_tech', 'ops']
+        >>> sanitize_org_tags(['tether_(usdt)'])
+        ['tether_usdt']
+    """
+    if not tags:
+        return []
+    if isinstance(tags, str):
+        tags = [t for t in tags.strip(":").split(":") if t]
+
+    out = []
+    for tag in tags:
+        if not tag:
+            continue
+        cleaned = re.sub(r"[^A-Za-z0-9_@#%]", "", to_org_tag(str(tag).strip()))
+        if cleaned and cleaned not in out:
+            out.append(cleaned)
+    return out
+
+
 def from_org_tag(tag: str) -> str:
     """
     Convert an org-mode tag back to its canonical (kebab-case) spelling.

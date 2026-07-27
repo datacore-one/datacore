@@ -70,3 +70,26 @@ def test_org_charset_holds_for_every_registry_tag():
     valid = re.compile(r"^[A-Za-z0-9_@#%]+$")
     offenders = [n for n in names if not valid.match(to_org_tag(n))]
     assert not offenders, f"tags that cannot be spelled in org even after conversion: {sorted(offenders)[:10]}"
+
+
+def test_sanitize_org_tags_is_the_write_path_guard():
+    from tag_utils import sanitize_org_tags
+
+    assert sanitize_org_tags(["privacy-tech", "ops"]) == ["privacy_tech", "ops"]
+    # Characters with no sensible mapping are dropped, not guessed at.
+    assert sanitize_org_tags(["tether_(usdt)"]) == ["tether_usdt"]
+    # Accepts an org tag string as well as a list.
+    assert sanitize_org_tags(":a-b:c:") == ["a_b", "c"]
+    # Duplicates collapse, empties disappear.
+    assert sanitize_org_tags(["a-b", "a_b", "", None]) == ["a_b"]
+    assert sanitize_org_tags([]) == []
+
+
+def test_sanitize_output_always_survives_org():
+    import re
+    from tag_utils import sanitize_org_tags
+
+    valid = re.compile(r"^[A-Za-z0-9_@#%]+$")
+    messy = ["privacy-tech", "tether_(usdt)", "a b", "x/y", "AI", "fds-H005"]
+    for tag in sanitize_org_tags(messy):
+        assert valid.match(tag), f"sanitize emitted an illegal org tag: {tag}"
