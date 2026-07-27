@@ -464,19 +464,25 @@ def scan_journal_files(space: str, verbose: bool = True) -> Dict[str, int]:
         print(f"Unknown space: {space}")
         return {'journals': 0, 'sessions': 0}
 
-    journal_path = SPACES[space].get('journal_path')
+    journal_paths = SPACES[space].get('journal_paths')
+    if not journal_paths:
+        single = SPACES[space].get('journal_path')
+        journal_paths = [single] if single else []
+    journal_paths = [p for p in journal_paths if p and p.exists()]
 
     totals = {'journals': 0, 'sessions': 0, 'decisions': 0}
 
-    if not journal_path or not journal_path.exists():
+    if not journal_paths:
         if verbose:
             print(f"  No journal path for {space}")
         return totals
 
     if verbose:
-        print(f"\n  Scanning: {journal_path.relative_to(DATA_ROOT)}")
+        for jp in journal_paths:
+            print(f"\n  Scanning: {jp.relative_to(DATA_ROOT)}")
 
-    for file_path in sorted(journal_path.glob('*.md')):
+    all_files = sorted(f for jp in journal_paths for f in jp.glob('*.md'))
+    for file_path in all_files:
         if file_path.name.startswith('.'):
             continue
 
@@ -524,12 +530,21 @@ def sync_journals_to_db(space: str = None, full: bool = False) -> Dict[str, Any]
         # Ensure DB is initialized
         init_database(sp)
 
-        journal_path = SPACES[sp].get('journal_path')
+        # Scan every journal directory the space has — a space can keep agent
+        # records in `journal/` and session entries in `notes/journals/`.
+        journal_paths = SPACES[sp].get('journal_paths')
+        if not journal_paths:
+            single = SPACES[sp].get('journal_path')
+            journal_paths = [single] if single else []
 
-        if not journal_path or not journal_path.exists():
+        candidates = [
+            f for jp in journal_paths if jp and jp.exists()
+            for f in jp.glob('*.md')
+        ]
+        if not candidates:
             continue
 
-        for file_path in journal_path.glob('*.md'):
+        for file_path in candidates:
             if file_path.name.startswith('.'):
                 continue
 

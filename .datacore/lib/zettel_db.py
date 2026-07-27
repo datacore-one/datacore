@@ -66,12 +66,26 @@ def _discover_spaces(data_root=None):
             if p.is_dir():
                 scan_paths.append(p)
         org_paths = [space_dir / 'org'] if (space_dir / 'org').is_dir() else []
-        journal_path = space_dir / 'journal' if (space_dir / 'journal').is_dir() else space_dir / 'notes' / 'journals'
+        # A space can hold journals in BOTH places and 0-personal does: `journal/`
+        # is where nightshift agents write execution records, `notes/journals/` is
+        # where /wrap-up and the human write session entries. The old code picked
+        # `journal/` whenever it existed and never looked at `notes/journals/`, so
+        # for 0-personal the indexer scanned 711 nightshift files containing zero
+        # `## Session:` headers and no session was ever indexed. Collect every
+        # journal directory that exists; `journal_path` stays as the first one for
+        # backwards compatibility with callers that expect a single Path.
+        journal_paths = [
+            p for p in (space_dir / 'journal', space_dir / 'notes' / 'journals')
+            if p.is_dir()
+        ]
+        if not journal_paths:
+            journal_paths = [space_dir / 'notes' / 'journals']
         spaces[name] = {
             'path': space_dir,
             'scan_paths': scan_paths,
             'org_paths': org_paths,
-            'journal_path': journal_path,
+            'journal_path': journal_paths[0],
+            'journal_paths': journal_paths,
         }
     return spaces
 
