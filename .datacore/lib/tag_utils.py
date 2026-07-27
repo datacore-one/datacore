@@ -206,8 +206,11 @@ def org_to_inline(org_tags: str) -> str:
     """
     Convert org-mode tags to inline hashtag format.
 
+    Org tags spell hyphens as underscores (see to_org_tag), so they are mapped
+    back to the canonical kebab-case form on the way out.
+
     Examples:
-        >>> org_to_inline(':project-alpha:ops:legal:')
+        >>> org_to_inline(':project_alpha:ops:legal:')
         '#project-alpha, #ops, #legal'
         >>> org_to_inline(':AI:research:')
         '#ai, #research'
@@ -223,19 +226,55 @@ def org_to_inline(org_tags: str) -> str:
     return format_inline_tags(normalized)
 
 
+def to_org_tag(tag: str) -> str:
+    """
+    Convert a canonical (kebab-case) tag to its org-mode spelling.
+
+    Org-mode tags may only contain [a-zA-Z0-9_@#%] — a hyphen is invalid, and
+    ONE invalid tag voids the ENTIRE trailing tag string on that heading, so
+    its siblings are silently dropped from every query too. `:privacy-tech:ops:`
+    parses as NO tags at all.
+
+    This is why the org spelling uses underscores while the canonical/markdown
+    spelling keeps hyphens per DIP-0014. The mapping is mechanical and
+    round-trips through from_org_tag().
+
+    Examples:
+        >>> to_org_tag('privacy-tech')
+        'privacy_tech'
+        >>> to_org_tag('AI')
+        'AI'
+    """
+    return tag.replace('-', '_') if tag else ""
+
+
+def from_org_tag(tag: str) -> str:
+    """
+    Convert an org-mode tag back to its canonical (kebab-case) spelling.
+
+    Examples:
+        >>> from_org_tag('privacy_tech')
+        'privacy-tech'
+    """
+    return tag.replace('_', '-') if tag else ""
+
+
 def inline_to_org(inline_tags: str) -> str:
     """
     Convert inline hashtags to org-mode format.
 
+    Canonical tags are kebab-case, but org rejects hyphens, so the org spelling
+    substitutes underscores (see to_org_tag).
+
     Examples:
         >>> inline_to_org('#project-alpha, #ops, #legal')
-        ':project-alpha:ops:legal:'
+        ':project_alpha:ops:legal:'
     """
     tags = extract_inline_tags(inline_tags)
     if not tags:
         return ""
 
-    normalized = [normalize_tag(t) for t in tags]
+    normalized = [to_org_tag(normalize_tag(t)) for t in tags]
     return ':' + ':'.join(normalized) + ':'
 
 
