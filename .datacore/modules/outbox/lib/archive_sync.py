@@ -188,8 +188,10 @@ class ServerArchiver:
         # Check if repo exists
         success, _ = self._ssh_command(f"test -d ~/{shlex.quote(repo_path)}")
         if not success:
-            # Create bare repo
-            self._ssh_command(f"mkdir -p ~/{shlex.quote(repo_path)} && git -C ~/{shlex.quote(repo_path)} init --bare")
+            # Non-bare: commit_changes runs `git add` in the repo, which
+            # requires a working tree. A bare repo here leaves every rsynced
+            # file loose and unversioned.
+            self._ssh_command(f"mkdir -p ~/{shlex.quote(repo_path)} && git -C ~/{shlex.quote(repo_path)} init")
             success, _ = self._ssh_command(f"test -d ~/{shlex.quote(repo_path)}")
         return success
 
@@ -274,6 +276,13 @@ class ServerArchiver:
         success, msg = self._ssh_command(f"cd {shlex.quote(abs_repo)} && git commit -m {escaped_msg}")
         if not success and "nothing to commit" not in msg:
             return False, f"Git commit failed: {msg}"
+
+        # Push if a remote is configured; a failed push leaves the commit
+        # local for the next run rather than failing the archive operation
+        self._ssh_command(
+            f"cd {shlex.quote(abs_repo)} && "
+            f"git remote get-url origin >/dev/null 2>&1 && git push origin HEAD || true"
+        )
 
         return True, "OK"
 
