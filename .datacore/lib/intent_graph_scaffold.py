@@ -147,7 +147,10 @@ def main() -> int:
     written = skipped = 0
     for f in targets:
         space = f.parent.name
-        dest = f.parent / "intents.org"
+        # DIP-0015: a space root allows only the listed dirs; org files
+        # live in org/, which is also where the tasks they govern live.
+        dest = f.parent / "org" / "intents.org"
+        dest.parent.mkdir(parents=True, exist_ok=True)
         if dest.exists() and not a.force:
             print(f"  skip   {space:14} intents.org exists")
             skipped += 1

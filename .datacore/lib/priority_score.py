@@ -116,8 +116,8 @@ class IntentGraph:
         """
         root = Path(root)
         nodes = cls._read_org(root / INTENTS_ORG)
-        for f in sorted(root.glob("[0-9]-*/intents.org")):
-            nodes.update(cls._read_org(f, prefix=f.parent.name))
+        for f in sorted(root.glob("[0-9]-*/org/intents.org")):
+            nodes.update(cls._read_org(f, prefix=f.parent.parent.name))
         cls._resolve_serves(nodes)
         return cls(nodes, cls._read_spotlight(root / SPOTLIGHT_YAML),
                    cls._read_tag_map(root))
