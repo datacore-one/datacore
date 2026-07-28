@@ -1,6 +1,6 @@
 # The Firm
 
-Three autonomous agents. One shared memory. Seven ventures.
+Four autonomous agents. One shared memory. Seven ventures.
 
 ## Mission
 
@@ -20,16 +20,23 @@ All data, I carry with me.
 
 ```
 Founder (Gregor)
- └── Mr Data (Chief of Staff) — single interface, unified view
+ └── Winston (Chief of Staff) — single interface, unified view
       ├── Miles (COO) — operations, execution, infrastructure
-      └── Tris (CIO) — intelligence, research, pattern detection
+      ├── Tris (CIO) — intelligence, research, pattern detection
+      └── Mr Data (Comms) — outward communication
 ```
+
+Winston is one agent in two places: the desktop app on the founder's Mac for
+interactive work, and the cos-server box for the autonomous half — the
+scheduled briefing, triage, research and sync. Both run first-party
+`claude -p` on the founder's subscription, so the marginal cost is zero.
 
 ## Members
 
 | Name | Handle | Role | Platform | Model | Powers |
 |------|--------|------|----------|-------|--------|
-| **Mr Data** | @plurclaw_bot | Chief of Staff | OpenClaw (GPT-5.4) | plur-claw (Hetzner) | Briefings, delegation, communication, user engagement |
+| **Winston** | app + box | Chief of Staff | Claude Code (`claude -p`) | Mac app + chief-of-staff (Hetzner) | Briefings, delegation, triage, user engagement |
+| **Mr Data** | @plurclaw_bot | Comms | OpenClaw (GPT-5.4) | plur-claw (Hetzner) | Outward communication |
 | **Tris** | @TrisHermes_bot | Chief Intelligence Officer | Hermes Agent (Kimi 2.6) | hermes (DO) | Research, cross-domain analysis, pattern detection |
 | **Miles** | @datacore_1_bot | Chief of Operations | Claude Code (Opus) | nightshift (DO) | Code, deployment, infrastructure, product creation |
 
@@ -38,7 +45,7 @@ Founder (Gregor)
 - **The Firm** — Telegram group with topic channels
 - **Git** — source of truth for tasks and work output
 - **PLUR** — shared memory (global scope), personal growth (agent scope)
-- **Briefing relay** — Miles writes operational reports, Tris writes intelligence reports, Data synthesizes both for founder
+- **Briefing relay** — Miles writes operational reports, Tris writes intelligence reports, Winston synthesizes both for the founder
 
 ## Founder
 
