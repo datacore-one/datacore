@@ -44,7 +44,7 @@ import argparse
 import json
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 try:
@@ -103,13 +103,49 @@ class IntentGraph:
 
     @classmethod
     def load(cls, root: Path) -> "IntentGraph":
+        """Every space's graph, composed.
+
+        The personal view IS the union: the principal works across ventures, so
+        seeing them together is the point rather than a reporting extra. One
+        graph could only ever describe one venture, which is why 154 tasks in
+        six other spaces had no branch to hang from.
+
+        Space ids are namespaced (`5-plur:north-star`) so two ventures may both
+        have a "growth" node, while `:SERVES:` can still cross spaces when one
+        venture's work genuinely serves another's goal.
+        """
         root = Path(root)
-        return cls(cls._read_org(root / INTENTS_ORG),
-                   cls._read_spotlight(root / SPOTLIGHT_YAML),
+        nodes = cls._read_org(root / INTENTS_ORG)
+        for f in sorted(root.glob("[0-9]-*/intents.org")):
+            nodes.update(cls._read_org(f, prefix=f.parent.name))
+        cls._resolve_serves(nodes)
+        return cls(nodes, cls._read_spotlight(root / SPOTLIGHT_YAML),
                    cls._read_tag_map(root))
 
     @staticmethod
-    def _read_org(f: Path) -> dict[str, Node]:
+    def _resolve_serves(nodes: dict[str, Node]) -> None:
+        """Rewrite `:SERVES:` targets to fully-qualified ids.
+
+        A bare id resolves within its own space first, then globally — so a
+        space's file stays readable without repeating its own prefix, and a
+        deliberate cross-space link (`5-plur:knowledge-exchange`) still works.
+        """
+        for nid, n in list(nodes.items()):
+            space = nid.split(":", 1)[0] if ":" in nid else ""
+            fixed = []
+            for target in n.serves:
+                if target in nodes:
+                    fixed.append(target)
+                elif space and f"{space}:{target}" in nodes:
+                    fixed.append(f"{space}:{target}")
+                else:
+                    # Keep it unresolved rather than dropping it: gaps() reports
+                    # a broken link, which is a finding, not noise to swallow.
+                    fixed.append(target)
+            nodes[nid] = replace(n, serves=tuple(fixed))
+
+    @staticmethod
+    def _read_org(f: Path, prefix: str = "") -> dict[str, Node]:
         """No bespoke parser: org-workspace already models this file."""
         if not f.is_file():
             return {}
@@ -129,12 +165,15 @@ class IntentGraph:
             nid = n.get_property("INTENT_ID")
             if not nid:
                 continue
+            # Namespace by space so two ventures may share a node name.
+            nid = f"{prefix}:{nid}" if prefix else nid
             depth = getattr(n, "level", None) or len(stack) + 1
             while stack and stack[-1][0] >= depth:
                 stack.pop()
             parent = stack[-1][1] if stack else None
             title = (n.heading or "").strip()
             serves = tuple((n.get_property("SERVES") or "").split())
+            space_tag = n.get_property("SPACE") or prefix
             nodes[nid] = Node(id=nid, title=title,
                               level=int(n.get_property("LEVEL") or 0),
                               success=(n.get_property("SUCCESS") or "").strip(),
