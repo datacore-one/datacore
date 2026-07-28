@@ -74,6 +74,19 @@ class Node:
     parent: str | None = None         # tree parent, from heading nesting
     children: list[str] = field(default_factory=list)
     keywords: tuple[str, ...] = ()
+    #: Extra properties surfaced in review outlines. Kept as plain fields
+    #: rather than a dict so a typo fails loudly at construction.
+    gate: str = ""
+    target: str = ""
+    metric: str = ""
+    owner: str = ""
+    benchmark: str = ""
+    window: str = ""
+    banned: str = ""
+    why: str = ""
+    status: str = ""
+    note: str = ""
+    source: str = ""
 
 
 def _keywords(title: str) -> tuple[str, ...]:
@@ -178,7 +191,11 @@ class IntentGraph:
                               level=int(n.get_property("LEVEL") or 0),
                               success=(n.get_property("SUCCESS") or "").strip(),
                               serves=serves, parent=parent,
-                              keywords=_keywords(title))
+                              keywords=_keywords(title),
+                              **{k: (n.get_property(k.upper()) or "").strip()
+                                 for k in ("gate", "target", "metric", "owner",
+                                           "benchmark", "window", "banned",
+                                           "why", "status", "note", "source")})
             if parent and parent in nodes:
                 nodes[parent].children.append(nid)
             stack.append((depth, nid))
