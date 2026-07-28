@@ -124,6 +124,13 @@ ALLOWED_ROOT_FILES = {
     # `./sync push` for 0-personal on two consecutive wrap-ups, forcing a manual
     # commit each time. If the goals module ever relocates the file, drop this.
     'goals.yaml',
+    # Written by the ventures module at space root by design, and already
+    # permitted by .datacore/hooks/space-pre-commit's ALLOWED_FILES. Two
+    # allowlists existed and disagreed, so this checker reported a DIP-0015
+    # violation in all seven venture spaces for files the commit hook accepts.
+    # Keep the two lists in step: the hook is what actually enforces.
+    'venture.yaml',
+    'hypotheses.yaml',
     '.DS_Store',
 }
 
