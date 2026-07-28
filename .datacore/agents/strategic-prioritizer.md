@@ -45,15 +45,41 @@ Engrams encode learned behavioral patterns that improve task quality.
 ## Behavior
 
 1. Receive task title, description, and tags
-2. Load Intent Graph keywords (from intent-routing skill)
-3. Compute match_ratio per intent
+2. Load **all four priority layers** via `.datacore/lib/priority_score.py`
+3. Score content (title/tags) and container (space directory) separately
 4. Apply tag bonuses
 5. Apply multi-parent bonus if applicable
 6. Return: `{ intent: string, score: number, reasoning: string, multi_intent: boolean }`
 
-## Intent Keywords
+## Priority layers
 
-See `gtd/skills/intent-routing.md` for the full keyword-to-intent mapping.
+Scoring is **not** the Intent Graph alone. `priority_score.Scorer` layers four
+sources, highest band wins:
+
+| Band | Source | Meaning |
+|---|---|---|
+| 1000 | `.datacore/cos/priorities.yaml` | restated at weekly planning — what matters NOW |
+| 500 | `0-personal/goals.yaml` (open, with `keywords`) | quarter-horizon commitments |
+| 200 | `[N]-*/venture.yaml` stage + autonomy | standing weight; paused ventures score **below** neutral |
+| 100 | `gtd/skills/intent-routing.md` | mission intents — why the work matters at all |
+
+Content is matched against title/tags; the space directory is matched only
+against venture layers. Merging them let priority 1's keyword `plur` match the
+path `5-plur/…` and flatten all 209 tasks in that space to one score.
+
+**Known limitation.** `task_queue.calculate_priority` weights intent at 0.10, so
+full priority alignment moves a task by only ~0.4 on a ~6-point scale. A
+`[#C]` task serving this week's stated priority still ranks below an unrelated
+`[#A]`. Raising that weight is a deliberate, unmade decision — see
+`docs/superpowers/specs/2026-07-28-briefing-orchestration-design.md`.
+
+## History
+
+Until 2026-07-28 this agent wrote `:INTENT_SCORE:` back to org property
+drawers, and `calculate_priority` read it. **0 of 877 tasks across 9 spaces
+ever carried that property**, so the intent term sat at its neutral default on
+every task ever queued. Scoring is now computed live at queue-build time and
+cannot go unpopulated or stale. The write-back below remains optional caching.
 
 ## Integration
 
