@@ -1,89 +1,155 @@
 #!/usr/bin/env python3
-"""One scorer for "what matters most", shared by every agent that picks work.
+"""The intent graph: why work matters, and what is missing.
 
-Why this exists
----------------
-Two priority sources existed and never met:
+What changed and why
+--------------------
+This module used to hold four bespoke readers over four schemas — `rank` in
+one, `stage`+`autonomy` in another, `horizon`+`status` in a third, and a
+markdown table parsed by regex in the fourth — plus a hardcoded band order
+(1000 > 500 > 200 > 100) asserting that personal goals always outrank venture
+goals. That was an invented ladder standing in for one the system already
+specifies.
 
-  .datacore/cos/priorities.yaml        the principal's ranked priorities,
-                                       rewritten at weekly planning
-  modules/gtd/skills/intent-routing.md a static 5-intent graph marked
-                                       "(extracted)", with no regeneration path
+`2-datacore/1-tracks/ops/Intent-Graph.md` — adapted from the Swarm Foundation
+Mission.md structure — has held the real graph since 2026-02-21: Vision ->
+Intents (5) -> Goals (19, every one with a success criterion) -> Initiatives
+(64) -> Projects. `modules/gtd/skills/intent-routing.md` kept only the five
+level-1 rows as a keyword table, and that lossy projection is what every
+scorer read. Four levels of measurable structure sat unused by any code.
 
-`strategic-prioritizer` — the thing `queue-optimizer` and `gtd-inbox-processor`
-call to order autonomous work — read only the second. So the file the principal
-actually edits each week steered the briefing's prose and nothing else. Stating
-"GEO is this week's priority" would not have changed one task nightshift chose,
-and the GEO drafts sat 22 days while GEO was described as struggling.
+So there are no bespoke readers now. `.datacore/intents.org` is generated from
+the markdown by intent_graph_convert.py and parsed by org-workspace, which
+already understands nesting, properties and tags. Heading depth carries
+what-serves-what; `:SERVES:` carries the cross-branch edges that make it a DAG.
 
-Both layers are legitimate; they answer different questions:
+Ranking follows the graph's OWN stated rules rather than invented weights:
 
-  intents     WHY the work matters. Stable, mission-level, rarely edited.
-  priorities  WHAT matters NOW. Volatile, re-stated weekly, in the user's voice.
+  * "multi-intent projects get worked on first" (source doc, Priority rule)
+  * the weekly spotlight in .datacore/cos/priorities.yaml raises one branch
+    without rewriting the graph — priorities change while goals stay put
 
-So they are layered rather than merged. A stated priority outranks every
-mission intent — that is what stating one means — but an item matching no
-priority still sorts by intent rather than falling to zero, so nothing outside
-this week's focus becomes invisible.
+And because the structure is explicit, absence is computable. gaps() answers
+the Review Protocol questions the source doc already asks: which intents got
+no work, which leaves have no tasks, which success criteria cannot be
+measured, which high-leverage nodes are being ignored.
 
-Scoring is deterministic keyword/tag overlap, never an LLM call: the ordering
-must be explainable ("this is first because you said GEO") and reproducible
-across machines that cannot reach the same model.
-
-    from priority_score import Scorer
-    s = Scorer.load(root)
-    score, why, layer = s.score("5-plur/1-tracks/comms/geo-queue.md")
+    from priority_score import IntentGraph
+    g = IntentGraph.load(root)
+    g.score_10("publish the GEO batch", container="5-plur")
+    g.gaps()
 """
 from __future__ import annotations
 
+import argparse
+import json
 import re
+import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 try:
     import yaml
-except ImportError:  # pragma: no cover - present in every datacore venv
+except ImportError:  # pragma: no cover
     yaml = None
 
-#: Four bands, ordered by how deliberately and how recently each was stated.
-#: A weekly priority outranks a quarterly goal outranks a venture's standing
-#: stage outranks the mission graph. Bands never overlap, so the ordering is a
-#: property of WHERE something was stated, not of how many words happened to
-#: match — which keeps it explainable.
-PRIORITY_BASE = 1000   # priorities.yaml — rewritten at weekly planning
-GOAL_BASE = 500        # goals.yaml — open, quarter-horizon commitments
-VENTURE_BASE = 200     # venture.yaml — standing stage/autonomy of the venture
-INTENT_BASE = 100      # intent-routing.md — mission, rarely edited
+#: Work matching nothing on the graph. `task_queue.calculate_priority` treats
+#: 5 as neutral, so unmapped work keeps exactly today's behaviour — absence of
+#: alignment is not evidence of unimportance, it is evidence of a missing edge.
+NEUTRAL = 5.0
+ON_GRAPH = 6.0
+HIGH_LEVERAGE = 8.0        # the source doc's own priority rule
+SPOTLIT = 10.0             # named in this week's spotlight
 
-#: Stage says how much a venture should be pulling attention right now.
-_STAGE_WEIGHT = {"growth": 100, "scaling": 100, "validation": 50,
-                 "discovery": 0, "paused": -150, "archived": -200}
-
-_ROW = re.compile(r"^\|\s*\d+\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|")
+INTENTS_ORG = ".datacore/intents.org"
+SPOTLIGHT_YAML = ".datacore/cos/priorities.yaml"
 
 
-class Scorer:
-    """Layers of (weight, label, keywords), highest-weight match wins."""
+@dataclass
+class Node:
+    id: str
+    title: str
+    level: int
+    success: str = ""
+    serves: tuple[str, ...] = ()      # extra parents (cross-branch)
+    parent: str | None = None         # tree parent, from heading nesting
+    children: list[str] = field(default_factory=list)
+    keywords: tuple[str, ...] = ()
 
-    def __init__(self, layers: list[tuple[int, str, list[str], str]]):
-        self.layers = layers
+
+def _keywords(title: str) -> tuple[str, ...]:
+    """Distinctive words from a node title, for matching work against it.
+
+    Stopwords stripped and short tokens dropped, because a graph node called
+    "Costs stay minimal" must not match every task mentioning "stay"."""
+    stop = {"the", "a", "an", "is", "are", "as", "of", "for", "to", "and", "in",
+            "on", "with", "without", "that", "by", "it", "its", "into", "from",
+            "be", "can", "will", "has", "have", "not", "no", "at", "or", "but",
+            "this", "their", "them", "they", "we", "our", "you", "your", "all",
+            "more", "most", "own", "via", "per", "up", "out", "first", "new",
+            "work", "works", "make", "makes", "use", "uses", "using", "get",
+            "gets", "stay", "stays", "enough", "good", "great", "well"}
+    return tuple(w for w in re.findall(r"[a-z0-9]{4,}", title.lower())
+                 if w not in stop)
+
+
+class IntentGraph:
+    def __init__(self, nodes: dict[str, Node], spotlight: list[dict],
+                 tag_map: dict[str, str]):
+        self.nodes = nodes
+        self.spotlight = spotlight
+        self.tag_map = tag_map
 
     # ── loading ──────────────────────────────────────────────────────────
 
     @classmethod
-    def load(cls, root: Path) -> "Scorer":
-        return cls(cls._priorities(root) + cls._goals(root)
-                   + cls._ventures(root) + cls._intents(root))
+    def load(cls, root: Path) -> "IntentGraph":
+        root = Path(root)
+        return cls(cls._read_org(root / INTENTS_ORG),
+                   cls._read_spotlight(root / SPOTLIGHT_YAML),
+                   cls._read_tag_map(root))
 
     @staticmethod
-    def _goals(root: Path) -> list[tuple[int, str, list[str], str]]:
-        """Open goals. Only those carrying explicit `keywords` participate.
+    def _read_org(f: Path) -> dict[str, Node]:
+        """No bespoke parser: org-workspace already models this file."""
+        if not f.is_file():
+            return {}
+        try:
+            from org_workspace import OrgWorkspace
+        except ImportError:
+            return {}
+        ws = OrgWorkspace()
+        try:
+            ws.load(str(f))
+        except Exception:
+            return {}
 
-        Deliberately NOT inferred from the prose statement: a goal about
-        "sleep of 7.5 hours" would otherwise match anything mentioning hours,
-        and a scorer that silently guesses is worse than one that visibly does
-        nothing. `goals_without_keywords()` reports the gap instead.
-        """
-        f = root / "0-personal" / "goals.yaml"
+        nodes: dict[str, Node] = {}
+        stack: list[tuple[int, str]] = []   # (heading depth, id)
+        for n in ws.all_nodes():
+            nid = n.get_property("INTENT_ID")
+            if not nid:
+                continue
+            depth = getattr(n, "level", None) or len(stack) + 1
+            while stack and stack[-1][0] >= depth:
+                stack.pop()
+            parent = stack[-1][1] if stack else None
+            title = (n.heading or "").strip()
+            serves = tuple((n.get_property("SERVES") or "").split())
+            nodes[nid] = Node(id=nid, title=title,
+                              level=int(n.get_property("LEVEL") or 0),
+                              success=(n.get_property("SUCCESS") or "").strip(),
+                              serves=serves, parent=parent,
+                              keywords=_keywords(title))
+            if parent and parent in nodes:
+                nodes[parent].children.append(nid)
+            stack.append((depth, nid))
+        return nodes
+
+    @staticmethod
+    def _read_spotlight(f: Path) -> list[dict]:
+        """This week's spotlight. Deliberately NOT part of the graph: the graph
+        is where you're heading, the spotlight is what you're doing about it
+        now. Re-ranking on Monday must not look like a change of direction."""
         if not (yaml and f.is_file()):
             return []
         try:
@@ -91,205 +157,296 @@ class Scorer:
         except Exception:
             return []
         out = []
-        for g in data.get("goals") or []:
-            if g.get("status") != "open":
-                continue
-            kws = [str(k).lower() for k in (g.get("keywords") or []) if k]
-            if kws:
-                out.append((GOAL_BASE, str(g.get("statement") or g.get("id"))[:60],
-                            kws, "goal"))
+        for i, p in enumerate(data.get("spotlight") or data.get("priorities") or [], 1):
+            if isinstance(p, str):
+                out.append({"id": p, "rank": i, "keywords": ()})
+            elif isinstance(p, dict):
+                out.append({
+                    "id": str(p.get("id") or p.get("intent") or ""),
+                    "rank": int(p.get("rank") or i),
+                    "statement": str(p.get("statement") or p.get("priority") or ""),
+                    "keywords": tuple(str(k).lower() for k in (p.get("keywords") or [])),
+                })
         return out
 
     @staticmethod
-    def _ventures(root: Path) -> list[tuple[int, str, list[str], str]]:
-        """Standing weight per venture, matched by SPACE DIRECTORY.
+    def _read_tag_map(root: Path) -> dict[str, str]:
+        """Focus-area tag -> intent id, read from the DIP-0014 tag registries.
 
-        Space is used rather than keywords because it is unambiguous: anything
-        under `5-plur/` is PLUR's work whatever words it happens to contain.
-        A paused venture scores negative, so its backlog sinks below neutral
-        work instead of competing with a venture that is actually running.
+        NOT a new registry. DIP-0014 already declares tags "a coding language"
+        whose purpose is cross-system integration and "planning and
+        prioritization across contexts" — linking a tag to the intent it serves
+        is exactly that, so it is an `intent:` field on existing entries rather
+        than a parallel file that would drift from them.
+
+        Root registry first, then space registries, which may override for
+        their own space (`:comms:` means something different in each venture).
+
+        Tasks already carry `:plur:` (311), `:gtd:` (320), `:enterprise:` (46).
+        Mapping tags places hundreds of tasks without editing any of them.
         """
-        out = []
-        for f in sorted(root.glob("[0-9]-*/venture.yaml")):
+        out: dict[str, str] = {}
+        files = [root / ".datacore" / "tags.yaml"]
+        files += sorted(root.glob("[0-9]-*/.datacore/tags.yaml"))
+        for f in files:
+            if not (yaml and f.is_file()):
+                continue
             try:
-                d = yaml.safe_load(f.read_text()) or {}
+                data = yaml.safe_load(f.read_text()) or {}
             except Exception:
                 continue
-            stage = str(d.get("stage") or "").lower()
-            if d.get("paused") is True:
-                stage = "paused"
-            weight = (VENTURE_BASE + _STAGE_WEIGHT.get(stage, 0)
-                      + int(d.get("autonomy") or 0) * 10)
-            label = f"{d.get('display_name') or d.get('name') or f.parent.name} ({stage or '?'})"
-            # The space directory IS the keyword. No trailing slash: boundary
-            # matching already delimits it, and "5-plur/" would demand a
-            # non-alphanumeric AFTER the slash, which never holds in a path.
-            out.append((weight, label, [f.parent.name.lower()], "venture"))
+            for section in data.values():
+                if not isinstance(section, dict):
+                    continue
+                for tag, spec in section.items():
+                    if isinstance(spec, dict) and spec.get("intent"):
+                        out[str(tag).lower()] = str(spec["intent"])
+                        org = str(spec.get("org") or "").strip(":").lower()
+                        if org:
+                            out[org] = str(spec["intent"])
         return out
 
-    def goals_without_keywords(self, root: Path) -> list[str]:
-        """Open goals that cannot steer anything yet. Surfaced so the gap is
-        visible rather than silently inert."""
-        f = root / "0-personal" / "goals.yaml"
-        if not (yaml and f.is_file()):
-            return []
-        try:
-            data = yaml.safe_load(f.read_text()) or {}
-        except Exception:
-            return []
-        return [str(g.get("statement") or g.get("id"))[:70]
-                for g in (data.get("goals") or [])
-                if g.get("status") == "open" and not g.get("keywords")]
+    # ── graph ────────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _priorities(root: Path) -> list[tuple[int, str, list[str], str]]:
-        f = root / ".datacore" / "cos" / "priorities.yaml"
-        if not (yaml and f.is_file()):
+    def parents(self, nid: str) -> list[str]:
+        """Tree parent plus cross-branch :SERVES: targets."""
+        n = self.nodes.get(nid)
+        if not n:
             return []
-        try:
-            data = yaml.safe_load(f.read_text()) or {}
-        except Exception:
-            return []
-        out = []
-        for p in data.get("priorities") or []:
-            kws = [str(k).lower() for k in (p.get("keywords") or []) if k]
-            if not kws:
-                continue
-            # rank 1 must beat rank 2 outright, so rank dominates hit count.
-            rank = int(p.get("rank") or 9)
-            out.append((PRIORITY_BASE + (10 - min(rank, 9)) * 10,
-                        str(p.get("priority") or "priority"), kws, "priority"))
-        return out
+        return [p for p in ([n.parent] if n.parent else []) + list(n.serves)
+                if p in self.nodes]
 
-    @staticmethod
-    def _intents(root: Path) -> list[tuple[int, str, list[str], str]]:
-        """The mission-level graph. Parsed from the skill's markdown table
-        because that table IS the definition — duplicating it into yaml would
-        create a third source of truth, which is the bug being fixed."""
-        f = root / ".datacore" / "modules" / "gtd" / "skills" / "intent-routing.md"
-        if not f.is_file():
-            return []
-        out = []
-        try:
-            lines = f.read_text(errors="ignore").splitlines()
-        except OSError:
-            return []
-        for line in lines:
-            m = _ROW.match(line.strip())
-            if not m:
-                continue
-            label, kw_cell = m.group(1).strip(), m.group(2)
-            kws = [k.strip().lower() for k in kw_cell.split(",") if k.strip()]
-            if kws:
-                out.append((INTENT_BASE, label, kws, "intent"))
-        return out
+    def ancestors(self, nid: str) -> set[str]:
+        seen, stack = set(), [nid]
+        while stack:
+            cur = stack.pop()
+            for p in self.parents(cur):
+                if p not in seen:
+                    seen.add(p)
+                    stack.append(p)
+        return seen
 
-    # ── scoring ──────────────────────────────────────────────────────────
+    def is_high_leverage(self, nid: str) -> bool:
+        """Serves more than one intent — the source doc's definition, and its
+        stated reason to work on something first."""
+        n = self.nodes.get(nid)
+        return bool(n and n.serves)
 
-    @staticmethod
-    def _hits(hay: str, kws: list[str]) -> int:
-        """Token-boundary match, not raw substring.
+    def leaves(self) -> list[Node]:
+        """Structural leaves — nodes with no children declared beneath them."""
+        return [n for n in self.nodes.values() if not n.children]
 
-        `plur` must not match "plural" and `pack` must not match "package" —
-        the paths being scored are full of English words, and a scorer that
-        fires on accidental substrings produces confident nonsense. Boundaries
-        are alphanumeric, so `-` and `/` in "5-plur/1-tracks" still delimit.
+    def frontier(self, done: set[str] | None = None) -> list[Node]:
+        """Where work actually happens right now.
+
+        A node is not permanently an "initiative" or a "project" — its kind is
+        emergent. While anything beneath it is open it is an aggregator; once
+        everything beneath it is done it becomes the actionable thing itself
+        and advances to the frontier. So the frontier MOVES UPWARD as work
+        completes, and `:LEVEL:` only records which depth a node was authored
+        at, never what it currently is.
+
+        This is the same rule org-mode already applies to a heading with TODO
+        children, which is why the intent graph and next_actions.org are the
+        same shape at different granularities.
         """
+        done = done or set()
+        out = []
+        for n in self.nodes.values():
+            live = [c for c in n.children if c not in done]
+            if not live and n.id not in done:
+                out.append(n)
+        return out
+
+    # ── matching and scoring ─────────────────────────────────────────────
+
+    @staticmethod
+    def _hits(hay: str, kws) -> int:
+        """Token-boundary, never substring: `plur` must not fire on "plural"."""
         return sum(1 for k in kws
                    if re.search(rf"(?<![a-z0-9]){re.escape(k)}(?![a-z0-9])", hay))
 
-    def score(self, text: str, container: str | None = None
-              ) -> tuple[int, str | None, str | None]:
-        """Return (score, matched label, layer). 0/None/None when nothing
-        matches — a neutral item, not a penalised one.
+    def match(self, text: str, container: str = "", tags=()) -> Node | None:
+        """Which graph node is this work serving?
 
-        `container` (the space directory) is scored ONLY against venture
-        layers, and `text` only against the rest. Merging them saturated
-        everything: priority 1's keywords include "plur", which matches the
-        path "5-plur/...", so all 209 tasks in that space scored identically
-        and alignment discriminated nothing. Splitting them is what lets one
-        GEO draft outrank its neighbours in the same space — which is the
-        whole point of naming GEO a priority.
+        Tag mapping wins over keyword guessing — a task tagged `:plur:` is
+        placed by declaration, not inference. Keywords are the fallback for
+        work that carries no mapped tag.
         """
-        if container is None:
-            # Called with a bare path: derive the container from it, so the
-            # space segment never also feeds the priority keywords.
-            text, container = self.split(text)
+        for t in tags or ():
+            nid = self.tag_map.get(str(t).lower())
+            if nid and nid in self.nodes:
+                return self.nodes[nid]
+        # Container is deliberately NOT part of the haystack. Blending it in
+        # let a space directory named after a node ("9-nightshift") match that
+        # node for every item inside it, scoring the whole space identically —
+        # the same saturation bug in a new place. Scoping now comes from the
+        # tag registry, so the container is context, never evidence.
         hay = (text or "").lower()
-        cont = (container or "").lower()
-        best = (0, None, None)
-        for weight, label, kws, layer in self.layers:
-            subject = cont if layer == "venture" else hay
-            if not subject:
+        best, best_hits = None, 0
+        for n in self.nodes.values():
+            if not n.keywords:
                 continue
-            hits = self._hits(subject, kws)
-            if hits and weight + hits > best[0]:
-                best = (weight + hits, label, layer)
+            h = self._hits(hay, n.keywords)
+            # Deeper nodes are more specific, so break ties downward.
+            if h > best_hits or (h and h == best_hits and best and n.level > best.level):
+                best, best_hits = n, h
         return best
 
-    @staticmethod
-    def split(path: str) -> tuple[str, str]:
-        """(content, container) for a repo-relative path.
+    def spotlight_rank(self, nid: str | None) -> int | None:
+        """Is this node, or anything it serves, named in this week's spotlight?"""
+        if not nid:
+            return None
+        family = {nid} | self.ancestors(nid)
+        best = None
+        for s in self.spotlight:
+            if s.get("id") and s["id"] in family:
+                best = min(best or 99, s["rank"])
+        return best
 
-        The leading `N-name/` segment is the container; everything after it is
-        content, because the filename is where the topic actually lives
-        ("plur-geo-distribution-approval-queue.md")."""
-        p = str(path or "").lstrip("./")
-        head, sep, rest = p.partition("/")
-        if sep and re.match(r"^\d+-", head):
-            return rest, head
-        return p, ""
+    def score_10(self, text: str, container: str = "", tags=()) -> float:
+        """0-10 for `task_queue.calculate_priority`, which treats 5 as neutral.
 
-    def score_item(self, item: dict) -> tuple[int, str | None, str | None]:
-        content, container = self.split(item.get("path") or "")
-        container = container or str(item.get("space") or "")
-        rest = " ".join(str(item.get(f, "")) for f in
-                        ("agent", "queue", "heading", "tags"))
-        return self.score(f"{content} {rest}", container)
-
-    #: Layer -> the 0-10 band nightshift's priority formula expects. 5 is
-    #: neutral there, so unmatched work keeps its existing behaviour exactly
-    #: and only aligned/misaligned work moves.
-    _BAND = {"priority": 10.0, "goal": 8.0, "venture": 6.0, "intent": 5.5}
-
-    def score_10(self, text: str, container: str | None = None) -> float:
-        """Normalise to the 0-10 scale `task_queue._calculate_priority` uses.
-
-        Computed live rather than read from an `:INTENT_SCORE:` property:
-        that property was never written to a single one of 877 tasks, so the
-        term sat at its neutral default forever and priorities could not move
-        anything. A value derived at queue-build time cannot go unpopulated
-        or stale.
-
-        A paused venture scores BELOW neutral, which is the only way stated
-        de-prioritisation actually de-prioritises.
+        Follows the graph's own rules: spotlight first, then the doc's
+        multi-intent priority rule, then merely being on the graph at all.
         """
-        raw, _, layer = self.score(text, container)
-        if layer is None:
-            return 5.0
-        if layer == "venture":
-            # Recover the stage signal: bands run 50 (paused) .. 310 (growth).
-            return max(0.0, min(10.0, 3.0 + (raw - VENTURE_BASE) / 30.0))
-        return self._BAND.get(layer, 5.0)
+        node = self.match(text, container, tags)
+        if node is None:
+            # Unmapped is neutral, never penalised — it means a missing edge,
+            # which gaps() reports rather than this silently downranking.
+            #
+            # Spotlight keywords are matched against CONTENT ONLY. Including
+            # the container would let the keyword "plur" match the directory
+            # "5-plur" and score every item in that space at 10.0 — the same
+            # saturation that made all 209 tasks in a space rank identically.
+            for s in self.spotlight:
+                if s.get("keywords") and self._hits(text.lower(), s["keywords"]):
+                    return SPOTLIT - (s["rank"] - 1) * 0.5
+            return NEUTRAL
+        rank = self.spotlight_rank(node.id)
+        if rank is not None:
+            return max(ON_GRAPH, SPOTLIT - (rank - 1) * 0.5)
+        if self.is_high_leverage(node.id) or any(
+                self.is_high_leverage(a) for a in self.ancestors(node.id)):
+            return HIGH_LEVERAGE
+        return ON_GRAPH
+
+    # ── gaps ─────────────────────────────────────────────────────────────
+
+    def gaps(self, task_index: dict[str, int] | None = None) -> list[dict]:
+        """What is missing. This is the point of having a structure at all.
+
+        Implements the Review Protocol the source doc already prescribes —
+        "which intents got zero work?", "any stale nodes?" — plus the checks
+        that only became possible once leaves could be compared against real
+        tasks. Each gap is a named hole, which is proposable work: it turns
+        agents from producers of more output into fillers of specific
+        absences.
+
+        `task_index` maps intent id -> number of open tasks. Omit it and the
+        work-coverage checks are skipped rather than guessed at.
+        """
+        out: list[dict] = []
+        for n in self.nodes.values():
+            if n.level == 2 and not n.success:
+                out.append({"kind": "unmeasurable", "id": n.id,
+                            "detail": "goal has no success criterion — aspiration, not a goal"})
+            if n.success and re.search(r"not yet instrumented|TBD|\?\?", n.success, re.I):
+                out.append({"kind": "uninstrumented", "id": n.id,
+                            "detail": f"success criterion cannot be measured: {n.success[:60]}"})
+            for s in n.serves:
+                if s not in self.nodes:
+                    out.append({"kind": "broken_link", "id": n.id,
+                                "detail": f"serves '{s}', which is not in the graph"})
+        for s in self.spotlight:
+            # An entry with no resolvable id is the same failure as one naming
+            # a missing node: this week's stated priority cannot be connected
+            # to any stated goal. Skipping the id-less case would hide exactly
+            # the priorities that most need the link.
+            sid = s.get("id")
+            if sid and sid in self.nodes:
+                continue
+            label = sid or (s.get("statement") or "?")[:44]
+            out.append({"kind": "spotlight_off_graph", "id": label,
+                        "detail": "this week's priority serves no node in the graph"})
+        if task_index is not None:
+            # The frontier is where work either exists or is missing. Nodes
+            # deeper in the tree are covered by their descendants; nodes above
+            # the frontier are aggregates and are not supposed to carry tasks
+            # of their own. Checking every node instead of the frontier is what
+            # would turn one real gap into a hundred noisy ones.
+            done = {nid for nid in self.nodes if task_index.get(nid, 0) == 0
+                    and self._descendants(nid) and all(
+                        task_index.get(d, 0) == 0 for d in self._descendants(nid))}
+            for n in self.frontier():
+                if not task_index.get(n.id, 0):
+                    out.append({"kind": "frontier_no_work", "id": n.id,
+                                "detail": "nothing open beneath it and no tasks — "
+                                          "this is where the next action must be defined"})
+            for n in self.nodes.values():
+                covered = task_index.get(n.id, 0)
+                if n.level == 1 and not covered:
+                    out.append({"kind": "no_work", "id": n.id,
+                                "detail": "intent has no open tasks anywhere beneath it"})
+                if self.is_high_leverage(n.id) and not covered:
+                    out.append({"kind": "ignored_high_leverage", "id": n.id,
+                                "detail": "multi-intent node with no open tasks — "
+                                          "the graph's own rule says work these first"})
+        return out
+
+    def _descendants(self, nid: str) -> set[str]:
+        seen, stack = set(), [nid]
+        while stack:
+            cur = stack.pop()
+            for c in self.nodes.get(cur, Node("", "", 0)).children:
+                if c not in seen:
+                    seen.add(c)
+                    stack.append(c)
+        return seen
 
 
 def _cli() -> int:
-    import argparse
-    import json
-    ap = argparse.ArgumentParser(description="Score text against stated priorities.")
+    ap = argparse.ArgumentParser(description="Intent graph: score work, find gaps.")
     ap.add_argument("text", nargs="*")
     ap.add_argument("--root", default=str(Path.home() / "Data"))
-    ap.add_argument("--layers", action="store_true", help="show what is loaded")
+    ap.add_argument("--container", default="")
+    ap.add_argument("--tags", default="")
+    ap.add_argument("--graph", action="store_true")
+    ap.add_argument("--gaps", action="store_true")
     a = ap.parse_args()
-    s = Scorer.load(Path(a.root).expanduser())
-    if a.layers:
-        for w, label, kws, layer in s.layers:
-            print(f"  {w:>5} {layer:8} {label[:44]:46} {', '.join(kws[:6])}")
+    root = Path(a.root).expanduser()
+    g = IntentGraph.load(root)
+
+    if a.graph:
+        for n in sorted(g.nodes.values(), key=lambda n: (n.level, n.id)):
+            flag = "HL" if g.is_high_leverage(n.id) else "  "
+            print(f"  L{n.level} {flag} {n.id:38} {n.title[:52]}")
+        print(f"\n  {len(g.nodes)} nodes, {len(g.leaves())} leaves, "
+              f"{sum(1 for n in g.nodes if g.is_high_leverage(n))} high-leverage")
         return 0
-    score, label, layer = s.score(" ".join(a.text))
-    print(json.dumps({"score": score, "matched": label, "layer": layer}))
+    if a.gaps:
+        from intent_tasks import task_index          # noqa: E402
+        gaps = g.gaps(task_index(root, g))
+        by_kind: dict[str, int] = {}
+        for x in gaps:
+            by_kind[x["kind"]] = by_kind.get(x["kind"], 0) + 1
+        for x in gaps[:24]:
+            print(f"  {x['kind']:22} {x['id'][:34]:36} {x['detail'][:52]}")
+        print("\n  " + "  ".join(f"{k}={v}" for k, v in sorted(by_kind.items())))
+        return 0
+
+    tags = [t for t in a.tags.split(",") if t]
+    node = g.match(" ".join(a.text), a.container, tags)
+    print(json.dumps({
+        "score": g.score_10(" ".join(a.text), a.container, tags),
+        "matched": node.id if node else None,
+        "title": node.title if node else None,
+        "high_leverage": g.is_high_leverage(node.id) if node else False,
+        "spotlight_rank": g.spotlight_rank(node.id if node else None),
+    }, indent=2))
     return 0
 
 
 if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     raise SystemExit(_cli())

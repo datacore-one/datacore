@@ -401,6 +401,36 @@ maturity:
 # Subject area classification (for both org tasks and notes)
 # =============================================================================
 domains:
+  plur:
+    description: "PLUR — engram memory engine"
+    org: ":plur:"
+    hashtag: "#PLUR"
+    yaml: "plur"
+    intent: three-loop-learning-system   # PLUR is the learning system
+  gtd:
+    description: "GTD workflow"
+    org: ":gtd:"
+    hashtag: "#GTD"
+    yaml: "gtd"
+    intent: knowledge-accumulates-byproduct-use   # doc: GTD generates the data learning consumes
+  cos:
+    description: "Chief of Staff — autonomous ops"
+    org: ":cos:"
+    hashtag: "#CoS"
+    yaml: "cos"
+    intent: datacore-runs-itself-autonomous
+  nightshift:
+    description: "Overnight autonomous execution"
+    org: ":nightshift:"
+    hashtag: "#Nightshift"
+    yaml: "nightshift"
+    intent: nightshift-executes-tasks-human
+  comms:
+    description: "Communications and content"
+    org: ":comms:"
+    hashtag: "#Comms"
+    yaml: "comms"
+    intent: content-pipeline-generates-publishes
   # Organization/Project domains — configure in tags.local.yaml
   # Example:
   #   mycompany:
@@ -414,6 +444,7 @@ domains:
     org: ":datacore:"
     hashtag: "#Datacore"
     yaml: "datacore"
+    intent: three-loop-learning-system   # the system learning from use
 
   # Technology domains
   AI:
@@ -460,6 +491,7 @@ domains:
     org: ":privacy:"
     hashtag: "#Privacy"
     yaml: "privacy"
+    intent: privacy-first-data-sovereign   # same goal
 
   security:
     description: "Security topics"
@@ -467,6 +499,7 @@ domains:
     hashtag: "#Security"
     yaml: "security"
     aliases: ["#security", "#hacking", "#Hacking"]
+    intent: privacy-first-data-sovereign   # sovereignty is the security goal
 
   defi:
     description: "Decentralized finance"
