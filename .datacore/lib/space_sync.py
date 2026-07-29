@@ -72,7 +72,11 @@ def sync_repo(repo: Path, quiet: bool = False) -> str:
     run(["git", "add", "-A"], repo)
     code, _ = run(["git", "diff", "--cached", "--quiet"], repo)
     if code != 0:
-        code, out = run(["git", "commit", "-m", "sync: mac autosave"], repo)
+        # Generous timeout: commit hooks (structural integrity, boundary
+        # scans) legitimately take minutes on large spaces — a timeout here
+        # masqueraded as a hook rejection on 5-plur (2026-07-29).
+        code, out = run(["git", "commit", "-m", "sync: mac autosave"], repo,
+                        timeout=420)
         if code != 0:
             # A commit hook rejected the autosave (e.g. date validation).
             # Leave the tree as it was and surface it — do NOT proceed to
