@@ -245,10 +245,16 @@ class ServerArchiver:
         return True, "OK"
 
     def _rsync_file(self, local_path: Path, remote_abs_path: str) -> Tuple[bool, str]:
-        """Copy file to server via rsync (handles spaces in paths)."""
+        """Copy file to server via rsync.
+
+        -s (protect args) keeps the remote side from shell-interpreting the
+        path — spaces survive plain -a, but a NEWLINE in a filename broke the
+        remote command and failed nightshift-outbox nightly (observed
+        2026-07-29: a roam-export page with an embedded newline).
+        """
         try:
             result = subprocess.run(
-                ["rsync", "-a", str(local_path), f"{self.host}:{remote_abs_path}"],
+                ["rsync", "-a", "-s", str(local_path), f"{self.host}:{remote_abs_path}"],
                 capture_output=True, text=True, timeout=120
             )
             return result.returncode == 0, result.stdout + result.stderr
