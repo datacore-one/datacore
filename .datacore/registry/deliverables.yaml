@@ -1,0 +1,55 @@
+# DIP-0033 §1 — Deliverable registry.
+# Every user-facing deliverable declares its producer, where the principal
+# consumes it, a deadline, the verifier that checks the OUTCOME there, and
+# the alert path a miss takes. A deliverable without a verifier is a spec
+# violation.
+
+deliverables:
+  - id: morning-journal
+    producer: nightshift-today.service (03:15Z) + publish-journal drop-in
+    consumption_point: Mac — journal open in editor
+    deadline: "08:35 local"
+    verifier: .datacore/lib/morning_journal.py (launchd io.datacore.morning-journal, 08:30)
+    alert: macOS notification + non-zero exit
+
+  - id: audio-briefing
+    producer: box cos_morning.sh → winston_audio.sh (Oura-gated, ~06:00Z+)
+    consumption_point: Telegram voice message
+    deadline: "08:00Z (box verifier)"
+    verifier: box cos_verify_morning.py check_audio (08:00Z cron)
+    alert: cos_alert.sh → Telegram
+
+  - id: tg-opener
+    producer: box winston_deliver.py (opener, not the full paste)
+    consumption_point: Telegram text
+    deadline: "08:00Z (box verifier)"
+    verifier: box cos_verify_morning.py check_deliveries (EXPECTED_DELIVERIES=1)
+    alert: cos_alert.sh → Telegram
+
+  - id: app-briefing-artifact
+    producer: box cos_generate.py → cos_reasoning.generate (fallback chain)
+    consumption_point: datacore app card (Mac)
+    deadline: "08:00Z (box verifier)"
+    verifier: box cos_verify_morning.py check_briefing (+ _meta.llm_attempts/degraded)
+    alert: cos_alert.sh on fallback/degraded (cos_generate) + verifier
+
+  - id: actionable-mail-section
+    producer: box cos_mail_section.py (triage re-trigger + artifact injection)
+    consumption_point: audio + TG opener + app card
+    deadline: "08:00Z (box verifier)"
+    verifier: box cos_verify_morning.py check_mail_section
+    alert: cos_alert.sh → Telegram
+
+  - id: nightshift-task-results
+    producer: nightshift overnight batch → space repos + journals
+    consumption_point: Mac — review queue in briefing / app
+    deadline: "smoke run 08:40 local"
+    verifier: .datacore/lib/smoke.py (repos_health, failed_units)
+    alert: macOS notification
+
+  - id: outbox-archive-run
+    producer: nightshift-outbox.service (DIP-0017)
+    consumption_point: server archive repos (versioned, pushed to Gitea)
+    deadline: "smoke run 08:40 local"
+    verifier: .datacore/lib/smoke.py (failed_units on nightshift)
+    alert: macOS notification
