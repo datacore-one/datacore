@@ -41,12 +41,23 @@ def main() -> int:
         print(sync.stderr.strip(), file=sys.stderr)
 
     journal = JOURNALS / f"{today}.md"
-    if not journal.exists():
-        print(f"{today}: journal not published yet — will retry on next run")
-        return 0
-    if "## Daily Briefing" not in journal.read_text():
-        print(f"{today}: journal exists but briefing section missing — not opening")
-        return 0
+    missing = (
+        "journal not published" if not journal.exists()
+        else "briefing section missing" if "## Daily Briefing" not in journal.read_text()
+        else None
+    )
+    if missing:
+        # Single daily shot (08:30) — a miss must be LOUD, not a log line.
+        # Silent non-delivery is exactly what the 2026-07-29 post-mortem
+        # was about.
+        msg = f"Morning briefing NOT delivered ({missing}) — check nightshift-today on the server"
+        print(f"{today}: {msg}")
+        subprocess.run(
+            ["osascript", "-e",
+             f'display notification "{msg}" with title "Datacore morning"'],
+            capture_output=True, timeout=10,
+        )
+        return 1
 
     subprocess.run(["open", str(journal)], timeout=30)
     marker.write_text("")
