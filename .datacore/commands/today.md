@@ -126,14 +126,23 @@ Proceed with full briefing generation (step 3 onward).
 
 Pull latest from all repos (brings nightshift outputs from server).
 
-```
-for each space in [root, 0-personal, 1-* through 7-*]:
-  git stash && git pull --rebase && git stash pop
+```bash
+python3 .datacore/lib/space_sync.py        # all space repos
+git -C ~/Data pull --rebase --autostash    # root repo (user's working copy)
 ```
 
-- `0-personal` syncs with nightshift server directly (not GitHub)
-- Team spaces sync with GitHub
-- If pull fails after 2 retries, warn and continue
+**NEVER use `git stash && git pull && git stash pop`** — when the pop
+conflicts the stash is silently kept and the work is stranded invisibly
+(10 orphaned stashes accumulated May–Jun 2026; see ENG-2026-0729-009).
+`space_sync.py` commits local work first (findable, pushable), rebases,
+and on conflict preserves everything on a pushed `mac-rescue-<TS>` branch
+with an alert — same self-healing pattern as the box's cos_sync.sh.
+
+- `0-personal` syncs with the private git server, team spaces with GitHub
+  (space_sync uses each repo's own origin)
+- A `rescued` outcome is preserved work, not a failure — surface it to the
+  user in the briefing
+- If fetch fails (offline), local work is already committed and syncs later
 
 ---
 
