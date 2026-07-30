@@ -1853,6 +1853,24 @@ module_agents:
     can_be_called_by:
     - nightshift-orchestrator
 
+  evaluator-critic-optimizer:
+    description: "Autonomous improvement loop for the nightshift critic evaluator prompt. Iterates on evaluator-critic.md, maximizing discrimination score on a fixed 5-item benchmark."
+    version: "1.0.0"
+    source: ".datacore/modules/nightshift/agents/evaluator-critic-optimizer.md"
+    module: "nightshift"
+    skills:
+    - prompt-optimization
+    - autonomous-loop
+    loop_type: "autoresearch"
+    criterion: "discrimination (higher is better)"
+    mutable_scope: ".datacore/modules/nightshift/agents/evaluator-critic.md"
+    immutable_scope: ".datacore/modules/nightshift/evaluate.py, tests/benchmark/, tests/run_critic_benchmark.py"
+    task_tag: ":AI:loop:evaluator-critic-optimizer:"
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+    - human
+
   evaluator-ceo:
     description: "CEO lens - strategic alignment and business value"
     version: "1.0.0"
