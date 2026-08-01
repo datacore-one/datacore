@@ -187,6 +187,20 @@ budgets:
   gemini-deep-research: 25.00
   google-scholar: 5.00
 
+  # === WIKIPEDIA / STRUCTURED ===
+  pixelrag:
+    type: mcp
+    description: "Visual Wikipedia search — 8.28M pages indexed as image tiles via Qwen3-VL embeddings"
+    tool: pixelrag__search
+    layers: [search, research]
+    content_type: documents
+    cost_per_call: 0
+    requires_key: false
+    authority: medium
+    max_latency_ms: 5000
+    good_for: [wikipedia, structured-data, academic]
+    note: "Hosted at api.pixelrag.ai. No API key. Text query → tile-level Wikipedia hits. Scores ~0.45–0.65 cosine. Spike quality evaluation only — index may not be maintained long-term."
+
   # === FUTURE SOURCES ===
   # Uncomment and configure as needed:
   #
