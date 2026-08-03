@@ -192,6 +192,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=DEFAULT_REPO)
     parser.add_argument("--branches", nargs="*", default=None)
+    parser.add_argument(
+        "--files", nargs="*", default=None,
+        help="render these DIP files directly (working tree) instead of extracting from branches",
+    )
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--intro", type=Path, default=None)
     parser.add_argument("--open", action="store_true", help="open in Brave when done")
@@ -201,20 +205,34 @@ def main() -> int:
         print(f"error: dips repo not found at {args.repo}", file=sys.stderr)
         return 1
 
-    branches = args.branches or discover_branches(args.repo)
-    if not branches:
-        print("error: no dip/* branches found", file=sys.stderr)
-        return 1
-
     renderer = markdown.Markdown(extensions=["extra", "sane_lists", "toc"])
     docs = []
-    for branch in branches:
-        path = dip_file_for(args.repo, branch)
-        if not path:
-            print(f"skip {branch}: no matching DIP file", file=sys.stderr)
-            continue
-        text = extract(args.repo, branch, path)
-        number = BRANCH_RE.match(branch).group(1)
+
+    if args.files:
+        sources = []
+        for raw in sorted(args.files):
+            path = Path(raw)
+            found = re.search(r"DIP-(\d{4})", path.name)
+            if not found:
+                print(f"skip {path}: no DIP number in filename", file=sys.stderr)
+                continue
+            sources.append((f"(working tree) {path.parent.name}", path.name,
+                            found.group(1), path.read_text()))
+    else:
+        branches = args.branches or discover_branches(args.repo)
+        if not branches:
+            print("error: no dip/* branches found", file=sys.stderr)
+            return 1
+        sources = []
+        for branch in branches:
+            path = dip_file_for(args.repo, branch)
+            if not path:
+                print(f"skip {branch}: no matching DIP file", file=sys.stderr)
+                continue
+            sources.append((branch, path, BRANCH_RE.match(branch).group(1),
+                            extract(args.repo, branch, path)))
+
+    for branch, path, number, text in sources:
         anchor = f"dip-{number}"
         renderer.reset()
         # Namespace heading ids per DIP so anchors stay unique across the page.
