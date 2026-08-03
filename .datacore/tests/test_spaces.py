@@ -71,6 +71,19 @@ def test_finds_marked_spaces(tmp_path):
     assert all(s.marked for s in found)
 
 
+def test_client_space_nested_under_its_owner_is_found(tmp_path):
+    """The real layout: <root>/<space>/1-tracks/clients/<name> is depth 4.
+
+    Regression guard — this sat exactly on MAX_DEPTH when first shipped, so one
+    extra grouping directory would have dropped it out of discovery silently.
+    """
+    make_space(tmp_path, "1-owner", "owner")
+    deeper = make_space(
+        tmp_path, "1-owner/1-tracks/clients/active/acme", "acme", type_="client"
+    )
+    assert deeper in [s.path for s in discover_spaces(tmp_path, include_legacy=False)]
+
+
 def test_location_does_not_matter(tmp_path):
     """The whole point: a space need not sit at the install root."""
     make_space(tmp_path, "1-owner", "owner")

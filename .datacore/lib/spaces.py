@@ -45,9 +45,13 @@ MARKER = Path(".datacore") / "config.yaml"
 #: being discovered. Remove once discovery_discrepancy() is empty everywhere.
 LEGACY_GLOB = "[0-9]-*"
 
-#: A space nested under another lives at e.g.
-#: ``<root>/1-space/1-tracks/clients/<name>``, which is depth 4.
-MAX_DEPTH = 4
+#: A client space nested under its owner sits at e.g.
+#: ``<root>/<space>/1-tracks/clients/<name>`` — depth 4 — so 4 is the shallowest
+#: bound that works today and leaves no headroom. One extra grouping directory
+#: would push a space out of discovery *silently*, which is the failure mode
+#: this module exists to remove. 5 costs one more level of a walk that already
+#: skips everything expensive.
+MAX_DEPTH = 5
 
 #: Never descended into. ``2-projects`` holds cloned repositories with their own
 #: dependency trees and is the single biggest cost in an unbounded walk.
