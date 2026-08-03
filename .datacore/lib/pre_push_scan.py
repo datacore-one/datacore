@@ -64,6 +64,12 @@ DATACORE_NEW_FILE_ALLOW = [
     ".datacore/tests/**",
     ".datacore/skills/**",
     ".datacore/cos/*.example",
+    # Retired agent/command definitions. Same content class as
+    # .datacore/agents/** above — they are moved here, not newly written, to
+    # get them out of the harness-scanned tree (.claude symlinks to .datacore
+    # and scans agents/** recursively, so _deprecated/ defs were loading into
+    # every session).
+    ".datacore/4-archive/**",
     # single-level files directly in .datacore/ (registries, manifests)
     ".datacore/*",
     # module-internal categories
