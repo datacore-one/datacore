@@ -1,5 +1,9 @@
 {
-  "hosts": ["igea"],
-  "networks": ["192.168.253.", "192.168.254."],
-  "note": "Client agreement: no AI system may access this infrastructure. Clone repositories and run tooling manually instead."
+  "_comment": "PUBLIC FILE. Generic entries only \u2014 never a customer host name. Real host names live in ~/.datacore/private/customer-denylist.yaml under `restricted_hosts:` and are unioned at load time.",
+  "hosts": [],
+  "networks": [
+    "192.168.253.",
+    "192.168.254."
+  ],
+  "note": "This host is off-limits to AI agents. A human must run this manually."
 }
