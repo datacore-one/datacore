@@ -52,6 +52,9 @@ try:
 except ImportError:  # pragma: no cover
     yaml = None
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import discover_spaces  # noqa: E402
+
 #: Work matching nothing on the graph. `task_queue.calculate_priority` treats
 #: 5 as neutral, so unmapped work keeps exactly today's behaviour — absence of
 #: alignment is not evidence of unimportance, it is evidence of a missing edge.
@@ -129,8 +132,10 @@ class IntentGraph:
         """
         root = Path(root)
         nodes = cls._read_org(root / INTENTS_ORG)
-        for f in sorted(root.glob("[0-9]-*/org/intents.org")):
-            nodes.update(cls._read_org(f, prefix=f.parent.parent.name))
+        for space in discover_spaces(root):
+            f = space.path / "org" / "intents.org"
+            if f.is_file():
+                nodes.update(cls._read_org(f, prefix=space.path.name))
         cls._resolve_serves(nodes)
         return cls(nodes, cls._read_spotlight(root / SPOTLIGHT_YAML),
                    cls._read_tag_map(root))
@@ -243,7 +248,7 @@ class IntentGraph:
         """
         out: dict[str, str] = {}
         files = [root / ".datacore" / "tags.yaml"]
-        files += sorted(root.glob("[0-9]-*/.datacore/tags.yaml"))
+        files += [s.path / ".datacore" / "tags.yaml" for s in discover_spaces(root)]
         for f in files:
             if not (yaml and f.is_file()):
                 continue

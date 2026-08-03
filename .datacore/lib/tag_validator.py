@@ -26,6 +26,9 @@ from typing import Dict, List, Set, Tuple
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import discover_spaces  # noqa: E402
+
 
 class TagValidator:
     """Validates tags against the canonical registry."""
@@ -50,14 +53,8 @@ class TagValidator:
         self._load_registry()
 
     def _discover_space_dirs(self) -> list:
-        """Discover [0-9]-* space directories under data_dir."""
-        try:
-            return sorted(
-                p for p in self.data_dir.iterdir()
-                if p.is_dir() and p.name[:1].isdigit()
-            )
-        except (PermissionError, OSError):
-            return []
+        """Space directories under data_dir. See lib/spaces.py and DIP-0015."""
+        return [s.path for s in discover_spaces(self.data_dir)]
 
     def _load_registry(self):
         """Load tag registry from YAML."""

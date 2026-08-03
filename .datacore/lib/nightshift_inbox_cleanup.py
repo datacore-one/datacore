@@ -7,9 +7,13 @@ Run from ~/Data directory.
 import os
 import re
 import shutil
+import sys
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import discover_spaces as _discover_spaces  # noqa: E402
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", Path.home() / "Data"))
 
@@ -141,12 +145,8 @@ def is_stale_news(title: str) -> bool:
 
 
 def discover_spaces() -> list:
-    """Discover Datacore spaces matching [0-9]-* pattern."""
-    spaces = []
-    for d in sorted(DATA_DIR.iterdir()):
-        if d.is_dir() and re.match(r"^[0-9]-[a-zA-Z0-9_-]+$", d.name):
-            spaces.append(d.name)
-    return spaces
+    """Space directory names. See lib/spaces.py and DIP-0015."""
+    return [s.path.name for s in _discover_spaces(DATA_DIR)]
 
 
 def main():
