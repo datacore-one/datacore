@@ -19,7 +19,10 @@ import argparse
 import sys
 from pathlib import Path
 
-CANONICAL = ("#+SEQ_TODO: TODO(t) NEXT(n!) WAITING(w!) DEFERRED(f) QUEUED(q) "
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import discover_spaces  # noqa: E402
+
+CANONICAL =("#+SEQ_TODO: TODO(t) NEXT(n!) WAITING(w!) DEFERRED(f) QUEUED(q) "
              "WORKING(W!) REVIEW(r!) | DONE(d!) FAILED(x!) CANCELLED(c!)")
 
 SCOPE = {"inbox.org", "next_actions.org", "someday.org", "nightshift.org",
@@ -64,7 +67,8 @@ def main() -> int:
 
     data_dir = Path(args.data_dir)
     changed = 0
-    for space in sorted(data_dir.glob("[0-9]-*/org")):
+    for discovered in discover_spaces(data_dir):
+        space = discovered.path / "org"
         for f in sorted(space.glob("*.org")):
             if f.name not in SCOPE or "archive" in f.name.lower():
                 continue

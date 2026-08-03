@@ -29,6 +29,9 @@ import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import discover_spaces  # noqa: E402
+
 DATA_DIR = Path(__file__).resolve().parents[2]
 ADAPTER = DATA_DIR / '.datacore' / 'lib' / 'org_workspace_adapter.py'
 
@@ -89,7 +92,8 @@ def main() -> int:
     args = parser.parse_args()
 
     spaces = {}
-    for space_dir in sorted(DATA_DIR.glob('[0-9]-*')):
+    for space in discover_spaces(DATA_DIR):
+        space_dir = space.path
         org_file = space_dir / 'org' / 'next_actions.org'
         if not org_file.exists():
             continue

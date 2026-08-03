@@ -10,9 +10,13 @@ Usage:
 """
 
 import re
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import discover_spaces  # noqa: E402
 
 
 def normalize_tag(tag: str) -> str:
@@ -73,8 +77,8 @@ def load_registry(data_root: Path) -> Dict:
         _merge_registry(registry, system_registry)
 
     # 2. Space registries
-    for space_dir in data_root.glob('[0-9]-*'):
-        space_registry = space_dir / '.datacore' / 'tags.yaml'
+    for space in discover_spaces(data_root):
+        space_registry = space.path / '.datacore' / 'tags.yaml'
         if space_registry.exists():
             _merge_registry(registry, space_registry)
 
