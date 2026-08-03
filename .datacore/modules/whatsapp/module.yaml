@@ -80,6 +80,7 @@ hooks:
     agent: whatsapp-notifications
     description: "Optional morning briefing push"
     enabled_setting: morning_briefing
+    slot: post
 
   nightshift_complete:
     agent: whatsapp-notifications
