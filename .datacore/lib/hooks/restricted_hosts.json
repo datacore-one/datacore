@@ -1,0 +1,5 @@
+{
+  "hosts": ["igea"],
+  "networks": ["192.168.253.", "192.168.254."],
+  "note": "Client agreement: no AI system may access this infrastructure. Clone repositories and run tooling manually instead."
+}
