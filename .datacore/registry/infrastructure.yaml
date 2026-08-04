@@ -8,14 +8,77 @@
 #       ssh_alias:      SSH config alias (or - if N/A)
 #       deploy_method:  How code gets there (git pull, rsync, systemd, etc.)
 #       services:       List of services running on it
+#       ledger_actors:  Writer actor names owning event files on this machine
+#                       (DIP-0034 — one .jsonl file per actor, never shared)
 #       notes:          Additional context
+#
+# NO NETWORK ADDRESSES IN THIS FILE. It is tracked in a public repository.
+# IPs live in ~/.ssh/config and in engram memory (plur_recall_hybrid,
+# domain "infrastructure") — per DIP-0018. Aliases only here.
+#
+# This file is the installation's ACTOR ROSTER for DIP-0034. Any change to the
+# ledger write path — deploying the ledger package, rotating keys, installing a
+# projector — must cover every machine listed here. A partial rollout is worse
+# than none: a machine on an older write path will either have its writes
+# refused by the projector guard or overwrite generated state.
 
 servers:
+  mac:
+    purpose: "Primary workstation — human sessions, Claude Code, org authoring"
+    ssh_alias: "-"
+    deploy_method: "local working copy (~/Data)"
+    services: []
+    ledger_actors:
+      - mac
+    notes: "Local machine. On main; feat/datacore-v2 unmerged as of 2026-08-04."
+
+  winston:
+    purpose: "Chief of Staff — briefings, approvals, merge gatekeeper"
+    ssh_alias: "winston"
+    deploy_method: "rsync + cron"
+    services:
+      - cos_verify_morning.sh (cron 08:00)
+      - job_verify.py (cron 08:00, DATACORE_V2=1)
+      - cos_merge_runs.sh (cron 03:50)
+    ledger_actors:
+      - winston
+    notes: "Only machine running any v2 code as of 2026-08-04 — config plane,
+      job contracts and the ledger package are deployed here."
+
   nightshift:
-    purpose: "Overnight AI task execution (systemd timers)"
+    purpose: "Overnight AI task execution (systemd timers); Miles Telegram bot"
     ssh_alias: "nightshift"
     deploy_method: "git pull + systemctl restart"
     services:
       - nightshift-overnight.service
       - nightshift-overnight.timer
-    notes: "Runs .datacore/modules/nightshift/ tasks on schedule"
+      - datacore-telegram.service
+      - datacore-fleet-sync.timer
+      - cos-cadence-triage.timer
+    ledger_actors:
+      - nightshift
+      - miles
+    notes: "Two actors on one machine — they own separate event files and never
+      contend. Runs .datacore/modules/nightshift/ tasks on schedule.
+      nightshift-digest.service is currently in a failed state."
+
+  hermes:
+    purpose: "Tris — Hermes agent gateway + PLUR bridge"
+    ssh_alias: "hermes"
+    deploy_method: "agent_update.py --host hermes --apply"
+    services:
+      - hermes-gateway.service
+    ledger_actors:
+      - tris
+    notes: "Has an agent_update.py profile with a health probe. No v2 code and
+      no job contracts declared yet."
+
+  plur-claw:
+    purpose: "Mr Data — OpenClaw agent host"
+    ssh_alias: "plur-claw"
+    deploy_method: "ssh + manual"
+    services: []
+    ledger_actors:
+      - data
+    notes: "No v2 code and no job contracts declared yet — the least covered
+      machine in the roster."
