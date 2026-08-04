@@ -60,13 +60,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_error(404, f"no .git in {space_dir}")
             return
 
+        # Use the shared healing sync (commit-first, rescue branch on
+        # conflict) instead of `pull --rebase --autostash`. Autostash keeps
+        # the stash when its pop conflicts, which stranded 29 stashes and
+        # wrote conflict markers into journals and org/inbox.org, silently
+        # blocking briefing delivery for three days (2026-08-03).
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from space_sync import sync_repo
+
         t0 = time.time()
-        proc = subprocess.run(
-            ["git", "-C", str(space_dir), "pull", "--rebase", "--autostash", "--quiet"],
-            capture_output=True, text=True, timeout=60,
-        )
+        try:
+            outcome = sync_repo(space_dir, quiet=True)
+            rc = 0 if outcome in ("clean", "offline", "rescued") else 1
+            out = f"sync_repo: {outcome}"
+        except Exception as exc:  # noqa: BLE001 - report, never crash the hook
+            rc, out, outcome = 1, f"sync_repo failed: {exc}", "error"
         dur = time.time() - t0
-        out = (proc.stdout + proc.stderr).strip()
+
+        class _P:
+            returncode = rc
+        proc = _P()
         if proc.returncode == 0:
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
