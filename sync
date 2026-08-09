@@ -163,7 +163,24 @@ for line in sys.stdin:
                 fi
             fi
         fi
-        git -C "$repo" diff --cached --quiet || git -C "$repo" commit -m "Sync: $(date +%Y-%m-%d)"
+        # Safety check 3: a commit that FAILS must not be followed by a push that
+        # reports success.
+        #
+        # The root repo's pre-commit hook (root-level allowlist) had been rejecting
+        # every commit for an unknown length of time. This line used to be
+        # `... || git commit -m ...` with no exit-code check, so a rejected commit
+        # fell straight through to the push, the push had nothing new to send,
+        # and sync printed its normal output. Nothing anywhere said "your work was
+        # not committed" — the run was indistinguishable from a clean one.
+        #
+        # Same shape as the stray-branch bug above: an operation failed and the
+        # tool reported a result you cannot tell apart from success.
+        if ! git -C "$repo" diff --cached --quiet; then
+            if ! git -C "$repo" commit -m "Sync: $(date +%Y-%m-%d)"; then
+                sync_alert "ABORT push in $name — commit was rejected (likely a pre-commit hook). Staged changes are NOT saved and NOT pushed. Run: git -C $repo commit -v"
+                return 1
+            fi
+        fi
         git -C "$repo" push 2>/dev/null || echo "  (no remote or error)"
     elif [ "$ACTION" = "status" ]; then
         echo "Status: $name [$current_branch]"
@@ -195,10 +212,32 @@ if [ -d ".datacore/dips/.git" ]; then
 fi
 
 # All projects within spaces
+#
+# Code repos are NEVER auto-committed. `sync push` stages everything with
+# `git add --ignore-removal .` and commits it as "Sync: <date>" — correct for
+# notes and org files, wrong for a codebase. On 2026-08-09 it took an agent's
+# edit to OVERVIEW.md in a project repo, committed it straight to `main`,
+# pushed, and triggered a production deploy. That repo requires changes to go
+# through a PR into a development branch; sync bypassed the entire flow, and
+# the deploy was a side effect nobody asked for.
+#
+# Pull and status still run — those are safe and it is genuinely useful to see
+# what is outstanding. Only push is withheld. Anything uncommitted here is
+# reported so it cannot be silently stranded, which is the failure this whole
+# script is otherwise built to prevent.
 for space in [0-9]-*/; do
     if [ -d "$space/2-projects" ]; then
         for project in "$space"2-projects/*/; do
             if [ -d "$project/.git" ]; then
+                if [ "$ACTION" = "push" ]; then
+                    dirty=$(git -C "$project" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+                    unpushed=$(git -C "$project" rev-list --count @{u}..HEAD 2>/dev/null || echo 0)
+                    if [ "$dirty" != "0" ] || [ "$unpushed" != "0" ]; then
+                        echo "Skipping project: $(basename $project) — code repos are not auto-committed."
+                        echo "  $dirty uncommitted file(s), $unpushed unpushed commit(s). Commit and push it yourself, or open a PR."
+                    fi
+                    continue
+                fi
                 sync_repo "$project" "project: $(basename $project)"
             fi
         done
