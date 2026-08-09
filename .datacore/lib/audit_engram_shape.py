@@ -112,10 +112,22 @@ def resistance(sig: dict) -> int:
     ])
 
 
-def collect(home: Path, domain_filter: str | None) -> list[dict]:
+def collect(home: Path, domain_filter: str | None) -> tuple[list[dict], list[dict]]:
+    """Return (rows, store_health).
+
+    store_health exists because this tool used to drop whole stores in silence.
+    `the-firm` is written as a bare YAML list whose engrams carry no `status`
+    field, so every one of its 17 records was filtered out by the active-status
+    check and never appeared in any total. The run looked clean. Nothing said a
+    store had contributed nothing — which is the same silent-skip failure this
+    tool was written to find. Report it instead of hiding it.
+    """
     rows = []
+    health = []
     for origin, path in discover_stores(home):
-        for e in load_store(path):
+        raw = load_store(path)
+        kept = 0
+        for e in raw:
             stmt = (e.get("statement") or "").strip()
             if not stmt:
                 continue
@@ -134,7 +146,46 @@ def collect(home: Path, domain_filter: str | None) -> list[dict]:
                 "resistance": resistance(sig),
                 "statement": stmt,
             })
-    return rows
+            kept += 1
+        health.append({
+            "origin": origin,
+            "records": len(raw),
+            "usable": kept,
+            "active": sum(1 for e in raw if e.get("status") == "active"),
+            "missing_status": sum(1 for e in raw if "status" not in e),
+            "shape": store_shape(path),
+        })
+    return rows, health
+
+
+def store_shape(path: Path) -> str:
+    """'mapping' is the expected shape; 'list' means the loader may reject it."""
+    try:
+        with open(path) as fh:
+            data = yaml.safe_load(fh)
+    except Exception as exc:  # unreadable is itself a finding
+        return f"unreadable ({type(exc).__name__})"
+    if isinstance(data, dict):
+        return "mapping"
+    if isinstance(data, list):
+        return "list"
+    return type(data).__name__
+
+
+def store_warnings(health: list[dict]) -> list[str]:
+    warns = []
+    for h in health:
+        if h["records"] and not h["active"]:
+            warns.append(
+                f"{h['origin']}: {h['records']} record(s) but 0 active "
+                f"({h['missing_status']} carry no status field) — excluded from every total"
+            )
+        if h["shape"] != "mapping":
+            warns.append(
+                f"{h['origin']}: top-level YAML is a {h['shape']}, not a mapping — "
+                f"PLUR's loader expects `engrams:` and may reject this store outright"
+            )
+    return warns
 
 
 def summarise(rows: list[dict]) -> dict:
@@ -217,9 +268,12 @@ def main() -> int:
         print(f"no PLUR store at {args.home}", file=sys.stderr)
         return 2
 
-    rows = collect(args.home, args.domain)
+    rows, health = collect(args.home, args.domain)
+    warnings = store_warnings(health)
     if not rows:
         print("no engrams matched", file=sys.stderr)
+        for w in warnings:
+            print(f"WARNING {w}", file=sys.stderr)
         return 2
 
     report = summarise(rows)
@@ -230,7 +284,7 @@ def main() -> int:
     )[:args.limit] if args.resistant else None
 
     if args.json:
-        payload = {"summary": report}
+        payload = {"summary": report, "store_health": health, "warnings": warnings}
         if voice:
             payload["voice"] = voice
         if offenders is not None:
@@ -248,6 +302,11 @@ def main() -> int:
               f"p99 {w['p99']}  max {w['max']}")
         print(f"resistant (>=2)  : {report['resistant']} ({report['resistant_pct']}%)")
         print(f"severe    (>=3)  : {report['severe']}")
+        if warnings:
+            print()
+            print("WARNINGS — stores excluded or malformed (totals above do NOT include these)")
+            for w in warnings:
+                print(f"  ! {w}")
         print()
         print("BY ORIGIN")
         for origin, b in sorted(report["by_origin"].items(), key=lambda kv: -kv[1]["n"]):
