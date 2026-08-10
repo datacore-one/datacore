@@ -1,0 +1,414 @@
+agents:
+  youtube-transcriber:
+    status: deprecated
+    deprecated_by: research.transcribe_youtube MCP tool
+    description: 'Sub-agent: extracts transcripts and metadata from YouTube videos and playlists'
+    version: 1.0.0
+    source: .datacore/4-archive/agents/youtube-transcriber.md
+    model: haiku
+    skills:
+    - youtube-transcription
+    - transcript-extraction
+    - video-metadata
+    triggers:
+      tags: []
+      commands: []
+    reads:
+      required: []
+      contextual: []
+    writes: []
+    references:
+      dips:
+      - DIP-0021
+      specs: []
+    spawns: []
+    can_be_called_by:
+    - knowledge-extractor
+module_agents:
+  action-item-extractor:
+    description: '[DEPRECATED] Absorbed into research-orchestrator'
+    version: 0.0.0
+    source: .datacore/4-archive/agents/action-item-extractor.md
+    module: research
+    deprecated: true
+    superseded_by: research-orchestrator
+    skills: []
+    triggers:
+      tags: []
+      commands: []
+    reads:
+      required: []
+      contextual: []
+    writes: []
+    references:
+      dips: []
+      specs: []
+    spawns: []
+    can_be_called_by: []
+  daily-research-processor:
+    description: '[DEPRECATED] Use research-orchestrator instead'
+    version: 0.0.0
+    source: .datacore/4-archive/agents/daily-research-processor.md
+    module: research
+    deprecated: true
+    superseded_by: research-orchestrator
+    skills: []
+    triggers:
+      tags: []
+      commands: []
+    reads:
+      required: []
+      contextual: []
+    writes: []
+    references:
+      dips: []
+      specs: []
+    spawns: []
+    can_be_called_by: []
+  evaluator-archivist:
+    status: deprecated
+    description: Archivist lens - knowledge preservation and linking
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-archivist.md
+    module: nightshift
+    skills:
+    - knowledge-evaluation
+    - link-assessment
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-aurelius:
+    status: deprecated
+    description: Marcus Aurelius - stoic wisdom and virtue ethics
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-aurelius.md
+    module: nightshift
+    skills:
+    - philosophical-evaluation
+    - ethical-assessment
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-bezos:
+    status: deprecated
+    description: Bezos lens - customer obsession and long-term thinking
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-bezos.md
+    module: nightshift
+    skills:
+    - customer-focus-evaluation
+    - long-term-assessment
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-buffett:
+    status: deprecated
+    description: Buffett lens - value and margin of safety
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-buffett.md
+    module: nightshift
+    skills:
+    - value-evaluation
+    - risk-assessment
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-ceo:
+    status: deprecated
+    description: CEO lens - strategic alignment and business value
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-ceo.md
+    module: nightshift
+    skills:
+    - strategic-evaluation
+    - business-value-assessment
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-coo:
+    status: deprecated
+    description: COO lens - operational feasibility and execution
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-coo.md
+    module: nightshift
+    skills:
+    - operational-evaluation
+    - feasibility-assessment
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-critic:
+    status: deprecated
+    description: Critical evaluation for quality and completeness
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-critic.md
+    module: nightshift
+    skills:
+    - critical-analysis
+    - quality-assessment
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-cto:
+    status: deprecated
+    description: CTO lens - technical excellence and architecture
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-cto.md
+    module: nightshift
+    skills:
+    - technical-evaluation
+    - architecture-review
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-data:
+    status: deprecated
+    description: Data evaluation - statistical rigor and evidence
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-data.md
+    module: nightshift
+    skills:
+    - data-evaluation
+    - statistical-assessment
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-dijkstra:
+    status: deprecated
+    description: Dijkstra lens - algorithmic elegance and correctness
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-dijkstra.md
+    module: nightshift
+    skills:
+    - algorithmic-evaluation
+    - correctness-assessment
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-feynman:
+    status: deprecated
+    description: Feynman lens - clarity and first principles
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-feynman.md
+    module: nightshift
+    skills:
+    - clarity-evaluation
+    - first-principles-assessment
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-hemingway:
+    status: deprecated
+    description: Hemingway lens - brevity and directness
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-hemingway.md
+    module: nightshift
+    skills:
+    - brevity-evaluation
+    - clarity-assessment
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-kahneman:
+    status: deprecated
+    description: Kahneman lens - cognitive bias detection
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-kahneman.md
+    module: nightshift
+    skills:
+    - bias-detection
+    - cognitive-assessment
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-musk:
+    status: deprecated
+    description: Musk lens - ambition and 10x thinking
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-musk.md
+    module: nightshift
+    skills:
+    - ambition-evaluation
+    - scale-assessment
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-orwell:
+    status: deprecated
+    description: Orwell lens - clear thinking and propaganda detection
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-orwell.md
+    module: nightshift
+    skills:
+    - clarity-evaluation
+    - deception-detection
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-picard:
+    status: deprecated
+    description: Picard lens - leadership and ethical command
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-picard.md
+    module: nightshift
+    skills:
+    - leadership-evaluation
+    - ethical-assessment
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-popper:
+    status: deprecated
+    description: Popper lens - falsifiability and scientific rigor
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-popper.md
+    module: nightshift
+    skills:
+    - scientific-evaluation
+    - methodology-assessment
+    triggers:
+      tags:
+      - ':AI:research:'
+      commands: []
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-socrates:
+    status: deprecated
+    description: Socrates lens - questioning assumptions and dialectic
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-socrates.md
+    module: nightshift
+    skills:
+    - assumption-questioning
+    - dialectic-evaluation
+    triggers:
+      tags:
+      - ':AI:strategy:'
+      commands: []
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-taleb:
+    status: deprecated
+    description: Taleb lens - antifragility and tail risk
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-taleb.md
+    module: nightshift
+    skills:
+    - risk-evaluation
+    - antifragility-assessment
+    triggers:
+      tags:
+      - ':AI:strategy:'
+      commands: []
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-tufte:
+    status: deprecated
+    description: Tufte lens - data visualization and clarity
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-tufte.md
+    module: nightshift
+    skills:
+    - visualization-evaluation
+    - data-ink-assessment
+    triggers:
+      tags:
+      - ':AI:data:'
+      commands: []
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-twain:
+    status: deprecated
+    description: Twain lens - writing quality and cutting fluff
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-twain.md
+    module: nightshift
+    skills:
+    - writing-evaluation
+    - fluff-detection
+    triggers:
+      tags:
+      - ':AI:content:'
+      commands: []
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  evaluator-user:
+    status: deprecated
+    description: Evaluates from user perspective - does output meet request?
+    version: 1.0.0
+    source: .datacore/4-archive/agents/evaluator-user.md
+    module: nightshift
+    skills:
+    - user-perspective-evaluation
+    - request-fulfillment-check
+    triggers:
+      tags: []
+      commands: []
+    spawns: []
+    can_be_called_by:
+    - nightshift-orchestrator
+  gtd-research-processor-module:
+    description: '[DEPRECATED] Use knowledge-extractor instead'
+    version: 0.0.0
+    source: .datacore/4-archive/agents/gtd-research-processor-module.md
+    module: research
+    deprecated: true
+    superseded_by: knowledge-extractor
+    skills: []
+    triggers:
+      tags: []
+      commands: []
+    reads:
+      required: []
+      contextual: []
+    writes: []
+    references:
+      dips: []
+      specs: []
+    spawns: []
+    can_be_called_by: []
+  nlm-podcast-creator:
+    description: '[DEPRECATED] Use podcast-creator instead'
+    version: 0.0.0
+    source: .datacore/4-archive/agents/nlm-podcast-creator.md
+    module: research
+    deprecated: true
+    superseded_by: podcast-creator
+    skills: []
+    triggers:
+      tags: []
+      commands: []
+    reads:
+      required: []
+      contextual: []
+    writes: []
+    references:
+      dips: []
+      specs: []
+    spawns: []
+    can_be_called_by: []
+  research-post-processor:
+    description: '[DEPRECATED] Absorbed into research-orchestrator'
+    version: 0.0.0
+    source: .datacore/4-archive/agents/research-post-processor.md
+    module: research
+    deprecated: true
+    superseded_by: research-orchestrator
+    skills: []
+    triggers:
+      tags: []
+      commands: []
+    reads:
+      required: []
+      contextual: []
+    writes: []
+    references:
+      dips: []
+      specs: []
+    spawns: []
+    can_be_called_by: []

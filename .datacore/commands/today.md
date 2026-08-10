@@ -373,11 +373,25 @@ for module_yaml in modules_dir.glob("*/module.yaml"):
             # Output feeds into the briefing section matching the module's slot
 ```
 
-**Currently registered inline hooks:**
+**The glob above is authoritative — do not maintain a list here.**
 
-| Module | Briefing section |
-|--------|-----------------|
-| metacognition | Knowledge base pulse — file counts, stubs, suggested command |
+An enumerated table drifts silently: this one listed a single module while
+nineteen were registering inline hooks. To see the live set:
+
+```bash
+python3 -c "
+from pathlib import Path; import yaml
+for my in sorted((Path.home()/'Data/.datacore/modules').glob('*/module.yaml')):
+    m = yaml.safe_load(my.read_text()) or {}
+    h = (m.get('hooks') or {}).get('today')
+    if h and (h.get('slot','inline') if isinstance(h,dict) else 'inline') == 'inline':
+        print(m.get('name'))
+"
+```
+
+Note `hooks.today` accepts three shapes: a path string (most modules), a dict
+with `file`/`slot`, or a block of inline instructions (trading). Handle all
+three — assuming a string raises `OSError: File name too long` on the third.
 
 ---
 

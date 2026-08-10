@@ -78,6 +78,7 @@ settings:
 hooks:
   today:
     agent: whatsapp-notifications
+    slot: post
     description: "Optional morning briefing push"
     enabled_setting: morning_briefing
     slot: post

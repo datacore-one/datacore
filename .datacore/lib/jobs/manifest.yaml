@@ -1,0 +1,356 @@
+# Job manifest — every scheduled job on the three Datacore machines
+# (mac, box, nightshift), for the unified job_verify.py verifier.
+#
+# Schema: .datacore/lib/jobs/manifest.py (load_manifest). Paths support
+# `{today}` (local YYYY-MM-DD) and `~` (expanded on whichever machine
+# job_verify.py runs on -- it is meant to run locally on each machine).
+#
+# Honesty rule: every artifact path below was derived from evidence read
+# in this repo (scripts, systemd units, launchd plists, or source code),
+# not invented. Where a path is inferred rather than directly traced to a
+# writer, a `# TODO(verify-on-<machine>)` comment says so and names the
+# evidence. Task 2.4 brief: .superpowers/sdd/2026-07-29-datacore-v2/task-2.4-brief.md
+#
+# on_fail policy (conservative default, Phase 6 tunes): briefing, cos_sync,
+# and backup alert via telegram; everything else logs only.
+#
+# Evidence sources (read in full before writing this file):
+#   - modules/chief-of-staff/server/lib/cos_verify_morning.py (briefing/journal/log assertions + check_ops log_max_age dict)
+#   - modules/chief-of-staff/server/COS-SERVER.md ("Cron schedule (root crontab, UTC)" table)
+#   - modules/chief-of-staff/server/cos-server-setup.sh (exact crontab lines for backup + health-digest)
+#   - modules/chief-of-staff/server/lib/cos_*.sh (each box script read directly)
+#   - modules/mail/server/triage-email.sh (email triage state paths)
+#   - modules/github/server/triage-github.sh (github triage cache paths)
+#   - modules/nightshift/server/nightshift-*.{service,timer} (six target timers: exact OnCalendar + ExecStart)
+#   - modules/nightshift/manifest.py + lib/postprocess.py + lib/run.py (nightshift-overnight's manifest-{today}.yaml, traced end to end)
+#   - modules/outbox/lib/archive_sync.py (nightshift-outbox: stdout-only JSON, no persisted file found)
+#   - modules/nightshift/lib/today_orchestrator.py (market-phase* freshness glob, reader side only)
+#   - modules/nightshift/CLAUDE.md ("Output Location" + service unit Descriptions for inbox-process)
+#   - .datacore/lib/audit_public_repos_wrapper.sh (public-repo-audit-last.json)
+#   - .datacore/lib/agent_stream_rsync.sh + com.datacore.agent-stream-rsync.plist (mac rsync)
+#   - modules/lens/scripts/com.datacore.lens.plist + modules/lens/CLAUDE.base.md + docs/OVERVIEW.md (mac lens runner)
+#   - live filesystem check on this Mac: ~/.datacore/lens/observations.db and
+#     /tmp/datacore-agent-stream-rsync.log both exist (confirmed directly, not inferred)
+
+version: 1
+jobs:
+  # ── box (Winston / cos-server), root crontab, UTC ────────────────────────
+
+  - name: box-backup
+    machine: box
+    schedule: "30 2 * * *"
+    cmd: "~/Data/.datacore/lib/cos_backup.sh"
+    artifacts:
+      # cos-server-setup.sh:78 pins the exact crontab redirect target.
+      # cos_backup.sh's own tar output has a timestamp in the filename
+      # (plur-state-<ts>.tar.gz) so it can't be a literal path -- the log
+      # is the stable artifact.
+      - path: "~/.datacore/cos/backup.log"
+        check: nonempty
+        max_age_hours: 26
+    on_fail: telegram
+
+  - name: box-news
+    machine: box
+    schedule: "0 3 * * *"
+    cmd: "~/Data/.datacore/lib/cos_news.sh"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/cos/news.log"
+        check: nonempty
+        max_age_hours: 26
+
+  - name: box-email-triage
+    machine: box
+    schedule: "30 3 * * *"
+    cmd: "~/Data/.datacore/modules/mail/server/triage-email.sh"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/cos/email-triage.log"
+        check: nonempty
+        max_age_hours: 26
+      # triage-email.sh's own AUDIT_LOG -- one JSONL line appended per run,
+      # per account. Direct script evidence, independent of the cron redirect.
+      - path: "~/Data/.datacore/state/mail/audit.jsonl"
+        check: nonempty
+        max_age_hours: 26
+
+  - name: box-github-triage
+    machine: box
+    schedule: "45 3 * * *"
+    cmd: "~/Data/.datacore/lib/cos_github.sh"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/cos/github-triage.log"
+        check: nonempty
+        max_age_hours: 26
+      # triage-github.sh: SCAN_FILE="$CACHE_DIR/scan_cache.json", written by
+      # github_scanner.py --format json.
+      - path: "~/Data/.datacore/modules/github/data/scan_cache.json"
+        check: nonempty
+        max_age_hours: 26
+
+  - name: box-merge-runs
+    # 50 3, not 45 3: deliberately off cos_sync.sh's */15 grid (:00/:15/
+    # :30/:45) -- the merge critical section takes a per-repo flock, but
+    # cos_sync.sh itself does not lock, so this also shrinks the window
+    # where the two could race on the same space repo (2026-08-01
+    # adversarial-review Critical 1). Still before box-briefing (0 4).
+    machine: box
+    schedule: "50 3 * * *"
+    cmd: "~/Data/.datacore/lib/cos_merge_runs.sh"
+    artifacts:
+      # cos_merge_runs.py's own status artifact (task-2.4-style companion:
+      # see .superpowers/sdd/2026-07-29-datacore-v2/cos-merge-runs-report.md).
+      # Must exist, be fresh, and carry both top-level keys.
+      - path: "~/.datacore/cos/merge_runs_status.json"
+        check: json_has_keys
+        arg: ["generated_at", "stale_branches"]
+        max_age_hours: 26
+      # Same file, a second and stricter artifact entry: a non-empty
+      # stale_branches means a nightshift run branch has sat unmerged for
+      # >24h without Winston resolving it -- worth a distinct regex check
+      # rather than folding into the json_has_keys entry above, since
+      # "the key exists" and "the key is the empty list" are different
+      # failure signals worth telling apart in job_verify's output.
+      - path: "~/.datacore/cos/merge_runs_status.json"
+        check: regex
+        arg: '"stale_branches": \[\]'
+        max_age_hours: 26
+      # Third entry, same file again: errors[] must be empty too -- a
+      # per-repo fetch/merge/push failure (e.g. a bad credential) is a
+      # real operational problem worth paging on, distinct from both
+      # checks above (2026-08-01 adversarial-review Important 4).
+      - path: "~/.datacore/cos/merge_runs_status.json"
+        check: regex
+        arg: '"errors": \[\]'
+        max_age_hours: 26
+    on_fail: telegram
+
+  - name: box-briefing
+    machine: box
+    schedule: "0 4 * * *"
+    cmd: "~/Data/.datacore/lib/cos_morning.sh"
+    artifacts:
+      # cos_verify_morning.py:check_briefing -- BRIEFINGS/<day>/app-briefing.json,
+      # must have a headline and _meta (generated_at/quality checked there too,
+      # but json_has_keys only asserts top-level key presence).
+      - path: "~/.datacore/cos/briefings/{today}/app-briefing.json"
+        check: json_has_keys
+        arg: ["headline", "_meta"]
+        max_age_hours: 26
+      - path: "~/.datacore/cos/morning.log"
+        check: nonempty
+        max_age_hours: 26
+      # cos_verify_morning.py:check_journal_briefing -- regex lifted verbatim
+      # from the source (miles_delivery accepts either heading).
+      - path: "~/Data/0-personal/notes/journals/{today}.md"
+        check: regex
+        arg: "^##\\s+(Daily Briefing|Good Morning)"
+        max_age_hours: 26
+      # cos_verify_morning.py:check_audio -- AUDIO_STAMP, written by
+      # winston_audio.sh only after Telegram accepts the voice message.
+      - path: "~/.datacore/cos/audio-last-ok"
+        check: nonempty
+        max_age_hours: 26
+    # cos_morning.sh:6 exports CLAUDE_CODE_OAUTH_TOKEN explicitly from
+    # /etc/datacored.env -- cos_verify_morning.py's check_credentials exists
+    # because a missing token is exactly the failure mode that has bitten
+    # this job before (2026-07-28, per its docstring).
+    required_env: ["CLAUDE_CODE_OAUTH_TOKEN"]
+    on_fail: telegram
+
+  - name: box-inbox
+    machine: box
+    schedule: "0 5 * * *"
+    cmd: "~/Data/.datacore/lib/cos_inbox.sh"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/cos/inbox.log"
+        check: nonempty
+        max_age_hours: 26
+
+  - name: box-research
+    machine: box
+    schedule: "30 5 * * *"
+    cmd: "~/Data/.datacore/lib/cos_research.sh"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/cos/research.log"
+        check: nonempty
+        max_age_hours: 26
+
+  - name: box-health-digest
+    machine: box
+    schedule: "15 7 * * *"
+    cmd: "~/Data/.datacore/lib/cos_health_digest.sh"
+    on_fail: telegram
+    artifacts:
+      # cos-server-setup.sh:79 pins the exact crontab line + redirect target.
+      - path: "~/.datacore/cos/health.log"
+        check: nonempty
+        max_age_hours: 26
+
+  - name: box-tomorrow
+    machine: box
+    schedule: "0 20 * * *"
+    cmd: "~/Data/.datacore/lib/cos_tomorrow.sh"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/cos/tomorrow.log"
+        check: nonempty
+        max_age_hours: 26
+
+  - name: box-cos-sync
+    machine: box
+    schedule: "*/15 * * * *"
+    cmd: "~/Data/.datacore/lib/cos_sync.sh"
+    artifacts:
+      # log_max_age dict in cos_verify_morning.py:check_ops gives sync.log
+      # exactly 1h -- the tightest bucket, matching the 15-min cadence.
+      - path: "~/.datacore/cos/sync.log"
+        check: nonempty
+        max_age_hours: 1
+    on_fail: telegram
+
+  # ── nightshift server, systemd timers, UTC ───────────────────────────────
+
+  - name: nightshift-outbox
+    machine: nightshift
+    schedule: "0 2 * * *"
+    cmd: "python3 ~/Data/.datacore/modules/outbox/lib/archive_sync.py"
+    on_fail: telegram
+    artifacts:
+      # archive_sync.py's main() only prints JSON to stdout (line ~590);
+      # StandardOutput=journal on the unit means nothing is persisted to a
+      # file. No writer for any fixed on-disk artifact was found -- falling
+      # back to the brief's documented last resort: exists-check on the
+      # job's own cmd script.
+      - path: "~/Data/.datacore/modules/outbox/lib/archive_sync.py"  # TODO(verify-on-nightshift): no persisted artifact found; confirm during Phase 6 whether outbox should start writing a result file
+        check: exists
+
+  - name: nightshift-overnight
+    machine: nightshift
+    schedule: "30 2 * * *"
+    cmd: "~/Data/.datacore/modules/nightshift/nightshift run"
+    on_fail: telegram
+    artifacts:
+      # Traced end to end: run.py's default (non --command) path ->
+      # run_postprocess() -> manifest.build_manifest/write_manifest ->
+      # .datacore/state/nightshift/manifest-<date>.yaml. Solid, not inferred.
+      - path: "~/Data/.datacore/state/nightshift/manifest-{today}.yaml"
+        check: nonempty
+        max_age_hours: 26
+
+  - name: nightshift-github-triage
+    machine: nightshift
+    schedule: "30 4 * * *"
+    cmd: "bash ~/Data/.datacore/modules/github/server/triage-github.sh"
+    on_fail: telegram
+    artifacts:
+      - path: "~/Data/.datacore/modules/github/data/scan_cache.json"
+        check: nonempty
+        max_age_hours: 26
+
+  - name: nightshift-inbox-process
+    machine: nightshift
+    schedule: "0 5 * * *"
+    cmd: "~/Data/.datacore/modules/nightshift/nightshift run --command=/process-inbox"
+    on_fail: telegram
+    artifacts:
+      # This runs through run_command_mode (a Claude-driven slash command,
+      # not a deterministic script), so there's no code-traced writer --
+      # the unit file's own Description is the evidence: "classify inbox.org
+      # -> research_learning.org + next_actions.org".
+      - path: "~/Data/0-personal/org/research_learning.org"
+        check: nonempty
+        max_age_hours: 26
+
+  - name: nightshift-market-phase
+    machine: nightshift
+    schedule: "30 5 * * *"
+    cmd: "~/Data/.datacore/modules/nightshift/nightshift run --command=/analyze-market-phase"
+    on_fail: telegram
+    artifacts:
+      # today_orchestrator.py's gather_market_data() (lib/today_orchestrator.py:598)
+      # reads state_dir.glob('market-phase*'), expecting a fresh file within
+      # 24h -- confirming the location and naming convention, but no writer
+      # of that file was found in this module or the trading module's skill.
+      - path: "~/Data/.datacore/state/trading"  # TODO(verify-on-nightshift): confirm the exact per-run filename (glob prefix 'market-phase*' evidenced, not the full name); directory-level exists+freshness is a proxy until then
+        check: exists
+        max_age_hours: 26
+
+  - name: nightshift-public-repo-audit
+    machine: nightshift
+    schedule: "45 5 * * *"
+    cmd: "~/Data/.datacore/lib/audit_public_repos_wrapper.sh"
+    on_fail: telegram
+    artifacts:
+      # audit_public_repos_wrapper.sh writes LAST_RESULT directly and
+      # annotates it with _timestamp/_exit_code -- keys confirmed by reading
+      # the script's own JSON construction.
+      - path: "~/Data/.datacore/state/public-repo-audit-last.json"
+        check: json_has_keys
+        arg: ["hits", "forbidden_count", "_timestamp"]
+        max_age_hours: 26
+
+  # ── mac ───────────────────────────────────────────────────────────────────
+  # No mac crontab/launchd inventory was available beyond the two jobs named
+  # in the brief (agent-stream rsync, lens sync). Both plists were confirmed
+  # installed (~/Library/LaunchAgents) on this machine, and both target
+  # artifacts were confirmed to exist by a direct filesystem check during
+  # authoring -- but schedules are launchd intervals, not crontab, so they
+  # are documented rather than expressed as 5-field cron.
+
+  - name: mac-agent-stream-rsync
+    machine: mac
+    schedule: "every 30s (launchd StartInterval, com.datacore.agent-stream-rsync.plist)"
+    cmd: "~/Data/.datacore/lib/agent_stream_rsync.sh"
+    on_fail: telegram
+    artifacts:
+      # StandardOutPath from the plist. rsync with --update prints nothing
+      # when there's nothing new to pull, so an mtime-freshness check here
+      # would false-fail routinely (observed: log last written ~14h before
+      # authoring despite the launchd job being loaded and healthy) --
+      # exists-only until Phase 6 designs a better liveness signal.
+      # VERIFIED (Task 6.3, 2026-07-30, live `ls` on this Mac): path exists,
+      # mtime same-day -- exists-only check confirmed correct as designed;
+      # freshness threshold intentionally still undefined (see rationale
+      # above), that choice is not what was in question.
+      - path: "/tmp/datacore-agent-stream-rsync.log"
+        check: exists
+        max_age_hours: 2   # daemon writes continuously; without this the check passes forever after the first write, even if the daemon died
+
+  - name: mac-lens-sync
+    machine: mac
+    schedule: "continuous (launchd KeepAlive daemon, RunAtLoad, com.datacore.lens.plist)"
+    cmd: "cd ~/Data/.datacore/modules/lens && python3 -m lib.runner --serve"
+    on_fail: telegram
+    artifacts:
+      # modules/lens/CLAUDE.base.md + docs/OVERVIEW.md: "All raw data lives
+      # in ~/.datacore/lens/observations.db only" / "Live capture DB".
+      # VERIFIED (Task 6.3, 2026-07-30, live `ls` on this Mac): path exists,
+      # ~2.2GB, actively growing (mtime minutes old at verification time) --
+      # exists-only check confirmed correct as designed; a freshness
+      # threshold for a continuously-written SQLite file is still an open
+      # design question, deferred, not what was in question here.
+      - path: "~/.datacore/lens/observations.db"
+        check: exists
+        max_age_hours: 2   # daemon writes continuously; without this the check passes forever after the first write, even if the daemon died
+
+  - name: mac-artifact-pull
+    machine: mac
+    schedule: "MANUAL — runs only when a human runs it"  # VERIFIED 2026-08-10: no crontab entry and no launchd plist exist on the mac. This field previously read "*/30 * * * *", a cadence that was never installed — a declared schedule with no scheduler behind it is a proxy for "this runs", so it is stated honestly here until Phase 6 ships the StartInterval plist
+    cmd: "python3 ~/Data/.datacore/lib/artifact_sync.py --role client"
+    artifacts:
+      # .datacore/lib/artifact_sync.py (Task 6.1): rsync-over-ssh pull of the
+      # box's CoS briefing artifacts. This is the local (mac-side) copy of
+      # the same app-briefing.json checked by box-briefing above -- same
+      # check/keys/freshness contract, since a stale or malformed pulled
+      # copy is exactly as bad as a stale generated one for anything
+      # reading it on this machine.
+      - path: "~/.datacore/cos/briefings/{today}/app-briefing.json"  # TODO(verify-on-mac): confirm sync cadence + freshness threshold once the launchd plist replaces this placeholder cron schedule
+        check: json_has_keys
+        arg: ["headline"]
+        max_age_hours: 26
+    on_fail: log

@@ -1,0 +1,36 @@
+# Approvals policy (public, no secrets) -- Task 5.1: policy gate + co-sign.
+#
+# Read by ledger.policy.load_policy(). Governs which side-effecting
+# task.create events require a human-recorded `approval.grant` event before
+# they may be appended at all (see ledger/policy.py: guarded_append).
+#
+# `approver`       -- the actor whose approval.grant events count as valid
+#                      grants under this policy.
+# `cosign_effects` -- effect tags that make a task.create "side-effecting"
+#                      and therefore gated. A task.create is gated iff its
+#                      payload's `effects` list intersects this set.
+# `known_effects`  -- (optional, final-review wave) the complete, closed
+#                      vocabulary of valid effect tags a task.create may
+#                      declare. Any effect NOT in this list is rejected
+#                      outright by guarded_append (fail closed) -- this
+#                      catches a typo'd effect (e.g. `emial.send`) that
+#                      would otherwise silently bypass cosign by simply
+#                      not matching any cosign_effects entry either.
+#                      Defaults to cosign_effects when this key is absent.
+#                      To allow a legitimate non-cosign effect, add it here
+#                      explicitly (it stays usable without requiring a
+#                      grant, since it's still absent from cosign_effects).
+#
+# This file ships with the defaults ledger.policy already falls back to
+# when no policy file is present -- it exists so the policy is explicit and
+# editable, not to change the out-of-the-box behavior.
+version: 1
+approver: human
+cosign_effects:
+  - email.send
+  - payment
+  - prod.deploy
+known_effects:
+  - email.send
+  - payment
+  - prod.deploy

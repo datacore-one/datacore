@@ -1,0 +1,63 @@
+# Merge policy (public, no secrets) — Winston's merge gatekeeper.
+#
+# Read by cos_merge_runs.py (chief-of-staff module,
+# server/lib/cos_merge_runs.py) every morning before briefing generation.
+# Governs how nightshift `nightshift/run-<ts>` branches, pushed to each
+# space repo they touched, get classified: auto-merge, revision, or
+# escalate to a human question.
+#
+# Classification order per branch (first match wins, most conservative
+# always wins on conflict):
+#   1. Any touched path matches `escalate_paths`      -> ESCALATE (never
+#      auto-merge, regardless of what else matches).
+#   2. ALL touched paths match `auto_merge_paths`      -> AUTO-MERGE eligible
+#      (still gated by `checks` below).
+#   3. Anything else (no match, or a mix that isn't fully covered by
+#      auto_merge_paths and isn't caught by escalate_paths) -> ESCALATE.
+#      Conservative by default: silence in this policy means "ask a human",
+#      not "assume it's fine".
+#
+# `checks` are deterministic gates run on AUTO-MERGE-eligible branches only.
+# ANY failure routes the branch to REVISION (an :AI:revision: task appended
+# to the space's org/inbox.org), never straight to merge or escalate.
+#
+# An LLM verdict (via the executor layer) runs on top of a checks-passed,
+# auto-merge-eligible branch as a CONFIRMATION step, not a gate: if the
+# executor errors or its response doesn't parse, cos_merge_runs falls back
+# to merging anyway (deterministic-only), because the deterministic floor
+# (classification + checks) already passed. Fail-open by design — the LLM
+# can catch something extra, but its absence must never block a branch the
+# deterministic rules already cleared.
+
+version: 1
+
+# Escalate instead of auto-merging when a branch's diff exceeds this many
+# changed lines (added + removed), even if every touched path is otherwise
+# eligible for auto-merge.
+max_diff_lines: 2000
+
+# Globs relative to the space repo root. A branch is auto-merge ELIGIBLE
+# only when EVERY touched path matches at least one of these globs.
+auto_merge_paths:
+  - "journal/**"
+  - "notes/journals/**"
+  - "3-knowledge/**"
+  - "notes/**"
+  - "0-inbox/**"
+  - "org/inbox.org"           # append-only capture is routine
+
+# Globs relative to the space repo root. If ANY touched path matches one of
+# these, the branch is escalated — never auto-merged, regardless of what
+# else it touches.
+escalate_paths:
+  - ".datacore/**"
+  - "org/next_actions.org"    # structural task changes get human eyes
+  - "**/*.py"
+  - "**/*.sh"
+
+# Deterministic gates — checked on auto-merge-eligible branches. ANY
+# failure routes the branch to REVISION, not merge and not escalate.
+checks:
+  org_parse: true             # touched .org files must parse via org-workspace
+  secrets_scan: true          # diff must not add secret-pattern lines
+  no_deletions_over: 50       # more than N deleted lines -> escalate instead

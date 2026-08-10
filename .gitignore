@@ -158,6 +158,18 @@ CLAUDE.md
 # only local runs.
 **/.datacore/state/
 
+# Event-ledger substrate (Datacore v2, task 1.x): the append-only event log
+# is machine-local runtime state, same rationale as above. Already covered
+# by the **/.datacore/state/ glob; listed explicitly since it's a distinct
+# subsystem and callers may reference this path directly.
+.datacore/state/ledger/
+
+# Agent-stream event logs (.datacore/events/<actor>.jsonl) — same class, but
+# NOT covered by the state/ glob since they live outside it. Per-actor,
+# hash-chained, and carry execution payloads (cost in cents, executor refs).
+# This repo is public; these must not flow through it.
+.datacore/events/
+
 # MCP module (DIP-0002 PRIVATE layer)
 .datacore/mcp-servers.local.yaml
 .mcp.json

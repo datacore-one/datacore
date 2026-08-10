@@ -4,6 +4,43 @@ All notable changes to Datacore are documented here.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## 2.0.0 (2026-07-30)
+
+Agent-ledger mindset (`ENG-2026-0729-016`), adopted in the current Datacore
+idiom without a blockchain: signed-capable append-only event logs,
+verification contracts, shadow accounting, co-sign, ownership-as-data, and
+content-addressed artifacts. Eight phases, each landed behind an
+interface-locked plan and expanded into its own DIP at phase start.
+
+- P1: Event ledger substrate — per-actor hash-chained append-only event log,
+  deterministic fold, opt-in signing (DIP-0034)
+- P2: Job contracts + unified verifier — `job_verify.py` emits `metric.attest`
+  events per scheduled job (DIP-0035)
+- P3: Config plane (DIP-0036)
+- P4: Grounded briefings — fact table + token contract + validator, wiring
+  behind `COS_GROUNDED=1` (DIP-0037)
+- P5: Action loop + co-sign (DIP-0038)
+- P6: Server-first artifacts + live box deploy (DIP-0039)
+- P7: Agent consolidation — registry GC + evaluator personas-as-data
+  (DIP-0040)
+- P8: Executor adapters + shadow accounting + this release (DIP-0041)
+
+### Deferred gates
+
+Recorded honestly as open, not claimed done:
+
+- 7-green-days retirement clock for `cos_verify_morning.sh` — 0/7 as of this
+  release (box verify cron running, `job_verify.py --machine box` green)
+- `answers.yaml`/`facts.json` producers absent on box (Phase 6 follow-up)
+- Agent registry ≤60-active target: actual is 110 (`registry_gc.py --check`),
+  down from 138 with 28 archived — further consolidation families are
+  follow-up, not forced
+- Deploy-side wirings named but not yet flipped: `COS_GROUNDED=1` (grounded
+  briefing pipeline), `cos_generate.py`/`cos_reasoning.py` + the nightshift
+  call site adopting `get_executor()`, nightshift's evaluator dispatch
+  reading `registry/evaluators.yaml`, and `.datacore/modules/nightshift/module.yaml`
+  still naming pre-consolidation `evaluator-*` agents
+
 ## [1.0.0] - 2026-03-04
 
 First public release.

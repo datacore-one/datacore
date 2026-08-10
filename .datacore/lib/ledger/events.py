@@ -1,0 +1,87 @@
+"""Event model: canonical bytes, hash chain.
+
+An Event is the atomic unit of the append-only ledger. Its `hash` is a
+sha256 digest of the canonical (deterministic) byte encoding of its body --
+and that body includes `prev` (the hash of the preceding event), which is
+what turns a flat list of events into a hash chain: mutating any earlier
+event changes its hash, which no longer matches the `prev` recorded by the
+event after it.
+
+This module is pure data modeling: no I/O, no clock reads, no crypto. It
+does not sign or verify events -- Task 1.4 (writer) signs `canonical_bytes`
+output at write time, and Task 1.5 (verifier) re-derives hashes to check
+chain integrity.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import asdict, dataclass
+
+EVENT_TYPES = frozenset(
+    {
+        "item.create",
+        "item.claim",
+        "item.release",
+        "item.complete",
+        "item.verify",
+        "item.dismiss",
+        "owner.set",
+        "spend.record",
+        "metric.attest",
+        "artifact.attest",
+        "policy.set",
+        "approval.grant",
+    }
+)
+
+
+@dataclass
+class Event:
+    seq: int
+    hlc: str
+    actor: str
+    type: str
+    payload: dict
+    prev: str
+    hash: str
+    sig: str
+
+
+def body_dict(seq: int, hlc: str, actor: str, type: str, payload: dict, prev: str) -> dict:
+    """Assemble the hashable body of an event (everything but `hash`/`sig`).
+
+    `prev` is included so `compute_hash` over this body chains to the prior
+    event -- that is the entire mechanism of the hash chain.
+    """
+    return {
+        "seq": seq,
+        "hlc": hlc,
+        "actor": actor,
+        "type": type,
+        "payload": payload,
+        "prev": prev,
+    }
+
+
+def canonical_bytes(d: dict) -> bytes:
+    """Deterministic byte encoding of `d`: sorted keys, no extra whitespace."""
+    return json.dumps(d, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode(
+        "utf-8"
+    )
+
+
+def compute_hash(body: dict) -> str:
+    """sha256 hex digest of `body`'s canonical bytes."""
+    return hashlib.sha256(canonical_bytes(body)).hexdigest()
+
+
+def to_line(e: Event) -> str:
+    """Serialize an Event to a single canonical-JSON line (no trailing newline)."""
+    return canonical_bytes(asdict(e)).decode("utf-8")
+
+
+def from_line(s: str) -> Event:
+    """Parse a line produced by `to_line` back into an Event."""
+    return Event(**json.loads(s))

@@ -1,6 +1,7 @@
 # Datacore core dependencies
 pyyaml>=6.0
-org-workspace>=0.5.1
+org-workspace>=0.5.1   # main's pin kept: 0.5.1 was published 2026-08-10 to fix 7 dead nightshift services; the branch's >=0.4.4 would regress that
+cryptography>=41  # relaxed from >=42: box parity ruling 2026-07-30 (box pins an older cryptography)
 
 # Calendar sync (optional - needed for /today calendar integration)
 # google-api-python-client>=2.0
