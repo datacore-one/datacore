@@ -154,7 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--machine",
         required=True,
-        choices=("mac", "box", "nightshift"),
+        metavar="NAME",   # not a fixed choice list: machines come from the installation roster
         help="Machine to verify jobs for",
     )
     parser.add_argument(

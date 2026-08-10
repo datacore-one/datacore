@@ -23,9 +23,39 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import re
 import yaml
 
-MACHINES = frozenset({"mac", "box", "nightshift"})
+# Machine names are INSTALLATION CONFIGURATION, not part of this spec: they
+# name hosts in the installation's own actor roster (DIP-0034, Per-writer
+# files), which varies per installation. This was a hardcoded three-name enum
+# until 2026-08-10, when adding contracts for a fourth host failed -- DIP-0035
+# had already been corrected to say "a machine in the installation's roster"
+# while the code still enforced the enum, so the spec described behaviour the
+# implementation did not have. Validate the SHAPE, not the membership.
+_MACHINE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+_ROSTER_PATH = Path(__file__).resolve().parents[1].parent / "registry" / "infrastructure.yaml"
+
+
+def known_machines() -> frozenset[str] | None:
+    """Machine names the installation's roster declares, or None if absent.
+
+    Shape validation alone is not enough: a typo silently creates a job for a
+    host that does not exist, which can never pass and never alerts. When a
+    roster is present it is authoritative; when it is not (a fresh install,
+    a test fixture) validation falls back to shape only.
+    """
+    try:
+        data = yaml.safe_load(_ROSTER_PATH.read_text())
+        names = set()
+        for host, cfg in (data.get("servers") or {}).items():
+            names.add(host)
+            if isinstance(cfg, dict) and cfg.get("manifest_machine"):
+                names.add(cfg["manifest_machine"])
+        return frozenset(names) or None
+    except Exception:
+        return None
 CHECKS = frozenset({"exists", "nonempty", "json_has_keys", "regex", "min_bytes"})
 ON_FAILS = frozenset({"log", "telegram"})
 
@@ -138,10 +168,16 @@ def _build_job(raw: object, index: int, errors: list[str], seen_names: set[str])
             seen_names.add(name)
 
     machine = _require_str(raw, "machine", ref, errors)
-    if machine is not None and machine not in MACHINES:
+    _known = known_machines()
+    if machine is not None and _known and machine not in _known:
         errors.append(
             f"{ref}: unknown machine {machine!r} "
-            f"(expected one of: {', '.join(sorted(MACHINES))})"
+            f"(not in the installation roster: {', '.join(sorted(_known))})"
+        )
+    elif machine is not None and not _MACHINE_RE.match(machine):
+        errors.append(
+            f"{ref}: unknown machine {machine!r} "
+            f"(expected a lowercase host name from the installation's roster)"
         )
 
     schedule = _require_str(raw, "schedule", ref, errors)

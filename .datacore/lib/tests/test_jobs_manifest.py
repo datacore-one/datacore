@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from jobs.manifest import MACHINES, Artifact, Job, ManifestError, load_manifest
+from jobs.manifest import Artifact, Job, ManifestError, load_manifest
 
 # The real manifest lives at .datacore/lib/jobs/manifest.yaml; this test
 # file lives at .datacore/lib/tests/. Resolve relative to this file rather
@@ -644,12 +644,53 @@ def test_real_manifest_every_job_has_at_least_one_artifact():
         assert len(job.artifacts) >= 1, f"job {job.name!r} has no artifacts"
 
 
-def test_real_manifest_covers_all_three_machines():
-    jobs = load_manifest(REAL_MANIFEST_PATH)
-    machines_present = {job.machine for job in jobs}
-    assert machines_present == set(MACHINES), (
-        f"expected all machines {sorted(MACHINES)}, got {sorted(machines_present)}"
+# Machines with no job contracts. This is a DECLARED gap, not a passing state:
+# a host in the roster with no contracts runs entirely unverified, which is the
+# failure class this manifest exists to close. Listing it here means adding a
+# new machine without contracts FAILS this test instead of going unnoticed --
+# which is exactly what happened to hermes and plur-claw, uncovered from the
+# start because the old assertion checked a hardcoded three-name set rather
+# than the roster.
+KNOWN_UNCOVERED_MACHINES = {"plur-claw"}
+
+ROSTER_PATH = Path(__file__).resolve().parents[2] / "registry" / "infrastructure.yaml"
+
+
+def test_real_manifest_covers_every_machine_in_the_roster():
+    """Every host in the installation roster needs contracts, or must be
+    explicitly declared uncovered."""
+    if not ROSTER_PATH.exists():          # roster is installation config
+        pytest.skip(f"no roster at {ROSTER_PATH}")
+    servers = yaml.safe_load(ROSTER_PATH.read_text())["servers"]
+    covered = {job.machine for job in load_manifest(REAL_MANIFEST_PATH)}
+    # a host is covered under its own name OR the manifest name it declares
+    uncovered = {
+        host
+        for host, cfg in servers.items()
+        if host not in covered
+        and not (isinstance(cfg, dict) and cfg.get("manifest_machine") in covered)
+    }
+    assert uncovered == KNOWN_UNCOVERED_MACHINES, (
+        f"roster machines without job contracts changed: {sorted(uncovered)} "
+        f"(declared: {sorted(KNOWN_UNCOVERED_MACHINES)}). Add contracts, or "
+        f"update KNOWN_UNCOVERED_MACHINES and say why."
     )
+
+
+def test_every_manifest_machine_is_in_the_roster():
+    """A contract for a host that does not exist can never pass."""
+    if not ROSTER_PATH.exists():
+        pytest.skip(f"no roster at {ROSTER_PATH}")
+    servers = yaml.safe_load(ROSTER_PATH.read_text())["servers"]
+    roster = set(servers) | {
+        cfg["manifest_machine"]
+        for cfg in servers.values()
+        if isinstance(cfg, dict) and cfg.get("manifest_machine")
+    }
+    for job in load_manifest(REAL_MANIFEST_PATH):
+        assert job.machine in roster, (
+            f"job {job.name!r} targets {job.machine!r}, absent from the roster"
+        )
 
 
 def test_real_manifest_every_schedule_is_non_empty():

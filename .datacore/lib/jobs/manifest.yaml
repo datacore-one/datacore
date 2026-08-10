@@ -383,6 +383,33 @@ jobs:
         max_age_hours: 26
     on_fail: log
 
+  # ── hermes (Tris — agent gateway host) ───────────────────────────────────
+  # Added 2026-08-10. This machine had NO contracts at all: the manifest
+  # covered three of the five machines in the roster, so two agent hosts ran
+  # entirely unverified. Found by TESTING the claim "every deployment gap is
+  # closed" instead of asserting it -- the claim was false.
+
+  - name: hermes-creds-sync
+    machine: hermes
+    schedule: "0 * * * *"
+    cmd: "cd ~/Data/.datacore/secrets && ./scripts/sync.sh >> /tmp/creds-sync.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "/tmp/creds-sync.log"
+        check: nonempty
+        max_age_hours: 3
+
+  - name: hermes-nightshift-deadman
+    machine: hermes
+    schedule: "*/15 * * * *"
+    cmd: "/root/nightshift-deadman.sh >> /var/log/nightshift-deadman.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "/var/log/nightshift-deadman.log"
+        check: nonempty
+        max_age_hours: 2
+
+
 # ── UNVERIFIED JOBS ───────────────────────────────────────────────────────
 # job_verify ignores unknown top-level keys, so nothing below is checked.
 # These jobs were REMOVED from `jobs:` on 2026-08-10 because their contracts

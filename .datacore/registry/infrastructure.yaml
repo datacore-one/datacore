@@ -33,6 +33,11 @@ servers:
     notes: "Local machine. On main; feat/datacore-v2 unmerged as of 2026-08-04."
 
   winston:
+    # DIP-0039 established "box" as a ROLE name (always-on producer). The job
+    # manifest uses it; this roster uses the host name. Recorded explicitly
+    # because the two drifting apart silently is how a job ends up declared
+    # for a machine nothing verifies (found 2026-08-10).
+    manifest_machine: "box"
     purpose: "Chief of Staff — briefings, approvals, merge gatekeeper"
     ssh_alias: "winston"
     deploy_method: "rsync + cron"
