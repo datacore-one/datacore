@@ -30,7 +30,10 @@ servers:
     services: []
     ledger_actors:
       - mac
-    notes: "Local machine. On main; feat/datacore-v2 unmerged as of 2026-08-04."
+    notes: "Local machine. On main at the v2 merge (0e2aad5) since 2026-08-10.
+      Holds the only copy of the genesis event logs: .datacore/events/ is
+      UNTRACKED in every space repo, so the migration output exists here and
+      nowhere else. Back it up before reinstalling this machine."
 
   winston:
     # DIP-0039 established "box" as a ROLE name (always-on producer). The job
@@ -47,8 +50,8 @@ servers:
       - cos_merge_runs.sh (cron 03:50)
     ledger_actors:
       - winston
-    notes: "Only machine running any v2 code as of 2026-08-04 — config plane,
-      job contracts and the ledger package are deployed here."
+    notes: "Runs the config plane, job contracts and the ledger package from
+      ~/Data at 0e2aad5. Verified end to end by ledger_probe.py 2026-08-10."
 
   nightshift:
     purpose: "Overnight AI task execution (systemd timers); Miles Telegram bot"
@@ -75,8 +78,9 @@ servers:
       - hermes-gateway.service
     ledger_actors:
       - tris
-    notes: "Has an agent_update.py profile with a health probe. No v2 code and
-      no job contracts declared yet."
+    notes: "Satellite writer: no ~/Data git repo — v2 code lives in
+      ~/.datacore/v2-runner (0e2aad5), events in ~/Data/.datacore/events.
+      Verified end to end by ledger_probe.py 2026-08-10."
 
   plur-claw:
     purpose: "Mr Data — OpenClaw agent host"
@@ -85,5 +89,6 @@ servers:
     services: []
     ledger_actors:
       - data
-    notes: "No v2 code and no job contracts declared yet — the least covered
-      machine in the roster."
+    notes: "Satellite writer. ~/Data is a DIFFERENT repo (data-on-claw/data-space),
+      not this installation; v2 code lives in ~/.datacore/v2-runner (0e2aad5).
+      Verified end to end by ledger_probe.py 2026-08-10."
