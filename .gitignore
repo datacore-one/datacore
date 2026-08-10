@@ -174,10 +174,20 @@ CLAUDE.md
 .datacore/mcp-servers.local.yaml
 .mcp.json
 
-# Modules: only gtd, outbox, research are root-tracked.
-# All other modules are independent repos, cloned via module.yaml repository: field.
-# voice-terminal is local-only (no repository: field) — keep it tracked.
+# Modules: core modules are root-tracked; everything else is an independent
+# repo, cloned via the module.yaml repository: field.
+#
+# The test is the repository: field. A module that declares one is a clone and
+# must stay excluded; a module that does not is core and must be listed here.
+# github had neither — no repository: field AND no allowlist entry — so it was
+# invisible to git entirely. Its scanner and task_creator were fixed on
+# 2026-08-10 with no history and no backup, which is how that came to light.
+#
+# github/.gitignore already excludes data/ (repos.json holds a live inventory of
+# private repos across five orgs) and CLAUDE.md, so tracking the module here does
+# not expose them — this repo is PUBLIC.
 .datacore/modules/*/
+!.datacore/modules/github/
 !.datacore/modules/gtd/
 !.datacore/modules/outbox/
 !.datacore/modules/research/

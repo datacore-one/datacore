@@ -1,0 +1,14 @@
+# server/ holds host-specific deployment files — systemd units with User=gregor
+# and EnvironmentFile=%h/config/nightshift.env, plus the runner referencing
+# /root/.config/cos.env. The root repo is PUBLIC and its pre-push guard blocks
+# .datacore/modules/*/server/ for exactly this reason. Kept out of git here so
+# the exclusion is stated at the module rather than discovered at push time.
+#
+# Consequence to be aware of: triage-github.sh is therefore NOT versioned. Its
+# 2026-08-10 fix (scan failures no longer reported as an empty result) lives
+# only on this Mac, winston and nightshift.
+server/
+
+data/
+CLAUDE.md
+CLAUDE.local.md
