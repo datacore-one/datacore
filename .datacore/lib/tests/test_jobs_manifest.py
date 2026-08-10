@@ -651,7 +651,7 @@ def test_real_manifest_every_job_has_at_least_one_artifact():
 # which is exactly what happened to hermes and plur-claw, uncovered from the
 # start because the old assertion checked a hardcoded three-name set rather
 # than the roster.
-KNOWN_UNCOVERED_MACHINES = {"plur-claw"}
+KNOWN_UNCOVERED_MACHINES: set[str] = set()   # every roster host now has contracts
 
 ROSTER_PATH = Path(__file__).resolve().parents[2] / "registry" / "infrastructure.yaml"
 

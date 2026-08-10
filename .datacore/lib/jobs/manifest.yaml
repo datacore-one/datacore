@@ -410,6 +410,37 @@ jobs:
         max_age_hours: 2
 
 
+  # ── plur-claw (Data — OpenClaw agent host) ───────────────────────────────
+  # Added 2026-08-10, the last roster host to gain any verification at all.
+
+  - name: plur-claw-data-heartbeat
+    machine: plur-claw
+    schedule: "data-heartbeat.timer (~30 min)"
+    cmd: "/root/data-heartbeat.sh"
+    on_fail: telegram
+    artifacts:
+      # The state file is rewritten every run, so its freshness proves the
+      # heartbeat ran -- unlike the daily log, which a single early run would
+      # leave fresh-looking for the rest of the day.
+      - path: "/root/.openclaw/state-heartbeat-last-report"
+        check: nonempty
+        max_age_hours: 2
+
+  - name: plur-claw-agent-stream-tail
+    machine: plur-claw
+    schedule: "continuous (datacore-agent-stream-tail sidecar)"
+    cmd: "agent_stream_tail.py"
+    on_fail: telegram
+    artifacts:
+      # This is the SOURCE of the workstation's agent-stream rsync: if the
+      # tailer stops, mac-agent-stream-rsync goes stale downstream and the
+      # cause is here. Checking both ends means the failure is attributed to
+      # the side that actually broke.
+      - path: "/root/.datacore/agent-stream-tail/state.json"
+        check: nonempty
+        max_age_hours: 2
+
+
 # ── UNVERIFIED JOBS ───────────────────────────────────────────────────────
 # job_verify ignores unknown top-level keys, so nothing below is checked.
 # These jobs were REMOVED from `jobs:` on 2026-08-10 because their contracts

@@ -59,17 +59,40 @@ RC=$?
 
 { printf '=== %s ===\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"; printf '%s\n' "$OUT"; } >> "$LOG"
 
+# Delivery. Two routes, because hosts differ in what they have:
+#   relay  -- ssh to a host that holds the credentials (workstation: no creds
+#             of its own, and copying secrets to a second machine buys nothing)
+#   direct -- POST to Telegram using this host's own credentials (agent hosts:
+#             they already have them, and cannot resolve the relay alias)
+# Direct is tried when a credentials file is configured; relay otherwise.
+# Whichever is used, a failure to DELIVER is written to the log rather than
+# swallowed -- a broken alert path must not be quiet about being broken.
+_deliver() {
+  local msg="$1"
+  if [ -n "${JOB_VERIFY_ENV_FILE:-}" ] && [ -r "${JOB_VERIFY_ENV_FILE}" ]; then
+    # shellcheck disable=SC1090
+    set -a; . "${JOB_VERIFY_ENV_FILE}"; set +a
+    local tok="${TELEGRAM_BOT_TOKEN:-${WINSTON_BOT_TOKEN:-}}"
+    local chat="${TELEGRAM_CHAT_ID:-${WINSTON_CHAT_ID:-}}"
+    if [ -n "$tok" ] && [ -n "$chat" ]; then
+      curl -s -m 15 -X POST "https://api.telegram.org/bot${tok}/sendMessage" \
+        -d "chat_id=${chat}" --data-urlencode "text=${msg}" >/dev/null && return 0
+      printf 'RELAY FAILED: direct telegram send failed\n' >> "$LOG"; return 1
+    fi
+    printf 'RELAY FAILED: %s has no bot token/chat id\n' "$JOB_VERIFY_ENV_FILE" >> "$LOG"; return 1
+  fi
+  printf '%s\n' "$msg" | ssh -o ConnectTimeout=15 -o BatchMode=yes "$RELAY_HOST" \
+    'set -a; . /root/.datacore/datacore.env; set +a;
+     python3 /root/Data/.datacore/modules/chief-of-staff/server/lib/winston_send.py' \
+    >>"$LOG" 2>&1 && return 0
+  printf 'RELAY FAILED: could not deliver via %s\n' "$RELAY_HOST" >> "$LOG"; return 1
+}
+
 if [ "$RC" -ne 0 ] && [ -n "$OUT" ]; then
   # Relay to the host that holds the credentials. Failure to relay is itself
   # reported into the log rather than swallowed -- a broken alert path must not
   # be quiet about being broken.
-  if ! printf 'job_verify FAILED on %s:\n%s\n' "$(hostname -s)" "$OUT" \
-      | ssh -o ConnectTimeout=15 -o BatchMode=yes "$RELAY_HOST" \
-        'set -a; . /root/.datacore/datacore.env; set +a;
-         python3 /root/Data/.datacore/modules/chief-of-staff/server/lib/winston_send.py' \
-      >>"$LOG" 2>&1; then
-    printf 'RELAY FAILED: could not deliver alert via %s\n' "$RELAY_HOST" >> "$LOG"
-  fi
+  _deliver "$(printf 'job_verify FAILED on %s:\n%s' "$(hostname -s)" "$OUT")"
 fi
 
 exit "$RC"
