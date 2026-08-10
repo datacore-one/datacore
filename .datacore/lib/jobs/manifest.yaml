@@ -178,9 +178,17 @@ jobs:
         max_age_hours: 26
       # cos_verify_morning.py:check_journal_briefing -- regex lifted verbatim
       # from the source (miles_delivery accepts either heading).
+      # A heading is not a briefing. This previously matched
+      # "^##\\s+(Daily Briefing|Good Morning)", which a file containing nothing
+      # but that heading would satisfy -- the generator could emit an empty
+      # shell and pass. Requires a section that only a populated briefing
+      # produces: "### Your Agenda" is written from calendar+GTD state, so it
+      # is absent when generation fails partway. Verified 2026-08-10 against a
+      # real 564-line briefing carrying Good Morning / The World / Your Agenda
+      # / Spaces / Trading / Decisions Due / Horizon.
       - path: "~/Data/0-personal/notes/journals/{today}.md"
         check: regex
-        arg: "^##\\s+(Daily Briefing|Good Morning)"
+        arg: "^###\\s+Your Agenda"
         max_age_hours: 26
       # cos_verify_morning.py:check_audio -- AUDIO_STAMP, written by
       # winston_audio.sh only after Telegram accepts the voice message.
