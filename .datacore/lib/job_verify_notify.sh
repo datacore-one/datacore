@@ -35,8 +35,26 @@ mkdir -p "$(dirname "$LOG")"
 
 # --alert log, never telegram: this machine cannot send, and asking it to try
 # only produces a misleading "telegram unavailable" line.
+# Cron has a minimal PATH, so the interpreter is resolved explicitly rather
+# than inherited. /usr/bin/python3 on macOS has no PyYAML -- using it makes
+# every run fail with ModuleNotFoundError, which is a false alarm that looks
+# exactly like a real one. Prefer an interpreter that can actually import the
+# dependencies, and say so loudly if none can.
+PY_BIN="${JOB_VERIFY_PYTHON:-}"
+if [ -z "$PY_BIN" ]; then
+  for c in /opt/homebrew/bin/python3 /usr/local/bin/python3 "$HOME/.pyenv/shims/python3" python3; do
+    if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import yaml' >/dev/null 2>&1; then
+      PY_BIN="$c"; break
+    fi
+  done
+fi
+if [ -z "$PY_BIN" ]; then
+  printf 'FATAL: no python3 with PyYAML found; job_verify cannot run\n' >> "$LOG"
+  exit 2
+fi
+
 OUT="$(DATACORE_V2=1 DATACORE_ROOT="${DATACORE_ROOT:-$HOME/Data}" \
-  /usr/bin/python3 "$RUNNER/.datacore/lib/job_verify.py" "${ARGS[@]}" --alert log 2>&1)"
+  "$PY_BIN" "$RUNNER/.datacore/lib/job_verify.py" "${ARGS[@]}" --alert log 2>&1)"
 RC=$?
 
 { printf '=== %s ===\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"; printf '%s\n' "$OUT"; } >> "$LOG"
