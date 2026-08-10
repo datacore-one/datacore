@@ -187,11 +187,16 @@ CLAUDE.md
 # private repos across five orgs) and CLAUDE.md, so tracking the module here does
 # not expose them — this repo is PUBLIC.
 .datacore/modules/*/
+!.datacore/modules/analytics/
+!.datacore/modules/decisions/
 !.datacore/modules/github/
+!.datacore/modules/goals/
 !.datacore/modules/gtd/
 !.datacore/modules/outbox/
 !.datacore/modules/research/
+!.datacore/modules/tab-capture/
 !.datacore/modules/voice-terminal/
+!.datacore/modules/whatsapp/
 
 # -----------------------------------------------------------------------------
 # SECRETS

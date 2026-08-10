@@ -25,6 +25,10 @@ last_updated: 2026-07-17
 # and sensitive categories (state/, env/, secrets/, private/, cos/ non-example,
 # modules/*/data/) are categorically rejected. Defaults live in the scanner;
 # override here with `datacore_new_file_allow:` / `datacore_new_file_reject:`.
+# CAUTION: these keys REPLACE the scanner defaults wholesale, they do not
+# extend them. Setting one with a couple of entries silently drops every
+# default allow — so add new allowed paths to DATACORE_NEW_FILE_ALLOW in
+# .datacore/lib/pre_push_scan.py instead, unless you truly mean to replace.
 
 # Optional path to a private patterns file. If it exists, its forbidden_paths
 # and forbidden_content arrays are unioned with the public ones at runtime.
@@ -156,3 +160,4 @@ content_scan_exemptions:
   - ".datacore/githooks/pre-commit"
   - ".datacore/hooks/pre-commit"
   - ".datacore/hooks/space-pre-commit"
+

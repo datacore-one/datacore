@@ -1,0 +1,42 @@
+manifest_version: 2
+name: goals
+version: 0.1.0
+description: "Goals + OKR tracking — yaml-based hierarchical horizons (5y/year/quarter/month/week)"
+author: datacore-one
+license: MIT
+
+dependencies:
+  - core@>=1.0.0
+
+provides:
+  tools:
+    - name: list_goals
+      description: List goals with optional horizon filter
+    - name: create_goal
+      description: Create a new goal at a specific horizon
+    - name: update_goal
+      description: Patch goal text fields or status
+    - name: log_progress
+      description: Append a progress note to a goal
+
+settings:
+  goals_path: 0-personal/goals.yaml
+
+requires:
+  env_vars:
+    required: []
+    optional: []
+
+context:
+  priority: on_match
+
+engrams:
+  namespace: goals
+  scopes: [goals, okrs, intent]
+
+recall:
+  # DIP-0029 — module-level engram scope; composes with command-level recall:.
+  scopes:
+    - module:goals
+  tags:
+    - goals

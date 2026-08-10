@@ -1,0 +1,42 @@
+manifest_version: 2
+name: decisions
+version: 0.1.0
+description: "Decisions log — markdown files per decision under [space]/3-knowledge/decisions/, MADR-ish format"
+author: datacore-one
+license: MIT
+
+dependencies:
+  - core@>=1.0.0
+
+provides:
+  tools:
+    - name: list_decisions
+      description: List decisions in the active space (optional status filter)
+    - name: read_decision
+      description: Read a specific decision's full body
+    - name: create_decision
+      description: Log a new decision with title, context, decision, consequences
+    - name: update_status
+      description: Promote/deprecate a decision (proposed → accepted → superseded)
+
+settings:
+  decisions_subdir: 3-knowledge/decisions
+
+requires:
+  env_vars:
+    required: []
+    optional: []
+
+context:
+  priority: on_match
+
+engrams:
+  namespace: decisions
+  scopes: [decisions, rationale]
+
+recall:
+  # DIP-0029 — module-level engram scope; composes with command-level recall:.
+  scopes:
+    - module:decisions
+  tags:
+    - decisions

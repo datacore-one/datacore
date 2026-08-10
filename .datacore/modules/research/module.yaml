@@ -8,7 +8,6 @@ description: |
   Tagline: "Curate links. Wake up to podcasts and insights."
 
 author: datacore-one
-repository: https://github.com/datacore-one/module-research
 license: MIT
 builtin: true
 

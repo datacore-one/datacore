@@ -370,6 +370,47 @@ modules:
     path: .datacore/modules/trading
 ```
 
+### Core Modules — Shipped, But Some Need a Setup Step
+
+A handful of modules are tracked in this repository, so you already have them
+after Step 1 — there is nothing to clone and nothing to register:
+
+| Module | What it does |
+|--------|--------------|
+| `gtd` | Task management — inbox, next actions, weekly review |
+| `github` | GitHub triage — mentions and assignments become tasks |
+| `analytics` | Website metrics via PostHog, feeds the daily briefing |
+| `decisions` | Decision log, MADR-style, under `[space]/3-knowledge/decisions/` |
+| `goals` | Hierarchical goals and OKRs (5y / year / quarter / month / week) |
+| `outbox` | Routes finished content out of active workspaces |
+| `research` | Research pipeline — sources to literature notes and zettels |
+| `tab-capture` | One-click browser tab capture straight into `inbox.org` |
+| `voice-terminal` | Spoken briefings and voice capture |
+| `whatsapp` | WhatsApp import — chat exports into CRM contacts |
+
+Most work as soon as Datacore does. **`tab-capture` is the exception: it needs a
+one-time install because it talks to your browser**, and it is easy to miss
+precisely because it ships with the repo rather than being something you chose
+to add.
+
+```bash
+# Registers the Native Messaging host with your browser
+python3 .datacore/modules/tab-capture/lib/install.py
+
+# Then load the extension:
+#   Brave/Chrome -> Extensions -> Developer mode -> Load unpacked
+#   -> select .datacore/modules/tab-capture/extension/
+```
+
+Supports Brave, Chrome and Chromium (`--browser brave|chrome|chromium`);
+`--uninstall` reverses it. Captured tabs land in the `inbox_path` set in
+`.datacore/modules/tab-capture/lib/config.json`, which defaults to
+`~/Data/0-personal/org/inbox.org`.
+
+Note for Brave on macOS: Brave uses Chrome's `NativeMessagingHosts` directory,
+not a BraveSoftware one. The installer handles this; it is worth knowing if you
+ever debug the manifest by hand.
+
 ## Post-Installation
 
 ### Configure Emacs

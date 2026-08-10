@@ -81,6 +81,15 @@ DATACORE_NEW_FILE_ALLOW = [
     ".datacore/modules/*/docs/**",
     ".datacore/modules/*/tests/**",
     ".datacore/modules/*/tools/**",
+    # app-tools/ is the datacore-app counterpart of tools/ — decisions/ and
+    # goals/ each ship tools/index.js AND app-tools/index.mjs. extension/ is
+    # browser-extension source (manifest, popup, background, icons) for
+    # tab-capture. Both are code-only by construction, exactly as lib/ is; the
+    # categorical rejects (state/, env/, secrets/, private/, modules/*/data/)
+    # and content scanning still apply inside them. Added 2026-08-10 when these
+    # modules moved into core.
+    ".datacore/modules/*/app-tools/**",
+    ".datacore/modules/*/extension/**",
     ".datacore/modules/*/specs/**",
     # module top-level manifest/doc files (single level only)
     ".datacore/modules/*/*",
