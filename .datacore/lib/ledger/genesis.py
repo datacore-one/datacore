@@ -40,10 +40,22 @@ from .events import Event  # noqa: F401  (re-exported for callers/tests)
 from .fold import fold
 from .log import EventLog, read_events
 
-#: States that represent live, coordinated work. Anything else is either
-#: finished (DONE/CANCELLED -> history) or an execution overlay that DIP-0011
-#: owns (QUEUED/WORKING/REVIEW/FAILED).
-ACTIVE_STATES = ("TODO", "NEXT", "WAITING")
+#: Human workflow states.
+HUMAN_STATES = ("TODO", "NEXT", "WAITING", "DEFERRED")
+
+#: Nightshift's execution overlay (DIP-0011). These were originally excluded,
+#: which left 87 tasks unmigratable and blocked the whole migration on
+#: rewriting nightshift's write path first. That was the wrong call: a task in
+#: REVIEW is not finished, it is live work wearing an execution badge. Excluding
+#: it would have silently dropped 7% of the corpus at the boundary -- the exact
+#: "migration loses work quietly" failure this import is written to avoid.
+#: The overlay state is preserved verbatim in the payload, so the projection
+#: renders it back unchanged and nightshift keeps seeing what it expects.
+OVERLAY_STATES = ("QUEUED", "WORKING", "REVIEW", "FAILED")
+
+#: Everything that represents live, coordinated work. DONE and CANCELLED are
+#: the only states that stay behind as history.
+ACTIVE_STATES = HUMAN_STATES + OVERLAY_STATES
 
 #: Used only when a task has no `:CREATED:` and no git history -- e.g. a task
 #: created in an uncommitted edit. Documented rather than invented per task so
@@ -144,6 +156,10 @@ def task_payload(node, space: str, date: str, rung: str) -> dict:
             },
         },
         "genesis": {"date": date, "rung": rung},
+        #: True for nightshift's execution overlay. Carried so a consumer can
+        #: tell "the human parked this" from "a machine is mid-flight on it"
+        #: without re-deriving it from the state string.
+        "overlay": node.todo in OVERLAY_STATES,
     }
 
 

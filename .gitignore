@@ -324,3 +324,8 @@ node_modules/
 
 # Local telemetry — per-machine, never shared.
 .datacore/events/
+
+# Org projections (DIP-0043, owner decision 2026-08-04). Derived state: each
+# machine regenerates its own from the ledger, so committing them would
+# recreate the merge-conflict surface the projection exists to remove.
+*.projected.org

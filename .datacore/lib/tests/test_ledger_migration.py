@@ -15,6 +15,7 @@ from ledger.fold import ItemState, LedgerState, fold  # noqa: E402
 from ledger.genesis import (  # noqa: E402
     ACTIVE_STATES,
     GENESIS_FALLBACK,
+    OVERLAY_STATES,
     import_space,
     scan,
 )
@@ -60,18 +61,28 @@ def space(tmp_path):
     return d
 
 
-def test_scan_takes_only_active_states(space):
+def test_scan_takes_every_live_state_including_overlays(space):
+    """A task in REVIEW is live work wearing an execution badge, not history.
+    Excluding overlays once left 87 real tasks unmigratable."""
     r = scan(space)
-    states = {p["state"] for p in r.importable}
-    assert states <= set(ACTIVE_STATES)
-    assert {p["id"] for p in r.importable} == {"task-alpha", "task-beta"}
+    assert {p["state"] for p in r.importable} <= set(ACTIVE_STATES)
+    assert {p["id"] for p in r.importable} == {"task-alpha", "task-beta", "task-review"}
 
 
-def test_overlay_and_done_states_are_reported_not_silently_dropped(space):
-    """A skipped task must be visible; silence is how a migration loses work."""
+def test_overlay_state_is_preserved_and_flagged(space):
+    r = scan(space)
+    review = next(p for p in r.importable if p["id"] == "task-review")
+    assert review["state"] == "REVIEW", "the overlay state must survive verbatim"
+    assert review["overlay"] is True
+    alpha = next(p for p in r.importable if p["id"] == "task-alpha")
+    assert alpha["overlay"] is False
+
+
+def test_finished_states_are_reported_not_silently_dropped(space):
+    """DONE/CANCELLED stay behind as history — but visibly, never silently."""
     r = scan(space)
     assert r.out_of_scope.get("DONE") == 1
-    assert r.out_of_scope.get("REVIEW") == 1
+    assert "REVIEW" not in r.out_of_scope, "overlays migrate now, not skipped"
 
 
 def test_task_without_an_id_is_reported(space):
@@ -86,12 +97,12 @@ def test_scan_writes_nothing(space):
 
 def test_import_is_idempotent(space):
     first = import_space(space)
-    assert len(first.importable) == 2
+    assert len(first.importable) == 3          # alpha, beta, review
     second = import_space(space)
     assert second.importable == []
-    assert len(second.already_present) == 2
+    assert len(second.already_present) == 3
     log = space / ".datacore" / "events" / "genesis.jsonl"
-    assert len(log.read_text().strip().split("\n")) == 2
+    assert len(log.read_text().strip().split("\n")) == 3
 
 
 def test_valid_time_comes_from_created_property(space):
