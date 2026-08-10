@@ -33,6 +33,18 @@ EVENT_TYPES = frozenset(
         "artifact.attest",
         "policy.set",
         "approval.grant",
+        # Migration (DIP-0043). item.clock.* exist because clocking is
+        # genuinely concurrent -- two machines can clock the same task -- so it
+        # must be events rather than an opaque payload blob that would
+        # last-writer-wins. projection.attest lets machines compare what they
+        # rendered without a network call: the ledger is its own comparison
+        # channel.
+        "item.clock.start",
+        "item.clock.stop",
+        "projection.attest",
+        # Claim-grant handshake (DIP-0034 amendment): a claim is a PROPOSAL;
+        # execution in an arbitrated pool requires the arbiter's grant.
+        "item.grant",
     }
 )
 

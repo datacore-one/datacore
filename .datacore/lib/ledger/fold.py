@@ -69,6 +69,14 @@ class ItemState:
     owner: str | None
     status: str  # created | claimed | completed | verified | dismissed
     history: list[str] = field(default_factory=list)
+    #: The `item.create` payload, copied verbatim. The fold's own state is
+    #: deliberately minimal, but a PROJECTOR (DIP-0043) has to rebuild a full
+    #: org heading -- scheduled, deadline, tags, parent, body -- and those live
+    #: only in the payload. Without this a projection cannot be derived from
+    #: folded state at all, only by re-reading raw events, which would give the
+    #: projector a second, divergent view of history. Copied (not aliased) so
+    #: fold stays non-mutating over its input.
+    payload: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -170,6 +178,7 @@ def _handle_create(state: LedgerState, event: Event) -> None:
         title=payload.get("title", ""),
         owner=payload.get("owner"),
         status="created",
+        payload=dict(payload),
     )
     _note(item, event, "applied")
     state.items[item_id] = item
