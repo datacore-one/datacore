@@ -441,6 +441,23 @@ jobs:
         max_age_hours: 2
 
 
+  # Phase 0 migration gate. The flip to Phase 1 is gated on N consecutive days
+  # of a clean shadow diff -- a gate that means nothing unless the diff is
+  # actually computed daily and its result is durable. Contracted on CONTENT
+  # ("all_clean": true), not freshness: a stale-but-fresh status file would
+  # report a passing migration that was never checked.
+  - name: mac-shadow-diff
+    machine: mac
+    schedule: "0 7 * * *"
+    cmd: "python3 ~/.datacore/v2-runner/.datacore/lib/shadow_check.py"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/shadow-status.json"
+        check: regex
+        arg: '"all_clean": true'
+        max_age_hours: 26
+
+
 # ── UNVERIFIED JOBS ───────────────────────────────────────────────────────
 # job_verify ignores unknown top-level keys, so nothing below is checked.
 # These jobs were REMOVED from `jobs:` on 2026-08-10 because their contracts
