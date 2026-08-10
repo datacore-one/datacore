@@ -9,6 +9,7 @@ Provides reusable functions for:
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from datetime import date, datetime, timedelta
@@ -89,11 +90,26 @@ def create_triage_task(
 
 
 def _find_task_by_id(org_file: Path, task_id: str) -> bool:
-    """Check if a task with given :TRIAGE_ID: property exists in the file."""
+    """Check if a task with given :TRIAGE_ID: property exists in the file.
+
+    Matches the id exactly, and also matches LEGACY date-suffixed ids of the
+    form ``<task_id>-YYYY-MM-DD``. Triage ids used to carry the creation date,
+    so the same GitHub issue produced a different id every day and never
+    matched its own existing task — on 2026-08-10 that appended a second copy
+    of the body to an already-DONE entry from 2026-07-08. New ids are identity
+    only; this keeps the tasks written under the old scheme deduplicating.
+
+    The previous implementation was ``task_id in content``, a substring test
+    over the WHOLE file: it would also match a longer id that merely contained
+    this one, and matched text anywhere, not a TRIAGE_ID line.
+    """
     if not org_file.exists():
         return False
-    content = org_file.read_text()
-    return f":TRIAGE_ID:" in content and task_id in content
+    pattern = re.compile(
+        r"^\s*:TRIAGE_ID:\s*" + re.escape(task_id) + r"(-\d{4}-\d{2}-\d{2})?\s*$",
+        re.M,
+    )
+    return bool(pattern.search(org_file.read_text()))
 
 
 def _set_task_properties(org_file: Path, node_id: str, properties: dict[str, str]):
@@ -128,28 +144,55 @@ def _set_task_properties(org_file: Path, node_id: str, properties: dict[str, str
         org_file.write_text("\n".join(new_lines) + "\n")
 
 
+#: States whose tasks are finished. Appending fresh triage context to one of
+#: these is always wrong — the work is done and the entry is a record.
+_CLOSED_STATES = ("DONE", "CANCELLED", "CANCELED")
+
+
 def _append_task_body(org_file: Path, heading: str, body: str):
-    """Append body text after a task's properties block."""
+    """Append body text after a task's properties block.
+
+    Guards added 2026-08-10 after this duplicated a body block into a DONE task:
+
+    * it matches on HEADING, and matches the FIRST heading containing that text
+      — which is an old task from a previous cycle whenever the heading repeats;
+    * it appended unconditionally, so re-running produced N copies.
+
+    Now: closed tasks are never appended to, and a body already present is not
+    written twice. Both make the function idempotent, which is what the caller
+    already assumed it was.
+    """
     if not org_file.exists():
         return
 
-    lines = org_file.read_text().splitlines()
+    content = org_file.read_text()
+    lines = content.splitlines()
     new_lines = []
     found_heading = False
     inserted = False
+    body_lines = body.strip().splitlines()
+    first_body_line = body_lines[0].strip() if body_lines else ""
 
-    for i, line in enumerate(lines):
+    for line in lines:
         new_lines.append(line)
 
-        if not inserted and heading in line and line.strip().startswith("**"):
+        if not inserted and not found_heading and heading in line and line.strip().startswith("**"):
+            # Never append triage context to a finished task.
+            after_stars = line.strip().lstrip("*").strip()
+            if any(after_stars.startswith(s) for s in _CLOSED_STATES):
+                continue
             found_heading = True
 
         if found_heading and not inserted and line.strip() == ":END:":
-            for body_line in body.strip().splitlines():
+            # Already recorded — do not write a second copy.
+            if first_body_line and first_body_line in content:
+                inserted = True
+                continue
+            for body_line in body_lines:
                 new_lines.append(f"   {body_line}")
             inserted = True
 
-    if inserted:
+    if inserted and len(new_lines) != len(lines):
         org_file.write_text("\n".join(new_lines) + "\n")
 
 
