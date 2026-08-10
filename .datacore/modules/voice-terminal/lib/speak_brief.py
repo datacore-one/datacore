@@ -146,58 +146,121 @@ Here is today's report:
 ---"""
 
 
-def summarize_with_llm(report_text):
-    """Use an LLM to create a conversational summary."""
-    prompt = SUMMARIZE_PROMPT.format(report=report_text)
-
-    # Try Anthropic API first
+def _try_anthropic_api(prompt):
     api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if api_key:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=400,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return response.content[0].text
+    if not api_key:
+        return None
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key)
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.content[0].text
 
-    # Try OpenRouter
+
+def _try_claude_cli(prompt):
+    """Claude Code CLI on the Max subscription — first-party, $0 marginal.
+
+    This is the nightshift box's only working backend and had no entry here.
+    Note it only works when ANTHROPIC_API_KEY is UNSET: a set key takes
+    precedence over the claude.ai login and routes to the metered API instead.
+    """
+    import shutil
+    if not shutil.which("claude"):
+        return None
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    result = subprocess.run(
+        ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "text", prompt],
+        capture_output=True, text=True, timeout=180, env=env, stdin=subprocess.DEVNULL,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"claude -p exited {result.returncode}: "
+            f"{(result.stderr or result.stdout or '').strip()[:200] or '(no output)'}"
+        )
+    return result.stdout.strip() or None
+
+
+def _try_openrouter(prompt):
     or_key = os.environ.get("OPENROUTER_API_KEY")
-    if or_key:
-        import json, urllib.request
-        req = urllib.request.Request(
-            "https://openrouter.ai/api/v1/chat/completions",
-            data=json.dumps({
-                "model": "anthropic/claude-haiku-4-5-20251001",
-                "max_tokens": 400,
-                "messages": [{"role": "user", "content": prompt}],
-            }).encode(),
-            headers={"Authorization": f"Bearer {or_key}", "Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req) as resp:
-            data = json.loads(resp.read())
-            return data["choices"][0]["message"]["content"]
+    if not or_key:
+        return None
+    import json, urllib.request
+    req = urllib.request.Request(
+        "https://openrouter.ai/api/v1/chat/completions",
+        data=json.dumps({
+            "model": "anthropic/claude-haiku-4-5-20251001",
+            "max_tokens": 400,
+            "messages": [{"role": "user", "content": prompt}],
+        }).encode(),
+        headers={"Authorization": f"Bearer {or_key}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read())["choices"][0]["message"]["content"]
 
-    # Fallback: Ollama
-    try:
-        import json, urllib.request
-        req = urllib.request.Request(
-            "http://localhost:11434/api/generate",
-            data=json.dumps({
-                "model": "deepseek-r1:7b-qwen-distill-q4_K_M",
-                "prompt": prompt,
-                "stream": False,
-            }).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read())
-            return data["response"]
-    except Exception as e:
-        print(f"All LLM backends failed. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY or run ollama.")
-        print(f"Last error: {e}")
-        sys.exit(1)
+
+def _try_ollama(prompt):
+    import json, urllib.request
+    req = urllib.request.Request(
+        "http://localhost:11434/api/generate",
+        data=json.dumps({
+            "model": "deepseek-r1:7b-qwen-distill-q4_K_M",
+            "prompt": prompt,
+            "stream": False,
+        }).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read())["response"]
+
+
+# Ordered cheapest-and-fastest-first. A backend returns None to mean "not
+# configured, try the next one" and raises to mean "configured but broken".
+LLM_BACKENDS = (
+    ("anthropic-api", _try_anthropic_api),
+    ("claude-cli", _try_claude_cli),
+    ("openrouter", _try_openrouter),
+    ("ollama", _try_ollama),
+)
+
+
+def summarize_with_llm(report_text):
+    """Use an LLM to create a conversational summary.
+
+    Every backend is tried in turn and a FAILING one falls through to the next.
+    Previously only the last branch (ollama) sat inside a try/except: if
+    ANTHROPIC_API_KEY was set but broken, the API exception propagated and
+    OpenRouter and ollama were never reached. That is exactly what happened
+    from 2026-08-06 — the key had no credit ("Your credit balance is too low"),
+    so a configured-but-dead primary took down a chain whose whole purpose was
+    to survive one backend being down.
+    """
+    prompt = SUMMARIZE_PROMPT.format(report=report_text)
+    errors = []
+
+    for name, backend in LLM_BACKENDS:
+        try:
+            result = backend(prompt)
+        except Exception as e:
+            errors.append(f"{name}: {type(e).__name__}: {str(e)[:160]}")
+            print(f"[speak_brief] backend '{name}' failed, trying next — {str(e)[:160]}")
+            continue
+        if result and result.strip():
+            print(f"[speak_brief] summary generated by '{name}'")
+            return result
+        if result is None:
+            errors.append(f"{name}: not configured")
+        else:
+            errors.append(f"{name}: returned empty output")
+
+    print("All LLM backends failed:")
+    for err in errors:
+        print(f"  - {err}")
+    print("Fix one of: unset ANTHROPIC_API_KEY so claude -p uses the Max "
+          "subscription, purchase API credits, set OPENROUTER_API_KEY, or start ollama.")
+    sys.exit(1)
 
 
 def _generate_audio_kokoro(text, voice=DEFAULT_VOICE, speed=DEFAULT_SPEED, output_path=None):
