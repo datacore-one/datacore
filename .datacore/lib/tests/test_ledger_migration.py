@@ -193,3 +193,29 @@ def test_write_proceeds_when_the_file_is_untouched(space, tmp_path):
 def test_generated_header_is_present(space):
     import_space(space)
     assert project(fold(read_events(space))).text.startswith("# -*- GENERATED FILE")
+
+
+def test_projection_declares_its_own_todo_keywords(space):
+    """A generated file whose parse depends on what was read before it is
+    broken. Without #+SEQ_TODO, custom states (REVIEW, QUEUED, ...) parsed
+    only when another file declaring them had been loaded first — which made
+    the same projection yield 574 tasks alone and 508 in a multi-space loop,
+    silently reporting 66 tasks lost in the migration gate."""
+    import_space(space)
+    text = project(fold(read_events(space))).text
+    decl = next(ln for ln in text.split("\n") if ln.startswith("#+SEQ_TODO:"))
+    for state in ("REVIEW", "QUEUED", "WORKING", "FAILED", "DEFERRED"):
+        assert state in decl, f"{state} must be declared"
+
+
+def test_overlay_task_survives_a_cold_reparse(space, tmp_path):
+    """Parse the projection in isolation — no other org file read first."""
+    import_space(space)
+    out = tmp_path / "cold.org"
+    out.write_text(project(fold(read_events(space))).text)
+    import sys as _s, pathlib as _p
+    _s.path.insert(0, str(_p.Path(__file__).resolve().parents[1]))
+    from org_workspace import OrgWorkspace
+    ws = OrgWorkspace(); ws.load(str(out))
+    states = {n.todo for n in ws.all_nodes() if n.todo}
+    assert "REVIEW" in states, f"overlay state lost on cold reparse: {states}"

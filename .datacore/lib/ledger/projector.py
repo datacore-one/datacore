@@ -32,6 +32,18 @@ from pathlib import Path
 
 from .fold import LedgerState
 
+#: The projection MUST declare its own todo keywords. Without this line
+#: org-mode's custom states (DEFERRED, QUEUED, WORKING, REVIEW, FAILED) parse
+#: only if some other file declaring them happened to be read first -- so the
+#: same projection parsed back gave 574 tasks alone and 508 inside a
+#: multi-space loop, silently reporting 66 tasks "lost" in the migration gate.
+#: A generated file whose meaning depends on what was parsed before it is
+#: broken; found 2026-08-10 by running the gate for real across nine spaces.
+SEQ_TODO = (
+    "#+SEQ_TODO: TODO(t) NEXT(n!) WAITING(w!) DEFERRED(f) QUEUED(q) "
+    "WORKING(W!) REVIEW(r!) | DONE(d!) FAILED(x!) CANCELLED(c!)"
+)
+
 GENERATED_HEADER = (
     "# -*- GENERATED FILE — DO NOT EDIT -*-\n"
     "# Rendered from the event ledger (DIP-0043). Edits here are not the\n"
@@ -145,7 +157,7 @@ def project(state: LedgerState, *, space: str | None = None) -> Projection:
     ]
     items.sort(key=lambda i: i.id)
 
-    lines = [GENERATED_HEADER.rstrip("\n"), ""]
+    lines = [GENERATED_HEADER.rstrip("\n"), "", SEQ_TODO, ""]
     for item in items:
         lines.extend(render_item(item))
         lines.append("")
