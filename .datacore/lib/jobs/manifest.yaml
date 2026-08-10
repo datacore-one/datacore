@@ -232,19 +232,6 @@ jobs:
 
   # ── nightshift server, systemd timers, UTC ───────────────────────────────
 
-  - name: nightshift-outbox
-    machine: nightshift
-    schedule: "0 2 * * *"
-    cmd: "python3 ~/Data/.datacore/modules/outbox/lib/archive_sync.py"
-    on_fail: telegram
-    artifacts:
-      # archive_sync.py's main() only prints JSON to stdout (line ~590);
-      # StandardOutput=journal on the unit means nothing is persisted to a
-      # file. No writer for any fixed on-disk artifact was found -- falling
-      # back to the brief's documented last resort: exists-check on the
-      # job's own cmd script.
-      - path: "~/Data/.datacore/modules/outbox/lib/archive_sync.py"  # TODO(verify-on-nightshift): no persisted artifact found; confirm during Phase 6 whether outbox should start writing a result file
-        check: exists
 
   - name: nightshift-overnight
     machine: nightshift
@@ -283,19 +270,6 @@ jobs:
         check: nonempty
         max_age_hours: 26
 
-  - name: nightshift-market-phase
-    machine: nightshift
-    schedule: "30 5 * * *"
-    cmd: "~/Data/.datacore/modules/nightshift/nightshift run --command=/analyze-market-phase"
-    on_fail: telegram
-    artifacts:
-      # today_orchestrator.py's gather_market_data() (lib/today_orchestrator.py:598)
-      # reads state_dir.glob('market-phase*'), expecting a fresh file within
-      # 24h -- confirming the location and naming convention, but no writer
-      # of that file was found in this module or the trading module's skill.
-      - path: "~/Data/.datacore/state/trading"  # TODO(verify-on-nightshift): confirm the exact per-run filename (glob prefix 'market-phase*' evidenced, not the full name); directory-level exists+freshness is a proxy until then
-        check: exists
-        max_age_hours: 26
 
   - name: nightshift-public-repo-audit
     machine: nightshift
@@ -376,3 +350,31 @@ jobs:
         arg: ["headline"]
         max_age_hours: 26
     on_fail: log
+
+# ── UNVERIFIED JOBS ───────────────────────────────────────────────────────
+# job_verify ignores unknown top-level keys, so nothing below is checked.
+# These jobs were REMOVED from `jobs:` on 2026-08-10 because their contracts
+# could not fail, which is worse than having no contract: a check that is
+# green regardless of reality manufactures exactly the false confidence this
+# manifest exists to prevent.
+#
+#   nightshift-outbox        Verified 2026-08-10: no cron entry and no systemd
+#                            timer schedules this job on that host -- it does
+#                            not run. Its artifact check was `exists` on its
+#                            OWN SOURCE FILE (archive_sync.py), which passes
+#                            whether or not the job has ever executed.
+#                            To re-list: schedule it, and have it write a
+#                            result artifact to check.
+#
+#   nightshift-market-phase  Verified 2026-08-10: the systemd timer IS active
+#                            and ran at 05:30 ("Command completed successfully"
+#                            in the journal), but it writes no identifiable
+#                            artifact. It was checked against the directory
+#                            ~/Data/.datacore/state/trading, whose freshness
+#                            comes from UNRELATED writers (monitor_state.json,
+#                            wave_trader/ at 15:31) -- so a failed 05:30 run
+#                            still passes. To re-list: have the unit write a
+#                            success marker (ExecStartPost) and check that.
+#                            Blocked on bringing the root-owned unit under
+#                            version control; it is untracked today.
+unverified_jobs_see_comment_above: true
