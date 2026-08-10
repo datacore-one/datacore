@@ -112,6 +112,58 @@ def _agent_env() -> dict:
     return {**os.environ, "DATACORE_HEADLESS": "1"}
 
 
+def _find_hermes() -> Path | None:
+    """The Hermes agent's venv python, or None.
+
+    HERMES_PYTHON wins; otherwise this machine's home dirs are searched. No
+    username appears here -- the gateway runs as its own user, which differs
+    per installation.
+    """
+    import os
+
+    override = os.environ.get("HERMES_PYTHON")
+    if override and Path(override).exists():
+        return Path(override)
+    rel = Path(".hermes/hermes-agent/venv/bin/python")
+    candidates = [Path.home() / rel]
+    candidates += sorted(Path("/home").glob("*/" + str(rel))) if Path("/home").is_dir() else []
+    return next((c for c in candidates if c.exists()), None)
+
+
+def detect_runtime() -> tuple[str, list] | tuple[None, None]:
+    """(name, argv_prefix_builder) for this machine's agent runtime.
+
+    The fleet is HETEROGENEOUS on purpose and assuming `claude -p` everywhere
+    was a design error: it made two of five actors look broken when they are
+    simply not Claude machines. Data runs OpenClaw (codex/gpt-5.5) and Tris
+    runs the Hermes agent; neither has Claude Code installed, and neither
+    should need it. An item is executed by whatever the machine actually runs.
+
+    Probed in order of specificity: the specialised runtimes first, so a box
+    that happens to have both does not silently fall back to the generic one.
+    """
+    import shutil
+
+    if shutil.which("openclaw"):
+        # `--agent main` is required: without a target session openclaw exits
+        # with "No target session selected" and does no work.
+        return "openclaw", lambda p: ["openclaw", "agent", "--agent", "main", "--message", p]
+
+    # Discovered, never hardcoded: the Hermes venv lives under the OWNING
+    # user's home, which is not the user this dispatcher runs as, and a literal
+    # path would bake one installation's username into a tracked file.
+    hermes = _find_hermes()
+    if hermes:
+        return "hermes", lambda p: [str(hermes), "-m", "hermes_cli.main", "-z", p, "--yolo"]
+
+    if shutil.which("claude"):
+        # acceptEdits, NOT --dangerously-skip-permissions: the latter is
+        # refused outright when the process is root, and winston runs as root.
+        return "claude", lambda p: ["claude", "-p", "--permission-mode", "acceptEdits",
+                                    "--output-format", "text", p]
+    return None, None
+
+
 def run_task(title: str, route: str, cwd: Path) -> tuple[bool, str]:
     """Execute one item. Returns (ok, detail).
 
@@ -122,6 +174,9 @@ def run_task(title: str, route: str, cwd: Path) -> tuple[bool, str]:
     """
     framing = ROUTE_FRAMING.get(route, ROUTE_FRAMING[DEFAULT_ROUTE])
     prompt = f"{framing}\n\nTask: {title}\n\nBe brief. Report what you found."
+    runtime, build_argv = detect_runtime()
+    if runtime is None:
+        return False, "no agent runtime on this machine (looked for openclaw, hermes, claude)"
     try:
         r = subprocess.run(
             # Without a permission mode the agent is read-only: it declines
@@ -135,13 +190,12 @@ def run_task(title: str, route: str, cwd: Path) -> tuple[bool, str]:
             # daemons run as root -- so the box could never execute a single
             # item. `acceptEdits` is accepted as root and is the narrower
             # grant anyway: file edits, not blanket bypass.
-            ["claude", "-p", "--permission-mode", "acceptEdits",
-             "--output-format", "text", prompt],
+            build_argv(prompt),
             capture_output=True, text=True, timeout=TIMEOUT,
             stdin=subprocess.DEVNULL, cwd=str(cwd), env=_agent_env(),
         )
     except FileNotFoundError:
-        return False, "claude CLI not found on PATH"
+        return False, f"{runtime} runtime not executable"
     except PermissionError as exc:
         return False, f"could not run claude: {exc}"
     except subprocess.TimeoutExpired:
