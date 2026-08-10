@@ -30,6 +30,7 @@ Usage:
   python3 .datacore/lib/audit_engram_shape.py --voice         # size voice slice
   python3 .datacore/lib/audit_engram_shape.py --domain plur   # filter by prefix
   python3 .datacore/lib/audit_engram_shape.py --strict        # exit 1 over budget
+  python3 .datacore/lib/audit_engram_shape.py --pinned        # simulate pinned budget pass
 
 Exit codes:
   0  report produced, or resistant share within budget
@@ -39,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import statistics
 import sys
@@ -71,6 +73,11 @@ VOICE_PREFIXES = (
 )
 
 DEFAULT_BUDGET = 10.0  # percent resistant tolerated before --strict fails
+
+# Mirror inject.ts constants for --pinned simulation
+_DEFAULT_MAX_TOKENS = 8000
+_PINNED_TOKEN_BUDGET_RATIO = 0.5
+_PINNED_TOKEN_BUDGET = int(_DEFAULT_MAX_TOKENS * _PINNED_TOKEN_BUDGET_RATIO)  # 4000
 
 
 def discover_stores(home: Path) -> list[tuple[str, Path]]:
@@ -251,6 +258,131 @@ def voice_slice(rows: list[dict]) -> dict:
     }
 
 
+def estimate_wire_tokens(engram: dict) -> int:
+    """Replicate inject.ts estimateTokens: serialize wire-visible fields (drop
+    associations, which are stripped before sending to the agent) and count
+    chars / 4, ceiling-rounded.  The scoring fields (keyword_match, raw_score,
+    score) only exist after scoring; raw YAML records don't carry them, so there
+    is nothing to exclude here."""
+    wire = {k: v for k, v in engram.items() if k != "associations"}
+    serialized = json.dumps(wire, default=str)
+    return math.ceil(len(serialized) / 4)
+
+
+def voice_text_tokens(engram: dict) -> int:
+    """Token cost of just the statement text — the hypothetical cost if
+    injection switched to voice-text-only (no metadata)."""
+    text = (engram.get("statement") or "").strip()
+    serialized = json.dumps(text)
+    return math.ceil(len(serialized) / 4)
+
+
+def pinned_budget_report(home: Path) -> dict:
+    """Simulate the pinned-budget pass from inject.ts fillTokenBudget.
+
+    Budget = PINNED_TOKEN_BUDGET_RATIO (0.5) * DEFAULT_MAX_TOKENS (8000) = 4000 tokens.
+    Engrams are sorted by retrieval_strength descending (proxy for injection
+    order — pinned engrams all receive the same 2x score boost).  Walk the list;
+    each engram costs estimateTokens(wireRecord).  Engrams that fit go into the
+    fit list; the rest go into evicted.
+
+    Reads only from the personal store (pinned engrams live there).
+    """
+    personal_path = home / "engrams.yaml"
+    if not personal_path.exists():
+        return {"error": f"personal store not found at {personal_path}"}
+
+    raw = load_store(personal_path)
+    pinned = [
+        e for e in raw
+        if isinstance(e, dict) and (
+            e.get("pinned") is True or e.get("status") == "pinned"
+        ) and (e.get("statement") or "").strip()
+    ]
+
+    # Sort by retrieval_strength descending — proxy for injection order
+    pinned.sort(
+        key=lambda e: e.get("activation", {}).get("retrieval_strength", 0.0),
+        reverse=True,
+    )
+
+    budget = _PINNED_TOKEN_BUDGET
+    tokens_used = 0
+    fit: list[dict] = []
+    evicted: list[dict] = []
+
+    for e in pinned:
+        cost = estimate_wire_tokens(e)
+        vt = voice_text_tokens(e)
+        entry = {
+            "id": e.get("id", "?"),
+            "domain": e.get("domain") or "(none)",
+            "retrieval_strength": e.get("activation", {}).get("retrieval_strength", 0.0),
+            "wire_tokens": cost,
+            "voice_tokens": vt,
+            "heading": (e.get("statement") or "")[:72].replace("\n", " "),
+        }
+        # fillTokenBudget condition: cost must fit within BOTH maxTokens and pinnedBudget
+        if tokens_used + cost <= _DEFAULT_MAX_TOKENS and tokens_used + cost <= budget:
+            fit.append(entry)
+            tokens_used += cost
+        else:
+            evicted.append(entry)
+
+    total_wire = sum(e["wire_tokens"] for e in fit) + sum(e["wire_tokens"] for e in evicted)
+    total_voice = sum(e["voice_tokens"] for e in fit) + sum(e["voice_tokens"] for e in evicted)
+    voice_delta = total_wire - total_voice
+    voice_delta_pct = round(100 * voice_delta / total_wire, 1) if total_wire else 0.0
+
+    return {
+        "total_pinned": len(pinned),
+        "total_wire_tokens": total_wire,
+        "total_voice_tokens": total_voice,
+        "voice_delta_tokens": voice_delta,
+        "voice_delta_pct": voice_delta_pct,
+        "budget": budget,
+        "tokens_used_by_fit": tokens_used,
+        "fit": fit,
+        "evicted": evicted,
+    }
+
+
+def print_pinned_report(rpt: dict) -> None:
+    if "error" in rpt:
+        print(f"ERROR: {rpt['error']}", file=sys.stderr)
+        return
+
+    print(f"PINNED BUDGET SIMULATION")
+    print(f"  inject.ts constants: DEFAULT_MAX_TOKENS={_DEFAULT_MAX_TOKENS}  "
+          f"PINNED_TOKEN_BUDGET_RATIO={_PINNED_TOKEN_BUDGET_RATIO}")
+    print(f"  pinned budget        : {rpt['budget']} tokens")
+    print(f"  total pinned engrams : {rpt['total_pinned']}")
+    print(f"  total wire cost      : {rpt['total_wire_tokens']} tokens  "
+          f"(voice-only: {rpt['total_voice_tokens']})")
+    print()
+
+    fit = rpt["fit"]
+    evicted = rpt["evicted"]
+    running = 0
+    print(f"FIT ({len(fit)} engrams, {rpt['tokens_used_by_fit']} tokens used of {rpt['budget']} budget)")
+    for e in fit:
+        running += e["wire_tokens"]
+        print(f"  [{running:4d}] {e['wire_tokens']:4d} tok  rs={e['retrieval_strength']:.3f}"
+              f"  {e['id'][:24]:24s}  {e['heading'][:60]}")
+
+    print()
+    print(f"EVICTED ({len(evicted)} engrams — did not fit in {rpt['budget']}-token pinned budget)")
+    for e in evicted:
+        print(f"         {e['wire_tokens']:4d} tok  rs={e['retrieval_strength']:.3f}"
+              f"  {e['id'][:24]:24s}  {e['heading'][:60]}")
+
+    print()
+    print(f"VOICE-TEXT DELTA")
+    print(f"  projected savings if injection switched to voice-text-only:")
+    print(f"  {rpt['voice_delta_tokens']} tokens saved  "
+          f"({rpt['voice_delta_pct']}% of total wire cost)")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Audit engram statement shape (read-only).")
     ap.add_argument("--home", type=Path, default=PLUR_HOME, help="PLUR home (default ~/.plur)")
@@ -262,11 +394,21 @@ def main() -> int:
     ap.add_argument("--budget", type=float, default=DEFAULT_BUDGET,
                     help=f"max resistant %% before --strict fails (default {DEFAULT_BUDGET})")
     ap.add_argument("--strict", action="store_true", help="exit 1 if over budget")
+    ap.add_argument("--pinned", action="store_true",
+                    help="simulate pinned-budget pass from inject.ts fillTokenBudget")
     args = ap.parse_args()
 
     if not args.home.exists():
         print(f"no PLUR store at {args.home}", file=sys.stderr)
         return 2
+
+    if args.pinned:
+        rpt = pinned_budget_report(args.home)
+        if args.json:
+            print(json.dumps(rpt, indent=2, default=str))
+        else:
+            print_pinned_report(rpt)
+        return 1 if "error" in rpt else 0
 
     rows, health = collect(args.home, args.domain)
     warnings = store_warnings(health)

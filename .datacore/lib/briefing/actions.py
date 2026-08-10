@@ -149,6 +149,15 @@ def materialize(
         approval_ref = item.get("approval_ref")
         if approval_ref:
             payload["approval_ref"] = approval_ref
+        # `check` is the assertion that proves the item was actually done. It
+        # must survive into the payload or a dispatcher has nothing to verify
+        # against and can only trust the agent's prose -- which reads as
+        # confident completion even when the agent declined. Forwarded like
+        # approval_ref rather than added to the fixed shape, so an item without
+        # one is unchanged.
+        check = item.get("check")
+        if check:
+            payload["check"] = check
 
         try:
             event = guarded_append(log, "item.create", payload, policy=policy, space_dir=space_dir)
