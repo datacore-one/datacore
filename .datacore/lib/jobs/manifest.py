@@ -26,7 +26,7 @@ from pathlib import Path
 import yaml
 
 MACHINES = frozenset({"mac", "box", "nightshift"})
-CHECKS = frozenset({"exists", "nonempty", "json_has_keys", "regex"})
+CHECKS = frozenset({"exists", "nonempty", "json_has_keys", "regex", "min_bytes"})
 ON_FAILS = frozenset({"log", "telegram"})
 
 # checks that must NOT carry an `arg`

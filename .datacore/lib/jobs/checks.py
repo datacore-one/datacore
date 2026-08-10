@@ -107,6 +107,26 @@ def run_check(artifact: Artifact, *, now: float | None = None) -> list[str]:
         if st.st_size == 0:
             errors.append(f"{expanded}: empty file (nonempty check failed)")
 
+    elif check == "min_bytes":
+        # For artifacts a daemon RECREATES when lost. `exists` cannot detect
+        # deletion of such a file (it reappears within milliseconds) and
+        # `nonempty` cannot either (a fresh file has a header). Verified
+        # 2026-08-10: moving the 2.6 GB lens DB aside was NOT detected --
+        # the KeepAlive daemon recreated it and the check passed. A floor on
+        # size distinguishes "the accumulated database" from "a database that
+        # just started over".
+        if not isinstance(artifact.arg, int) or artifact.arg < 0:
+            errors.append(
+                f"{expanded}: min_bytes artifact has invalid arg "
+                f"(expected a non-negative int, got {artifact.arg!r})"
+            )
+        elif st.st_size < artifact.arg:
+            errors.append(
+                f"{expanded}: {st.st_size} bytes is below the "
+                f"min_bytes floor of {artifact.arg} "
+                f"(artifact may have been recreated from scratch)"
+            )
+
     elif check == "json_has_keys":
         if not isinstance(artifact.arg, list):
             # Defend locally even though the manifest loader is supposed to

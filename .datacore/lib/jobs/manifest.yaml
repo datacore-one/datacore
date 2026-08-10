@@ -355,9 +355,16 @@ jobs:
       # exists-only check confirmed correct as designed; a freshness
       # threshold for a continuously-written SQLite file is still an open
       # design question, deferred, not what was in question here.
+      # Two failure modes, two checks. max_age catches a STALLED daemon.
+      # min_bytes catches a daemon that LOST its database and started over --
+      # verified 2026-08-10 that `exists` cannot: moving the 2.6 GB file aside
+      # was not detected, because the KeepAlive daemon recreated it in
+      # milliseconds and a fresh file passes both exists and nonempty. Floor
+      # set well under the observed 2.6 GB so ordinary growth never trips it.
       - path: "~/.datacore/lens/observations.db"
-        check: exists
-        max_age_hours: 2   # daemon writes continuously; without this the check passes forever after the first write, even if the daemon died
+        check: min_bytes
+        arg: 1000000000
+        max_age_hours: 2
 
   - name: mac-artifact-pull
     machine: mac
