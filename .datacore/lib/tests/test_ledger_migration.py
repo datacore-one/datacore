@@ -28,6 +28,9 @@ from ledger.projector import (  # noqa: E402
 )
 
 ORG = """* Tasks
+   :PROPERTIES:
+   :ID: section-tasks
+   :END:
 ** TODO [#A] Ship the thing                                    :work:urgent:
    SCHEDULED: <2026-08-11 Tue>
    :PROPERTIES:
@@ -65,8 +68,13 @@ def test_scan_takes_every_live_state_including_overlays(space):
     """A task in REVIEW is live work wearing an execution badge, not history.
     Excluding overlays once left 87 real tasks unmigratable."""
     r = scan(space)
-    assert {p["state"] for p in r.importable} <= set(ACTIVE_STATES)
-    assert {p["id"] for p in r.importable} == {"task-alpha", "task-beta", "task-review"}
+    tasks = [p for p in r.importable if not p.get("section")]
+    assert {p["state"] for p in tasks} <= set(ACTIVE_STATES)
+    assert {p["id"] for p in tasks} == {"task-alpha", "task-beta", "task-review"}
+    # the section ancestor comes too, as a structural item with no state
+    sections = [p for p in r.importable if p.get("section")]
+    assert [p["id"] for p in sections] == ["section-tasks"]
+    assert sections[0]["state"] is None
 
 
 def test_overlay_state_is_preserved_and_flagged(space):
@@ -97,12 +105,12 @@ def test_scan_writes_nothing(space):
 
 def test_import_is_idempotent(space):
     first = import_space(space)
-    assert len(first.importable) == 3          # alpha, beta, review
+    assert len(first.importable) == 4          # 1 section + alpha, beta, review
     second = import_space(space)
     assert second.importable == []
-    assert len(second.already_present) == 3
+    assert len(second.already_present) == 3    # sections are re-derived, not re-imported
     log = space / ".datacore" / "events" / "genesis.jsonl"
-    assert len(log.read_text().strip().split("\n")) == 3
+    assert len(log.read_text().strip().split("\n")) == 4
 
 
 def test_valid_time_comes_from_created_property(space):
@@ -229,10 +237,11 @@ def test_parent_and_level_are_captured(space):
         assert "parent" in p and "level" in p
 
 
-def test_depth_survives_a_section_heading_with_no_id(space):
-    """Tasks under a plain section heading have no TASK parent, but they are
-    not top-level either. Rendering them at depth 1 would silently promote
-    them out of their section."""
+def test_depth_survives_under_a_section_heading(space):
+    """A section heading is not a task, but ensure-ids gives it an :ID:, so it
+    IS imported as a structural item and its children nest under it. Without
+    that, tasks re-parent under whichever task precedes them and inherit its
+    tags — 571 of 574 tasks in 0-personal did exactly that."""
     import_space(space)
     text = project(fold(read_events(space))).text
     line = next(ln for ln in text.split("\n") if "Ship the thing" in ln)

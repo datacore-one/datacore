@@ -27,7 +27,7 @@ resolving it. Only its provenance changes -- announced by a header.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .fold import LedgerState
@@ -113,6 +113,14 @@ def render_item(item, *, level: int | None = None) -> list[str]:
     org = payload.get("org") or {}
 
     stars = "*" * level
+    if payload.get("section"):
+        # A plain heading: no TODO keyword, no drawer beyond its id. Rendering
+        # it as a task would invent work that never existed.
+        tags = sorted(payload.get("tags") or [])
+        tag_str = f"  :{':'.join(tags)}:" if tags else ""
+        out = [f"{stars} {item.title}{tag_str}"]
+        out.extend("  " + ln for ln in _drawer({"ID": item.id}))
+        return out
     state = payload.get("state") or "TODO"
     priority = org.get("priority")
     prio = f"[#{priority}] " if priority else ""
@@ -185,6 +193,13 @@ def project(state: LedgerState, *, space: str | None = None) -> Projection:
             ordered.append((child, depth))
             _walk(child.id, depth + 1)
 
+    # NOTE: `depth` here is the tree depth. Recorded level is preferred below,
+    # but CLAMPED to this + nothing deeper, because org files legitimately skip
+    # levels (a level-3 task directly under a level-1 section). Rendering the
+    # recorded 3 after a level-2 sibling would nest the task under that sibling
+    # and inherit its tags -- three tasks in 5-plur picked up anthropic/outreach
+    # exactly this way.
+
     _walk(None, 1)
     # Depth comes from each item's RECORDED level, not from its position in
     # this walk. The two differ whenever a task sat under a plain section
@@ -192,10 +207,48 @@ def project(state: LedgerState, *, space: str | None = None) -> Projection:
     # walk sees the task as a root and would promote it out of its section.
     # Preserving the recorded level keeps the file's shape; the walk is used
     # only to keep children adjacent to their parents.
-    items = [(item, (item.payload or {}).get("level") or depth)
-             for item, depth in ordered]
+    # Depth: recorded level when the parent is still present, otherwise
+    # promote to top level. A task whose parent is DONE (and so absent from
+    # the projection) would keep its recorded depth and physically nest under
+    # whatever unrelated item precedes it -- inheriting that item's tags.
+    # Observed 2026-08-10: seven tasks came back carrying ai_policy/blog/
+    # writing from a neighbour. Promoting matches what org itself does when
+    # you archive a parent: the child becomes top-level.
+    resolved = []
+    for item, depth in ordered:
+        payload = item.payload or {}
+        parent = payload.get("parent")
+        if parent and parent not in known:
+            # Promoted orphan: render its effective tags, so the tags it used
+            # to inherit from the absent parent are not silently dropped.
+            eff = payload.get("effective_tags")
+            if eff:
+                payload = dict(payload)
+                payload["tags"] = eff
+                item = replace(item, payload=payload)
+            resolved.append((item, 1))
+        else:
+            recorded = payload.get("level") or depth
+            # never deeper than its true position in the tree
+            resolved.append((item, min(recorded, depth)))
+    items = resolved
 
-    lines = [GENERATED_HEADER.rstrip("\n"), "", SEQ_TODO, ""]
+    lines = [GENERATED_HEADER.rstrip("\n"), "", SEQ_TODO]
+    filetags: list[str] = []
+    for item in items:
+        ft = (item.payload or {}).get("filetags") if not isinstance(item, tuple) else None
+        if ft:
+            filetags = ft
+            break
+    if not filetags:
+        for cand in state.items.values():
+            ft = (cand.payload or {}).get("filetags")
+            if ft:
+                filetags = ft
+                break
+    if filetags:
+        lines.append("#+FILETAGS: :" + ":".join(filetags) + ":")
+    lines.append("")
     for item, depth in items:
         lines.extend(render_item(item, level=depth))
         lines.append("")

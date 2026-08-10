@@ -125,24 +125,93 @@ def valid_time(node, repo: Path | None = None, rel: str | None = None) -> tuple[
 
 
 def _parent_id(node) -> str | None:
-    """The nearest ancestor that is itself an imported task, by its org :ID:.
+    """The IMMEDIATE parent's org :ID:, or None.
 
     DIP-0043 makes parent mandatory: org tasks are hierarchical and a flat
-    projection cannot rebuild the tree. Walking to the nearest ID-bearing
-    ancestor (rather than the immediate parent) means a task nested under a
-    plain section heading still attaches to the right task above it, and a
-    task under no task at all correctly reports None.
+    projection cannot rebuild the tree.
+
+    Deliberately the immediate parent only. An earlier version walked up to the
+    nearest ID-bearing ancestor so that a task under a plain section heading
+    would still attach "somewhere" -- but that invents a parent-child edge the
+    file never had, and org-mode tag inheritance then makes it visible: a firm
+    task came back carrying `infra` and `security` from a grandparent it was
+    never under. A task whose immediate parent is a plain heading genuinely has
+    no task parent; its position is carried by `level` instead.
     """
     parent = getattr(node, "parent", None)
-    while parent is not None:
+    if parent is None:
+        return None
+    try:
+        return parent.get_property("ID") or None
+    except Exception:  # noqa: BLE001 — a root/sentinel node has no properties
+        return None
+
+
+def _section_payload(node, space: str) -> dict:
+    """A non-task heading that a task lives under, as a structural item.
+
+    `ensure-ids` gives EVERY heading an id, including plain section headings
+    like `* Operations`. They are legitimate parents, but they carry no todo
+    state, so an import that only takes tasks skips them -- and their children
+    are then re-parented under whatever task precedes them, inheriting its
+    tags. Observed 2026-08-10: a Telegram task under `* Operations` came back
+    under an infra/security task and inherited both.
+
+    Imported with `state: None` and `section: True` so the projector renders a
+    plain heading rather than a TODO, and so a consumer can filter them out
+    when it wants tasks only.
+    """
+    own = getattr(node, "shallow_tags", None)
+    tags = sorted(t for t in (own if own is not None else (node.tags or [])) if t)
+    return {
+        "id": node.get_property("ID"),
+        "title": node.heading,
+        "state": None,
+        "section": True,
+        "space": space,
+        "tags": tags,
+        #: The task's EFFECTIVE tags in the source file, inheritance included.
+        #: Normally redundant -- the projection rebuilds the tree, so org
+        #: re-derives them. But a task whose parent is DONE has no parent in
+        #: the projection, so it silently loses whatever it inherited from it.
+        #: Kept so a promoted orphan can carry its tags explicitly instead.
+        "effective_tags": sorted(t for t in (node.tags or []) if t),
+        "level": getattr(node, "level", None),
+        "parent": _parent_id(node),
+        "org": {"priority": None, "body": "", "properties": {}},
+        "genesis": {"date": GENESIS_FALLBACK, "rung": "section"},
+    }
+
+
+def _outline(node) -> list[dict]:
+    """Ancestor headings that are NOT tasks, outermost first.
+
+    org-mode tag inheritance follows a file's PHYSICAL nesting, not any link
+    we record. A task living under `* Infrastructure :infra:security:`
+    inherits those tags; drop that heading from the projection and the task
+    lands under whatever level-1 task happens to precede it and inherits ITS
+    tags instead. Observed 2026-08-10: 571 of 574 tasks in 0-personal came
+    back with tags they never had.
+
+    So the scaffold is part of the data. Captured per task (rather than as
+    separate section items) because a heading has no id to key on, and this
+    keeps every task self-describing: its payload alone says where it lives.
+    """
+    chain, cur = [], getattr(node, "parent", None)
+    while cur is not None:
         try:
-            pid = parent.get_property("ID")
-        except Exception:  # noqa: BLE001 — a root/sentinel node has no props
-            pid = None
-        if pid:
-            return pid
-        parent = getattr(parent, "parent", None)
-    return None
+            has_id = bool(cur.get_property("ID"))
+            heading = cur.heading
+            level = cur.level
+            own = getattr(cur, "shallow_tags", None)
+            tags = sorted(t for t in (own if own is not None else (cur.tags or [])) if t)
+        except Exception:  # noqa: BLE001 — root/sentinel node
+            break
+        if not has_id and heading:
+            chain.append({"title": heading, "level": level, "tags": tags})
+        cur = getattr(cur, "parent", None)
+    chain.reverse()
+    return chain
 
 
 def task_payload(node, space: str, date: str, rung: str) -> dict:
@@ -159,7 +228,18 @@ def task_payload(node, space: str, date: str, rung: str) -> dict:
     # the exact "set iteration order" determinism killer DIP-0043 names. Caught
     # 2026-08-10 by a full-suite run rendering ":urgent:work:" where a
     # single-file run rendered ":work:urgent:".
-    tags = sorted(t for t in (node.tags or []) if t)
+    # shallow_tags, NOT tags: `tags` already includes everything inherited
+    # from ancestors. Storing the inherited set and then RENDERING it
+    # explicitly on the heading makes the child inherit its parent's tags a
+    # second time on reparse -- a superset that grows every round trip.
+    # Observed 2026-08-10 once the tree was rebuilt: a firm task carrying
+    # (firm, plur, research) came back as (firm, infra, plur, research,
+    # security). Store what the task itself declares; let org-mode do
+    # inheritance, which is its job.
+    own = getattr(node, "shallow_tags", None)
+    if own is None:
+        own = node.tags or []
+    tags = sorted(t for t in own if t)
     return {
         "id": node.get_property("ID"),
         "title": node.heading,
@@ -168,6 +248,12 @@ def task_payload(node, space: str, date: str, rung: str) -> dict:
         "scheduled": str(node.scheduled) if node.scheduled else None,
         "deadline": str(node.deadline) if node.deadline else None,
         "tags": tags,
+        #: The task's EFFECTIVE tags in the source file, inheritance included.
+        #: Normally redundant -- the projection rebuilds the tree, so org
+        #: re-derives them. But a task whose parent is DONE has no parent in
+        #: the projection, so it silently loses whatever it inherited from it.
+        #: Kept so a promoted orphan can carry its tags explicitly instead.
+        "effective_tags": sorted(t for t in (node.tags or []) if t),
         "org": {
             "priority": node.priority,
             "body": node.body or "",
@@ -185,6 +271,9 @@ def task_payload(node, space: str, date: str, rung: str) -> dict:
         #: no task parent yet is not top-level, and rendering it at depth 1
         #: would silently promote it out of its section.
         "level": getattr(node, "level", None),
+        #: Non-task ancestor headings, outermost first. Without these the
+        #: projection re-parents tasks under whatever heading precedes them.
+        "outline": _outline(node),
         "genesis": {"date": date, "rung": rung},
         #: True for nightshift's execution overlay. Carried so a consumer can
         #: tell "the human parked this" from "a machine is mid-flight on it"
@@ -212,9 +301,20 @@ def scan(space_dir: Path, org_file: Path | None = None) -> ScanResult:
         return result
 
     known = set(fold(read_events(space_dir)).items.keys())
+    sections: dict[str, dict] = {}
 
     ws = OrgWorkspace()
     ws.load(str(org_file))
+
+    # File-level tags apply to every heading in the file. They are not any
+    # one task's property, so no task payload can carry them alone -- but a
+    # projection that omits the declaration silently strips a tag from every
+    # task. Same class as the missing #+SEQ_TODO: file metadata is data.
+    filetags: list[str] = []
+    for line in org_file.read_text().split("\n")[:40]:
+        if line.upper().startswith("#+FILETAGS:"):
+            filetags = sorted(t for t in line.split(":", 1)[1].split(":") if t.strip())
+            break
     repo, rel = space_dir, str(org_file.relative_to(space_dir))
     space = space_dir.name
 
@@ -233,8 +333,25 @@ def scan(space_dir: Path, org_file: Path | None = None) -> ScanResult:
             result.already_present.append(node_id)
             continue
         date, rung = valid_time(node, repo, rel)
-        result.importable.append(task_payload(node, space, date, rung))
+        payload = task_payload(node, space, date, rung)
+        payload["filetags"] = filetags
+        result.importable.append(payload)
+        # Walk up and record any state-less ancestor headings this task needs
+        # in order to sit where it did. Collected in a dict so an ancestor
+        # shared by fifty tasks is imported once.
+        anc = getattr(node, "parent", None)
+        while anc is not None:
+            try:
+                aid = anc.get_property("ID")
+                a_state = anc.todo
+            except Exception:  # noqa: BLE001 — root/sentinel
+                break
+            if aid and not a_state and aid not in known and aid not in sections:
+                sections[aid] = _section_payload(anc, space)
+            anc = getattr(anc, "parent", None)
 
+    # Sections first: a parent must exist before the children that name it.
+    result.importable = list(sections.values()) + result.importable
     return result
 
 
