@@ -144,6 +144,23 @@ jobs:
         arg: "^OK "
         max_age_hours: 26
 
+  # Agent registry integrity. registry_gc.py existed and was never scheduled --
+  # capability with no runner. Contracted on "duplicate keys (0)", an
+  # unambiguous corruption signal that is TRUE today, rather than on
+  # "orphaned (0)", which is 13 as of 2026-08-10 and would make this check born
+  # red. Alert fatigue is a failure mode, not a stricter standard: the orphan
+  # count is in the log for review, and this contract fires on regression.
+  - name: box-registry-gc
+    machine: box
+    schedule: "35 7 * * *"
+    cmd: "python3 ~/Data/.datacore/lib/registry_gc.py --registry ~/Data/.datacore/registry/agents.yaml --check > ~/.datacore/state/registry-gc.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/registry-gc.log"
+        check: regex
+        arg: "duplicate keys \\(0\\)"
+        max_age_hours: 26
+
   - name: box-briefing
     machine: box
     schedule: "0 4 * * *"
