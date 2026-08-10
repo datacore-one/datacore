@@ -127,6 +127,23 @@ jobs:
         max_age_hours: 26
     on_fail: telegram
 
+  # Ledger chain integrity. The hash chain can DETECT retroactive tampering,
+  # but nothing ran the check -- a capability with no runner is the same
+  # silent-failure shape this manifest exists to close. Verified 2026-08-10 by
+  # flipping a payload byte mid-chain: `ledger_cli verify` reported
+  # "line 251: hash mismatch". The regex below is a CONTENT check, not a
+  # freshness proxy: a tampered chain writes the mismatch instead of "OK".
+  - name: box-ledger-verify
+    machine: box
+    schedule: "20 7 * * *"
+    cmd: "python3 ~/Data/.datacore/lib/ledger_cli.py verify --space ~/Data > ~/.datacore/state/ledger-verify.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/ledger-verify.log"
+        check: regex
+        arg: "^OK "
+        max_age_hours: 26
+
   - name: box-briefing
     machine: box
     schedule: "0 4 * * *"
