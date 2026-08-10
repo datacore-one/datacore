@@ -336,7 +336,7 @@ jobs:
 
   - name: mac-artifact-pull
     machine: mac
-    schedule: "MANUAL — runs only when a human runs it"  # VERIFIED 2026-08-10: no crontab entry and no launchd plist exist on the mac. This field previously read "*/30 * * * *", a cadence that was never installed — a declared schedule with no scheduler behind it is a proxy for "this runs", so it is stated honestly here until Phase 6 ships the StartInterval plist
+    schedule: "every 30 min (launchd StartInterval 1800, com.datacore.artifact-pull.plist)"  # INSTALLED 2026-08-10. Before that this field claimed "*/30 * * * *" while no crontab entry and no plist existed — a declared schedule with no scheduler behind it. The plist now exists and RunAtLoad-fired successfully; it exits 1 while answers.yaml and facts.json have no producer on the box (declared CHANGELOG gap), which is honest failure rather than silence — the contract below checks app-briefing.json, which does have a producer and does sync
     cmd: "python3 ~/Data/.datacore/lib/artifact_sync.py --role client"
     artifacts:
       # .datacore/lib/artifact_sync.py (Task 6.1): rsync-over-ssh pull of the
