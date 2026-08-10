@@ -100,9 +100,16 @@ def _drawer(props: dict) -> list[str]:
     return out
 
 
-def render_item(item, *, level: int = 2) -> list[str]:
-    """One ledger item as org lines. Pure; no I/O, no clock."""
+def render_item(item, *, level: int | None = None) -> list[str]:
+    """One ledger item as org lines. Pure; no I/O, no clock.
+
+    Depth comes from the item's own recorded `level` when it has one, so a
+    subtask renders as a subtask. An explicit `level=` overrides it (used by
+    tests and by any caller re-parenting a subtree).
+    """
     payload = item.payload or {}
+    if level is None:
+        level = payload.get("level") or 2
     org = payload.get("org") or {}
 
     stars = "*" * level
@@ -155,11 +162,42 @@ def project(state: LedgerState, *, space: str | None = None) -> Projection:
         if item.status in LIVE_STATUSES
         and (space is None or (item.payload or {}).get("space") == space)
     ]
-    items.sort(key=lambda i: i.id)
+
+    # Depth-first by parent, so a child is emitted directly under its parent
+    # rather than wherever its id happens to sort. Sorting the whole set by id
+    # alone would scatter subtasks away from their parents and silently
+    # reparent them to whatever heading preceded them in the flat order.
+    by_parent: dict[str | None, list] = {}
+    known = {i.id for i in items}
+    for item in items:
+        parent = (item.payload or {}).get("parent")
+        # A parent that is not itself projected (finished, dismissed, or in
+        # another space) would strand its children invisibly; treat them as
+        # roots so they are still rendered.
+        by_parent.setdefault(parent if parent in known else None, []).append(item)
+    for bucket in by_parent.values():
+        bucket.sort(key=lambda i: i.id)
+
+    ordered: list = []
+
+    def _walk(parent_id, depth):
+        for child in by_parent.get(parent_id, []):
+            ordered.append((child, depth))
+            _walk(child.id, depth + 1)
+
+    _walk(None, 1)
+    # Depth comes from each item's RECORDED level, not from its position in
+    # this walk. The two differ whenever a task sat under a plain section
+    # heading: that heading is not a task, so it is not a ledger item, so the
+    # walk sees the task as a root and would promote it out of its section.
+    # Preserving the recorded level keeps the file's shape; the walk is used
+    # only to keep children adjacent to their parents.
+    items = [(item, (item.payload or {}).get("level") or depth)
+             for item, depth in ordered]
 
     lines = [GENERATED_HEADER.rstrip("\n"), "", SEQ_TODO, ""]
-    for item in items:
-        lines.extend(render_item(item))
+    for item, depth in items:
+        lines.extend(render_item(item, level=depth))
         lines.append("")
     return Projection(text="\n".join(lines).rstrip("\n") + "\n", item_count=len(items))
 

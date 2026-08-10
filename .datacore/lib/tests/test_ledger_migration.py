@@ -219,3 +219,35 @@ def test_overlay_task_survives_a_cold_reparse(space, tmp_path):
     ws = OrgWorkspace(); ws.load(str(out))
     states = {n.todo for n in ws.all_nodes() if n.todo}
     assert "REVIEW" in states, f"overlay state lost on cold reparse: {states}"
+
+
+def test_parent_and_level_are_captured(space):
+    """DIP-0043 makes parent mandatory: without it the projection is flat and
+    every subtask surfaces as a sibling of its own parent."""
+    r = scan(space)
+    for p in r.importable:
+        assert "parent" in p and "level" in p
+
+
+def test_depth_survives_a_section_heading_with_no_id(space):
+    """Tasks under a plain section heading have no TASK parent, but they are
+    not top-level either. Rendering them at depth 1 would silently promote
+    them out of their section."""
+    import_space(space)
+    text = project(fold(read_events(space))).text
+    line = next(ln for ln in text.split("\n") if "Ship the thing" in ln)
+    assert line.startswith("** "), f"depth not preserved: {line[:24]!r}"
+
+
+def test_children_render_adjacent_to_their_parent():
+    from ledger.projector import project as _project
+    st = LedgerState()
+    st.items["p"] = ItemState("p", "parent", None, "created",
+                              payload={"id": "p", "level": 1})
+    st.items["zz"] = ItemState("zz", "child", None, "created",
+                               payload={"id": "zz", "parent": "p", "level": 2})
+    st.items["q"] = ItemState("q", "other root", None, "created",
+                              payload={"id": "q", "level": 1})
+    body = [ln for ln in _project(st).text.split("\n") if ln.startswith("*")]
+    # the child must follow its parent, not sort to the end by id
+    assert body[0].endswith("parent") and body[1].endswith("child")

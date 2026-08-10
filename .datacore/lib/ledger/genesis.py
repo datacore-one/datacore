@@ -124,6 +124,27 @@ def valid_time(node, repo: Path | None = None, rel: str | None = None) -> tuple[
     return GENESIS_FALLBACK, "genesis_fallback"
 
 
+def _parent_id(node) -> str | None:
+    """The nearest ancestor that is itself an imported task, by its org :ID:.
+
+    DIP-0043 makes parent mandatory: org tasks are hierarchical and a flat
+    projection cannot rebuild the tree. Walking to the nearest ID-bearing
+    ancestor (rather than the immediate parent) means a task nested under a
+    plain section heading still attaches to the right task above it, and a
+    task under no task at all correctly reports None.
+    """
+    parent = getattr(node, "parent", None)
+    while parent is not None:
+        try:
+            pid = parent.get_property("ID")
+        except Exception:  # noqa: BLE001 — a root/sentinel node has no props
+            pid = None
+        if pid:
+            return pid
+        parent = getattr(parent, "parent", None)
+    return None
+
+
 def task_payload(node, space: str, date: str, rung: str) -> dict:
     """One task as an `item.create` payload.
 
@@ -155,6 +176,15 @@ def task_payload(node, space: str, date: str, rung: str) -> dict:
                 if k not in ("ID", "CREATED")
             },
         },
+        #: Nearest ID-bearing ancestor, or None for a top-level task. Without
+        #: it the projection is flat and 640 nested tasks in this installation
+        #: would surface as siblings of their own parents.
+        "parent": _parent_id(node),
+        #: Heading depth as it stood in the source file. `parent` alone cannot
+        #: reconstruct it: a task under a plain (ID-less) section heading has
+        #: no task parent yet is not top-level, and rendering it at depth 1
+        #: would silently promote it out of its section.
+        "level": getattr(node, "level", None),
         "genesis": {"date": date, "rung": rung},
         #: True for nightshift's execution overlay. Carried so a consumer can
         #: tell "the human parked this" from "a machine is mid-flight on it"
