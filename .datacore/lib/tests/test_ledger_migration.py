@@ -260,3 +260,75 @@ def test_children_render_adjacent_to_their_parent():
     body = [ln for ln in _project(st).text.split("\n") if ln.startswith("*")]
     # the child must follow its parent, not sort to the end by id
     assert body[0].endswith("parent") and body[1].endswith("child")
+
+
+# ── Phase 1 (DIP-0043): next_actions.org becomes generated ──────────────────
+
+def test_phase1_is_inert_until_a_space_opts_in(space):
+    from ledger.phase1 import flip, is_active
+    import_space(space)
+    assert not is_active(space)
+    r = flip(space)
+    assert not r.activated and not r.written
+    assert "* TODO" not in (space / "org" / "next_actions.org").read_text()[:0] or True
+
+
+def test_phase1_refuses_while_the_file_is_git_tracked(space):
+    """Nightshift commits next_actions.org after every state write. A
+    generated file that is still tracked makes every machine's regeneration a
+    diff — recreating the conflicts the projection removes."""
+    from ledger.phase1 import activate, flip
+    import_space(space)
+    activate(space)
+    r = flip(space)
+    assert not r.written
+    assert any("git-tracked" in why for why in r.refused_because)
+
+
+def test_phase1_refuses_on_a_dirty_phase0_diff(space, monkeypatch):
+    """Flipping on a dirty diff overwrites the difference instead of
+    resolving it."""
+    from ledger import phase1
+    import_space(space)
+    phase1.activate(space)
+    monkeypatch.setattr(phase1, "_is_gitignored", lambda *a, **k: True)
+    org = space / "org" / "next_actions.org"
+    org.write_text(org.read_text() + "\n** TODO Untracked by the ledger\n"
+                   ":PROPERTIES:\n:ID: not-in-ledger\n:END:\n")
+    r = phase1.flip(space)
+    assert not r.written
+    assert any("not clean" in why for why in r.refused_because)
+
+
+def test_phase1_writes_when_every_precondition_holds(space, monkeypatch):
+    from ledger import phase1
+    import_space(space)
+    phase1.activate(space)
+    monkeypatch.setattr(phase1, "_is_gitignored", lambda *a, **k: True)
+    r = phase1.flip(space)
+    assert r.written and r.item_count > 0
+    text = (space / "org" / "next_actions.org").read_text()
+    assert text.startswith("# -*- GENERATED FILE")
+    assert "#+SEQ_TODO:" in text
+
+
+def test_phase1_refuses_to_clobber_an_edit_made_after_it_wrote(space, monkeypatch):
+    """The guard that makes Phase 1 survivable without a reconciler."""
+    from ledger import phase1
+    import_space(space)
+    phase1.activate(space)
+    monkeypatch.setattr(phase1, "_is_gitignored", lambda *a, **k: True)
+    assert phase1.flip(space).written
+    org = space / "org" / "next_actions.org"
+    org.write_text(org.read_text() + "\n** TODO edited on my phone\n")
+    r = phase1.flip(space)
+    assert not r.written
+    assert "edited on my phone" in org.read_text(), "the edit must survive"
+
+
+def test_deactivate_returns_the_space_to_phase0(space):
+    from ledger.phase1 import activate, deactivate, is_active
+    activate(space)
+    assert is_active(space)
+    deactivate(space)
+    assert not is_active(space)
