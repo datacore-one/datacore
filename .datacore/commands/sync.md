@@ -214,18 +214,32 @@ TASKS SYNCED
 
 ### Repository Sync
 
-Uses existing `./sync` logic:
+One transport for every repo (DIP-0046). Both directions in one call — a
+converge fetches, commits local work, merges and pushes:
 
 ```bash
-# Pull
-git -C ~/Data pull --rebase
-git -C ~/Data/1-teamspace pull --rebase
-git -C ~/Data/2-projectspace pull --rebase
-
-# Push
-git -C ~/Data add . && git -C ~/Data commit -m "Sync" && git -C ~/Data push
-# Repeat for spaces
+python3 .datacore/lib/ledger_transport.py sync               # every space repo
+python3 .datacore/lib/ledger_transport.py converge --space .  # root repo
 ```
+
+This block previously read `git -C ~/Data pull --rebase` per space, followed by
+`git add . && git commit -m "Sync" && git push`, against space names
+(`1-teamspace`, `2-projectspace`) that do not exist in this installation — it
+was never updated from the template. Three things were wrong with it beyond the
+names:
+
+- **`--rebase`** is what stranded 610 commits on a parked branch. Per-writer
+  logs are disjoint files, so a merge is a union that cannot conflict; there is
+  nothing for a rebase to buy.
+- **`add .`** commits whatever happens to be in the tree under a message that
+  says "Sync", which is how unreviewed work stops looking like anything worth
+  reviewing (the same defect DIP-0046 E3 gates in the unattended path).
+- **Hardcoded space names** silently skip any space not in the list. `sync`
+  enumerates what is actually on disk.
+
+Report `blocked` and `conflict` outcomes to the user — those need a human and
+never clear on their own. `offline` is transient; local work is already
+committed and goes out next time.
 
 ### External Task Sync
 
