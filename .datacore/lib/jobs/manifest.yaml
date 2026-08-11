@@ -233,6 +233,23 @@ jobs:
         arg: '"all_clean": true'
         max_age_hours: 26
 
+  # The commit gate deliberately never blocks — nightshift runs ~20 tasks with
+  # nobody awake, and waiting for an answer turns one unreviewed commit into a
+  # stalled queue. The cost is that withheld work is invisible unless counted.
+  # Age, not volume, is the signal: last night's decisions are the gate working;
+  # the same ones in a fortnight mean the backlog has become a wastebasket, and
+  # the gate is then discarding work while appearing to protect it.
+  - name: mac-pending-decisions
+    machine: mac
+    schedule: "20 8 * * *"
+    cmd: "python3 ~/Data/.datacore/lib/detectors/pending_decisions.py > ~/.datacore/state/pending-decisions.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/pending-decisions.log"
+        check: regex
+        arg: "0 older than"
+        max_age_hours: 26
+
   - name: box-ledger-verify
     machine: box
     schedule: "20 7 * * *"
