@@ -204,3 +204,37 @@ def test_seq_gap_reports_unverifiable_when_fetch_fails(tmp_path: Path, monkeypat
     assert rows and all(r["error"] for r in rows), "a failed fetch must mark rows unverifiable"
     assert all(r["gap"] is None for r in rows), "must not claim a gap of zero"
     assert "unreachable" in rows[0]["error"]
+
+
+def test_submodule_only_change_still_converges(repo_pair: Path, tmp_path: Path):
+    """A repo dirty ONLY in a submodule must still sync.
+
+    Unstaging the submodule can empty the index, and `git commit` then exits
+    non-zero for "nothing to commit". Treating that as a refused autosave
+    aborted the converge, so such a repo could never sync again. Observed on
+    nightshift: 2 ahead, 7 behind, dirty only in .datacore/dips.
+    """
+    sub_origin = tmp_path / "sub2.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(sub_origin)], check=True)
+    seed = tmp_path / "sub2seed"
+    subprocess.run(["git", "clone", "-q", str(sub_origin), str(seed)], check=True)
+    git(seed, "config", "user.email", "t@t"); git(seed, "config", "user.name", "t")
+    (seed / "a.txt").write_text("one\n")
+    git(seed, "add", "-A"); git(seed, "commit", "-qm", "one")
+    git(seed, "push", "-q", "origin", "HEAD:refs/heads/main")
+
+    subprocess.run(["git", "-C", str(repo_pair), "-c", "protocol.file.allow=always",
+                    "submodule", "add", "-q", str(sub_origin), "sub"],
+                   capture_output=True, text=True)
+    git(repo_pair, "commit", "-qm", "add submodule")
+    before = git(repo_pair, "rev-parse", "HEAD:sub").stdout.strip()
+
+    sub = repo_pair / "sub"
+    (sub / "a.txt").write_text("two\n")
+    git(sub, "config", "user.email", "t@t"); git(sub, "config", "user.name", "t")
+    git(sub, "add", "-A"); git(sub, "commit", "-qm", "two")
+
+    res = converge(repo_pair)
+
+    assert res.ok, f"submodule-only dirt must not block convergence: {res.reason}"
+    assert git(repo_pair, "rev-parse", "HEAD:sub").stdout.strip() == before
