@@ -108,11 +108,28 @@ on the root repo — two lines above its own warning never to do that. Replaced
 with `converge --space .`; the root repo is in the registry, so it was always
 eligible.
 
-**Still duplicated, measured not assumed:** `cos_sync.sh` exists twice
-BYTE-IDENTICAL (`lib/` and `modules/chief-of-staff/server/lib/`, 80 lines each)
-and routes through none of this — it is the original DIP-0046 motivation, still
-live on winston's cron. `claim.py` (266 L) and `02-mirror-sync.sh` (551 L) are
-also byte-identical pairs. That is C5, and it needs a winston deploy.
+**C5 — measured, and one earlier claim here was wrong.**
+
+`claim.py`, `01-droplet-setup.sh` and `02-mirror-sync.sh` each existed twice,
+tracked, byte-identical, all three from one commit ("snapshot: server drift
+2026-07-12"). Deleted — 1,137 lines. `claim.py` was the one that mattered: E3
+added the commit gate to `lib/claim.py`, leaving the root copy 33 lines stale
+and still carrying the ungated `git add -A`. A byte-identical duplicate is a
+latent divergence; a DIVERGED duplicate of a safety gate is a trap.
+
+**Correction:** this plan previously said `cos_sync.sh` "exists twice
+BYTE-IDENTICAL" in version control. It does not. The canonical copy lives in the
+PRIVATE chief-of-staff module (`server/lib/`), and `server/deploy.sh` rsyncs it
+to the box; the copy under `.datacore/lib/` is **gitignored and untracked**
+(`.gitignore:309`) because this repo is public and those files must never be
+tracked here. Two files on disk, one under version control — so there is no
+git-level drift risk, which is what "duplicated" was claiming. The DIP's
+"`cos_sync.sh` ×2 paths" line overstates this the same way and should be
+amended.
+
+What genuinely remains: `cos_sync.sh` still syncs by `rebase` + rescue-branch +
+reset rather than through the transport. That is one unmigrated writer on
+winston's 15-minute cron, in a private repo, feeding the morning briefing.
 ### C3b. Migrate module hooks — **measured: near-empty**
 
 Classified all 11 hooks that reference org files: **10 are readers only**
