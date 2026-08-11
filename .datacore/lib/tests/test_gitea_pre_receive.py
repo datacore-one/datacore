@@ -27,7 +27,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-HOOK = Path(__file__).resolve().parents[2] / "hooks" / "gitea-pre-receive.py"
+# The SHELL hook is what actually ships: the Gitea container has no python3,
+# so the .py version would install cleanly and never run. Test what deploys.
+HOOK = Path(__file__).resolve().parents[2] / "hooks" / "gitea-pre-receive.sh"
 # The bare repo must resolve ITS OWN hooks/ — see failure 1 above.
 RECEIVE_PACK = "git -c core.hooksPath=hooks receive-pack"
 ZEROISH = "members:\n  - mac\n  - winston\n"
@@ -47,6 +49,12 @@ def setup(tmp: Path) -> tuple[Path, Path]:
     sh(tmp, "git", "init", "-q", str(wt))
     sh(wt, "git", "config", "user.email", "t@t")
     sh(wt, "git", "config", "user.name", "t")
+    # Point the CLIENT hooks at this fixture's own (empty) hooks dir. Without
+    # this the Mac's global core.hooksPath runs the real pre-push guard, which
+    # refuses the cross-actor cases before the SERVER hook under test ever sees
+    # them — the fixture would be testing the wrong hook and failing for the
+    # right reason.
+    sh(wt, "git", "config", "core.hooksPath", str(wt / ".git" / "hooks"))
     (wt / ".datacore" / "events").mkdir(parents=True)
     (wt / ".datacore" / "members.yaml").write_text(ZEROISH)
     (wt / ".datacore" / "events" / "mac.jsonl").write_text('{"seq":1}\n')

@@ -1,6 +1,8 @@
 # Deploying the Gitea pre-receive hook (DIP-0046 D5)
 
-Status: **written and rehearsed, NOT deployed.** The hook passes all eight
+Status: **DEPLOYED 2026-08-12, report-only**, on 0-personal, 4-forge,
+6-meridian, 7-megaphone. Three things below were WRONG in the first version of
+this document and were only found by deploying and proving the hook fires. The hook passes all eight
 cases in `.datacore/lib/tests/test_gitea_pre_receive.py`. Deployment is blocked
 on SSH access — see "Blocked on" below.
 
@@ -19,11 +21,29 @@ Check before installing:
 Expect **empty**. If it is set, the hook must go in that directory instead, or
 the setting must be removed.
 
-**2. Gitea owns `hooks/pre-receive`.**
-Gitea generates that file itself and overwrites it on upgrade and on repo
-re-sync. Custom hooks belong at `custom_hooks/pre-receive`, which Gitea's own
-hook chains into. Installing to `hooks/pre-receive` works until the next
-`gitea admin regenerate hooks`, then vanishes without a word.
+**2. The chained directory is `hooks/pre-receive.d/`, NOT `custom_hooks/`.**
+This document originally said `custom_hooks/`. Gitea's generated
+`hooks/pre-receive` reads:
+
+    for hook in ${GIT_DIR}/hooks/${hookname}.d/*; do
+
+so a hook in `custom_hooks/` is never executed. Installed there it looked
+perfect and did nothing — caught only by pushing and observing no output.
+Install as `hooks/pre-receive.d/50-datacore`.
+
+**3. THE CONTAINER HAS NO PYTHON.** `gitea-pre-receive.py` cannot run on the
+server at all; it is the readable reference. `gitea-pre-receive.sh` (POSIX sh,
+using only sh/awk/sed/grep/git) is what deploys, and it is what the rehearsal
+suite now targets. A hook needing an absent interpreter installs cleanly and is
+inert — the same check-strength failure as hazard 1, from another direction.
+
+**4. Gitea reports the ACCOUNT, not the actor.** `GITEA_PUSHER_NAME` is
+`gregor` for every machine, while `members.yaml` lists machine actors. The
+server therefore cannot attribute a push to a machine, so per-actor log
+ownership is enforced CLIENT-side by
+`.datacore/lib/hooks/log_ownership_guard.py`; the server checks only that the
+pushing account is admitted. On Gitea the single-writer invariant rests on the
+client hook plus config_drift watching `core.hooksPath`.
 
 ## Install (report-only)
 
