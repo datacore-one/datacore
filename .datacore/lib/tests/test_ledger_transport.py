@@ -135,3 +135,38 @@ def test_sync_repo_maps_blocked_distinctly(repo_pair: Path, monkeypatch, capsys)
     monkeypatch.setattr(lt, "converge",
                         lambda s: lt.Result(False, "autosave refused by pre-commit hook", {}))
     assert sync_repo(repo_pair, quiet=True) == "blocked"
+
+
+def test_autosave_never_commits_a_submodule_pointer(repo_pair: Path, tmp_path: Path):
+    """A pointer bump is a deliberate act, never a side effect of syncing.
+
+    `git add -A` stages a changed gitlink, so without this an unattended
+    converge would move `.datacore/dips` to whatever commit happened to be
+    checked out locally — publishing a DIP revision nobody chose to publish.
+    """
+    sub_origin = tmp_path / "sub.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(sub_origin)], check=True)
+    seed = tmp_path / "subseed"
+    subprocess.run(["git", "clone", "-q", str(sub_origin), str(seed)], check=True)
+    git(seed, "config", "user.email", "t@t"); git(seed, "config", "user.name", "t")
+    (seed / "a.txt").write_text("one\n")
+    git(seed, "add", "-A"); git(seed, "commit", "-qm", "one")
+    git(seed, "push", "-q", "origin", "HEAD:refs/heads/main")
+
+    subprocess.run(["git", "-C", str(repo_pair), "-c", "protocol.file.allow=always",
+                    "submodule", "add", "-q", str(sub_origin), "sub"],
+                   capture_output=True, text=True)
+    git(repo_pair, "commit", "-qm", "add submodule")
+    before = git(repo_pair, "rev-parse", "HEAD:sub").stdout.strip()
+
+    # Move the submodule's checkout — the pointer is now dirty.
+    sub = repo_pair / "sub"
+    (sub / "a.txt").write_text("two\n")
+    git(sub, "config", "user.email", "t@t"); git(sub, "config", "user.name", "t")
+    git(sub, "add", "-A"); git(sub, "commit", "-qm", "two")
+
+    converge(repo_pair)
+
+    assert git(repo_pair, "rev-parse", "HEAD:sub").stdout.strip() == before
+    # Preserved, not discarded: still visible as a working-tree change.
+    assert "sub" in git(repo_pair, "status", "--porcelain").stdout
