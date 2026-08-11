@@ -90,6 +90,15 @@ def sync_state(space: Path, actor: str = "mac", dry_run: bool = False) -> dict:
         # title too: a heading edited in org left the projection rendering the
         # imported wording forever, which is a diff no amount of state syncing
         # would ever close.
+        # TAGS ARE DELIBERATELY NOT SYNCED, and this is the second time that
+        # needs saying. `node.tags` from org_workspace is the INHERITED set —
+        # the heading's own tags plus every ancestor's. The projector then files
+        # the item under its own sections, which contribute their tags again, so
+        # writing inherited tags into the payload double-applies inheritance and
+        # the projection diverges from the file it is meant to reproduce.
+        # Attempted 2026-08-12: 569 items updated, and 0-personal went from
+        # clean to changed=46. Syncing tags at all needs the node's OWN tags,
+        # which org_workspace does not expose separately here.
         want = {"state": node.todo,
                 "title": node.heading,
                 "scheduled": str(node.scheduled or "") or None,
