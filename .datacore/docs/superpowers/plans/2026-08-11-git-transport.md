@@ -127,9 +127,30 @@ git-level drift risk, which is what "duplicated" was claiming. The DIP's
 "`cos_sync.sh` ×2 paths" line overstates this the same way and should be
 amended.
 
-What genuinely remains: `cos_sync.sh` still syncs by `rebase` + rescue-branch +
-reset rather than through the transport. That is one unmigrated writer on
-winston's 15-minute cron, in a private repo, feeding the morning briefing.
+**`cos_sync.sh` — MIGRATED AND DEPLOYED.** The last writer syncing by `rebase` +
+rescue-branch + `reset --hard` now delegates to `converge`. Deployed to winston
+via the module's own rsync path and verified on a live run: 5 GitHub spaces
+`synced clean`, 4 Gitea spaces `offline` (log only, no alert — the host's disk
+had failed). Kept locally because the transport has no opinion on either: the
+autosave commit runs before converge so Winston's `Co-Authored-By` trailer
+survives, and alerts stay deduped per space per day.
+
+**What the old path cost, measured on the box:** 76 `cos-rescue-*` branches, 3
+still carrying unmerged commits. One is from today at 17:30 and holds **three
+ledger events** — `item.claim`, `item.release` (error: "Failed to authenticate:
+OAuth"), `item.claim` — that were `reset --hard` out of the tree. Both chains
+then continued independently from seq 76, so an **append-only log forked**: the
+surviving log has 83 events, the rescue branch 80, and none of the three hashes
+appear in the survivor.
+
+They are not recoverable by appending — their `prev` hashes point into the
+abandoned fork — and their content is superseded failure records, so the branch
+was pushed to origin for preservation rather than merged. Both chains verify OK
+(winston 204 events, mac 206; the difference is ordinary convergence lag).
+
+That a hard reset could fork an append-only log is the strongest single
+argument for this track, and it is now unreachable: nothing discards to make a
+sync succeed, so nothing needs rescuing.
 ### C3b. Migrate module hooks — **measured: near-empty**
 
 Classified all 11 hooks that reference org files: **10 are readers only**
