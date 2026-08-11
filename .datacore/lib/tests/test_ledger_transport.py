@@ -170,3 +170,37 @@ def test_autosave_never_commits_a_submodule_pointer(repo_pair: Path, tmp_path: P
     assert git(repo_pair, "rev-parse", "HEAD:sub").stdout.strip() == before
     # Preserved, not discarded: still visible as a working-tree change.
     assert "sub" in git(repo_pair, "status", "--porcelain").stdout
+
+
+def test_seq_gap_reports_unverifiable_when_fetch_fails(tmp_path: Path, monkeypatch):
+    """A failed fetch must not read as 'all published' (DIP-0046 A1).
+
+    The fetch return code was discarded, so an unreachable remote fell back to
+    the stale remote-tracking ref, found it equal to local, and reported
+    everything safely replicated — at the exact moment it could not check.
+    Observed live 2026-08-11 when the Gitea host's disk failed.
+    """
+    import sys as _sys
+    _sys.path.insert(0, str(LIB / "detectors"))
+    import seq_gap
+
+    space = tmp_path / "1-thing"
+    (space / ".datacore" / "events").mkdir(parents=True)
+    (space / ".datacore" / "events" / "mac.jsonl").write_text('{"seq":7}\n')
+
+    # Fetch fails; every other git call would otherwise succeed.
+    calls = {"fetch": 0}
+
+    def fake_git(repo, *args):
+        if args and args[0] == "fetch":
+            calls["fetch"] += 1
+            return 128, "fatal: Could not read from remote repository."
+        return 0, ""
+
+    monkeypatch.setattr(seq_gap, "git", fake_git)
+    rows = seq_gap.scan_space(space, fetch=True)
+
+    assert calls["fetch"] == 1
+    assert rows and all(r["error"] for r in rows), "a failed fetch must mark rows unverifiable"
+    assert all(r["gap"] is None for r in rows), "must not claim a gap of zero"
+    assert "unreachable" in rows[0]["error"]
