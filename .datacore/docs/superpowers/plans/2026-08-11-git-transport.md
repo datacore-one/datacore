@@ -95,7 +95,24 @@ handled by an explicit bounded **fetch → merge → retry** loop on non-fast-fo
 **Verify:** two *machines* pushing concurrently both land (a two-local-process
 test passes without exercising this); offline remote → `ok=False`, no exception.
 
-### C3a. Migrate `lib/` git callers — **space_sync DONE** (142→80 lines, 13 git calls→0)
+### C3a. Migrate `lib/` git callers — **DONE, and `space_sync.py` is gone**
+142 lines → an 80-line shim → deleted. A shim is still a file, still a name to
+remember, and still somewhere the next fix can land on one side only, which is
+the defect being removed rather than a smaller instance of it. `sync_repo` and
+`sync_all` now live in `ledger_transport`, reached as
+`ledger_transport.py sync [--repo NAME]`. Callers updated: `gitea_pull_webhook`
+(import), `morning_journal` (subprocess), `/today` step 3.
+
+`/today` step 3 was telling the operator to run `git pull --rebase --autostash`
+on the root repo — two lines above its own warning never to do that. Replaced
+with `converge --space .`; the root repo is in the registry, so it was always
+eligible.
+
+**Still duplicated, measured not assumed:** `cos_sync.sh` exists twice
+BYTE-IDENTICAL (`lib/` and `modules/chief-of-staff/server/lib/`, 80 lines each)
+and routes through none of this — it is the original DIP-0046 motivation, still
+live on winston's cron. `claim.py` (266 L) and `02-mirror-sync.sh` (551 L) are
+also byte-identical pairs. That is C5, and it needs a winston deploy.
 ### C3b. Migrate module hooks — **measured: near-empty**
 
 Classified all 11 hooks that reference org files: **10 are readers only**

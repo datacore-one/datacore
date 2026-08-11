@@ -127,22 +127,33 @@ Proceed with full briefing generation (step 3 onward).
 Pull latest from all repos (brings nightshift outputs from server).
 
 ```bash
-python3 .datacore/lib/space_sync.py        # all space repos
-git -C ~/Data pull --rebase --autostash    # root repo (user's working copy)
+python3 .datacore/lib/ledger_transport.py sync              # all space repos
+python3 .datacore/lib/ledger_transport.py converge --space . # root repo
 ```
 
-**NEVER use `git stash && git pull && git stash pop`** — when the pop
-conflicts the stash is silently kept and the work is stranded invisibly
-(10 orphaned stashes accumulated May–Jun 2026; see ENG-2026-0729-009).
-`space_sync.py` commits local work first (findable, pushable), rebases,
-and on conflict preserves everything on a pushed `mac-rescue-<TS>` branch
-with an alert — same self-healing pattern as the box's cos_sync.sh.
+**NEVER use `git stash`, `git pull --rebase`, or `--autostash`.** When an
+autostash pop conflicts, the stash is silently kept and the work is stranded
+invisibly — 10 orphaned stashes accumulated May–Jun 2026 (ENG-2026-0729-009)
+and 29 more blocked briefing delivery for three days (2026-08-03). This step
+itself used to say `pull --rebase --autostash` two lines under that warning.
 
-- `0-personal` syncs with the private git server, team spaces with GitHub
-  (space_sync uses each repo's own origin)
-- A `rescued` outcome is preserved work, not a failure — surface it to the
-  user in the briefing
-- If fetch fails (offline), local work is already committed and syncs later
+One transport does every repo (DIP-0046). It commits local work first —
+findable and pushable, unlike a stash — then merges. It does not rebase:
+per-writer logs are disjoint files, so a merge is a union that cannot
+conflict, and rebase is what stranded 610 commits on a parked branch.
+
+Outcomes, and what each means for the briefing:
+
+| | |
+|---|---|
+| `clean` | nothing to say |
+| `offline` | transient, self-clearing — local work is committed and goes out later |
+| `blocked` | **surface it**: auth denied, host key untrusted, or remote gone. Never clears on its own |
+| `conflict` | **surface it**: a genuine content conflict, left with markers intact for a human |
+| `skipped` | repo absent from `registry/repositories.yaml`, so no rule applies |
+
+The `rescued` outcome is retired — nothing is discarded to make a sync
+succeed, so there is nothing to rescue.
 
 ---
 

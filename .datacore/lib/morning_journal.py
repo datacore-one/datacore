@@ -10,8 +10,8 @@ two shots because nightshift publishes the journal after its batch, and
 the Oura-gated box chain can push the morning past 08:00. A daily marker
 prevents a second open once it has been shown.
 
-Safe by construction: sync goes through space_sync.py (rescue-branch
-pattern, never stash), and this script itself never writes to the repo.
+Safe by construction: sync goes through the single transport (commit-first,
+never stash, never rebase), and this script itself never writes to the repo.
 """
 import subprocess
 import sys
@@ -32,8 +32,8 @@ def main() -> int:
         return 0
 
     sync = subprocess.run(
-        [sys.executable, str(DATA / ".datacore" / "lib" / "space_sync.py"),
-         "--repo", "0-personal", "--quiet"],
+        [sys.executable, str(DATA / ".datacore" / "lib" / "ledger_transport.py"),
+         "sync", "--repo", "0-personal", "--quiet"],
         capture_output=True, text=True, timeout=300,
     )
     print(sync.stdout.strip())
