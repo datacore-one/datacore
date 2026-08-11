@@ -28,6 +28,7 @@ Usage:
   python3 .datacore/lib/audit_engram_shape.py --json          # machine output
   python3 .datacore/lib/audit_engram_shape.py --resistant     # list offenders
   python3 .datacore/lib/audit_engram_shape.py --voice         # size voice slice
+  python3 .datacore/lib/audit_engram_shape.py --pinned        # pinned-budget simulation
   python3 .datacore/lib/audit_engram_shape.py --domain plur   # filter by prefix
   python3 .datacore/lib/audit_engram_shape.py --strict        # exit 1 over budget
 
@@ -39,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import statistics
 import sys
@@ -48,6 +50,10 @@ from pathlib import Path
 import yaml
 
 PLUR_HOME = Path.home() / ".plur"
+
+# Mirrors inject.ts constants so simulated budget matches production behaviour.
+DEFAULT_MAX_TOKENS = 8000
+PINNED_TOKEN_BUDGET_RATIO = 0.5  # pinned engrams capped at 50 % of maxTokens
 
 ENUM = re.compile(r"\(\d\)")
 SECTION = re.compile(r"\b[A-Z][A-Z /-]{3,}:")
@@ -251,6 +257,104 @@ def voice_slice(rows: list[dict]) -> dict:
     }
 
 
+def estimate_tokens(record: dict) -> int:
+    """Simulate inject.ts estimateTokens: JSON-serialize wire-visible fields, divide by 4.
+
+    Wire-visible = all fields except `associations` (scoring fields such as
+    keyword_match/raw_score/score are added at runtime by inject.ts and are
+    not stored on disk, so they are never present in the raw YAML record).
+    """
+    wire = {k: v for k, v in record.items() if k != "associations"}
+    return math.ceil(len(json.dumps(wire, default=str)) / 4)
+
+
+def estimate_voice_tokens(statement: str) -> int:
+    """Projected cost if injection sent only the statement text (no metadata)."""
+    return math.ceil(len(statement) / 4)
+
+
+def pinned_budget_report(home: Path, domain_filter: str | None) -> dict:
+    """Simulate inject.ts fillTokenBudget's pinned first-pass (read-only).
+
+    Sort pinned engrams by retrieval_strength descending — this is the proxy
+    for injection order because all pinned engrams receive the same 2× score
+    boost in scoreEngram, so RS is the effective tie-breaker when there is no
+    prompt to compute keyword hits against.
+
+    Budget = PINNED_TOKEN_BUDGET_RATIO * DEFAULT_MAX_TOKENS = 4000 tokens.
+    Any engram whose cumulative cost would exceed that cap is evicted.
+
+    Also computes the voice-text delta: how many tokens would be saved if
+    injection serialised each engram as its statement string alone rather than
+    the full JSON wire record (all fields except associations).
+    """
+    all_pinned: list[dict] = []
+    for _origin, path in discover_stores(home):
+        for e in load_store(path):
+            if not e.get("pinned"):
+                continue
+            if e.get("status") != "active":
+                continue
+            if not (e.get("statement") or "").strip():
+                continue
+            domain = e.get("domain") or ""
+            if domain_filter and not domain.startswith(domain_filter):
+                continue
+            all_pinned.append(e)
+
+    all_pinned.sort(
+        key=lambda e: (e.get("activation") or {}).get("retrieval_strength", 0),
+        reverse=True,
+    )
+
+    pinned_budget = math.floor(DEFAULT_MAX_TOKENS * PINNED_TOKEN_BUDGET_RATIO)
+    tokens_used = 0
+    fit: list[dict] = []
+    evicted: list[dict] = []
+
+    for e in all_pinned:
+        stmt = (e.get("statement") or "").strip()
+        wire_cost = estimate_tokens(e)
+        voice_cost = estimate_voice_tokens(stmt)
+        entry = {
+            "id": e.get("id", "?"),
+            "domain": e.get("domain") or "",
+            "retrieval_strength": (e.get("activation") or {}).get("retrieval_strength", 0),
+            "wire_cost": wire_cost,
+            "voice_cost": voice_cost,
+            "statement_preview": stmt[:60],
+        }
+        if tokens_used + wire_cost > DEFAULT_MAX_TOKENS:
+            entry["evict_reason"] = "over_max_tokens"
+            evicted.append(entry)
+        elif tokens_used + wire_cost > pinned_budget:
+            entry["evict_reason"] = "over_pinned_budget"
+            evicted.append(entry)
+        else:
+            fit.append(entry)
+            tokens_used += wire_cost
+
+    total_wire = sum(e["wire_cost"] for e in fit) + sum(e["wire_cost"] for e in evicted)
+    total_voice = sum(e["voice_cost"] for e in fit) + sum(e["voice_cost"] for e in evicted)
+    voice_delta = total_wire - total_voice
+    meta_pct = round(100 * voice_delta / total_wire, 1) if total_wire else 0.0
+
+    return {
+        "pinned_count": len(all_pinned),
+        "budget": pinned_budget,
+        "max_tokens": DEFAULT_MAX_TOKENS,
+        "tokens_used": tokens_used,
+        "fit_count": len(fit),
+        "evicted_count": len(evicted),
+        "total_wire_cost": total_wire,
+        "total_voice_cost": total_voice,
+        "metadata_overhead_pct": meta_pct,
+        "voice_delta": voice_delta,
+        "fit": fit,
+        "evicted": evicted,
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Audit engram statement shape (read-only).")
     ap.add_argument("--home", type=Path, default=PLUR_HOME, help="PLUR home (default ~/.plur)")
@@ -258,6 +362,8 @@ def main() -> int:
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("--resistant", action="store_true", help="list resistant engrams")
     ap.add_argument("--voice", action="store_true", help="size the voice slice")
+    ap.add_argument("--pinned", action="store_true",
+                    help="simulate pinned-budget pass: fit/evicted list and voice-text delta")
     ap.add_argument("--limit", type=int, default=20, help="rows for --resistant (default 20)")
     ap.add_argument("--budget", type=float, default=DEFAULT_BUDGET,
                     help=f"max resistant %% before --strict fails (default {DEFAULT_BUDGET})")
@@ -278,6 +384,7 @@ def main() -> int:
 
     report = summarise(rows)
     voice = voice_slice(rows) if args.voice else None
+    pinned = pinned_budget_report(args.home, args.domain) if args.pinned else None
     offenders = sorted(
         (r for r in rows if r["status"] == "active" and r["resistance"] >= 2),
         key=lambda r: (-r["resistance"], -r["signals"]["words"]),
@@ -287,6 +394,8 @@ def main() -> int:
         payload = {"summary": report, "store_health": health, "warnings": warnings}
         if voice:
             payload["voice"] = voice
+        if pinned is not None:
+            payload["pinned"] = pinned
         if offenders is not None:
             payload["resistant"] = [
                 {k: r[k] for k in ("id", "domain", "type", "resistance", "signals")}
@@ -323,6 +432,37 @@ def main() -> int:
                   f"({voice['share_pct']}% of personal), ~{voice['approx_tokens']} tokens")
             print("  NOTE: domain over-selects. Expect roughly half to be operational")
             print("        statements filed under a voice domain. Human pass required.")
+        if pinned is not None:
+            p = pinned
+            budget_ratio_pct = int(PINNED_TOKEN_BUDGET_RATIO * 100)
+            print()
+            print(f"PINNED SET")
+            print(f"  pinned active            : {p['pinned_count']}")
+            print(f"  budget ({budget_ratio_pct}% of {p['max_tokens']})     "
+                  f": {p['budget']} tokens")
+            print(f"  tokens used              : {p['tokens_used']} tokens "
+                  f"({p['fit_count']} fit / {p['evicted_count']} evicted)")
+            print(f"  total wire cost          : {p['total_wire_cost']} tokens")
+            print(f"  total voice cost         : {p['total_voice_cost']} tokens")
+            print(f"  metadata overhead        : {p['metadata_overhead_pct']}%")
+            print(f"  voice delta (savings)    : {p['voice_delta']} tokens")
+            if p["fit"]:
+                print()
+                print(f"  FIT ({p['fit_count']})")
+                for e in p["fit"]:
+                    rs = f"{e['retrieval_strength']:.2f}" if e["retrieval_strength"] else "  --"
+                    print(f"    {e['id']:26s} {e['domain'][:26]:26s} "
+                          f"rs={rs}  wire={e['wire_cost']:4d}  voice={e['voice_cost']:3d}"
+                          f"  {e['statement_preview']}")
+            if p["evicted"]:
+                print()
+                print(f"  EVICTED ({p['evicted_count']})")
+                for e in p["evicted"]:
+                    rs = f"{e['retrieval_strength']:.2f}" if e["retrieval_strength"] else "  --"
+                    reason = e.get("evict_reason", "")
+                    print(f"    {e['id']:26s} {e['domain'][:26]:26s} "
+                          f"rs={rs}  wire={e['wire_cost']:4d}  voice={e['voice_cost']:3d}"
+                          f"  [{reason}]  {e['statement_preview']}")
         if offenders:
             print()
             print("RESISTANT")
