@@ -150,7 +150,12 @@ jobs:
     artifacts:
       - path: "~/.datacore/state/seq-gap.log"
         check: regex
-        arg: "0 with unpublished events"
+        # BOTH counts, not just the first. This regex was "0 with unpublished
+        # events" alone, which passes a run reporting "0 with unpublished
+        # events, 9 error(s)" — nine logs the detector could not verify at all
+        # because their remote was down. A contract that ignores the error count
+        # certifies exactly what was never checked.
+        arg: "0 with unpublished events, 0 error"
         max_age_hours: 26
 
   - name: mac-actor-presence

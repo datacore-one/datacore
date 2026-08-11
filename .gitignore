@@ -329,3 +329,12 @@ node_modules/
 # machine regenerates its own from the ledger, so committing them would
 # recreate the merge-conflict surface the projection exists to remove.
 *.projected.org
+
+# Agent skill installs — not system content. The root allowlist in
+# .datacore/hooks/pre-commit permits only .datacore/, .github/ and .plur/ at the
+# root, so these were staged by `git add -A`, rejected on every commit, and left
+# the root repo unable to autosave or converge at all (found 2026-08-11 when the
+# DIP-0046 transport started reporting the refusal instead of failing later as a
+# confusing merge error). Ignored rather than deleted: the files stay on disk.
+.agents/
+skills-lock.json

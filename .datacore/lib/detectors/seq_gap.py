@@ -91,8 +91,19 @@ def scan_space(space: Path, *, fetch: bool = False) -> list[dict]:
     events_dir = space / ".datacore" / "events"
     if not events_dir.is_dir():
         return []
+    # A FAILED FETCH IS NOT A CLEAN FETCH. The return code used to be discarded,
+    # so when the remote was unreachable this fell back to the stale
+    # remote-tracking ref, found it equal to local, and reported "all published"
+    # — the detector announcing that work was safely replicated at the exact
+    # moment it could not check. Observed live on 2026-08-11: the Gitea host's
+    # disk failed, four spaces became unpushable, and this printed
+    # "23 log(s), 0 with unpublished events, 0 error(s)".
+    #
+    # "I could not verify" is its own answer, and it is not "fine".
+    stale = False
     if fetch:
-        git(space, "fetch", "-q", "--prune")
+        rc_fetch, _ = git(space, "fetch", "-q", "--prune")
+        stale = rc_fetch != 0
 
     db = default_branch(space)
     rows = []
@@ -100,6 +111,13 @@ def scan_space(space: Path, *, fetch: bool = False) -> list[dict]:
         actor = log.stem
         rel = log.relative_to(space).as_posix()
         local = head_seq(log.read_text(errors="replace"))
+
+        if stale:
+            rows.append({"space": space.name, "actor": actor, "local_seq": local,
+                         "remote_seq": None, "gap": None,
+                         "error": "remote unreachable — comparison would use a "
+                                  "stale ref, cannot verify"})
+            continue
 
         rc, out = git(space, "show", f"origin/{db}:{rel}")
         if rc != 0:

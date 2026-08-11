@@ -135,3 +135,106 @@ def test_sync_repo_maps_blocked_distinctly(repo_pair: Path, monkeypatch, capsys)
     monkeypatch.setattr(lt, "converge",
                         lambda s: lt.Result(False, "autosave refused by pre-commit hook", {}))
     assert sync_repo(repo_pair, quiet=True) == "blocked"
+
+
+def test_autosave_never_commits_a_submodule_pointer(repo_pair: Path, tmp_path: Path):
+    """A pointer bump is a deliberate act, never a side effect of syncing.
+
+    `git add -A` stages a changed gitlink, so without this an unattended
+    converge would move `.datacore/dips` to whatever commit happened to be
+    checked out locally — publishing a DIP revision nobody chose to publish.
+    """
+    sub_origin = tmp_path / "sub.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(sub_origin)], check=True)
+    seed = tmp_path / "subseed"
+    subprocess.run(["git", "clone", "-q", str(sub_origin), str(seed)], check=True)
+    git(seed, "config", "user.email", "t@t"); git(seed, "config", "user.name", "t")
+    (seed / "a.txt").write_text("one\n")
+    git(seed, "add", "-A"); git(seed, "commit", "-qm", "one")
+    git(seed, "push", "-q", "origin", "HEAD:refs/heads/main")
+
+    subprocess.run(["git", "-C", str(repo_pair), "-c", "protocol.file.allow=always",
+                    "submodule", "add", "-q", str(sub_origin), "sub"],
+                   capture_output=True, text=True)
+    git(repo_pair, "commit", "-qm", "add submodule")
+    before = git(repo_pair, "rev-parse", "HEAD:sub").stdout.strip()
+
+    # Move the submodule's checkout — the pointer is now dirty.
+    sub = repo_pair / "sub"
+    (sub / "a.txt").write_text("two\n")
+    git(sub, "config", "user.email", "t@t"); git(sub, "config", "user.name", "t")
+    git(sub, "add", "-A"); git(sub, "commit", "-qm", "two")
+
+    converge(repo_pair)
+
+    assert git(repo_pair, "rev-parse", "HEAD:sub").stdout.strip() == before
+    # Preserved, not discarded: still visible as a working-tree change.
+    assert "sub" in git(repo_pair, "status", "--porcelain").stdout
+
+
+def test_seq_gap_reports_unverifiable_when_fetch_fails(tmp_path: Path, monkeypatch):
+    """A failed fetch must not read as 'all published' (DIP-0046 A1).
+
+    The fetch return code was discarded, so an unreachable remote fell back to
+    the stale remote-tracking ref, found it equal to local, and reported
+    everything safely replicated — at the exact moment it could not check.
+    Observed live 2026-08-11 when the Gitea host's disk failed.
+    """
+    import sys as _sys
+    _sys.path.insert(0, str(LIB / "detectors"))
+    import seq_gap
+
+    space = tmp_path / "1-thing"
+    (space / ".datacore" / "events").mkdir(parents=True)
+    (space / ".datacore" / "events" / "mac.jsonl").write_text('{"seq":7}\n')
+
+    # Fetch fails; every other git call would otherwise succeed.
+    calls = {"fetch": 0}
+
+    def fake_git(repo, *args):
+        if args and args[0] == "fetch":
+            calls["fetch"] += 1
+            return 128, "fatal: Could not read from remote repository."
+        return 0, ""
+
+    monkeypatch.setattr(seq_gap, "git", fake_git)
+    rows = seq_gap.scan_space(space, fetch=True)
+
+    assert calls["fetch"] == 1
+    assert rows and all(r["error"] for r in rows), "a failed fetch must mark rows unverifiable"
+    assert all(r["gap"] is None for r in rows), "must not claim a gap of zero"
+    assert "unreachable" in rows[0]["error"]
+
+
+def test_submodule_only_change_still_converges(repo_pair: Path, tmp_path: Path):
+    """A repo dirty ONLY in a submodule must still sync.
+
+    Unstaging the submodule can empty the index, and `git commit` then exits
+    non-zero for "nothing to commit". Treating that as a refused autosave
+    aborted the converge, so such a repo could never sync again. Observed on
+    nightshift: 2 ahead, 7 behind, dirty only in .datacore/dips.
+    """
+    sub_origin = tmp_path / "sub2.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(sub_origin)], check=True)
+    seed = tmp_path / "sub2seed"
+    subprocess.run(["git", "clone", "-q", str(sub_origin), str(seed)], check=True)
+    git(seed, "config", "user.email", "t@t"); git(seed, "config", "user.name", "t")
+    (seed / "a.txt").write_text("one\n")
+    git(seed, "add", "-A"); git(seed, "commit", "-qm", "one")
+    git(seed, "push", "-q", "origin", "HEAD:refs/heads/main")
+
+    subprocess.run(["git", "-C", str(repo_pair), "-c", "protocol.file.allow=always",
+                    "submodule", "add", "-q", str(sub_origin), "sub"],
+                   capture_output=True, text=True)
+    git(repo_pair, "commit", "-qm", "add submodule")
+    before = git(repo_pair, "rev-parse", "HEAD:sub").stdout.strip()
+
+    sub = repo_pair / "sub"
+    (sub / "a.txt").write_text("two\n")
+    git(sub, "config", "user.email", "t@t"); git(sub, "config", "user.name", "t")
+    git(sub, "add", "-A"); git(sub, "commit", "-qm", "two")
+
+    res = converge(repo_pair)
+
+    assert res.ok, f"submodule-only dirt must not block convergence: {res.reason}"
+    assert git(repo_pair, "rev-parse", "HEAD:sub").stdout.strip() == before

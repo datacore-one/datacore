@@ -108,11 +108,49 @@ on the root repo — two lines above its own warning never to do that. Replaced
 with `converge --space .`; the root repo is in the registry, so it was always
 eligible.
 
-**Still duplicated, measured not assumed:** `cos_sync.sh` exists twice
-BYTE-IDENTICAL (`lib/` and `modules/chief-of-staff/server/lib/`, 80 lines each)
-and routes through none of this — it is the original DIP-0046 motivation, still
-live on winston's cron. `claim.py` (266 L) and `02-mirror-sync.sh` (551 L) are
-also byte-identical pairs. That is C5, and it needs a winston deploy.
+**C5 — measured, and one earlier claim here was wrong.**
+
+`claim.py`, `01-droplet-setup.sh` and `02-mirror-sync.sh` each existed twice,
+tracked, byte-identical, all three from one commit ("snapshot: server drift
+2026-07-12"). Deleted — 1,137 lines. `claim.py` was the one that mattered: E3
+added the commit gate to `lib/claim.py`, leaving the root copy 33 lines stale
+and still carrying the ungated `git add -A`. A byte-identical duplicate is a
+latent divergence; a DIVERGED duplicate of a safety gate is a trap.
+
+**Correction:** this plan previously said `cos_sync.sh` "exists twice
+BYTE-IDENTICAL" in version control. It does not. The canonical copy lives in the
+PRIVATE chief-of-staff module (`server/lib/`), and `server/deploy.sh` rsyncs it
+to the box; the copy under `.datacore/lib/` is **gitignored and untracked**
+(`.gitignore:309`) because this repo is public and those files must never be
+tracked here. Two files on disk, one under version control — so there is no
+git-level drift risk, which is what "duplicated" was claiming. The DIP's
+"`cos_sync.sh` ×2 paths" line overstates this the same way and should be
+amended.
+
+**`cos_sync.sh` — MIGRATED AND DEPLOYED.** The last writer syncing by `rebase` +
+rescue-branch + `reset --hard` now delegates to `converge`. Deployed to winston
+via the module's own rsync path and verified on a live run: 5 GitHub spaces
+`synced clean`, 4 Gitea spaces `offline` (log only, no alert — the host's disk
+had failed). Kept locally because the transport has no opinion on either: the
+autosave commit runs before converge so Winston's `Co-Authored-By` trailer
+survives, and alerts stay deduped per space per day.
+
+**What the old path cost, measured on the box:** 76 `cos-rescue-*` branches, 3
+still carrying unmerged commits. One is from today at 17:30 and holds **three
+ledger events** — `item.claim`, `item.release` (error: "Failed to authenticate:
+OAuth"), `item.claim` — that were `reset --hard` out of the tree. Both chains
+then continued independently from seq 76, so an **append-only log forked**: the
+surviving log has 83 events, the rescue branch 80, and none of the three hashes
+appear in the survivor.
+
+They are not recoverable by appending — their `prev` hashes point into the
+abandoned fork — and their content is superseded failure records, so the branch
+was pushed to origin for preservation rather than merged. Both chains verify OK
+(winston 204 events, mac 206; the difference is ordinary convergence lag).
+
+That a hard reset could fork an append-only log is the strongest single
+argument for this track, and it is now unreachable: nothing discards to make a
+sync succeed, so nothing needs rescuing.
 ### C3b. Migrate module hooks — **measured: near-empty**
 
 Classified all 11 hooks that reference org files: **10 are readers only**
