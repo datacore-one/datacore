@@ -149,12 +149,39 @@ plur-claw (manual ssh) — three different deploy mechanisms.
 **Verify:** unset on each machine in turn → red naming that machine. Rev 1 said
 "3 machines" and would have left two silently unguarded.
 
-### D5. Gitea `pre-receive` *(needs D3)* — **log-only first, then enforce**
-Reads `members.yaml`; no `fold.py` on the server.
-Staged: run in report-only mode until it has been silent for a week against real
-pushes, *then* enforce. `0-personal` is the operator's own daily space and the
-rejection is unbypassable from the client — a wrong rule locks them out of their
-own notes. Rehearse on a throwaway repo first.
+### D1/D2 replacement. `members.yaml` — **DONE**
+Written for all 9 space repos from **verified** collaborator access, not from
+observed writers (history is not intent) and not from `ledger_actors` (that says
+which actors run on a MACHINE, a different question). The GitHub/Gitea split was
+checked against `git remote get-url` per repo rather than generalised from one:
+github = 1-datafund, 2-datacore, 3-fds, 5-plur, 8-firm; gitea = 0-personal,
+4-forge, 6-meridian, 7-megaphone (ENG-2026-08-11-074 — an earlier session got
+burned assuming uniform hosting). `genesis` is a member everywhere: it wrote each
+space's initial import and would otherwise be unattributable.
+
+### D5. Gitea `pre-receive` — **written + rehearsed, NOT deployed**
+Reads `members.yaml`; no `fold.py` on the server. Enforces two invariants:
+membership, and **single-writer log ownership** — the latter is load-bearing,
+because disjoint per-writer files are the entire reason a merge is a union that
+cannot conflict.
+
+Rehearsed against a real bare repo (`tests/test_gitea_pre_receive.py`, 8 cases).
+Two bugs found by rehearsing rather than asserting:
+
+  **A global `core.hooksPath` silently disables per-repo server-side hooks.** The
+  hook was installed, executable and correct, and never ran. Every "is the hook
+  present" check reads green through this — the same check-strength lesson as E1,
+  found again in a new place.
+
+  **Enforce mode rejected a space with no `members.yaml`.** The comment said
+  "report, never reject"; the code appended to `violations`. That is a lockout of
+  `0-personal` — unbypassable from the client — shipped as a security control.
+
+**Blocked:** `ssh blackpi` fails host-key verification from the Mac, and
+accepting a host key is the operator's trust decision. Procedure, including
+Gitea's `custom_hooks/` requirement (Gitea overwrites `hooks/pre-receive` on
+upgrade), is in `.datacore/hooks/DEPLOY-gitea.md`. Report-only first; a week of
+silence before `DATACORE_ENFORCE=1`.
 
 ### D6. GitHub Rulesets + `bypass_actors` — **NEW**
 Rev 1 had no task for this at all, leaving **5 of 9 spaces** (1-datafund,
