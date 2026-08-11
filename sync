@@ -202,7 +202,44 @@ for line in sys.stdin:
                 return 1
             fi
         fi
-        git -C "$repo" push 2>/dev/null || echo "  (no remote or error)"
+        # Safety check 4: name the push failure. This was
+        # `push 2>/dev/null || echo "(no remote or error)"`, which sent the
+        # only useful text to /dev/null and printed one message for four
+        # unrelated conditions — no remote, a rejected key, a non-fast-forward,
+        # and a ruleset refusal all read identically, and three of them need
+        # different actions. The ssh config's own comment records this line
+        # failing silently "after every reboot".
+        local push_out push_rc
+        push_out=$(git -C "$repo" push 2>&1); push_rc=$?
+        if [ $push_rc -ne 0 ]; then
+            case "$push_out" in
+                # Git does not print "Permission denied" every time. On repeated
+                # failures within one run it drops that line and leaves only the
+                # generic tail, so matching solely on it classified the first
+                # blocked repo correctly and the next three as unknown — same
+                # cause, two different alerts. Match the tail as well.
+                *"Permission denied"*|*"Authentication failed"*|\
+                *"correct access rights"*|*"Could not read from remote repository"*)
+                    sync_alert "BLOCKED $name — key rejected by remote (check the key, or a VPN/exit node)" ;;
+                *"Host key verification failed"*)
+                    sync_alert "BLOCKED $name — remote host key not trusted" ;;
+                # Ordering is load-bearing, most specific first — "fetch first"
+                # is the actionable answer and must win.
+                *"non-fast-forward"*|*"fetch first"*)
+                    echo "  behind remote — run './sync pull' first" ;;
+                # NOT a bare *protected*: this repo's own pre-push hook prints
+                # "not a protected public repo — policy check skipped" on every
+                # push, so that pattern matched the hook's banner and reported
+                # "ruleset blocked" for two repos that were merely behind. A
+                # classifier that matches its own tooling's output is worse than
+                # no classifier: it is confidently wrong.
+                *GH013*|*"rule violations"*|*"protected branch"*)
+                    sync_alert "REFUSED $name — repository ruleset blocked this push (force-push or deletion?)" ;;
+                *"does not appear to be a git repository"*|*"No configured push destination"*)
+                    echo "  (no remote configured)" ;;
+                *) sync_alert "PUSH FAILED $name — $(echo "$push_out" | tail -2 | head -1)" ;;
+            esac
+        fi
     elif [ "$ACTION" = "status" ]; then
         echo "Status: $name [$current_branch]"
         warn_branch
