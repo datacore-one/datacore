@@ -119,8 +119,47 @@ resolved by the decision pipeline, not by this cadence).
    EOF
    ```
 
-5. **Commit** the new sprint YAML in the enterprise repo with message
-   `sprint-rollover: draft <sprint_id> (planning) + GO decision queued`.
+5. **Open a PR — never commit to `main` directly.**
+
+   This step used to say "commit", and with `main` checked out that is what
+   happened: five sprint rollovers went straight onto `main` with no PR and no
+   review. On 2026-08-10 one of them reset the deployed server, because `main`
+   still carried a deploy trigger and the box does `git reset --hard origin/main`
+   — a planning artefact silently reverted two shipped fixes.
+
+   Branch protection now backs this up (it did not on 2026-08-10 — the org was
+   on a free plan then, which is how the incident happened). As of 2026-08-11
+   the plur-ai org is on the **team** plan and both branches are gated:
+
+   - `main` — classic protection: PR + 1 approval + 10 status checks, **no
+     bypass for anyone**.
+   - `development` — ruleset "development: non-admins open PRs": a PR is
+     required, **repository admins bypass entirely**. Humans keep pushing and
+     merging here freely; that is deliberate, it is where they develop.
+
+   `miles-on-nightshift` holds `maintain`, not admin, so it bypasses neither.
+   A direct push is rejected by GitHub, not merely discouraged — verified by
+   attempting one: `GH013: Repository rule violations found`. Keep following
+   this template anyway; a rejected push still costs a cycle, and the PR is
+   the deliverable.
+
+   ```bash
+   cd "$ENTERPRISE"
+   BR="sprint/rollover-<sprint_id>"
+   git fetch -q origin
+   # Branch from development — main is the released record, not the working branch.
+   git checkout -q -B "$BR" origin/development
+   git add sprints/
+   git commit -q -m "chore(sprint): draft <sprint_id> (planning) + GO decision queued"
+   git push -q -u origin "$BR"
+   gh pr create --base development --head "$BR" \
+     --title "chore(sprint): draft <sprint_id> (planning)" \
+     --body "Automated sprint rollover. Planning artefact only — no product code.
+   Drafted by the nightshift agent; activation still requires the principal's GO."
+   ```
+
+   Leave the PR **open**. Do not merge it — an agent opening a PR is the point;
+   merging it would put the review back where it was.
 
 ## Output
 
@@ -137,6 +176,12 @@ One of:
 
 ## Hard rules
 
+- **NEVER commit or push to `main` or `development`.** Branch from
+  `origin/development`, push the branch, open a PR against `development`, leave
+  it open. Both are gated against this agent as of 2026-08-11 (enterprise#429),
+  so a direct push is rejected — this rule tells you why, the platform enforces
+  it. A push that unexpectedly *succeeds* means you are running as the wrong
+  account: stop and report it.
 - **NEVER set `status: active`** — only the principal's GO (or the decision
   pipeline's auto-default resolution) activates a sprint.
 - Never clobber `decisions_pending` — read-merge-write, dedupe on decision id.

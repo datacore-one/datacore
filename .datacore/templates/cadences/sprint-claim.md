@@ -69,12 +69,35 @@ Per `~/Data/docs/superpowers/specs/2026-05-07-plur-enterprise-sprint-execution-d
 
 5. **Open a branch + work in the implementation repo**:
    - For `ref: github:plur-ai/<repo>#<n>` → clone or cd to that repo
-   - Create branch: `feat/<sprint_id>-<item_id>-<short>`
-   - Implement, test (`pnpm test` or per-package equivalent)
-   - Commit, push, open PR with `Sprint: <sprint_id>, item: <item_id>` in body
+   - **Branch from `origin/development`, and target it with the PR.** In
+     `plur-ai/enterprise`, `development` is the integration branch and it
+     auto-deploys to plur.datafund.io; `main` is the released record. Both are
+     gated against you — `main` by classic protection (PR + 1 approval + status
+     checks, no bypass), `development` by a ruleset that requires a PR from
+     everyone except repository admins. You are `maintain`, not admin.
+     `gh pr create` defaults to the repo's default branch — which is still
+     `main` — so the base is **not** optional, you must pass it:
+     ```bash
+     git fetch -q origin
+     git checkout -q -B "feat/<sprint_id>-<item_id>-<short>" origin/development
+     # …implement, test…
+     git push -q -u origin "feat/<sprint_id>-<item_id>-<short>"
+     gh pr create --base development \
+       --title "<type>(<scope>): <what changed>" \
+       --body "Sprint: <sprint_id>, item: <item_id>
+     Closes #<n>"
+     ```
+   - Implement, test (`pnpm test` or per-package equivalent) **before** pushing
+     — a merge to `development` is a deployment to the server the team uses.
+     See the enterprise repo's CLAUDE.md § "Shipping to plur.datafund.io".
+   - Never `git push origin main` / `git push origin development`. Both reject
+     a direct push from this account (enterprise#429). If one ever succeeds,
+     stop and report it — it means the run is authenticated as an admin
+     account rather than `miles-on-nightshift`, and the gate was bypassed
+     rather than passed.
 
 6. **HITL gate check** before any of:
-   - merge to main
+   - merge of any PR (to `development` or `main`) — humans merge, you don't
    - `npm publish`
    - schema migration
    - production deploy

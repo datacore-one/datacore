@@ -112,12 +112,20 @@ If initially marked "unknown", determine complexity now. If ANY criterion is "co
    If tests fail → **switch to complex path** (propose instead of fix).
 
 4. **Open PR**:
+
+   Check the base first — `gh pr create` defaults to the repo's *default*
+   branch, which is not always the branch changes are supposed to land on. If
+   the repo has a separate integration branch, branch from it and pass
+   `--base <that branch>`. In `plur-ai/enterprise` that branch is
+   `development`; `main` there is the released record and is protected.
+
    ```bash
    git add -A
    git commit -m "Fix #<number>: <brief description>"
    git push -u origin github-agent/issue-<number>
    gh pr create \
      --repo <owner/repo> \
+     --base <integration branch, e.g. development> \
      --title "Fix #<number>: <brief description>" \
      --body "Automated fix for #<number>.
 

@@ -23,6 +23,10 @@ Only touches repos already on their default branch. A repo on a feature branch
 is either legitimate work-in-flight or a stranding case, and neither should be
 resolved by a sweep — that needs a human decision.
 
+Also refuses any branch with a review gate on it. This sweep lands work nobody
+reviewed, so a branch that only changes through a reviewed PR is out of bounds
+by definition — see review_gate(), and af1e8d9 for what happens without it.
+
 Dry-run by default. Pass --execute to actually commit and push.
 
 Sync is bidirectional: --pull also rebases each default-branch repo onto origin
@@ -40,6 +44,7 @@ cron or timer touching git, which is why Tris accumulated 53 uncommitted files
 over two months and nobody ever saw his research.
 """
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -70,6 +75,118 @@ def git_raw(repo: Path, *args: str) -> str:
 def default_branch(repo: Path) -> str:
     ref = git(repo, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD')
     return ref.split('/', 1)[1] if ref.startswith('origin/') else 'main'
+
+
+def github_slug(repo: Path) -> str:
+    """Return 'owner/name' if origin is on github.com, else ''."""
+    url = git(repo, 'remote', 'get-url', 'origin')
+    for prefix in ('git@github.com:', 'https://github.com/', 'ssh://git@github.com/'):
+        if url.startswith(prefix):
+            return url[len(prefix):].removesuffix('.git').strip('/')
+    return ''
+
+
+def review_gate(repo: Path, branch: str) -> str:
+    """Return a reason string if `branch` is review-gated, else ''.
+
+    A blind sweep must never land an unreviewed commit on a branch a human
+    agreed would only change through a reviewed PR. On 2026-08-10 this script
+    committed a file straight onto plur-ai/enterprise `main` (af1e8d9) — that
+    repo was in scope only because it sits under `*/2-projects/*`, and `main`
+    was its default branch, so both guards above waved it through.
+
+    Asked of the platform rather than a hardcoded list, because a list of
+    "repos with a review gate" is wrong the day someone protects a new one.
+
+    Refuses only when the gate admits NOBODY — PRs required and no bypass
+    allowance — because then a direct push cannot land under any identity and
+    committing locally just strands the work. When a bypass list exists the
+    remote is the better judge than we are: it knows which identity is actually
+    pushing, and this process does not. `gh` here may be authenticated as a
+    different account than the SSH key that performs the push (on nightshift it
+    is: `gh` is plur9, the key is miles-on-nightshift), so any actor check we
+    did locally would be guessing. Let the push run — a permitted identity
+    lands it, a gated one is rejected and reported as PUSH FAILED. Either way
+    nothing unreviewed reaches a branch that forbids it.
+
+    An inconclusive answer also proceeds: reading protection needs admin, and
+    the datacore-one org is on a plan where protection cannot exist at all
+    (403 "Upgrade to GitHub Pro" is the answer "not gated", not an unknown).
+    Non-GitHub remotes have no gate to consult.
+    """
+    slug = github_slug(repo)
+    if not slug:
+        return ''
+
+    for describe in (_classic_gate, _ruleset_gate):
+        reason = describe(repo, slug, branch)
+        if reason:
+            return reason
+    return ''
+
+
+def _gh_json(repo: Path, path: str):
+    """GET a gh api path, or None if it failed or was not JSON."""
+    r = subprocess.run(['gh', 'api', path], cwd=repo,
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    try:
+        return json.loads(r.stdout)
+    except ValueError:
+        return None
+
+
+def _classic_gate(repo: Path, slug: str, branch: str) -> str:
+    """Classic branch protection. Invisible to the rulesets endpoint."""
+    prot = _gh_json(repo, f'repos/{slug}/branches/{branch}/protection')
+    if not isinstance(prot, dict):
+        return ''
+
+    reviews = prot.get('required_pull_request_reviews')
+    if not reviews:
+        return ''
+
+    allowances = reviews.get('bypass_pull_request_allowances') or {}
+    if any(allowances.get(k) for k in ('users', 'teams', 'apps')):
+        return ''
+
+    return (f'{slug}@{branch} requires a PR (branch protection) and allows no '
+            'bypass — a sweep cannot land here; open a PR')
+
+
+def _ruleset_gate(repo: Path, slug: str, branch: str) -> str:
+    """Repository rulesets. Invisible to the branch-protection endpoint.
+
+    The two mechanisms are reported by two different endpoints and neither
+    mentions the other: on plur-ai/enterprise, `main` (classic) reads as `[]`
+    here, and `development` (ruleset) reads as 404 "Branch not protected"
+    there. Consulting one and concluding "unguarded" is how a sweep talks
+    itself into a push it should not make.
+    """
+    rules = _gh_json(repo, f'repos/{slug}/rules/branches/{branch}')
+    if not isinstance(rules, list):
+        return ''
+
+    ids = {r.get('ruleset_id') for r in rules
+           if isinstance(r, dict) and r.get('type') == 'pull_request'}
+    if not ids:
+        return ''
+
+    # This endpoint reports a rule whether or not the caller bypasses it, so
+    # the bypass list has to be read off each ruleset directly. Same policy as
+    # the classic path: any bypass at all means the remote is the better judge
+    # of whether THIS push is allowed, because it knows the pushing identity
+    # and we do not.
+    for rid in ids:
+        rs = _gh_json(repo, f'repos/{slug}/rulesets/{rid}')
+        if not isinstance(rs, dict):
+            return ''
+        if rs.get('bypass_actors'):
+            return ''
+
+    return (f'{slug}@{branch} requires a PR (repository ruleset) and allows no '
+            'bypass — a sweep cannot land here; open a PR')
 
 
 def is_junk(repo: Path, path: str, tracked: set) -> str:
@@ -121,6 +238,11 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
         return result
     if branch != default:
         result['status'] = f'SKIP — on {branch}, not {default} (needs a decision)'
+        return result
+
+    gated = review_gate(repo, default)
+    if gated:
+        result['status'] = f'SKIP — {gated}'
         return result
 
     # Sync is bidirectional. Pushing agent work out is only half of it — an agent
