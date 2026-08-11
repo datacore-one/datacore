@@ -180,7 +180,30 @@ def _converge_locked(space: Path) -> Result:
     autosaved = bool(out.strip())
     if autosaved:
         _git(space, "add", "-A")
-        crc, cout, cerr = _git(space, "commit", "-m", "ledger: autosave before converge")
+        # NEVER autosave a submodule pointer. `add -A` stages a changed
+        # gitlink, so an unattended converge would silently move `.datacore/dips`
+        # to whatever commit happens to be checked out locally — publishing a
+        # DIP revision nobody chose to publish, as a side effect of syncing
+        # something else. Bumping a pointer is a deliberate act; unstage them and
+        # leave the change in the working tree where it stays visible.
+        rc, subs, _ = _git(space, "submodule", "--quiet", "foreach",
+                           "echo $sm_path")
+        for sub in (subs or "").split():
+            _git(space, "restore", "--staged", "--", sub)
+
+        # Unstaging the submodules may have emptied the index. `git commit` then
+        # exits non-zero for "nothing to commit", which the check below would
+        # report as a REFUSED autosave and abort the whole converge — so a repo
+        # whose only change is a submodule pointer could never sync again.
+        # Observed on nightshift: 2 commits ahead, 7 behind, dirty only in
+        # `.datacore/dips`, unable to converge at all.
+        rc_staged, _, _ = _git(space, "diff", "--cached", "--quiet")
+        if rc_staged == 0:                      # 0 = no staged changes remain
+            autosaved = False
+            crc, cout, cerr = 0, "", ""
+        else:
+            crc, cout, cerr = _git(space, "commit",
+                                   "-m", "ledger: autosave before converge")
         if crc != 0:
             # A REFUSED AUTOSAVE MUST STOP THE CONVERGE. This return used to be
             # absent: a pre-commit hook rejected the commit, `add -A` had already
