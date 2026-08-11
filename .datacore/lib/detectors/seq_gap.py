@@ -36,6 +36,7 @@ Exit 0 when every actor is fully published, 1 when any gap exists, 2 on error.
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import subprocess
 import sys
@@ -126,12 +127,23 @@ def scan_space(space: Path, *, fetch: bool = False) -> list[dict]:
     return rows
 
 
+def _default_root() -> Path:
+    """Root from DATACORE_ROOT, then ~/Data — NEVER from this file's location.
+
+    A second checkout exists for scheduled runs (~/.datacore/v2-runner). A
+    location-derived root would make this scan THAT tree, which holds zero
+    spaces, and report "0 findings" — a false green, and the same defect
+    seq_gap shipped once already as a parents[] off-by-one.
+    """
+    return Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     # parents: detectors -> lib -> .datacore -> <data root>. Off-by-one here
     # silently scans nothing and reports "0 logs, 0 gaps", which is the
     # detector's own version of a green light meaning nothing.
-    ap.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[3])
+    ap.add_argument("--root", type=Path, default=_default_root())
     ap.add_argument("--space", help="limit to one space by directory name")
     ap.add_argument("--fetch", action="store_true", help="fetch before comparing")
     ap.add_argument("--json", action="store_true")
@@ -139,6 +151,14 @@ def main() -> int:
 
     spaces = [d for d in sorted(args.root.glob("[0-9]-*"))
               if (d / ".git").exists() and (not args.space or d.name == args.space)]
+
+    # SCANNING NOTHING IS NOT A PASS — this detector already shipped that bug
+    # once, as a parents[] off-by-one that reported "0 logs, 0 gaps" while
+    # examining an empty directory. Pointed at the wrong root it would do it
+    # again, silently, and the contract above it would stay green.
+    if not spaces:
+        print(f"ERROR: no space repos under {args.root} — refusing to report clean")
+        return 2
 
     rows: list[dict] = []
     for sp in spaces:

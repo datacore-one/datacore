@@ -34,6 +34,7 @@ Exit 0 all present, 1 on any missing/stalled, 2 on error.
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import sys
 from pathlib import Path
@@ -69,9 +70,20 @@ def observed(root: Path) -> dict[str, dict]:
     return out
 
 
+def _default_root() -> Path:
+    """Root from DATACORE_ROOT, then ~/Data — NEVER from this file's location.
+
+    A second checkout exists for scheduled runs (~/.datacore/v2-runner). A
+    location-derived root would make this scan THAT tree, which holds zero
+    spaces, and report "0 findings" — a false green, and the same defect
+    seq_gap shipped once already as a parents[] off-by-one.
+    """
+    return Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[3])
+    ap.add_argument("--root", type=Path, default=_default_root())
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
@@ -113,6 +125,14 @@ def main() -> int:
                          "spaces": (here or {}).get("spaces", {})})
 
     bad = [r for r in rows if r["status"] in ("missing", "stalled")]
+
+    # SCANNING NOTHING IS NOT A PASS. An empty roster means the registry was not
+    # found — usually a wrong root — and "0 rostered actors, 0 failing" reads as
+    # perfect health in every summary above this one.
+    if not rows:
+        print(f"ERROR: no rostered actors resolved under {args.root} — "
+              "refusing to report clean")
+        return 2
 
     if args.json:
         print(json.dumps({"rows": rows, "failures": len(bad),

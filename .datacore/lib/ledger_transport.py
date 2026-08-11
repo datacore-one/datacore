@@ -133,7 +133,11 @@ def _fetch_reason(err: str) -> str:
     """
     e = err.lower()
     if "permission denied" in e or "authentication failed" in e:
-        return "auth denied (key rejected by remote)"
+        # "check your key OR your route": a VPN or exit node can put a different
+        # host on the far end of the same address, which answers and rejects the
+        # key — identical symptom, completely different fix. Naming only the key
+        # sends the operator to regenerate credentials that were never wrong.
+        return "auth denied (key rejected — check the key, or a VPN/exit node)"
     if "host key verification failed" in e:
         return "host key not trusted"
     if "repository not found" in e or "does not appear to be a git repo" in e:

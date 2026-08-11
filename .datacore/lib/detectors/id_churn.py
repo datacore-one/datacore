@@ -33,6 +33,7 @@ Exit 0 clean, 1 on duplicates or correspondence loss, 2 on error.
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import re
 from collections import Counter
@@ -82,13 +83,31 @@ def scan_space(space: Path) -> dict | None:
             "examples": sorted(dupes)[:3], "orphaned_ledger_ids": orphaned}
 
 
+def _default_root() -> Path:
+    """Root from DATACORE_ROOT, then ~/Data — NEVER from this file's location.
+
+    A second checkout exists for scheduled runs (~/.datacore/v2-runner). A
+    location-derived root would make this scan THAT tree, which holds zero
+    spaces, and report "0 findings" — a false green, and the same defect
+    seq_gap shipped once already as a parents[] off-by-one.
+    """
+    return Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[3])
+    ap.add_argument("--root", type=Path, default=_default_root())
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
     spaces = sorted(args.root.glob("[0-9]-*"))
+    # SCANNING NOTHING IS NOT A PASS. Pointed at the wrong root — a second
+    # checkout, a moved file, a bad --root — this finds zero spaces, finds zero
+    # findings in them, and exits 0. Every layer above reads that as healthy.
+    # This detector's own first bug was exactly that shape.
+    if not spaces:
+        print(f"ERROR: no spaces under {args.root} — refusing to report clean")
+        return 2
     findings = [r for r in (scan_space(s) for s in spaces if (s / "org").is_dir()) if r]
 
     if args.json:
