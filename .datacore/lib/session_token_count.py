@@ -102,9 +102,25 @@ def count_session(transcript_path: Path) -> TokenTotals:
     return totals
 
 
+def current_project_transcripts() -> list[Path]:
+    """Return .jsonl files for the current working directory's Claude project."""
+    encoded = str(Path.cwd()).replace('/', '-')
+    proj_dir = PROJECTS_DIR / encoded
+    if proj_dir.exists():
+        return list(proj_dir.glob('*.jsonl'))
+    return []
+
+
 def latest_transcript() -> Path | None:
-    """Return the most recently modified .jsonl across all projects."""
-    candidates = list(PROJECTS_DIR.glob('*/*.jsonl'))
+    """Return the most recently modified .jsonl, preferring the current project.
+
+    Narrows to the current project directory first so concurrent sessions in
+    other projects do not shadow the calling session via mtime comparison.
+    Falls back to all projects only when no current-project transcript exists.
+    """
+    candidates = current_project_transcripts()
+    if not candidates:
+        candidates = list(PROJECTS_DIR.glob('*/*.jsonl'))
     if not candidates:
         return None
     return max(candidates, key=lambda p: p.stat().st_mtime)
