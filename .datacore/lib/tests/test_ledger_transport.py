@@ -238,3 +238,38 @@ def test_submodule_only_change_still_converges(repo_pair: Path, tmp_path: Path):
 
     assert res.ok, f"submodule-only dirt must not block convergence: {res.reason}"
     assert git(repo_pair, "rev-parse", "HEAD:sub").stdout.strip() == before
+
+
+def test_converge_publishes(repo_pair: Path):
+    """Converge must PUSH, not just pull.
+
+    It previously stopped after the merge, making it one-way: every caller —
+    `sync`, `./sync pull`, cos_sync on winston's 15-minute cron — reported
+    "synced clean" from that Result while nothing left the machine. Measured
+    before the fix: 5-plur sat 2 commits ahead of a reachable GitHub remote and
+    nightshift held 4, including a 140-line audit script.
+    """
+    (repo_pair / "work.txt").write_text("published?\n")
+    git(repo_pair, "add", "-A")
+    git(repo_pair, "commit", "-qm", "local work")
+    assert git(repo_pair, "rev-list", "--count", "origin/main..main").stdout.strip() == "1"
+
+    res = converge(repo_pair)
+
+    assert res.ok, res.reason
+    git(repo_pair, "fetch", "-q", "origin")
+    assert git(repo_pair, "rev-list", "--count", "origin/main..main").stdout.strip() == "0"
+
+
+def test_converge_reports_when_it_merged_but_could_not_publish(repo_pair: Path, monkeypatch):
+    """Pulled-but-unpublished is a distinct outcome, never a silent success."""
+    import ledger_transport as lt
+    monkeypatch.setattr(lt, "_push_with_retry",
+                        lambda space, db: lt.Result(False, "push failed", {}))
+    (repo_pair / "work.txt").write_text("x\n")
+    git(repo_pair, "add", "-A"); git(repo_pair, "commit", "-qm", "w")
+
+    res = converge(repo_pair)
+
+    assert not res.ok
+    assert "not published" in res.reason
