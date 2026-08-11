@@ -230,6 +230,36 @@ def _handle_complete(state: LedgerState, event: Event) -> None:
     _note(item, event, "applied")
 
 
+def _handle_update(state: LedgerState, event: Event) -> None:
+    """Merge changed fields into an existing item.
+
+    Only the keys present in the payload are touched, so an update that carries
+    just `scheduled` cannot silently blank a `deadline` it never mentioned —
+    partial updates are the normal case and a whole-payload replace would make
+    every caller responsible for resending fields it does not own.
+
+    A dismissed item stays dismissed: dismiss is terminal by DIP-0034, and an
+    update must not resurrect what a human closed.
+    """
+    item = _get_item_or_orphan(state, event)
+    if item is None or _dismissed(state, event, item):
+        return
+    fields = {k: v for k, v in (event.payload or {}).items() if k != "id"}
+    if not fields:
+        _note(item, event, "no-op (no fields)")
+        return
+    if "state" in fields:
+        item.payload["state"] = fields["state"]
+    for k, v in fields.items():
+        if k == "org" and isinstance(v, dict) and isinstance(item.payload.get("org"), dict):
+            item.payload["org"] = {**item.payload["org"], **v}
+        else:
+            item.payload[k] = v
+    if "title" in fields:
+        item.title = fields["title"]
+    _note(item, event, f"applied ({', '.join(sorted(fields))})")
+
+
 def _handle_verify(state: LedgerState, event: Event) -> None:
     item = _get_item_or_orphan(state, event)
     if item is None or _dismissed(state, event, item):
@@ -289,6 +319,7 @@ _HANDLERS = {
     "item.claim": _handle_claim,
     "item.release": _handle_release,
     "item.complete": _handle_complete,
+    "item.update": _handle_update,
     "item.verify": _handle_verify,
     "item.dismiss": _handle_dismiss,
     "owner.set": _handle_owner_set,

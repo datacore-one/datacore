@@ -27,6 +27,14 @@ EVENT_TYPES = frozenset(
         "item.complete",
         "item.verify",
         "item.dismiss",
+        # item.update carries CHANGED FIELDS for an existing item.
+        # Without it the vocabulary can create an item and close it and
+        # nothing in between, so a task rescheduled in org could never be
+        # reflected: a second item.create on a known id is a no-op by
+        # design. Phase 0 needs this to keep the projection equal to org,
+        # and the target design needs it just as much -- an agent moving a
+        # deadline is a fact, not a re-creation.
+        "item.update",
         "owner.set",
         "spend.record",
         "metric.attest",
