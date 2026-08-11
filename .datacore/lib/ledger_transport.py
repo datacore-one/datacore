@@ -145,7 +145,7 @@ def _fetch_reason(err: str) -> str:
     return "fetch failed (offline?)"
 
 
-def _converge_locked(space: Path) -> Result:
+def _converge_locked(space: Path, *, publish: bool = True) -> Result:
     """converge() with the repo lock ALREADY HELD.
 
     The split is not stylistic. `append()` holds the lock and, on a
@@ -233,7 +233,23 @@ def _converge_locked(space: Path) -> Result:
         return Result(False, "merge conflict — human needed",
                       {"branch": db, "autosaved": autosaved,
                        "detail": err[:400]})
-    return Result(True, "converged", {"branch": db, "autosaved": autosaved})
+    # PUBLISH. Converge previously stopped here, which made it a one-way
+    # operation: it pulled and never pushed. Every caller means both — `sync`,
+    # `./sync pull`, and cos_sync on winston's 15-minute cron all report
+    # "synced clean" from this Result. Measured before the fix: 5-plur sat 2
+    # commits ahead of a reachable GitHub remote, silently, and nightshift held
+    # 4 including a learning-classifier fix and a 140-line audit script.
+    #
+    # `publish=False` only for _push_with_retry, which calls this to resolve a
+    # non-fast-forward and would otherwise recurse into pushing.
+    if not publish:
+        return Result(True, "converged", {"branch": db, "autosaved": autosaved})
+    pr = _push_with_retry(space, db)
+    if not pr.ok:
+        return Result(False, f"converged but not published: {pr.reason}",
+                      {"branch": db, "autosaved": autosaved, **pr.context})
+    return Result(True, "converged", {"branch": db, "autosaved": autosaved,
+                                      "pushed": pr.context.get("attempts", 1)})
 
 
 def _push_with_retry(space: Path, db: str) -> Result:
@@ -249,7 +265,7 @@ def _push_with_retry(space: Path, db: str) -> Result:
             return Result(True, "pushed", {"attempts": attempt})
         low = err.lower()
         if "non-fast-forward" in low or "fetch first" in low or "rejected" in low:
-            c = _converge_locked(space)
+            c = _converge_locked(space, publish=False)
             if not c:
                 return Result(False, "push rejected and converge failed",
                               {"attempt": attempt, "converge": c.reason})
