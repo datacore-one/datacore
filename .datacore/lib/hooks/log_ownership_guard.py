@@ -41,10 +41,28 @@ from pathlib import Path
 
 ACTOR_LOG = re.compile(r"^(?:.*/)?\.datacore/events/([A-Za-z0-9_-]+)\.jsonl$")
 
+# `genesis` is a ROLE, not a machine: it is the import actor, and
+# `ledger_ingest_org.py` appends to it from whichever machine runs the sweep.
+# Refusing that blocks every ordinary import.
+#
+# Worth stating rather than hiding: this is therefore the ONE log the
+# disjoint-writer argument does not cover. If two machines ever ran the ingest
+# sweep concurrently they would both append to genesis.jsonl and could produce
+# exactly the interleaving the per-writer design exists to prevent. Today only
+# the Mac is scheduled for it (mac-ledger-ingest, 07:40). If that ever changes,
+# the importer needs a per-machine log — genesis-<machine>.jsonl — not an
+# exemption here.
+SHARED_ROLE_LOGS = {"genesis"}
+
 
 def actor() -> str:
-    """Same resolution as ledger_cli: $DATACORE_ACTOR, else hostname."""
-    return os.environ.get("DATACORE_ACTOR") or socket.gethostname().split(".")[0]
+    """Same resolution as ledger_cli: $DATACORE_ACTOR, else hostname.
+
+    Lower-cased: this machine's hostname is "Mac" while its log is `mac.jsonl`,
+    so a case-sensitive compare made the guard report mac writing its OWN log.
+    """
+    return (os.environ.get("DATACORE_ACTOR")
+            or socket.gethostname().split(".")[0]).lower()
 
 
 def git(*args: str) -> tuple[int, str]:
@@ -53,8 +71,24 @@ def git(*args: str) -> tuple[int, str]:
 
 
 def changed(rng: str) -> list[str]:
-    rc, out = git("diff", "--name-only", rng)
-    return [l for l in out.splitlines() if l.strip()] if rc == 0 else []
+    """Files touched by LOCALLY AUTHORED commits in this range.
+
+    `--no-merges` is load-bearing. A converge fetches other actors' logs and
+    merges them; the merge commit then shows those logs as "changed" relative
+    to its first parent, so a plain `git diff <range>` reported this machine as
+    writing genesis.jsonl and blocked every ordinary sync. Commits that came
+    from origin are already on origin and so are not in the range at all —
+    what remains, minus merges, is what this machine actually wrote.
+    """
+    rc, out = git("rev-list", "--no-merges", rng)
+    if rc != 0:
+        return []
+    files: list[str] = []
+    for sha in out.split():
+        rc2, names = git("show", "--name-only", "--format=", sha)
+        if rc2 == 0:
+            files.extend(l for l in names.splitlines() if l.strip())
+    return files
 
 
 def members(root: Path) -> list[str]:
@@ -86,7 +120,8 @@ def main(argv: list[str]) -> int:
     for rng in argv:
         for f in changed(rng):
             m = ACTOR_LOG.match(f)
-            if m and m.group(1) != me:
+            if m and m.group(1).lower() != me \
+                    and m.group(1).lower() not in SHARED_ROLE_LOGS:
                 foreign.add(m.group(1))
 
     if not foreign:
