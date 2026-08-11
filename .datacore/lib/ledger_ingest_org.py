@@ -121,14 +121,31 @@ def ensure_ids(space: Path, adapter: Path) -> str:
     return " ".join(touched) or "no org files"
 
 
+def _default_root() -> Path:
+    """Root from DATACORE_ROOT, then ~/Data — NEVER from this file's location.
+
+    Scheduled runs execute from a second checkout (~/.datacore/v2-runner) that
+    holds no spaces. Derived from __file__, this swept zero spaces and printed
+    "imported 0 task(s) across 0 space(s); 0 space(s) failed" — exit 0, contract
+    green, and the org->ledger reconciliation silently not happening. Caught by
+    running it in a cron-like environment instead of from a shell in ~/Data.
+    """
+    import os
+    return Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
+    ap.add_argument("--root", type=Path, default=_default_root())
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     adapter = args.root / ".datacore" / "lib" / "org_workspace_adapter.py"
     spaces = sorted(p for p in args.root.glob("[0-9]-*") if (p / "org").is_dir())
+    # Sweeping nothing is not a successful sweep.
+    if not spaces:
+        print(f"ERROR: no spaces with org/ under {args.root} — refusing to report success")
+        return 2
 
     total_new = 0
     failures = 0
