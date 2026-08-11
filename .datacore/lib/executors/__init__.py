@@ -23,7 +23,7 @@ from .base import (
     register,
     registered_executors,
 )
-from . import api, claude_code, hermes  # noqa: F401 -- import registers each adapter
+from . import api, claude_code, hermes, openclaw  # noqa: F401 -- import registers each adapter
 
 __all__ = [
     "ESTIMATE_CENTS_PER_MILLION_TOKENS",

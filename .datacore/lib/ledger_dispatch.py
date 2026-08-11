@@ -44,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from briefing.actions import act  # noqa: E402
 from ledger.fold import fold  # noqa: E402
 from ledger.log import EventLog, read_events  # noqa: E402
+from executors import get_executor  # noqa: E402
 from ops_markers import AUTH_FAILURE_MARKERS  # noqa: E402
 
 CLAIMABLE = "created"
@@ -112,113 +113,40 @@ def _agent_env() -> dict:
     return {**os.environ, "DATACORE_HEADLESS": "1"}
 
 
-def _find_hermes() -> Path | None:
-    """The Hermes agent's venv python, or None.
-
-    HERMES_PYTHON wins; otherwise this machine's home dirs are searched. No
-    username appears here -- the gateway runs as its own user, which differs
-    per installation.
-    """
-    import os
-
-    override = os.environ.get("HERMES_PYTHON")
-    if override and Path(override).exists():
-        return Path(override)
-    rel = Path(".hermes/hermes-agent/venv/bin/python")
-    candidates = [Path.home() / rel]
-    candidates += sorted(Path("/home").glob("*/" + str(rel))) if Path("/home").is_dir() else []
-    return next((c for c in candidates if c.exists()), None)
-
-
-def detect_runtime() -> tuple[str, list] | tuple[None, None]:
-    """(name, argv_prefix_builder) for this machine's agent runtime.
-
-    The fleet is HETEROGENEOUS on purpose and assuming `claude -p` everywhere
-    was a design error: it made two of five actors look broken when they are
-    simply not Claude machines. Data runs OpenClaw (codex/gpt-5.5) and Tris
-    runs the Hermes agent; neither has Claude Code installed, and neither
-    should need it. An item is executed by whatever the machine actually runs.
-
-    Probed in order of specificity: the specialised runtimes first, so a box
-    that happens to have both does not silently fall back to the generic one.
-    """
-    import shutil
-
-    if shutil.which("openclaw"):
-        # `--agent main` is required: without a target session openclaw exits
-        # with "No target session selected" and does no work.
-        return "openclaw", lambda p: ["openclaw", "agent", "--agent", "main", "--message", p]
-
-    # Discovered, never hardcoded: the Hermes venv lives under the OWNING
-    # user's home, which is not the user this dispatcher runs as, and a literal
-    # path would bake one installation's username into a tracked file.
-    hermes = _find_hermes()
-    if hermes:
-        return "hermes", lambda p: [str(hermes), "-m", "hermes_cli.main", "-z", p, "--yolo"]
-
-    if shutil.which("claude"):
-        # acceptEdits, NOT --dangerously-skip-permissions: the latter is
-        # refused outright when the process is root, and winston runs as root.
-        return "claude", lambda p: ["claude", "-p", "--permission-mode", "acceptEdits",
-                                    "--output-format", "text", p]
-    return None, None
-
-
 def run_task(title: str, route: str, cwd: Path) -> tuple[bool, str]:
     """Execute one item. Returns (ok, detail).
 
-    Reads BOTH streams and checks the auth markers: `claude -p` prints auth
-    failures to stdout with an empty stderr, and a caller that reads only
-    stderr records the failure as the empty string. That exact bug hid a
-    nine-day outage on the CoS box -- see ops_markers.
+    Runs through the executors registry (.datacore/lib/executors) rather than
+    shelling out to a runtime this module picks itself. An earlier version of
+    this file probed for `openclaw`/`hermes`/`claude` binaries by hand, which
+    duplicated an abstraction that already existed AND skipped what it gives
+    you: per-adapter cost accounting, schema contracts, and a `run()` that
+    never raises. Which adapter runs is configuration ($DATACORE_EXECUTOR),
+    not a guess made here -- so a machine with two runtimes installed uses the
+    one its operator chose instead of whichever the probe happened to try first.
     """
     framing = ROUTE_FRAMING.get(route, ROUTE_FRAMING[DEFAULT_ROUTE])
     prompt = f"{framing}\n\nTask: {title}\n\nBe brief. Report what you found."
-    runtime, build_argv = detect_runtime()
-    if runtime is None:
-        return False, "no agent runtime on this machine (looked for openclaw, hermes, claude)"
+
+    import os as _os
+    _os.environ.setdefault("DATACORE_HEADLESS", "1")  # see _agent_env
     try:
-        r = subprocess.run(
-            # Without a permission mode the agent is read-only: it declines
-            # every write and the check then fails in a way that reads as the
-            # agent refusing the task, rather than never having been able to
-            # attempt it.
-            #
-            # NOT --dangerously-skip-permissions, which nightshift's executor
-            # uses. That flag is REFUSED outright when the process is root
-            # ("cannot be used with root/sudo privileges"), and winston's
-            # daemons run as root -- so the box could never execute a single
-            # item. `acceptEdits` is accepted as root and is the narrower
-            # grant anyway: file edits, not blanket bypass.
-            build_argv(prompt),
-            capture_output=True, text=True, timeout=TIMEOUT,
-            stdin=subprocess.DEVNULL, cwd=str(cwd), env=_agent_env(),
-        )
-    except FileNotFoundError:
-        return False, f"{runtime} runtime not executable"
-    except PermissionError as exc:
-        return False, f"could not run claude: {exc}"
-    except subprocess.TimeoutExpired:
-        return False, f"timed out after {TIMEOUT}s"
+        ex = get_executor()
+    except ValueError as exc:               # unknown $DATACORE_EXECUTOR
+        return False, str(exc)
 
-    combined = f"{r.stdout or ''}\n{r.stderr or ''}".strip()
-    marker = next((m for m in AUTH_FAILURE_MARKERS if m in combined.lower()), None)
-    if marker:
-        return False, f"auth rejected ({marker!r}): {combined[:200]}"
-    if r.returncode != 0:
-        return False, f"exited {r.returncode}: {combined[:200] or '(no output)'}"
-    out = (r.stdout or "").strip()
+    res = ex.run(prompt, timeout_s=TIMEOUT)
+    if res.error:
+        return False, f"{ex.name}: {res.error[:250]}"
+
+    out = (res.text or "").strip()
     if not out:
-        return False, "exited 0 but produced no output"
+        return False, f"{ex.name} returned no output"
 
-    # An agent that EXPLAINS why it could not do the task exits 0 and produces
-    # plenty of text. The first version of this function returned True on any
-    # output and recorded two such refusals as DONE -- the same
-    # assert-the-exit-code-not-the-outcome bug this system exists to prevent.
-    # Text is not evidence of work.
-    refusal = next((p for p in REFUSAL_MARKERS if p in out.lower()[:400]), None)
-    if refusal:
-        return False, f"agent did not complete the task ({refusal!r}): {out[:200]}"
+    combined = out.lower()[:400]
+    marker = next((m for m in AUTH_FAILURE_MARKERS if m in combined), None)
+    if marker:
+        return False, f"{ex.name} auth rejected ({marker!r}): {out[:200]}"
     return True, out
 
 
