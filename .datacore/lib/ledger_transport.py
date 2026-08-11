@@ -180,6 +180,16 @@ def _converge_locked(space: Path) -> Result:
     autosaved = bool(out.strip())
     if autosaved:
         _git(space, "add", "-A")
+        # NEVER autosave a submodule pointer. `add -A` stages a changed
+        # gitlink, so an unattended converge would silently move `.datacore/dips`
+        # to whatever commit happens to be checked out locally — publishing a
+        # DIP revision nobody chose to publish, as a side effect of syncing
+        # something else. Bumping a pointer is a deliberate act; unstage them and
+        # leave the change in the working tree where it stays visible.
+        rc, subs, _ = _git(space, "submodule", "--quiet", "foreach",
+                           "echo $sm_path")
+        for sub in (subs or "").split():
+            _git(space, "restore", "--staged", "--", sub)
         crc, cout, cerr = _git(space, "commit", "-m", "ledger: autosave before converge")
         if crc != 0:
             # A REFUSED AUTOSAVE MUST STOP THE CONVERGE. This return used to be
