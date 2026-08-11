@@ -180,6 +180,22 @@ jobs:
         arg: "0 with findings"
         max_age_hours: 26
 
+  # Watches OUR OWN ENFORCEMENT. Observability platforms watch agent behaviour
+  # and not agent configuration: core.hooksPath was unset on three of five
+  # machines, so those actors committed with no hooks at all, indefinitely, and
+  # nothing said so. git clone never copies hooks, which is why per-repo
+  # .git/hooks cannot be the mechanism and a global hooksPath is.
+  - name: mac-config-drift
+    machine: mac
+    schedule: "50 */6 * * *"
+    cmd: "python3 ~/Data/.datacore/lib/detectors/config_drift.py > ~/.datacore/state/config-drift.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/config-drift.log"
+        check: regex
+        arg: "0 with drift, 0 unreachable"
+        max_age_hours: 26
+
   - name: box-ledger-verify
     machine: box
     schedule: "20 7 * * *"
