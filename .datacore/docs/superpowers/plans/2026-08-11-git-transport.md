@@ -1,189 +1,200 @@
-# DIP-0046 Implementation Plan — Git as Ledger Transport
+# DIP-0046 Implementation Plan — Git as Ledger Transport (rev 2)
 
 > Spec: `.datacore/dips/DIP-0046-git-transport.md` (branch `dip/0046-git-transport`)
-> Six tracks. Within a track order is a dependency; across tracks there is none.
-
-**Goal:** git carries only conflict-free payloads; derived state is regenerated;
-facts move through one writer with detectors watching.
+> Revised after four evaluators (critic, cto 0.58, coo, dijkstra 0.74) — **none approved**.
 
 **Global constraints**
 
-- Python for all `.datacore/lib/` tooling. No TypeScript.
-- Never multi-line Bash; chain with `&&`.
-- No new dependency may be required to import `ledger/` — stdlib only.
-- Every detector emits `metric.attest` and writes a **dated artifact**; a job is
-  green only if its artifact exists and is fresh (ENG-2026-0804-033).
-- Every item below is verified by **causing the failure it prevents**, not by
-  asserting the code runs.
-- `~/Data` is a shared working tree. Never `git checkout <other-branch>` in it.
+- Python for `.datacore/lib/`. Never multi-line Bash; chain with `&&`.
+- stdlib-only to import `ledger/`.
+- Every detector emits `metric.attest` + a **dated artifact**; green requires the
+  artifact to exist and be fresh (ENG-2026-0804-033).
+- Every item is verified by **causing the failure it prevents**.
+- `~/Data` is a shared tree — never `git checkout <other-branch>` in it.
 - `.datacore/dips` and `.datacore/modules/*` are separate repos; never
-  auto-commit a submodule pointer bump.
+  auto-commit a submodule pointer.
+
+**Cross-track ordering** — the rev-1 claim "across tracks there is no dependency"
+was false. Three real ones:
+
+| Dependency | Why |
+|---|---|
+| **C3 before E4** | both modify nightshift's `run.py` |
+| **D3 before C2** | `ledger_transport` refuses repos absent from the registry |
+| **A before F2** | the 14-day gate is only meaningful if detectors can go red |
+
+**The operator is the serialization point.** Parallelising tracks compresses
+calendar time; it does not create more operator attention, which is the scarce
+resource here. Anything requiring a human decision is scheduled, not parallel.
 
 ---
 
-## Track A — detectors (no dependencies; ships first)
+## Track A — detectors ✅ partially done
 
-### A1. Seq-gap detector
-**Files:** create `.datacore/lib/detectors/seq_gap.py`
-- Per space, per actor: compare local head `seq` against `origin/<default>`'s.
-- Report `{actor, local_seq, remote_seq, gap}`; exit non-zero on any gap.
-- **Verify:** append an event, do not push, run → gap of 1, exit 1. Push → 0.
+### A1. Seq-gap detector — **DONE** (`detectors/seq_gap.py`)
+Verified: unpushed event → `GAP … 1 unpublished`, exit 1; pushed → exit 0.
+**Outstanding:** its verify only proves the *local* case. A machine that never
+fetches reports `gap=0` while a third machine holds work it has not seen. Add a
+cross-machine verification: push from nightshift, assert mac goes red **before**
+any local action. `--fetch` must be set in the scheduled invocation.
 
-### A2. Actor-presence detector
-**Files:** create `.datacore/lib/detectors/actor_presence.py`
-- Read the roster; assert every rostered actor has a log, non-empty, whose
-  `seq` has not gone backwards since the last run (state in `~/.datacore/state/`).
-- **Verify:** move an actor's `.jsonl` aside → red, naming the actor. Restore → green.
+### A2. Actor-presence — **DONE** (`detectors/actor_presence.py`)
+Absorbs actor-file **ownership** (dijkstra: one check, two assertions).
+Verified: deleted log → `MISSING`, exit 1, sticky across re-runs.
+Fault injection found two bugs pre-trust: baseline recorded expectations not
+observations (5 MISSING instead of 1), and the alarm self-healed on re-run.
 
-### A3. State root
-**Files:** modify `.datacore/lib/ledger/fold.py`; create `.datacore/lib/detectors/state_root.py`
-- `fold()` gains `state_root()` — a stable hash over folded item states
-  (sorted by id; no timestamps or dict order in the input).
-- Detector compares roots across machines via the newest `projection.attest`.
-- **Verify:** fold the same log twice → identical root. Fold with one extra
-  event → different root. Fold on two machines with identical logs → equal.
+### A3. ~~State root as a standalone detector~~ → **folded into F1**
+Dijkstra: once seq-gap is clean and the chain verifies, both machines hold
+identical event sets and `fold()` is pure — divergence means `fold.py` version
+skew, which a golden-fixture test catches more cheaply. The root becomes a
+*field* on projection-drift, covering **all three** `LedgerState` fields
+(`items`, `spend`, `orphans`) via `canonical_bytes`, and gated on seq-agreement
+so convergence lag is not reported as divergence.
 
 ### A4. Contracts
-**Files:** modify `.datacore/lib/jobs/manifest.yaml`
-- One job per detector, `max_age_hours: 26`, `on_fail: telegram`.
-- **Verify:** `job_verify.py --machine mac` shows the new jobs green; backdate
-  one artifact → that job red.
+One job per detector in `manifest.yaml`, `max_age_hours: 26`, `on_fail: telegram`.
+**Verify:** backdate an artifact → that job red.
 
 ---
 
 ## Track B — provenance
 
 ### B1. Provenance record + local sink
-**Files:** create `.datacore/lib/provenance.py`
-- `record(subject, actor, action, event, at) -> dict`; `emit(record, sinks)`.
-- Local sink: render trailers + append `metric.attest`.
-- **Sinks never gate the write** — a failing sink logs and returns; the caller
-  is not blocked. **Verify:** a sink that raises does not fail `emit`.
+`record(subject, actor, action, event, at)`; sinks never gate the write.
+**Verify:** a sink that raises does not fail `emit`.
 
-### B2. commit-msg hook
-**Files:** create `.datacore/githooks/commit-msg`
-- Reject a Conventional-Commits prefix authored inside `subject`.
-- Append the trailer block when `DATACORE_ACTOR` is set.
-- **Verify:** a commit whose subject starts `feat(api: change` is refused; a
-  normal human commit is untouched.
+### B2. `commit-msg` hook
+Refuse a Conventional-Commits prefix authored inside `subject`; append trailers.
+**Verify:** `feat(api: change` refused; a human commit untouched.
 
 ### B3. Commit↔event cross-reference *(needs B1)*
-**Files:** create `.datacore/lib/detectors/commit_event_xref.py`
-- Every commit carrying `Datacore-Event` names an event that exists; every
-  `item.complete` names a resolvable `artifact_commit`.
-- **Verify:** hand-write a commit with a bogus `Datacore-Event` → red.
+**Both directions.** Rev 1 tested only the safe one.
+**Verify:** (a) commit with bogus `Datacore-Event` → red; (b) **`item.complete`
+naming an unresolvable `artifact_commit` → red** — the direction the spec calls
+dangerous and the one ordering exists to make unreachable.
 
 ---
 
-## Track C — transport (critical path)
+## Track C — transport (critical path, decomposed)
 
-### C1. Atomic publish
-**Files:** modify `.datacore/lib/ledger/log.py`
-- Append via temp file + `os.replace()` onto the log path.
-- **Verify:** a concurrent reader in a loop never observes a partial line while
-  1,000 events are appended.
+### C1. ~~Atomic append via temp+rename~~ → **DROPPED**
+CTO: technically wrong and would regress working code. `log.py` already does
+open + `flock(LOCK_EX)` + read-tail + truncate-torn-line + append in one critical
+section. Temp+rename would make every append O(file) read *and* write — O(n²)
+over the log's life — and without one critical section reintroduces a lost
+update. **Nothing changes in `log.py`.**
+Re-scoped: temp+rename is used for **snapshots (F1)** and **projections**, which
+are replaced wholesale.
 
-### C2. `ledger_transport.py` *(needs C1)*
-**Files:** create `.datacore/lib/ledger_transport.py`
-- `append(space, actor, event)`, `converge(space)`, `gaps(space)`.
-- Per-repo `flock`. **Merge only — never rebase.**
-- Expected failures return `{ok, reason, context}`; only unexpected ones raise.
-- Reads `registry/repositories.yaml`; an unregistered repo is **refused**.
-- **Verify:** offline remote → `ok=False` with reason, no exception; two
-  processes appending concurrently both succeed and both events survive.
+### C2. `ledger_transport.py` *(needs D3)*
+`append` / `converge` / `gaps`; expected failures return `{ok, reason, context}`,
+only unexpected ones raise; refuses unregistered repos.
+`flock` serialises **same-machine** writers only — cross-machine races are
+handled by an explicit bounded **fetch → merge → retry** loop on non-fast-forward.
+**Verify:** two *machines* pushing concurrently both land (a two-local-process
+test passes without exercising this); offline remote → `ok=False`, no exception.
 
-### C3. Migrate git callers *(needs C2)*
-**Files:** the 16 identified callers
-- **Verify:** `grep -rn "subprocess.*git" .datacore/lib .datacore/modules`
-  returns only `ledger_transport.py` and the recovery/audit tools.
+### C3a. Migrate `lib/` git callers *(then C3b)*
+### C3b. Migrate module hooks — one sub-track per module, fully parallel
+**Verify:** `grep -rn "subprocess.*git"` across **`.datacore` AND `datacore-mcp`
+AND `datacore-app`** returns only the transport module and the audit tools. Rev 1
+scoped this grep to `.datacore` only, so the track could go green with the two
+repos the spec calls the hard part untouched.
 
-### C4. Migrate org writers *(needs C2)*
-**Files:** 5 slash commands, 15 library/module writers, 10+ module hooks
-- Readers are untouched — only writes route through the ledger.
-- **Verify:** per writer, the write produces an event; `/wrap-up` refuses to
-  close with a non-zero gap count.
+### C4a. The 5 slash commands — **scheduled, not parallel; last within C**
+Daily driver. One command at a time, each verified against a live day, each with
+a stated fallback to the inline path. This is the operator's workflow.
+
+### C4b. `datacore-mcp` GTD write tools — separate repo, separate release
+(MCP server rebuild + restart).
+
+### C4c. `datacore-app` — **greenfield, not migration**
+The spec states it has no ledger awareness at all. It has no existing behaviour
+to preserve, so the "readers keep working" safety property does not apply.
+Scoped and reviewed as its own effort.
 
 ### C5. Delete dead code *(needs C3, C4)*
-- `nightshift_recover_stranded.py`, `cos_sync.sh` ×2, `space_sync.py`,
-  `cos_merge_runs.sh`, most of `git_fleet_sync.py`, shadowed duplicate copies.
-- **Verify:** full test suite green; no import of a deleted module remains.
+**Verify additionally:** `tris` and `data` still function. They hold partial
+checkouts, and `git_fleet_sync`/`space_sync`/`cos_sync` may be what currently
+keeps them viable. "Tests pass, no dead imports" proves compilation, not that
+two special-cased actors survive.
 
 ---
 
 ## Track D — membership and enforcement
 
-### D1. `member.*` event types
-**Files:** modify `.datacore/lib/ledger/events.py`, `fold.py`
-- Add `member.add` / `member.remove`; fold maintains a member set.
-- **Verify:** add then remove an actor → member set empty; a remove for a
-  non-member is a recorded no-op, not an error.
+### D1/D2. ~~`member.*` events + genesis backfill~~ → **DROPPED**
+Replaced by a flat `<space>/.datacore/members.yaml`. Folding member events at
+push time would require a version-locked `fold.py` **on the Gitea server** — a
+deployment dependency that contradicts the very argument used to justify
+membership-as-fact. `git log` answers "who admitted whom, when".
 
-### D2. Genesis backfill *(needs D1)*
-**Files:** create `.datacore/lib/ledger/members_genesis.py`
-- One-time, idempotent: emit `member.add` per actor per space from
-  `ledger_actors`.
-- **Verify:** run twice → second run emits nothing.
+### D3. `registry/repositories.yaml` *(blocks C2)*
+`category` (knowledge|code|agent-personal), `transport`, `host` per repo.
 
-### D3. Repository registry
-**Files:** create `.datacore/registry/repositories.yaml`
-- Each repo: `category` (knowledge|code|agent-personal), `transport`, `host`.
-- **Verify:** `ledger_transport.append` on an unregistered repo → refused.
+### D4. `core.hooksPath` on **all five** machines + config-drift detector
+Named: mac, winston (rsync+cron), nightshift (git pull + systemctl), hermes and
+plur-claw (manual ssh) — three different deploy mechanisms.
+**Verify:** unset on each machine in turn → red naming that machine. Rev 1 said
+"3 machines" and would have left two silently unguarded.
 
-### D4. `core.hooksPath` + config-drift detector
-**Files:** create `.datacore/lib/detectors/config_drift.py`; set on 3 machines
-- Assert `core.hooksPath` resolves and the hook dir has the expected files.
-- **Verify:** unset it on one machine → red naming that machine.
+### D5. Gitea `pre-receive` *(needs D3)* — **log-only first, then enforce**
+Reads `members.yaml`; no `fold.py` on the server.
+Staged: run in report-only mode until it has been silent for a week against real
+pushes, *then* enforce. `0-personal` is the operator's own daily space and the
+rejection is unbypassable from the client — a wrong rule locks them out of their
+own notes. Rehearse on a throwaway repo first.
 
-### D5. Gitea `pre-receive` *(needs D2)*
-**Files:** create `.datacore/githooks/server/pre-receive`
-- Reject a push writing `events/<actor>.jsonl` for a non-member.
-- **Verify:** push a foreign actor's log from a test clone → rejected server-side.
+### D6. GitHub Rulesets + `bypass_actors` — **NEW**
+Rev 1 had no task for this at all, leaving **5 of 9 spaces** (1-datafund,
+2-datacore, 3-fds, 5-plur, 8-firm) with detection-only enforcement by silent
+omission. Merge queue on code repos.
 
 ---
 
 ## Track E — verification and the code gate
 
 ### E1. Check isolation
-**Files:** modify `.datacore/lib/ledger_dispatch.py`
-- Run `check` in a fresh checkout of the committed result; the executing agent
-  never has write access to it.
-- **Verify:** the `touch proof.txt` attack fails — an agent that fabricates the
-  artifact without committing it does not pass.
+Checks run in a checkout the executing agent never had write access to.
+**Verify:** the `touch proof.txt` attack fails.
 
-### E2. Effect verifiers
-**Files:** create `.datacore/lib/effects/` (`registry.py`, per-effect verifiers)
-- Each `effects` tag binds a verifier reading an external system of record.
-- Unregistered effect → review, never auto-complete.
-- **Verify:** an `email.send` item with no BCC evidence lands in review.
+### E2. ~~Effect verifiers~~ → **OUT OF SCOPE**, own proposal
+Not a transport concern; not motivated by any of the five incidents. The **rule**
+stays in the DIP: an effect with no registered verifier never auto-completes.
 
 ### E3. Commit-decision gate
-**Files:** create `.datacore/lib/commit_gate.py`
-- On verdict with a dirty tree: pause, write pending decision, await
-  `approve|fix|apply|skip|halt`, persist the decision as an audit artifact.
-- **Verify:** an unattended run with a dirty tree does **not** commit.
+Pause on a verdict with a dirty tree; persist the decision as an audit artifact.
+**Verify:** an unattended run with a dirty tree does not commit.
+**Additionally:** a pending-decision **backlog metric**, alerted. Nightshift runs
+~20 tasks unattended; without this the operator wakes to a stalled queue with no
+visibility into how bad it is.
 
-### E4. Worktree isolation *(needs E3)*
-**Files:** modify the code-work executor path
-- `agent/<task-id>` unique per run; a collision **fails loudly**.
-- **Verify:** two runs in one workspace → second gets its own branch, or fails
-  visibly. It never falls back to the source checkout.
+### E4. Worktree isolation *(needs E3, and C3 — shared `run.py`)*
+`agent/<task-id>` unique per run; a collision **fails loudly**.
+**Verify:** two runs in one workspace → second gets its own branch or fails
+visibly; never falls back to the source checkout.
 
 ---
 
 ## Track F — projection
 
-### F1. Snapshots + state root *(needs A3)*
-**Files:** create `.datacore/lib/ledger/snapshot.py`
-- Untracked local cache; `.gitignore` entry; fold resumes from newest snapshot.
-- **Verify:** delete the snapshot → fold still correct, only slower.
+### F1. Snapshots + projection-drift (absorbing the state root) *(needs A)*
+Snapshots untracked, published by temp+rename. Drift detector regenerates and
+diffs, emitting the root as a field.
+**Verify:** delete a snapshot → fold still correct, only slower.
 
 ### F2. Phase 1 on one space *(needs A, F1, shadow streak)*
-- Write `phase1-active`, gitignore the projection, add the weekly archive.
-- **Verify:** 14 consecutive days of positive counts.
+**Verify:** 14 consecutive days of positive counts.
+**F2a. Revert drill — before F2.** Perform the documented reversal once, on a
+scratch space: un-gitignore, commit the projection, resume authoring. A phase
+billed as reversible that has never been reversed is a claim, not a property —
+and this installation's history is 610 stranded commits and 110 wiped files.
 
 ---
 
-## Sequencing
+## What is deliberately unresolved
 
-Critical path **C**. A and D are widest and least coupled. F2 is gated on
-elapsed time, not effort, and cannot be compressed.
+- Append cost: `append()` re-reads its own log **and every sibling log** to
+  compute the causal floor — O(own + siblings) per event. Snapshots fix *fold*
+  cost, not *append* cost. Not addressed by any track; recorded, not hidden.
