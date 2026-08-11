@@ -49,14 +49,19 @@ Read the cursor file to determine where the last run left off:
 
 ```yaml
 # .datacore/state/learning_classifier_cursor.yaml
+# Each value is the date of the LAST PROCESSED ENTRY for that file,
+# not today's date. This ensures same-day entries are never skipped.
 last_run: "2026-04-20"
 cursors:
-  ".datacore/learning/patterns.md": "2026-04-20"
-  ".datacore/learning/corrections.md": "2026-04-20"
+  ".datacore/learning/patterns.md": "2026-04-19"
+  ".datacore/learning/corrections.md": "2026-04-18"
   "0-personal/.datacore/learning/patterns.md": "2026-04-20"
-  "1-datafund/.datacore/learning/patterns.md": "2026-04-20"
-  # ... per-file cursors keyed by relative path
+  "1-datafund/.datacore/learning/patterns.md": "2026-04-15"
+  # ... per-file cursors keyed by relative path from Data root
 ```
+
+- `last_run`: date this agent last ran (informational only — not used for filtering)
+- `cursors`: per-file last-processed-entry dates. A missing key means "process all entries" for that file.
 
 If the cursor file does not exist, process all entries (first run).
 
@@ -70,7 +75,7 @@ Scan learning files across all spaces for entries newer than the cursor:
 - `[0-9]-*/.datacore/learning/patterns.md` (per-space)
 - `[0-9]-*/.datacore/learning/corrections.md` (per-space)
 
-**Entry detection:** Learning files use date headings (`### YYYY-MM-DD`). Read entries where the date heading is after the cursor date for that file. Each bullet point under a date heading is one entry.
+**Entry detection:** Learning files use date headings (`### YYYY-MM-DD`). Read entries where the date heading is **strictly after** (`>`) the cursor date for that file. The cursor stores the date of the last *processed* entry (not today's run date), so `>` is the correct comparison — it avoids reprocessing while still catching new entries on the same calendar day. Each bullet point under a date heading is one entry.
 
 **Parse each entry into:**
 - `text`: the raw content
@@ -120,7 +125,10 @@ Map learning entry types to engram fields:
 
 After processing all entries:
 
-1. **Update cursor:** Write `.datacore/state/learning_classifier_cursor.yaml` with today's date for each processed file.
+1. **Update cursor:** Write `.datacore/state/learning_classifier_cursor.yaml`:
+   - Set `last_run` to today's date (informational).
+   - For each file processed, set `cursors[file]` to the **date of the latest entry processed** in that file — NOT today's date. If a file had no new entries, leave its cursor unchanged.
+   - Use only the keys defined in the schema above. Do not invent new top-level keys (e.g. `*_note` fields, `spaces` nesting, `last_hash`). Session notes belong in the agent's output report, not the cursor file.
 
 2. **Rate injected engrams:** Call `plur_feedback` with:
    - Positive feedback for engrams that matched as `recurrence` (reinforces useful patterns)
