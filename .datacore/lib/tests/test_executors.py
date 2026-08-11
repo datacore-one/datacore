@@ -53,8 +53,11 @@ def hermetic_env(tmp_path, monkeypatch):
 # --- registry -------------------------------------------------------------
 
 
-def test_registered_executors_includes_all_three_adapters():
-    assert set(registered_executors()) == {"claude-code", "hermes", "api"}
+def test_registered_executors_includes_every_adapter():
+    """openclaw joined on 2026-08-11. Its absence is why a claude-shaped
+    dispatcher reported Data as having "no agent runtime" when plur-claw runs a
+    perfectly good one — the registry, not the machine, was missing it."""
+    assert set(registered_executors()) == {"claude-code", "hermes", "api", "openclaw"}
 
 
 def test_get_executor_unknown_name_raises_value_error_listing_known():
