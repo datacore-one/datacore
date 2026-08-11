@@ -56,22 +56,24 @@ def scan_space(space: Path) -> dict | None:
             if n > 1:
                 dupes[i] = dupes.get(i, 0) + n - 1
 
-    g = space / ".datacore" / "events" / "genesis.jsonl"
     orphaned = 0
-    if g.exists() and org_ids:
-        led = set()
-        for line in g.read_text(errors="replace").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                e = json.loads(line)
-            except ValueError:
-                continue
-            if e.get("type") == "item.create":
-                iid = (e.get("payload") or {}).get("id")
-                if iid:
-                    led.add(iid)
+    if org_ids:
+        # FOLD, don't scan raw creates. Reading item.create alone counts items
+        # that were later completed or dismissed — which SHOULD be absent from
+        # org, that being what closing a task means. Measured on 7-megaphone:
+        # 6 "churned" ids, all six dismissed, 28% of the space and so over the
+        # noise floor. A detector that fires on finished work teaches the
+        # operator to ignore it, which costs more than it can ever save.
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        try:
+            from ledger.fold import fold
+            from ledger.log import read_events
+            st = fold(read_events(space))
+            led = {i for i, it in st.items.items()
+                   if it.status in ("created", "claimed", "granted")}
+        except Exception:      # noqa: BLE001 — a fold failure is not churn
+            return None
         # Ledger ids with no org task. A handful is normal drift (a task was
         # completed and archived); a large fraction is the churn signature.
         orphaned = len(led - org_ids)
