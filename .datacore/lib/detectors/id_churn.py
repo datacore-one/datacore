@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""Duplicate org `:ID:`s — the trigger that rewrites every id in a file.
+
+On 2026-08-11 winston logged, at 13:44:28:
+
+    WARNING:org_workspace.identifiers:Duplicate ID 'org-20260726-trackb-rescore-verify'
+    — regenerated as 'org-20260811-134428-8f87a44a'
+
+`dedup_ids()` runs on `OrgWorkspace.load()`: where it finds a duplicate it keeps
+the first and **regenerates the rest**. A later `save()` persists that, and the
+15-minute `cos_sync` autosave commits and pushes it. One minute later 1,204
+`:ID:` lines had changed and eight of nine spaces had lost ledger↔org
+correspondence — 0-personal went from 602 matching ids to zero.
+
+Every part of that chain is working as designed. Dedup is correct: two tasks
+sharing an id is worse than a new id. Autosave is correct: committing beats
+stashing. The defect is that **nothing watches the trigger**, so a repairable
+condition (a handful of duplicates) silently escalates into an unrepairable one
+(ids regenerated with a timestamp, which cannot be reproduced).
+
+So this watches the trigger, not the damage. Duplicates are cheap to fix while
+they are duplicates and expensive once dedup has fired — the whole value is in
+the ordering.
+
+It also reports IDs the ledger knows that org has lost, which is the damage
+signature itself, so a churn that happens anyway is visible immediately rather
+than at the next projection diff.
+
+Exit 0 clean, 1 on duplicates or correspondence loss, 2 on error.
+
+    id_churn.py [--root DIR] [--json]
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from collections import Counter
+from pathlib import Path
+
+ID_RE = re.compile(r":ID:\s*(\S+)")
+ORG_FILES = ("next_actions.org", "inbox.org")
+
+
+def scan_space(space: Path) -> dict | None:
+    dupes: dict[str, int] = {}
+    org_ids: set[str] = set()
+    for name in ORG_FILES:
+        f = space / "org" / name
+        if not f.exists():
+            continue
+        ids = ID_RE.findall(f.read_text(errors="replace"))
+        org_ids |= set(ids)
+        for i, n in Counter(ids).items():
+            if n > 1:
+                dupes[i] = dupes.get(i, 0) + n - 1
+
+    g = space / ".datacore" / "events" / "genesis.jsonl"
+    orphaned = 0
+    if g.exists() and org_ids:
+        led = set()
+        for line in g.read_text(errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if e.get("type") == "item.create":
+                iid = (e.get("payload") or {}).get("id")
+                if iid:
+                    led.add(iid)
+        # Ledger ids with no org task. A handful is normal drift (a task was
+        # completed and archived); a large fraction is the churn signature.
+        orphaned = len(led - org_ids)
+        if led and orphaned / len(led) < 0.25:
+            orphaned = 0        # below the noise floor: ordinary lifecycle
+    if not dupes and not orphaned:
+        return None
+    return {"space": space.name, "duplicates": sum(dupes.values()),
+            "examples": sorted(dupes)[:3], "orphaned_ledger_ids": orphaned}
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[3])
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args()
+
+    spaces = sorted(args.root.glob("[0-9]-*"))
+    findings = [r for r in (scan_space(s) for s in spaces if (s / "org").is_dir()) if r]
+
+    if args.json:
+        print(json.dumps({"findings": findings, "spaces": len(spaces)}, indent=2))
+    else:
+        for r in findings:
+            if r["duplicates"]:
+                print(f"  DUPLICATES {r['space']}: {r['duplicates']} "
+                      f"(e.g. {', '.join(r['examples'])}) — fix BEFORE dedup_ids fires")
+            if r["orphaned_ledger_ids"]:
+                print(f"  CHURNED    {r['space']}: {r['orphaned_ledger_ids']} ledger ids "
+                      f"no longer present in org")
+        print(f"\nid-churn: {len(spaces)} space(s), {len(findings)} with findings")
+
+    return 1 if findings else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
