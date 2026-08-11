@@ -33,7 +33,6 @@ fi
 DATA_DIR="${DATA_DIR:-$HOME/Data}"
 DENYLIST="$DATA_DIR/.datacore/config/public-repo-denylist.yaml"
 SCANNER="$DATA_DIR/.datacore/lib/pre_push_scan.py"
-
 # Fallback protection list, used ONLY when the denylist file is missing.
 # These are our public end-user repos; better to block a push here than
 # to fail open because a checkout is incomplete.
@@ -45,6 +44,34 @@ FALLBACK_PROTECTED="plur-ai/plur datacore-one/datacore datacore-one/datacore-dip
 # objects are never uploaded (3-fds silently accumulated 460 objects /
 # 824 MB unpushed by 2026-06-10 exactly this way).
 REFS_INPUT=$(cat || true)
+
+OWNERSHIP="$DATA_DIR/.datacore/lib/hooks/log_ownership_guard.py"
+
+# ---- Single-writer log ownership (DIP-0046 D5, GitHub side) ---------------
+# Runs for EVERY repo, before the not-protected early exit further down. Space
+# repos are not "protected public repos", so anything placed after that exit
+# would never run on the five GitHub-hosted spaces — precisely the ones with no
+# server-side pre-receive available.
+#
+# Reads REFS_INPUT rather than calling `cat` again: stdin can be read ONCE, and
+# an earlier revision of this block consumed it here, leaving REFS_INPUT empty
+# so LFS chaining and the denylist scan silently scanned nothing.
+if [ -f "$OWNERSHIP" ] && command -v python3 >/dev/null 2>&1 && [ -n "$REFS_INPUT" ]; then
+    OWN_RANGES=$(printf '%s\n' "$REFS_INPUT" | while IFS=' ' read -r l_ref l_sha r_ref r_sha; do
+        [ -z "$l_ref" ] && continue
+        [ "$l_sha" = "0000000000000000000000000000000000000000" ] && continue
+        if [ "$r_sha" = "0000000000000000000000000000000000000000" ] || \
+           ! git rev-parse --quiet --verify "${r_sha}^{commit}" >/dev/null 2>&1; then
+            echo "$l_sha"
+        else
+            echo "${r_sha}..${l_sha}"
+        fi
+    done)
+    if [ -n "$OWN_RANGES" ]; then
+        # shellcheck disable=SC2086
+        python3 "$OWNERSHIP" $OWN_RANGES || exit 1
+    fi
+fi
 
 lfs_chain() {
     if command -v git-lfs >/dev/null 2>&1 && [ -n "$REFS_INPUT" ]; then
