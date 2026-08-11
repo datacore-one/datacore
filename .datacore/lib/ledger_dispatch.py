@@ -233,14 +233,26 @@ def main() -> int:
 
     space = args.space.resolve()
     state = fold(read_events(space))
-    pending = [i for i in state.items.values() if i.status == CLAIMABLE]
+    claimable = [i for i in state.items.values() if i.status == CLAIMABLE]
+
+    # A genesis-imported GTD task is a MIRROR of an org heading, not a work
+    # queue. Both land at status `created`, so before this filter a single
+    # space offered 343 "claimable items" -- the whole backlog -- and a
+    # scheduled dispatcher would have started working through the principal's
+    # personal todo list unattended. Delegation is opt-in: only items that were
+    # materialized as delegations are dispatchable. The discriminator is the
+    # payload's `org` block, which genesis writes (heading, level, filetags,
+    # parent) and materialize() never does.
+    pending = [i for i in claimable if not (i.payload or {}).get("org")]
+    mirrored = len(claimable) - len(pending)
     pending.sort(key=lambda i: i.id)
 
+    mirror_note = f" ({mirrored} org-mirrored task(s) skipped -- not delegations)" if mirrored else ""
     if not pending:
-        print("nothing to dispatch: no items at status 'created'")
+        print(f"nothing to dispatch: no delegated items awaiting claim{mirror_note}")
         return 0
 
-    print(f"{len(pending)} claimable item(s); limit {args.limit}")
+    print(f"{len(pending)} delegated item(s) awaiting claim; limit {args.limit}{mirror_note}")
     dispatched = failed = refused = review = 0
 
     for item in pending[:args.limit]:
