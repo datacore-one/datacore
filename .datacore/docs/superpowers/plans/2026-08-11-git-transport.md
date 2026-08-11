@@ -217,7 +217,23 @@ Checks run in a checkout the executing agent never had write access to.
 Not a transport concern; not motivated by any of the five incidents. The **rule**
 stays in the DIP: an effect with no registered verifier never auto-completes.
 
-### E3. Commit-decision gate
+### E3. Commit-decision gate — **DONE**
+`commit_gate.py` + `detectors/pending_decisions.py`, wired into
+`claim.git_commit_push`, contracted as `mac-pending-decisions`.
+Verified by causing it — same fixture, one run each:
+`gate off -> stranger.txt stranger2.txt` / `gate on -> report.md` (strangers
+still untracked). It never blocks: ~20 unattended tasks a night, and waiting
+for an answer turns one unreviewed commit into a stalled queue. The backlog
+alerts on AGE, not volume.
+
+### E4. Worktree isolation — **library DONE, not wired**
+`agent_workspace.py`, 8 tests. Justified by measurement, not assumption: three
+systemd units on the nightshift box run as one user in one WorkingDirectory, so
+a Telegram session can start mid-batch. A collision raises; failure never
+returns the source checkout. **Wiring into `run.py` is deliberately not done** —
+that changes an unattended overnight batch on a remote box.
+
+### E3-old. Commit-decision gate
 Pause on a verdict with a dirty tree; persist the decision as an audit artifact.
 **Verify:** an unattended run with a dirty tree does not commit.
 **Additionally:** a pending-decision **backlog metric**, alerted. Nightshift runs
