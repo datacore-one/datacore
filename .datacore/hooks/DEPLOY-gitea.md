@@ -2,11 +2,11 @@
 
 Status: **DEPLOYED 2026-08-12, report-only**, on 0-personal, 4-forge,
 6-meridian, 7-megaphone. Three things below were WRONG in the first version of
-this document and were only found by deploying and proving the hook fires. The hook passes all eight
-cases in `.datacore/lib/tests/test_gitea_pre_receive.py`. Deployment is blocked
-on SSH access — see "Blocked on" below.
+this document and were only found by deploying and proving the hook fires. The
+shell hook passes all eight cases in
+`.datacore/lib/tests/test_gitea_pre_receive.py`.
 
-## Two things that will make this look installed when it is not
+## Four things that will make this look installed when it is not
 
 **1. A global `core.hooksPath` disables per-repo server-side hooks.**
 Discovered while rehearsing: the hook was present, executable and correct, and
@@ -47,16 +47,16 @@ client hook plus config_drift watching `core.hooksPath`.
 
 ## Install (report-only)
 
-Per repo, under Gitea's repository root (typically
-`/var/lib/gitea/data/gitea-repositories/<owner>/<repo>.git`):
+Gitea runs in Docker here; repositories live on the host under
+`/mnt/ssd/gitea/data/git/repositories/<owner>/<repo>.git`, owned by `gregor`.
 
-    scp .datacore/hooks/gitea-pre-receive.py <gitea-host>:/tmp/
-    ssh <gitea-host> "sudo install -o git -g git -m 755 /tmp/gitea-pre-receive.py \
-        /var/lib/gitea/data/gitea-repositories/gregor/<repo>.git/custom_hooks/pre-receive"
-
-Gitea spaces: `0-personal`, `4-forge`, `6-meridian`, `7-megaphone` (verified
-against `git remote get-url` on 2026-08-11, not assumed — the other five spaces
-are GitHub and are covered by D6 rulesets instead).
+    scp .datacore/hooks/gitea-pre-receive.sh <gitea-host>:/tmp/
+    ssh <gitea-host> 'B=/mnt/ssd/gitea/data/git/repositories/gregor; \
+      for r in 0-personal 4-forge 6-meridian 7-megaphone; do \
+        d=$B/$r.git/hooks/pre-receive.d; \
+        sudo mkdir -p $d && sudo cp /tmp/gitea-pre-receive.sh $d/50-datacore && \
+        sudo chown gregor:gregor $d/50-datacore && sudo chmod 755 $d/50-datacore; \
+      done'
 
 **Do not set `DATACORE_ENFORCE` yet.** Report-only writes `datacore/warn:` and
 `datacore/would reject:` to the pusher's terminal and always exits 0.
@@ -80,9 +80,12 @@ their own space. Set `DATACORE_ENFORCE=1` in the hook's environment
 (`custom_hooks/pre-receive` wrapper or Gitea's app.ini env passthrough), one
 repo at a time, starting with a space that is not `0-personal`.
 
-## Blocked on
+## History
 
-`ssh blackpi` fails host-key verification from the Mac. Accepting a host key is
-a trust decision for the operator to make, so this stops here rather than
-auto-accepting. Once `ssh blackpi` works, the install above is a two-line
-per-repo operation.
+Deployment was blocked for a day by what looked like Gitea rejecting the Mac's
+SSH key. It was not a key problem: blackpi's USB SSD had dropped off the bus,
+Gitea could not read its own database, and the symptom surfaced at the client as
+`Permission denied (publickey)`. A USB controller re-bind
+(`xhci_hcd` unbind/bind) brought the disk back, `fsck -n` passed clean, and the
+key authenticated first try. Diagnosing from the client alone produced a
+confident wrong answer — check the server before trusting the symptom.
