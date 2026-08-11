@@ -133,6 +133,37 @@ jobs:
   # flipping a payload byte mid-chain: `ledger_cli verify` reported
   # "line 251: hash mismatch". The regex below is a CONTENT check, not a
   # freshness proxy: a tampered chain writes the mismatch instead of "OK".
+  # DIP-0046 Track A. Both detectors report POSITIVELY — a count, never merely
+  # the absence of an alarm — because silence is consistent with "nothing is
+  # wrong" and with "the detector did not run", and telling those apart is the
+  # entire purpose (DIP-0046 §8).
+  #
+  # --fetch is REQUIRED here and not merely allowed. Without it seq-gap compares
+  # against a stale remote-tracking ref and cannot see work a THIRD machine
+  # pushed, which is the cross-machine blindness the critic flagged: a missing
+  # push would look identical to a slow one, the exact defect this detects.
+  - name: mac-seq-gap
+    machine: mac
+    schedule: "10 * * * *"
+    cmd: "python3 ~/Data/.datacore/lib/detectors/seq_gap.py --fetch > ~/.datacore/state/seq-gap.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/seq-gap.log"
+        check: regex
+        arg: "0 with unpublished events"
+        max_age_hours: 26
+
+  - name: mac-actor-presence
+    machine: mac
+    schedule: "25 * * * *"
+    cmd: "python3 ~/Data/.datacore/lib/detectors/actor_presence.py > ~/.datacore/state/actor-presence.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/actor-presence.log"
+        check: regex
+        arg: "0 failing"
+        max_age_hours: 26
+
   - name: box-ledger-verify
     machine: box
     schedule: "20 7 * * *"
