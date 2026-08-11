@@ -1,142 +1,80 @@
 #!/usr/bin/env python3
-"""Self-healing space-repo sync for the Mac — no data loss, no silent failure.
+"""Sync one space repo. A thin shim over `ledger_transport.converge`.
 
-Port of the box's proven cos_sync.sh pattern (see
-.datacore/modules/chief-of-staff/server/lib/cos_sync.sh). Replaces the
-stash -> pull -> stash pop recipe that stranded work in unlabelled stashes
-whenever the pop conflicted — 10 orphaned stashes accumulated between
-2026-05-14 and 06-29 before anyone noticed (2026-07-29 post-mortem,
-ENG-2026-0729-009).
+This was 142 lines reimplementing, for the Mac, the algorithm `cos_sync.sh`
+already implemented for the box — autosave-commit, fetch, rebase, and on
+conflict save to a rescue branch, hard-reset and alert. Two machines, one
+algorithm, two copies, and they drifted: the `git push … || true` fix lived on
+the box for weeks while this file and the repo's copies still swallowed the
+failure (DIP-0046 motivation).
 
-Per space repo ([0-9]-* under ~/Data):
-  1. dirty?  -> autosave commit on the current branch (commit, never stash —
-     a commit is on a branch, findable, pushable; a stash is invisible)
-  2. fetch   -> on failure: warn and continue (offline is not an error state)
-  3. rebase origin/<branch>
-       clean -> push, report
-       conflict -> abort, save local commits to mac-rescue-<TS> branch,
-                   push the branch where possible, hard-reset to origin,
-                   ALERT (stderr + macOS notification) — work is preserved
-                   on a named, pushed branch, never destroyed
+`ledger_transport` is now the single writer, so this keeps only its published
+interface — `sync_repo(repo) -> str` — and delegates. Callers
+(`gitea_pull_webhook`, `morning_journal`) are unchanged.
 
-The root ~/Data repo is deliberately NOT touched: it is the user's working
-copy (public OSS repo with commit hooks); auto-reset there could destroy
-in-progress work. Sync it manually or via /today.
+Two behaviours deliberately do NOT survive the move, and both were the point:
 
-Usage:
-    python3 .datacore/lib/space_sync.py               # all spaces
-    python3 .datacore/lib/space_sync.py --repo 0-personal
-    python3 .datacore/lib/space_sync.py --quiet
+  NO REBASE. Per-writer logs are disjoint files, so a merge is a union and
+  cannot conflict; rebase bought nothing and is the operation that stranded 610
+  commits on a parked branch and 645 across 74 run branches.
+
+  NO HARD RESET, NO RESCUE BRANCH. `converge` autosave-COMMITS before merging —
+  a commit is on a branch, findable and pushable, where a stash is invisible
+  (ENG-2026-0729-009 cost 10 orphaned stashes over six weeks) — and then refuses
+  a genuine content conflict rather than resetting past it. Nothing is discarded
+  to make the sync succeed, so there is nothing to rescue.
+
+Outcome strings are preserved because `gitea_pull_webhook` branches on them:
+'clean' | 'offline' | 'conflict' | 'skipped'. 'rescued' can no longer occur and
+is retired.
 """
+from __future__ import annotations
+
 import argparse
-import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
-DATA_ROOT = Path.home() / "Data"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-
-def run(args: list[str], cwd: Path, timeout: int = 120) -> tuple[int, str]:
-    try:
-        r = subprocess.run(args, cwd=cwd, capture_output=True, text=True,
-                           timeout=timeout)
-        return r.returncode, (r.stdout + r.stderr).strip()
-    except subprocess.TimeoutExpired:
-        return 1, f"timeout: {' '.join(args)}"
-
-
-def notify(message: str) -> None:
-    print(f"ALERT: {message}", file=sys.stderr)
-    subprocess.run(
-        ["osascript", "-e",
-         f'display notification "{message}" with title "Datacore sync"'],
-        capture_output=True, timeout=10,
-    )
+from ledger_transport import converge  # noqa: E402
 
 
 def sync_repo(repo: Path, quiet: bool = False) -> str:
-    """Sync one repo. Returns 'clean' | 'rescued' | 'offline' | 'skipped'."""
-    name = repo.name
-
-    def log(msg: str) -> None:
-        if not quiet:
-            print(f"{name}: {msg}")
-
-    code, branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo)
-    if code != 0 or branch == "HEAD":
-        log("detached or unreadable HEAD — skipped, needs a human")
-        return "skipped"
-
-    # 1. Autosave: commit local work where it is findable, never stash it.
-    run(["git", "add", "-A"], repo)
-    code, _ = run(["git", "diff", "--cached", "--quiet"], repo)
-    if code != 0:
-        # Generous timeout: commit hooks (structural integrity, boundary
-        # scans) legitimately take minutes on large spaces — a timeout here
-        # masqueraded as a hook rejection on 5-plur (2026-07-29).
-        code, out = run(["git", "commit", "-m", "sync: mac autosave"], repo,
-                        timeout=420)
-        if code != 0:
-            # A commit hook rejected the autosave (e.g. date validation).
-            # Leave the tree as it was and surface it — do NOT proceed to
-            # rebase over a dirty tree.
-            run(["git", "reset", "-q"], repo)
-            notify(f"{name}: autosave commit rejected by hook — sync skipped, "
-                   f"resolve manually ({out.splitlines()[-1][:80] if out else ''})")
-            return "skipped"
-
-    # 2. Fetch.
-    code, _ = run(["git", "fetch", "origin", "-q"], repo, timeout=180)
-    if code != 0:
-        log("fetch failed (offline?) — local work is committed, will sync later")
-        return "offline"
-
-    # 3. Rebase; rescue on conflict.
-    code, _ = run(["git", "rebase", f"origin/{branch}"], repo, timeout=180)
-    if code == 0:
-        run(["git", "push", "-q"], repo, timeout=180)
-        code, head = run(["git", "rev-parse", "--short", "HEAD"], repo)
-        log(f"synced clean (HEAD {head})")
-        return "clean"
-
-    run(["git", "rebase", "--abort"], repo)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
-    rescue = f"mac-rescue-{ts}"
-    run(["git", "branch", rescue], repo)
-    pushed = run(["git", "push", "-q", "origin", rescue], repo, timeout=180)[0] == 0
-    run(["git", "reset", "--hard", f"origin/{branch}"], repo)
-    notify(f"{name}: sync conflict — local work preserved on branch {rescue}"
-           f"{' (pushed)' if pushed else ' (LOCAL ONLY — push failed)'}; "
-           f"review and merge")
-    return "rescued"
+    """Sync one repo. Returns 'clean' | 'offline' | 'conflict' | 'skipped'."""
+    res = converge(Path(repo))
+    if res.ok:
+        outcome = "clean"
+    elif "not in registry" in res.reason:
+        # Refused, not failed: an unregistered repo has no category, so no rule
+        # to apply. Silently defaulting is what DIP-0046 §1 forbids.
+        outcome = "skipped"
+    elif "offline" in res.reason or "fetch failed" in res.reason:
+        outcome = "offline"
+    else:
+        outcome = "conflict"
+    if not quiet:
+        detail = res.context.get("detail", "")
+        print(f"{Path(repo).name}: {outcome}"
+              + (f" — {res.reason}" if not res.ok else "")
+              + (f"\n  {detail.splitlines()[0]}" if detail else ""))
+    return outcome
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", help="Sync only this space (e.g. 0-personal)")
-    parser.add_argument("--quiet", action="store_true")
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser(description="sync space repos via ledger_transport")
+    ap.add_argument("--repo", help="one space by directory name")
+    ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
+    args = ap.parse_args()
 
-    if args.repo:
-        repos = [DATA_ROOT / args.repo]
-    else:
-        repos = sorted(p for p in DATA_ROOT.glob("[0-9]-*") if (p / ".git").exists())
-
-    results: dict[str, int] = {}
-    for repo in repos:
-        if not (repo / ".git").exists():
-            print(f"{repo.name}: not a git repo — skipped", file=sys.stderr)
-            continue
-        outcome = sync_repo(repo, quiet=args.quiet)
-        results[outcome] = results.get(outcome, 0) + 1
-
-    summary = " ".join(f"{k}={v}" for k, v in sorted(results.items()))
-    print(f"space_sync: {summary}")
-    # Rescues are preserved work, not failures; only a repo we could not
-    # handle at all (skipped) is worth a non-zero exit.
-    return 1 if results.get("skipped") else 0
+    repos = [d for d in sorted(args.root.glob("[0-9]-*"))
+             if (d / ".git").exists() and (not args.repo or d.name == args.repo)]
+    outcomes = [sync_repo(r, quiet=args.quiet) for r in repos]
+    bad = [o for o in outcomes if o == "conflict"]
+    if not args.quiet:
+        print(f"\nspace_sync: {len(outcomes)} repo(s), {len(bad)} needing a human")
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
