@@ -85,6 +85,40 @@ class LedgerState:
     spend: dict[str, int] = field(default_factory=dict)
     orphans: list[str] = field(default_factory=list)
 
+    def state_root(self) -> str:
+        """One hash over the WHOLE folded state — items, spend and orphans.
+
+        Two machines answer "do we agree?" by comparing this instead of
+        replaying two logs. All three fields participate deliberately: hashing
+        only `items` would attest agreement while spend totals differed or one
+        machine had silently accumulated orphans, which is worse than no root —
+        a confident answer to a question it did not ask.
+
+        Encoded with the same `canonical_bytes` the event hash uses, so the
+        result is stable across Python versions and dict ordering rather than
+        merely stable within one process.
+
+        A mismatch is NOT on its own an alarm: two machines mid-convergence hold
+        different event sets and must differ. It is only meaningful once
+        per-actor `seq` agrees, which is the seq-gap detector's job — checking
+        the root first would make it noisy by construction, and a noisy alarm is
+        an ignored one.
+        """
+        import hashlib
+        from .events import canonical_bytes
+
+        h = hashlib.sha256()
+        for iid in sorted(self.items):
+            it = self.items[iid]
+            h.update(canonical_bytes({
+                "id": iid, "title": it.title,
+                "owner": it.owner, "status": it.status,
+                "payload": it.payload or {},
+            }))
+        h.update(canonical_bytes({"spend": dict(sorted(self.spend.items()))}))
+        h.update(canonical_bytes({"orphans": sorted(self.orphans)}))
+        return h.hexdigest()
+
 
 def fold(events: list[Event]) -> LedgerState:
     """Reduce `events` (already merged + hlc-sorted) into a `LedgerState`.

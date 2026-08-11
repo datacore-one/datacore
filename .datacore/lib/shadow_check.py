@@ -58,6 +58,21 @@ def main() -> int:
         streak = 0                          # a later dirty run same day resets
 
     STATUS.parent.mkdir(parents=True, exist_ok=True)
+    # State roots travel with the diff so two machines can compare agreement in
+    # one hash rather than replaying two logs (DIP-0046 §3.7). A mismatch is only
+    # meaningful once seq-gap reports no gap — mid-convergence the roots MUST
+    # differ, and alarming on that would make this noisy by construction.
+    roots = {}
+    for name in spaces:
+        try:
+            import sys as _sys
+            _sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from ledger.fold import fold as _fold
+            from ledger.log import read_events as _read
+            roots[name] = _fold(_read(Path(name))).state_root()[:16]
+        except Exception:      # a root is diagnostic, never load-bearing here
+            roots[name] = None
+
     STATUS.write_text(json.dumps({
         "date": today,
         "generated_at": f"{today}",
@@ -66,6 +81,7 @@ def main() -> int:
         "total_spaces": len(spaces),
         "all_clean": all_clean,
         "consecutive_clean_days": streak,
+        "state_roots": roots,
     }, indent=2))
 
     print(f"\n  {clean}/{len(spaces)} clean | consecutive clean days: {streak}")
