@@ -1,0 +1,17 @@
+# Poll cadence for ledger-dispatch.service. 15 minutes is a compromise: short
+# enough that a delegated item is picked up while it still matters, long enough
+# that several actors polling the same space do not spend the day colliding on
+# the same items. A collision is harmless -- the fold resolves concurrent claims
+# to the earliest HLC and records the loser's attempt as an explicit no-op -- but
+# it is wasted work.
+
+[Unit]
+Description=Poll the ledger for delegated items
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

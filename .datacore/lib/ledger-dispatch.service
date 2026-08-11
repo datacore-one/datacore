@@ -1,0 +1,23 @@
+# An actor pulls delegated items from the ledger and executes them.
+#
+# Installed on winston (as root, WorkingDirectory=/root/Data) and on nightshift
+# (User=gregor, /home/gregor/Data) -- substitute the path and add User= for the
+# non-root box. Data (plur-claw) runs the cron variant instead, because it also
+# has to git pull/push around the dispatch: see ledger-dispatch-pull.sh.
+#
+# --limit 2 is deliberate. An actor that drains the whole queue in one tick
+# starves every other actor of anything to claim, which turns a fleet into a
+# single worker. Small bites, every 15 minutes.
+#
+# --actor MUST be this machine's roster name from registry/infrastructure.yaml.
+# Two machines sharing an actor name would write to the same per-writer log and
+# break the one-file-per-writer invariant the whole design rests on.
+
+[Unit]
+Description=Pull delegated items from the ledger and execute them
+Documentation=file:.datacore/lib/ledger_dispatch.py
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/Data
+ExecStart=/usr/bin/python3 /root/Data/.datacore/lib/ledger_dispatch.py --space /root/Data/2-datacore --actor winston --limit 2 --execute
