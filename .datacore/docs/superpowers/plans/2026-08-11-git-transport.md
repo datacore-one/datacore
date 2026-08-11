@@ -95,8 +95,18 @@ handled by an explicit bounded **fetch → merge → retry** loop on non-fast-fo
 **Verify:** two *machines* pushing concurrently both land (a two-local-process
 test passes without exercising this); offline remote → `ok=False`, no exception.
 
-### C3a. Migrate `lib/` git callers *(then C3b)*
-### C3b. Migrate module hooks — one sub-track per module, fully parallel
+### C3a. Migrate `lib/` git callers — **space_sync DONE** (142→80 lines, 13 git calls→0)
+### C3b. Migrate module hooks — **measured: near-empty**
+
+Classified all 11 hooks that reference org files: **10 are readers only**
+(`crm`, `github`, `health`, `mail`×2, `meetings`×2, `nightshift`, `ventures`,
+`crm/weekly`). The one write reference is `research/nightshift-hook`, and it
+writes a **journal entry**, not task state.
+
+That is the Phase-1 scoping principle paying off — *breaks writers, not readers*
+— and it means this sub-track is roughly one item rather than the "10+ module
+hooks" both the DIP and rev 1 of this plan claimed. The 30+ writer figure for
+Track C is correspondingly ~10 smaller and should not be quoted as-is.
 **Verify:** `grep -rn "subprocess.*git"` across **`.datacore` AND `datacore-mcp`
 AND `datacore-app`** returns only the transport module and the audit tools. Rev 1
 scoped this grep to `.datacore` only, so the track could go green with the two
