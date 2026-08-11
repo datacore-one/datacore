@@ -150,6 +150,64 @@ def run_task(title: str, route: str, cwd: Path) -> tuple[bool, str]:
     return True, out
 
 
+def _isolated_check(space: Path, check: str) -> bool:
+    """Check a fresh worktree of the committed result, not the agent's directory.
+
+    What this DOES buy, and it is worth having:
+
+      The artifact must be COMMITTED to be checkable, so a pass means something
+      durable that anyone can verify later from the sha — not a fact about one
+      machine's /tmp that disappears on reboot. This is what makes the
+      `artifact_commit` sequencing meaningful.
+
+      Checks cannot quietly depend on machine-local state.
+
+    What it does NOT buy, stated plainly because an earlier version of this
+    claimed otherwise: **it does not prevent a fabricated artifact.** Measured —
+    an "agent" that writes `faked` into proof.txt without doing the work still
+    passes `test -s proof.txt` here, because committing the agent's output is
+    precisely what isolation does, and for a file-producing task producing the
+    file IS the work.
+
+    The defence against fabrication is CHECK STRENGTH, not isolation:
+
+        test -s proof.txt              passes on "faked"   <- asserts existence
+        grep -qx verified proof.txt    fails on "faked"    <- asserts content
+
+    So a check must assert the OUTCOME, never merely that something appeared. A
+    check that only tests existence is a check an agent satisfies by touching a
+    file, and no amount of sandboxing repairs that.
+
+    A worktree that cannot be created fails CLOSED. An isolation mechanism that
+    silently degrades to the unisolated path is worse than none: it reports the
+    same green.
+    """
+    import tempfile
+    subprocess.run(["git", "add", "-A"], cwd=space, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "dispatch: agent output"],
+                   cwd=space, capture_output=True)
+    rc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=space,
+                        capture_output=True, text=True)
+    if rc.returncode != 0:
+        print("         -> check FAILED CLOSED: cannot resolve HEAD for isolation")
+        return False
+    head = rc.stdout.strip()
+    with tempfile.TemporaryDirectory(prefix="check-") as tmp:
+        wt = Path(tmp) / "verify"
+        add = subprocess.run(["git", "worktree", "add", "--detach", str(wt), head],
+                             cwd=space, capture_output=True, text=True)
+        if add.returncode != 0:
+            print(f"         -> check FAILED CLOSED: no isolated worktree "
+                  f"({(add.stderr or '').strip()[:90]})")
+            return False
+        try:
+            return subprocess.run(check, shell=True, cwd=str(wt),
+                                  capture_output=True, timeout=120).returncode == 0
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", str(wt)],
+                           cwd=space, capture_output=True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--space", required=True, type=Path)
@@ -212,8 +270,7 @@ def main() -> int:
             # sniffing that prose for refusal markers both passed a failure as
             # DONE, because the model rephrases ("I can't" / "I could not").
             # Prose is not evidence. A check that passes is.
-            passed = subprocess.run(check, shell=True, cwd=str(space),
-                                    capture_output=True, timeout=120).returncode == 0
+            passed = _isolated_check(space, check)
             if passed:
                 act(space, item.id, "complete", args.actor)
                 print(f"DONE     [{route}] {title[:70]}\n         -> check passed")
