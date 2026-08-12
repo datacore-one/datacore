@@ -70,6 +70,12 @@ m=$(grep -ho "[^ \"']*datacore-mcp[^ \"']*" ~/.hermes/config.yaml ~/.claude.json
                         /usr/local/lib/node_modules/@datacore-one/mcp; do
   [ -f "$g/package.json" ] && { m="$g"; break; }
 done
+# Hermes ships its OWN node install, so the package is not on the default PATH
+# and `command -v` finds nothing — Tris has been running v1.6.0 for 14 days
+# while every probe reported it absent.
+for hp in "$HOME/.hermes/node/lib/node_modules/@datacore-one/mcp"; do
+  [ -z "$m" ] && [ -f "$hp/package.json" ] && m="$hp"
+done
 [ -z "$m" ] && command -v datacore-mcp >/dev/null 2>&1 && \
   m=$(dirname "$(dirname "$(readlink -f "$(command -v datacore-mcp)")")")
 if [ -n "$m" ] && [ -f "$m/package.json" ]; then
