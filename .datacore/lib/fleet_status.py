@@ -41,14 +41,19 @@ PROBE = r'''
 D=$(eval echo __DATA__); R=$(eval echo __RUNNER__)
 cd "$D" 2>/dev/null && echo "data_head=$(git rev-parse --short HEAD 2>/dev/null)"
 [ -n "$R" ] && cd "$R" 2>/dev/null && echo "runner_head=$(git rev-parse --short HEAD 2>/dev/null)"
-# datacore-mcp: search the data root AND the runner, and fall back to whatever
-# the machine's own MCP config points at — the first version only checked one
-# guessed path and reported it absent on every server while Winston was
-# demonstrably serving v1.6.0.
-m=$(ls -d "$D"/*/2-projects/datacore-mcp 2>/dev/null | head -1)
-[ -z "$m" ] && m=$(ls -d "$D"/*/*/datacore-mcp 2>/dev/null | head -1)
-[ -z "$m" ] && m=$(grep -ho '"[^"]*datacore-mcp[^"]*"' ~/.claude.json ~/.mcp.json "$D/.mcp.json" 2>/dev/null                     | head -1 | tr -d '"' | sed 's#/dist/.*##')
-[ -n "$m" ] && [ -f "$m/package.json" ] &&   echo "mcp=$(python3 -c "import json;print(json.load(open('$m/package.json'))['version'])" 2>/dev/null)"
+# datacore-mcp is an IN-REPO BUILD, not a package. The deployed tree has dist/
+# and node_modules/ and NO package.json, so a package.json probe reports it
+# absent on every server while Winston serves v1.6.0. The version is compiled
+# into dist/index.js, and the launch path lives in ~/.hermes/config.yaml — not
+# .mcp.json, which is why a config fallback missed it as well.
+m=$(grep -ho "[^ \"']*datacore-mcp[^ \"']*" ~/.hermes/config.yaml ~/.claude.json ~/.mcp.json "$D/.mcp.json" 2>/dev/null | head -1 | sed "s#/dist/.*##")
+[ -z "$m" ] && m=$(ls -d "$D"/*/2-projects/datacore-mcp 2>/dev/null | head -1)
+if [ -n "$m" ] && [ -f "$m/package.json" ]; then
+  echo "mcp=$(python3 -c "import json;print(json.load(open('$m/package.json'))['version'])" 2>/dev/null)"
+elif [ -n "$m" ] && [ -f "$m/dist/index.js" ]; then
+  v=$(grep -oE "version[\": ]+[0-9]+\.[0-9]+\.[0-9]+" "$m/dist/index.js" 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+\.[0-9]+")
+  [ -n "$v" ] && echo "mcp=$v"
+fi
 
 # PYTHON: report the interpreter this machine actually resolves, by path AND
 # version. `python3` under a non-interactive shell picked /usr/bin/python3 on
