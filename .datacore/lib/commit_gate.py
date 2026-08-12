@@ -51,7 +51,13 @@ class Decision:
 
 def dirty_paths(repo: Path) -> list[str]:
     """Every path git reports as changed, staged or not, tracked or not."""
-    r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
+    # -uall is load-bearing. Plain `--porcelain` COLLAPSES a new untracked
+    # directory to "0-inbox/" instead of listing the files in it, so a task
+    # whose output lands in a brand-new directory has a declared path that
+    # matches nothing and gets withheld — the gate refusing the task's own
+    # work. Verified: declaring 0-inbox/nightshift-exec-1.md against a
+    # collapsed "0-inbox/" withheld it.
+    r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "-uall"],
                        capture_output=True, text=True, timeout=120)
     out = []
     for line in (r.stdout or "").splitlines():

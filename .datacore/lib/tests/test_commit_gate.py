@@ -114,3 +114,20 @@ def test_gate_defaults_on(monkeypatch):
     assert commit_gate.enabled()
     monkeypatch.setenv("DATACORE_COMMIT_GATE", "0")
     assert not commit_gate.enabled()
+
+
+def test_new_untracked_directory_is_listed_per_file(repo: Path):
+    """git collapses a new untracked dir; a declared path inside it must match.
+
+    Plain `--porcelain` reports "0-inbox/" rather than the file within, so a
+    task whose output lands in a brand-new directory declared a path matching
+    nothing and had its OWN work withheld. -uall lists the files.
+    """
+    (repo / "0-inbox").mkdir()
+    (repo / "0-inbox" / "out.md").write_text("task output\n")
+    (repo / "stranger.txt").write_text("someone else\n")
+
+    d = commit_gate.decide(repo, ["0-inbox/out.md"], task_id="t9")
+
+    assert "0-inbox/out.md" in d.allowed
+    assert d.withheld == ["stranger.txt"]
