@@ -1,94 +1,80 @@
-# Infrastructure Registry — servers, services, and deployment targets
-# Used by <!-- REGISTRY:infrastructure --> in CLAUDE.base.md
-#
-# Schema:
-#   servers:
-#     [name]:
-#       purpose:        What this server does
-#       ssh_alias:      SSH config alias (or - if N/A)
-#       deploy_method:  How code gets there (git pull, rsync, systemd, etc.)
-#       services:       List of services running on it
-#       ledger_actors:  Writer actor names owning event files on this machine
-#                       (DIP-0034 — one .jsonl file per actor, never shared)
-#       notes:          Additional context
-#
-# NO NETWORK ADDRESSES IN THIS FILE. It is tracked in a public repository.
-# IPs live in ~/.ssh/config and in engram memory (plur_recall_hybrid,
-# domain "infrastructure") — per DIP-0018. Aliases only here.
-#
-# This file is the installation's ACTOR ROSTER for DIP-0034. Any change to the
-# ledger write path — deploying the ledger package, rotating keys, installing a
-# projector — must cover every machine listed here. A partial rollout is worse
-# than none: a machine on an older write path will either have its writes
-# refused by the projector guard or overwrite generated state.
-
 servers:
   mac:
-    purpose: "Primary workstation — human sessions, Claude Code, org authoring"
-    ssh_alias: "-"
-    deploy_method: "local working copy (~/Data)"
+    purpose: Primary workstation — human sessions, Claude Code, org authoring
+    ssh_alias: '-'
+    deploy_method: local working copy (~/Data)
     services: []
     ledger_actors:
-      - mac
-    notes: "Local machine. On main at the v2 merge (0e2aad5) since 2026-08-10.
-      Holds the only copy of the genesis event logs: .datacore/events/ is
-      UNTRACKED in every space repo, so the migration output exists here and
-      nowhere else. Back it up before reinstalling this machine."
-
+    - mac
+    notes: 'Local machine. On main at the v2 merge (0e2aad5) since 2026-08-10. Holds the only copy of
+      the genesis event logs: .datacore/events/ is UNTRACKED in every space repo, so the migration output
+      exists here and nowhere else. Back it up before reinstalling this machine.'
+    access:
+      service_user: gregor
+      data_root: ~/Data
+      runner: ~/.datacore/v2-runner
   winston:
-    # DIP-0039 established "box" as a ROLE name (always-on producer). The job
-    # manifest uses it; this roster uses the host name. Recorded explicitly
-    # because the two drifting apart silently is how a job ends up declared
-    # for a machine nothing verifies (found 2026-08-10).
-    manifest_machine: "box"
-    purpose: "Chief of Staff — briefings, approvals, merge gatekeeper"
-    ssh_alias: "winston"
-    deploy_method: "rsync + cron"
+    manifest_machine: box
+    purpose: Chief of Staff — briefings, approvals, merge gatekeeper
+    ssh_alias: winston
+    deploy_method: rsync + cron
     services:
-      - cos_verify_morning.sh (cron 08:00)
-      - job_verify.py (cron 08:00, DATACORE_V2=1)
-      - cos_merge_runs.sh (cron 03:50)
+    - cos_verify_morning.sh (cron 08:00)
+    - job_verify.py (cron 08:00, DATACORE_V2=1)
+    - cos_merge_runs.sh (cron 03:50)
     ledger_actors:
-      - winston
-    notes: "Runs the config plane, job contracts and the ledger package from
-      ~/Data at 0e2aad5. Verified end to end by ledger_probe.py 2026-08-10."
-
+    - winston
+    notes: Runs the config plane, job contracts and the ledger package from ~/Data at 0e2aad5. Verified
+      end to end by ledger_probe.py 2026-08-10.
+    access:
+      ssh_user: root
+      service_user: root
+      data_root: ~/Data
   nightshift:
-    purpose: "Overnight AI task execution (systemd timers); Miles Telegram bot"
-    ssh_alias: "nightshift"
-    deploy_method: "git pull + systemctl restart"
+    purpose: Overnight AI task execution (systemd timers); Miles Telegram bot
+    ssh_alias: nightshift
+    deploy_method: git pull + systemctl restart
     services:
-      - nightshift-overnight.service
-      - nightshift-overnight.timer
-      - datacore-telegram.service
-      - datacore-fleet-sync.timer
-      - cos-cadence-triage.timer
+    - nightshift-overnight.service
+    - nightshift-overnight.timer
+    - datacore-telegram.service
+    - datacore-fleet-sync.timer
+    - cos-cadence-triage.timer
     ledger_actors:
-      - nightshift
-      - miles
-    notes: "Two actors on one machine — they own separate event files and never
-      contend. Runs .datacore/modules/nightshift/ tasks on schedule.
-      nightshift-digest.service is currently in a failed state."
-
+    - nightshift
+    - miles
+    notes: Two actors on one machine — they own separate event files and never contend. Runs .datacore/modules/nightshift/
+      tasks on schedule. nightshift-digest.service is currently in a failed state.
+    access:
+      ssh_user: gregor
+      service_user: gregor
+      data_root: ~/Data
   hermes:
-    purpose: "Tris — Hermes agent gateway + PLUR bridge"
-    ssh_alias: "hermes"
-    deploy_method: "agent_update.py --host hermes --apply"
+    purpose: Tris — Hermes agent gateway + PLUR bridge
+    ssh_alias: hermes
+    deploy_method: agent_update.py --host hermes --apply
     services:
-      - hermes-gateway.service
+    - hermes-gateway.service
     ledger_actors:
-      - tris
-    notes: "Satellite writer: no ~/Data git repo — v2 code lives in
-      ~/.datacore/v2-runner (0e2aad5), events in ~/Data/.datacore/events.
-      Verified end to end by ledger_probe.py 2026-08-10."
-
+    - tris
+    notes: 'Satellite writer: no ~/Data git repo — v2 code lives in ~/.datacore/v2-runner (0e2aad5), events
+      in ~/Data/.datacore/events. Verified end to end by ledger_probe.py 2026-08-10.'
+    access:
+      ssh_user: root
+      service_user: gregor
+      data_root: ~gregor/Data
+      runner: ~gregor/.datacore/v2-runner
   plur-claw:
-    purpose: "Mr Data — OpenClaw agent host"
-    ssh_alias: "plur-claw"
-    deploy_method: "ssh + manual"
+    purpose: Mr Data — OpenClaw agent host
+    ssh_alias: plur-claw
+    deploy_method: ssh + manual
     services: []
     ledger_actors:
-      - data
-    notes: "Satellite writer. ~/Data is a DIFFERENT repo (data-on-claw/data-space),
-      not this installation; v2 code lives in ~/.datacore/v2-runner (0e2aad5).
-      Verified end to end by ledger_probe.py 2026-08-10."
+    - data
+    notes: Satellite writer. ~/Data is a DIFFERENT repo (data-on-claw/data-space), not this installation;
+      v2 code lives in ~/.datacore/v2-runner (0e2aad5). Verified end to end by ledger_probe.py 2026-08-10.
+    access:
+      ssh_user: root
+      service_user: root
+      data_root: ~/Data
+      runner: ~/.datacore/v2-runner
