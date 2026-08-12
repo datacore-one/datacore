@@ -184,3 +184,13 @@ repositories:
     host: github
     transport: git
     repo: datacore
+  tris-space:
+    category: agent-personal
+    host: github
+    transport: git
+    repo: tris-space
+  data-space:
+    category: agent-personal
+    host: github
+    transport: git
+    repo: data-space
