@@ -85,7 +85,15 @@ def observed(root: Path) -> dict[str, dict]:
 # cries wolf gets muted, which is worse than not having it.
 MIN_SAMPLES = 20        # below this, cadence cannot be learned honestly
 FLOOR_HOURS = 6.0       # never alarm faster than this, whatever history says
-MARGIN = 1.5            # x the LONGEST quiet spell already seen
+MARGIN = 2.0            # x the LONGEST quiet spell already seen
+                        # 1.5 flagged nightshift at 13.9h against a 13.7h
+                        # threshold — a 0.2h overshoot on an actor whose
+                        # batches are ~12h apart, i.e. the observed max simply
+                        # under-sampled its true period. For periodic work the
+                        # longest gap seen is a floor on the real one, so the
+                        # margin has to absorb that. 2.0 still catches a dead
+                        # nightshift inside a day and keeps winston's genuine
+                        # 26.5h finding.
 
 
 def gap_hours(events_ms: list[int]) -> list[float]:
