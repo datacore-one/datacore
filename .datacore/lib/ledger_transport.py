@@ -102,8 +102,24 @@ def classify(space: Path, root: Path | None = None) -> Result:
     (DIP-0046 §1).
     """
     root = root or Path(__file__).resolve().parents[2]
+    reg = _registry(root)
     key = "<root>" if space.resolve() == root.resolve() else space.name
-    entry = _registry(root).get(key)
+    entry = reg.get(key)
+
+    # FALL BACK TO THE REMOTE'S NAME, because the directory name is a LOCAL
+    # fact. Tris on hermes clones the same repos under different names —
+    # `2-plur` there is `5-plur` here, `1-datacore` is `2-datacore` — so a
+    # name-keyed registry refuses every one of its spaces and the transport
+    # cannot be used on that machine at all. The remote's basename is the same
+    # everywhere. (Basename only: this registry is tracked in a PUBLIC repo and
+    # must carry no host or address.)
+    if not entry:
+        rc, out, _ = _git(space, "remote", "get-url", "origin")
+        if rc == 0 and out.strip():
+            import re as _re
+            name = _re.sub(r"\.git$", "", out.strip().rstrip("/").split("/")[-1])
+            entry = next((v for v in reg.values() if v.get("repo") == name), None)
+
     if not entry:
         return Result(False, "repository not in registry/repositories.yaml",
                       {"repo": key, "fix": "classify it as knowledge, code or agent-personal"})
