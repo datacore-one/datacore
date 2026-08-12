@@ -143,7 +143,16 @@ def main() -> int:
             tag = {"ok": "ok   ", "no-log-yet": "new  ",
                    "missing": "MISSING", "stalled": "STALLED"}[r["status"]]
             print(f"  {tag} {r['actor']:<12} ({r['machine']:<10}) {where}")
+        # SURFACE THE NEVER-WRITTEN. An actor with no log is "no-log-yet", not
+        # "missing", and that is right — a new actor has not failed. But folded
+        # into "0 failing" it is indistinguishable from an actor that has been
+        # rostered for months and never worked, which is exactly what `tris` was
+        # on 2026-08-12: code deployed, hooks installed, zero events ever. The
+        # count is reported separately rather than alarmed on, because a genuinely
+        # new actor must not page anyone.
+        never = [r["actor"] for r in rows if r["status"] == "no-log-yet"]
         print(f"\nactor-presence: {len(rows)} rostered actor(s), {len(bad)} failing"
+              + (f", {len(never)} never written ({', '.join(never)})" if never else "")
               + ("  [first run — baseline established, STALLED cannot fire]" if first_run else ""))
 
     # A missing actor KEEPS its prior baseline. Dropping it would make the next

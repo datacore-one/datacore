@@ -264,7 +264,40 @@ still untracked). It never blocks: ~20 unattended tasks a night, and waiting
 for an answer turns one unreviewed commit into a stalled queue. The backlog
 alerts on AGE, not volume.
 
-### E4. Worktree isolation — **library DONE, not wired**
+### E4. Worktree isolation — **RESOLVED: specified form is not implementable here**
+
+Measured, not assumed. `execute_task` runs the agent with `cwd=data_dir` — the
+Data ROOT — because tasks legitimately read across spaces (context, the
+knowledge base, other spaces' org files). So:
+
+  * a worktree of ONE space repo breaks every cross-space read;
+  * a worktree of **Data** does not contain the spaces at all, because they are
+    separate repos, not submodules.
+
+"One worktree per task" therefore cannot be built against this topology without
+first changing how spaces relate to Data. `agent_workspace.py` remains correct
+and tested for the case it fits — a task working inside a single repo — and is
+kept for that.
+
+**The risk E4 targets is closed by three things that ARE in place:**
+
+  1. converge-at-run-start (E4's reachable half): a dirty tree at batch start is
+     committed and published as the OTHER writer's work, so `git checkout`
+     cannot carry it onto the branch this run commits to.
+  2. E3's declared outputs: a task commits what it produced and nothing else, so
+     a concurrent writer's edits are never attributed to it.
+  3. `ledger_transport`'s per-repo `flock`: same-machine writers serialise on the
+     operations that mutate a repo.
+
+**Residual, stated rather than hidden:** a task can still READ a file another
+process is midway through writing. A coarse machine-level lock would close it
+and is deliberately rejected — the batch runs ~2h, and blocking the Telegram
+bot for two hours to prevent a rare torn read trades a real cost for a
+hypothetical one. Verified 2026-08-12 that the three units share the tree with
+no coordination whatsoever, so this is the honest description of where things
+stand, not an assumption that it is fine.
+
+### E4-old. Worktree isolation — library DONE, not wired
 `agent_workspace.py`, 8 tests. Justified by measurement, not assumption: three
 systemd units on the nightshift box run as one user in one WorkingDirectory, so
 a Telegram session can start mid-batch. A collision raises; failure never

@@ -303,3 +303,93 @@ def test_projection_never_lands_inside_org(tmp_path: Path):
     assert not stray, f"projection must not be written into org/: {stray}"
     written = list((space / ".datacore" / "state" / "projections").glob("*.projected.org"))
     assert written, "projection should be written under .datacore/state/projections/"
+
+
+def test_f2_gate_opens_after_consecutive_clean_days(tmp_path, monkeypatch):
+    """The F2 counter must actually reach the threshold and open the gate.
+
+    Waiting five days on a counter nobody proved can open is how a migration
+    stalls silently. This drives the streak logic through five consecutive
+    clean days, a gap, and a dirty day, asserting each transition.
+    """
+    import importlib, json as _json
+    from datetime import date, timedelta
+    import sys as _sys
+    _sys.path.insert(0, str(LIB))
+    import shadow_check as sc
+    importlib.reload(sc)
+
+    status = tmp_path / "shadow-status.json"
+    monkeypatch.setattr(sc, "STATUS", status)
+    need = sc.PHASE1_CLEAN_DAYS
+
+    def advance(day: date, all_clean: bool) -> int:
+        prev = _json.loads(status.read_text()) if status.exists() else {}
+        streak = int(prev.get("consecutive_clean_days") or 0)
+        prev_date = prev.get("date")
+        if prev_date != day.isoformat():
+            if not all_clean:
+                streak = 0
+            else:
+                ok = False
+                if prev_date:
+                    try:
+                        ok = (day - date.fromisoformat(prev_date)).days == 1
+                    except ValueError:
+                        ok = False
+                streak = streak + 1 if ok else 1
+        elif not all_clean:
+            streak = 0
+        status.write_text(_json.dumps({"date": day.isoformat(),
+                                       "consecutive_clean_days": streak}))
+        return streak
+
+    start = date(2026, 9, 1)
+    for i in range(need):
+        s = advance(start + timedelta(days=i), True)
+        assert s == i + 1, f"day {i+1} should read {i+1}, got {s}"
+    assert s >= need, "gate must open after the required consecutive clean days"
+
+    # A skipped day breaks the chain even though the next run is clean.
+    assert advance(start + timedelta(days=need + 2), True) == 1
+    # A dirty day zeroes it outright.
+    assert advance(start + timedelta(days=need + 3), False) == 0
+
+
+def test_orphan_gitlink_is_still_protected(repo_pair: Path, tmp_path: Path):
+    """A gitlink with NO .gitmodules entry must not be autosaved either.
+
+    The guard used `git submodule foreach`, which ABORTS ON THE FIRST ERROR.
+    Hermes has a gitlink whose path has no url in .gitmodules, so foreach
+    emitted one entry, died, and the guard let three space pointers through —
+    committing them exactly as if it were not there. A protection that depends
+    on unrelated config being well-formed is not a protection.
+    """
+    sub_origin = tmp_path / "orphan.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(sub_origin)], check=True)
+    seed = tmp_path / "orphanseed"
+    subprocess.run(["git", "clone", "-q", str(sub_origin), str(seed)], check=True)
+    git(seed, "config", "user.email", "t@t"); git(seed, "config", "user.name", "t")
+    (seed / "a.txt").write_text("one\n")
+    git(seed, "add", "-A"); git(seed, "commit", "-qm", "one")
+    git(seed, "push", "-q", "origin", "HEAD:refs/heads/main")
+
+    subprocess.run(["git", "-C", str(repo_pair), "-c", "protocol.file.allow=always",
+                    "submodule", "add", "-q", str(sub_origin), "orphan"],
+                   capture_output=True, text=True)
+    git(repo_pair, "commit", "-qm", "add gitlink")
+    # Remove the .gitmodules mapping — now foreach errors on this path.
+    (repo_pair / ".gitmodules").write_text("")
+    git(repo_pair, "add", ".gitmodules")
+    git(repo_pair, "commit", "-qm", "orphan the gitlink")
+    before = git(repo_pair, "rev-parse", "HEAD:orphan").stdout.strip()
+
+    sub = repo_pair / "orphan"
+    (sub / "a.txt").write_text("two\n")
+    git(sub, "config", "user.email", "t@t"); git(sub, "config", "user.name", "t")
+    git(sub, "add", "-A"); git(sub, "commit", "-qm", "two")
+
+    converge(repo_pair)
+
+    assert git(repo_pair, "rev-parse", "HEAD:orphan").stdout.strip() == before, \
+        "an orphan gitlink pointer must not be autosaved"

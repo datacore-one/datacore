@@ -1,168 +1,196 @@
-# Repository registry — DIP-0046 §1
-#
-# What a repository IS. Not who may write to it: membership is
-# <space>/.datacore/members.yaml, and which actors may RUN on a machine is
-# registry/infrastructure.yaml. Three different facts, three homes; conflating
-# the last two is what made `ledger_actors` answer a question it does not.
-#
-#   knowledge       facts, org, journals, notes — commit and push to the default
-#                   branch. A pull request per journal entry is ceremony.
-#   code            product repos — branch, PR, review, merge queue.
-#   agent-personal  an agent's own space — its own default branch, no review.
-#
-# NO NETWORK ADDRESSES. Tracked in a public repository; hosts are named
-# symbolically and resolved via ~/.ssh/config (DIP-0018).
-#
-# `ledger_transport.py` REFUSES a repository absent from this file. Defaulting
-# would silently hand a production repo the knowledge rules, which is the one
-# mistake the two categories exist to prevent.
-
 repositories:
   .datacore/dips:
     category: code
     host: github
     transport: git
+    repo: datacore-dips
   .datacore/modules/chief-of-staff:
     category: code
     host: github
     transport: git
+    repo: datacore-chief-of-staff
   .datacore/modules/comms:
     category: code
     host: github
     transport: git
+    repo: datacore-comms
   .datacore/modules/crm:
     category: code
     host: github
     transport: git
+    repo: datacore-crm
   .datacore/modules/datacore-appbuilder:
     category: code
     host: github
     transport: git
+    repo: datacore-appbuilder
   .datacore/modules/datacortex:
     category: code
     host: github
     transport: git
+    repo: datacortex
   .datacore/modules/dev:
     category: code
     host: github
     transport: git
+    repo: datacore-dev
   .datacore/modules/forge:
     category: code
     host: github
     transport: git
+    repo: datacore-forge
   .datacore/modules/gordon:
     category: code
     host: github
     transport: git
+    repo: datacore-fundraising
   .datacore/modules/grants:
     category: code
     host: github
     transport: git
+    repo: module-grants
   .datacore/modules/gstack:
     category: code
     host: github
     transport: git
+    repo: datacore-gstack
   .datacore/modules/health:
     category: code
     host: github
     transport: git
+    repo: datacore-health
   .datacore/modules/image-generation:
     category: code
     host: github
     transport: git
+    repo: datacore-image-generation
   .datacore/modules/lens:
     category: code
     host: github
     transport: git
+    repo: datacore-lens
   .datacore/modules/mail:
     category: code
     host: github
     transport: git
+    repo: datacore-mail
   .datacore/modules/meetings:
     category: code
     host: github
     transport: git
+    repo: module-meetings
   .datacore/modules/megaphone-websites:
     category: code
     host: github
     transport: git
+    repo: megaphone-websites
   .datacore/modules/metacognition:
     category: code
     host: github
     transport: git
+    repo: module-metacognition
   .datacore/modules/news:
     category: code
     host: github
     transport: git
+    repo: datacore-news
   .datacore/modules/nightshift:
     category: code
     host: github
     transport: git
+    repo: datacore-nightshift
   .datacore/modules/personal-finance:
     category: code
     host: github
     transport: git
+    repo: module-personal-finance
   .datacore/modules/slides:
     category: code
     host: github
     transport: git
+    repo: datacore-slides
   .datacore/modules/telegram:
     category: code
     host: github
     transport: git
+    repo: datacore-telegram
   .datacore/modules/trading:
     category: code
     host: github
     transport: git
+    repo: datacore-trading
   .datacore/modules/tutor:
     category: code
     host: github
     transport: git
+    repo: datacore-tutor
   .datacore/modules/ventures:
     category: code
     host: github
     transport: git
+    repo: datacore-ventures
   .datacore/modules/verity:
     category: code
     host: github
     transport: git
+    repo: datacore-verity
   0-personal:
     category: knowledge
     host: gitea
     transport: git
+    repo: 0-personal
   1-datafund:
     category: knowledge
     host: github
     transport: git
+    repo: datafund-space
   2-datacore:
     category: knowledge
     host: github
     transport: git
+    repo: datacore-space
   3-fds:
     category: knowledge
     host: github
     transport: git
+    repo: fds-space
   4-forge:
     category: knowledge
     host: gitea
     transport: git
+    repo: 4-forge
   5-plur:
     category: knowledge
     host: github
     transport: git
+    repo: plur-space
   6-meridian:
     category: knowledge
     host: gitea
     transport: git
+    repo: 6-meridian
   7-megaphone:
     category: knowledge
     host: gitea
     transport: git
+    repo: 7-megaphone
   8-firm:
     category: knowledge
     host: github
     transport: git
+    repo: the-firm-space
   <root>:
     category: code
     host: github
     transport: git
+    repo: datacore
+  tris-space:
+    category: agent-personal
+    host: github
+    transport: git
+    repo: tris-space
+  data-space:
+    category: agent-personal
+    host: github
+    transport: git
+    repo: data-space

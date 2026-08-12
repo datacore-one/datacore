@@ -142,12 +142,37 @@ def check_projections() -> tuple[str, str]:
         else ("OPEN", line[-1].strip() if line else "drift")
 
 
+def check_concurrency() -> tuple[str, str]:
+    """E4: worktree isolation is not implementable here, so check the mitigations.
+
+    `execute_task` runs the agent with cwd=data_dir because tasks read across
+    spaces, and the spaces are separate repos rather than submodules — so
+    neither a per-space worktree nor a Data worktree can hold a task. What must
+    hold instead: converge-at-run-start, E3's declared outputs, and the
+    transport's per-repo flock.
+    """
+    run_py = ROOT / ".datacore/modules/nightshift/lib/run.py"
+    missing = []
+    if run_py.exists():
+        t = run_py.read_text(errors="replace")
+        if "tree dirty at run start" not in t:
+            missing.append("converge-at-run-start")
+        if "files=produced" not in t:
+            missing.append("declared outputs")
+    transport = ROOT / ".datacore/lib/ledger_transport.py"
+    if transport.exists() and "_repo_lock" not in transport.read_text(errors="replace"):
+        missing.append("per-repo flock")
+    return ("OPEN", f"missing: {', '.join(missing)}") if missing \
+        else ("DONE", "isolation infeasible by topology; 3 mitigations in place")
+
+
 TRACKS = [
     ("A  detectors", check_detectors),
     ("C  transport", check_transport),
     ("D  membership", check_membership),
     ("D  hooks", check_hooks),
     ("E  commit gate", check_gate),
+    ("E  concurrency", check_concurrency),
     ("F1 projections", check_projections),
     ("F2a reversibility", check_reversibility),
     ("F2 clean streak", check_streak),
