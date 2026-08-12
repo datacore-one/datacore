@@ -55,14 +55,61 @@ ACTOR_LOG = re.compile(r"^(?:.*/)?\.datacore/events/([A-Za-z0-9_-]+)\.jsonl$")
 SHARED_ROLE_LOGS = {"genesis"}
 
 
-def actor() -> str:
-    """Same resolution as ledger_cli: $DATACORE_ACTOR, else hostname.
+def _registry_actors(root: Path, host: str) -> list[str]:
+    """Which ledger actors this MACHINE may write, per the registry.
 
-    Lower-cased: this machine's hostname is "Mac" while its log is `mac.jsonl`,
-    so a case-sensitive compare made the guard report mac writing its OWN log.
+    A hostname is not an actor name. winston's hostname is `chief-of-staff`
+    while its ledger actor is `winston`, so a hostname-derived actor made the
+    guard refuse winston writing its OWN log — blocking every push from the
+    Chief of Staff box. The registry already recorded the mapping
+    (servers.winston.ledger_actors); this reads it instead of assuming.
     """
-    return (os.environ.get("DATACORE_ACTOR")
-            or socket.gethostname().split(".")[0]).lower()
+    try:
+        import yaml
+        reg = yaml.safe_load((root / ".datacore/registry/infrastructure.yaml").read_text())
+    except Exception:      # noqa: BLE001 — no registry is not a violation
+        return []
+    servers = (reg or {}).get("servers") or {}
+    for name, cfg in servers.items():
+        if not isinstance(cfg, dict):
+            continue
+        access = cfg.get("access") or {}
+        if host in (name.lower(),
+                    str(access.get("hostname", "")).lower(),
+                    str(cfg.get("ssh_alias", "")).lower(),
+                    str(cfg.get("manifest_machine", "")).lower()):
+            return [str(a).lower() for a in (cfg.get("ledger_actors") or [])]
+    return []
+
+
+def _data_root() -> Path:
+    """Find the Data root from a SPACE repo, which does not contain the registry."""
+    env = os.environ.get("DATACORE_ROOT")
+    if env:
+        return Path(env)
+    here = Path.cwd().resolve()
+    for cand in [here, *here.parents]:
+        if (cand / ".datacore" / "registry" / "infrastructure.yaml").is_file():
+            return cand
+    return Path.home() / "Data"
+
+
+def actors() -> list[str]:
+    """Every actor identity this machine may legitimately write.
+
+    Lower-cased: this Mac's hostname is "Mac" while its log is `mac.jsonl`, so a
+    case-sensitive compare made the guard report mac writing its OWN log.
+    """
+    explicit = os.environ.get("DATACORE_ACTOR")
+    if explicit:
+        return [explicit.lower()]
+    host = socket.gethostname().split(".")[0].lower()
+    return sorted({host, *_registry_actors(_data_root(), host)})
+
+
+def actor() -> str:
+    """Primary identity, for messages."""
+    return actors()[0]
 
 
 def git(*args: str) -> tuple[int, str]:
@@ -112,7 +159,8 @@ def members(root: Path) -> list[str]:
 def main(argv: list[str]) -> int:
     if not argv:
         return 0
-    me = actor()
+    mine = actors()
+    me = "/".join(mine)
     rc, top = git("rev-parse", "--show-toplevel")
     root = Path(top.strip()) if rc == 0 and top.strip() else Path.cwd()
 
@@ -120,7 +168,7 @@ def main(argv: list[str]) -> int:
     for rng in argv:
         for f in changed(rng):
             m = ACTOR_LOG.match(f)
-            if m and m.group(1).lower() != me \
+            if m and m.group(1).lower() not in mine \
                     and m.group(1).lower() not in SHARED_ROLE_LOGS:
                 foreign.add(m.group(1))
 

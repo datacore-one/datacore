@@ -13,6 +13,7 @@ servers:
       service_user: gregor
       data_root: ~/Data
       runner: ~/.datacore/v2-runner
+      hostname: Mac
   winston:
     manifest_machine: box
     purpose: Chief of Staff — briefings, approvals, merge gatekeeper
@@ -30,6 +31,7 @@ servers:
       ssh_user: root
       service_user: root
       data_root: ~/Data
+      hostname: chief-of-staff
   nightshift:
     purpose: Overnight AI task execution (systemd timers); Miles Telegram bot
     ssh_alias: nightshift
@@ -49,6 +51,7 @@ servers:
       ssh_user: gregor
       service_user: gregor
       data_root: ~/Data
+      hostname: nightshift
   hermes:
     purpose: Tris — Hermes agent gateway + PLUR bridge
     ssh_alias: hermes
@@ -64,6 +67,7 @@ servers:
       service_user: gregor
       data_root: ~gregor/Data
       runner: ~gregor/.datacore/v2-runner
+      hostname: hermes-test
   plur-claw:
     purpose: Mr Data — OpenClaw agent host
     ssh_alias: plur-claw
@@ -78,3 +82,4 @@ servers:
       service_user: root
       data_root: ~/Data
       runner: ~/.datacore/v2-runner
+      hostname: plur-claw

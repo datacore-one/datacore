@@ -41,11 +41,28 @@ PROBE = r'''
 D=$(eval echo __DATA__); R=$(eval echo __RUNNER__)
 cd "$D" 2>/dev/null && echo "data_head=$(git rev-parse --short HEAD 2>/dev/null)"
 [ -n "$R" ] && cd "$R" 2>/dev/null && echo "runner_head=$(git rev-parse --short HEAD 2>/dev/null)"
+# datacore-mcp: search the data root AND the runner, and fall back to whatever
+# the machine's own MCP config points at — the first version only checked one
+# guessed path and reported it absent on every server while Winston was
+# demonstrably serving v1.6.0.
 m=$(ls -d "$D"/*/2-projects/datacore-mcp 2>/dev/null | head -1)
-[ -n "$m" ] && echo "mcp=$(python3 -c "import json;print(json.load(open('$m/package.json'))['version'])" 2>/dev/null)"
-echo "org_workspace=$(python3 -c 'import org_workspace as o;print(getattr(o,"__version__","?"))' 2>/dev/null)"
-command -v datacore >/dev/null 2>&1 && echo "cli=$(datacore --version 2>&1 | head -1)"
-echo "python=$(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null)"
+[ -z "$m" ] && m=$(ls -d "$D"/*/*/datacore-mcp 2>/dev/null | head -1)
+[ -z "$m" ] && m=$(grep -ho '"[^"]*datacore-mcp[^"]*"' ~/.claude.json ~/.mcp.json "$D/.mcp.json" 2>/dev/null                     | head -1 | tr -d '"' | sed 's#/dist/.*##')
+[ -n "$m" ] && [ -f "$m/package.json" ] &&   echo "mcp=$(python3 -c "import json;print(json.load(open('$m/package.json'))['version'])" 2>/dev/null)"
+
+# PYTHON: report the interpreter this machine actually resolves, by path AND
+# version. `python3` under a non-interactive shell picked /usr/bin/python3 on
+# the Mac (3.9) while the real one is pyenv — a version that is true of no job
+# that runs here.
+PY3=$(command -v python3 2>/dev/null)
+[ -x "$HOME/.pyenv/shims/python3" ] && PY3="$HOME/.pyenv/shims/python3"
+echo "python=$("$PY3" -c 'import sys;print("%d.%d.%d"%sys.version_info[:3])' 2>/dev/null)"
+echo "python_path=$PY3"
+echo "org_workspace=$("$PY3" -c 'import org_workspace as o;print(getattr(o,"__version__","?"))' 2>/dev/null)"
+
+for c in datacore "$HOME/.local/bin/datacore" /usr/local/bin/datacore; do
+  command -v "$c" >/dev/null 2>&1 && { echo "cli=$("$c" --version 2>&1 | head -1)"; break; }
+done
 '''
 
 
