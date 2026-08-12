@@ -40,6 +40,7 @@ PROBE = r'''
 # cd'd into a literal "~/Data" and reported every head as empty.
 D=$(eval echo __DATA__); R=$(eval echo __RUNNER__)
 cd "$D" 2>/dev/null && echo "data_head=$(git rev-parse --short HEAD 2>/dev/null)"
+[ -f "$D/.datacore/VERSION" ] && echo "core=$(head -1 "$D/.datacore/VERSION" | tr -d ' ')"
 [ -n "$R" ] && cd "$R" 2>/dev/null && echo "runner_head=$(git rev-parse --short HEAD 2>/dev/null)"
 # datacore-mcp is an IN-REPO BUILD, not a package. The deployed tree has dist/
 # and node_modules/ and NO package.json, so a package.json probe reports it
@@ -47,7 +48,22 @@ cd "$D" 2>/dev/null && echo "data_head=$(git rev-parse --short HEAD 2>/dev/null)
 # into dist/index.js, and the launch path lives in ~/.hermes/config.yaml — not
 # .mcp.json, which is why a config fallback missed it as well.
 m=$(grep -ho "[^ \"']*datacore-mcp[^ \"']*" ~/.hermes/config.yaml ~/.claude.json ~/.mcp.json "$D/.mcp.json" 2>/dev/null | head -1 | sed "s#/dist/.*##")
+# A config may name a path that DOES NOT EXIST — nightshift's .mcp.json points
+# at a tree that was never deployed there. Accepting it non-empty made every
+# later fallback unreachable, so the machine reported no MCP while Miles was
+# running one. Validate before accepting.
+[ -n "$m" ] && [ ! -d "$m" ] && m=""
 [ -z "$m" ] && m=$(ls -d "$D"/*/2-projects/datacore-mcp 2>/dev/null | head -1)
+# GLOBAL NPM INSTALL. Miles runs /usr/bin/datacore-mcp ->
+# /usr/lib/node_modules/@datacore-one/mcp, which no in-repo search could ever
+# find — the third place this probe had to learn to look, after a guessed path
+# and the hermes config.
+[ -z "$m" ] && for g in /usr/lib/node_modules/@datacore-one/mcp \
+                        /usr/local/lib/node_modules/@datacore-one/mcp; do
+  [ -f "$g/package.json" ] && { m="$g"; break; }
+done
+[ -z "$m" ] && command -v datacore-mcp >/dev/null 2>&1 && \
+  m=$(dirname "$(dirname "$(readlink -f "$(command -v datacore-mcp)")")")
 if [ -n "$m" ] && [ -f "$m/package.json" ]; then
   echo "mcp=$(python3 -c "import json;print(json.load(open('$m/package.json'))['version'])" 2>/dev/null)"
 elif [ -n "$m" ] && [ -f "$m/dist/index.js" ]; then
@@ -141,8 +157,8 @@ def main() -> int:
         print(json.dumps({"machines": rows}, indent=2))
         return 1 if any(not r["reachable"] for r in rows) else 0
 
-    cols = ["data_head", "runner_head", "mcp", "org_workspace", "cli", "python"]
-    print(f"  {'machine':<12} {'data':<9} {'runner':<9} {'mcp':<7} {'org-ws':<7} {'cli':<7} py")
+    cols = ["data_head", "core", "mcp", "org_workspace", "cli", "python"]
+    print(f"  {'machine':<12} {'data':<9} {'core':<7} {'mcp':<7} {'org-ws':<7} {'cli':<7} py")
     for r in rows:
         if not r["reachable"]:
             print(f"  {r['machine']:<12} UNREACHABLE — {r.get('error','?')}")
@@ -156,7 +172,8 @@ def main() -> int:
     def spread(key: str) -> set:
         return {r.get(key) for r in rows if r["reachable"] and r.get(key)}
 
-    drift = [k for k in ("data_head", "mcp", "org_workspace", "cli") if len(spread(k)) > 1]
+    drift = [k for k in ("data_head", "core", "mcp", "org_workspace", "cli")
+             if len(spread(k)) > 1]
     unreachable = [r["machine"] for r in rows if not r["reachable"]]
     print(f"\nfleet: {len(rows)} machine(s), {len(unreachable)} unreachable"
           + (f", DRIFT in {', '.join(drift)}" if drift else ", all versions agree"))
