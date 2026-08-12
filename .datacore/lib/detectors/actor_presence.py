@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import os
 import json
+from datetime import datetime
 import sys
 from pathlib import Path
 
@@ -70,6 +71,77 @@ def observed(root: Path) -> dict[str, dict]:
     return out
 
 
+# ---- silence, learned per actor -------------------------------------------
+#
+# A liveness BEACON proves the wrong thing. Tris wrote HEARTBEAT_OK faithfully
+# every 30 minutes while its transport was unusable, its runner unreadable by
+# the user running it, and its sync on a pre-DIP path — a dead-man switch on
+# that signal would have been green throughout. So silence is measured from
+# WORK: an actor whose seq advances did something, and no beacon can fake that.
+#
+# The threshold is per-actor because a global one is empirically wrong. Measured
+# inter-event gaps: `data` has a p90 of 6.95h and a max of 22.9h, while winston
+# sits at 0.25h. One hour would fire on `data` constantly — and a detector that
+# cries wolf gets muted, which is worse than not having it.
+MIN_SAMPLES = 20        # below this, cadence cannot be learned honestly
+FLOOR_HOURS = 6.0       # never alarm faster than this, whatever history says
+MARGIN = 1.5            # x the LONGEST quiet spell already seen
+
+
+def gap_hours(events_ms: list[int]) -> list[float]:
+    ts = sorted(events_ms)
+    return [g for g in ((ts[i + 1] - ts[i]) / 3_600_000 for i in range(len(ts) - 1)) if g > 0]
+
+
+def actor_history(root: Path) -> dict[str, list[int]]:
+    """actor -> every event timestamp (ms) across every space on this box."""
+    import json as _json
+    out: dict[str, list[int]] = {}
+    for space in sorted(root.glob("[0-9]-*")):
+        ev = space / ".datacore" / "events"
+        if not ev.is_dir():
+            continue
+        for log in sorted(ev.glob("*.jsonl")):
+            for line in log.read_text(errors="replace").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    hlc = _json.loads(line).get("hlc") or ""
+                    out.setdefault(log.stem, []).append(int(hlc.split(".")[0]))
+                except (ValueError, TypeError):
+                    continue
+    return out
+
+
+def silence_verdict(stamps: list[int], now_ms: int) -> tuple[str, float, float]:
+    """(verdict, silent_hours, threshold_hours).
+
+    'unknown' when there is too little history to learn a cadence — reported,
+    never alarmed. Claiming a threshold from four samples would be inventing
+    one, and this detector's whole value is that its alarms mean something.
+    """
+    if not stamps:
+        return "no-data", 0.0, 0.0
+    silent = (now_ms - max(stamps)) / 3_600_000
+    gaps = gap_hours(stamps)
+    if len(gaps) < MIN_SAMPLES:
+        return "unknown", silent, 0.0
+    # THE LONGEST GAP, not a percentile. These actors are BURSTY: 95% of mac's
+    # events are seconds apart, so its p95 is ~0 and any percentile-based
+    # threshold collapses onto the arbitrary floor — which then fires on a
+    # perfectly normal overnight quiet. Measured: p95 0.00h, real max 8.4h, and
+    # a 6h floor flagged mac, nightshift and winston on the first run while all
+    # three were healthy.
+    #
+    # What the alarm should mean is "quieter than this actor has EVER been",
+    # which is the max gap, times a margin. It costs lateness — an actor that
+    # dies right after a long idle spell is caught late — and buys the alarm
+    # meaning something, which is the only reason to have it.
+    threshold = max(max(gaps) * MARGIN, FLOOR_HOURS)
+    return ("silent" if silent > threshold else "ok"), silent, threshold
+
+
 def _default_root() -> Path:
     """Root from DATACORE_ROOT, then ~/Data — NEVER from this file's location.
 
@@ -94,6 +166,8 @@ def main() -> int:
         return 2
 
     seen = observed(args.root)
+    history = actor_history(args.root)
+    now_ms = int(datetime.now().timestamp() * 1000)
     prev = {}
     if STATE.exists():
         try:
@@ -103,6 +177,7 @@ def main() -> int:
     first_run = not prev
 
     rows: list[dict] = []
+    sil: dict[str, tuple] = {}
     for machine, actors in sorted(expected.items()):
         for actor in actors:
             here = seen.get(actor)
@@ -121,10 +196,20 @@ def main() -> int:
                     if was is not None and seq is not None and seq < was:
                         status = "stalled"
                         break
+                # SILENT is checked only for actors that are otherwise fine: a
+                # stalled log is a louder finding and must not be masked by it.
+                if status == "ok":
+                    verdict, silent_h, thr = silence_verdict(history.get(actor, []), now_ms)
+                    if verdict == "silent":
+                        status = "silent"
+                    sil[actor] = (verdict, silent_h, thr)
             rows.append({"machine": machine, "actor": actor, "status": status,
                          "spaces": (here or {}).get("spaces", {})})
 
-    bad = [r for r in rows if r["status"] in ("missing", "stalled")]
+    # SILENT counts as failing: an actor that has stopped doing work is the
+    # condition this exists to surface, and miles sat 32h quiet with nothing
+    # flagging it before this was added.
+    bad = [r for r in rows if r["status"] in ("missing", "stalled", "silent")]
 
     # SCANNING NOTHING IS NOT A PASS. An empty roster means the registry was not
     # found — usually a wrong root — and "0 rostered actors, 0 failing" reads as
@@ -140,9 +225,15 @@ def main() -> int:
     else:
         for r in rows:
             where = ", ".join(f"{s}:{q}" for s, q in sorted(r["spaces"].items())) or "—"
-            tag = {"ok": "ok   ", "no-log-yet": "new  ",
+            tag = {"ok": "ok   ", "no-log-yet": "new  ", "silent": "SILENT ",
                    "missing": "MISSING", "stalled": "STALLED"}[r["status"]]
-            print(f"  {tag} {r['actor']:<12} ({r['machine']:<10}) {where}")
+            v = sil.get(r["actor"])
+            note = ""
+            if v and v[0] == "silent":
+                note = f"  [silent {v[1]:.1f}h > {v[2]:.1f}h threshold]"
+            elif v and v[0] == "unknown":
+                note = f"  [cadence unknown: <{MIN_SAMPLES} gaps]"
+            print(f"  {tag} {r['actor']:<12} ({r['machine']:<10}) {where}{note}")
         # SURFACE THE NEVER-WRITTEN. An actor with no log is "no-log-yet", not
         # "missing", and that is right — a new actor has not failed. But folded
         # into "0 failing" it is indistinguishable from an actor that has been

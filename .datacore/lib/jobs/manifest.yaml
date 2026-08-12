@@ -192,8 +192,14 @@ jobs:
   # .git/hooks cannot be the mechanism and a global hooksPath is.
   - name: mac-config-drift
     machine: mac
-    schedule: "50 */6 * * *"
-    cmd: "python3 ~/Data/.datacore/lib/detectors/config_drift.py > ~/.datacore/state/config-drift.log 2>&1"
+    # launchd, not cron. This SSHes to four machines, and under cron on a
+    # laptop it failed two ways that look identical in the log: a run scheduled
+    # during sleep never happened, and a run landing mid-wake had no agent
+    # socket so hermes read as unreachable — red contract, false alert, and the
+    # next manual run passing. launchd fires missed runs on wake and the socket
+    # is resolved at run time rather than baked into a crontab line.
+    schedule: "launchd io.datacore.config-drift @ 08:50, 14:50, 20:50 (fires on wake)"
+    cmd: "~/Data/.datacore/lib/config_drift_run.sh"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/config-drift.log"
@@ -491,7 +497,18 @@ jobs:
       - path: "~/.datacore/lens/observations.db"
         check: min_bytes
         arg: 1000000000
-        max_age_hours: 2
+        max_age_hours: 14
+        # 2h was calibrated for a continuously-running daemon; this one runs on
+        # a LAPTOP THAT SLEEPS. Every overnight produced a red contract and a
+        # telegram alert while the daemon was perfectly healthy — observed
+        # 2026-08-12 at ages 5.2h and 5.7h, with the db writing normally on
+        # wake. An alert that fires every morning regardless of health is one
+        # the operator learns to dismiss, which costs more than it protects.
+        #
+        # 14h still catches a genuinely dead daemon within a day, which is the
+        # failure worth catching. It does NOT catch a daemon that dies at
+        # midnight and is noticed at noon — accepted deliberately, because the
+        # alternative is an alarm nobody reads.
 
   - name: mac-artifact-pull
     machine: mac
