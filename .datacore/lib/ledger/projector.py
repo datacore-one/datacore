@@ -165,10 +165,22 @@ def project(state: LedgerState, *, space: str | None = None) -> Projection:
     user can see (title, date) would reorder the file whenever a task was
     renamed, producing diff noise that hides real change.
     """
+    # An ABSENT space means "this space", not "no space".
+    #
+    # This filter was `payload["space"] == space`, so an item whose payload
+    # simply lacked the field was silently dropped. Events are read from ONE
+    # space's log directory, so the log itself already scopes them — an item
+    # sitting in this space's log is in this space by construction.
+    #
+    # Caught by the F2a reversal drill, and it was a Phase 1 blocker: after the
+    # flip the org file is generated, so a task appended straight to the ledger
+    # (which is the entire point of Phase 1) rendered as nothing. A valid event,
+    # accepted by fold, producing a task nobody could see. Only an explicit
+    # FOREIGN space is excluded now.
     items = [
         item for item in state.items.values()
         if item.status in LIVE_STATUSES
-        and (space is None or (item.payload or {}).get("space") == space)
+        and (space is None or (item.payload or {}).get("space", space) == space)
     ]
 
     # Depth-first by parent, so a child is emitted directly under its parent
