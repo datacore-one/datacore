@@ -51,9 +51,32 @@ def main() -> int:
         except (OSError, ValueError):
             prev = {}
     streak = int(prev.get("consecutive_clean_days") or 0)
-    today = date.today().isoformat()
-    if prev.get("date") != today:          # one increment per day, not per run
-        streak = streak + 1 if all_clean else 0
+    today = date.today()
+    today_s = today.isoformat()
+    prev_date = prev.get("date")
+
+    # CONSECUTIVE MEANS CONSECUTIVE. This used to increment whenever the last
+    # run carried any date other than today's, so it counted RUNS ON DISTINCT
+    # DATES, not consecutive days. A laptop that sleeps through the scheduled
+    # window — this one slept through 07:40 and 07:50 on 2026-08-12 and macOS
+    # cron never catches up — would skip days silently and still reach 14,
+    # certifying a fortnight that was never checked. That is the exact defect
+    # DIP-0046 exists to remove, sitting inside the gate that authorises the
+    # Phase 1 flip.
+    #
+    # A gap now RESETS to 1: today is clean, but the chain behind it is not
+    # evidence. Better a slow honest counter than a fast dishonest one.
+    if prev_date != today_s:
+        if not all_clean:
+            streak = 0
+        else:
+            gap_ok = False
+            if prev_date:
+                try:
+                    gap_ok = (today - date.fromisoformat(prev_date)).days == 1
+                except ValueError:
+                    gap_ok = False
+            streak = streak + 1 if gap_ok else 1
     elif not all_clean:
         streak = 0                          # a later dirty run same day resets
 
@@ -74,7 +97,7 @@ def main() -> int:
             roots[name] = None
 
     STATUS.write_text(json.dumps({
-        "date": today,
+        "date": today_s,
         "generated_at": f"{today}",
         "spaces": spaces,
         "clean_spaces": clean,
