@@ -27,6 +27,19 @@ from ledger.shadow import compare  # noqa: E402
 ROOT = Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
 STATUS = Path.home() / ".datacore" / "state" / "shadow-status.json"
 
+# Days of clean shadow required before the Phase 1 flip. Operator-set to 5
+# (2026-08-12): 14 was a round number I picked, never derived from anything —
+# see the note below on what the gate actually measures. The counter is now
+# honest about consecutive days, so a shorter window is a real 5 days rather
+# than 14 runs spread over a month.
+#
+# What this still does NOT measure: coverage. Five quiet days prove less than
+# three busy ones. The classes that have actually broken org<->ledger
+# correspondence are ID churn, un-ingested captures, multi-machine converge,
+# org-side state changes and merge conflicts. A streak that never met any of
+# them is weak evidence whatever its length.
+PHASE1_CLEAN_DAYS = int(os.environ.get("DATACORE_PHASE1_DAYS", "5"))
+
 
 def main() -> int:
     spaces, clean = {}, 0
@@ -107,7 +120,10 @@ def main() -> int:
         "state_roots": roots,
     }, indent=2))
 
-    print(f"\n  {clean}/{len(spaces)} clean | consecutive clean days: {streak}")
+    gate = "READY for Phase 1" if streak >= PHASE1_CLEAN_DAYS else \
+           f"{PHASE1_CLEAN_DAYS - streak} more clean day(s) to Phase 1"
+    print(f"\n  {clean}/{len(spaces)} clean | consecutive clean days: {streak}"
+          f" | {gate}")
     return 0 if all_clean else 1
 
 

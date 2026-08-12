@@ -1,6 +1,6 @@
 """Phase 0 shadow projection (DIP-0043): run the migration without risking it.
 
-The projector writes `next_actions.projected.org` ALONGSIDE the real file and
+The projector writes the projection under `.datacore/state/projections/` and
 never touches the real one. A diff between them is the migration's own test,
 run against production data every day, with nothing at stake if it is wrong.
 
@@ -85,7 +85,25 @@ def compare(space_dir: Path, org_file: Path | None = None) -> ShadowDiff:
     if not org_file.exists():
         return diff
 
-    projected_path = org_file.with_name(org_file.stem + ".projected.org")
+    # OUTSIDE org/, and this is the root cause of the ID churn.
+    #
+    # The projection reproduces every :ID: by design — that is what makes it a
+    # projection. Written as `org/next_actions.projected.org` it sat beside the
+    # authored file, so ANY tool that loads more than one org file from that
+    # directory saw every id twice. Measured: loading both into one workspace
+    # produces 605 duplicate-ID warnings, and `dedup_ids()` regenerates the
+    # duplicates on load. A later save persists that, autosave commits it, and
+    # 1,204 ids change.
+    #
+    # It was also TRACKED IN GIT in all nine spaces, so the condition was
+    # committed, pushed and pulled to every machine — which is why the churn
+    # kept recurring on winston and returned through Gitea after the outage.
+    #
+    # Derived content is regenerated, never tracked (DIP-0046 payload classes).
+    # `.datacore/state/projections/` is scanned by no org globber.
+    proj_dir = space_dir / ".datacore" / "state" / "projections"
+    proj_dir.mkdir(parents=True, exist_ok=True)
+    projected_path = proj_dir / (org_file.stem + ".projected.org")
     projection = project(fold(read_events(space_dir)), space=space_dir.name)
     projected_path.write_text(projection.text, encoding="utf-8")
 

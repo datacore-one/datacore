@@ -273,3 +273,33 @@ def test_converge_reports_when_it_merged_but_could_not_publish(repo_pair: Path, 
 
     assert not res.ok
     assert "not published" in res.reason
+
+
+def test_projection_never_lands_inside_org(tmp_path: Path):
+    """The ID-churn root cause: a projection beside the file it projects.
+
+    The projection reproduces every :ID: by design. Written into org/ it made
+    every id a duplicate to any tool that loads more than one org file from
+    that directory — 605 duplicate-ID warnings measured on 0-personal — and
+    `dedup_ids()` regenerates duplicates on load. A save persists it, autosave
+    commits it, and 1,204 ids change across eight spaces.
+
+    It was also tracked in git in all nine spaces, so the condition replicated
+    to every machine.
+    """
+    import sys as _sys
+    _sys.path.insert(0, str(LIB))
+    from ledger.shadow import compare
+
+    space = tmp_path / "1-thing"
+    (space / "org").mkdir(parents=True)
+    (space / ".datacore" / "events").mkdir(parents=True)
+    (space / "org" / "next_actions.org").write_text(
+        "* Focus\n** TODO A task\n   :PROPERTIES:\n   :ID: org-x-1\n   :END:\n")
+
+    compare(space)
+
+    stray = list((space / "org").glob("*.projected.org"))
+    assert not stray, f"projection must not be written into org/: {stray}"
+    written = list((space / ".datacore" / "state" / "projections").glob("*.projected.org"))
+    assert written, "projection should be written under .datacore/state/projections/"
