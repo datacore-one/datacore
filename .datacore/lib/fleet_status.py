@@ -40,7 +40,15 @@ PROBE = r'''
 # cd'd into a literal "~/Data" and reported every head as empty.
 D=$(eval echo __DATA__); R=$(eval echo __RUNNER__)
 cd "$D" 2>/dev/null && echo "data_head=$(git rev-parse --short HEAD 2>/dev/null)"
-[ -f "$D/.datacore/VERSION" ] && echo "core=$(head -1 "$D/.datacore/VERSION" | tr -d ' ')"
+# Core version can live in the data root OR the runner. On plur-claw and
+# hermes the "Data" tree is the AGENT'S OWN SPACE repo (data-space /
+# tris-space), not the datacore core — so reading VERSION only from there
+# reported them as having no core at all, when the core is in their runner.
+CORE=""
+[ -f "$D/.datacore/VERSION" ] && CORE=$(head -1 "$D/.datacore/VERSION" | tr -d " ")
+[ -z "$CORE" ] && [ -n "$R" ] && [ -f "$R/.datacore/VERSION" ] && \
+  CORE=$(head -1 "$R/.datacore/VERSION" | tr -d " ")
+[ -n "$CORE" ] && echo "core=$CORE"
 [ -n "$R" ] && cd "$R" 2>/dev/null && echo "runner_head=$(git rev-parse --short HEAD 2>/dev/null)"
 # datacore-mcp is an IN-REPO BUILD, not a package. The deployed tree has dist/
 # and node_modules/ and NO package.json, so a package.json probe reports it
