@@ -27,6 +27,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import sys as _sys
+import socket as _socket
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -110,10 +112,65 @@ def cmd_list(args):
 # add
 # ---------------------------------------------------------------------------
 
+
+# ---- v2: the ledger write path (DIP-0046 C4b) ------------------------------
+#
+# BOTH the MCP (1.6.0) and the CLI (1.3.1) shell out to this script, and
+# NEITHER knows the ledger exists. So every task an agent created reached the
+# ledger only via the nightly sweep, which imports as `genesis` — 1,816 of
+# 2,034 item.create events say `genesis`, meaning the ledger cannot answer who
+# created 89% of its own items. It also meant a write could sit un-ingested for
+# a day.
+#
+# Putting the emit HERE upgrades both connectors at once, with no npm release
+# and nothing for an agent to update. The alternative — a v2 MCP and a v2 CLI,
+# published, then rolled out to five machines — is the same behaviour behind
+# two release cycles and a fleet upgrade.
+#
+# NEVER fails the caller. A task written to org but not recorded is still a
+# task; turning an observability gap into a write failure is the worse trade,
+# and this runs inside an agent's tool call where an exception is a broken tool.
+def _ledger_emit(file_path, event_type, payload):
+    try:
+        import os as _os
+        space = None
+        for parent in Path(file_path).resolve().parents:
+            if (parent / ".datacore" / "events").is_dir():
+                space = parent
+                break
+        if space is None:
+            return None
+        _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from ledger.log import EventLog
+        actor = _os.environ.get("DATACORE_ACTOR") or _socket.gethostname().split(".")[0].lower()
+        EventLog(space, actor).append(event_type, payload)
+        return actor
+    except Exception:      # noqa: BLE001 — see the note above
+        return None
+
 def cmd_add(args):
     """Add a new task to an org file."""
     ws = _load_ws(args.file)
     file_path = Path(args.file).resolve()
+
+    # HARD RULE: new tasks go to inbox.org (GTD single capture point).
+    #
+    # Enforced HERE because this is the one choke point every writer shares —
+    # the MCP's add_task, the CLI, and anything shelling out to this adapter.
+    # The MCP already targeted inbox.org by itself, but nothing stopped a
+    # direct --file at next_actions.org, and I did exactly that tonight when
+    # restoring three recovered tasks. A rule only the well-behaved callers
+    # follow is a convention, not a rule.
+    #
+    # --parent-id / --parent are exempt: attaching a SUBTASK to an existing
+    # task is not capture, and forcing it into inbox would orphan it from the
+    # parent it exists to hang from.
+    is_subtask = bool(getattr(args, "parent_id", None) or getattr(args, "parent", None))
+    if not is_subtask and file_path.name != "inbox.org":
+        if not getattr(args, "allow_any_file", False):
+            return {"error": f"new tasks go to inbox.org, not {file_path.name} "
+                             "(GTD single capture point). Pass --allow-any-file "
+                             "only for a deliberate migration or repair."}
 
     # Auto-CREATED timestamp
     if args.created:
@@ -202,7 +259,14 @@ def cmd_add(args):
         file_path.write_text("\n".join(lines))
         ws.reload(file_path)
 
-    return {"added": True, "id": node_id, "heading": args.heading}
+    emitted = _ledger_emit(file_path, "item.create", {
+        "id": node_id, "title": args.heading, "state": "TODO",
+        "tags": sorted(tags) if tags else None,
+        "scheduled": getattr(args, "scheduled", None) or None,
+        "space": file_path.parent.parent.name,
+    })
+    return {"added": True, "id": node_id, "heading": args.heading,
+            "ledger_actor": emitted}
 
 
 # ---------------------------------------------------------------------------
@@ -815,7 +879,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int)
 
     # add
-    p = sub.add_parser("add", help="Add a new task")
+    p = sub.add_parser("add", help="Add a new task (inbox.org only)")
+    p.add_argument("--allow-any-file", action="store_true",
+                   help="bypass the inbox-only rule: migrations and repairs only")
     p.add_argument("--file", required=True)
     p.add_argument("--heading", required=True)
     p.add_argument("--state", default="TODO")

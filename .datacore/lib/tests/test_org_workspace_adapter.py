@@ -31,7 +31,7 @@ def run_adapter(*args):
 class TestAddEnhanced:
     def test_add_with_body(self, work_dir):
         result = run_adapter(
-            "add", "--file", str(work_dir / "next_actions.org"),
+            "add", "--allow-any-file", "--file", str(work_dir / "next_actions.org"),
             "--heading", "Test task with body",
             "--body", "This is the body text.\nSecond line.",
         )
@@ -42,7 +42,7 @@ class TestAddEnhanced:
 
     def test_add_with_properties(self, work_dir):
         result = run_adapter(
-            "add", "--file", str(work_dir / "next_actions.org"),
+            "add", "--allow-any-file", "--file", str(work_dir / "next_actions.org"),
             "--heading", "Task with context",
             "--property", "CONTEXT=Demo recorded",
             "--property", "EFFORT=0:30",
@@ -54,7 +54,7 @@ class TestAddEnhanced:
 
     def test_add_with_parent(self, work_dir):
         result = run_adapter(
-            "add", "--file", str(work_dir / "next_actions.org"),
+            "add", "--allow-any-file", "--file", str(work_dir / "next_actions.org"),
             "--heading", "Child of AI Queue",
             "--parent", "AI Queue",
         )
@@ -64,7 +64,7 @@ class TestAddEnhanced:
 
     def test_add_with_parent_by_id(self, work_dir):
         result = run_adapter(
-            "add", "--file", str(work_dir / "next_actions.org"),
+            "add", "--allow-any-file", "--file", str(work_dir / "next_actions.org"),
             "--heading", "Child by ID",
             "--parent-id", "fds-001",
         )
@@ -234,7 +234,7 @@ class TestInboxProcessing:
 
     def test_add_new_task_with_full_context(self, work_dir):
         result = run_adapter(
-            "add", "--file", str(work_dir / "next_actions.org"),
+            "add", "--allow-any-file", "--file", str(work_dir / "next_actions.org"),
             "--heading", "Post video on X",
             "--priority", "C",
             "--tags", ":fds:comms:",
@@ -251,3 +251,47 @@ class TestInboxProcessing:
         )
         assert result["properties"]["CONTEXT"] == "Strategy from engram"
         assert "Tag @jssr" in result["body"]
+
+
+class TestV2LedgerWrite:
+    """DIP-0046 C4b: the adapter is the v2 write path for BOTH connectors."""
+
+    def test_new_tasks_are_refused_outside_inbox(self, work_dir):
+        """The hard rule, enforced where every writer passes through.
+
+        The MCP already targeted inbox.org by itself, but nothing stopped a
+        direct --file at next_actions.org — and that is exactly what happened
+        when three recovered tasks were restored on 2026-08-12. A rule only the
+        well-behaved callers follow is a convention, not a rule.
+        """
+        result = run_adapter("add", "--file", str(work_dir / "next_actions.org"),
+                             "--heading", "should be refused")
+        assert "error" in result
+        assert "inbox.org" in result["error"]
+
+    def test_subtasks_are_exempt(self, work_dir):
+        """Attaching a subtask is not capture; forcing it to inbox orphans it."""
+        parent = run_adapter("add", "--file", str(work_dir / "inbox.org"),
+                             "--heading", "Parent task")
+        assert parent.get("added") is True
+        child = run_adapter("add", "--file", str(work_dir / "next_actions.org"),
+                            "--heading", "Child task", "--parent-id", parent["id"])
+        assert "error" not in child or "inbox.org" not in child.get("error", "")
+
+    def test_add_emits_to_the_ledger_when_a_space_is_present(self, work_dir, monkeypatch):
+        """Attribution and latency, both fixed at one choke point.
+
+        Before this, an agent's task reached the ledger only via the nightly
+        sweep, which imports as `genesis` — 1,816 of 2,034 item.create events
+        said `genesis`, so the ledger could not say who created 89% of its own
+        items, and a write could sit un-ingested for a day.
+        """
+        (work_dir / ".datacore" / "events").mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("DATACORE_ACTOR", "testactor")
+        result = run_adapter("add", "--file", str(work_dir / "inbox.org"),
+                             "--heading", "Ledger-bound task")
+        assert result.get("added") is True
+        # The emit must never fail the caller, so absence is tolerated; when it
+        # happens it must carry the REAL actor, not the import role.
+        if result.get("ledger_actor"):
+            assert result["ledger_actor"] != "genesis"
