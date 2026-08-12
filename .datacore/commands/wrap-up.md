@@ -146,7 +146,8 @@ python3 ~/Data/.datacore/lib/focus_mode.py detect
 **If `mode: focus`:**
 - Record space, project, and contributor from the output
 - These values are passed to `journal-coordinator` in Step 4
-- Journal entries will be written to the parent space's journal directory
+- **Personal journal (0-personal/journal/) is ALWAYS written — focus mode does NOT skip it**
+- A team journal entry will ALSO be written to the focused space's journal directory IN ADDITION
 - Continuation tasks will be written to the parent space's org files
 - The session summary should note: `[Focus mode: {space_dir}/{project}]`
 
@@ -430,10 +431,11 @@ Focus mode active:
   contributor: [contributor from detection]
   journal_path: [journal_path from detection]
 
-This session was run from a project folder. Write the team journal entry
-to the parent space's journal using the contributor and project info above.
+This session was run from a project folder. Write BOTH journals:
+1. Personal journal (0-personal/journal/) — ALWAYS required, regardless of focus mode
+2. Team journal entry in the focused space's journal — using contributor and project info above
 
-The coordinator uses this to skip space discovery (the space is already known) and passes the project/contributor directly to journal-entry-writer.
+The coordinator uses this to avoid full space discovery for the team entry (the space is already known) and passes the project/contributor directly to journal-entry-writer. It still spawns the personal journal-entry-writer as normal.
 
 ```
 SESSION LEARNING & JOURNALS
@@ -1067,9 +1069,9 @@ WRAP-UP CHECKLIST
        [ ] New files listed with paths and purposes
        [ ] Artifacts have proper frontmatter/tags
        [ ] Artifacts listed in journal entry
-[ ] 11. Journals updated (only if relevant work was done):
-       [ ] Personal (0-personal/journal/) - always
-       [ ] Team (1-teamspace/journal/) - if team work
+[ ] 11. Journals updated:
+       [ ] Personal (0-personal/journal/) - ALWAYS (even in focus mode — never skip)
+       [ ] Team (1-teamspace/journal/) - if team work or focus mode active
        [ ] Project (2-projectspace/journal/) - if project work
        [ ] Journal includes "Artifacts Created" section
 [ ] 12. Orphaned dev servers killed
