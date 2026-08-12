@@ -48,7 +48,7 @@ CORE=""
 [ -f "$D/.datacore/VERSION" ] && CORE=$(head -1 "$D/.datacore/VERSION" | tr -d " ")
 [ -z "$CORE" ] && [ -n "$R" ] && [ -f "$R/.datacore/VERSION" ] && \
   CORE=$(head -1 "$R/.datacore/VERSION" | tr -d " ")
-[ -n "$CORE" ] && echo "core=$CORE"
+echo "core=${CORE:-?}"
 [ -n "$R" ] && cd "$R" 2>/dev/null && echo "runner_head=$(git rev-parse --short HEAD 2>/dev/null)"
 # datacore-mcp is an IN-REPO BUILD, not a package. The deployed tree has dist/
 # and node_modules/ and NO package.json, so a package.json probe reports it
@@ -177,20 +177,32 @@ def main() -> int:
         if not r["reachable"]:
             print(f"  {r['machine']:<12} UNREACHABLE — {r.get('error','?')}")
             continue
-        vals = [r.get(c, "—") for c in cols]
+        # "?" means THE PROBE COULD NOT TELL; "—" would say "not installed".
+        # Conflating those is the error that made me report Tris as having no
+        # MCP while it had 14 days of uptime: a failed lookup rendered as a
+        # finding. An unknown must look different from a known absence.
+        vals = [r.get(c, "?") for c in cols]
         print(f"  {r['machine']:<12} {vals[0]:<9} {vals[1]:<9} {vals[2]:<7} "
               f"{vals[3]:<7} {vals[4]:<7} {vals[5]}")
 
     # Disagreement is the finding. A fleet where one machine is six weeks behind
     # looks identical to a healthy one unless the versions are compared.
     def spread(key: str) -> set:
-        return {r.get(key) for r in rows if r["reachable"] and r.get(key)}
+        # "?" is excluded from drift: an unknown is not a disagreement, and
+        # counting it as one would manufacture findings out of probe failures.
+        return {r.get(key) for r in rows
+                if r["reachable"] and r.get(key) and r.get(key) != "?"}
 
     drift = [k for k in ("data_head", "core", "mcp", "org_workspace", "cli")
              if len(spread(k)) > 1]
+    unknown = sum(1 for r in rows if r["reachable"]
+                  for k in ("core", "mcp", "org_workspace", "cli")
+                  if r.get(k, "?") == "?")
     unreachable = [r["machine"] for r in rows if not r["reachable"]]
     print(f"\nfleet: {len(rows)} machine(s), {len(unreachable)} unreachable"
-          + (f", DRIFT in {', '.join(drift)}" if drift else ", all versions agree"))
+          + (f", DRIFT in {', '.join(drift)}" if drift else ", all versions agree")
+          + (f", {unknown} value(s) the probe COULD NOT DETERMINE — ask the "
+             f"machine directly" if unknown else ""))
     return 1 if (drift or unreachable) else 0
 
 
