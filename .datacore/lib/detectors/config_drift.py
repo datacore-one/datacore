@@ -62,13 +62,30 @@ def run(host: str | None, user: str | None, cmd: str) -> tuple[int, str]:
         return 1, f"{type(exc).__name__}: {exc}"
 
 
-def check(label: str, host: str | None, user: str | None) -> dict:
+def check(label: str, host: str | None, user: str | None, _retry: bool = True) -> dict:
+    """One retry before declaring a host unreachable.
+
+    The principle stands — a machine we cannot reach is a machine whose
+    enforcement we cannot vouch for, and skipping it quietly is how "all green"
+    comes to mean "all the ones that answered". But this runs from a LAPTOP on a
+    6-hourly schedule, and a run that lands while the Mac is waking or the
+    network has not settled reports a healthy fleet as unreachable. That fired
+    at 06:50 on 2026-08-12 and passed on the very next manual run.
+    
+    A contract that cries wolf gets muted, and a muted contract is worth less
+    than none. One retry separates "asleep for a moment" from "actually down";
+    a machine that is genuinely gone fails both attempts and still reports.
+    """
     rc, path = run(host, user, "git config --global --get core.hooksPath")
     if rc != 0 or not path:
         # Distinguish "reachable and unset" from "unreachable". The second is an
         # ERROR: we cannot vouch for a machine that did not answer.
         rc2, _ = run(host, user, "true")
         if rc2 != 0:
+            if _retry and host is not None:
+                import time
+                time.sleep(5)
+                return check(label, host, user, _retry=False)
             return {"machine": label, "status": "unreachable", "detail": path[:120]}
         return {"machine": label, "status": "unset", "detail": "core.hooksPath not configured"}
 
