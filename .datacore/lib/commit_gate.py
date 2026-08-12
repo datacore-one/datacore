@@ -70,13 +70,30 @@ def decide(repo: Path, produced: list[str] | None, *,
            at: str = "") -> Decision:
     """Split the dirty tree into what this run made and what it merely found.
 
-    `produced=None` means the caller does not know what it produced. That is
-    not permission to commit everything — it is the case this gate exists for,
-    so everything dirty is withheld.
+    `produced=None` means the caller did not declare its outputs. That is
+    RECORDED, NOT BLOCKED, and the distinction cost a production batch:
+
+    Withholding everything in that case looked principled — "not knowing what
+    you made is the case this exists for" — but every real caller in
+    nightshift's run.py calls git_commit_push(repo, message) with no file list.
+    The result on 2026-08-12 was eight tasks executed and NOTHING committed:
+    their own output files, their ledger events and their org state updates all
+    withheld, with `committed: []` in every decision record. A gate that stops
+    the system doing its job is not a safety feature.
+
+    So the strict guarantee — anything you did not declare is withheld — applies
+    where a caller DECLARES its outputs. Where it does not, the gate degrades to
+    an audit trail: the commit proceeds and the record says exactly what went in
+    under that message, which is still strictly more than existed before.
     """
     dirty = dirty_paths(repo)
     if not dirty:
         return Decision()
+
+    if produced is None:
+        dec = Decision(allowed=list(dirty), withheld=[])
+        dec.record = _record(repo, dec, task_id=task_id, actor=actor, at=at)
+        return dec
 
     wanted = set(produced or [])
     allowed = [p for p in dirty if p in wanted]
