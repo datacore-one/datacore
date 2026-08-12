@@ -166,7 +166,7 @@ jobs:
     artifacts:
       - path: "~/.datacore/state/actor-presence.log"
         check: regex
-        arg: "0 failing"
+        arg: "0 failing"   # suffix may follow (never-written count); anchor on this
         max_age_hours: 26
 
   # Watches the TRIGGER, not the damage. dedup_ids() regenerates duplicate ids
