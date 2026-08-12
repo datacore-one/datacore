@@ -215,8 +215,13 @@ jobs:
   # when shadow_check RUNS, so an unscheduled check is a clock that never ticks.
   - name: mac-ledger-ingest
     machine: mac
-    schedule: "40 7 * * *"
-    cmd: "python3 ~/Data/.datacore/lib/ledger_ingest_org.py > ~/.datacore/state/ledger-ingest.log 2>&1"
+    # launchd, not cron — and the two are ONE job now (ledger_daily.sh), because
+    # the order between them is load-bearing. Recorded as separate contracts
+    # because they produce separate artifacts worth checking separately.
+    # Cron does not run missed jobs; the Mac slept through 07:40 on 2026-08-12
+    # and neither fired, while the hourly detectors either side of the gap did.
+    schedule: "launchd io.datacore.ledger-daily @ 07:40 (fires on wake)"
+    cmd: "~/Data/.datacore/lib/ledger_daily.sh"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/ledger-ingest.log"
@@ -226,8 +231,8 @@ jobs:
 
   - name: mac-projection-drift
     machine: mac
-    schedule: "50 7 * * *"
-    cmd: "python3 ~/Data/.datacore/lib/shadow_check.py > ~/.datacore/state/shadow-check.log 2>&1"
+    schedule: "launchd io.datacore.ledger-daily @ 07:40 (runs after the ingest)"
+    cmd: "~/Data/.datacore/lib/ledger_daily.sh"
     on_fail: telegram
     artifacts:
       # Assert on the JSON, not on "9/9" in the log: a hardcoded space count
