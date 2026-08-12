@@ -338,3 +338,6 @@ node_modules/
 # confusing merge error). Ignored rather than deleted: the files stay on disk.
 .agents/
 skills-lock.json
+
+# Atomic-write temp file for ledger checkpoints.
+*.org.tmp

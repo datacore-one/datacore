@@ -37,4 +37,14 @@ check_rc=$?
 echo "drift  rc=$check_rc"
 tail -2 "$STATE/shadow-check.log"
 
+# Checkpoint LAST, from a ledger that has just been reconciled, then prove it
+# restores. Writing one is cheap; the verify is the part with value — it
+# rebuilds each checkpoint in a throwaway space and compares item by item, so
+# "could we re-genesis from this?" is answered continuously rather than
+# discovered during the incident that needs it.
+"$PY" "$LIB/ledger_checkpoint.py" write  > "$STATE/checkpoint-write.log" 2>&1
+"$PY" "$LIB/ledger_checkpoint.py" verify > "$STATE/checkpoint-verify.log" 2>&1
+echo "ckpt   rc=$?"
+tail -1 "$STATE/checkpoint-verify.log"
+
 exit $(( ingest_rc != 0 ? ingest_rc : check_rc ))
