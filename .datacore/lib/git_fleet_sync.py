@@ -251,11 +251,22 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
     # written, so he was "sharing" a months-old view of the world.
     if pull and execute:
         subprocess.run(['git', 'fetch', '-q', 'origin'], cwd=repo, capture_output=True)
-        r = subprocess.run(['git', 'pull', '--rebase', 'origin', default],
+        # MERGE, NEVER REBASE (DIP-0046). Rebase rewrites this box's local
+        # commits to sit on top of origin, which gives them new hashes. If the
+        # subsequent push then fails — offline, gated, rejected — those commits
+        # exist under an identity nothing else has seen, and the next run's
+        # watchdog treats them as junk to reset past. That is how 23 commits in
+        # 2-datacore and 27 in 3-fds were stranded on 2026-08-12.
+        #
+        # A merge cannot do this: local commits keep their hashes and stay
+        # reachable no matter how many times the push fails afterwards. And for
+        # the per-writer event logs this exists to move, a merge is a union of
+        # disjoint files — there is nothing for it to conflict over.
+        r = subprocess.run(['git', 'pull', '--no-rebase', 'origin', default],
                            cwd=repo, capture_output=True, text=True)
         if r.returncode != 0:
-            # Never leave a half-applied rebase behind for the next run to trip on.
-            subprocess.run(['git', 'rebase', '--abort'], cwd=repo, capture_output=True)
+            # Never leave a half-applied merge behind for the next run to trip on.
+            subprocess.run(['git', 'merge', '--abort'], cwd=repo, capture_output=True)
             result['pull'] = 'PULL CONFLICT — needs a human'
         else:
             result['pull'] = 'pulled'
