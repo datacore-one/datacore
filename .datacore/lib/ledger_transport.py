@@ -202,10 +202,25 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         # DIP revision nobody chose to publish, as a side effect of syncing
         # something else. Bumping a pointer is a deliberate act; unstage them and
         # leave the change in the working tree where it stays visible.
-        rc, subs, _ = _git(space, "submodule", "--quiet", "foreach",
-                           "echo $sm_path")
-        for sub in (subs or "").split():
-            _git(space, "restore", "--staged", "--", sub)
+        # Read GITLINKS FROM THE INDEX, not `git submodule foreach`.
+        #
+        # foreach ABORTS ON THE FIRST ERROR. Hermes has a gitlink whose path has
+        # no url in .gitmodules, so foreach emitted one entry, died, and this
+        # guard unstaged only that one — then committed three space pointers
+        # (1-datacore, 2-plur, 3-firm) exactly as if the guard were not there.
+        # A protection that depends on unrelated config being well-formed is not
+        # a protection.
+        #
+        # Mode 160000 in the index IS a gitlink, by definition, whether or not
+        # .gitmodules knows about it. Orphan gitlinks — committed without
+        # submodule config — are precisely the ones nothing else would catch.
+        rc, staged, _ = _git(space, "diff", "--cached", "--raw")
+        for line in (staged or "").splitlines():
+            # ":100644 160000 <sha> <sha> M\tpath"
+            if line.startswith(":") and " 160000 " in line[:40]:
+                path = line.split("\t", 1)[-1].strip()
+                if path:
+                    _git(space, "restore", "--staged", "--", path)
 
         # Unstaging the submodules may have emptied the index. `git commit` then
         # exits non-zero for "nothing to commit", which the check below would
