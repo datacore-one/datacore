@@ -219,15 +219,19 @@ jobs:
   #
   # Both jobs were absent entirely until then. The streak counter only advances
   # when shadow_check RUNS, so an unscheduled check is a clock that never ticks.
-  - name: mac-ledger-ingest
-    machine: mac
+  - name: box-ledger-ingest
+    machine: box
     # launchd, not cron — and the two are ONE job now (ledger_daily.sh), because
     # the order between them is load-bearing. Recorded as separate contracts
     # because they produce separate artifacts worth checking separately.
     # Cron does not run missed jobs; the Mac slept through 07:40 on 2026-08-12
     # and neither fired, while the hourly detectors either side of the gap did.
-    schedule: "launchd io.datacore.ledger-daily @ 07:40 (fires on wake)"
-    cmd: "~/Data/.datacore/lib/ledger_daily.sh"
+    # MOVED TO THE ALWAYS-ON BOX 2026-08-12. On the laptop it slept through
+    # its window and missed 9 tasks outright — a sweep that only runs when a
+    # laptop is awake is a sweep that mostly does not run, and the ledger is
+    # the system's record, not the Mac's.
+    schedule: "cron 35 5 * * * on winston"
+    cmd: "~/Data/.datacore/lib/ledger_daily.sh"   # winston
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/ledger-ingest.log"
@@ -235,10 +239,10 @@ jobs:
         arg: "0 space\\(s\\) failed"
         max_age_hours: 26
 
-  - name: mac-projection-drift
-    machine: mac
-    schedule: "launchd io.datacore.ledger-daily @ 07:40 (runs after the ingest)"
-    cmd: "~/Data/.datacore/lib/ledger_daily.sh"
+  - name: box-projection-drift
+    machine: box
+    schedule: "cron 35 5 * * * on winston (runs after the ingest, same script)"
+    cmd: "~/Data/.datacore/lib/ledger_daily.sh"   # winston
     on_fail: telegram
     artifacts:
       # Assert on the JSON, not on "9/9" in the log: a hardcoded space count
