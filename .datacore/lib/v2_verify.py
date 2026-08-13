@@ -270,6 +270,66 @@ def check_transport(rep: Report) -> None:
             rep.add("0046", "events published", None, "seq-gap.log not written yet")
 
 
+# ── Fleet: are the OTHER machines' jobs succeeding? ─────────────────────────
+def check_fleet(rep: Report) -> None:
+    """The blind spot this checklist shipped with.
+
+    Every other check runs against THIS machine. On 2026-08-13 the checklist
+    reported 17 ok / 0 FAIL while Winston's every-15-minutes sync had been
+    failing on 4 of 9 spaces for hours — the migration left its service user
+    without known_hosts, so four spaces died with "host key not trusted" and
+    nothing here noticed. A fleet-wide system with a single-machine checklist
+    is a checklist that certifies the one box you were already looking at.
+    """
+    import yaml
+    try:
+        reg = yaml.safe_load((ROOT / ".datacore/registry/infrastructure.yaml").read_text())
+        servers = {k: v for k, v in (reg.get("servers") or {}).items()
+                   if isinstance(v, dict)}
+    except Exception as exc:  # noqa: BLE001
+        rep.add("fleet", "remote job health", None, f"registry unreadable: {exc}")
+        return
+
+    unreachable, failing, ok_hosts = [], [], []
+    for name, cfg in servers.items():
+        access = cfg.get("access") or {}
+        alias = cfg.get("ssh_alias") or name
+        if alias == "-" or name == "mac":
+            continue
+        actor = access.get("actor") or name
+        # RUNNER FIRST. On hermes and plur-claw `~/Data` is the AGENT'S OWN
+        # SPACE repo (tris-space / data-space), not the Datacore core — the
+        # core lives in the runner. Using data_root reported both as failing
+        # when they were simply being asked the wrong directory, the same
+        # mistake fleet_status.py already carries a comment about.
+        runner = access.get("runner") or ""
+        roots = [r for r in (runner, access.get("data_root") or "~/Data") if r]
+        # The manifest keys jobs by REGISTRY NAME (winston, nightshift,
+        # plur-claw...), not by ledger actor — `miles` has no jobs, `nightshift`
+        # does. And job_verify resolves the manifest through DATACORE_ROOT, so
+        # that must point at whichever tree actually holds .datacore/lib.
+        probe = " || ".join(
+            f"(test -f {r}/.datacore/lib/job_verify.py && cd {r} && "
+            f"DATACORE_ROOT={r} python3 .datacore/lib/job_verify.py "
+            f"--machine {name} --no-emit >/dev/null 2>&1)" for r in roots)
+        cmd = probe + "; echo $?"
+        rc, out = run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                       alias, cmd], 120)
+        code = (out or "").strip().splitlines()[-1] if out.strip() else ""
+        if rc != 0 or not code.isdigit():
+            unreachable.append(name)
+        elif code == "0":
+            ok_hosts.append(name)
+        else:
+            failing.append(name)
+
+    rep.add("fleet", "remote job contracts",
+            None if (unreachable and not failing) else not failing,
+            f"{len(ok_hosts)} ok"
+            + (f", FAILING: {', '.join(failing)}" if failing else "")
+            + (f", {len(unreachable)} unreachable" if unreachable else ""))
+
+
 # ── DIP-0042: sequencer / finality ──────────────────────────────────────────
 def check_finality(rep: Report) -> None:
     """DIP-0042 is cited by DIP-0046 but has never been written or built.
@@ -336,6 +396,8 @@ def main() -> int:
     check_identity(rep)
     check_transport(rep)
     check_finality(rep)
+    if not a.quick:
+        check_fleet(rep)
 
     if a.json:
         print(json.dumps({"checks": [c.__dict__ for c in rep.checks],
