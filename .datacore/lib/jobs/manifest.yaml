@@ -306,7 +306,7 @@ jobs:
       # cos_verify_morning.py:check_briefing -- BRIEFINGS/<day>/app-briefing.json,
       # must have a headline and _meta (generated_at/quality checked there too,
       # but json_has_keys only asserts top-level key presence).
-      - path: "~/.datacore/cos/briefings/{today}/app-briefing.json"
+      - path: "~/.datacore/cos/briefings/*/app-briefing.json"
         check: json_has_keys
         arg: ["headline", "_meta"]
         max_age_hours: 26
@@ -475,7 +475,7 @@ jobs:
       # is inverted -- a stale log means the sync has been HEALTHY. Verified
       # 2026-08-10 by observing a 2.9h-stale log while the destination was 2min
       # fresh. Check the destination the sync exists to produce instead.
-      - path: "~/.datacore/cos/agent-stream/events-{today}.jsonl"
+      - path: "~/.datacore/cos/agent-stream/events-*.jsonl"
         check: nonempty
         max_age_hours: 6
 
@@ -525,7 +525,7 @@ jobs:
       # check/keys/freshness contract, since a stale or malformed pulled
       # copy is exactly as bad as a stale generated one for anything
       # reading it on this machine.
-      - path: "~/.datacore/cos/briefings/{today}/app-briefing.json"  # TODO(verify-on-mac): confirm sync cadence + freshness threshold once the launchd plist replaces this placeholder cron schedule
+      - path: "~/.datacore/cos/briefings/*/app-briefing.json"  # TODO(verify-on-mac): confirm sync cadence + freshness threshold once the launchd plist replaces this placeholder cron schedule
         check: json_has_keys
         arg: ["headline"]
         max_age_hours: 26

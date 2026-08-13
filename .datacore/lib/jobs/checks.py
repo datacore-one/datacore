@@ -54,7 +54,26 @@ def expand_path(path: str, *, now: float | None = None) -> str:
     if now is None:
         now = time.time()
     today = datetime.fromtimestamp(now).strftime("%Y-%m-%d")
-    return os.path.expanduser(path.replace("{today}", today))
+    expanded = os.path.expanduser(path.replace("{today}", today))
+    if "*" not in expanded:
+        return expanded
+    # GLOB: resolve to the NEWEST match, or the literal pattern when nothing
+    # matches so the caller reports a clean "does not exist".
+    #
+    # Needed because a daily-rotated file is written under YESTERDAY'S name
+    # until the first event of the new day rolls it over. A `{today}` path
+    # therefore fails every night between midnight and that first event —
+    # observed on mac-agent-stream-rsync at 00:0x, with the previous day's file
+    # last written 01:30 the same morning and the stream perfectly healthy.
+    # A nightly false alarm is one people learn to ignore.
+    #
+    # Freshness (`max_age_hours`) is the real liveness signal here; the exact
+    # filename is not.
+    import glob as _glob
+    matches = _glob.glob(expanded)
+    if not matches:
+        return expanded
+    return max(matches, key=lambda m: os.path.getmtime(m))
 
 
 def _read_text(path: str) -> tuple[str | None, str | None]:
