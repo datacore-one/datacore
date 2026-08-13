@@ -290,6 +290,47 @@ def check_transport(rep: Report) -> None:
             rep.add("0046", "events published", None, "seq-gap.log not written yet")
 
 
+# ── The APPLICATION layer: the part that was never watched ─────────────────
+def check_app(rep: Report) -> None:
+    """Everything above verifies the ledger; nothing verified what sits on it.
+
+    Asked three direct questions on 2026-08-14 — is the app tested, will the
+    brief run, do X posts reach the ledger — the answers were no, partly, and
+    no. All three sat outside what this checklist looked at, and the unifying
+    fact was that it checked the substrate thoroughly and the application layer
+    not at all.
+    """
+    # 1. Can agents record external actions at all? This is the capability, not
+    #    a specific post: if the module is absent or unimportable, publishing
+    #    goes unrecorded and nothing else here would notice.
+    sys.path.insert(0, str(LIB))
+    try:
+        from ledger_attest import _actor, attest  # noqa: F401
+        actor = _actor()
+        import socket
+        host = socket.gethostname().split(".")[0].lower()
+        # An actor equal to the hostname is the DIP-0044 trap: it means the
+        # registry lookup failed and events would be filed under the wrong
+        # writer. Two of five machines were doing exactly that until caught.
+        ok = actor != host or actor in ("mac",)
+        rep.add("app", "agents can attest actions", ok,
+                f"actor={actor}" + ("" if ok else f" — equals hostname; registry lookup failed"))
+    except Exception as exc:  # noqa: BLE001
+        rep.add("app", "agents can attest actions", False, f"ledger_attest unusable: {exc}")
+
+    # 2. Does the X path actually call it? A capability nothing invokes is not
+    #    a capability. Checked by grep because importing the comms module pulls
+    #    in credentials this check has no business touching.
+    xapi = ROOT / ".datacore/modules/comms/lib/x_api.py"
+    if not xapi.is_file():
+        rep.add("app", "publishing is attested", None, "comms module not on this machine")
+    else:
+        wired = "_attest_post" in xapi.read_text(errors="replace")
+        rep.add("app", "publishing is attested", wired,
+                "x_api posts and replies attest" if wired
+                else "X posts leave NO ledger record")
+
+
 # ── Fleet: are the OTHER machines' jobs succeeding? ─────────────────────────
 def check_fleet(rep: Report) -> None:
     """The blind spot this checklist shipped with.
@@ -425,6 +466,7 @@ def main() -> int:
     check_identity(rep)
     check_transport(rep)
     check_finality(rep)
+    check_app(rep)
     if not a.quick:
         check_fleet(rep)
 
