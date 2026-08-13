@@ -50,7 +50,8 @@ Read the cursor file to determine where the last run left off:
 ```yaml
 # .datacore/state/learning_classifier_cursor.yaml
 # Each value is the date of the LAST PROCESSED ENTRY for that file,
-# not today's date. This ensures same-day entries are never skipped.
+# not today's date. Never set a cursor to today's run date — only to the
+# actual date of the last entry you successfully processed.
 last_run: "2026-04-20"
 cursors:
   ".datacore/learning/patterns.md": "2026-04-19"
@@ -75,7 +76,22 @@ Scan learning files across all spaces for entries newer than the cursor:
 - `[0-9]-*/.datacore/learning/patterns.md` (per-space)
 - `[0-9]-*/.datacore/learning/corrections.md` (per-space)
 
-**Entry detection:** Learning files use date headings (`### YYYY-MM-DD`). Read entries where the date heading is **strictly after** (`>`) the cursor date for that file. The cursor stores the date of the last *processed* entry (not today's run date), so `>` is the correct comparison — it avoids reprocessing while still catching new entries on the same calendar day. Each bullet point under a date heading is one entry.
+**Entry detection:** Learning files use one of two formats depending on the file type:
+- `corrections.md` and `patterns.md`: `## YYYY-MM-DD: Title` sections (level-2 heading with date in title, full prose body, separated by `---`)
+- Legacy format: `### YYYY-MM-DD` with bullet points (use if the above is absent)
+
+The `**Date**: YYYY-MM-DD` field inside each section is the authoritative date for cursor comparison.
+
+**Reading order and cursor filter — READ THIS CAREFULLY:**
+
+Learning files are written in **reverse chronological order** (newest entries appear first). This means a naive top-to-bottom read with an early exit will skip older entries that appear lower in the file once the cursor check fails. To avoid permanently skipping entries:
+
+1. **Read ALL entries from the file first** (do not stop reading once you hit entries that appear to be before the cursor).
+2. **Sort the collected entries by date ascending** (oldest first) before applying the cursor filter.
+3. **Filter to entries where `date >= cursor`** for that file. Using `>=` (not `>`) ensures entries added on the same calendar day as the cursor are not silently dropped. Entries that were already processed on the cursor date will score >0.9 on similarity search and be classified as `recurrence` — that is safe and expected.
+4. **Process in chronological order** (oldest to newest after sorting).
+
+Each section from the top-level date heading to the next `---` separator is one entry.
 
 **Parse each entry into:**
 - `text`: the raw content
@@ -126,8 +142,9 @@ Map learning entry types to engram fields:
 After processing all entries:
 
 1. **Update cursor:** Write `.datacore/state/learning_classifier_cursor.yaml`:
-   - Set `last_run` to today's date (informational).
-   - For each file processed, set `cursors[file]` to the **date of the latest entry processed** in that file — NOT today's date. If a file had no new entries, leave its cursor unchanged.
+   - Set `last_run` to today's date (informational only).
+   - For each file processed, set `cursors[file]` to the **date of the chronologically latest entry you successfully processed** in that file — this is the entry's `**Date**:` field value, NOT today's date and NOT `last_run`. If a file had no new entries, leave its cursor unchanged.
+   - **Validation before writing**: confirm that `cursors[file]` is ≤ the date of the last entry in the file you touched. If you find yourself about to write a cursor date that is LATER than any entry you actually processed, that is a bug — write the actual last-processed-entry date instead.
    - Use only the keys defined in the schema above. Do not invent new top-level keys (e.g. `*_note` fields, `spaces` nesting, `last_hash`). Session notes belong in the agent's output report, not the cursor file.
 
 2. **Rate injected engrams:** Call `plur_feedback` with:
