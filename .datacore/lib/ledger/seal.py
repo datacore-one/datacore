@@ -104,6 +104,25 @@ def settled(events: list[Event]):
     return fold(settled_events(events))
 
 
+def _self_consistent(events: list[Event]) -> list[tuple[str, int]]:
+    """(actor, seq) pairs that appear more than once with different hashes.
+
+    A fork that arrives via sync lands INSIDE the event set the sequencer is
+    about to certify. verify_seal recomputes the root from those same events,
+    so it agrees with itself and reports success — certifying a history another
+    machine will disagree with. That is the worst thing finality can do, so it
+    is checked before the root comparison rather than after.
+    """
+    seen: dict[tuple[str, int], str] = {}
+    bad: list[tuple[str, int]] = []
+    for e in events:
+        k = (e.actor, e.seq)
+        if k in seen and seen[k] != e.hash:
+            bad.append(k)
+        seen[k] = e.hash
+    return sorted(set(bad))
+
+
 def verify_seal(events: list[Event]) -> tuple[bool | None, str]:
     """Recompute the sealed state and compare to the sequencer's claim.
 
@@ -111,6 +130,13 @@ def verify_seal(events: list[Event]) -> tuple[bool | None, str]:
     is not a failing one. This is the check that makes a designated sequencer
     safe: its claim is reproducible by every reader.
     """
+    forked = _self_consistent(events)
+    if forked:
+        a, sq = forked[0]
+        return False, (f"FORKED LOG: {len(forked)} (actor, seq) pair(s) have two "
+                       f"different events, e.g. {a} seq {sq}. A seal over a fork "
+                       f"certifies a history other machines reject — refusing.")
+
     seal = latest_seal(events)
     if seal is None:
         return None, "no seal yet"

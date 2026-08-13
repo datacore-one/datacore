@@ -113,6 +113,26 @@ def check_ledger(rep: Report, quick: bool) -> None:
     rep.add("0034", "per-actor nonces", dup == 0 and gap == 0,
             f"{dup} duplicate, {gap} gapped")
 
+    # FORK CHECK. The nonce check above looks WITHIN one copy; a fork is a
+    # disagreement BETWEEN copies and has neither a gap nor a duplicate on
+    # either side. It broke in production on 2026-08-13 and was found only
+    # because git happened to produce a text conflict.
+    sys.path.insert(0, str(LIB))
+    try:
+        from ledger.fork import detect_all
+        reps = detect_all(ROOT)
+    except Exception as exc:  # noqa: BLE001
+        rep.add("0034", "no forked logs", None, f"detector unavailable: {exc}")
+    else:
+        forked = [r for r in reps if not r.clean]
+        unknown = [r for r in reps if r.reason]
+        checked = sum(r.checked for r in reps)
+        rep.add("0034", "no forked logs",
+                None if (unknown and not forked) else not forked,
+                f"{checked} event(s) agree with origin"
+                + (f"; FORKED: {', '.join(r.space for r in forked)}" if forked else "")
+                + (f"; {len(unknown)} unchecked" if unknown else ""))
+
 
 # ── DIP-0035: job contracts ─────────────────────────────────────────────────
 def check_jobs(rep: Report) -> None:
