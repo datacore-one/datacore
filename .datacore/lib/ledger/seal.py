@@ -151,7 +151,26 @@ def verify_seal(events: list[Event]) -> tuple[bool | None, str]:
     recomputed = fold(settled_events(events)).state_root()
     if recomputed == seal.state_root:
         n = sum(seal.watermarks.values()) + len(seal.watermarks)
-        return True, f"seal by {seal.sequencer} verifies over ~{n} event(s)"
+        # COVERAGE IS NOT CORRECTNESS. A seal is internally consistent as long
+        # as its root matches the events it names — so a sequencer that simply
+        # NEVER names an actor produces a seal that verifies forever while that
+        # actor's work is permanently outside settled state. Nothing is forged;
+        # a writer is just quietly ignored, which is the same outcome.
+        #
+        # Lagging coverage is NORMAL — the sequencer seals what it has synced —
+        # so this is reported, never failed. But it must be SAID: an unnamed
+        # actor is invisible in settled state, and silence is how that becomes
+        # permanent.
+        known = watermarks([e for e in events if e.type != "ledger.seal"])
+        uncovered = sorted(a for a in known if a not in seal.watermarks)
+        behind_actors = sorted(
+            a for a, wm in seal.watermarks.items() if known.get(a, -1) > wm)
+        note = ""
+        if uncovered:
+            note += f"; NOT COVERED: {', '.join(uncovered)}"
+        if behind_actors:
+            note += f"; lags newer events from {', '.join(behind_actors)}"
+        return True, f"seal by {seal.sequencer} verifies over ~{n} event(s){note}"
     return False, (f"SEAL MISMATCH: sequencer {seal.sequencer} claims "
                    f"{seal.state_root[:12]}, recomputed {recomputed[:12]}")
 

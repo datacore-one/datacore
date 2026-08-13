@@ -58,11 +58,16 @@ from __future__ import annotations
 
 import fcntl
 import os
+import re
 from pathlib import Path
 
 from .events import EVENT_TYPES, Event, body_dict, canonical_bytes, compute_hash, from_line, to_line
 from .hlc import tick
 from .keys import ensure_keypair, sign
+
+
+#: An actor name becomes a filename; anything else can escape events/.
+_VALID_ACTOR = re.compile(r"[a-z0-9][a-z0-9_-]*")
 
 
 class StaleLogError(RuntimeError):
@@ -120,6 +125,18 @@ class EventLog:
         self.keys_dir = keys_dir
         self.registry_path = registry_path
         self.sign = sign if sign is not None else os.environ.get("DATACORE_LEDGER_SIGN") == "1"
+        # VALIDATE THE ACTOR NAME. It becomes a filename, so "../x" writes
+        # <space>/x.jsonl — inside the space, but OUTSIDE events/, where
+        # read_events never globs. The events are written, accepted, chained,
+        # and then invisible to every reader: silent data loss rather than an
+        # error. Actor names come from a registry, an env var or a hostname, so
+        # this is a typo/misconfiguration guard rather than an attacker one —
+        # which is exactly the case that fails quietly.
+        if not _VALID_ACTOR.fullmatch(actor):
+            raise ValueError(
+                f"invalid actor name {actor!r}: expected lowercase letters, "
+                f"digits, '-' or '_' (it becomes the log filename)"
+            )
         self.path = self.space_dir / ".datacore" / "events" / f"{actor}.jsonl"
         if self.sign:
             # Acceptable to do at init (keeps callers/tests hermetic): idempotent,
@@ -183,12 +200,33 @@ class EventLog:
                 except (OSError, ValueError):
                     pass
                 tail_seq = last.seq if last is not None else -1
-                if tail_seq < hwm:
+                if tail_seq < hwm and os.environ.get("DATACORE_HWM_OVERRIDE") != "1":
+                    # NAME THE RECOVERY, or the guard becomes a brick.
+                    #
+                    # This refuses appends whenever the file is behind the mark.
+                    # That is right for a rewind — but if the mark itself is
+                    # wrong (corrupted, or restored from another machine's
+                    # backup) the actor can never append again, and the first
+                    # version of this guard said only "converge first", which
+                    # does nothing when the log is ALREADY current. A safety
+                    # net that can silently become a permanent outage is worse
+                    # than the fork it prevents, because at least a fork is
+                    # repairable.
+                    #
+                    # So: state the file, the two numbers, and both exits. The
+                    # override is deliberately an env var rather than automatic
+                    # healing — clearing it is a decision about whether this
+                    # machine's log is trustworthy, and that is the operator's
+                    # call, not a heuristic's.
                     raise StaleLogError(
                         f"{self.path.name} ends at seq {tail_seq} but this "
                         f"machine already wrote seq {hwm}. The log was rewound "
-                        f"(bad merge/checkout). Appending now would reuse a "
-                        f"seq and fork the log. Converge first, then retry."
+                        f"(bad merge/checkout); appending now would reuse a seq "
+                        f"and fork it.\n"
+                        f"  If the log is genuinely behind: converge, then retry.\n"
+                        f"  If the mark is wrong (restored/corrupted state): "
+                        f"rm {hwm_path}\n"
+                        f"  To append once anyway: DATACORE_HWM_OVERRIDE=1"
                     )
 
                 if last is None:

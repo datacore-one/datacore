@@ -9,6 +9,8 @@ Each attack states the invariant it targets and what a PASS means. Run in
 throwaway spaces only. Nothing here touches a real ledger.
 """
 import json, os, shutil, subprocess, sys, tempfile, threading
+
+import pytest
 from pathlib import Path
 
 LIB = Path(__file__).resolve().parents[1]
@@ -253,3 +255,70 @@ def test_a4_seal_refuses_a_fork():        _run(a4_seal_over_fork)
 def test_a5_tamper_is_caught():           _run(a5_tamper)
 def test_a6_state_root_is_stable():       _run(a6_fold_determinism)
 def test_a7_actor_spoof_is_caught():      _run(a7_actor_spoof)
+
+
+# ── Round three: payload smuggling, actor names, guard recoverability ───────
+# Each of these was probed after the first two rounds; D3 and D6 were BROKEN
+# and are fixed here. The rest are negative results kept so they stay negative.
+
+class TestSmugglingAndNames:
+    def test_newline_in_payload_cannot_inject_an_event(self, tmp_path):
+        """A payload carrying a raw newline must not become two log lines —
+        otherwise any task title could forge an event."""
+        s = tmp_path / "9-x"
+        (s / ".datacore" / "events").mkdir(parents=True)
+        EventLog(s, "mac").append(
+            "item.create",
+            {"id": "a", "title": 'x\n{"seq":99,"actor":"mac","type":"item.dismiss"}'})
+        raw = (s / ".datacore" / "events" / "mac.jsonl").read_text()
+        assert raw.count("\n") == 1
+        assert len(read_events(s)) == 1
+
+    def test_actor_name_cannot_escape_the_events_directory(self, tmp_path):
+        """An actor name becomes a filename. '../x' wrote <space>/x.jsonl —
+        inside the space but OUTSIDE events/, where read_events never globs.
+        Events written, chained, accepted, and invisible to every reader."""
+        s = tmp_path / "9-x"
+        (s / ".datacore" / "events").mkdir(parents=True)
+        for bad in ("../../escape", "a/b", "", "UPPER", "x y"):
+            with pytest.raises(ValueError):
+                EventLog(s, bad)
+        for good in ("mac", "winston", "plur-claw", "data_1"):
+            EventLog(s, good)          # must not raise
+
+
+class TestGuardIsRecoverable:
+    """A safety net that can become a permanent outage is worse than the fault
+    it prevents — a fork is repairable, a bricked actor is not."""
+
+    def _prep(self, tmp_path):
+        s = tmp_path / "9-x"
+        (s / ".datacore" / "events").mkdir(parents=True)
+        EventLog(s, "mac").append("item.create", {"id": "a", "title": "x"})
+        return s, s / ".datacore" / "state" / "seq-hwm" / "mac.seq"
+
+    def test_a_corrupt_mark_states_its_own_recovery(self, tmp_path):
+        s, hwm = self._prep(tmp_path)
+        hwm.write_text("999999")
+        with pytest.raises(StaleLogError) as exc:
+            EventLog(s, "mac").append("item.create", {"id": "b", "title": "y"})
+        msg = str(exc.value)
+        assert str(hwm) in msg and "DATACORE_HWM_OVERRIDE" in msg
+
+    def test_removing_the_mark_restores_appends(self, tmp_path):
+        s, hwm = self._prep(tmp_path)
+        hwm.write_text("999999")
+        hwm.unlink()
+        EventLog(s, "mac").append("item.create", {"id": "b", "title": "y"})
+
+    def test_explicit_override_restores_appends(self, tmp_path, monkeypatch):
+        s, hwm = self._prep(tmp_path)
+        hwm.write_text("999999")
+        monkeypatch.setenv("DATACORE_HWM_OVERRIDE", "1")
+        EventLog(s, "mac").append("item.create", {"id": "b", "title": "y"})
+
+    def test_unparseable_mark_degrades_permissively(self, tmp_path):
+        """Garbage must not block work: the mark is a net, not an authority."""
+        s, hwm = self._prep(tmp_path)
+        hwm.write_text("not-a-number")
+        EventLog(s, "mac").append("item.create", {"id": "b", "title": "y"})
