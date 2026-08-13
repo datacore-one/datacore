@@ -55,7 +55,21 @@ echo "core=${CORE:-?}"
 # absent on every server while Winston serves v1.6.0. The version is compiled
 # into dist/index.js, and the launch path lives in ~/.hermes/config.yaml — not
 # .mcp.json, which is why a config fallback missed it as well.
-m=$(grep -ho "[^ \"']*datacore-mcp[^ \"']*" ~/.hermes/config.yaml ~/.claude.json ~/.mcp.json "$D/.mcp.json" 2>/dev/null | head -1 | sed "s#/dist/.*##")
+# ASK THE SYSTEM WHAT IT ACTUALLY RUNS, FIRST.
+# Every other branch below is inference — a config file that may name a path
+# nothing uses, or a source checkout that may be a leftover. `command -v` is
+# the only one that answers "what executes when something types this". It was
+# last, so on winston the probe kept reporting the stale in-repo build (1.6.0)
+# while /usr/bin/datacore-mcp was 2.1.0: a machine we had just upgraded looked
+# un-upgraded, and the disagreement pointed at the wrong thing entirely.
+m=""
+if command -v datacore-mcp >/dev/null 2>&1; then
+  real=$(readlink -f "$(command -v datacore-mcp)")
+  # .../<pkg>/dist/index.js -> <pkg>
+  m=$(printf '%s' "$real" | sed "s#/dist/.*##")
+  [ -f "$m/package.json" ] || m=""
+fi
+[ -z "$m" ] && m=$(grep -ho "[^ \"']*datacore-mcp[^ \"']*" ~/.hermes/config.yaml ~/.claude.json ~/.mcp.json "$D/.mcp.json" 2>/dev/null | head -1 | sed "s#/dist/.*##")
 # A config may name a path that DOES NOT EXIST — nightshift's .mcp.json points
 # at a tree that was never deployed there. Accepting it non-empty made every
 # later fallback unreachable, so the machine reported no MCP while Miles was
@@ -95,7 +109,12 @@ echo "python=$("$PY3" -c 'import sys;print("%d.%d.%d"%sys.version_info[:3])' 2>/
 echo "python_path=$PY3"
 echo "org_workspace=$("$PY3" -c 'import org_workspace as o;print(getattr(o,"__version__","?"))' 2>/dev/null)"
 
-for c in datacore "$HOME/.local/bin/datacore" /usr/local/bin/datacore; do
+# Hermes ships its OWN node, so its global bin is not on a non-interactive
+# PATH and `command -v datacore` finds nothing there — the same blind spot that
+# reported Tris as having no MCP for 14 days. List it explicitly rather than
+# hoping the login shell exports it.
+for c in datacore "$HOME/.hermes/node/bin/datacore" "$HOME/.local/bin/datacore" \
+         /usr/local/bin/datacore /usr/bin/datacore; do
   command -v "$c" >/dev/null 2>&1 && { echo "cli=$("$c" --version 2>&1 | head -1)"; break; }
 done
 '''
