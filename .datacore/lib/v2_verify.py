@@ -310,6 +310,11 @@ def check_fleet(rep: Report) -> None:
         rep.add("fleet", "remote job health", None, f"registry unreadable: {exc}")
         return
 
+    # WHERE THIS CHECK IS MEANINGFUL. The ssh aliases (winston, miles, tris,
+    # data) are defined in the operator's ~/.ssh/config on the Mac. Run from a
+    # server, every host is simply unreachable — which reports n-a, honestly,
+    # but means an unattended run there verifies only itself. Say so in the
+    # detail rather than letting "0 ok, 4 unreachable" read as a fleet outage.
     unreachable, failing, ok_hosts = [], [], []
     for name, cfg in servers.items():
         access = cfg.get("access") or {}
@@ -343,11 +348,15 @@ def check_fleet(rep: Report) -> None:
         else:
             failing.append(name)
 
+    note = ""
+    if unreachable and not ok_hosts:
+        note = " — no ssh aliases here; run this from the operator machine"
     rep.add("fleet", "remote job contracts",
             None if (unreachable and not failing) else not failing,
             f"{len(ok_hosts)} ok"
             + (f", FAILING: {', '.join(failing)}" if failing else "")
-            + (f", {len(unreachable)} unreachable" if unreachable else ""))
+            + (f", {len(unreachable)} unreachable" if unreachable else "")
+            + note)
 
 
 # ── DIP-0042: sequencer / finality ──────────────────────────────────────────
