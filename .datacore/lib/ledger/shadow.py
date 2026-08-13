@@ -109,6 +109,40 @@ def compare(space_dir: Path, org_file: Path | None = None) -> ShadowDiff:
 
     real = _tasks(org_file, ACTIVE_STATES)
     shadow = _tasks(projected_path, ACTIVE_STATES)
+
+    # INBOX ITEMS ARE NOT NEXT_ACTIONS DRIFT.
+    #
+    # ledger_ingest_org.py ingests from ("inbox.org", "next_actions.org"), so
+    # both files' tasks reach the ledger and therefore the projection. This
+    # diff is against next_actions.org, so every task captured in inbox.org
+    # counted as drift the moment it was ingested — permanently, through no
+    # fault of the system.
+    #
+    # Measured 2026-08-13: 25 items reported as extra across four spaces; a
+    # fleet-wide scan found exactly THREE genuinely orphaned. The other 22 were
+    # ordinary inbox captures, counted as corruption by the gate that decides
+    # whether Phase 1 may proceed — which made the gate unreachable rather than
+    # merely slow.
+    #
+    # Phase 1 replaces next_actions.org and nothing else, so what this gate
+    # must measure is next_actions fidelity. An item that currently lives in
+    # inbox.org belongs to capture, not to the action list.
+    #
+    # Rejected alternative: diffing against BOTH files. Tried and measured —
+    # it made things worse (5/9 clean -> 2/9, 336 phantom "lost" in
+    # 0-personal), because the ledger holds only the inbox items that were
+    # ingested, not every capture line. Comparing against the whole inbox is no
+    # more apples-to-apples than ignoring it.
+    inbox = space_dir / "org" / "inbox.org"
+    if inbox.exists() and org_file.name == "next_actions.org":
+        # EVERY id in inbox.org, not just the ones in an active state. A
+        # capture line frequently carries no TODO keyword at all — that is what
+        # capture IS — so filtering by state let most inbox items straight back
+        # through and the exclusion silently did almost nothing.
+        import re as _re
+        inbox_ids = set(_re.findall(r":ID:\s*(\S+)",
+                                    inbox.read_text(errors="replace")))
+        shadow = {k: v for k, v in shadow.items() if k not in inbox_ids}
     diff.org_count, diff.projection_count = len(real), len(shadow)
     diff.only_in_org = sorted(set(real) - set(shadow))
     diff.only_in_projection = sorted(set(shadow) - set(real))

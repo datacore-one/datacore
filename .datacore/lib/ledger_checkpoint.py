@@ -93,6 +93,17 @@ def _fingerprint(state) -> dict[str, tuple]:
         if item.status not in LIVE:
             continue
         p = item.payload or {}
+        # SECTIONS ARE DERIVED, NOT STORED. genesis imports a plain heading only
+        # as the ANCESTOR of a task that lives under it (`_section_payload`),
+        # and its own docstring is explicit that sections are "re-derived, not
+        # re-imported". A section whose children have all been closed therefore
+        # has nothing to re-derive it, and correctly does not come back.
+        #
+        # Measuring it as lost was measuring structure as if it were content:
+        # one such heading in 2-datacore was the sole reason a space reported
+        # "would NOT restore" while every task in it restored perfectly.
+        if p.get("section"):
+            continue
         eff = set(p.get("effective_tags") or p.get("tags") or [])
         eff -= set(p.get("filetags") or [])
         out[iid] = (p.get("title"), p.get("state"),
