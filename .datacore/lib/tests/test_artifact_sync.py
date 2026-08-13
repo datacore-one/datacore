@@ -370,7 +370,13 @@ def test_manifest_loads_and_mac_artifact_pull_job_present():
 
     artifact = job.artifacts[0]
     assert "app-briefing.json" in artifact.path
-    assert "{today}" in artifact.path
+    # NOT `{today}`: a daily artifact cannot exist between midnight and the hour
+    # its job runs, so a date-templated path failed this contract every night
+    # for hours. It globs to the newest briefing instead, and `max_age_hours` —
+    # not the filename — catches "the brief stopped running", which is the
+    # failure actually worth alerting on.
+    assert "*" in artifact.path
+    assert artifact.max_age_hours and artifact.max_age_hours <= 26
     assert artifact.check == "json_has_keys"
     assert artifact.arg == ["headline"]
     assert artifact.max_age_hours == 26
