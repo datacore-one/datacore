@@ -117,21 +117,54 @@ def git(*args: str) -> tuple[int, str]:
     return r.returncode, (r.stdout or "")
 
 
+def local_identity() -> str:
+    """This machine's git author email — the only reliable "who wrote it".
+
+    Actor names are not usable here: Winston commits as "Winston (CoS)", Miles
+    as "Miles", and the registry knows neither string. The email is what git
+    stamps on every commit and what each box configures once.
+    """
+    rc, out = git("config", "user.email")
+    return out.strip().lower() if rc == 0 else ""
+
+
 def changed(rng: str) -> list[str]:
-    """Files touched by LOCALLY AUTHORED commits in this range.
+    """Files touched by commits THIS MACHINE AUTHORED in this range.
 
     `--no-merges` is load-bearing. A converge fetches other actors' logs and
     merges them; the merge commit then shows those logs as "changed" relative
     to its first parent, so a plain `git diff <range>` reported this machine as
-    writing genesis.jsonl and blocked every ordinary sync. Commits that came
-    from origin are already on origin and so are not in the range at all —
-    what remains, minus merges, is what this machine actually wrote.
+    writing genesis.jsonl and blocked every ordinary sync.
+
+    But --no-merges alone is NOT enough, and the assumption it rested on —
+    "commits from origin are already on origin and so are not in the range" —
+    is false once the fleet stopped rebasing. A merge carries other actors'
+    commits into your history AS THEMSELVES, so a push range legitimately
+    contains foreign-authored commits that have not reached this remote yet.
+    Rebase used to hide that by replaying everything under the pusher.
+
+    On 2026-08-13 that blocked Miles's entire nightshift wrap-up: two commits
+    authored by Winston, touching winston.jsonl, sat in Miles's push range, and
+    the guard reported Miles as having written another actor's log. The events
+    were Winston's, correctly attributed, doing exactly what merge-based sync
+    is supposed to do.
+
+    So filter by AUTHOR. What this machine is accountable for is what it wrote,
+    not what it is carrying. Anything else is someone else's commit in transit,
+    and blaming the courier both blocks honest work and — worse — trains
+    everyone to reach for SKIP_PRE_PUSH, which disables the check for the real
+    case it exists to catch.
     """
+    me = local_identity()
     rc, out = git("rev-list", "--no-merges", rng)
     if rc != 0:
         return []
     files: list[str] = []
     for sha in out.split():
+        if me:
+            rc_a, author = git("show", "-s", "--format=%ae", sha)
+            if rc_a == 0 and author.strip().lower() != me:
+                continue          # someone else's commit, merely passing through
         rc2, names = git("show", "--name-only", "--format=", sha)
         if rc2 == 0:
             files.extend(l for l in names.splitlines() if l.strip())

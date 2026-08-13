@@ -538,3 +538,66 @@ class TestStatePersistence:
 
         executor2 = HookExecutor()
         assert executor2.state["retry_counts"]["test-agent"]["task-1"] == 2
+
+
+class TestLogOwnershipGuardAuthorship:
+    """The guard must judge what a machine WROTE, not what it is carrying.
+
+    Merge-based sync (DIP-0046) carries other actors' commits into your history
+    as themselves, so a push range legitimately contains foreign-authored
+    commits. Rebase used to hide this by replaying everything under the pusher.
+    On 2026-08-13 the guard blocked Miles's entire nightshift wrap-up over two
+    commits Winston had authored against winston.jsonl — correctly attributed
+    events, doing exactly what merge-based sync is for.
+    """
+
+    @staticmethod
+    def _repo(tmp_path):
+        import subprocess
+
+        def g(*a, **kw):
+            return subprocess.run(["git", *a], cwd=tmp_path, capture_output=True,
+                                  text=True, **kw)
+
+        g("init", "-q", "-b", "main")
+        g("config", "user.email", "gregor+miles@datafund.io")
+        g("config", "user.name", "Miles")
+        (tmp_path / ".datacore" / "events").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".datacore" / "events" / "miles.jsonl").write_text('{"a":1}\n')
+        g("add", "-A")
+        g("commit", "-q", "-m", "base")
+        g("branch", "-q", "base-ref")
+        return g
+
+    def _run_guard(self, tmp_path, rng):
+        import subprocess
+        from pathlib import Path
+        guard = Path(__file__).resolve().parents[1] / "hooks" / "log_ownership_guard.py"
+        env = {**os.environ, "DATACORE_ACTOR": "miles"}
+        return subprocess.run(["python3", str(guard), rng], cwd=tmp_path,
+                              capture_output=True, text=True, env=env)
+
+    def test_foreign_authored_commit_in_range_is_allowed(self, tmp_path):
+        """Winston's own commit, merged in, must not be blamed on Miles."""
+        g = self._repo(tmp_path)
+        g("checkout", "-q", "-b", "wside", "base-ref")
+        (tmp_path / ".datacore" / "events" / "winston.jsonl").write_text('{"w":1}\n')
+        g("add", "-A")
+        g("-c", "user.email=gregor+winston@datafund.io",
+          "-c", "user.name=Winston (CoS)", "commit", "-q", "-m", "cos: local autosave")
+        g("checkout", "-q", "main")
+        g("merge", "-q", "--no-edit", "wside", "-m", "Merge")
+
+        r = self._run_guard(tmp_path, "base-ref..HEAD")
+        assert r.returncode == 0, f"blocked an honest merge:\n{r.stdout}{r.stderr}"
+
+    def test_locally_authored_foreign_log_write_is_refused(self, tmp_path):
+        """The real violation still has to be caught."""
+        g = self._repo(tmp_path)
+        (tmp_path / ".datacore" / "events" / "winston.jsonl").write_text('{"forged":1}\n')
+        g("add", "-A")
+        g("commit", "-q", "-m", "miles writes winston's log")
+
+        r = self._run_guard(tmp_path, "base-ref..HEAD")
+        assert r.returncode == 1, "forgery was allowed through"
+        assert "winston.jsonl" in (r.stdout + r.stderr)
