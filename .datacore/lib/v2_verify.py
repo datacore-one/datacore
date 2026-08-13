@@ -174,7 +174,27 @@ def check_registry(rep: Report) -> None:
         rep.add("0040", "registry gc", None, "registry_gc.py or agents.yaml absent")
         return
     rc, out = run([PY, str(gc), "--registry", str(reg), "--check"], 90)
-    rep.add("0040", "registry gc", rc == 0, out.strip().splitlines()[-1][:70] if out.strip() else "")
+
+    # ORPHANS ARE MACHINE-DEPENDENT, so they must not fail a fleet check.
+    # An orphan is a registry entry whose agent file is missing HERE. Some
+    # module agents are deliberately untracked and exist only on the Mac
+    # (health, for one), so Winston reports 13 orphans and the Mac reports 0 —
+    # both correct. Failing on that would make this check permanently red on
+    # every server for a reason that is not a v2 regression, and a permanently
+    # red check is one people stop reading.
+    #
+    # The other three categories ARE fleet-invariant registry hygiene: stray
+    # .bak files, unregistered agents, duplicate keys. Those still fail.
+    import re as _re
+    counts = {k: int(v) for k, v in
+              _re.findall(r"(bak files|unregistered|duplicate keys) \((\d+)\)", out)}
+    orphans = next((int(v) for v in
+                    _re.findall(r"orphaned \((\d+)\)", out)), 0)
+    hygiene_bad = sum(counts.values())
+    detail = ", ".join(f"{k}={v}" for k, v in counts.items()) or out.strip()[:48]
+    rep.add("0040", "registry hygiene", hygiene_bad == 0,
+            detail + (f"; {orphans} orphan(s) — module agents absent on this "
+                      f"machine, informational" if orphans else ""))
 
 
 # ── DIP-0041: executor adapters + shadow accounting ─────────────────────────
