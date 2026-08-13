@@ -52,8 +52,20 @@ def _actor() -> str:
     host = socket.gethostname().split(".")[0].lower()
     try:
         import yaml
-        root = Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
-        reg = yaml.safe_load((root / ".datacore/registry/infrastructure.yaml").read_text())
+        # Find the registry relative to THIS FILE, not DATACORE_ROOT. On hermes
+        # and plur-claw `~/Data` is the AGENT'S OWN SPACE repo and the core
+        # lives in the runner, so a DATACORE_ROOT lookup finds no registry,
+        # falls through to the hostname, and files tris's events under
+        # `transporter` and data's under `holodeck` — the exact DIP-0044
+        # failure this function's own comment warns about. Verified on all five
+        # machines; two were wrong until this changed.
+        candidates = [LIB.parent.parent / ".datacore/registry/infrastructure.yaml",
+                      Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
+                      / ".datacore/registry/infrastructure.yaml"]
+        reg_path = next((c for c in candidates if c.is_file()), None)
+        if reg_path is None:
+            raise FileNotFoundError("no infrastructure registry")
+        reg = yaml.safe_load(reg_path.read_text())
         for name, cfg in (reg.get("servers") or {}).items():
             if not isinstance(cfg, dict):
                 continue
