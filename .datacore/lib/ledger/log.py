@@ -65,6 +65,15 @@ from .hlc import tick
 from .keys import ensure_keypair, sign
 
 
+class StaleLogError(RuntimeError):
+    """Raised when appending would reuse a seq because the log was rewound.
+
+    A hard error rather than a silent renumber: renumbering would hide the
+    fact that this machine's log disagrees with the fleet's, which is exactly
+    the condition an operator has to know about.
+    """
+
+
 class CorruptLogError(ValueError):
     """A non-final line in an event-log file failed to parse.
 
@@ -145,6 +154,43 @@ class EventLog:
                     f.truncate(valid_len)
                     f.flush()
                 last = events[-1] if events else None
+
+                # HIGH-WATER MARK: refuse to append against a REWOUND log.
+                #
+                # seq comes from this file's own tail, which is only safe while
+                # the file is current. A git operation that rewinds it — a
+                # merge taking "theirs", a checkout, a bad conflict resolution
+                # — silently lowers that tail, and the next append then REUSES
+                # a seq that already identifies a different event on another
+                # machine. Two events, one (actor, seq): the fork this whole
+                # design exists to make impossible.
+                #
+                # That is not hypothetical. It happened in 5-plur on
+                # 2026-08-13: seq 139 was an item.update on one machine and an
+                # item.dismiss on another, found only because git happened to
+                # produce a text conflict. Had the two sides merged cleanly the
+                # fork would have been silent and permanent.
+                #
+                # The mark lives OUTSIDE the log, in state/, so rewinding the
+                # tracked file cannot rewind the memory of how far it got.
+                # State is machine-local and disposable by design — losing it
+                # only costs the guard, never data.
+                hwm_path = (self.path.parent.parent / "state" / "seq-hwm"
+                            / f"{self.actor}.seq")
+                hwm = -1
+                try:
+                    hwm = int(hwm_path.read_text().strip())
+                except (OSError, ValueError):
+                    pass
+                tail_seq = last.seq if last is not None else -1
+                if tail_seq < hwm:
+                    raise StaleLogError(
+                        f"{self.path.name} ends at seq {tail_seq} but this "
+                        f"machine already wrote seq {hwm}. The log was rewound "
+                        f"(bad merge/checkout). Appending now would reuse a "
+                        f"seq and fork the log. Converge first, then retry."
+                    )
+
                 if last is None:
                     seq, prev = 0, "GENESIS"
                 else:
@@ -197,6 +243,16 @@ class EventLog:
 
                 f.write((to_line(event) + "\n").encode("utf-8"))
                 f.flush()
+                # Record the mark only AFTER the event is on disk, so a crash
+                # between the two leaves the guard permissive rather than
+                # blocking a legitimate retry. Failure to write it is never
+                # fatal: the guard is a safety net, and losing the net must not
+                # stop the work.
+                try:
+                    hwm_path.parent.mkdir(parents=True, exist_ok=True)
+                    hwm_path.write_text(str(seq))
+                except OSError:
+                    pass
                 return event
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)

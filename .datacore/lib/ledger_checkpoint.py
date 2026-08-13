@@ -63,14 +63,51 @@ def _default_root() -> Path:
 def _fingerprint(state) -> dict[str, tuple]:
     """The fields a restore must preserve. Not the state root: a fresh import
     writes new events with new hashes and hlcs, so the CHAIN differs by design
-    — what must survive is the ITEMS."""
+    — what must survive is the ITEMS.
+
+    Tags are compared as EFFECTIVE tags — the item's own plus whatever it
+    inherits — because own-tags alone flag a correct transformation as damage.
+
+    When a task's parent is missing from a projection, the projector promotes
+    it to top level and writes its effective tags, so the tags it used to
+    inherit are not silently dropped (see projector.py). That is right: the
+    item keeps every tag it had. But its OWN tag set legitimately grows, and
+    comparing own-tags reported nine such items across 0-personal and 5-plur as
+    "altered" — a restore that preserved the tags perfectly, described as one
+    that corrupted them.
+
+    Effective tags are invariant under that promotion, which is exactly the
+    property a restore must hold: the item ends up tagged the same way, whether
+    or not the parent came along.
+
+    FILE-LEVEL tags are subtracted from both sides. `#+FILETAGS: :gtd:` applies
+    to every item in the file, so it carries no per-item information — but the
+    two sides disagree about it: a recorded `effective_tags` omits filetags,
+    while re-importing a projection that reproduces the FILETAGS line picks
+    them up. That asymmetry reported 16 untagged items in 0-personal as
+    "altered", every one of them differing by exactly the same constant.
+    Subtracting it compares what is actually per-item.
+    """
     out = {}
     for iid, item in state.items.items():
         if item.status not in LIVE:
             continue
         p = item.payload or {}
+        # SECTIONS ARE DERIVED, NOT STORED. genesis imports a plain heading only
+        # as the ANCESTOR of a task that lives under it (`_section_payload`),
+        # and its own docstring is explicit that sections are "re-derived, not
+        # re-imported". A section whose children have all been closed therefore
+        # has nothing to re-derive it, and correctly does not come back.
+        #
+        # Measuring it as lost was measuring structure as if it were content:
+        # one such heading in 2-datacore was the sole reason a space reported
+        # "would NOT restore" while every task in it restored perfectly.
+        if p.get("section"):
+            continue
+        eff = set(p.get("effective_tags") or p.get("tags") or [])
+        eff -= set(p.get("filetags") or [])
         out[iid] = (p.get("title"), p.get("state"),
-                    tuple(sorted(p.get("tags") or [])),
+                    tuple(sorted(eff)),
                     p.get("scheduled"), p.get("deadline"))
     return out
 
@@ -87,17 +124,42 @@ def write(space: Path) -> Path:
 
 
 def verify(space: Path) -> tuple[bool, str]:
-    """Rebuild from the checkpoint in a scratch space and compare."""
+    """Rebuild from the checkpoint in a scratch space and compare.
+
+    STALENESS IS NOT CORRUPTION, and conflating them made this tool lie.
+
+    The checkpoint on disk is written once a day. Every item appended to the
+    ledger after that write is, trivially, absent from it — so comparing the
+    stored file against the CURRENT ledger reported ordinary new work as data
+    loss. On 2026-08-13 that read as "4 of 9 spaces would NOT restore, 23 items
+    lost". Re-writing first and re-running dropped it to 1 lost item: 22 of the
+    23 were tasks created since breakfast.
+
+    That is the worst failure mode available to this particular tool. Its whole
+    purpose is answering "could we actually re-genesis from this?", and an
+    answer that cries corruption on a healthy system is one the operator learns
+    to wave away — leaving nothing to raise the alarm when a restore genuinely
+    breaks.
+
+    So project FRESH from the same ledger being compared against. That isolates
+    the question this is meant to answer — does the projection round-trip? —
+    from "is the file on disk current?", which is the write step's job and is
+    reported separately below.
+    """
     cp = space / CHECKPOINT_REL
     if not cp.is_file():
         return False, "no checkpoint written yet"
 
-    live = _fingerprint(fold(read_events(space)))
+    state = fold(read_events(space))
+    live = _fingerprint(state)
+
+    # Round-trip a projection of the CURRENT state, not yesterday's file.
+    fresh = project(state, space=space.name).text
     with tempfile.TemporaryDirectory() as td:
         scratch = Path(td) / space.name
         (scratch / ".datacore" / "events").mkdir(parents=True)
         (scratch / "org").mkdir()
-        shutil.copy(cp, scratch / "org" / "next_actions.org")
+        (scratch / "org" / "next_actions.org").write_text(fresh, encoding="utf-8")
         import_space(scratch, org_file=scratch / "org" / "next_actions.org")
         restored = _fingerprint(fold(read_events(scratch)))
 
@@ -105,8 +167,16 @@ def verify(space: Path) -> tuple[bool, str]:
     extra = sorted(set(restored) - set(live))
     changed = [i for i in (set(live) & set(restored)) if live[i] != restored[i]]
 
+    # Report the on-disk file's age as its own fact. A stale checkpoint is a
+    # real problem — it is what a restore would actually start from — but it is
+    # a DIFFERENT problem from a projection that cannot round-trip, and the two
+    # need different fixes: run the write step, versus fix the projector.
+    stale = ""
+    if cp.read_text(encoding="utf-8", errors="replace") != fresh:
+        stale = " [on-disk checkpoint is behind the ledger — run: write]"
+
     if not (missing or extra or changed):
-        return True, f"{len(live)} item(s) restore identically"
+        return True, f"{len(live)} item(s) restore identically{stale}"
     parts = []
     if missing:
         parts.append(f"{len(missing)} lost (e.g. {missing[0]})")
@@ -114,7 +184,7 @@ def verify(space: Path) -> tuple[bool, str]:
         parts.append(f"{len(extra)} invented")
     if changed:
         parts.append(f"{len(changed)} altered (e.g. {changed[0]})")
-    return False, "; ".join(parts)
+    return False, "; ".join(parts) + stale
 
 
 def main() -> int:

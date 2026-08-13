@@ -142,11 +142,20 @@ def recover_repo(repo: Path, execute: bool) -> dict:
     # branch has almost always moved since the last fetch — pushing without
     # integrating first just returns "fetch first" and strands the recovery
     # commit locally, which is the same failure mode being cleaned up here.
+    # MERGE, NEVER REBASE, and never --autostash (DIP-0046).
+    #
+    # This is the STRANDED-COMMIT RECOVERY tool, so it is the last place that
+    # should be able to strand a commit. Rebasing here would rewrite the very
+    # recovery commit it just made: a rejected push afterwards leaves that work
+    # under a hash nothing else has seen, which is the exact condition this
+    # script exists to clean up. --autostash compounds it — a conflicting pop
+    # keeps the stash and writes conflict markers into the tree of a repo we are
+    # already repairing.
     git(repo, 'fetch', '-q', 'origin')
-    pull = git(repo, 'pull', '--rebase', '--autostash', 'origin', db)
+    pull = git(repo, 'pull', '--no-rebase', 'origin', db)
     if pull.returncode != 0:
-        git(repo, 'rebase', '--abort')
-        res['status'] = (f'committed, NOT PUSHED — rebase onto origin/{db} '
+        git(repo, 'merge', '--abort')
+        res['status'] = (f'committed, NOT PUSHED — merge with origin/{db} '
                          f'conflicts, needs a human')
         return res
 

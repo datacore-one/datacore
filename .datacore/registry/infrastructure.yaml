@@ -72,11 +72,11 @@ servers:
       in ~/Data/.datacore/events. Verified end to end by ledger_probe.py 2026-08-10.'
     access:
       actor: tris
-      ssh_user: root
+      ssh_user: gregor
       service_user: gregor
       data_root: ~gregor/Data
       runner: ~gregor/.datacore/v2-runner
-      hostname: hermes-test
+      hostname: transporter
   plur-claw:
     purpose: Mr Data — OpenClaw agent host
     ssh_alias: plur-claw
