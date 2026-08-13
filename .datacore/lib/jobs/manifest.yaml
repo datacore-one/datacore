@@ -632,4 +632,20 @@ jobs:
 #                            success marker (ExecStartPost) and check that.
 #                            Blocked on bringing the root-owned unit under
 #                            version control; it is untracked today.
+  # The checklist itself must be contracted, or it becomes one more thing that
+  # silently stops running — which is how every failure found on 2026-08-13
+  # survived for hours or days. Freshness catches "the job died"; the regex
+  # catches "the job ran and found problems". Two different failures, one
+  # artifact, and silent absence is the case that hid everything.
+  - name: bridge-v2-verify
+    machine: box
+    schedule: "0 6,18 * * *"
+    cmd: "~/Data/.datacore/lib/v2_verify_run.sh"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/v2-verify.log"
+        check: regex
+        arg: '0 FAIL'
+        max_age_hours: 26
+
 unverified_jobs_see_comment_above: true
