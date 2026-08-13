@@ -10,6 +10,12 @@ servers:
       the genesis event logs: .datacore/events/ is UNTRACKED in every space repo, so the migration output
       exists here and nowhere else. Back it up before reinstalling this machine.'
     access:
+      # CANONICAL IDENTITY. Every other name for this box disagrees with the
+      # others: ssh alias, `hostname -s`, git user.name and the agent's own
+      # name are four different strings on some machines (winston's hostname
+      # is chief-of-staff; hermes is hermes-test and runs Tris). Nothing may
+      # infer the actor from any of them — read it from here.
+      actor: mac
       service_user: gregor
       data_root: ~/Data
       runner: ~/.datacore/v2-runner
@@ -28,10 +34,11 @@ servers:
     notes: Runs the config plane, job contracts and the ledger package from ~/Data at 0e2aad5. Verified
       end to end by ledger_probe.py 2026-08-10.
     access:
-      ssh_user: root
-      service_user: root
+      actor: winston
+      ssh_user: gregor
+      service_user: gregor
       data_root: ~/Data
-      hostname: chief-of-staff
+      hostname: bridge
   nightshift:
     purpose: Overnight AI task execution (systemd timers); Miles Telegram bot
     ssh_alias: nightshift
@@ -48,6 +55,7 @@ servers:
     notes: Two actors on one machine — they own separate event files and never contend. Runs .datacore/modules/nightshift/
       tasks on schedule. nightshift-digest.service is currently in a failed state.
     access:
+      actor: miles
       ssh_user: gregor
       service_user: gregor
       data_root: ~/Data
@@ -63,6 +71,7 @@ servers:
     notes: 'Satellite writer: no ~/Data git repo — v2 code lives in ~/.datacore/v2-runner (0e2aad5), events
       in ~/Data/.datacore/events. Verified end to end by ledger_probe.py 2026-08-10.'
     access:
+      actor: tris
       ssh_user: root
       service_user: gregor
       data_root: ~gregor/Data
@@ -78,8 +87,9 @@ servers:
     notes: Satellite writer. ~/Data is a DIFFERENT repo (data-on-claw/data-space), not this installation;
       v2 code lives in ~/.datacore/v2-runner (0e2aad5). Verified end to end by ledger_probe.py 2026-08-10.
     access:
-      ssh_user: root
-      service_user: root
+      actor: data
+      ssh_user: gregor
+      service_user: gregor
       data_root: ~/Data
       runner: ~/.datacore/v2-runner
-      hostname: plur-claw
+      hostname: holodeck
