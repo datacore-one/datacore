@@ -35,10 +35,10 @@ servers:
       end to end by ledger_probe.py 2026-08-10.
     access:
       actor: winston
-      ssh_user: root
-      service_user: root
+      ssh_user: gregor
+      service_user: gregor
       data_root: ~/Data
-      hostname: chief-of-staff
+      hostname: bridge
   nightshift:
     purpose: Overnight AI task execution (systemd timers); Miles Telegram bot
     ssh_alias: nightshift
