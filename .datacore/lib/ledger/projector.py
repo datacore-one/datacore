@@ -26,6 +26,9 @@ resolving it. Only its provenance changes -- announced by a header.
 
 from __future__ import annotations
 
+import re
+from datetime import date
+
 import hashlib
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -82,6 +85,40 @@ class Projection:
         return hashlib.sha256(self.text.encode("utf-8")).hexdigest()
 
 
+
+_BARE_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+
+
+def _org_stamp(value):
+    """Render a date as a VALID org timestamp: `<YYYY-MM-DD Day>`.
+
+    Some writers store `scheduled` as a bare `2026-08-14`, and this emitted it
+    verbatim. A bare date is not an org timestamp — org-mode requires angle or
+    square brackets — so re-importing the projection parsed it as no schedule
+    at all. Eight items in 5-plur lost their dates on a restore round-trip.
+
+    That is a checkpoint bug today and a DATA-LOSS bug at the Phase 1 flip,
+    when the projection stops being a shadow copy and BECOMES next_actions.org.
+    Every bare-date schedule would have been silently erased from the file the
+    user actually works in.
+
+    The day name is COMPUTED here, never guessed: a wrong day in an org
+    timestamp is exactly the class of error the date tooling exists to prevent.
+    Anything already bracketed is passed through untouched — it is already a
+    timestamp, and rewriting it would risk dropping a time-of-day or repeater.
+    """
+    if not value:
+        return value
+    text = str(value).strip()
+    m = _BARE_DATE.match(text)
+    if not m:
+        return text
+    try:
+        d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return text          # not a real date; emit as-is rather than invent one
+    return f"<{text} {d.strftime('%a')}>"
+
 def _drawer(props: dict) -> list[str]:
     """A PROPERTIES drawer with keys in sorted order.
 
@@ -130,7 +167,7 @@ def render_item(item, *, level: int | None = None) -> list[str]:
     tag_str = f"  :{':'.join(tags)}:" if tags else ""
     lines = [f"{stars} {state} {prio}{item.title}{tag_str}"]
 
-    sched, dead = payload.get("scheduled"), payload.get("deadline")
+    sched, dead = _org_stamp(payload.get("scheduled")), _org_stamp(payload.get("deadline"))
     if sched or dead:
         parts = []
         if sched:

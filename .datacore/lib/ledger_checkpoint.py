@@ -50,7 +50,7 @@ sys.path.insert(0, str(LIB))
 from ledger.fold import fold  # noqa: E402
 from ledger.genesis import import_space  # noqa: E402
 from ledger.log import read_events  # noqa: E402
-from ledger.projector import project  # noqa: E402
+from ledger.projector import _org_stamp, project  # noqa: E402
 
 LIVE = ("created", "claimed", "granted")
 CHECKPOINT_REL = Path(".datacore") / "checkpoints" / "next_actions.org"
@@ -106,9 +106,14 @@ def _fingerprint(state) -> dict[str, tuple]:
             continue
         eff = set(p.get("effective_tags") or p.get("tags") or [])
         eff -= set(p.get("filetags") or [])
+        # Normalise timestamps before comparing. Some writers store a bare
+        # `2026-08-14`; the projector renders the valid org form
+        # `<2026-08-14 Fri>`. Those denote the SAME date, so comparing the raw
+        # strings reported eight items as altered by a restore that preserved
+        # them exactly — the mirror of the bug just fixed in the projector.
         out[iid] = (p.get("title"), p.get("state"),
                     tuple(sorted(eff)),
-                    p.get("scheduled"), p.get("deadline"))
+                    _org_stamp(p.get("scheduled")), _org_stamp(p.get("deadline")))
     return out
 
 
