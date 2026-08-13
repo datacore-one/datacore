@@ -37,6 +37,23 @@ EVENT_TYPES = frozenset(
         "item.update",
         "owner.set",
         "spend.record",
+        # FINALITY (DIP-0042). Everything above is an append by one actor about
+        # its own work; per-actor logs are disjoint, so appends need no
+        # sequencer. `ledger.seal` is the one event that is ABOUT the combined
+        # log: the sequencer attests "including exactly these per-actor
+        # sequence numbers, the folded state root was X".
+        #
+        # This is the block-time distinction. Without it every read is a read of
+        # the TIP — whatever happens to have arrived on this machine — so two
+        # boxes can disagree and neither is wrong, and there is no point anyone
+        # can name as settled. A seal creates that point: state at or before the
+        # watermark is final and identical everywhere; state after it is the
+        # tip, useful for a UI and not for settlement.
+        #
+        # It carries watermarks rather than a count so verification is
+        # independent of arrival order: fold the events up to those seqs, hash,
+        # compare. Anyone can check the sequencer's claim without trusting it.
+        "ledger.seal",
         "metric.attest",
         "artifact.attest",
         "policy.set",
