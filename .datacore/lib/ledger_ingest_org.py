@@ -127,19 +127,49 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
         # title too: a heading edited in org left the projection rendering the
         # imported wording forever, which is a diff no amount of state syncing
         # would ever close.
-        # TAGS ARE DELIBERATELY NOT SYNCED, and this is the second time that
-        # needs saying. `node.tags` from org_workspace is the INHERITED set —
-        # the heading's own tags plus every ancestor's. The projector then files
-        # the item under its own sections, which contribute their tags again, so
-        # writing inherited tags into the payload double-applies inheritance and
-        # the projection diverges from the file it is meant to reproduce.
-        # Attempted 2026-08-12: 569 items updated, and 0-personal went from
-        # clean to changed=46. Syncing tags at all needs the node's OWN tags,
-        # which org_workspace does not expose separately here.
+        # TAGS SYNC FROM `shallow_tags` — the node's OWN tags — and never from
+        # `node.tags`, which is the inherited set.
+        #
+        # The 2026-08-12 attempt used node.tags and went badly: 569 items
+        # updated and 0-personal from clean to changed=46, because the projector
+        # files each item under its own sections, which contribute those
+        # ancestor tags AGAIN. Writing inherited tags into the payload
+        # double-applies inheritance.
+        #
+        # That attempt concluded own tags were unavailable. They are:
+        # org_workspace exposes `shallow_tags`, and genesis.py has used it since
+        # the migration. Not syncing them at all left a real hole — an item
+        # created through the adapter without tags could never acquire the ones
+        # org shows, so 5-plur held two items tagged in org and untagged in the
+        # ledger with no path to converge.
+        #
+        # `or None` normalises empty to absent, matching how the adapter emits
+        # tags on create; without it every untagged item would diff forever
+        # between [] and None.
+        # ADDITIVE ONLY: fill tags in when the ledger has NONE, never rewrite
+        # or remove them.
+        #
+        # A dry run over the real corpus found two distinct classes. Items
+        # created through the adapter without tags, where org has them and the
+        # ledger has None — a genuine hole, since nothing could ever fill it.
+        # And items whose ledger tags are a SUPERSET of the heading's own,
+        # because genesis ran under an org_workspace without `shallow_tags` and
+        # fell back to the inherited set, baking ancestor tags into the payload.
+        #
+        # Syncing both directions would have stripped tags from 41 items to
+        # "correct" that history. Removing data to satisfy a comparison is the
+        # wrong trade: those tags are what the projector renders today, the
+        # promoted-orphan path depends on them, and a diff is not a mandate.
+        # Filling a hole is safe; rewriting history to match a checker is not.
+        own = getattr(node, "shallow_tags", None)
         want = {"state": node.todo,
                 "title": node.heading,
                 "scheduled": str(node.scheduled or "") or None,
                 "deadline": str(node.deadline or "") or None}
+        if own is not None and not (cur.get("tags") or None):
+            filled = sorted(t for t in own if t) or None
+            if filled:
+                want["tags"] = filled
         diff = {k: v for k, v in want.items() if (cur.get(k) or None) != v}
         if not diff:
             continue
