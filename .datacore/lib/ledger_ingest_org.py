@@ -31,7 +31,10 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import os
 from pathlib import Path
+
+LIB = Path(__file__).resolve().parent
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -43,7 +46,41 @@ ACTIVE = ("TODO", "NEXT", "WAITING", "DEFERRED", "QUEUED", "WORKING", "REVIEW", 
 LIVE = ("created", "claimed", "granted")
 
 
-def sync_state(space: Path, actor: str = "mac", dry_run: bool = False) -> dict:
+def _this_actor() -> str:
+    """Resolve THIS machine's actor. Never a hardcoded default.
+
+    This defaulted to "mac". Run anywhere else — and it is run on the
+    chief-of-staff box every night — it appends to mac.jsonl AS mac, so two
+    machines write one per-writer log with independent sequences. That is a
+    guaranteed fork of the exact kind the whole design exists to prevent, and
+    it produced one overnight in 1-datafund and 5-plur (same payload, different
+    hash, at the same seq) which the 06:00 checklist caught.
+
+    A per-writer log is only disjoint if exactly one writer writes it. A
+    default actor silently breaks that for every machine except the one the
+    default names.
+    """
+    import socket
+    explicit = os.environ.get("DATACORE_ACTOR")
+    if explicit:
+        return explicit.strip().lower()
+    host = socket.gethostname().split(".")[0].lower()
+    try:
+        import yaml
+        reg = yaml.safe_load(
+            (LIB.parent / "registry" / "infrastructure.yaml").read_text())
+        for name, cfg in (reg.get("servers") or {}).items():
+            if not isinstance(cfg, dict):
+                continue
+            access = cfg.get("access") or {}
+            if host in (access.get("hostname"), name) and access.get("actor"):
+                return str(access["actor"]).lower()
+    except Exception:  # noqa: BLE001
+        pass
+    return host
+
+
+def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> dict:
     """Reconcile an already-imported task with what org says about it NOW.
 
     Importing new tasks is a third of the job. Org keeps moving afterwards — a
@@ -79,7 +116,7 @@ def sync_state(space: Path, actor: str = "mac", dry_run: bool = False) -> dict:
             continue
         if node.todo == "DONE":
             if not dry_run:
-                log = log or EventLog(space, actor)
+                log = log or EventLog(space, actor or _this_actor())
                 log.append("item.dismiss", {"id": nid,
                            "reason": "closed as DONE in next_actions.org"})
             dismissed += 1
@@ -107,7 +144,7 @@ def sync_state(space: Path, actor: str = "mac", dry_run: bool = False) -> dict:
         if not diff:
             continue
         if not dry_run:
-            log = log or EventLog(space, actor)
+            log = log or EventLog(space, actor or _this_actor())
             log.append("item.update", {"id": nid, **diff})
         updated += 1
     return {"dismissed": dismissed, "updated": updated}
