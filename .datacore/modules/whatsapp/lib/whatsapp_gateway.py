@@ -1,3 +1,4 @@
+from datacore.ledger import attests
 #!/usr/bin/env python3
 """
 WhatsApp Gateway
@@ -486,6 +487,7 @@ _Or just send any text to capture to inbox._"""
 
     # ==================== Messaging ====================
 
+    @attests("whatsapp.sent", ref=lambda r: str(getattr(r, "id", None) or (r.get("id", "") if isinstance(r, dict) else "") or ""))
     async def send_reply(self, chat_id: str, text: str):
         """Send reply message.
 
@@ -495,6 +497,7 @@ _Or just send any text to capture to inbox._"""
         """
         await self.client.send_message(chat_id, text)
 
+    @attests("whatsapp.sent", ref=lambda r: str(getattr(r, "id", None) or (r.get("id", "") if isinstance(r, dict) else "") or ""))
     async def send_message(self, to: str, text: str) -> WAHAMessage:
         """Send message to phone number.
 
@@ -549,6 +552,7 @@ class WhatsAppGatewaySync:
     def stop(self):
         return self._run(self._gateway.stop())
 
+    @attests("whatsapp.sent", ref=lambda r: str(getattr(r, "id", None) or (r.get("id", "") if isinstance(r, dict) else "") or ""))
     def send_message(self, to: str, text: str):
         return self._run(self._gateway.send_message(to, text))
 

@@ -1,3 +1,4 @@
+from datacore.ledger import attests
 #!/usr/bin/env python3
 """
 WAHA Client
@@ -287,6 +288,7 @@ class WAHAClient:
 
     # ==================== Messaging ====================
 
+    @attests("whatsapp.sent", ref=lambda r: str(getattr(r, "id", None) or (r.get("id", "") if isinstance(r, dict) else "") or ""))
     async def send_message(
         self,
         to: str,
@@ -686,6 +688,7 @@ class WAHAClientSync:
     def get_qr_code(self, format: str = "image") -> Dict[str, Any]:
         return self._run(self._client.get_qr_code(format))
 
+    @attests("whatsapp.sent", ref=lambda r: str(getattr(r, "id", None) or (r.get("id", "") if isinstance(r, dict) else "") or ""))
     def send_message(self, to: str, text: str, reply_to: str = None) -> WAHAMessage:
         return self._run(self._client.send_message(to, text, reply_to))
 

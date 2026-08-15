@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import os
 import subprocess
 
 from .base import ESTIMATE_CENTS_PER_MILLION_TOKENS, Executor, estimate_cost_cents, register
@@ -93,12 +94,38 @@ class ClaudeCodeExecutor(Executor):
         if binary is None:
             raise RuntimeError("'claude' binary not found on PATH")
 
+        # THREE THINGS THE REGISTRY REFACTOR DROPPED, each restored here with
+        # the reason it exists, because losing them was silent and cost days.
+        #
+        # --permission-mode acceptEdits: without a permission mode the agent is
+        #   READ-ONLY. It declines every Write, then reports fluently and exits
+        #   0, so the caller sees success and the check fails for a reason that
+        #   looks like refusal. Verified on nightshift 2026-08-14: identical
+        #   prompt, `acceptEdits` writes the file, no flag does not.
+        #   NOT --dangerously-skip-permissions: that is refused outright under
+        #   root, which is exactly winston's situation, and it is a blanket
+        #   grant where this is the narrow one.
+        #
+        # cwd: the agent must work in the space it was dispatched for.
+        #   `acceptEdits` is scoped to the working directory, so a wrong cwd
+        #   silently makes every write a denied out-of-scope write.
+        #
+        # env with DATACORE_HEADLESS: the PreToolUse PLUR guard demands
+        #   plur_session_start, which is unsatisfiable where the MCP server is
+        #   not connected -- it then refuses every tool call and exits 0.
+        #   Passed explicitly rather than relying on the parent process having
+        #   mutated os.environ, which is how it came to be a coincidence.
+        env = {**os.environ, "DATACORE_HEADLESS": "1"}
         result = subprocess.run(
-            [binary, "-p", prompt, "--output-format", "json"],
+            [binary, "-p", prompt, "--permission-mode", "acceptEdits",
+             "--output-format", "json"],
             capture_output=True,
             text=True,
             timeout=timeout_s,
             check=False,
+            stdin=subprocess.DEVNULL,
+            cwd=str(self._cwd) if self._cwd else None,
+            env=env,
         )
 
         envelope: dict | None = None
@@ -113,6 +140,14 @@ class ClaudeCodeExecutor(Executor):
             raise RuntimeError(f"claude exited {result.returncode}: {result.stderr.strip()}")
 
         if envelope is not None:
+            # The model is the KEY of `modelUsage`, e.g.
+            # {"claude-opus-4-8[1m]": {...}} -- confirmed against a live
+            # envelope. More than one key means a fallback fired mid-turn, so
+            # all of them are recorded: naming only the first would hide
+            # exactly the event worth knowing about.
+            usage = envelope.get("modelUsage")
+            if isinstance(usage, dict) and usage:
+                self._model = ",".join(sorted(usage))
             text = _extract_text(envelope)
             cost_cents = _extract_cost_cents(envelope)
             self._check_in_band_error(envelope)
@@ -140,5 +175,44 @@ class ClaudeCodeExecutor(Executor):
         is_error_flag = envelope.get("is_error") is True
         subtype_present = "subtype" in envelope
         subtype = envelope.get("subtype")
-        if is_error_flag or (subtype_present and subtype != "success"):
-            self._in_band_error = f"claude reported error: {subtype if subtype_present else 'unknown'}"
+        if not (is_error_flag or (subtype_present and subtype != "success")):
+            return
+
+        # SAY WHAT WENT WRONG, NOT WHICH FLAG NOTICED.
+        #
+        # This used to report `claude reported error: {subtype}`. When
+        # `is_error: true` arrives alongside `subtype: "success"` -- which real
+        # envelopes do -- that renders as "claude reported error: success": a
+        # contradiction that also THREW AWAY the diagnosis. Every failing item
+        # in a 15-item suite carried that string, and it cost three
+        # investigation rounds and a wrong root cause (a supposed OAuth outage
+        # that did not exist) before anyone read the envelope directly.
+        #
+        # The envelope already carries the answer in `api_error_status`,
+        # `terminal_reason`, `permission_denials` and `result`. Preferred in
+        # that order, most specific first, with subtype kept only as a last
+        # resort -- and never alone when something better exists.
+        # Subtype is INCLUDED whenever it is informative, not used as a
+        # fallback. A first attempt at this fix preferred the `result` body and
+        # dropped the subtype, which lost `error_max_turns` -- trading one lost
+        # diagnosis for another. It is skipped only when it says "success",
+        # which is the single case where printing it produced nonsense.
+        parts: list[str] = []
+        if subtype_present and subtype != "success":
+            parts.append(f"subtype={subtype}")
+        status = envelope.get("api_error_status")
+        if status:
+            parts.append(f"api_error_status={status}")
+        terminal = envelope.get("terminal_reason")
+        if terminal and terminal != "success":
+            parts.append(f"terminal_reason={terminal}")
+        denials = envelope.get("permission_denials")
+        if denials:
+            parts.append(f"permission_denials={len(denials)}")
+        body = envelope.get("result")
+        if isinstance(body, str) and body.strip():
+            parts.append(body.strip()[:200])
+        if not parts:
+            parts.append("is_error set, envelope carried no detail")
+
+        self._in_band_error = "claude reported error: " + "; ".join(parts)

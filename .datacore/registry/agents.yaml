@@ -796,7 +796,8 @@ agents:
     - agent-registry-auditor
     can_be_called_by: []
   create-module:
-    description: Scaffolds, converts, or audits modules for spec alignment
+    description: Scaffolds, converts, or audits modules for spec alignment; audit-all
+      mode sweeps every installed module, including DIP-0047 egress attestation
     version: 1.0.0
     source: .datacore/agents/create-module.md
     model: inherit

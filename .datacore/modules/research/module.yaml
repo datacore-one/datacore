@@ -96,3 +96,17 @@ recall:
     - module:research
   tags:
     - research
+
+# DIP-0047
+egress:
+  - fn: lib/adapters/readwise.py:delete_document
+    kind: readwise.delete
+exempt:
+  - fn: "lib/research_orchestrator.py:_fetch_direct"
+    reason: read-only — source fetch
+  - fn: "lib/research_orchestrator.py:_fetch_jina"
+    reason: read-only — Jina reader extraction
+  - fn: "lib/research_orchestrator.py:_fetch_wayback"
+    reason: read-only — archive.org fallback
+  - fn: "lib/research_orchestrator.py:send_telegram_summary"
+    reason: operator summary to the configured chat

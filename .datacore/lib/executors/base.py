@@ -104,6 +104,11 @@ class ExecResult:
     # A separate field rather than overloading `error` -- a parse failure
     # is not an execution failure and must not read as one.
     parse_ok: bool | None = None
+    # Which model actually served the request, as the transport reported it --
+    # NOT what was configured. Those differ whenever a fallback fires, and the
+    # configured value would then record a model that never ran. None means the
+    # adapter could not determine it, which is honest; a guess would not be.
+    model: str | None = None
 
 
 _REGISTRY: dict[str, type["Executor"]] = {}
@@ -184,6 +189,8 @@ class Executor:
         # `run()` before every call for the same stale-state reason as
         # `_cost_estimated` above.
         self._in_band_error: str | None = None
+        self._cwd = None
+        self._model: str | None = None
 
     def _invoke(self, prompt: str, timeout_s: int) -> tuple[str, int]:
         """Real transport call. MUST be overridden by subclasses. Returns
@@ -191,10 +198,20 @@ class Executor:
         exception from here escape; see the module docstring."""
         raise NotImplementedError
 
-    def run(self, prompt: str, *, schema: dict | None = None, timeout_s: int = 300) -> ExecResult:
+    def run(self, prompt: str, *, schema: dict | None = None, timeout_s: int = 300,
+            cwd=None) -> ExecResult:
         """Run the executor. Never raises -- every failure mode becomes
         `ExecResult.error` instead. See the module docstring for the full
-        contract (schema handling, spend emission, timeout mapping)."""
+        contract (schema handling, spend emission, timeout mapping).
+
+        `cwd` is the directory the agent should work in. It is part of the
+        INTERFACE rather than an environment variable because it was lost once
+        already: the dispatcher used to spawn agents with `cwd=<space>`, the
+        move to this registry dropped it silently, and nothing could notice
+        because no signature mentioned it. An adapter that does not spawn a
+        process ignores it; one that does reads `self._cwd`.
+        """
+        self._cwd = cwd
         effective_prompt = prompt
         if schema is not None:
             try:
@@ -204,6 +221,7 @@ class Executor:
 
         self._cost_estimated = False
         self._in_band_error = None
+        self._model = None
         try:
             text, cost_cents = self._invoke(effective_prompt, timeout_s)
         except subprocess.TimeoutExpired as exc:
@@ -213,12 +231,14 @@ class Executor:
                 cost_cents=0,
                 error=f"executor {self.name!r} timed out after {timeout_s}s: {exc}",
                 parse_ok=None,
+                model=self._model,
             )
         except Exception as exc:  # noqa: BLE001 -- adapters must never raise out of run()
             return ExecResult(
                 text="",
                 parsed=None,
                 cost_cents=0,
+                model=self._model,
                 error=f"executor {self.name!r} failed: {exc}",
                 parse_ok=None,
             )
@@ -275,4 +295,5 @@ class Executor:
                     emission_note = "[spend-emit-failed]"
                 error = f"{error} {emission_note}" if error else emission_note
 
-        return ExecResult(text=text, parsed=parsed, cost_cents=cost_cents, error=error, parse_ok=parse_ok)
+        return ExecResult(text=text, parsed=parsed, cost_cents=cost_cents,
+                          error=error, parse_ok=parse_ok, model=self._model)

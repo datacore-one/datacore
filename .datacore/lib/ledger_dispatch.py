@@ -35,6 +35,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -48,6 +49,10 @@ from executors import get_executor  # noqa: E402
 from ops_markers import AUTH_FAILURE_MARKERS  # noqa: E402
 
 CLAIMABLE = "created"
+# Three strikes. Enough for a transient network or rate-limit blip to clear,
+# few enough that a genuinely unsatisfiable item stops within one hour of a
+# 15-minute timer instead of running for days.
+MAX_ATTEMPTS = 3
 TIMEOUT = 600
 
 # Phrases that mean the agent declined or was prevented, in a run that exits 0
@@ -92,28 +97,8 @@ def classify_route(text: str) -> tuple[str, str]:
     return DEFAULT_ROUTE, "no heuristic matched; default route"
 
 
-def _agent_env() -> dict:
-    """Environment for a spawned agent.
 
-    Without a bypass signal, the PreToolUse guard
-    (.datacore/lib/hooks/plur_session_guard.py) demands
-    `mcp__plur__plur_session_start`. On machines where the PLUR MCP server is
-    not connected that guard is UNSATISFIABLE -- the agent cannot call the tool
-    that would release it. It refuses every Write and Bash call, writes a lucid
-    paragraph explaining why it is stuck, and exits 0. Every task then fails
-    its check for a reason that looks nothing like the real one.
-
-    The guard bypasses on any of CLAUDE_AGENT_SDK, OPENCLAW_SESSION,
-    NIGHTSHIFT_RUN or DATACORE_HEADLESS. DATACORE_HEADLESS is the right one
-    here: this is not nightshift, and claiming its variable would make the
-    dispatcher's runs indistinguishable from the overnight executor's to
-    anything that keys on it.
-    """
-    import os
-    return {**os.environ, "DATACORE_HEADLESS": "1"}
-
-
-def run_task(title: str, route: str, cwd: Path) -> tuple[bool, str]:
+def run_task(title: str, route: str, cwd: Path) -> tuple[bool, str, dict]:
     """Execute one item. Returns (ok, detail).
 
     Runs through the executors registry (.datacore/lib/executors) rather than
@@ -128,29 +113,41 @@ def run_task(title: str, route: str, cwd: Path) -> tuple[bool, str]:
     framing = ROUTE_FRAMING.get(route, ROUTE_FRAMING[DEFAULT_ROUTE])
     prompt = f"{framing}\n\nTask: {title}\n\nBe brief. Report what you found."
 
-    import os as _os
-    _os.environ.setdefault("DATACORE_HEADLESS", "1")  # see _agent_env
+    import time as _time
+    meta: dict = {}
     try:
         ex = get_executor()
     except ValueError as exc:               # unknown $DATACORE_EXECUTOR
-        return False, str(exc)
+        return False, str(exc), meta
 
-    res = ex.run(prompt, timeout_s=TIMEOUT)
+    # cwd is passed, not assumed. The agent must work in the space it was
+    # dispatched for -- `acceptEdits` is scoped to the working directory, so a
+    # missing cwd turns every write into a denied out-of-scope write. The
+    # guard-bypass env is set by the adapter that spawns the process, rather
+    # than by mutating this process's os.environ and hoping it is inherited.
+    started = _time.monotonic()
+    res = ex.run(prompt, timeout_s=TIMEOUT, cwd=cwd)
+    # Recorded for EVERY outcome, not just success: a failure that cost real
+    # money is exactly the one worth being able to add up later.
+    meta = {"executor": ex.name,
+            "model": res.model,
+            "cost_cents": res.cost_cents,
+            "duration_s": round(_time.monotonic() - started, 1)}
     if res.error:
-        return False, f"{ex.name}: {res.error[:250]}"
+        return False, f"{ex.name}: {res.error[:250]}", meta
 
     out = (res.text or "").strip()
     if not out:
-        return False, f"{ex.name} returned no output"
+        return False, f"{ex.name} returned no output", meta
 
     combined = out.lower()[:400]
     marker = next((m for m in AUTH_FAILURE_MARKERS if m in combined), None)
     if marker:
-        return False, f"{ex.name} auth rejected ({marker!r}): {out[:200]}"
-    return True, out
+        return False, f"{ex.name} auth rejected ({marker!r}): {out[:200]}", meta
+    return True, out, meta
 
 
-def _isolated_check(space: Path, check: str) -> bool:
+def _isolated_check(space: Path, check: str) -> tuple[bool, str]:
     """Check a fresh worktree of the committed result, not the agent's directory.
 
     What this DOES buy, and it is worth having:
@@ -190,7 +187,7 @@ def _isolated_check(space: Path, check: str) -> bool:
                         capture_output=True, text=True)
     if rc.returncode != 0:
         print("         -> check FAILED CLOSED: cannot resolve HEAD for isolation")
-        return False
+        return False, ""
     head = rc.stdout.strip()
     with tempfile.TemporaryDirectory(prefix="check-") as tmp:
         wt = Path(tmp) / "verify"
@@ -199,10 +196,11 @@ def _isolated_check(space: Path, check: str) -> bool:
         if add.returncode != 0:
             print(f"         -> check FAILED CLOSED: no isolated worktree "
                   f"({(add.stderr or '').strip()[:90]})")
-            return False
+            return False, head
         try:
-            return subprocess.run(check, shell=True, cwd=str(wt),
-                                  capture_output=True, timeout=120).returncode == 0
+            ok = subprocess.run(check, shell=True, cwd=str(wt),
+                                capture_output=True, timeout=120).returncode == 0
+            return ok, head
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", str(wt)],
                            cwd=space, capture_output=True)
@@ -218,7 +216,8 @@ def main() -> int:
     args = ap.parse_args()
 
     space = args.space.resolve()
-    state = fold(read_events(space))
+    events = read_events(space)
+    state = fold(events)
     claimable = [i for i in state.items.values() if i.status == CLAIMABLE]
 
     # A genesis-imported GTD task is a MIRROR of an org heading, not a work
@@ -231,9 +230,69 @@ def main() -> int:
     # parent) and materialize() never does.
     pending = [i for i in claimable if not (i.payload or {}).get("org")]
     mirrored = len(claimable) - len(pending)
+
+    # ADDRESSED WORK GOES TO ITS ADDRESSEE. `item.claim` is an append, not a
+    # lock: every dispatcher folds its OWN copy of the log, so a claim written
+    # on one machine does not exist on another until it converges. Two
+    # dispatchers watching one space therefore both see `created` and both
+    # claim legitimately -- item 929eb69d6b was claimed AND completed by both
+    # winston and miles, two models, two costs, one task. The answers happened
+    # to agree, which is the hardest kind of duplication to notice.
+    #
+    # An `assignee` in the payload makes the race impossible instead of
+    # unlikely: a dispatcher simply declines what is addressed to someone else.
+    # This is cheaper and stricter than a claim-lease, which would still be
+    # racy across an eventually-consistent log. Items with no assignee stay
+    # open to whoever gets there first -- the existing behaviour, kept so
+    # nothing already in flight changes meaning.
+    addressed = [i for i in pending
+                 if (i.payload or {}).get("assignee") not in (None, "", args.actor)]
+    pending = [i for i in pending if i not in addressed]
+
+    # GIVE UP AFTER MAX_ATTEMPTS. `item.release` returns an item to `created`,
+    # which is claimable, so a 15-minute timer re-claims it forever: item
+    # 4e6e2c5be4521870 was released 40 times, and winston released one item 38
+    # times over 48.9h on a dead OAuth token. Nothing counted, nothing backed
+    # off, nothing gave up. One unsatisfiable item becomes a permanent
+    # fleet-wide loop that also crowds out real work behind --limit.
+    #
+    # Counted from the log rather than a payload field, because the count must
+    # survive across machines and processes -- two dispatchers on one space
+    # (winston and miles both watch 2-datacore) share the item but share no
+    # memory. The events are the only common ground.
+    #
+    # Exhausted items are DISMISSED, once, with the reason. Dismissal takes
+    # them out of `created`, so they stop being claimable and become visible as
+    # a decision in the log rather than disappearing behind a filter.
+    attempts: dict[str, int] = {}
+    for ev in events:
+        if ev.type == "item.release":
+            iid = (ev.payload or {}).get("id")
+            if iid:
+                attempts[iid] = attempts.get(iid, 0) + 1
+
+    exhausted = [i for i in pending if attempts.get(i.id, 0) >= MAX_ATTEMPTS]
+    for item in exhausted:
+        n = attempts.get(item.id, 0)
+        title = (item.payload or {}).get("title", item.id)[:60]
+        # Dismissal is a WRITE, so it obeys --execute like every other write
+        # here. The module contract is that a run without it plans and writes
+        # nothing; a dead-letter that fired during a dry run would break that
+        # for the one path an operator is most likely to run while diagnosing.
+        if not args.execute:
+            print(f"would deadletter  {title}  ({n} failed attempts)")
+            continue
+        EventLog(space, args.actor).append(
+            "item.dismiss",
+            {"id": item.id, "owner": args.actor,
+             "reason": f"gave up after {n} failed attempts"})
+        print(f"DEADLETTER  {title}\n         -> {n} failed attempts; dismissed")
+    pending = [i for i in pending if attempts.get(i.id, 0) < MAX_ATTEMPTS]
     pending.sort(key=lambda i: i.id)
 
     mirror_note = f" ({mirrored} org-mirrored task(s) skipped -- not delegations)" if mirrored else ""
+    if addressed:
+        mirror_note += f"; {len(addressed)} addressed to another agent"
     if not pending:
         print(f"nothing to dispatch: no delegated items awaiting claim{mirror_note}")
         return 0
@@ -263,21 +322,33 @@ def main() -> int:
         # Claim BEFORE working, so an interrupted run is visible as claimed.
         EventLog(space, args.actor).append(
             "item.claim", {"id": item.id, "owner": args.actor, "route": route, "reason": why})
-        ok, detail = run_task(title, route, space)
+        ok, detail, meta = run_task(title, route, space)
         if ok and check:
             # The ONLY thing that completes an item. An agent that declined
             # produces fluent, confident prose and exits 0; two attempts at
             # sniffing that prose for refusal markers both passed a failure as
             # DONE, because the model rephrases ("I can't" / "I could not").
             # Prose is not evidence. A check that passes is.
-            passed = _isolated_check(space, check)
+            passed, sha = _isolated_check(space, check)
             if passed:
-                act(space, item.id, "complete", args.actor)
-                print(f"DONE     [{route}] {title[:70]}\n         -> check passed")
+                act(space, item.id, "complete", args.actor, detail={
+                    "owner": args.actor,
+                    "route": route,
+                    "executor": meta.get("executor"),
+                    "model": meta.get("model"),
+                    "cost_cents": meta.get("cost_cents"),
+                    "duration_s": meta.get("duration_s"),
+                    "check": check,
+                    "artifact_commit": sha,
+                })
+                print(f"DONE     [{route}] {title[:70]}\n         -> check passed "
+                      f"@ {sha[:10]} ({meta.get('cost_cents', '?')}c, "
+                      f"{meta.get('duration_s', '?')}s)")
                 dispatched += 1
             else:
                 EventLog(space, args.actor).append(
                     "item.release", {"id": item.id, "owner": args.actor,
+                                     "artifact_commit": sha,
                                      "error": f"check failed: {check}"})
                 print(f"FAILED   [{route}] {title[:70]}\n         -> check failed: {check}")
                 failed += 1

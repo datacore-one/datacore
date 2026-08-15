@@ -24,6 +24,37 @@ import sys
 from .base import Executor, estimate_cost_cents, register
 
 
+def _hermes_env() -> dict:
+    """PATH that includes the Hermes install's own binaries.
+
+    The wrapper shells out to the PLUR CLI, and Hermes ships its own node
+    runtime -- `plur` lives at `~/.hermes/node/bin/plur`, `hermes` at
+    `~/.local/bin/hermes`. Neither is on the PATH of a non-interactive shell
+    or a systemd unit, only of the login shell the box was set up from.
+
+    So the wrapper printed `PLUR CLI not found. Install: npm install -g
+    @plur-ai/cli` to stderr, wrote nothing to stdout, and EXITED 0. The
+    adapter saw returncode 0 with empty output and reported "hermes returned
+    no output" -- a PATH problem wearing the costume of a missing package.
+    Anyone acting on that message would have installed a CLI that was already
+    there.
+
+    Set here rather than in the systemd unit because this adapter already
+    hardcodes the same install's venv interpreter: one place knows the Hermes
+    layout, and the fix then works from a timer, an SSH command, or a test
+    equally.
+    """
+    home = os.path.expanduser("~")
+    extra = [os.path.join(home, ".hermes", "node", "bin"),
+             os.path.join(home, ".local", "bin"),
+             os.path.join(home, ".hermes", "hermes-agent")]
+    env = dict(os.environ)
+    present = env.get("PATH", "").split(os.pathsep)
+    env["PATH"] = os.pathsep.join(
+        [p for p in extra if p not in present] + present)
+    return env
+
+
 @register
 class HermesExecutor(Executor):
     name = "hermes"
@@ -46,6 +77,7 @@ class HermesExecutor(Executor):
                 text=True,
                 timeout=timeout_s,
                 check=False,
+                env=_hermes_env(),
             )
         else:
             # Fallback: use the hermes CLI directly
@@ -64,6 +96,10 @@ class HermesExecutor(Executor):
         if result.returncode != 0:
             raise RuntimeError(f"hermes exited {result.returncode}: {result.stderr.strip()}")
 
+        # Hermes reports no model: the wrapper prints the agent's reply and
+        # nothing else. Left as None deliberately -- see ExecResult.model. A
+        # value invented from config here would be indistinguishable in the
+        # ledger from one the transport actually confirmed.
         text = result.stdout.strip()
         cost_cents = estimate_cost_cents(prompt, text)
         self._cost_estimated = True

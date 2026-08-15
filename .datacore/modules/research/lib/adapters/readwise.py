@@ -5,6 +5,9 @@ API Documentation: https://readwise.io/reader_api
 """
 
 import os
+
+# DIP-0047: third-party action, previously unrecorded.
+from datacore.ledger import attests
 import requests
 from datetime import datetime
 from pathlib import Path
@@ -200,6 +203,7 @@ class ReadwiseAdapter:
 
         return counts
 
+    @attests("readwise.delete", ref=lambda r: "")
     def delete_document(self, document_id: str) -> bool:
         """Delete a document from Readwise Reader. This is permanent."""
         token = self._get_token()

@@ -37,6 +37,18 @@ from .base import Executor, estimate_cost_cents, register
 _CHROME = ("│", "◇", "├", "╮", "╯", "─", "┌", "└", "┐", "┘")
 
 
+def _configured_model() -> str | None:
+    """Primary model from openclaw.json, labelled as configured rather than observed."""
+    import json
+    from pathlib import Path as _P
+    try:
+        cfg = json.loads((_P.home() / ".openclaw" / "openclaw.json").read_text())
+        primary = cfg["agents"]["defaults"]["model"]["primary"]
+        return f"{primary} (configured)" if primary else None
+    except Exception:  # noqa: BLE001 -- never fail a run over provenance metadata
+        return None
+
+
 @register
 class OpenClawExecutor(Executor):
     """One agent turn through the OpenClaw Gateway."""
@@ -49,6 +61,12 @@ class OpenClawExecutor(Executor):
             raise RuntimeError("'openclaw' binary not found on PATH")
 
         agent = os.environ.get("OPENCLAW_AGENT", "main")
+        # OpenClaw prints only the agent's reply -- no envelope, so there is no
+        # served-model to read. The configured primary is the best available
+        # answer and is marked as such IN THE VALUE, because a fallback would
+        # make it silently wrong and an unlabelled guess in an audit trail is
+        # worse than an absent field.
+        self._model = _configured_model()
         result = subprocess.run(
             [binary, "agent", "--agent", agent, "--message", prompt],
             capture_output=True,

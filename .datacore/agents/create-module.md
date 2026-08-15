@@ -647,6 +647,50 @@ If yes, delegate to `module-registrar` agent which will:
 - Update CATALOG.md
 - Create PR
 
+## Audit-All Mode (sweep every installed module)
+
+Triggered by "audit all modules", "audit the plugins", `/create-module --audit-all`,
+or `:AI:module:audit:`. Audits **every** directory under `.datacore/modules/`,
+not one named module.
+
+Run the mechanical checks FIRST and report their output verbatim. They are
+cheaper and more reliable than reading 30-odd modules by hand, and the manual
+audit they replace was measurably wrong in both directions — it counted reads as
+egress, and missed `x_poster`, a second live X-posting path that had been
+publishing unattested.
+
+```bash
+python3 .datacore/lib/egress_scan.py            # report-only, all modules
+python3 .datacore/lib/egress_scan.py --enforce  # non-zero if an opted-in module drifted
+```
+
+Read `EGRESS SCAN` output as four distinct populations, and do not merge them:
+
+| Bucket | Meaning | Action |
+|---|---|---|
+| declared/exempted | covered | none |
+| undeclared in opted-in modules | a module that made promises grew a new action | **fix now** |
+| undecorated | manifest names a function with no decorator | **fix now** |
+| in modules not yet declaring | never opted in | queue; do not fail the build |
+
+The last bucket is reported, never failed. Failing every module the day the
+check turns on guarantees the check gets switched off; the ratchet is that once
+a module declares anything, it is held to the whole contract.
+
+**What the scan cannot see, and you must check by hand.** Detection is
+syntactic and matches HTTP-library verbs. Egress through a vendor SDK is
+invisible to it: the Gmail client's `.execute()`, `exchange.order()` on
+Hyperliquid, and `gh` via subprocess all send without touching `requests`. Both
+of the highest-priority chokepoints — email and trade orders — sit in that blind
+spot and were wired from a read of the code. So `undeclared` is a **lower
+bound**: for any module that talks to a vendor SDK, grep for the SDK's send verb
+yourself and confirm it is declared or exempted.
+
+Then, per module, run the Spec Alignment Checklist below. Report as one table —
+module × required-item — so gaps are comparable across modules rather than
+buried in thirty separate write-ups. Do not fix silently: propose, then apply on
+confirmation, module by module.
+
 ## Spec Alignment Checklist
 
 **Required (must have):**
@@ -680,6 +724,34 @@ If yes, delegate to `module-registrar` agent which will:
 - [ ] Commands offer follow-up actions
 - [ ] Settings have `auto_*` options for power users
 - [ ] Error messages include solutions
+
+**Egress Attestation (DIP-0047) — required for any module that acts outward:**
+- [ ] Every function that posts, sends, files, or trades is listed under `egress:` in `module.yaml`, with a `kind` from the vocabulary in `datacore/ledger.py`
+- [ ] Every listed function carries `@attests(...)` in code
+- [ ] Outbound calls that are reads, inference, or operator notifications are listed under `exempt:` **with a reason** — never left undeclared
+- [ ] The module imports `from datacore.ledger import attest, attests` and does **not** hand-roll `sys.path.insert` to find the core
+- [ ] `python3 .datacore/lib/egress_scan.py --enforce` passes
+
+Why this is a required item and not a nicety: a missing attestation has no
+symptom. There is no error, no gap, and no anomaly — an unrecorded post is
+indistinguishable from a post that never happened, so nothing in the system can
+notice it on its own. Every other defect class eventually announces itself; this
+one cannot, which is why it is checked rather than trusted.
+
+Two failure modes, and they are different:
+- **undeclared** — the code acts and nothing says so. The dangerous one.
+- **undecorated** — the manifest names a function that carries no decorator,
+  usually because it was renamed. The declaration outlived the wiring.
+
+Do NOT propose generating the decorators from the manifest at load time. The
+declaration and the decorator are deliberately two artifacts that must agree,
+because a single artifact cannot detect its own absence — and a mechanism whose
+own failure mode is silence cannot be the one guarding against silence.
+
+Attest **chokepoints, not call sites**. Fifteen files in `comms` reference X;
+publishing funnels through two functions. Where a module has no chokepoint —
+Telegram had 27 direct senders — introduce one rather than decorating every
+caller.
 
 ## Reference Files
 
