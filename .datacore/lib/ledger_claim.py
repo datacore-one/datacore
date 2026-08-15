@@ -336,7 +336,7 @@ def main() -> int:
             continue
         EventLog(space, args.actor).append(
             "item.dismiss",
-            {"id": item.id, "owner": args.actor,
+            {"id": item.id, "owner": args.actor, "kind": "dropped",
              "reason": f"gave up after {n} failed attempts"})
         print(f"DEADLETTER  {title}\n         -> {n} failed attempts; dismissed")
     pending = [i for i in pending if attempts.get(i.id, 0) < MAX_ATTEMPTS]

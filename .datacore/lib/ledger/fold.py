@@ -79,6 +79,9 @@ class ItemState:
     #: opposite meanings -- without the reason a report calls finished work
     #: "cancelled", which is worse than not reporting at all.
     closed_reason: str | None = None
+    #: Declared closure kind from the dismiss payload: "done" | "dropped" |
+    #: "housekeeping". Emitters state intent; readers stop guessing.
+    closed_kind: str | None = None
     history: list[str] = field(default_factory=list)
     #: The `item.create` payload, copied verbatim. The fold's own state is
     #: deliberately minimal, but a PROJECTOR (DIP-0043) has to rebuild a full
@@ -323,7 +326,9 @@ def _handle_dismiss(state: LedgerState, event: Event) -> None:
         return
     item.status = "dismissed"
     item.closed_at = event.hlc
-    item.closed_reason = (event.payload or {}).get("reason")
+    payload = event.payload or {}
+    item.closed_reason = payload.get("reason")
+    item.closed_kind = payload.get("kind")
     _note(item, event, "applied")
 
 
@@ -342,30 +347,36 @@ _DROPPED = ("gave up", "cancelled", "canceled", "abandoned", "obsolete",
 def closure_kind(item) -> str:
     """Why an item closed: "done" | "dropped" | "housekeeping".
 
-    `dismissed` cannot answer this alone, because it is OVERLOADED. Org
-    ingestion dismisses a task when a human marks it DONE (the fold refuses
-    item.complete on an unclaimed item); the dead-letter dismisses one it gave
-    up on; and maintenance passes dismiss duplicates and orphans. Three
-    different meanings, one event type.
+    PREFERS A DECLARED `kind` ON THE DISMISS PAYLOAD. `item.dismiss` is
+    overloaded three ways -- org ingestion emits it when a human marks a task
+    DONE, the dead-letter emits it for giving up, maintenance emits it for
+    duplicates -- so the event alone cannot say which happened. An emitter
+    knows; a reader can only guess.
 
-    The first weekly report exposed the cost of guessing: treating every
-    dismissal as completion reported 247 finished tasks in a space that had
-    finished 4. A report that flatters is worse than no report -- it gets
-    believed once and trusted never again.
+    The string matching below is the FALLBACK for events written before `kind`
+    existed. It is genuinely unreliable and was measured so: probing it with
+    realistic novel wordings, "task withdrawn by requester", "rolled back after
+    review" and "not doing this" all classified as done, and every
+    misclassification fell the same way -- toward done, the direction that
+    inflates the weekly report. An empty or absent reason does too.
 
-    Kept beside `Item.closed_reason` so the projector, the archive and the
-    report cannot drift into three different definitions of "done".
+    So the fallback exists to read history, not to carry the future. New
+    emitters must set `kind`.
     """
     if item.status in ("completed", "verified"):
         return "done"
     if item.status != "dismissed":
         return "done"
+
+    declared = (getattr(item, "closed_kind", None) or "").strip().lower()
+    if declared in ("done", "dropped", "housekeeping"):
+        return declared
+
     reason = (item.closed_reason or "").lower()
     if any(h in reason for h in _HOUSEKEEPING):
         return "housekeeping"
     if any(d in reason for d in _DROPPED):
         return "dropped"
-    # Anything else that reached dismissal came from a human closing it.
     return "done"
 
 

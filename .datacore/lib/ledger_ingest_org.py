@@ -124,7 +124,7 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
         if node.todo == "DONE":
             if not dry_run:
                 log = log or EventLog(space, actor or _this_actor())
-                log.append("item.dismiss", {"id": nid,
+                log.append("item.dismiss", {"id": nid, "kind": "done",
                            "reason": "closed as DONE in next_actions.org"})
             dismissed += 1
             continue

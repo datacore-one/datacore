@@ -26,6 +26,7 @@ import hmac
 import json
 import os
 import random
+import re
 import string
 import sys
 import time
@@ -35,9 +36,21 @@ from pathlib import Path
 
 SECRETS = Path.home() / 'Data/.datacore/secrets/spaces'
 ENDPOINT = 'https://api.x.com/2/tweets'
-#: X's own limit. The release script used 270 to leave room for a URL; this
-#: enforces the real ceiling and reports the overage so a caller can decide.
+#: X's own limit.
 MAX_CHARS = 280
+#: Every link counts as this many characters however long it is — X rewrites it
+#: through t.co. Counting raw length rejects tweets that would actually fit.
+TCO_LENGTH = 23
+URL_PATTERN = re.compile(r'https?://\S+|(?<![@\w.])(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/\S*)?', re.I)
+
+
+def weighted_length(text: str) -> int:
+    """Length as X counts it, with every URL charged at t.co length.
+
+    :param text: the tweet body.
+    :returns: the counted length.
+    """
+    return len(URL_PATTERN.sub('#' * TCO_LENGTH, text))
 
 REQUIRED = (
     'PLUR_X_API_KEY',
@@ -138,12 +151,13 @@ def main() -> None:
     args = parser.parse_args()
 
     text = args.file.read_text().rstrip('\n') if args.file else args.text
-    length = len(text)
+    length = weighted_length(text)
 
     print('─' * 60)
     print(text)
     print('─' * 60)
-    print(f'{length} characters', end='')
+    raw = len(text)
+    print(f'{length} characters as X counts them' + (f' ({raw} raw)' if raw != length else ''), end='')
     if args.reply_to:
         print(f' · reply to {args.reply_to}', end='')
     if args.quote:
