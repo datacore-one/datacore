@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Working non-interactive Hermes invocation for the ledger dispatcher.
+"""Working non-interactive Hermes invocation for the ledger claim worker.
 
 `hermes -z` and `hermes chat -q` both hang in this environment because the
 oneshot module redirects stdout/stderr to devnull, which breaks the SSH

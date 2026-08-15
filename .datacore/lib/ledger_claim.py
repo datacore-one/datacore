@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """Claim -> route -> execute -> complete. The consumer the action loop lacked.
 
+Renamed from `ledger_dispatch` on 2026-08-15. "Dispatch" reads as sending work
+OUT, which is the one thing this does not do -- creation lives in
+`materialize()`, publication in `ledger_transport.converge`. This process only
+ever pulls: it folds the log, claims what is addressed to it, runs it, and
+records the result. Calling that dispatch cost real confusion about which half
+of the loop was broken.
+
 DIP-0038 built `materialize()` (proposals become ledger items) and `act()`
 (items move between states). `briefing_materialize.py` then supplied the caller
 for the first half. Nothing supplied the second: no process ever READ the
@@ -30,7 +37,7 @@ Three properties are the point, and each is checkable in the log afterwards:
   plans and writes nothing.
 
 Usage:
-    ledger_dispatch.py --space DIR [--actor NAME] [--limit N] [--execute]
+    ledger_claim.py --space DIR [--actor NAME] [--limit N] [--execute]
 """
 from __future__ import annotations
 
