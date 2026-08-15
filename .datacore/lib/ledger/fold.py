@@ -68,6 +68,17 @@ class ItemState:
     title: str
     owner: str | None
     status: str  # created | claimed | completed | verified | dismissed
+    #: HLC of the event that closed this item (completed or dismissed).
+    #: Needed because closing is a MOMENT, and the projection now renders
+    #: recently-closed work as DONE before archiving it -- "when" is the only
+    #: thing that distinguishes the two.
+    closed_at: str | None = None
+    #: Why it closed. `item.dismiss` is OVERLOADED: org ingestion emits it when
+    #: a human marks a task DONE (the fold refuses item.complete on an
+    #: unclaimed item), and the dead-letter emits it for giving up. Same event,
+    #: opposite meanings -- without the reason a report calls finished work
+    #: "cancelled", which is worse than not reporting at all.
+    closed_reason: str | None = None
     history: list[str] = field(default_factory=list)
     #: The `item.create` payload, copied verbatim. The fold's own state is
     #: deliberately minimal, but a PROJECTOR (DIP-0043) has to rebuild a full
@@ -261,6 +272,7 @@ def _handle_complete(state: LedgerState, event: Event) -> None:
         _note(item, event, f"no-op (illegal transition from status={item.status})")
         return
     item.status = "completed"
+    item.closed_at = event.hlc
     _note(item, event, "applied")
 
 
@@ -310,7 +322,56 @@ def _handle_dismiss(state: LedgerState, event: Event) -> None:
     if item is None or _dismissed(state, event, item):
         return
     item.status = "dismissed"
+    item.closed_at = event.hlc
+    item.closed_reason = (event.payload or {}).get("reason")
     _note(item, event, "applied")
+
+
+
+#: Reason fragments that mean an item closed as ADMINISTRATIVE HOUSEKEEPING --
+#: no work was done and none was abandoned. Deduplication and id-churn cleanup
+#: dominate a real space: 0-personal held 240 of these against 4 genuine
+#: completions, so folding them into either bucket misreports by ~60x.
+_HOUSEKEEPING = ("duplicate", "orphaned", "id churn", "supersed", "re-created",
+                 "recreated", "no org task")
+#: Reason fragments that mean the work was given up on.
+_DROPPED = ("gave up", "cancelled", "canceled", "abandoned", "obsolete",
+            "no longer", "bad check path")
+
+
+def closure_kind(item) -> str:
+    """Why an item closed: "done" | "dropped" | "housekeeping".
+
+    `dismissed` cannot answer this alone, because it is OVERLOADED. Org
+    ingestion dismisses a task when a human marks it DONE (the fold refuses
+    item.complete on an unclaimed item); the dead-letter dismisses one it gave
+    up on; and maintenance passes dismiss duplicates and orphans. Three
+    different meanings, one event type.
+
+    The first weekly report exposed the cost of guessing: treating every
+    dismissal as completion reported 247 finished tasks in a space that had
+    finished 4. A report that flatters is worse than no report -- it gets
+    believed once and trusted never again.
+
+    Kept beside `Item.closed_reason` so the projector, the archive and the
+    report cannot drift into three different definitions of "done".
+    """
+    if item.status in ("completed", "verified"):
+        return "done"
+    if item.status != "dismissed":
+        return "done"
+    reason = (item.closed_reason or "").lower()
+    if any(h in reason for h in _HOUSEKEEPING):
+        return "housekeeping"
+    if any(d in reason for d in _DROPPED):
+        return "dropped"
+    # Anything else that reached dismissal came from a human closing it.
+    return "done"
+
+
+def was_finished(item) -> bool:
+    """True only for work that was actually completed."""
+    return closure_kind(item) == "done"
 
 
 def _handle_owner_set(state: LedgerState, event: Event) -> None:
