@@ -199,7 +199,7 @@ class Executor:
         raise NotImplementedError
 
     def run(self, prompt: str, *, schema: dict | None = None, timeout_s: int = 300,
-            cwd=None) -> ExecResult:
+            cwd=None, space=None, item: str | None = None) -> ExecResult:
         """Run the executor. Never raises -- every failure mode becomes
         `ExecResult.error` instead. See the module docstring for the full
         contract (schema handling, spend emission, timeout mapping).
@@ -277,8 +277,26 @@ class Executor:
 
         if os.environ.get("DATACORE_NO_SPEND") != "1":
             try:
-                space_dir = _default_space_dir()
-                actor = _default_actor()
+                # WRITE SPEND WHERE SOMEONE WILL FOLD IT, ATTRIBUTED TO THE
+                # DECLARED ACTOR, AND LINKED TO THE ITEM THAT INCURRED IT.
+                #
+                # All three were wrong. `_default_space_dir()` returns
+                # DATACORE_ROOT -- `~/Data` -- which is NOT a space, so every
+                # spend event went into an orphan log no fold ever reads. The
+                # actor came from `socket.gethostname()`, producing files like
+                # `Mac.jsonl` and `air-23.local.jsonl` instead of the declared
+                # DIP-0044 actors. And the payload named only the adapter, so
+                # "what did this delegation cost" was unanswerable even in
+                # principle.
+                #
+                # A forensic pass over a 15-item run found no spend events in
+                # any space and concluded the type did not exist. It did; it
+                # was being filed somewhere nobody looks.
+                #
+                # The caller knows the space and the item. Both are optional so
+                # non-dispatch callers keep working unchanged.
+                space_dir = Path(space) if space else _default_space_dir()
+                actor = os.environ.get("DATACORE_ACTOR") or _default_actor()
                 log = EventLog(space_dir, actor)
                 ref = f"executor:{self.name}"
                 if self._cost_estimated:
@@ -287,7 +305,12 @@ class Executor:
                     ref += ":clamped"
                 if self._in_band_error is not None:
                     ref += ":err"
-                log.append("spend.record", {"cents": cost_cents, "ref": ref})
+                payload = {"cents": cost_cents, "ref": ref, "executor": self.name}
+                if item:
+                    payload["item"] = item
+                if self._model:
+                    payload["model"] = self._model
+                log.append("spend.record", payload)
             except Exception as exc:  # noqa: BLE001 -- accounting hiccups must not break the run
                 if not text:
                     emission_note = f"spend emission failed: {exc}"

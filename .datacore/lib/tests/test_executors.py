@@ -137,7 +137,11 @@ class TestExecutorConformance:
         events = read_events(hermetic_env)
         spend_events = [e for e in events if e.type == "spend.record"]
         assert len(spend_events) == 1
-        assert spend_events[0].payload == {"cents": 42, "ref": f"executor:{name}"}
+        # Required keys, not an exact dict: the payload gained `executor`,
+        # and gains `item`/`model` when the caller supplies them.
+        p = spend_events[0].payload
+        assert p["cents"] == 42 and p["ref"] == f"executor:{name}"
+        assert p["executor"] == name
         assert spend_events[0].actor == "test-actor"
         assert spend_events[0].sig == ""  # unsigned by default
 
@@ -772,3 +776,36 @@ class TestInBandErrorMessage:
         msg = self._err({"is_error": True, "subtype": "success",
                          "permission_denials": [{"tool": "Write"}, {"tool": "Bash"}]})
         assert "permission_denials=2" in msg
+
+
+class TestSpendIsAttributable:
+    """Spend must be findable, correctly attributed, and linked to its cause.
+
+    All three failed silently. Spend went to DATACORE_ROOT -- not a space, so no
+    fold ever read it -- under a hostname actor rather than the declared one,
+    with a payload naming only the adapter. A forensic pass over a 15-item run
+    concluded `spend.record` did not exist in the schema. It did; it was being
+    filed where nobody looks.
+    """
+
+    def test_spend_lands_in_the_space_the_caller_named(self, tmp_path, monkeypatch):
+        import executors.base as base
+
+        (tmp_path / ".datacore" / "events").mkdir(parents=True)
+        monkeypatch.setenv("DATACORE_ACTOR", "miles")
+        monkeypatch.delenv("DATACORE_NO_SPEND", raising=False)
+
+        class Fake(base.Executor):
+            name = "fake-spend"
+
+            def _invoke(self, prompt, timeout_s):
+                return "ok", 7
+
+        Fake().run("hi", space=tmp_path, item="item-abc")
+
+        from ledger.log import read_events
+        spend = [e for e in read_events(tmp_path) if e.type == "spend.record"]
+        assert len(spend) == 1, "spend must land in the caller's space"
+        assert spend[0].actor == "miles", "declared actor, not the hostname"
+        assert spend[0].payload["item"] == "item-abc", "linked to what incurred it"
+        assert spend[0].payload["executor"] == "fake-spend"
