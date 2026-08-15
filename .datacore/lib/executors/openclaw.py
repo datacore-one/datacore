@@ -67,12 +67,18 @@ class OpenClawExecutor(Executor):
         # make it silently wrong and an unlabelled guess in an audit trail is
         # worse than an absent field.
         self._model = _configured_model()
+        # cwd matters as much here as for claude-code: an OpenClaw/Hermes agent
+        # otherwise works in its OWN workspace, so the proof file lands somewhere
+        # the check never looks. Data ran, reported success, and wrote nothing
+        # into the space -- `run()` accepted cwd from the dispatcher and only
+        # claude_code was wired to use it.
         result = subprocess.run(
             [binary, "agent", "--agent", agent, "--message", prompt],
             capture_output=True,
             text=True,
             timeout=timeout_s,
             check=False,
+            cwd=str(self._cwd) if self._cwd else None,
         )
         if result.returncode != 0:
             raise RuntimeError(
