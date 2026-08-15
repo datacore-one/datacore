@@ -146,7 +146,7 @@ else
 fi
 
 if [ "$IS_PROTECTED" != "1" ]; then
-    echo "pre-push: $REPO not a protected public repo — policy check skipped (LFS still chained)" >&2
+    echo "pre-push: $REPO not a protected public repo — policy check skipped" >&2
     lfs_chain
     exit 0
 fi
