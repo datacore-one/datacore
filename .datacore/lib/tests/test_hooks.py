@@ -555,7 +555,15 @@ class TestLogOwnershipGuardAuthorship:
     def _repo(tmp_path):
         import subprocess
 
+        # Strip GIT_AUTHOR_* and GIT_COMMITTER_* so git -c user.email=... is not
+        # silently overridden by the environment (which carries the machine's own
+        # author identity and caused test_foreign_authored_commit_in_range_is_allowed
+        # to fail: all commits ended up with Miles's email regardless of -c flags).
+        _clean = {k: v for k, v in os.environ.items()
+                  if not k.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_"))}
+
         def g(*a, **kw):
+            kw.setdefault("env", _clean)
             return subprocess.run(["git", *a], cwd=tmp_path, capture_output=True,
                                   text=True, **kw)
 
@@ -573,7 +581,9 @@ class TestLogOwnershipGuardAuthorship:
         import subprocess
         from pathlib import Path
         guard = Path(__file__).resolve().parents[1] / "hooks" / "log_ownership_guard.py"
-        env = {**os.environ, "DATACORE_ACTOR": "miles"}
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_"))}
+        env["DATACORE_ACTOR"] = "miles"
         return subprocess.run(["python3", str(guard), rng], cwd=tmp_path,
                               capture_output=True, text=True, env=env)
 
@@ -600,4 +610,45 @@ class TestLogOwnershipGuardAuthorship:
 
         r = self._run_guard(tmp_path, "base-ref..HEAD")
         assert r.returncode == 1, "forgery was allowed through"
+        assert "winston.jsonl" in (r.stdout + r.stderr)
+
+    def test_datacore_actor_env_cannot_override_registry(self, tmp_path):
+        """DATACORE_ACTOR=winston on a machine registered as miles must still block
+        writes to winston.jsonl.
+
+        Root cause of 2026-08-12 chain fork: DATACORE_ACTOR=winston was set on the
+        mac during a test and the old actors() trusted it blindly, bypassing the
+        registry and allowing a write to winston.jsonl (resolved in merge 221efd0).
+        """
+        import socket, subprocess
+        from pathlib import Path
+
+        g = self._repo(tmp_path)
+
+        # Build a registry that explicitly maps this host → miles only.
+        host = socket.gethostname().split(".")[0].lower()
+        reg_dir = tmp_path / ".datacore" / "registry"
+        reg_dir.mkdir(parents=True, exist_ok=True)
+        (reg_dir / "infrastructure.yaml").write_text(
+            f"servers:\n"
+            f"  {host}:\n"
+            f"    ledger_actors:\n"
+            f"    - miles\n"
+            f"    access:\n"
+            f"      hostname: {socket.gethostname()}\n"
+        )
+
+        # Write to winston.jsonl as Miles, but with DATACORE_ACTOR=winston in env.
+        (tmp_path / ".datacore" / "events" / "winston.jsonl").write_text('{"forged":1}\n')
+        g("add", "-A")
+        g("commit", "-q", "-m", "mac writes winston log with DATACORE_ACTOR=winston")
+
+        guard = Path(__file__).resolve().parents[1] / "hooks" / "log_ownership_guard.py"
+        env = {**os.environ, "DATACORE_ACTOR": "winston", "DATACORE_ROOT": str(tmp_path)}
+        r = subprocess.run(["python3", str(guard), "base-ref..HEAD"], cwd=tmp_path,
+                           capture_output=True, text=True, env=env)
+        assert r.returncode == 1, (
+            "registry-registered machine allowed DATACORE_ACTOR to override it:\n"
+            + r.stdout + r.stderr
+        )
         assert "winston.jsonl" in (r.stdout + r.stderr)

@@ -97,14 +97,28 @@ def _data_root() -> Path:
 def actors() -> list[str]:
     """Every actor identity this machine may legitimately write.
 
+    Registry-first: when the infrastructure registry maps this host to
+    specific ledger_actors, that mapping is authoritative and DATACORE_ACTOR
+    is ignored for ownership checks. DATACORE_ACTOR=winston on the mac would
+    otherwise make the guard allow the mac to write to winston.jsonl — exactly
+    what caused the 2026-08-12 chain fork (resolved in merge 221efd0).
+
+    DATACORE_ACTOR still controls which actor the ledger_transport writes as
+    at runtime; the guard only determines which files this machine may push.
+
     Lower-cased: this Mac's hostname is "Mac" while its log is `mac.jsonl`, so a
     case-sensitive compare made the guard report mac writing its OWN log.
     """
+    host = socket.gethostname().split(".")[0].lower()
+    registry = _registry_actors(_data_root(), host)
+    if registry:
+        # Registry is the ground truth; DATACORE_ACTOR cannot override it.
+        return sorted({host, *registry})
+    # No registry entry for this host — fall back to DATACORE_ACTOR or hostname.
     explicit = os.environ.get("DATACORE_ACTOR")
     if explicit:
         return [explicit.lower()]
-    host = socket.gethostname().split(".")[0].lower()
-    return sorted({host, *_registry_actors(_data_root(), host)})
+    return [host]
 
 
 def actor() -> str:
