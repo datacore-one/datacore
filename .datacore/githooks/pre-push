@@ -74,12 +74,18 @@ if [ -f "$OWNERSHIP" ] && command -v python3 >/dev/null 2>&1 && [ -n "$REFS_INPU
 fi
 
 lfs_chain() {
-    if command -v git-lfs >/dev/null 2>&1 && [ -n "$REFS_INPUT" ]; then
-        printf '%s\n' "$REFS_INPUT" | git lfs pre-push "$REMOTE" "$URL" || {
-            echo "pre-push: ✗ git-lfs upload failed — push blocked" >&2
-            exit 2
-        }
-    fi
+    # DELIBERATELY A NO-OP: this installation does not use git-lfs. Large files
+    # are gitignored instead (see each space's .gitignore, e.g. `*.db`).
+    #
+    # The chain used to run `git lfs pre-push`, which blocked every push to
+    # 0-personal with "LFS Server is not enabled" — the Gitea host serves no
+    # LFS endpoint, and two vestigial `.lfs-pointer` files in the tree were
+    # enough for git-lfs to attempt an upload of blobs nobody has. Four
+    # commits sat unpushable behind a feature the installation never adopted.
+    #
+    # Left as a named function rather than deleted so the intent is visible at
+    # the call site: LFS is not merely absent here, it is declined.
+    :
 }
 
 fail_closed() {
