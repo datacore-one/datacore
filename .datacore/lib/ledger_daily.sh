@@ -1,22 +1,23 @@
 #!/bin/bash
-# Daily ledger reconciliation: ingest org -> ledger, THEN check the projection.
+# Daily ledger verification: shadow_check + checkpoint (ingest is separate).
 #
-# One job, not two cron lines, for two reasons.
+# INGEST IS NOT HERE. As of 2026-08-16, ingest was split into
+# ledger_ingest_hourly.sh, which runs every hour on winston. This script runs
+# the heavier verification passes once daily at 05:35, after the 05:00 hourly
+# ingest has already completed.
 #
-# ORDER IS LOAD-BEARING. The drift check compares org against the ledger's
-# projection, so every task captured since the last ingest reads as drift.
-# Running the check first reports a healthy system as dirty on any day a task
-# was captured — and since DIP-0046 F2 gates the Phase 1 flip on 14 consecutive
-# clean days, that does not merely add noise, it makes the gate unreachable.
+# ORDER IS STILL LOAD-BEARING. The drift check compares org against the
+# ledger's projection. It must run AFTER ingest — not before, not in place of.
+# 05:35 is safely after the :00-past-the-hour ingest at 05:00. Do not move
+# this job earlier than 05:01 without coordinating with the hourly schedule.
 #
-# LAUNCHD, NOT CRON. These were cron entries at 07:40 and 07:50. On 2026-08-12
-# the Mac was asleep through that window (full wake at 09:14) and macOS cron
-# does not catch up missed runs, so neither fired — while the hourly detectors
-# either side of the gap did, which is exactly the pattern that makes a hole
-# look like health. launchd runs a missed StartCalendarInterval job on wake.
+# WHY NOT CRON ON THE LAPTOP. These were cron entries on the Mac at 07:40 and
+# 07:50. On 2026-08-12 the Mac was asleep through that window and macOS cron
+# does not catch up missed runs. ledger_daily.sh now runs on winston (always-on
+# Linux) via cron, which does not have a wake constraint.
 #
-# A laptop sleeping through 07:40 is the normal case, not the exception. Any
-# once-daily job scheduled here via cron is a job that mostly does not run.
+# SERVER. Runs on winston via cron:
+#   35 5 * * * DATACORE_ROOT=/home/deploy/Data /home/deploy/Data/.datacore/lib/ledger_daily.sh >> /home/deploy/.datacore/state/ledger-daily-cron.log 2>&1
 set -u
 export DATACORE_ROOT="${DATACORE_ROOT:-$HOME/Data}"
 LIB="$DATACORE_ROOT/.datacore/lib"
@@ -33,7 +34,8 @@ STATE="$HOME/.datacore/state"
 # all (PEP-604 unions at module level). So test candidates and take the first
 # that clears 3.10 — the same rule the CLI and MCP already apply.
 PY=""
-for c in "${DATACORE_PYTHON:-}" python3.13 python3.12 python3.11 python3.10          /opt/homebrew/bin/python3 /usr/local/bin/python3 python3; do
+for c in "${DATACORE_PYTHON:-}" python3.13 python3.12 python3.11 python3.10 \
+         /opt/homebrew/bin/python3 /usr/local/bin/python3 python3; do
   [ -n "$c" ] || continue
   command -v "$c" >/dev/null 2>&1 || continue
   if "$c" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
@@ -47,13 +49,11 @@ fi
 echo "python: $PY"
 mkdir -p "$STATE"
 
-echo "=== $(date '+%F %T') ledger daily ==="
-"$PY" "$LIB/ledger_ingest_org.py"  > "$STATE/ledger-ingest.log" 2>&1
-ingest_rc=$?
-echo "ingest rc=$ingest_rc"
+echo "=== $(date '+%F %T') ledger daily (verification) ==="
 
-# Run the check even if ingest failed: its result is still the truth about
-# drift, and suppressing it would hide the consequence of the failure.
+# Run the check even if the most recent ingest had a non-zero exit: its result
+# is still the truth about drift, and suppressing it would hide the consequence
+# of the ingest failure.
 "$PY" "$LIB/shadow_check.py"       > "$STATE/shadow-check.log" 2>&1
 check_rc=$?
 echo "drift  rc=$check_rc"
@@ -69,4 +69,4 @@ tail -2 "$STATE/shadow-check.log"
 echo "ckpt   rc=$?"
 tail -1 "$STATE/checkpoint-verify.log"
 
-exit $(( ingest_rc != 0 ? ingest_rc : check_rc ))
+exit $check_rc
