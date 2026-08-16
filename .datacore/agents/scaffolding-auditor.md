@@ -20,7 +20,7 @@ model: inherit
 
 Before starting work, load relevant learned patterns:
 
-1. **Preferred**: Call `plur_inject_hybrid` MCP tool with `prompt` = your task description and `scope` = `agent:scaffolding-auditor`
+1. **Preferred**: Call `plur_admin` MCP tool with `action` = `"plur_inject_hybrid"`, `prompt` = your task description, `scope` = `agent:scaffolding-auditor`
 2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/scaffolding-auditor.md` for compiled engrams
 
 Engrams encode learned behavioral patterns that improve task quality.
@@ -88,6 +88,23 @@ Systematically audit a space's scaffolding completeness, discover source content
 - When setting up a new space
 
 ## Audit Methodology
+
+### Phase 0: Marker Check (Space Discovery Health)
+
+Before any content audit, verify the space has a discovery marker:
+
+1. Check `.datacore/config.yaml` exists and has a `space:` block with `name:` and `type:` fields
+2. If missing or malformed, flag as **CRITICAL** — the space will not be found by
+   `discover_spaces()` once `include_legacy=False` (the post-migration default).
+
+```
+[CRITICAL] .datacore/config.yaml missing or has no `space:` block.
+  Space will not be discovered by marker-based discovery.
+  Fix: create .datacore/config.yaml with `space.name` and `space.type`.
+  Reference format: spaces in .datacore/lib/spaces.py → read_marker()
+```
+
+Report marker health before proceeding — do not skip this check even for quick audits.
 
 ### Phase 1: Index Generation (Context First)
 

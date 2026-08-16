@@ -68,6 +68,20 @@ class ItemState:
     title: str
     owner: str | None
     status: str  # created | claimed | completed | verified | dismissed
+    #: HLC of the event that closed this item (completed or dismissed).
+    #: Needed because closing is a MOMENT, and the projection now renders
+    #: recently-closed work as DONE before archiving it -- "when" is the only
+    #: thing that distinguishes the two.
+    closed_at: str | None = None
+    #: Why it closed. `item.dismiss` is OVERLOADED: org ingestion emits it when
+    #: a human marks a task DONE (the fold refuses item.complete on an
+    #: unclaimed item), and the dead-letter emits it for giving up. Same event,
+    #: opposite meanings -- without the reason a report calls finished work
+    #: "cancelled", which is worse than not reporting at all.
+    closed_reason: str | None = None
+    #: Declared closure kind from the dismiss payload: "done" | "dropped" |
+    #: "housekeeping". Emitters state intent; readers stop guessing.
+    closed_kind: str | None = None
     history: list[str] = field(default_factory=list)
     #: The `item.create` payload, copied verbatim. The fold's own state is
     #: deliberately minimal, but a PROJECTOR (DIP-0043) has to rebuild a full
@@ -261,6 +275,7 @@ def _handle_complete(state: LedgerState, event: Event) -> None:
         _note(item, event, f"no-op (illegal transition from status={item.status})")
         return
     item.status = "completed"
+    item.closed_at = event.hlc
     _note(item, event, "applied")
 
 
@@ -310,7 +325,64 @@ def _handle_dismiss(state: LedgerState, event: Event) -> None:
     if item is None or _dismissed(state, event, item):
         return
     item.status = "dismissed"
+    item.closed_at = event.hlc
+    payload = event.payload or {}
+    item.closed_reason = payload.get("reason")
+    item.closed_kind = payload.get("kind")
     _note(item, event, "applied")
+
+
+
+#: Reason fragments that mean an item closed as ADMINISTRATIVE HOUSEKEEPING --
+#: no work was done and none was abandoned. Deduplication and id-churn cleanup
+#: dominate a real space: 0-personal held 240 of these against 4 genuine
+#: completions, so folding them into either bucket misreports by ~60x.
+_HOUSEKEEPING = ("duplicate", "orphaned", "id churn", "supersed", "re-created",
+                 "recreated", "no org task")
+#: Reason fragments that mean the work was given up on.
+_DROPPED = ("gave up", "cancelled", "canceled", "abandoned", "obsolete",
+            "no longer", "bad check path")
+
+
+def closure_kind(item) -> str:
+    """Why an item closed: "done" | "dropped" | "housekeeping".
+
+    PREFERS A DECLARED `kind` ON THE DISMISS PAYLOAD. `item.dismiss` is
+    overloaded three ways -- org ingestion emits it when a human marks a task
+    DONE, the dead-letter emits it for giving up, maintenance emits it for
+    duplicates -- so the event alone cannot say which happened. An emitter
+    knows; a reader can only guess.
+
+    The string matching below is the FALLBACK for events written before `kind`
+    existed. It is genuinely unreliable and was measured so: probing it with
+    realistic novel wordings, "task withdrawn by requester", "rolled back after
+    review" and "not doing this" all classified as done, and every
+    misclassification fell the same way -- toward done, the direction that
+    inflates the weekly report. An empty or absent reason does too.
+
+    So the fallback exists to read history, not to carry the future. New
+    emitters must set `kind`.
+    """
+    if item.status in ("completed", "verified"):
+        return "done"
+    if item.status != "dismissed":
+        return "done"
+
+    declared = (getattr(item, "closed_kind", None) or "").strip().lower()
+    if declared in ("done", "dropped", "housekeeping"):
+        return declared
+
+    reason = (item.closed_reason or "").lower()
+    if any(h in reason for h in _HOUSEKEEPING):
+        return "housekeeping"
+    if any(d in reason for d in _DROPPED):
+        return "dropped"
+    return "done"
+
+
+def was_finished(item) -> bool:
+    """True only for work that was actually completed."""
+    return closure_kind(item) == "done"
 
 
 def _handle_owner_set(state: LedgerState, event: Event) -> None:

@@ -19,7 +19,7 @@ tools:
 
 Before starting work, load relevant learned patterns:
 
-1. **Preferred**: Call `plur_inject_hybrid` MCP tool with `prompt` = your task description and `scope` = `agent:research-synthesizer`
+1. **Preferred**: Call `plur_admin` MCP tool with `action` = `"plur_inject_hybrid"`, `prompt` = your task description, `scope` = `agent:research-synthesizer`
 2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/research-synthesizer.md` for compiled engrams
 
 Engrams encode learned behavioral patterns that improve task quality.

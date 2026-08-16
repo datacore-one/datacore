@@ -112,12 +112,19 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
         if not nid:
             continue
         item = state.items.get(nid)
+        # A node with no ledger item is NOT this function's problem. Admission
+        # is scan() + import_space(), called just above this in main(). It was
+        # tempting to create here too -- an org task can sit outside the ledger
+        # for hours, which is very visible now the app reads the ledger -- but
+        # that would make two code paths responsible for admitting items, with
+        # two ideas of which nodes qualify. The latency is a SCHEDULING problem;
+        # solving it with a second creator would trade a delay for a divergence.
         if not item or item.status not in LIVE:
             continue
         if node.todo == "DONE":
             if not dry_run:
                 log = log or EventLog(space, actor or _this_actor())
-                log.append("item.dismiss", {"id": nid,
+                log.append("item.dismiss", {"id": nid, "kind": "done",
                            "reason": "closed as DONE in next_actions.org"})
             dismissed += 1
             continue

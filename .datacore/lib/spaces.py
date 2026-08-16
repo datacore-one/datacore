@@ -45,6 +45,12 @@ MARKER = Path(".datacore") / "config.yaml"
 #: being discovered. Remove once discovery_discrepancy() is empty everywhere.
 LEGACY_GLOB = "[0-9]-*"
 
+#: Directory name suffixes that match LEGACY_GLOB but are never spaces.
+#: ``-archive`` dirs are archival stores; ``.git`` suffix indicates a bare repo.
+#: These are excluded from legacy discovery to keep discovery_discrepancy()
+#: focused on real unmarked spaces.
+LEGACY_SKIP_SUFFIXES: frozenset[str] = frozenset({"-archive", ".git"})
+
 #: A client space nested under its owner sits at e.g.
 #: ``<root>/<space>/1-tracks/clients/<name>`` — depth 4 — so 4 is the shallowest
 #: bound that works today and leaves no headroom. One extra grouping directory
@@ -124,9 +130,49 @@ def _walk(root: Path, depth: int = 1):
         yield from _walk(entry, depth + 1)
 
 
+def _looks_like_space(path: Path) -> bool:
+    """Heuristic: does this directory look like a Datacore space?
+
+    A directory must have at least one canonical space artefact to be
+    treated as a legacy space.  The checks are ordered strongest-first:
+
+    1. ``.datacore/config.yaml`` — the proper marker (already handled by the
+       marker path, but included here for symmetry).
+    2. ``org/`` subdirectory — every Datacore space has GTD org files.
+    3. ``CLAUDE.base.md`` — every Datacore space has a layered context file.
+
+    A bare ``.datacore/`` directory (e.g. one that contains only a
+    ``knowledge.db`` and no subdirectories) does **not** qualify; that
+    pattern appears in stray sub-tree directories that accidentally ended
+    up at the install root.
+    """
+    return (
+        (path / ".datacore" / "config.yaml").is_file()
+        or (path / "org").is_dir()
+        or (path / "CLAUDE.base.md").is_file()
+    )
+
+
 def _legacy_dirs(root: Path) -> list[Path]:
-    """Directories the old ``[0-9]-*/`` glob would have matched."""
-    return sorted(p for p in root.glob(LEGACY_GLOB) if p.is_dir())
+    """Directories the old ``[0-9]-*/`` glob would have matched.
+
+    Two filters narrow the raw glob to directories that are plausibly spaces:
+
+    1. Names ending with a suffix in LEGACY_SKIP_SUFFIXES are excluded —
+       they match the glob syntactically but are never spaces (archive
+       stores, bare git repos, etc.).
+    2. Directories that contain none of the canonical space artefacts
+       (``org/``, ``CLAUDE.base.md``, ``.datacore/``) are excluded via
+       :func:`_looks_like_space`.  This catches stray sub-tree directories
+       (e.g. a ``1-tracks/`` that leaked to the install root) whose names
+       happen to match the glob.
+    """
+    return sorted(
+        p for p in root.glob(LEGACY_GLOB)
+        if p.is_dir()
+        and not any(p.name.endswith(suffix) for suffix in LEGACY_SKIP_SUFFIXES)
+        and _looks_like_space(p)
+    )
 
 
 def _from_marker(path: Path, block: dict) -> Space:
@@ -149,16 +195,18 @@ def discover_spaces(
     root: Path | None = None,
     *,
     types: set[str] | None = None,
-    include_legacy: bool = True,
+    include_legacy: bool = False,
 ) -> list[Space]:
-    """Every space under ``root``, marker-discovered plus (by default) legacy.
+    """Every space under ``root``, marker-discovered (and optionally legacy).
 
     Args:
         root: install root. Defaults to :func:`data_root`.
         types: keep only these ``space.type`` values. Legacy directories have
             no declared type, so a ``types`` filter necessarily excludes them.
         include_legacy: also return ``[0-9]-*/`` directories that carry no
-            marker. True during migration so nothing silently disappears.
+            marker.  Defaults to False now that discovery_discrepancy() is
+            empty for this install; set True only when investigating gaps
+            during migration to a new install.
 
     Returns:
         Spaces sorted by path. Marker-discovered entries win over legacy ones

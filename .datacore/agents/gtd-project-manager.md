@@ -35,7 +35,7 @@ You are a long-horizon agent that runs repeatedly on the same projects. Without 
 
 1. `plur_session_start` — open an episode for this run with task description as the topic
 2. `plur_timeline --agent gtd-project-manager` — read your last 5-10 episodes. What did you do? What worked? What got stuck?
-3. `plur_inject_hybrid --prompt "<task>" --scope agent:gtd-project-manager` — load relevant engrams (behavioral patterns)
+3. `plur_admin` with `action` = `"plur_inject_hybrid"`, `prompt` = `"<task>"`, `scope` = `"agent:gtd-project-manager"` — load relevant engrams (behavioral patterns)
 4. `datacore.search "<project name or topic>"` — find relevant journal entries from past sessions
 5. **Synthesize** what you learned from steps 2-4 into a brief context block before acting
 

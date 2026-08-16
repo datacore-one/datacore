@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """Claim -> route -> execute -> complete. The consumer the action loop lacked.
 
+Renamed from `ledger_dispatch` on 2026-08-15. "Dispatch" reads as sending work
+OUT, which is the one thing this does not do -- creation lives in
+`materialize()`, publication in `ledger_transport.converge`. This process only
+ever pulls: it folds the log, claims what is addressed to it, runs it, and
+records the result. Calling that dispatch cost real confusion about which half
+of the loop was broken.
+
 DIP-0038 built `materialize()` (proposals become ledger items) and `act()`
 (items move between states). `briefing_materialize.py` then supplied the caller
 for the first half. Nothing supplied the second: no process ever READ the
@@ -30,7 +37,7 @@ Three properties are the point, and each is checkable in the log afterwards:
   plans and writes nothing.
 
 Usage:
-    ledger_dispatch.py --space DIR [--actor NAME] [--limit N] [--execute]
+    ledger_claim.py --space DIR [--actor NAME] [--limit N] [--execute]
 """
 from __future__ import annotations
 
@@ -98,7 +105,7 @@ def classify_route(text: str) -> tuple[str, str]:
 
 
 
-def run_task(title: str, route: str, cwd: Path) -> tuple[bool, str, dict]:
+def run_task(title: str, route: str, cwd: Path, item_id: str = "") -> tuple[bool, str, dict]:
     """Execute one item. Returns (ok, detail).
 
     Runs through the executors registry (.datacore/lib/executors) rather than
@@ -126,7 +133,9 @@ def run_task(title: str, route: str, cwd: Path) -> tuple[bool, str, dict]:
     # guard-bypass env is set by the adapter that spawns the process, rather
     # than by mutating this process's os.environ and hoping it is inherited.
     started = _time.monotonic()
-    res = ex.run(prompt, timeout_s=TIMEOUT, cwd=cwd)
+    # space and item travel with the call so the spend event lands in a log
+    # that gets folded, under the declared actor, linked to what incurred it.
+    res = ex.run(prompt, timeout_s=TIMEOUT, cwd=cwd, space=cwd, item=item_id)
     # Recorded for EVERY outcome, not just success: a failure that cost real
     # money is exactly the one worth being able to add up later.
     meta = {"executor": ex.name,
@@ -145,6 +154,49 @@ def run_task(title: str, route: str, cwd: Path) -> tuple[bool, str, dict]:
     if marker:
         return False, f"{ex.name} auth rejected ({marker!r}): {out[:200]}", meta
     return True, out, meta
+
+
+def _journal(space: Path, actor: str, lines: list[str]) -> None:
+    """Append this run's outcomes to the space journal. Never raises.
+
+    WHY THE WORKER WRITES THIS AND NOT THE AGENT.
+
+    After a 15-item unattended run, Data had journal entries and Miles and Tris
+    had none -- because Data's runtime happens to journal on its own and the
+    other two do not. Ten completed tasks left no narrative trace at all, so a
+    human reading the journal would conclude nothing happened on two of three
+    hosts while the ledger proved otherwise.
+
+    Asking each agent to journal in its prompt was the obvious fix and is the
+    wrong one: it makes the record depend on the agent's own account, and this
+    system already learned that agent prose is not evidence -- `_isolated_check`
+    exists because two attempts at trusting self-reports passed failures as
+    DONE. A record that can be forgotten or embellished is not a record.
+
+    So this is DERIVED bookkeeping: written from events already committed,
+    identical in form for every agent and every runtime, and impossible to
+    fabricate because nothing here is reported -- it is all read back from what
+    just happened. The reflective layer (what was learned) is a separate
+    concern and deliberately not attempted here.
+    """
+    if not lines:
+        return
+    try:
+        import datetime
+        day = datetime.date.today().isoformat()
+        jdir = space / "journal"
+        if not jdir.is_dir():                     # some spaces use notes/journals
+            alt = space / "notes" / "journals"
+            jdir = alt if alt.is_dir() else jdir
+        jdir.mkdir(parents=True, exist_ok=True)
+        path = jdir / f"{day}.md"
+        stamp = datetime.datetime.now().strftime("%H:%M")
+        body = [f"\n## {actor} — {stamp} — ledger claim run\n"]
+        body += [f"- {ln}" for ln in lines]
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write("\n".join(body) + "\n")
+    except Exception:  # noqa: BLE001 -- a journal failure must not fail the work
+        pass
 
 
 def _isolated_check(space: Path, check: str) -> tuple[bool, str]:
@@ -284,7 +336,7 @@ def main() -> int:
             continue
         EventLog(space, args.actor).append(
             "item.dismiss",
-            {"id": item.id, "owner": args.actor,
+            {"id": item.id, "owner": args.actor, "kind": "dropped",
              "reason": f"gave up after {n} failed attempts"})
         print(f"DEADLETTER  {title}\n         -> {n} failed attempts; dismissed")
     pending = [i for i in pending if attempts.get(i.id, 0) < MAX_ATTEMPTS]
@@ -300,6 +352,7 @@ def main() -> int:
     print(f"{len(pending)} delegated item(s) awaiting claim; limit {args.limit}{mirror_note}")
     dispatched = failed = refused = review = 0
 
+    journal_lines: list[str] = []
     for item in pending[:args.limit]:
         title = (item.payload or {}).get("title") or item.id
         effects = (item.payload or {}).get("effects") or []
@@ -322,7 +375,7 @@ def main() -> int:
         # Claim BEFORE working, so an interrupted run is visible as claimed.
         EventLog(space, args.actor).append(
             "item.claim", {"id": item.id, "owner": args.actor, "route": route, "reason": why})
-        ok, detail, meta = run_task(title, route, space)
+        ok, detail, meta = run_task(title, route, space, item.id)
         if ok and check:
             # The ONLY thing that completes an item. An agent that declined
             # produces fluent, confident prose and exits 0; two attempts at
@@ -341,6 +394,10 @@ def main() -> int:
                     "check": check,
                     "artifact_commit": sha,
                 })
+                journal_lines.append(
+                    f"DONE `{item.id[:12]}` {title[:70]} — {meta.get('executor','?')}"
+                    f" / {meta.get('model') or 'model n/a'}, {meta.get('cost_cents','?')}c,"
+                    f" {meta.get('duration_s','?')}s, artifact `{sha[:10]}`")
                 print(f"DONE     [{route}] {title[:70]}\n         -> check passed "
                       f"@ {sha[:10]} ({meta.get('cost_cents', '?')}c, "
                       f"{meta.get('duration_s', '?')}s)")
@@ -350,6 +407,8 @@ def main() -> int:
                     "item.release", {"id": item.id, "owner": args.actor,
                                      "artifact_commit": sha,
                                      "error": f"check failed: {check}"})
+                journal_lines.append(
+                    f"FAILED `{item.id[:12]}` {title[:60]} — check did not pass: `{check}`")
                 print(f"FAILED   [{route}] {title[:70]}\n         -> check failed: {check}")
                 failed += 1
             continue
@@ -366,9 +425,14 @@ def main() -> int:
             # pool rather than be recorded as finished work.
             EventLog(space, args.actor).append(
                 "item.release", {"id": item.id, "owner": args.actor, "error": detail[:300]})
+            journal_lines.append(
+                f"FAILED `{item.id[:12]}` {title[:60]} — {detail[:110]}")
             print(f"FAILED   [{route}] {title[:70]}\n         -> {detail[:150]}")
             failed += 1
 
+    # One entry per run, not per item: the batch is the unit of work a reader
+    # cares about, and fifteen separate headings would bury the journal.
+    _journal(space, args.actor, journal_lines)
     print(f"\ndispatched {dispatched}, needs-review {review}, failed {failed}, refused {refused}")
     return 1 if failed else 0
 

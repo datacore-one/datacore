@@ -25,6 +25,8 @@ reporting contract is different in two ways that matter here:
 
 from __future__ import annotations
 
+import json
+
 from pathlib import Path
 
 from .events import Event, body_dict, canonical_bytes, compute_hash, from_line
@@ -144,3 +146,54 @@ def verify_chain(path: Path, registry_path: Path | None = None, strict: bool = F
         expected_seq = event.seq + 1
 
     return errors
+
+
+def check_not_rewound(path: Path) -> list[str]:
+    """Has this log lost events from its tail?
+
+    THE CHAIN CANNOT ANSWER THIS. Hash-linking proves that the events present
+    are the events written, in order, unmodified -- an edited payload is caught
+    even if its own hash is recomputed, because each event commits to its
+    predecessor. But removing events from the END removes their hashes too,
+    and what remains is a shorter, internally perfect chain. Measured: dropping
+    the last two events of a five-event log passes `verify` clean while `fold`
+    silently sees a shorter history.
+
+    That is not an exotic attack. A torn write, a full disk, a killed process
+    mid-append, or an interrupted sync all produce exactly a truncated tail.
+
+    The high-water mark is the external witness. `EventLog.append` records the
+    highest seq this machine has ever written to `state/seq-hwm/<actor>.seq`,
+    and refuses to append when the log has fallen behind it. That check fires
+    at WRITE time on the writing machine; this brings the same evidence to READ
+    time, where verification actually happens.
+
+    Silent when no watermark exists: a log this machine never wrote (another
+    actor's, freshly cloned) has no local witness, and absence of evidence must
+    not be reported as evidence of tampering.
+    """
+    actor = path.stem
+    hwm_path = path.parent.parent / "state" / "seq-hwm" / f"{actor}.seq"
+    try:
+        hwm = int(hwm_path.read_text().strip())
+    except (OSError, ValueError):
+        return []
+
+    tail = -1
+    try:
+        for line in path.read_text(errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                tail = max(tail, int(json.loads(line).get("seq", -1)))
+            except (ValueError, TypeError):
+                continue
+    except OSError:
+        return []
+
+    if tail < hwm:
+        return [f"TRUNCATED: log ends at seq {tail} but this machine wrote up to "
+                f"seq {hwm} — {hwm - tail} event(s) missing from the tail "
+                f"(witness: {hwm_path})"]
+    return []

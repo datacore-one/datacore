@@ -526,7 +526,7 @@ If `learning.auto_defer_learning_review: false`, restore the legacy interactive 
 
 **Extract actionable tasks from conversation context (runs parallel to step 5 coordinators):**
 
-Review the session's insights, decisions, and next steps. Identify items that should become tasks in `next_actions.org` — things that aren't continuation of current work (those go in step 3) but are *new* actionable items that emerged from the session.
+Review the session's insights, decisions, and next steps. Identify items that should become tasks in `inbox.org` — things that aren't continuation of current work (those go in step 3) but are *new* actionable items that emerged from the session.
 
 **Inference-first: auto-add with a removable tag, surface in report, let user veto in §16.5.**
 
@@ -535,7 +535,7 @@ GTD TASK EXTRACTION (silent — surfaced in §17 report)
 ─────────────────────────────────────────────────────
 Reviewing session for actionable items beyond continuation tasks...
 
-New tasks identified and added to next_actions.org with :wrap_up_extracted: tag:
+New tasks identified and captured to inbox.org with :wrap_up_extracted: tag:
   1. org-YYYYMMDD-HHMMSS-aaaa | [#A] Task from insight X → Growth section
   2. org-YYYYMMDD-HHMMSS-bbbb | [#B] Task from decision Y → Product section
   3. org-YYYYMMDD-HHMMSS-cccc | [#B] Task from discovery Z → Engineering section
@@ -566,9 +566,9 @@ New tasks identified and added to next_actions.org with :wrap_up_extracted: tag:
 - Patterns and insights → step 5 (session-learning)
 - Engram candidates → step 6 (learning-reviewer)
 
-**Task format** (Rich Task Standard — DIP-0009 Part 3.5):
+**Task format** (Rich Task Standard — DIP-0009 Part 3.5, appended under `* Inbox`):
 ```org
-*** TODO [#B] Task description                        :tag1:tag2:
+** TODO [#B] Task description                        :tag1:tag2:
 :PROPERTIES:
 :CREATED: [YYYY-MM-DD Day]
 :ASSIGNEE: {{USER}}
@@ -578,7 +578,7 @@ New tasks identified and added to next_actions.org with :wrap_up_extracted: tag:
 Brief description of what needs to be done.
 ```
 
-**Routing:** Place tasks in the appropriate section of `next_actions.org` based on their nature (Operations, Product, Engineering, Growth, Research, Communications).
+**Routing:** Place tasks in `inbox.org` under the `* Inbox` heading. Do NOT write directly to `next_actions.org` — capture first, triage later (GTD single-capture-point). Use `** TODO [#B]` (2-level heading) to match inbox.org conventions.
 
 ### 8. Insight Verification Checklist
 
@@ -1542,7 +1542,8 @@ Run `/tomorrow` once at end of day.
 - Git status/log in all session-active repos
 
 **Update:**
-- `org/next_actions.org` (mark DONE, add continuations)
+- `org/next_actions.org` (mark DONE only — step 4)
+- `org/inbox.org` (new task capture — steps 3, 7; single capture point)
 - `0-personal/journal/YYYY-MM-DD.md`
 - Space journals if applicable
 - `.datacore/learning/patterns.md`

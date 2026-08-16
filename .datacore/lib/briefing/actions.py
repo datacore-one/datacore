@@ -170,7 +170,8 @@ def materialize(
     return result
 
 
-def act(space_dir: Path, item_id: str, action: str, actor: str) -> Event:
+def act(space_dir: Path, item_id: str, action: str, actor: str,
+        detail: dict | None = None) -> Event:
     """Append the `item.*` event for `action` (one of `claim`, `complete`,
     `dismiss`) against `item_id`, via a plain (ungated) `EventLog` -- only
     `item.create` is ever policy-gated (per `ledger.policy`), so lifecycle
@@ -185,5 +186,25 @@ def act(space_dir: Path, item_id: str, action: str, actor: str) -> Event:
             f"unknown action: {action!r} (expected one of {sorted(_ACTION_EVENT_TYPES)})"
         )
 
+    # `detail` carries WHAT ACTUALLY HAPPENED, and without it a completion is
+    # an assertion rather than a record.
+    #
+    # `item.complete` used to be `{"id": ...}` alone, so the log could say a
+    # task finished but not who ran it, on which model, what it cost, how long
+    # it took, or -- most importantly -- which commit holds the artifact that
+    # proved it. Cost went to a separate `spend.record` with no link back to
+    # the item, so "what did this delegation cost" was unanswerable from the
+    # ledger even though every number existed somewhere.
+    #
+    # The commit sha matters most. `_isolated_check` verifies a worktree built
+    # from a specific commit; recording that sha is what lets anyone re-run the
+    # same check later against the same tree. Without it, "check passed" is a
+    # claim about a moment that cannot be revisited.
+    #
+    # Kept optional so existing callers are unaffected -- an absent `detail`
+    # produces exactly the old payload.
+    payload = {"id": item_id}
+    if detail:
+        payload.update({k: v for k, v in detail.items() if v not in (None, "")})
     log = EventLog(space_dir, actor)
-    return log.append(event_type, {"id": item_id})
+    return log.append(event_type, payload)

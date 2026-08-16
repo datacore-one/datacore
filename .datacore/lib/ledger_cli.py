@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ledger.fold import fold  # noqa: E402
 from ledger.index import build_index, items_by  # noqa: E402
 from ledger.log import EventLog, read_events  # noqa: E402
-from ledger.verify import verify_chain  # noqa: E402
+from ledger.verify import check_not_rewound, verify_chain  # noqa: E402
 
 
 def _default_actor() -> str:
@@ -92,6 +92,11 @@ def cmd_verify(args: argparse.Namespace) -> None:
     had_errors = False
     for path in files:
         for error in verify_chain(path, strict=args.strict):
+            print(f"{path.name}: {error}", file=sys.stderr)
+            had_errors = True
+        # Truncation leaves a shorter but internally perfect chain, so it must
+        # be checked against an external witness rather than the chain itself.
+        for error in check_not_rewound(path):
             print(f"{path.name}: {error}", file=sys.stderr)
             had_errors = True
 

@@ -133,14 +133,28 @@ def test_does_not_follow_symlinks(tmp_path):
 
 # ── legacy union: migration must not lose anything ───────────────────────────
 
+def make_legacy_space(root: Path, rel: str) -> Path:
+    """Create a numbered directory that looks like a space but has no marker.
+
+    Represents a real space that predates marker-based discovery — it carries
+    canonical space artefacts (CLAUDE.base.md) but no ``.datacore/config.yaml``.
+    A bare empty directory is NOT a legacy space: _looks_like_space() filters
+    directories that have no space artefacts (stray sub-trees, accidental matches).
+    """
+    path = root / rel
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "CLAUDE.base.md").write_text("# placeholder\n")
+    return path
+
+
 def test_union_includes_unmarked_legacy_dirs(tmp_path):
     make_space(tmp_path, "1-alpha", "alpha")
-    (tmp_path / "2-unmarked").mkdir()
+    make_legacy_space(tmp_path, "2-unmarked")
 
-    names = {s.name for s in discover_spaces(tmp_path)}
+    names = {s.name for s in discover_spaces(tmp_path, include_legacy=True)}
     assert names == {"alpha", "unmarked"}
 
-    unmarked = next(s for s in discover_spaces(tmp_path) if s.name == "unmarked")
+    unmarked = next(s for s in discover_spaces(tmp_path, include_legacy=True) if s.name == "unmarked")
     assert unmarked.marked is False
     assert unmarked.type == "unknown"
 
@@ -154,13 +168,13 @@ def test_marker_wins_over_legacy_for_same_directory(tmp_path):
 
 def test_legacy_can_be_excluded(tmp_path):
     make_space(tmp_path, "1-alpha", "alpha")
-    (tmp_path / "2-unmarked").mkdir()
+    make_legacy_space(tmp_path, "2-unmarked")
     assert [s.name for s in discover_spaces(tmp_path, include_legacy=False)] == ["alpha"]
 
 
 def test_type_filter_excludes_legacy(tmp_path):
     """Legacy dirs declare no type, so any type filter necessarily drops them."""
-    (tmp_path / "2-unmarked").mkdir()
+    make_legacy_space(tmp_path, "2-unmarked")
     assert discover_spaces(tmp_path, types={"team"}) == []
 
 
@@ -168,11 +182,23 @@ def test_type_filter_excludes_legacy(tmp_path):
 
 def test_discrepancy_reports_what_would_vanish(tmp_path):
     make_space(tmp_path, "1-alpha", "alpha")
-    (tmp_path / "2-unmarked").mkdir()
+    make_legacy_space(tmp_path, "2-unmarked")
 
     marker_only, legacy_only = discovery_discrepancy(tmp_path)
     assert legacy_only == {tmp_path / "2-unmarked"}
     assert marker_only == set()
+
+
+def test_bare_glob_match_not_treated_as_legacy_space(tmp_path):
+    """An empty dir matching [0-9]-* is NOT a legacy space (no space artefacts).
+
+    This prevents stray sub-tree directories (e.g. a ``1-tracks/`` leaked to
+    the install root) from appearing as phantom spaces in discovery.
+    """
+    (tmp_path / "2-stray").mkdir()
+    marker_only, legacy_only = discovery_discrepancy(tmp_path)
+    assert legacy_only == set()
+    assert discover_spaces(tmp_path, include_legacy=True) == []
 
 
 def test_discrepancy_reports_what_the_glob_never_saw(tmp_path):

@@ -1,0 +1,19 @@
+# gh-reconcile.yaml — space-to-GitHub-repo mapping
+#
+# Purpose: gh_reconcile.py uses this to resolve bare PR/issue references like
+# "PR #774" or "plur#504" found in task titles, without relying on the space's
+# own git remote (which may point to a notes/space repo, not the code repo).
+#
+# Format: space_repos maps a space directory name to "owner/repo".
+# The script falls back to `git remote get-url origin` for unconfigured spaces.
+#
+# Example: 5-plur's git remote is plur-ai/plur-space (the org notes repo),
+# but its tasks track PRs/issues in plur-ai/plur (the code repo).
+# Without this override, "Merge PR #774" would resolve to plur-space#774
+# (wrong) instead of plur-ai/plur#774 (correct).
+
+space_repos:
+  5-plur: plur-ai/plur
+  # 2-datacore: datacore-one/datacore-mcp  # uncomment if 2-datacore tasks ref PRs there
+  # 1-datafund: datafund/verity             # example — adjust to your actual code repo
+  # 3-fds: fairdatasociety/fdp-storage      # example

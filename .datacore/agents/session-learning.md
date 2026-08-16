@@ -33,7 +33,7 @@ Extract learnings, patterns, and insights from work sessions and integrate them 
 
 Before starting work, load relevant learned patterns:
 
-1. **Preferred**: Call `plur_inject_hybrid` MCP tool with `prompt` = your task description and `scope` = `agent:session-learning`
+1. **Preferred**: Call `plur_admin` MCP tool with `action` = `"plur_inject_hybrid"`, `prompt` = your task description, `scope` = `agent:session-learning`
 2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/session-learning.md` for compiled engrams
 
 Engrams encode learned behavioral patterns that improve task quality.
@@ -341,7 +341,7 @@ plur_learn(
 
 ### Engram Feedback Step
 
-After extracting learnings, review the engrams that were injected at session start (via `plur_inject_hybrid` or hook injection) and call `plur_feedback` for each relevant one:
+After extracting learnings, review the engrams that were injected at session start (via `plur_admin` dispatch to `plur_inject_hybrid` or hook injection) and call `plur_feedback` for each relevant one:
 
 - **positive** for engrams that prevented a mistake or informed a decision during the session
 - **negative** for engrams that were completely irrelevant to the session's work

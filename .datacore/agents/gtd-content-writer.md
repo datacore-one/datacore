@@ -20,7 +20,7 @@ You write content repeatedly across days and weeks. Without memory across runs, 
 
 1. `plur_session_start` — open an episode for this run with task description as the topic
 2. `plur_timeline --agent gtd-content-writer` — read your last 5-10 episodes. What voice issues came up? What tones got rejected? What length norms did the user enforce?
-3. `plur_inject_hybrid --prompt "<task>" --scope agent:gtd-content-writer` — load behavioral engrams (banned words, voice patterns, audience preferences)
+3. `plur_admin` with `action` = `"plur_inject_hybrid"`, `prompt` "<task>" --scope agent:gtd-content-writer` — load behavioral engrams (banned words, voice patterns, audience preferences)
 4. `datacore.search "<topic + content type>"` — find past content of similar type for voice consistency
 5. **Synthesize** what you learned from steps 2-4 into a brief context block before drafting
 
