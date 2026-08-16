@@ -20,6 +20,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -304,6 +305,88 @@ def fetch_url(url: str) -> Optional[str]:
 
 # ---- Process single item with Claude ----
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / 'lib'))
+from ops_markers import AUTH_FAILURE_MARKERS  # noqa: E402
+
+
+def _claude_json(prompt: str, timeout: int, label: str) -> Optional[Dict[str, Any]]:
+    """Run a headless Claude analysis and parse its JSON reply.
+
+    RUNS IN AN EMPTY DIRECTORY, DELIBERATELY. These calls used to run with
+    cwd=DATA_DIR, which makes the subprocess load ~/Data/CLAUDE.md — and that
+    file instructs the agent to call plur_session_start before anything else.
+    PLUR is not connected in a headless subprocess, so instead of returning
+    JSON the model spent its turn explaining that the MCP server was missing.
+    Every item then failed to parse and was skipped, which is why a run could
+    report "Processed: 0, Failed: N" while `claude` itself was perfectly
+    healthy. These prompts are self-contained text-in/JSON-out; they need no
+    workspace, so they get none.
+
+    Reports what actually came back on a parse failure. The bare
+    "Expecting value: line 1 column 1 (char 0)" that this replaces was true
+    and useless — it described the symptom and hid the response that would
+    have identified the cause in one read.
+    """
+    with tempfile.TemporaryDirectory() as workdir:
+        try:
+            result = subprocess.run(
+                ['claude', '-p', '--dangerously-skip-permissions',
+                 '--output-format', 'text', prompt],
+                cwd=workdir, capture_output=True, text=True, timeout=timeout
+            )
+        except subprocess.TimeoutExpired:
+            log(f"  {label}: Claude timed out after {timeout}s")
+            return None
+
+    if result.returncode != 0:
+        log(f"  {label}: Claude exited {result.returncode}: {result.stderr[:200]}")
+        return None
+
+    output = result.stdout.strip()
+
+    # `claude -p` reports auth failures on STDOUT with an EMPTY STDERR and
+    # exit 0, so neither the exit code nor stderr can be trusted to reveal
+    # them. ops_markers exists because a caller that checked only stderr
+    # logged nine days of failures as the empty string. Its docstring requires
+    # every caller in this repo to check the list.
+    low = output.lower()
+    for marker in AUTH_FAILURE_MARKERS:
+        if marker in low:
+            log(f"  {label}: AUTH FAILURE from claude -p (exit 0): {output[:200]!r}")
+            return None
+
+    output = re.sub(r'^```json\s*', '', output)
+    output = re.sub(r'\s*```\s*$', '', output)
+    if not output:
+        log(f"  {label}: Claude returned NOTHING (exit 0, empty stdout)")
+        return None
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError as first_error:
+        pass
+
+    # Repair invalid escape sequences, then try once more.
+    #
+    # JSON permits only \" \\ \/ \b \f \n \r \t \uXXXX. Models routinely emit
+    # \' when prose contains an apostrophe ("Ben\'s Bites"), which is valid in
+    # Python and JavaScript source but not in JSON, and json.loads rejects the
+    # whole document over one character. Dropping the stray backslash is safe:
+    # the negative lookahead leaves every legal escape untouched, so this
+    # cannot corrupt \n, \t or \uXXXX.
+    repaired = re.sub(r'\\(?!["\\/bfnrtu])', '', output)
+    if repaired != output:
+        try:
+            data = json.loads(repaired)
+            log(f"  {label}: repaired invalid escape sequence(s) in the reply")
+            return data
+        except json.JSONDecodeError:
+            pass
+
+    log(f"  {label}: reply was not JSON ({first_error})")
+    log(f"  {label}: got instead -> {output[:200]!r}")
+    return None
+
+
 def process_item(item: Dict[str, str], content: str) -> Optional[Dict[str, Any]]:
     """Send fetched content to Claude for analysis. Returns structured output."""
     title = item['title']
@@ -364,26 +447,7 @@ Output ONLY valid JSON, nothing else.
 """
 
     try:
-        result = subprocess.run(
-            ['claude', '-p', '--dangerously-skip-permissions', '--output-format', 'text', prompt],
-            cwd=DATA_DIR, capture_output=True, text=True, timeout=90
-        )
-        if result.returncode != 0:
-            log(f"  Claude error: {result.stderr[:200]}")
-            return None
-
-        # Parse JSON from output (may have markdown fences)
-        output = result.stdout.strip()
-        output = re.sub(r'^```json\s*', '', output)
-        output = re.sub(r'\s*```\s*$', '', output)
-
-        return json.loads(output)
-    except json.JSONDecodeError as e:
-        log(f"  JSON parse error: {e}")
-        return None
-    except subprocess.TimeoutExpired:
-        log(f"  Claude timed out")
-        return None
+        return _claude_json(prompt, timeout=90, label="analysis")
     except Exception as e:
         log(f"  Processing error: {e}")
         return None
@@ -794,17 +858,9 @@ Output ONLY valid JSON, nothing else.
 """
 
     try:
-        result = subprocess.run(
-            ['claude', '-p', '--dangerously-skip-permissions', '--output-format', 'text', prompt],
-            cwd=DATA_DIR, capture_output=True, text=True, timeout=180
-        )
-        if result.returncode != 0:
-            log(f"  Daily-news Claude error: {result.stderr[:200]}")
+        data = _claude_json(prompt, timeout=180, label="daily-news")
+        if data is None:
             return None
-        output = result.stdout.strip()
-        output = re.sub(r'^```json\s*', '', output)
-        output = re.sub(r'\s*```\s*$', '', output)
-        data = json.loads(output)
     except Exception as e:
         log(f"  Daily-news Claude parse failed: {e}")
         return None
@@ -1002,6 +1058,14 @@ def main():
             notebook_id = create_notebook_with_podcast(processed, daily_brief_path)
             if notebook_id:
                 log(f"NotebookLM notebook ready: {notebook_id}")
+            else:
+                # "best-effort" governs whether the RUN fails, not whether the
+                # user is told. A podcast step that produced nothing and said
+                # nothing is indistinguishable from one that was never asked
+                # for — which is how this broke for six days unnoticed.
+                log("PODCAST STEP PRODUCED NO NOTEBOOK — see the nlm errors above. "
+                    "Likely causes: expired nlm auth (refresh on the Mac and "
+                    "re-sync), or a stale nlm binary.")
         except Exception as e:
             log(f"NotebookLM step failed (non-fatal): {e}")
 
@@ -1108,17 +1172,32 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
         log("  No sources added — skipping audio generation")
         return notebook_id
 
-    # Queue audio overview
-    instructions = f"Datacore Research podcast {TODAY} — discuss key themes across the sources"
+    # Queue audio overview.
+    #
+    # INSTRUCTIONS MUST BE EMPTY. In notebooklm/client_audio.go,
+    # CreateAudioOverviewWithOptions routes to the new CreateUniversalArtifact
+    # RPC only when Instructions == "" (and DEEP_DIVE / DEFAULT / "en"). ANY
+    # custom instruction falls through to the old CreateAudioOverview path,
+    # which the server now rejects with "One or more arguments are invalid".
+    #
+    # This function used to pass a per-day instruction string, so every audio
+    # overview failed — and because the failure was only logged, the run
+    # reported success with no podcast. That is the silent-failure mode this
+    # whole path keeps regressing into. Custom instructions must be set in the
+    # web UI instead. See ENG-2026-08-09-028.
     audio_res = subprocess.run(
-        [nlm, 'create-audio', notebook_id, instructions],
+        [nlm, 'create-audio', notebook_id, ''],
         capture_output=True, text=True, timeout=60
     )
-    if audio_res.returncode == 0:
-        log(f"  Audio overview queued")
-    else:
-        log(f"  Audio queue failed: {audio_res.stderr[:200]}")
+    if audio_res.returncode != 0:
+        # Loud, and reflected in the return value: a notebook with no audio is
+        # not a podcast, and a caller that cannot distinguish the two will keep
+        # reporting success to the user while nothing is produced.
+        log(f"  AUDIO QUEUE FAILED: {(audio_res.stderr or audio_res.stdout)[:300]}")
+        log(f"  Notebook {notebook_id} exists with {sources_added} source(s) but has NO audio.")
+        return None
 
+    log("  Audio overview queued")
     return notebook_id
 
 
@@ -1127,8 +1206,32 @@ def send_telegram_summary(processed: List[Dict[str, Any]], failed: List[Dict[str
     """Push a research-run summary to Telegram. Returns True on success."""
     token = os.environ.get('TELEGRAM_BOT_TOKEN')
     chat_id = os.environ.get('TELEGRAM_CHAT_ID')
+    # Fall back to the host env file. Under cron, or when an agent shells out,
+    # the process inherits almost nothing, so these were routinely absent and
+    # the run finished having told nobody it was done — the notification path
+    # failing exactly when it is the only thing that would report the run.
     if not token or not chat_id:
-        log("  Telegram creds missing — skipping push")
+        env_file = Path.home() / ".datacore" / "datacore.env"
+        try:
+            for line in env_file.read_text().splitlines():
+                line = line.strip()
+                if line.startswith("export "):
+                    line = line[7:]
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                v = v.strip().strip('"').strip("'")
+                if k.strip() == "TELEGRAM_BOT_TOKEN" and not token:
+                    token = v
+                elif k.strip() == "TELEGRAM_CHAT_ID" and not chat_id:
+                    chat_id = v
+        except OSError:
+            pass
+    if not token or not chat_id:
+        missing = [n for n, v in (("TELEGRAM_BOT_TOKEN", token),
+                                  ("TELEGRAM_CHAT_ID", chat_id)) if not v]
+        log(f"  Telegram push SKIPPED — missing {', '.join(missing)} "
+            f"(checked environment and ~/.datacore/datacore.env)")
         return False
 
     lines = [f"📚 Research processed for {TODAY}"]
