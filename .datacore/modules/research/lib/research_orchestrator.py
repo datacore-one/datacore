@@ -305,6 +305,10 @@ def fetch_url(url: str) -> Optional[str]:
 
 # ---- Process single item with Claude ----
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / 'lib'))
+from ops_markers import AUTH_FAILURE_MARKERS  # noqa: E402
+
+
 def _claude_json(prompt: str, timeout: int, label: str) -> Optional[Dict[str, Any]]:
     """Run a headless Claude analysis and parse its JSON reply.
 
@@ -339,6 +343,18 @@ def _claude_json(prompt: str, timeout: int, label: str) -> Optional[Dict[str, An
         return None
 
     output = result.stdout.strip()
+
+    # `claude -p` reports auth failures on STDOUT with an EMPTY STDERR and
+    # exit 0, so neither the exit code nor stderr can be trusted to reveal
+    # them. ops_markers exists because a caller that checked only stderr
+    # logged nine days of failures as the empty string. Its docstring requires
+    # every caller in this repo to check the list.
+    low = output.lower()
+    for marker in AUTH_FAILURE_MARKERS:
+        if marker in low:
+            log(f"  {label}: AUTH FAILURE from claude -p (exit 0): {output[:200]!r}")
+            return None
+
     output = re.sub(r'^```json\s*', '', output)
     output = re.sub(r'\s*```\s*$', '', output)
     if not output:
@@ -346,10 +362,29 @@ def _claude_json(prompt: str, timeout: int, label: str) -> Optional[Dict[str, An
         return None
     try:
         return json.loads(output)
-    except json.JSONDecodeError as e:
-        log(f"  {label}: reply was not JSON ({e})")
-        log(f"  {label}: got instead -> {output[:200]!r}")
-        return None
+    except json.JSONDecodeError as first_error:
+        pass
+
+    # Repair invalid escape sequences, then try once more.
+    #
+    # JSON permits only \" \\ \/ \b \f \n \r \t \uXXXX. Models routinely emit
+    # \' when prose contains an apostrophe ("Ben\'s Bites"), which is valid in
+    # Python and JavaScript source but not in JSON, and json.loads rejects the
+    # whole document over one character. Dropping the stray backslash is safe:
+    # the negative lookahead leaves every legal escape untouched, so this
+    # cannot corrupt \n, \t or \uXXXX.
+    repaired = re.sub(r'\\(?!["\\/bfnrtu])', '', output)
+    if repaired != output:
+        try:
+            data = json.loads(repaired)
+            log(f"  {label}: repaired invalid escape sequence(s) in the reply")
+            return data
+        except json.JSONDecodeError:
+            pass
+
+    log(f"  {label}: reply was not JSON ({first_error})")
+    log(f"  {label}: got instead -> {output[:200]!r}")
+    return None
 
 
 def process_item(item: Dict[str, str], content: str) -> Optional[Dict[str, Any]]:
