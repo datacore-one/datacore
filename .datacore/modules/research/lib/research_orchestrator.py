@@ -1002,6 +1002,14 @@ def main():
             notebook_id = create_notebook_with_podcast(processed, daily_brief_path)
             if notebook_id:
                 log(f"NotebookLM notebook ready: {notebook_id}")
+            else:
+                # "best-effort" governs whether the RUN fails, not whether the
+                # user is told. A podcast step that produced nothing and said
+                # nothing is indistinguishable from one that was never asked
+                # for — which is how this broke for six days unnoticed.
+                log("PODCAST STEP PRODUCED NO NOTEBOOK — see the nlm errors above. "
+                    "Likely causes: expired nlm auth (refresh on the Mac and "
+                    "re-sync), or a stale nlm binary.")
         except Exception as e:
             log(f"NotebookLM step failed (non-fatal): {e}")
 
@@ -1108,17 +1116,32 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
         log("  No sources added — skipping audio generation")
         return notebook_id
 
-    # Queue audio overview
-    instructions = f"Datacore Research podcast {TODAY} — discuss key themes across the sources"
+    # Queue audio overview.
+    #
+    # INSTRUCTIONS MUST BE EMPTY. In notebooklm/client_audio.go,
+    # CreateAudioOverviewWithOptions routes to the new CreateUniversalArtifact
+    # RPC only when Instructions == "" (and DEEP_DIVE / DEFAULT / "en"). ANY
+    # custom instruction falls through to the old CreateAudioOverview path,
+    # which the server now rejects with "One or more arguments are invalid".
+    #
+    # This function used to pass a per-day instruction string, so every audio
+    # overview failed — and because the failure was only logged, the run
+    # reported success with no podcast. That is the silent-failure mode this
+    # whole path keeps regressing into. Custom instructions must be set in the
+    # web UI instead. See ENG-2026-08-09-028.
     audio_res = subprocess.run(
-        [nlm, 'create-audio', notebook_id, instructions],
+        [nlm, 'create-audio', notebook_id, ''],
         capture_output=True, text=True, timeout=60
     )
-    if audio_res.returncode == 0:
-        log(f"  Audio overview queued")
-    else:
-        log(f"  Audio queue failed: {audio_res.stderr[:200]}")
+    if audio_res.returncode != 0:
+        # Loud, and reflected in the return value: a notebook with no audio is
+        # not a podcast, and a caller that cannot distinguish the two will keep
+        # reporting success to the user while nothing is produced.
+        log(f"  AUDIO QUEUE FAILED: {(audio_res.stderr or audio_res.stdout)[:300]}")
+        log(f"  Notebook {notebook_id} exists with {sources_added} source(s) but has NO audio.")
+        return None
 
+    log("  Audio overview queued")
     return notebook_id
 
 
