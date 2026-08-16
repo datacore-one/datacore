@@ -20,6 +20,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -304,6 +305,53 @@ def fetch_url(url: str) -> Optional[str]:
 
 # ---- Process single item with Claude ----
 
+def _claude_json(prompt: str, timeout: int, label: str) -> Optional[Dict[str, Any]]:
+    """Run a headless Claude analysis and parse its JSON reply.
+
+    RUNS IN AN EMPTY DIRECTORY, DELIBERATELY. These calls used to run with
+    cwd=DATA_DIR, which makes the subprocess load ~/Data/CLAUDE.md — and that
+    file instructs the agent to call plur_session_start before anything else.
+    PLUR is not connected in a headless subprocess, so instead of returning
+    JSON the model spent its turn explaining that the MCP server was missing.
+    Every item then failed to parse and was skipped, which is why a run could
+    report "Processed: 0, Failed: N" while `claude` itself was perfectly
+    healthy. These prompts are self-contained text-in/JSON-out; they need no
+    workspace, so they get none.
+
+    Reports what actually came back on a parse failure. The bare
+    "Expecting value: line 1 column 1 (char 0)" that this replaces was true
+    and useless — it described the symptom and hid the response that would
+    have identified the cause in one read.
+    """
+    with tempfile.TemporaryDirectory() as workdir:
+        try:
+            result = subprocess.run(
+                ['claude', '-p', '--dangerously-skip-permissions',
+                 '--output-format', 'text', prompt],
+                cwd=workdir, capture_output=True, text=True, timeout=timeout
+            )
+        except subprocess.TimeoutExpired:
+            log(f"  {label}: Claude timed out after {timeout}s")
+            return None
+
+    if result.returncode != 0:
+        log(f"  {label}: Claude exited {result.returncode}: {result.stderr[:200]}")
+        return None
+
+    output = result.stdout.strip()
+    output = re.sub(r'^```json\s*', '', output)
+    output = re.sub(r'\s*```\s*$', '', output)
+    if not output:
+        log(f"  {label}: Claude returned NOTHING (exit 0, empty stdout)")
+        return None
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError as e:
+        log(f"  {label}: reply was not JSON ({e})")
+        log(f"  {label}: got instead -> {output[:200]!r}")
+        return None
+
+
 def process_item(item: Dict[str, str], content: str) -> Optional[Dict[str, Any]]:
     """Send fetched content to Claude for analysis. Returns structured output."""
     title = item['title']
@@ -364,26 +412,7 @@ Output ONLY valid JSON, nothing else.
 """
 
     try:
-        result = subprocess.run(
-            ['claude', '-p', '--dangerously-skip-permissions', '--output-format', 'text', prompt],
-            cwd=DATA_DIR, capture_output=True, text=True, timeout=90
-        )
-        if result.returncode != 0:
-            log(f"  Claude error: {result.stderr[:200]}")
-            return None
-
-        # Parse JSON from output (may have markdown fences)
-        output = result.stdout.strip()
-        output = re.sub(r'^```json\s*', '', output)
-        output = re.sub(r'\s*```\s*$', '', output)
-
-        return json.loads(output)
-    except json.JSONDecodeError as e:
-        log(f"  JSON parse error: {e}")
-        return None
-    except subprocess.TimeoutExpired:
-        log(f"  Claude timed out")
-        return None
+        return _claude_json(prompt, timeout=90, label="analysis")
     except Exception as e:
         log(f"  Processing error: {e}")
         return None
@@ -794,17 +823,9 @@ Output ONLY valid JSON, nothing else.
 """
 
     try:
-        result = subprocess.run(
-            ['claude', '-p', '--dangerously-skip-permissions', '--output-format', 'text', prompt],
-            cwd=DATA_DIR, capture_output=True, text=True, timeout=180
-        )
-        if result.returncode != 0:
-            log(f"  Daily-news Claude error: {result.stderr[:200]}")
+        data = _claude_json(prompt, timeout=180, label="daily-news")
+        if data is None:
             return None
-        output = result.stdout.strip()
-        output = re.sub(r'^```json\s*', '', output)
-        output = re.sub(r'\s*```\s*$', '', output)
-        data = json.loads(output)
     except Exception as e:
         log(f"  Daily-news Claude parse failed: {e}")
         return None
@@ -1150,8 +1171,32 @@ def send_telegram_summary(processed: List[Dict[str, Any]], failed: List[Dict[str
     """Push a research-run summary to Telegram. Returns True on success."""
     token = os.environ.get('TELEGRAM_BOT_TOKEN')
     chat_id = os.environ.get('TELEGRAM_CHAT_ID')
+    # Fall back to the host env file. Under cron, or when an agent shells out,
+    # the process inherits almost nothing, so these were routinely absent and
+    # the run finished having told nobody it was done — the notification path
+    # failing exactly when it is the only thing that would report the run.
     if not token or not chat_id:
-        log("  Telegram creds missing — skipping push")
+        env_file = Path.home() / ".datacore" / "datacore.env"
+        try:
+            for line in env_file.read_text().splitlines():
+                line = line.strip()
+                if line.startswith("export "):
+                    line = line[7:]
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                v = v.strip().strip('"').strip("'")
+                if k.strip() == "TELEGRAM_BOT_TOKEN" and not token:
+                    token = v
+                elif k.strip() == "TELEGRAM_CHAT_ID" and not chat_id:
+                    chat_id = v
+        except OSError:
+            pass
+    if not token or not chat_id:
+        missing = [n for n, v in (("TELEGRAM_BOT_TOKEN", token),
+                                  ("TELEGRAM_CHAT_ID", chat_id)) if not v]
+        log(f"  Telegram push SKIPPED — missing {', '.join(missing)} "
+            f"(checked environment and ~/.datacore/datacore.env)")
         return False
 
     lines = [f"📚 Research processed for {TODAY}"]
