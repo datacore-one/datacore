@@ -130,6 +130,46 @@ def cmd_list(args):
 # NEVER fails the caller. A task written to org but not recorded is still a
 # task; turning an observability gap into a write failure is the worse trade,
 # and this runs inside an agent's tool call where an exception is a broken tool.
+def _assignee_from_tags(file_path, tags):
+    """Resolve `:AI:venture:<role>:` to the actor who fills that role, or None.
+
+    Cadence tasks are tagged by ROLE (`:AI:venture:cio:`), never by actor, so
+    without this every cadence task lands unaddressed -- and an unaddressed
+    item is claimable by anyone. That is not theoretical: item 929eb69d6b was
+    claimed AND completed by both winston and miles, two models, two costs,
+    one task, and the answers agreed, which is the hardest kind of duplication
+    to notice. `ledger_claim.py` already declines work addressed to someone
+    else; it just needs to be told who that is.
+
+    The map is DATA, not code: each role in the space's `venture.yaml` names
+    its own `actor`. A hardcoded role->actor table here would be a second
+    roster to drift out of sync with the first, and this installation has
+    already paid for that once -- three persona files disagreed with
+    ROSTER.md about who the Chief of Staff was.
+
+    Silent None on every failure is deliberate. This decorates an item; it must
+    never be the reason a task fails to reach the ledger at all. A role with no
+    `actor:` key (every venture except the Firm today) simply keeps the old
+    first-come behaviour.
+    """
+    if not tags:
+        return None
+    try:
+        import yaml  # lazy: this adapter must import on hosts without pyyaml
+        for parent in Path(file_path).resolve().parents:
+            vy = parent / "venture.yaml"
+            if vy.is_file():
+                roles = (yaml.safe_load(vy.read_text()) or {}).get("roles") or {}
+                for tag in tags:
+                    role = roles.get(tag)
+                    if isinstance(role, dict) and role.get("actor"):
+                        return str(role["actor"]).strip().lower() or None
+                return None
+    except Exception:
+        return None
+    return None
+
+
 def _ledger_emit(file_path, event_type, payload):
     try:
         import os as _os
@@ -259,12 +299,16 @@ def cmd_add(args):
         file_path.write_text("\n".join(lines))
         ws.reload(file_path)
 
-    emitted = _ledger_emit(file_path, "item.create", {
+    _create_payload = {
         "id": node_id, "title": args.heading, "state": "TODO",
         "tags": sorted(tags) if tags else None,
         "scheduled": getattr(args, "scheduled", None) or None,
         "space": file_path.parent.parent.name,
-    })
+    }
+    _assignee = _assignee_from_tags(file_path, sorted(tags) if tags else None)
+    if _assignee:
+        _create_payload["assignee"] = _assignee
+    emitted = _ledger_emit(file_path, "item.create", _create_payload)
     return {"added": True, "id": node_id, "heading": args.heading,
             "ledger_actor": emitted}
 
