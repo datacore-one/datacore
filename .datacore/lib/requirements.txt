@@ -3,6 +3,14 @@ pyyaml>=6.0
 org-workspace>=0.5.1   # main's pin kept: 0.5.1 was published 2026-08-10 to fix 7 dead nightshift services; the branch's >=0.4.4 would regress that
 cryptography>=41  # relaxed from >=42: box parity ruling 2026-07-30 (box pins an older cryptography)
 
+# Module deps that were never declared and so were never installed. Both
+# modules failed silently for weeks: news served 13-day-old cached headlines
+# (feedparser missing since ~2026-08-04) and the /today voice post-hook died
+# at the TTS step (gtts missing). Homebrew python is PEP-668 managed, so they
+# live in .datacore/venv — see venv_site_packages() in venv_bootstrap.py.
+feedparser>=6.0   # news module: feed_fetcher.py
+gTTS>=2.5         # voice-terminal: speak_brief.py fallback when kokoro_onnx is absent
+
 # Calendar sync (optional - needed for /today calendar integration)
 # google-api-python-client>=2.0
 # google-auth-oauthlib>=1.0

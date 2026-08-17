@@ -324,6 +324,19 @@ def _generate_audio_kokoro(text, voice=DEFAULT_VOICE, speed=DEFAULT_SPEED, outpu
 
 def _generate_audio_gtts(text, output_path=None):
     """Fallback TTS via gTTS (Google). No local models needed. Returns (path, duration)."""
+    # gtts lives in .datacore/venv — system python is PEP-668 managed. Callers
+    # invoke this as a bare `python3`, so the venv needs to be on sys.path.
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[3] / "lib"))
+    try:
+        import venv_bootstrap
+
+        venv_bootstrap.activate()
+    except ImportError:
+        pass
+
     from gtts import gTTS
 
     if output_path is None:
