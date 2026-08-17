@@ -306,6 +306,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/session_archive.py",
+            "timeout": 60
+          },
+          {
+            "type": "command",
             "command": "python3 ~/Data/.datacore/lib/session_cleanup.py",
             "timeout": 5
           }

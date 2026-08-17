@@ -6,6 +6,11 @@ If guardian is enabled and session ended late without wrap-up,
 logs a breadcrumb for next /today to surface.
 
 Hebbian write-back is handled by MCP session.end, not this hook.
+
+ORDER IS LOAD-BEARING: `session_archive.py` MUST run before this hook in the
+SessionEnd array. It reads the state file this one deletes, and the archive is
+what the nightly learning sweep works from. Reordering them silently drops
+`first_prompt` and `cwd` from every archived session.
 """
 import sys, os
 from datetime import datetime

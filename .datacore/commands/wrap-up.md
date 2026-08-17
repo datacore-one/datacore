@@ -9,8 +9,10 @@ recall:
   ids:
     - ENG-2026-0411-001   # Subagent dispatch produces zero output for 15-20min — execute inline
     - ENG-2026-0505-029   # Token cost in /wrap-up was estimated 5000x too low
-    - ENG-2026-0512-038   # Token cost MUST use session_token_count.py; never Fermi-estimate
-    - ENG-2026-0512-039   # /wrap-up checklist must name coordinators as separate tracked items
+    - ENG-2026-0512-038   # Token cost MUST be read from the transcript; never Fermi-estimate
+    - ENG-2026-08-16-011  # Measured /wrap-up cost: 405k output tok, 338 tool calls, 3.6 engrams
+    - ENG-2026-08-16-012  # Learning-classifier cursor stalled; 37 candidates never reviewed
+    - ENG-2026-08-16-013  # v2: an org-mirrored task carries an `org` payload and is undelegatable
   scopes:
     - command:wrap-up
   tags:
@@ -64,10 +66,21 @@ completed. You cannot skip what is tracked. This is the fix for ENG-2026-0411-00
 | Agent | Purpose |
 |-------|---------|
 | `journal-coordinator` | Per-space journal entries |
-| `session-learning-coordinator` | Pattern extraction |
-| `context-maintainer` | Context sync if changes |
+| `context-maintainer` | Context sync, only if `preflight` reports registry changes |
 | `coach` | Quick emotional check (optional) |
-| `learning-classifier` | Engram classification, dedup, promotion (DIP-0019) |
+
+**No longer invoked here:** `session-learning-coordinator`, `session-learning`, `learning-classifier`. Learning moved to the nightly batch sweep — see §5. Spawning any of them from this command re-creates the cost this revision removed.
+
+### Scripts This Command Calls
+
+| Script | Replaces |
+|--------|----------|
+| `wrap_up_mechanics.py preflight` | §10, §12, §12.5, §14 + the session archive |
+| `wrap_up_mechanics.py meta` | §9 counters, `session_token_count.py` |
+| `wrap_up_mechanics.py finalize` | §13 |
+| `wrap_up_mechanics.py audit` | §16, and the machine-checkable half of §12 |
+| `session_archive.py` | (called by preflight; also runs on the SessionEnd hook) |
+| `focus_mode.py detect` | §0a-bis |
 
 ### Integration Points
 
@@ -105,6 +118,8 @@ You started this conversation with a goal. Work happened, insights emerged. Now 
 - Learnings are captured
 - Journal is updated
 - Completed tasks are marked done
+
+## Sequence
 
 ## Sequence
 
@@ -158,77 +173,86 @@ python3 ~/Data/.datacore/lib/focus_mode.py detect
 
 **After context recovery**, create a tracked task list — **one TaskCreate per spec step. NO CLUSTERING.**
 
-**HARD RULE — one-to-one mapping:** The spec has 20 tracked steps (1-18 plus the inserted §16.5 safety and §17.5 feedback gate). Create EXACTLY 20 tasks, in order. Do not combine "GTD extraction + insight verification" into one task. Do not bundle "meta-analysis + artifact tracking." Each spec step gets its own task. Clustering is where skipping hides: once "X + Y" is one task you can do X, mark it done, and silently drop Y. With one task per step you cannot fake completion.
+**HARD RULE — one-to-one mapping:** The spec has 12 tracked steps. Create EXACTLY 12 tasks, in order. Each spec step gets its own task. Clustering is where skipping hides: once "X + Y" is one task you can do X, mark it done, and silently drop Y. (§6 is deliberately one task — its two halves are a single decision about one item, not two steps. See §6.)
 
 ```
 Tasks to create (one per spec step, mark in_progress when starting, completed when done):
 
- 1. "Step 1 — Session summary"
- 2. "Step 2 — Pulse prompt (skip if fast mode or coach.wrap_up_check=false)"
- 3. "Step 3 — Continuation tasks (inferred — no prompt)"
- 4. "Step 4 — Mark completed tasks (auto-mark high-conf, surface med-conf)"
- 5. "Step 5 — Spawn journal-coordinator + session-learning-coordinator"
- 6. "Step 6 — Learning review (spawn learning-classifier; defer to /today)"
- 7. "Step 7 — GTD task extraction (auto-add with :wrap_up_extracted: tag)"
- 8. "Step 8 — Insight verification checklist (≥1 layer per insight)"
- 9. "Step 9 — Session meta-analysis (write to personal journal)"
-10. "Step 10 — Knowledge artifact tracking (auto-trust descriptions)"
-11. "Step 11 — Index session to journal DB"
-12. "Step 12 — Kill orphaned dev servers"
-13. "Step 12.5 — Archive old nightshift reports"
-14. "Step 13 — Push ALL repos (./sync push + subprojects)"
-15. "Step 14 — Context sync (CLAUDE.md tables)"
-16. "Step 15 — AI delegation opportunities (inferred — surface, no auto-add)"
-17. "Step 16.5 — Safety boundaries (prompt iff destructive/external/credential)"
-18. "Step 17 — Consolidated report + persist authoritative journal + social posts + exact token cost"
-19. "Step 17.5 — Feedback gate (bulk corrections; skip if fast mode)"
-20. "Step 18 — Wrap-up checklist self-audit (REQUIRED — produces 'Wrap-up Checklist Audit' section)"
+ 1. "Step 1  — Pulse + notes (ask, DO NOT WAIT)"
+ 2. "Step 2  — Preflight (wrap_up_mechanics.py preflight)"
+ 3. "Step 3  — Continuation tasks (inferred — no prompt)"
+ 4. "Step 4  — Mark completed tasks (auto-mark high-conf, surface med-conf)"
+ 5. "Step 5  — Journals (spawn journal-coordinator)"
+ 6. "Step 6  — Tasks & delegation (proposals, paired — no auto-add)"
+ 7. "Step 7  — Session meta-analysis (wrap_up_mechanics.py meta)"
+ 8. "Step 8  — Finalize (wrap_up_mechanics.py finalize + journal index)"
+ 9. "Step 9  — Audit (wrap_up_mechanics.py audit)"
+10. "Step 10 — Consolidated report (opens with the session summary)"
+11. "Step 11 — Postable moments"
+12. "Step 12 — Self-audit section to journal (HOOK-ENFORCED)"
 ```
 
-**Step 18 is the gate.** Before marking it complete, run `TaskList` and verify every prior task is `completed`. Then write the `## Wrap-up Checklist Audit` section to today's personal journal listing each step's actual status using the §18 allowed statuses: `run ✓`, `skipped-by-user`, `skipped-by-mode-fast`, `not-applicable (REASON)`, `inferred-and-reported (DESCRIPTION)`, or `applied-from-feedback (N CORRECTIONS)`. The PreToolUse hook `wrap_up_checklist_check.py` blocks `plur_session_end` until that section exists in the journal.
+> **What changed, and where each old step went.**
+>
+> | Old step | Now |
+> |---|---|
+> | §1 session summary | Opens §10 as §10a. At the top of the run it scrolled away before anyone read it. |
+> | §2 pulse | §1 — asked first and **non-blocking**. It used to strand the entire run when left unanswered. |
+> | §6 learning review | The nightly sweep. Gone from this command. |
+> | §8 insight verification | **Dropped**, survives as a one-line coverage note in §10c. Its `Learning` column is unknowable at wrap-up time now, and its other three re-verified §3, §5 and §6 one step after doing them. |
+> | §10 artifacts, §12 orphans, §12.5 archival, §14 context | `preflight` JSON fields (§2a). |
+> | §11 index-to-DB | §8 — and its command path was broken; see there. |
+> | §13 push | §8. |
+> | §6b AI delegation | §6b, paired with task extraction. |
+> | §16 checklist | §9 `audit`. |
+> | §1 pulse | §1, merged into the pulse. |
+>
+> Not a relaxation. Each removed step is now either a JSON field §9 asserts against the filesystem, or a merge that removes a seam. A model marking its own task done was never the stronger check.
+
+**Step 12 is the gate.** Before marking it complete, run `TaskList` and verify every prior task is `completed`. Then write the `## Wrap-up Checklist Audit` section to today's personal journal listing each step's actual status using the §12 allowed statuses: `run ✓`, `skipped-by-user`, `skipped-by-mode-fast`, `not-answered`, `not-applicable (REASON)`, `inferred-and-reported (DESCRIPTION)`, or `applied-from-feedback (N CORRECTIONS)`. The PreToolUse hook `wrap_up_checklist_check.py` blocks `plur_session_end` until that section exists in the journal.
 
 **Why this exists:** Spec step counts in past sessions: 17 spec steps, 9 tasks created, 6 silently skipped (observed 2026-05-29 SMK wrap-up; previously documented as ENG-2026-0512-044 on 2026-05-12 but recurred 17 days later). Memory engrams alone are insufficient — execution-time discipline failure. The hook is the structural defense; one-task-per-step is the readability defense.
 
-**CRITICAL:** Steps 5-6 must use `journal-coordinator` and `session-learning-coordinator` — NEVER spawn `journal-entry-writer` or `session-learning` directly with a hardcoded space name. Coordinators discover all relevant spaces automatically. Bypassing them silently skips spaces with actual work.
+**CRITICAL:** Step 5 must use `journal-coordinator` — NEVER spawn `journal-entry-writer` directly with a hardcoded space name. The coordinator discovers all relevant spaces automatically. Bypassing it silently skips spaces with actual work, including root system files.
 
 ### 0c. Inference-First Model (MANDATORY READ — supersedes the old "always prompt" rule)
 
 The previous version of this spec required surfacing a prompt at every decision point (~8 separate interruptions). That was strictly worse than the current model. The new rule:
 
-**Run every step. Infer every answer you can. Surface ONE bulk feedback gate at the end (§16.5). Let the user veto in bulk.**
+**Run every step. Infer every answer you can. Ask ONE non-blocking question at the start (§1). Let the user veto whenever they get to it.**
 
 For each step that previously asked the user a question:
 
 | Wording in spec | Means under inference-first |
 |---|---|
-| "ask user" / "prompt user" | **Infer.** Apply the inferred answer. List in §17 report. User vetoes via §16.5 if wrong. |
+| "ask user" / "prompt user" | **Infer.** Apply the inferred answer. List in §10 report. User vetoes via §0e if wrong. |
 | "Optional (user-initiated)" | **Infer + apply.** The default is "do the cheap reversible thing." |
 | "or Enter to skip" | **Apply silently.** Surface only as a line in the report. |
 | "Automatic (silent)" | **Run silently — still RUN.** Unchanged. Not "skip without telling user." |
 
-Only **three** mid-flow prompts remain (§17.5 safety boundaries — force-push, external comms, credentials). Everything else is inferred.
+Only **three** unplanned prompts remain (§0e safety boundaries — force-push, external comms, credentials). Everything else is inferred.
 
-If the agent reads "the talk shipped, user said it went well" and concludes "they don't need a coaching check / AI delegation / social posts" — that's still wrong. The new fix is not "ask harder" but "do the thing silently, then surface what you did so the user can veto." Skipping an entire step requires an explicit reason in the §18 audit table.
+If the agent reads "the talk shipped, user said it went well" and concludes "they don't need a coaching check / AI delegation / social posts" — that's still wrong. The new fix is not "ask harder" but "do the thing silently, then surface what you did so the user can veto." Skipping an entire step requires an explicit reason in the §12 audit table.
 
 ### 0d. Flags
 
 `/wrap-up` accepts these forms:
 
 ```
-/wrap-up                  # normal mode: one pulse prompt at §1.5, then silent, then §16.5 feedback gate
-/wrap-up fast             # zero prompts: skip pulse, skip §16.5 gate. Pure silent run.
+/wrap-up                  # normal mode: one non-blocking pulse at §1, then silent to the §10 report
+/wrap-up fast             # zero prompts: skip the §1 pulse entirely. Pure silent run.
 /wrap-up --fast           # alias for `fast`
 /wrap-up check also tmp/  # pass-through args for §0a context recovery
 ```
 
 **Mode behaviors:**
 
-| Mode | §1.5 pulse prompt | §16.5 feedback gate | Inference defaults |
+| Mode | §1 pulse prompt | §0e feedback gate | Inference defaults |
 |------|---|---|---|
 | `normal` | 1 prompt (1-10, instant) | Single bulk prompt at end | Apply all (user vetoes in bulk) |
 | `fast`   | none | none (Enter-to-accept implied) | Apply all |
 
-In both modes, §17.5 safety prompts can still fire if the agent detects a destructive/external/credential action.
+In both modes, §0e safety prompts can still fire if the agent detects a destructive/external/credential action.
 
 **Settings overrides** (in `.datacore/settings.local.yaml`):
 
@@ -236,66 +260,102 @@ In both modes, §17.5 safety prompts can still fire if the agent detects a destr
 wrap_up:
   default_mode: normal              # or 'fast' — applies when no flag passed
   inference_mode: auto              # or 'off' (restores legacy per-step prompts)
-  feedback_gate: true               # set false to skip §16.5 even in normal mode
+  pulse: true                       # set false to skip the §1 question entirely
   tag_extracted_tasks_with: wrap_up_extracted   # so they're trivial to grep/review
 ```
 
 When `inference_mode: off`, the spec falls back to the legacy per-step prompts (kept for users who want the old behavior).
 
-### 1. Session Summary
+### 0e. Safety Rule — the only unplanned prompt, applies throughout
 
-> Run silently — no user prompt. Output the summary block below. Do not skip on the grounds that it is "automatic."
+These three categories of action are NOT auto-inferred. If the agent's inference logic during any prior step would trigger one of these, the agent MUST surface a prompt before proceeding. This is the only sanctioned mid-flow interruption in inference-first mode.
 
-```
-═══════════════════════════════════════════════════
-SESSION WRAP-UP
-═══════════════════════════════════════════════════
+| Category | Examples | Action |
+|---|---|---|
+| **Destructive git** | force-push, `--force-with-lease` to protected branch, `git reset --hard` to discard committed work | AskUserQuestion: explicit Y/N before executing |
+| **External communication** | `:AI:send:` task that fires real email/post tonight, posting to social media before review, sending Telegram/WhatsApp | AskUserQuestion: confirm send target + content |
+| **Credential decisions** | rotating a token, changing OAuth scopes, prompting for new auth on a service mid-wrap-up | AskUserQuestion: explicit confirmation |
 
-Session started: [HH:MM] (infer from first user message)
-Goal: [Inferred from conversation start or ask user]
+These are the *only* prompts allowed after §1 (pulse). If the agent finds itself about to add a fourth prompt category here, it's wrong — the right answer is "infer, apply, surface in §10, let user veto in §1 pulse" instead.
 
-Work completed:
-  - [List key accomplishments from session]
-  - [Files created/modified]
-  - [Decisions made]
+### 1. Pulse + Notes — FIRST, and it never blocks
 
-───────────────────────────────────────────────────
-```
-
-**Note:** Record the session start time here (from first user message). It's needed at close for the duration calculation.
-
-### 2. Pulse (the only mid-flow prompt in normal mode)
-
-> Fire this immediately after the §1 summary. ONE single-line `AskUserQuestion`. No follow-up branches mid-flow. If user scored 1-4 they can attach a note via the Other field on the same prompt; the agent records it for /tomorrow without asking again.
-
-**Skip entirely when:**
-- mode = `fast`
-- `coach.wrap_up_check: false` in settings
-- `wrap_up.inference_mode: off` (legacy mode — falls back to the old multi-prompt flow further down)
-
-**Prompt format** (using AskUserQuestion):
+**Ask once, in plain text, then keep going. Do NOT use AskUserQuestion here.**
 
 ```
-Q: Pulse — how was this session?
-Options:
-  - 8-10 (good)               [Recommended]
-  - 6-7 (fine)
-  - 1-5 (heavy — Other for note)
-  - Skip
+Pulse 1-10? Anything to correct or add? (answer any time — I'm continuing)
 ```
 
-**Behavior:**
-- Capture the score immediately. No second prompt for the note — if user picks 1-5 they use the Other field to add free-text in one shot.
-- If a note exists, append it verbatim to `0-personal/0-inbox/coach-pending.md` for /tomorrow's coach session to pick up. Do NOT escalate the conversation here.
-- Record the score in §17 report and §18 audit.
+Proceed immediately to §2. Do not wait. Do not re-ask. Never make a later step
+conditional on having an answer.
 
-**Configuration** (in `.datacore/settings.local.yaml`):
-```yaml
-coach:
-  wrap_up_check: true  # Include the pulse in /wrap-up (default true)
+**Why it moved to first, and why it stopped blocking.** It used to sit at §2 as
+a blocking prompt: start /wrap-up, switch to another session, forget to answer,
+and the whole run stalls indefinitely with work half-done. A prompt that can
+strand the run is worse than no prompt. Asking first puts the question on screen
+before the user walks away; not blocking makes their return optional.
+
+**This absorbs the old §1 pulse.** That gate asked for bulk
+corrections *after* a 270-line report — by which point the user had scrolled
+past everything and pressed Enter. One interaction, asked when attention is
+highest, beats two asked when it is lowest.
+
+**Handling the answer, whenever it lands:**
+
+| When it arrives | What to do |
+|---|---|
+| Before §10 | Apply corrections to whatever step they touch; carry the pulse score into the journal. |
+| After §10 | Apply as a follow-up edit and state what changed. The report was not wrong, it was early. |
+| Never | Finish the wrap-up. Record `Pulse: not answered` in §10 and `not-answered` in the §12 audit. A normal outcome, not a failure. |
+
+**Correction vocabulary** (free text — parse intent, never demand syntax):
+`drop task 2` · `task 3 to priority A` · `that one isn't done, undo it` ·
+`also capture: <insight>` (call `plur_learn` directly) · `delegate 1` ·
+`add task: <text>` · `skip the social posts`
+
+`wrap_up.pulse: false` disables it; `/wrap-up fast` skips it. Neither changes
+anything else — nothing downstream depends on it.
+
+### 2. Preflight — one call, not two hundred
+
+```bash
+python3 ~/Data/.datacore/lib/wrap_up_mechanics.py preflight
 ```
 
-If `coach.wrap_up_check: false` → no pulse, audit row reads `not-applicable (coach.wrap_up_check=false)`.
+Returns one JSON object. **Read it once and carry it through the whole run** — every field below feeds a later step, and re-deriving any of it with ad-hoc `ps`/`git`/`ls` calls is the thing this replaces.
+
+| JSON field | Feeds | What it already did |
+|---|---|---|
+| `session_archive` | §5, §12 | Copied this session's transcript + subagents to `.datacore/state/sessions/archive/<date>/<id>/` and queued it for the nightly learning sweep |
+| `processes.killed` | §10 report | Killed orphaned dev servers and hook workers (old §12) |
+| `processes.flagged` | §10 report | ppid=1 node processes >1h — reported, never killed |
+| `nightshift_archival` | §10 report | Ran `nightshift_archival.py --all-spaces` (old §12.5) |
+| `context_sync` | §10 report | Checked whether agents/commands/registry changed (old §14) |
+| `artifacts` | §8, §10 | Files created/modified this session, from git (old §10) |
+| `repos` | §B, §10 | Per-repo dirty count and unpushed commits across all ~60 repos |
+
+**Why this exists.** A measured wrap-up ran 338 tool calls, 218 of them ad-hoc Bash. None of that needed judgement. If `preflight` fails, report the failure in §10 and continue — do not fall back to hand-rolling the same scans, which is how the 218 accumulated in the first place.
+
+**`--dry-run`** previews the process kills without executing them. Use it if the user asks what would be killed.
+
+#### 2a. What preflight already did (old §10, §12, §12.5, §14)
+
+These three ran in Step A. **Do not re-run them by hand.** Report what preflight
+returned, in §10:
+
+| Preflight field | Report as |
+|---|---|
+| `processes.killed[]` | `Killed N orphaned process(es)` with pid, age and reason. Empty list -> `No stray dev servers or hook workers. OK` |
+| `processes.flagged[]` | `Flagged (not killed): pid N, <cmd>` — ppid=1 node processes older than an hour that are not known MCP servers. Never kill these; they cannot be proven to be leaks from here. |
+| `nightshift_archival.ok` | `Archived nightshift reports >30d` or the failure text. If `note` says the script is missing, say that explicitly rather than dropping the step. |
+| `context_sync.registry_changed` | If true, run the rebuild in `context_sync.action` and say so. If false, `no agent/command registry changes — context already in sync` |
+
+What preflight preserves, deliberately: MCP servers (`datacore-mcp`, `exa-mcp`,
+`plur-mcp`) and any process with a live parent. The kill list is dev servers
+(vite / next dev / bun run / webpack / `node_modules/.bin/`) plus orphaned
+one-shot hook workers — 24 immortal `plur hook-inject` orphans once drove a
+16GB machine to 17.4GB swap (2026-07-06, plur-ai/plur#504), which is why the
+old dev-server-only pattern was not enough.
 
 ### 3. Continuation Tasks (inferred — no prompt)
 
@@ -312,11 +372,11 @@ If `coach.wrap_up_check: false` → no pulse, audit row reads `not-applicable (c
 
 **If ANY signal exists:** call `/continue --save` inline-mode to create the continuation task. Compose the bootstrap context from the conversation + signals above. Tag `:continuation:`, schedule next working day.
 
-**If NO signal exists:** no continuation task. §17 report shows `Continuation: none (work appears complete)`. §18 audit row reads `not-applicable (no incomplete-work signal)`.
+**If NO signal exists:** no continuation task. §10 report shows `Continuation: none (work appears complete)`. §12 audit row reads `not-applicable (no incomplete-work signal)`.
 
-**Surface in §17, not before:**
+**Surface in §10, not before:**
 - The created continuation task heading + ID + scheduled date
-- The signals that triggered it (so user can veto in §16.5: "actually that's done, drop it")
+- The signals that triggered it (so user can veto in §0e: "actually that's done, drop it")
 
 **Delegation reference:** The continuation task format (Rich Task Standard — DIP-0009 Part 3.5) with the `:BOOTSTRAP:` extension field is maintained in `/continue`. Use `/continue --save` inline; do not reimplement.
 
@@ -332,10 +392,10 @@ This session's work appears incomplete. What remains? (brief, or I'll infer)
 - Use `gtd.write_clock_entry` for tasks worked during the session (infer start/end times from conversation message timestamps -- first mention to last mention of each task)
 - Use `gtd.duplicate_check` before creating any new tasks (continuation or GTD tasks) to avoid near-duplicates
 
-**Inference-first: auto-mark high-confidence, defer low-confidence to §16.5 bulk review.**
+**Inference-first: auto-mark high-confidence, defer low-confidence to §0e bulk review.**
 
 ```
-TASK COMPLETION (silent — surfaced in §17 report)
+TASK COMPLETION (silent — surfaced in §10 report)
 ─────────────────────────────────────────────────
 1. Scan next_actions.org for tasks related to session work
 2. For each candidate compute a match score (heuristic):
@@ -345,21 +405,21 @@ TASK COMPLETION (silent — surfaced in §17 report)
      +1 if conversation explicitly references the task ID or near-verbatim heading
 3. Auto-mark DONE for tasks with score ≥ 4 (high confidence)
 4. Add CLOCK entries via gtd.write_clock_entry using inferred start/end times
-5. Tasks with score 2-3 → "Suggested DONE" list in §17 report — user vetoes/confirms in §16.5
+5. Tasks with score 2-3 → "Suggested DONE" list in §10 report — user vetoes/confirms in §0e
 6. Tasks with score < 2 → ignored (not surfaced; too noisy)
 ```
 
-**Report rendering** (§17):
+**Report rendering** (§10):
 ```
 Auto-marked DONE (high confidence):
   - org-XXX | "Task heading" — matched files: [...]
   - org-YYY | "Task heading" — matched goal verbatim
 
-Suggested DONE (medium confidence — confirm in §16.5):
+Suggested DONE (medium confidence — confirm in §0e):
   - org-ZZZ | "Task heading" — score 3 (file overlap only)
 ```
 
-**§16.5 corrections** can include "actually task org-ZZZ isn't done, undo" or "yes confirm all suggested" — applied in one pass.
+**§0e corrections** can include "actually task org-ZZZ isn't done, undo" or "yes confirm all suggested" — applied in one pass.
 
 **Ad-hoc Task Gap Detection:**
 
@@ -414,14 +474,23 @@ add_clock_entry(node.node, session_start_time, session_end_time)
 ws.save()
 ```
 
-### 5. Session Learning & Journal Update (Coordinator Pattern)
+### 5. Journals (Coordinator Pattern)
 
-**Spawn two coordinators in parallel:**
+**Spawn ONE coordinator: `journal-coordinator`** — it discovers spaces and spawns `journal-entry-writer` per space.
 
-1. **`journal-coordinator`** - Discovers spaces, spawns journal-entry-writer per space
-2. **`session-learning-coordinator`** - Discovers spaces, spawns session-learning per space
+> ⚠ **Always delegate to the coordinator. Never call `journal-entry-writer` directly with a hardcoded space name.** It discovers all relevant spaces automatically via `ls -d [0-9]-*/`. Bypassing it causes spaces with actual work (e.g., root system files) to be silently skipped.
 
-> ⚠ **Always delegate to the coordinator agents. Never call `session-learning` or `journal-entry-writer` directly with a hardcoded space name.** Coordinators discover all relevant spaces automatically via `ls -d [0-9]-*/`. Bypassing them causes spaces with actual work (e.g., root system files in the Datacore space) to be silently skipped.
+#### Learning does NOT happen here any more
+
+**Do not spawn `session-learning-coordinator`. Do not spawn `learning-classifier`. There is no §6.**
+
+Step A already copied this session's full transcript and every subagent transcript to `.datacore/state/sessions/archive/<date>/<session-id>/` with `learning_status: pending`. The nightly sweep (`io.datacore.session-learning`, 05:20) reads the whole day's sessions in one batch and writes the engrams.
+
+**Why it moved.** Measured over 54 runs: learning inside wrap-up cost a median 405k output tokens and ~14 subagent transcripts per session, and returned 3.6 engrams — about 112k output tokens each. It also never terminated: 5-plur's classifier cursor sat at 2026-07-30 while four consecutive passes re-read the same files and appended another run note explaining why they weren't advancing it, and all 37 candidates it queued are *still* unreviewed because the `/today` step they were deferred to did not exist. Batching the day removes the per-session fixed cost, sees cross-session repetition that a single-session pass structurally cannot, and replaces the date cursor — the thing that stalled — with a per-session claim that cannot skip work.
+
+**What still belongs in the session:** calling `plur_learn` the moment the user corrects you. That path produced essentially all of the engrams that actually landed. It is not affected by any of this.
+
+**Verify, don't assume.** Report the archive result from Step A's `session_archive` field in §10. If its status is not `archived`, say so plainly — an unarchived session is one the sweep will never see, and that is a silent loss, not a minor blemish.
 
 **Focus mode context:** If focus mode was detected in Step 0a-bis, pass the following additional context to `journal-coordinator`:
 
@@ -438,116 +507,74 @@ This session was run from a project folder. Write BOTH journals:
 The coordinator uses this to avoid full space discovery for the team entry (the space is already known) and passes the project/contributor directly to journal-entry-writer. It still spawns the personal journal-entry-writer as normal.
 
 ```
-SESSION LEARNING & JOURNALS
-───────────────────────────
-Discovering spaces and spawning per-space agents...
+JOURNALS
+────────
+Discovering spaces and spawning per-space writers...
 
 Spaces found: 0-personal, 1-teamspace, 2-projectspace
 
-[Spawning in parallel:]
-  - journal-coordinator → journal-entry-writer × N
-  - session-learning-coordinator → session-learning × N
-
-[Results aggregated:]
+[Spawning: journal-coordinator → journal-entry-writer × N]
 
 Journals updated:
   - 0-personal/journal/YYYY-MM-DD.md ✓
   - 1-teamspace/journal/YYYY-MM-DD.md ✓ (if work done there)
   - 2-projectspace/journal/YYYY-MM-DD.md ✓ (if work done there)
 
-Learnings captured:
-  - personal: X patterns
-  - teamspace: X patterns (if relevant)
-  - projectspace: X patterns (if relevant)
+Session archived: .datacore/state/sessions/archive/YYYY-MM-DD/<id>/ ✓
+  → queued for the 05:20 learning sweep (learning_status: pending)
 ```
 
 **How it works:**
 
-1. Each coordinator discovers spaces via `ls -d [0-9]-*/`
-2. Coordinator determines which spaces had relevant work
-3. Spawns subagent for each relevant space (in parallel)
-4. Subagents write to space-specific files
-5. Coordinator aggregates and returns summary
+1. The coordinator discovers spaces via `ls -d [0-9]-*/`
+2. It determines which spaces had relevant work
+3. It spawns a `journal-entry-writer` for each relevant space (in parallel)
+4. Those write to space-specific journals
+5. The coordinator aggregates and returns a summary
 
-**What gets captured per space:**
-- Patterns → `[space]/.datacore/learning/patterns.md`
-- Corrections → `[space]/.datacore/learning/corrections.md`
-- Insights → `[space]/3-knowledge/insights.md`
+**What gets written here:**
 - Journal entry → `[space]/journal/YYYY-MM-DD.md`
 
-**No "additional insights" prompt.** Coordinators already extract from the conversation. If the user wants to add a missed insight, they do it via §16.5 bulk feedback: *"also capture: the rebase-on-fork pattern for stale dependency PRs"* — the agent then appends to the right learning file in a single pass.
+**What gets written by the nightly sweep instead:**
+- Patterns → `[space]/.datacore/learning/patterns.md`
+- Corrections → `[space]/.datacore/learning/corrections.md`
+- Preferences → `[space]/.datacore/learning/preferences.md`
+- Engrams → PLUR, directly, no candidate queue
 
-> **Parallel execution:** While coordinators run in background, immediately proceed to steps 7-9 (GTD task extraction, insight verification, session meta-analysis). These steps work from conversation context and do NOT depend on coordinator output. Step 6 (learning review) is the only step that must wait for step 5 to complete.
+**No "additional insights" prompt.** If the user wants to force a specific insight into memory now rather than waiting for the sweep, they say so via §0e bulk feedback: *"also capture: the rebase-on-fork pattern for stale dependency PRs"* — call `plur_learn` on it directly in the same pass.
 
-### 6. Learning Review (DIP-0019 Engram Model)
+> **Parallel execution:** While the coordinator runs in background, immediately proceed to steps 7-9. Those work from conversation context and do not depend on its output. Nothing in this command now blocks on a learning agent.
 
-**After step 5 coordinators complete, run learning review:**
+### 6. Tasks & Delegation (paired — one decision, two destinations)
 
-> ⚠ **Spawning `learning-classifier` is mandatory — it is not optional and must not be deferred.** The agent always runs. What is optional is the *interactive review* of contradictions afterwards (the user can skip or defer that part). Never skip spawning the agent on the grounds of "deferring" — engrams will not be classified unless the agent runs.
->
-> ⚠ **Sequential dependency:** `learning-classifier` MUST wait for step 5 (session-learning) to complete before starting. Session-learning writes to patterns.md/corrections.md AND calls plur_learn directly. The classifier then reads those files and deduplicates against PLUR.
-
-1. **Classify new learnings**: Spawn `learning-classifier` agent. This reads new patterns.md/corrections.md entries since last cursor position, deduplicates via `plur_similarity_search`, creates engrams with proper type/polarity/tags, and detects recurrences and contradictions.
-
-2. **Inference-first: default to defer.** No "Review now? [Y/skip/defer]" prompt. Candidates surface in §17 report and §16.5 lets the user override.
-
-```
-LEARNING REVIEW (silent — surfaced in §17 report)
-─────────────────────────────────────────────────
-[After learning-classifier completes:]
-  Patterns evaluated: N
-  Passed quality gates → candidates: N (queued for /today daily-review)
-  Failed → reference.md: N
-  Failed → reinforced existing: N
-
-  Top candidates (full list in §17):
-  1. [type] "Statement summary..." — confidence X/10
-  2. [type] "Statement summary..." — confidence X/10
-
-  [If legacy audit flagged engrams:]
-  ⚠ ENG-XXXX-XXXX-XXX: "Statement..." — fails {gate}, consider retiring (surface in §17)
-```
-
-**§16.5 corrections** can include "actually review the engrams now" (triggers `/daily-review` after the wrap-up closes) or "drop candidate 2 — that's not a real pattern".
-
-**Configuration** (in `.datacore/settings.local.yaml`):
-```yaml
-learning:
-  auto_defer_learning_review: true   # default flipped to true — matches inference-first model
-  daily_review_max_items: 5
-```
-
-If `learning.auto_defer_learning_review: false`, restore the legacy interactive prompt.
-
-**Agents spawned:** `learning-classifier` (processes all spaces with new entries)
-**Skills used:** `/daily-review` (if user chooses to review contradictions now)
-
-### 7. GTD Task Extraction from Session Insights
-
-**Extract actionable tasks from conversation context (runs parallel to step 5 coordinators):**
+**Extract actionable tasks from conversation context (runs parallel to step 5):**
 
 Review the session's insights, decisions, and next steps. Identify items that should become tasks in `next_actions.org` — things that aren't continuation of current work (those go in step 3) but are *new* actionable items that emerged from the session.
 
-**Inference-first: auto-add with a removable tag, surface in report, let user veto in §16.5.**
+**Propose, do not auto-add.** Surface them in the §10 report as numbered proposals and create only what survives the §1 gate.
+
+> **Why this flipped.** Auto-add was measured: 379 `:wrap_up_extracted:` tasks exist, they complete at **25.1% against a 36.8% baseline**, and the 276 still open are **a quarter of the entire open backlog**. The old rationale — "adding a task is cheap and reversible" — is true per task and false in aggregate; the cost is not the org edit, it is the backlog nobody can face. A proposal the user accepts costs one line of typing. A task the user never does costs attention every week forever.
 
 ```
-GTD TASK EXTRACTION (silent — surfaced in §17 report)
-─────────────────────────────────────────────────────
+GTD TASK EXTRACTION (proposals — confirmed in §1)
+────────────────────────────────────────────────────
 Reviewing session for actionable items beyond continuation tasks...
 
-New tasks identified and added to next_actions.org with :wrap_up_extracted: tag:
-  1. org-YYYYMMDD-HHMMSS-aaaa | [#A] Task from insight X → Growth section
-  2. org-YYYYMMDD-HHMMSS-bbbb | [#B] Task from decision Y → Product section
-  3. org-YYYYMMDD-HHMMSS-cccc | [#B] Task from discovery Z → Engineering section
+Proposed (say "add 1,3" or "add all" or ignore):
+  1. [#A] Task from insight X → Growth section
+  2. [#B] Task from decision Y → Product section
+  3. [#B] Task from discovery Z → Engineering section
 ```
+
+Tasks actually created still carry the `:wrap_up_extracted:` tag (configurable via `wrap_up.tag_extracted_tasks_with`) so the cohort stays measurable.
 
 **Why auto-add with a tag instead of asking:**
 - Adding an org task is cheap and reversible (1-line edit)
 - The `:wrap_up_extracted:` tag (configurable via `wrap_up.tag_extracted_tasks_with`) makes them trivially greppable for batch review later
-- §16.5 lets the user say "drop task 2, change task 3 to priority A, add another: research X" in one shot
+- §0e lets the user say "drop task 2, change task 3 to priority A, add another: research X" in one shot
 - Not adding loses time-sensitive items the agent correctly identified
 
-**§16.5 corrections** for this step:
+**§0e corrections** for this step:
 - `drop task <n>` → delete the task by ID
 - `change task <n> priority to <A/B/C>` → update priority cookie
 - `change task <n> tag <add/remove> <tag>` → tag mutations
@@ -563,8 +590,7 @@ New tasks identified and added to next_actions.org with :wrap_up_extracted: tag:
 **What does NOT qualify (already captured elsewhere):**
 - Current work that's incomplete → step 3 (continuation tasks)
 - Completed items → step 4 (mark DONE)
-- Patterns and insights → step 5 (session-learning)
-- Engram candidates → step 6 (learning-reviewer)
+- Patterns, insights and engram candidates → the nightly learning sweep (not this session)
 
 **Task format** (Rich Task Standard — DIP-0009 Part 3.5):
 ```org
@@ -580,49 +606,70 @@ Brief description of what needs to be done.
 
 **Routing:** Place tasks in the appropriate section of `next_actions.org` based on their nature (Operations, Product, Engineering, Growth, Research, Communications).
 
-### 8. Insight Verification Checklist
+> **v2: an org task is not a delegation.** `next_actions.org` is still the write surface (every space is at DIP-0043 Phase 0 — no `phase1-active` marker), and `ledger_ingest_org.py` mirrors what you write into the ledger on the 05:35 sweep. But a mirrored item carries an `org` block in its payload, and `ledger_claim.py` skips exactly those: `pending = [i for i in claimable if not (i.payload or {}).get("org")]`. That filter is deliberate — it stopped agents working through a 342-item personal backlog unattended. The consequence for this step: **a task you write here can never be picked up by the fleet.** If the intent is "an agent should do this tonight", that is §6b delegation, not a task heading. Say which one you mean in the §10 report.
 
-**Verify all session insights are captured (runs parallel to step 5 coordinators):**
 
-Compile a checklist of the session's key insights, decisions, and patterns. For each item, verify it was captured in at least one of three layers:
+> **Why these are one step.** "This should happen" splits into *I will do it*
+> (a task) and *an agent should do it tonight* (a delegation). Asking them in
+> separate steps meant task-filing always ran first and delegation inherited
+> whatever was left, which is how 379 auto-filed tasks accumulated at a 25%
+> completion rate while the nightshift queue stayed thin. Decide the
+> destination once, per item.
 
+---
+
+#### 6b. Delegation half
+
+
+**Inference-first: scan the session for delegation candidates, surface them in §10 as suggestions. The user opts IN via §0e ("delegate task 1 and 3 tonight"). No tasks are auto-tagged `:AI:` here** — that's a heavier commitment because nightshift will actually execute. Surface, don't auto-execute.
+
+**What to look for** (delegation candidates):
+
+- **Research questions** the user voiced but didn't pursue: "I wonder if X..."
+- **Time-sensitive opportunities** mentioned but parked: just-shipped feature → social posts; market signal → research deep-dive; competitor news → competitive brief
+- **Repetitive maintenance** that's overdue per other GTD signals: "those 5 stale PRs need triage"
+- **Content drafts** mentioned: "I should write about Y"
+- **Outreach** that's been sitting: "I need to follow up with Z"
+
+**Report rendering** (§10):
 ```
-INSIGHT VERIFICATION
-────────────────────
-Checking all session insights are captured...
-
-| # | Insight                          | Learning | Document | GTD | Journal |
-|---|----------------------------------|----------|----------|-----|---------|
-| 1 | Community Tap-In GTM pattern     | ENG-051  | plan.md  | --  | noted   |
-| 2 | Anti-SaaS revenue model          | ENG-054  | plan.md  | --  | noted   |
-| 3 | User base growth is #1           | --       | plan.md  | #A  | noted   |
-| 4 | Obsidian is next community       | pattern  | --       | #B  | --      |
-| ...                                                                        |
-
-Coverage: X/X insights captured across 4 layers
-
-[If gaps found:]
-⚠ Uncaptured: "Insight description"
-  → Capture as: [engram/pattern/task/zettel]?
-
-[If all captured:]
-All session insights accounted for.
+DELEGATION OPPORTUNITIES (suggestions — opt in via §0e):
+  1. Research: "x402 vs ERC-8004 — which agentic-payment standard wins?"
+     Why: session mentioned twice, no action taken
+     If approved: would be added with :AI:research: tag
+  2. Content: short post about today's [client]-space verification flow
+     Why: time-sensitive, build-in-public momentum
+     If approved: would be added with :AI:content: tag
+  3. ...
 ```
 
-**Four capture layers:**
+**§0e corrections:**
+- `delegate 1 and 3` → add those with appropriate `:AI:*:` tags
+- `delegate all` → add all suggestions
+- `delegate none` (default) → no AI tasks created
+- `delegate: <free text>` → add a user-composed AI task
 
-| Layer | What it captures | Where |
-|-------|------------------|-------|
-| Learning | Patterns, engrams, corrections | `.datacore/learning/`, `3-knowledge/` |
-| Documents | Plans, designs, reports, zettels | `content/`, `1-tracks/`, `3-knowledge/zettel/` |
-| GTD | Actionable next steps | `org/next_actions.org` |
-| Journal | Session narrative, decisions, context | `journal/YYYY-MM-DD.md` |
+**Legacy prompt** (only when `wrap_up.inference_mode: off`):
+```
+Any quick tasks to delegate to AI? (brief, or Enter to skip)
+> [user input]
+```
 
-**Every significant insight should appear in at least one layer.** Many will appear in two or three (e.g., an engram AND a task AND a journal entry). The verification ensures nothing falls through the cracks.
+### 7. Session Meta-Analysis
 
-### 9. Session Meta-Analysis
+**Get the counters from the archive, not from memory:**
 
-**Analyze the session itself, not just its content (runs parallel to step 5 coordinators).** This builds a longitudinal dataset for understanding how sessions work and improving over time.
+```bash
+python3 ~/Data/.datacore/lib/wrap_up_mechanics.py meta
+```
+
+Returns `turns`, `user_turns`, `tool_calls`, `tool_breakdown`, `agents_spawned`, `output_tokens`, `subagent_output_tokens`, `billable_tokens`, `files_modified`, `spaces_touched` — computed from this session's archived transcript.
+
+**This supersedes the old "Insight Density" tally and the `session_token_count.py` call.** Both asked the model to count things from a conversation it had partly compacted away, and the token figure in particular was once wrong by a factor of 5000 (ENG-2026-0505-029). Numbers that come from the transcript are right even when the session was long.
+
+**What still needs judgement** — write these from the conversation, they are not in the JSON: session arc, correction categories, user role, energy pattern, key observation.
+
+**Analyze the session itself, not just its content (runs parallel to step 5).** This builds a longitudinal dataset for understanding how sessions work and improving over time.
 
 ```
 SESSION META-ANALYSIS
@@ -644,9 +691,13 @@ Correction Categories:
   - Context: X     (missing background, wrong assumption about user)
   - Prioritization: X (wrong emphasis, wrong ordering)
 
+Session Shape (from `wrap_up_mechanics.py meta` — do NOT estimate these):
+  - Turns: X (user: X)   Tool calls: X   Agents spawned: X
+  - Output tokens: X     Subagent output: X     Billable: X
+  - Spaces touched: [...]
+
 Insight Density:
-  - Engrams: X
-  - Patterns: X
+  - Engrams written in-session: X   (the sweep adds more at 05:20)
   - Zettels: X
   - GTD tasks: X
   - Documents: X
@@ -699,418 +750,95 @@ If found, add a TODO to inbox.org tagged `:datacore:dip:` with the gap descripti
 :END:
 ```
 
-### 9b. Postable Moment Detection (Build in Public)
-
-**Purpose:** Flag session moments worth sharing on X (@jssr). Show don't tell - short demos, absorptions, before/afters, surprising results.
-
-Scan the session for:
-- **Framework absorptions** - read something, integrated it, shipped it (with timing)
-- **Before/after moments** - friction that disappeared, workflow that clicked
-- **Surprising metrics** - unexpected numbers, performance gains
-- **Cool demos** - something that just works and looks impressive
-- **Contrarian insights** - something you believe that others don't
-
-```
-POSTABLE MOMENTS
-────────────────
-[If any found:]
-  Postable moment detected: [short description]
-  Format: [screenshot / screen recording / text-only]
-  Draft tweet? [suggest one, short and punchy, no hype words]
-
-[If none:]
-  No standout moments this session. That's fine.
-```
-
-**Guidelines:**
-- Max 1-2 suggestions per session (don't spam)
-- Tweet should stand alone without context
-- Prefer visual proof (screenshot/recording) over text claims
-- No em dashes, use hyphens
-- Match voice profile: punchy, confident, no hype words
-- If riding a wave (trending topic matches session work), note it
-
-### 10. Knowledge Artifact Tracking (CRITICAL)
-
-**Purpose:** Ensure all knowledge artifacts created during the session are discoverable.
-
-```
-KNOWLEDGE ARTIFACTS
-───────────────────
-Scanning for artifacts created this session...
-
-[Scan these locations for new/modified files:]
-  - .datacore/specs/          (style guides, specifications)
-  - .datacore/learning/       (patterns, corrections)
-  - [space]/3-knowledge/      (zettels, insights, reference)
-  - [space]/notes/            (topic notes, literature)
-  - [space]/content/reports/  (analysis reports)
-
-Artifacts found (descriptions inferred from file frontmatter + first heading + session context):
-  ┌─────────────────────────────────────────────────────────────┐
-  │ TYPE          │ PATH                        │ DESCRIPTION   │
-  ├───────────────┼─────────────────────────────┼───────────────┤
-  │ Style Guide   │ .datacore/specs/X.md        │ X writing...  │
-  │ Zettel        │ 3-knowledge/zettel/Y.md     │ Concept Y     │
-  │ Report        │ content/reports/Z.md        │ Analysis of Z │
-  └─────────────────────────────────────────────────────────────┘
-```
-
-**Inference-first: no per-artifact prompt.** Descriptions are auto-applied to the journal artifact table and the monthly artifact index. The full table appears in §17 — if a description is wrong the user fixes it in §16.5 with `artifact <n> description: <new text>`.
-
-**What gets tracked:**
-
-| Artifact Type | Location | Discoverability |
-|---------------|----------|-----------------|
-| Style guides | `.datacore/specs/` | grep "style-guide" in type |
-| Specifications | `.datacore/specs/` | grep by topic |
-| Patterns | `.datacore/learning/` | patterns.md index |
-| Zettels | `3-knowledge/zettel/` | datacortex search |
-| Reports | `content/reports/` | date-prefixed, indexed |
-| Topic notes | `notes/` | wiki-links |
-
-**Artifact tracking actions:**
-
-1. **List in journal** - Add "Artifacts Created" section with full paths
-2. **Tag appropriately** - Ensure frontmatter has searchable tags
-3. **Cross-reference** - Link from related files
-4. **Index** - Add to datacortex if not auto-indexed
-
-**Journal artifact section format:**
-
-```markdown
-## Artifacts Created
-
-| File | Type | Purpose |
-|------|------|---------|
-| `0-personal/1-active/personal-dev/x-style-guide.md` | style-guide | X/Twitter voice for content generation |
-| `3-knowledge/zettel/new-concept.md` | zettel | Atomic concept about X |
-```
-
-**Why this matters:**
-- Prevents "I know I created this but can't find it" problem
-- Enables future sessions to discover past work
-- Makes knowledge artifacts part of the searchable corpus
-- Creates audit trail of what was produced
-
-**Artifact Index (REQUIRED):**
-
-In addition to listing artifacts in the journal, append each artifact to the monthly artifact index at `0-personal/notes/artifact-index-YYYY-MM.md`. This file is the cross-session lookup table for "when did I work on X and where is it?"
-
-```markdown
-# Artifact Index — YYYY-MM
-
-| Date | Session | Type | Artifact | Path |
-|------|---------|------|----------|------|
-| 03-18 | Voice Terminal | module | Working voice prototype | .datacore/modules/voice-terminal/lib/voice_terminal.py |
-| 03-18 | Voice Terminal | project-doc | Comprehensive product spec | 0-personal/notes/pages/datacore-voice-terminal.md |
-| 03-18 | Voice Terminal | 3d-model | Blender model with components | 0-personal/notes/pages/datacore-voice-terminal.blend |
-| 03-18 | Voice Terminal | render | 40+ product concept renders | 0-personal/notes/pages/datacore-voice-terminal-render-v*.png |
-| 03-17 | FDS X Campaign | strategy | Campaign strategy v6 | 3-fds/1-tracks/comms/campaigns/.../campaign-strategy-v6.md |
-```
-
-**Artifact index rules:**
-- One file per month: `artifact-index-YYYY-MM.md`
-- Location: `0-personal/notes/`
-- Append-only (never rewrite existing rows)
-- Type column uses: `module`, `project-doc`, `report`, `zettel`, `render`, `3d-model`, `script`, `strategy`, `spec`, `style-guide`, `config`, `presentation`
-- Path column is relative to `~/Data/`
-- Use glob patterns for multiple files (e.g., `*-v*.png`)
-- Session column matches the `## Session:` header in the journal
-
-### 11. Index Session to Database (DIP-0004)
-
-```
-INDEXING SESSION
-────────────────
-Updating knowledge database with session data...
-
-Session indexed:
-  - Goal: [session goal]
-  - Accomplishments: X
-  - Files modified: X
-  - Decisions: X
-
-[If index fails, warn and continue - data still in journal files]
-```
-
-**Run:**
-```bash
-python ~/.datacore/lib/journal_parser.py --sync --space personal
-```
-
-### 12. Kill Orphaned Dev Servers
-
-> Run silently. "Run silently" ≠ "skip." Execute the scan and kill. Report results in the consolidated report.
-
-**Automatically find and kill dev servers spawned by Claude sessions.**
-
-Dev servers (Vite, Bun, Next.js, etc.) are often started by Claude for preview/testing but not cleaned up. Left running, they accumulate across sessions and burn CPU via file watchers. This step runs automatically without prompting.
-
-**How to identify session-owned processes:**
-
-1. Get the current Claude process PID (the `claude` process for this session)
-2. Find all dev server processes system-wide
-3. Check ancestry — if a dev server's PPID chain traces back to ANY `claude` process (current or previous sessions where parent is now PID 1 / orphaned), it's a Claude-spawned server
-4. Orphaned dev servers (PPID=1) that match dev server patterns are always safe to kill — they lost their parent session
+### 8. Finalize — push, and index the journal
 
 ```bash
-# Find dev servers: vite, bun run, next dev, webpack, npm run dev
-ps -eo pid,ppid,etime,command | grep -E "vite|bun run (dev|server)|next dev|npm run dev|npm exec vite|webpack-dev-server" | grep -v grep
-
-# Orphaned ones (PPID=1) are from dead sessions — kill automatically
-# Current-session ones — kill automatically (session is ending)
-
-# ALSO: orphaned hook/CLI worker processes (2026-07-06 incident: 24 immortal
-# `plur hook-inject` orphans on a degraded network drove a 16GB machine to
-# 17.4GB swap — the old dev-server-only pattern looked right past them).
-# ANY node process with PPID=1 whose command is a hook or one-shot CLI worker
-# is a leak: hooks/workers should live seconds, not minutes.
-ps -eo pid,ppid,etime,command | awk '$2==1' | grep -E "plur hook-|hook-inject|hook-observe|@plur-ai/cli" | grep -v grep
-# Kill all matches. Additionally FLAG (don't kill) any ppid=1 node process
-# older than 1 hour that isn't a known MCP server — report it for review.
+python3 ~/Data/.datacore/lib/wrap_up_mechanics.py finalize
 ```
 
-```
-PROCESS CLEANUP
-───────────────
-Scanning for dev servers...
+**Session-scoped by default.** It commits and pushes ONLY the files this session
+touched, read from the archive's `files_modified` (main thread **and**
+subagents). Everything else dirty in the repo is left alone.
 
-[If found:]
-  Killed 3 orphaned dev servers:
-    PID 26939 (13h) — vite --host (megaphone-saas)
-    PID 32781 (2d)  — bun run server
-    PID 33001 (2d)  — vite (megaphone-websites)
+> **Why.** `./sync push` stages everything with `git add --ignore-removal .` and
+> commits it as `Sync: <date>`. Correct for a single-session day; wrong the
+> moment two sessions are open, because one session's wrap-up sweeps up the
+> other's half-finished work and pushes it. That was the reported complaint, and
+> it is a data-integrity problem, not a tidiness one — the other session never
+> chose to publish that state.
 
-[If none found:]
-  No dev servers running. ✓
-```
+Every session file lands in exactly one bucket, and **all four are reported**:
 
-**What to kill:**
-- `vite` / `next dev` / `webpack-dev-server`
-- `bun run dev` / `bun run server`
-- `npm run dev` / `npm exec vite`
-- Any `node` process running from a project's `node_modules/.bin/` (e.g., esbuild child processes)
-- **Orphaned (PPID=1) hook/CLI workers**: `plur hook-inject`, `plur hook-observe`, any `@plur-ai/cli` one-shot — these should live seconds; an orphaned one is a leak (see plur-ai/plur#504)
+| Bucket | Meaning |
+|---|---|
+| `pushes[].session_files_staged` | Committed and pushed |
+| `pushes[].left_for_other_sessions` | Dirty in the repo but not this session's — deliberately untouched |
+| `skipped_project_repos` | Under `*/2-projects/*` — code repos are **never** auto-committed (a 2026-08-09 auto-commit to `main` triggered an unasked-for production deploy) |
+| `unversioned` | Outside any repo, or invisible to git — `.claude/` is behind a symlink, launchd plists live in `~/Library`. **No push will ever carry these.** Say so in §10; this is how a hook config silently survives on one machine only. |
 
-**What to preserve:**
-- MCP server processes (datacore-mcp, exa-mcp-server, plur-mcp) — these belong to active Claude sessions (they have a live claude parent, NOT ppid=1)
-- Non-dev-server node processes with live parents
+Report the counts for all four in §10. "Nothing to push" and "I left 4 files
+behind" must never read the same.
 
-### 12.5. Archive Old Nightshift Reports
+**Guards it inherits from `./sync`, each bought with an incident:**
+- **Refuses to push from a non-default branch** unless `DATACORE_SYNC_ALLOW_BRANCH=1`. A warning alone let 610 commits pile up on a feature branch in 5-plur for two months — 52 zettels, every weekly content calendar since mid-June — pushed, but where nobody reads.
+- **A rejected commit never falls through to a push.** It reports `COMMIT REJECTED` instead of a run that looks clean.
+- **Names the push failure** rather than collapsing four causes into one message.
+- **Reports `preexisting_unpushed_commits`** — a push carries every earlier unpushed commit on the branch. That is git, not a choice, and pretending the push was fully scoped would be false.
 
-> Run the archival script. "Run silently" ≠ "skip." If the script is missing, report that explicitly in the consolidated report rather than silently dropping the step.
+**`--scope all`** restores the old behaviour (delegates to `./sync push`). Use it
+only when the user explicitly wants everything swept up.
 
-**Automatically archive nightshift reports older than 30 days.**
+**`--dry-run`** reports what would be committed without doing it.
 
-Nightshift execution reports accumulate in inbox directories. This step moves reports older than the retention period to structured monthly archives, keeping inboxes clean while preserving historical data.
+**It will not commit a project repo for you**, in either scope.
 
-```
-NIGHTSHIFT ARCHIVAL
-───────────────────
-Archiving old nightshift reports...
-
-[If reports found:]
-  Archived 15 reports from 0-personal/0-inbox → 4-archive/nightshift/2025-12/
-  Archived 8 reports from 1-datafund/0-inbox → 4-archive/nightshift/2025-12/
-  Total: 23 reports archived (>30 days old)
-
-[If none found:]
-  No old reports to archive. ✓
-```
-
-**Archive structure:**
-```
-[space]/4-archive/nightshift/
-├── 2025-11/  # November reports
-├── 2025-12/  # December reports
-└── 2026-01/  # January reports
-```
-
-**Retention policy:**
-- Execution logs: 30 days in inbox
-- Summary reports: 90 days in inbox (optional)
-- Archive location: `[space]/4-archive/nightshift/YYYY-MM/`
-
-**Configuration** (in `.datacore/settings.local.yaml`):
-```yaml
-nightshift:
-  archival:
-    enabled: true
-    retention_days: 30
-    summary_retention_days: 90
-```
-
-**Manual archival:**
-```bash
-# Archive all spaces
-python .datacore/lib/nightshift_archival.py --all-spaces
-
-# Archive specific space
-python .datacore/lib/nightshift_archival.py --space 0-personal
-
-# Preview without moving files
-python .datacore/lib/nightshift_archival.py --dry-run
-```
-
-### 13. Push Changes to Repos
-
-**Push ALL repos including subprojects within spaces.**
-
-
-```
-SAVING WORK
-───────────
-Checking for uncommitted changes...
-
-1. Spaces & Root (via ./sync push):
-   datacore (root).......... [3 files changed] → Pushed
-   0-personal............... [2 files changed] → Pushed (to nightshift server)
-   teamspace................ [No changes]
-   projectspace............. [1 file changed] → Pushed
-
-2. Subproject repos (manual check):
-   [Check git status in common subproject locations]
-   1-teamspace/2-projects/project-alpha... [1 commit ahead] → Pushing...
-   [Any other repos with unpushed commits]
-
-All work saved.
-```
-
-**Steps:**
-1. Run `./sync push` for spaces and root
-2. Check subproject repos for unpushed commits:
-   - `git -C 1-teamspace/2-projects/project-alpha status`
-   - Any other active project repos
-3. Push any repos that are ahead of origin
-
-**Commit message format:**
+**Commit message format** (when you do commit, for this repo's own changes):
 ```
 Session: [brief goal/topic]
 
 - [Key change 1]
 - [Key change 2]
-
-🤖 Generated with Claude Code
-
-Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 
-**If push fails:**
-```
-⚠ Push failed for [repo]. Will retry in /tomorrow.
-  Error: [error message]
-  Your changes are committed locally.
-```
+**If push fails:** report it in §10 with the error. Changes are committed
+locally; `/tomorrow` retries.
 
-### 14. Context Sync
 
-> Run the check. Even if nothing changed, run the verification command and record the result in the consolidated report ("no agent/command registry changes — context already in sync ✓"). Do not skip on the assumption that nothing changed.
+**Then index the session to the knowledge database (DIP-0004):**
 
-```
-[Check if agents/commands changed during session]
-[If changed: backup + update CLAUDE.md tables]
-[Log to journal if updates made]
-```
-
-### 15. AI Delegation Opportunities (inferred — no prompt)
-
-**Inference-first: scan the session for delegation candidates, surface them in §17 as suggestions. The user opts IN via §16.5 ("delegate task 1 and 3 tonight"). No tasks are auto-tagged `:AI:` here** — that's a heavier commitment because nightshift will actually execute. Surface, don't auto-execute.
-
-**What to look for** (delegation candidates):
-
-- **Research questions** the user voiced but didn't pursue: "I wonder if X..."
-- **Time-sensitive opportunities** mentioned but parked: just-shipped feature → social posts; market signal → research deep-dive; competitor news → competitive brief
-- **Repetitive maintenance** that's overdue per other GTD signals: "those 5 stale PRs need triage"
-- **Content drafts** mentioned: "I should write about Y"
-- **Outreach** that's been sitting: "I need to follow up with Z"
-
-**Report rendering** (§17):
-```
-DELEGATION OPPORTUNITIES (suggestions — opt in via §16.5):
-  1. Research: "x402 vs ERC-8004 — which agentic-payment standard wins?"
-     Why: session mentioned twice, no action taken
-     If approved: would be added with :AI:research: tag
-  2. Content: short post about today's [client]-space verification flow
-     Why: time-sensitive, build-in-public momentum
-     If approved: would be added with :AI:content: tag
-  3. ...
-```
-
-**§16.5 corrections:**
-- `delegate 1 and 3` → add those with appropriate `:AI:*:` tags
-- `delegate all` → add all suggestions
-- `delegate none` (default) → no AI tasks created
-- `delegate: <free text>` → add a user-composed AI task
-
-**Legacy prompt** (only when `wrap_up.inference_mode: off`):
-```
-Any quick tasks to delegate to AI? (brief, or Enter to skip)
-> [user input]
-```
-
-### 16. Completion Checklist (REQUIRED)
-
-**Before closing, verify all steps are done:**
-
-```
-WRAP-UP CHECKLIST
-─────────────────
-[ ] 1. Session summary displayed
-[ ] 2. Quick emotional check (optional - skipped or completed)
-[ ] 3. Continuation tasks created (if work incomplete)
-[ ] 4. Completed tasks marked DONE in next_actions.org
-[ ] 5. Session learnings captured (coordinators spawned)
-[ ] 6. Learning review completed (engram candidates reviewed/deferred)
-[ ] 7. GTD tasks extracted from session insights
-[ ] 8. Insight verification checklist — all insights in ≥1 layer
-[ ] 9. Session meta-analysis written to personal journal
-[ ] 10. Knowledge artifacts tracked:
-       [ ] New files listed with paths and purposes
-       [ ] Artifacts have proper frontmatter/tags
-       [ ] Artifacts listed in journal entry
-[ ] 11. Journals updated:
-       [ ] Personal (0-personal/journal/) - ALWAYS (even in focus mode — never skip)
-       [ ] Team (1-teamspace/journal/) - if team work or focus mode active
-       [ ] Project (2-projectspace/journal/) - if project work
-       [ ] Journal includes "Artifacts Created" section
-[ ] 12. Orphaned dev servers killed
-[ ] 12.5. Old nightshift reports archived (>30 days)
-[ ] 13. All repos pushed:
-       [ ] Root & spaces (./sync push)
-       [ ] Subproject repos (project-alpha, etc.)
-[ ] 14. Context sync completed
-[ ] 15. AI delegation captured (if any)
-
-Note: Space journals only need updating if session involved that space.
-      It's OK to skip a space journal if no relevant work was done.
-```
-
-**Verification commands:**
 ```bash
-# Check all repos are pushed
-git -C ~/Data status --short
-git -C ~/Data/1-teamspace/2-projects/project-alpha log --oneline origin/main..HEAD
-
-# Check journals exist (personal is required, spaces are optional)
-ls -la ~/Data/0-personal/journal/$(date +%Y-%m-%d).md
-ls -la ~/Data/1-teamspace/journal/$(date +%Y-%m-%d).md 2>/dev/null
-ls -la ~/Data/2-projectspace/journal/$(date +%Y-%m-%d).md 2>/dev/null
+python3 ~/Data/.datacore/lib/journal_parser.py --sync --space personal
 ```
 
-### 16.5. Inference Safety Boundaries (mid-flow prompts allowed ONLY here)
+> This was §11. Its command read `~/.datacore/lib/journal_parser.py` — a path
+> that does not exist; the file lives under `~/Data/.datacore/lib/`. Paired
+> with its own "if index fails, warn and continue", the step could not have
+> worked and was built not to say so. Corrected above. If it fails now, report
+> the error in §10 rather than swallowing it — the journal files remain the
+> source of truth, but a silently stale index is one you will still trust.
 
-These three categories of action are NOT auto-inferred. If the agent's inference logic during any prior step would trigger one of these, the agent MUST surface a prompt before proceeding. This is the only sanctioned mid-flow interruption in inference-first mode.
+### 9. Audit — asserted, not eyeballed
 
-| Category | Examples | Action |
-|---|---|---|
-| **Destructive git** | force-push, `--force-with-lease` to protected branch, `git reset --hard` to discard committed work | AskUserQuestion: explicit Y/N before executing |
-| **External communication** | `:AI:send:` task that fires real email/post tonight, posting to social media before review, sending Telegram/WhatsApp | AskUserQuestion: confirm send target + content |
-| **Credential decisions** | rotating a token, changing OAuth scopes, prompting for new auth on a service mid-wrap-up | AskUserQuestion: explicit confirmation |
+```bash
+python3 ~/Data/.datacore/lib/wrap_up_mechanics.py audit
+```
 
-These are the *only* prompts allowed between §2 (pulse) and §17.5 (feedback gate). If the agent finds itself about to add a fourth prompt category here, it's wrong — the right answer is "infer, apply, surface in §17, let user veto in §17.5 feedback gate" instead.
+Returns `checks[]`, `passed`, `total`, `failed[]`. It asserts, against the filesystem and git, that:
 
-### 17. Close — Consolidated Session Report (MANDATORY, NEVER SKIP)
+| Check | Passes when |
+|---|---|
+| personal journal written | `0-personal/journal/<today>.md` (or `notes/journals/`) exists |
+| space journals | reports which spaces got one — informational, never a failure |
+| session archived | this session has a `meta.json` under the archive — i.e. the learning sweep will actually see it |
+| all repos pushed | no repo has unpushed commits |
+| no uncommitted work | no repo is dirty |
+| context in sync | agents/commands/registry unchanged, or the rebuild was run |
+
+**This replaces the old tick-box list.** A checklist the model fills in about its own behaviour tests nothing: 17 spec steps, 9 tasks created, 6 silently skipped (2026-05-29) happened *with* the checklist present. These checks read the disk.
+
+**A failing check is reported, not hidden.** Put every entry of `failed[]` in the §10 report verbatim. If the personal journal is missing, that is the headline of the report, not a footnote.
+
+### 10. Consolidated Report — the point of the command
 
 **This step is the ENTIRE POINT of /wrap-up for the user.** Everything before this is processing. This is the output. If you skip this step, the user gets nothing usable — they have to scroll through hundreds of lines of tool calls and agent output to piece together what happened. That is unacceptable.
 
@@ -1286,13 +1014,15 @@ Run this command to read the current session's transcript and produce
 exact counts (no estimation, no vibes):
 
 ```bash
-python3 ~/Data/.datacore/lib/session_token_count.py --json
+python3 ~/Data/.datacore/lib/wrap_up_mechanics.py meta
 ```
 
-The output gives you `input_tokens` (uncached), `cache_creation_input_tokens`
-(cached, billed at ~125%), `cache_read_input_tokens` (cache hits, billed
-at ~10%), `output_tokens`, and a `total_billable_estimate` that applies
-the cache multipliers.
+The output gives you `output_tokens`, `subagent_output_tokens` and
+`billable_tokens` (uncached input + cache writes + output), all read from this
+session's archived transcript. `session_token_count.py` still exists and reads
+the live transcript directly if you need the raw cache-read breakdown, but
+`meta` is the one to use here — it reads the same archive the sweep does, so
+the two can never disagree about what the session cost.
 
 Use the `total_billable_estimate` field in the Main conversation row.
 Also report the breakdown beneath the table so the user can see how much
@@ -1378,75 +1108,169 @@ After displaying the consolidated report to the user, **write a condensed versio
 - This is the user's "what did I produce today" receipt
 
 **Token Cost guidelines:**
-- Report token usage from all background agents spawned during wrap-up (journal-coordinator, session-learning-coordinator, and any others). Each agent's `<usage>` block in the task notification contains `total_tokens`.
-- Estimate main conversation tokens for the wrap-up portion (~tool calls from session_end through the consolidated report). This is approximate — state it as "~NK".
-- Sum subagent tokens (precise) + main conversation estimate for a session total.
-- This gives the user visibility into the cost of the wrap-up process itself.
+- Take every figure from `wrap_up_mechanics.py meta`. Do not estimate any of them — the last spec that said "state it as ~NK" produced a number wrong by 5000x (ENG-2026-0505-029), and `meta` counts the transcript.
+- `output_tokens` is the main thread; `subagent_output_tokens` covers every agent spawned this session, wrap-up included. No summing by hand.
+- This gives the user visibility into the cost of the wrap-up process itself. For the cost across many sessions, `analyze_wrapup_cost.py` reports medians and the wrap-up's share of each session.
 
-### 17.5. Feedback Gate (single bulk-correction prompt — normal mode only)
 
-**The entire point of inference-first.** After §17 outputs the consolidated report, the agent surfaces ONE final prompt asking for bulk corrections. The user can either press Enter to accept everything as-is, or type a free-text instruction containing any number of corrections, which the agent then parses and applies in a single pass.
+#### 10a. Open with the session summary
 
-**Skip the gate when:**
-- mode = `fast`
-- `wrap_up.feedback_gate: false` in settings
-- `wrap_up.inference_mode: off` (legacy mode never hit §17.5)
+The summary is this report's first section, not a step at the top of the run.
+Delivered first it scrolls away under a hundred tool calls before anyone reads
+it; delivered here it is the first thing seen once the work is done.
 
-**Prompt format:**
+
+> Run silently — no user prompt. Output the summary block below. Do not skip on the grounds that it is "automatic."
 
 ```
-═══ FEEDBACK ═══
+═══════════════════════════════════════════════════
+SESSION WRAP-UP
+═══════════════════════════════════════════════════
 
-Inferred actions applied (see §17 above for full report):
-  - Pulse: {score}
-  - Continuation: {none | task ID}
-  - DONE auto-marked: N high-confidence | M suggested for review
-  - GTD extracted: N tasks (tag :wrap_up_extracted:)
-  - Engrams: N candidates queued for /today daily-review
-  - Artifacts: N tracked in index
-  - Delegation: N opportunities surfaced (none auto-added)
+Session started: [HH:MM] (infer from first user message)
+Goal: [Inferred from conversation start or ask user]
 
-Anything to change? (Enter to accept all, or bulk instructions)
->
+Work completed:
+  - [List key accomplishments from session]
+  - [Files created/modified]
+  - [Decisions made]
+
+───────────────────────────────────────────────────
 ```
 
-**Vocabulary the agent must parse** (case-insensitive, comma-separated, line-separated, or natural language — all accepted):
+**Note:** Record the session start time here (from first user message). It's needed at close for the duration calculation.
 
-| Pattern | Action |
-|---|---|
-| `drop task <n>` / `remove task <n>` | Delete extracted task n from next_actions.org |
-| `change task <n> priority to <A/B/C>` | Update priority cookie |
-| `change task <n> tag add/remove <tag>` | Tag mutation |
-| `move task <n> to <section>` | Re-route within next_actions.org |
-| `add task: <text>` | Create new task (same wrap_up_extracted batch) |
-| `confirm DONE <n>` / `confirm suggested` | Apply DONE to medium-confidence candidates |
-| `undo DONE <n>` / `undo done org-XXX` | Revert auto-marked DONE |
-| `delegate <n>` / `delegate <n> and <m>` / `delegate all` | Add suggested delegation candidates as :AI:*: tasks |
-| `delegate: <text>` | Add user-composed AI task |
-| `drop engram candidate <n>` | Remove from /daily-review queue |
-| `review engrams now` | Trigger /daily-review skill after wrap-up closes |
-| `artifact <n> description: <text>` | Overwrite inferred artifact description |
-| `add insight: <text>` | Append to space's patterns.md (agent picks the right space) |
-| `drop continuation` / `continuation is done` | Delete the continuation task that was auto-created |
-| `note for tomorrow: <text>` | Append to coach-pending.md for /tomorrow processing |
 
-The agent processes ALL parsed instructions in a single batch, then prints a one-line confirmation per applied edit:
+#### 10b. Artifacts
+
+Describe what `preflight.artifacts.knowledge_docs` found — type, path, one line
+of purpose — then append them to the journal's "Artifacts Created" section and
+the monthly index. Preflight enumerated them already; only the descriptions
+need judgement.
+
+
+**Purpose:** Ensure all knowledge artifacts created during the session are discoverable.
+
+**Do not re-scan the filesystem.** Step A's `artifacts` field already holds `created`, `modified` and `knowledge_docs` for this session, read from git rather than mtime (mtime catches every cache write; the point is knowledge artifacts, not churn). Your job here is to *describe* what it found, which needs judgement — enumerating it does not.
 
 ```
-Applied:
-  ✓ Dropped task 3 (org-YYYY...)
-  ✓ Task 2 → priority A
-  ✓ Added 1 delegation task: org-YYYY...
-  ✓ Dropped engram candidate 4
+KNOWLEDGE ARTIFACTS
+───────────────────
+From preflight `artifacts.knowledge_docs`:
 
-Close confirmed.
+Artifacts found (descriptions inferred from file frontmatter + first heading + session context):
+  ┌─────────────────────────────────────────────────────────────┐
+  │ TYPE          │ PATH                        │ DESCRIPTION   │
+  ├───────────────┼─────────────────────────────┼───────────────┤
+  │ Style Guide   │ .datacore/specs/X.md        │ X writing...  │
+  │ Zettel        │ 3-knowledge/zettel/Y.md     │ Concept Y     │
+  │ Report        │ content/reports/Z.md        │ Analysis of Z │
+  └─────────────────────────────────────────────────────────────┘
 ```
 
-**If user types nothing parseable** (e.g., raw question or vague comment), the agent treats it as a `note for tomorrow:` append rather than blocking on clarification. The point is to NOT re-prompt — capture the input, route it, close.
+**Inference-first: no per-artifact prompt.** Descriptions are auto-applied to the journal artifact table and the monthly artifact index. The full table appears in §10 — if a description is wrong the user fixes it in §0e with `artifact <n> description: <new text>`.
 
-**Audit row:** §18 records `applied-from-feedback (N corrections)` when corrections were applied, or `run ✓ — no corrections` when user pressed Enter.
+**What gets tracked:**
 
-### 18. Wrap-up Checklist Self-Audit (MANDATORY, HOOK-ENFORCED)
+| Artifact Type | Location | Discoverability |
+|---------------|----------|-----------------|
+| Style guides | `.datacore/specs/` | grep "style-guide" in type |
+| Specifications | `.datacore/specs/` | grep by topic |
+| Patterns | `.datacore/learning/` | patterns.md index |
+| Zettels | `3-knowledge/zettel/` | datacortex search |
+| Reports | `content/reports/` | date-prefixed, indexed |
+| Topic notes | `notes/` | wiki-links |
+
+**Artifact tracking actions:**
+
+1. **List in journal** - Add "Artifacts Created" section with full paths
+2. **Tag appropriately** - Ensure frontmatter has searchable tags
+3. **Cross-reference** - Link from related files
+4. **Index** - Add to datacortex if not auto-indexed
+
+**Journal artifact section format:**
+
+```markdown
+## Artifacts Created
+
+| File | Type | Purpose |
+|------|------|---------|
+| `0-personal/1-active/personal-dev/x-style-guide.md` | style-guide | X/Twitter voice for content generation |
+| `3-knowledge/zettel/new-concept.md` | zettel | Atomic concept about X |
+```
+
+**Why this matters:**
+- Prevents "I know I created this but can't find it" problem
+- Enables future sessions to discover past work
+- Makes knowledge artifacts part of the searchable corpus
+- Creates audit trail of what was produced
+
+**Artifact Index (REQUIRED):**
+
+In addition to listing artifacts in the journal, append each artifact to the monthly artifact index at `0-personal/notes/artifact-index-YYYY-MM.md`. This file is the cross-session lookup table for "when did I work on X and where is it?"
+
+```markdown
+# Artifact Index — YYYY-MM
+
+| Date | Session | Type | Artifact | Path |
+|------|---------|------|----------|------|
+| 03-18 | Voice Terminal | module | Working voice prototype | .datacore/modules/voice-terminal/lib/voice_terminal.py |
+| 03-18 | Voice Terminal | project-doc | Comprehensive product spec | 0-personal/notes/pages/datacore-voice-terminal.md |
+| 03-18 | Voice Terminal | 3d-model | Blender model with components | 0-personal/notes/pages/datacore-voice-terminal.blend |
+| 03-18 | Voice Terminal | render | 40+ product concept renders | 0-personal/notes/pages/datacore-voice-terminal-render-v*.png |
+| 03-17 | FDS X Campaign | strategy | Campaign strategy v6 | 3-fds/1-tracks/comms/campaigns/.../campaign-strategy-v6.md |
+```
+
+**Artifact index rules:**
+- One file per month: `artifact-index-YYYY-MM.md`
+- Location: `0-personal/notes/`
+- Append-only (never rewrite existing rows)
+- Type column uses: `module`, `project-doc`, `report`, `zettel`, `render`, `3d-model`, `script`, `strategy`, `spec`, `style-guide`, `config`, `presentation`
+- Path column is relative to `~/Data/`
+- Use glob patterns for multiple files (e.g., `*-v*.png`)
+- Session column matches the `## Session:` header in the journal
+
+
+#### 10c. Coverage note (replaces the old §8 insight-verification table)
+
+One line, not a table: `Coverage: N insights — all in journal, M as tasks, K as
+documents.` The old four-column checklist had a `Learning` column that is
+unknowable at wrap-up time now (engrams do not exist until the 05:20 sweep),
+and its other three columns re-verified §3, §5 and §6 one step after doing
+them. Flag only genuine gaps.
+
+### 11. Postable Moment Detection (Build in Public)
+
+**Purpose:** Flag session moments worth sharing on X (@jssr). Show don't tell - short demos, absorptions, before/afters, surprising results.
+
+Scan the session for:
+- **Framework absorptions** - read something, integrated it, shipped it (with timing)
+- **Before/after moments** - friction that disappeared, workflow that clicked
+- **Surprising metrics** - unexpected numbers, performance gains
+- **Cool demos** - something that just works and looks impressive
+- **Contrarian insights** - something you believe that others don't
+
+```
+POSTABLE MOMENTS
+────────────────
+[If any found:]
+  Postable moment detected: [short description]
+  Format: [screenshot / screen recording / text-only]
+  Draft tweet? [suggest one, short and punchy, no hype words]
+
+[If none:]
+  No standout moments this session. That's fine.
+```
+
+**Guidelines:**
+- Max 1-2 suggestions per session (don't spam)
+- Tweet should stand alone without context
+- Prefer visual proof (screenshot/recording) over text claims
+- No em dashes, use hyphens
+- Match voice profile: punchy, confident, no hype words
+- If riding a wave (trending topic matches session work), note it
+
+### 12. Wrap-up Self-Audit (MANDATORY, HOOK-ENFORCED)
 
 **This step is the structural defense against silent skipping.** Before plur_session_end can succeed, today's personal journal MUST contain a `## Wrap-up Checklist Audit` section listing every spec step and its actual outcome. The PreToolUse hook `wrap_up_checklist_check.py` enforces this — it reads the journal and refuses to allow session_end if the section is missing.
 
@@ -1455,35 +1279,33 @@ Close confirmed.
 ```markdown
 ## Wrap-up Checklist Audit
 
-| Step | Title                                         | Status |
-|------|-----------------------------------------------|--------|
-|  1   | Session summary                                | run ✓ |
-|  2   | Pulse                                          | run ✓ (score 8, no note) |
-|  3   | Continuation tasks                             | inferred-and-reported (none — work complete) |
-|  4   | Mark completed tasks                           | inferred-and-reported (1 auto-marked DONE, 2 surfaced for review) |
-|  5   | Journal + learning coordinators                | run ✓ — 3 journals, 14 engrams |
-|  6   | Learning review                                | inferred-and-reported (8 candidates queued for /today, 0 contradictions) |
-|  7   | GTD task extraction                            | inferred-and-reported (4 added with :wrap_up_extracted:) |
-|  8   | Insight verification                           | run ✓ — coverage table in §6 of report |
-|  9   | Session meta-analysis                          | run ✓ — appended to today's personal journal |
-|  10  | Knowledge artifact tracking                    | inferred-and-reported (13 artifacts, descriptions auto-trusted) |
-|  11  | Index session to journal DB                    | run ✓ — journal_parser.py --sync |
-|  12  | Kill orphaned dev servers                      | run ✓ — killed PID 50706 (http.server 8099) |
-| 12.5 | Archive nightshift reports                     | run ✓ — 0 archived (all within retention) |
-|  13  | Push all repos                                 | run ✓ — ./sync push + smk2026 plur-branding |
-|  14  | Context sync                                   | run ✓ — no registry changes |
-|  15  | AI delegation                                  | inferred-and-reported (3 opportunities surfaced, awaiting opt-in) |
-| 16.5 | Safety boundaries                              | not-applicable (no destructive/external/credential action triggered) |
-|  17  | Consolidated report + journal persist + social | run ✓ — report output, journal written, 3 social drafts |
-| 17.5 | Feedback gate                                  | applied-from-feedback (2 corrections: dropped task 3, delegated 1 AI task) |
-|  18  | This audit                                     | run ✓ |
+| Step | Title                          | Status |
+|------|--------------------------------|--------|
+|  1   | Pulse + notes                   | not-answered (asked 21:40, run continued) |
+|  2   | Preflight                       | run ✓ — killed 1, flagged 1, session archived, 13 artifacts |
+|  3   | Continuation tasks              | inferred-and-reported (none — work complete) |
+|  4   | Mark completed tasks            | inferred-and-reported (1 auto-marked DONE, 2 surfaced) |
+|  5   | Journals                        | run ✓ — 3 journals; session queued for 05:20 sweep |
+|  6   | Tasks & delegation              | inferred-and-reported (4 tasks + 3 delegations proposed, 0 accepted — §1 unanswered) |
+|  7   | Session meta-analysis           | run ✓ — counters from `mechanics meta`, appended to journal |
+|  8   | Finalize (push + journal index) | run ✓ — ./sync push + 1 subproject; 1 dirty repo reported |
+|  9   | Audit                           | run ✓ — `mechanics audit` 6/6 passed |
+|  10  | Consolidated report             | run ✓ — report output, journal written |
+|  11  | Postable moments                | inferred-and-reported (1 draft surfaced) |
+|  12  | This audit                      | run ✓ |
 
 Notes (use only when status alone isn't self-explanatory):
-- Step 2: user picked 8 (good) — pulse complete, no follow-up needed
-- Step 3: no continuation tasks needed (work complete) — see §17 report
-- Step 15: opportunities surfaced; user opted in to 1 via §17.5
+- Step 1: asked at 21:40, never answered — run completed as designed, nothing blocked
+- Step 3: no continuation tasks needed (work complete) — see §10 report
+- Step 6: proposals stand; nothing created because §1 went unanswered
 
-(Be explicit. "I felt the user was done" is NOT a valid reason — that's a self-serving compression, see /wrap-up §0c. Likewise "I figured we could infer it" is not a §15 reason — that's the *point*; the reason must be specific.)
+Old steps 8, 10, 11, 12, 12.5, 13, 14, 16, 17.5 no longer have rows: §8 became a
+coverage line, §6-learning moved to the nightly sweep, and the rest are
+assertions inside `mechanics audit`, whose `passed/total` is reported on the
+Step 9 row. A step that is machine-checked does not also need the model to
+vouch for it.
+
+(Be explicit. "I felt the user was done" is NOT a valid reason — that's a self-serving compression, see /wrap-up §0c. Likewise "I figured we could infer it" is not a §6b reason — that's the *point*; the reason must be specific.)
 ```
 
 **Statuses allowed:**
@@ -1491,8 +1313,8 @@ Notes (use only when status alone isn't self-explanatory):
 - `skipped-by-user` — user explicitly declined (e.g. via AskUserQuestion answer)
 - `skipped-by-mode-fast` — step was suppressed by `/wrap-up fast` (e.g. pulse, feedback gate)
 - `not-applicable (REASON)` — concrete factual reason (e.g. "no continuation tasks because work is complete")
-- `inferred-and-reported (DESCRIPTION)` — inference-first model: agent made decisions, applied them, surfaced in §17 report. Example: `inferred-and-reported (1 task auto-marked DONE, 2 surfaced for review)`
-- `applied-from-feedback (N CORRECTIONS)` — §17.5 feedback gate received corrections and applied them. Example: `applied-from-feedback (dropped 1 task, bumped 1 priority)`
+- `inferred-and-reported (DESCRIPTION)` — inference-first model: agent made decisions, applied them, surfaced in §10 report. Example: `inferred-and-reported (1 task auto-marked DONE, 2 surfaced for review)`
+- `applied-from-feedback (N CORRECTIONS)` — §1 pulse received corrections and applied them. Example: `applied-from-feedback (dropped 1 task, bumped 1 priority)`
 
 **Statuses NOT allowed:**
 - "skipped" without reason
@@ -1554,38 +1376,31 @@ Run `/tomorrow` once at end of day.
 
 ## Step Status Reference
 
-**All 19 steps are REQUIRED to run** (1-18 plus §16.5 safety, §17.5 feedback). This table describes whether each step prompts the user or runs silently — both categories must execute.
+**All 12 steps are REQUIRED to run.** This table says whether a step prompts or runs silently — both categories execute.
 
 | # | Step | Normal mode | Fast mode |
 |---|------|------|------|
-| 1   | Session summary | silent | silent |
-| 2   | Pulse (1-10) | **1 prompt** (only mid-flow prompt in normal) | skipped-by-mode-fast |
-| 3   | Continuation tasks | inferred-and-reported | inferred-and-reported |
-| 4   | Mark completed tasks | inferred (high-conf auto-mark, med-conf surfaced) | same |
-| 5   | Journal + learning coordinators | silent (background subagents) | silent |
-| 6   | Learning review | inferred (defer to /today, listed in report) | same |
-| 7   | GTD task extraction | inferred (auto-add with :wrap_up_extracted: tag) | same |
-| 8   | Insight verification | silent (gaps flagged in report) | silent |
-| 9   | Session meta-analysis | silent (written to personal journal) | silent |
-| 10  | Artifact tracking | inferred (auto-trust descriptions, listed in report) | same |
-| 11  | Index session to DB | silent | silent |
-| 12  | Kill orphaned dev servers | silent | silent |
-| 12.5 | Archive nightshift reports | silent | silent |
-| 13  | Push all repos | silent | silent |
-| 14  | Context sync | silent | silent |
-| 15  | AI delegation | inferred (opportunities surfaced — opt-in via §17.5) | same (no opt-in path) |
-| 16  | Completion checklist | silent | silent |
-| 16.5 | Safety boundaries | **prompt iff triggered** (destructive git / external comm / credential) | same |
-| 17  | Consolidated report + persist | silent (writes), then surfaces report to user | same |
-| 17.5 | Feedback gate (bulk corrections) | **1 prompt** (Enter to accept) | skipped-by-mode-fast |
-| 18  | Wrap-up checklist self-audit | silent (writes audit section to journal — HOOK-ENFORCED) | silent |
+| 1  | Pulse + notes | **asks once, never waits** | skipped-by-mode-fast |
+| 2  | Preflight (`mechanics preflight`) | silent — one script call | same |
+| 3  | Continuation tasks | inferred-and-reported | same |
+| 4  | Mark completed tasks | inferred (high-conf auto-mark, med-conf surfaced) | same |
+| 5  | Journals (`journal-coordinator`) | silent (background subagent) | silent |
+| 6  | Tasks & delegation | proposed in §10; created only if §1 accepts | proposed only — nothing created |
+| 7  | Session meta-analysis (`mechanics meta`) | silent (written to personal journal) | silent |
+| 8  | Finalize: push + journal index (`mechanics finalize`) | silent | silent |
+| 9  | Audit (`mechanics audit`) | silent | silent |
+| 10 | Consolidated report (opens with session summary) | **the output** | same |
+| 11 | Postable moments | inferred (drafts surfaced) | same |
+| 12 | Self-audit to journal | silent (HOOK-ENFORCED) | silent |
 
 **Prompt count totals:**
-- Normal mode: **2 prompts** (pulse at §2, feedback at §17.5) + §16.5 only-if-triggered safety
-- Fast mode: **0 prompts** + §16.5 only-if-triggered safety
-- Legacy mode (`inference_mode: off`): 8 prompts (the original spec)
+- Normal mode: **1** — §1, non-blocking. Plus §0e safety prompts only if a destructive / external / credential action is triggered.
+- Fast mode: **0** + §0e.
+- Legacy mode (`inference_mode: off`): 8 prompts (the original spec).
 
-**"silent" ≠ "skip."** Every silent step still executes. The user just doesn't get a prompt. **"inferred" ≠ "skip" either** — the agent does the work, applies the decision, lists the result in §17. If the agent reads "inferred" as permission not to run, see §0c.
+**"silent" ≠ "skip."** Every silent step still executes. **"inferred" ≠ "skip" either** — the agent does the work, applies the decision, lists it in §10. If the agent reads "inferred" as permission not to run, see §0c.
+
+**An unanswered §1 is a normal outcome, and nothing may block on it.** If you find yourself waiting for the pulse, or holding a step until it arrives, that is precisely the failure §1 was reordered to remove: a wrap-up that stalls half-done because the user stepped away.
 
 ## Related
 
@@ -1595,7 +1410,6 @@ Run `/tomorrow` once at end of day.
 - `/gtd-daily-start` - Morning planning
 - `journal-coordinator` agent - Orchestrates per-space journal entries
 - `journal-entry-writer` agent - Writes single space journal entry
-- `session-learning-coordinator` agent - Orchestrates per-space learning extraction
-- `session-learning` agent - Extracts learnings for single space
+- `session_learning_sweep.py` - Nightly batch learning (replaces the per-session `session-learning-coordinator` / `learning-classifier` pair)
 - `coach` agent - REBT coaching
 - `context-maintainer` agent
