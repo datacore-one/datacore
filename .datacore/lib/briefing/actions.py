@@ -158,6 +158,13 @@ def materialize(
         check = item.get("check")
         if check:
             payload["check"] = check
+        # `assignee` routes the item to one actor's dispatcher and makes every
+        # other dispatcher decline it outright (see ledger_claim.py) instead of
+        # racing for the same unclaimed item. Forwarded the same way as
+        # approval_ref/check: present only when the caller supplied it.
+        assignee = item.get("assignee")
+        if assignee:
+            payload["assignee"] = assignee
 
         try:
             event = guarded_append(log, "item.create", payload, policy=policy, space_dir=space_dir)
