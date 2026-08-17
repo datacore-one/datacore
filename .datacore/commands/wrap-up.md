@@ -338,6 +338,14 @@ Returns one JSON object. **Read it once and carry it through the whole run** —
 
 **`--dry-run`** previews the process kills without executing them. Use it if the user asks what would be killed.
 
+> **Always call the mechanics with an absolute path.** The Bash working directory
+> persists across tool calls, so any earlier `cd <space> && git …` leaves the
+> shell there and a later `python3 .datacore/lib/wrap_up_mechanics.py` resolves
+> against `<space>/.datacore/lib/` and dies with `No such file or directory`.
+> This happened twice inside a single run on 2026-08-17. Use
+> `python3 ~/Data/.datacore/lib/…` in every step, and prefer `git -C <path>`
+> over `cd <path> && git`.
+
 #### 2a. What preflight already did (old §10, §12, §12.5, §14)
 
 These three ran in Step A. **Do not re-run them by hand.** Report what preflight
