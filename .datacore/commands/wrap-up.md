@@ -426,12 +426,12 @@ Suggested DONE (medium confidence — confirm in §0e):
 Many sessions start with ad-hoc work (user dives into a task without a pre-existing
 org entry). If Step 4 finds **no matching task** for the session's primary work:
 
-1. **Create a retroactive task** in `next_actions.org` under the appropriate focus area:
-   - Heading: session goal (from Step 1 summary)
-   - State: DONE
+1. **Create a retroactive task in `inbox.org`** — NOT `next_actions.org`. See
+   "Everything this command writes goes to inbox.org" below.
+   - Heading: session goal (from §10a summary), state `DONE`
    - Tags: inferred from session context
-   - Properties: CREATED (session start time), EFFORT (estimated from session duration)
-   - CLOSED: session end time
+   - Properties: the full positioning block (below), plus `CREATED` (session
+     start), `EFFORT` (from session duration), `CLOSED` (session end)
 
 2. **Add a CLOCK entry** with actual session duration:
    ```
@@ -444,35 +444,73 @@ org entry). If Step 4 finds **no matching task** for the session's primary work:
 3. **Log it transparently:**
    ```
    No existing task found for this session's work.
-   Created retroactive task: "Redesign /today daily briefing spec"
-     State: DONE | Duration: 2:30 | Focus area: /Datacore
+   Created retroactive task in inbox.org: "Redesign /today daily briefing spec"
+     State: DONE | Duration: 2:30 | Routes to: next_actions.org / Datacore
    ```
 
 **Why this matters:** Without retroactive task creation, ad-hoc sessions are invisible
 to productivity tracking. The daily score in `/tomorrow` needs completed task data.
 Journal entries capture WHAT was done, but org tasks capture HOW MUCH and WHERE,
-enabling trend analysis over time.
+enabling trend analysis over time. Landing them in inbox.org does not weaken that —
+the CLOCK and CLOSED data is on the entry from the moment it is written, and
+`/process-inbox` routes it without re-deriving anything.
 
-**Implementation:**
-```python
-from org_workspace import OrgWorkspace, Query
-from org_workspace.log import add_clock_entry
+**Implementation:** write to `inbox.org` via org-workspace, same as any capture.
+Do NOT `ws.load(next_actions_path)` — that file is on its way to being generated.
 
-ws = OrgWorkspace()
-ws.load(next_actions_path)
+---
 
-# Create the retroactive task
-node = ws.create_node(
-    file=next_actions_path,
-    heading=session_goal,
-    state="DONE",
-    tags=inferred_tags,
-    EFFORT=estimated_effort,
-)
-ws.set_closed(node, session_end_time)
-add_clock_entry(node.node, session_start_time, session_end_time)
-ws.save()
+### Everything this command writes goes to inbox.org
+
+**Applies to §3 continuations, §4 retroactive tasks, §6 extracted tasks, §6b
+delegations, and the §7 DIP-gap TODO. There are no exceptions.**
+
+`inbox.org` is the single capture point (DIP-0009), and it is the **only org file
+DIP-0043 exempts from projection in every phase**. `next_actions.org` becomes
+generated and `chmod 444` the moment a space flips to Phase 1, and the projector's
+guard will refuse writes to it. A command that writes there today is a command
+that breaks on flip day, silently, per space, at different times.
+
+Writing only to inbox.org means this command is already correct after the switch.
+That is the point: **prepare for ledger-first now, while it costs one edit.**
+
+**Positioning is mandatory.** Capture without routing intent just moves the work to
+whoever processes the inbox. Every entry this command creates carries:
+
+```org
+** TODO [#B] Task description                              :tag1:tag2:
+:PROPERTIES:
+:CREATED:      [YYYY-MM-DD Day]
+:ID:           org-YYYYMMDD-<slug>
+:SOURCE:       wrap-up
+:TARGET_FILE:  0-personal/org/next_actions.org
+:TARGET_SPACE: 0-personal
+:TARGET_SECTION: Engineering
+:ASSIGNEE:     {{USER}}
+:EFFORT:       1:00
+:KEY_FILES:    path/to/file.md | path/to/another.py
+:END:
+:CONTEXT: Why this task exists, what session insight prompted it.
 ```
+
+| Property | Why it is not optional |
+|---|---|
+| `TARGET_FILE` | Which file `/process-inbox` should route to. Under Phase 1 this becomes "which ledger stream", and the mapping already exists. |
+| `TARGET_SPACE` | Which space. The agent knows it now; the inbox processor would have to guess. |
+| `TARGET_SECTION` | Operations / Product / Engineering / Growth / Research / Communications. Preserves the routing decision §6 already made. |
+| `SOURCE: wrap-up` | Makes the whole cohort greppable, the way `:wrap_up_extracted:` did — and survives re-tagging. |
+
+> **Org tags cannot contain hyphens.** `:wrap-up:` does not parse as a tag — the
+> whole `:a:b:` string stays inside the heading and org-workspace reports the
+> file's inherited FILETAGS instead, so the entry looks tagged and is not. Use
+> `wrap_up`, `ledger_first`, `session_close`. Verify after writing with
+> `org_workspace_adapter.py`, never by eye: a broken tag string is invisible in
+> the raw file and only shows up when a query fails to find the task months later.
+
+**Retroactive DONE entries carry the same block**, plus `CLOSED` and the `LOGBOOK`
+CLOCK. A DONE item in the inbox looks unusual for GTD; it is deliberate. The
+alternative is writing to a file that is about to become read-only, and a DONE
+entry costs the inbox processor one archive move.
 
 ### 5. Journals (Coordinator Pattern)
 
@@ -549,7 +587,9 @@ Session archived: .datacore/state/sessions/archive/YYYY-MM-DD/<id>/ ✓
 
 **Extract actionable tasks from conversation context (runs parallel to step 5):**
 
-Review the session's insights, decisions, and next steps. Identify items that should become tasks in `next_actions.org` — things that aren't continuation of current work (those go in step 3) but are *new* actionable items that emerged from the session.
+Review the session's insights, decisions, and next steps. Identify items that should become tasks — things that aren't continuation of current work (those go in step 3) but are *new* actionable items that emerged from the session.
+
+**They are written to `inbox.org`, with positioning** (see §4). Not `next_actions.org`.
 
 **Propose, do not auto-add.** Surface them in the §10 report as numbered proposals and create only what survives the §1 gate.
 
@@ -578,7 +618,7 @@ Tasks actually created still carry the `:wrap_up_extracted:` tag (configurable v
 - `drop task <n>` → delete the task by ID
 - `change task <n> priority to <A/B/C>` → update priority cookie
 - `change task <n> tag <add/remove> <tag>` → tag mutations
-- `move task <n> to <section>` → re-route within next_actions.org
+- `move task <n> to <section>` → update the entry's `TARGET_SECTION` property
 - `add task: <free text>` → create new task in the same wrap_up_extracted batch
 
 **What qualifies:**
@@ -592,21 +632,14 @@ Tasks actually created still carry the `:wrap_up_extracted:` tag (configurable v
 - Completed items → step 4 (mark DONE)
 - Patterns, insights and engram candidates → the nightly learning sweep (not this session)
 
-**Task format** (Rich Task Standard — DIP-0009 Part 3.5):
-```org
-*** TODO [#B] Task description                        :tag1:tag2:
-:PROPERTIES:
-:CREATED: [YYYY-MM-DD Day]
-:ASSIGNEE: {{USER}}
-:CONTEXT: Why this task exists, what session insight prompted it.
-:KEY_FILES: path/to/relevant/file.md | path/to/another.md
-:END:
-Brief description of what needs to be done.
-```
+**Task format:** the positioning block in §4. `TARGET_SECTION` carries the routing
+decision (Operations, Product, Engineering, Growth, Research, Communications) that
+this step used to express by *placing* the heading — the decision is the same, it is
+just recorded as data instead of as a file offset.
 
-**Routing:** Place tasks in the appropriate section of `next_actions.org` based on their nature (Operations, Product, Engineering, Growth, Research, Communications).
-
-> **v2: an org task is not a delegation.** `next_actions.org` is still the write surface (every space is at DIP-0043 Phase 0 — no `phase1-active` marker), and `ledger_ingest_org.py` mirrors what you write into the ledger on the 05:35 sweep. But a mirrored item carries an `org` block in its payload, and `ledger_claim.py` skips exactly those: `pending = [i for i in claimable if not (i.payload or {}).get("org")]`. That filter is deliberate — it stopped agents working through a 342-item personal backlog unattended. The consequence for this step: **a task you write here can never be picked up by the fleet.** If the intent is "an agent should do this tonight", that is §6b delegation, not a task heading. Say which one you mean in the §10 report.
+> **v2: an org task is not a delegation.** `ledger_ingest_org.py` mirrors org tasks into the ledger on the 05:35 sweep, but a mirrored item carries an `org` block in its payload and `ledger_claim.py` skips exactly those: `pending = [i for i in claimable if not (i.payload or {}).get("org")]`. That filter is deliberate — it stopped agents working through a 342-item personal backlog unattended. The consequence: **a task written here can never be picked up by the fleet.** If the intent is "an agent should do this tonight", that is §6b delegation, not a task heading. Say which one you mean in the §10 report.
+>
+> **This is also why inbox-only matters for the switch.** Under Phase 1, `next_actions.org` is a projection of the ledger and refuses direct writes; `inbox.org` stays the capture surface it is today. Routing every write through inbox.org means the flip changes where entries *land*, never whether this command works — and the `TARGET_*` properties are exactly what a ledger-first `/process-inbox` needs to emit an `item.create` without re-deriving intent.
 
 
 > **Why these are one step.** "This should happen" splits into *I will do it*
@@ -1358,13 +1391,14 @@ Run `/tomorrow` once at end of day.
 
 **Read:**
 - Conversation context (including full transcript if compacted)
-- `org/next_actions.org` (for completed tasks)
+- `org/next_actions.org` (READ ONLY — to find tasks to mark DONE; never written by this command)
 - Today's journal
 - External working directories (`/tmp/`, worktrees, repos specified in arguments)
 - Git status/log in all session-active repos
 
 **Update:**
-- `org/next_actions.org` (mark DONE, add continuations)
+- `org/inbox.org` (ALL new entries: continuations, retroactive, extracted, delegations, DIP gaps — with `TARGET_*` positioning)
+- `org/next_actions.org` (state changes only — mark DONE. No new headings; see §4.)
 - `0-personal/journal/YYYY-MM-DD.md`
 - Space journals if applicable
 - `.datacore/learning/patterns.md`
