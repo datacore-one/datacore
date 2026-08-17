@@ -135,6 +135,64 @@ def verify() -> tuple[bool, str]:
     return True, f"cost {d.get('total_cost_usd')}"
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+_TOKEN_SHAPE = re.compile(r"[A-Za-z0-9._\-]{24,}")
+
+
+def extract_token(raw: str) -> str:
+    """Pull the token out of whatever `claude setup-token` printed.
+
+    This used to be re.fullmatch over the whole of stdin, which meant the
+    pipeline this script's own docstring recommends —
+
+        claude setup-token | claude_account_switch.py set
+
+    — could never work. `setup-token` is an interactive OAuth flow with no
+    plain-output mode: it prints a banner, prompts and ANSI colour around the
+    token, so stdin is never *only* a token and the switch died on "that does
+    not look like a token" with the real token sitting in the input.
+
+    Strip the escape sequences, then take the token-shaped run. Ambiguity is
+    refused rather than guessed: writing the wrong string into the fleet's
+    credential store is a worse failure than stopping and asking, and it
+    would not surface until the next unattended run.
+    """
+    text = _ANSI.sub("", raw).replace("\r", "\n")
+
+    # Whole-input case (a human pasting, or an already-clean pipe).
+    stripped = text.strip()
+    if _TOKEN_SHAPE.fullmatch(stripped):
+        return stripped
+
+    candidates = _TOKEN_SHAPE.findall(text)
+    # Claude's long-lived tokens carry this prefix; when present it is decisive.
+    prefixed = [c for c in candidates if c.startswith("sk-ant-")]
+    if prefixed:
+        unique = sorted(set(prefixed), key=len, reverse=True)
+        if len(unique) > 1:
+            raise SystemExit(
+                f"found {len(unique)} different sk-ant- tokens in the input — "
+                "refusing to guess which one to install. Pipe only the token, "
+                "or run `set` with no pipe and paste it at the prompt."
+            )
+        return unique[0]
+
+    if not candidates:
+        raise SystemExit(
+            "no token found on stdin. `claude setup-token` is interactive and "
+            "prints UI around the token — if you piped it and saw nothing "
+            "useful, run `set` with no pipe and paste the token at the prompt."
+        )
+
+    unique = sorted(set(candidates), key=len, reverse=True)
+    if len(unique) > 1 and len(unique[0]) == len(unique[1]):
+        raise SystemExit(
+            "could not tell which of several strings on stdin is the token — "
+            "refusing to guess. Run `set` with no pipe and paste it at the prompt."
+        )
+    return unique[0]
+
+
 def set_token(check_only: bool) -> int:
     if check_only:
         ok, detail = verify()
@@ -143,11 +201,10 @@ def set_token(check_only: bool) -> int:
 
     if sys.stdin.isatty():
         print("  paste the token from `claude setup-token`, then Ctrl-D:", file=sys.stderr)
-    token = sys.stdin.read().strip()
-    if not token:
+    raw = sys.stdin.read()
+    if not raw.strip():
         raise SystemExit("no token on stdin")
-    if not re.fullmatch(r"[A-Za-z0-9._\-]+", token):
-        raise SystemExit("that does not look like a token (unexpected characters)")
+    token = extract_token(raw)
 
     if not os.access(ENV_FILE, os.W_OK):
         raise SystemExit(f"{ENV_FILE} is not writable by {os.environ.get('USER', 'this user')} — "
