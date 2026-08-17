@@ -92,7 +92,12 @@ def git_status_entries(repo: Path, *paths: str) -> list[tuple[str, str]]:
     did `line[3:]` over stripped output and each dropped a character from the
     first entry.
     """
-    cmd = ["git", "status", "--porcelain", "-z"] + (["--", *paths] if paths else [])
+    # `-uall` is not optional. Without it porcelain collapses an entire untracked
+    # DIRECTORY into one `??` line for the directory itself and never names the
+    # files inside (ENG-2026-0714-008). A session that creates a new folder of
+    # files would then match none of them against `files_modified`, and every one
+    # would be misreported as "invisible to git" instead of "new, commit me".
+    cmd = ["git", "status", "--porcelain", "-z", "-uall"] + (["--", *paths] if paths else [])
     rc, out, _ = _run(cmd, cwd=repo, timeout=60, strip=False)
     if rc != 0:
         return []
@@ -398,6 +403,7 @@ def finalize_session_scope(dry_run: bool) -> dict:
         # were reported nowhere, which is the precise failure this scoping
         # exists to prevent.
         quiet = sorted(rel_mine - dirty)
+        already_committed: list[str] = []
         if quiet:
             _, tracked_out, _ = _run(["git", "ls-files", "-z", "--"] + quiet,
                                      cwd=repo, timeout=60, strip=False)
@@ -405,11 +411,19 @@ def finalize_session_scope(dry_run: bool) -> dict:
             invisible = [str(repo / q) for q in quiet if q not in tracked]
             if invisible:
                 unversioned.extend(invisible)
+            # Tracked and clean = committed already, quite possibly by something
+            # OTHER than this session. `ledger_transport.py` autosaves with
+            # `git add -A` before every converge and the converge pushes, so a
+            # scheduled job can publish this session's in-progress tree without
+            # anyone running a command. Counting these is what makes the buckets
+            # sum to the session's file count instead of quietly falling short.
+            already_committed = [q for q in quiet if q in tracked]
 
         entry = {
             "repo": str(repo.relative_to(DATACORE_ROOT)) if repo != DATACORE_ROOT else ".",
             "session_files_staged": staged,
             "left_for_other_sessions": others,
+            "already_committed": already_committed,
         }
         if not staged:
             entry["ok"] = None
@@ -435,6 +449,25 @@ def finalize_session_scope(dry_run: bool) -> dict:
         if dry_run:
             entry["ok"] = None
             entry["note"] = "dry run — would stage, commit and push the listed files only"
+            results.append(entry)
+            continue
+
+        # Never stage a path that is gone from disk. `git add` on a missing file
+        # stages a DELETION — the shape of the 2026-07-24 git_fleet_sync incident,
+        # where committing every porcelain entry propagated 110 files' deletion
+        # fleet-wide under a message that counted them as landed work. Edit/Write
+        # paths normally exist, but a later `rm` in the same session would turn a
+        # scoped push into a scoped delete.
+        vanished = [f for f in staged if not (repo / f).exists()]
+        if vanished:
+            staged = [f for f in staged if f not in vanished]
+            entry["deleted_not_staged"] = vanished
+            entry["deletion_note"] = ("these were edited then removed this session — "
+                                      "NOT staged; delete them deliberately if intended")
+            entry["session_files_staged"] = staged
+        if not staged:
+            entry["ok"] = None
+            entry["note"] = "only deletions remained — nothing staged"
             results.append(entry)
             continue
 
