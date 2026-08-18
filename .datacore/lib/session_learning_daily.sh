@@ -8,7 +8,13 @@
 #      the 60s timeout is hit on a very large transcript, or when the machine
 #      is force-restarted. Running the sweep first would learn from a day with
 #      holes in it and then mark that day done.
-#   2. The sweep itself, over yesterday.
+#   2. The sweep itself, over EVERY day that still has pending sessions.
+#
+# `--backlog`, NOT yesterday-only. A yesterday-only sweep cannot revisit an
+# older day, so anything one night left behind was stranded for good. On
+# 2026-08-18 that was 21 sessions: a PATH bug had killed the sweep outright for
+# two days, and even after the fix the schedule would only ever have picked up
+# the most recent day. The queue is per-session; the schedule now matches it.
 #
 # LAUNCHD, NOT CRON. macOS cron does not run missed jobs, and a laptop asleep
 # at 05:00 is the normal case, not the exception — the ledger's own daily job
@@ -48,7 +54,7 @@ echo "python: $PY"
 echo "archive rc=$?"
 tail -1 "$STATE/session-archive.log"
 
-"$PY" "$LIB/session_learning_sweep.py"
+"$PY" "$LIB/session_learning_sweep.py" --backlog
 sweep_rc=$?
 echo "sweep rc=$sweep_rc"
 

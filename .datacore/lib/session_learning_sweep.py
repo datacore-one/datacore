@@ -34,11 +34,18 @@ NO CANDIDATE QUEUE. The sweep writes engrams via plur_learn or it writes
 nothing. A deferral path that nobody drains is not caution, it is a leak — see
 the 37.
 
+THE SCHEDULE MUST MATCH THE QUEUE. The queue is per-session, but the job used
+to sweep `--date yesterday` and nothing else, so any session a night left
+behind — batch cap, failure, laptop asleep — was stranded permanently, because
+no later run would ever look at an older day again. `--backlog` is what the
+nightly job runs: every day still holding pending sessions, oldest first.
+
 Usage:
-  python3 .datacore/lib/session_learning_sweep.py                 # yesterday
+  python3 .datacore/lib/session_learning_sweep.py --backlog        # every pending day
+  python3 .datacore/lib/session_learning_sweep.py                  # yesterday
   python3 .datacore/lib/session_learning_sweep.py --date 2026-08-16
-  python3 .datacore/lib/session_learning_sweep.py --dry-run       # print prompt
-  python3 .datacore/lib/session_learning_sweep.py --status        # queue depth
+  python3 .datacore/lib/session_learning_sweep.py --backlog --dry-run
+  python3 .datacore/lib/session_learning_sweep.py --status         # queue depth
   python3 .datacore/lib/session_learning_sweep.py --drain-candidates
 """
 from __future__ import annotations
@@ -48,6 +55,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -65,7 +73,27 @@ MIN_OUTPUT_TOKENS = 8_000
 # precomputed summaries and the PATHS, and reads what it judges relevant with
 # its own tools — the same reason /today's orchestrator hands over paths.
 MAX_SESSIONS_PER_BATCH = 12
+
+# A batch is bounded by TOKENS as well as by count, because count alone cannot
+# express "too big to finish". 2026-08-18: the twelve largest sessions of
+# 2026-08-17 summed to ~1.24M output tokens, `claude -p` hit the 1800s wall
+# every time, and the failure path correctly re-marked all twelve `pending` —
+# so the identical oversized batch was retried forever. Sorting biggest-first
+# guaranteed the worst possible batch.
+BATCH_TOKEN_BUDGET = 250_000
 CLAUDE_TIMEOUT = 1800
+
+# Escalation ladder for a batch that keeps failing: retry in a batch, then
+# isolate the session so one poison transcript cannot hold its whole day
+# hostage, then give up VISIBLY as `failed`. Pending-forever is not a terminal
+# state, it is a leak that looks like a queue.
+ISOLATE_AFTER = 2
+FAIL_AFTER = 4
+
+# The nightly job starts at 01:00; it must be done long before /today at 08:00.
+# Sessions left over stay pending and are picked up by the next night's backlog
+# pass — which is the point of having one.
+RUN_DEADLINE_SECONDS = 4 * 3600
 
 
 def _load(p: Path) -> dict:
@@ -95,13 +123,58 @@ def pending_sessions(day: str) -> tuple[list[dict], list[dict]]:
     return sweep, skip
 
 
-def mark(meta_path: str, status: str, result: str | None = None) -> None:
+def days_with_pending() -> list[str]:
+    """Every archived day still holding pending sessions, oldest first.
+
+    Directory names are YYYY-MM-DD, so lexicographic sort is chronological.
+    """
+    if not ARCHIVE_DIR.is_dir():
+        return []
+    days = []
+    for d in sorted(ARCHIVE_DIR.iterdir()):
+        if not d.is_dir():
+            continue
+        if any(_load(mp).get("learning_status") == "pending"
+               for mp in d.glob("*/meta.json")):
+            days.append(d.name)
+    return days
+
+
+def make_batch(sweep: list[dict]) -> list[dict]:
+    """Pick the next batch, bounded by count AND by total output tokens.
+
+    A session that has already failed ISOLATE_AFTER times travels alone. If one
+    transcript is what blows the timeout, batching it again just re-fails every
+    session it is grouped with — which is precisely how 2026-08-17 got stuck.
+    """
+    stuck = [m for m in sweep if m.get("learning_attempts", 0) >= ISOLATE_AFTER]
+    if stuck:
+        return [max(stuck, key=lambda m: m.get("learning_attempts", 0))]
+
+    batch: list[dict] = []
+    total = 0
+    for m in sweep:
+        tok = m.get("output_tokens", 0)
+        # The first session is always admitted: a single session larger than the
+        # whole budget still has to be attempted, alone, or it never runs.
+        if batch and (total + tok > BATCH_TOKEN_BUDGET
+                      or len(batch) >= MAX_SESSIONS_PER_BATCH):
+            break
+        batch.append(m)
+        total += tok
+    return batch
+
+
+def mark(meta_path: str, status: str, result: str | None = None,
+         bump_attempt: bool = False) -> None:
     p = Path(meta_path)
     m = _load(p)
     if not m:
         return
     m["learning_status"] = status
     m["learning_run_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+    if bump_attempt:
+        m["learning_attempts"] = m.get("learning_attempts", 0) + 1
     if result is not None:
         m["learning_result"] = result[:2000]
     tmp = p.with_suffix(".tmp")
@@ -241,9 +314,121 @@ def cmd_drain_candidates() -> int:
     return 0
 
 
+def sweep_once(day: str, dry_run: bool = False) -> str:
+    """Run ONE batch for a day. Returns done | empty | failed | dry-run."""
+    sweep, skip = pending_sessions(day)
+
+    # --dry-run means invoke nothing, and marking a meta is a mutation: it
+    # claims the session out of the queue for good. Previously a dry run
+    # silently marked every trivial session `skipped` before printing.
+    if not dry_run:
+        for m in skip:
+            mark(m["_meta_path"], "skipped", "below MIN_TURNS/MIN_OUTPUT_TOKENS")
+
+    if not sweep:
+        msg = f"{day}: 0 session(s) to sweep ({len(skip)} trivial skipped)"
+        print(msg)
+        log(msg)
+        return "empty"
+
+    batch = make_batch(sweep)
+    remaining = len(sweep) - len(batch)
+    tokens = sum(m.get("output_tokens", 0) for m in batch)
+    prompt = build_prompt(day, batch)
+
+    if dry_run:
+        print(prompt)
+        print(f"\n--- would sweep {len(batch)} session(s) / {tokens:,} output tokens, "
+              f"skip {len(skip)}, leaving {remaining} pending for the next batch ---")
+        return "dry-run"
+
+    log(f"{day}: sweeping {len(batch)} session(s), {tokens:,} output tokens")
+    ok, out = run_claude(prompt)
+
+    if not ok:
+        # Never mark failed work done — the next run would skip it forever.
+        # But pending-forever is its own leak, so count attempts and eventually
+        # settle on `failed`, which is visible in --status.
+        for m in batch:
+            attempts = m.get("learning_attempts", 0) + 1
+            if attempts >= FAIL_AFTER and len(batch) == 1:
+                mark(m["_meta_path"], "failed",
+                     f"gave up after {attempts} attempts: {out}", bump_attempt=True)
+            else:
+                mark(m["_meta_path"], "pending", f"FAILED: {out}", bump_attempt=True)
+        print(f"{day}: sweep FAILED on {len(batch)} session(s) / {tokens:,} tokens — {out}")
+        log(f"{day}: FAILED ({len(batch)} sessions, {tokens:,} tokens) {out}")
+        return "failed"
+
+    for m in batch:
+        mark(m["_meta_path"], "done", out[-2000:])
+
+    tail = out.strip().splitlines()[-1] if out.strip() else ""
+    print(f"{day}: swept {len(batch)} session(s) / {tokens:,} tokens, "
+          f"skipped {len(skip)} trivial"
+          + (f", {remaining} still pending" if remaining else ""))
+    print(f"  agent report: {tail[:300]}")
+    log(f"{day}: OK {len(batch)} swept | {tail[:200]}")
+    return "done"
+
+
+def run_day(day: str, deadline: float | None, dry_run: bool = False) -> str:
+    """Sweep a day in batches until it drains, fails, or the deadline hits."""
+    while True:
+        outcome = sweep_once(day, dry_run)
+        if outcome != "done":
+            return outcome
+        if deadline is not None and time.monotonic() >= deadline:
+            msg = f"{day}: stopped on the run deadline — remaining sessions stay pending"
+            print(msg)
+            log(msg)
+            return "deadline"
+
+
+def cmd_backlog(dry_run: bool) -> int:
+    """Sweep EVERY day with pending sessions, oldest first.
+
+    The scheduled job runs this rather than a bare `--date yesterday`. A
+    yesterday-only sweep can never revisit an older day, so anything a night
+    left behind — a failure, a batch cap, a laptop asleep — was stranded
+    permanently. The queue is per-session; the schedule has to match it.
+    """
+    days = days_with_pending()
+    if not days:
+        print("backlog: nothing pending")
+        log("backlog: nothing pending")
+        return 0
+
+    print(f"backlog: {len(days)} day(s) with pending sessions — {', '.join(days)}")
+    log(f"backlog: {len(days)} day(s) pending — {', '.join(days)}")
+
+    deadline = None if dry_run else time.monotonic() + RUN_DEADLINE_SECONDS
+    unfinished = []
+    for i, day in enumerate(days):
+        if deadline is not None and time.monotonic() >= deadline:
+            left = days[i:]
+            print(f"backlog: deadline reached, {len(left)} day(s) untouched: {', '.join(left)}")
+            log(f"backlog: deadline reached, untouched: {', '.join(left)}")
+            unfinished += left
+            break
+        # One bad day must not block the rest of the backlog.
+        if run_day(day, deadline, dry_run) in ("failed", "deadline"):
+            unfinished.append(day)
+
+    if unfinished:
+        print(f"backlog: {len(unfinished)} day(s) did not drain: {', '.join(unfinished)}")
+        log(f"backlog: did not drain {', '.join(unfinished)}")
+        return 1
+    print("backlog: drained")
+    log("backlog: drained")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--date", help="YYYY-MM-DD (default: yesterday)")
+    ap.add_argument("--backlog", action="store_true",
+                    help="sweep every day with pending sessions, oldest first")
     ap.add_argument("--dry-run", action="store_true", help="print the prompt, invoke nothing")
     ap.add_argument("--status", action="store_true", help="show queue depth per day")
     ap.add_argument("--drain-candidates", action="store_true",
@@ -254,53 +439,12 @@ def main() -> int:
         return cmd_status()
     if args.drain_candidates:
         return cmd_drain_candidates()
+    if args.backlog:
+        return cmd_backlog(args.dry_run)
 
     day = args.date or (date.today() - timedelta(days=1)).isoformat()
-    sweep, skip = pending_sessions(day)
-
-    for m in skip:
-        mark(m["_meta_path"], "skipped", "below MIN_TURNS/MIN_OUTPUT_TOKENS")
-
-    if not sweep:
-        msg = f"{day}: 0 session(s) to sweep ({len(skip)} trivial skipped)"
-        print(msg)
-        log(msg)
-        return 0
-
-    dropped = sweep[MAX_SESSIONS_PER_BATCH:]
-    batch = sweep[:MAX_SESSIONS_PER_BATCH]
-    prompt = build_prompt(day, batch)
-
-    if args.dry_run:
-        print(prompt)
-        print(f"\n--- would sweep {len(batch)} session(s), skip {len(skip)}, "
-              f"defer {len(dropped)} to the next run ---")
-        return 0
-
-    log(f"{day}: sweeping {len(batch)} session(s)")
-    ok, out = run_claude(prompt)
-
-    if not ok:
-        # Leave them pending. A failed sweep that marks work done is worse than
-        # no sweep at all — the next run would skip the sessions forever.
-        for m in batch:
-            mark(m["_meta_path"], "pending", f"FAILED: {out}")
-        print(f"{day}: sweep FAILED — {out}")
-        log(f"{day}: FAILED {out}")
-        return 1
-
-    for m in batch:
-        mark(m["_meta_path"], "done", out[-2000:])
-
-    tail = out.strip().splitlines()[-1] if out.strip() else ""
-    print(f"{day}: swept {len(batch)} session(s), skipped {len(skip)} trivial"
-          + (f", {len(dropped)} deferred to next run" if dropped else ""))
-    print(f"  agent report: {tail[:300]}")
-    log(f"{day}: OK {len(batch)} swept | {tail[:200]}")
-    # Deferred sessions stay pending on purpose; a silent cap reads as coverage.
-    if dropped:
-        log(f"{day}: {len(dropped)} session(s) over the batch cap, still pending")
-    return 0
+    deadline = None if args.dry_run else time.monotonic() + RUN_DEADLINE_SECONDS
+    return 1 if run_day(day, deadline, args.dry_run) == "failed" else 0
 
 
 if __name__ == "__main__":
