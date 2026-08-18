@@ -703,10 +703,22 @@ class CredentialManager:
             try:
                 value = ca.get_value(c.id, consumer="creds-doctor")
             except Exception as exc:  # noqa: BLE001
-                rows.append(("FAIL", c.id, f"unreadable: {str(exc)[:70]}"))
-                fail += 1
+                scoped = ca.in_scope(c.extra if isinstance(c.extra, dict) else {})
+                if scoped is False:
+                    rows.append(("n-a", c.id,
+                                 f"not scoped to instance '{ca.instance_name()}'"))
+                    na += 1
+                else:
+                    rows.append(("FAIL", c.id, f"unreadable: {str(exc)[:70]}"))
+                    fail += 1
                 continue
-            state, detail = ca.verify_value(var, value)
+            state, detail = ca.verify_value(
+                var, value, entry=c.extra if isinstance(c.extra, dict) else {})
+            if state == "FAIL":
+                warn = ca.replication_warning(
+                    {**(c.extra if isinstance(c.extra, dict) else {}), "id": c.id})
+                if warn:
+                    detail = f"{detail[:60]} — {warn}"
             rows.append((state, c.id, detail))
             if state == "ok":
                 ok += 1

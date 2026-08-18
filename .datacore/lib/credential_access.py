@@ -102,6 +102,20 @@ def _entry(name: str) -> dict:
         f"refusal is what keeps that true.")
 
 
+def _store_for(entry: dict) -> str:
+    """The declared store for THIS platform.
+
+    Single implementation on purpose. When resolve() and get_value() each did
+    their own lookup, making one platform-aware and not the other left Linux
+    reading a macOS Keychain path — a credential that was present and valid
+    reported as unreadable.
+    """
+    import platform as _plat
+    if _plat.system() != "Darwin" and entry.get("storage_linux"):
+        return str(entry["storage_linux"]).strip()
+    return str(entry.get("storage") or "").strip()
+
+
 def resolve(name: str) -> tuple[Path, str]:
     """Return (path, why) for a credential name. Never searches, never guesses.
 
@@ -113,6 +127,19 @@ def resolve(name: str) -> tuple[Path, str]:
     c = _entry(name)
     scope = (c.get("scope") or "global").strip()
     space = (c.get("space") or "").strip()
+
+    # A credential need not live in a file. The Claude subscription token is in
+    # the macOS Keychain on this host and in ~/.claude/.credentials.json on the
+    # Linux boxes — both correct, neither assembled by sync. Before this, the
+    # resolver assumed "somewhere in .datacore/env" and reported a perfectly
+    # working credential as unreadable, which is the same false-negative that
+    # sends someone to rotate something that was fine.
+    # Platform-specific store. The Claude token is in the macOS Keychain here and
+    # in ~/.claude/.credentials.json on the Linux boxes — both correct. Declaring
+    # only one made the other host report a working credential as unreadable.
+    store = _store_for(c)
+    if store:
+        return Path(store), f"storage={store} (declared, not assembled by sync)"
 
     # ONE DESTINATION, WHATEVER THE SCOPE. `secrets/scripts/sync.sh` assembles
     # global + every permitted space + projects into a single output file:
@@ -126,6 +153,18 @@ def resolve(name: str) -> tuple[Path, str]:
     # written. That is the same mistake this module exists to stop, made inside
     # the module itself, and it was caught only by resolving a real credential
     # and finding the path absent.
+    # INSTANCE-LOCAL WINS. local.env is this host's own tier and is never
+    # assembled or synced. If it defines the variable, that is deliberate: it is
+    # how a machine holds its OWN key rather than a shared one — per-agent
+    # OpenRouter keys being the immediate case. Winston already had its own and
+    # a fleet-wide copy was pushed over the top of it, creating divergence out of
+    # nothing. Precedence belongs here, decided once, rather than in each
+    # consumer's sourcing order.
+    var_for_local = (c.get("var_name") or (c.get("vars") or [name])[0])
+    local = ENV / "local.env"
+    if local.is_file() and _read_var(local, var_for_local) is not None:
+        return local, f"instance-local override ({instance_name()}) — wins over scope={scope}"
+
     dest = ENV / ".env"
     why = f"scope={scope}" + (f" space={space}" if space else "") + \
           " -> assembled by sync.sh into the single .env"
@@ -150,6 +189,59 @@ LEGACY_PER_SERVICE = (
 )
 
 
+def instance_name() -> str:
+    """Which instance this host is, for scope-aware reporting."""
+    import os as _os
+    if _os.environ.get("DATACORE_INSTANCE"):
+        return _os.environ["DATACORE_INSTANCE"]
+    for cand in (ENV / ".instance", SECRETS / ".instance"):
+        try:
+            return cand.read_text().strip()
+        except OSError:
+            continue
+    return "local"
+
+
+def granted_scopes() -> tuple[set, set] | None:
+    """(spaces, projects) this instance may hold, or None if undeclared.
+
+    None means "cannot tell" and must be treated as such — not as "everything".
+    """
+    import yaml  # noqa: PLC0415
+    man = SECRETS / "instances" / f"{instance_name()}.yaml"
+    try:
+        d = yaml.safe_load(man.read_text()) or {}
+    except OSError:
+        return None
+    return set(d.get("spaces") or []), set(d.get("projects") or [])
+
+
+def in_scope(entry: dict) -> bool | None:
+    """Is this credential one this instance is supposed to hold?
+
+    A credential outside an instance's scope being absent is CORRECT, not a
+    failure. Reporting it as FAIL buries the real failures under noise — the
+    first scope-aware run on winston showed 27 'failures', every one of them the
+    system working as designed.
+    """
+    g = granted_scopes()
+    if g is None:
+        return None
+    spaces, projects = g
+    if "all" in spaces:
+        return True
+    scope = (entry.get("scope") or "global").strip()
+    if scope == "global":
+        return True
+    if scope == "space":
+        return (entry.get("space") or "") in spaces
+    if scope == "project":
+        return (entry.get("project") or "") in projects
+    if scope in ("instance", "instance-local"):
+        return True
+    return None
+
+
 def _read_var(path: Path, var: str) -> str | None:
     try:
         text = path.read_text()
@@ -167,10 +259,54 @@ def _read_var(path: Path, var: str) -> str | None:
     return None
 
 
+def _read_keychain(service: str) -> str | None:
+    """macOS Keychain. The value is a JSON blob; the token is inside it."""
+    import json as _json
+    import subprocess  # noqa: PLC0415
+    try:
+        raw = subprocess.run(["security", "find-generic-password", "-s", service, "-w"],
+                             capture_output=True, text=True, timeout=20).stdout.strip()
+    except Exception:  # noqa: BLE001
+        return None
+    if not raw:
+        return None
+    try:
+        d = _json.loads(raw)
+    except ValueError:
+        return raw
+    return (d.get("claudeAiOauth") or d).get("accessToken") or None
+
+
+def _read_json_field(path: Path, field: str) -> str | None:
+    import json as _json
+    try:
+        d = _json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    return (d.get("claudeAiOauth") or d).get(field) or None
+
+
 def fingerprint(value: str) -> str:
     """Identify a secret without revealing it — the convention used everywhere
     else in this installation's credential tooling."""
     return hashlib.sha256(value.encode()).hexdigest()[:12] if value else "(empty)"
+
+
+def replication_warning(entry: dict) -> str | None:
+    """Is this credential one that cannot be copied between hosts?
+
+    A single-use refresh token cannot be replicated: whichever holder refreshes
+    first invalidates every other copy, and the losers cannot tell — they hold a
+    value that looks fine and 401s. Distribution tooling will happily copy such a
+    credential and produce exactly that, so the index declares it and the tools
+    say so instead of trying harder.
+    """
+    if entry.get("replicable") is False:
+        return (f"{entry.get('id')} is NOT replicable: single-use refresh means a "
+                f"copied value is revoked the moment another host refreshes. "
+                f"Mint per host" +
+                (f" (mint_host: {entry['mint_host']})" if entry.get("mint_host") else "") + ".")
+    return None
 
 
 def get_value(name: str, *, consumer: str = "") -> str:
@@ -178,7 +314,14 @@ def get_value(name: str, *, consumer: str = "") -> str:
     c = _entry(name)
     var = c.get("var_name") or (c.get("vars") or [name])[0]
     path, why = resolve(name)
-    value = _read_var(path, var)
+    store = _store_for(c)
+    if store.startswith("keychain:"):
+        value = _read_keychain(store.split(":", 1)[1])
+    elif store.startswith("json:"):
+        value = _read_json_field(Path(store.split(":", 1)[1]).expanduser(),
+                                c.get("storage_field") or "accessToken")
+    else:
+        value = _read_var(path, var)
 
     attest("credential.read",
            ref=str(c.get("id") or name),
@@ -239,20 +382,54 @@ def unindexed(paths: list[Path] | None = None) -> list[tuple[Path, str]]:
 # are NOT the canonical store, and a glob of the canonical directory cannot see
 # ~/.config/cos.env or /etc/datacored.env at all — which is exactly where the
 # 2026-08-17 drift lived.
-KNOWN_STORES = (
-    "{DATA}/.datacore/env/.env",              # canonical assembled
-    "{DATA}/.datacore/env/*.env",             # per-service, legacy
-    "{HOME}/.config/cos.env",                 # sourced with `set -a` by every cos_*.sh
-    "/etc/datacored.env",                     # datacored.service
-    "{HOME}/.hermes/.env",                    # hermes gateway
-    "{HOME}/.datacore/datacore.env",          # agents, assorted crons
+# Where credential values are known to live. DECLARED, not hardcoded: this ships
+# as a product, and `~/.config/cos.env` or `/etc/datacored.env` are one
+# installation's furniture, not everyone's. Read from
+# `.datacore/config/credential-stores.yaml` when present; the defaults below are
+# only the canonical Datacore locations that exist in every install.
+#
+# The reason non-canonical stores must be declarable at all: the 2026-08-17 drift
+# lived in exactly those app-owned files, and no glob of the canonical directory
+# can see them. A scanner that only looks where it expects finds nothing wrong.
+DEFAULT_STORES = (
+    "{DATA}/.datacore/env/.env",
+    "{DATA}/.datacore/env/local.env",
 )
+
+# Third-party applications keep their OWN config, and a value there is not a copy
+# of ours — it is a different credential that happens to share a variable name.
+# hermes holding its own TELEGRAM_BOT_TOKEN (@kton9_bot) is not drift from the
+# Datacore bot (@datacore_1_bot); reporting it as divergence trains the reader to
+# ignore the check. Declared per install for the same reason as above.
+DEFAULT_EXTERNAL = ()
+
+_STORE_CONFIG = "{DATA}/.datacore/config/credential-stores.yaml"
+
+
+def _store_config() -> dict:
+    import yaml  # noqa: PLC0415
+    p = Path(_STORE_CONFIG.format(DATA=DATA))
+    try:
+        return yaml.safe_load(p.read_text()) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def KNOWN_STORES() -> tuple:
+    cfg = _store_config()
+    return tuple(cfg.get("stores") or DEFAULT_STORES)
+
+
+def EXTERNAL_STORES() -> tuple:
+    """Files owned by another application, scanned but namespaced separately."""
+    cfg = _store_config()
+    return tuple(cfg.get("external") or DEFAULT_EXTERNAL)
 
 
 def _store_paths() -> list[Path]:
     import glob as _glob
     out: list[Path] = []
-    for pat in KNOWN_STORES:
+    for pat in tuple(KNOWN_STORES()) + tuple(EXTERNAL_STORES()):
         s = pat.format(DATA=DATA, HOME=Path.home())
         out.extend(Path(x) for x in _glob.glob(s))
     return sorted({p for p in out if p.is_file()})
@@ -278,22 +455,37 @@ def _vars_in(path: Path) -> dict[str, str]:
     return vals
 
 
+def _expand(pats) -> set:
+    import glob as _glob
+    out = set()
+    for pat in pats:
+        out |= {Path(x) for x in _glob.glob(pat.format(DATA=DATA, HOME=Path.home()))}
+    return {p for p in out if p.is_file()}
+
+
 def duplicates() -> tuple[list, list]:
-    """Every credential value that exists in more than one store.
+    """Every credential value that exists in more than one DATACORE-OWNED store.
 
     Returns (divergent, redundant). The split matters more than the count:
 
       DIVERGENT — the copies disagree. One of them is being read by something,
       and it is not knowable from here which. This is the state that produced
-      "works by hand, 401 under cron": ~/.config/cos.env held a revoked token
-      and EXPORTED it over the store that could refresh.
+      "works by hand, 401 under cron".
 
-      REDUNDANT — the copies agree today. Harmless right now and a countdown:
-      when the value next changes, whichever copy is not updated becomes
-      divergent, silently.
+      REDUNDANT — the copies agree today. Harmless now and a countdown: when the
+      value next changes, whichever copy is not updated becomes divergent,
+      silently.
+
+    Files owned by another application are scanned but namespaced separately, so
+    hermes holding its own @kton9_bot token is not reported as drift from the
+    Datacore bot. They are different credentials that share a variable name, and
+    conflating them produces noise that trains people to ignore the check.
     """
+    owned = _expand(KNOWN_STORES())
+    external = _expand(EXTERNAL_STORES()) - owned
+
     seen: dict[str, list[tuple[Path, str]]] = {}
-    for path in _store_paths():
+    for path in sorted(owned):
         for var, val in _vars_in(path).items():
             if not any(w in var.upper() for w in
                        ("TOKEN", "KEY", "SECRET", "PASSWORD", "PAT", "CREDENTIAL")):
@@ -309,26 +501,84 @@ def duplicates() -> tuple[list, list]:
     return divergent, redundant
 
 
+def external_namespace() -> list:
+    """What other applications hold under names we also use. Informational."""
+    owned = _expand(KNOWN_STORES())
+    external = _expand(EXTERNAL_STORES()) - owned
+    ours = set()
+    for path in owned:
+        ours |= set(_vars_in(path))
+    out = []
+    for path in sorted(external):
+        for var, val in _vars_in(path).items():
+            if var in ours and any(w in var.upper() for w in
+                                   ("TOKEN", "KEY", "SECRET", "PAT")):
+                out.append((var, path, fingerprint(val)))
+    return out
+
 
 # ---- Liveness: ask the provider, do not read the file ----------------------
 #
-# Every check in this installation before now asked whether a value was PRESENT.
+# Every check here before now asked whether a value was PRESENT.
 # oauth_health_check returned exit 0 and "no expiresAt (long-lived token?)" on a
-# credential that could not authenticate at all. Presence is not health; only the
+# credential that could not authenticate. Presence is not health; only the
 # provider knows.
 #
-# Endpoints are chosen to be free and side-effect-free. A verifier that costs
-# money or writes something is one nobody dares run, and an unrun check is the
-# same as no check.
+# Endpoints are free and side-effect-free. A verifier that costs money or writes
+# something is one nobody dares run, and an unrun check is no check.
+#
+# No self-hosted URLs here: this ships as a product, and a Gitea host belongs to
+# the installation, not to this file. Those come from the index entry's
+# `api_base` via _entry_verifier().
 VERIFIERS = {
-    "TELEGRAM_BOT_TOKEN": ("https://api.telegram.org/bot{v}/getMe", None, "ok"),
-    "WINSTON_BOT_TOKEN":  ("https://api.telegram.org/bot{v}/getMe", None, "ok"),
+    "TELEGRAM_BOT_TOKEN": ("https://api.telegram.org/bot{v}/getMe", None, '"ok":true'),
+    "WINSTON_BOT_TOKEN":  ("https://api.telegram.org/bot{v}/getMe", None, '"ok":true'),
+    "REDALERT_BOT_TOKEN": ("https://api.telegram.org/bot{v}/getMe", None, '"ok":true'),
     "OPENROUTER_API_KEY": ("https://openrouter.ai/api/v1/key", "Bearer {v}", "data"),
-    "GITEA_TOKEN":        (None, None, None),   # host-specific; no public probe
+    "ANTHROPIC_API_KEY":  ("https://api.anthropic.com/v1/models", "x-api-key: {v}", "data"),
+    "OPENAI_API_KEY":     ("https://api.openai.com/v1/models", "Bearer {v}", "data"),
+    "READWISE_ACCESS_TOKEN": ("https://readwise.io/api/v2/auth/", "Token {v}", None),
+    "OURA_PERSONAL_ACCESS_TOKEN": (
+        "https://api.ouraring.com/v2/usercollection/personal_info", "Bearer {v}", None),
+    "GH_TOKEN":           ("https://api.github.com/user", "Bearer {v}", "login"),
+    # Anthropic rejects a raw-API call with a subscription OAuth token (429/400
+    # regardless of validity — measured), so the only honest probe is the
+    # first-party client, which is what actually consumes it.
+    "CLAUDE_CODE_OAUTH_TOKEN": ("__cli__", None, None),
+}
+
+# Credentials with no free probe. Listed EXPLICITLY rather than left to fall
+# through, so the reason is visible and someone can disagree with it. An unlisted
+# credential reporting n-a means "nobody has thought about this"; a listed one
+# means "we decided, and here is why".
+NO_PROBE = {
+    "GEMINI_API_KEY": "no free introspection endpoint; every call bills",
+    "PERPLEXITY_API_KEY": "no free introspection endpoint",
+    "SERPAPI_API_KEY": "quota-metered; a probe consumes a search",
+    "GAMMA_API_KEY": "no public introspection endpoint",
+    "EXA_API_KEY": "search is POST-only and metered; a probe consumes quota",
+    "TELEGRAM_CHAT_ID": "an identifier, not a secret — nothing to authenticate",
+    "WINSTON_CHAT_ID": "an identifier, not a secret",
 }
 
 
-def verify_value(var: str, value: str, timeout: int = 25) -> tuple[str, str]:
+def _entry_verifier(entry: dict) -> tuple | None:
+    """A verifier built from the index entry itself.
+
+    Self-hosted services have no universal endpoint — a Gitea URL belongs to the
+    installation. An entry declaring `api_base` gets a probe; one that does not
+    reports n-a and says why, which is honest and portable.
+    """
+    base = (entry or {}).get("api_base")
+    if not base:
+        return None
+    if (entry.get("provider") or "").lower() == "gitea":
+        return (base.rstrip("/") + "/api/v1/user", "token {v}", "login")
+    return (base.rstrip("/"), "Bearer {v}", None)
+
+
+def verify_value(var: str, value: str, timeout: int = 25,
+                 entry: dict | None = None) -> tuple[str, str]:
     """Return (state, detail) where state is ok / FAIL / n-a.
 
     n-a means "no verifier for this variable" — reported, never counted as a
@@ -339,7 +589,34 @@ def verify_value(var: str, value: str, timeout: int = 25) -> tuple[str, str]:
     import urllib.error
     import urllib.request
 
-    spec = VERIFIERS.get(var)
+    if var == "CLAUDE_CODE_OAUTH_TOKEN":
+        import subprocess  # noqa: PLC0415
+        import shutil as _sh
+        if not _sh.which("claude"):
+            return "n-a", "claude CLI not on PATH on this host"
+        try:
+            r = subprocess.run(
+                ["claude", "-p", "Reply with exactly: OK", "--output-format", "json"],
+                capture_output=True, text=True, timeout=150,
+                stdin=subprocess.DEVNULL,
+                env={**os.environ, "DATACORE_HEADLESS": "1",
+                     "CLAUDE_CODE_OAUTH_TOKEN": value})
+        except Exception as e:  # noqa: BLE001
+            return "n-a", f"probe failed: {type(e).__name__}"
+        raw = r.stdout or ""
+        i = raw.find('{"')
+        if i < 0:
+            return "FAIL", (r.stderr or raw).strip()[:100] or "no output"
+        import json as _json
+        try:
+            d = _json.loads(raw[i:])
+        except ValueError:
+            return "FAIL", raw[:100]
+        return ("FAIL", str(d.get("result"))[:100]) if d.get("is_error") else ("ok", "claude -p accepted it")
+
+    if var in NO_PROBE:
+        return "n-a", f"no probe by design: {NO_PROBE[var]}"
+    spec = VERIFIERS.get(var) or _entry_verifier(entry or {})
     if not spec or not spec[0]:
         return "n-a", "no verifier declared for this variable"
     url, auth, expect = spec
@@ -348,7 +625,17 @@ def verify_value(var: str, value: str, timeout: int = 25) -> tuple[str, str]:
     try:
         req = urllib.request.Request(url.format(v=value))
         if auth:
-            req.add_header("Authorization", auth.format(v=value))
+            # "Header-Name: template" targets a specific header; a bare template
+            # means Authorization. Anthropic takes x-api-key and rejects Bearer
+            # with a 401 that reads exactly like a dead key — which is how a
+            # perfectly good key got reported FAIL on the first run here.
+            if ":" in auth.split("{")[0]:
+                hdr, _, tmpl = auth.partition(":")
+                req.add_header(hdr.strip(), tmpl.strip().format(v=value))
+            else:
+                req.add_header("Authorization", auth.format(v=value))
+        if "anthropic.com" in url:
+            req.add_header("anthropic-version", "2023-06-01")
         with urllib.request.urlopen(req, timeout=timeout) as r:
             body = r.read(400).decode(errors="ignore")
         ok = (expect in body) if expect else True
@@ -398,8 +685,16 @@ def main() -> int:
 
     if a.op == "duplicates":
         div, red = duplicates()
+        ext = external_namespace()
         if not div and not red:
-            print("  no credential appears in more than one store")
+            print("  no credential appears in more than one Datacore-owned store")
+            if ext:
+                # Still worth showing: a name collision is not drift, but it is
+                # how someone reads the wrong value into the wrong app.
+                print(f"\n  {len(ext)} name collision(s) with app-owned config — NOT our drift:")
+                for var, path, fp in ext:
+                    print(f"    {var:30} {fp}  {path}")
+                print("    (a different credential that shares a variable name)")
             return 0
         if div:
             print(f"  {len(div)} DIVERGENT — copies disagree, and which one is read is not knowable here:")
@@ -407,6 +702,12 @@ def main() -> int:
                 print(f"    {var}")
                 for path, fp in places:
                     print(f"      {fp}  {path}")
+        ext = external_namespace()
+        if ext:
+            print(f"\n  {len(ext)} name collision(s) with app-owned config — NOT our drift:")
+            for var, path, fp in ext:
+                print(f"    {var:30} {fp}  {path}")
+            print("    (a different credential that shares a variable name)")
         if red:
             print(f"\n  {len(red)} redundant — copies agree today, divergent the next time one changes:")
             for var, places in red:
