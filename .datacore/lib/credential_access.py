@@ -153,6 +153,18 @@ def resolve(name: str) -> tuple[Path, str]:
     # written. That is the same mistake this module exists to stop, made inside
     # the module itself, and it was caught only by resolving a real credential
     # and finding the path absent.
+    # INSTANCE-LOCAL WINS. local.env is this host's own tier and is never
+    # assembled or synced. If it defines the variable, that is deliberate: it is
+    # how a machine holds its OWN key rather than a shared one — per-agent
+    # OpenRouter keys being the immediate case. Winston already had its own and
+    # a fleet-wide copy was pushed over the top of it, creating divergence out of
+    # nothing. Precedence belongs here, decided once, rather than in each
+    # consumer's sourcing order.
+    var_for_local = (c.get("var_name") or (c.get("vars") or [name])[0])
+    local = ENV / "local.env"
+    if local.is_file() and _read_var(local, var_for_local) is not None:
+        return local, f"instance-local override ({instance_name()}) — wins over scope={scope}"
+
     dest = ENV / ".env"
     why = f"scope={scope}" + (f" space={space}" if space else "") + \
           " -> assembled by sync.sh into the single .env"
@@ -353,20 +365,54 @@ def unindexed(paths: list[Path] | None = None) -> list[tuple[Path, str]]:
 # are NOT the canonical store, and a glob of the canonical directory cannot see
 # ~/.config/cos.env or /etc/datacored.env at all — which is exactly where the
 # 2026-08-17 drift lived.
-KNOWN_STORES = (
-    "{DATA}/.datacore/env/.env",              # canonical assembled
-    "{DATA}/.datacore/env/*.env",             # per-service, legacy
-    "{HOME}/.config/cos.env",                 # sourced with `set -a` by every cos_*.sh
-    "/etc/datacored.env",                     # datacored.service
-    "{HOME}/.hermes/.env",                    # hermes gateway
-    "{HOME}/.datacore/datacore.env",          # agents, assorted crons
+# Where credential values are known to live. DECLARED, not hardcoded: this ships
+# as a product, and `~/.config/cos.env` or `/etc/datacored.env` are one
+# installation's furniture, not everyone's. Read from
+# `.datacore/config/credential-stores.yaml` when present; the defaults below are
+# only the canonical Datacore locations that exist in every install.
+#
+# The reason non-canonical stores must be declarable at all: the 2026-08-17 drift
+# lived in exactly those app-owned files, and no glob of the canonical directory
+# can see them. A scanner that only looks where it expects finds nothing wrong.
+DEFAULT_STORES = (
+    "{DATA}/.datacore/env/.env",
+    "{DATA}/.datacore/env/local.env",
 )
+
+# Third-party applications keep their OWN config, and a value there is not a copy
+# of ours — it is a different credential that happens to share a variable name.
+# hermes holding its own TELEGRAM_BOT_TOKEN (@kton9_bot) is not drift from the
+# Datacore bot (@datacore_1_bot); reporting it as divergence trains the reader to
+# ignore the check. Declared per install for the same reason as above.
+DEFAULT_EXTERNAL = ()
+
+_STORE_CONFIG = "{DATA}/.datacore/config/credential-stores.yaml"
+
+
+def _store_config() -> dict:
+    import yaml  # noqa: PLC0415
+    p = Path(_STORE_CONFIG.format(DATA=DATA))
+    try:
+        return yaml.safe_load(p.read_text()) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def KNOWN_STORES() -> tuple:
+    cfg = _store_config()
+    return tuple(cfg.get("stores") or DEFAULT_STORES)
+
+
+def EXTERNAL_STORES() -> tuple:
+    """Files owned by another application, scanned but namespaced separately."""
+    cfg = _store_config()
+    return tuple(cfg.get("external") or DEFAULT_EXTERNAL)
 
 
 def _store_paths() -> list[Path]:
     import glob as _glob
     out: list[Path] = []
-    for pat in KNOWN_STORES:
+    for pat in tuple(KNOWN_STORES()) + tuple(EXTERNAL_STORES()):
         s = pat.format(DATA=DATA, HOME=Path.home())
         out.extend(Path(x) for x in _glob.glob(s))
     return sorted({p for p in out if p.is_file()})
@@ -392,22 +438,37 @@ def _vars_in(path: Path) -> dict[str, str]:
     return vals
 
 
+def _expand(pats) -> set:
+    import glob as _glob
+    out = set()
+    for pat in pats:
+        out |= {Path(x) for x in _glob.glob(pat.format(DATA=DATA, HOME=Path.home()))}
+    return {p for p in out if p.is_file()}
+
+
 def duplicates() -> tuple[list, list]:
-    """Every credential value that exists in more than one store.
+    """Every credential value that exists in more than one DATACORE-OWNED store.
 
     Returns (divergent, redundant). The split matters more than the count:
 
       DIVERGENT — the copies disagree. One of them is being read by something,
       and it is not knowable from here which. This is the state that produced
-      "works by hand, 401 under cron": ~/.config/cos.env held a revoked token
-      and EXPORTED it over the store that could refresh.
+      "works by hand, 401 under cron".
 
-      REDUNDANT — the copies agree today. Harmless right now and a countdown:
-      when the value next changes, whichever copy is not updated becomes
-      divergent, silently.
+      REDUNDANT — the copies agree today. Harmless now and a countdown: when the
+      value next changes, whichever copy is not updated becomes divergent,
+      silently.
+
+    Files owned by another application are scanned but namespaced separately, so
+    hermes holding its own @kton9_bot token is not reported as drift from the
+    Datacore bot. They are different credentials that share a variable name, and
+    conflating them produces noise that trains people to ignore the check.
     """
+    owned = _expand(KNOWN_STORES())
+    external = _expand(EXTERNAL_STORES()) - owned
+
     seen: dict[str, list[tuple[Path, str]]] = {}
-    for path in _store_paths():
+    for path in sorted(owned):
         for var, val in _vars_in(path).items():
             if not any(w in var.upper() for w in
                        ("TOKEN", "KEY", "SECRET", "PASSWORD", "PAT", "CREDENTIAL")):
@@ -423,54 +484,24 @@ def duplicates() -> tuple[list, list]:
     return divergent, redundant
 
 
-
-# ---- Liveness: ask the provider, do not read the file ----------------------
-#
-# Every check in this installation before now asked whether a value was PRESENT.
-# oauth_health_check returned exit 0 and "no expiresAt (long-lived token?)" on a
-# credential that could not authenticate at all. Presence is not health; only the
-# provider knows.
-#
-# Endpoints are chosen to be free and side-effect-free. A verifier that costs
-# money or writes something is one nobody dares run, and an unrun check is the
-# same as no check.
-VERIFIERS = {
-    # Telegram bots — getMe is free and read-only.
-    "TELEGRAM_BOT_TOKEN": ("https://api.telegram.org/bot{v}/getMe", None, '"ok":true'),
-    "WINSTON_BOT_TOKEN":  ("https://api.telegram.org/bot{v}/getMe", None, '"ok":true'),
-    "REDALERT_BOT_TOKEN": ("https://api.telegram.org/bot{v}/getMe", None, '"ok":true'),
-    # Key-introspection endpoints: free, and they answer the only question that
-    # matters — does the provider still accept this.
-    "OPENROUTER_API_KEY": ("https://openrouter.ai/api/v1/key", "Bearer {v}", "data"),
-    "ANTHROPIC_API_KEY":  ("https://api.anthropic.com/v1/models", "x-api-key: {v}", "data"),
-    "OPENAI_API_KEY":     ("https://api.openai.com/v1/models", "Bearer {v}", "data"),
-    "GITEA_TOKEN":        ("https://gitea.datafund.io/api/v1/user", "token {v}", "login"),
-    "READWISE_ACCESS_TOKEN": ("https://readwise.io/api/v2/auth/", "Token {v}", None),
-    "OURA_PERSONAL_ACCESS_TOKEN": (
-        "https://api.ouraring.com/v2/usercollection/personal_info", "Bearer {v}", None),
-    "GH_TOKEN":           ("https://api.github.com/user", "Bearer {v}", "login"),
-    # The Claude subscription token. Anthropic rejects a raw-API call with this
-    # OAuth token (429/400 regardless of validity — measured), so the only
-    # honest probe is the first-party client, which is what actually consumes it.
-    "CLAUDE_CODE_OAUTH_TOKEN": ("__cli__", None, None),
-}
-
-# Credentials with no free probe. Listed EXPLICITLY rather than left to fall
-# through to n-a, so the reason is visible and someone can disagree with it. An
-# unlisted credential reporting n-a means "nobody has thought about this yet";
-# a listed one means "we decided, and here is why".
-NO_PROBE = {
-    "GEMINI_API_KEY": "no free introspection endpoint; every call bills",
-    "PERPLEXITY_API_KEY": "no free introspection endpoint",
-    "SERPAPI_API_KEY": "quota-metered; a probe consumes a search",
-    "GAMMA_API_KEY": "no public introspection endpoint",
-    "EXA_API_KEY": "search is POST-only and metered; a probe consumes quota",
-    "TELEGRAM_CHAT_ID": "an identifier, not a secret — nothing to authenticate",
-    "WINSTON_CHAT_ID": "an identifier, not a secret",
-}
+def external_namespace() -> list:
+    """What other applications hold under names we also use. Informational."""
+    owned = _expand(KNOWN_STORES())
+    external = _expand(EXTERNAL_STORES()) - owned
+    ours = set()
+    for path in owned:
+        ours |= set(_vars_in(path))
+    out = []
+    for path in sorted(external):
+        for var, val in _vars_in(path).items():
+            if var in ours and any(w in var.upper() for w in
+                                   ("TOKEN", "KEY", "SECRET", "PAT")):
+                out.append((var, path, fingerprint(val)))
+    return out
 
 
-def verify_value(var: str, value: str, timeout: int = 25) -> tuple[str, str]:
+def verify_value(var: str, value: str, timeout: int = 25,
+                 entry: dict | None = None) -> tuple[str, str]:
     """Return (state, detail) where state is ok / FAIL / n-a.
 
     n-a means "no verifier for this variable" — reported, never counted as a
@@ -508,7 +539,7 @@ def verify_value(var: str, value: str, timeout: int = 25) -> tuple[str, str]:
 
     if var in NO_PROBE:
         return "n-a", f"no probe by design: {NO_PROBE[var]}"
-    spec = VERIFIERS.get(var)
+    spec = VERIFIERS.get(var) or _entry_verifier(entry or {})
     if not spec or not spec[0]:
         return "n-a", "no verifier declared for this variable"
     url, auth, expect = spec
@@ -577,8 +608,16 @@ def main() -> int:
 
     if a.op == "duplicates":
         div, red = duplicates()
+        ext = external_namespace()
         if not div and not red:
-            print("  no credential appears in more than one store")
+            print("  no credential appears in more than one Datacore-owned store")
+            if ext:
+                # Still worth showing: a name collision is not drift, but it is
+                # how someone reads the wrong value into the wrong app.
+                print(f"\n  {len(ext)} name collision(s) with app-owned config — NOT our drift:")
+                for var, path, fp in ext:
+                    print(f"    {var:30} {fp}  {path}")
+                print("    (a different credential that shares a variable name)")
             return 0
         if div:
             print(f"  {len(div)} DIVERGENT — copies disagree, and which one is read is not knowable here:")
@@ -586,6 +625,12 @@ def main() -> int:
                 print(f"    {var}")
                 for path, fp in places:
                     print(f"      {fp}  {path}")
+        ext = external_namespace()
+        if ext:
+            print(f"\n  {len(ext)} name collision(s) with app-owned config — NOT our drift:")
+            for var, path, fp in ext:
+                print(f"    {var:30} {fp}  {path}")
+            print("    (a different credential that shares a variable name)")
         if red:
             print(f"\n  {len(red)} redundant — copies agree today, divergent the next time one changes:")
             for var, places in red:

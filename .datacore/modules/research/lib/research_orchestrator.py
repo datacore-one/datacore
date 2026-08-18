@@ -1204,29 +1204,43 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
 def send_telegram_summary(processed: List[Dict[str, Any]], failed: List[Dict[str, str]],
                           notebook_id: Optional[str]) -> bool:
     """Push a research-run summary to Telegram. Returns True on success."""
+    # Broker-served. An earlier version of this fell back to reading
+    # ~/.datacore/datacore.env directly, and on winston that file holds a
+    # DIFFERENT bot's token — @kton9_bot, which belongs to hermes, not
+    # @datacore_1_bot. The research digest was being addressed to the wrong bot
+    # with nothing reporting an error, which is exactly the failure mode a
+    # file-search credential lookup produces: it finds *a* value and cannot tell
+    # you it is the wrong one.
     token = os.environ.get('TELEGRAM_BOT_TOKEN')
     chat_id = os.environ.get('TELEGRAM_CHAT_ID')
-    # Fall back to the host env file. Under cron, or when an agent shells out,
-    # the process inherits almost nothing, so these were routinely absent and
-    # the run finished having told nobody it was done — the notification path
-    # failing exactly when it is the only thing that would report the run.
-    if not token or not chat_id:
+    if not token:
+        broker = Path.home() / "Data" / ".datacore" / "lib" / "creds.py"
+        if broker.is_file():
+            try:
+                r = subprocess.run(
+                    ["python3", str(broker), "get", "mrdata-telegram-bot",
+                     "--consumer", "research.digest"],
+                    capture_output=True, text=True, timeout=90)
+                if r.returncode == 0 and r.stdout.strip():
+                    token = r.stdout.strip()
+                else:
+                    log(f"  [creds] broker declined the telegram bot token: "
+                        f"{(r.stderr or '').strip()[:120]}")
+            except Exception as e:  # noqa: BLE001
+                log(f"  [creds] broker unavailable ({type(e).__name__})")
+    if not chat_id:
+        # The chat id is an identifier, not a secret, and is not brokered.
         env_file = Path.home() / ".datacore" / "datacore.env"
         try:
             for line in env_file.read_text().splitlines():
                 line = line.strip()
                 if line.startswith("export "):
                     line = line[7:]
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, _, v = line.partition("=")
-                v = v.strip().strip('"').strip("'")
-                if k.strip() == "TELEGRAM_BOT_TOKEN" and not token:
-                    token = v
-                elif k.strip() == "TELEGRAM_CHAT_ID" and not chat_id:
-                    chat_id = v
+                if line.startswith("TELEGRAM_CHAT_ID="):
+                    chat_id = line.split("=", 1)[1].strip().strip('"').strip("'")
         except OSError:
             pass
+
     if not token or not chat_id:
         missing = [n for n, v in (("TELEGRAM_BOT_TOKEN", token),
                                   ("TELEGRAM_CHAT_ID", chat_id)) if not v]
