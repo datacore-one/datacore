@@ -733,6 +733,75 @@ class CredentialManager:
               f"   ({na} could not be determined — not counted as passing)")
         return 1 if fail else 0
 
+
+    def cmd_adopt_token(self, cred_id: str = "claude-code-oauth") -> int:
+        """Install a freshly minted token into its declared store. ONE place.
+
+        Reads from STDIN only — never argv, which would put the value in shell
+        history and in `ps` output for every user on the box.
+
+        CLEARS any existing refreshToken and expiresAt. That is the important
+        part, not the write: a `setup-token` value is long-lived and is NOT part
+        of the previous credential's refresh pair. Leaving the old refresh token
+        beside it invites the CLI to renew the new token using the old chain —
+        and a single-use refresh chain that two hosts share is precisely what
+        revoked winston's credential twice today.
+
+        Writes NOTHING else. No env copies, no propagation. Four derived copies
+        were removed on 2026-08-18 because a copy cannot refresh itself and is
+        therefore a countdown; re-creating one here would undo that.
+        """
+        import json as _json  # noqa: PLC0415
+        ca = self._access()
+
+        if sys.stdin.isatty():
+            print("  paste the token from `claude setup-token`, then Ctrl-D:",
+                  file=sys.stderr)
+        token = sys.stdin.read().strip()
+        if not token:
+            print("no token on stdin", file=sys.stderr)
+            return 2
+        if not re.fullmatch(r"[A-Za-z0-9._\-]+", token):
+            print("that does not look like a token (unexpected characters)",
+                  file=sys.stderr)
+            return 2
+
+        try:
+            entry = ca._entry(cred_id)
+        except Exception as exc:  # noqa: BLE001
+            print(f"{exc}", file=sys.stderr)
+            return 1
+
+        store = ca._store_for(entry)
+        if not store.startswith("json:"):
+            print(f"{cred_id} declares storage {store!r}; adopt-token only "
+                  f"handles a json: store", file=sys.stderr)
+            return 1
+        path = Path(store.split(":", 1)[1]).expanduser()
+
+        try:
+            cur = _json.loads(path.read_text()) if path.exists() else {}
+        except (OSError, ValueError):
+            cur = {}
+        blk = cur.setdefault("claudeAiOauth", {})
+        old = blk.get("accessToken", "")
+        blk["accessToken"] = token
+        blk.pop("refreshToken", None)      # see docstring — this is the point
+        blk.pop("expiresAt", None)
+        blk.setdefault("scopes", ["user:inference", "user:profile"])
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_json.dumps(cur))
+        os.chmod(path, 0o600)
+        print(f"  wrote {ca.fingerprint(old)} -> {ca.fingerprint(token)}  {path}",
+              file=sys.stderr)
+        print("  cleared refreshToken/expiresAt — a long-lived token has no "
+              "refresh pair", file=sys.stderr)
+
+        state, detail = ca.verify_value("CLAUDE_CODE_OAUTH_TOKEN", token)
+        print(f"  live check: {state} — {detail}", file=sys.stderr)
+        return 0 if state == "ok" else 1
+
     def cmd_sync(self, instance: str = None) -> int:
         """Run sync.sh from the secrets repo."""
         secrets_dir = self.data_dir / ".datacore" / "secrets"
@@ -1017,6 +1086,10 @@ def main():
     get_p.add_argument("--consumer", default="cli", help="who is asking — recorded in the ledger")
     get_p.add_argument("--no-verify", action="store_true", help="skip the liveness call")
 
+    adopt_p = subparsers.add_parser("adopt-token",
+        help="Install a freshly minted token from stdin into its declared store")
+    adopt_p.add_argument("--id", dest="adopt_id", default="claude-code-oauth")
+
     doctor_p = subparsers.add_parser("doctor", help="Liveness for every credential (ok/FAIL/n-a)")
     doctor_p.add_argument("--id", dest="doctor_id", default=None)
 
@@ -1052,6 +1125,8 @@ def main():
     elif args.command == "get":
         return mgr.cmd_get(args.credential, consumer=args.consumer,
                            no_verify=args.no_verify)
+    elif args.command == "adopt-token":
+        return mgr.cmd_adopt_token(args.adopt_id)
     elif args.command == "doctor":
         return mgr.cmd_doctor(args.doctor_id)
     elif args.command == "sync":
