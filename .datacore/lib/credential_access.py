@@ -500,6 +500,66 @@ def external_namespace() -> list:
     return out
 
 
+# ---- Liveness: ask the provider, do not read the file ----------------------
+#
+# Every check here before now asked whether a value was PRESENT.
+# oauth_health_check returned exit 0 and "no expiresAt (long-lived token?)" on a
+# credential that could not authenticate. Presence is not health; only the
+# provider knows.
+#
+# Endpoints are free and side-effect-free. A verifier that costs money or writes
+# something is one nobody dares run, and an unrun check is no check.
+#
+# No self-hosted URLs here: this ships as a product, and a Gitea host belongs to
+# the installation, not to this file. Those come from the index entry's
+# `api_base` via _entry_verifier().
+VERIFIERS = {
+    "TELEGRAM_BOT_TOKEN": ("https://api.telegram.org/bot{v}/getMe", None, '"ok":true'),
+    "WINSTON_BOT_TOKEN":  ("https://api.telegram.org/bot{v}/getMe", None, '"ok":true'),
+    "REDALERT_BOT_TOKEN": ("https://api.telegram.org/bot{v}/getMe", None, '"ok":true'),
+    "OPENROUTER_API_KEY": ("https://openrouter.ai/api/v1/key", "Bearer {v}", "data"),
+    "ANTHROPIC_API_KEY":  ("https://api.anthropic.com/v1/models", "x-api-key: {v}", "data"),
+    "OPENAI_API_KEY":     ("https://api.openai.com/v1/models", "Bearer {v}", "data"),
+    "READWISE_ACCESS_TOKEN": ("https://readwise.io/api/v2/auth/", "Token {v}", None),
+    "OURA_PERSONAL_ACCESS_TOKEN": (
+        "https://api.ouraring.com/v2/usercollection/personal_info", "Bearer {v}", None),
+    "GH_TOKEN":           ("https://api.github.com/user", "Bearer {v}", "login"),
+    # Anthropic rejects a raw-API call with a subscription OAuth token (429/400
+    # regardless of validity — measured), so the only honest probe is the
+    # first-party client, which is what actually consumes it.
+    "CLAUDE_CODE_OAUTH_TOKEN": ("__cli__", None, None),
+}
+
+# Credentials with no free probe. Listed EXPLICITLY rather than left to fall
+# through, so the reason is visible and someone can disagree with it. An unlisted
+# credential reporting n-a means "nobody has thought about this"; a listed one
+# means "we decided, and here is why".
+NO_PROBE = {
+    "GEMINI_API_KEY": "no free introspection endpoint; every call bills",
+    "PERPLEXITY_API_KEY": "no free introspection endpoint",
+    "SERPAPI_API_KEY": "quota-metered; a probe consumes a search",
+    "GAMMA_API_KEY": "no public introspection endpoint",
+    "EXA_API_KEY": "search is POST-only and metered; a probe consumes quota",
+    "TELEGRAM_CHAT_ID": "an identifier, not a secret — nothing to authenticate",
+    "WINSTON_CHAT_ID": "an identifier, not a secret",
+}
+
+
+def _entry_verifier(entry: dict) -> tuple | None:
+    """A verifier built from the index entry itself.
+
+    Self-hosted services have no universal endpoint — a Gitea URL belongs to the
+    installation. An entry declaring `api_base` gets a probe; one that does not
+    reports n-a and says why, which is honest and portable.
+    """
+    base = (entry or {}).get("api_base")
+    if not base:
+        return None
+    if (entry.get("provider") or "").lower() == "gitea":
+        return (base.rstrip("/") + "/api/v1/user", "token {v}", "login")
+    return (base.rstrip("/"), "Bearer {v}", None)
+
+
 def verify_value(var: str, value: str, timeout: int = 25,
                  entry: dict | None = None) -> tuple[str, str]:
     """Return (state, detail) where state is ok / FAIL / n-a.
