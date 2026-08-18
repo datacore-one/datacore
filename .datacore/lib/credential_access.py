@@ -292,6 +292,23 @@ def fingerprint(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()[:12] if value else "(empty)"
 
 
+def replication_warning(entry: dict) -> str | None:
+    """Is this credential one that cannot be copied between hosts?
+
+    A single-use refresh token cannot be replicated: whichever holder refreshes
+    first invalidates every other copy, and the losers cannot tell — they hold a
+    value that looks fine and 401s. Distribution tooling will happily copy such a
+    credential and produce exactly that, so the index declares it and the tools
+    say so instead of trying harder.
+    """
+    if entry.get("replicable") is False:
+        return (f"{entry.get('id')} is NOT replicable: single-use refresh means a "
+                f"copied value is revoked the moment another host refreshes. "
+                f"Mint per host" +
+                (f" (mint_host: {entry['mint_host']})" if entry.get("mint_host") else "") + ".")
+    return None
+
+
 def get_value(name: str, *, consumer: str = "") -> str:
     """The value, attested. Raises rather than returning a value it guessed at."""
     c = _entry(name)
