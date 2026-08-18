@@ -309,12 +309,92 @@ def duplicates() -> tuple[list, list]:
     return divergent, redundant
 
 
+
+# ---- Liveness: ask the provider, do not read the file ----------------------
+#
+# Every check in this installation before now asked whether a value was PRESENT.
+# oauth_health_check returned exit 0 and "no expiresAt (long-lived token?)" on a
+# credential that could not authenticate at all. Presence is not health; only the
+# provider knows.
+#
+# Endpoints are chosen to be free and side-effect-free. A verifier that costs
+# money or writes something is one nobody dares run, and an unrun check is the
+# same as no check.
+VERIFIERS = {
+    "TELEGRAM_BOT_TOKEN": ("https://api.telegram.org/bot{v}/getMe", None, "ok"),
+    "WINSTON_BOT_TOKEN":  ("https://api.telegram.org/bot{v}/getMe", None, "ok"),
+    "OPENROUTER_API_KEY": ("https://openrouter.ai/api/v1/key", "Bearer {v}", "data"),
+    "GITEA_TOKEN":        (None, None, None),   # host-specific; no public probe
+}
+
+
+def verify_value(var: str, value: str, timeout: int = 25) -> tuple[str, str]:
+    """Return (state, detail) where state is ok / FAIL / n-a.
+
+    n-a means "no verifier for this variable" — reported, never counted as a
+    pass. A check whose "healthy" and "could not tell" are the same output is
+    not a check.
+    """
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    spec = VERIFIERS.get(var)
+    if not spec or not spec[0]:
+        return "n-a", "no verifier declared for this variable"
+    url, auth, expect = spec
+    if not value:
+        return "FAIL", "empty value"
+    try:
+        req = urllib.request.Request(url.format(v=value))
+        if auth:
+            req.add_header("Authorization", auth.format(v=value))
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read(400).decode(errors="ignore")
+        ok = (expect in body) if expect else True
+        return ("ok", f"HTTP {r.status}") if ok else ("FAIL", f"HTTP {r.status}, unexpected body")
+    except urllib.error.HTTPError as e:
+        return "FAIL", f"HTTP {e.code} {e.read(160).decode(errors='ignore')[:100]}"
+    except Exception as e:  # noqa: BLE001 — a network fault is n-a, not a failure
+        return "n-a", f"probe failed: {type(e).__name__}: {str(e)[:80]}"
+
+
+def test_divergent() -> int:
+    """For every divergent credential, ask the provider which copy is real."""
+    div, _ = duplicates()
+    if not div:
+        print("  no divergent credentials on this host")
+        return 0
+    worst = 0
+    for var, places in div:
+        print(f"  {var}")
+        results = []
+        for path, fp in places:
+            val = _vars_in(path).get(var, "")
+            state, detail = verify_value(var, val)
+            results.append(state)
+            mark = {"ok": "WORKS  ", "FAIL": "DEAD   ", "n-a": "unknown"}[state]
+            print(f"    {mark} {fp}  {path}")
+            if state != "ok":
+                print(f"             {detail[:88]}")
+        if "ok" in results and "FAIL" in results:
+            print("    -> one copy is live and another is dead. The dead copy is a "
+                  "trap: whichever reader finds it first reports the credential invalid.")
+            worst = max(worst, 1)
+        elif results and all(r == "n-a" for r in results):
+            print("    -> no verifier; cannot say which copy is real. Declare one.")
+    return worst
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("op", choices=["resolve", "get", "unindexed", "duplicates"])
+    ap.add_argument("op", choices=["resolve", "get", "unindexed", "duplicates", "test-divergent"])
     ap.add_argument("name", nargs="?", default="")
     ap.add_argument("--consumer", default="cli")
     a = ap.parse_args()
+
+    if a.op == "test-divergent":
+        return test_divergent()
 
     if a.op == "duplicates":
         div, red = duplicates()
