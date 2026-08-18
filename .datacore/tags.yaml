@@ -68,6 +68,13 @@ ai_delegation:
     github: "ai-module"
     agent: "module-registrar"
 
+  AI-speculative:
+    description: "Tasks deliberately below confidence threshold for KumoRFM-2 signal generation"
+    org: ":AI:speculative:"
+    github: "ai-speculative"
+    agent: "nightshift"
+    notes: "See kumorfm2-signal-generation-2026-08-15.md for routing spec"
+
 # =============================================================================
 # MODULE AI DELEGATION TAGS
 # Compound :AI: tags used by modules for agent routing.
