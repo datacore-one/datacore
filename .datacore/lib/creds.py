@@ -295,7 +295,13 @@ class CredentialManager:
     def __init__(self, data_dir: str = None):
         self.data_dir = Path(data_dir or os.environ.get(
             "DATACORE_ROOT", os.path.expanduser("~/Data")))
-        self.index_path = self.data_dir / ".datacore" / "specs" / "credential-index.yaml"
+        # THE INDEX LIVES IN THE SECRETS REPO, not in specs/. Both files existed
+        # for four months and drifted: specs/ was last updated 2026-04-23 with 35
+        # entries while the secrets-repo copy kept being maintained. Only the
+        # secrets-repo copy travels — it is inside the repo `creds sync` pulls to
+        # every instance, so it is the only one a second machine can ever see.
+        # specs/ is left as a pointer stub.
+        self.index_path = self.data_dir / ".datacore" / "secrets" / "credential-index.yaml"
         self.example_path = self.data_dir / ".datacore" / "specs" / "credential-index.yaml.example"
 
     def _load_index(self) -> Optional[CredentialIndex]:
@@ -437,7 +443,17 @@ class CredentialManager:
                     ))
 
             # Check 4: No locations or var_name
-            has_location = bool(cred.locations) or cred.extra.get("var_name") or cred.extra.get("vars")
+            #
+            # `file_path` counts. A file-based credential — an ssh_key, a service
+            # account JSON — has no environment variable by nature, and demanding
+            # one flagged the single best-documented entry in the index
+            # (plur-website-deploy-key, which carries file_path, public_key,
+            # fingerprint, hosts and mirrored_to) as an error. The entry was right
+            # and the rule was too narrow.
+            has_location = (bool(cred.locations)
+                            or cred.extra.get("var_name")
+                            or cred.extra.get("vars")
+                            or cred.extra.get("file_path"))
             if not has_location:
                 result.issues.append(AuditIssue(
                     severity="error",
@@ -592,6 +608,118 @@ class CredentialManager:
         else:
             print("No credentials were marked as rotated.")
         return 0
+
+
+    # ---- Broker + liveness (DIP-0018 rotating-credential extension) --------
+
+    def _access(self):
+        """The single resolver. Imported lazily so the rest of the CLI still
+        works on a host where the module has not been deployed yet."""
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import credential_access as ca  # noqa: PLC0415
+        return ca
+
+    def cmd_get(self, cred_id: str, consumer: str = "cli",
+                no_verify: bool = False) -> int:
+        """Serve a currently-valid credential value. THE BROKER.
+
+        Holds an exclusive lock for the credential id for the whole operation.
+        That lock is the entire point: a rotating credential's refresh token is
+        SINGLE-USE, so two processes refreshing concurrently do not both get a
+        fresh value — the loser invalidates the winner's. On 2026-08-17 that
+        produced an empty access token in the CLI store while four env copies
+        held a superseded one, and the machine that could refresh had lost.
+
+        It prints the VALUE on stdout (that is the point of a broker) and
+        everything else on stderr, so `X=$(creds get id)` is safe.
+        """
+        import fcntl  # noqa: PLC0415
+        ca = self._access()
+
+        lockdir = Path.home() / ".datacore" / "locks"
+        lockdir.mkdir(parents=True, exist_ok=True)
+        lock = lockdir / f"cred-{cred_id.replace('/', '_')}.lock"
+        fh = open(lock, "w")
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            try:
+                value = ca.get_value(cred_id, consumer=consumer)
+            except (ca.CredentialNotIndexed, ca.CredentialUnresolvable) as exc:
+                print(f"{exc}", file=sys.stderr)
+                return 1
+
+            entry = ca._entry(cred_id)
+            var = entry.get("var_name") or (entry.get("vars") or [cred_id])[0]
+
+            if not no_verify:
+                state, detail = ca.verify_value(var, value)
+                if state == "FAIL":
+                    # Refusing to serve a value proven dead is the difference
+                    # between this and reading the file yourself. A dead value
+                    # served silently is what sends someone to rotate a
+                    # credential that was fine.
+                    print(f"{cred_id}: value is DEAD ({detail}). Not served.",
+                          file=sys.stderr)
+                    if entry.get("lifecycle") == "rotating":
+                        owner = entry.get("owner", "unresolved")
+                        mint = entry.get("mint_host", "unknown")
+                        print(f"  rotating: owner={owner} mint_host={mint} — "
+                              f"renew there, not here.", file=sys.stderr)
+                    return 1
+                if state == "n-a":
+                    print(f"{cred_id}: served WITHOUT verification ({detail})",
+                          file=sys.stderr)
+            print(value)
+            return 0
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+            fh.close()
+
+    def cmd_doctor(self, cred_id: str = None) -> int:
+        """Liveness for every indexed credential. ok / FAIL / n-a.
+
+        Replaces shape-checking. `oauth_health_check` returned exit 0 and
+        "no expiresAt (long-lived token?)" against a credential that could not
+        authenticate — because it read the file rather than asking the provider.
+        n-a is reported and never counted as a pass.
+        """
+        ca = self._access()
+        index = self._load_index()
+        creds = [c for c in index.credentials
+                 if not cred_id or c.id == cred_id]
+        if not creds:
+            print(f"no credential matching {cred_id!r}")
+            return 2
+
+        ok = fail = na = 0
+        rows = []
+        for c in creds:
+            var = c.extra.get("var_name") or (c.extra.get("vars") or [None])[0]
+            if not var:
+                rows.append(("n-a", c.id, "file-based credential; no env var to probe"))
+                na += 1
+                continue
+            try:
+                value = ca.get_value(c.id, consumer="creds-doctor")
+            except Exception as exc:  # noqa: BLE001
+                rows.append(("FAIL", c.id, f"unreadable: {str(exc)[:70]}"))
+                fail += 1
+                continue
+            state, detail = ca.verify_value(var, value)
+            rows.append((state, c.id, detail))
+            if state == "ok":
+                ok += 1
+            elif state == "FAIL":
+                fail += 1
+            else:
+                na += 1
+
+        for state, cid, detail in sorted(rows, key=lambda r: {"FAIL": 0, "n-a": 1, "ok": 2}[r[0]]):
+            print(f"  {state:5} {cid:32} {detail[:70]}")
+        print(f"\n  ok {ok}   FAIL {fail}   n-a {na}"
+              f"   ({na} could not be determined — not counted as passing)")
+        return 1 if fail else 0
 
     def cmd_sync(self, instance: str = None) -> int:
         """Run sync.sh from the secrets repo."""
@@ -872,6 +1000,14 @@ def main():
     add_p.add_argument("--description", help="Description")
 
     # sync
+    get_p = subparsers.add_parser("get", help="Serve a verified credential value (broker)")
+    get_p.add_argument("credential")
+    get_p.add_argument("--consumer", default="cli", help="who is asking — recorded in the ledger")
+    get_p.add_argument("--no-verify", action="store_true", help="skip the liveness call")
+
+    doctor_p = subparsers.add_parser("doctor", help="Liveness for every credential (ok/FAIL/n-a)")
+    doctor_p.add_argument("--id", dest="doctor_id", default=None)
+
     sync_p = subparsers.add_parser("sync", help="Sync credentials from central repo")
     sync_p.add_argument("--instance", help="Instance name (auto-detected if not given)")
 
@@ -901,6 +1037,11 @@ def main():
             scope=args.scope, space=args.space, project=args.project,
             tier=args.tier, category=args.category, provider=args.provider,
             description=args.description)
+    elif args.command == "get":
+        return mgr.cmd_get(args.credential, consumer=args.consumer,
+                           no_verify=args.no_verify)
+    elif args.command == "doctor":
+        return mgr.cmd_doctor(args.doctor_id)
     elif args.command == "sync":
         return mgr.cmd_sync(instance=getattr(args, 'instance', None))
     return 1

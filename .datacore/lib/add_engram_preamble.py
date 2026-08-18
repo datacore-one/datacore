@@ -19,6 +19,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import discover_spaces  # noqa: E402
+
 DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
 PREAMBLE_MARKER = "<!-- engram-injection-preamble -->"
 
@@ -44,7 +47,10 @@ def find_agent_files():
             files[f.stem] = f
 
     # Space agents
-    for space_dir in sorted(DATACORE_ROOT.glob("[0-9]-*/.datacore/agents")):
+    for space in discover_spaces(DATACORE_ROOT):
+        space_dir = space.path / ".datacore" / "agents"
+        if not space_dir.is_dir():
+            continue
         for f in space_dir.glob("*.md"):
             if f.stem not in files:
                 files[f.stem] = f

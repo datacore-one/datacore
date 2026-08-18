@@ -24,6 +24,7 @@ from collections import defaultdict
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from org_workspace import OrgWorkspace
+from spaces import discover_spaces  # noqa: E402
 
 OPEN = {"TODO", "NEXT", "WAITING"}
 
@@ -39,7 +40,10 @@ def main() -> int:
     args = ap.parse_args()
 
     removed = kept = 0
-    for f in sorted(args.root.glob("[0-9]-*/org/next_actions.org")):
+    for space in discover_spaces(args.root):
+        f = space.path / "org" / "next_actions.org"
+        if not f.exists():
+            continue
         ws = OrgWorkspace(); ws.load(str(f))
         groups = defaultdict(list)
         for n in ws.all_nodes():
