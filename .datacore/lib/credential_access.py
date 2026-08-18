@@ -541,6 +541,18 @@ VERIFIERS = {
     "OURA_PERSONAL_ACCESS_TOKEN": (
         "https://api.ouraring.com/v2/usercollection/personal_info", "Bearer {v}", None),
     "GH_TOKEN":           ("https://api.github.com/user", "Bearer {v}", "login"),
+    # X / Twitter. Both credential classes get a probe, because they fail
+    # independently and for different reasons: the app-only bearer dies when the
+    # app's keys are regenerated in the developer portal, the OAuth2 user token
+    # when the user-context grant is revoked or rotated. On 2026-08-18 both were
+    # dead and nothing said so — plur-x-oauth2 reported n-a ("no verifier"),
+    # which is precisely the gap that let a release announcement fail at the
+    # last step after every other step had gone green.
+    "PLUR_X_BEARER_TOKEN": ("https://api.twitter.com/2/users/by/username/plur_ai",
+                            "Bearer {v}", "data"),
+    "PLUR_X_OAUTH2_ACCESS_TOKEN": ("https://api.twitter.com/2/users/me",
+                                   "Bearer {v}", "data"),
+    "JSSR_X_BEARER_TOKEN": ("https://api.twitter.com/2/users/me", "Bearer {v}", "data"),
     # Anthropic rejects a raw-API call with a subscription OAuth token (429/400
     # regardless of validity — measured), so the only honest probe is the
     # first-party client, which is what actually consumes it.
