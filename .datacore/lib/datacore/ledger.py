@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
-__all__ = ["attest", "attests", "EGRESS_KINDS"]
+__all__ = ["attest", "attests", "EGRESS_KINDS", "CREDENTIAL_KINDS", "ATTEST_KINDS"]
 
 # The vocabulary. A `kind` outside this set is a typo until someone adds it here
 # deliberately — which is the point: the conformance check reads this, so a
@@ -56,6 +56,33 @@ EGRESS_KINDS = frozenset({
     # to answer "when did this go on sale?", which is the question that matters.
     "etsy.listing", "etsy.publish",
 })
+
+# Credential access. NOT egress — none of it reaches a third party — which is
+# why it is a separate set: `egress_scan` requires every EGRESS_KINDS use to be
+# declared in a module manifest, and credential access happens in core, not in
+# modules. Conflating them would demand manifest entries that cannot exist.
+#
+# It is attested for a different reason: on 2026-08-17 five copies of one token
+# drifted across a host and nobody could say which process had written which
+# store. Reconstructing it took an hour of file mtimes and inference, and the
+# answer — an operator's own manual sync run — was a guess until confirmed.
+# `credential.write` makes that a query.
+#
+# `read` is included deliberately, not just `write`. "Which processes actually
+# consume this credential" is the question that decides whether a fix reaching
+# four of five stores is complete, and today it is answered by grepping and
+# hoping.
+CREDENTIAL_KINDS = frozenset({
+    "credential.read",     # a value was served to a consumer
+    "credential.write",    # a store was updated
+    "credential.refresh",  # a rotating credential was renewed — the single-use
+                           # operation two processes must never race
+    "credential.verify",   # liveness was checked with a real call
+})
+
+# Everything `attest` accepts. Kept as a union so a caller cannot pass a kind
+# from neither vocabulary without it being a plain typo.
+ATTEST_KINDS = EGRESS_KINDS | CREDENTIAL_KINDS
 
 
 def _core_lib() -> Path | None:
