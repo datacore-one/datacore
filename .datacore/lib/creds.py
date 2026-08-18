@@ -295,7 +295,13 @@ class CredentialManager:
     def __init__(self, data_dir: str = None):
         self.data_dir = Path(data_dir or os.environ.get(
             "DATACORE_ROOT", os.path.expanduser("~/Data")))
-        self.index_path = self.data_dir / ".datacore" / "specs" / "credential-index.yaml"
+        # THE INDEX LIVES IN THE SECRETS REPO, not in specs/. Both files existed
+        # for four months and drifted: specs/ was last updated 2026-04-23 with 35
+        # entries while the secrets-repo copy kept being maintained. Only the
+        # secrets-repo copy travels — it is inside the repo `creds sync` pulls to
+        # every instance, so it is the only one a second machine can ever see.
+        # specs/ is left as a pointer stub.
+        self.index_path = self.data_dir / ".datacore" / "secrets" / "credential-index.yaml"
         self.example_path = self.data_dir / ".datacore" / "specs" / "credential-index.yaml.example"
 
     def _load_index(self) -> Optional[CredentialIndex]:
@@ -437,7 +443,17 @@ class CredentialManager:
                     ))
 
             # Check 4: No locations or var_name
-            has_location = bool(cred.locations) or cred.extra.get("var_name") or cred.extra.get("vars")
+            #
+            # `file_path` counts. A file-based credential — an ssh_key, a service
+            # account JSON — has no environment variable by nature, and demanding
+            # one flagged the single best-documented entry in the index
+            # (plur-website-deploy-key, which carries file_path, public_key,
+            # fingerprint, hosts and mirrored_to) as an error. The entry was right
+            # and the rule was too narrow.
+            has_location = (bool(cred.locations)
+                            or cred.extra.get("var_name")
+                            or cred.extra.get("vars")
+                            or cred.extra.get("file_path"))
             if not has_location:
                 result.issues.append(AuditIssue(
                     severity="error",

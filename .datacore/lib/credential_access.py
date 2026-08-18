@@ -233,12 +233,107 @@ def unindexed(paths: list[Path] | None = None) -> list[tuple[Path, str]]:
     return out
 
 
+
+# Every place a credential value is known to live on a Datacore host. Listed
+# explicitly rather than globbed: the point is to catch copies in places that
+# are NOT the canonical store, and a glob of the canonical directory cannot see
+# ~/.config/cos.env or /etc/datacored.env at all — which is exactly where the
+# 2026-08-17 drift lived.
+KNOWN_STORES = (
+    "{DATA}/.datacore/env/.env",              # canonical assembled
+    "{DATA}/.datacore/env/*.env",             # per-service, legacy
+    "{HOME}/.config/cos.env",                 # sourced with `set -a` by every cos_*.sh
+    "/etc/datacored.env",                     # datacored.service
+    "{HOME}/.hermes/.env",                    # hermes gateway
+    "{HOME}/.datacore/datacore.env",          # agents, assorted crons
+)
+
+
+def _store_paths() -> list[Path]:
+    import glob as _glob
+    out: list[Path] = []
+    for pat in KNOWN_STORES:
+        s = pat.format(DATA=DATA, HOME=Path.home())
+        out.extend(Path(x) for x in _glob.glob(s))
+    return sorted({p for p in out if p.is_file()})
+
+
+def _vars_in(path: Path) -> dict[str, str]:
+    vals: dict[str, str] = {}
+    try:
+        text = path.read_text()
+    except OSError:
+        return vals
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[7:]
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        v = v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        vals[k.strip()] = v
+    return vals
+
+
+def duplicates() -> tuple[list, list]:
+    """Every credential value that exists in more than one store.
+
+    Returns (divergent, redundant). The split matters more than the count:
+
+      DIVERGENT — the copies disagree. One of them is being read by something,
+      and it is not knowable from here which. This is the state that produced
+      "works by hand, 401 under cron": ~/.config/cos.env held a revoked token
+      and EXPORTED it over the store that could refresh.
+
+      REDUNDANT — the copies agree today. Harmless right now and a countdown:
+      when the value next changes, whichever copy is not updated becomes
+      divergent, silently.
+    """
+    seen: dict[str, list[tuple[Path, str]]] = {}
+    for path in _store_paths():
+        for var, val in _vars_in(path).items():
+            if not any(w in var.upper() for w in
+                       ("TOKEN", "KEY", "SECRET", "PASSWORD", "PAT", "CREDENTIAL")):
+                continue
+            seen.setdefault(var, []).append((path, fingerprint(val)))
+
+    divergent, redundant = [], []
+    for var, places in sorted(seen.items()):
+        if len(places) < 2:
+            continue
+        (divergent if len({fp for _, fp in places}) > 1 else redundant).append(
+            (var, places))
+    return divergent, redundant
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("op", choices=["resolve", "get", "unindexed"])
+    ap.add_argument("op", choices=["resolve", "get", "unindexed", "duplicates"])
     ap.add_argument("name", nargs="?", default="")
     ap.add_argument("--consumer", default="cli")
     a = ap.parse_args()
+
+    if a.op == "duplicates":
+        div, red = duplicates()
+        if not div and not red:
+            print("  no credential appears in more than one store")
+            return 0
+        if div:
+            print(f"  {len(div)} DIVERGENT — copies disagree, and which one is read is not knowable here:")
+            for var, places in div:
+                print(f"    {var}")
+                for path, fp in places:
+                    print(f"      {fp}  {path}")
+        if red:
+            print(f"\n  {len(red)} redundant — copies agree today, divergent the next time one changes:")
+            for var, places in red:
+                print(f"    {var:34} in {len(places)} stores")
+                for path, fp in places:
+                    print(f"      {fp}  {path}")
+        return 1 if div else 0
 
     if a.op == "unindexed":
         rows = unindexed()
