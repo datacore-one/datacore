@@ -251,7 +251,7 @@ if __name__ == "__main__":
         org_file = Path(args.space) / "org" / "next_actions.org"
         ws = OrgWorkspace()
         ws.load(str(org_file))
-        node = ws.get_by_id(args.id)
+        node = ws.find_by_id(args.id)
         if node:
             node.todo = "DONE"
             ws.save()
