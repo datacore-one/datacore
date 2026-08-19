@@ -665,6 +665,11 @@ NO_PROBE = {
     "BUYER_PRIVATE_KEY": "a wallet key; see SELLER_PRIVATE_KEY",
     "WALLET_PRIVATE_KEY": "a wallet key; see SELLER_PRIVATE_KEY",
     "ENGAGEMENT_CHAT_ID": "an identifier, not a secret",
+    # Left behind after their dead keys were deleted 2026-08-19. Identifiers, not
+    # credentials — kept because each still has a consumer, and named here so the
+    # entries report a reason rather than the undecided "no verifier declared".
+    "DO_DROPLET_ID": "an identifier, not a secret — the DO token was deleted as dead",
+    "ETSY_SHOP_ID": "an identifier, not a secret — the Etsy key was deleted as dead",
     "PHONE_TOKEN": "device pairing token; no server-side introspection exists",
 
     # Write-only by design.
