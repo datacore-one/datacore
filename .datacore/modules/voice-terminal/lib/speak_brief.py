@@ -390,17 +390,23 @@ def convert_to_ogg(audio_path):
 
 def _load_telegram_creds(env_file=None):
     """Return (bot_token, chat_id) from env or env files."""
-    env_path = env_file or (
-        Path.home() / "Data" / ".datacore" / "env" / "mrdata.env"
-        if (Path.home() / "Data" / ".datacore" / "env" / "mrdata.env").exists()
-        else Path.home() / "Data" / ".datacore" / "env" / "gateio.env"
-    )
+    envdir = Path.home() / "Data" / ".datacore" / "env"
+    # `creds sync` assembles every credential into .env; the per-service files
+    # predate that consolidation and are no longer regenerated. Read the
+    # canonical store first, keeping the legacy names for unconsolidated hosts.
+    candidates = [Path(env_file)] if env_file else [
+        envdir / ".env",
+        envdir / "mrdata.env",
+        envdir / "gateio.env",
+    ]
     env = {}
-    if Path(env_path).exists():
-        for line in Path(env_path).read_text().strip().split("\n"):
+    for env_path in candidates:
+        if not env_path.exists():
+            continue
+        for line in env_path.read_text().strip().split("\n"):
             if "=" in line and not line.startswith("#"):
                 k, v = line.split("=", 1)
-                env[k.strip()] = v.strip()
+                env.setdefault(k.strip(), v.strip())
     # Also check nightshift.env (server config)
     ns_env = Path.home() / "config" / "nightshift.env"
     if ns_env.exists():
