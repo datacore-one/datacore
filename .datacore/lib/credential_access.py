@@ -557,6 +557,31 @@ VERIFIERS = {
     # regardless of validity — measured), so the only honest probe is the
     # first-party client, which is what actually consumes it.
     "CLAUDE_CODE_OAUTH_TOKEN": ("__cli__", None, None),
+
+    # --- Added 2026-08-19, working down the n-a backlog -------------------
+    # Each of these is a free, read-only, unmetered endpoint. A verifier that
+    # costs money or writes something is one nobody dares run, and an unrun
+    # check is not a check.
+    "DO_API_TOKEN":      ("https://api.digitalocean.com/v2/account", "Bearer {v}", "account"),
+    "DO_TOKEN_DATAFUND": ("https://api.digitalocean.com/v2/account", "Bearer {v}", "account"),
+    # /v1/api-key, NOT /v1/models: a key without model-list permission gets 403
+    # "permission-denied" from /v1/models while being perfectly valid — it even
+    # names the team in the error. That is a live credential reported dead.
+    "XAI_API_KEY":       ("https://api.x.ai/v1/api-key", "Bearer {v}", None),
+    "DEVTO_API_KEY":     ("https://dev.to/api/articles/me?per_page=1", "api-key: {v}", None),
+    # Etsy publishes a ping endpoint whose entire purpose is key validation.
+    "ETSY_API_KEY":      ("https://openapi.etsy.com/v3/application/openapi-ping",
+                          "x-api-key: {v}", "application_id"),
+    # Etherscan answers 200 with {"status":"0","result":"Invalid API Key"} for a
+    # bad key, so the HTTP code proves nothing and the body is the real check.
+    # V2 with an explicit chainid: the V1 path still answers 200 but with an
+    # empty body, which reported a working key as "unexpected body".
+    "ETHERSCAN_API_KEY": ("https://api.etherscan.io/v2/api?chainid=1&module=stats"
+                          "&action=ethsupply&apikey={v}", None, '"status":"1"'),
+    # Notion 400s without Notion-Version regardless of key validity — hence the
+    # multi-header form.
+    "NOTION_API_KEY":    ("https://api.notion.com/v1/users/me",
+                          ("Bearer {v}", "Notion-Version: 2022-06-28"), "object"),
 }
 
 # X OAuth 1.0a user-context sets. These CANNOT go in VERIFIERS: the credential is
@@ -595,6 +620,49 @@ NO_PROBE = {
     "EXA_API_KEY": "search is POST-only and metered; a probe consumes quota",
     "TELEGRAM_CHAT_ID": "an identifier, not a secret — nothing to authenticate",
     "WINSTON_CHAT_ID": "an identifier, not a secret",
+
+    # --- 2026-08-19: the rest of the n-a backlog, decided rather than left ---
+    # "no verifier declared" means nobody has thought about it. Each line below
+    # means someone did, and disagreed with probing. That distinction is the
+    # whole point of the three-state report.
+
+    # Signed-request APIs. Verifiable in principle (the same way X OAuth1 now is)
+    # but these are TRADING keys: the cheapest signed endpoint still authenticates
+    # against an account that can place orders. Not probing on a schedule.
+    "GATE_API_KEY": "trading API — HMAC-signed; will not probe an order-capable key on a timer",
+    "GATE_API_KEY_2": "trading API — HMAC-signed; will not probe an order-capable key on a timer",
+
+    # Region-dependent hosts. A probe against the wrong region returns 401 for a
+    # perfectly good key, and a false FAIL is worse than an honest n-a.
+    "POSTHOG_API_KEY": "host is region-specific (us/eu/self-hosted); declare api_base on the entry to enable",
+    "GITEA_TOKEN": "self-hosted; declare api_base on the entry and _entry_verifier will probe it",
+    "COINGECKO_API_KEY": "demo and pro tiers take different auth params; probing the wrong one reports a good key dead",
+
+    # No introspection endpoint that does not consume quota or produce output.
+    "COINGLASS_API_KEY": "no free introspection endpoint; every call is metered",
+    "CREATOMATE_API_KEY": "render API — the cheapest authenticated call creates a render",
+    "LATE_API_KEY": "no read-only introspection endpoint published",
+    "APIFRAME_API_KEY": "image-generation proxy; authenticated calls are billed per job",
+
+    # Not API credentials at all.
+    "SEPOLIA_RPC_URL": "an endpoint URL; reachability is not authentication",
+    "DATA_ESCROW_ADDRESS_SEPOLIA": "a contract address, public by construction — nothing to authenticate",
+    "SELLER_PRIVATE_KEY": "a wallet key; proving control means signing, and signing on a timer is not free of consequence",
+    "BUYER_PRIVATE_KEY": "a wallet key; see SELLER_PRIVATE_KEY",
+    "WALLET_PRIVATE_KEY": "a wallet key; see SELLER_PRIVATE_KEY",
+    "ENGAGEMENT_CHAT_ID": "an identifier, not a secret",
+    "PHONE_TOKEN": "device pairing token; no server-side introspection exists",
+
+    # Write-only by design.
+    "PYPI_TOKEN_PLUR_HERMES": "upload-scoped; the only call that exercises it publishes a release",
+    "PYPI_TOKEN_ORG_WORKSPACE": "upload-scoped; the only call that exercises it publishes a release",
+
+    # Probing these would look like account takeover to the provider.
+    "MIDJOURNEY_DISCORD_TOKEN": "a user session token; automated probing risks the account itself",
+
+    # OAuth2 with a refresh dance — verifying means possibly rotating, and a
+    # verifier with a side effect is a verifier nobody runs.
+    "WITHINGS_ACCESS_TOKEN": "OAuth2; a probe may trigger refresh, and a check with side effects is not a check",
 }
 
 
@@ -746,16 +814,29 @@ def verify_value(var: str, value: str, timeout: int = 25,
         return "FAIL", "empty value"
     try:
         req = urllib.request.Request(url.format(v=value))
+        # A real User-Agent. urllib defaults to "Python-urllib/3.x", which
+        # Cloudflare-fronted APIs reject outright: dev.to returned 403 to the
+        # probe and 200 to curl with the identical auth header. That is a live
+        # credential reported dead by a header the check never thought about,
+        # and it would have looked exactly like a revoked key.
+        req.add_header("User-Agent", "datacore-creds-doctor/1.0 (+credential liveness probe)")
         if auth:
             # "Header-Name: template" targets a specific header; a bare template
             # means Authorization. Anthropic takes x-api-key and rejects Bearer
             # with a 401 that reads exactly like a dead key — which is how a
             # perfectly good key got reported FAIL on the first run here.
-            if ":" in auth.split("{")[0]:
-                hdr, _, tmpl = auth.partition(":")
-                req.add_header(hdr.strip(), tmpl.strip().format(v=value))
-            else:
-                req.add_header("Authorization", auth.format(v=value))
+            #
+            # A tuple sends several headers. Some APIs refuse without a second,
+            # non-secret header — Notion requires Notion-Version, and omitting it
+            # returns 400 regardless of whether the key is good. A probe that
+            # cannot express the request the API actually needs produces a
+            # confident wrong verdict, which is worse than reporting n-a.
+            for spec in (auth if isinstance(auth, (tuple, list)) else [auth]):
+                if ":" in spec.split("{")[0]:
+                    hdr, _, tmpl = spec.partition(":")
+                    req.add_header(hdr.strip(), tmpl.strip().format(v=value))
+                else:
+                    req.add_header("Authorization", spec.format(v=value))
         if "anthropic.com" in url:
             req.add_header("anthropic-version", "2023-06-01")
         with urllib.request.urlopen(req, timeout=timeout) as r:
