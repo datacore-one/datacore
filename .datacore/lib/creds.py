@@ -772,6 +772,34 @@ class CredentialManager:
             print(f"{exc}", file=sys.stderr)
             return 1
 
+        # OWNERSHIP, ENFORCED. `owner` and `mint_host` were declared in the index
+        # for two days and checked by nothing, which made them documentation
+        # rather than a control. For a rotating credential that is not a small
+        # gap: a single-use refresh chain shared by two hosts means whichever CLI
+        # refreshes first silently revokes the other. Measured 2026-08-18 — a
+        # token copied mac->winston at 12:30 was dead by 14:40, and winston had
+        # no way to know it was holding a corpse.
+        #
+        # `hosts:` (may this instance hold it at all) is checked first, then
+        # `mint_host`/`owner` (may this instance MINT it). A host may legitimately
+        # hold a credential it must not mint.
+        me = ca.instance_name()
+        allowed_hosts = entry.get("hosts")
+        if allowed_hosts and me not in allowed_hosts:
+            print(f"{cred_id} is not for this instance ({me}). Declared hosts: "
+                  f"{', '.join(allowed_hosts)}. Refusing — installing it here "
+                  f"would create a copy that cannot refresh itself.",
+                  file=sys.stderr)
+            return 1
+        mint = (entry.get("mint_host") or "").strip()
+        if mint and mint != me and (entry.get("lifecycle") or "") == "rotating":
+            print(f"{cred_id} declares mint_host={mint!r} but this instance is "
+                  f"{me!r}. A rotating credential must be minted where it is "
+                  f"owned: if you minted it on {me}, add {me} to mint_host or "
+                  f"re-mint on {mint}. Refusing rather than joining a shared "
+                  f"single-use refresh chain.", file=sys.stderr)
+            return 1
+
         store = ca._store_for(entry)
         if not store.startswith("json:"):
             print(f"{cred_id} declares storage {store!r}; adopt-token only "
@@ -791,6 +819,27 @@ class CredentialManager:
         blk.setdefault("scopes", ["user:inference", "user:profile"])
 
         path.parent.mkdir(parents=True, exist_ok=True)
+        # BACK UP THE OUTGOING VALUE FIRST. This overwrite is irreversible and
+        # the credential it replaces cannot be re-derived — only re-minted, which
+        # needs an interactive browser login on that specific host.
+        #
+        # Added after destroying nightshift's token on 2026-08-19 by running this
+        # command with a dummy value to test an ownership guard. The guard was
+        # correct; it had simply not been distributed to nightshift yet, so
+        # nothing stopped the write, and there was no backup to undo it. A write
+        # path for an unrecoverable credential must not depend on the caller
+        # being careful.
+        if old:
+            bak = path.with_suffix(path.suffix + ".prev")
+            try:
+                bak.write_text(_json.dumps(cur | {"claudeAiOauth": {**blk, "accessToken": old}}))
+                os.chmod(bak, 0o600)
+                print(f"  previous value saved to {bak}", file=sys.stderr)
+            except OSError as e:
+                print(f"  WARNING: could not back up the previous value ({e}) — "
+                      f"aborting rather than making an unrecoverable overwrite",
+                      file=sys.stderr)
+                return 1
         path.write_text(_json.dumps(cur))
         os.chmod(path, 0o600)
         print(f"  wrote {ca.fingerprint(old)} -> {ca.fingerprint(token)}  {path}",
