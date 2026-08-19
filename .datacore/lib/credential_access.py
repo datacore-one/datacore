@@ -224,6 +224,20 @@ def in_scope(entry: dict) -> bool | None:
     first scope-aware run on winston showed 27 'failures', every one of them the
     system working as designed.
     """
+    # An explicit host list beats every other rule, in both directions: it is the
+    # entry saying which instances this credential belongs to at all.
+    #
+    # Checked FIRST and before granted_scopes(), because "all" spaces would
+    # otherwise swallow it. Without this, `doctor` on a host reading the MASTER
+    # index reported FAIL for another machine's instance-local credential —
+    # github-pat-hermes is hermes's own PAT, correctly absent here, and correctly
+    # absent is not a failure. The hosts: filter was being applied only at
+    # distribution time, so the one host that reads the unfiltered index was the
+    # one host that got it wrong.
+    hosts = entry.get("hosts")
+    if hosts:
+        return instance_name() in hosts
+
     g = granted_scopes()
     if g is None:
         return None
