@@ -724,6 +724,15 @@ def verify_value(var: str, value: str, timeout: int = 25,
             return "FAIL", raw[:100]
         return ("FAIL", str(d.get("result"))[:100]) if d.get("is_error") else ("ok", "claude -p accepted it")
 
+    # Deliberately disabled. Distinct from "broken": an account switched off on
+    # purpose must not report FAIL forever, because a permanent red line is how
+    # doctor stops being read — the failure mode behind the 0.18.0 release. It
+    # must not report ok either. n-a with the decision stated is the honest
+    # answer, and the reason makes it arguable rather than inherited.
+    if (entry or {}).get("disabled"):
+        why = (entry or {}).get("disabled_reason") or "no reason recorded"
+        return "n-a", f"disabled by decision: {why}"
+
     if var in OAUTH1_SETS:
         return _oauth1_probe(entry or {}, var, value, timeout)
 
