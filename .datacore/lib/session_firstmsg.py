@@ -21,19 +21,20 @@ from pathlib import Path
 
 DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
 sys.path.insert(0, str(DATACORE_ROOT / ".datacore" / "lib"))
+import session_state
 from session_state import session_exists, create_session, _debug
 
 
 def main():
-    # Hot path: session already started (~1ms)
-    if session_exists():
-        sys.exit(0)
-
     try:
         input_data = json.load(sys.stdin)
     except (json.JSONDecodeError, EOFError):
-        # Malformed input — still create session to avoid re-triggering
-        create_session("")
+        input_data = {}
+
+    session_state.set_session_id(input_data.get("session_id", ""))
+
+    # Hot path: session already started (~1ms)
+    if session_exists():
         sys.exit(0)
 
     create_session(input_data.get("prompt", ""))

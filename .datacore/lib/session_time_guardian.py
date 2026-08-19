@@ -22,6 +22,7 @@ from pathlib import Path
 # Get absolute paths using DATACORE_ROOT
 DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
 sys.path.insert(0, str(DATACORE_ROOT / ".datacore" / "lib"))
+import session_state
 from session_state import session_exists, read_session, update_session, _debug
 
 TZ = ZoneInfo("Europe/Berlin")
@@ -73,6 +74,12 @@ def critical_msg(hour):
 
 
 def main():
+    try:
+        input_data = json.load(sys.stdin)
+    except (json.JSONDecodeError, EOFError):
+        input_data = {}
+    session_state.set_session_id(input_data.get("session_id", ""))
+
     if not session_exists():
         sys.exit(0)
 

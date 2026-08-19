@@ -18,6 +18,7 @@ from pathlib import Path
 
 DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
 sys.path.insert(0, str(DATACORE_ROOT / ".datacore" / "lib"))
+import session_state
 from session_state import read_session, _debug
 
 
@@ -150,6 +151,7 @@ def main():
     args = parser.parse_args()
 
     input_data = get_stdin_json()
+    session_state.set_session_id(input_data.get("session_id", ""))
     context = HANDLERS[args.event](input_data)
 
     if context:
