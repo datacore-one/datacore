@@ -559,6 +559,30 @@ VERIFIERS = {
     "CLAUDE_CODE_OAUTH_TOKEN": ("__cli__", None, None),
 }
 
+# X OAuth 1.0a user-context sets. These CANNOT go in VERIFIERS: the credential is
+# not a value, it is a four-value tuple, and the proof of life is a signature
+# rather than a header. A bearer probe against a signing credential says nothing
+# about it.
+#
+# This is the gap that let 0.18.0 publish everything and then fail to tweet.
+# release.sh signs with OAuth1 (PLUR_X_API_KEY/_API_SECRET/_ACCESS_TOKEN/
+# _ACCESS_TOKEN_SECRET), while the only X probes that existed were bearer probes
+# against two OAuth2 values that NOTHING consumes. So `doctor` reported FAIL for
+# two credentials nobody uses and stayed silent about the four that post.
+#
+# Keyed on the user-context token, because that is the value that dies when a
+# grant is revoked, and it is what the entry should name as its var_name.
+OAUTH1_SETS = {
+    "PLUR_X_ACCESS_TOKEN": ("PLUR_X_API_KEY", "PLUR_X_API_SECRET",
+                            "PLUR_X_ACCESS_TOKEN", "PLUR_X_ACCESS_TOKEN_SECRET"),
+    "X_ACCESS_TOKEN": ("X_CONSUMER_KEY", "X_CONSUMER_SECRET",
+                       "X_ACCESS_TOKEN", "X_ACCESS_TOKEN_SECRET"),
+    "FDS_X_ACCESS_TOKEN": ("FDS_X_API_KEY", "FDS_X_API_SECRET",
+                           "FDS_X_ACCESS_TOKEN", "FDS_X_ACCESS_TOKEN_SECRET"),
+    "JSSR_X_ACCESS_TOKEN": ("JSSR_X_API_KEY", "JSSR_X_API_SECRET",
+                            "JSSR_X_ACCESS_TOKEN", "JSSR_X_ACCESS_TOKEN_SECRET"),
+}
+
 # Credentials with no free probe. Listed EXPLICITLY rather than left to fall
 # through, so the reason is visible and someone can disagree with it. An unlisted
 # credential reporting n-a means "nobody has thought about this"; a listed one
@@ -587,6 +611,80 @@ def _entry_verifier(entry: dict) -> tuple | None:
     if (entry.get("provider") or "").lower() == "gitea":
         return (base.rstrip("/") + "/api/v1/user", "token {v}", "login")
     return (base.rstrip("/"), "Bearer {v}", None)
+
+
+def _oauth1_probe(entry: dict, primary_var: str, value: str,
+                  timeout: int = 25) -> tuple[str, str]:
+    """Verify an X OAuth 1.0a set by signing a real read-only request.
+
+    GET /2/users/me needs user context, so a 200 here proves the whole tuple:
+    consumer pair, token pair, and signature agreement. Read-only and unmetered,
+    so it is a probe someone will actually run.
+
+    The companions come from the SAME resolved store as the primary value. They
+    are deliberately not fetched via get_value(): a signing set is one credential
+    and must be read as one, from one place. Pulling three of four from wherever
+    they happen to be found is how a working set gets diagnosed as broken.
+    """
+    import base64
+    import hashlib
+    import hmac
+    import json as _json
+    import secrets as _secrets
+    import time as _time
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    def pe(s: object) -> str:
+        return urllib.parse.quote(str(s), safe="-._~")
+
+    ck_v, cs_v, tok_v, ts_v = OAUTH1_SETS[primary_var]
+    try:
+        path, _why = resolve(entry.get("id") or primary_var)
+    except (CredentialNotIndexed, CredentialUnresolvable) as e:
+        return "n-a", f"cannot resolve store: {e}"
+
+    vals = {}
+    for name in (ck_v, cs_v, tok_v, ts_v):
+        vals[name] = value if name == primary_var else _read_var(path, name)
+    missing = [k for k, v in vals.items() if not v]
+    if missing:
+        # Not n-a: the entry claims a signing set and the store does not hold one.
+        return "FAIL", "incomplete OAuth1 set — missing " + ", ".join(missing)
+
+    url = "https://api.twitter.com/2/users/me"
+    params = {
+        "oauth_consumer_key": vals[ck_v],
+        "oauth_nonce": _secrets.token_hex(16),
+        "oauth_signature_method": "HMAC-SHA1",
+        "oauth_timestamp": str(int(_time.time())),
+        "oauth_token": vals[tok_v],
+        "oauth_version": "1.0",
+    }
+    norm = "&".join(f"{pe(k)}={pe(params[k])}" for k in sorted(params))
+    base = "&".join(["GET", pe(url), pe(norm)])
+    key = f"{pe(vals[cs_v])}&{pe(vals[ts_v])}".encode()
+    params["oauth_signature"] = base64.b64encode(
+        hmac.new(key, base.encode(), hashlib.sha1).digest()).decode()
+    header = "OAuth " + ", ".join(
+        f'{pe(k)}="{pe(v)}"' for k, v in sorted(params.items()))
+
+    try:
+        req = urllib.request.Request(url, headers={"Authorization": header})
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310
+            body = r.read().decode(errors="replace")
+        who = ((_json.loads(body) or {}).get("data") or {}).get("username")
+        return "ok", f"OAuth1 signature accepted — @{who}" if who else "OAuth1 signature accepted"
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode(errors="replace")[:120].replace("\n", " ")
+        except Exception:  # noqa: BLE001, S110
+            pass
+        return "FAIL", f"HTTP {e.code} {detail}".strip()
+    except Exception as e:  # noqa: BLE001
+        return "n-a", f"probe failed: {type(e).__name__}"
 
 
 def verify_value(var: str, value: str, timeout: int = 25,
@@ -625,6 +723,9 @@ def verify_value(var: str, value: str, timeout: int = 25,
         except ValueError:
             return "FAIL", raw[:100]
         return ("FAIL", str(d.get("result"))[:100]) if d.get("is_error") else ("ok", "claude -p accepted it")
+
+    if var in OAUTH1_SETS:
+        return _oauth1_probe(entry or {}, var, value, timeout)
 
     if var in NO_PROBE:
         return "n-a", f"no probe by design: {NO_PROBE[var]}"
