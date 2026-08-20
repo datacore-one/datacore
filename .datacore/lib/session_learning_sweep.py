@@ -69,6 +69,16 @@ LOG = Path.home() / ".datacore" / "state" / "session-learning-sweep.log"
 MIN_TURNS = 12
 MIN_OUTPUT_TOKENS = 8_000
 
+# The sweep's own `claude -p` runs are archived like any other session and land
+# back in this queue, so without this the sweep sweeps itself: by 2026-08-20 the
+# recursion had reached fifth order (6dd6a2d3 -> 11d46a2f -> a8c372a5 ->
+# 433fb202 -> ...), each night spending its whole budget re-mining the previous
+# night's transcript while real sessions waited (ENG-2026-08-20-024/-035). They
+# clear both thresholds easily (45-85 turns, 21k-48k tokens), so the cheap guard
+# never catches them. Matched on the first line the prompt template below emits.
+# Marked `skipped`, not `done`, so a self-run stays visible in the archive.
+SELF_SWEEP_PREFIX = "Extract durable learning from"
+
 # One prompt cannot carry a whole day of raw transcript. The agent is given the
 # precomputed summaries and the PATHS, and reads what it judges relevant with
 # its own tools — the same reason /today's orchestrator hands over paths.
@@ -114,7 +124,11 @@ def pending_sessions(day: str) -> tuple[list[dict], list[dict]]:
         if not m or m.get("learning_status") != "pending":
             continue
         m["_meta_path"] = str(meta_path)
-        if m.get("turns", 0) < MIN_TURNS and m.get("output_tokens", 0) < MIN_OUTPUT_TOKENS:
+        if (m.get("first_prompt") or "").startswith(SELF_SWEEP_PREFIX):
+            m["_skip_reason"] = "self-sweep: extraction run, not a work session"
+            skip.append(m)
+        elif m.get("turns", 0) < MIN_TURNS and m.get("output_tokens", 0) < MIN_OUTPUT_TOKENS:
+            m["_skip_reason"] = "below MIN_TURNS/MIN_OUTPUT_TOKENS"
             skip.append(m)
         else:
             sweep.append(m)
@@ -205,7 +219,7 @@ def build_prompt(day: str, sessions: list[dict]) -> str:
     lines += [
         "## What to do",
         "",
-        "1. Read each transcript (`zcat` or python gzip). Skim for the things below;",
+        "1. Read each transcript (`gzip -dc` or python gzip). Skim for the things below;",
         "   you do NOT need to read every line of a large one.",
         "2. Extract ONLY:",
         "   - **corrections** — the user said you were wrong, and why",
@@ -323,10 +337,11 @@ def sweep_once(day: str, dry_run: bool = False) -> str:
     # silently marked every trivial session `skipped` before printing.
     if not dry_run:
         for m in skip:
-            mark(m["_meta_path"], "skipped", "below MIN_TURNS/MIN_OUTPUT_TOKENS")
+            mark(m["_meta_path"], "skipped",
+                 m.get("_skip_reason", "below MIN_TURNS/MIN_OUTPUT_TOKENS"))
 
     if not sweep:
-        msg = f"{day}: 0 session(s) to sweep ({len(skip)} trivial skipped)"
+        msg = f"{day}: 0 session(s) to sweep ({len(skip)} skipped)"
         print(msg)
         log(msg)
         return "empty"
@@ -365,7 +380,7 @@ def sweep_once(day: str, dry_run: bool = False) -> str:
 
     tail = out.strip().splitlines()[-1] if out.strip() else ""
     print(f"{day}: swept {len(batch)} session(s) / {tokens:,} tokens, "
-          f"skipped {len(skip)} trivial"
+          f"skipped {len(skip)}"
           + (f", {remaining} still pending" if remaining else ""))
     print(f"  agent report: {tail[:300]}")
     log(f"{day}: OK {len(batch)} swept | {tail[:200]}")

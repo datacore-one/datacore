@@ -26,6 +26,23 @@
 # .datacore/state/, which is gitignored and machine-local — sessions happen
 # here, so the corpus is here. Unlike the ledger, this cannot move to winston.
 set -u
+
+# HOLD A POWER ASSERTION FOR THE WHOLE RUN. launchd starts a missed job on wake,
+# but nothing stops the Mac going back to sleep DURING one, and a `claude -p`
+# killed mid-response still prints partial text — which run_claude() reads as
+# success and marks `done`, losing that session's learning permanently
+# (ENG-2026-08-20-016/-028/-030: archive/2026-08-17/8e5ec22a and
+# 2026-08-18/1105ee74 are both `done` with learning_result ending "API Error:
+# Your computer went to sleep mid-response" and zero engrams written).
+# The sweep's own deadline is 4h, so it must survive an idle laptop that long.
+# Re-exec under caffeinate rather than wrapping it in the plist: no launchctl
+# reload needed, and it holds for a manual invocation too. The env guard is what
+# stops the re-exec recursing.
+if [ -z "${DATACORE_SWEEP_CAFFEINATED:-}" ] && command -v caffeinate >/dev/null 2>&1; then
+  export DATACORE_SWEEP_CAFFEINATED=1
+  exec caffeinate -i -s "$0" "$@"
+fi
+
 export DATACORE_ROOT="${DATACORE_ROOT:-$HOME/Data}"
 LIB="$DATACORE_ROOT/.datacore/lib"
 STATE="$HOME/.datacore/state"
