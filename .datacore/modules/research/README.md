@@ -72,7 +72,7 @@ daily-research-processor (orchestrator)
 | Podcasts | `0-personal/content/podcasts/` |
 | Literature Notes | `0-personal/notes/2-knowledge/literature/` |
 | Zettels | `0-personal/notes/2-knowledge/zettel/` |
-| Industry Landscape | `0-personal/notes/2-knowledge/industry-landscape.yaml` |
+| Industry Landscape | `1-datafund/1-tracks/research/Industry landscape.md` |
 
 ## Configuration
 

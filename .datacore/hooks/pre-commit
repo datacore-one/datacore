@@ -100,7 +100,7 @@ if [ -n "$STAGED_BASE" ]; then
         for file in $STAGED_BASE; do
             if [[ "$(dirname "$file")" == "$dir" ]]; then
                 base_name=$(basename "$file" | sed 's/\.base\.md$//')
-                if ! python "$MERGE_SCRIPT" validate --path "$REPO_ROOT/$dir" --name "$base_name" 2>&1; then
+                if ! python3 "$MERGE_SCRIPT" validate --path "$REPO_ROOT/$dir" --name "$base_name" 2>&1; then
                     FAILED=1
                 fi
             fi

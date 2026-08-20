@@ -68,7 +68,7 @@ daily-research-processor (orchestrator)
 | Research Reports | `0-personal/content/reports/` |
 | Literature Notes | `0-personal/notes/2-knowledge/literature/` |
 | Zettels | `0-personal/notes/2-knowledge/zettel/` |
-| Industry Landscape | `0-personal/notes/2-knowledge/industry-landscape.yaml` |
+| Industry Landscape | `1-datafund/1-tracks/research/Industry landscape.md` |
 
 ## Configuration
 

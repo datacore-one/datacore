@@ -65,12 +65,10 @@ ZETTEL_DIR = _setting_path('zettel_output_dir', PERSONAL / 'notes' / '2-knowledg
 COMPANIES_DIR = PERSONAL / '3-knowledge' / 'reference' / 'companies'
 PEOPLE_DIR_DF = DATAFUND / '3-knowledge' / 'reference' / 'people'
 PEOPLE_DIR_PERSONAL = PERSONAL / '3-knowledge' / 'reference' / 'people'
-LANDSCAPE_FILE = DATAFUND / '1-tracks' / 'research' / 'Industry landscape.md'
+LANDSCAPE_FILE = _setting_path('industry_landscape_file', DATAFUND / '1-tracks' / 'research' / 'Industry landscape.md')
 REPORTS_DIR = _setting_path('reports_output_dir', PERSONAL / 'content' / 'reports')
 JOURNAL_DIR = PERSONAL / 'notes' / 'journals'
 PODCAST_DIR = _setting_path('podcast_output_dir', PERSONAL / 'content' / 'podcasts')
-# NOTE: industry_landscape_file setting default contradicts the working path
-# below (LANDSCAPE_FILE) — deliberately NOT wired until module.yaml is corrected.
 TODAY = date.today().isoformat()
 
 
