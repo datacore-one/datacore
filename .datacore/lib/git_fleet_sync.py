@@ -385,6 +385,13 @@ def main() -> int:
             print(f"  {r['name']}")
         print()
 
+    failures = [r for r in results if 'FAILED' in r.get('status', '')]
+    if failures:
+        print('Failures — these repos need a human:')
+        for r in failures:
+            print(f"  {r['name']}: {r['status']}")
+        print()
+
     held = [r for r in results if r['status'].startswith('SKIP')]
     if held:
         print("Held back — on a non-default branch, needs a human decision:")
@@ -392,9 +399,12 @@ def main() -> int:
             print(f"  {r['name']}: {r['status']}")
         print()
 
+    needs_human = len(conflicts) + len(failures)
     verb = 'Committed' if execute else 'Would commit'
-    print(f"{verb} {total_c} file(s); skipped {total_s} as junk.")
-    return 0
+    print(f"{verb} {total_c} file(s); skipped {total_s} as junk."
+          + (f" {needs_human} repo(s) needing a human." if needs_human else ""))
+    # Exit non-zero so systemd sees a failure and OnFailure= can alert.
+    return 1 if needs_human else 0
 
 
 if __name__ == '__main__':
