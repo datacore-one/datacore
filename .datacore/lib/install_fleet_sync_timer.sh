@@ -21,6 +21,7 @@ cat > /etc/systemd/system/datacore-fleet-sync.service <<EOF
 Description=Datacore fleet sync — land agent work, pull latest shared knowledge
 After=network-online.target
 Wants=network-online.target
+OnFailure=datacore-fleet-sync-alert.service
 
 [Service]
 Type=oneshot
@@ -28,6 +29,24 @@ User=${RUN_AS}
 WorkingDirectory=${DATA_DIR}
 ExecStart=/usr/bin/python3 ${DATA_DIR}/.datacore/lib/git_fleet_sync.py ${DATA_DIR} --execute --pull
 TimeoutStartSec=900
+EOF
+
+# Alert service — fires when the sync exits non-zero (pull conflict or push failure).
+# EnvironmentFile loads TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID. The `-` prefix makes
+# the file optional so a host without credentials still starts (alert degrades to a
+# journalctl entry rather than refusing to run at all).
+cat > /etc/systemd/system/datacore-fleet-sync-alert.service <<EOF
+[Unit]
+Description=Alert on Datacore fleet sync failure
+DefaultDependencies=no
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=${RUN_AS}
+WorkingDirectory=${DATA_DIR}
+EnvironmentFile=-/home/${RUN_AS}/config/nightshift.env
+ExecStart=/bin/bash ${DATA_DIR}/.datacore/lib/fleet_sync_alert.sh
 EOF
 
 cat > /etc/systemd/system/datacore-fleet-sync.timer <<'EOF'
