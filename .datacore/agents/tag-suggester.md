@@ -2,6 +2,10 @@
 name: tag-suggester
 description: AI-powered tag suggestion for content. Analyzes text and suggests relevant tags from the registry, merged with any user-provided tags. Called by knowledge-extractor, session-learning, gtd-inbox-processor.
 model: haiku
+tools:
+  - Read
+  - Glob
+  - Grep
 ---
 
 # Tag Suggester Agent

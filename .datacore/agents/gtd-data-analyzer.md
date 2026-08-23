@@ -2,6 +2,13 @@
 name: gtd-data-analyzer
 description: Autonomous data processing and reporting agent that extracts data from journals and org files, calculates metrics, generates insights, and creates reports (weekly GTD metrics, monthly trading performance, project dashboards). Invoked by ai-task-executor for :AI:data: tagged tasks.
 model: sonnet
+tools:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
 ---
 
 # GTD Data Analyzer - Autonomous Data Processing & Reporting Agent

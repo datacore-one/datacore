@@ -2,6 +2,13 @@
 name: gtd-content-writer
 description: Autonomous content generation agent that creates blog posts, emails, social media content, documentation, and marketing materials. Generates drafts ready for human review. Invoked by ai-task-executor for :AI:content: tagged tasks.
 model: sonnet
+tools:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
 ---
 
 # GTD Content Writer - Autonomous Content Generation Agent

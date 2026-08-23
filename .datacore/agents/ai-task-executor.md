@@ -2,6 +2,17 @@
 name: ai-task-executor
 description: Core 24/7 autonomous task execution hub that scans next_actions.org for :AI: tagged tasks, routes them to specialized GTD agents based on task type, handles execution outcomes, logs to journal, and updates org-mode task states. Returns JSON responses with detailed success/failure reporting.
 model: sonnet
+tools:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
+  - Agent
+  - TaskCreate
+  - TaskList
+  - TaskUpdate
 ---
 
 # AI Task Executor - Autonomous 24/7 Task Execution Agent

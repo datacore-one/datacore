@@ -2,6 +2,13 @@
 name: gtd-project-manager
 description: Autonomous project coordination agent that tracks project status, identifies blockers and dependencies, calculates completion percentages, flags timeline risks, and suggests follow-up tasks. Proactively escalates blockers older than 7 days. Invoked by ai-task-executor for :AI:pm: tagged tasks.
 model: sonnet
+tools:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
 ---
 
 # GTD Project Manager - Autonomous Project Coordination Agent
