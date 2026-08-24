@@ -15,6 +15,7 @@ Usage:
     python3 research_orchestrator.py [--limit N] [--dry-run] [--no-podcast]
 """
 
+import asyncio
 import json
 import os
 import re
@@ -27,6 +28,9 @@ import urllib.request
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+import claude_agent_sdk
+from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, RateLimitEvent, SystemMessage
 
 
 DATA_DIR = Path(os.environ.get('DATA_DIR', Path.home() / 'Data'))
@@ -307,8 +311,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / 'l
 from ops_markers import AUTH_FAILURE_MARKERS  # noqa: E402
 
 
-def _claude_json(prompt: str, timeout: int, label: str) -> Optional[Dict[str, Any]]:
-    """Run a headless Claude analysis and parse its JSON reply.
+_MAX_BUDGET_USD = 0.50
+
+
+async def _claude_json_async(prompt: str, label: str) -> Optional[Dict[str, Any]]:
+    """Async implementation: call claude_agent_sdk.query() and collect the reply.
 
     RUNS IN AN EMPTY DIRECTORY, DELIBERATELY. These calls used to run with
     cwd=DATA_DIR, which makes the subprocess load ~/Data/CLAUDE.md — and that
@@ -325,38 +332,39 @@ def _claude_json(prompt: str, timeout: int, label: str) -> Optional[Dict[str, An
     and useless — it described the symptom and hid the response that would
     have identified the cause in one read.
     """
-    with tempfile.TemporaryDirectory() as workdir:
-        try:
-            result = subprocess.run(
-                ['claude', '-p', '--dangerously-skip-permissions',
-                 '--output-format', 'text', prompt],
-                cwd=workdir, capture_output=True, text=True, timeout=timeout
-            )
-        except subprocess.TimeoutExpired:
-            log(f"  {label}: Claude timed out after {timeout}s")
-            return None
+    workdir = tempfile.mkdtemp()
+    options = ClaudeAgentOptions(
+        permission_mode='bypassPermissions',
+        cwd=workdir,
+        max_budget_usd=_MAX_BUDGET_USD,
+    )
 
-    if result.returncode != 0:
-        log(f"  {label}: Claude exited {result.returncode}: {result.stderr[:200]}")
-        return None
+    output = ''
+    async for message in claude_agent_sdk.query(prompt=prompt, options=options):
+        if isinstance(message, (SystemMessage, RateLimitEvent)):
+            continue
+        if isinstance(message, ResultMessage):
+            if message.is_error:
+                log(f"  {label}: SDK returned is_error=True; result={message.result!r:.200}")
+                return None
+            cost = message.total_cost_usd or 0.0
+            if cost > _MAX_BUDGET_USD:
+                log(f"  {label}: cost ${cost:.4f} exceeded budget ${_MAX_BUDGET_USD:.2f} — aborting")
+                return None
+            output = (message.result or '').strip()
 
-    output = result.stdout.strip()
-
-    # `claude -p` reports auth failures on STDOUT with an EMPTY STDERR and
-    # exit 0, so neither the exit code nor stderr can be trusted to reveal
-    # them. ops_markers exists because a caller that checked only stderr
-    # logged nine days of failures as the empty string. Its docstring requires
-    # every caller in this repo to check the list.
+    # AUTH failures surface as plain text in the result with exit 0; check them
+    # the same way the old subprocess path did.
     low = output.lower()
     for marker in AUTH_FAILURE_MARKERS:
         if marker in low:
-            log(f"  {label}: AUTH FAILURE from claude -p (exit 0): {output[:200]!r}")
+            log(f"  {label}: AUTH FAILURE from SDK (is_error=False): {output[:200]!r}")
             return None
 
     output = re.sub(r'^```json\s*', '', output)
     output = re.sub(r'\s*```\s*$', '', output)
     if not output:
-        log(f"  {label}: Claude returned NOTHING (exit 0, empty stdout)")
+        log(f"  {label}: Claude returned NOTHING")
         return None
     try:
         return json.loads(output)
@@ -383,6 +391,23 @@ def _claude_json(prompt: str, timeout: int, label: str) -> Optional[Dict[str, An
     log(f"  {label}: reply was not JSON ({first_error})")
     log(f"  {label}: got instead -> {output[:200]!r}")
     return None
+
+
+def _claude_json(prompt: str, timeout: int, label: str) -> Optional[Dict[str, Any]]:
+    """Synchronous wrapper around _claude_json_async().
+
+    The ``timeout`` parameter is retained for API compatibility with existing
+    callers.  The SDK does not expose a simple per-call wall-clock timeout, so
+    we enforce it here via asyncio.wait_for().  The budget guard inside the
+    async function provides an additional cost-based safety net.
+    """
+    try:
+        return asyncio.run(
+            asyncio.wait_for(_claude_json_async(prompt, label), timeout=timeout)
+        )
+    except asyncio.TimeoutError:
+        log(f"  {label}: Claude timed out after {timeout}s")
+        return None
 
 
 def process_item(item: Dict[str, str], content: str) -> Optional[Dict[str, Any]]:
