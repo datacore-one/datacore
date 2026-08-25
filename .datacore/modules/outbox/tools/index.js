@@ -2,7 +2,7 @@
 // Scans outbox directories and provides archive search.
 // Plain JS (ESM) for direct dynamic import by the MCP server.
 
-import { z } from 'zod'
+import { z } from '@datacore-one/mcp/runtime'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import * as fs from 'fs'

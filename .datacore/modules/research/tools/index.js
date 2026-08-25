@@ -2,7 +2,7 @@
 // Reads research_learning.org to report queue status and source management.
 // Plain JS (ESM) for direct dynamic import by the MCP server.
 
-import { z } from 'zod'
+import { z } from '@datacore-one/mcp/runtime'
 import * as fs from 'fs'
 import * as path from 'path'
 import { execSync } from 'child_process'

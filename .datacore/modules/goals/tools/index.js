@@ -5,10 +5,9 @@
 // best-effort writes — no flock here. For atomic, gated writes with
 // event emission, see `app-tools/index.mjs` (daemon-wrapped).
 
-import { z } from 'zod'
+import { z, yaml } from '@datacore-one/mcp/runtime'
 import * as fs from 'fs'
 import * as path from 'path'
-import * as yaml from 'js-yaml'
 
 const HORIZONS = ['five_year', 'year', 'quarter', 'month', 'week']
 const STATUSES = ['open', 'done', 'abandoned']
