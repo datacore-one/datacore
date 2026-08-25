@@ -1326,6 +1326,7 @@ sync_label_mapping:
   ":AI:data:": "ai-data"
   ":AI:pm:": "ai-pm"
   ":AI:technical:": "ai-technical"
+  ":AI:speculative:": "ai-speculative"
   # Priority tags -> GitHub labels
   "[#A]": "priority-high"
   "[#B]": "priority-medium"

@@ -1542,7 +1542,8 @@ module_agents:
     - execution-coordination
     - consensus-building
     triggers:
-      tags: []
+      tags:
+      - ':AI:speculative:'
       commands: []
       schedules:
       - overnight
