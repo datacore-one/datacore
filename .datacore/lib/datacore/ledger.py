@@ -32,7 +32,8 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
-__all__ = ["attest", "attests", "EGRESS_KINDS", "CREDENTIAL_KINDS", "ATTEST_KINDS"]
+__all__ = ["attest", "attests", "EGRESS_KINDS", "CREDENTIAL_KINDS",
+           "FUND_KINDS", "ATTEST_KINDS"]
 
 # The vocabulary. A `kind` outside this set is a typo until someone adds it here
 # deliberately — which is the point: the conformance check reads this, so a
@@ -80,9 +81,44 @@ CREDENTIAL_KINDS = frozenset({
     "credential.verify",   # liveness was checked with a real call
 })
 
+# Fund governance. NOT egress — a NAV mark, an approval, a halt, a limit change
+# and a strategy going live all stay inside the building — which is why this is
+# a third set rather than an addition to EGRESS_KINDS: `egress_scan` demands a
+# module manifest entry for every egress kind, and these have no third party to
+# declare.
+#
+# They exist because Meridian is run as an incorporated fund would be, and the
+# questions an LP asks are not answerable from `trade.order` alone. What was it
+# worth on the 14th. On what evidence was this approved, and what was waived.
+# When did a control stop it trading. Who moved the position cap, and from what.
+# Which vehicle produced this result.
+#
+# ATTRIBUTION IS MANDATORY, not decorative. Every fund.* event carries
+# `extra={"vehicle": ...}` naming the pool whose money moved, and where the
+# event belongs to one strategy rather than the whole pool, `extra["strategy"]`
+# names it too. Without both, a multi-strategy fund cannot attribute a result,
+# and attribution is the difference between a track record and a balance.
+#
+#     vehicle    "meridian" | "index-fund"        the capital pool
+#     strategy   "hlbot-SOL" | "hlbot-ETH" | ...  the thing being run
+#
+# `fund.limit_change` earns its keep soonest. On 2026-08-22 the position cap,
+# the tranche sizing curve and the equity floor were each edited inside a
+# single session — every one the sort of change that later explains a result —
+# and none left a record beyond a shell history.
+FUND_KINDS = frozenset({
+    "fund.nav",           # a NAV mark, with its account breakdown
+    "fund.decision",      # an approval, a waiver, or a policy change
+    "fund.halt",          # a risk control stopped trading, and why
+    "fund.limit_change",  # a risk limit moved: what, from, to, by whom
+    "fund.strategy",      # a vehicle or strategy was registered, started,
+                          # paused or retired — the lifecycle a track record
+                          # is measured against
+})
+
 # Everything `attest` accepts. Kept as a union so a caller cannot pass a kind
 # from neither vocabulary without it being a plain typo.
-ATTEST_KINDS = EGRESS_KINDS | CREDENTIAL_KINDS
+ATTEST_KINDS = EGRESS_KINDS | CREDENTIAL_KINDS | FUND_KINDS
 
 
 def _core_lib() -> Path | None:
