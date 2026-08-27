@@ -1,5 +1,5 @@
 // GTD Module — MCP Tool Definitions
-// These tools operate on org-mode files in Datacore spaces.
+// Plain JS for direct dynamic import by the MCP server.
 // Backend: org_workspace_adapter.py (replaces org_parser.py)
 
 import { z } from 'zod'
@@ -9,20 +9,6 @@ import { execFile } from 'child_process'
 import { promisify } from 'util'
 
 const execFileAsync = promisify(execFile)
-
-interface ModuleToolContext {
-  storage: { basePath: string; mode: string }
-  modulePath: string
-  dataPath: string
-  spaceName?: string
-}
-
-interface ModuleToolDefinition {
-  name: string
-  description: string
-  inputSchema: z.ZodType
-  handler: (args: unknown, context: ModuleToolContext) => Promise<unknown>
-}
 
 // --- Helpers ---
 
@@ -34,14 +20,14 @@ interface ModuleToolDefinition {
 // Callers all default via `space || '0-personal'` before reaching here, so the
 // fallback never served the "no space given" case anyway — it only ever
 // cross-wired spaces.
-function findOrgFile(basePath: string, space: string | undefined, filename: string): string | null {
+function findOrgFile(basePath, space, filename) {
   const target = space || '0-personal'
   const p = path.join(basePath, target, 'org', filename)
   return fs.existsSync(p) ? p : null
 }
 
-function findAllOrgFiles(basePath: string, filename: string): Array<{ space: string; path: string }> {
-  const results: Array<{ space: string; path: string }> = []
+function findAllOrgFiles(basePath, filename) {
+  const results = []
   try {
     for (const entry of fs.readdirSync(basePath)) {
       if (/^\d+-/.test(entry)) {
@@ -51,13 +37,13 @@ function findAllOrgFiles(basePath: string, filename: string): Array<{ space: str
         }
       }
     }
-  } catch (err: any) {
+  } catch (err) {
     process.stderr.write(`findAllOrgFiles: ${err.message}\n`)
   }
   return results
 }
 
-async function runAdapter(basePath: string, args: string[]): Promise<unknown> {
+async function runAdapter(basePath, args) {
   const adapterScript = path.join(basePath, '.datacore', 'lib', 'org_workspace_adapter.py')
   try {
     const { stdout } = await execFileAsync('python3', [adapterScript, ...args], {
@@ -65,22 +51,22 @@ async function runAdapter(basePath: string, args: string[]): Promise<unknown> {
       env: { ...process.env },
     })
     return JSON.parse(stdout.trim())
-  } catch (err: any) {
+  } catch (err) {
     return { error: `Adapter failed: ${err.message}`, detail: err.stderr?.slice(0, 500) || '' }
   }
 }
 
 // --- Tools ---
 
-export const tools: ModuleToolDefinition[] = [
+export const tools = [
   {
     name: 'inbox_count',
     description: 'Count items in GTD inbox across spaces',
     inputSchema: z.object({
       space: z.string().optional().describe('Space name (e.g., "0-personal"). Omit for all spaces.'),
     }),
-    handler: async (args: unknown, ctx: ModuleToolContext) => {
-      const { space } = args as { space?: string }
+    handler: async (args, ctx) => {
+      const { space } = args
 
       if (space) {
         const orgPath = findOrgFile(ctx.storage.basePath, space, 'inbox.org')
@@ -92,15 +78,15 @@ export const tools: ModuleToolDefinition[] = [
       if (files.length === 0) return { total: 0, spaces: [] }
       const results = await Promise.all(
         files.map(async f => {
-          const r = await runAdapter(ctx.storage.basePath, ['count', '--files', f.path]) as any
+          const r = await runAdapter(ctx.storage.basePath, ['count', '--files', f.path])
           if (r.error) return { space: f.space, count: 0, error: r.error }
           return { space: f.space, count: r.count ?? 0 }
         })
       )
       const errors = results.filter(r => r.error)
       const total = results.reduce((sum, r) => sum + r.count, 0)
-      const response: any = { total, spaces: results }
-      if (errors.length > 0) response.warnings = errors.map((e: any) => `${e.space}: ${e.error}`)
+      const response = { total, spaces: results }
+      if (errors.length > 0) response.warnings = errors.map(e => `${e.space}: ${e.error}`)
       return response
     },
   },
@@ -115,10 +101,8 @@ export const tools: ModuleToolDefinition[] = [
       space: z.string().optional().describe('Target space (default: 0-personal)'),
       priority: z.enum(['A', 'B', 'C']).optional().describe('Priority level'),
     }),
-    handler: async (args: unknown, ctx: ModuleToolContext) => {
-      const { title, tags, scheduled, space, priority } = args as {
-        title: string; tags?: string; scheduled?: string; space?: string; priority?: string
-      }
+    handler: async (args, ctx) => {
+      const { title, tags, scheduled, space, priority } = args
 
       const targetSpace = space || '0-personal'
       const orgPath = findOrgFile(ctx.storage.basePath, targetSpace, 'inbox.org')
@@ -129,7 +113,7 @@ export const tools: ModuleToolDefinition[] = [
       if (scheduled) adapterArgs.push('--scheduled', scheduled)
       if (priority) adapterArgs.push('--priority', priority)
 
-      const result = await runAdapter(ctx.storage.basePath, adapterArgs) as { added?: boolean; id?: string }
+      const result = await runAdapter(ctx.storage.basePath, adapterArgs)
       return { ...result, space: targetSpace }
     },
   },
@@ -143,10 +127,8 @@ export const tools: ModuleToolDefinition[] = [
       limit: z.number().optional().describe('Max results (default: 20)'),
       tag: z.string().optional().describe('Filter by tag (e.g., "AI")'),
     }),
-    handler: async (args: unknown, ctx: ModuleToolContext) => {
-      const { space, state, limit, tag } = args as {
-        space?: string; state?: string; limit?: number; tag?: string
-      }
+    handler: async (args, ctx) => {
+      const { space, state, limit, tag } = args
 
       const targetSpace = space || '0-personal'
       const orgPath = findOrgFile(ctx.storage.basePath, targetSpace, 'next_actions.org')
@@ -157,7 +139,7 @@ export const tools: ModuleToolDefinition[] = [
       if (limit) adapterArgs.push('--limit', String(limit))
       if (tag) adapterArgs.push('--tags', tag.replace(/:/g, ''))
 
-      const result = await runAdapter(ctx.storage.basePath, adapterArgs) as { count: number; tasks: unknown[] }
+      const result = await runAdapter(ctx.storage.basePath, adapterArgs)
       return { space: targetSpace, ...result }
     },
   },
@@ -169,8 +151,8 @@ export const tools: ModuleToolDefinition[] = [
       title: z.string().describe('Task title (or substring) to match'),
       space: z.string().optional().describe('Space name (default: 0-personal)'),
     }),
-    handler: async (args: unknown, ctx: ModuleToolContext) => {
-      const { title, space } = args as { title: string; space?: string }
+    handler: async (args, ctx) => {
+      const { title, space } = args
 
       const targetSpace = space || '0-personal'
       const orgPath = findOrgFile(ctx.storage.basePath, targetSpace, 'next_actions.org')
@@ -179,7 +161,7 @@ export const tools: ModuleToolDefinition[] = [
       const result = await runAdapter(ctx.storage.basePath, [
         'complete', '--file', orgPath, '--title', title,
       ])
-      return { ...result as object, space: targetSpace }
+      return { ...result, space: targetSpace }
     },
   },
 
@@ -194,11 +176,8 @@ export const tools: ModuleToolDefinition[] = [
       scheduled_within: z.number().optional().describe('Show tasks scheduled within N days'),
       space: z.string().optional().describe('Space to query (omit for 0-personal)'),
     }),
-    handler: async (args: unknown, ctx: ModuleToolContext) => {
-      const { states, tags, focus_area, deadline_within, scheduled_within, space } = args as {
-        states?: string[]; tags?: string; focus_area?: string
-        deadline_within?: number; scheduled_within?: number; space?: string
-      }
+    handler: async (args, ctx) => {
+      const { states, tags, focus_area, deadline_within, scheduled_within, space } = args
 
       const targetSpace = space || '0-personal'
       const orgPath = findOrgFile(ctx.storage.basePath, targetSpace, 'next_actions.org')
@@ -209,24 +188,24 @@ export const tools: ModuleToolDefinition[] = [
       }
       if (scheduled_within !== undefined) {
         const r = await runAdapter(ctx.storage.basePath, ['agenda', '--file', orgPath, '--days', String(scheduled_within)])
-        return { space: targetSpace, ...(r as object) }
+        return { space: targetSpace, ...r }
       }
       if (deadline_within !== undefined) {
         const r = await runAdapter(ctx.storage.basePath, ['deadlines', '--file', orgPath, '--days', String(deadline_within)])
-        return { space: targetSpace, ...(r as object) }
+        return { space: targetSpace, ...r }
       }
 
       const adapterArgs = ['list', '--file', orgPath]
       if (states && states.length > 0) adapterArgs.push('--states', states.join(','))
       if (tags) adapterArgs.push('--tags', tags.replace(/:/g, ''))
 
-      const result = await runAdapter(ctx.storage.basePath, adapterArgs) as { tasks: Array<Record<string, unknown>>; count: number }
-      if ('error' in (result as object)) return result
+      const result = await runAdapter(ctx.storage.basePath, adapterArgs)
+      if (result.error) return result
 
       let tasks = result.tasks || []
       if (focus_area) {
         const fa = focus_area.toLowerCase()
-        tasks = tasks.filter((t: any) => {
+        tasks = tasks.filter(t => {
           const props = t.properties || {}
           return (props.CATEGORY || '').toLowerCase().includes(fa) ||
                  (t.heading || '').toLowerCase().includes(fa)
@@ -244,8 +223,8 @@ export const tools: ModuleToolDefinition[] = [
       days: z.number().optional().describe('Show deadlines within N days (default: 14)'),
       space: z.string().optional().describe('Space name (default: 0-personal)'),
     }),
-    handler: async (args: unknown, ctx: ModuleToolContext) => {
-      const { days: daysArg, space } = args as { days?: number; space?: string }
+    handler: async (args, ctx) => {
+      const { days: daysArg, space } = args
       const targetSpace = space || '0-personal'
       const orgPath = findOrgFile(ctx.storage.basePath, targetSpace, 'next_actions.org')
       if (!orgPath) return { error: `No next_actions.org found in ${targetSpace}` }
@@ -253,7 +232,7 @@ export const tools: ModuleToolDefinition[] = [
       const r = await runAdapter(ctx.storage.basePath, [
         'deadlines', '--file', orgPath, '--days', String(daysArg || 14),
       ])
-      return { space: targetSpace, ...(r as object) }
+      return { space: targetSpace, ...r }
     },
   },
 
@@ -265,8 +244,8 @@ export const tools: ModuleToolDefinition[] = [
       min_age_days: z.number().optional().describe('Only archive DONE tasks closed more than N days ago (default: 30)'),
       dry_run: z.boolean().optional().describe('If true, list candidates without archiving (default: true)'),
     }),
-    handler: async (args: unknown, ctx: ModuleToolContext) => {
-      const { space, min_age_days, dry_run } = args as { space?: string; min_age_days?: number; dry_run?: boolean }
+    handler: async (args, ctx) => {
+      const { space, min_age_days, dry_run } = args
       const targetSpace = space || '0-personal'
       const orgPath = findOrgFile(ctx.storage.basePath, targetSpace, 'next_actions.org')
       if (!orgPath) return { error: `No next_actions.org found in ${targetSpace}` }
@@ -279,7 +258,7 @@ export const tools: ModuleToolDefinition[] = [
       if (isDryRun) adapterArgs.push('--dry-run')
 
       const r = await runAdapter(ctx.storage.basePath, adapterArgs)
-      return { space: targetSpace, ...(r as object) }
+      return { space: targetSpace, ...r }
     },
   },
 
@@ -293,10 +272,8 @@ export const tools: ModuleToolDefinition[] = [
       start: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).describe('Start time (YYYY-MM-DDTHH:MM)'),
       end: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).describe('End time (YYYY-MM-DDTHH:MM)'),
     }),
-    handler: async (args: unknown, ctx: ModuleToolContext) => {
-      const { file, heading, task_id, start, end } = args as {
-        file: string; heading?: string; task_id?: string; start: string; end: string
-      }
+    handler: async (args, ctx) => {
+      const { file, heading, task_id, start, end } = args
       let filePath = file
       if (!path.isAbsolute(filePath)) {
         filePath = path.join(ctx.storage.basePath, filePath)
@@ -324,19 +301,19 @@ export const tools: ModuleToolDefinition[] = [
       threshold: z.number().optional().describe('Similarity threshold 0-1 (default: 0.7)'),
       space: z.string().optional().describe('Space name (default: 0-personal)'),
     }),
-    handler: async (args: unknown, ctx: ModuleToolContext) => {
-      const { title, threshold, space } = args as { title: string; threshold?: number; space?: string }
+    handler: async (args, ctx) => {
+      const { title, threshold, space } = args
       const targetSpace = space || '0-personal'
       const nextActionsPath = findOrgFile(ctx.storage.basePath, targetSpace, 'next_actions.org')
       const inboxPath = findOrgFile(ctx.storage.basePath, targetSpace, 'inbox.org')
 
-      const results: unknown[] = []
+      const results = []
       for (const orgPath of [nextActionsPath, inboxPath].filter(Boolean)) {
         const r = await runAdapter(ctx.storage.basePath, [
-          'duplicates', '--file', orgPath!,
+          'duplicates', '--file', orgPath,
           '--title', title,
           '--threshold', String(threshold || 0.7),
-        ]) as any
+        ])
         if (!r.error && r.duplicates?.length) results.push(...r.duplicates)
       }
       if (!nextActionsPath && !inboxPath) return { error: `No org files found in ${targetSpace}` }
@@ -356,14 +333,14 @@ export const tools: ModuleToolDefinition[] = [
       space: z.string().optional().describe('Space name (default: 0-personal)'),
       stale_days: z.number().optional().describe('Days without activity to flag as stale (default: 14)'),
     }),
-    handler: async (args: unknown, ctx: ModuleToolContext) => {
-      const { space, stale_days } = args as { space?: string; stale_days?: number }
+    handler: async (args, ctx) => {
+      const { space } = args
       const targetSpace = space || '0-personal'
       const orgPath = findOrgFile(ctx.storage.basePath, targetSpace, 'next_actions.org')
       if (!orgPath) return { error: `No next_actions.org found in ${targetSpace}` }
 
       const adapterArgs = ['project-health', '--file', orgPath]
-      if (stale_days) adapterArgs.push('--stale-days', String(stale_days))
+      if (args.stale_days) adapterArgs.push('--stale-days', String(args.stale_days))
       return runAdapter(ctx.storage.basePath, adapterArgs)
     },
   },
@@ -375,8 +352,8 @@ export const tools: ModuleToolDefinition[] = [
       space: z.string().optional().describe('Space name (default: 0-personal)'),
       states: z.array(z.string()).optional().describe('Filter by states (default: ["TODO", "NEXT"])'),
     }),
-    handler: async (args: unknown, ctx: ModuleToolContext) => {
-      const { space, states } = args as { space?: string; states?: string[] }
+    handler: async (args, ctx) => {
+      const { space, states } = args
       const targetSpace = space || '0-personal'
       const orgPath = findOrgFile(ctx.storage.basePath, targetSpace, 'next_actions.org')
       if (!orgPath) return { error: `No next_actions.org found in ${targetSpace}` }
