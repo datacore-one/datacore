@@ -306,7 +306,11 @@ node_modules/
 .datacore/modules/github/data/scan_cache.json
 
 # Machine-local operational scripts — private, never tracked here.
+# NOTE: `cos-*` (hyphen) is listed as well as `cos_*` (underscore): the
+# underscore-only pattern silently missed cos-server-setup.sh et al., which
+# slipped past this guardrail on 2026-08-27 (see datacore#56).
 .datacore/lib/cos_*
+.datacore/lib/cos-*
 .datacore/lib/winston_*
 .datacore/lib/data_deliver.*
 .datacore/lib/lens_analyze.py
