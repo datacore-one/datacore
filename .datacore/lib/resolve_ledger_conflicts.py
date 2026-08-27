@@ -80,13 +80,21 @@ for repo in REPOS:
             how = f"later timestamp {times[-1] if times else '-'}"
         elif "/checkpoints/" in f:
             new, how = keep_head(t), "keep HEAD (regenerable snapshot)"
-        elif f.endswith(".org") or "/journal" in f or "/journals/" in f:
+        elif (f.endswith(".org") or f.startswith(("journal/", "journals/"))
+              or "/journal/" in f or "/journals/" in f):
             # Append-only per writer: two writers each add an entry at the same
             # offset, so a union keeps both and choosing a side silently deletes
             # one. On 2026-08-27 the old keep-HEAD default was applied to
             # 5-plur/journal/2026-08-27.md and discarded four Miles wrap-up
             # entries plus a nightshift run record — recovered from origin, but
             # only because the merge had not been pushed yet.
+            #
+            # f is REPO-RELATIVE (git diff --name-only): a journal at the repo
+            # root arrives as `journal/2026-08-16.md`, with no leading slash for
+            # `"/journal" in f` to match — so the 2026-08-27 fix missed the very
+            # path it was written for, and on 2026-08-28 keep-HEAD dropped
+            # origin's side of 1-datacore-space/journal/2026-08-16.md on
+            # plur-claw. startswith catches the root-anchored case.
             new, how = keep_both(t), "union — BOTH sides kept"
         else:
             # keep-HEAD is only safe for regenerable artifacts. If you are about
