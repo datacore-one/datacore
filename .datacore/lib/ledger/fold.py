@@ -91,11 +91,6 @@ class ItemState:
     #: projector a second, divergent view of history. Copied (not aliased) so
     #: fold stays non-mutating over its input.
     payload: dict = field(default_factory=dict)
-    #: Git commit SHA recorded by the dispatcher when it ran the artifact check
-    #: that produced the `item.complete` event. Present only for items that were
-    #: completed via an automated check (ledger_claim / ledger_dispatch); absent
-    #: (None) for items completed manually or before this field was introduced.
-    artifact_commit: str | None = None
 
 
 @dataclass
@@ -281,9 +276,6 @@ def _handle_complete(state: LedgerState, event: Event) -> None:
         return
     item.status = "completed"
     item.closed_at = event.hlc
-    sha = (event.payload or {}).get("artifact_commit")
-    if isinstance(sha, str) and sha:
-        item.artifact_commit = sha
     _note(item, event, "applied")
 
 

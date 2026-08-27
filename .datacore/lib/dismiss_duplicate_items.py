@@ -104,6 +104,7 @@ def main() -> int:
             log = EventLog(space, a.actor)
             for iid, title in dupes:
                 log.append("item.dismiss", {
+                    "kind": "housekeeping",
                     "id": iid,
                     "reason": "duplicate: org tracks this task under another id "
                               "after an ID-churn repair",

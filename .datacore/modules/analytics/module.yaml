@@ -43,3 +43,8 @@ recall:
     - module:analytics
   tags:
     - analytics
+
+# DIP-0047
+exempt:
+  - fn: "lib/posthog_daily.py:query_hogql"
+    reason: read-only — HogQL analytics query

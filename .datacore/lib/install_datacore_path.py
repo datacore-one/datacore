@@ -58,17 +58,25 @@ def _importable_cleanly() -> bool:
 
 
 def _site_dir() -> Path | None:
+    """The USER site-packages, created if absent — never a system directory.
+
+    The first version accepted any existing site dir, preferring the user one
+    only if it already existed. On a fresh box the user site does not exist, so
+    it fell straight through to `/usr/local/lib/python3.12/dist-packages` and
+    failed with PermissionError on winston and plur-claw.
+
+    Falling back to a system path is wrong even where it would succeed: it makes
+    an unprivileged, per-user change into a machine-wide one, and installs the
+    core for interpreters no Datacore job uses. Absent is a reason to CREATE the
+    user site, not to escalate out of it.
+    """
     import site
-    for fn in ("getusersitepackages", "getsitepackages"):
-        try:
-            got = getattr(site, fn)()
-        except Exception:  # noqa: BLE001
-            continue
-        for d in ([got] if isinstance(got, str) else list(got)):
-            p = Path(d)
-            if p.is_dir():
-                return p
-    return None
+    try:
+        user = Path(site.getusersitepackages())
+        user.mkdir(parents=True, exist_ok=True)
+        return user
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def main() -> int:

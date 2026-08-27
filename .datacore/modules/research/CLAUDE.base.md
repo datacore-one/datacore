@@ -135,9 +135,15 @@ python3 .datacore/modules/research/lib/research_orchestrator.py [--limit N] [--d
   [#A] first, capped at --limit; URL-less reading digests never consume slots)
 - Fetch chain: subscription cookies → Jina → direct → Wayback
 - Writes literature notes, zettels, CRM entities, landscape rows; marks items DONE
-- Podcast: creates a NotebookLM notebook via `nlm` (old-style syntax ONLY —
-  `nlm create`, not `nlm notebook create`; the server binary has no new-style
-  commands), adds sources, queues the audio overview
+- Podcast: creates a NotebookLM notebook via `nlm`, adds sources, queues the
+  audio overview. Two `nlm` constraints, both of which have silently broken
+  this pipeline before:
+  - **Audio instructions MUST be empty** — `create-audio <id> ""`. Any custom
+    instruction routes to the old RPC, which the server rejects with
+    "One or more arguments are invalid". Set instructions in the web UI.
+  - Old-style verbs (`create`, `add`, `create-audio`) still work as deprecated
+    aliases on v0.1.1, which all hosts now run. `notebook create` / `source add`
+    / `audio create` are the current spellings.
 - Config: module.yaml settings (`nlm_path`, `podcast_output_dir`,
   `reports_output_dir`, `literature_output_dir`, `zettel_output_dir`,
   `research_org_file`) are wired with fail-safe fallbacks; `NLM_BIN` env
@@ -152,9 +158,16 @@ python3 .datacore/modules/research/lib/research_orchestrator.py [--limit N] [--d
 - **Update it**: this module is tracked in the root Data repo
   (datacore-one/datacore) — commit + push there. The nightshift repo needs no
   changes for research behavior.
-- **Auth**: nlm auth is cookie-derived and expires (see engrams
-  ENG-2026-0714-048): re-auth locally with `nlm auth Default`, copy
-  `~/.nlm/env` to the server.
+- **Auth**: nlm auth is derived from browser cookies, so it can ONLY be
+  refreshed on the Mac — the servers have no browser and can never renew
+  themselves. It expires roughly monthly. This is automated:
+
+      .datacore/modules/research/lib/nlm_auth_sync.py check   # status, all hosts
+      .datacore/modules/research/lib/nlm_auth_sync.py sync    # refresh + push
+
+  A weekly cron on the Mac (Sun 21:00, ahead of the Monday research run) runs
+  `sync`. Left unautomated, both servers aged out on 2026-07-14 and the podcast
+  stopped being produced for a month without anyone being told.
 
 ## Integration with Nightshift
 

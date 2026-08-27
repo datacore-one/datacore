@@ -80,7 +80,7 @@ def _identity() -> dict:
     `~/.datacore/identity.env`, KEY=VALUE per line:
 
         DATACORE_ACTOR=data
-        DATACORE_ATTEST_SPACE=~/spaces/5-plur
+        DATACORE_ATTEST_SPACE=$HOME/spaces/5-plur   # absolute; see below
 
     Every identity bug this file has had came from inferring what should have
     been stated. The hostname lookup filed tris's events under `transporter`.

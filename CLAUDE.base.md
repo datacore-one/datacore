@@ -126,6 +126,49 @@ Use `datacore.modules.list` for installed modules, `datacore.modules.info <name>
 - `.datacore/specs/module-deployment-checklist.md` — Universal server deployment & credential parity checklist
 - Module-specific: Check `[module]/SERVER.md` or `[module]/docs/` for detailed setup guides
 
+## Credentials — NEVER search for them
+
+Do not grep `.env` files. Do not look on another host. Do not read `~/.hermes/.env`
+or any other copy you happen to find. **Searching is what creates the problem**: a
+search finds *a* value, and nothing about a found value says whether it is current
+or abandoned. That is how duplicates accumulate and how "the credential is missing"
+gets reported about a credential that is present and working.
+
+Ask the broker instead:
+
+```bash
+python3 .datacore/lib/creds.py get <id-or-VAR_NAME> --consumer <who-wants-it>
+```
+
+It resolves the ONE declared location, prefers this host's own value over a
+fleet-wide one, verifies against the provider before returning, and prints the
+value on **stdout** with every diagnostic on **stderr** — so pipe it into the
+consumer, never echo it. If it refuses because the credential is not indexed, that
+refusal is the feature: add it with `creds add`. Do not go looking.
+
+| Need | Command |
+|------|---------|
+| Is it alive? | `creds doctor [--id X]` → `ok` / `FAIL` / `n-a` |
+| Where does it live? | `creds show X` / `creds list` / `creds search X` |
+| Reassemble this host's env | `creds sync` |
+| Push to every host | `.datacore/secrets/scripts/distribute.sh` |
+
+`n-a` means "could not tell" and is **never** a pass.
+
+**To change a value**: edit the space/project file under `.datacore/secrets/`, then
+run `creds sync`. Never edit `.datacore/env/.env` — it is generated, says so in its
+own header, and your edit is silently lost on the next sync.
+
+**Before concluding a credential was revoked**, diff its value across every host.
+A rotation may have reached only one machine. On 2026-07-08 the @plur_ai X keys were
+rotated into one host's working tree and never committed; the canonical store served
+pre-rotation values for four months and a release published everywhere before failing
+to post. Sending someone to regenerate keys that are alive on another machine
+destroys a working credential.
+
+Never print a secret value — compare truncated `sha256` instead. Rotation is the
+user's action: flag what needs rotating, do not rotate it.
+
 ## Conventions
 
 ### Tasks — org-workspace is mandatory

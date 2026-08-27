@@ -137,7 +137,11 @@ class TestExecutorConformance:
         events = read_events(hermetic_env)
         spend_events = [e for e in events if e.type == "spend.record"]
         assert len(spend_events) == 1
-        assert spend_events[0].payload == {"cents": 42, "ref": f"executor:{name}"}
+        # Required keys, not an exact dict: the payload gained `executor`,
+        # and gains `item`/`model` when the caller supplies them.
+        p = spend_events[0].payload
+        assert p["cents"] == 42 and p["ref"] == f"executor:{name}"
+        assert p["executor"] == name
         assert spend_events[0].actor == "test-actor"
         assert spend_events[0].sig == ""  # unsigned by default
 
@@ -367,7 +371,7 @@ class TestClaudeCodeAdapter:
         monkeypatch.setattr(claude_code_mod.shutil, "which", lambda name: "/usr/bin/claude")
         fake_stdout = json.dumps({"result": "hi there", "total_cost_usd": 0.015})
 
-        def fake_run(cmd, capture_output, text, timeout, check):
+        def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 0, stdout=fake_stdout, stderr="")
 
         monkeypatch.setattr(claude_code_mod.subprocess, "run", fake_run)
@@ -388,7 +392,7 @@ class TestClaudeCodeAdapter:
         monkeypatch.setattr(claude_code_mod.shutil, "which", lambda name: "/usr/bin/claude")
         fake_stdout = json.dumps({"result": "hi there"})
 
-        def fake_run(cmd, capture_output, text, timeout, check):
+        def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 0, stdout=fake_stdout, stderr="")
 
         monkeypatch.setattr(claude_code_mod.subprocess, "run", fake_run)
@@ -407,7 +411,7 @@ class TestClaudeCodeAdapter:
 
         monkeypatch.setattr(claude_code_mod.shutil, "which", lambda name: "/usr/bin/claude")
 
-        def fake_run(cmd, capture_output, text, timeout, check):
+        def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom: auth failed")
 
         monkeypatch.setattr(claude_code_mod.subprocess, "run", fake_run)
@@ -431,7 +435,7 @@ class TestClaudeCodeAdapter:
             }
         )
 
-        def fake_run(cmd, capture_output, text, timeout, check):
+        def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 0, stdout=fake_stdout, stderr="")
 
         monkeypatch.setattr(claude_code_mod.subprocess, "run", fake_run)
@@ -439,7 +443,11 @@ class TestClaudeCodeAdapter:
 
         result = executor.run("hello")
 
-        assert result.error == "claude reported error: error_during_execution"
+        # Message now names the fault; subtype is the fallback when the
+        # envelope carries nothing more specific.
+        assert result.error is not None
+        assert "error_during_execution" in result.error
+        assert "error: success" not in result.error
         assert result.cost_cents == 1  # round(0.01 * 100) -- tokens WERE consumed
 
         events = read_events(hermetic_env)
@@ -459,7 +467,7 @@ class TestClaudeCodeAdapter:
             }
         )
 
-        def fake_run(cmd, capture_output, text, timeout, check):
+        def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 0, stdout=fake_stdout, stderr="")
 
         monkeypatch.setattr(claude_code_mod.subprocess, "run", fake_run)
@@ -467,7 +475,8 @@ class TestClaudeCodeAdapter:
 
         result = executor.run("hello")
 
-        assert result.error == "claude reported error: error_max_turns"
+        assert result.error is not None
+        assert "error_max_turns" in result.error
 
         events = read_events(hermetic_env)
         assert events[0].payload["ref"] == "executor:claude-code:err"
@@ -478,7 +487,7 @@ class TestClaudeCodeAdapter:
         monkeypatch.setattr(claude_code_mod.shutil, "which", lambda name: "/usr/bin/claude")
         fake_stdout = json.dumps({"result": "hi there", "total_cost_usd": 0.01})
 
-        def fake_run(cmd, capture_output, text, timeout, check):
+        def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 0, stdout=fake_stdout, stderr="")
 
         monkeypatch.setattr(claude_code_mod.subprocess, "run", fake_run)
@@ -503,7 +512,7 @@ class TestClaudeCodeAdapter:
             }
         )
 
-        def fake_run(cmd, capture_output, text, timeout, check):
+        def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 0, stdout=fake_stdout, stderr="")
 
         monkeypatch.setattr(claude_code_mod.subprocess, "run", fake_run)
@@ -535,7 +544,7 @@ class TestHermesAdapter:
 
         monkeypatch.setattr(hermes_mod.shutil, "which", lambda name: "/usr/bin/hermes")
 
-        def fake_run(cmd, capture_output, text, timeout, check):
+        def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 0, stdout="hermes reply\n", stderr="")
 
         monkeypatch.setattr(hermes_mod.subprocess, "run", fake_run)
@@ -554,7 +563,7 @@ class TestHermesAdapter:
 
         monkeypatch.setattr(hermes_mod.shutil, "which", lambda name: "/usr/bin/hermes")
 
-        def fake_run(cmd, capture_output, text, timeout, check):
+        def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="connection refused")
 
         monkeypatch.setattr(hermes_mod.subprocess, "run", fake_run)
@@ -676,3 +685,127 @@ def test_claude_code_live_smoke(hermetic_env):
     assert result.error is None, result.error
     assert "pong" in result.text.lower()
     assert result.cost_cents >= 0
+
+
+class TestClaudeCodeSpawnContract:
+    """The three spawn arguments that were dropped once and cost days.
+
+    `--permission-mode`, `cwd` and the guard-bypass env were all present, all
+    removed by a registry refactor, and their absence was invisible: the agent
+    declines every write, reports fluently, and exits 0, so the caller records
+    success while no file is ever written. Nothing failed. These assertions are
+    the only thing that would notice.
+    """
+
+    def _capture(self, monkeypatch, cwd=None):
+        import executors.claude_code as m
+        monkeypatch.setattr(m.shutil, "which", lambda name: "/usr/bin/claude")
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen["cmd"] = cmd
+            seen.update(kw)
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout=json.dumps({"result": "ok"}), stderr="")
+
+        monkeypatch.setattr(m.subprocess, "run", fake_run)
+        m.ClaudeCodeExecutor().run("hello", cwd=cwd)
+        return seen
+
+    def test_permission_mode_is_passed(self, hermetic_env, monkeypatch):
+        """Without it the agent is read-only and declines every write."""
+        seen = self._capture(monkeypatch)
+        assert "--permission-mode" in seen["cmd"]
+        i = seen["cmd"].index("--permission-mode")
+        assert seen["cmd"][i + 1] == "acceptEdits"
+
+    def test_not_the_blanket_bypass(self, hermetic_env, monkeypatch):
+        """--dangerously-skip-permissions is refused under root (winston) and
+        is a blanket grant where acceptEdits is the narrow one."""
+        seen = self._capture(monkeypatch)
+        assert "--dangerously-skip-permissions" not in seen["cmd"]
+
+    def test_cwd_reaches_the_subprocess(self, hermetic_env, monkeypatch):
+        """acceptEdits is scoped to the working directory, so a lost cwd turns
+        every write into a denied out-of-scope write."""
+        seen = self._capture(monkeypatch, cwd="/tmp/some-space")
+        assert seen["cwd"] == "/tmp/some-space"
+
+    def test_guard_bypass_is_explicit_in_env(self, hermetic_env, monkeypatch):
+        """Passed explicitly, not inherited from a mutated os.environ -- the
+        PLUR PreToolUse guard is unsatisfiable where the MCP server is absent
+        and then refuses every tool call while exiting 0."""
+        seen = self._capture(monkeypatch)
+        assert seen["env"]["DATACORE_HEADLESS"] == "1"
+
+
+class TestInBandErrorMessage:
+    """An error message must name the fault, not the flag that spotted it.
+
+    `is_error: true` with `subtype: "success"` rendered as "claude reported
+    error: success" -- self-contradictory, and it discarded the envelope's
+    actual diagnosis. A 15-item suite failed with that string and it produced a
+    wrong root cause before anyone read the raw envelope.
+    """
+
+    def _err(self, envelope):
+        import executors.claude_code as m
+        ex = m.ClaudeCodeExecutor()
+        ex._in_band_error = None
+        ex._check_in_band_error(envelope)
+        return ex._in_band_error
+
+    def test_success_subtype_is_never_the_message(self):
+        msg = self._err({"is_error": True, "subtype": "success",
+                         "api_error_status": 401, "result": "OAuth token revoked"})
+        assert msg is not None
+        assert "error: success" not in msg
+        assert "401" in msg and "OAuth token revoked" in msg
+
+    def test_subtype_is_kept_alongside_richer_detail(self):
+        """It is a real signal; only the literal "success" is suppressed."""
+        msg = self._err({"is_error": True, "subtype": "error_max_turns",
+                         "result": "partial output"})
+        assert "subtype=error_max_turns" in msg and "partial output" in msg
+
+    def test_clean_envelope_is_not_an_error(self):
+        assert self._err({"is_error": False, "subtype": "success",
+                          "result": "fine"}) is None
+
+    def test_permission_denials_are_surfaced(self):
+        msg = self._err({"is_error": True, "subtype": "success",
+                         "permission_denials": [{"tool": "Write"}, {"tool": "Bash"}]})
+        assert "permission_denials=2" in msg
+
+
+class TestSpendIsAttributable:
+    """Spend must be findable, correctly attributed, and linked to its cause.
+
+    All three failed silently. Spend went to DATACORE_ROOT -- not a space, so no
+    fold ever read it -- under a hostname actor rather than the declared one,
+    with a payload naming only the adapter. A forensic pass over a 15-item run
+    concluded `spend.record` did not exist in the schema. It did; it was being
+    filed where nobody looks.
+    """
+
+    def test_spend_lands_in_the_space_the_caller_named(self, tmp_path, monkeypatch):
+        import executors.base as base
+
+        (tmp_path / ".datacore" / "events").mkdir(parents=True)
+        monkeypatch.setenv("DATACORE_ACTOR", "miles")
+        monkeypatch.delenv("DATACORE_NO_SPEND", raising=False)
+
+        class Fake(base.Executor):
+            name = "fake-spend"
+
+            def _invoke(self, prompt, timeout_s):
+                return "ok", 7
+
+        Fake().run("hi", space=tmp_path, item="item-abc")
+
+        from ledger.log import read_events
+        spend = [e for e in read_events(tmp_path) if e.type == "spend.record"]
+        assert len(spend) == 1, "spend must land in the caller's space"
+        assert spend[0].actor == "miles", "declared actor, not the hostname"
+        assert spend[0].payload["item"] == "item-abc", "linked to what incurred it"
+        assert spend[0].payload["executor"] == "fake-spend"

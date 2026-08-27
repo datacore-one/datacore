@@ -17,7 +17,7 @@ cd "$S" || exit 1
 # Merge is also simply correct for the payload: per-writer event logs are
 # disjoint files, so receiving another actor's log is a union, not a conflict.
 git pull --no-rebase -q 2>&1 | tail -2
-/usr/bin/python3 /root/.datacore/v2-runner/.datacore/lib/ledger_dispatch.py \
+/usr/bin/python3 /root/.datacore/v2-runner/.datacore/lib/ledger_claim.py \
   --space "$S" --actor data --limit 2 --execute
 rc=$?
 git add .datacore/events/ 2>/dev/null

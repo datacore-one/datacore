@@ -144,6 +144,28 @@ if [ -s "$sfile" ]; then
   cat "$sfile"
   fail=1
 fi
+# Day-of-week names must match their dates.
+#
+# This is where it actually matters: org files and journals live in the space
+# repos, not the root repo. On 2026-08-27 seven `[2026-08-27 Wed]` stamps were
+# written into 0-personal/org/inbox.org — a space repo — through a
+# `python3 - <<EOF` heredoc, which never touches the Edit/Write PreToolUse hook
+# that exists to catch this. The date was a Thursday. The commit is the one
+# chokepoint every write path passes through whatever tool produced the bytes.
+_dv=""
+for _c in "$(git rev-parse --show-toplevel)/.datacore/lib/validate_org_dates.py" \
+          "$HOME/Data/.datacore/lib/validate_org_dates.py"; do
+  [ -f "$_c" ] && { _dv="$_c"; break; }
+done
+if [ -n "$_dv" ]; then
+  if ! python3 "$_dv" --staged; then
+    printf "\n\033[1;31mWRONG WEEKDAY\033[0m — a date stamp names a day it is not.\n"
+    printf "Repair and re-stage:\n"
+    printf "  python3 .datacore/lib/validate_org_dates.py --fix <file> && git add <file>\n"
+    fail=1
+  fi
+fi
+
 [ "$fail" = "1" ] && { printf "\nTo bypass (emergency): git commit --no-verify\n"; exit 1; }
 
 exit 0

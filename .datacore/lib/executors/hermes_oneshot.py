@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Working non-interactive Hermes invocation for the ledger dispatcher.
+"""Working non-interactive Hermes invocation for the ledger claim worker.
 
 `hermes -z` and `hermes chat -q` both hang in this environment because the
 oneshot module redirects stdout/stderr to devnull, which breaks the SSH
@@ -62,11 +62,30 @@ def main():
     result = agent.run_conversation(prompt)
     response = result.get("final_response") or ""
 
+    # FLUSH BEFORE os._exit -- it does not.
+    #
+    # os._exit() terminates immediately: no atexit handlers, no buffer flush.
+    # That is exactly why it is used here (the agent leaves threads that make a
+    # clean interpreter shutdown hang), but it means anything still sitting in
+    # Python's stdout buffer is discarded.
+    #
+    # Under a terminal stdout is line-buffered, so `print` flushes on the
+    # newline and this works. Under `subprocess.run(capture_output=True)`
+    # stdout is a PIPE and therefore block-buffered: the response goes into the
+    # buffer, os._exit throws it away, and the process reports success.
+    #
+    # The caller then sees returncode 0 with empty stdout and reports "hermes
+    # returned no output" -- which reads as the agent having said nothing,
+    # rather than as its answer being dropped on the floor. Every Tris
+    # dispatch failed this way, and it only reproduces when captured, never
+    # when run by hand.
     if response:
         print(response)
+        sys.stdout.flush()
         os._exit(0)
     else:
         print("hermes_oneshot: no response produced", file=sys.stderr)
+        sys.stderr.flush()
         os._exit(1)
 
 if __name__ == "__main__":

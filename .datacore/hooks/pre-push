@@ -81,4 +81,41 @@ while read local_ref local_sha remote_ref remote_sha; do
     echo "Pre-push validation passed"
 done
 
+# ========================================================
+# Phantom gitlink guard: reject commits containing gitlinks (mode 160000)
+# not listed in .gitmodules (issue #50)
+# ========================================================
+
+REGISTERED_SUBMODULES=""
+if [ -f "$REPO_ROOT/.gitmodules" ]; then
+    REGISTERED_SUBMODULES=$(grep '^\s*path\s*=' "$REPO_ROOT/.gitmodules" \
+        | sed 's/^\s*path\s*=\s*//' | sort -u)
+fi
+
+# Check the tree being pushed for phantom gitlinks
+while read local_ref local_sha remote_ref remote_sha; do
+    if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+        continue
+    fi
+
+    # Scan all gitlinks in the pushed tree
+    PHANTOM_FOUND=0
+    while IFS=$'\t' read -r mode sha stage path; do
+        if [ "$mode" = "160000" ]; then
+            if ! echo "$REGISTERED_SUBMODULES" | grep -qxF "$path"; then
+                echo "  PHANTOM GITLINK: $path (mode 160000, no .gitmodules entry)"
+                PHANTOM_FOUND=1
+            fi
+        fi
+    done < <(git ls-tree -r "$local_sha" 2>/dev/null | grep '^160000' || true)
+
+    if [ $PHANTOM_FOUND -eq 1 ]; then
+        echo ""
+        echo "Push blocked: phantom gitlink(s) in commit $local_sha"
+        echo "These are staged as submodules (mode 160000) but have no .gitmodules entry."
+        echo "Fix with: git rm --cached <path> && git commit --amend"
+        exit 1
+    fi
+done
+
 exit 0

@@ -1,3 +1,4 @@
+from datacore.ledger import attests
 #!/usr/bin/env python3
 """
 WhatsApp Notifications
@@ -94,6 +95,7 @@ class WhatsAppNotifications:
         except Exception:
             return False
 
+    @attests("whatsapp.sent", ref=lambda r: str(getattr(r, "id", None) or (r.get("id", "") if isinstance(r, dict) else "") or ""))
     async def send_notification(self, text: str, to: str = None) -> bool:
         """Send notification message.
 
@@ -463,6 +465,7 @@ class WhatsAppNotificationsSync:
         finally:
             loop.close()
 
+    @attests("whatsapp.sent", ref=lambda r: str(getattr(r, "id", None) or (r.get("id", "") if isinstance(r, dict) else "") or ""))
     def send_notification(self, text: str, to: str = None) -> bool:
         return self._run(self._notifier.send_notification(text, to))
 

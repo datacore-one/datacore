@@ -2,7 +2,7 @@
 """One task, one checkout (DIP-0046 E4).
 
 Three systemd units run as the same user with the same WorkingDirectory on the
-nightshift box — `nightshift-overnight`, `ledger-dispatch` and
+nightshift box — `nightshift-overnight`, `ledger-claim` and
 `datacore-telegram` — so a Telegram session can start while the overnight batch
 is mid-task, in that one tree, editing the same files. The batch is sequential
 internally; that says nothing about what else is running beside it.

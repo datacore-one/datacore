@@ -73,6 +73,7 @@ Use `TaskCreate` to create one task per step:
 5. "Scan email"
 6. "Scan GitHub"
 7. "Collect nightshift results"
+7b. "Check overnight learning sweep"
 8. "Compute GTD health"
 9. "Fetch news headlines"
 10. "Gather trading data"
@@ -295,6 +296,32 @@ plur: 3 (5-plur: 2, 2-datacore: 1) · miles: 1 (8-firm)
 ```
 
 Show the commit messages (abbreviated) so the user knows WHAT changed, not just counts.
+
+---
+
+## Step 8b: Check the Overnight Learning Sweep
+
+```bash
+python3 ~/Data/.datacore/lib/session_learning_sweep.py --status | tail -4
+tail -3 ~/.datacore/state/session-learning.log
+```
+
+The `io.datacore.session-learning` job (05:20, launchd) reads every session archived yesterday and writes the engrams. Report one line in the briefing:
+
+```
+Learning: 4 sessions swept, 7 engrams, 3 recurrences reinforced
+```
+
+**Report a stalled queue as a problem, not as silence.** If `pending` is non-zero for a day older than yesterday, the sweep failed or never ran. Say so and name the day:
+
+```
+Learning: ⚠ 6 sessions pending since 2026-08-14 — sweep has not run for 3 days
+  → check ~/.datacore/state/session-learning.error.log
+```
+
+This step exists because its absence was a real bug. Wrap-up §6 deferred engram candidates to "the /today daily-review" — a step that did not exist in this command. 37 candidates accumulated unreviewed across five months before anyone noticed, because nothing was ever going to look at them. A queue with no reader is a leak; this is the reader.
+
+**The legacy candidate backlog is separate and is not swept.** `session_learning_sweep.py --drain-candidates` lists it. Surface it once, in the first briefing after this change, then leave it alone — auto-promoting 37 unreviewed claims is what the review gate was there to prevent.
 
 ---
 

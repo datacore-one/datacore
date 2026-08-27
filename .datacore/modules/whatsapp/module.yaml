@@ -112,3 +112,21 @@ recall:
     - module:whatsapp
   tags:
     - whatsapp
+
+# DIP-0047 — messages to third parties. Both the async and sync definitions of
+# each sender are declared: the files carry two classes with same-named methods,
+# and decorating only one leaves a live path unrecorded.
+egress:
+  - fn: lib/waha_client.py:send_message
+    kind: whatsapp.sent
+  - fn: lib/whatsapp_gateway.py:send_message
+    kind: whatsapp.sent
+  - fn: lib/whatsapp_gateway.py:send_reply
+    kind: whatsapp.sent
+  - fn: lib/whatsapp_notifications.py:send_notification
+    kind: whatsapp.sent
+exempt:
+  - fn: "lib/waha_client.py:<module>"
+    reason: module-level client construction, no send
+  - fn: "lib/whatsapp_gateway.py:<module>"
+    reason: module-level gateway construction, no send

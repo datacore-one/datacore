@@ -24,7 +24,8 @@ for validation, but agents should use these statuses when writing the audit):
   - `skipped-by-mode-fast` — suppressed by `/wrap-up fast`
   - `not-applicable (REASON)` — concrete factual reason
   - `inferred-and-reported (DESCRIPTION)` — inference-first mode default
-  - `applied-from-feedback (N CORRECTIONS)` — §17.5 feedback gate applied edits
+  - `applied-from-feedback (N CORRECTIONS)` — §1 pulse returned corrections
+    and they were applied (this was §17.5 before the renumbering)
 
 If any required section is missing, the hook outputs a `decision: block` JSON
 response on stdout, which Claude Code surfaces to the model and refuses the
@@ -33,6 +34,7 @@ tool call. The model must then complete the missing section(s) before retrying.
 Pass-through otherwise.
 """
 import json
+import re
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -43,6 +45,47 @@ REQUIRED_SECTIONS = (
     "Token Cost",
     "Session Meta-Analysis",
 )
+
+# The spec is the source of truth for which steps exist. This used to be a
+# hardcoded string — "1, 2, ... 12, 12.5, 13, 14, 15, 16.5, 17, 17.5, 18" —
+# which went stale when wrap-up.md was renumbered down to 0a-12 (its own §2a
+# still references "old §10, §12, §12.5, §14"). The hook then demanded an
+# audit of eight steps that no longer existed, so the only way to satisfy it
+# was to write rows for imaginary steps. An enforcement gate that cannot be
+# satisfied truthfully teaches people to fabricate, which is worse than no
+# gate at all. Derive the list instead.
+SPEC_PATHS = (
+    Path.home() / "Data" / ".datacore" / "commands" / "wrap-up.md",
+    Path.home() / "Data" / ".claude" / "commands" / "wrap-up.md",
+)
+
+# Match only top-level numbered steps: "### 7. Session Meta-Analysis".
+# Deliberately excludes the 0a-0e setup steps and the lettered sub-steps
+# (2a, 6b, 10a-10c), because the spec's own audit template in §12 carries
+# rows for 1-12 and nothing else. The hook must ask for exactly the table
+# the spec tells the agent to write — no more, no less.
+_STEP_HEADING = re.compile(r"^#{2,4}\s+(\d+)\.\s+\S", re.MULTILINE)
+
+# Used only if the spec cannot be read, so the hook degrades to a generic
+# instruction rather than asserting a step list it has not verified.
+_FALLBACK_STEPS = "every numbered step in .datacore/commands/wrap-up.md"
+
+
+def spec_step_list() -> str:
+    """Numbered steps actually defined in the wrap-up spec, in document order."""
+    for path in SPEC_PATHS:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        seen: list[str] = []
+        for match in _STEP_HEADING.finditer(text):
+            step = match.group(1)
+            if step not in seen:
+                seen.append(step)
+        if seen:
+            return ", ".join(seen)
+    return _FALLBACK_STEPS
 
 
 def journal_paths_recent() -> list[Path]:
@@ -127,10 +170,9 @@ def main() -> None:
         "reason": (
             f"Wrap-up checklist enforcement: journal at {best_path} is missing required "
             f"section(s): {', '.join(repr(s) for s in missing)}. "
-            "Step 17 of /wrap-up requires an authoritative journal entry written from the "
-            "main conversation. Step 18 requires an explicit checklist audit listing every "
-            "spec step (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 12.5, 13, 14, 15, 16.5, 17, "
-            "17.5, 18) with one of these statuses: 'run ✓', 'skipped-by-user', "
+            "/wrap-up requires an authoritative journal entry written from the "
+            "main conversation, plus an explicit checklist audit listing every "
+            f"spec step ({spec_step_list()}) with one of these statuses: 'run ✓', 'skipped-by-user', "
             "'skipped-by-mode-fast', 'not-applicable (REASON)', "
             "'inferred-and-reported (DESCRIPTION)', or 'applied-from-feedback (N CORRECTIONS)'. "
             "Sessions that roll past midnight can keep the audit on the session-start date — "
