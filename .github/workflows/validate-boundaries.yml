@@ -32,7 +32,7 @@ jobs:
           echo "Checking all tracked files against root-level allowlist..."
 
           ALLOWED_ROOT_DIRS="^(\\.datacore|\\.github|\\.plur)/"
-          ALLOWED_ROOT_FILES="^(\\.|CLAUDE\\.base\\.md|README\\.md|INSTALL\\.md|CONTRIBUTING\\.md|GETTING_STARTED\\.md|CHANGELOG\\.md|ROADMAP\\.md|CODE_OF_CONDUCT\\.md|SECURITY\\.md|LICENSE|CODEOWNERS|sync|install\\.yaml.*example|\\.mcp\\.json\\.example|\\.gitignore|\\.gitmodules|\\.gitattributes|\\.claude)$"
+          ALLOWED_ROOT_FILES="^(\\.|CLAUDE\\.base\\.md|README\\.md|INSTALL\\.md|CONTRIBUTING\\.md|GETTING_STARTED\\.md|HOSTING\\.md|CHANGELOG\\.md|ROADMAP\\.md|CODE_OF_CONDUCT\\.md|SECURITY\\.md|LICENSE|CODEOWNERS|sync|install\\.yaml.*example|\\.mcp\\.json\\.example|\\.gitignore|\\.gitmodules|\\.gitattributes|\\.claude)$"
 
           VIOLATIONS=""
           while IFS= read -r file; do
