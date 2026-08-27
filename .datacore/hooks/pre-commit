@@ -251,9 +251,23 @@ fi
 # .github/ (CI). All other content belongs in space repos ([0-9]-*/),
 # which are private and gitignored. This prevents ad-hoc directories
 # from being committed at root level.
+#
+# The allowlist is maintained in a single shared file so this hook and
+# the GitHub Actions workflow (.github/workflows/validate-boundaries.yml)
+# are always in sync:
+#   .datacore/config/root-allowlist.txt
 
 ALLOWED_ROOT_DIRS="^(\\.datacore|\\.github|\\.plur)/"
-ALLOWED_ROOT_FILES="^(\\.|CLAUDE\\.base\\.md|README\\.md|INSTALL\\.md|CONTRIBUTING\\.md|GETTING_STARTED\\.md|HOSTING\\.md|CHANGELOG\\.md|ROADMAP\\.md|CODE_OF_CONDUCT\\.md|SECURITY\\.md|LICENSE|CODEOWNERS|sync|install\\.yaml.*example|\\.mcp\\.json\\.example|\\.gitignore|\\.gitmodules|\\.gitattributes|\\.claude)$"
+
+# Build ALLOWED_ROOT_FILES from the shared config (skip comment/blank lines,
+# join fragments with '|', wrap in anchors).
+_ALLOWLIST_FILE="$REPO_ROOT/.datacore/config/root-allowlist.txt"
+if [ ! -f "$_ALLOWLIST_FILE" ]; then
+    echo "Error: root-allowlist.txt not found at $_ALLOWLIST_FILE"
+    exit 1
+fi
+_JOINED=$(grep -v '^\s*#' "$_ALLOWLIST_FILE" | grep -v '^\s*$' | paste -sd '|' -)
+ALLOWED_ROOT_FILES="^(${_JOINED})$"
 
 if [ -n "$ALL_STAGED" ]; then
     echo "Checking root-level allowlist..."

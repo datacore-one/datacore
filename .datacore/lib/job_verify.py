@@ -76,7 +76,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config_plane import ConfigError, doctor  # noqa: E402
-from jobs.checks import run_check  # noqa: E402
+from jobs.checks import check_repo_sync, run_check  # noqa: E402
 from jobs.manifest import Job, ManifestError, load_manifest  # noqa: E402
 from ledger.log import EventLog  # noqa: E402
 
@@ -133,12 +133,28 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str]) -> None:
 def _check_job(job: Job) -> list[str]:
     """Run every artifact check for `job`, collecting failure strings.
 
+    Staleness gate (require_synced_repos): if the job declares one or more
+    repo paths under ``require_synced_repos``, each is checked with
+    ``check_repo_sync`` BEFORE the artifact content checks run.  When any
+    repo is behind its upstream the artifact checks are skipped entirely --
+    reading a file out of an unsynced repo and asserting on its content
+    produces confident wrong verdicts (the real defect is the missing pull,
+    not the file contents), which is worse than producing no verdict.  The
+    repo-behind errors are returned in place of the artifact check results
+    so the operator knows exactly which repo to sync and by how many commits.
+
     Never raises: an unexpected exception anywhere in the check pipeline
     becomes a failure string naming the job and the exception, so one
     job's bug can't take down verification of the rest of the manifest.
     """
     failures: list[str] = []
     try:
+        for repo_path in job.require_synced_repos:
+            failures.extend(check_repo_sync(repo_path))
+        if failures:
+            # Repo(s) are behind -- artifact content checks would read stale
+            # input and emit wrong verdicts.  Return the sync errors only.
+            return failures
         for artifact in job.artifacts:
             failures.extend(run_check(artifact))
     except Exception as exc:  # noqa: BLE001 -- deliberate: see docstring

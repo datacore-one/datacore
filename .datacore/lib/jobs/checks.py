@@ -43,6 +43,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import time
 from datetime import datetime
 
@@ -74,6 +75,67 @@ def expand_path(path: str, *, now: float | None = None) -> str:
     if not matches:
         return expanded
     return max(matches, key=lambda m: os.path.getmtime(m))
+
+
+def check_repo_sync(repo_path: str) -> list[str]:
+    """Check whether a git repo's working tree is behind its upstream.
+
+    Runs ``git rev-list --count HEAD..@{u}`` inside `repo_path` (after
+    ``~`` expansion).  Returns a list of error strings; an empty list means
+    the repo is up to date or has no tracking branch.
+
+    A non-zero behind count is a hard error: reading a file whose repo has
+    not pulled N upstream commits means the file on disk may be N commits
+    stale.  Reporting a content mismatch in that situation produces a
+    confident wrong verdict -- the actual defect is the unsynced input, not
+    the content.  The caller (job_verify._check_job) skips artifact content
+    checks entirely when this returns errors, replacing them with the
+    "unverifiable: repo behind" message.
+
+    Never raises.  Failure modes:
+    - `repo_path` is not a git repository  → silent pass (not our problem
+      to police non-git paths; only git-tracked files benefit from this gate).
+    - No upstream configured               → silent pass (a local-only repo
+      cannot be "behind" anything).
+    - git subprocess error (other)         → error string naming the path
+      and the stderr output so the operator can diagnose.
+    - behind count > 0                     → error string naming the path
+      and the exact count so the operator knows the magnitude.
+    """
+    expanded = os.path.expanduser(repo_path)
+    try:
+        result = subprocess.run(
+            ["git", "-C", expanded, "rev-list", "--count", "HEAD..@{u}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return [f"{expanded}: repo sync check failed ({exc})"]
+
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        # "not a git repository" and "no upstream configured" are silent
+        # pass cases -- not errors we want to surface as job failures.
+        if "not a git repository" in stderr or "@{u}" in stderr or "no upstream" in stderr.lower():
+            return []
+        return [f"{expanded}: repo sync check failed (git exited {result.returncode}: {stderr})"]
+
+    try:
+        behind = int(result.stdout.strip())
+    except ValueError:
+        return [
+            f"{expanded}: repo sync check returned unexpected output "
+            f"({result.stdout.strip()!r})"
+        ]
+
+    if behind > 0:
+        return [
+            f"{expanded}: repo is {behind} commit(s) behind upstream -- "
+            f"artifact content checks skipped (stale input, cannot verify)"
+        ]
+
+    return []
 
 
 def _read_text(path: str) -> tuple[str | None, str | None]:

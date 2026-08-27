@@ -738,3 +738,104 @@ def test_real_manifest_has_box_merge_runs_job():
 
     for artifact in status_artifacts:
         assert artifact.max_age_hours == 26
+
+
+# --- require_synced_repos ---------------------------------------------------
+
+
+def test_require_synced_repos_round_trips_string_list(tmp_path):
+    data = {
+        "version": 1,
+        "jobs": [
+            {
+                "name": "briefing",
+                "machine": "box",
+                "schedule": "0 4 * * *",
+                "cmd": "true",
+                "artifacts": [{"path": "/tmp/x"}],
+                "require_synced_repos": ["~/Data/0-personal", "~/Data/1-teamspace"],
+            }
+        ],
+    }
+    path = _write(tmp_path, data)
+
+    jobs = load_manifest(path)
+
+    assert jobs[0].require_synced_repos == ["~/Data/0-personal", "~/Data/1-teamspace"]
+
+
+def test_require_synced_repos_defaults_to_empty_list(tmp_path):
+    data = {
+        "version": 1,
+        "jobs": [
+            {
+                "name": "briefing",
+                "machine": "box",
+                "schedule": "0 4 * * *",
+                "cmd": "true",
+                "artifacts": [{"path": "/tmp/x"}],
+            }
+        ],
+    }
+    path = _write(tmp_path, data)
+
+    jobs = load_manifest(path)
+
+    assert jobs[0].require_synced_repos == []
+
+
+def test_require_synced_repos_non_list_is_error(tmp_path):
+    data = {
+        "version": 1,
+        "jobs": [
+            {
+                "name": "briefing",
+                "machine": "box",
+                "schedule": "0 4 * * *",
+                "cmd": "true",
+                "artifacts": [{"path": "/tmp/x"}],
+                "require_synced_repos": "~/Data/0-personal",  # string, not list
+            }
+        ],
+    }
+    path = _write(tmp_path, data)
+
+    with pytest.raises(ManifestError) as exc_info:
+        load_manifest(path)
+    assert "require_synced_repos" in str(exc_info.value)
+
+
+def test_require_synced_repos_list_of_non_strings_is_error(tmp_path):
+    data = {
+        "version": 1,
+        "jobs": [
+            {
+                "name": "briefing",
+                "machine": "box",
+                "schedule": "0 4 * * *",
+                "cmd": "true",
+                "artifacts": [{"path": "/tmp/x"}],
+                "require_synced_repos": [42, "~/Data/0-personal"],
+            }
+        ],
+    }
+    path = _write(tmp_path, data)
+
+    with pytest.raises(ManifestError) as exc_info:
+        load_manifest(path)
+    assert "require_synced_repos" in str(exc_info.value)
+
+
+def test_real_manifest_box_briefing_declares_require_synced_repos():
+    """box-briefing reads ~/Data/0-personal/notes/journals/{today}.md.
+    If Winston's 0-personal checkout is behind, the journal on disk is stale
+    and any regex check against it yields a confident wrong verdict.
+    The staleness gate must be declared in the manifest so job_verify can
+    skip content checks and report the real cause.
+    """
+    jobs = load_manifest(REAL_MANIFEST_PATH)
+    by_name = {job.name: job for job in jobs}
+
+    assert "box-briefing" in by_name
+    briefing = by_name["box-briefing"]
+    assert "~/Data/0-personal" in briefing.require_synced_repos
