@@ -1,0 +1,37 @@
+# WaveTrader systemd unit — TEMPLATE.
+#
+# Install: substitute <HOME> with the real home (e.g. /home/gregor) and copy to
+#   /etc/systemd/system/wave-trader.service, then `systemctl daemon-reload`.
+#
+# PYTHONPATH note: the executor imports `datacore.ledger` (DIP-0047 order
+# attestation), whose package lives at <HOME>/Data/.datacore/lib. That path MUST
+# be on PYTHONPATH or the service crash-loops on `No module named 'datacore'`.
+[Unit]
+Description=WaveTrader — multi-asset regime-gated wave bot (Hyperliquid)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gregor
+WorkingDirectory=<HOME>/Data/.datacore/modules/trading/lib/gateio
+Environment=PYTHONPATH=<HOME>/Data/.datacore/modules/trading/lib/gateio:<HOME>/Data/.datacore/lib
+# --shadow flag for paper-trading. Remove flag to go live.
+# Default assets exclude SOL (managed by ladder-trader).
+ExecStart=<HOME>/venvs/trading/bin/python3 -u wave_trader.py --watch --interval 60 --shadow --assets SOL ETH SUI DOGE BTC
+Restart=on-failure
+RestartSec=30
+StartLimitBurst=5
+StartLimitIntervalSec=300
+MemoryMax=512M
+StandardOutput=journal
+StandardError=journal
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=<HOME>/Data/.datacore/state/trading <HOME>/.datacore
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
