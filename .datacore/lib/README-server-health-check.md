@@ -30,9 +30,9 @@ Add to `next_actions.org`:
 
 ```org
 *** TODO Weekly server health check                    :AI:technical:
-SCHEDULED: <2026-03-11 Tue +1w>
+SCHEDULED: <2026-03-11 Wed +1w>
 :PROPERTIES:
-:CREATED: [2026-03-04 Tue 18:56]
+:CREATED: [2026-03-04 Wed 18:56]
 :EFFORT: 0:05
 :PRIORITY: C
 :CATEGORY: Infrastructure

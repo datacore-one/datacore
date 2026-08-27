@@ -344,4 +344,33 @@ if [ -n "$STAGED_ENV" ]; then
     exit 1
 fi
 
+# ========================================================
+# Day-of-week names must match their dates
+# ========================================================
+# org_date_prewrite.py already guards Edit/Write. It cannot guard anything
+# else: a `python3 - <<EOF` heredoc, sed -i, a script, or an agent shelling
+# out never touches a PreToolUse hook. On 2026-08-27 seven `[2026-08-27 Wed]`
+# stamps were written through a heredoc and reached the index; the date was a
+# Thursday. The commit is the one chokepoint every write path passes through,
+# whichever tool produced the bytes, so the check belongs here too.
+
+DATE_VALIDATOR=""
+if [ -f "$REPO_ROOT/.datacore/lib/validate_org_dates.py" ]; then
+    DATE_VALIDATOR="$REPO_ROOT/.datacore/lib/validate_org_dates.py"
+elif [ -f "$HOME/Data/.datacore/lib/validate_org_dates.py" ]; then
+    DATE_VALIDATOR="$HOME/Data/.datacore/lib/validate_org_dates.py"
+fi
+
+if [ -n "$DATE_VALIDATOR" ]; then
+    echo "Checking day-of-week names against their dates..."
+    if ! python3 "$DATE_VALIDATOR" --staged; then
+        echo ""
+        echo "Commit blocked: a date stamp names the wrong weekday."
+        echo "Repair and re-stage:"
+        echo "  python3 .datacore/lib/validate_org_dates.py --fix <file> && git add <file>"
+        exit 1
+    fi
+    echo "Day-of-week check passed"
+fi
+
 exit 0

@@ -52,7 +52,7 @@ Add to nightshift weekly tasks in `~/Data/0-personal/org/nightshift.org`:
 
 ```org-mode
 *** TODO Weekly server health check                          :AI:technical:
-SCHEDULED: <2026-03-12 Wed +1w>
+SCHEDULED: <2026-03-12 Thu +1w>
 :PROPERTIES:
 :EFFORT: 0:05
 :CATEGORY: System
