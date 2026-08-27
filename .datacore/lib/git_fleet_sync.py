@@ -267,7 +267,13 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
         if r.returncode != 0:
             # Never leave a half-applied merge behind for the next run to trip on.
             subprocess.run(['git', 'merge', '--abort'], cwd=repo, capture_output=True)
-            result['pull'] = 'PULL CONFLICT — needs a human'
+            # Keep the 'PULL CONFLICT' prefix — the summary filters on it — but
+            # carry the actual error: on 2026-08-28 a transient failure (not a
+            # conflict) wore this label through three runs on plur-claw, and the
+            # discarded stderr was the only thing that could have said so.
+            detail = (r.stderr or r.stdout).strip().splitlines()
+            result['pull'] = ('PULL CONFLICT — needs a human'
+                              + (f" [{detail[-1][:120]}]" if detail else ''))
         else:
             result['pull'] = 'pulled'
 
