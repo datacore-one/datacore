@@ -1,6 +1,6 @@
 # WaveTrader systemd unit — TEMPLATE.
 #
-# Install: substitute <HOME> with the real home (e.g. /home/gregor) and copy to
+# Install: substitute <HOME> with the real home (e.g. /home/<account>) and copy to
 #   /etc/systemd/system/wave-trader.service, then `systemctl daemon-reload`.
 #
 # PYTHONPATH note: the executor imports `datacore.ledger` (DIP-0047 order
