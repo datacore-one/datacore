@@ -394,6 +394,30 @@ def main() -> int:
 
     verb = 'Committed' if execute else 'Would commit'
     print(f"{verb} {total_c} file(s); skipped {total_s} as junk.")
+
+    # Exit non-zero when a repo is genuinely stuck, so the caller — systemd,
+    # cron, a shell pipeline — sees a failure instead of a green run.
+    #
+    # Printing "PULL CONFLICT — needs a human" to stdout and then returning 0
+    # is how 87 pull conflicts accumulated on nightshift across 14 days with
+    # nothing escalating (#48). The unit recorded ExecMainStatus=0 on every
+    # run while the affected repos stopped converging entirely; the first
+    # occurrence in the retained journal was 2026-08-07 and it was noticed on
+    # 2026-08-21, by hand, only after two agent fleets had gone blind.
+    #
+    # Only conflicts fail the run. `held` repos are parked on a non-default
+    # branch, which is a deliberate and often long-lived state — failing on it
+    # would leave the unit permanently red and train whoever reads it to
+    # ignore the signal. That habit is exactly what let a stale-input verifier
+    # report four confident wrong failures a day for five days before anyone
+    # looked. A check that is always red is not a check.
+    if conflicts:
+        print(
+            f"\nFAIL: {len(conflicts)} repo(s) have pull conflicts and are not "
+            f"converging. Resolve the merge in each, then re-run."
+        )
+        return 1
+
     return 0
 
 
