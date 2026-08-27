@@ -101,7 +101,11 @@ for repo in REPOS:
             # to add a file class here, ask first whether losing the other side
             # is recoverable; if it is not, it belongs in the union branch above.
             new, how = keep_head(t), "keep HEAD (regenerable)"
-        if "<<<<<<<" in new or ">>>>>>>" in new:
+        # Line-anchored on purpose: git's markers always start a line and carry
+        # a label (`<<<<<<< HEAD`). A substring test refused winston's
+        # 0-personal org files on 2026-08-28 because a TASK ABOUT conflict
+        # markers quoted them mid-line in its :CONTEXT: property.
+        if re.search(r"^(?:<<<<<<< |>>>>>>> )", new, re.M):
             print(f"  REFUSED {f}: markers survived")
             continue
         p.write_text(new)
