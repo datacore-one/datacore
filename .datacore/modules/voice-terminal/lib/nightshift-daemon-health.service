@@ -5,11 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=gregor
-Group=gregor
-WorkingDirectory=/home/gregor/Data
-EnvironmentFile=/home/gregor/config/nightshift.env
-ExecStart=/usr/bin/python3 /home/gregor/Data/.datacore/modules/voice-terminal/lib/daemon_health.py --bind 127.0.0.1 --port 8899
+# Substitute the service account for this host before installing.
+User=%i
+Group=%i
+WorkingDirectory=%h/Data
+EnvironmentFile=%h/config/nightshift.env
+ExecStart=/usr/bin/python3 %h/Data/.datacore/modules/voice-terminal/lib/daemon_health.py --bind 127.0.0.1 --port 8899
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
