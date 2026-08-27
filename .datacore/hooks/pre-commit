@@ -75,6 +75,47 @@ scan_staged_files() {
 }
 
 # ========================================================
+# Phantom gitlink guard: reject staged gitlinks (mode 160000)
+# not listed in .gitmodules (issue #50)
+# ========================================================
+# Git auto-promotes any directory containing a .git subdirectory to a
+# gitlink (mode 160000) when staged. If the path is not in .gitmodules,
+# it's a phantom gitlink that breaks `git submodule status` (exit 128).
+
+# Build the set of registered submodule paths from .gitmodules
+REGISTERED_SUBMODULES=""
+if [ -f "$REPO_ROOT/.gitmodules" ]; then
+    REGISTERED_SUBMODULES=$(grep '^\s*path\s*=' "$REPO_ROOT/.gitmodules" \
+        | sed 's/^\s*path\s*=\s*//' | sort -u)
+fi
+
+# Check for staged gitlinks (mode 160000)
+PHANTOM_GITLINKS=""
+while IFS=$'\t' read -r mode sha stage path; do
+    if [ "$mode" = "160000" ]; then
+        # Is this path in .gitmodules?
+        if ! echo "$REGISTERED_SUBMODULES" | grep -qxF "$path"; then
+            PHANTOM_GITLINKS="${PHANTOM_GITLINKS}  - ${path} (mode 160000, no .gitmodules entry)\n"
+        fi
+    fi
+done < <(git diff --cached --raw 2>/dev/null || true)
+
+if [ -n "$PHANTOM_GITLINKS" ]; then
+    echo ""
+    echo "Commit blocked: phantom gitlink(s) detected — staged entries with mode 160000"
+    echo "that have no corresponding .gitmodules entry. This breaks 'git submodule status'."
+    echo ""
+    echo "Offending paths:"
+    echo -e "$PHANTOM_GITLINKS"
+    echo "These directories contain nested .git directories and were auto-promoted to"
+    echo "gitlinks by 'git add'. To fix:"
+    echo "  1. git rm --cached <path>   (removes from index, keeps on disk)"
+    echo "  2. Ensure the path is in .gitignore"
+    echo "  3. Re-stage only the files you actually want to commit"
+    exit 1
+fi
+
+# ========================================================
 # Collect all staged files once
 # ========================================================
 ALL_STAGED=$(git diff --cached --name-only --diff-filter=ACM || true)
