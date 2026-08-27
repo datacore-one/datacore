@@ -1,7 +1,7 @@
 # An actor pulls delegated items from the ledger and executes them.
 #
-# Installed on winston (as root, WorkingDirectory=/root/Data) and on nightshift
-# (User=gregor, /home/gregor/Data) -- substitute the path and add User= for the
+# Installed on a root box (WorkingDirectory=/root/Data) and on a non-root box
+# (User=<account>, $HOME/Data) -- substitute the path and add User= for the
 # non-root box. Data (plur-claw) runs the cron variant instead, because it also
 # has to git pull/push around the dispatch: see ledger-dispatch-pull.sh.
 #
