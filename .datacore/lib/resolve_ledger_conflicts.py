@@ -80,10 +80,19 @@ for repo in REPOS:
             how = f"later timestamp {times[-1] if times else '-'}"
         elif "/checkpoints/" in f:
             new, how = keep_head(t), "keep HEAD (regenerable snapshot)"
-        elif f.endswith(".org"):
-            new, how = keep_both(t), "union — BOTH tasks kept"
+        elif f.endswith(".org") or "/journal" in f or "/journals/" in f:
+            # Append-only per writer: two writers each add an entry at the same
+            # offset, so a union keeps both and choosing a side silently deletes
+            # one. On 2026-08-27 the old keep-HEAD default was applied to
+            # 5-plur/journal/2026-08-27.md and discarded four Miles wrap-up
+            # entries plus a nightshift run record — recovered from origin, but
+            # only because the merge had not been pushed yet.
+            new, how = keep_both(t), "union — BOTH sides kept"
         else:
-            new, how = keep_head(t), "keep HEAD"
+            # keep-HEAD is only safe for regenerable artifacts. If you are about
+            # to add a file class here, ask first whether losing the other side
+            # is recoverable; if it is not, it belongs in the union branch above.
+            new, how = keep_head(t), "keep HEAD (regenerable)"
         if "<<<<<<<" in new or ">>>>>>>" in new:
             print(f"  REFUSED {f}: markers survived")
             continue
