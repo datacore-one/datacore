@@ -365,6 +365,43 @@ class IntentGraph:
                 best = min(best or 99, s["rank"])
         return best
 
+    def hard_gate(self, text: str, tags=()) -> str | None:
+        """Park reason when a hard-gate node bans this work, else None.
+
+        Delegation-gate epic (datacore#59/#62), ratified 2026-08-28: a node
+        with `:GATE: hard` and `:BANNED:` keywords makes matching work
+        INELIGIBLE for autonomous execution — parked, not ranked lower. The
+        first such node is Meridian HL-bot-only: a full HMM research cluster
+        executed across multiple nights against a standing priority that was
+        stated repeatedly but encoded nowhere the selection layer looked.
+
+        Matching is deliberately blunt: banned keywords are matched as word
+        tokens (hyphenated keywords as substrings) against title+tags text,
+        in ANY space — the violating cluster lived outside 6-meridian. An
+        explicit :APPROVED_BY: on the task is the human override; callers
+        enforce that, not this method.
+        """
+        low = f"{text} {' '.join(tags)}".lower()
+        # Split on every non-alphanumeric so `hmm_strategy` yields the token
+        # `hmm` — underscore-glued identifiers are exactly how the violating
+        # cluster's tasks were titled. Multi-word keywords (hyphen/underscore)
+        # match as substrings under either separator.
+        tokens = set(re.findall(r"[a-z0-9]+", low))
+        for node in self.nodes.values():
+            if node.gate.strip().lower() != "hard" or not node.banned.strip():
+                continue
+            for kw in node.banned.lower().split():
+                if "_" in kw or "-" in kw:
+                    hit = any(v in low for v in
+                              {kw, kw.replace("-", "_"), kw.replace("_", "-")})
+                else:
+                    hit = kw in tokens
+                if hit:
+                    why = f" — {node.why}" if node.why else ""
+                    return (f"hard gate '{node.title}' [{node.id}]: "
+                            f"banned keyword '{kw}'{why}")
+        return None
+
     def score_10(self, text: str, container: str = "", tags=()) -> float:
         """0-10 for `task_queue.calculate_priority`, which treats 5 as neutral.
 
