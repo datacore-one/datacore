@@ -324,6 +324,19 @@ def _generate_audio_kokoro(text, voice=DEFAULT_VOICE, speed=DEFAULT_SPEED, outpu
 
 def _generate_audio_gtts(text, output_path=None):
     """Fallback TTS via gTTS (Google). No local models needed. Returns (path, duration)."""
+    # gtts lives in .datacore/venv — system python is PEP-668 managed. Callers
+    # invoke this as a bare `python3`, so the venv needs to be on sys.path.
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[3] / "lib"))
+    try:
+        import venv_bootstrap
+
+        venv_bootstrap.activate()
+    except ImportError:
+        pass
+
     from gtts import gTTS
 
     if output_path is None:
@@ -377,17 +390,23 @@ def convert_to_ogg(audio_path):
 
 def _load_telegram_creds(env_file=None):
     """Return (bot_token, chat_id) from env or env files."""
-    env_path = env_file or (
-        Path.home() / "Data" / ".datacore" / "env" / "mrdata.env"
-        if (Path.home() / "Data" / ".datacore" / "env" / "mrdata.env").exists()
-        else Path.home() / "Data" / ".datacore" / "env" / "gateio.env"
-    )
+    envdir = Path.home() / "Data" / ".datacore" / "env"
+    # `creds sync` assembles every credential into .env; the per-service files
+    # predate that consolidation and are no longer regenerated. Read the
+    # canonical store first, keeping the legacy names for unconsolidated hosts.
+    candidates = [Path(env_file)] if env_file else [
+        envdir / ".env",
+        envdir / "mrdata.env",
+        envdir / "gateio.env",
+    ]
     env = {}
-    if Path(env_path).exists():
-        for line in Path(env_path).read_text().strip().split("\n"):
+    for env_path in candidates:
+        if not env_path.exists():
+            continue
+        for line in env_path.read_text().strip().split("\n"):
             if "=" in line and not line.startswith("#"):
                 k, v = line.split("=", 1)
-                env[k.strip()] = v.strip()
+                env.setdefault(k.strip(), v.strip())
     # Also check nightshift.env (server config)
     ns_env = Path.home() / "config" / "nightshift.env"
     if ns_env.exists():

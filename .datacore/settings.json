@@ -219,7 +219,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx @plur-ai/cli hook-observe",
+            "command": "npx @plur-ai/cli hook-observe >/dev/null",
             "timeout": 3
           }
         ]
@@ -305,7 +305,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx @plur-ai/cli hook-observe --post",
+            "command": "npx @plur-ai/cli hook-observe --post >/dev/null",
             "timeout": 3
           }
         ]
@@ -314,6 +314,11 @@
     "SessionEnd": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/session_archive.py",
+            "timeout": 60
+          },
           {
             "type": "command",
             "command": "python3 ~/Data/.datacore/lib/session_cleanup.py",

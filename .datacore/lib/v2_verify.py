@@ -294,6 +294,110 @@ def check_transport(rep: Report) -> None:
 
 
 # ── The APPLICATION layer: the part that was never watched ─────────────────
+def check_declared_identity(rep: Report) -> None:
+    """Is this machine's ledger identity DECLARED, or still being guessed?
+
+    Nothing writes `~/.datacore/identity.env` — not the box-setup script, not
+    the agent updater — and until this check existed nothing reported its
+    absence either. So the two machines whose identity was known to be wrong
+    stayed wrong until someone hand-placed a file, and the checklist called it
+    green. A mechanism nobody installs and nothing verifies is a mechanism that
+    exists only in the machine it was demonstrated on.
+
+    Reports `n-a` rather than FAIL when the file is missing but inference
+    happens to land correctly: that is a real, working state, just a fragile
+    one — it depends on a registry copy staying fresh. FAIL is reserved for
+    identity actually resolving to the hostname, which means events are being
+    filed under the wrong writer right now.
+    """
+    import socket
+    sys.path.insert(0, str(LIB))
+    try:
+        from ledger_attest import _actor, _identity
+    except Exception as exc:  # noqa: BLE001
+        rep.add("0044", "identity declared", None, f"ledger_attest unusable: {exc}")
+        return
+    actor = _actor()
+    host = socket.gethostname().split(".")[0].lower()
+    declared = bool(_identity().get("DATACORE_ACTOR"))
+    if actor == host and actor not in ("mac",):
+        rep.add("0044", "identity declared", False,
+                f"actor={actor} equals hostname — events filed under the wrong writer")
+    elif declared:
+        rep.add("0044", "identity declared", True, f"actor={actor} from identity.env")
+    else:
+        rep.add("0044", "identity declared", None,
+                f"actor={actor} inferred — no identity.env; correct today, fragile")
+
+
+def check_egress(rep: Report) -> None:
+    """Has any module grown an external action nobody declared? (DIP-0047)
+
+    Two separate questions, because they fail for different reasons and a single
+    verdict would hide the useful one.
+
+    IMPORTABILITY is the precondition. `from datacore.ledger import attests` has
+    to work for the interpreter that runs the jobs, or every decorator in every
+    module silently records nothing — which is exactly how X posting went
+    unattested on plur-claw for months while looking fine everywhere else.
+
+    THE RATCHET is checked only for modules that have declared egress. Failing
+    every module at once on the day this turns on would guarantee the check gets
+    disabled; failing a module that opted in and then grew a new action is the
+    signal worth having.
+    """
+    try:
+        subprocess.run([sys.executable, "-c", "import datacore.ledger"],
+                       cwd="/", capture_output=True, timeout=60, check=True)
+        rep.add("app", "core importable by modules", True,
+                "from datacore.ledger import attests")
+    except Exception as exc:  # noqa: BLE001
+        rep.add("app", "core importable by modules", False,
+                f"{type(exc).__name__} — module decorators would record nothing")
+        return
+
+    scan = LIB / "egress_scan.py"
+    if not scan.is_file():
+        rep.add("app", "egress declared", None, "egress_scan.py not present")
+        return
+    try:
+        r = subprocess.run([sys.executable, str(scan), "--enforce"],
+                           capture_output=True, text=True, timeout=300)
+        head = next((ln for ln in r.stdout.splitlines()
+                     if ln.startswith("EGRESS SCAN")), "").replace("EGRESS SCAN — ", "")
+        rep.add("app", "egress declared", r.returncode == 0, head or "no summary")
+    except Exception as exc:  # noqa: BLE001
+        rep.add("app", "egress declared", None, f"{type(exc).__name__}: {exc}")
+
+    # DECLARED IS NOT WIRED. The scan above reads source: it proves a decorator
+    # is written above a def. Whether it is in force at runtime is a different
+    # question, and it is the one that failed before — an import that resolves
+    # on one machine and not another leaves the decorator absent with no error.
+    # This imports each declared function and asks the object itself.
+    rt = LIB / "egress_runtime_check.py"
+    if not rt.is_file():
+        rep.add("app", "egress wired at runtime", None, "egress_runtime_check.py not present")
+        return
+    try:
+        r = subprocess.run([sys.executable, str(rt), "--functional"],
+                           capture_output=True, text=True, timeout=300)
+        line = next((ln.strip() for ln in r.stdout.splitlines()
+                     if "runtime wiring:" in ln), "")
+        detail = line.replace("runtime wiring: ", "") or "no summary"
+        # UNVERIFIABLE IS NOT OK. A module that would not import under THIS
+        # interpreter has not been checked, and saying "ok" for it is the exact
+        # collapse this file's docstring forbids. Seen immediately: the standalone
+        # run verified 28 under python3.11 and the checklist verified 22 under
+        # 3.14, because six modules' dependencies are not installed there — a
+        # real gap in whichever interpreter the jobs actually use.
+        broken = "0 broken" not in detail
+        unknown = "0 unverifiable" not in detail
+        rep.add("app", "egress wired at runtime",
+                False if broken else (None if unknown else True), detail)
+    except Exception as exc:  # noqa: BLE001
+        rep.add("app", "egress wired at runtime", None, f"{type(exc).__name__}: {exc}")
+
+
 def check_app(rep: Report) -> None:
     """Everything above verifies the ledger; nothing verified what sits on it.
 
@@ -328,7 +432,14 @@ def check_app(rep: Report) -> None:
     if not xapi.is_file():
         rep.add("app", "publishing is attested", None, "comms module not on this machine")
     else:
-        wired = "_attest_post" in xapi.read_text(errors="replace")
+        # Matches the DECORATOR, not the old private helper. This check looked
+        # for `_attest_post`, the hand-rolled function that DIP-0047 replaced —
+        # so the moment publishing became correctly attested, the check
+        # reporting on it began saying the opposite. A detector keyed to one
+        # implementation of the thing it verifies fails exactly when that thing
+        # is improved, which is the worst possible time to be told it is broken.
+        src = xapi.read_text(errors="replace")
+        wired = "@attests(" in src or "_attest_post" in src
         rep.add("app", "publishing is attested", wired,
                 "x_api posts and replies attest" if wired
                 else "X posts leave NO ledger record")
@@ -470,6 +581,8 @@ def main() -> int:
     check_transport(rep)
     check_finality(rep)
     check_app(rep)
+    check_declared_identity(rep)
+    check_egress(rep)
     if not a.quick:
         check_fleet(rep)
 

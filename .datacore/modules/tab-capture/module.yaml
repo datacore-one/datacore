@@ -41,3 +41,8 @@ recall:
     - module:tab-capture
   tags:
     - tab-capture
+
+# DIP-0047
+exempt:
+  - fn: "lib/host.py:main"
+    reason: native-messaging host writing to the local GTD inbox, not outward

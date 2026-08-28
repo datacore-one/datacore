@@ -1,5 +1,8 @@
 CLAUDE.md
 CLAUDE.local.md
-tools/*.js
+# tools/*.js is NOT generated — module.yaml names tools/index.js as the live
+# handler and there is no build step. Ignoring it meant the file the MCP server
+# actually imports never left this machine (un-ignored 2026-08-27). Matches
+# decisions/goals/outbox/research, which already track theirs.
 tools/*.js.map
 node_modules/

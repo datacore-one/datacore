@@ -6,9 +6,16 @@ command: /wrap-up
 version: 1.0.0
 
 phases:
+  - name: preflight
+    type: script
+    invoke: python3 .datacore/lib/wrap_up_mechanics.py preflight
+    description: >-
+      Orphan cleanup, nightshift archival, context-sync check, artifact scan,
+      repo status, and the session archive — one call, JSON out. Replaces the
+      old §10/§12/§12.5/§14 hand-rolled bash.
+
   - name: session-summary
-    type: skill
-    invoke: session-summary
+    type: inline
     description: Infer and display session summary from conversation
 
   - name: emotional-check
@@ -28,35 +35,34 @@ phases:
     invoke: datacore.gtd.complete_task
     description: Mark completed tasks as DONE
 
-  - name: extract-learnings
-    type: agent
-    invoke: session-learning-coordinator
-    description: Extract patterns and learnings per space
-
-  - name: learning-review
-    type: agent
-    invoke: learning-reviewer
-    optional: true
-    description: Generate engram candidates from new patterns
+  # Learning is NOT a wrap-up phase any more. The session archive written by
+  # `preflight` is the handoff; `io.datacore.session-learning` (05:20, launchd)
+  # sweeps the whole day at once via session_learning_sweep.py.
+  #
+  # The two phases that used to live here — session-learning-coordinator and
+  # learning-reviewer — cost a median 405k output tokens and ~14 subagent
+  # transcripts per wrap-up and returned 3.6 engrams. `learning-reviewer` had
+  # also been renamed `learning-classifier` long before this file was updated,
+  # so the phase named an agent that no longer existed.
 
   - name: journal-update
     type: agent
     invoke: journal-coordinator
     description: Write journal entries per space
 
-  - name: artifact-tracking
-    type: tool
-    invoke: datacore.index
-    description: Track knowledge artifacts created this session
-
-  - name: archive-nightshift-reports
+  - name: session-meta
     type: script
-    invoke: python .datacore/lib/nightshift_archival.py --all-spaces
-    description: Archive old nightshift reports (>30 days)
+    invoke: python3 .datacore/lib/wrap_up_mechanics.py meta
+    description: Session counters read from the archived transcript, never estimated
 
-  - name: sync-push
-    type: tool
-    invoke: sync push
-    description: Push all repos
+  - name: finalize
+    type: script
+    invoke: python3 .datacore/lib/wrap_up_mechanics.py finalize
+    description: ./sync push plus subproject repos; reports dirty trees rather than committing them
+
+  - name: audit
+    type: script
+    invoke: python3 .datacore/lib/wrap_up_mechanics.py audit
+    description: Assert journals exist, session archived, repos pushed, context in sync
 
 trigger: manual

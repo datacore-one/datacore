@@ -146,6 +146,32 @@ Analyzing current session...
 
 **Steps:**
 
+0. **Archive the session — FIRST, before anything else:**
+
+   ```bash
+   python3 ~/Data/.datacore/lib/session_archive.py --json
+   ```
+
+   Copies this session's transcript and every subagent transcript into
+   `.datacore/state/sessions/archive/<date>/<session-id>/` and queues it for the
+   nightly learning sweep (`learning_status: pending`).
+
+   **Why here and not only in /wrap-up.** `--save` is what you run when a
+   session is being cut short — which is exactly the session most likely to hold
+   an unextracted correction and least likely to reach a proper close.
+
+   The copy is idempotent and the SessionEnd hook runs it again on the way out,
+   which matters: the version written *here* is necessarily incomplete (this turn
+   is still being recorded), and the hook's later run overwrites it with the
+   finished transcript while preserving `learning_status`. So this call is
+   insurance against the hook never firing — a killed terminal, a timeout, a
+   force restart — not the primary path.
+
+   `~/.claude/projects/` is pruned; without this the transcript is gone within
+   about a month. Report the returned `path` in the save confirmation. If the
+   status is not `archived`, say so — silently losing the session is worse than
+   a noisy save.
+
 1. **Summarize session context** — review conversation to extract:
    - What was being worked on
    - What was accomplished
@@ -232,6 +258,8 @@ Session continues.
 ```
 
 **Key difference from save mode:** No /wrap-up invoked. Session stays active.
+
+**No archive step here.** Inline save happens mid-session, so the transcript is still being written — archiving it now would capture a partial session and mark it `pending`, and the sweep would then learn from half a conversation. The SessionEnd hook archives the complete transcript when the session actually ends, and full `--save` archives because that path means the session is being closed.
 
 **Key difference from regular task creation:** Always uses Rich Task Standard format with `:continuation:` tag, BOOTSTRAP property, and session context. A regular "create a task" request does NOT get continuation treatment unless the user explicitly says "continuation task".
 

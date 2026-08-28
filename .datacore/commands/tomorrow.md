@@ -520,6 +520,20 @@ These will appear in tomorrow's /today briefing.
 
 ### 8. AI Delegation Review (Nightshift Queue)
 
+> **There are two delegation paths, and they do not see each other. Say which one you used.**
+>
+> | Path | How work is created | Who executes it |
+> |---|---|---|
+> | **Nightshift (this step)** | `:AI:` tag → moved to `nightshift.org` | `nightshift-orchestrator`, via the org files |
+> | **v2 ledger** | `materialize()` → an `item.create` event with no `org` block | `ledger_claim.py`, across the fleet |
+>
+> `ledger_ingest_org.py` mirrors every org task into the ledger on the 05:35 sweep, but a mirrored item carries an `org` block in its payload and `ledger_claim.py` filters exactly those out:
+> `pending = [i for i in claimable if not (i.payload or {}).get("org")]`
+>
+> That filter is deliberate — without it the first live pull reported "343 claimable items" and agents would have started working through a personal backlog unattended across five machines. The consequence for this step: **queueing a task into `nightshift.org` does not make it available to the v2 fleet, and never will.** Nightshift picks it up; `ledger_claim` does not.
+>
+> Every space is still at DIP-0043 Phase 0 (no `phase1-active` marker anywhere), so this step's org writes remain correct. When a space flips to Phase 1 its `next_actions.org` becomes generated and read-only, and this step's task movement must become event emission for that space. Check the marker before assuming; the answer is per-space and never "the whole installation is on v2".
+
 **Main AI delegation happens here via Nightshift module:**
 
 **Step 1: Recurring Task Instance Creation (DIP-0009 Part 3.6)**
@@ -673,6 +687,17 @@ Your Priorities (just set):
 
 ### 10. Final Status
 
+**Before the closing message, archive the session:**
+
+```bash
+python3 ~/Data/.datacore/lib/session_archive.py --json
+python3 ~/Data/.datacore/lib/session_learning_sweep.py --status | tail -2
+```
+
+`/tomorrow` is a day-end command, so it is the last chance to guarantee the day's own session reaches the archive that the 05:20 sweep reads. Idempotent — if `/wrap-up` or the SessionEnd hook already did it, this costs nothing and preserves `learning_status`.
+
+Report the queue depth in the closing message so a sweep that has silently stopped running becomes visible the same evening rather than weeks later.
+
 **Closing message:**
 
 ```
@@ -685,6 +710,7 @@ Inboxes: [CLEAR/X items pending]
 Diagnostics: PASSED
 Journal: UPDATED
 Priorities: SET
+Sessions queued for learning: N (sweep runs 05:20)
 
 "The ship is secured. Rest well, Captain.
 Tomorrow's briefing will be ready at 0700."

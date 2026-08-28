@@ -15,7 +15,6 @@ Usage:
     python3 research_orchestrator.py [--limit N] [--dry-run] [--no-podcast]
 """
 
-import asyncio
 import json
 import os
 import re
@@ -28,9 +27,6 @@ import urllib.request
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-
-import claude_agent_sdk
-from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, RateLimitEvent, SystemMessage
 
 
 DATA_DIR = Path(os.environ.get('DATA_DIR', Path.home() / 'Data'))
@@ -69,10 +65,12 @@ ZETTEL_DIR = _setting_path('zettel_output_dir', PERSONAL / 'notes' / '2-knowledg
 COMPANIES_DIR = PERSONAL / '3-knowledge' / 'reference' / 'companies'
 PEOPLE_DIR_DF = DATAFUND / '3-knowledge' / 'reference' / 'people'
 PEOPLE_DIR_PERSONAL = PERSONAL / '3-knowledge' / 'reference' / 'people'
-LANDSCAPE_FILE = _setting_path('industry_landscape_file', DATAFUND / '1-tracks' / 'research' / 'Industry landscape.md')
+LANDSCAPE_FILE = DATAFUND / '1-tracks' / 'research' / 'Industry landscape.md'
 REPORTS_DIR = _setting_path('reports_output_dir', PERSONAL / 'content' / 'reports')
 JOURNAL_DIR = PERSONAL / 'notes' / 'journals'
 PODCAST_DIR = _setting_path('podcast_output_dir', PERSONAL / 'content' / 'podcasts')
+# NOTE: industry_landscape_file setting default contradicts the working path
+# below (LANDSCAPE_FILE) — deliberately NOT wired until module.yaml is corrected.
 TODAY = date.today().isoformat()
 
 
@@ -311,11 +309,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / 'l
 from ops_markers import AUTH_FAILURE_MARKERS  # noqa: E402
 
 
-_MAX_BUDGET_USD = 0.50
-
-
-async def _claude_json_async(prompt: str, label: str) -> Optional[Dict[str, Any]]:
-    """Async implementation: call claude_agent_sdk.query() and collect the reply.
+def _claude_json(prompt: str, timeout: int, label: str) -> Optional[Dict[str, Any]]:
+    """Run a headless Claude analysis and parse its JSON reply.
 
     RUNS IN AN EMPTY DIRECTORY, DELIBERATELY. These calls used to run with
     cwd=DATA_DIR, which makes the subprocess load ~/Data/CLAUDE.md — and that
@@ -332,39 +327,38 @@ async def _claude_json_async(prompt: str, label: str) -> Optional[Dict[str, Any]
     and useless — it described the symptom and hid the response that would
     have identified the cause in one read.
     """
-    workdir = tempfile.mkdtemp()
-    options = ClaudeAgentOptions(
-        permission_mode='bypassPermissions',
-        cwd=workdir,
-        max_budget_usd=_MAX_BUDGET_USD,
-    )
+    with tempfile.TemporaryDirectory() as workdir:
+        try:
+            result = subprocess.run(
+                ['claude', '-p', '--dangerously-skip-permissions',
+                 '--output-format', 'text', prompt],
+                cwd=workdir, capture_output=True, text=True, timeout=timeout
+            )
+        except subprocess.TimeoutExpired:
+            log(f"  {label}: Claude timed out after {timeout}s")
+            return None
 
-    output = ''
-    async for message in claude_agent_sdk.query(prompt=prompt, options=options):
-        if isinstance(message, (SystemMessage, RateLimitEvent)):
-            continue
-        if isinstance(message, ResultMessage):
-            if message.is_error:
-                log(f"  {label}: SDK returned is_error=True; result={message.result!r:.200}")
-                return None
-            cost = message.total_cost_usd or 0.0
-            if cost > _MAX_BUDGET_USD:
-                log(f"  {label}: cost ${cost:.4f} exceeded budget ${_MAX_BUDGET_USD:.2f} — aborting")
-                return None
-            output = (message.result or '').strip()
+    if result.returncode != 0:
+        log(f"  {label}: Claude exited {result.returncode}: {result.stderr[:200]}")
+        return None
 
-    # AUTH failures surface as plain text in the result with exit 0; check them
-    # the same way the old subprocess path did.
+    output = result.stdout.strip()
+
+    # `claude -p` reports auth failures on STDOUT with an EMPTY STDERR and
+    # exit 0, so neither the exit code nor stderr can be trusted to reveal
+    # them. ops_markers exists because a caller that checked only stderr
+    # logged nine days of failures as the empty string. Its docstring requires
+    # every caller in this repo to check the list.
     low = output.lower()
     for marker in AUTH_FAILURE_MARKERS:
         if marker in low:
-            log(f"  {label}: AUTH FAILURE from SDK (is_error=False): {output[:200]!r}")
+            log(f"  {label}: AUTH FAILURE from claude -p (exit 0): {output[:200]!r}")
             return None
 
     output = re.sub(r'^```json\s*', '', output)
     output = re.sub(r'\s*```\s*$', '', output)
     if not output:
-        log(f"  {label}: Claude returned NOTHING")
+        log(f"  {label}: Claude returned NOTHING (exit 0, empty stdout)")
         return None
     try:
         return json.loads(output)
@@ -391,23 +385,6 @@ async def _claude_json_async(prompt: str, label: str) -> Optional[Dict[str, Any]
     log(f"  {label}: reply was not JSON ({first_error})")
     log(f"  {label}: got instead -> {output[:200]!r}")
     return None
-
-
-def _claude_json(prompt: str, timeout: int, label: str) -> Optional[Dict[str, Any]]:
-    """Synchronous wrapper around _claude_json_async().
-
-    The ``timeout`` parameter is retained for API compatibility with existing
-    callers.  The SDK does not expose a simple per-call wall-clock timeout, so
-    we enforce it here via asyncio.wait_for().  The budget guard inside the
-    async function provides an additional cost-based safety net.
-    """
-    try:
-        return asyncio.run(
-            asyncio.wait_for(_claude_json_async(prompt, label), timeout=timeout)
-        )
-    except asyncio.TimeoutError:
-        log(f"  {label}: Claude timed out after {timeout}s")
-        return None
 
 
 def process_item(item: Dict[str, str], content: str) -> Optional[Dict[str, Any]]:
@@ -1227,29 +1204,43 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
 def send_telegram_summary(processed: List[Dict[str, Any]], failed: List[Dict[str, str]],
                           notebook_id: Optional[str]) -> bool:
     """Push a research-run summary to Telegram. Returns True on success."""
+    # Broker-served. An earlier version of this fell back to reading
+    # ~/.datacore/datacore.env directly, and on winston that file holds a
+    # DIFFERENT bot's token — @kton9_bot, which belongs to hermes, not
+    # @datacore_1_bot. The research digest was being addressed to the wrong bot
+    # with nothing reporting an error, which is exactly the failure mode a
+    # file-search credential lookup produces: it finds *a* value and cannot tell
+    # you it is the wrong one.
     token = os.environ.get('TELEGRAM_BOT_TOKEN')
     chat_id = os.environ.get('TELEGRAM_CHAT_ID')
-    # Fall back to the host env file. Under cron, or when an agent shells out,
-    # the process inherits almost nothing, so these were routinely absent and
-    # the run finished having told nobody it was done — the notification path
-    # failing exactly when it is the only thing that would report the run.
-    if not token or not chat_id:
+    if not token:
+        broker = Path.home() / "Data" / ".datacore" / "lib" / "creds.py"
+        if broker.is_file():
+            try:
+                r = subprocess.run(
+                    ["python3", str(broker), "get", "mrdata-telegram-bot",
+                     "--consumer", "research.digest"],
+                    capture_output=True, text=True, timeout=90)
+                if r.returncode == 0 and r.stdout.strip():
+                    token = r.stdout.strip()
+                else:
+                    log(f"  [creds] broker declined the telegram bot token: "
+                        f"{(r.stderr or '').strip()[:120]}")
+            except Exception as e:  # noqa: BLE001
+                log(f"  [creds] broker unavailable ({type(e).__name__})")
+    if not chat_id:
+        # The chat id is an identifier, not a secret, and is not brokered.
         env_file = Path.home() / ".datacore" / "datacore.env"
         try:
             for line in env_file.read_text().splitlines():
                 line = line.strip()
                 if line.startswith("export "):
                     line = line[7:]
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, _, v = line.partition("=")
-                v = v.strip().strip('"').strip("'")
-                if k.strip() == "TELEGRAM_BOT_TOKEN" and not token:
-                    token = v
-                elif k.strip() == "TELEGRAM_CHAT_ID" and not chat_id:
-                    chat_id = v
+                if line.startswith("TELEGRAM_CHAT_ID="):
+                    chat_id = line.split("=", 1)[1].strip().strip('"').strip("'")
         except OSError:
             pass
+
     if not token or not chat_id:
         missing = [n for n, v in (("TELEGRAM_BOT_TOKEN", token),
                                   ("TELEGRAM_CHAT_ID", chat_id)) if not v]

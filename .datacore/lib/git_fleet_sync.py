@@ -267,7 +267,13 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
         if r.returncode != 0:
             # Never leave a half-applied merge behind for the next run to trip on.
             subprocess.run(['git', 'merge', '--abort'], cwd=repo, capture_output=True)
-            result['pull'] = 'PULL CONFLICT — needs a human'
+            # Keep the 'PULL CONFLICT' prefix — the summary filters on it — but
+            # carry the actual error: on 2026-08-28 a transient failure (not a
+            # conflict) wore this label through three runs on plur-claw, and the
+            # discarded stderr was the only thing that could have said so.
+            detail = (r.stderr or r.stdout).strip().splitlines()
+            result['pull'] = ('PULL CONFLICT — needs a human'
+                              + (f" [{detail[-1][:120]}]" if detail else ''))
         else:
             result['pull'] = 'pulled'
 
@@ -385,13 +391,6 @@ def main() -> int:
             print(f"  {r['name']}")
         print()
 
-    failures = [r for r in results if 'FAILED' in r.get('status', '')]
-    if failures:
-        print('Failures — these repos need a human:')
-        for r in failures:
-            print(f"  {r['name']}: {r['status']}")
-        print()
-
     held = [r for r in results if r['status'].startswith('SKIP')]
     if held:
         print("Held back — on a non-default branch, needs a human decision:")
@@ -399,12 +398,33 @@ def main() -> int:
             print(f"  {r['name']}: {r['status']}")
         print()
 
-    needs_human = len(conflicts) + len(failures)
     verb = 'Committed' if execute else 'Would commit'
-    print(f"{verb} {total_c} file(s); skipped {total_s} as junk."
-          + (f" {needs_human} repo(s) needing a human." if needs_human else ""))
-    # Exit non-zero so systemd sees a failure and OnFailure= can alert.
-    return 1 if needs_human else 0
+    print(f"{verb} {total_c} file(s); skipped {total_s} as junk.")
+
+    # Exit non-zero when a repo is genuinely stuck, so the caller — systemd,
+    # cron, a shell pipeline — sees a failure instead of a green run.
+    #
+    # Printing "PULL CONFLICT — needs a human" to stdout and then returning 0
+    # is how 87 pull conflicts accumulated on nightshift across 14 days with
+    # nothing escalating (#48). The unit recorded ExecMainStatus=0 on every
+    # run while the affected repos stopped converging entirely; the first
+    # occurrence in the retained journal was 2026-08-07 and it was noticed on
+    # 2026-08-21, by hand, only after two agent fleets had gone blind.
+    #
+    # Only conflicts fail the run. `held` repos are parked on a non-default
+    # branch, which is a deliberate and often long-lived state — failing on it
+    # would leave the unit permanently red and train whoever reads it to
+    # ignore the signal. That habit is exactly what let a stale-input verifier
+    # report four confident wrong failures a day for five days before anyone
+    # looked. A check that is always red is not a check.
+    if conflicts:
+        print(
+            f"\nFAIL: {len(conflicts)} repo(s) have pull conflicts and are not "
+            f"converging. Resolve the merge in each, then re-run."
+        )
+        return 1
+
+    return 0
 
 
 if __name__ == '__main__':

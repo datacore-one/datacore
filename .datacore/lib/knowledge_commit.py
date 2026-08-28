@@ -112,6 +112,35 @@ def _blob_mode(repo: Path, rel: str) -> str:
     return '100755' if os.access(repo / rel, os.X_OK) else '100644'
 
 
+def _push_converging(repo: Path, branch: str, sha: str) -> None:
+    """Push, and on a non-fast-forward rejection converge and retry once.
+
+    MERGE, NEVER REBASE (DIP-0046). 6-meridian sat ahead 10 / behind 8 on
+    2026-08-28 because another writer had pushed first and this code gave up
+    on the first rejection — with an alert claiming the work was
+    'uncommitted' when it was committed and merely unpushed.
+    """
+    try:
+        _git(repo, 'push', 'origin', branch)
+        return
+    except GitError as e:
+        msg = str(e)
+        if not any(s in msg for s in ('non-fast-forward', 'behind', 'fetch first')):
+            raise GitError(
+                f"{repo.name}: committed locally on {branch} ({sha[:10]}) but "
+                f"push failed — {msg}")
+    try:
+        _git(repo, 'pull', '--no-rebase', 'origin', branch)
+    except GitError as e:
+        _git(repo, 'merge', '--abort', check=False)
+        raise GitError(
+            f"{repo.name}: committed locally on {branch} ({sha[:10]}); remote "
+            f"moved and the converge-merge conflicted — needs a human "
+            f"(resolve_ledger_conflicts.py handles the usual journal/org "
+            f"cases). {e}")
+    _git(repo, 'push', 'origin', branch)
+
+
 def commit_to_branch(repo: Path, branch: str, paths, message: str,
                      push: bool = True) -> str:
     """Commit `paths` onto `branch` WITHOUT checking it out.
@@ -135,12 +164,25 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
     if head == branch:
         for p in paths:
             _git(repo, 'add', '--', p)
-        if not _git(repo, 'diff', '--cached', '--name-only'):
-            return ''
-        _git(repo, 'commit', '-m', message)
+        # Commit with an explicit pathspec, not the whole index. A pathspec
+        # commit runs against a temporary index holding only these paths, so
+        # leftover staged files from an earlier failed run can neither ride
+        # along nor make the pre-commit hook reject OUR files for THEIR
+        # violations. 1-datafund carried two stray staged reports/ files from
+        # 2026-08-24 that blocked every batch-end commit for four days —
+        # journal, org and inbox updates all bounced off a hook complaint
+        # about files this code never touched.
+        r = subprocess.run(
+            ['git', '-C', str(repo), 'commit', '-m', message, '--', *paths],
+            capture_output=True, text=True)
+        if r.returncode != 0:
+            out = (r.stdout or '') + (r.stderr or '')
+            if 'nothing to commit' in out or 'nothing added to commit' in out:
+                return ''
+            raise GitError(f"git commit: {out.strip()[:400]}")
         sha = _git(repo, 'rev-parse', 'HEAD')
         if push:
-            _git(repo, 'push', 'origin', branch)
+            _push_converging(repo, branch, sha)
         return sha
 
     # HEAD is elsewhere. Land on `branch` via plumbing.
@@ -193,7 +235,16 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
     _drop_landed_untracked(repo, branch, paths)
 
     if push:
-        _git(repo, 'push', 'origin', branch)
+        try:
+            _git(repo, 'push', 'origin', branch)
+        except GitError as e:
+            # Converging a branch that is not checked out means a checkout or a
+            # worktree — too much machinery for a wrap-up. Tell the truth
+            # instead: the knowledge IS committed and safe on the local branch.
+            raise GitError(
+                f"{repo.name}: knowledge committed locally on '{branch}' "
+                f"({sha[:10]}) but the push was rejected — converge {branch} "
+                f"with origin and push. {e}")
 
     return sha
 

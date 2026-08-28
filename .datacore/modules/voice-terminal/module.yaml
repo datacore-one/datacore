@@ -52,3 +52,18 @@ recall:
     - module:voice-terminal
   tags:
     - voice-terminal
+
+# DIP-0047 — speaks to the operator; the only outbound spend is LLM inference.
+exempt:
+  - fn: "lib/daemon_health.py:do_POST"
+    reason: inbound HTTP handler, not an outbound call
+  - fn: "lib/setup_telegram.py:send_test_message"
+    reason: one-off setup probe to the operator's own chat
+  - fn: "lib/setup_telegram.py:validate_bot_token"
+    reason: read-only — token validation
+  - fn: "lib/speak_brief.py:_telegram_send_file"
+    reason: operator audio delivery to the configured chat
+  - fn: "lib/speak_brief.py:_try_ollama"
+    reason: local Ollama inference — no external side effect
+  - fn: "lib/speak_brief.py:_try_openrouter"
+    reason: inference only; spend attestation tracked separately

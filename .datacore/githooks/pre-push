@@ -73,13 +73,56 @@ if [ -f "$OWNERSHIP" ] && command -v python3 >/dev/null 2>&1 && [ -n "$REFS_INPU
     fi
 fi
 
-lfs_chain() {
-    if command -v git-lfs >/dev/null 2>&1 && [ -n "$REFS_INPUT" ]; then
-        printf '%s\n' "$REFS_INPUT" | git lfs pre-push "$REMOTE" "$URL" || {
-            echo "pre-push: ✗ git-lfs upload failed — push blocked" >&2
-            exit 2
-        }
+# ---- Local CI gate (opt-in, per repo) --------------------------------------
+# A repo opts in by defining a `ci` target in a Makefile at its root. Repos
+# without one are untouched, which is every repo but datacore-app today.
+#
+# Placed here, BEFORE the not-protected early exit further down, for the same
+# reason the ownership guard is: most repos in this installation are not
+# "protected public repos", so anything after that exit never runs for them.
+#
+# Why local at all, when a workflow exists: on this machine the local gate is
+# the STRONGER of the two. Every private dependency is already present, so it
+# runs 1002 tests where the cloud runs 934, and it can run `check-types`, which
+# needs the ventures module and pydantic2ts and therefore cannot run on a
+# runner. What it cannot do is a clean dependency resolve — that is the weekly
+# scheduled workflow's job, and the two are complements, not duplicates.
+#
+# Bypass: SKIP_LOCAL_CI=1 git push …   (or SKIP_PRE_PUSH=1 to skip everything)
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+if [ "${SKIP_LOCAL_CI:-0}" != "1" ] && [ -n "$REPO_ROOT" ] && [ -n "$REFS_INPUT" ] \
+   && [ -f "$REPO_ROOT/Makefile" ] && command -v make >/dev/null 2>&1 \
+   && grep -qE '^ci:' "$REPO_ROOT/Makefile"; then
+    echo "pre-push: running local CI gate (make ci) — SKIP_LOCAL_CI=1 to bypass" >&2
+    # Run from the repo root regardless of the caller's cwd, and give the tests
+    # a real terminal-free stdin: stdin here is the ref list, already consumed
+    # into REFS_INPUT, and handing a half-read pipe to a test runner hangs it.
+    if ! ( cd "$REPO_ROOT" && make ci </dev/null >&2 ); then
+        echo "" >&2
+        echo "═══════════════════════════════════════════════════════════════" >&2
+        echo "PUSH BLOCKED: local CI failed (make ci) in $REPO_ROOT" >&2
+        echo "═══════════════════════════════════════════════════════════════" >&2
+        echo "Fix the failures above, or bypass deliberately:" >&2
+        echo "  SKIP_LOCAL_CI=1 git push ..." >&2
+        echo "═══════════════════════════════════════════════════════════════" >&2
+        exit 1
     fi
+    echo "pre-push: ✓ local CI passed" >&2
+fi
+
+lfs_chain() {
+    # DELIBERATELY A NO-OP: this installation does not use git-lfs. Large files
+    # are gitignored instead (see each space's .gitignore, e.g. `*.db`).
+    #
+    # The chain used to run `git lfs pre-push`, which blocked every push to
+    # 0-personal with "LFS Server is not enabled" — the Gitea host serves no
+    # LFS endpoint, and two vestigial `.lfs-pointer` files in the tree were
+    # enough for git-lfs to attempt an upload of blobs nobody has. Four
+    # commits sat unpushable behind a feature the installation never adopted.
+    #
+    # Left as a named function rather than deleted so the intent is visible at
+    # the call site: LFS is not merely absent here, it is declined.
+    :
 }
 
 fail_closed() {
@@ -140,7 +183,7 @@ else
 fi
 
 if [ "$IS_PROTECTED" != "1" ]; then
-    echo "pre-push: $REPO not a protected public repo — policy check skipped (LFS still chained)" >&2
+    echo "pre-push: $REPO not a protected public repo — policy check skipped" >&2
     lfs_chain
     exit 0
 fi

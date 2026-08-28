@@ -54,9 +54,44 @@ GENERATED_HEADER = (
     "# append an event; this file is a view.\n"
 )
 
-#: Statuses that still represent live work. `completed`/`verified`/`dismissed`
-#: items leave the projection the same way a DONE task leaves next_actions.org.
+#: Statuses that still represent live work.
 LIVE_STATUSES = ("created", "claimed", "granted")
+
+#: Statuses that mean the work is finished.
+CLOSED_STATUSES = ("completed", "verified", "dismissed")
+
+#: How long finished work stays visible in the projection, as DONE, before it
+#: is archived.
+#:
+#: These used to be dropped outright, which made "completed" and "never
+#: existed" render identically -- a task you finished simply disappeared from
+#: the file, with nothing to show for it. That is the wrong trade for a GTD
+#: system: seeing what you finished is half of why the list exists, and a
+#: weekly DONE report has nothing to read if the only record is an event log.
+#:
+#: One day, so the list still opens clean tomorrow morning while today's work
+#: is visible in the place you actually look.
+CLOSED_RETENTION_DAYS = 1
+
+
+def _closed_within(item, days: int) -> bool:
+    """Was this item closed inside the retention window?
+
+    `closed_at` is an HLC -- "<ms-epoch>.<counter>.<actor>" -- so the timestamp
+    is the leading field. An item closed before the fold began recording the
+    moment has no value here; treat it as OLD rather than recent, so a
+    retro-fitted field cannot resurrect a year of finished work into the
+    projection on first run.
+    """
+    raw = getattr(item, "closed_at", None)
+    if not raw:
+        return False
+    try:
+        import time
+        ms = float(str(raw).split(".")[0])
+        return (time.time() - ms / 1000.0) <= days * 86400
+    except (ValueError, TypeError):
+        return False
 
 
 class ProjectionConflict(RuntimeError):
@@ -158,7 +193,19 @@ def render_item(item, *, level: int | None = None) -> list[str]:
         out = [f"{stars} {item.title}{tag_str}"]
         out.extend("  " + ln for ln in _drawer({"ID": item.id}))
         return out
-    state = payload.get("state") or "TODO"
+    # A CLOSED ITEM RENDERS AS DONE, WHATEVER IT WAS BEFORE.
+    #
+    # The payload keeps the state the task had while it was live (TODO, NEXT,
+    # WAITING). Rendering that after completion would show finished work as
+    # still outstanding -- worse than dropping it, because it reads as a lie
+    # rather than an omission. `dismissed` renders as CANCELLED: giving up on
+    # something and finishing it are different outcomes and a weekly report
+    # that conflates them is not worth reading.
+    if item.status in CLOSED_STATUSES:
+        from .fold import was_finished
+        state = "DONE" if was_finished(item) else "CANCELLED"
+    else:
+        state = payload.get("state") or "TODO"
     priority = org.get("priority")
     prio = f"[#{priority}] " if priority else ""
     # sorted() again, not redundantly: a payload can reach here from any
@@ -166,6 +213,17 @@ def render_item(item, *, level: int | None = None) -> list[str]:
     tags = sorted(payload.get("tags") or [])
     tag_str = f"  :{':'.join(tags)}:" if tags else ""
     lines = [f"{stars} {state} {prio}{item.title}{tag_str}"]
+
+    if item.status in CLOSED_STATUSES and getattr(item, "closed_at", None):
+        # An org CLOSED: stamp, so a weekly report can find finished work by
+        # date without re-folding the whole event log.
+        try:
+            import datetime
+            ms = float(str(item.closed_at).split(".")[0])
+            when = datetime.datetime.fromtimestamp(ms / 1000.0)
+            lines.append("  CLOSED: " + when.strftime("[%Y-%m-%d %a %H:%M]"))
+        except (ValueError, TypeError):
+            pass
 
     sched, dead = _org_stamp(payload.get("scheduled")), _org_stamp(payload.get("deadline"))
     if sched or dead:
@@ -214,9 +272,13 @@ def project(state: LedgerState, *, space: str | None = None) -> Projection:
     # (which is the entire point of Phase 1) rendered as nothing. A valid event,
     # accepted by fold, producing a task nobody could see. Only an explicit
     # FOREIGN space is excluded now.
+    # Live work, plus work finished recently enough to still be worth seeing.
+    # Anything closed longer ago belongs to the archive, not the action list.
     items = [
         item for item in state.items.values()
-        if item.status in LIVE_STATUSES
+        if (item.status in LIVE_STATUSES
+            or (item.status in CLOSED_STATUSES
+                and _closed_within(item, CLOSED_RETENTION_DAYS)))
         and (space is None or (item.payload or {}).get("space", space) == space)
     ]
 
