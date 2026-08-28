@@ -33,9 +33,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from org_workspace import OrgWorkspace  # noqa: E402
 
-OPEN_STATES = {'TODO', 'NEXT', 'WAITING', 'QUEUED', 'WORKING', 'REVIEW',
-               'PROJECT', 'ACTIVE', 'ASSIGN', 'PAUSED', 'DEFERRED'}
-CLOSED_STATES = {'DONE', 'COMPLETED', 'CANCELLED', 'FAILED'}
+# DIP-0009 v2.0 canon: seven states. DEFERRED is CLOSED ("done deciding,
+# not now"). Retired keywords (QUEUED/WORKING/FAILED/PROJECT/ACTIVE/ASSIGN/
+# PAUSED) are kept in OPEN transitional so pre-migration files still count
+# as open rather than vanishing — the lint flags them for migration.
+OPEN_STATES = {'TODO', 'NEXT', 'WAITING', 'REVIEW',
+               'QUEUED', 'WORKING', 'FAILED', 'PROJECT', 'ACTIVE', 'ASSIGN',
+               'PAUSED'}
+CLOSED_STATES = {'DONE', 'COMPLETED', 'CANCELLED', 'DEFERRED'}
 STOPWORDS = {'the', 'a', 'an', 'to', 'of', 'in', 'on', 'for', 'and', 'or',
              'with', 'from', 'into', 'via', 'per', 'after', 'before', 'when'}
 DATE_RE = re.compile(r'(\d{4})-(\d{2})-(\d{2})')

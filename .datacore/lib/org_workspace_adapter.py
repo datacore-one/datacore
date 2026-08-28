@@ -1010,7 +1010,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--file", required=True)
     p.add_argument("--title", help="Title substring to match")
     p.add_argument("--id", help="Task :ID: to match")
-    p.add_argument("--state", help="New state (TODO, NEXT, WAITING, DONE)")
+    p.add_argument("--state", help="New state (canon: TODO, NEXT, WAITING, "
+                                   "REVIEW | DONE, DEFERRED, CANCELLED)")
     p.add_argument("--tags", help="Replace tags (:tag1:tag2: format)")
     p.add_argument("--scheduled", help="YYYY-MM-DD")
     p.add_argument("--heading", dest="new_heading", help="New heading text")

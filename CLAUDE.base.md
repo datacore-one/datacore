@@ -197,7 +197,7 @@ GTD MCP tools (`datacore.gtd.*`) are also available when the MCP server is runni
 
 ### org-mode format
 
-- Headings: `*` per level. States: TODO, NEXT, WAITING, DONE
+- Headings: `*` per level. States (DIP-0009 v2.0): TODO, NEXT, WAITING, REVIEW | DONE, DEFERRED, CANCELLED — one loop for humans and agents; assignment/telemetry are properties, never states
 - Properties: `:PROPERTIES:` ... `:END:`. Tags: `:tag1:tag2:`
 - Timestamps: **Always verify day-of-week** — LLMs get these wrong:
   `python3 -c "from datetime import date; print(date(YYYY,M,D).strftime('%a'))"`

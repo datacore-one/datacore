@@ -42,9 +42,12 @@ from .fold import LedgerState
 #: multi-space loop, silently reporting 66 tasks "lost" in the migration gate.
 #: A generated file whose meaning depends on what was parsed before it is
 #: broken; found 2026-08-10 by running the gate for real across nine spaces.
+# DIP-0009 v2.0 canon (2026-08-29): seven states, agents-as-workers. Must
+# match the live-file header exactly or generated projections/checkpoints
+# diverge from authored files.
 SEQ_TODO = (
-    "#+SEQ_TODO: TODO(t) NEXT(n!) WAITING(w!) DEFERRED(f) QUEUED(q) "
-    "WORKING(W!) REVIEW(r!) | DONE(d!) FAILED(x!) CANCELLED(c!)"
+    "#+SEQ_TODO: TODO(t) NEXT(n!) WAITING(w!) REVIEW(r!) "
+    "| DONE(d!) DEFERRED(f!) CANCELLED(c!)"
 )
 
 GENERATED_HEADER = (
