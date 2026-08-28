@@ -77,6 +77,14 @@ class Node:
     parent: str | None = None         # tree parent, from heading nesting
     children: list[str] = field(default_factory=list)
     keywords: tuple[str, ...] = ()
+    #: Lane switch (delegation gate, reworked 2026-08-28 per the owner): a
+    #: node with :SWITCH: off makes work matching its :KEYWORDS: ineligible
+    #: for autonomous execution. No banned-word lists — a lane is on or off.
+    switch: str = ""
+    #: Explicit :KEYWORDS: for lane matching. Deliberately separate from the
+    #: title-derived `keywords` used for scoring: an ineligibility decision
+    #: must never ride on words like "research" scraped from a title.
+    lane_keywords: tuple[str, ...] = ()
     #: Extra properties surfaced in review outlines. Kept as plain fields
     #: rather than a dict so a typo fails loudly at construction.
     gate: str = ""
@@ -192,15 +200,18 @@ class IntentGraph:
             title = (n.heading or "").strip()
             serves = tuple((n.get_property("SERVES") or "").split())
             space_tag = n.get_property("SPACE") or prefix
+            lane_kw = tuple((n.get_property("KEYWORDS") or "").lower().split())
             nodes[nid] = Node(id=nid, title=title,
                               level=int(n.get_property("LEVEL") or 0),
                               success=(n.get_property("SUCCESS") or "").strip(),
                               serves=serves, parent=parent,
                               keywords=_keywords(title),
+                              lane_keywords=lane_kw,
                               **{k: (n.get_property(k.upper()) or "").strip()
-                                 for k in ("gate", "target", "metric", "owner",
-                                           "benchmark", "window", "banned",
-                                           "why", "status", "note", "source")})
+                                 for k in ("switch", "gate", "target", "metric",
+                                           "owner", "benchmark", "window",
+                                           "banned", "why", "status", "note",
+                                           "source")})
             if parent and parent in nodes:
                 nodes[parent].children.append(nid)
             stack.append((depth, nid))
@@ -366,31 +377,31 @@ class IntentGraph:
         return best
 
     def hard_gate(self, text: str, tags=()) -> str | None:
-        """Park reason when a hard-gate node bans this work, else None.
+        """Park reason when this work belongs to a lane that is switched OFF.
 
-        Delegation-gate epic (datacore#59/#62), ratified 2026-08-28: a node
-        with `:GATE: hard` and `:BANNED:` keywords makes matching work
-        INELIGIBLE for autonomous execution — parked, not ranked lower. The
-        first such node is Meridian HL-bot-only: a full HMM research cluster
-        executed across multiple nights against a standing priority that was
-        stated repeatedly but encoded nowhere the selection layer looked.
+        Delegation-gate epic (datacore#59/#62), reworked 2026-08-28 per the
+        owner: no banned-word lists — a lane (a bot, a research track, a
+        product line) is an intent node with `:SWITCH: on|off`, and flipping
+        one property is the whole control surface. Work matching an OFF
+        node's `:KEYWORDS:` is ineligible for autonomous execution until the
+        switch flips back. First lane: Meridian HMM research OFF while the
+        HL bot lane is ON — a full HMM cluster executed across multiple
+        nights because no graph encoded that standing priority.
 
-        Matching is deliberately blunt: banned keywords are matched as word
-        tokens (hyphenated keywords as substrings) against title+tags text,
-        in ANY space — the violating cluster lived outside 6-meridian. An
-        explicit :APPROVED_BY: on the task is the human override; callers
-        enforce that, not this method.
+        Matching uses ONLY explicit `:KEYWORDS:` — never title-derived words
+        (an OFF lane titled "HMM research" must not gate every task
+        containing "research"). An OFF node without `:KEYWORDS:` gates
+        nothing. Tokens split on every non-alphanumeric so `hmm_strategy`
+        yields `hmm`; hyphen/underscore keywords match as substrings under
+        either separator. `:APPROVED_BY:` on a task is the human override;
+        callers enforce that, not this method.
         """
         low = f"{text} {' '.join(tags)}".lower()
-        # Split on every non-alphanumeric so `hmm_strategy` yields the token
-        # `hmm` — underscore-glued identifiers are exactly how the violating
-        # cluster's tasks were titled. Multi-word keywords (hyphen/underscore)
-        # match as substrings under either separator.
         tokens = set(re.findall(r"[a-z0-9]+", low))
         for node in self.nodes.values():
-            if node.gate.strip().lower() != "hard" or not node.banned.strip():
+            if node.switch.strip().lower() != "off" or not node.lane_keywords:
                 continue
-            for kw in node.banned.lower().split():
+            for kw in node.lane_keywords:
                 if "_" in kw or "-" in kw:
                     hit = any(v in low for v in
                               {kw, kw.replace("-", "_"), kw.replace("_", "-")})
@@ -398,8 +409,8 @@ class IntentGraph:
                     hit = kw in tokens
                 if hit:
                     why = f" — {node.why}" if node.why else ""
-                    return (f"hard gate '{node.title}' [{node.id}]: "
-                            f"banned keyword '{kw}'{why}")
+                    return (f"lane OFF: '{node.title}' [{node.id}] "
+                            f"matched '{kw}'{why}")
         return None
 
     def score_10(self, text: str, container: str = "", tags=()) -> float:
