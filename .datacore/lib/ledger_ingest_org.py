@@ -103,6 +103,20 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
     org_file = space / "org" / "next_actions.org"
     if not org_file.exists():
         return {"dismissed": 0, "updated": 0}
+    # File-level tags, parsed the way genesis does. Items created through the
+    # adapter/ingest never recorded `filetags`, while genesis-imported ones
+    # do — checkpoint-verify then compares unlike data and reports the same
+    # constant as an alteration (2 items in 0-personal, 2026-08-29, differing
+    # by exactly the file's :gtd:). Fill-only, same philosophy as tags below.
+    file_filetags: list = []
+    try:
+        for _l in org_file.read_text(encoding="utf-8").splitlines()[:10]:
+            if _l.startswith("#+FILETAGS:"):
+                file_filetags = sorted(
+                    t for t in _l.split(":", 1)[1].split(":") if t.strip())
+                break
+    except OSError:
+        pass
     ws = OrgWorkspace(); ws.load(str(org_file))
     state = fold(read_events(space))
     log = None
@@ -177,6 +191,8 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
             filled = sorted(t for t in own if t) or None
             if filled:
                 want["tags"] = filled
+        if file_filetags and not (cur.get("filetags") or None):
+            want["filetags"] = file_filetags
         diff = {k: v for k, v in want.items() if (cur.get(k) or None) != v}
         if not diff:
             continue
