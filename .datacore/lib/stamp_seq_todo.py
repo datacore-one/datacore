@@ -22,8 +22,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from spaces import discover_spaces  # noqa: E402
 
-CANONICAL =("#+SEQ_TODO: TODO(t) NEXT(n!) WAITING(w!) DEFERRED(f) QUEUED(q) "
-             "WORKING(W!) REVIEW(r!) | DONE(d!) FAILED(x!) CANCELLED(c!)")
+# DIP-0009 v2.0 canon (2026-08-29) — must match projector.SEQ_TODO and
+# state_loop_rollout.CANON, or this stamper silently reverts the rollout.
+CANONICAL =("#+SEQ_TODO: TODO(t) NEXT(n!) WAITING(w!) REVIEW(r!) "
+            "| DONE(d!) DEFERRED(f!) CANCELLED(c!)")
 
 SCOPE = {"inbox.org", "next_actions.org", "someday.org", "nightshift.org",
          "ai.org", "research_learning.org"}
