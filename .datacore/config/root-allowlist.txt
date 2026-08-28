@@ -1,0 +1,37 @@
+# Root-level allowlist for the system repo
+#
+# Only files matching one of these patterns may be tracked at the repository root.
+# Directories are governed separately: .datacore/, .github/, .plur/ are always allowed.
+#
+# This file is the single source of truth. Both consumers read it:
+#   - .datacore/hooks/pre-commit  (local enforcement)
+#   - .github/workflows/validate-boundaries.yml  (CI enforcement)
+#
+# Format: one ERE pattern fragment per line (no surrounding slashes or anchors).
+# Lines starting with '#' and blank lines are ignored.
+# At runtime the fragments are joined with '|' and wrapped in:
+#   ^(<joined>)$
+#
+# ---- dot-files / dot-dirs at root ----
+\.
+\.gitignore
+\.gitmodules
+\.gitattributes
+\.claude
+\.mcp\.json\.example
+# ---- standard open-source documentation ----
+CLAUDE\.base\.md
+README\.md
+INSTALL\.md
+CONTRIBUTING\.md
+GETTING_STARTED\.md
+HOSTING\.md
+CHANGELOG\.md
+ROADMAP\.md
+CODE_OF_CONDUCT\.md
+SECURITY\.md
+LICENSE
+CODEOWNERS
+# ---- datacore installer / bootstrap ----
+sync
+install\.yaml.*example

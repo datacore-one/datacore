@@ -18,7 +18,12 @@ def result(a, held, d):
     print(f"  [{'HELD' if held else 'BROKEN':6}] {a:<48} {d}")
 
 
+_GIT_ENV = {k: v for k, v in os.environ.items()
+            if not k.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_"))}
+
+
 def git(d, *a, **kw):
+    kw.setdefault("env", _GIT_ENV)
     return subprocess.run(["git", "-C", str(d), *a], capture_output=True,
                           text=True, **kw)
 

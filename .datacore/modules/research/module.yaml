@@ -58,8 +58,8 @@ settings:
     description: "Directory for atomic zettels"
     default: "0-personal/notes/2-knowledge/zettel"
   industry_landscape_file:
-    description: "Path to industry landscape YAML"
-    default: "0-personal/notes/2-knowledge/industry-landscape.yaml"
+    description: "Path to industry landscape file"
+    default: "1-datafund/1-tracks/research/Industry landscape.md"
   research_org_file:
     description: "Path to research_learning.org"
     default: "0-personal/org/research_learning.org"

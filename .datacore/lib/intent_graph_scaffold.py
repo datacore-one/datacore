@@ -35,6 +35,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from spaces import discover_spaces  # noqa: E402
+
 try:
     import yaml
 except ImportError:
@@ -141,7 +143,11 @@ def main() -> int:
         print("pyyaml required", file=sys.stderr)
         return 1
 
-    targets = sorted(root.glob("[0-9]-*/venture.yaml"))
+    targets = sorted(
+        s.path / "venture.yaml"
+        for s in discover_spaces(root)
+        if (s.path / "venture.yaml").exists()
+    )
     if a.space:
         targets = [t for t in targets if t.parent.name == a.space]
     written = skipped = 0

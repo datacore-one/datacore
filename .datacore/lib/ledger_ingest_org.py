@@ -217,6 +217,39 @@ def _default_root() -> Path:
     return Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
 
 
+def _notify_daemon(root: Path) -> None:
+    """POST ledger.sweep.complete to the daemon (best-effort).
+
+    If the daemon is not running, the port file is absent, or the POST fails
+    for any reason, the error is logged but the sweep exit code is unaffected.
+    Callers never see an exception from this function.
+    """
+    import urllib.request
+    port_file = Path.home() / ".datacore" / "app" / "datacored.port"
+    token_file = Path.home() / ".datacore" / "app" / "datacored.token"
+    try:
+        port = int(port_file.read_text().strip())
+        token = token_file.read_text().strip()
+    except Exception:
+        return  # daemon not running or files absent; nothing to notify
+    url = f"http://127.0.0.1:{port}/org/ledger-sweep/notify"
+    req = urllib.request.Request(
+        url,
+        data=b"{}",
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5):
+            pass
+        print("notified daemon: ledger.sweep.complete")
+    except Exception as exc:  # noqa: BLE001
+        print(f"daemon notify skipped: {exc}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", type=Path, default=_default_root())
@@ -251,6 +284,8 @@ def main() -> int:
 
     verb = "would import" if args.dry_run else "imported"
     print(f"\n{verb} {total_new} task(s) across {len(spaces)} space(s); {failures} space(s) failed")
+    if not args.dry_run:
+        _notify_daemon(args.root)
     return 1 if failures else 0
 
 

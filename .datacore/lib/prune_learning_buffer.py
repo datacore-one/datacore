@@ -19,6 +19,9 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import discover_spaces  # noqa: E402
+
 # Base directory — script lives in .datacore/lib/, root is two levels up
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -55,10 +58,10 @@ def find_learning_files():
         if p.exists():
             files.append(p)
 
-    # Spaces: [0-9]-*/.datacore/learning/
-    for space_dir in sorted(ROOT.glob("[0-9]-*")):
+    # Spaces: [space]/.datacore/learning/
+    for space in discover_spaces(ROOT):
         for name in TARGET_FILES:
-            p = space_dir / ".datacore" / "learning" / name
+            p = space.path / ".datacore" / "learning" / name
             if p.exists():
                 files.append(p)
 

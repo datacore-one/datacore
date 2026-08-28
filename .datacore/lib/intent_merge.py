@@ -41,6 +41,7 @@ from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import discover_spaces  # noqa: E402
 
 #: Phrases that mark a reversal. Deliberately narrow, and narrowed FURTHER
 #: after a first run fired on "retire" inside a bug report and "dropped" in a
@@ -81,21 +82,22 @@ def completed(root: Path) -> list[dict]:
     """
     out = []
     heading = re.compile(r"^\*+\s+DONE\s+(.*?)(?:\s+(:[A-Za-z0-9_@#%:]+:))?\s*$")
-    for f in sorted(root.glob("[0-9]-*/org/*.org")):
-        try:
-            txt = f.read_text(errors="ignore")
-        except OSError:
-            continue
-        space = f.parent.parent.name
-        for line in txt.splitlines():
-            m = heading.match(line)
-            if not m:
+    for space_obj in discover_spaces(root):
+        for f in sorted((space_obj.path / "org").glob("*.org")):
+            try:
+                txt = f.read_text(errors="ignore")
+            except OSError:
                 continue
-            title = re.sub(r"^\[#[ABC]\]\s*", "", m.group(1) or "").strip()
-            tags = tuple(t for t in (m.group(2) or "").strip(":").split(":") if t)
-            if title:
-                out.append({"space": space, "title": title, "tags": tags,
-                            "file": f.name})
+            space = f.parent.parent.name
+            for line in txt.splitlines():
+                m = heading.match(line)
+                if not m:
+                    continue
+                title = re.sub(r"^\[#[ABC]\]\s*", "", m.group(1) or "").strip()
+                tags = tuple(t for t in (m.group(2) or "").strip(":").split(":") if t)
+                if title:
+                    out.append({"space": space, "title": title, "tags": tags,
+                                "file": f.name})
     return out
 
 
@@ -109,13 +111,16 @@ def decision_records(root: Path) -> list[dict]:
     5-plur/3-knowledge/decisions/2026-07-24-token-killed-*.md
     """
     out = []
-    for d in sorted(root.glob("[0-9]-*/3-knowledge/decisions")):
+    for space_obj in discover_spaces(root):
+        d = space_obj.path / "3-knowledge" / "decisions"
+        if not d.is_dir():
+            continue
         for f in sorted(d.glob("*.md")):
             try:
                 text = f.read_text(errors="ignore")
             except OSError:
                 continue
-            out.append({"space": d.parent.parent.name, "file": f.name,
+            out.append({"space": space_obj.path.name, "file": f.name,
                         "text": text,
                         "reverses": bool(REVERSAL.search(text[:2000]))})
     return out

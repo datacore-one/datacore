@@ -323,7 +323,7 @@ research:
   podcast_output_dir: "0-personal/content/podcasts"
   literature_output_dir: "0-personal/notes/2-knowledge/literature"
   zettel_output_dir: "0-personal/notes/2-knowledge/zettel"
-  industry_landscape_file: "0-personal/notes/2-knowledge/industry-landscape.yaml"
+  industry_landscape_file: "1-datafund/1-tracks/research/Industry landscape.md"
   research_org_file: "0-personal/org/research_learning.org"
 
   # Readwise Reader integration

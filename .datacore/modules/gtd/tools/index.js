@@ -2,7 +2,7 @@
 // Plain JS for direct dynamic import by the MCP server.
 // Backend: org_workspace_adapter.py (replaces org_parser.py)
 
-import { z } from 'zod'
+import { z } from '@datacore-one/mcp/runtime'
 import * as fs from 'fs'
 import * as path from 'path'
 import { execFile } from 'child_process'

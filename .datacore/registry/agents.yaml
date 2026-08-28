@@ -11,6 +11,7 @@
 #   - description: One-line description
 #   - version: Semantic version
 #   - source: Path to agent definition file
+#   - tools: Tool allowlist mirroring frontmatter (for registry cross-reference)
 #   - skills: Array of capability tags for semantic discovery
 #   - triggers.tags: Org-mode tags that route to this agent
 #   - triggers.commands: Slash commands that invoke this agent
@@ -23,6 +24,15 @@
 #   - can_be_called_by: Agents that invoke this agent
 #   - profile: Hook profile to inherit (§17)
 #   - hooks: Lifecycle hooks configuration (§16)
+#
+# FRONTMATTER NOTE (2026-08-23):
+#   Agent markdown files (.datacore/agents/*.md) now carry a YAML frontmatter
+#   block that the claude CLI reads directly for runtime configuration:
+#     name, description, model, tools, effort, color
+#   The 'tools' field in frontmatter is the AUTHORITATIVE source for tool
+#   restrictions. The 'tools' field here in the registry is a mirror for
+#   discoverability queries only — keep them in sync.
+#   See .datacore/agents/_patterns/frontmatter-schema.md for the full schema.
 #
 # =============================================================================
 
@@ -296,6 +306,7 @@ agents:
     version: 1.0.0
     source: .datacore/agents/ai-task-executor.md
     model: sonnet
+    tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, TaskCreate, TaskList, TaskUpdate]
     profile: coordinator
     skills:
     - task-routing
@@ -393,6 +404,7 @@ agents:
     version: 1.0.0
     source: .datacore/agents/gtd-content-writer.md
     model: sonnet
+    tools: [Read, Write, Edit, Glob, Grep, Bash]
     profile: content-writer
     skills:
     - content-generation
@@ -427,6 +439,7 @@ agents:
     version: 1.0.0
     source: .datacore/agents/gtd-data-analyzer.md
     model: sonnet
+    tools: [Read, Write, Edit, Glob, Grep, Bash]
     profile: gtd-processor
     skills:
     - data-extraction
@@ -459,6 +472,7 @@ agents:
     version: 1.0.0
     source: .datacore/agents/gtd-project-manager.md
     model: sonnet
+    tools: [Read, Write, Edit, Glob, Grep, Bash]
     profile: gtd-processor
     skills:
     - project-tracking
@@ -1038,7 +1052,8 @@ agents:
     description: Suggests appropriate tags for tasks based on content
     version: 1.0.0
     source: .datacore/agents/tag-suggester.md
-    model: inherit
+    model: haiku
+    tools: [Read, Glob, Grep]
     skills:
     - tag-suggestion
     - classification
@@ -1528,7 +1543,8 @@ module_agents:
     - execution-coordination
     - consensus-building
     triggers:
-      tags: []
+      tags:
+      - ':AI:speculative:'
       commands: []
       schedules:
       - overnight

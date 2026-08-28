@@ -2,6 +2,17 @@
 name: ai-task-executor
 description: Core 24/7 autonomous task execution hub that scans next_actions.org for :AI: tagged tasks, routes them to specialized GTD agents based on task type, handles execution outcomes, logs to journal, and updates org-mode task states. Returns JSON responses with detailed success/failure reporting.
 model: sonnet
+tools:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
+  - Agent
+  - TaskCreate
+  - TaskList
+  - TaskUpdate
 ---
 
 # AI Task Executor - Autonomous 24/7 Task Execution Agent
@@ -16,7 +27,7 @@ Run continuously (24/7) to scan for AI-tagged tasks and execute them autonomousl
 
 Before starting work, load relevant learned patterns:
 
-1. **Preferred**: Call `plur_inject_hybrid` MCP tool with `prompt` = your task description and `scope` = `agent:ai-task-executor`
+1. **Preferred**: Call `plur_admin` MCP tool with `action` = `"plur_inject_hybrid"`, `prompt` = your task description, `scope` = `agent:ai-task-executor`
 2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/ai-task-executor.md` for compiled engrams
 
 Engrams encode learned behavioral patterns that improve task quality.

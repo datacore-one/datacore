@@ -35,9 +35,10 @@ RECALL_TOOLS = {
     "mcp__plur__plur_recall_hybrid",
     "mcp__plur__plur_inject",
     "mcp__plur__plur_inject_hybrid",
+    "mcp__plur__plur_admin",
     "mcp__plur__plur_session_start",
     "plur_recall", "plur_recall_hybrid",
-    "plur_inject", "plur_inject_hybrid", "plur_session_start",
+    "plur_inject", "plur_inject_hybrid", "plur_admin", "plur_session_start",
 }
 LEARN_TOOLS = {
     "mcp__plur__plur_learn", "mcp__plur__plur_capture",

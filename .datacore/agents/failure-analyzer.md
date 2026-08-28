@@ -14,7 +14,7 @@ You analyze failed nightshift task executions to identify root causes and recomm
 
 Before starting work, load relevant learned patterns:
 
-1. **Preferred**: Call `plur_inject_hybrid` MCP tool with `prompt` = your task description and `scope` = `agent:failure-analyzer`
+1. **Preferred**: Call `plur_admin` MCP tool with `action` = `"plur_inject_hybrid"`, `prompt` = your task description, `scope` = `agent:failure-analyzer`
 2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/failure-analyzer.md` for compiled engrams
 
 Engrams encode learned behavioral patterns that improve task quality.

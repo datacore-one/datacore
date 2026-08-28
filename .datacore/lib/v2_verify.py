@@ -33,6 +33,9 @@ from pathlib import Path
 
 LIB = Path(__file__).resolve().parent
 ROOT = Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
+
+sys.path.insert(0, str(LIB))
+from spaces import discover_spaces  # noqa: E402
 PY = sys.executable
 
 
@@ -75,8 +78,8 @@ def run(args: list[str], timeout: int = 180) -> tuple[int, str]:
 
 
 def spaces() -> list[Path]:
-    return [s for s in sorted(ROOT.glob("[0-9]-*"))
-            if (s / ".datacore" / "events").is_dir()]
+    return [s.path for s in discover_spaces(ROOT)
+            if (s.path / ".datacore" / "events").is_dir()]
 
 
 # ── DIP-0034: event ledger substrate ────────────────────────────────────────

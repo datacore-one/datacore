@@ -16,7 +16,7 @@ Review all open pull requests across venture repos — assess code quality, chec
 
 2. **Fetch open PRs**: For each repo, list open pull requests:
    ```bash
-   gh pr list --repo {org}/{repo} --state open --json number,title,author,createdAt,isDraft,reviewDecision,statusCheckRollup --limit 30
+   gh pr list --repo {org}/{repo} --state open --json number,title,author,createdAt,isDraft,reviewDecision,statusCheckRollup,reviews,headRefName,baseRefName,mergeable --limit 30
    ```
 
 3. **Categorize PRs**: Split into:
@@ -52,10 +52,22 @@ Review all open pull requests across venture repos — assess code quality, chec
      gh pr review {number} --repo {org}/{repo} --comment --body "Review feedback here"
      ```
 
-6. **Flag stale PRs**: For PRs open >7 days with no recent commits or reviews:
-   ```bash
-   gh pr comment {number} --repo {org}/{repo} --body "This PR has been open for over 7 days. Is it still active? Please update or close if abandoned."
-   ```
+6. **Route stale PRs**: For PRs open >7 days with no recent activity, branch on state — **never post a generic nag**:
+
+   - **Author is the agent account (plur9/bot)**: Do NOT comment on your own PR.
+     - `CHANGES_REQUESTED`: Read the review body from the `reviews` field. If the findings are auto-addressable, file an org task naming them explicitly. If not, escalate to the human operator with a one-line summary of the specific blocker.
+     - `mergeable == DIRTY`: File an org task to rebase the PR onto its base branch.
+     - `statusCheckRollup` failing / CI never ran: Investigate the root cause — wrong base, missing workflow trigger. Fix or escalate with specifics. Do not comment.
+
+   - **Author is an external human and ball is genuinely with them**: Post a specific nudge (not a template), naming the blocking review finding or CI failure. De-duplicate: if an identical comment already exists on the PR, skip.
+     ```bash
+     # Only when: external author, no response for >7 days, ball is with them
+     gh pr comment {number} --repo {org}/{repo} --body "Reminder: [specific finding or CI failure blocking merge]. Let me know if you need help or want to close this."
+     ```
+
+   - **`reviewDecision` is null / no review yet**: Leave no comment. The PR is simply open; add a review if the diff is ready to assess (per step 5).
+
+   - **`mergeable == UNKNOWN`**: Skip — GitHub is still computing the merge state; re-check next run.
 
 7. **Log summary**: Record PRs reviewed, actions taken, and any PRs needing human decision.
 
@@ -70,6 +82,7 @@ Review all open pull requests across venture repos — assess code quality, chec
 
 - No automated PR with passing CI left without approval
 - Every human PR has at least one review comment or approval
-- Stale PRs (>7 days) are identified and authors notified
+- Stale PRs (>7 days) are routed (task filed, escalated, or specific nudge) — never a generic nag
+- No generic self-addressed nag comments posted (agent-authored PRs are never nagged at themselves)
 - No security issues in reviewed diffs go uncommented
 - Zero merges executed by the agent — merge is human-only

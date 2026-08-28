@@ -25,6 +25,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import discover_spaces  # noqa: E402
+
 HEADING = re.compile(r"^(\*+)\s+(.*)$")
 # A trailing tag string: colon-delimited run at end of line.
 TRAILING_TAGS = re.compile(r"(:[^\s:]+(?::[^\s:]+)*:)\s*$")
@@ -84,7 +87,16 @@ def main() -> int:
     args = ap.parse_args()
 
     root = Path(args.root).expanduser()
-    files = [p for p in root.glob("[0-9]-*/**/*.org") if ".git" not in p.parts]
+    # Collect *.org files from every discovered space — consistent with how
+    # other lib scripts enumerate spaces (see dedup_tasks.py, tag_validator.py).
+    # tag_validator.py uses per-space org/ glob; here we scan all *.org files
+    # under each space root (not only org/) to catch non-standard locations.
+    files = [
+        p
+        for space in discover_spaces(root)
+        for p in space.path.rglob("*.org")
+        if ".git" not in p.parts
+    ]
     findings: list[dict] = []
     for f in files:
         findings.extend(audit_file(f))

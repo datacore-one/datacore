@@ -24,7 +24,7 @@ model: inherit
 
 Before starting work, load relevant learned patterns:
 
-1. **Preferred**: Call `plur_inject_hybrid` MCP tool with `prompt` = your task description and `scope` = `agent:create-space`
+1. **Preferred**: Call `plur_admin` MCP tool with `action` = `"plur_inject_hybrid"`, `prompt` = your task description, `scope` = `agent:create-space`
 2. **Fallback**: If MCP is unavailable, read `.datacore/state/agent-engrams/create-space.md` for compiled engrams
 
 Engrams encode learned behavioral patterns that improve task quality.
@@ -140,7 +140,20 @@ If intent is clear (e.g., "create a new team space for Acme"), proceed directly.
 5. **Generate files from templates**
    - Copy `CLAUDE.base.md` from template
    - Generate `CLAUDE.space.md` with user-provided info (substitute placeholders)
-   - Generate `.datacore/config.yaml` with space settings
+   - **Generate `.datacore/config.yaml`** — this is the space discovery marker
+     (see `spaces.py`). Every new space MUST have this file or it will not be
+     found by `discover_spaces()`. Minimal required format:
+     ```yaml
+     space:
+       name: {{SPACE_NAME}}
+       type: {{SPACE_TYPE}}   # "team" or "personal"
+
+     team:
+       members:
+         - id: {{AUTHOR_ID}}
+           name: {{AUTHOR_NAME}}
+           github: {{AUTHOR_GITHUB}}
+     ```
    - Copy `.gitignore` from template
    - Generate `org/inbox.org` and `org/next_actions.org`
    - Generate `_index.md` files
@@ -190,7 +203,7 @@ Required Files:
   [✓/✗] CLAUDE.base.md exists
   [✓/✗] CLAUDE.space.md exists
   [✓/✗] CLAUDE.md exists (generated)
-  [✓/✗] .datacore/config.yaml exists
+  [✓/✗] .datacore/config.yaml exists  ← DISCOVERY MARKER: must have space.name + space.type
   [✓/✗] .gitignore exists
   [✓/✗] org/inbox.org exists
   [✓/✗] org/next_actions.org exists

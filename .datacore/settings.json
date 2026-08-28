@@ -175,6 +175,16 @@
         ]
       },
       {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/hooks/org_date_prewrite.py",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "EnterPlanMode",
         "hooks": [
           {

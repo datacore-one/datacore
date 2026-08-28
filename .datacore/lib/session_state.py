@@ -20,10 +20,21 @@ def _debug(msg):
         print(f"[hooks] {msg}", file=sys.stderr)
 
 
+_session_id_override = None
+
+
+def set_session_id(session_id):
+    """Cache session ID for this process — call after reading stdin JSON in hook scripts."""
+    global _session_id_override
+    _session_id_override = session_id.strip() if session_id else None
+
+
 def _get_session_id():
-    """Get current session ID from environment. Returns None if unavailable."""
+    """Get current session ID. Tries env var first, then process-level cache."""
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
-    return sid if sid else None
+    if sid:
+        return sid
+    return _session_id_override
 
 
 def _state_file(session_id=None):

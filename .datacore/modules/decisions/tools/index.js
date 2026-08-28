@@ -5,7 +5,7 @@
 // Read-only + best-effort writes — no flock here. For atomic, gated
 // writes through the active-space resolver, see `app-tools/index.mjs`.
 
-import { z } from 'zod'
+import { z } from '@datacore-one/mcp/runtime'
 import * as fs from 'fs'
 import * as path from 'path'
 

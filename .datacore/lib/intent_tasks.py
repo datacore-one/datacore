@@ -32,6 +32,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import discover_spaces  # noqa: E402
 
 OPEN_STATES = ("TODO", "NEXT", "WAITING")
 
@@ -43,7 +44,10 @@ def _tasks(root: Path):
     except ImportError:
         return []
     out = []
-    for f in sorted(root.glob("[0-9]-*/org/next_actions.org")):
+    for space in discover_spaces(root):
+        f = space.path / "org" / "next_actions.org"
+        if not f.exists():
+            continue
         ws = OrgWorkspace()
         try:
             ws.load(str(f))

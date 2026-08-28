@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""One-shot disposition of the 2026-07-25 QUEUED-zombie backlog.
+"""ARCHIVED 2026-08-26 — mission complete; triage markers confirmed in org files.
+
+One-shot disposition of the 2026-07-25 QUEUED-zombie backlog.
 
 Context: DIP-0009 v1.1 requeue coverage makes orphaned QUEUED tasks (outside
 nightshift.org) requeue to NEXT — correct for the steady-state trickle, but

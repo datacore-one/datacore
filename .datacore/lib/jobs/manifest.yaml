@@ -302,6 +302,14 @@ jobs:
     machine: box
     schedule: "0 4 * * *"
     cmd: "~/Data/.datacore/lib/cos_morning.sh"
+    # Staleness gate: 0-personal holds the journal file asserted below.
+    # If Winston's checkout is behind upstream, the journal on disk may be
+    # days old (observed 2026-08-20 through 2026-08-24: 0-personal was 318
+    # commits behind; Winston read a 439-byte stub and reported "content
+    # mismatch" for five consecutive days instead of "unverifiable: stale
+    # input"). A host that cannot sync must not emit confident wrong verdicts.
+    require_synced_repos:
+      - "~/Data/0-personal"
     artifacts:
       # cos_verify_morning.py:check_briefing -- BRIEFINGS/<day>/app-briefing.json,
       # must have a headline and _meta (generated_at/quality checked there too,

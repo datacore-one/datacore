@@ -88,6 +88,7 @@ class Job:
     artifacts: list[Artifact]
     required_env: list[str] = field(default_factory=list)
     on_fail: str = "log"
+    require_synced_repos: list[str] = field(default_factory=list)
 
 
 def load_manifest(path: Path) -> list[Job]:
@@ -198,6 +199,15 @@ def _build_job(raw: object, index: int, errors: list[str], seen_names: set[str])
             f"(expected one of: {', '.join(sorted(ON_FAILS))})"
         )
 
+    require_synced_repos = raw.get("require_synced_repos", [])
+    if not isinstance(require_synced_repos, list) or not all(
+        isinstance(x, str) for x in require_synced_repos
+    ):
+        errors.append(
+            f"{ref}: field 'require_synced_repos' must be a list of strings "
+            f"(got {require_synced_repos!r})"
+        )
+
     if len(errors) != start:
         return None
 
@@ -209,6 +219,7 @@ def _build_job(raw: object, index: int, errors: list[str], seen_names: set[str])
         artifacts=artifacts,
         required_env=list(required_env),
         on_fail=on_fail,
+        require_synced_repos=list(require_synced_repos),
     )
 
 
