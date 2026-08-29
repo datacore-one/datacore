@@ -50,6 +50,7 @@ Engrams encode learned behavioral patterns that improve task quality.
 |-------|--------------|
 | `knowledge-extractor` | Spawns me for local file inputs |
 | `ingest-orchestrator` | May process files I read |
+| `ocr-reader` | I spawn for image files (OCR extraction) |
 
 ---
 
@@ -74,7 +75,7 @@ Determine format from extension and content:
 - Documents: `.docx` (via XML parsing), `.html`
 - Data: `.csv`, `.xlsx`, `.json`, `.yaml`, `.xml`
 - Code: `.py`, `.js`, `.ts`, `.sh`, and other source files
-- Images: `.png`, `.jpg`, `.gif`, `.webp` (visual analysis via Read tool)
+- Images: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.tiff`, `.bmp` — delegate to `ocr-reader` (see Step 2b)
 
 **Partial extraction:**
 - `.pdf` — delegate to pdf-extractor (note: coordinator should route PDFs directly)
@@ -89,6 +90,21 @@ Determine format from extension and content:
 - Archives: `.zip`, `.tar.gz`
 
 ### Step 2: Extract Content
+
+**Image files (.png, .jpg, .jpeg, .gif, .webp, .tiff, .bmp):**
+Delegate to `ocr-reader` via Task tool:
+- Spawn `ocr-reader` with `path` and optional `language`
+- Return its output as the extracted content
+- Do NOT attempt visual analysis yourself — `ocr-reader` handles both OCR text and the visual Read fallback when OCR is unavailable
+
+### Step 2b: Image fallback (when ocr-reader unavailable)
+
+If `ocr-reader` fails or is not registered:
+- Use Read tool for visual analysis (multimodal)
+- Describe content, text visible, diagrams shown
+- Note: this path does not extract selectable text
+
+### Step 2c: Text/Document files
 
 **Markdown/Text files:**
 - Read directly with Read tool
@@ -115,11 +131,6 @@ Then:
 - Identify key columns and metrics
 - Summarize data structure (rows, columns, date range)
 - Extract notable values or trends
-
-**Image files:**
-- Use Read tool (multimodal) to analyze visually
-- Describe content, text visible, diagrams shown
-- Note dimensions and format
 
 **EML files:**
 - Parse headers: From, To, CC, Date, Subject
@@ -223,7 +234,7 @@ If read fails:
 - Read any accessible local file
 - Extract text from common document formats
 - Parse DOCX via XML extraction
-- Analyze images visually
+- Analyze images visually (via ocr-reader or Read fallback)
 - Create companion descriptions for non-readable files
 - Extract file metadata
 
@@ -231,7 +242,7 @@ If read fails:
 - Create notes, zettels, or knowledge artifacts
 - Delete or modify source files
 - Access files outside provided paths
-- Perform OCR (flag the need instead)
+- Perform OCR directly (delegate to ocr-reader instead)
 - Process URLs (that's url-fetcher's job)
 
 **YOU MUST:**

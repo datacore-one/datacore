@@ -48,6 +48,7 @@ Engrams encode learned behavioral patterns that improve task quality.
 | Agent | Relationship |
 |-------|--------------|
 | `knowledge-extractor` | Spawns me for PDF inputs |
+| `ocr-reader` | I spawn for scanned/image-only PDFs |
 
 ---
 
@@ -162,10 +163,14 @@ Read the PDF and extract:
 - Page headers/footers — strip (they repeat)
 - Table of contents — preserve as a navigable outline
 
-### Step 3: Assess Quality
+### Step 3: Assess Quality and Delegate Scanned PDFs
 
 Check extraction quality:
-- **Scanned/image PDF** — if text extraction yields garbled output or very few words relative to page count, flag as OCR-needed. If using OpenDataLoader, suggest hybrid mode with `--force-ocr`.
+- **Scanned/image PDF** — if text extraction yields fewer than 50 words relative to page count:
+  - Spawn `ocr-reader` via Task tool with `path` = the PDF path
+  - `ocr-reader` uses pdf2image + Tesseract for page-by-page OCR
+  - Use its output as the extracted content
+  - Set `ocr_needed: true` and `extraction_engine: "ocr-reader"` in metadata
 - **Multi-column layout** — detect and reorder columns (left-to-right, top-to-bottom). OpenDataLoader handles this automatically via XY-Cut++.
 - **Mixed content** — note sections with charts/images that couldn't be extracted
 - **Encoding issues** — detect and note character encoding problems
@@ -190,7 +195,7 @@ Extract from the PDF:
 - **has_tables** — boolean
 - **has_figures** — boolean (noted but not extractable)
 - **ocr_needed** — boolean (if scanned)
-- **extraction_engine** — "opendataloader-pdf" or "read-tool-fallback"
+- **extraction_engine** — "opendataloader-pdf", "read-tool-fallback", or "ocr-reader"
 - **extraction_quality** — high, medium, low (self-assessed)
 - **language** — detected language
 
@@ -236,7 +241,7 @@ If extraction fails:
 - Handle multi-page documents in chunks
 - Convert PDF structure to markdown
 - Use OpenDataLoader for high-quality extraction when available
-- Perform OCR on scanned documents (via OpenDataLoader hybrid mode)
+- Delegate scanned PDFs to `ocr-reader` (pdf2image + Tesseract)
 
 **YOU CANNOT:**
 - Create notes, zettels, or knowledge artifacts
