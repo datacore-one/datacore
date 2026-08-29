@@ -41,16 +41,17 @@ def main() -> int:
         print(sync.stderr.strip(), file=sys.stderr)
 
     journal = JOURNALS / f"{today}.md"
-    missing = (
-        "journal not published" if not journal.exists()
-        else "briefing section missing" if "## Daily Briefing" not in journal.read_text()
-        else None
-    )
+    # "## Daily Briefing" check retired 2026-07-29: miles_delivery paste was
+    # retired; briefing now ships as audio + Telegram + app card — nothing
+    # writes that heading into the journal anymore. Keep only the file-exists
+    # check; if the journal is absent the overnight batch failed entirely.
+    # See datacore#54.
+    missing = "journal not published" if not journal.exists() else None
     if missing:
         # Single daily shot (08:30) — a miss must be LOUD, not a log line.
         # Silent non-delivery is exactly what the 2026-07-29 post-mortem
         # was about.
-        msg = f"Morning briefing NOT delivered ({missing}) — check nightshift-today on the server"
+        msg = f"Morning briefing NOT delivered ({missing}) — check nightshift on the server"
         print(f"{today}: {msg}")
         subprocess.run(
             ["osascript", "-e",
