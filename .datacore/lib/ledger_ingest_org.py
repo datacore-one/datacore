@@ -240,6 +240,7 @@ def _notify_daemon(root: Path) -> None:
     for any reason, the error is logged but the sweep exit code is unaffected.
     Callers never see an exception from this function.
     """
+    import urllib.error
     import urllib.request
     port_file = Path.home() / ".datacore" / "app" / "datacored.port"
     token_file = Path.home() / ".datacore" / "app" / "datacored.token"
@@ -262,6 +263,16 @@ def _notify_daemon(root: Path) -> None:
         with urllib.request.urlopen(req, timeout=5):
             pass
         print("notified daemon: ledger.sweep.complete")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            # The daemon is running but has no such route — the live-refresh
+            # feature simply is not deployed in this build. Saying "skipped:
+            # 404" on every sweep reads like a fault; it is an absent
+            # optional feature, and the sweep itself succeeded.
+            print("daemon has no ledger-sweep notify route (optional "
+                  "live-refresh not deployed) — sweep unaffected")
+        else:
+            print(f"daemon notify skipped: HTTP {exc.code}")
     except Exception as exc:  # noqa: BLE001
         print(f"daemon notify skipped: {exc}")
 
