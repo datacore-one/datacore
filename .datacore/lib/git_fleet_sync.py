@@ -271,9 +271,25 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
             # carry the actual error: on 2026-08-28 a transient failure (not a
             # conflict) wore this label through three runs on plur-claw, and the
             # discarded stderr was the only thing that could have said so.
-            detail = (r.stderr or r.stdout).strip().splitlines()
-            result['pull'] = ('PULL CONFLICT — needs a human'
-                              + (f" [{detail[-1][:120]}]" if detail else ''))
+            out = (r.stderr or '') + (r.stdout or '')
+            detail = out.strip().splitlines()
+            tail = detail[-1][:120] if detail else ''
+            # A PULL that fails for want of ACCESS is not a conflict, and
+            # calling it one sends someone hunting a merge that does not
+            # exist. On 2026-08-30 three repos (DHF, website, extract-cli)
+            # were reported as 'pull conflicts' when this host's key simply
+            # is not authorised for them — a credential job, not a merge job.
+            if any(s in out for s in (
+                    'Permission denied', 'could not read Username',
+                    'Authentication failed', 'access rights',
+                    'Repository not found', '403 Forbidden')):
+                result['pull'] = f'NO ACCESS — this host cannot reach the remote [{tail}]'
+            elif 'refusing to merge unrelated histories' in out:
+                result['pull'] = ('UNRELATED HISTORY — local checkout shares no '
+                                  'ancestor with origin; re-clone or align '
+                                  'deliberately')
+            else:
+                result['pull'] = f'PULL CONFLICT — needs a human [{tail}]'
         else:
             result['pull'] = 'pulled'
 
@@ -391,6 +407,24 @@ def main() -> int:
             print(f"  {r['name']}")
         print()
 
+    # Access failures are reported SEPARATELY from conflicts: they need a
+    # credential, not a merge, and grouping them taught the reader to look
+    # for the wrong thing entirely.
+    noaccess = [r for r in results if r.get('pull', '').startswith('NO ACCESS')]
+    if noaccess:
+        print('No access — this host cannot reach these remotes '
+              '(credential/deploy-key job, NOT a merge):')
+        for r in noaccess:
+            print(f"  {r['name']}: {r['pull']}")
+        print()
+
+    unrelated = [r for r in results if r.get('pull', '').startswith('UNRELATED HISTORY')]
+    if unrelated:
+        print('Unrelated history — local checkout shares no ancestor with origin:')
+        for r in unrelated:
+            print(f"  {r['name']}")
+        print()
+
     held = [r for r in results if r['status'].startswith('SKIP')]
     if held:
         print("Held back — on a non-default branch, needs a human decision:")
@@ -421,6 +455,20 @@ def main() -> int:
         print(
             f"\nFAIL: {len(conflicts)} repo(s) have pull conflicts and are not "
             f"converging. Resolve the merge in each, then re-run."
+        )
+        return 1
+
+    if unrelated:
+        print(f"\nFAIL: {len(unrelated)} repo(s) share no history with origin.")
+        return 1
+
+    # Access failures fail the run too — an agent silently stuck on a stale
+    # copy is the whole class this tool exists to surface — but with the
+    # honest remedy, which is a key, not a merge.
+    if noaccess:
+        print(
+            f"\nFAIL: {len(noaccess)} repo(s) unreachable from this host. "
+            f"Grant it access (deploy key / token) — there is nothing to merge."
         )
         return 1
 
