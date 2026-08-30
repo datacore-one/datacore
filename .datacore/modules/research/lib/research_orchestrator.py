@@ -15,6 +15,7 @@ Usage:
     python3 research_orchestrator.py [--limit N] [--dry-run] [--no-podcast]
 """
 
+import asyncio
 import json
 import os
 import re
@@ -27,6 +28,9 @@ import urllib.request
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from claude_agent_sdk import query as _sdk_query, ClaudeAgentOptions
+from claude_agent_sdk.types import ResultMessage as _SdkResultMessage
 
 
 DATA_DIR = Path(os.environ.get('DATA_DIR', Path.home() / 'Data'))
@@ -313,52 +317,62 @@ def _claude_json(prompt: str, timeout: int, label: str) -> Optional[Dict[str, An
     """Run a headless Claude analysis and parse its JSON reply.
 
     RUNS IN AN EMPTY DIRECTORY, DELIBERATELY. These calls used to run with
-    cwd=DATA_DIR, which makes the subprocess load ~/Data/CLAUDE.md — and that
-    file instructs the agent to call plur_session_start before anything else.
-    PLUR is not connected in a headless subprocess, so instead of returning
-    JSON the model spent its turn explaining that the MCP server was missing.
-    Every item then failed to parse and was skipped, which is why a run could
-    report "Processed: 0, Failed: N" while `claude` itself was perfectly
-    healthy. These prompts are self-contained text-in/JSON-out; they need no
-    workspace, so they get none.
+    cwd=DATA_DIR, which makes the SDK load ~/Data/CLAUDE.md — and that file
+    instructs the agent to call plur_session_start before anything else.
+    PLUR is not connected in a headless run, so instead of returning JSON the
+    model spent its turn explaining that the MCP server was missing. Every item
+    then failed to parse and was skipped. These prompts are self-contained
+    text-in/JSON-out; they need no workspace, so they get none.
+
+    Uses claude_agent_sdk.query() with bypassPermissions + $0.50 budget cap.
+    asyncio.run() bridges the async SDK into the synchronous pipeline.
 
     Reports what actually came back on a parse failure. The bare
     "Expecting value: line 1 column 1 (char 0)" that this replaces was true
     and useless — it described the symptom and hid the response that would
     have identified the cause in one read.
     """
-    with tempfile.TemporaryDirectory() as workdir:
-        try:
-            result = subprocess.run(
-                ['claude', '-p', '--dangerously-skip-permissions',
-                 '--output-format', 'text', prompt],
-                cwd=workdir, capture_output=True, text=True, timeout=timeout
-            )
-        except subprocess.TimeoutExpired:
-            log(f"  {label}: Claude timed out after {timeout}s")
-            return None
-
-    if result.returncode != 0:
-        log(f"  {label}: Claude exited {result.returncode}: {result.stderr[:200]}")
+    async def _run(workdir: str) -> Optional[str]:
+        options = ClaudeAgentOptions(
+            permission_mode='bypassPermissions',
+            cwd=workdir,
+            max_budget_usd=0.50,
+        )
+        async for msg in _sdk_query(prompt=prompt, options=options):
+            if isinstance(msg, _SdkResultMessage):
+                if msg.is_error:
+                    errs = '; '.join(msg.errors or ['<no detail>'])
+                    log(f"  {label}: SDK returned error: {errs[:200]}")
+                    return None
+                return msg.result
         return None
 
-    output = result.stdout.strip()
+    with tempfile.TemporaryDirectory() as workdir:
+        try:
+            output = asyncio.run(asyncio.wait_for(_run(workdir), timeout=timeout))
+        except asyncio.TimeoutError:
+            log(f"  {label}: Claude timed out after {timeout}s")
+            return None
+        except Exception as e:
+            log(f"  {label}: SDK error: {e}")
+            return None
 
-    # `claude -p` reports auth failures on STDOUT with an EMPTY STDERR and
-    # exit 0, so neither the exit code nor stderr can be trusted to reveal
-    # them. ops_markers exists because a caller that checked only stderr
-    # logged nine days of failures as the empty string. Its docstring requires
-    # every caller in this repo to check the list.
+    if output is None:
+        return None
+    output = output.strip()
+
+    # ops_markers: auth failures can surface as plain text even when is_error=False.
+    # Its docstring requires every caller of the SDK in this repo to check the list.
     low = output.lower()
     for marker in AUTH_FAILURE_MARKERS:
         if marker in low:
-            log(f"  {label}: AUTH FAILURE from claude -p (exit 0): {output[:200]!r}")
+            log(f"  {label}: AUTH FAILURE in SDK result text: {output[:200]!r}")
             return None
 
     output = re.sub(r'^```json\s*', '', output)
     output = re.sub(r'\s*```\s*$', '', output)
     if not output:
-        log(f"  {label}: Claude returned NOTHING (exit 0, empty stdout)")
+        log(f"  {label}: Claude returned NOTHING (empty result)")
         return None
     try:
         return json.loads(output)

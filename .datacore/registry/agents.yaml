@@ -1140,14 +1140,15 @@ agents:
     can_be_called_by:
     - knowledge-extractor
   pdf-extractor:
-    description: 'Sub-agent: extracts text from PDFs with structure preservation'
-    version: 1.0.0
+    description: 'Sub-agent: extracts text from PDFs with structure preservation; delegates scanned PDFs to ocr-reader'
+    version: 1.1.0
     source: .datacore/agents/pdf-extractor.md
     model: haiku
     skills:
     - pdf-extraction
     - structure-preservation
     - table-handling
+    - ocr-delegation
     triggers:
       tags: []
       commands: []
@@ -1159,7 +1160,8 @@ agents:
       dips:
       - DIP-0021
       specs: []
-    spawns: []
+    spawns:
+    - ocr-reader
     can_be_called_by:
     - knowledge-extractor
   conversation-parser:
@@ -1186,8 +1188,8 @@ agents:
     can_be_called_by:
     - knowledge-extractor
   file-reader:
-    description: 'Sub-agent: reads local files with MIME detection, DOCX parsing, companion creation'
-    version: 1.0.0
+    description: 'Sub-agent: reads local files with MIME detection, DOCX parsing, companion creation; delegates images to ocr-reader'
+    version: 1.1.0
     source: .datacore/agents/file-reader.md
     model: haiku
     skills:
@@ -1195,6 +1197,7 @@ agents:
     - docx-extraction
     - companion-creation
     - mime-detection
+    - ocr-delegation
     triggers:
       tags: []
       commands: []
@@ -1207,9 +1210,38 @@ agents:
       - DIP-0021
       - DIP-0015
       specs: []
-    spawns: []
+    spawns:
+    - ocr-reader
     can_be_called_by:
     - knowledge-extractor
+  ocr-reader:
+    description: 'Sub-agent: extracts text from images and scanned PDFs via Tesseract OCR (ocr MCP server)'
+    version: 1.0.0
+    source: .datacore/agents/ocr-reader.md
+    model: haiku
+    skills:
+    - ocr-extraction
+    - image-text-extraction
+    - scanned-pdf-extraction
+    triggers:
+      tags: []
+      commands: []
+    reads:
+      required: []
+      contextual: []
+    writes: []
+    references:
+      dips: []
+      specs: []
+    spawns: []
+    uses_tools:
+    - ocr__check_ocr_availability
+    - ocr__extract_text_from_image
+    - ocr__extract_text_from_image_url
+    - ocr__extract_text_from_pdf
+    can_be_called_by:
+    - file-reader
+    - pdf-extractor
   docx-reader:
     description: Reads Microsoft Word DOCX files and converts them to clean Markdown
     version: 1.0.0
