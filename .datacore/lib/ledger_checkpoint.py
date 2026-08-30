@@ -111,7 +111,15 @@ def _fingerprint(state) -> dict[str, tuple]:
         # `<2026-08-14 Fri>`. Those denote the SAME date, so comparing the raw
         # strings reported eight items as altered by a restore that preserved
         # them exactly — the mirror of the bug just fixed in the projector.
-        out[iid] = (p.get("title"), p.get("state"),
+        # Normalise STATE the way the projector does. `projector.py` renders
+        # `payload.get("state") or "TODO"`, so an item created without a state
+        # — every task the nightshift executor admits, for one — projects as
+        # TODO and re-imports as TODO, while the live side still reads None.
+        # Comparing the raw values reported 30 such items in winston's
+        # 0-personal as "altered" by a restore that preserved them exactly
+        # (2026-08-30), the same false-alarm class as the timestamp and
+        # filetag asymmetries above. A missing state MEANS TODO here.
+        out[iid] = (p.get("title"), p.get("state") or "TODO",
                     tuple(sorted(eff)),
                     _org_stamp(p.get("scheduled")), _org_stamp(p.get("deadline")))
     return out
