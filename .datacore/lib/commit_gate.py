@@ -57,8 +57,12 @@ def dirty_paths(repo: Path) -> list[str]:
     # matches nothing and gets withheld — the gate refusing the task's own
     # work. Verified: declaring 0-inbox/nightshift-exec-1.md against a
     # collapsed "0-inbox/" withheld it.
+    # 300s, not 120: a quiet 0-personal answers in 0.18s, but transient lock/
+    # IO contention mid-batch blew 120s on 2026-08-30 and (before callers
+    # hardened) crashed the run. Callers treat TimeoutExpired as a soft
+    # failure — the timeout is a backstop, not a promise.
     r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "-uall"],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=300)
     out = []
     for line in (r.stdout or "").splitlines():
         if len(line) < 4:
