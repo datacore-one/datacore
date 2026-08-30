@@ -1,1 +1,0 @@
-../../../9-practice/2-projects/health-dashboard/agents/john.md
