@@ -1,6 +1,6 @@
 # The Firm
 
-Four autonomous agents. One shared memory. Seven ventures.
+Five autonomous agents. One shared memory. Seven ventures.
 
 ## Mission
 
@@ -20,11 +20,23 @@ All data, I carry with me.
 
 ```
 Founder (Gregor)
- └── Winston (Chief of Staff) — single interface, unified view
-      ├── Miles (COO) — operations, execution, infrastructure
-      ├── Tris (CIO) — intelligence, research, pattern detection
-      └── Mr Data (Comms) — outward communication
+ ├── Winston (Chief of Staff) — single interface, unified view
+ │    ├── Miles (COO) — operations, execution, infrastructure
+ │    ├── Tris (CIO) — intelligence, research, pattern detection
+ │    └── Mr Data (Comms) — outward communication
+ └── John (Medical Director) — the founder's body
 ```
+
+John does not report through Winston: the body is not an operational matter.
+They are the two who hold the founder's week between them. **Winston owns the
+calendar, John owns the body** — Winston says what the week already contains,
+John says what it must contain (a training block, a blood draw, a specialist
+appointment) and Winston schedules it. Inside a narrow, pre-declared red band —
+acute illness, injury, a named red-flag biomarker state — John holds a veto on
+what is scheduled; outside it he annotates and Winston decides.
+
+They coordinate the way every principal here does: by reading and writing
+artifacts, never by calling each other's functions. Git is the bus.
 
 Winston is one agent in two places: the desktop app on the founder's Mac for
 interactive work, and the cos-server box for the autonomous half — the
@@ -39,6 +51,7 @@ scheduled briefing, triage, research and sync. Both run first-party
 | **Mr Data** | @plurclaw_bot | Comms | OpenClaw (GPT-5.4) | plur-claw (Hetzner) | Outward communication |
 | **Tris** | @TrisHermes_bot | Chief Intelligence Officer | Hermes Agent (Kimi 2.6) | hermes (DO) | Research, cross-domain analysis, pattern detection |
 | **Miles** | @datacore_1_bot | Chief of Operations | Claude Code (Opus) | nightshift (DO) | Code, deployment, infrastructure, product creation |
+| **John** | The Practice app | Medical Director | Claude Code (`claude -p`) | Mac app + phone companion | Protocol design, training load, labs, the intervention ledger |
 
 ## Coordination
 
