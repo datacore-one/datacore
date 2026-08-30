@@ -205,11 +205,15 @@ def relay(host: str, root: str, repo: str, data_dir: Path,
             return f"{repo}: relayed locally but push failed: {tail[:200]}"
 
         # Correct the host's remote-tracking ref so it stops reporting a
-        # divergence that no longer exists. Content is identical — this only
-        # moves a pointer the host could not update itself.
-        sha = _run(['git', '-C', str(local), 'rev-parse', 'HEAD']).stdout.strip()
-        _ssh(host, f'git -C {root}/{repo} update-ref '
-                   f'refs/remotes/origin/{branch} {sha}')
+        # divergence that no longer exists. PUSH rather than update-ref: the
+        # host cannot fetch, so it does not have the merge commit, and
+        # `update-ref` fails with "nonexistent object". Pushing delivers the
+        # objects and moves the pointer in one step. The target is a
+        # remote-tracking ref, never the checked-out branch, so the host's
+        # working tree is untouched.
+        _run(['git', '-C', str(local), 'push',
+              f'{host}:{root}/{repo}',
+              f'HEAD:refs/remotes/origin/{branch}'], timeout=300)
         return f"{repo}: RELAYED {ahead} commit(s) from {host} -> origin"
     finally:
         _run(['git', '-C', str(local), 'remote', 'remove', remote_name])
