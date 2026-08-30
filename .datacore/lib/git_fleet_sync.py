@@ -468,7 +468,11 @@ def main() -> int:
     if noaccess:
         print(
             f"\nFAIL: {len(noaccess)} repo(s) unreachable from this host. "
-            f"Grant it access (deploy key / token) — there is nothing to merge."
+            f"Grant it access (deploy key / token) — there is nothing to merge.\n"
+            f"Meanwhile nothing is stuck: run "
+            f"`python3 .datacore/lib/git_relay.py --check` from the operator "
+            f"machine, which can reach both this host and the remote, and "
+            f"`--host <this host>` to land anything waiting."
         )
         return 1
 
