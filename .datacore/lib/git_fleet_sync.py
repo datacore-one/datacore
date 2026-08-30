@@ -283,7 +283,19 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
                     'Permission denied', 'could not read Username',
                     'Authentication failed', 'access rights',
                     'Repository not found', '403 Forbidden')):
-                result['pull'] = f'NO ACCESS — this host cannot reach the remote [{tail}]'
+                # Distinguish "stale" from "work at risk". A host that cannot
+                # reach a remote it has nothing to send is merely behind; a
+                # host holding unpushed commits it cannot push has work
+                # nobody else can see. Only the second is a failure — a check
+                # that is permanently red is one you learn to ignore, which is
+                # the same lesson the watchdog learned the hard way.
+                unpushed = git_raw(repo, 'rev-list', '--count', '@{u}..HEAD') or '0'
+                at_risk = unpushed.strip().isdigit() and int(unpushed.strip()) > 0
+                result['pull'] = (
+                    f'NO ACCESS — this host cannot reach the remote'
+                    + (f' AND holds {unpushed.strip()} unpushed commit(s) [{tail}]'
+                       if at_risk else f' (nothing waiting to send) [{tail}]'))
+                result['access_at_risk'] = at_risk
             elif 'refusing to merge unrelated histories' in out:
                 result['pull'] = ('UNRELATED HISTORY — local checkout shares no '
                                   'ancestor with origin; re-clone or align '
@@ -465,16 +477,23 @@ def main() -> int:
     # Access failures fail the run too — an agent silently stuck on a stale
     # copy is the whole class this tool exists to surface — but with the
     # honest remedy, which is a key, not a merge.
-    if noaccess:
+    # Only unreachable repos that are HOLDING WORK fail the run. The rest are
+    # reported above and leave the exit code alone: they are stale, not stuck.
+    stuck = [r for r in noaccess if r.get('access_at_risk')]
+    if stuck:
         print(
-            f"\nFAIL: {len(noaccess)} repo(s) unreachable from this host. "
-            f"Grant it access (deploy key / token) — there is nothing to merge.\n"
-            f"Meanwhile nothing is stuck: run "
+            f"\nFAIL: {len(stuck)} repo(s) hold unpushed work this host cannot "
+            f"send. Grant it access (deploy key / token) — there is nothing to "
+            f"merge.\nMeanwhile nothing is lost: run "
             f"`python3 .datacore/lib/git_relay.py --check` from the operator "
             f"machine, which can reach both this host and the remote, and "
             f"`--host <this host>` to land anything waiting."
         )
         return 1
+    if noaccess:
+        print(f"\nNote: {len(noaccess)} repo(s) unreachable from this host but "
+              f"holding nothing to send — stale, not stuck. A deploy key fixes "
+              f"the staleness; no work is at risk.")
 
     return 0
 
