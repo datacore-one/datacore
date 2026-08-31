@@ -32,6 +32,7 @@ import argparse
 import subprocess
 import sys
 import os
+import time
 from pathlib import Path
 
 LIB = Path(__file__).resolve().parent
@@ -41,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ledger.fold import fold  # noqa: E402
 from ledger.genesis import import_space, scan  # noqa: E402
 from ledger.log import EventLog, read_events  # noqa: E402
+from ledger_dismiss_orphans import confirm_and_dismiss  # noqa: E402
 
 ACTIVE = ("TODO", "NEXT", "WAITING", "DEFERRED", "QUEUED", "WORKING", "REVIEW", "FAILED")
 LIVE = ("created", "claimed", "granted")
@@ -463,6 +465,16 @@ def main() -> int:
                 import_space(space, actor=_this_actor())
             total_new += new
             sy = sync_state(space, dry_run=args.dry_run)
+            # ORPHANS ARE A LEDGER FAILURE, so the sweep closes them rather
+            # than letting them accumulate for a human to find. Confirmation
+            # needs TWO sweeps an hour apart (see confirm_and_dismiss): one
+            # scan cannot tell a deleted heading from a tree mid-merge, two
+            # can, because transients do not survive the gap.
+            orph = confirm_and_dismiss(space, time.time(),
+                                       execute=not args.dry_run)
+            sy["dismissed"] += orph.get("dismissed", 0)
+            if orph.get("refused"):
+                print(f"{space.name:14} ORPHAN SWEEP REFUSED — {orph['refused']}")
             drift = new or sy["dismissed"] or sy["updated"]
             flag = "  <-- DRIFT" if drift else ""
             print(f"{space.name:14} new={new:4d} closed={sy['dismissed']:3d} "
