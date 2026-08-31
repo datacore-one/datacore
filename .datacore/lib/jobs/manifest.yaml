@@ -239,6 +239,27 @@ jobs:
         arg: "0 space\\(s\\) failed"
         max_age_hours: 26
 
+  - name: box-deploy-drift
+    machine: box
+    # server/deploy.sh refuses to overwrite a box file that differs, but only
+    # at the moment someone runs a deploy. Between deploys the divergence is
+    # invisible — on 2026-08-31 four deployable scripts differed and THREE
+    # were newer on the box, none of it known until a deploy was attempted,
+    # and that deploy would have reinstated a rebase/reset --hard sync
+    # factory, a broad GH_TOKEN reaching plur-ai/enterprise, a morning check
+    # that false-FAILED daily, and a github triage path to a missing script.
+    #
+    # Runs on the box because the box holds both sides: the private module is
+    # checked out there and the running copies are in .datacore/lib.
+    schedule: "cron 25 7 * * * on winston"
+    cmd: "~/Data/.datacore/lib/cos_deploy_drift.sh"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/deploy-drift.log"
+        check: regex
+        arg: "^0 file\\(s\\) differ$"
+        max_age_hours: 26
+
   - name: box-fleet-sync
     machine: box
     # DIP-0011 names git_fleet_audit/git_fleet_sync as the default-branch
