@@ -119,6 +119,120 @@ def test_reconciliation_is_idempotent(space):
     assert len(read_events(space)) == after_first
 
 
+TAG_ORG = """\
+#+TITLE: Next Actions
+
+* NEXT Gains a tag in org                                          :work:urgent:
+:PROPERTIES:
+:ID: task-gains
+:END:
+* NEXT Ledger knows more than the heading                                :work:
+:PROPERTIES:
+:ID: task-superset
+:END:
+"""
+
+
+@pytest.fixture
+def tag_space(tmp_path):
+    space = tmp_path / "0-tagspace"
+    (space / "org").mkdir(parents=True)
+    (space / "org" / "next_actions.org").write_text(TAG_ORG, encoding="utf-8")
+
+    log = EventLog(space, "test")
+    log.append("item.create", {"id": "task-gains", "title": "Gains a tag in org",
+                               "state": "NEXT", "tags": ["work"]})
+    # Ancestor tags baked in by a genesis run predating `shallow_tags`.
+    log.append("item.create", {"id": "task-superset",
+                               "title": "Ledger knows more than the heading",
+                               "state": "NEXT", "tags": ["gtd", "inherited", "work"]})
+    return space
+
+
+def _tags(space, nid):
+    return (fold(read_events(space)).items[nid].payload or {}).get("tags")
+
+
+def test_tag_added_in_org_reaches_the_ledger(tag_space):
+    """The hole fill-when-empty left open.
+
+    Without this the tag vanishes at the Phase 1 flip, when the projection
+    replaces the authored file.
+    """
+    ingest.sync_state(tag_space, actor="test")
+    assert _tags(tag_space, "task-gains") == ["urgent", "work"]
+
+
+def test_ledger_only_tags_are_never_removed(tag_space):
+    """39 real items depend on this.
+
+    Their payloads carry ancestor tags from a genesis run that had no
+    `shallow_tags`. Those tags are what the projector renders today, so
+    "correcting" them to match the heading would delete live data to satisfy
+    a comparison.
+    """
+    ingest.sync_state(tag_space, actor="test")
+    assert _tags(tag_space, "task-superset") == ["gtd", "inherited", "work"]
+
+
+def test_tag_sync_settles(tag_space):
+    """No update once merged — an unstable sync would append events hourly."""
+    ingest.sync_state(tag_space, actor="test")
+    n = len(read_events(tag_space))
+
+    assert ingest.sync_state(tag_space, actor="test")["updated"] == 0
+    assert len(read_events(tag_space)) == n
+
+
+def test_archived_heading_closes_as_housekeeping(space):
+    """org-archive-subtree moves a heading into <file>_archive.org — a plain
+    file move nothing here can hook, so the ledger only ever learns about it
+    by finding the id in the archive."""
+    (space / "org" / "next_actions_archive.org").write_text(
+        "* NEXT Still working on it\n:PROPERTIES:\n:ID: task-next\n:END:\n",
+        encoding="utf-8")
+    # And it is gone from the live file.
+    live = (space / "org" / "next_actions.org")
+    live.write_text(live.read_text().split("* NEXT Still working on it")[0],
+                    encoding="utf-8")
+
+    ingest.sync_state(space, actor="test")
+
+    item = _items(space)["task-next"]
+    assert item.status == "dismissed"
+    assert closure_kind(item) == "housekeeping", (
+        "archived is neither finished nor abandoned"
+    )
+
+
+def test_absence_alone_never_dismisses(space):
+    """The guard that keeps this from becoming a bulk-close.
+
+    A truncated or half-written next_actions.org must not terminally close
+    live work — dismiss is terminal (DIP-0034), so absence is far too weak a
+    signal to act on.
+    """
+    (space / "org" / "next_actions.org").write_text("", encoding="utf-8")
+
+    ingest.sync_state(space, actor="test")
+
+    assert all(_items(space)[i].status in ingest.LIVE for i in IDS)
+
+
+def test_archived_but_still_authored_elsewhere_stays_live(space):
+    """Archived out of next_actions.org, still captured in inbox.org."""
+    (space / "org" / "next_actions_archive.org").write_text(
+        "* NEXT Still working on it\n:PROPERTIES:\n:ID: task-next\n:END:\n",
+        encoding="utf-8")
+    (space / "org" / "inbox.org").write_text(
+        "* Still working on it\n:PROPERTIES:\n:ID: task-next\n:END:\n",
+        encoding="utf-8")
+
+    ingest.sync_state(space, actor="test")
+
+    assert _items(space)["task-next"].status in ingest.LIVE
+
+
 def test_terminal_kinds_match_the_ratified_loop():
     """Guards the mapping itself against a well-meaning edit.
 

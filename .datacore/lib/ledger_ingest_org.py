@@ -209,10 +209,25 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
                 "title": node.heading,
                 "scheduled": str(node.scheduled or "") or None,
                 "deadline": str(node.deadline or "") or None}
-        if own is not None and not (cur.get("tags") or None):
-            filled = sorted(t for t in own if t) or None
-            if filled:
-                want["tags"] = filled
+        # UNION, not fill-when-empty. Filling only an absent tag list left the
+        # commoner hole open: an item that HAS tags in the ledger and gains one
+        # in org (a human marking something `:urgent:`) could never converge,
+        # and at the Phase 1 flip — when the projection replaces the authored
+        # file — that tag would simply disappear.
+        #
+        # Union is not the both-directions sync this deliberately rejected.
+        # That one REMOVED tags, which would have stripped 39 items whose
+        # ledger payloads legitimately carry ancestor tags baked in by a
+        # genesis run predating `shallow_tags`. Union only adds, so those 39
+        # keep every tag they hold and stay exactly as they are.
+        #
+        # Measured over the live corpus before changing it: 1396 items
+        # identical, 39 ledger-superset (untouched), 4 org-superset (fixed),
+        # 0 diverging both ways. Four items, zero collateral.
+        if own is not None:
+            merged = sorted({t for t in own if t} | set(cur.get("tags") or []))
+            if merged and merged != sorted(cur.get("tags") or []):
+                want["tags"] = merged
         if file_filetags and not (cur.get("filetags") or None):
             want["filetags"] = file_filetags
         diff = {k: v for k, v in want.items() if (cur.get(k) or None) != v}
@@ -222,7 +237,56 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
             log = log or EventLog(space, actor or _this_actor())
             log.append("item.update", {"id": nid, **diff})
         updated += 1
+
+    # ARCHIVED OUT OF ORG -> dismissed in the ledger, on POSITIVE EVIDENCE.
+    #
+    # `org-archive-subtree` (Emacs, and the GTD archive tools) moves a heading
+    # into `<file>_archive.org` — a plain file move this process cannot hook,
+    # and the ledger never hears about it. The item stays live in the
+    # projection forever, which is drift that accumulates with every archive
+    # pass and holds the Phase 1 gate shut.
+    #
+    # Deliberately NOT "dismiss anything missing from next_actions.org". Mere
+    # absence is far too weak: a transient parse failure, a half-written file,
+    # or a mid-rename would silently close live work in bulk, and dismiss is
+    # terminal (DIP-0034). Requiring the id to actually appear in an archive
+    # file makes this evidence-based — we close it because we can see where it
+    # went, not because we cannot see where it is.
+    #
+    # An id still present in ANY live org file is left alone: an item can be
+    # archived out of next_actions.org and still be authored in inbox.org or
+    # nightshift.org, and it is live work while any of them holds it.
+    dismissed += _dismiss_archived(space, ws, state, log, actor, dry_run)
     return {"dismissed": dismissed, "updated": updated}
+
+
+def _dismiss_archived(space, ws, state, log, actor, dry_run) -> int:
+    """Close ledger items whose heading now lives in an archive file."""
+    import re
+    org_dir = space / "org"
+    live_ids: set[str] = set()
+    archived_ids: set[str] = set()
+    for f in sorted(org_dir.glob("*.org")):
+        try:
+            ids = set(re.findall(r":ID:\s*(\S+)", f.read_text(errors="replace")))
+        except OSError:
+            # Unreadable file: treat its ids as LIVE, never as archived. The
+            # cautious direction is the one that declines to close things.
+            continue
+        (archived_ids if "archive" in f.name.lower() else live_ids).update(ids)
+
+    closed = 0
+    for nid in sorted(archived_ids - live_ids):
+        item = state.items.get(nid)
+        if not item or item.status not in LIVE:
+            continue
+        if not dry_run:
+            log = log or EventLog(space, actor or _this_actor())
+            log.append("item.dismiss", {
+                "id": nid, "kind": "housekeeping",
+                "reason": "archived out of next_actions.org"})
+        closed += 1
+    return closed
 
 ORG_FILES = ("inbox.org", "next_actions.org")
 

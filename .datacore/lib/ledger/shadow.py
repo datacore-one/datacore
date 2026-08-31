@@ -133,16 +133,42 @@ def compare(space_dir: Path, org_file: Path | None = None) -> ShadowDiff:
     # 0-personal), because the ledger holds only the inbox items that were
     # ingested, not every capture line. Comparing against the whole inbox is no
     # more apples-to-apples than ignoring it.
-    inbox = space_dir / "org" / "inbox.org"
-    if inbox.exists() and org_file.name == "next_actions.org":
-        # EVERY id in inbox.org, not just the ones in an active state. A
+    if org_file.name == "next_actions.org":
+        # AN ITEM AUTHORED IN ANOTHER ORG FILE IS NOT NEXT_ACTIONS DRIFT.
+        #
+        # Generalised from the inbox.org-only exclusion, for the same reason
+        # and by the same argument. Phase 1 replaces next_actions.org and
+        # nothing else, so this gate measures next_actions fidelity; an item
+        # that lives in some other authored file is not missing, it is
+        # elsewhere. The ledger holds it because something legitimately put it
+        # there -- ledger_ingest_org reads inbox.org too, and nightshift emits
+        # events for the tasks it runs, which live in nightshift.org.
+        #
+        # Measured: 21 of 0-personal's 34 remaining "extra" were ordinary
+        # nightshift.org tasks, counted as corruption by the gate that decides
+        # whether Phase 1 may proceed.
+        #
+        # EVERY id in those files, not just the ones in an active state. A
         # capture line frequently carries no TODO keyword at all — that is what
         # capture IS — so filtering by state let most inbox items straight back
         # through and the exclusion silently did almost nothing.
+        #
+        # Still an exclusion from the SHADOW side only. Adding those files to
+        # the real side was tried and measured worse (5/9 clean -> 2/9, 336
+        # phantom "lost" in 0-personal): the ledger holds only what was
+        # ingested, not every authored line, so comparing against a whole
+        # second file is no more apples-to-apples than ignoring it.
         import re as _re
-        inbox_ids = set(_re.findall(r":ID:\s*(\S+)",
-                                    inbox.read_text(errors="replace")))
-        shadow = {k: v for k, v in shadow.items() if k not in inbox_ids}
+        elsewhere: set[str] = set()
+        for other in sorted((space_dir / "org").glob("*.org")):
+            if other.name == "next_actions.org" or "archive" in other.name.lower():
+                continue
+            try:
+                elsewhere |= set(_re.findall(r":ID:\s*(\S+)",
+                                             other.read_text(errors="replace")))
+            except OSError:
+                continue
+        shadow = {k: v for k, v in shadow.items() if k not in elsewhere}
     diff.org_count, diff.projection_count = len(real), len(shadow)
     diff.only_in_org = sorted(set(real) - set(shadow))
     diff.only_in_projection = sorted(set(shadow) - set(real))
