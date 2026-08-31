@@ -444,7 +444,23 @@ def main() -> int:
             before = scan(space)
             new = len(before.importable)
             if new and not args.dry_run:
-                import_space(space)
+                # ADMIT UNDER THIS HOST'S ACTOR, never the shared `genesis`.
+                #
+                # DIP-0046 §151: "One writer per file. Enforced by filename
+                # (<actor>.jsonl)." That is what makes (actor, seq) identify
+                # exactly one event forever. `genesis` was the right actor for
+                # a one-shot migration run once, on one machine; this sweep
+                # runs HOURLY ON EVERY HOST, so leaving the default made two
+                # machines increment independent counters into the same
+                # genesis.jsonl and produce different events under the same
+                # seq the moment they both saw a new task before syncing.
+                #
+                # That is the fork this session resolved three times by hand
+                # (5-plur seq 561, 0-personal seq 918-927, 5-plur seq 568) —
+                # not bad luck, a shared writer. Per-host actors cannot
+                # collide, so the class ends here rather than being detected
+                # again by resolve_ledger_conflicts' ForkError guard.
+                import_space(space, actor=_this_actor())
             total_new += new
             sy = sync_state(space, dry_run=args.dry_run)
             drift = new or sy["dismissed"] or sy["updated"]
