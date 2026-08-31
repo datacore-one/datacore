@@ -92,6 +92,25 @@ def test_dirty_worktree_is_never_moved(repo):
     assert "uncommitted" in info["detail"]
 
 
+def test_untracked_files_do_not_block_repair(repo):
+    """Untracked files survive a branch switch, so they are not "dirty".
+
+    Counting them made the guard report STUCK forever on exactly the hosts
+    it exists to repair — winston permanently carries .datacore/keys/, scp
+    backups and host-local scripts, and the first drill refused to move a
+    branch whose only "dirt" was files git never tracked.
+    """
+    _git(["checkout", "-q", "-b", "fix/with-junk"], repo)
+    (repo / "scratch.tmp").write_text("not tracked\n")
+    (repo / "keys").mkdir()
+    (repo / "keys" / "local.yaml").write_text("host-local\n")
+
+    info = guard.repair(repo, guard.inspect(repo))
+
+    assert info["state"] == "REPAIRED"
+    assert (repo / "scratch.tmp").exists(), "untracked file must survive"
+
+
 def test_detached_head_is_reported_not_touched(repo):
     sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
                          capture_output=True, text=True).stdout.strip()

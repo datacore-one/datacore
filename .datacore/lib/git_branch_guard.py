@@ -81,7 +81,13 @@ def inspect(repo: Path) -> dict:
     if current == want:
         return {"repo": name, "state": "OK", "branch": current}
 
-    dirty = bool(out(repo, "status", "--porcelain"))
+    # TRACKED changes only. `--porcelain` alone counts untracked files, which
+    # a branch switch does not touch at all — and every long-lived host has
+    # some (winston carries .datacore/keys/, scp backups, host-local scripts).
+    # Counting those made the guard report STUCK forever on exactly the
+    # machines it exists to repair: the first drill refused to move a branch
+    # whose only "dirt" was files git was never tracking.
+    dirty = bool(out(repo, "status", "--porcelain", "--untracked-files=no"))
     # Commits on this branch that the expected branch does not have. Compared
     # against the REMOTE expected branch: comparing against a local `main`
     # that is itself stale would call work unique when origin already has it,
