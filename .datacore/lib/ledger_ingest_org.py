@@ -284,9 +284,20 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
             # able to shrink when the previous value overreached. `tags` stays
             # additive because removing there would destroy the ancestor tags
             # 39 items legitimately carry.
+            # FILETAGS ARE EXCLUDED. `node.tags` includes the file's
+            # `#+FILETAGS:`, but ledger_checkpoint's fingerprint subtracts
+            # filetags from both sides — so recording them here puts a tag in
+            # `effective_tags` that the restored side removes, and the
+            # round-trip reports an alteration on a value that matched.
+            # 0-personal's org-20260831-203052 differed by exactly `gtd`, the
+            # file's own filetag, on a task created minutes earlier.
+            #
+            # They are also per-FILE, not per-item, so they carry no
+            # information about this task — which is the same reason the
+            # fingerprint drops them.
             eff_now = sorted(cur.get("effective_tags") or [])
             inherited = {t for t in (node.tags or []) if t} if cur.get("parent") else set()
-            eff = sorted(inherited | set(merged))
+            eff = sorted((inherited | set(merged)) - set(file_filetags))
             if eff and eff != eff_now:
                 want["effective_tags"] = eff
         if file_filetags and not (cur.get("filetags") or None):
