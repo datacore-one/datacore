@@ -40,12 +40,44 @@ def keep_head(text):
     return CONFLICT_RE.sub(lambda m: m.group("head"), text)
 
 
+class ForkError(RuntimeError):
+    """Two events claim one (actor, seq). Only a human can choose."""
+
+
 def union_jsonl(text):
+    """Union two sides of a per-writer event log, deduped.
+
+    UNION IS ONLY SAFE WHILE THE TWO SIDES ARE DISJOINT APPENDS. A per-writer
+    ledger log guarantees that `(actor, seq)` identifies exactly one event
+    forever (DIP-0046) — so if both sides carry that key with DIFFERENT
+    content, keeping both does not merge anything, it manufactures a fork.
+    That is precisely what happened on 2026-08-30: a relay merge union'd
+    winston's pre-re-import genesis.jsonl and produced 9 events sharing
+    seq 553-559, which turned v2-verify's nonce and seal checks red.
+
+    So: dedupe identical lines as before, and REFUSE on a genuine key
+    collision rather than silently inventing history. Refusing leaves the
+    conflict markers in place, which the caller already reports and skips —
+    nothing is lost, and a human picks the surviving side.
+    """
     seen, out = set(), []
+    by_key = {}
     for line in keep_both(text).splitlines(True):
-        if line.strip() and line not in seen:
-            seen.add(line)
-            out.append(line)
+        if not line.strip() or line in seen:
+            continue
+        seen.add(line)
+        try:
+            event = json.loads(line)
+            key = (event.get("actor"), event.get("seq"))
+        except (ValueError, AttributeError):
+            key = None            # not an event line; union it as before
+        if key is not None and key[1] is not None:
+            if key in by_key and by_key[key] != line:
+                raise ForkError(
+                    f"two different events both claim actor={key[0]!r} "
+                    f"seq={key[1]} — a fork, not a merge; resolve by hand")
+            by_key[key] = line
+        out.append(line)
     return "".join(out)
 
 
@@ -74,7 +106,14 @@ for repo in REPOS:
             print(f"  SKIP {f}: {e}")
             continue
         if f.endswith(".jsonl"):
-            new, how = union_jsonl(t), "union+dedupe (per-writer log)"
+            try:
+                new, how = union_jsonl(t), "union+dedupe (per-writer log)"
+            except ForkError as exc:
+                # Leave the markers in place: the caller reports and skips
+                # this file, which is the correct outcome. Silently choosing
+                # a side of a ledger fork is how history gets invented.
+                print(f"  REFUSED {f}: {exc}")
+                continue
         elif "heartbeat.json" in f:
             new, times = resolve_heartbeat(t)
             how = f"later timestamp {times[-1] if times else '-'}"
