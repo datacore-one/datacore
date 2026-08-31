@@ -239,6 +239,35 @@ jobs:
         arg: "0 space\\(s\\) failed"
         max_age_hours: 26
 
+  - name: box-fleet-sync
+    machine: box
+    # DIP-0011 names git_fleet_audit/git_fleet_sync as the default-branch
+    # backstop for hosts outside nightshift, "intended to run on a timer on
+    # EVERY agent host". Winston was the only host without that timer, which
+    # is how it served four days from a stray branch while nightshift, hermes
+    # and plur-claw were covered.
+    #
+    # The timer alone was not enough: a systemd oneshot that fails leaves a
+    # `failed` unit and nothing else — no OnFailure, no watcher — which is the
+    # same "detected, told nobody" failure the stray branch already
+    # demonstrated (cos_sync logged it 1,326 times). This contract is what
+    # turns the artifact into an alert.
+    #
+    # Asserts the SUMMARY line rather than the absence of the word "FAIL":
+    # unreachable repos are reported in the body by design and must not read
+    # as failure, or the check goes permanently red on a credential gap and
+    # stops being read.
+    schedule: "systemd datacore-fleet-sync.timer, 06:10 and 18:10 UTC on winston"
+    cmd: "python3 ~/Data/.datacore/lib/git_fleet_sync.py ~/Data --execute --pull"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/fleet-sync.log"
+        check: regex
+        # Written by the unit's StandardOutput. Any FAIL: line ends the run
+        # before this summary is printed, so its presence IS the pass.
+        arg: "Committed [0-9]+ file\\(s\\)"
+        max_age_hours: 26
+
   - name: box-projection-drift
     machine: box
     schedule: "cron 35 5 * * * on winston (runs after the ingest, same script)"
