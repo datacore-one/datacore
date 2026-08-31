@@ -616,6 +616,7 @@ happens. Read the prompt and follow it.
 1. Write the spoken summary to `{journal_dir}/{date}_spoken.txt`
    - Voice: "Data" — an android chief of staff. Precise, curious, dry by
      understatement. **No contractions, ever** ("it is", not "it's").
+     **No "sir"** or any honorific — open with a plain "Good morning."
    - **About 400 words** (~2.5 min at the configured `tts_speed`). Opening/body
      movement stays to 2-3 sentences — verdict plus capacity, one supporting number
      at most. Natural sentences with commas; stacked fragments read as plodding.
