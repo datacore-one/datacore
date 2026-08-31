@@ -60,7 +60,7 @@ def _default_root() -> Path:
     return Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
 
 
-def _fingerprint(state) -> dict[str, tuple]:
+def _fingerprint(state, space_filetags: set | None = None) -> dict[str, tuple]:
     """The fields a restore must preserve. Not the state root: a fresh import
     writes new events with new hashes and hlcs, so the CHAIN differs by design
     — what must survive is the ITEMS.
@@ -105,7 +105,18 @@ def _fingerprint(state) -> dict[str, tuple]:
         if p.get("section"):
             continue
         eff = set(p.get("effective_tags") or p.get("tags") or [])
+        # Subtract the item's OWN recorded filetags, and also the file the
+        # round-trip actually goes through. The restored side is re-imported
+        # from a projection carrying next_actions.org's `#+FILETAGS:`, so it
+        # always records and subtracts those — while an item that never sat in
+        # next_actions.org has `filetags: None` and subtracts nothing.
+        # 0-personal's org-20260831-203052 lives in inbox.org, carries `gtd`
+        # (next_actions' filetag) in `tags`, and failed the round-trip on
+        # exactly that one tag. Subtracting the space's filetags on BOTH sides
+        # compares like with like instead of asking the live side to have
+        # recorded something only the projection can know.
         eff -= set(p.get("filetags") or [])
+        eff -= (space_filetags or set())
         # Normalise timestamps before comparing. Some writers store a bare
         # `2026-08-14`; the projector renders the valid org form
         # `<2026-08-14 Fri>`. Those denote the SAME date, so comparing the raw
@@ -164,7 +175,20 @@ def verify(space: Path) -> tuple[bool, str]:
         return False, "no checkpoint written yet"
 
     state = fold(read_events(space))
-    live = _fingerprint(state)
+    # The filetags of the file the round-trip re-imports through. Both sides
+    # are compared with these removed, so an item that never lived in
+    # next_actions.org is not penalised for lacking a `filetags` record only
+    # the projection could have given it.
+    space_ft: set = set()
+    na = space / "org" / "next_actions.org"
+    try:
+        for _l in na.read_text(encoding="utf-8", errors="replace").splitlines()[:10]:
+            if _l.startswith("#+FILETAGS:"):
+                space_ft = {x for x in _l.split(":", 1)[1].split(":") if x.strip()}
+                break
+    except OSError:
+        pass
+    live = _fingerprint(state, space_ft)
 
     # Round-trip a projection of the CURRENT state, not yesterday's file.
     fresh = project(state, space=space.name).text
@@ -174,7 +198,7 @@ def verify(space: Path) -> tuple[bool, str]:
         (scratch / "org").mkdir()
         (scratch / "org" / "next_actions.org").write_text(fresh, encoding="utf-8")
         import_space(scratch, org_file=scratch / "org" / "next_actions.org")
-        restored = _fingerprint(fold(read_events(scratch)))
+        restored = _fingerprint(fold(read_events(scratch)), space_ft)
 
     missing = sorted(set(live) - set(restored))
     extra = sorted(set(restored) - set(live))

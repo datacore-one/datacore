@@ -239,6 +239,55 @@ jobs:
         arg: "0 space\\(s\\) failed"
         max_age_hours: 26
 
+  - name: box-cadence-liveness
+    machine: box
+    # THE CATCHER NEEDS A CATCHER. cadence_engine has computed overdue
+    # cadences since it was written; nothing read the answer. So
+    # cto.daily.pr-review — the cadence whose whole job is catching unreviewed
+    # PRs — stopped on 2026-04-17 and nobody noticed for 136 days, while 11 of
+    # 18 open PRs sat on unresolved CHANGES_REQUESTED. firm.weekly.portfolio-
+    # review, the review that would have caught THAT, was 36 days stale.
+    #
+    # See 8-firm/1-tracks/ops/closure-diagnosis-2026-08-31.md: infrastructure
+    # must leave an artifact and is checked; agent work asserts its own
+    # completion and is not. A cadence is agent work. This contract is the
+    # smallest change that makes the asymmetry stop applying to it.
+    #
+    # STARTS RED, DELIBERATELY. 34 cadences are overdue right now. That is the
+    # true state and the whole point — the condition was always there and only
+    # invisible. Unlike a credential gap, it is actionable: run the cadence or
+    # retire it. If it is still red in a month, the answer is to retire what
+    # nobody runs, not to widen the threshold.
+    schedule: "cron 40 7 * * * on winston"
+    cmd: "python3 ~/Data/.datacore/lib/cadence_liveness.py"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/cadence-liveness.log"
+        check: regex
+        arg: "^0 cadence\\(s\\) overdue$"
+        max_age_hours: 26
+
+  - name: box-deploy-drift
+    machine: box
+    # server/deploy.sh refuses to overwrite a box file that differs, but only
+    # at the moment someone runs a deploy. Between deploys the divergence is
+    # invisible — on 2026-08-31 four deployable scripts differed and THREE
+    # were newer on the box, none of it known until a deploy was attempted,
+    # and that deploy would have reinstated a rebase/reset --hard sync
+    # factory, a broad GH_TOKEN reaching plur-ai/enterprise, a morning check
+    # that false-FAILED daily, and a github triage path to a missing script.
+    #
+    # Runs on the box because the box holds both sides: the private module is
+    # checked out there and the running copies are in .datacore/lib.
+    schedule: "cron 25 7 * * * on winston"
+    cmd: "~/Data/.datacore/lib/cos_deploy_drift.sh"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/deploy-drift.log"
+        check: regex
+        arg: "^0 file\\(s\\) differ$"
+        max_age_hours: 26
+
   - name: box-fleet-sync
     machine: box
     # DIP-0011 names git_fleet_audit/git_fleet_sync as the default-branch

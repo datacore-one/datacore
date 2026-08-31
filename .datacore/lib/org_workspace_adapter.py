@@ -73,14 +73,34 @@ def _node_to_dict(node) -> dict:
 # ---------------------------------------------------------------------------
 
 def cmd_count(args):
-    """Count active (non-terminal) tasks in one or more files."""
+    """Count active (non-terminal) tasks in one or more files.
+
+    `--top-level` counts CAPTURES rather than headings, and for an inbox that
+    is the number that means something. A GTD capture is one top-level entry;
+    its sub-headings are part of it, not separate items to triage.
+
+    Measured on 0-personal/org/inbox.org, 2026-08-31: 969 headings, 637 of
+    them active — but only 57 top-level entries, 43 of those open, and 45 of
+    the 57 have no children at all. Nearly every heading is a child of a dozen
+    malformed containers, one of which holds 316.
+
+    That gap is why inbox triage deadlocked. cos_inbox.sh asks an agent to
+    process the inbox; the agent reads a count in the hundreds, correctly
+    judges the blast radius unacceptable, and declines. It has declined every
+    night for months, so the pile never shrinks and the next run sees the same
+    number. The refusal was right; the number was wrong.
+    """
     ws = _load_ws(*args.files)
     count = 0
     terminal = ws.state_config.terminal_states
     for node in ws.all_nodes():
+        if getattr(args, "top_level", False) and node.level != 1:
+            continue
         if node.todo and node.todo not in terminal:
             count += 1
-    return {"count": count, "files": args.files}
+    return {"count": count, "files": args.files,
+            "unit": "top-level captures" if getattr(args, "top_level", False)
+                    else "headings"}
 
 
 # ---------------------------------------------------------------------------
@@ -914,6 +934,9 @@ def build_parser() -> argparse.ArgumentParser:
     # count
     p = sub.add_parser("count", help="Count active tasks")
     p.add_argument("--files", nargs="+", required=True, metavar="FILE")
+    p.add_argument("--top-level", action="store_true",
+                   help="count top-level CAPTURES, not every heading — the "
+                        "meaningful unit for an inbox (see cmd_count)")
 
     # list
     p = sub.add_parser("list", help="List tasks")

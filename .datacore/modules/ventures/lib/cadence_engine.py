@@ -143,6 +143,21 @@ def load_cadence_log_safe(path: Path) -> dict:
     is logged loudly, and an empty log is returned so cadences fire fresh.
     """
     path = Path(path)
+    # QUARANTINE ONLY A FILE. This renames `path`, so a caller that passes
+    # anything other than the log renames that instead — and on 2026-08-31 a
+    # caller passed the SPACE DIRECTORY, whose read raised IsADirectoryError
+    # and sent eight spaces (1-datafund … 8-firm) to `<space>.broken-*.bak` in
+    # one call. They were restored intact, but nothing here made that a near
+    # miss rather than a loss.
+    #
+    # A missing file is not corruption either: it is the normal state of a
+    # venture that has never run a cadence, and quarantining it would be
+    # renaming something that does not exist.
+    if path.exists() and not path.is_file():
+        logger.error(
+            "REFUSING to quarantine %s — not a file. A cadence log path was "
+            "expected; this looks like a caller passing a directory.", path)
+        return {}
     try:
         return load_cadence_log(path)
     except Exception as exc:

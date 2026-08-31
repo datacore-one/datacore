@@ -8,9 +8,20 @@ become true and the Phase 1 gate stays shut.
 
 WHY THIS IS SEPARATE FROM ledger_ingest_org's archived-dismiss. That one
 fires on POSITIVE evidence — the id turned up in an archive file, so we know
-where the heading went. This one fires on ABSENCE, which is weaker, so it is
-a separate dry-run-by-default tool a human runs rather than part of the
-hourly sweep.
+where the heading went. This one fires on ABSENCE, which is weaker.
+
+TWO ENTRY POINTS, DIFFERENT EVIDENCE BARS:
+
+  `confirm_and_dismiss()` is what the hourly sweep calls, and it acts only
+  on absence confirmed across TWO sweeps at least half an hour apart. That
+  is a transition, not a snapshot: a tree caught mid-merge or a scan that
+  under-read does not survive the gap, a deleted heading does. Orphans are a
+  LEDGER FAILURE and must not accumulate for a human to find, so this runs
+  unattended.
+
+  `main()` is the one-shot form a human runs, dry-run by default, for
+  clearing a backlog on the spot. It acts on a single scan, which is why it
+  is not the scheduled path.
 
 NOT because org files can be caught half-written: org_workspace writes them
 atomically (tmp in the same directory, fsync, os.replace), so a reader never
@@ -49,6 +60,7 @@ Three guards make absence trustworthy enough to act on:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import socket
@@ -106,6 +118,99 @@ def orphans(space: Path) -> dict:
             if it.status in LIVE and not (it.payload or {}).get("section")]
     found = [i for i in live if i not in present]
     return {"space": space.name, "live": len(live), "orphans": sorted(found)}
+
+
+#: Where the previous sweep's orphan set is remembered, per space.
+#:
+#: OUTSIDE THE REPO, under $HOME, and that placement is load-bearing. This
+#: must be per-HOST: confirmation means "this machine saw the item absent
+#: twice", and if the file synced, one host's first observation would ratify
+#: another's and a single bad scan on either could confirm a deletion.
+#:
+#: Inside the space it would sync. `**/.datacore/state/` is gitignored in most
+#: repos but NOT in 0-personal, where the file showed up untracked and
+#: cos_sync's `git add -A` autosave would have committed and pushed it.
+#: Derived state is regenerated, never tracked (DIP-0046 payload classes) —
+#: and here "never shared" matters even more than "never tracked".
+WATCH_DIR = Path.home() / ".datacore" / "state"
+
+
+def _watch_path(space: Path) -> Path:
+    return WATCH_DIR / f"orphan-watch-{space.name}.json"
+
+#: Two observations closer together than this do not count as independent.
+#: The hourly sweep is the intended caller, so an hour is the natural gap;
+#: the floor stops a burst of manual runs from confirming a deletion that a
+#: single bad scan invented.
+MIN_GAP_SECONDS = 1800
+
+
+def confirm_and_dismiss(space: Path, now: float, execute: bool = False,
+                        max_fraction: float = 0.10,
+                        min_gap: int = MIN_GAP_SECONDS) -> dict:
+    """Dismiss items that have been absent from org across TWO sweeps.
+
+    ABSENCE IN ONE SCAN IS NOT EVIDENCE; ABSENCE ACROSS TWO IS. A single
+    snapshot cannot tell a deleted task from a tree caught mid-merge or a
+    scan that under-read — this tool shipped with two such bugs. But a
+    transient condition does not survive an hour and a second independent
+    scan, and a deleted heading does. That is what makes this safe to run
+    unattended when the one-shot form was not.
+
+    Orphans are a LEDGER FAILURE, not a fact of life: anything that rewrites
+    an org file wholesale (process-inbox routing to zero, org-archive, a
+    merge dropping a hunk) removes headings with no event, so the ledger
+    keeps them live forever and `all_clean` can never hold. Fourteen had
+    accumulated by 2026-08-31.
+
+    Every guard from the one-shot path still applies — whole-space scan,
+    unreadable files skip the space, and the ceiling — because dismiss is
+    terminal (DIP-0034) and two scans do not make a bad scanner good.
+    """
+    watch = _watch_path(space)
+    try:
+        prev = json.loads(watch.read_text())
+    except (OSError, ValueError):
+        prev = {}
+    prev_ids = set(prev.get("orphans") or [])
+    prev_at = float(prev.get("at") or 0)
+
+    r = orphans(space)
+    if r.get("skipped"):
+        return {"space": space.name, "skipped": r["skipped"], "dismissed": 0}
+
+    found = set(r["orphans"])
+    live = r["live"]
+
+    # Confirmed = absent BOTH times, and the two looks were far enough apart
+    # to be independent observations rather than one condition seen twice.
+    gap_ok = prev_at and (now - prev_at) >= min_gap
+    confirmed = sorted(found & prev_ids) if gap_ok else []
+
+    refused = ""
+    if confirmed and live and len(confirmed) / live > max_fraction:
+        refused = (f"{len(confirmed)}/{live} live items confirmed orphaned "
+                   f"(> {max_fraction:.0%}) — refusing as a broken scan")
+        confirmed = []
+
+    if execute and confirmed:
+        log = EventLog(space, _actor())
+        for iid in confirmed:
+            log.append("item.dismiss", {
+                "id": iid, "kind": "housekeeping",
+                "reason": "absent from every org file of this space across "
+                          "two consecutive sweeps"})
+
+    # Remember THIS sweep's set for the next one. Written even when nothing
+    # was dismissed — that is how the second observation becomes possible.
+    if execute:
+        watch.parent.mkdir(parents=True, exist_ok=True)
+        watch.write_text(json.dumps(
+            {"at": now, "orphans": sorted(found)}, indent=2))
+
+    return {"space": space.name, "dismissed": len(confirmed),
+            "pending": sorted(found - set(confirmed)), "refused": refused,
+            "confirmed": confirmed}
 
 
 def main() -> int:

@@ -205,6 +205,33 @@ def test_effective_tags_claim_inherited_only_with_recorded_structure(tmp_path):
     assert "routed" not in (items["task-floating"].payload or {}).get("effective_tags", [])
 
 
+def test_effective_tags_exclude_the_files_filetags(tmp_path):
+    """A filetag is per-FILE, so it says nothing about this item.
+
+    ledger_checkpoint's fingerprint subtracts filetags from both sides, so
+    recording one in effective_tags puts a value there that the restored
+    side removes — and the round-trip reports an alteration on tags that
+    matched. 0-personal's org-20260831-203052 failed on exactly `gtd`.
+    """
+    space = tmp_path / "0-filetagspace"
+    (space / "org").mkdir(parents=True)
+    (space / "org" / "next_actions.org").write_text(
+        "#+FILETAGS: :gtd:\n\n"
+        "* Section                                                     :routed:\n"
+        "** NEXT Under a section\n:PROPERTIES:\n:ID: task-ft\n:END:\n",
+        encoding="utf-8")
+
+    log = EventLog(space, "test")
+    log.append("item.create", {"id": "task-ft", "title": "Under a section",
+                               "state": "NEXT", "parent": "sec", "level": 2})
+
+    ingest.sync_state(space, actor="test")
+    eff = (fold(read_events(space)).items["task-ft"].payload or {}).get("effective_tags", [])
+
+    assert "routed" in eff, "an ancestor heading's tag is real inheritance"
+    assert "gtd" not in eff, "the file's filetag must not be recorded per-item"
+
+
 def test_tag_sync_settles(tag_space):
     """No update once merged — an unstable sync would append events hourly."""
     ingest.sync_state(tag_space, actor="test")

@@ -32,6 +32,17 @@ from ledger.log import EventLog, read_events  # noqa: E402
 PRESENT = [f"task-present-{n}" for n in range(12)]
 
 
+@pytest.fixture(autouse=True)
+def _isolate_watch_dir(tmp_path, monkeypatch):
+    """Never let a test read or write the real ~/.datacore/state.
+
+    WATCH_DIR is module-level and outside the repo by design, so without
+    this every run would leave orphan-watch-0-testspace.json in live state
+    and tests would confirm each other's observations.
+    """
+    monkeypatch.setattr(orph, "WATCH_DIR", tmp_path / "watch")
+
+
 @pytest.fixture
 def space(tmp_path):
     space = tmp_path / "0-testspace"
@@ -124,6 +135,99 @@ def test_ceiling_refuses_an_implausible_sweep(space, monkeypatch, capsys):
 
     assert "REFUSED" in capsys.readouterr().out
     assert _status(space, "task-gone") in orph.LIVE, "nothing may be dismissed"
+
+
+# ── two-sweep confirmation (the unattended path) ────────────────────────
+
+HOUR = 3600
+
+
+def test_first_sweep_never_dismisses(space):
+    """One scan cannot tell a deletion from a tree caught mid-merge."""
+    r = orph.confirm_and_dismiss(space, now=1000.0, execute=True)
+
+    assert r["dismissed"] == 0
+    assert r["pending"] == ["task-gone"]
+    assert _status(space, "task-gone") in orph.LIVE
+
+
+def test_second_sweep_an_hour_later_dismisses(space):
+    orph.confirm_and_dismiss(space, now=1000.0, execute=True)
+    r = orph.confirm_and_dismiss(space, now=1000.0 + HOUR, execute=True)
+
+    assert r["dismissed"] == 1
+    from ledger.fold import closure_kind
+    items = fold(read_events(space)).items
+    assert items["task-gone"].status == "dismissed"
+    assert closure_kind(items["task-gone"]) == "housekeeping"
+
+
+def test_two_sweeps_too_close_together_do_not_confirm(space):
+    """A burst of manual runs must not ratify a single bad scan."""
+    orph.confirm_and_dismiss(space, now=1000.0, execute=True)
+    r = orph.confirm_and_dismiss(space, now=1000.0 + 60, execute=True)
+
+    assert r["dismissed"] == 0
+    assert _status(space, "task-gone") in orph.LIVE
+
+
+def test_a_task_that_comes_back_is_never_dismissed(space):
+    """The transient case this exists to survive.
+
+    Absent in one sweep — a mid-merge tree, a file being rewritten — and
+    present in the next. Confirmation requires BOTH, so it is spared.
+    """
+    orph.confirm_and_dismiss(space, now=1000.0, execute=True)
+    (space / "org" / "next_actions.org").write_text(
+        (space / "org" / "next_actions.org").read_text()
+        + "* NEXT Back again\n:PROPERTIES:\n:ID: task-gone\n:END:\n",
+        encoding="utf-8")
+
+    r = orph.confirm_and_dismiss(space, now=1000.0 + HOUR, execute=True)
+
+    assert r["dismissed"] == 0
+    assert _status(space, "task-gone") in orph.LIVE
+
+
+def test_ceiling_still_applies_to_the_confirmed_set(space):
+    log = EventLog(space, "test")
+    for n in range(20):
+        log.append("item.create", {"id": f"bulk-{n}", "title": "x", "state": "NEXT"})
+
+    orph.confirm_and_dismiss(space, now=1000.0, execute=True)
+    r = orph.confirm_and_dismiss(space, now=1000.0 + HOUR, execute=True)
+
+    assert r["dismissed"] == 0
+    assert "refusing as a broken scan" in r["refused"]
+    assert _status(space, "task-gone") in orph.LIVE
+
+
+def test_unreadable_space_neither_dismisses_nor_forgets(space):
+    """A skipped space must not overwrite the watch file with an empty set.
+
+    Doing so would reset the confirmation clock every time a scan failed,
+    so a genuinely deleted task could never reach its second observation.
+    """
+    orph.confirm_and_dismiss(space, now=1000.0, execute=True)
+    before = orph._watch_path(space).read_text()
+
+    real = Path.read_text
+
+    def boom(self, *args, **kwargs):
+        if self.suffix == ".org":
+            raise OSError("nope")
+        return real(self, *args, **kwargs)
+
+    # Its OWN context, undone on exit. Sharing the test's `monkeypatch` and
+    # calling .undo() would also revert the autouse WATCH_DIR isolation and
+    # send the assertion below at the real ~/.datacore/state.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(Path, "read_text", boom)
+        r = orph.confirm_and_dismiss(space, now=1000.0 + HOUR, execute=True)
+
+    assert r["dismissed"] == 0
+    assert r.get("skipped")
+    assert orph._watch_path(space).read_text() == before
 
 
 def test_unreadable_org_file_skips_the_whole_space(space, monkeypatch):
