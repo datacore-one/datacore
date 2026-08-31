@@ -303,7 +303,18 @@ def main() -> int:
     hosts = [a.host] if a.host else list(HOSTS)
     total = 0
     for host in hosts:
-        root = DATA_ROOT
+        # RESOLVE $HOME ON THE HOST, once. DATA_ROOT is written with `$HOME` so
+        # it is not a personal path in a tracked file, but git does not put a
+        # fetch URL through a shell: `git fetch host:$HOME/Data/2-datacore`
+        # arrives at the far end as the literal four characters `$HOME`, and
+        # every relay failed with "'$HOME/Data/2-datacore' does not appear to
+        # be a git repository". --check never noticed because it goes over
+        # ssh, which DOES expand it.
+        root = _run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15',
+                     host, f'echo {DATA_ROOT}'], timeout=60).stdout.strip()
+        if not root:
+            print(f"{host}: could not resolve {DATA_ROOT} (unreachable?)")
+            continue
         try:
             found = trapped_repos(host, root, data_dir)
         except subprocess.TimeoutExpired:
