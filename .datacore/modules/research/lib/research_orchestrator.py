@@ -1137,14 +1137,21 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
     # Create notebook
     title = f"Datacore Research {TODAY}"
     log(f"  Creating notebook: {title}")
-    # Old-style syntax ('create', not 'notebook create') — the server binary
-    # (Apr 2026) only knows old-style; the new binary keeps it as a
-    # deprecated alias. 'notebook create' here meant this function NEVER
-    # succeeded on the server (silent best-effort failure).
-    res = subprocess.run(
-        [nlm, 'create', title],
-        capture_output=True, text=True, timeout=30
-    )
+    # TRY BOTH SPELLINGS, newest first. This was pinned to old-style
+    # ('create') because the Apr 2026 server binary only knew that form and
+    # the new binary kept it as an alias. The binary has since been upgraded
+    # and now REJECTS it — "nlm: 'create' is deprecated; use 'notebook
+    # create'" — so the pin inverted the bug rather than removing it and the
+    # podcast step produced no notebook on every run.
+    #
+    # Flipping the pin the other way would just queue up the same failure for
+    # whichever host upgrades last. Trying both tolerates either binary, and
+    # the fallback disappears on its own once no old binary remains.
+    res = None
+    for argv in ([nlm, 'notebook', 'create', title], [nlm, 'create', title]):
+        res = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+        if res.returncode == 0:
+            break
     if res.returncode != 0:
         log(f"  nlm create failed: {res.stderr[:200]}")
         return None
@@ -1199,10 +1206,15 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
     # reported success with no podcast. That is the silent-failure mode this
     # whole path keeps regressing into. Custom instructions must be set in the
     # web UI instead. See ENG-2026-08-09-028.
-    audio_res = subprocess.run(
-        [nlm, 'create-audio', notebook_id, ''],
-        capture_output=True, text=True, timeout=60
-    )
+    # Same two-spelling tolerance as notebook creation above: `audio create`
+    # is the current form, `create-audio` the legacy alias that is next in
+    # line to be dropped.
+    audio_res = None
+    for argv in ([nlm, 'audio', 'create', notebook_id, ''],
+                 [nlm, 'create-audio', notebook_id, '']):
+        audio_res = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        if audio_res.returncode == 0:
+            break
     if audio_res.returncode != 0:
         # Loud, and reflected in the return value: a notebook with no audio is
         # not a podcast, and a caller that cannot distinguish the two will keep
