@@ -279,10 +279,17 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
             # exist. On 2026-08-30 three repos (DHF, website, extract-cli)
             # were reported as 'pull conflicts' when this host's key simply
             # is not authorised for them — a credential job, not a merge job.
+            # `error: 403` / `error: 401` are the forms git's HTTP transport
+            # actually emits ("The requested URL returned error: 403"); the
+            # literal '403 Forbidden' never appears there. Six module repos on
+            # winston were therefore reported as PULL CONFLICT on 2026-08-31 —
+            # sending someone to resolve a merge that does not exist — for
+            # exactly the credential reason this branch was written to catch.
             if any(s in out for s in (
                     'Permission denied', 'could not read Username',
                     'Authentication failed', 'access rights',
-                    'Repository not found', '403 Forbidden')):
+                    'Repository not found', '403 Forbidden',
+                    'error: 403', 'error: 401')):
                 # Distinguish "stale" from "work at risk". A host that cannot
                 # reach a remote it has nothing to send is merely behind; a
                 # host holding unpushed commits it cannot push has work
