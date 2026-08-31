@@ -24,6 +24,7 @@ work stops accumulating behind it in the meantime.
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -105,6 +106,47 @@ def trapped_repos(host: str, root: str, data_dir: Path) -> list[dict]:
     return out
 
 
+def ledger_forks(repo: Path) -> list[str]:
+    """Ledger files in `repo` holding two events with one (actor, seq).
+
+    A merge must never create these. `(actor, seq)` identifies exactly one
+    event forever (DIP-0046), so two events sharing it is a fork — and a
+    relay that pushes one propagates it to every machine. This tool did
+    exactly that on 2026-08-30: merging a host's stale genesis.jsonl put 9
+    forked events on origin, and v2-verify (which only runs on winston,
+    twice a day) was the only thing that noticed.
+
+    So the guard lives HERE, at the moment of creation, not only in a
+    checker somewhere else on a schedule.
+    """
+    import collections
+    bad = []
+    events = Path(repo) / '.datacore' / 'events'
+    if not events.is_dir():
+        return bad
+    for f in sorted(events.glob('*.jsonl')):
+        seen = collections.defaultdict(set)
+        try:
+            for line in f.read_text(errors='replace').splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                key = (e.get('actor'), e.get('seq'))
+                if key[1] is None:
+                    continue
+                seen[key].add(e.get('hash') or line)
+        except OSError:
+            continue
+        forked = [k for k, v in seen.items() if len(v) > 1]
+        if forked:
+            bad.append(f"{f.name}: {len(forked)} forked (actor,seq) "
+                       f"e.g. {forked[0]}")
+    return bad
+
+
 def _normalise_remote(url: str) -> str:
     """github.com/org/name from any of the URL forms git accepts."""
     u = (url or '').strip().removesuffix('.git')
@@ -180,6 +222,18 @@ def relay(host: str, root: str, repo: str, data_dir: Path,
                 return (f"{repo}: merge from {host} conflicts beyond the "
                         f"resolver — needs a human")
 
+        # NEVER PUSH A FORK. The merge above can only have combined two
+        # per-writer logs, and if it produced two events sharing an
+        # (actor,seq) then pushing would hand that fork to every machine.
+        # Abort and leave the merge for a human — the host's work is still
+        # safe where it was.
+        forks = ledger_forks(local)
+        if forks:
+            _run(['git', '-C', str(local), 'reset', '--hard', 'HEAD~1'])
+            return (f"{repo}: REFUSED — merging {host} would fork the ledger "
+                    f"({'; '.join(forks)[:160]}). Merge reverted; nothing "
+                    f"pushed. Resolve by hand.")
+
         # Converge with origin before pushing. The relaying machine is not
         # necessarily up to date itself, and a rejected push would leave the
         # host's work sitting on THIS machine instead — trapped one hop
@@ -226,10 +280,25 @@ def main() -> int:
     ap.add_argument('--repos', nargs='*')
     ap.add_argument('--check', action='store_true',
                     help='report trapped work everywhere, change nothing')
+    ap.add_argument('--forks', action='store_true',
+                    help='check THIS machine for forked ledger logs '
+                         '(two events sharing one actor+seq) and exit')
     ap.add_argument('--dry-run', action='store_true')
     ap.add_argument('--data-dir', default=str(Path.home() / 'Data'))
     a = ap.parse_args()
     data_dir = Path(a.data_dir)
+
+    # Fork check runs locally and needs no SSH, so every machine can run it
+    # rather than waiting on winston's twice-daily v2-verify.
+    if a.forks:
+        total = 0
+        for space in sorted(data_dir.glob('[0-9]-*')):
+            found = ledger_forks(space)
+            for line in found:
+                print(f"{space.name}/{line}")
+            total += len(found)
+        print(f"\n{total} ledger file(s) with forked (actor,seq)")
+        return 1 if total else 0
 
     hosts = [a.host] if a.host else list(HOSTS)
     total = 0
