@@ -296,11 +296,12 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
     # pass and holds the Phase 1 gate shut.
     #
     # Deliberately NOT "dismiss anything missing from next_actions.org". Mere
-    # absence is far too weak: a transient parse failure, a half-written file,
-    # or a mid-rename would silently close live work in bulk, and dismiss is
-    # terminal (DIP-0034). Requiring the id to actually appear in an archive
-    # file makes this evidence-based — we close it because we can see where it
-    # went, not because we cannot see where it is.
+    # absence is far too weak, and dismiss is terminal (DIP-0034). Requiring
+    # the id to actually appear in an archive file makes this evidence-based —
+    # we close it because we can see where it went, not because we cannot see
+    # where it is. (Not a defence against half-written files: org_workspace
+    # writes atomically, so those do not occur. It is a defence against a
+    # mid-merge tree and against a scan bug, both of which have happened.)
     #
     # An id still present in ANY live org file is left alone: an item can be
     # archived out of next_actions.org and still be authored in inbox.org or

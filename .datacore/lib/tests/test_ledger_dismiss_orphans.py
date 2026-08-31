@@ -1,8 +1,14 @@
 """Tests for ledger_dismiss_orphans — closing items org no longer has.
 
-This tool acts on ABSENCE, which is weak evidence: a truncated file or a bad
-parse looks identical to a deleted task, and dismiss is terminal (DIP-0034)
-with no undo. The guards are the point, so they are what these test.
+This tool acts on ABSENCE, which is weaker evidence than a state change, and
+dismiss is terminal (DIP-0034) with no undo. The guards are the point, so they
+are what these test.
+
+Note on what the guards are NOT for: org files cannot be caught half-written.
+org_workspace writes atomically (tmp + fsync + os.replace in the same
+directory) and no truncation has ever been recorded. The guards defend against
+the failure that did occur — a bug in the scan itself, which shipped twice
+here — plus unreadable paths and trees mid-merge.
 """
 from __future__ import annotations
 

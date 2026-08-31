@@ -8,11 +8,24 @@ become true and the Phase 1 gate stays shut.
 
 WHY THIS IS SEPARATE FROM ledger_ingest_org's archived-dismiss. That one
 fires on POSITIVE evidence — the id turned up in an archive file, so we know
-where the heading went. This one fires on ABSENCE, which is intrinsically
-weaker: a truncated file, a bad parse, or a half-finished rename all look
-like "the task is gone". Absence is only safe to act on deliberately, which
-is why this is a separate, dry-run-by-default tool a human runs, and not
-part of the hourly sweep.
+where the heading went. This one fires on ABSENCE, which is weaker, so it is
+a separate dry-run-by-default tool a human runs rather than part of the
+hourly sweep.
+
+NOT because org files can be caught half-written: org_workspace writes them
+atomically (tmp in the same directory, fsync, os.replace), so a reader never
+sees a partial file, and no truncation incident has ever been recorded. An
+earlier version of this comment cited that hazard; it was invented, and the
+guards below would have been justified on something that cannot happen.
+
+The real ways a scan under-reports, each of which HAS happened here:
+  - a bug in the scan itself — the first run of this tool found ZERO
+    orphans while shadow_check reported fourteen, because `*.org` matched a
+    vendored DIRECTORY (3-fds/…/vendor/golang.org) and because it counted
+    .datacore/checkpoints, which is a rendering OF the ledger;
+  - an unreadable path, which is what that directory raised;
+  - a tree mid-merge, carrying conflict markers instead of headings —
+    resolve_ledger_conflicts.py exists because that recurs.
 
 Three guards make absence trustworthy enough to act on:
 
@@ -26,6 +39,8 @@ Three guards make absence trustworthy enough to act on:
   A CEILING. If more than `--max-fraction` of a space's live items look
   orphaned, that is a broken scan, not a tidy corpus — refuse the whole
   space. Dismiss is terminal (DIP-0034); there is no undo to fall back on.
+  This is not hypothetical: this tool shipped with two scan bugs, and the
+  ceiling is what stands between the next one and a bulk close.
 
     python3 ledger_dismiss_orphans.py                 # report only
     python3 ledger_dismiss_orphans.py --execute
