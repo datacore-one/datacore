@@ -968,6 +968,22 @@ class CredentialManager:
                 print("Variable name is required.")
                 return 1
 
+        # A variable NAME is [A-Z0-9_]; a secret is not. Rejecting the
+        # difference here is what stops a mis-ordered `add` writing a live
+        # credential into the metadata field.
+        #
+        # This is not hypothetical: on 2026-08-31 a JWT landed in `var_name`
+        # because the arguments were transposed. `add` accepted it silently,
+        # and `get` then returned the first characters of a field holding an
+        # entire token — so it looked like a truncated placeholder rather than
+        # a leaked secret sitting in the index.
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", var_name or ""):
+            print(f"Refusing: --var must be an environment variable name "
+                  f"([A-Za-z_][A-Za-z0-9_]*), got {len(var_name or '')} characters "
+                  f"that do not look like one.")
+            print("Did you pass the secret to --var instead of --value?")
+            return 1
+
         if not value:
             value = input(f"Value for {var_name}: ").strip()
             if not value:
