@@ -1,0 +1,15 @@
+# Python dependencies for the research module.
+#
+# WHY THIS FILE EXISTS. research_orchestrator.py imports claude_agent_sdk at
+# module scope, and that package was installed by hand on nightshift and never
+# anywhere else. Winston's nightly research run therefore died at the import
+# line every night — the whole pipeline, before it reached a single source or
+# the podcast stage — while nightshift's ran fine. An undeclared dependency
+# does not fail where it is missing, it fails where nobody is looking.
+#
+# Install on a host that runs research:
+#   python3 -m pip install --user --break-system-packages -r requirements.txt
+# (--break-system-packages is needed on Debian/Ubuntu under PEP 668; it still
+# installs into ~/.local, not the system tree.)
+
+claude-agent-sdk>=0.2.148
