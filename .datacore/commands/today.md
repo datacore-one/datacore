@@ -160,13 +160,27 @@ succeed, so there is nothing to rescue.
 
 ## Step 4: Fetch Oura Vitals
 
-Read token from `.datacore/env/oura.env` (var: `OURA_PERSONAL_ACCESS_TOKEN`),
-fetch from Oura API v2:
-- `daily_readiness` → score, contributors (hrv_balance, resting_heart_rate, recovery_index, sleep_balance)
-- `daily_sleep` → score, contributors (total_sleep, efficiency, deep_sleep, rem_sleep, restfulness)
-- `daily_activity` → score, steps, active_calories
+**Do not call the Oura API and do not look for a token.** `.datacore/env/oura.env`
+does not exist (only `oura.env.example`), and `OURA_PERSONAL_ACCESS_TOKEN` is not
+indexed in the creds broker — this step used to say "read the token from
+`.datacore/env/oura.env`", which is why the server briefing reported "vitals not
+available" every morning while the data was already on disk.
 
-Use today's record; fall back to yesterday's.
+The health module syncs Oura and Withings into
+`0-personal/1-active/health-longevity/data/metrics/` on its own schedule. Read from
+there via MCP:
+
+- `datacore_health_readiness` → readiness, sleep score, sleep hours, HRV, resting HR,
+  body-temperature delta, weight
+- `datacore_health_metrics` (`metric`: hrv | readiness_score | sleep_score | steps |
+  resting_hr | weight, `days`: N) → trend, min/max/avg, change
+- `datacore_health_sync_status` → per-source `last_data_date`, `days_stale`, `status`
+
+**Always check `datacore_health_sync_status` first.** If the source is stale
+(`days_stale` > 0), say health data is NOT AVAILABLE and withhold the capacity
+verdict — never present an older day's numbers as today's reading.
+
+If MCP is unavailable, read the parquet metrics store directly at the path above.
 
 **Readiness-to-capacity mapping:**
 
@@ -589,9 +603,28 @@ For each module with `slot: post`:
 | whatsapp | Push briefing notification to mobile |
 
 **Voice-terminal instructions:**
-1. Write butler-style spoken summary to `{journal_dir}/{date}_spoken.txt`
-   - Voice of "Data" — trusted chief of staff. 120-180 words.
-   - Cover: health, top priorities, meetings, market highlight, closing thought.
+
+**Do not restate the spec here.** `SUMMARIZE_PROMPT` in
+`.datacore/modules/voice-terminal/lib/speak_brief.py` is authoritative for voice,
+length and structure; `voice-terminal/module.yaml` summarises it. This file used to
+carry its own shorter list ("health, top priorities, meetings, market highlight,
+closing thought", 120-180 words) which silently won whenever /today ran from the
+command file — that is why audio briefings never covered The World and never said
+whether email or GitHub triage had run. Three specs, one of them wrong, is how that
+happens. Read the prompt and follow it.
+
+1. Write the spoken summary to `{journal_dir}/{date}_spoken.txt`
+   - Voice: "Data" — an android chief of staff. Precise, curious, dry by
+     understatement. **No contractions, ever** ("it is", not "it's").
+   - **About 400 words** (~2.5 min at the configured `tts_speed`). Opening/body
+     movement stays to 2-3 sentences — verdict plus capacity, one supporting number
+     at most. Natural sentences with commas; stacked fragments read as plodding.
+     Seven movements, in order: opening + body;
+     **The World** (mandatory); the day + deadlines; **what was handled** (state
+     explicitly whether email triage and GitHub triage ran, and what they did —
+     never leave it ambiguous); money; **the observation** (3-4 sentences on one
+     real pattern from today's report, concrete, never a generic aphorism); close.
+   - Numbers as spoken words: "seventy-two", not "72".
    - End with "Your full report is on your desk" or variant.
 2. Generate audio and send:
    ```bash

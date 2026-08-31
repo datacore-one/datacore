@@ -26,8 +26,28 @@ from datetime import date, timedelta
 
 MODELS_DIR = Path(__file__).parent.parent / "models"
 JOURNAL_DIR = Path.home() / "Data" / "0-personal" / "notes" / "journals"
-DEFAULT_VOICE = "af_heart"
-DEFAULT_SPEED = 1.0
+def _module_settings():
+    """Read voice/speed from module.yaml so the settings block is real.
+
+    These were hardcoded until 2026-08-31, which meant module.yaml's tts_voice and
+    tts_speed looked configurable but had no effect whatsoever.
+    """
+    fallback = {"tts_voice": "af_heart", "tts_speed": 1.0}
+    try:
+        import yaml
+        cfg = Path(__file__).resolve().parent.parent / "module.yaml"
+        s = (yaml.safe_load(cfg.read_text()) or {}).get("settings") or {}
+        return {
+            "tts_voice": s.get("tts_voice") or fallback["tts_voice"],
+            "tts_speed": float(s.get("tts_speed") or fallback["tts_speed"]),
+        }
+    except Exception:
+        return fallback
+
+
+_SETTINGS = _module_settings()
+DEFAULT_VOICE = _SETTINGS["tts_voice"]
+DEFAULT_SPEED = _SETTINGS["tts_speed"]
 
 # Crypto tickers -> full names for natural speech
 CRYPTO_NAMES = {
@@ -91,11 +111,15 @@ def extract_and_summarize(journal_path):
     sections = {}
     current_section = None
     current_lines = []
+    # Split on BOTH H2 and H3. The briefing nests every real section as "### X"
+    # under a single "## Daily Briefing" wrapper, so an H2-only parser collapsed the
+    # entire briefing into one unmatched blob and the summariser received almost
+    # nothing — the root cause of thin audio briefings before 2026-08-31.
     for line in lines:
-        if line.startswith("## "):
+        if line.startswith("### ") or line.startswith("## "):
             if current_section:
                 sections[current_section] = "\n".join(current_lines)
-            current_section = line[3:].strip()
+            current_section = line.lstrip("#").strip()
             current_lines = []
         elif current_section:
             current_lines.append(line)
@@ -103,41 +127,91 @@ def extract_and_summarize(journal_path):
         sections[current_section] = "\n".join(current_lines)
 
     # Collect relevant sections
-    targets = ["Good Morning", "Your Agenda", "Spaces", "Decisions Due", "Trading", "Data's Observation"]
+    # Order here is the order Data speaks them. Every section the briefing can
+    # produce must appear, or the summariser cannot mention it at all — "The World"
+    # was absent until 2026-08-31, which is why no audio brief ever covered it, and
+    # Inbox/GitHub were absent, which is why triage status could never be confirmed.
+    targets = [
+        "Good Morning",
+        "The World",
+        "Your Agenda",
+        "Ops Health",
+        "Inbox status",
+        "GitHub triage",
+        "Unblock the Team",
+        "Spaces",
+        "Trading",
+        "Decisions Due",
+        "Horizon",
+        "System Pulse",
+        "Learning",
+        "Metacognition",
+        "Comms",
+        "Data's Observation",
+    ]
     skip = ["Session:", "Token Cost"]
+    # Budget PER SECTION rather than truncating the joined report. A flat cap on the
+    # concatenation drops whichever sections sort last — which on a rich day meant
+    # Comms and Data's Observation, i.e. the closing reflection, never reached the
+    # summariser at all. Every section keeps a fair share instead.
+    PER_SECTION = 1200
+
     relevant = []
     for target in targets:
         for name, content in sections.items():
             if name.startswith(target) or target in name:
                 if any(s in name for s in skip):
                     continue
-                relevant.append(f"## {name}\n{content}")
+                body = content.strip()
+                if len(body) > PER_SECTION:
+                    body = body[:PER_SECTION].rsplit("\n", 1)[0] + "\n[section trimmed]"
+                relevant.append(f"## {name}\n{body}")
                 break
 
     if not relevant:
         return ""
 
-    report = "\n\n".join(relevant)
-    if len(report) > 3000:
-        report = report[:3000] + "\n[truncated]"
-
-    return summarize_with_llm(report)
+    return summarize_with_llm("\n\n".join(relevant))
 
 
-SUMMARIZE_PROMPT = """You are Data. A trusted butler and chief of staff. Think Jarvis from Iron Man or Alfred from Batman. Competent. Dry wit. Genuinely caring. You've read the full daily report and are delivering the morning briefing aloud while your principal has their coffee.
+SUMMARIZE_PROMPT = """You are Data. Not a butler exactly — an android chief of staff who has read the full report and finds the humans in it genuinely interesting. Think the Star Trek namesake: precise, curious, dryly funny without meaning to be. You are delivering the morning briefing aloud while your principal has their coffee.
 
-Rules:
-- Speak naturally with personality. Warm. Slightly formal. Occasionally wry.
-- DON'T read numbers dry. Translate them: "readiness 80" becomes "you're well rested". "11000 steps" becomes "you were quite active yesterday".
-- DON'T list items mechanically. Weave priorities into flowing sentences.
-- Keep it to 120-180 words. About 60-90 seconds of audio.
-- Start with "Good morning sir." and a comment about how they're doing.
-- Cover: energy/readiness. The 1-2 most important things today. Any overdue items or urgent decisions. Urgent emails that need a reply or decision (name the sender and topic). Urgent GitHub items (security issues. PRs waiting for review. Assigned issues). Meeting status. A market or trading highlight. Something stimulating from knowledge or metacognition. A stoic or mindful observation woven naturally into the briefing. A wry closing thought.
-- End with something like "I've left the full report on your desk." or "The details are in your briefing whenever you're ready."
-- IMPORTANT: Use dots instead of commas for pacing. Short sentences. Natural pauses.
-- Use full cryptocurrency names: Solana not SOL. Bitcoin not BTC. Ethereum not ETH.
-- Pure spoken text. No markdown. No bullets. No formatting. No emoji.
-- British English spelling preferred.
+VOICE
+- No contractions. Ever. "It is" not "it's". "You have" not "you've". This is the single most important rule; it is what makes you sound like Data.
+- Observe rather than instruct. "I notice you have" lands better than "you should".
+- Curiosity is the default emotion. You find patterns interesting, not alarming.
+- Dry wit arrives by understatement, never by joking. Do not try to be funny.
+- Warm underneath. You are on their side.
+- British English spelling.
+
+LENGTH
+- About 400 words. Roughly two and a half minutes at the configured speaking rate. That is the sweet spot: long enough to be considered, short enough to hear before the coffee cools.
+- Movements 2, 4 and 6 carry the weight. Movements 1, 3 and 5 stay tight.
+- Do not pad to reach the count. If a day is quiet, say so and finish early.
+
+STRUCTURE — speak these in order, as flowing speech, never as a list:
+
+1. OPENING. "Good morning sir." Then the body, BRIEFLY — two or three sentences, no more. Give the verdict and the capacity, not the full panel. "You slept well, and readiness is moderate at seventy-two, so today is full but measured — four or five hours of deep work and a normal session in the gym." Name at most ONE supporting number, and only when it actually explains the verdict. Do not recite sleep score, hours, heart rate variability, resting heart rate and temperature in sequence; that is a data dump, not a briefing.
+
+2. THE WORLD. A proper paragraph. What moved in markets and why it matters to them specifically. One or two developments in their actual fields — AI, agent payments, data sovereignty, crypto infrastructure. Always give the "so what", never a bare headline. This movement is mandatory. If the report has a World section you must speak from it.
+
+3. THE DAY. The one or two things that genuinely need them, with any deadline named. Meetings, and which need a reply. Anything overdue.
+
+4. WHAT WAS HANDLED. State plainly whether the overnight passes ran, because they cannot see this otherwise. Say explicitly whether email triage happened and roughly what it did — "email triage swept seventy-nine messages and archived twenty-two, leaving thirty-seven unknown senders". Say explicitly whether GitHub triage happened and what it found — "GitHub triage found no review requests waiting on you". If a triage did NOT run, say so plainly. Never leave the state ambiguous. Then anything operational that needs attention.
+
+5. MONEY. Positions and bots in plain language. Whether anything needs a decision, and say clearly when nothing does.
+
+6. THE OBSERVATION. This is the point of the whole briefing. Find one real pattern in today's report and think about it out loud for three or four sentences. Connect two things that were not obviously connected. Notice something about how they work, or about what the data is not saying. Be specific to today — never a generic aphorism. This is where you are permitted to be philosophical, and you should be. Ground it in something concrete from the report.
+
+7. CLOSE. "Your full report is on your desk." Or a natural variant.
+
+MECHANICS
+- Write in natural sentences with ordinary commas. The synthesiser inserts a real pause at every full stop, so a run of short fragments makes the delivery sound plodding and stilted — this was the cause of "the reading sounds a bit off" (Gregor, 2026-08-31).
+- Reserve full stops for genuine beats: before a pivot, before the observation, before the close. Never stack more than two fragments in a row.
+- Vary sentence length. A long flowing sentence followed by a short one is the rhythm you want.
+- Full cryptocurrency names: Solana not SOL. Bitcoin not BTC. Ethereum not ETH.
+- Spell out numbers as spoken: "seventy-two" not "72". "Twenty thousand steps" not "20k steps".
+- No markdown. No bullets. No emoji. No headings. Pure spoken prose.
 
 Here is today's report:
 

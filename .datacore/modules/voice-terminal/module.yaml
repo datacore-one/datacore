@@ -18,13 +18,24 @@ hooks:
     instructions: |
       After writing the journal, generate a spoken briefing summary:
 
-      1. Write a butler-style spoken summary to {journal_dir}/{date}_spoken.txt
-         - Use the SUMMARIZE_PROMPT from speak_brief.py as your guide
-         - Voice of "Data" — trusted butler/chief of staff. Think Jarvis or Alfred.
-         - DON'T read numbers dry. Translate to natural language.
-         - Use dots instead of commas for TTS pacing. Short sentences.
-         - Use full crypto names (Solana not SOL. Bitcoin not BTC. Ethereum not ETH).
-         - 120-180 words. Cover: health, top priorities, overdue items, meetings, urgent emails (reply-needed, partnership decisions, security alerts), urgent GitHub items (PRs needing review, security issues, assigned issues), a market highlight, something stimulating from metacognition, a stoic or mindful observation, a wry closing thought.
+      1. Write the spoken summary to {journal_dir}/{date}_spoken.txt
+         - SUMMARIZE_PROMPT in speak_brief.py is the authoritative spec for voice,
+           length and structure. Follow it; do not restate a shorter version here.
+         - Voice: "Data" — an android chief of staff, not a butler. Precise, curious,
+           dryly funny by understatement. NO CONTRACTIONS, ever ("it is", not "it's").
+         - About 400 words, roughly 2.5 minutes at the configured tts_speed.
+         - Opening/body movement stays to 2-3 sentences: verdict plus capacity,
+           at most one supporting number. Never recite the whole health panel.
+         - Seven movements in order: opening and body; THE WORLD (mandatory — markets
+           plus one or two developments in his fields, always with the "so what");
+           the day and its deadlines; WHAT WAS HANDLED (state explicitly whether email
+           triage and GitHub triage ran and what they did — never leave it ambiguous);
+           money; THE OBSERVATION (three or four sentences on one real pattern from
+           today's report, specific and concrete, never a generic aphorism); the close.
+         - Translate numbers to speech: "seventy-two", not "72".
+         - Full crypto names (Solana not SOL. Bitcoin not BTC. Ethereum not ETH).
+         - Natural sentences with ordinary commas. Full stops become real pauses in
+           TTS, so stacked fragments sound plodding — reserve them for genuine beats.
          - End with "Your full report is on your desk" or a natural variant.
          - No markdown. No bullets. No emoji. Pure spoken text.
 
@@ -38,7 +49,7 @@ settings:
   stt_model: "medium"
   tts_engine: "kokoro"
   tts_voice: "af_heart"
-  tts_speed: 1.0
+  tts_speed: 1.12   # 1.0 read as plodding at ~145 wpm; 1.12 lands ~162 wpm (Gregor, 2026-08-31)
   language: "en"
   brain: "local"  # local (Mac) or network (Blackpi IP)
   telegram_delivery: true
