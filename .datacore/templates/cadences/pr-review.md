@@ -12,6 +12,39 @@ Review all open pull requests across venture repos — assess code quality, chec
 
 ## Steps
 
+0. **Address feedback on your own PRs — FIRST, every run, regardless of age.**
+
+   You opened these. Nobody else will close the loop. Do this before reviewing
+   anyone else's work.
+
+   ```bash
+   gh search prs --author=@me --state=open --json number,title,repository --limit 60
+   # then per PR:
+   gh pr view {number} --repo {org}/{repo} --json reviewDecision,reviews,comments,updatedAt
+   ```
+
+   For every PR where `reviewDecision` is `CHANGES_REQUESTED`, or a review/comment
+   is newer than your last commit on the branch:
+
+   - **Read the review body.** Address it in code on the same branch and push.
+     Then reply on the PR saying what changed, referencing the specific point.
+   - **If the request needs a human decision** (a product call, a scope question,
+     a security trade-off), reply on the PR stating the question plainly and
+     escalate. Do not leave it silent.
+   - **Do not** file an org task and wait for the next nightshift cycle. That is
+     the round-trip this step exists to remove. Fix it now, in this cadence.
+   - **Do not** self-approve, and do not merge. Humans merge.
+
+   **Do not gate this on staleness.** Step 6 handles PRs that have gone quiet;
+   this step handles feedback that has *arrived*, however recently.
+
+   > **Why this step exists:** on 2026-08-31, 25 of 41 open PRs authored by
+   > `miles-on-nightshift` needed the author to come back. Seven carried
+   > `CHANGES_REQUESTED` untouched for a week, including plur#942 where a
+   > reviewer had explained precisely what to change. Two in plur-space had sat
+   > 109 and 50 days. Opening a PR is not finishing the task; the task is
+   > finished when the PR is merged or closed.
+
 1. **Load venture context**: Read `venture.yaml` to get the list of GitHub repos (`github.repos`) and the GitHub org name.
 
 2. **Fetch open PRs**: For each repo, list open pull requests:
@@ -54,7 +87,8 @@ Review all open pull requests across venture repos — assess code quality, chec
 
 6. **Route stale PRs**: For PRs open >7 days with no recent activity, branch on state — **never post a generic nag**:
 
-   - **Author is the agent account (plur9/bot)**: Do NOT comment on your own PR.
+   - **Author is an agent account** (`plur9`, `miles-on-nightshift`, or any bot you operate): Do NOT comment on your own PR.
+     Note: step 0 should already have addressed anything actionable here. If a PR reaches this branch still carrying `CHANGES_REQUESTED`, that is a step-0 miss worth logging.
      - `CHANGES_REQUESTED`: Read the review body from the `reviews` field. If the findings are auto-addressable, file an org task naming them explicitly. If not, escalate to the human operator with a one-line summary of the specific blocker.
      - `mergeable == DIRTY`: File an org task to rebase the PR onto its base branch.
      - `statusCheckRollup` failing / CI never ran: Investigate the root cause — wrong base, missing workflow trigger. Fix or escalate with specifics. Do not comment.
