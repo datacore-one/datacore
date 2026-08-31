@@ -205,15 +205,28 @@ def test_generated_header_is_present(space):
 
 def test_projection_declares_its_own_todo_keywords(space):
     """A generated file whose parse depends on what was read before it is
-    broken. Without #+SEQ_TODO, custom states (REVIEW, QUEUED, ...) parsed
-    only when another file declaring them had been loaded first — which made
-    the same projection yield 574 tasks alone and 508 in a multi-space loop,
-    silently reporting 66 tasks lost in the migration gate."""
+    broken. Without #+SEQ_TODO, custom states parsed only when another file
+    declaring them had been loaded first — which made the same projection
+    yield 574 tasks alone and 508 in a multi-space loop, silently reporting
+    66 tasks lost in the migration gate.
+
+    Asserted as a PROPERTY (everything emitted is declared) rather than
+    against a hand-copied keyword list. The list version named QUEUED,
+    WORKING and FAILED, and when DIP-0009 v2.0 retired all three it kept
+    demanding a v1.1 header — pointing the test at the migration instead of
+    at the invariant. A property cannot go stale when the canon moves.
+    """
+    import re
+
     import_space(space)
     text = project(fold(read_events(space))).text
     decl = next(ln for ln in text.split("\n") if ln.startswith("#+SEQ_TODO:"))
-    for state in ("REVIEW", "QUEUED", "WORKING", "FAILED", "DEFERRED"):
-        assert state in decl, f"{state} must be declared"
+
+    declared = set(re.findall(r"[A-Z]{3,}", decl.split(":", 1)[1]))
+    emitted = {m.group(1) for m in re.finditer(r"^\*+ ([A-Z]{3,}) ", text, re.M)}
+
+    assert emitted, "fixture should project at least one task"
+    assert emitted <= declared, f"undeclared keywords emitted: {emitted - declared}"
 
 
 def test_overlay_task_survives_a_cold_reparse(space, tmp_path):

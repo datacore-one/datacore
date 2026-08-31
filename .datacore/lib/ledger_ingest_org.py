@@ -45,6 +45,25 @@ from ledger.log import EventLog, read_events  # noqa: E402
 ACTIVE = ("TODO", "NEXT", "WAITING", "DEFERRED", "QUEUED", "WORKING", "REVIEW", "FAILED")
 LIVE = ("created", "claimed", "granted")
 
+#: Org states that close an item IN THE LEDGER, and the dismiss `kind` each
+#: one means. DIP-0009 v2.0's transition table rules `DONE, CANCELLED ->
+#: terminal`, so both must dismiss; leaving CANCELLED out is what made 33
+#: cancelled tasks sit in the projection as permanent drift across four
+#: spaces, holding `all_clean` false forever and turning box-projection-drift
+#: into an alert that could never go green.
+#:
+#: DEFERRED IS DELIBERATELY ABSENT. The same table calls it "closed but
+#: wakeable, i.e. done-class, non-terminal": a benched task wakes on a
+#: past-due SCHEDULED: or when its intent lane switches back on, and
+#: `item.dismiss` is terminal (DIP-0034). Closed-in-org is not
+#: dismissed-in-ledger. Dismissing it would make the wake impossible.
+#:
+#: `dropped`, not `done`, for CANCELLED: `fold.was_finished()` counts only
+#: "done", and cancelled work must not inflate the completion stats -- the
+#: exact direction `fold.closure_kind` records every historical
+#: misclassification as falling.
+TERMINAL_KINDS = {"DONE": "done", "CANCELLED": "dropped"}
+
 
 def _this_actor() -> str:
     """Resolve THIS machine's actor. Never a hardcoded default.
@@ -89,7 +108,9 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
     meant to reproduce. Two reconciliations, each a different event because they
     mean different things:
 
-      CLOSED  org says DONE -> item.dismiss. NOT item.complete: the fold requires
+      CLOSED  org says DONE or CANCELLED -> item.dismiss (see TERMINAL_KINDS;
+              DEFERRED is closed-but-wakeable and deliberately excluded).
+              NOT item.complete: the fold requires
               status == claimed before completing, so completing an unclaimed
               item is a SILENT no-op — two full passes over org-DONE tasks did
               nothing and reported success. Fabricating a claim that never
@@ -135,11 +156,12 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
         # solving it with a second creator would trade a delay for a divergence.
         if not item or item.status not in LIVE:
             continue
-        if node.todo == "DONE":
+        if node.todo in TERMINAL_KINDS:
             if not dry_run:
                 log = log or EventLog(space, actor or _this_actor())
-                log.append("item.dismiss", {"id": nid, "kind": "done",
-                           "reason": "closed as DONE in next_actions.org"})
+                log.append("item.dismiss",
+                           {"id": nid, "kind": TERMINAL_KINDS[node.todo],
+                            "reason": f"closed as {node.todo} in next_actions.org"})
             dismissed += 1
             continue
         if node.todo not in ACTIVE:
