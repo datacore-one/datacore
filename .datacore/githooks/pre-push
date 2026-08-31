@@ -62,7 +62,24 @@ if [ -f "$OWNERSHIP" ] && command -v python3 >/dev/null 2>&1 && [ -n "$REFS_INPU
         [ "$l_sha" = "0000000000000000000000000000000000000000" ] && continue
         if [ "$r_sha" = "0000000000000000000000000000000000000000" ] || \
            ! git rev-parse --quiet --verify "${r_sha}^{commit}" >/dev/null 2>&1; then
-            echo "$l_sha"
+            # r_sha unknown locally (another writer pushed since last fetch).
+            # Use merge-base with the remote tracking ref for this branch to scope
+            # the check to outgoing commits only. Without this, git rev-list walks
+            # the entire history and the author filter catches pre-DIP-0046 commits
+            # this machine legitimately wrote, producing false refusals.
+            BRANCH="${r_ref#refs/heads/}"
+            TRACKING="refs/remotes/${REMOTE}/${BRANCH}"
+            OWN_BASE=""
+            if git rev-parse --quiet --verify "$TRACKING" >/dev/null 2>&1; then
+                OWN_BASE=$(git merge-base "$l_sha" "$TRACKING" 2>/dev/null || true)
+            fi
+            if [ -n "$OWN_BASE" ]; then
+                echo "pre-push: ownership guard: r_sha ${r_sha:0:12} not local — using merge-base ${OWN_BASE:0:12} (fetch first if this recurs)" >&2
+                echo "${OWN_BASE}..${l_sha}"
+            else
+                echo "pre-push: ownership guard: r_sha ${r_sha:0:12} not local, no tracking ref — range degraded to full history; fetch and retry to avoid false refusals" >&2
+                echo "$l_sha"
+            fi
         else
             echo "${r_sha}..${l_sha}"
         fi
