@@ -175,6 +175,36 @@ def test_ledger_only_tags_are_never_removed(tag_space):
     assert _tags(tag_space, "task-superset") == ["gtd", "inherited", "work"]
 
 
+def test_effective_tags_claim_inherited_only_with_recorded_structure(tmp_path):
+    """effective_tags must equal what the projection will actually render.
+
+    The projector reproduces a section for an item that has a `parent`; for
+    one that does not, it renders the heading at top level and the inherited
+    tags simply are not in the file. Recording them anyway makes the
+    checkpoint round-trip compare a claim against a file that cannot contain
+    it, and reports a restore that worked as one that corrupted the item.
+    """
+    space = tmp_path / "0-structspace"
+    (space / "org").mkdir(parents=True)
+    (space / "org" / "next_actions.org").write_text(
+        "* Section                                                     :routed:\n"
+        "** NEXT Structured\n:PROPERTIES:\n:ID: task-structured\n:END:\n"
+        "** NEXT Floating\n:PROPERTIES:\n:ID: task-floating\n:END:\n",
+        encoding="utf-8")
+
+    log = EventLog(space, "test")
+    log.append("item.create", {"id": "task-structured", "title": "Structured",
+                               "state": "NEXT", "parent": "sec", "level": 2})
+    log.append("item.create", {"id": "task-floating", "title": "Floating",
+                               "state": "NEXT"})
+
+    ingest.sync_state(space, actor="test")
+    items = fold(read_events(space)).items
+
+    assert "routed" in (items["task-structured"].payload or {}).get("effective_tags", [])
+    assert "routed" not in (items["task-floating"].payload or {}).get("effective_tags", [])
+
+
 def test_tag_sync_settles(tag_space):
     """No update once merged — an unstable sync would append events hourly."""
     ingest.sync_state(tag_space, actor="test")

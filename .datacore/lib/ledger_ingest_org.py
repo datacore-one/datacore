@@ -228,6 +228,36 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
             merged = sorted({t for t in own if t} | set(cur.get("tags") or []))
             if merged and merged != sorted(cur.get("tags") or []):
                 want["tags"] = merged
+            # `effective_tags` MUST MOVE WITH `tags`. ledger_checkpoint's
+            # fingerprint prefers effective_tags over tags, so updating one and
+            # not the other makes the round-trip compare a fresh value against
+            # a stale one: the restored side re-derives effective tags from the
+            # projection it just parsed, the live side still reports what
+            # genesis recorded, and four spaces flipped to "would NOT restore"
+            # on tags that had in fact been preserved exactly.
+            #
+            # Sourced from `node.tags` — the INHERITED set — but ONLY when the
+            # ledger records the structure that produces those tags. The
+            # projector reproduces a section for an item that has a `parent`;
+            # for one that does not, it renders the heading at top level with
+            # its own tags and the inherited ones simply do not exist in the
+            # file. Recording them anyway writes a promise the round-trip
+            # cannot keep: 0-personal's org-20260814-145711 sits under
+            # `* Inbox Processed … :inbox:routed:` in the authored file but has
+            # parent=None level=None in the ledger (adapter-created, never
+            # genesis-imported), and claiming its inherited tags flipped that
+            # space to "would NOT restore" on tags the restore handled fine.
+            #
+            # AUTHORITATIVE, not additive — unlike `tags`. This one is derived:
+            # it must equal what the projection will render, so it has to be
+            # able to shrink when the previous value overreached. `tags` stays
+            # additive because removing there would destroy the ancestor tags
+            # 39 items legitimately carry.
+            eff_now = sorted(cur.get("effective_tags") or [])
+            inherited = {t for t in (node.tags or []) if t} if cur.get("parent") else set()
+            eff = sorted(inherited | set(merged))
+            if eff and eff != eff_now:
+                want["effective_tags"] = eff
         if file_filetags and not (cur.get("filetags") or None):
             want["filetags"] = file_filetags
         diff = {k: v for k, v in want.items() if (cur.get(k) or None) != v}
