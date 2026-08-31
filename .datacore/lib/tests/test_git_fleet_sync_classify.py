@@ -69,6 +69,26 @@ def test_unrelated_history_keeps_its_own_class():
     assert _classify("fatal: refusing to merge unrelated histories") == "UNRELATED HISTORY"
 
 
+def test_no_access_never_claims_work_is_at_risk_from_a_stale_ref():
+    """A host that cannot fetch cannot answer "am I holding unpushed work".
+
+    Its remote-tracking ref froze when access last worked, so the count only
+    ever over-reports — on 2026-08-31 winston named five module repos as
+    holding unpushed commits and all five HEADs were already ancestors of
+    origin. Deciding it here made the run permanently red; the question
+    belongs to git_relay.py, which verifies against origin from a machine
+    that can reach it.
+    """
+    src = (LIB / "git_fleet_sync.py").read_text()
+    branch = src[src.index("if any(s in out for s in ("):]
+    branch = branch[:branch.index("elif 'refusing to merge unrelated histories'")]
+
+    assert "result['access_at_risk'] = False" in branch, (
+        "the NO ACCESS branch must not derive at-risk from @{u}"
+    )
+    assert "UNVERIFIABLE" in branch, "it must say the count cannot be trusted"
+
+
 def test_source_carries_every_pattern_this_asserts():
     """Pin the mirror to the implementation, so they cannot drift apart."""
     src = (LIB / "git_fleet_sync.py").read_text()

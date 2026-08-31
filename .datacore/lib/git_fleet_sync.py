@@ -296,13 +296,29 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
                 # nobody else can see. Only the second is a failure — a check
                 # that is permanently red is one you learn to ignore, which is
                 # the same lesson the watchdog learned the hard way.
+                # `@{u}` CANNOT ANSWER THIS FROM HERE. A host that cannot fetch
+                # can never update its remote-tracking ref, so the count is
+                # frozen at whatever it was when access last worked — and it
+                # over-reports forever once another machine lands the work.
+                # Measured 2026-08-31: winston reported 5 module repos holding
+                # unpushed commits; checked from the Mac, which can reach
+                # GitHub, ALL FIVE HEADs were already ancestors of origin. The
+                # run failed on all of them, so its check could never go green.
+                #
+                # This is the same defect git_relay.py was rewritten to remove
+                # ("it kept reporting 166 commits as trapped after every one of
+                # them had been relayed"). The answer there was to ask the
+                # machine that CAN see the remote — which is git_relay's job,
+                # not this one's. So report the access gap and defer the
+                # at-risk question rather than guessing it from a stale ref.
                 unpushed = git_raw(repo, 'rev-list', '--count', '@{u}..HEAD') or '0'
-                at_risk = unpushed.strip().isdigit() and int(unpushed.strip()) > 0
+                n = unpushed.strip() if unpushed.strip().isdigit() else '?'
                 result['pull'] = (
-                    f'NO ACCESS — this host cannot reach the remote'
-                    + (f' AND holds {unpushed.strip()} unpushed commit(s) [{tail}]'
-                       if at_risk else f' (nothing waiting to send) [{tail}]'))
-                result['access_at_risk'] = at_risk
+                    f'NO ACCESS — this host cannot reach the remote '
+                    f'(local ref says {n} unpushed, UNVERIFIABLE from here — '
+                    f'run git_relay.py --check from the operator machine) '
+                    f'[{tail}]')
+                result['access_at_risk'] = False
             elif 'refusing to merge unrelated histories' in out:
                 result['pull'] = ('UNRELATED HISTORY — local checkout shares no '
                                   'ancestor with origin; re-clone or align '
@@ -481,20 +497,19 @@ def main() -> int:
         print(f"\nFAIL: {len(unrelated)} repo(s) share no history with origin.")
         return 1
 
-    # Access failures fail the run too — an agent silently stuck on a stale
-    # copy is the whole class this tool exists to surface — but with the
-    # honest remedy, which is a key, not a merge.
-    # Only unreachable repos that are HOLDING WORK fail the run. The rest are
-    # reported above and leave the exit code alone: they are stale, not stuck.
+    # A REPO THIS HOST CANNOT REACH NEVER FAILS THE RUN. Whether it is holding
+    # work is a question only a machine that can see the remote can answer, and
+    # git_relay.py --check already answers it, from the operator machine,
+    # verifying against origin rather than a ref this host cannot refresh.
+    # Deciding it here from `@{u}` made the run fail permanently on five repos
+    # whose work was already on origin — a check that cannot go green, which is
+    # the exact failure this tool exists to prevent elsewhere.
     stuck = [r for r in noaccess if r.get('access_at_risk')]
-    if stuck:
+    if stuck:                      # kept: a future caller may set this honestly
         print(
             f"\nFAIL: {len(stuck)} repo(s) hold unpushed work this host cannot "
             f"send. Grant it access (deploy key / token) — there is nothing to "
-            f"merge.\nMeanwhile nothing is lost: run "
-            f"`python3 .datacore/lib/git_relay.py --check` from the operator "
-            f"machine, which can reach both this host and the remote, and "
-            f"`--host <this host>` to land anything waiting."
+            f"merge."
         )
         return 1
     if noaccess:
