@@ -210,24 +210,34 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
                 "scheduled": str(node.scheduled or "") or None,
                 "deadline": str(node.deadline or "") or None}
 
-        # STRUCTURE IS DELIBERATELY NOT SYNCED HERE. An item created through the
-        # adapter never records `parent`/`level`, so the projector renders it at
-        # top level however deeply org nests it, and the tags it inherits from
-        # its section are absent from the projection. That is the last per-item
-        # difference left in the fleet (0-personal's org-20260814-145711, under
-        # `* Inbox Processed … :inbox:routed:`).
+        # STRUCTURE. `parent`/`level` are reconciled from org like every other
+        # field, because DIP-0034 settles which side wins: "org-mode (DIP-0009)
+        # remains the sole source of truth for GTD task state". A ledger parent
+        # that disagrees with org is stale, not authoritative.
         #
-        # Syncing parent/level from org looked like the general fix and was
-        # measured before shipping: 19 of 1466 live items have an org parent the
-        # ledger lacks, but 139 more in 5-plur alone have a ledger parent that
-        # DISAGREES with org's — org_workspace's `node.parent` is the immediate
-        # heading, while genesis records the nearest section, so they mean
-        # different things for a task nested under another task. Rewriting 139
-        # parents to settle one item's tags would restructure the projection on
-        # a guess about which of the two definitions the projector wants.
+        # This was held back once for lack of that ruling. The doubt was that
+        # `node.parent` is the immediate heading while genesis records the
+        # nearest section, so the two might mean different things — but the
+        # measured cases show genesis recording ordinary TASK parents too
+        # (0-personal's org-20260702-063403 is filed under a task titled
+        # "Continue: PLUR Enterprise …"), so they are the same relation, and
+        # org's is the current one.
         #
-        # Left alone until that is understood. The one affected item is fixed
-        # by recording its parent directly; see the drift triage task.
+        # The cost of leaving it: a stale parent makes the projector nest the
+        # item under an unrelated heading, where it inherits that heading's
+        # tags. 116 items in 0-personal came back carrying
+        # continuation/demo/enterprise instead of their own review/strategic —
+        # the same neighbour-inheritance the projector's own comment records
+        # from 2026-08-10.
+        parent_node = getattr(node, "parent", None)
+        parent_id = (parent_node.get_property("ID")
+                     if parent_node is not None else None)
+        # Only ever set a parent org actually shows. Absent means top-level,
+        # and clearing a recorded parent is exactly what promotes the item back
+        # out of a section it no longer belongs to.
+        want["parent"] = parent_id
+        if node.level:
+            want["level"] = node.level
         # UNION, not fill-when-empty. Filling only an absent tag list left the
         # commoner hole open: an item that HAS tags in the ledger and gains one
         # in org (a human marking something `:urgent:`) could never converge,
