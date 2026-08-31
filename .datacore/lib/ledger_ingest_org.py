@@ -209,6 +209,25 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
                 "title": node.heading,
                 "scheduled": str(node.scheduled or "") or None,
                 "deadline": str(node.deadline or "") or None}
+
+        # STRUCTURE IS DELIBERATELY NOT SYNCED HERE. An item created through the
+        # adapter never records `parent`/`level`, so the projector renders it at
+        # top level however deeply org nests it, and the tags it inherits from
+        # its section are absent from the projection. That is the last per-item
+        # difference left in the fleet (0-personal's org-20260814-145711, under
+        # `* Inbox Processed … :inbox:routed:`).
+        #
+        # Syncing parent/level from org looked like the general fix and was
+        # measured before shipping: 19 of 1466 live items have an org parent the
+        # ledger lacks, but 139 more in 5-plur alone have a ledger parent that
+        # DISAGREES with org's — org_workspace's `node.parent` is the immediate
+        # heading, while genesis records the nearest section, so they mean
+        # different things for a task nested under another task. Rewriting 139
+        # parents to settle one item's tags would restructure the projection on
+        # a guess about which of the two definitions the projector wants.
+        #
+        # Left alone until that is understood. The one affected item is fixed
+        # by recording its parent directly; see the drift triage task.
         # UNION, not fill-when-empty. Filling only an absent tag list left the
         # commoner hole open: an item that HAS tags in the ledger and gains one
         # in org (a human marking something `:urgent:`) could never converge,
