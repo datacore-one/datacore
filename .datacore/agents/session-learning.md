@@ -667,6 +667,14 @@ User can skip with "none" or provide input.
    ```
    Or use the Write tool in append mode. Do NOT use `cat file | process > file` or any construct that opens the file for writing before the read is complete.
 
+6. **Pre-write rotation (mandatory).** Before writing to any `.datacore/learning/*.md` file, rotate the current file to a timestamped backup:
+   ```bash
+   python3 .datacore/lib/rotate_learning_backup.py "<filepath>"
+   ```
+   This copies the file to `.datacore/state/learning-backups/`, keeping the 7 most recent backups per file. If the file does not yet exist, the command is a no-op. If rotation exits non-zero, **abort the write** and report the error — do not proceed.
+
+   Run this once per file per session (before the first write to that file). There is no need to rotate before every individual append to the same file within a single session.
+
 ## Your Boundaries
 
 **YOU CAN:**

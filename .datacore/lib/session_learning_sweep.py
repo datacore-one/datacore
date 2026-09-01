@@ -59,6 +59,12 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+# Rotation library lives alongside this script in .datacore/lib/
+_LIB_DIR = Path(__file__).resolve().parent
+if str(_LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(_LIB_DIR))
+from rotate_learning_backup import rotate_all  # noqa: E402
+
 DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
 ARCHIVE_DIR = DATACORE_ROOT / ".datacore" / "state" / "sessions" / "archive"
 LOG = Path.home() / ".datacore" / "state" / "session-learning-sweep.log"
@@ -358,6 +364,16 @@ def sweep_once(day: str, dry_run: bool = False) -> str:
         return "dry-run"
 
     log(f"{day}: sweeping {len(batch)} session(s), {tokens:,} output tokens")
+
+    # Rotate all learning files before the agent writes — ensures a recovery
+    # copy exists for every file the claude -p subprocess may append to.
+    try:
+        rotated = rotate_all()
+        if rotated:
+            log(f"{day}: rotated {len(rotated)} learning file(s) to learning-backups/")
+    except Exception as exc:
+        log(f"{day}: WARNING: learning backup rotation failed: {exc} — proceeding anyway")
+
     ok, out = run_claude(prompt)
 
     if not ok:
