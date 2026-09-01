@@ -732,7 +732,6 @@ def render_plan(r):
         out += (f'<div class="step{" thru" if thru else ""}"><div class="num">{num}</div>'
                 f'<div><div class="do">{e(s["do"])}</div>'
                 f'<p class="why">{e(s["why"]).strip()}</p>'
-                f'<div class="serves">serves · {e(" · ".join(s.get("serves") or []))}</div>'
                 f'</div></div>')
     return f'<div class="plan">{out}</div>'
 
@@ -996,8 +995,6 @@ def render_html(r):
 </div></header>
 
 <div class="wrap">
-  <div class="metrics">{mhtml}</div>
-
   <section>
     <div class="sec-head"><h2>The master plan</h2>
       <span class="eyebrow">five lines</span></div>
@@ -1006,16 +1003,16 @@ def render_html(r):
     question to ask about it.</p>
     {plan_html}
   </section>
-
   <section>
-    <div class="sec-head"><h2>The ladder</h2>
-      <span class="eyebrow">one primitive, four rungs</span></div>
-    <p class="sec-sub">From the seed deck's vision slide. Memory is the floor and it ships today;
-    everything above it is carried by the same primitive, captured when knowledge forms —
-    <em>the way a deed is issued when property changes hands. It cannot be added later.</em></p>
-    {ladder_html}
+    <div class="sec-head"><h2>The roadmap</h2>
+      <span class="eyebrow">the story, end to end</span></div>
+    <p class="sec-sub">Not tasks — the handful of state changes that each let the next one
+    happen. Gated by conditions rather than dates, so the diagram is a dependency chain and not
+    a timeline: spacing these on a time axis would invent precision nobody has. State is honest —
+    <em>shipped</em> means shipped, and one of these is a claim the ICE one-pager already rests on.</p>
+    <figure class="figure">{ARC_DIAGRAM}</figure>
+    {miles_html}
   </section>
-
   <section>
     <div class="sec-head"><h2>The three goals</h2>
       <span class="eyebrow">three motions, three clocks</span></div>
@@ -1024,46 +1021,11 @@ def render_html(r):
     do not move at the same speed, so they are not one number.</p>
     {goals_html}
   </section>
-
   <section>
-    <div class="sec-head"><h2>Verticals</h2>
-      <span class="eyebrow">answered by which integrator signs</span></div>
-    <p class="sec-sub">Not a product decision. PLUR rides the system of record and reaches the
-    institution through the integrator who already delivers it. The internal ventures are the R&amp;D
-    lab for the same pattern — and until one has external revenue they are internal R&amp;D, not proof.</p>
-    {verts_html}
+    <div class="sec-head"><h2>The board</h2><span class="eyebrow">filter to narrow</span></div>
+    <div class="filters">{lchips}<span class="fsep"></span>{tchips}<span class="fsep"></span>{ochips}</div>
+    {board}
   </section>
-
-  <section>
-    <div class="sec-head"><h2>What we are actually trying to do</h2>
-      <span class="eyebrow">org/intents.org</span></div>
-    <p class="sec-sub">Read straight out of the intent graph, not restated here — so a
-    renamed or deleted intent shows up as a missing node rather than a stale copy. Items
-    reference these; an item serving none of them is a deletion candidate. Crossed chips
-    are anti-goals: doors deliberately not opened.</p>
-    {intents_html}
-  </section>
-
-  <section>
-    <div class="sec-head"><h2>The arc</h2>
-      <span class="eyebrow">milestones toward the vision</span></div>
-    <p class="sec-sub">Not tasks — the handful of state changes that each let the next one
-    happen. Gated by conditions rather than dates, so the diagram is a dependency chain and not
-    a timeline: spacing these on a time axis would invent precision nobody has. State is honest —
-    <em>shipped</em> means shipped, and one of these is a claim the ICE one-pager already rests on.</p>
-    <figure class="figure">{ARC_DIAGRAM}</figure>
-    {miles_html}
-  </section>
-
-  <section>
-    <div class="sec-head"><h2>Where the roadmap stops moving</h2>
-      <span class="eyebrow">fan-in bottleneck</span></div>
-    <p class="sec-sub">Forty-eight items leave one file by three routes. Two of them flow.
-    The third converges on a single person with a capacity of one, and everything behind
-    it waits.</p>
-    <figure class="figure">{DIAGRAM}</figure>
-  </section>
-
   <section>
     <div class="sec-head"><h2>The founder queue</h2>
       <span class="eyebrow">blocked_on: human</span></div>
@@ -1077,15 +1039,46 @@ def render_html(r):
       engineering capacity.</div>
     </div>
   </section>
-
   <section>
-    <div class="sec-head"><h2>The board</h2><span class="eyebrow">filter to narrow</span></div>
-    <div class="filters">{lchips}<span class="fsep"></span>{tchips}<span class="fsep"></span>{ochips}</div>
-    {board}
+    <div class="sec-head"><h2>Where the roadmap stops moving</h2>
+      <span class="eyebrow">fan-in bottleneck</span></div>
+    <p class="sec-sub">Forty-eight items leave one file by three routes. Two of them flow.
+    The third converges on a single person with a capacity of one, and everything behind
+    it waits.</p>
+    <figure class="figure">{DIAGRAM}</figure>
   </section>
 
   <section>
-    <div class="sec-head"><h2>Where the strategy has no roadmap</h2></div>
+    <div class="sec-head"><h2>Context</h2><span class="eyebrow">what all of it serves</span></div>
+    <p class="sec-sub">Kept below the roadmap on purpose. The plan and the arc should stand without any of this.</p>
+  </section>
+  <section>
+    <div class="sec-head"><h2>The ladder</h2>
+      <span class="eyebrow">one primitive, four rungs</span></div>
+    <p class="sec-sub">From the seed deck's vision slide. Memory is the floor and it ships today;
+    everything above it is carried by the same primitive, captured when knowledge forms —
+    <em>the way a deed is issued when property changes hands. It cannot be added later.</em></p>
+    {ladder_html}
+  </section>
+  <section>
+    <div class="sec-head"><h2>What we are actually trying to do</h2>
+      <span class="eyebrow">org/intents.org</span></div>
+    <p class="sec-sub">Read straight out of the intent graph, not restated here — so a
+    renamed or deleted intent shows up as a missing node rather than a stale copy. Items
+    reference these; an item serving none of them is a deletion candidate. Crossed chips
+    are anti-goals: doors deliberately not opened.</p>
+    {intents_html}
+  </section>
+  <section>
+    <div class="sec-head"><h2>Verticals</h2>
+      <span class="eyebrow">answered by which integrator signs</span></div>
+    <p class="sec-sub">Not a product decision. PLUR rides the system of record and reaches the
+    institution through the integrator who already delivers it. The internal ventures are the R&amp;D
+    lab for the same pattern — and until one has external revenue they are internal R&amp;D, not proof.</p>
+    {verts_html}
+  </section>
+  <section>
+    <div class="sec-head"><h2>What this file deliberately does not cover</h2></div>
     <div class="cov">
       <div class="card">
         <h3>Intent coverage</h3>
@@ -1094,20 +1087,13 @@ def render_html(r):
         least one item. Constraints, the vision node and ops cadences are excluded — they are
         not supposed to carry work.</p>
       </div>
-      <div class="card">
-        <h3>Five uncovered goals</h3>
-        <p style="font-size:13.5px;color:var(--muted)">All five sit in the top-down half of the
-        two-track exchange. The strategy calls hub and Verity “the same rails from opposite
-        ends” — only the bottom-up end has items.</p>
-        <ul class="gaps">{ghtml}</ul>
-      </div>
+      <div class="card"><h3>The institutional rail</h3><p style="font-size:13.5px;color:var(--muted)">The regulated venue where tokenised data would actually settle, and the insurance market that would make it holdable, are real and sequenced — and they belong to Verity, not here. Out of scope until Verity is the live question. They are the reason the coverage number is not 100% and should not be.</p></div>
     </div>
     <div class="flag">
       <h3>The north star is flagged OPEN, and the file says so</h3>
       <p>{e(ns["open_question"]).replace(chr(10), " ")}</p>
     </div>
   </section>
-
   <footer>
     <span>generated by .datacore/lib/roadmap_render.py</span>
     <span>embargoed items keep their shape; their notes are withheld from generated views</span>
