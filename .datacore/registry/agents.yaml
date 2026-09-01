@@ -3205,6 +3205,63 @@ module_agents:
     spawns: []
     can_be_called_by:
     - ai-task-executor
+  accounting-sync:
+    description: Pull e-racuni data into local state (the only agent that calls the API)
+    version: 1.0.0
+    source: 1-datafund/.datacore/modules/datafund-accounting/agents/accounting-sync.md
+    module: datafund-accounting
+    skills:
+    - api-sync
+    - state-management
+    spawns: []
+    can_be_called_by: []
+  accounting-overview:
+    description: Cash, receivables, payables, net position
+    version: 1.0.0
+    source: 1-datafund/.datacore/modules/datafund-accounting/agents/accounting-overview.md
+    module: datafund-accounting
+    skills:
+    - financial-overview
+    spawns: []
+    can_be_called_by: []
+  pending-payments:
+    description: Outstanding payables grouped by vendor with aging
+    version: 1.0.0
+    source: 1-datafund/.datacore/modules/datafund-accounting/agents/pending-payments.md
+    module: datafund-accounting
+    skills:
+    - payables-analysis
+    - aging-report
+    spawns: []
+    can_be_called_by: []
+  payment-planner:
+    description: Ranked payment proposal — proposes only, never executes
+    version: 1.0.0
+    source: 1-datafund/.datacore/modules/datafund-accounting/agents/payment-planner.md
+    module: datafund-accounting
+    skills:
+    - payment-planning
+    - cash-flow-ranking
+    spawns: []
+    can_be_called_by: []
+  spend-analyzer:
+    description: Spend by cost centre, category, or project
+    version: 1.0.0
+    source: 1-datafund/.datacore/modules/datafund-accounting/agents/spend-analyzer.md
+    module: datafund-accounting
+    skills:
+    - spend-analysis
+    spawns: []
+    can_be_called_by: []
+  invoice-classifier:
+    description: Assigns cost centre/category/project; writes the overlay only
+    version: 1.0.0
+    source: 1-datafund/.datacore/modules/datafund-accounting/agents/invoice-classifier.md
+    module: datafund-accounting
+    skills:
+    - invoice-classification
+    spawns: []
+    can_be_called_by: []
 knowledge_locations:
   gtd:
     description: GTD methodology and workflows
