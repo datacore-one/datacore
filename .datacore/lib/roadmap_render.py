@@ -431,6 +431,17 @@ footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);
 .step .never{margin-top:14px;padding:12px 14px;border-radius:7px;background:var(--accent-soft);
   color:var(--accent);font-size:14px;line-height:1.5;max-width:72ch}
 .step.thru .never{background:var(--paper);border:1px solid color-mix(in srgb,var(--accent) 34%,transparent)}
+
+.hook{font-family:'Literata',Georgia,serif;font-size:clamp(24px,3.4vw,34px);line-height:1.22;
+  color:var(--ink);max-width:20ch;margin:26px 0 18px;letter-spacing:-.012em;text-wrap:balance}
+.thesis{max-width:64ch;font-size:16.5px;line-height:1.6;color:var(--body);margin-bottom:6px}
+.drive{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:9px;
+  letter-spacing:.15em;text-transform:uppercase;color:var(--accent);
+  background:var(--accent-soft);padding:3px 9px;border-radius:4px;margin-bottom:12px}
+.horizon{margin-top:22px;padding:22px 24px;border-radius:10px;background:var(--raised);
+  border:1px solid var(--rule)}
+.horizon p:last-child{max-width:66ch;font-family:'Literata',Georgia,serif;font-size:17px;
+  line-height:1.55;color:var(--ink)}
 .figure{margin:22px 0 0;overflow-x:auto;border:1px solid var(--rule);border-radius:10px;
   background:var(--surface);padding:20px 8px}
 .figure svg{display:block;min-width:940px;width:100%;height:auto}
@@ -768,20 +779,27 @@ chips.forEach(c=>c.addEventListener('click',()=>{
 
 
 def render_plan(r):
-    """Master plan — each step a leap, with its mechanism and its principle."""
+    """Master plan — each step names its drive and reaches it in one step."""
     out = ""
     for s in r.get("master_plan") or []:
         thru = s["step"] == "throughline"
         num = "under<br>all<br>four" if thru else e(s["step"])
         out += (f'<div class="step{" thru" if thru else ""}">'
                 f'<div class="num">{num}</div><div class="stepbody">'
-                f'<p class="today"><b>today</b>{e(s["today"]).strip()}</p>'
+                f'<span class="drive">{e(s["drive"])}</span>'
+                f'<p class="today">{e(s["today"]).strip()}</p>'
                 f'<div class="do">{e(s["do"])}</div>'
                 f'<p class="how">{e(s["how"]).strip()}</p>'
                 f'<p class="never"><b>never</b>{e(s["never"]).strip()}</p>'
                 f'</div></div>')
-    ref = (f'<p class="refusal">{e(r["refusal"]).strip()}</p>' if r.get("refusal") else "")
-    return ref + f'<div class="plan">{out}</div>'
+    head = ""
+    if r.get("hook"):
+        head += f'<p class="hook">{e(r["hook"]).strip()}</p>'
+    if r.get("thesis"):
+        head += f'<p class="thesis">{e(r["thesis"]).strip()}</p>'
+    tail = (f'<div class="horizon"><p class="eyebrow">where it goes</p>'
+            f'<p>{e(r["horizon"]).strip()}</p></div>') if r.get("horizon") else ""
+    return head + f'<div class="plan">{out}</div>' + tail
 
 
 def render_intents():
@@ -1061,9 +1079,9 @@ def render_html(r):
   <section>
     <div class="sec-head"><h2>The master plan</h2>
       <span class="eyebrow">five lines</span></div>
-    <p class="sec-sub">Four leaps, not four business stages. Each names what becomes true that
-    was not true before, how we get there commercially, and the principle that step will not
-    trade away to get there faster.</p>
+    <p class="sec-sub">Four leaps. Each names the drive it aims at before it is written and
+    reaches it in one step — status first, self-protection last, because opening on risk makes
+    a reader defend what they already built.</p>
     {plan_html}
   </section>
   <section>
