@@ -728,8 +728,8 @@ whoever produced it. Each arrow is labelled with the condition that must be true
 <rect x="84" y="352" width="280" height="112" rx="6" fill="var(--fill-opt)" stroke="var(--stroke-opt)" stroke-width="1" stroke-dasharray="4,3"/>
 <rect x="92" y="358" width="64" height="12" rx="2" fill="none" stroke="var(--stroke-opt)" stroke-width="0.8"/>
 <text x="124" y="367" fill="var(--soft)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">OWNABLE</text>
-<text x="224" y="408" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Outfit',sans-serif" text-anchor="middle">A pack is a reputation object</text>
-<text x="224" y="428" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">M4 · author · installs · public index</text>
+<text x="224" y="408" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Outfit',sans-serif" text-anchor="middle">Other agents learn to work with you</text>
+<text x="224" y="428" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">M4 · publish · installs · demand</text>
 <rect x="164" y="440" width="120" height="16" rx="4" fill="var(--paper)" stroke="var(--stroke-opt)" stroke-width="0.8"/>
 <text x="224" y="451" fill="var(--soft)" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">G3 · 1M AGENTS</text>
 
