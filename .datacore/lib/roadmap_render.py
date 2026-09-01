@@ -442,6 +442,17 @@ footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);
   border:1px solid var(--rule)}
 .horizon p:last-child{max-width:66ch;font-family:'Literata',Georgia,serif;font-size:17px;
   line-height:1.55;color:var(--ink)}
+
+.vhead{font-family:'Literata',Georgia,serif;font-size:clamp(21px,2.6vw,27px);line-height:1.28;
+  color:var(--ink);max-width:26ch;margin-bottom:14px;letter-spacing:-.01em;text-wrap:balance}
+.vclaim{max-width:66ch;font-size:15.5px;line-height:1.6;color:var(--body)}
+.vhalves{max-width:66ch;font-size:14px;line-height:1.55;color:var(--muted);margin-top:12px;
+  padding-left:14px;border-left:2px solid var(--accent)}
+.vhorizon{max-width:66ch;font-family:'Literata',Georgia,serif;font-size:16px;line-height:1.55;
+  color:var(--ink);margin-top:16px}
+.radius{margin-top:7px;font-size:13.5px;color:var(--accent)}
+.radius b{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--faint);margin-right:8px;font-weight:400}
 .figure{margin:22px 0 0;overflow-x:auto;border:1px solid var(--rule);border-radius:10px;
   background:var(--surface);padding:20px 8px}
 .figure svg{display:block;min-width:940px;width:100%;height:auto}
@@ -797,8 +808,12 @@ def render_plan(r):
         head += f'<p class="hook">{e(r["hook"]).strip()}</p>'
     if r.get("thesis"):
         head += f'<p class="thesis">{e(r["thesis"]).strip()}</p>'
-    tail = (f'<div class="horizon"><p class="eyebrow">where it goes</p>'
-            f'<p>{e(r["horizon"]).strip()}</p></div>') if r.get("horizon") else ""
+    v = r.get("vision") or {}
+    tail = (f'<div class="horizon"><p class="eyebrow">the vision</p>'
+            f'<p class="vhead">{e(v.get("headline",""))}</p>'
+            f'<p class="vclaim">{e(v.get("the_claim","")).strip()}</p>'
+            f'<p class="vhalves">{e(v.get("both_halves_matter","")).strip()}</p>'
+            f'<p class="vhorizon">{e(v.get("horizon","")).strip()}</p></div>') if v else ""
     return head + f'<div class="plan">{out}</div>' + tail
 
 
@@ -835,7 +850,7 @@ def render_intents():
 
 
 def render_milestones(r):
-    """The arc: the few state changes that each let the next one happen."""
+    """The arc: each milestone widens who the compounding is for."""
     out = ""
     for m in r.get("milestones") or []:
         gate = (f'<div class="mgate"><b>gate</b><span>{e(m["gate"])}</span></div>'
@@ -861,10 +876,12 @@ def render_milestones(r):
                       f'<p class="fd">{e(f["delivers"]).strip()}</p>{why}</div>')
         feats = (f'<div class="feats"><p class="eyebrow">what gets built to get there</p>'
                  f'{feats}</div>') if feats else ""
+        rad = (f'<p class="radius"><b>compounds for</b>{e(m["compounds_for"])}</p>'
+               if m.get("compounds_for") else "")
         out += (f'<div class="mile" id="m-{e(m["id"])}"><div class="rail"><span class="mid">{e(m["id"])}</span>'
                 f'<span class="state {e(m["state"])}">{e(m["state"].replace("_", " "))}</span>'
                 f'<span class="mid">{e(m.get("tier", ""))}</span></div>'
-                f'<div><div class="mt">{e(m["title"])}</div>'
+                f'<div><div class="mt">{e(m["title"])}</div>{rad}'
                 f'<p class="ev">{e(m["evidence"]).strip()}</p>{gate}'
                 f'<div class="imeta">{its}</div>{feats}</div></div>')
     return f'<div class="miles">{out}</div>'
@@ -1095,10 +1112,10 @@ def render_html(r):
   <section>
     <div class="sec-head"><h2>The roadmap</h2>
       <span class="eyebrow">the story, end to end</span></div>
-    <p class="sec-sub">Not tasks — the handful of state changes that each let the next one
-    happen. Gated by conditions rather than dates, so the diagram is a dependency chain and not
-    a timeline: spacing these on a time axis would invent precision nobody has. State is honest —
-    <em>shipped</em> means shipped, and one of these is a claim the ICE one-pager already rests on.</p>
+    <p class="sec-sub">Each milestone does not add a feature — it widens <em>who the compounding
+    is for</em>: one person, one team, the organisation, between organisations, the whole network.
+    That is the test for belonging on this ladder. Gated by conditions rather than dates, so this
+    is a dependency chain and not a timeline. State is honest: <em>shipped</em> means shipped.</p>
     <figure class="figure">{ARC_DIAGRAM}</figure>
     {miles_html}
   </section>
