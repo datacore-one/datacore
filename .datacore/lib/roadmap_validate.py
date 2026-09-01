@@ -33,7 +33,7 @@ INTENTS_ORG = REPO / "5-plur" / "org" / "intents.org"
 ITEM_KEYS = {
     "id", "track", "title", "outcome", "serves", "drive", "horizon", "status",
     "blocked_on", "delegable", "owner", "gh", "org", "unblocks", "shipped",
-    "gate", "note", "also", "embargoed", "hypothesis",
+    "gate", "note", "also", "embargoed", "hypothesis", "lane", "rice",
 }
 REQUIRED = {"id", "track", "title", "outcome", "serves", "horizon", "status", "shipped"}
 

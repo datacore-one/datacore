@@ -373,6 +373,20 @@ footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);
 .vs{color:var(--muted);font-family:'JetBrains Mono',monospace;font-size:12.5px;white-space:nowrap}
 .vi{color:var(--body);max-width:56ch}
 @media (max-width:760px){.ladderwrap{grid-template-columns:1fr}.rung{grid-template-columns:1fr auto}}
+
+.goals-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-top:22px}
+.goal-card{background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:18px 20px}
+.goal-card .gid{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--accent)}
+.goal-card .gname{font-family:'Literata',Georgia,serif;font-size:19px;color:var(--ink);line-height:1.25}
+.gmotion,.gfrom{font-size:13px;color:var(--muted);margin-top:8px}
+.gmotion b,.gfrom b{font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--faint);margin-right:7px;font-weight:400}
+.rice{font-family:'JetBrains Mono',monospace;font-size:10.5px;padding:2.5px 8px;border-radius:4px;
+  background:var(--accent-soft);color:var(--accent);white-space:nowrap;cursor:help}
+.ricewhy{font-size:13px;color:var(--faint);margin-top:6px;max-width:76ch;font-style:italic}
+.tag.lane{background:transparent;color:var(--faint);border-color:var(--rule)}
+.chip.lanechip[aria-pressed="true"]{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.fsep{width:1px;background:var(--rule);align-self:stretch;margin:0 5px}
 .figure{margin:22px 0 0;overflow-x:auto;border:1px solid var(--rule);border-radius:10px;
   background:var(--surface);padding:20px 8px}
 .figure svg{display:block;min-width:940px;width:100%;height:auto}
@@ -575,15 +589,124 @@ tracks; nine further items are deliberately held on conditions and are not queue
 </svg>"""
 
 
+ARC_DIAGRAM = """<svg viewBox="0 0 1120 580" role="img" aria-labelledby="arc-title arc-desc" xmlns="http://www.w3.org/2000/svg">
+<title id="arc-title">The PLUR roadmap arc, from shipped memory to the vision</title>
+<desc id="arc-desc">Six milestones in a gated chain: memory that persists is shipped; one customer
+becoming a pattern is in progress and carries the enterprise-clients and fundraising goals; memory
+you can prove is not shipped and gates both remaining rungs; a pack as a reputation object and
+knowledge carrying a price are both gated on conditions; the vision is that knowledge stays owned by
+whoever produced it. Each arrow is labelled with the condition that must be true to cross it.</desc>
+<defs>
+<marker id="a" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--muted)"/></marker>
+<marker id="aa" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--accent)"/></marker>
+</defs>
+<rect width="100%" height="100%" fill="var(--paper)"/>
+
+<!-- connectors first -->
+<line x1="364" y1="196" x2="420" y2="196" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#a)"/>
+<rect x="368" y="176" width="48" height="12" rx="2" fill="var(--paper)"/>
+<text x="392" y="185" fill="var(--soft)" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">SHIPPED</text>
+
+<line x1="700" y1="196" x2="756" y2="196" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#a)"/>
+<rect x="704" y="176" width="48" height="12" rx="2" fill="var(--paper)"/>
+<text x="728" y="185" fill="var(--soft)" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">SRC SEPT</text>
+
+<!-- M3 -> M4, the accent route: provenance is the precondition -->
+<path d="M 896,252 V 292 Q 896,300 888,300 H 232 Q 224,300 224,308 V 352"
+      fill="none" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#aa)"/>
+<rect x="472" y="280" width="176" height="12" rx="2" fill="var(--paper)"/>
+<text x="560" y="289" fill="var(--accent)" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">PROVENANCE ACTUALLY WRITTEN</text>
+
+<line x1="364" y1="408" x2="420" y2="408" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#a)"/>
+<rect x="368" y="388" width="48" height="12" rx="2" fill="var(--paper)"/>
+<text x="392" y="397" fill="var(--soft)" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">PACKTRUST</text>
+
+<line x1="700" y1="408" x2="756" y2="408" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#a)"/>
+<rect x="704" y="388" width="48" height="12" rx="2" fill="var(--paper)"/>
+<text x="728" y="397" fill="var(--soft)" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">ROI LOOP</text>
+
+<!-- M1 -->
+<rect x="84" y="140" width="280" height="112" rx="6" fill="var(--paper)"/>
+<rect x="84" y="140" width="280" height="112" rx="6" fill="var(--fill-store)" stroke="var(--muted)" stroke-width="1"/>
+<rect x="92" y="146" width="60" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+<text x="122" y="155" fill="var(--muted)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">USABLE</text>
+<text x="224" y="196" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Outfit',sans-serif" text-anchor="middle">Memory that persists</text>
+<text x="224" y="216" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">M1 · core v0.19.4 · R@5 98.0%</text>
+<rect x="176" y="228" width="96" height="16" rx="4" fill="var(--paper-2)"/>
+<text x="224" y="239" fill="var(--go)" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">SHIPPED</text>
+
+<!-- M2 -->
+<rect x="420" y="140" width="280" height="112" rx="6" fill="var(--paper)"/>
+<rect x="420" y="140" width="280" height="112" rx="6" fill="var(--paper-2)" stroke="var(--ink)" stroke-width="1"/>
+<rect x="428" y="146" width="76" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+<text x="466" y="155" fill="var(--muted)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">GOVERNABLE</text>
+<text x="560" y="196" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Outfit',sans-serif" text-anchor="middle">One customer becomes a pattern</text>
+<text x="560" y="216" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">M2 · IGEA signed · SRC onboarding</text>
+<rect x="472" y="228" width="80" height="16" rx="4" fill="var(--paper)" stroke="var(--stroke-opt)" stroke-width="0.8"/>
+<text x="512" y="239" fill="var(--ink)" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">G1 CLIENTS</text>
+<rect x="560" y="228" width="88" height="16" rx="4" fill="var(--paper)" stroke="var(--stroke-opt)" stroke-width="0.8"/>
+<text x="604" y="239" fill="var(--ink)" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">G2 RAISE</text>
+
+<!-- M3 — FOCAL -->
+<rect x="756" y="140" width="280" height="112" rx="6" fill="var(--paper)"/>
+<rect x="756" y="140" width="280" height="112" rx="6" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="764" y="146" width="64" height="12" rx="2" fill="none" stroke="var(--accent)" stroke-opacity="0.5" stroke-width="0.8"/>
+<text x="796" y="155" fill="var(--accent)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">OWNABLE</text>
+<text x="896" y="196" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Outfit',sans-serif" text-anchor="middle">Memory you can prove</text>
+<text x="896" y="216" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">M3 · origin · chain · signature</text>
+<rect x="836" y="228" width="120" height="16" rx="4" fill="var(--paper)" stroke="var(--accent)" stroke-width="0.8"/>
+<text x="896" y="239" fill="var(--accent)" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">NOT SHIPPED</text>
+
+<!-- M4 -->
+<rect x="84" y="352" width="280" height="112" rx="6" fill="var(--paper)"/>
+<rect x="84" y="352" width="280" height="112" rx="6" fill="var(--fill-opt)" stroke="var(--stroke-opt)" stroke-width="1" stroke-dasharray="4,3"/>
+<rect x="92" y="358" width="72" height="12" rx="2" fill="none" stroke="var(--stroke-opt)" stroke-width="0.8"/>
+<text x="128" y="367" fill="var(--soft)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">TRADEABLE</text>
+<text x="224" y="408" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Outfit',sans-serif" text-anchor="middle">A pack is a reputation object</text>
+<text x="224" y="428" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">M4 · author · installs · index</text>
+<rect x="164" y="440" width="120" height="16" rx="4" fill="var(--paper)" stroke="var(--stroke-opt)" stroke-width="0.8"/>
+<text x="224" y="451" fill="var(--soft)" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">G3 · 1M AGENTS</text>
+
+<!-- M5 -->
+<rect x="420" y="352" width="280" height="112" rx="6" fill="var(--paper)"/>
+<rect x="420" y="352" width="280" height="112" rx="6" fill="var(--fill-opt)" stroke="var(--stroke-opt)" stroke-width="1" stroke-dasharray="4,3"/>
+<rect x="428" y="358" width="72" height="12" rx="2" fill="none" stroke="var(--stroke-opt)" stroke-width="0.8"/>
+<text x="464" y="367" fill="var(--soft)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">TRADEABLE</text>
+<text x="560" y="408" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Outfit',sans-serif" text-anchor="middle">Knowledge carries a price</text>
+<text x="560" y="428" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">M5 · x402 · escrow · authorship</text>
+<rect x="488" y="440" width="144" height="16" rx="4" fill="var(--paper)" stroke="var(--stroke-opt)" stroke-width="0.8"/>
+<text x="560" y="451" fill="var(--soft)" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">FEE UNRECONCILED</text>
+
+<!-- V -->
+<rect x="756" y="352" width="280" height="112" rx="6" fill="var(--paper)"/>
+<rect x="756" y="352" width="280" height="112" rx="6" fill="var(--fill-store)" stroke="var(--muted)" stroke-width="1"/>
+<rect x="764" y="358" width="52" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+<text x="790" y="367" fill="var(--muted)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">VISION</text>
+<text x="896" y="408" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Outfit',sans-serif" text-anchor="middle">Knowledge stays owned</text>
+<text x="896" y="428" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">by whoever produced it</text>
+
+<!-- legend -->
+<line x1="84" y1="504" x2="1036" y2="504" stroke="var(--rule)" stroke-width="0.8"/>
+<text x="84" y="524" fill="var(--soft)" font-size="8" font-family="'JetBrains Mono',monospace" letter-spacing="0.14em">LEGEND</text>
+<rect x="172" y="516" width="24" height="12" rx="3" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<text x="204" y="524" fill="var(--muted)" font-size="8" font-family="'JetBrains Mono',monospace" letter-spacing="0.06em">THE PRECONDITION, NOT SHIPPED</text>
+<rect x="464" y="516" width="24" height="12" rx="3" fill="var(--fill-opt)" stroke="var(--stroke-opt)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="496" y="524" fill="var(--muted)" font-size="8" font-family="'JetBrains Mono',monospace" letter-spacing="0.06em">GATED ON A CONDITION</text>
+<line x1="716" y1="520" x2="744" y2="520" stroke="var(--muted)" stroke-width="1.2"/>
+<text x="752" y="524" fill="var(--muted)" font-size="8" font-family="'JetBrains Mono',monospace" letter-spacing="0.06em">ARROW LABEL = WHAT MUST BE TRUE TO CROSS</text>
+</svg>"""
+
+
 JS = """
 const chips=[...document.querySelectorAll('.chip')];
 const items=[...document.querySelectorAll('.item')];
-let active={track:null,owner:null};
+let active={track:null,owner:null,lane:null};
 function apply(){
   items.forEach(el=>{
     const okT=!active.track||el.dataset.track===active.track;
     const okO=!active.owner||el.dataset.owner===active.owner;
-    el.classList.toggle('hidden',!(okT&&okO));
+    const okL=!active.lane||el.dataset.lane===active.lane;
+    el.classList.toggle('hidden',!(okT&&okO&&okL));
   });
   document.querySelectorAll('.hgroup').forEach(g=>{
     const vis=[...g.querySelectorAll('.item')].filter(i=>!i.classList.contains('hidden')).length;
@@ -655,17 +778,22 @@ def render_milestones(r):
         its = ("".join(f'<span class="tag">{e(i)}</span>' for i in m.get("items") or [])
                or '<span class="tag">—</span>')
         feats = ""
-        for f in (r.get("features") or []):
-            if f.get("milestone") != m["id"]:
-                continue
+        mine = [f for f in (r.get("features") or []) if f.get("milestone") == m["id"]]
+        mine.sort(key=lambda x: -(x.get("rice", {}).get("score") or 0))
+        for f in mine:
             repo, _, num = f["gh"].rpartition("#")
             kids = (f'<span class="kids">{len(f["children"])} sub-issues</span>'
                     if f.get("children") else "")
+            rc = f.get("rice")
+            rice = (f'<span class="rice" title="reach {rc["reach"]} x impact {rc["impact"]}'
+                    f' x confidence {rc["confidence"]} / effort {rc["effort"]}">'
+                    f'RICE {rc["score"]}</span>') if rc else ""
+            why = f'<p class="ricewhy">{e(f["rice_why"]).strip()}</p>' if f.get("rice_why") else ""
             feats += (f'<div class="feat"><div class="fh">'
                       f'<a class="fgh" href="https://github.com/{e(repo)}/issues/{e(num)}">'
                       f'{e(repo.split("/")[-1])}#{e(num)}</a>'
-                      f'<span class="ft">{e(f["title"])}</span>{kids}</div>'
-                      f'<p class="fd">{e(f["delivers"]).strip()}</p></div>')
+                      f'<span class="ft">{e(f["title"])}</span>{kids}{rice}</div>'
+                      f'<p class="fd">{e(f["delivers"]).strip()}</p>{why}</div>')
         feats = (f'<div class="feats"><p class="eyebrow">what gets built to get there</p>'
                  f'{feats}</div>') if feats else ""
         out += (f'<div class="mile"><div class="rail"><span class="mid">{e(m["id"])}</span>'
@@ -717,6 +845,19 @@ def render_verticals(r):
     return (f'<div class="tablewrap"><table class="vtab"><thead><tr>'
             f'<th>Domain</th><th>System of record</th><th>Instance</th>'
             f'</tr></thead><tbody>{out}</tbody></table></div>') if out else ""
+
+
+def render_goals(r):
+    out = ""
+    for g in r.get("goals") or []:
+        rung = f'<span class="tag">{e(g["rung"])}</span>' if g.get("rung") else ""
+        out += (f'<div class="goal-card"><div class="hd">'
+                f'<span class="gid">{e(g["id"])}</span>'
+                f'<span class="gname">{e(g["goal"])}</span>{rung}</div>'
+                f'<p class="gmotion"><b>motion</b> {e(g["motion"])}</p>'
+                f'<p class="gfrom"><b>from</b> {e(g["from"])}</p>'
+                f'<p class="fd">{e(g["note"]).strip()}</p></div>')
+    return f'<div class="goals-grid">{out}</div>' if out else ""
 
 
 def e(s):
@@ -775,6 +916,7 @@ def render_html(r):
         for i in grp:
             tags = f'<span class="tag track">{e(i["track"])}</span>'
             tags += f'<span class="tag">{e(i.get("owner", "—"))}</span>'
+            tags += f'<span class="tag lane">{e(i.get("lane", ""))}</span>'
             st = i.get("status")
             tags += f'<span class="tag {"go" if st == "in_progress" else ""}">{e(st)}</span>'
             b = i.get("blocked_on")
@@ -792,6 +934,7 @@ def render_html(r):
                     if i.get("gate") else "")
             rows += (
                 f'<div class="item" data-track="{e(i["track"])}" data-owner="{e(i.get("owner"))}"'
+                f' data-lane="{e(i.get("lane"))}"'
                 f' data-block="{e(b)}" data-h="{e(h)}" data-s="{e(st)}">'
                 f'<div class="itop"><span class="iid">{e(i["id"])}</span>'
                 f'<span class="ititle">{e(i["title"])}</span></div>'
@@ -810,6 +953,7 @@ def render_html(r):
     ladder_html = render_ladder(r)
     ents_html = render_entities(r)
     verts_html = render_verticals(r)
+    goals_html = render_goals(r)
     plan_html = render_plan(r)
     intents_html = render_intents()
     miles_html = render_milestones(r)
@@ -821,6 +965,10 @@ def render_html(r):
     ochips = "".join(
         f'<button class="chip" data-key="owner" data-val="{e(o)}" aria-pressed="false">{e(o)}</button>'
         for o in owners
+    )
+    lchips = "".join(
+        f'<button class="chip lanechip" data-key="lane" data-val="{e(k)}" aria-pressed="false"'
+        f' title="{e(v)}">{e(k)}</button>' for k, v in (r.get("lanes") or {}).items()
     )
 
     gaps = ["dss-rail", "lloyds-of-london-flank", "lloyds-phase-a", "lloyds-phase-b", "lloyds-phase-c"]
@@ -869,12 +1017,12 @@ def render_html(r):
   </section>
 
   <section>
-    <div class="sec-head"><h2>Who launches what</h2>
-      <span class="eyebrow">entity boundaries</span></div>
-    <p class="sec-sub">The network is not launched from PLUR Ltd, and that is load-bearing rather
-    than administrative: the absence of a value-capture token is what lets PLUR be the cross-vendor
-    intermediary at all.</p>
-    {ents_html}
+    <div class="sec-head"><h2>The three goals</h2>
+      <span class="eyebrow">three motions, three clocks</span></div>
+    <p class="sec-sub">Set 2026-09-01, replacing a single metric that spanned two motions with
+    different physics and could not be true of both. A sales cycle, a raise, and an ecosystem
+    do not move at the same speed, so they are not one number.</p>
+    {goals_html}
   </section>
 
   <section>
@@ -900,8 +1048,10 @@ def render_html(r):
     <div class="sec-head"><h2>The arc</h2>
       <span class="eyebrow">milestones toward the vision</span></div>
     <p class="sec-sub">Not tasks — the handful of state changes that each let the next one
-    happen. State is honest: <em>shipped</em> means shipped, and one of these is a claim the
-    ICE one-pager already rests on.</p>
+    happen. Gated by conditions rather than dates, so the diagram is a dependency chain and not
+    a timeline: spacing these on a time axis would invent precision nobody has. State is honest —
+    <em>shipped</em> means shipped, and one of these is a claim the ICE one-pager already rests on.</p>
+    <figure class="figure">{ARC_DIAGRAM}</figure>
     {miles_html}
   </section>
 
@@ -930,7 +1080,7 @@ def render_html(r):
 
   <section>
     <div class="sec-head"><h2>The board</h2><span class="eyebrow">filter to narrow</span></div>
-    <div class="filters">{tchips}<span style="width:10px"></span>{ochips}</div>
+    <div class="filters">{lchips}<span class="fsep"></span>{tchips}<span class="fsep"></span>{ochips}</div>
     {board}
   </section>
 
