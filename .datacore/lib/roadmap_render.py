@@ -417,6 +417,20 @@ footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);
 .hgroup{margin-top:20px}
 
 .rung .rms{display:flex;gap:5px}
+
+.refusal{max-width:70ch;font-family:'Literata',Georgia,serif;font-size:19px;line-height:1.55;
+  color:var(--ink);margin:20px 0 4px}
+.step{grid-template-columns:64px 1fr;padding:24px}
+.stepbody{min-width:0}
+.step .today{font-size:14px;color:var(--muted);max-width:72ch}
+.step .today b,.step .never b{display:block;font-family:'JetBrains Mono',monospace;font-size:9px;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:4px;font-weight:400}
+.step .do{font-family:'Literata',Georgia,serif;font-size:21px;color:var(--ink);
+  line-height:1.3;margin:14px 0 10px}
+.step .how{font-size:14.5px;color:var(--body);max-width:72ch}
+.step .never{margin-top:14px;padding:12px 14px;border-radius:7px;background:var(--accent-soft);
+  color:var(--accent);font-size:14px;line-height:1.5;max-width:72ch}
+.step.thru .never{background:var(--paper);border:1px solid color-mix(in srgb,var(--accent) 34%,transparent)}
 .figure{margin:22px 0 0;overflow-x:auto;border:1px solid var(--rule);border-radius:10px;
   background:var(--surface);padding:20px 8px}
 .figure svg{display:block;min-width:940px;width:100%;height:auto}
@@ -754,16 +768,20 @@ chips.forEach(c=>c.addEventListener('click',()=>{
 
 
 def render_plan(r):
-    """Master plan — four sequential steps plus one throughline."""
+    """Master plan — each step a leap, with its mechanism and its principle."""
     out = ""
     for s in r.get("master_plan") or []:
         thru = s["step"] == "throughline"
-        num = "runs<br>under<br>all" if thru else e(s["step"])
-        out += (f'<div class="step{" thru" if thru else ""}"><div class="num">{num}</div>'
-                f'<div><div class="do">{e(s["do"])}</div>'
-                f'<p class="why">{e(s["why"]).strip()}</p>'
+        num = "under<br>all<br>four" if thru else e(s["step"])
+        out += (f'<div class="step{" thru" if thru else ""}">'
+                f'<div class="num">{num}</div><div class="stepbody">'
+                f'<p class="today"><b>today</b>{e(s["today"]).strip()}</p>'
+                f'<div class="do">{e(s["do"])}</div>'
+                f'<p class="how">{e(s["how"]).strip()}</p>'
+                f'<p class="never"><b>never</b>{e(s["never"]).strip()}</p>'
                 f'</div></div>')
-    return f'<div class="plan">{out}</div>'
+    ref = (f'<p class="refusal">{e(r["refusal"]).strip()}</p>' if r.get("refusal") else "")
+    return ref + f'<div class="plan">{out}</div>'
 
 
 def render_intents():
@@ -1043,9 +1061,9 @@ def render_html(r):
   <section>
     <div class="sec-head"><h2>The master plan</h2>
       <span class="eyebrow">five lines</span></div>
-    <p class="sec-sub">Four steps, each one paying for the next, plus one throughline that
-    runs under all of them. If a roadmap item cannot be traced to a step here, that is the
-    question to ask about it.</p>
+    <p class="sec-sub">Four leaps, not four business stages. Each names what becomes true that
+    was not true before, how we get there commercially, and the principle that step will not
+    trade away to get there faster.</p>
     {plan_html}
   </section>
   <section>
