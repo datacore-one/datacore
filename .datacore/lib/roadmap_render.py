@@ -415,6 +415,8 @@ footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);
 .serves{font-size:10px;margin-top:6px;opacity:.85}
 .igate{margin-top:6px;font-size:12.5px}
 .hgroup{margin-top:20px}
+
+.rung .rms{display:flex;gap:5px}
 .figure{margin:22px 0 0;overflow-x:auto;border:1px solid var(--rule);border-radius:10px;
   background:var(--surface);padding:20px 8px}
 .figure svg{display:block;min-width:940px;width:100%;height:auto}
@@ -668,8 +670,8 @@ whoever produced it. Each arrow is labelled with the condition that must be true
 <rect x="420" y="140" width="280" height="112" rx="6" fill="var(--paper-2)" stroke="var(--ink)" stroke-width="1"/>
 <rect x="428" y="146" width="76" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
 <text x="466" y="155" fill="var(--muted)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">GOVERNABLE</text>
-<text x="560" y="196" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Outfit',sans-serif" text-anchor="middle">One customer becomes a pattern</text>
-<text x="560" y="216" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">M2 · one signed · one onboarding</text>
+<text x="560" y="196" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Outfit',sans-serif" text-anchor="middle">One person’s memory becomes a team’s</text>
+<text x="560" y="216" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">M2 · review · scopes · permissions</text>
 <rect x="472" y="228" width="80" height="16" rx="4" fill="var(--paper)" stroke="var(--stroke-opt)" stroke-width="0.8"/>
 <text x="512" y="239" fill="var(--ink)" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">G1 CLIENTS</text>
 <rect x="560" y="228" width="88" height="16" rx="4" fill="var(--paper)" stroke="var(--stroke-opt)" stroke-width="0.8"/>
@@ -688,10 +690,10 @@ whoever produced it. Each arrow is labelled with the condition that must be true
 <!-- M4 -->
 <rect x="84" y="352" width="280" height="112" rx="6" fill="var(--paper)"/>
 <rect x="84" y="352" width="280" height="112" rx="6" fill="var(--fill-opt)" stroke="var(--stroke-opt)" stroke-width="1" stroke-dasharray="4,3"/>
-<rect x="92" y="358" width="72" height="12" rx="2" fill="none" stroke="var(--stroke-opt)" stroke-width="0.8"/>
-<text x="128" y="367" fill="var(--soft)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">TRADEABLE</text>
+<rect x="92" y="358" width="64" height="12" rx="2" fill="none" stroke="var(--stroke-opt)" stroke-width="0.8"/>
+<text x="124" y="367" fill="var(--soft)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">OWNABLE</text>
 <text x="224" y="408" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Outfit',sans-serif" text-anchor="middle">A pack is a reputation object</text>
-<text x="224" y="428" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">M4 · author · installs · index</text>
+<text x="224" y="428" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">M4 · author · installs · public index</text>
 <rect x="164" y="440" width="120" height="16" rx="4" fill="var(--paper)" stroke="var(--stroke-opt)" stroke-width="0.8"/>
 <text x="224" y="451" fill="var(--soft)" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">G3 · 1M AGENTS</text>
 
@@ -700,8 +702,8 @@ whoever produced it. Each arrow is labelled with the condition that must be true
 <rect x="420" y="352" width="280" height="112" rx="6" fill="var(--fill-opt)" stroke="var(--stroke-opt)" stroke-width="1" stroke-dasharray="4,3"/>
 <rect x="428" y="358" width="72" height="12" rx="2" fill="none" stroke="var(--stroke-opt)" stroke-width="0.8"/>
 <text x="464" y="367" fill="var(--soft)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">TRADEABLE</text>
-<text x="560" y="408" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Outfit',sans-serif" text-anchor="middle">Knowledge carries a price</text>
-<text x="560" y="428" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">M5 · x402 · escrow · authorship</text>
+<text x="560" y="408" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Outfit',sans-serif" text-anchor="middle">The agentic knowledge economy</text>
+<text x="560" y="428" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">M5 · packs trade between agents</text>
 <rect x="488" y="440" width="144" height="16" rx="4" fill="var(--paper)" stroke="var(--stroke-opt)" stroke-width="0.8"/>
 <text x="560" y="451" fill="var(--soft)" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">FEE UNRECONCILED</text>
 
@@ -842,8 +844,9 @@ def render_ladder(r):
                  f'<span class="rname">{e(rg["rung"])}</span>'
                  f'<span class="ris">{e(rg["is"]).strip()}</span>'
                  f'<span class="rst">{e(rg["state"])}</span>'
-                 f'<a class="rm" href="#m-{e(rg.get("milestone",""))}">'
-                 f'{e(rg.get("milestone",""))}</a></div>')
+                 f'<span class="rms">' + "".join(
+                     f'<a class="rm" href="#m-{e(mid)}">{e(mid)}</a>'
+                     for mid in (rg.get("milestones") or [])) + '</span></div>')
     return (f'<div class="ladderwrap"><div class="spine">'
             f'<span class="eyebrow">the one primitive</span>'
             f'<span class="prim">{e(r.get("primitive",""))}</span>'
