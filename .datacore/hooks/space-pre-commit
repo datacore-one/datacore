@@ -18,7 +18,7 @@
 # Emergency bypass: git commit --no-verify
 
 ALLOWED_DIRS="org journal today 0-inbox 1-tracks 2-projects 3-knowledge 4-outbox 4-archive notes .datacore .claude .git .github"
-ALLOWED_FILES=".gitignore .gitattributes .gitmodules _index.md README.md CLAUDE.md CLAUDE.base.md CLAUDE.space.md CLAUDE.org.md CLAUDE.team.md CLAUDE.local.md SCAFFOLDING.md SCAFFOLDING.base.md SCAFFOLDING.space.md SCAFFOLDING.local.md venture.yaml hypotheses.yaml mail.yaml goals.yaml VISION.md CEO_BOOTSTRAP.md dashboard.md strategy.yaml .DS_Store"
+ALLOWED_FILES=".gitignore .gitattributes .gitmodules _index.md README.md CLAUDE.md CLAUDE.base.md CLAUDE.space.md CLAUDE.org.md CLAUDE.team.md CLAUDE.local.md SCAFFOLDING.md SCAFFOLDING.base.md SCAFFOLDING.space.md SCAFFOLDING.local.md venture.yaml hypotheses.yaml roadmap.yaml mail.yaml goals.yaml VISION.md CEO_BOOTSTRAP.md dashboard.md strategy.yaml .DS_Store"
 
 # Per-space grandfathered entries (legacy dirs/files, one per line)
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
