@@ -387,6 +387,34 @@ footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);
 .tag.lane{background:transparent;color:var(--faint);border-color:var(--rule)}
 .chip.lanechip[aria-pressed="true"]{background:var(--ink);border-color:var(--ink);color:var(--paper)}
 .fsep{width:1px;background:var(--rule);align-self:stretch;margin:0 5px}
+
+.rung .rm{text-decoration:none;border-bottom:1px solid transparent}
+.rung .rm:hover{color:var(--accent);border-bottom-color:var(--accent)}
+.rung .rm:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.kpi{margin-top:14px;padding-top:12px;border-top:1px dashed var(--rule)}
+.kpi .eyebrow{margin:0 0 6px}
+.kh{font-family:'Literata',Georgia,serif;font-size:15px;color:var(--ink)}
+.know{font-size:13px;color:var(--muted);margin-top:4px}
+.know b{font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--faint);margin-right:6px;font-weight:400}
+.klead{list-style:none;padding:0;margin:9px 0 0;display:grid;gap:4px}
+.klead li{font-size:13px;color:var(--body);padding-left:14px;position:relative}
+.klead li::before{content:"→";position:absolute;left:0;color:var(--faint);font-size:11px}
+.rcheck{margin-top:11px;padding:11px 13px;border-radius:7px;background:var(--human-soft);
+  color:var(--human);font-size:13px;line-height:1.5}
+
+/* compact board */
+.items{gap:5px}
+.item{padding:10px 14px 10px 15px;border-radius:7px}
+.item::before{width:2px}
+.itop{gap:8px}
+.ititle{font-size:14px}
+.iout{font-size:13.5px;margin-top:3px}
+.imeta{margin-top:7px;gap:4px}
+.tag{font-size:10px;padding:2px 6px}
+.serves{font-size:10px;margin-top:6px;opacity:.85}
+.igate{margin-top:6px;font-size:12.5px}
+.hgroup{margin-top:20px}
 .figure{margin:22px 0 0;overflow-x:auto;border:1px solid var(--rule);border-radius:10px;
   background:var(--surface);padding:20px 8px}
 .figure svg{display:block;min-width:940px;width:100%;height:auto}
@@ -609,7 +637,7 @@ whoever produced it. Each arrow is labelled with the condition that must be true
 
 <line x1="700" y1="196" x2="756" y2="196" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#a)"/>
 <rect x="704" y="176" width="48" height="12" rx="2" fill="var(--paper)"/>
-<text x="728" y="185" fill="var(--soft)" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">SRC SEPT</text>
+<text x="728" y="185" fill="var(--soft)" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">SEPT GATE</text>
 
 <!-- M3 -> M4, the accent route: provenance is the precondition -->
 <path d="M 896,252 V 292 Q 896,300 888,300 H 232 Q 224,300 224,308 V 352"
@@ -641,7 +669,7 @@ whoever produced it. Each arrow is labelled with the condition that must be true
 <rect x="428" y="146" width="76" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
 <text x="466" y="155" fill="var(--muted)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">GOVERNABLE</text>
 <text x="560" y="196" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Outfit',sans-serif" text-anchor="middle">One customer becomes a pattern</text>
-<text x="560" y="216" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">M2 · IGEA signed · SRC onboarding</text>
+<text x="560" y="216" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">M2 · one signed · one onboarding</text>
 <rect x="472" y="228" width="80" height="16" rx="4" fill="var(--paper)" stroke="var(--stroke-opt)" stroke-width="0.8"/>
 <text x="512" y="239" fill="var(--ink)" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">G1 CLIENTS</text>
 <rect x="560" y="228" width="88" height="16" rx="4" fill="var(--paper)" stroke="var(--stroke-opt)" stroke-width="0.8"/>
@@ -795,7 +823,7 @@ def render_milestones(r):
                       f'<p class="fd">{e(f["delivers"]).strip()}</p>{why}</div>')
         feats = (f'<div class="feats"><p class="eyebrow">what gets built to get there</p>'
                  f'{feats}</div>') if feats else ""
-        out += (f'<div class="mile"><div class="rail"><span class="mid">{e(m["id"])}</span>'
+        out += (f'<div class="mile" id="m-{e(m["id"])}"><div class="rail"><span class="mid">{e(m["id"])}</span>'
                 f'<span class="state {e(m["state"])}">{e(m["state"].replace("_", " "))}</span>'
                 f'<span class="mid">{e(m.get("tier", ""))}</span></div>'
                 f'<div><div class="mt">{e(m["title"])}</div>'
@@ -814,7 +842,8 @@ def render_ladder(r):
                  f'<span class="rname">{e(rg["rung"])}</span>'
                  f'<span class="ris">{e(rg["is"]).strip()}</span>'
                  f'<span class="rst">{e(rg["state"])}</span>'
-                 f'<span class="rm">{e(rg.get("milestone",""))}</span></div>')
+                 f'<a class="rm" href="#m-{e(rg.get("milestone",""))}">'
+                 f'{e(rg.get("milestone",""))}</a></div>')
     return (f'<div class="ladderwrap"><div class="spine">'
             f'<span class="eyebrow">the one primitive</span>'
             f'<span class="prim">{e(r.get("primitive",""))}</span>'
@@ -846,6 +875,19 @@ def render_verticals(r):
             f'</tr></thead><tbody>{out}</tbody></table></div>') if out else ""
 
 
+def _kpi(g):
+    k = g.get("kpi")
+    if not k:
+        return ""
+    lead = "".join(f'<li>{e(x)}</li>' for x in k.get("leading") or [])
+    rc = (f'<p class="rcheck">{e(g["reality_check"]).strip()}</p>'
+          if g.get("reality_check") else "")
+    return (f'<div class="kpi"><p class="eyebrow">how we know</p>'
+            f'<p class="kh">{e(k.get("headline",""))}</p>'
+            f'<p class="know"><b>today</b> {e(k.get("now",""))}</p>'
+            f'<ul class="klead">{lead}</ul>{rc}</div>')
+
+
 def render_goals(r):
     out = ""
     for g in r.get("goals") or []:
@@ -855,7 +897,7 @@ def render_goals(r):
                 f'<span class="gname">{e(g["goal"])}</span>{rung}</div>'
                 f'<p class="gmotion"><b>motion</b> {e(g["motion"])}</p>'
                 f'<p class="gfrom"><b>from</b> {e(g["from"])}</p>'
-                f'<p class="fd">{e(g["note"]).strip()}</p></div>')
+                f'<p class="fd">{e(g["note"]).strip()}</p>{_kpi(g)}</div>')
     return f'<div class="goals-grid">{out}</div>' if out else ""
 
 
@@ -901,7 +943,7 @@ def render_html(r):
 
     # board
     HORIZON_NOTE = {
-        "now": "Answers the September SRC question, or unblocks something that does.",
+        "now": "Answers the September vertical question, or unblocks something that does.",
         "next": "Real work, sequenced behind now — not started, not forgotten.",
         "gated": "Held on a condition, never a date. Sprint planning must not select these.",
         "later": "Acknowledged, deliberately unscheduled.",
@@ -1004,6 +1046,14 @@ def render_html(r):
     {plan_html}
   </section>
   <section>
+    <div class="sec-head"><h2>The ladder</h2>
+      <span class="eyebrow">the mental model</span></div>
+    <p class="sec-sub">From the seed deck's vision slide. Memory is the floor and it ships today;
+    everything above it is carried by the same primitive, captured when knowledge forms —
+    <em>the way a deed is issued when property changes hands. It cannot be added later.</em></p>
+    {ladder_html}
+  </section>
+  <section>
     <div class="sec-head"><h2>The roadmap</h2>
       <span class="eyebrow">the story, end to end</span></div>
     <p class="sec-sub">Not tasks — the handful of state changes that each let the next one
@@ -1051,14 +1101,6 @@ def render_html(r):
   <section>
     <div class="sec-head"><h2>Context</h2><span class="eyebrow">what all of it serves</span></div>
     <p class="sec-sub">Kept below the roadmap on purpose. The plan and the arc should stand without any of this.</p>
-  </section>
-  <section>
-    <div class="sec-head"><h2>The ladder</h2>
-      <span class="eyebrow">one primitive, four rungs</span></div>
-    <p class="sec-sub">From the seed deck's vision slide. Memory is the floor and it ships today;
-    everything above it is carried by the same primitive, captured when knowledge forms —
-    <em>the way a deed is issued when property changes hands. It cannot be added later.</em></p>
-    {ladder_html}
   </section>
   <section>
     <div class="sec-head"><h2>What we are actually trying to do</h2>
