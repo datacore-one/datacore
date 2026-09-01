@@ -325,6 +325,54 @@ footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);
 .state.not_shipped{background:var(--human-soft);color:var(--human)}
 .state.gated{background:var(--gated-soft);color:var(--gated)}
 .state.vision{background:var(--raised);color:var(--muted)}
+
+.feats{margin-top:18px;padding-top:16px;border-top:1px dashed var(--rule)}
+.feats > .eyebrow{margin:0 0 12px}
+.feat{padding:12px 0;border-top:1px solid var(--rule-soft)}
+.feat:first-of-type{border-top:none;padding-top:0}
+.fh{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.fgh{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--accent);
+  text-decoration:none;border-bottom:1px solid transparent;flex-shrink:0}
+.fgh:hover{border-bottom-color:var(--accent)}
+.fgh:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ft{color:var(--ink);font-weight:600;font-size:14px}
+.kids{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--faint);
+  background:var(--raised);padding:2px 7px;border-radius:4px}
+.fd{font-size:14px;color:var(--muted);margin-top:6px;max-width:76ch}
+
+/* ladder */
+.ladderwrap{display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:28px;margin-top:22px;align-items:start}
+.spine{background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 28%,transparent);
+  border-radius:10px;padding:18px 20px}
+.spine .prim{display:block;font-family:'Literata',Georgia,serif;font-size:26px;color:var(--accent);
+  margin:6px 0 10px;letter-spacing:-.01em}
+.spinenote{font-size:13.5px;color:var(--body);line-height:1.5}
+.rungs{display:flex;flex-direction:column-reverse;gap:8px}
+.rung{display:grid;grid-template-columns:130px 1fr auto auto;gap:14px;align-items:baseline;
+  background:var(--surface);border:1px solid var(--rule);border-radius:9px;padding:14px 16px}
+.rung .rname{font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;color:var(--muted)}
+.rung .ris{color:var(--body);font-size:14px}
+.rung .rst,.rung .rm{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.08em;
+  text-transform:uppercase;padding:3px 8px;border-radius:4px;background:var(--raised);color:var(--muted)}
+.rung.s-shipping{border-color:color-mix(in srgb,var(--accent) 46%,transparent);background:var(--accent-soft)}
+.rung.s-shipping .rname,.rung.s-shipping .rst{color:var(--accent)}
+.rung.s-horizon{border-style:dashed;opacity:.86}
+
+/* entities + verticals */
+.ents{display:grid;gap:12px;margin-top:20px}
+.ent{background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:16px 20px}
+.ent .nm{font-family:'Literata',Georgia,serif;font-size:17px;color:var(--ink)}
+.tablewrap{overflow-x:auto;margin-top:20px;border:1px solid var(--rule);border-radius:10px}
+.vtab{border-collapse:collapse;width:100%;background:var(--surface);font-size:14px}
+.vtab th{text-align:left;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--faint);font-weight:400;padding:12px 16px;
+  border-bottom:1px solid var(--rule)}
+.vtab td{padding:13px 16px;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+.vtab tr:last-child td{border-bottom:none}
+.vd{color:var(--ink);font-weight:600;white-space:nowrap}
+.vs{color:var(--muted);font-family:'JetBrains Mono',monospace;font-size:12.5px;white-space:nowrap}
+.vi{color:var(--body);max-width:56ch}
+@media (max-width:760px){.ladderwrap{grid-template-columns:1fr}.rung{grid-template-columns:1fr auto}}
 .figure{margin:22px 0 0;overflow-x:auto;border:1px solid var(--rule);border-radius:10px;
   background:var(--surface);padding:20px 8px}
 .figure svg{display:block;min-width:940px;width:100%;height:auto}
@@ -606,13 +654,69 @@ def render_milestones(r):
                 if m.get("gate") else "")
         its = ("".join(f'<span class="tag">{e(i)}</span>' for i in m.get("items") or [])
                or '<span class="tag">—</span>')
+        feats = ""
+        for f in (r.get("features") or []):
+            if f.get("milestone") != m["id"]:
+                continue
+            repo, _, num = f["gh"].rpartition("#")
+            kids = (f'<span class="kids">{len(f["children"])} sub-issues</span>'
+                    if f.get("children") else "")
+            feats += (f'<div class="feat"><div class="fh">'
+                      f'<a class="fgh" href="https://github.com/{e(repo)}/issues/{e(num)}">'
+                      f'{e(repo.split("/")[-1])}#{e(num)}</a>'
+                      f'<span class="ft">{e(f["title"])}</span>{kids}</div>'
+                      f'<p class="fd">{e(f["delivers"]).strip()}</p></div>')
+        feats = (f'<div class="feats"><p class="eyebrow">what gets built to get there</p>'
+                 f'{feats}</div>') if feats else ""
         out += (f'<div class="mile"><div class="rail"><span class="mid">{e(m["id"])}</span>'
                 f'<span class="state {e(m["state"])}">{e(m["state"].replace("_", " "))}</span>'
                 f'<span class="mid">{e(m.get("tier", ""))}</span></div>'
                 f'<div><div class="mt">{e(m["title"])}</div>'
                 f'<p class="ev">{e(m["evidence"]).strip()}</p>{gate}'
-                f'<div class="imeta">{its}</div></div></div>')
+                f'<div class="imeta">{its}</div>{feats}</div></div>')
     return f'<div class="miles">{out}</div>'
+
+
+def render_ladder(r):
+    """The strategic spine: one primitive, four rungs."""
+    if not r.get("ladder"):
+        return ""
+    rows = ""
+    for i, rg in enumerate(r["ladder"]):
+        rows += (f'<div class="rung s-{e(rg["state"])}">'
+                 f'<span class="rname">{e(rg["rung"])}</span>'
+                 f'<span class="ris">{e(rg["is"]).strip()}</span>'
+                 f'<span class="rst">{e(rg["state"])}</span>'
+                 f'<span class="rm">{e(rg.get("milestone",""))}</span></div>')
+    return (f'<div class="ladderwrap"><div class="spine">'
+            f'<span class="eyebrow">the one primitive</span>'
+            f'<span class="prim">{e(r.get("primitive",""))}</span>'
+            f'<p class="spinenote">A store that is open, inspectable and portable by design is also '
+            f'<em>forkable</em>. A fork has the bytes and none of the lineage — so attested origin is '
+            f'the only thing that turns a copyable corpus into an ownable asset. Every rung above the '
+            f'floor is gated on it.</p></div>'
+            f'<div class="rungs">{rows}</div></div>')
+
+
+def render_entities(r):
+    out = ""
+    for en in r.get("entities") or []:
+        c = f'<span class="tag">{e(en["constraint"])}</span>' if en.get("constraint") else ""
+        out += (f'<div class="ent"><div class="hd"><span class="nm">{e(en["name"])}</span>'
+                f'<span class="tag">{e(en["holds"])}</span>{c}</div>'
+                f'<p class="fd">{e(en["stance"]).strip()}</p></div>')
+    return f'<div class="ents">{out}</div>' if out else ""
+
+
+def render_verticals(r):
+    out = ""
+    for v in r.get("verticals") or []:
+        out += (f'<tr><td class="vd">{e(v["domain"])}</td>'
+                f'<td class="vs">{e(v["system_of_record"])}</td>'
+                f'<td class="vi">{e(v["instance"]).strip()}</td></tr>')
+    return (f'<div class="tablewrap"><table class="vtab"><thead><tr>'
+            f'<th>Domain</th><th>System of record</th><th>Instance</th>'
+            f'</tr></thead><tbody>{out}</tbody></table></div>') if out else ""
 
 
 def e(s):
@@ -703,6 +807,9 @@ def render_html(r):
             f'<div class="items">{rows}</div></div>'
         )
 
+    ladder_html = render_ladder(r)
+    ents_html = render_entities(r)
+    verts_html = render_verticals(r)
     plan_html = render_plan(r)
     intents_html = render_intents()
     miles_html = render_milestones(r)
@@ -750,6 +857,33 @@ def render_html(r):
     runs under all of them. If a roadmap item cannot be traced to a step here, that is the
     question to ask about it.</p>
     {plan_html}
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>The ladder</h2>
+      <span class="eyebrow">one primitive, four rungs</span></div>
+    <p class="sec-sub">From the seed deck's vision slide. Memory is the floor and it ships today;
+    everything above it is carried by the same primitive, captured when knowledge forms —
+    <em>the way a deed is issued when property changes hands. It cannot be added later.</em></p>
+    {ladder_html}
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Who launches what</h2>
+      <span class="eyebrow">entity boundaries</span></div>
+    <p class="sec-sub">The network is not launched from PLUR Ltd, and that is load-bearing rather
+    than administrative: the absence of a value-capture token is what lets PLUR be the cross-vendor
+    intermediary at all.</p>
+    {ents_html}
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Verticals</h2>
+      <span class="eyebrow">answered by which integrator signs</span></div>
+    <p class="sec-sub">Not a product decision. PLUR rides the system of record and reaches the
+    institution through the integrator who already delivers it. The internal ventures are the R&amp;D
+    lab for the same pattern — and until one has external revenue they are internal R&amp;D, not proof.</p>
+    {verts_html}
   </section>
 
   <section>
