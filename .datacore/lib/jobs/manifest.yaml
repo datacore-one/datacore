@@ -406,10 +406,15 @@ jobs:
       # file containing nothing but that heading would pass.
       #
       # HEADING LEVEL, fixed 2026-09-02: this said "^###\\s+Your Agenda" (H3)
-      # from 2026-08-10, but the generator has always emitted H2 --
-      # today_orchestrator.py:1281 and :2167 both write "## Your Agenda", and
-      # the /today command spec says H2. So box-briefing FAILED every single
-      # day (08-27, 09-01, 09-02 confirmed) on briefings that were complete.
+      # from 2026-08-10. There are TWO briefing generators and they disagree.
+      # The nightshift orchestrator writes H3 -- verified in the 06:00 run in
+      # 0-personal/notes/journals/2026-09-02.md, which carries "### Good
+      # Morning" / "### The World" / "### Your Agenda". The interactive
+      # /today writes H2, matching its own command spec and the prompt
+      # template at today_orchestrator.py:1281 and :2167. So the H3 form
+      # matched the overnight run and missed every interactive one, and
+      # box-briefing FAILED on complete briefings (08-27, 09-01, 09-02
+      # confirmed) whenever the interactive briefing was the one on disk.
       # The sibling check in cos_verify_morning.py:check_journal_briefing was
       # RETIRED 2026-08-27 (datacore#54) for the same class of false alarm;
       # its own docstring is the rule: "A verifier stricter than the pipeline
