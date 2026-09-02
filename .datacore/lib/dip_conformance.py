@@ -110,8 +110,16 @@ def _paths(cell: str) -> list[str]:
                 break
             s = cell[i + 1:j].strip().rstrip(",")
             preceding = cell[max(0, i - 40):i].lower()
+            following = cell[j + 1:j + 40].lower()
+            # A path annotated as generated does not exist until its generator
+            # runs. DIP-0034's keys/registry.yaml is created by
+            # keys.ensure_keypair on the first signed write and is absent while
+            # DATACORE_LEDGER_SIGN is unset — the documented default, not an
+            # omission. The annotation sits AFTER the closing backtick, so
+            # inspecting the path string alone never sees it.
             aspirational = ("future" in preceding or "planned" in preceding
-                            or "proposed" in preceding)
+                            or "proposed" in preceding
+                            or following.lstrip().startswith("(generated"))
             if s and not aspirational:
                 if "/" in s:
                     out.append(s)

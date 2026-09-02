@@ -308,3 +308,78 @@ def test_dip_0031_failure_analyzer_is_discoverable():
     assert "failure-analyzer" in names, (
         "failure-analyzer is not in the agent registry, so DIP-0016 discovery "
         "cannot route to it")
+
+
+# --- DIP-0036: Config Plane -------------------------------------------------
+# Normative: one canonical env file per machine, read through config_plane
+# rather than each caller inventing its own parser. The loader is PURE — it
+# never touches os.environ — because merging with the process environment is
+# the caller's decision, and a loader that silently mutated it would make
+# precedence unknowable.
+
+def test_dip_0036_config_plane_is_a_pure_loader():
+    src = (ROOT / ".datacore" / "lib" / "config_plane.py")
+    assert src.exists(), "DIP-0036's config_plane.py is missing"
+    body = src.read_text(errors="replace")
+    assert "CANONICAL_PATH" in body, "config_plane declares no canonical path"
+    load = body[body.index("def load("):] if "def load(" in body else ""
+    assert load, "config_plane exposes no load()"
+    head = load[:load.index("\ndef ")] if "\ndef " in load else load
+    # Look for USE, not mention. config_plane's own docstring says "it never
+    # reads or writes `os.environ`", and a substring check on the source hits
+    # that sentence — failing the module for documenting the property the test
+    # is verifying.
+    import ast as _ast
+    tree = _ast.parse(head + "\n" if head.strip().endswith(":") else head)
+    uses = [n for n in _ast.walk(tree)
+            if isinstance(n, _ast.Attribute) and n.attr == "environ"]
+    assert not uses, (
+        "config_plane.load() touches os.environ. DIP-0036 makes it pure: the "
+        "caller decides precedence, and a loader that mutates the environment "
+        "makes that unknowable.")
+
+
+# --- DIP-0037: Grounded Briefings ------------------------------------------
+# Normative: a briefing is rendered from a fact table, so every claim in it
+# traces to a fact that was gathered — rather than being generated prose that
+# happens to look plausible.
+
+def test_dip_0037_briefing_renders_from_a_fact_table():
+    lib = ROOT / ".datacore" / "lib"
+    for rel in ("briefing/fact_table.py", "briefing/render.py",
+                "briefing_grounded.py"):
+        assert (lib / rel).exists(), (
+            f"DIP-0037 names {rel}; without it a briefing has no fact table to "
+            f"be grounded in")
+
+
+# --- DIP-0039: Server-First Artifacts --------------------------------------
+# Normative: artifacts are produced on the server and synced, not produced
+# locally and pushed — so a machine being asleep does not silently skip a day.
+
+def test_dip_0039_artifact_sync_surface_exists():
+    lib = ROOT / ".datacore" / "lib"
+    for rel in ("v2_box_setup.sh", "artifact_sync.py"):
+        assert (lib / rel).exists(), f"DIP-0039 names {rel}, which is absent"
+
+
+# --- DIP-0041: Executor Adapters -------------------------------------------
+# Normative: executors sit behind one adapter interface so a task can be run
+# by claude-code, hermes or another runtime without the caller knowing which.
+
+def test_dip_0041_executors_share_one_base_interface():
+    ex = ROOT / ".datacore" / "lib" / "executors"
+    assert (ex / "base.py").exists(), "DIP-0041's executor base class is missing"
+    adapters = [p for p in ex.glob("*.py")
+                if p.name not in ("__init__.py", "base.py")]
+    assert adapters, "DIP-0041 defines an adapter interface with no adapters"
+    base_body = (ex / "base.py").read_text(errors="replace")
+    assert "class " in base_body, "executors/base.py defines no base class"
+
+
+def test_dip_0041_generated_agent_definitions_have_a_generator():
+    """gen_claude_agents.py turns the registry into runtime agent definitions.
+    Without it the two would be maintained by hand — bug class 1."""
+    assert (ROOT / ".datacore" / "lib" / "gen_claude_agents.py").exists(), (
+        "DIP-0041 names gen_claude_agents.py; without it registry and runtime "
+        "agent definitions are two hand-maintained copies of one fact")

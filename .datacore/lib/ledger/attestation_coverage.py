@@ -36,6 +36,7 @@ import sys
 
 ROOT = pathlib.Path(os.environ.get("DATACORE_ROOT", pathlib.Path.home() / "Data"))
 REGISTRY = ROOT / ".datacore" / "keys" / "registry.yaml"
+SIGN_FLAG = "DATACORE_LEDGER_SIGN"
 
 
 def _ledgers() -> list[pathlib.Path]:
@@ -76,6 +77,7 @@ def measure() -> dict:
 
     total = signed + unsigned
     return {
+        "signing_enabled": os.environ.get(SIGN_FLAG) == "1",
         "registry_path": str(REGISTRY),
         "registry_exists": REGISTRY.exists(),
         "known_actors": known_actors,
@@ -112,13 +114,26 @@ def main() -> int:
     print(f"coverage         {m['coverage_pct']}%")
     print()
     if not m["attestation_active"]:
-        print("ATTESTATION IS NOT ACTIVE.")
-        print("  verify_chain validates hash-chaining and sequence — that part works.")
-        print("  It checks a signature only when one is present, and treats an")
-        print("  unsigned event as an error only under strict=True, which no caller")
-        print("  sets. With no registry and no signed events, verification passes")
-        print("  while attesting nothing. DIP-0034 declares this registry as")
-        print("  tracked and is marked Implemented.")
+        print("ATTESTATION IS NOT ACTIVE — and this is a switch, not missing work.")
+        print(f"  {SIGN_FLAG} is "
+              f"{'set' if m['signing_enabled'] else 'unset'}.")
+        print()
+        print("  Signing is opt-in by design; ledger/policy.py says the ledger")
+        print("  'becomes cryptographic only when DATACORE_LEDGER_SIGN=1'. With it")
+        print("  unset, EventLog never calls ensure_keypair, so no keys and no")
+        print("  registry exist and every event carries sig=\"\". That is why")
+        print("  registry.yaml is absent: it is generated on the first signed")
+        print("  write, not a file anyone forgot.")
+        print()
+        print("  What is NOT by design is the silence. verify_chain checks a")
+        print("  signature only when one is present, and flags an unsigned event")
+        print("  only under strict=True, which no production caller sets — so a")
+        print("  wholly unattested chain returns a clean pass.")
+        print()
+        print("  Verified end-to-end 2026-09-02: with the flag set, events sign,")
+        print("  the registry is created with this actor, and verify_chain passes")
+        print("  under strict=True. Enabling it is a fleet-wide posture change and")
+        print("  is the owner's call — but it is a decision, not a build.")
         return 1
     print("attestation active")
     return 0
