@@ -51,6 +51,29 @@ about after before also just only more most some any all can could should
 would will shall may might must task item work do does done""".split())
 
 
+# Coarse buckets for the inventory. Deliberately overlapping-tolerant: a task
+# lands in the first theme that matches, and "unfiled" is a finding rather
+# than a failure — it is where work nobody categorised accumulates.
+THEMES = {
+    "packs / hub": r"\bpack|hub\b|marketplace|listing|seller",
+    "provenance / audit": r"provenance|lineage|tamper|signed|attest|audit chain",
+    "retrieval / recall": r"recall|retriev|rerank|embed|inject|bm25|vector|hybrid",
+    "scopes / permissions": r"scope|permission|acl|multi-tenant|rbac|tenant",
+    "enterprise delivery": r"enterprise|customer|deploy|onboard|install|docker|helm|runbook",
+    "integrator / channel": r"integrator|channel|partner|reseller|civo|stackit",
+    "geo / content": r"\bgeo\b|dev\.to|blog|share of voice|wikidata|seo|content|publish",
+    "benchmark": r"benchmark|longmemeval|locomo|bench\b|leaderboard",
+    "exchange / token": r"exchange|token|escrow|x402|verity|\bfee\b",
+    "spec / standard": r"\bspec\b|standard|capsule|schema|protocol",
+    "security / trust": r"security|vulnerab|trust page|soc2|dpa|secret|credential",
+    "agents / nightshift": r"nightshift|agent fleet|miles|cadence|prompt|orchestrat",
+    "verticals": r"vertical|clinical|medicine|health|legal|law",
+    "fundraising": r"fundrais|investor|seed|deck|cap table|round",
+    "release / ci": r"\bci\b|workflow|release|version|npm|pypi|publish to",
+    "infra / ops": r"backup|monitor|server|dns|smoke|token rotation|systemd",
+}
+
+
 def tokens(s):
     return {w for w in re.findall(r"[a-z0-9#]{3,}", s.lower()) if w not in STOP}
 
@@ -168,11 +191,63 @@ def report_coverage(tasks):
     return 0
 
 
+def write_doc(tasks, out):
+    """A grouped, scannable inventory of the whole pool.
+
+    This is the file agents select work from, so what matters is that a human
+    can see its shape in one pass: what is stale, what is unscheduled, what is
+    a review wrapper nobody closed, and which theme each bucket belongs to.
+    Nothing is discarded — a task nobody can place is a clue, not a mistake.
+    """
+    import datetime
+    now = datetime.datetime.now()
+
+    def age(t):
+        c = (t.get("properties") or {}).get("CREATED", "")
+        m = re.search(r"(\d{4})-(\d{2})-(\d{2})", c)
+        return (now - datetime.datetime(*map(int, m.groups()))).days if m else None
+
+    buckets = defaultdict(list)
+    for t in tasks:
+        hits = [k for k, pat in THEMES.items() if re.search(pat, t["heading"], re.I)]
+        buckets[hits[0] if hits else "unfiled"].append(t)
+
+    wrappers = [t for t in tasks if re.match(r"^review:\s", t["heading"], re.I)]
+    stale = [t for t in tasks if (age(t) or 0) > 90]
+    unsched = [t for t in tasks if not t.get("scheduled")]
+
+    L = [f"# PLUR task pool — {len(tasks)} open", "",
+         f"Generated {now:%Y-%m-%d} by `.datacore/lib/task_triage.py --doc`. "
+         "Regenerate rather than edit.", "",
+         "This is the pool agents select work from. The tighter it is, the more of "
+         "what they pick serves the roadmap.", "",
+         "| | |", "|---|---|",
+         f"| open tasks | {len(tasks)} |",
+         f"| unscheduled | {len(unsched)} |",
+         f"| older than 90 days | {len(stale)} |",
+         f"| `Review:` wrappers | {len(wrappers)} |", ""]
+
+    for theme in sorted(buckets, key=lambda k: -len(buckets[k])):
+        rows = sorted(buckets[theme], key=lambda t: (t["state"], -(age(t) or 0)))
+        L += [f"## {theme} — {len(rows)}", "",
+              "| state | age | task | id |", "|---|---|---|---|"]
+        for t in rows:
+            a = age(t)
+            head = t["heading"].replace("|", "\\|")[:130]
+            L.append(f"| {t['state']} | {str(a)+'d' if a is not None else '—'} | "
+                     f"{head} | `{(t.get('properties') or {}).get('ID','')}` |")
+        L.append("")
+    Path(out).write_text("\n".join(L))
+    print(f"wrote {out} — {len(tasks)} tasks in {len(buckets)} groups")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dupes", action="store_true")
     ap.add_argument("--clusters", action="store_true")
     ap.add_argument("--coverage", action="store_true")
+    ap.add_argument("--doc", metavar="OUT", help="write a grouped inventory")
     ap.add_argument("--threshold", type=float, default=0.62)
     ap.add_argument("--min", type=int, default=4)
     ap.add_argument("--all-tasks", action="store_true",
@@ -186,6 +261,8 @@ def main():
         return report_clusters(tasks, args.min)
     if args.coverage:
         return report_coverage(tasks)
+    if args.doc:
+        return write_doc(tasks, args.doc)
     ap.print_help()
     return 0
 
