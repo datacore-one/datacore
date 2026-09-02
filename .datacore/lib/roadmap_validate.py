@@ -34,6 +34,7 @@ ITEM_KEYS = {
     "id", "track", "title", "outcome", "serves", "drive", "horizon", "status",
     "blocked_on", "delegable", "owner", "gh", "org", "unblocks", "shipped",
     "gate", "note", "also", "embargoed", "hypothesis", "lane", "rice",
+    "rice_why", "goal", "compounds_for", "half", "rung",
 }
 REQUIRED = {"id", "track", "title", "outcome", "serves", "horizon", "status", "shipped"}
 
@@ -140,11 +141,84 @@ def validate(roadmap: dict, intent_ids: set) -> list:
     return errors
 
 
+ORG_FILES = ["5-plur/org/next_actions.org", "5-plur/org/someday.org",
+             "5-plur/org/inbox.org", "0-personal/org/next_actions.org",
+             "0-personal/org/someday.org"]
+
+THEMES = {
+    "packs / hub": r"\bpack|hub\b|marketplace|listing|seller",
+    "provenance / audit": r"provenance|lineage|tamper|signed|attest|audit chain",
+    "retrieval / recall": r"recall|retriev|rerank|embed|inject|bm25|vector|hybrid",
+    "scopes / permissions": r"scope|permission|acl|multi-tenant|rbac|tenant",
+    "enterprise delivery": r"enterprise|customer|deploy|onboard|install|docker|helm|runbook",
+    "integrator / channel": r"integrator|channel|partner|reseller|civo|stackit",
+    "geo / content": r"\bgeo\b|dev\.to|blog|share of voice|wikidata|seo|content|publish",
+    "benchmark": r"benchmark|longmemeval|locomo|bench\b|leaderboard",
+    "exchange / token": r"exchange|token|escrow|x402|verity|fee",
+    "spec / standard": r"\bspec\b|standard|capsule|schema|protocol",
+    "security / trust": r"security|vulnerab|trust page|soc2|dpa|secret|credential",
+    "agents / nightshift": r"nightshift|agent fleet|miles|cadence|prompt|orchestrat",
+    "verticals": r"vertical|clinical|medicine|health|legal|law",
+    "fundraising": r"fundrais|investor|seed|deck|cap table|round",
+    "infra / ops": r"\bci\b|workflow|backup|monitor|server|dns|smoke",
+}
+
+
+def report_orphans(roadmap):
+    """PLUR tasks with no roadmap item, clustered.
+
+    Most orphans are CORRECT — the roadmap is not a backlog. What this looks
+    for is an orphan CLUSTER large enough to be outcome-level, which is the
+    shape a missing roadmap item makes.
+    """
+    import json
+    import subprocess
+    from collections import defaultdict
+
+    refs = set(re.findall(r"org-[0-9a-z-]{6,}", yaml.dump(roadmap)))
+    rm = yaml.dump(roadmap).lower()
+    buckets, total, covered = defaultdict(list), 0, 0
+    for f in ORG_FILES:
+        path = REPO / f
+        if not path.exists():
+            continue
+        r = subprocess.run(["python3", str(REPO / ".datacore/lib/org_workspace_adapter.py"),
+                            "list", "--file", str(path), "--states", "NEXT,TODO,WAITING,REVIEW"],
+                           capture_output=True, text=True, cwd=REPO)
+        if r.returncode:
+            continue
+        for task in json.loads(r.stdout)["tasks"]:
+            tags = set(task.get("tags") or [])
+            if not ("plur" in tags or f.startswith("5-plur")
+                    or "plur" in task["heading"].lower()):
+                continue
+            total += 1
+            if (task.get("properties") or {}).get("ID") in refs:
+                covered += 1
+                continue
+            hits = [k for k, pat in THEMES.items()
+                    if re.search(pat, task["heading"], re.I)] or ["(unthemed)"]
+            for k in hits:
+                buckets[k].append(task["heading"])
+
+    print(f"{total} PLUR-scoped open tasks · {covered} referenced by a roadmap item "
+          f"· {total - covered} orphaned\n")
+    print("Most orphans are correct — the roadmap is not a backlog. Look for a\n"
+          "cluster big enough to be outcome-level with no theme in the file.\n")
+    for k, v in sorted(buckets.items(), key=lambda x: -len(x[1])):
+        probe = k.split(" /")[0].split()[0].lower()
+        flag = "" if probe in rm else "   <- NO ROADMAP ITEM ON THIS THEME"
+        print(f"{len(v):5}  {k}{flag}")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", default=str(DEFAULT_ROADMAP))
     ap.add_argument("--query", help="field=value, e.g. blocked_on=human")
     ap.add_argument("--coverage", action="store_true", help="intent coverage + orphan intents")
+    ap.add_argument("--orphans", action="store_true",
+                    help="PLUR org tasks with no roadmap item, clustered by theme")
     args = ap.parse_args()
 
     roadmap = yaml.safe_load(Path(args.file).read_text())
@@ -179,6 +253,9 @@ def main():
         print(f"\nnot expected to carry items ({len(skipped)}): "
               + ", ".join(f"{i}/{intents[i]}" for i in skipped))
         return 0
+
+    if args.orphans:
+        return report_orphans(roadmap)
 
     errors = validate(roadmap, intent_ids)
     hard = [e for e in errors if not e.startswith("NOTE")]
