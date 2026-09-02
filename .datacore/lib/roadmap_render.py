@@ -478,6 +478,13 @@ footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);
 .blessing{margin-top:26px;padding-top:20px;border-top:1px solid color-mix(in srgb,var(--accent) 30%,transparent);
   font-family:'Literata',Georgia,serif;font-size:clamp(20px,2.4vw,26px);color:var(--accent);
   letter-spacing:-.008em}
+
+.motto{font-family:'Literata',Georgia,serif;font-style:italic;font-size:clamp(18px,2.2vw,23px);
+  color:var(--accent);margin:0 0 18px;letter-spacing:-.006em}
+.half{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--accent);margin:26px 0 2px;padding-top:14px;
+  border-top:1px solid color-mix(in srgb,var(--accent) 26%,transparent)}
+.miles > .half:first-child{margin-top:0;padding-top:0;border-top:none}
 .figure{margin:22px 0 0;overflow-x:auto;border:1px solid var(--rule);border-radius:10px;
   background:var(--surface);padding:20px 8px}
 .figure svg{display:block;min-width:940px;width:100%;height:auto}
@@ -832,6 +839,8 @@ def render_plan(r):
     head = ""
     if r.get("hook"):
         head += f'<p class="hook">{e(r["hook"]).strip()}</p>'
+    if r.get("motto"):
+        head += f'<p class="motto">{e(r["motto"])}</p>'
     if r.get("thesis"):
         head += f'<p class="thesis">{e(r["thesis"]).strip()}</p>'
     verbs = "".join(f'<span class="vchip">{e(s["verb"])}</span>'
@@ -850,7 +859,6 @@ def render_plan(r):
             f'<p class="vclaim">{e(v.get("the_claim","")).strip()}</p>'
             f'<p class="vhalves">{e(v.get("both_halves_matter","")).strip()}</p>'
             f'<p class="vhorizon">{e(v.get("horizon","")).strip()}</p>'
-            + (f'<p class="blessing">{e(v["closing"])}</p>' if v.get("closing") else "")
             + '</div>') if v else ""
     return head + f'<div class="plan">{out}</div>' + tail
 
@@ -890,7 +898,11 @@ def render_intents():
 def render_milestones(r):
     """The arc: each milestone widens who the compounding is for."""
     out = ""
+    seen_half = None
     for m in r.get("milestones") or []:
+        if m.get("half") and m["half"] != seen_half:
+            seen_half = m["half"]
+            out += f'<p class="half">{e(m["half"])}</p>' 
         gate = (f'<div class="mgate"><b>gate</b><span>{e(m["gate"])}</span></div>'
                 if m.get("gate") else "")
         its = ("".join(f'<span class="tag">{e(i)}</span>' for i in m.get("items") or [])
