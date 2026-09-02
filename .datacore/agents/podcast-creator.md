@@ -230,26 +230,39 @@ Status: [status]
 Progress: [if available]
 ```
 
-### Step 6: Download Podcast
+### Step 6: Deliver the Notebook Link — do NOT attempt an mp3 download
 
-Once ready, download the audio file:
+**The deliverable is a URL, not a file.** NotebookLM's audio download and
+share-link RPCs are broken server-side on both the default path and
+`--direct-rpc`. `nlm audio download` does not fail loudly: it prints the
+notebook URL, tells you to open a browser, and exits auth-class 3 having
+written nothing. A pipeline that treats that as a download reports a failed
+podcast for a podcast that was generated correctly and is sitting in the
+notebook, playable.
+
+Confirmed broken 2026-08-30 (both paths) and re-confirmed 2026-09-02 against
+a `ready` audio overview with freshly verified credentials. Auth is not the
+problem; the export is.
 
 ```bash
-nlm audio download [notebook-id] "[output_path]/[filename].mp3" --direct-rpc
+# Confirm the overview exists and is ready. This DOES work.
+nlm audio list [notebook-id]
 ```
 
-**Filename conventions:**
+Deliver:
+
+```
+https://notebook.google.com/notebook/[notebook-id]
+```
+
+The audio plays in the notebook. Say plainly that the link is the
+deliverable and why, rather than implying a file exists somewhere.
+
+**When the export is fixed**, restore the download with:
+`nlm audio download [notebook-id] "[output_path]/[filename].mp3" --direct-rpc`
+and these filename conventions:
 - Daily: `daily-research-YYYY-MM-DD.mp3`
 - Topical: `[topic-slug]-YYYY-MM-DD.mp3`
-- Custom: User-specified or title-based
-
-**Verify download:**
-```
-Download complete:
-File: [full path]
-Size: [file size]
-Duration: [if available from metadata]
-```
 
 ### Step 7: Return Result
 
@@ -260,7 +273,9 @@ Duration: [if available from metadata]
   "notebook_title": "[title]",
   "sources_added": X,
   "sources_failed": X,
-  "audio_file": "[full path to mp3]",
+  "notebook_url": "https://notebook.google.com/notebook/[id]",
+  "audio_status": "ready | generating | failed",
+  "audio_file": null,  // mp3 export broken server-side; see Step 6
   "duration": "[duration if known]",
   "generated_at": "[timestamp]"
 }
@@ -393,10 +408,9 @@ Step 5: Monitoring...
   [4m] Status: processing
   [8m] Status: ready
 
-Step 6: Downloading...
-  ✓ Downloaded: project-alpha-competitive-2025-12-19.mp3
-  Size: 28.4 MB
-  Duration: 26:42
+Step 6: Delivering link (mp3 export is broken server-side)...
+  ✓ Audio overview ready in notebook
+  → https://notebook.google.com/notebook/abc123-def456
 
 ═══════════════════════════════════════════════════
 RESULT: SUCCESS
@@ -404,8 +418,9 @@ RESULT: SUCCESS
 {
   "status": "success",
   "notebook_id": "abc123-def456",
-  "audio_file": "~/Data/0-personal/content/podcasts/project-alpha-competitive-2025-12-19.mp3",
-  "duration": "26:42"
+  "notebook_url": "https://notebook.google.com/notebook/abc123-def456",
+  "audio_status": "ready",
+  "audio_file": null
 }
 ```
 

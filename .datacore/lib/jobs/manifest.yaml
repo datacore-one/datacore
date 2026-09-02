@@ -399,19 +399,27 @@ jobs:
       - path: "~/.datacore/cos/morning.log"
         check: nonempty
         max_age_hours: 26
-      # cos_verify_morning.py:check_journal_briefing -- regex lifted verbatim
-      # from the source (miles_delivery accepts either heading).
-      # A heading is not a briefing. This previously matched
-      # "^##\\s+(Daily Briefing|Good Morning)", which a file containing nothing
-      # but that heading would satisfy -- the generator could emit an empty
-      # shell and pass. Requires a section that only a populated briefing
-      # produces: "### Your Agenda" is written from calendar+GTD state, so it
-      # is absent when generation fails partway. Verified 2026-08-10 against a
-      # real 564-line briefing carrying Good Morning / The World / Your Agenda
-      # / Spaces / Trading / Decisions Due / Horizon.
+      # A heading is not a briefing. This must match a section that only a
+      # populated briefing produces -- "Your Agenda" is written from
+      # calendar+GTD state, so it is absent when generation fails partway.
+      # Matching just "^##\\s+(Daily Briefing|Good Morning)" is too weak: a
+      # file containing nothing but that heading would pass.
+      #
+      # HEADING LEVEL, fixed 2026-09-02: this said "^###\\s+Your Agenda" (H3)
+      # from 2026-08-10, but the generator has always emitted H2 --
+      # today_orchestrator.py:1281 and :2167 both write "## Your Agenda", and
+      # the /today command spec says H2. So box-briefing FAILED every single
+      # day (08-27, 09-01, 09-02 confirmed) on briefings that were complete.
+      # The sibling check in cos_verify_morning.py:check_journal_briefing was
+      # RETIRED 2026-08-27 (datacore#54) for the same class of false alarm;
+      # its own docstring is the rule: "A verifier stricter than the pipeline
+      # it verifies produces false alarms, and false alarms are how a real one
+      # gets ignored." This copy was missed in that retirement.
+      # {2,3} accepts either level so a future heading change cannot silently
+      # re-break it.
       - path: "~/Data/0-personal/notes/journals/{today}.md"
         check: regex
-        arg: "^###\\s+Your Agenda"
+        arg: "^#{2,3}\\s+Your Agenda"
         max_age_hours: 26
       # cos_verify_morning.py:check_audio -- AUDIO_STAMP, written by
       # winston_audio.sh only after Telegram accepts the voice message.
