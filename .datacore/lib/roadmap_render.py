@@ -489,6 +489,20 @@ footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);
 .visionblock{margin-top:20px;padding:26px 28px;border-radius:10px;background:var(--accent-soft);
   border:1px solid color-mix(in srgb,var(--accent) 30%,transparent)}
 .visionblock .vhead{margin-bottom:14px}
+
+.board{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:20px;align-items:start}
+.col{min-width:0}
+.colhead{display:flex;align-items:baseline;gap:9px;padding-bottom:9px;margin-bottom:10px;
+  border-bottom:2px solid var(--accent)}
+.colhead h3{font-family:'Literata',Georgia,serif;font-size:18px;font-weight:400;color:var(--ink)}
+.colcount{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--faint)}
+.hz{font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);margin:16px 0 6px}
+.col > .hz:first-of-type{margin-top:0}
+.col .item{margin-bottom:6px}
+.col .ititle{font-size:13.5px}
+.col .iout{font-size:12.5px}
+@media (max-width:900px){.board{grid-template-columns:1fr}}
 .figure{margin:22px 0 0;overflow-x:auto;border:1px solid var(--rule);border-radius:10px;
   background:var(--surface);padding:20px 8px}
 .figure svg{display:block;min-width:940px;width:100%;height:auto}
@@ -1054,63 +1068,55 @@ def render_html(r):
         )
 
     # board
-    HORIZON_NOTE = {
-        "now": "Answers the September vertical question, or unblocks something that does.",
-        "next": "Real work, sequenced behind now — not started, not forgotten.",
-        "gated": "Held on a condition, never a date. Sprint planning must not select these.",
-        "later": "Acknowledged, deliberately unscheduled.",
-    }
-    board = ""
-    for h in ("now", "next", "gated", "later"):
-        grp = [i for i in items if i["horizon"] == h]
-        if not grp:
-            continue
-        rows = ""
-        for i in grp:
-            tags = f'<span class="tag track">{e(i["track"])}</span>'
-            tags += f'<span class="tag">{e(i.get("owner", "—"))}</span>'
-            tags += f'<span class="tag lane">{e(i.get("lane", ""))}</span>'
-            st = i.get("status")
-            tags += f'<span class="tag {"go" if st == "in_progress" else ""}">{e(st)}</span>'
-            b = i.get("blocked_on")
-            if b == "human":
-                tags += '<span class="tag human">blocked on you</span>'
-            elif b == "standing_block":
-                tags += '<span class="tag halt">standing block</span>'
-            elif b:
-                tags += f'<span class="tag">blocked · {e(b)}</span>'
-            if i.get("embargoed"):
-                tags += '<span class="tag lock">embargoed</span>'
-            if i.get("gh"):
-                tags += f'<span class="tag">{e(i["gh"].split("/")[-1])}</span>'
-            gate = (f'<div class="igate"><b>gate</b><span>{e(i["gate"])}</span></div>'
-                    if i.get("gate") else "")
-            rows += (
-                f'<div class="item" data-track="{e(i["track"])}" data-owner="{e(i.get("owner"))}"'
-                f' data-lane="{e(i.get("lane"))}"'
-                f' data-block="{e(b)}" data-h="{e(h)}" data-s="{e(st)}">'
+    vision_html = render_vision(r)
+    plan_html = render_plan(r)
+    ladder_html = render_ladder(r)
+    goals_html = render_goals(r)
+    verts_html = render_verticals(r)
+    intents_html = render_intents()
+    miles_html = render_milestones(r)
+
+    COLMAP = {tr: col for col, trs in (r.get("columns") or {}).items() for tr in trs}
+    HORIZON_ORDER = {"now": 0, "next": 1, "gated": 2, "later": 3}
+
+    def item_card(i):
+        b, st, h = i.get("blocked_on"), i.get("status"), i["horizon"]
+        tags = f'<span class="tag track">{e(i["track"])}</span>'
+        tags += f'<span class="tag">{e(i.get("owner", "—"))}</span>'
+        tags += f'<span class="tag lane">{e(i.get("lane", ""))}</span>'
+        tags += f'<span class="tag {"go" if st == "in_progress" else ""}">{e(st)}</span>'
+        if b == "human":
+            tags += '<span class="tag human">blocked on you</span>'
+        elif b == "standing_block":
+            tags += '<span class="tag halt">standing block</span>'
+        elif b:
+            tags += f'<span class="tag">blocked · {e(b)}</span>'
+        if i.get("embargoed"):
+            tags += '<span class="tag lock">embargoed</span>'
+        if i.get("gh"):
+            tags += f'<span class="tag">{e(i["gh"].split("/")[-1])}</span>'
+        gate = (f'<div class="igate"><b>gate</b><span>{e(i["gate"])}</span></div>'
+                if i.get("gate") else "")
+        return (f'<div class="item" data-track="{e(i["track"])}" data-owner="{e(i.get("owner"))}"'
+                f' data-lane="{e(i.get("lane"))}" data-block="{e(b)}" data-h="{e(h)}" data-s="{e(st)}">'
                 f'<div class="itop"><span class="iid">{e(i["id"])}</span>'
                 f'<span class="ititle">{e(i["title"])}</span></div>'
                 f'<p class="iout">{e(i["outcome"])}</p>'
-                f'<div class="imeta">{tags}</div>{gate}'
-                f'<div class="serves">serves · {e(" · ".join(i.get("serves") or []))}</div>'
-                f'</div>'
-            )
-        board += (
-            f'<div class="hgroup"><div class="hlabel"><h2>{h.title()}</h2>'
-            f'<span class="hcount">{len(grp)} items</span><span class="bar"></span></div>'
-            f'<p class="sec-sub" style="margin:0 0 12px">{HORIZON_NOTE[h]}</p>'
-            f'<div class="items">{rows}</div></div>'
-        )
+                f'<div class="imeta">{tags}</div>{gate}</div>')
 
-    ladder_html = render_ladder(r)
-    ents_html = render_entities(r)
-    verts_html = render_verticals(r)
-    goals_html = render_goals(r)
-    vision_html = render_vision(r)
-    plan_html = render_plan(r)
-    intents_html = render_intents()
-    miles_html = render_milestones(r)
+    board = ""
+    for col in (r.get("columns") or {}):
+        mine = sorted((i for i in items if COLMAP.get(i["track"]) == col),
+                      key=lambda x: (HORIZON_ORDER.get(x["horizon"], 9), x["id"]))
+        rows, seen = "", None
+        for i in mine:
+            if i["horizon"] != seen:
+                seen = i["horizon"]
+                rows += f'<p class="hz">{e(seen)}</p>'
+            rows += item_card(i)
+        board += (f'<div class="col"><div class="colhead"><h3>{e(col)}</h3>'
+                  f'<span class="colcount">{len(mine)}</span></div>{rows}</div>')
+    board = f'<div class="board">{board}</div>'
 
     tchips = "".join(
         f'<button class="chip" data-key="track" data-val="{e(t)}" aria-pressed="false">{e(t)}</button>'
@@ -1151,11 +1157,7 @@ def render_html(r):
 
 <div class="wrap">
   <section>
-    <div class="sec-head"><h2>The master plan</h2>
-      <span class="eyebrow">five lines</span></div>
-    <p class="sec-sub">Four leaps. Each names the drive it aims at before it is written and
-    reaches it in one step — status first, self-protection last, because opening on risk makes
-    a reader defend what they already built.</p>
+    <div class="sec-head"><h2>The master plan</h2></div>
     {plan_html}
   </section>
   <section>
