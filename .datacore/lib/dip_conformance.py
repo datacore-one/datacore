@@ -328,7 +328,27 @@ def derive(recs: dict[str, dict]) -> None:
             if not r["tests"]:
                 reasons.append("no test names this DIP")
             if r["no_review"]:
-                reasons.append("ratified without review")
+                # The governance rule in CLAUDE.base.md has TWO clauses that can
+                # disagree, and this checker takes the strict branch:
+                #
+                #   "Implemented/Accepted status requires owner ratification
+                #    — auto-generated DIPs stay Draft until reviewed."
+                #
+                # DIP-0035's note says the status move "satisfies that rule by
+                # owner instruction alone, not by review". If these DIPs were
+                # human-authored, clause one is met and they are conformant. If
+                # they were auto-generated, clause two applies and they must
+                # stay Draft until read. Authorship is not recorded — Author
+                # says "Datacore Team" for both kinds.
+                #
+                # So this blocker is a QUESTION, not a verdict, and only the
+                # owner can settle it. Choosing the lenient branch here would
+                # clear eight overclaims by redefining the rule, which is the
+                # failure this tool exists to detect.
+                reasons.append(
+                    "ratified by owner instruction, review not performed — "
+                    "conformant only if the DIP was human-authored (see "
+                    "CLAUDE.base.md governance note; authorship unrecorded)")
 
             ceiling = RANK["implemented"]
             for d in r["deps"]:
