@@ -148,6 +148,12 @@ def _classify(p: str) -> str:
     if p.startswith("~/"):
         base, rel = pathlib.Path.home(), p[2:]
     elif p.startswith("/"):
+        # A system path such as /usr/local/lib/hermes-agent is a claim about
+        # ANOTHER host's filesystem. Absence here proves nothing about the host
+        # that DIP targets, and reporting it as absent is the same error as
+        # calling an unreachable host a failure.
+        if not p.startswith(str(ROOT)):
+            return "unverifiable"
         base, rel = pathlib.Path("/"), p[1:]
     else:
         base, rel = ROOT, p
@@ -167,8 +173,18 @@ def _classify(p: str) -> str:
     # as absent.
     if base is ROOT and "/" in rel:
         try:
-            for proj in ROOT.glob("[0-9]-*/2-projects"):
-                if (proj / rel).exists():
+            # Two levels, because DIPs write both shapes: DIP-0032 names
+            # `datacore-app/daemon/...` (relative to 2-projects/) and DIP-0048
+            # names `packages/core/...` (relative to the project itself).
+            # Replacing one with the other regressed the first.
+            for pattern in ("[0-9]-*/2-projects", "[0-9]-*/2-projects/*"):
+                for proj in ROOT.glob(pattern):
+                    if (proj / rel).exists():
+                        return "exists"
+            # and module-relative: DIP-0027 names `lens/docs/spec.md`, which is
+            # .datacore/modules/lens/docs/spec.md
+            for mod in ROOT.glob(".datacore/modules"):
+                if (mod / rel).exists():
                     return "exists"
         except OSError:
             pass
@@ -319,15 +335,26 @@ def derive(recs: dict[str, dict]) -> None:
                             f"depends on DIP-{d} ({dep.get('derived', dep['claimed'])})")
                     ceiling = min(ceiling, dr)
 
+            # The derived status is the CLAIM, capped by what the signals
+            # support -- not a binary. Emitting only implemented/draft made a
+            # clean `Accepted` DIP overclaim against itself: nothing was wrong
+            # with DIP-0020, but "accepted" could never equal "implemented".
+            # A status is an overclaim only when the evidence cannot carry it.
             supported = RANK["implemented"] if not reasons else RANK["draft"]
-            floor = min(supported, ceiling, RANK.get(r["claimed"], 0))
-            new = "implemented" if floor >= RANK["implemented"] else "draft"
+            claimed_rank = RANK.get(r["claimed"], 0)
+            floor = min(supported, ceiling, claimed_rank)
+            if floor >= claimed_rank:
+                new = r["claimed"]          # evidence carries the claim
+            elif floor >= RANK["implemented"]:
+                new = "implemented"
+            else:
+                new = "draft"
 
             if new != r.get("derived"):
                 changed = True
             r["derived"] = new
             r["reasons"] = reasons
-            r["overclaims"] = RANK.get(r["claimed"], 0) > RANK[new]
+            r["overclaims"] = RANK.get(r["claimed"], 0) > RANK.get(new, 0)
         if not changed:
             break
 

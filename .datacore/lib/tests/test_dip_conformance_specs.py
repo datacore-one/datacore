@@ -148,3 +148,163 @@ def test_dip_0002_base_layer_exists_for_every_composed_context():
             f"{composed.relative_to(ROOT)} declares itself generated but has no "
             f"CLAUDE.base.md — it cannot be regenerated, so the output is the "
             f"only source")
+
+
+# --- DIP-0004, DIP-0006, DIP-0007: Superseded ------------------------------
+# A superseded DIP's conformance is not that its own design was built — it is
+# that the thing replacing it exists and is named. Without that, "Superseded"
+# is a way to retire a DIP without saying what took over, and the trail ends.
+
+SUPERSEDED = [f for f in sorted(DIPS.glob("DIP-*.md"))
+              if re.search(r"^\|\s*\*\*Status\*\*\s*\|\s*Superseded",
+                           f.read_text(errors="replace"), re.M | re.I)]
+
+
+@pytest.mark.parametrize("dip_file", SUPERSEDED, ids=lambda p: p.stem[:12])
+def test_superseded_dip_names_its_successor(dip_file):
+    text = dip_file.read_text(errors="replace")
+    m = re.search(r"^\|\s*\*\*Superseded By\*\*\s*\|\s*(.+?)\s*\|", text, re.M)
+    assert m and m.group(1).strip(), (
+        f"{dip_file.name} is Superseded but names no successor — the design it "
+        f"replaced is gone and nothing says what replaced it")
+
+
+@pytest.mark.parametrize("dip_file", SUPERSEDED, ids=lambda p: p.stem[:12])
+def test_superseded_successor_dips_exist(dip_file):
+    """If the successor is named as a DIP number, that DIP must be present."""
+    text = dip_file.read_text(errors="replace")
+    m = re.search(r"^\|\s*\*\*Superseded By\*\*\s*\|\s*(.+?)\s*\|", text, re.M)
+    cited = re.findall(r"DIP-(\d{4})", m.group(1)) if m else []
+    missing = [n for n in cited if not list(DIPS.glob(f"DIP-{n}-*.md"))]
+    assert not missing, (
+        f"{dip_file.name} points at DIP(s) {missing}, which do not exist — a "
+        f"dangling supersession trail")
+
+
+# --- Module DIPs: DIP-0011 nightshift, DIP-0012 crm, DIP-0013 meetings,
+#     DIP-0020 whatsapp ------------------------------------------------------
+# A DIP that specifies a module is conformant when that module is installed
+# and identifies itself as the DIP says. These are the four whose subject is a
+# single named module.
+
+MODULE_DIPS = {"0011": "nightshift", "0012": "crm",
+               "0013": "meetings", "0020": "whatsapp"}
+
+
+@pytest.mark.parametrize("dip,module", sorted(MODULE_DIPS.items()))
+def test_module_dip_subject_is_installed_and_identifies_itself(dip, module):
+    manifest = MODULES / module / "module.yaml"
+    assert manifest.exists(), (
+        f"DIP-{dip} specifies the `{module}` module, which is not installed. "
+        f"The DIP describes something that is not there.")
+    m = yaml.safe_load(manifest.read_text()) or {}
+    assert m.get("name") == module, (
+        f"DIP-{dip}'s module declares name={m.get('name')!r}, not {module!r}")
+    assert m.get("version"), f"{module} declares no version"
+
+
+# --- DIP-0019: Learning Architecture ---------------------------------------
+# Normative: each space keeps its learning in patterns.md, corrections.md and
+# preferences.md under .datacore/learning/. The engram pipeline reads these by
+# name; a space missing one silently contributes nothing from that category.
+
+LEARNING_FILES = ("patterns.md", "corrections.md", "preferences.md")
+# A space is a numbered directory with its OWN context file. `0-inbox` is a
+# numbered drop directory that also happens to carry a .datacore/, and treating
+# it as a space demanded learning files from a folder that holds one transcript.
+SPACES = sorted(d for d in ROOT.glob("[0-9]-*")
+                if d.is_dir() and (d / ".datacore").is_dir()
+                and (d / "CLAUDE.md").is_file())
+
+
+@pytest.mark.parametrize("space", SPACES, ids=lambda p: p.name)
+def test_dip_0019_space_keeps_the_three_learning_files(space):
+    learning = space / ".datacore" / "learning"
+    assert learning.is_dir(), f"{space.name} has no .datacore/learning/"
+    missing = [f for f in LEARNING_FILES if not (learning / f).exists()]
+    assert not missing, (
+        f"{space.name}/.datacore/learning/ is missing {missing}. The engram "
+        f"pipeline reads these by name — an absent file contributes nothing "
+        f"and reports nothing.")
+
+
+# --- DIP-0001: Contribution Model ------------------------------------------
+# Normative: the fork-and-overlay model needs an installable entry point and a
+# catalogue of what can be installed. Without the catalogue a contributed
+# module is unfindable, which defeats the model.
+
+def test_dip_0001_install_entrypoint_and_catalogue_exist():
+    for rel in ("INSTALL.md", ".datacore/CATALOG.md"):
+        assert (ROOT / rel).exists(), (
+            f"DIP-0001's contribution model requires {rel}; without it a "
+            f"contributed module cannot be found or installed")
+
+
+# --- DIP-0005: Installation & Upgrade --------------------------------------
+# Normative: an install manifest and a lockfile. The lock records what is
+# actually installed; a lockfile that will not parse cannot be reconciled
+# against install.yaml, and upgrade has nothing to compare to.
+
+def test_dip_0005_install_manifest_and_lockfile_parse():
+    for rel in ("install.yaml", "datacore.lock.yaml"):
+        p = ROOT / rel
+        assert p.exists(), f"DIP-0005 requires {rel}"
+        parsed = yaml.safe_load(p.read_text())
+        assert isinstance(parsed, dict) and parsed, (
+            f"{rel} does not parse to a mapping — upgrade cannot reconcile "
+            f"against it")
+
+
+# --- DIP-0017: Outbox & Archive Pattern ------------------------------------
+# Normative: every space routes content out through 4-outbox/. A space without
+# one has no exit path, so content either stays or is moved by hand.
+
+@pytest.mark.parametrize("space", SPACES, ids=lambda p: p.name)
+def test_dip_0017_every_space_has_an_outbox(space):
+    outbox = space / "4-outbox"
+    assert outbox.is_dir(), (
+        f"{space.name} has no 4-outbox/. DIP-0017 makes it the single exit "
+        f"path; without it content leaves by hand or not at all.")
+
+
+# --- DIP-0029: Command-Scoped Engram Recall --------------------------------
+# Normative: a module declares the scope its engrams are recalled under. A
+# module with no declared scope gets no scoped recall — and the lookup returns
+# nothing rather than failing, so the absence is silent.
+
+@pytest.mark.parametrize(
+    "manifest", MODULE_MANIFESTS, ids=lambda p: p.parent.name)
+def test_dip_0029_module_declares_its_recall_scope(manifest):
+    m = yaml.safe_load(manifest.read_text()) or {}
+    recall = m.get("recall")
+    assert recall, (
+        f"{manifest.parent.name} declares no `recall:` scope. Its engrams are "
+        f"never recalled for its own commands, and the lookup returns empty "
+        f"rather than erroring — the failure is silent.")
+    assert recall.get("scopes"), f"{manifest.parent.name} recall declares no scopes"
+
+
+# --- DIP-0031: Agent Error Classification & Recovery -----------------------
+# Normative: nightshift classifies why an execution failed, via failure-analyzer
+# and the execution recorder. Without the recorder there is no per-execution
+# record to classify, and a failed run is indistinguishable from one that did
+# nothing.
+
+def test_dip_0031_failure_classification_surface_exists():
+    lib = MODULES / "nightshift" / "lib"
+    for f in ("execute.py", "run.py", "execution_recorder.py"):
+        assert (lib / f).exists(), (
+            f"DIP-0031 names nightshift/lib/{f}; without it there is no "
+            f"per-execution record to classify")
+    agent = ROOT / ".datacore" / "agents" / "failure-analyzer.md"
+    assert agent.exists(), "DIP-0031's failure-analyzer agent is missing"
+
+
+def test_dip_0031_failure_analyzer_is_discoverable():
+    """Classification that nothing can find is classification that never runs."""
+    reg = yaml.safe_load(
+        (ROOT / ".datacore" / "registry" / "agents.yaml").read_text()) or {}
+    names = set(reg.get("agents") or {}) | set(reg.get("module_agents") or {})
+    assert "failure-analyzer" in names, (
+        "failure-analyzer is not in the agent registry, so DIP-0016 discovery "
+        "cannot route to it")
