@@ -1360,8 +1360,8 @@ module_commands:
     description: Read-only Datafund accounting — overview, payables, payment planning, spend analysis
     version: 2.0.0
     status: active
-    source: 1-datafund/.datacore/modules/datafund-accounting/commands/accounting.md
-    module: datafund-accounting
+    source: 1-datafund/.datacore/modules/datafund-finance/commands/accounting.md
+    module: datafund-finance
     invokes:
     - agent: accounting-sync
       when: sync

@@ -3208,8 +3208,8 @@ module_agents:
   accounting-sync:
     description: Pull e-racuni data into local state (the only agent that calls the API)
     version: 1.0.0
-    source: 1-datafund/.datacore/modules/datafund-accounting/agents/accounting-sync.md
-    module: datafund-accounting
+    source: 1-datafund/.datacore/modules/datafund-finance/agents/accounting-sync.md
+    module: datafund-finance
     skills:
     - api-sync
     - state-management
@@ -3218,8 +3218,8 @@ module_agents:
   accounting-overview:
     description: Cash, receivables, payables, net position
     version: 1.0.0
-    source: 1-datafund/.datacore/modules/datafund-accounting/agents/accounting-overview.md
-    module: datafund-accounting
+    source: 1-datafund/.datacore/modules/datafund-finance/agents/accounting-overview.md
+    module: datafund-finance
     skills:
     - financial-overview
     spawns: []
@@ -3227,8 +3227,8 @@ module_agents:
   pending-payments:
     description: Outstanding payables grouped by vendor with aging
     version: 1.0.0
-    source: 1-datafund/.datacore/modules/datafund-accounting/agents/pending-payments.md
-    module: datafund-accounting
+    source: 1-datafund/.datacore/modules/datafund-finance/agents/pending-payments.md
+    module: datafund-finance
     skills:
     - payables-analysis
     - aging-report
@@ -3237,8 +3237,8 @@ module_agents:
   payment-planner:
     description: Ranked payment proposal — proposes only, never executes
     version: 1.0.0
-    source: 1-datafund/.datacore/modules/datafund-accounting/agents/payment-planner.md
-    module: datafund-accounting
+    source: 1-datafund/.datacore/modules/datafund-finance/agents/payment-planner.md
+    module: datafund-finance
     skills:
     - payment-planning
     - cash-flow-ranking
@@ -3247,8 +3247,8 @@ module_agents:
   spend-analyzer:
     description: Spend by cost centre, category, or project
     version: 1.0.0
-    source: 1-datafund/.datacore/modules/datafund-accounting/agents/spend-analyzer.md
-    module: datafund-accounting
+    source: 1-datafund/.datacore/modules/datafund-finance/agents/spend-analyzer.md
+    module: datafund-finance
     skills:
     - spend-analysis
     spawns: []
@@ -3256,8 +3256,8 @@ module_agents:
   invoice-classifier:
     description: Assigns cost centre/category/project; writes the overlay only
     version: 1.0.0
-    source: 1-datafund/.datacore/modules/datafund-accounting/agents/invoice-classifier.md
-    module: datafund-accounting
+    source: 1-datafund/.datacore/modules/datafund-finance/agents/invoice-classifier.md
+    module: datafund-finance
     skills:
     - invoice-classification
     spawns: []
