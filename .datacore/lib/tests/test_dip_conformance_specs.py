@@ -383,3 +383,42 @@ def test_dip_0041_generated_agent_definitions_have_a_generator():
     assert (ROOT / ".datacore" / "lib" / "gen_claude_agents.py").exists(), (
         "DIP-0041 names gen_claude_agents.py; without it registry and runtime "
         "agent definitions are two hand-maintained copies of one fact")
+
+
+# --- DIP-0003: Scaffolding Pattern -----------------------------------------
+# Normative: scaffolding uses the SAME layered pattern as CLAUDE.md (DIP-0002)
+# — a .base.md layer, optional .space.md overlay, composed output — and two
+# agents maintain it.
+#
+# What these deliberately do NOT assert: that every space has authored its
+# _core documents. Only 1-datafund has, and demanding purpose/vision/mission
+# from nine spaces would be asserting content nobody has written. Conformance
+# is that the PATTERN holds where scaffolding exists; authoring the documents
+# is work, not conformance, and conflating the two produces a test that fails
+# for the system being honest about a gap.
+
+SCAFFOLDED = [s for s in SPACES if (s / "SCAFFOLDING.space.md").exists()
+              or (s / "SCAFFOLDING.md").exists()]
+
+
+@pytest.mark.parametrize("space", SCAFFOLDED, ids=lambda p: p.name)
+def test_dip_0003_scaffolding_follows_the_layered_pattern(space):
+    """An overlay or a composed file implies a base layer to compose from."""
+    assert (space / "SCAFFOLDING.base.md").exists(), (
+        f"{space.name} has a SCAFFOLDING overlay or composed file but no "
+        f"SCAFFOLDING.base.md — there is nothing to regenerate it from, so the "
+        f"output would be the only source (DIP-0002's failure mode)")
+
+
+def test_dip_0003_scaffolding_agents_exist_and_are_discoverable():
+    """The DIP names create-space and scaffolding-auditor. An agent that is not
+    in the registry cannot be routed to, so the pattern has no maintainer."""
+    reg = yaml.safe_load(
+        (ROOT / ".datacore" / "registry" / "agents.yaml").read_text()) or {}
+    names = set(reg.get("agents") or {}) | set(reg.get("module_agents") or {})
+    for agent in ("create-space", "scaffolding-auditor"):
+        assert (ROOT / ".datacore" / "agents" / f"{agent}.md").exists(), (
+            f"DIP-0003 names the `{agent}` agent, which is absent")
+        assert agent in names, (
+            f"`{agent}` is not in the agent registry — DIP-0016 discovery "
+            f"cannot route to it, so the scaffolding pattern has no maintainer")
