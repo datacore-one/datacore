@@ -453,6 +453,21 @@ footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);
 .radius{margin-top:7px;font-size:13.5px;color:var(--accent)}
 .radius b{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.13em;
   text-transform:uppercase;color:var(--faint);margin-right:8px;font-weight:400}
+
+.step{grid-template-columns:132px 1fr}
+.step .num{display:flex;flex-direction:column;gap:4px}
+.verb{font-family:'Literata',Georgia,serif;font-size:23px;line-height:1.1;color:var(--accent);
+  letter-spacing:-.01em}
+.vwhy{font-size:12px;color:var(--faint);line-height:1.35}
+.step.thru .verb{color:var(--accent)}
+.cathedral{margin:20px 0 4px;padding:22px 24px;border-radius:10px;background:var(--raised);
+  border:1px solid var(--rule)}
+.cathedral p{max-width:66ch;font-size:15px;line-height:1.62;color:var(--body)}
+.vrow{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.vchip{font-family:'Literata',Georgia,serif;font-size:20px;color:var(--ink);
+  padding:4px 14px;border:1px solid var(--rule);border-radius:999px;background:var(--surface)}
+.vchip:last-child{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,transparent)}
+@media (max-width:640px){.step{grid-template-columns:1fr}}
 .figure{margin:22px 0 0;overflow-x:auto;border:1px solid var(--rule);border-radius:10px;
   background:var(--surface);padding:20px 8px}
 .figure svg{display:block;min-width:940px;width:100%;height:auto}
@@ -794,9 +809,10 @@ def render_plan(r):
     out = ""
     for s in r.get("master_plan") or []:
         thru = s["step"] == "throughline"
-        num = "under<br>all<br>four" if thru else e(s["step"])
         out += (f'<div class="step{" thru" if thru else ""}">'
-                f'<div class="num">{num}</div><div class="stepbody">'
+                f'<div class="num"><span class="verb">{e(s["verb"])}</span>'
+                f'<span class="vwhy">{e(s["verb_why"])}</span></div>'
+                f'<div class="stepbody">'
                 f'<span class="drive">{e(s["drive"])}</span>'
                 f'<p class="today">{e(s["today"]).strip()}</p>'
                 f'<div class="do">{e(s["do"])}</div>'
@@ -808,6 +824,11 @@ def render_plan(r):
         head += f'<p class="hook">{e(r["hook"]).strip()}</p>'
     if r.get("thesis"):
         head += f'<p class="thesis">{e(r["thesis"]).strip()}</p>'
+    if r.get("cathedral"):
+        verbs = "".join(f'<span class="vchip">{e(s["verb"])}</span>'
+                        for s in r.get("master_plan") or [])
+        head += (f'<div class="cathedral"><div class="vrow">{verbs}</div>'
+                 f'<p>{e(r["cathedral"]).strip()}</p></div>')
     v = r.get("vision") or {}
     tail = (f'<div class="horizon"><p class="eyebrow">the vision</p>'
             f'<p class="vhead">{e(v.get("headline",""))}</p>'
@@ -1088,8 +1109,8 @@ def render_html(r):
     <span>·</span><span>{len(tracks)} tracks</span>
     <span>·</span><span>north star: {e(ns["metric"])} {e(ns["target"])} by {e(ns["by"])}</span>
   </div>
-  <p class="lede">Five prose roadmaps drifted independently because nothing regenerated them.
-  This page is generated — a stale view is now a visible diff, not a silent three-month gap.</p>
+  <p class="lede">What we are building, in what order, and what each step makes possible that
+  the one before it could not.</p>
 </div></header>
 
 <div class="wrap">
