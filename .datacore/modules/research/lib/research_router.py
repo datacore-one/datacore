@@ -116,11 +116,95 @@ ACTION_VERBS = ["should", "need to", "must", "fix", "add ", "implement", "migrat
                 "upgrade", "bump", "port ", "wire ", "close the", "gate ", "publish"]
 
 
+# ---------------------------------------------------------------------------
+# Relevance is a vector, not a theme match.
+#
+# Theme answers "which notebook does this source join". It does NOT answer
+# "is this worth your attention", and conflating the two is why a keyword
+# router looks like a relevance engine and is not one. Four axes, scored
+# independently, because they disagree in useful ways: a piece can be highly
+# timely and strategically irrelevant (most news), or untimely and decisive
+# (a paper from March that invalidates a roadmap assumption).
+#
+#   timeliness  does it decay? News does. A method does not. Scored from the
+#               item's age against a per-kind half-life, not a flat cutoff.
+#   roadmap     does it touch work that is OPEN right now -- a live milestone,
+#               an open PR, a named issue? This is the axis that turns reading
+#               into doing, and the only one that can promote to `issue`.
+#   strategy    does it move a venture thesis, or merely confirm it?
+#               Confirmation is worth less than challenge and is scored lower.
+#   meta        does it change HOW we work rather than what we know? Rare,
+#               and the highest-value class -- a better method compounds
+#               across every future item, which no single fact does.
+#
+# Scores are 0-3 and deliberately coarse. A finer scale would imply a
+# precision keyword matching does not have.
+# ---------------------------------------------------------------------------
+
+HALF_LIFE_DAYS = {"news": 10, "analysis": 60, "method": 365, "unknown": 45}
+
+NEWS_MARKERS = ["bloomberg", "reuters", "techcrunch", "wsj", "nytimes", "cnbc",
+                "coindesk", "cointelegraph", "theverge", "guardian", "ft.com"]
+METHOD_MARKERS = ["arxiv", "paper", "benchmark", "spec", "rfc", "protocol",
+                  "architecture", "postmortem", "post-mortem", "how we", "lessons"]
+
+# Challenge outranks confirmation: a source that contradicts the thesis is
+# worth more than one that agrees with it.
+CHALLENGE = ["however", "contrary", "fails", "wrong", "myth", "overrated",
+             "does not", "debunk", "instead of", "versus", "vs ", "critique",
+             "limitation", "underperform", "regress"]
+
+META = ["workflow", "how we work", "process", "practice", "convention",
+        "postmortem", "post-mortem", "retro", "methodology", "operating",
+        "checklist", "discipline", "habit", "tooling"]
+
+
+def _kind(text: str) -> str:
+    if any(m in text for m in METHOD_MARKERS):
+        return "method"
+    if any(m in text for m in NEWS_MARKERS):
+        return "news"
+    return "unknown"
+
+
+def _timeliness(text: str, age_days: int | None) -> int:
+    """3 = fresh for its kind, 0 = past its half-life twice over."""
+    if age_days is None:
+        return 1  # unknown age is not a reason to promote or bury
+    hl = HALF_LIFE_DAYS.get(_kind(text), HALF_LIFE_DAYS["unknown"])
+    ratio = age_days / hl
+    return 3 if ratio <= .5 else 2 if ratio <= 1 else 1 if ratio <= 2 else 0
+
+
+def _roadmap(text: str, open_work: dict) -> tuple[int, list[str]]:
+    """Score against work that is actually open, passed in by the caller.
+
+    `open_work` maps a matchable token -> a human label, e.g.
+    {"omnigent": "PR #3353", "provenance": "PR #1108"}. It is a parameter and
+    not a constant on purpose: what is open changes daily, and a router with a
+    hardcoded roadmap is stale the moment it is committed.
+    """
+    hit = [label for tok, label in open_work.items() if tok in text]
+    return (3 if len(hit) > 1 else 2 if hit else 0), hit
+
+
+def _strategy(text: str, ventures: list[str]) -> int:
+    if not ventures:
+        return 0
+    return 3 if any(w in text for w in CHALLENGE) else 2
+
+
+def _meta(text: str) -> int:
+    n = len(_hits(text, META))
+    return 3 if n >= 2 else 2 if n == 1 else 0
+
+
 def _hits(text: str, words) -> list[str]:
     return [w for w in words if w in text]
 
 
-def classify(item: dict) -> dict:
+def classify(item: dict, open_work: dict | None = None,
+             age_days: int | None = None) -> dict:
     # The URL is signal, and it is signal the heading often lacks: a bare
     # newsletter title says nothing, its domain says a great deal. The URL
     # lives in org link syntax [[url][title]] or a :SOURCE: property, and an
@@ -132,7 +216,10 @@ def classify(item: dict) -> dict:
 
     if any(d in text for d in DISCARD):
         return {"theme": None, "ventures": [], "repo": None,
-                "dest": "discard", "why": "not research"}
+                "dest": "discard", "why": "not research",
+                "relevance": {"timeliness": 0, "roadmap": 0,
+                              "strategy": 0, "meta": 0},
+                "score": 0, "roadmap_hits": []}
 
     scored = {k: len(_hits(text, v["kw"])) for k, v in THEMES.items()}
     theme = max(scored, key=scored.get) if max(scored.values()) > 0 else None
@@ -143,22 +230,54 @@ def classify(item: dict) -> dict:
     repo = next((r for r, kws in REPO_HINTS.items() if _hits(text, kws)), None)
     names_change = any(v in text for v in ACTION_VERBS)
 
+    open_work = open_work or {}
+    if age_days is None:
+        age_days = item.get("age_days")
+
+    rm, rm_hits = _roadmap(text, open_work)
+    rel = {
+        "timeliness": _timeliness(text, age_days),
+        "roadmap": rm,
+        "strategy": _strategy(text, ventures),
+        "meta": _meta(text),
+    }
+    # Roadmap and meta are weighted double. Roadmap because it is the axis
+    # that converts reading into work; meta because a better method compounds
+    # across every future item, which no single fact does. Timeliness is NOT
+    # weighted up -- fresh is not the same as important, and weighting it
+    # would rebuild a news feed.
+    score = (rel["timeliness"] + rel["strategy"]
+             + 2 * rel["roadmap"] + 2 * rel["meta"])
+
     # The gate the user set: name the repo AND name the change, or it is inbox.
-    if repo and names_change:
-        dest, why = "issue", f"names {repo} and a change"
+    # Roadmap relevance is a necessary condition for an issue but never a
+    # sufficient one -- it can stop a low-relevance item becoming an issue,
+    # and can never promote one on its own.
+    if repo and names_change and rm > 0:
+        dest, why = "issue", f"names {repo} and a change; touches {', '.join(rm_hits)}"
+    elif repo and names_change:
+        dest, why = "inbox", f"names {repo} and a change, but no open work touches it"
     elif theme or ventures:
         dest, why = "inbox", "actionable but no repo+change named"
     else:
         dest, why = "inbox", "unclassified — needs a human glance"
 
     return {"theme": theme, "ventures": ventures, "repo": repo,
-            "dest": dest, "why": why}
+            "dest": dest, "why": why,
+            "relevance": rel, "score": score, "roadmap_hits": rm_hits}
 
 
 def main() -> int:
-    items = json.load(open(sys.argv[1])) if len(sys.argv) > 1 else json.load(sys.stdin)
+    args = sys.argv[1:]
+    open_work = {}
+    if "--open-work" in args:
+        i = args.index("--open-work")
+        open_work = json.load(open(args[i + 1]))
+        del args[i:i + 2]
+    items = json.load(open(args[0])) if args else json.load(sys.stdin)
     for it in items:
-        it.update(classify(it))
+        it.update(classify(it, open_work=open_work))
+    items.sort(key=lambda x: -x["score"])
     json.dump(items, sys.stdout, indent=1)
     return 0
 
