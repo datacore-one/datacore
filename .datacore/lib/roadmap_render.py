@@ -460,14 +460,24 @@ footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);
   letter-spacing:-.01em}
 .vwhy{font-size:12px;color:var(--faint);line-height:1.35}
 .step.thru .verb{color:var(--accent)}
-.cathedral{margin:20px 0 4px;padding:22px 24px;border-radius:10px;background:var(--raised);
+.missionblock{margin:20px 0 4px;padding:22px 24px;border-radius:10px;background:var(--raised);
   border:1px solid var(--rule)}
-.cathedral p{max-width:66ch;font-size:15px;line-height:1.62;color:var(--body)}
+.missionblock p{max-width:66ch;font-size:15px;line-height:1.62;color:var(--body)}
 .vrow{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
 .vchip{font-family:'Literata',Georgia,serif;font-size:20px;color:var(--ink);
   padding:4px 14px;border:1px solid var(--rule);border-radius:999px;background:var(--surface)}
 .vchip:last-child{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,transparent)}
 @media (max-width:640px){.step{grid-template-columns:1fr}}
+
+.missiontext{max-width:66ch;font-size:16px;line-height:1.62;color:var(--ink)}
+.whynow{max-width:66ch;font-size:14.5px;line-height:1.58;color:var(--body);margin-top:14px;
+  padding-left:14px;border-left:2px solid var(--human)}
+.whynow b{display:block;font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--human);margin-bottom:4px;font-weight:400}
+.notagainst{max-width:66ch;font-size:14px;line-height:1.55;color:var(--muted);margin-top:14px}
+.blessing{margin-top:26px;padding-top:20px;border-top:1px solid color-mix(in srgb,var(--accent) 30%,transparent);
+  font-family:'Literata',Georgia,serif;font-size:clamp(20px,2.4vw,26px);color:var(--accent);
+  letter-spacing:-.008em}
 .figure{margin:22px 0 0;overflow-x:auto;border:1px solid var(--rule);border-radius:10px;
   background:var(--surface);padding:20px 8px}
 .figure svg{display:block;min-width:940px;width:100%;height:auto}
@@ -824,17 +834,24 @@ def render_plan(r):
         head += f'<p class="hook">{e(r["hook"]).strip()}</p>'
     if r.get("thesis"):
         head += f'<p class="thesis">{e(r["thesis"]).strip()}</p>'
-    if r.get("cathedral"):
-        verbs = "".join(f'<span class="vchip">{e(s["verb"])}</span>'
-                        for s in r.get("master_plan") or [])
-        head += (f'<div class="cathedral"><div class="vrow">{verbs}</div>'
-                 f'<p>{e(r["cathedral"]).strip()}</p></div>')
+    verbs = "".join(f'<span class="vchip">{e(s["verb"])}</span>'
+                    for s in r.get("master_plan") or [])
+    if r.get("mission"):
+        head += (f'<div class="missionblock"><p class="eyebrow">why we do this</p>'
+                 f'<p class="missiontext">{e(r["mission"]).strip()}</p>'
+                 + (f'<p class="whynow"><b>why now</b>{e(r["why_now"]).strip()}</p>'
+                    if r.get("why_now") else "")
+                 + (f'<p class="notagainst">{e(r["not_against"]).strip()}</p>'
+                    if r.get("not_against") else "")
+                 + f'<div class="vrow">{verbs}</div></div>')
     v = r.get("vision") or {}
     tail = (f'<div class="horizon"><p class="eyebrow">the vision</p>'
             f'<p class="vhead">{e(v.get("headline",""))}</p>'
             f'<p class="vclaim">{e(v.get("the_claim","")).strip()}</p>'
             f'<p class="vhalves">{e(v.get("both_halves_matter","")).strip()}</p>'
-            f'<p class="vhorizon">{e(v.get("horizon","")).strip()}</p></div>') if v else ""
+            f'<p class="vhorizon">{e(v.get("horizon","")).strip()}</p>'
+            + (f'<p class="blessing">{e(v["closing"])}</p>' if v.get("closing") else "")
+            + '</div>') if v else ""
     return head + f'<div class="plan">{out}</div>' + tail
 
 
