@@ -207,18 +207,6 @@ section{margin-top:56px}
 .sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:6px;flex-wrap:wrap}
 .sec-sub{max-width:68ch;color:var(--muted);font-size:14.5px;margin-top:8px}
 
-/* founder queue */
-.queue{margin-top:22px;border:1px solid var(--rule);border-radius:10px;overflow:hidden;background:var(--surface);box-shadow:var(--shadow)}
-.qrow{display:grid;grid-template-columns:64px 1fr auto;gap:16px;align-items:center;
-  padding:13px 18px;border-top:1px solid var(--rule-soft)}
-.qrow:first-child{border-top:none}
-.qrow .qid{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--human)}
-.qrow .qt{color:var(--ink);font-weight:500;font-size:14.5px}
-.qrow .qo{font-size:13px;color:var(--muted);margin-top:1px}
-.qcost{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--human);
-  background:var(--human-soft);padding:3px 9px;border-radius:5px;white-space:nowrap}
-.qfoot{padding:13px 18px;background:var(--human-soft);border-top:1px solid var(--rule-soft);
-  color:var(--human);font-size:13.5px}
 
 /* board */
 .filters{display:flex;gap:7px;flex-wrap:wrap;margin:20px 0 16px}
@@ -503,6 +491,18 @@ footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);
 .col .ititle{font-size:13.5px}
 .col .iout{font-size:12.5px}
 @media (max-width:900px){.board{grid-template-columns:1fr}}
+
+.vrung{font-family:'JetBrains Mono',monospace;font-size:8.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--faint);margin-top:6px}
+details.more{margin-top:14px}
+details.more > summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:8px;
+  font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--accent);
+  border:1px solid color-mix(in srgb,var(--accent) 34%,transparent);border-radius:999px;padding:7px 15px}
+details.more > summary::-webkit-details-marker{display:none}
+details.more > summary::after{content:"↓"}
+details.more[open] > summary::after{content:"↑"}
+details.more > summary:hover{background:var(--accent-soft)}
+details.more > summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .figure{margin:22px 0 0;overflow-x:auto;border:1px solid var(--rule);border-radius:10px;
   background:var(--surface);padding:20px 8px}
 .figure svg{display:block;min-width:940px;width:100%;height:auto}
@@ -846,7 +846,9 @@ def render_plan(r):
         thru = s["step"] == "throughline"
         out += (f'<div class="step{" thru" if thru else ""}">'
                 f'<div class="num"><span class="verb">{e(s["verb"])}</span>'
-                f'<span class="vwhy">{e(s["verb_why"])}</span></div>'
+                f'<span class="vwhy">{e(s["verb_why"])}</span>'
+                + (f'<span class="vrung">{e(s["rung"])}</span>' if s.get("rung") else "")
+                + '</div>'
                 f'<div class="stepbody">'
                 f'<span class="drive">{e(s["drive"])}</span>'
                 f'<p class="today">{e(s["today"]).strip()}</p>'
@@ -861,16 +863,20 @@ def render_plan(r):
         head += f'<p class="thesis">{e(r["thesis"]).strip()}</p>'
     verbs = "".join(f'<span class="vchip">{e(s["verb"])}</span>'
                     for s in r.get("master_plan") or [])
-    if r.get("mission"):
-        head += (f'<div class="missionblock"><p class="eyebrow">why we do this</p>'
-                 f'<p class="missiontext">{e(r["mission"]).strip()}</p>'
-                 + (f'<p class="whynow"><b>why now</b>{e(r["why_now"]).strip()}</p>'
-                    if r.get("why_now") else "")
-                 + (f'<p class="notagainst">{e(r["not_against"]).strip()}</p>'
-                    if r.get("not_against") else "")
-                 + f'<div class="vrow">{verbs}</div></div>')
+    head += f'<div class="vrow">{verbs}</div>' 
     tail = ""
     return head + f'<div class="plan">{out}</div>' + tail
+
+
+def render_why(r):
+    if not r.get("mission"):
+        return ""
+    return (f'<div class="missionblock">'
+            f'<p class="missiontext">{e(r["mission"]).strip()}</p>'
+            + (f'<p class="whynow"><b>why now</b>{e(r["why_now"]).strip()}</p>'
+               if r.get("why_now") else "")
+            + (f'<p class="notagainst">{e(r["not_against"]).strip()}</p>'
+               if r.get("not_against") else "") + '</div>')
 
 
 def render_vision(r):
@@ -1068,6 +1074,7 @@ def render_html(r):
         )
 
     # board
+    why_html = render_why(r)
     vision_html = render_vision(r)
     plan_html = render_plan(r)
     ladder_html = render_ladder(r)
@@ -1156,18 +1163,24 @@ def render_html(r):
 </div></header>
 
 <div class="wrap">
+  <div class="metrics">{mhtml}</div>
+
   <section>
     <div class="sec-head"><h2>The master plan</h2></div>
     {plan_html}
   </section>
   <section>
-    <div class="sec-head"><h2>The vision</h2></div>
-    {vision_html}
+    <div class="sec-head"><h2>Why we do it</h2></div>
+    {why_html}
   </section>
 
   <section>
+    <div class="sec-head"><h2>The vision</h2></div>
+    {vision_html}
+  </section>
+  <section>
     <div class="sec-head"><h2>The ladder</h2>
-      <span class="eyebrow">the mental model</span></div>
+      <span class="eyebrow">one primitive, four rungs</span></div>
     <p class="sec-sub">From the seed deck's vision slide. Memory is the floor and it ships today;
     everything above it is carried by the same primitive, captured when knowledge forms —
     <em>the way a deed is issued when property changes hands. It cannot be added later.</em></p>
@@ -1184,55 +1197,15 @@ def render_html(r):
     {miles_html}
   </section>
   <section>
-    <div class="sec-head"><h2>The three goals</h2>
-      <span class="eyebrow">three motions, three clocks</span></div>
+    <div class="sec-head"><h2>Goals</h2>
+      <span class="eyebrow">three clocks</span></div>
     <p class="sec-sub">Set 2026-09-01, replacing a single metric that spanned two motions with
     different physics and could not be true of both. A sales cycle, a raise, and an ecosystem
     do not move at the same speed, so they are not one number.</p>
     {goals_html}
   </section>
   <section>
-    <div class="sec-head"><h2>The board</h2><span class="eyebrow">filter to narrow</span></div>
-    <div class="filters">{lchips}<span class="fsep"></span>{tchips}<span class="fsep"></span>{ochips}</div>
-    {board}
-  </section>
-  <section>
-    <div class="sec-head"><h2>The founder queue</h2>
-      <span class="eyebrow">blocked_on: human</span></div>
-    <p class="sec-sub">Every item here is stalled on one person. None is large — a DNS record,
-    a token rotation, one approval click on an eight-line green PR, three five-minute form
-    submissions. Together they gate four tracks. This is the query the spec argued for after
-    a distribution item sat thirty-seven days because nobody had surfaced it as a queue.</p>
-    <div class="queue">{qhtml}
-      <div class="qfoot"><b>{len(queue)} items</b> — roughly an hour of your attention,
-      against {len(delegable)} items already delegable and moving. The constraint is not
-      engineering capacity.</div>
-    </div>
-  </section>
-  <section>
-    <div class="sec-head"><h2>Where the roadmap stops moving</h2>
-      <span class="eyebrow">fan-in bottleneck</span></div>
-    <p class="sec-sub">Forty-eight items leave one file by three routes. Two of them flow.
-    The third converges on a single person with a capacity of one, and everything behind
-    it waits.</p>
-    <figure class="figure">{DIAGRAM}</figure>
-  </section>
-
-  <section>
-    <div class="sec-head"><h2>Context</h2><span class="eyebrow">what all of it serves</span></div>
-    <p class="sec-sub">Kept below the roadmap on purpose. The plan and the arc should stand without any of this.</p>
-  </section>
-  <section>
-    <div class="sec-head"><h2>What we are actually trying to do</h2>
-      <span class="eyebrow">org/intents.org</span></div>
-    <p class="sec-sub">Read straight out of the intent graph, not restated here — so a
-    renamed or deleted intent shows up as a missing node rather than a stale copy. Items
-    reference these; an item serving none of them is a deletion candidate. Crossed chips
-    are anti-goals: doors deliberately not opened.</p>
-    {intents_html}
-  </section>
-  <section>
-    <div class="sec-head"><h2>Verticals</h2>
+    <div class="sec-head"><h2>Where it lands</h2>
       <span class="eyebrow">answered by which integrator signs</span></div>
     <p class="sec-sub">Not a product decision. PLUR rides the system of record and reaches the
     institution through the integrator who already delivers it. The internal ventures are the R&amp;D
@@ -1240,7 +1213,12 @@ def render_html(r):
     {verts_html}
   </section>
   <section>
-    <div class="sec-head"><h2>What this file deliberately does not cover</h2></div>
+    <div class="sec-head"><h2>Everything else</h2><span class="eyebrow">58 items</span></div>
+    <div class="filters">{lchips}<span class="fsep"></span>{tchips}<span class="fsep"></span>{ochips}</div>
+    <details class="more"><summary>Show all 58 items</summary>{board}</details>
+  </section>
+  <section>
+    <div class="sec-head"><h2>Out of scope</h2></div>
     <div class="cov">
       <div class="card">
         <h3>Intent coverage</h3>
