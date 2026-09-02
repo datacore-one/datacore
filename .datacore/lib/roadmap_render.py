@@ -479,12 +479,16 @@ footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);
   font-family:'Literata',Georgia,serif;font-size:clamp(20px,2.4vw,26px);color:var(--accent);
   letter-spacing:-.008em}
 
-.motto{font-family:'Literata',Georgia,serif;font-style:italic;font-size:clamp(18px,2.2vw,23px);
-  color:var(--accent);margin:0 0 18px;letter-spacing:-.006em}
+.motto{font-family:'Literata',Georgia,serif;font-size:clamp(26px,3.6vw,38px);line-height:1.18;
+  color:var(--ink);max-width:22ch;margin:26px 0 16px;letter-spacing:-.014em;text-wrap:balance}
 .half{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.18em;
   text-transform:uppercase;color:var(--accent);margin:26px 0 2px;padding-top:14px;
   border-top:1px solid color-mix(in srgb,var(--accent) 26%,transparent)}
 .miles > .half:first-child{margin-top:0;padding-top:0;border-top:none}
+
+.visionblock{margin-top:20px;padding:26px 28px;border-radius:10px;background:var(--accent-soft);
+  border:1px solid color-mix(in srgb,var(--accent) 30%,transparent)}
+.visionblock .vhead{margin-bottom:14px}
 .figure{margin:22px 0 0;overflow-x:auto;border:1px solid var(--rule);border-radius:10px;
   background:var(--surface);padding:20px 8px}
 .figure svg{display:block;min-width:940px;width:100%;height:auto}
@@ -837,8 +841,6 @@ def render_plan(r):
                 f'<p class="never"><b>never</b>{e(s["never"]).strip()}</p>'
                 f'</div></div>')
     head = ""
-    if r.get("hook"):
-        head += f'<p class="hook">{e(r["hook"]).strip()}</p>'
     if r.get("motto"):
         head += f'<p class="motto">{e(r["motto"])}</p>'
     if r.get("thesis"):
@@ -853,14 +855,18 @@ def render_plan(r):
                  + (f'<p class="notagainst">{e(r["not_against"]).strip()}</p>'
                     if r.get("not_against") else "")
                  + f'<div class="vrow">{verbs}</div></div>')
-    v = r.get("vision") or {}
-    tail = (f'<div class="horizon"><p class="eyebrow">the vision</p>'
-            f'<p class="vhead">{e(v.get("headline",""))}</p>'
-            f'<p class="vclaim">{e(v.get("the_claim","")).strip()}</p>'
-            f'<p class="vhalves">{e(v.get("both_halves_matter","")).strip()}</p>'
-            f'<p class="vhorizon">{e(v.get("horizon","")).strip()}</p>'
-            + '</div>') if v else ""
+    tail = ""
     return head + f'<div class="plan">{out}</div>' + tail
+
+
+def render_vision(r):
+    v = r.get("vision") or {}
+    if not v:
+        return ""
+    return (f'<div class="visionblock">'
+            f'<p class="vhead">{e(v["headline"])}</p>'
+            f'<p class="vclaim">{e(v["claim"]).strip()}</p>'
+            f'<p class="vhorizon">{e(v["horizon"]).strip()}</p></div>')
 
 
 def render_intents():
@@ -1101,6 +1107,7 @@ def render_html(r):
     ents_html = render_entities(r)
     verts_html = render_verticals(r)
     goals_html = render_goals(r)
+    vision_html = render_vision(r)
     plan_html = render_plan(r)
     intents_html = render_intents()
     miles_html = render_milestones(r)
@@ -1151,6 +1158,11 @@ def render_html(r):
     a reader defend what they already built.</p>
     {plan_html}
   </section>
+  <section>
+    <div class="sec-head"><h2>The vision</h2></div>
+    {vision_html}
+  </section>
+
   <section>
     <div class="sec-head"><h2>The ladder</h2>
       <span class="eyebrow">the mental model</span></div>
