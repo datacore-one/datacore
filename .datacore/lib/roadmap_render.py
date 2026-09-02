@@ -331,7 +331,7 @@ footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);
 /* ladder */
 .ladderwrap{display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:28px;margin-top:22px;align-items:start}
 .spine{background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 28%,transparent);
-  border-radius:10px;padding:18px 20px}
+  border-radius:10px;padding:18px 22px;margin:18px 0 4px;max-width:70ch}
 .spine .prim{display:block;font-family:'Literata',Georgia,serif;font-size:26px;color:var(--accent);
   margin:6px 0 10px;letter-spacing:-.01em}
 .spinenote{font-size:13.5px;color:var(--body);line-height:1.5}
@@ -863,7 +863,14 @@ def render_plan(r):
         head += f'<p class="thesis">{e(r["thesis"]).strip()}</p>'
     verbs = "".join(f'<span class="vchip">{e(s["verb"])}</span>'
                     for s in r.get("master_plan") or [])
-    head += f'<div class="vrow">{verbs}</div>' 
+    head += f'<div class="vrow">{verbs}</div>'
+    if r.get("primitive"):
+        head += (f'<div class="spine"><span class="eyebrow">the one primitive</span>'
+                 f'<span class="prim">{e(r["primitive"])}</span>'
+                 f'<p class="spinenote">A store that is open, inspectable and portable by design '
+                 f'is also <em>forkable</em>. A fork has the bytes and none of the lineage — so '
+                 f'attested origin is the only thing that turns a copyable corpus into an ownable '
+                 f'asset. Every rung above the floor is gated on it.</p></div>')
     tail = ""
     return head + f'<div class="plan">{out}</div>' + tail
 
@@ -1177,14 +1184,6 @@ def render_html(r):
   <section>
     <div class="sec-head"><h2>The vision</h2></div>
     {vision_html}
-  </section>
-  <section>
-    <div class="sec-head"><h2>The ladder</h2>
-      <span class="eyebrow">one primitive, four rungs</span></div>
-    <p class="sec-sub">From the seed deck's vision slide. Memory is the floor and it ships today;
-    everything above it is carried by the same primitive, captured when knowledge forms —
-    <em>the way a deed is issued when property changes hands. It cannot be added later.</em></p>
-    {ladder_html}
   </section>
   <section>
     <div class="sec-head"><h2>The roadmap</h2>
