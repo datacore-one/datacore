@@ -1212,9 +1212,9 @@ def render_html(r):
     {verts_html}
   </section>
   <section>
-    <div class="sec-head"><h2>Everything else</h2><span class="eyebrow">58 items</span></div>
+    <div class="sec-head"><h2>The whole board</h2><span class="eyebrow">every roadmap item</span></div>
     <div class="filters">{lchips}<span class="fsep"></span>{tchips}<span class="fsep"></span>{ochips}</div>
-    <details class="more"><summary>Show all 58 items</summary>{board}</details>
+    <details class="more"><summary>Show every item</summary>{board}</details>
   </section>
   <section>
     <div class="sec-head"><h2>Out of scope</h2></div>
