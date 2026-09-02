@@ -102,6 +102,29 @@ def _entry(name: str) -> dict:
         f"refusal is what keeps that true.")
 
 
+def _var_for(entry: dict, name: str) -> str:
+    """The variable the caller actually asked for.
+
+    `_entry` accepts an id or ANY variable an entry declares. Having matched,
+    the caller's variable must not then be discarded in favour of the entry's
+    primary — for a multi-var credential (a key and its secret, an OAuth1 set)
+    that serves one value for every member.
+
+    It did until 2026-09-01: `creds get WITHINGS_CLIENT_SECRET` returned the
+    client id. 17 entries and 34 variables were affected, among them
+    BUYER_PRIVATE_KEY (served the seller's), GATE_API_SECRET, every X OAuth1
+    secret, and PYPI_TOKEN_ORG_WORKSPACE. The failure is quiet in the worst
+    way: the caller gets a real credential, fails to authenticate with it, and
+    concludes the key was revoked — which is how a live key gets rotated away.
+
+    Asking by id keeps the old meaning: the primary, or the first declared.
+    """
+    want = name.strip()
+    if want == entry.get("var_name") or want in (entry.get("vars") or []):
+        return want
+    return entry.get("var_name") or (entry.get("vars") or [name])[0]
+
+
 def _store_for(entry: dict) -> str:
     """The declared store for THIS platform.
 
@@ -160,7 +183,7 @@ def resolve(name: str) -> tuple[Path, str]:
     # a fleet-wide copy was pushed over the top of it, creating divergence out of
     # nothing. Precedence belongs here, decided once, rather than in each
     # consumer's sourcing order.
-    var_for_local = (c.get("var_name") or (c.get("vars") or [name])[0])
+    var_for_local = _var_for(c, name)
     local = ENV / "local.env"
     if local.is_file() and _read_var(local, var_for_local) is not None:
         return local, f"instance-local override ({instance_name()}) — wins over scope={scope}"
@@ -326,7 +349,7 @@ def replication_warning(entry: dict) -> str | None:
 def get_value(name: str, *, consumer: str = "") -> str:
     """The value, attested. Raises rather than returning a value it guessed at."""
     c = _entry(name)
-    var = c.get("var_name") or (c.get("vars") or [name])[0]
+    var = _var_for(c, name)
     path, why = resolve(name)
     store = _store_for(c)
     if store.startswith("keychain:"):
