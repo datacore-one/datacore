@@ -662,8 +662,21 @@ Each installed module with a `hooks.today` entry contributes content.
 | verity | Spaces | MCP server health |
 | comms | Horizon | Content calendar items |
 | metacognition | inline (after Observation) | Knowledge base pulse |
+| chief-of-staff | Spaces + Decisions Due | Autonomous-activity observations, sub-slot contributors |
+| gordon | inline | Daily fundraise-sprint contribution |
+| lens | inline | Behavioural observation and personalisation signals |
+| tutor | inline | Turns the day's work into retained understanding |
 | voice-terminal | post | Spoken briefing → Telegram |
 | whatsapp | post | Push notification |
+
+**This table is checked, not trusted.** `test_today_hooks_grounded.py` asserts
+its module set equals the modules that actually declare `hooks.today` in their
+`module.yaml`. It was written because this table had drifted to 16 rows while
+20 modules registered a hook — chief-of-staff, gordon, lens and tutor were all
+absent — in the same file that already warns "the glob above is authoritative
+— do not maintain a list here". That warning was added for the inline-hooks
+table above and this second enumeration was missed, which is the whole of bug
+class 1: the fix was applied to one copy.
 
 **Future slots:**
 - `family` → Good Morning + Agenda
