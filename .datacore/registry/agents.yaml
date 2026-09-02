@@ -3262,6 +3262,52 @@ module_agents:
     - invoice-classification
     spawns: []
     can_be_called_by: []
+
+  # --- appended 2026-09-02 ------------------------------------------------
+  # Agents present on disk with no registry entry. DIP-0016's discovery
+  # cannot surface an agent it does not know about, so these were invisible
+  # to datacore_agent_list — including podcast-creator and
+  # research-orchestrator, which the research pipeline calls by name.
+  # A module overlay sharing a core agent's name is keyed <name>@<module>:
+  # a name-keyed map cannot hold both, and overwriting one silently repoints
+  # it at the other (which is how the core entry briefly came to point at a
+  # 1 KB stub while this was being fixed).
+  dispensary:
+    description: "The pharmacy. Owns interaction, dose, timing, quality and cost for everything on the protocol. Medications are given constraints, never its to discont"
+    version: '1.0.0'
+    source: .datacore/modules/health/agents/dispensary.md
+    module: health
+  john:
+    description: "Managing Partner of the Practice \u2014 risk model, protocol design, arbitration, clinical veto. The conversation about why."
+    version: '1.0.0'
+    source: .datacore/modules/health/agents/john.md
+    module: health
+  mick:
+    description: "Performance. Owns the session \u2014 warm-up, loads, cues, substitutions. The conversation about now."
+    version: '1.0.0'
+    source: .datacore/modules/health/agents/mick.md
+    module: health
+  registrar:
+    description: "Custodian of the intervention ledger. Enforces that every entry carries a hypothesis, a measure and a stop rule, and runs the quarterly sunset review "
+    version: '1.0.0'
+    source: .datacore/modules/health/agents/registrar.md
+    module: health
+  reviewer:
+    description: "The Second Opinion desk. Its only job is to refuse. Reviews every proposed intervention before it can enter the protocol and must produce a reason to "
+    version: '1.0.0'
+    source: .datacore/modules/health/agents/reviewer.md
+    module: health
+  podcast-creator:
+    description: "Module version of podcast-creator with research module output paths. Creates NotebookLM podcasts from curated source lists."
+    version: '1.0.0'
+    source: .datacore/modules/research/agents/podcast-creator.md
+    module: research
+  research-orchestrator:
+    description: "Module version of research-orchestrator with research module output paths. Coordinates the full research pipeline for both interactive (/research) and"
+    version: '1.0.0'
+    source: .datacore/modules/research/agents/research-orchestrator.md
+    module: research
+
 knowledge_locations:
   gtd:
     description: GTD methodology and workflows
