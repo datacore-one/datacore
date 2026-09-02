@@ -75,36 +75,52 @@ def _norm_status(raw: str) -> str:
 
 
 def _paths(cell: str) -> list[str]:
-    """Backticked paths from an Affects/Specs cell, with directory context.
+    """Backticked paths from an Affects/Specs cell, with PARENTHETICAL context.
 
-    These cells are prose with code spans, and the prose carries structure a
-    naive extractor destroys:
+    Directory context applies only inside parentheses:
 
-        `.datacore/lib/jobs/` (`manifest.py`, `checks.py`), `.datacore/lib/x.py`
+        `.datacore/lib/jobs/` (`manifest.py`, `checks.py`)   -> members
+        `.datacore/registry/`, `tags.yaml`                    -> siblings
 
-    The parenthetical basenames are members of the directory span before them,
-    not root-relative paths. Reading them as root-relative reported
-    `manifest.py` absent for DIP-0035 when `.datacore/lib/jobs/manifest.py`
-    exists -- a false finding produced by this very tool, in an audit about
-    claims nothing checks. Caught 2026-09-02 before it was reported.
+    Applying it across a comma list too resolved DIP-0016's `tags.yaml` to
+    `.datacore/registry/tags.yaml` and reported it absent, when the file is at
+    `.datacore/tags.yaml`. The prose distinguishes the two cases with
+    parentheses; the extractor now does as well.
 
-    So: track the last directory-shaped span and resolve bare basenames
-    against it.
+    Paths introduced by "future" or "planned" are aspirational, not claims.
+    DIP-0037 says "future `cos_generate.py`/`cos_reasoning.py` call sites" --
+    reading those as current made a DIP fail for describing its own roadmap.
     """
     out: list[str] = []
     ctx = ""
-    for raw in PATH_RE.findall(cell):
-        s = raw.strip().rstrip(",")
-        if not s:
-            continue
-        if "/" in s:
-            out.append(s)
-            # A span ending in "/" -- or whose tail has no suffix -- is a
-            # directory, and scopes the basenames that follow it.
-            ctx = s if s.endswith("/") else (s.rsplit("/", 1)[0] + "/")
-            continue
-        if s.endswith((".py", ".md", ".yaml", ".yml", ".sh", ".ts", ".json")):
-            out.append(ctx + s if ctx else s)
+    depth = 0
+    i = 0
+    aspirational = False
+    while i < len(cell):
+        ch = cell[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+            if depth == 0:
+                ctx = ""
+        elif ch == "`":
+            j = cell.find("`", i + 1)
+            if j == -1:
+                break
+            s = cell[i + 1:j].strip().rstrip(",")
+            preceding = cell[max(0, i - 40):i].lower()
+            aspirational = ("future" in preceding or "planned" in preceding
+                            or "proposed" in preceding)
+            if s and not aspirational:
+                if "/" in s:
+                    out.append(s)
+                    if depth == 0:
+                        ctx = s if s.endswith("/") else s.rsplit("/", 1)[0] + "/"
+                elif s.endswith((".py", ".md", ".yaml", ".yml", ".sh", ".ts", ".json")):
+                    out.append((ctx + s) if depth > 0 and ctx else s)
+            i = j
+        i += 1
     return out
 
 
@@ -144,6 +160,18 @@ def _classify(p: str) -> str:
 
     if (base / rel).exists():
         return "exists"
+
+    # A DIP about a project writes paths relative to THAT project:
+    # `datacore-app/daemon/datacored/api/mail.py` is real, under
+    # 2-datacore/2-projects/. Reading it root-relative reported a shipped file
+    # as absent.
+    if base is ROOT and "/" in rel:
+        try:
+            for proj in ROOT.glob("[0-9]-*/2-projects"):
+                if (proj / rel).exists():
+                    return "exists"
+        except OSError:
+            pass
 
     # A bare name with no directory context ("org/", "dips/") may be relative
     # to a space rather than the repo root. Look before calling it absent.
