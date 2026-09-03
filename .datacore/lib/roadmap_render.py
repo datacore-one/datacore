@@ -247,6 +247,73 @@ section{margin-top:56px}
 .tag.go{background:var(--go-soft);color:var(--go);border-color:transparent}
 .igate{margin-top:9px;font-size:13px;color:var(--gated);display:flex;gap:7px}
 .igate b{font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.09em;
+.rels{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:12px;margin-top:18px}
+.mrel{border-left:3px solid var(--rule);padding:9px 0 9px 13px;margin-top:11px}
+.mrel.r-core{border-left-color:var(--accent)}
+.mrel.r-enterprise{border-left-color:var(--go)}
+.mrel .relv{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--ink);font-weight:600}
+.mrel .relrepo{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--faint);margin-left:8px}
+.reltheme-s{display:block;font-family:'Literata',Georgia,serif;font-size:16px;color:var(--ink);
+  line-height:1.25;margin:4px 0 3px}
+.rel{background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:15px 18px;
+  border-left:3px solid var(--rule)}
+.rel.r-core{border-left-color:var(--accent)}
+.rel.r-enterprise{border-left-color:var(--go)}
+.relhead{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.relv{font-family:'JetBrains Mono',monospace;font-size:14px;color:var(--ink);font-weight:600}
+.relrepo{font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--faint)}
+.reltheme{font-family:'Literata',Georgia,serif;font-size:19px;color:var(--ink);
+  line-height:1.25;margin:7px 0 6px}
+.rellands{font-size:13.5px;color:var(--muted);line-height:1.5;margin-bottom:9px}
+.itemtag{display:inline-flex;gap:6px;align-items:baseline;max-width:100%}
+.itemtag b{font-family:'JetBrains Mono',monospace;font-weight:400;color:var(--accent);flex:0 0 auto}
+.itemtag i{font-style:normal}
+.relbtn{display:inline-flex;align-items:center;gap:0;border:1px solid var(--rule);
+  border-radius:7px;overflow:hidden;background:var(--paper-2)}
+.relbtn b{font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:600;
+  color:var(--paper);background:var(--accent);padding:4px 9px}
+.relbtn i,.relbtn u{font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--muted);font-style:normal;text-decoration:none;
+  padding:4px 8px}
+.relbtn u{border-left:1px solid var(--rule);color:var(--faint)}
+.r-enterprise .relbtn b{background:var(--go)}
+.goal-card .hd{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.gfrom span,.gnext span{margin-left:2px}
+.twocol{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));
+  gap:20px;margin-top:18px;align-items:start}
+.twocol > *{margin-top:0 !important;margin-bottom:0 !important;height:100%}
+
+.itemlist{list-style:none;margin:9px 0 0;padding:0;display:grid;gap:5px}
+.itemrow{display:flex;gap:10px;align-items:baseline;font-size:13.5px;line-height:1.45;
+  padding:5px 0;border-bottom:1px solid var(--rule-soft)}
+.itemrow:last-child{border-bottom:none}
+.itemrow b{font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:400;
+  color:var(--accent);flex:0 0 auto;min-width:52px}
+.itemrow span{color:var(--body)}
+.mrel{display:flex;align-items:baseline;gap:11px;flex-wrap:wrap;
+  border-left:3px solid var(--rule);padding:8px 0 8px 13px;margin-top:9px}
+.mrel.r-core{border-left-color:var(--accent)}
+.mrel.r-enterprise{border-left-color:var(--go)}
+.relbtn{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--paper);
+  background:var(--accent);border-radius:5px;padding:3px 9px;white-space:nowrap}
+.r-enterprise .relbtn{background:var(--go)}
+.reldate{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--faint);
+  margin-left:auto;white-space:nowrap}
+.subh{font-family:'Literata',Georgia,serif;font-size:21px;color:var(--ink);
+  margin:30px 0 4px;font-weight:400}
+.msumm{font-size:14.5px;line-height:1.55;color:var(--body);margin:12px 0 4px}
+.idone{margin-top:9px;padding:9px 11px;border:1px solid var(--rule);border-radius:7px;
+  background:var(--paper-2);display:grid;gap:5px}
+.idone b{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--faint);font-weight:400}
+.idone span{font-size:13px;color:var(--body);line-height:1.45}
+.idone .ev{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--accent);font-style:normal;justify-self:start;
+  border:1px solid var(--accent);border-radius:4px;padding:1.5px 6px}
+.idone code{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);
+  word-break:break-word;line-height:1.5}
   text-transform:uppercase;color:var(--faint);flex-shrink:0;padding-top:2px}
 .serves{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--faint);margin-top:8px}
 
@@ -332,6 +399,12 @@ footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);
 .ladderwrap{display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:28px;margin-top:22px;align-items:start}
 .spine{background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 28%,transparent);
   border-radius:10px;padding:18px 22px;margin:18px 0 4px;max-width:70ch}
+.prim-inline{margin-top:14px;padding:13px 15px;border:1px solid var(--accent);
+  border-radius:8px;background:var(--accent-tint)}
+.prim-inline .prim{display:block;font-family:'Literata',Georgia,serif;font-size:22px;
+  color:var(--accent);line-height:1.2;margin:3px 0 7px}
+.means{font-family:'Literata',Georgia,serif;font-size:17px;line-height:1.4;color:var(--ink);
+  margin:7px 0 10px}
 .spine .prim{display:block;font-family:'Literata',Georgia,serif;font-size:26px;color:var(--accent);
   margin:6px 0 10px;letter-spacing:-.01em}
 .spinenote{font-size:13.5px;color:var(--body);line-height:1.5}
@@ -451,10 +524,6 @@ footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);
 .missionblock{margin:20px 0 4px;padding:22px 24px;border-radius:10px;background:var(--raised);
   border:1px solid var(--rule)}
 .missionblock p{max-width:66ch;font-size:15px;line-height:1.62;color:var(--body)}
-.vrow{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
-.vchip{font-family:'Literata',Georgia,serif;font-size:20px;color:var(--ink);
-  padding:4px 14px;border:1px solid var(--rule);border-radius:999px;background:var(--surface)}
-.vchip:last-child{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,transparent)}
 @media (max-width:640px){.step{grid-template-columns:1fr}}
 
 .missiontext{max-width:66ch;font-size:16px;line-height:1.62;color:var(--ink)}
@@ -505,7 +574,8 @@ details.more > summary:hover{background:var(--accent-soft)}
 details.more > summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .figure{margin:22px 0 0;overflow-x:auto;border:1px solid var(--rule);border-radius:10px;
   background:var(--surface);padding:20px 8px}
-.figure svg{display:block;min-width:940px;width:100%;height:auto}
+.figure svg{display:block;min-width:1180px;width:100%;height:auto}
+@media (min-width:1300px){.figure{width:calc(100% + 260px);margin-left:-130px}}
 .hidden{display:none}
 @media (max-width:640px){
   .wrap,.head-in{padding-left:18px;padding-right:18px}
@@ -767,7 +837,7 @@ whoever produced it. Each arrow is labelled with the condition that must be true
 <rect x="756" y="140" width="280" height="112" rx="6" fill="var(--paper)"/>
 <rect x="756" y="140" width="280" height="112" rx="6" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
 <rect x="764" y="146" width="64" height="12" rx="2" fill="none" stroke="var(--accent)" stroke-opacity="0.5" stroke-width="0.8"/>
-<text x="796" y="155" fill="var(--accent)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">OWNABLE</text>
+<text x="796" y="155" fill="var(--accent)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">PUBLISHABLE</text>
 <text x="896" y="196" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Outfit',sans-serif" text-anchor="middle">Memory you can prove</text>
 <text x="896" y="216" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">M3 · origin · chain · signature</text>
 <rect x="836" y="228" width="120" height="16" rx="4" fill="var(--paper)" stroke="var(--accent)" stroke-width="0.8"/>
@@ -855,22 +925,20 @@ def render_plan(r):
                 f'<div class="do">{e(s["do"])}</div>'
                 f'<p class="how">{e(s["how"]).strip()}</p>'
                 f'<p class="never"><b>never</b>{e(s["never"]).strip()}</p>'
-                f'</div></div>')
+                + (f'<div class="prim-inline"><span class="eyebrow">the one primitive</span>'
+                   f'<span class="prim">{e(r["primitive"])}</span>'
+                   f'<p class="spinenote">A store that is open, inspectable and portable by '
+                   f'design is also <em>forkable</em>. A fork has the bytes and none of the '
+                   f'lineage — so attested origin is the only thing that turns a copyable '
+                   f'corpus into an ownable asset. Every rung above the floor is gated on it.'
+                   f'</p></div>'
+                   if s.get("step") == "throughline" and r.get("primitive") else "")
+                + f'</div></div>')
     head = ""
     if r.get("motto"):
         head += f'<p class="motto">{e(r["motto"])}</p>'
     if r.get("thesis"):
         head += f'<p class="thesis">{e(r["thesis"]).strip()}</p>'
-    verbs = "".join(f'<span class="vchip">{e(s["verb"])}</span>'
-                    for s in r.get("master_plan") or [])
-    head += f'<div class="vrow">{verbs}</div>'
-    if r.get("primitive"):
-        head += (f'<div class="spine"><span class="eyebrow">the one primitive</span>'
-                 f'<span class="prim">{e(r["primitive"])}</span>'
-                 f'<p class="spinenote">A store that is open, inspectable and portable by design '
-                 f'is also <em>forkable</em>. A fork has the bytes and none of the lineage — so '
-                 f'attested origin is the only thing that turns a copyable corpus into an ownable '
-                 f'asset. Every rung above the floor is gated on it.</p></div>')
     tail = ""
     return head + f'<div class="plan">{out}</div>' + tail
 
@@ -879,8 +947,7 @@ def render_why(r):
     if not r.get("mission"):
         return ""
     return (f'<div class="missionblock">'
-            f'<p class="missiontext">{e(r["mission"]).strip()}</p>'
-            + (f'<p class="whynow"><b>why now</b>{e(r["why_now"]).strip()}</p>'
+            + (f'<p class="missiontext">{e(r["why_now"]).strip()}</p>'
                if r.get("why_now") else "")
             + (f'<p class="notagainst">{e(r["not_against"]).strip()}</p>'
                if r.get("not_against") else "") + '</div>')
@@ -936,10 +1003,23 @@ def render_milestones(r):
         if m.get("half") and m["half"] != seen_half:
             seen_half = m["half"]
             out += f'<p class="half">{e(m["half"])}</p>' 
-        gate = (f'<div class="mgate"><b>gate</b><span>{e(m["gate"])}</span></div>'
-                if m.get("gate") else "")
-        its = ("".join(f'<span class="tag">{e(i)}</span>' for i in m.get("items") or [])
-               or '<span class="tag">—</span>')
+        gate = (f'<div class="mgate"><b>cannot start until</b>'
+                f'<span>{e(m["gate"])}</span></div>' if m.get("gate") else "")
+        # A bare R-NNN is unreadable — the reader has to go and look it up, and
+        # on a page meant to be read rather than queried that is a dead end.
+        # Carry the title inline, with the outcome on hover.
+        byid = {x["id"]: x for x in r["items"]}
+        def itag(iid):
+            it = byid.get(iid)
+            if not it:
+                return f'<span class="tag">{e(iid)}</span>'
+            return (f'<li class="itemrow" title="{e(it.get("outcome","").strip())}">'
+                    f'<b>{e(iid)}</b>&nbsp; <span>{e(it["title"])}</span></li>')
+        its = ("".join(itag(i) for i in m.get("items") or [])
+               or '<li class="itemrow"><span>—</span></li>')
+        summ = (f'<p class="msumm">{e(m["brings"]).strip()}</p>'
+                if m.get("brings") else "")
+        its = f'{summ}<p class="eyebrow">epics</p><ul class="itemlist">{its}</ul>'
         feats = ""
         mine = [f for f in (r.get("features") or []) if f.get("milestone") == m["id"]]
         mine.sort(key=lambda x: -(x.get("rice", {}).get("score") or 0))
@@ -957,15 +1037,27 @@ def render_milestones(r):
                       f'{e(repo.split("/")[-1])}#{e(num)}</a>'
                       f'<span class="ft">{e(f["title"])}</span>{kids}{rice}</div>'
                       f'<p class="fd">{e(f["delivers"]).strip()}</p>{why}</div>')
-        feats = (f'<div class="feats"><p class="eyebrow">what gets built to get there</p>'
-                 f'{feats}</div>') if feats else ""
+        # Releases replace the epic list here. An epic says what is being built;
+        # a release says when a slice of it reaches someone outside the repo and
+        # under what name — which is the thing a reader of a roadmap wants.
+        mrel = [x for x in (r.get("releases") or []) if x.get("rung") == m["id"]]
+        relhtml = ""
+        for x in mrel:
+            relhtml += (f'<div class="mrel r-{e(x["repo"])}">'
+                        f'<span class="relbtn">{e(x["version"])} {e(x["repo"])}</span>'
+                        f'&nbsp; <span class="reltheme-s">{e(x["theme"])}</span>'
+                        f'&nbsp; <span class="reldate">({e(_week_end(x["week"]))})</span></div>')
+        feats = (f'<div class="feats"><p class="eyebrow">'
+                 f'{"ships as" if relhtml else "what gets built to get there"}</p>'
+                 f'{relhtml or feats}</div>') if (relhtml or feats) else ""
         rad = (f'<p class="radius"><b>compounds for</b>{e(m["compounds_for"])}</p>'
                if m.get("compounds_for") else "")
         out += (f'<div class="mile" id="m-{e(m["id"])}"><div class="rail"><span class="mid">{e(m["id"])}</span>'
                 f'<span class="state {e(m["state"])}">{e(m["state"].replace("_", " "))}</span>'
                 f'<span class="mid">{e(m.get("tier", ""))}</span></div>'
-                f'<div><div class="mt">{e(m["title"])}</div>{rad}'
-                f'<p class="ev">{e(m["evidence"]).strip()}</p>{gate}'
+                f'<div><div class="mt">{e(m["title"])}</div>'
+                + (f'<p class="means">{e(m["means"]).strip()}</p>' if m.get("means") else "")
+                + f'{rad}<p class="ev">{e(m["evidence"]).strip()}</p>{gate}'
                 f'<div class="imeta">{its}</div>{feats}</div></div>')
     return f'<div class="miles">{out}</div>'
 
@@ -1032,11 +1124,11 @@ def render_goals(r):
     for g in r.get("goals") or []:
         rung = f'<span class="tag">{e(g["rung"])}</span>' if g.get("rung") else ""
         out += (f'<div class="goal-card"><div class="hd">'
-                f'<span class="gid">{e(g["id"])}</span>'
-                f'<span class="gname">{e(g["goal"])}</span>{rung}</div>'
-                f'<p class="gmotion"><b>motion</b> {e(g["motion"])}</p>'
-                f'<p class="gfrom"><b>from</b> {e(g["from"])}</p>'
-                f'<p class="fd">{e(g["note"]).strip()}</p>{_kpi(g)}</div>')
+                f'<span class="gid">{e(g["id"])}</span>&nbsp; '
+                f'<span class="gname">{e(g["goal"])}</span>&nbsp; {rung}</div>'
+                f'<p class="gfrom"><b>from</b> <span>{e(g["from"])}</span></p>'
+                f'<p class="gnext"><b>next</b> <span>{e(g["next"])}</span></p>'
++ '</div>')
     return f'<div class="goals-grid">{out}</div>' if out else ""
 
 
@@ -1109,14 +1201,19 @@ def render_html(r):
             tags += '<span class="tag lock">embargoed</span>'
         if i.get("gh"):
             tags += f'<span class="tag">{e(i["gh"].split("/")[-1])}</span>'
-        gate = (f'<div class="igate"><b>gate</b><span>{e(i["gate"])}</span></div>'
-                if i.get("gate") else "")
+        gate = (f'<div class="igate"><b>cannot start until</b>'
+                f'<span>{e(i["gate"])}</span></div>' if i.get("gate") else "")
+        dw = i.get("done_when") or {}
+        done = (f'<div class="idone"><b>done when</b>'
+                f'<span>{e(dw["condition"])}</span>'
+                f'<em class="ev">{e(dw["evidence"])}</em>'
+                f'<code>{e(dw["verify"])}</code></div>') if dw else ""
         return (f'<div class="item" data-track="{e(i["track"])}" data-owner="{e(i.get("owner"))}"'
                 f' data-lane="{e(i.get("lane"))}" data-block="{e(b)}" data-h="{e(h)}" data-s="{e(st)}">'
                 f'<div class="itop"><span class="iid">{e(i["id"])}</span>'
                 f'<span class="ititle">{e(i["title"])}</span></div>'
                 f'<p class="iout">{e(i["outcome"])}</p>'
-                f'<div class="imeta">{tags}</div>{gate}</div>')
+                f'<div class="imeta">{tags}</div>{gate}{done}</div>')
 
     board = ""
     for col in (r.get("columns") or {}):
@@ -1131,6 +1228,9 @@ def render_html(r):
         board += (f'<div class="col"><div class="colhead"><h3>{e(col)}</h3>'
                   f'<span class="colcount">{len(mine)}</span></div>{rows}</div>')
     board = f'<div class="board">{board}</div>'
+    exec_html = execution_html(r)
+    n_items = len(r['items'])
+    rels_html = render_releases(r)
 
     tchips = "".join(
         f'<button class="chip" data-key="track" data-val="{e(t)}" aria-pressed="false">{e(t)}</button>'
@@ -1177,23 +1277,27 @@ def render_html(r):
     {plan_html}
   </section>
   <section>
-    <div class="sec-head"><h2>Why we do it</h2></div>
-    {why_html}
-  </section>
-
-  <section>
-    <div class="sec-head"><h2>The vision</h2></div>
-    {vision_html}
+    <div class="sec-head"><h2>Where this goes, and why now</h2></div>
+    <div class="twocol">{vision_html}{why_html}</div>
   </section>
   <section>
     <div class="sec-head"><h2>The roadmap</h2>
       <span class="eyebrow">the story, end to end</span></div>
-    <p class="sec-sub">Each milestone does not add a feature — it widens <em>who the compounding
-    is for</em>: one person, one team, the organisation, between organisations, the whole network.
-    That is the test for belonging on this ladder. Gated by conditions rather than dates, so this
-    is a dependency chain and not a timeline. State is honest: <em>shipped</em> means shipped.</p>
+    <p class="sec-sub"><b>R-numbers are epics.</b> A <em>cannot start until</em> line is a
+    precondition — sometimes another epic, sometimes an outside event, sometimes a decision
+    only Gregor can make. It is not a date, and nothing here slips by being late.</p>
+    <p class="sec-sub"> Each one is an outcome with a definition of
+    done, the tasks that serve it, and the release it ships in — not a ticket. There are
+    {n_items} of them.</p>
     <figure class="figure">{ARC_DIAGRAM}</figure>
     {miles_html}
+  </section>
+  <section>
+    <div class="sec-head"><h2>Planned releases</h2>
+      <span class="eyebrow">both repos, weekly</span></div>
+    <p class="sec-sub">Milestones gate on conditions. A release is how a slice of one reaches
+    someone outside the repo, under a name they can repeat. Every sprint carries at least one.</p>
+    {rels_html}
   </section>
   <section>
     <div class="sec-head"><h2>Goals</h2>
@@ -1203,16 +1307,9 @@ def render_html(r):
     do not move at the same speed, so they are not one number.</p>
     {goals_html}
   </section>
+  {exec_html}
   <section>
-    <div class="sec-head"><h2>Where it lands</h2>
-      <span class="eyebrow">answered by which integrator signs</span></div>
-    <p class="sec-sub">Not a product decision. PLUR rides the system of record and reaches the
-    institution through the integrator who already delivers it. The internal ventures are the R&amp;D
-    lab for the same pattern — and until one has external revenue they are internal R&amp;D, not proof.</p>
-    {verts_html}
-  </section>
-  <section>
-    <div class="sec-head"><h2>The whole board</h2><span class="eyebrow">every roadmap item</span></div>
+    <div class="sec-head"><h2>The whole board</h2><span class="eyebrow">every epic</span></div>
     <div class="filters">{lchips}<span class="fsep"></span>{tchips}<span class="fsep"></span>{ochips}</div>
     <details class="more"><summary>Show every item</summary>{board}</details>
   </section>
@@ -1228,10 +1325,6 @@ def render_html(r):
       </div>
       <div class="card"><h3>The institutional rail</h3><p style="font-size:13.5px;color:var(--muted)">The regulated venue where tokenised data would actually settle, and the insurance market that would make it holdable, are real and sequenced — and they belong to Verity, not here. Out of scope until Verity is the live question. They are the reason the coverage number is not 100% and should not be.</p></div>
     </div>
-    <div class="flag">
-      <h3>The north star is flagged OPEN, and the file says so</h3>
-      <p>{e(ns["open_question"]).replace(chr(10), " ")}</p>
-    </div>
   </section>
   <footer>
     <span>generated by .datacore/lib/roadmap_render.py</span>
@@ -1239,6 +1332,154 @@ def render_html(r):
   </footer>
 </div>
 <script>{JS}</script>
+"""
+
+
+
+
+def _week_end(week):
+    """`2026-W37` -> `13 Sep`. A reader wants a date, not a week number."""
+    import datetime
+    try:
+        y, w = week.split("-W")
+        d = datetime.date.fromisocalendar(int(y), int(w), 7)
+        return f"{d.day} {d.strftime('%b')}"
+    except Exception:
+        return week
+
+
+def _itemtag(r, iid):
+    """An item chip that says what the item IS, not just its number."""
+    it = next((x for x in r["items"] if x["id"] == iid), None)
+    if not it:
+        return f'<span class="tag">{e(iid)}</span>'
+    return (f'<li class="itemrow" title="{e(it.get("outcome","").strip())}">'
+            f'<b>{e(iid)}</b>&nbsp; <span>{e(it["title"])}</span></li>')
+
+
+def render_releases(r):
+    """Planned releases — the cadence the milestones actually arrive on.
+
+    Milestones say what changes and gate on conditions. Releases say WHEN a
+    slice of that reaches someone outside the repo, and under what name. A
+    sprint that merges things is invisible; a sprint that ships a named,
+    themed version is a chapter someone can read.
+    """
+    rel = r.get("releases") or []
+    if not rel:
+        return ""
+    rows = ""
+    week = None
+    for x in rel:
+        if x["week"] != week:
+            week = x["week"]
+            rows += f'<p class="half">{e(week)}</p>'
+        rows += (f'<div class="rel r-{e(x["repo"])}">'
+                 f'<div class="relhead">'
+                 f'<span class="relbtn">{e(x["version"])} {e(x["repo"])}</span>'
+                 f'&nbsp; <span class="reldate">({e(_week_end(x["week"]))})</span>'
+                 f'&nbsp; <span class="tag">{e(x["rung"])}</span></div>'
+                 f'<p class="reltheme">{e(x["theme"])}</p>'
+                 f'<p class="rellands">{e(x["lands"]).strip()}</p>'
+                 f'<ul class="itemlist">'
+                 + "".join(_itemtag(r, i) for i in x.get("items") or [])
+                 + '</ul></div>')
+    return f'<div class="rels">{rows}</div>'
+
+
+def execution_html(r: dict) -> str:
+    """Execution, read live from the org files at render time.
+
+    Three questions, in the order a reader asks them: what is waiting on
+    Gregor, where is the work actually pointed, and what does the roadmap call
+    current that nobody is working on.
+    """
+    import subprocess, collections
+    items = {i["id"]: i for i in r["items"]}
+    tasks: dict = collections.defaultdict(list)
+    linked = total = 0
+    for f in ("next_actions.org", "someday.org", "inbox.org"):
+        x = subprocess.run(
+            ["python3", str(REPO / ".datacore/lib/org_workspace_adapter.py"),
+             "list", "--file", f"5-plur/org/{f}",
+             "--states", "NEXT,TODO,WAITING,REVIEW"],
+            capture_output=True, text=True, cwd=REPO)
+        if x.returncode:
+            continue
+        for t in json.loads(x.stdout)["tasks"]:
+            total += 1
+            rid = (t.get("properties") or {}).get("ROADMAP")
+            if rid:
+                linked += 1
+                tasks[rid].append(t)
+    if not total:
+        return ""
+
+    # ── 1. blocked on you
+    blocked = [i for i in r["items"] if i.get("blocked_on") == "human"]
+    brows = ""
+    for i in sorted(blocked, key=lambda i: (i.get("horizon") != "now", i["id"])):
+        dw = (i.get("done_when") or {}).get("condition", "")
+        brows += (f'<tr><td class="vs">{e(i["id"])}</td>'
+                  f'<td class="vd">{e(i["title"])}</td>'
+                  f'<td class="vi">{e(dw)}</td></tr>')
+
+    # ── 2. where the pool points
+    top = sorted(tasks.items(), key=lambda kv: -len(kv[1]))[:8]
+    rows = ""
+    for iid, ts in top:
+        it = items.get(iid, {})
+        rows += (f'<tr><td class="vs">{e(iid)}</td>'
+                 f'<td class="vd">{len(ts)}</td>'
+                 f'<td class="vs">{e(str(it.get("milestone","—")))}</td>'
+                 f'<td class="vi">{e(str(it.get("title","")))}</td></tr>')
+
+    # ── 3. current, but nobody is on it
+    now_items = [i for i in r["items"] if i.get("horizon") == "now"]
+    gaps = [i for i in now_items if i["id"] not in tasks]
+    grows = ""
+    for i in sorted(gaps, key=lambda i: (str(i.get("milestone")), i["id"]))[:12]:
+        ev = (i.get("done_when") or {}).get("evidence", "—")
+        grows += (f'<tr><td class="vs">{e(i["id"])}</td>'
+                  f'<td class="vd">{e(str(i.get("title","")))}</td>'
+                  f'<td class="vs">{e(ev)}</td></tr>')
+
+    pct = 100 * linked // total
+    return f"""
+  <section>
+    <div class="sec-head"><h2>What is actually being worked</h2>
+      <span class="eyebrow">read from the task pool at render time</span></div>
+    <p class="sec-sub">Every other section is intent. This one is execution, generated rather
+    than written, so it cannot flatter the plan. {linked} of {total} open tasks ({pct}%) name the
+    epic they serve; the rest stay unlinked on purpose, because a wrong parent points an agent at
+    the wrong work.</p>
+
+    <h3 class="subh">1 &middot; Blockers &mdash; {len(blocked)} epics waiting on Gregor</h3>
+    <p class="sec-sub">Nothing else can move these: they need a decision, a signature or an
+    approval from one person. <b>This is the list to schedule.</b> Each row shows what would
+    have to become true for it to stop being blocked.</p>
+    <div class="tablewrap"><table class="vtab"><thead><tr>
+      <th>epic</th><th>what it is</th><th>unblocked when</th>
+    </tr></thead><tbody>{brows}</tbody></table></div>
+
+    <h3 class="subh">2 &middot; Where the pool is pointed</h3>
+    <p class="sec-sub">The eight epics holding the most open tasks. Not a priority order &mdash;
+    a mirror. It says where effort has accumulated, which is worth comparing against where the
+    ladder says it should be: the top two are both <em>continuous</em>, and neither advances a
+    rung.</p>
+    <div class="tablewrap"><table class="vtab"><thead><tr>
+      <th>epic</th><th>tasks</th><th>rung</th><th>outcome</th>
+    </tr></thead><tbody>{rows}</tbody></table></div>
+
+    <h3 class="subh">3 &middot; Current, but nobody is on it &mdash; {len(gaps)} of {len(now_items)}</h3>
+    <p class="sec-sub">Epics the roadmap calls <em>now</em> that no task points at. Mostly these
+    are decisions rather than builds, which is why no task was ever generated for them &mdash;
+    the third column says what kind of answer each one needs. <b>Either give each a task, or move
+    it off the now horizon.</b></p>
+    <div class="tablewrap"><table class="vtab"><thead><tr>
+      <th>epic</th><th>what it is</th><th>answer takes the form of</th>
+    </tr></thead><tbody>{grows}</tbody></table></div>
+  </section>
 """
 
 

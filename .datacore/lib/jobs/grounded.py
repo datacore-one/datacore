@@ -233,6 +233,9 @@ def _schedule_seen(raw_path: str, stem: str, haystack: str) -> bool:
     passed on any line mentioning any cli.py. A verifier weaker than what it
     verifies produces false PASSES, the one thing it must never do.
     """
+    # A commented-out crontab line is not a schedule. Independent review
+    # 2026-09-03 reproduced a false PASS on "# 0 7 * * * /path/script.py".
+    haystack = "\n".join(l for l in haystack.splitlines() if not l.lstrip().startswith("#"))
     if raw_path:
         tok = r"(?<![A-Za-z0-9_./-])" + re.escape(raw_path) + r"(?![A-Za-z0-9_./-])"
         if re.search(tok, haystack):

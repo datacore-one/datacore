@@ -44,6 +44,7 @@ import fcntl
 import json
 import os
 import pathlib
+import sys
 
 # DIP-0031: ">=3 consecutive runs is a recurring failure". Same number, on
 # purpose -- two thresholds for one idea is bug class 1.
@@ -111,7 +112,14 @@ def record(job_name: str, failed: bool, *, today: str | None = None) -> dict:
     # overwritten by a concurrent fail's increment. A counter that can be off
     # by one is fine; a reset that can be lost is not -- it is how a recovered
     # job stays "recurring".
-    with _locked():
+    try:
+        with _locked():
+            return _record_unlocked(job_name, failed, today)
+    except OSError as exc:
+        # A home where mkdir or flock fails (read-only, NFS without locks)
+        # must not take down verification of every remaining job. Degrade to
+        # the unserialised update -- an off-by-one counter, not an aborted run.
+        print(f"recurrence: lock unavailable ({exc}); recording without it", file=sys.stderr)
         return _record_unlocked(job_name, failed, today)
 
 
@@ -153,6 +161,10 @@ def prune(known: set[str]) -> list[str]:
     winston reported box-registry-gc 3x recurring for a job that had been
     renamed to mac-registry-gc that morning. Class 4, applied to the counter.
     """
+    if not known:
+        # A manifest that loaded with zero jobs is not a reason to forget
+        # every counter -- that is the same wipe a failed load would cause.
+        return []
     with _locked():
         state = _load()
         gone = sorted(k for k in state if k not in known)

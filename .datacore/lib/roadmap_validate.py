@@ -34,11 +34,32 @@ ITEM_KEYS = {
     "id", "track", "title", "outcome", "serves", "drive", "horizon", "status",
     "blocked_on", "delegable", "owner", "gh", "org", "unblocks", "shipped",
     "gate", "note", "also", "embargoed", "hypothesis", "lane", "rice",
-    "rice_why", "goal", "compounds_for", "half", "rung",
+    "rice_why", "goal", "compounds_for", "half", "rung", "milestone",
+    "done_when",
 }
 REQUIRED = {"id", "track", "title", "outcome", "serves", "horizon", "status", "shipped"}
 
 HORIZONS = {"now", "next", "later", "gated"}
+# Every item names the rung it advances, or 'continuous' for work that runs
+# alongside the ladder rather than gating a rung (ops, GEO, company, the merge
+# queue). 'continuous' is a real answer, not a missing one — forcing ops work
+# onto a product rung is what made the ladder meaningless the first time.
+MILESTONES = {"M1", "M2", "M3", "M4", "M5", "continuous"}
+
+# How an item proves it is done. The point of naming the KIND is that an agent
+# can tell what artifact to go and produce, and a reviewer can tell what to go
+# and look at — "done" stops being a judgement call and becomes a fetch.
+#
+#   test        a named test or suite passes that did not before
+#   metric      a number crosses a stated threshold, measured by a named command
+#   artifact    a file exists at a stated path with stated properties
+#   screenshot  a visual state a human confirms — for UI and dashboards
+#   url         a public address returns a stated response
+#   merged-pr   named PRs are merged and their issues closed
+#   decision    a decision is recorded in writing at a stated location
+#   signed      a countersigned or legally executed document exists
+EVIDENCE = {"test", "metric", "artifact", "screenshot", "url",
+            "merged-pr", "decision", "signed"}
 STATUSES = {"ready", "in_progress", "blocked", "done"}
 BLOCKED_ON = {"human", "agent", "external", "dependency", "standing_block", None}
 DRIVES = {"status", "self-protection", "affiliation", "disease-avoidance", "kin-care"}
@@ -82,6 +103,39 @@ def validate(roadmap: dict, intent_ids: set) -> list:
     for i, item in enumerate(items):
         ref = item.get("id") or f"items[{i}]"
 
+        # An epic on the near horizon with no definition of done cannot be
+        # finished by anyone — human or agent — because nothing says what
+        # finishing looks like. Later items are exempt: writing a condition for
+        # work whose shape is unknown produces a fiction that has to be undone.
+        if item.get("horizon") in ("now", "next") and not item.get("done_when"):
+            errors.append(f"{ref}: horizon={item['horizon']} requires done_when — "
+                          f"an epic nobody can check is not schedulable")
+
+        # `blocked_on: human` says a person must act; `delegable: true` says an
+        # agent may take it. Both at once tells an agent to start work it cannot
+        # finish, which is the single most expensive contradiction on the board.
+        if item.get("blocked_on") == "human" and item.get("delegable"):
+            errors.append(f"{ref}: blocked_on=human contradicts delegable=true — "
+                          f"an agent cannot finish work that waits on a person")
+
+        dw = item.get("done_when")
+        if dw is not None:
+            if not isinstance(dw, dict):
+                errors.append(f"{ref}: done_when must be a mapping")
+            else:
+                unk = set(dw) - {"condition", "evidence", "verify"}
+                if unk:
+                    errors.append(f"{ref}: done_when has unknown key(s) {sorted(unk)}")
+                for k in ("condition", "evidence", "verify"):
+                    if not dw.get(k):
+                        errors.append(f"{ref}: done_when is missing {k!r} — "
+                                      f"a condition nobody can check is not a definition of done")
+                ev = dw.get("evidence")
+                if ev and ev not in EVIDENCE:
+                    errors.append(f"{ref}: done_when.evidence {ev!r} not in {sorted(EVIDENCE)}")
+        ms = item.get("milestone")
+        if ms is not None and ms not in MILESTONES:
+            errors.append(f"{ref}: milestone {ms!r} not in {sorted(MILESTONES)}")
         unknown = set(item) - ITEM_KEYS
         if unknown:
             errors.append(f"{ref}: unknown key(s) {sorted(unknown)} — the spec makes this an error")
