@@ -1270,8 +1270,13 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
     # is the current form, `create-audio` the legacy alias that is next in
     # line to be dropped.
     audio_res = None
-    for argv in ([nlm, 'audio', 'create', notebook_id, ''],
-                 [nlm, 'create-audio', notebook_id, '']):
+    # Never send empty instructions: the client rejects '' as "invalid
+    # arguments" before any RPC is made (verified on winston 2026-09-03), so an
+    # empty string can only ever fail. A real brief also makes a better podcast.
+    instructions = ("A concise two-host briefing on today's research for a founder: "
+                    "what each source found, why it matters, and the one decision it implies.")
+    for argv in ([nlm, 'audio', 'create', '--audio-type', 'deep-dive', notebook_id, instructions],
+                 [nlm, 'create-audio', notebook_id, instructions]):
         audio_res = subprocess.run(argv, capture_output=True, text=True, timeout=60)
         if audio_res.returncode == 0:
             break
