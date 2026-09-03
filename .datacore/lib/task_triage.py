@@ -215,6 +215,7 @@ def write_doc(tasks, out):
     wrappers = [t for t in tasks if re.match(r"^review:\s", t["heading"], re.I)]
     stale = [t for t in tasks if (age(t) or 0) > 90]
     unsched = [t for t in tasks if not t.get("scheduled")]
+    linked = [t for t in tasks if (t.get("properties") or {}).get("ROADMAP")]
 
     L = [f"# PLUR task pool — {len(tasks)} open", "",
          f"Generated {now:%Y-%m-%d} by `.datacore/lib/task_triage.py --doc`. "
@@ -225,17 +226,33 @@ def write_doc(tasks, out):
          f"| open tasks | {len(tasks)} |",
          f"| unscheduled | {len(unsched)} |",
          f"| older than 90 days | {len(stale)} |",
-         f"| `Review:` wrappers | {len(wrappers)} |", ""]
+         f"| `Review:` wrappers | {len(wrappers)} |",
+         f"| linked to a roadmap item | {len(linked)} |",
+         f"| **orphaned — serve no named outcome** | **{len(tasks)-len(linked)}** |", ""]
+
+    L += ["", "## Orphans by theme", "",
+          "These serve no named roadmap outcome. Most are implementation detail, "
+          "which is correct. Scan for anything that is an outcome nobody decided on.",
+          "", "| theme | orphans |", "|---|---|"]
+    orph = defaultdict(int)
+    for t in tasks:
+        if not (t.get("properties") or {}).get("ROADMAP"):
+            hits = [k for k, pat in THEMES.items() if re.search(pat, t["heading"], re.I)]
+            orph[hits[0] if hits else "unfiled"] += 1
+    for k in sorted(orph, key=lambda k: -orph[k]):
+        L.append(f"| {k} | {orph[k]} |")
+    L.append("")
 
     for theme in sorted(buckets, key=lambda k: -len(buckets[k])):
         rows = sorted(buckets[theme], key=lambda t: (t["state"], -(age(t) or 0)))
         L += [f"## {theme} — {len(rows)}", "",
-              "| state | age | task | id |", "|---|---|---|---|"]
+              "| state | age | roadmap | task | id |", "|---|---|---|---|---|"]
         for t in rows:
             a = age(t)
             head = t["heading"].replace("|", "\\|")[:130]
+            rm = (t.get("properties") or {}).get("ROADMAP", "")
             L.append(f"| {t['state']} | {str(a)+'d' if a is not None else '—'} | "
-                     f"{head} | `{(t.get('properties') or {}).get('ID','')}` |")
+                     f"{rm or '—'} | {head} | `{(t.get('properties') or {}).get('ID','')}` |")
         L.append("")
     Path(out).write_text("\n".join(L))
     print(f"wrote {out} — {len(tasks)} tasks in {len(buckets)} groups")
