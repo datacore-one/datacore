@@ -1,0 +1,12 @@
+# fixture for mac-actor-presence artifact[0]
+# producer artifact: ~/.datacore/state/actor-presence.log on mac
+# harvested: 2026-09-03
+# regex under test: 0 failing
+# represents: SUCCESS (derived)
+# The live artifact was UNHEALTHY when harvested, so a success sample
+# could not be captured. This is the producer's own observed output with
+# the failing count rewritten to its success value. The format is the
+# producer's; only the number changed. It proves the regex CAN match this
+# producer -- it says nothing about current health.
+# ---
+actor-presence: 6 rostered actor(s), 0 failing

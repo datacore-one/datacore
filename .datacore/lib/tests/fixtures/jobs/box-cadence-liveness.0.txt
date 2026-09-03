@@ -1,0 +1,13 @@
+# fixture for box-cadence-liveness artifact[0]
+# producer artifact: ~/.datacore/state/cadence-liveness.log on box
+# harvested: 2026-09-03
+# regex under test: ^0 cadence\(s\) overdue$
+# represents: SUCCESS (derived)
+# The live artifact was UNHEALTHY when harvested, so a success sample
+# could not be captured. This is the producer's own observed output with
+# the failing count rewritten to its success value. The format is the
+# producer's; only the number changed. It proves the regex CAN match this
+# producer -- it says nothing about current health.
+# ---
+0 cadence(s) overdue
+0 cadence(s) overdue
