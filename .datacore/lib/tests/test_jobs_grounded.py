@@ -101,3 +101,33 @@ def test_regex_check_has_a_fixture_it_can_match(job, machine, idx, path, pattern
         f"{job} artifact[{idx}]: regex {pattern!r} cannot match a real sample of\n"
         f"{path} on {machine}. Either the regex is wrong or the producer changed\n"
         f"its output format. This is the box-briefing failure.")
+
+
+def test_runner_manifest_matches_canonical():
+    """The copy that EXECUTES must equal the copy that is edited.
+
+    job_verify_notify.sh reads `$HOME/.datacore/v2-runner`, not `~/Data`, so on
+    every host that invokes it — mac, plur-claw, hermes — the runner copy is
+    what actually governs verification. Nothing synced it.
+
+    Measured 2026-09-03: seven copies of jobs/manifest.yaml existed across the
+    fleet in four different states. The canonical file carried the corrected
+    `^#{2,3}\\s+Your Agenda`; mac's runner still carried the broken `^###` form
+    fixed the day before, and plur-claw/hermes carried a 33-job copy older
+    still. Editing the canonical file had changed what runs on exactly one of
+    four hosts.
+
+    That is bug class 1 at the deployment layer: the fix landed on the copy
+    someone was looking at. This test fails when they diverge again.
+    """
+    canonical = ROOT / ".datacore" / "lib" / "jobs" / "manifest.yaml"
+    runner = pathlib.Path.home() / ".datacore" / "v2-runner" / ".datacore" / "lib" / "jobs" / "manifest.yaml"
+    if not runner.exists():
+        pytest.skip("no v2-runner deployment on this host")
+    assert runner.read_bytes() == canonical.read_bytes(), (
+        f"the runner manifest that job_verify_notify.sh actually reads has "
+        f"drifted from the canonical one.\n"
+        f"  canonical: {canonical}\n"
+        f"  runner:    {runner}\n"
+        f"Editing the canonical file does not change what runs until this is "
+        f"synced.")
