@@ -601,7 +601,7 @@ jobs:
       # fresh. Check the destination the sync exists to produce instead.
       - path: "~/.datacore/cos/agent-stream/events-*.jsonl"
         check: nonempty
-        max_age_hours: 6
+        max_age_hours: 26  # written only when agents act; a quiet evening is not a failure (2026-09-03)
 
   - name: mac-lens-sync
     machine: mac

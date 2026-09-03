@@ -175,6 +175,37 @@ def prune(known: set[str]) -> list[str]:
         return gone
 
 
+def should_alert(rec: dict, *, today: str | None = None) -> bool:
+    """Alert on every failure below the threshold, ONCE at escalation, then
+    once a day while it stays recurring.
+
+    The escalation text said "needs a decision, not another alert" while
+    being another alert every 30 minutes: six mac jobs produced twelve
+    Telegram messages an hour the moment the relay started working
+    (2026-09-03). A reader cannot decide anything inside that.
+    """
+    today = today or datetime.date.today().isoformat()
+    if not rec.get("recurring"):
+        return True
+    if int(rec.get("consecutive") or 0) == RECURRING_AFTER:
+        return True
+    return rec.get("last_alerted") != today
+
+
+def note_alerted(job_name: str, *, today: str | None = None) -> None:
+    today = today or datetime.date.today().isoformat()
+    try:
+        with _locked():
+            state = _load()
+            rec = state.get(job_name)
+            if isinstance(rec, dict):
+                rec["last_alerted"] = today
+                state[job_name] = rec
+                _save(state)
+    except OSError:
+        pass
+
+
 def describe(job_name: str, rec: dict, n_failures: int) -> str:
     """The alert line. Below the threshold it is unchanged from before.
 

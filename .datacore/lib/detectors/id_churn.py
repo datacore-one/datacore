@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import datetime
 import json
 import re
 from collections import Counter
@@ -96,10 +97,38 @@ def _default_root() -> Path:
     return Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
 
 
+def _load_baseline(path: Path) -> dict:
+    try:
+        d = json.loads(path.read_text())
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def apply_baseline(findings: list, baseline: dict) -> list:
+    """Drop orphaned counts at or below the acknowledged baseline; keep
+    duplicates always (they are the trigger, never acknowledged)."""
+    out = []
+    for r in findings:
+        ack = int(baseline.get(r["space"], 0) or 0)
+        orphaned = int(r.get("orphaned_ledger_ids") or 0)
+        growth = max(0, orphaned - ack)
+        if ack and orphaned:
+            print(f"  ack        {r['space']}: {min(orphaned, ack)} orphaned ledger ids acknowledged "
+                  f"({baseline.get('_acknowledged', '?')}); growth {growth}")
+        r = dict(r, orphaned_ledger_ids=growth)
+        if r["duplicates"] or r["orphaned_ledger_ids"]:
+            out.append(r)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", type=Path, default=_default_root())
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--acknowledge", action="store_true",
+                    help="record today\'s orphaned-id counts as the known baseline; "
+                         "later runs report only GROWTH above it")
     args = ap.parse_args()
 
     spaces = sorted(args.root.glob("[0-9]-*"))
@@ -111,6 +140,21 @@ def main() -> int:
         print(f"ERROR: no spaces under {args.root} — refusing to report clean")
         return 2
     findings = [r for r in (scan_space(s) for s in spaces if (s / "org").is_dir()) if r]
+    # Acknowledged damage. On 2026-08-11 dedup regenerated 1,204 ids; the
+    # ledger still references the old ones (360 in 0-personal, 271 in
+    # 2-datacore on 2026-09-03). That is not repairable by this detector and
+    # alerting on it every hour hid every NEW churn behind it. --acknowledge
+    # records the counts; from then on only growth above them is a finding,
+    # and the acknowledged amount is printed so it is never invisible.
+    baseline_path = Path.home() / ".datacore" / "state" / "id-churn.baseline.json"
+    if args.acknowledge:
+        base = {r["space"]: r["orphaned_ledger_ids"] for r in findings if r["orphaned_ledger_ids"]}
+        base["_acknowledged"] = datetime.date.today().isoformat()
+        baseline_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = baseline_path.with_suffix(".json.tmp"); tmp.write_text(json.dumps(base, indent=1)); tmp.replace(baseline_path)
+        print(f"acknowledged orphaned ledger ids as baseline: {base}")
+        return 0
+    findings = apply_baseline(findings, _load_baseline(baseline_path))
 
     if args.json:
         print(json.dumps({"findings": findings, "spaces": len(spaces)}, indent=2))
