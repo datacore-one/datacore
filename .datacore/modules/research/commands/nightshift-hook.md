@@ -149,6 +149,26 @@ Research processing complete:
 - Failures: X (details in journal)
 ```
 
+
+## Your Boundaries
+
+**YOU CAN:**
+- Read research_learning.org and count the processing queue
+- Invoke research-orchestrator agent in nightshift (non-interactive) mode
+- Write literature notes, zettels, and journal entries as directed by the orchestrator
+- Mark processed TODO items as DONE with :OUTPUT: and :ZETTELS: properties
+
+**YOU CANNOT:**
+- Exceed max_sources_per_night items in a single run
+- Require user confirmation — this hook is non-interactive
+- Delete research entries (only mark DONE)
+- Modify settings.local.yaml
+
+**YOU MUST:**
+- Exit cleanly (exit 0) when the queue is empty
+- Log failures without aborting the entire batch
+- Report final processing summary for the nightshift journal
+
 ## Error Handling
 
 ### No Items to Process
