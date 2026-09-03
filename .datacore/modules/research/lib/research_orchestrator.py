@@ -662,6 +662,65 @@ def write_zettels(zettels: List[Dict[str, str]]) -> List[Path]:
     return paths
 
 
+MAX_FETCH_ATTEMPTS = 3
+
+
+def note_fetch_failure(item: Dict[str, str]) -> Optional[int]:
+    """Count a failed fetch on the item; after MAX_FETCH_ATTEMPTS park it.
+
+    Three paywalled links sat at the head of the queue for weeks (2026-09-03:
+    Bloomberg, BizJournals, NYT -- no cookies, no Wayback snapshot). Every
+    run retried them, processed nothing, and the podcast step -- which needs
+    at least one processed item -- never ran. An item that cannot be fetched
+    is not a TODO for a machine; it is a request to a human for a readable
+    source. So: increment :FETCH_ATTEMPTS:, and at the limit set the heading
+    to WAITING with a :RESULT: that says exactly what is needed. The queue
+    drains; the summary names what is parked.
+    """
+    try:
+        content = RESEARCH_ORG.read_text(encoding='utf-8')
+    except OSError:
+        return None
+    heading = item.get('heading_line')
+    if not heading or heading not in content:
+        return None
+    lines = content.split('\n')
+    hi = lines.index(heading)
+    # find an existing :FETCH_ATTEMPTS: within the item's body (before the next heading)
+    attempts = 0; ai = None
+    for j in range(hi + 1, len(lines)):
+        if lines[j].lstrip().startswith('*'):
+            break
+        if lines[j].strip().startswith(':FETCH_ATTEMPTS:'):
+            try:
+                attempts = int(lines[j].split(':FETCH_ATTEMPTS:', 1)[1].strip() or 0)
+            except ValueError:
+                attempts = 0
+            ai = j
+            break
+    attempts += 1
+    indent = '    '
+    if ai is not None:
+        lines[ai] = f"{indent}:FETCH_ATTEMPTS: {attempts}"
+    else:
+        # place right after the heading (and after a CLOSED/SCHEDULED planning line if present)
+        insert_at = hi + 1
+        if insert_at < len(lines) and lines[insert_at].strip().startswith(('CLOSED:', 'SCHEDULED:', 'DEADLINE:')):
+            insert_at += 1
+        lines.insert(insert_at, f"{indent}:FETCH_ATTEMPTS: {attempts}")
+    if attempts >= MAX_FETCH_ATTEMPTS and ' TODO ' in heading:
+        parked = heading.replace(' TODO ', ' WAITING ', 1)
+        lines[hi] = parked
+        lines.insert(hi + 1, f"{indent}:RESULT: unfetchable after {attempts} attempts (paywall/403, no archive) "
+                             f"-- provide the text, a PDF, or an archive link, then set TODO again")
+        log(f"  PARKED as WAITING after {attempts} failed fetches -- needs a readable source")
+    p = RESEARCH_ORG
+    tmp = p.with_suffix(p.suffix + '.tmp')
+    tmp.write_text('\n'.join(lines), encoding='utf-8')
+    tmp.replace(p)
+    return attempts
+
+
 def mark_done(item: Dict[str, str], output_path: str, zettel_names: List[str]):
     """Mark a research item as DONE in the org file."""
     content = RESEARCH_ORG.read_text(encoding='utf-8')
@@ -982,6 +1041,7 @@ def main():
         if not content:
             log(f"  SKIP: Could not fetch URL")
             failed.append(item)
+            note_fetch_failure(item)
             continue
 
         log(f"  Fetched {len(content)} chars")
