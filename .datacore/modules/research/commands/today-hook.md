@@ -152,6 +152,25 @@ When queue is clear:
 Research queue is clear.
 ```
 
+
+## Your Boundaries
+
+**YOU CAN:**
+- Read research_learning.org to count pending TODO items
+- Check Readwise API for archived item count (read-only)
+- List the podcast directory to find the most recent podcast
+- Output a concise research status block for the /today briefing
+
+**YOU CANNOT:**
+- Import or modify Readwise items (use /research-status for that)
+- Process research queue items (use /research-daily for that)
+- Write to research_learning.org or any org file
+
+**YOU MUST:**
+- Show "Queue: not set up" if research_learning.org doesn't exist
+- Degrade gracefully on any API or IO error (show status string, do not throw)
+- Keep output concise — this is a briefing section, not a full report
+
 ## Error Handling
 
 - If research_learning.org doesn't exist: Show "Queue: not set up"
