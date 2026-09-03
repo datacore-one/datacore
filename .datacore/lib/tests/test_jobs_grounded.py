@@ -191,6 +191,8 @@ def test_declared_launchd_label_binds_a_mac_job():
                "412\t0\tio.datacore.config-drift\n")
     assert grounded._declared_launchd_seen("every 30 min (launchd StartInterval 1800, com.datacore.artifact-pull)", listing)
     assert grounded._declared_launchd_seen("launchd io.datacore.config-drift @ 08:50, 14:50, 20:50", listing)
+    assert grounded._declared_launchd_seen("every 30 min (launchd StartInterval 1800, com.datacore.artifact-pull.plist)", listing), \
+        "the manifest names the plist file; launchctl lists the label"
     assert not grounded._declared_launchd_seen("launchd com.datacore.artifact", listing), "a prefix is not the label"
     assert not grounded._declared_launchd_seen("launchd com.datacore.lens-sync", listing)
     assert not grounded._declared_launchd_seen("0 7 * * *", listing)

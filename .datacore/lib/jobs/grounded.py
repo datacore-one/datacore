@@ -269,7 +269,11 @@ def _declared_launchd_seen(schedule: str | None, launchd: str) -> bool:
     only that label, exactly as _declared_timer_seen does for systemd."""
     if not schedule or not launchd:
         return False
-    labels = _LAUNCHD_LABEL_RE.findall(str(schedule))
+    # The manifest names the plist FILE (com.datacore.x.plist); launchctl
+    # lists the LABEL (com.datacore.x). Same job, one suffix apart -- and
+    # three mac jobs stayed FAIL on exactly that until the live run showed it.
+    labels = [lb[:-6] if lb.endswith(".plist") else lb
+              for lb in _LAUNCHD_LABEL_RE.findall(str(schedule))]
     return any(re.search(r"(?<![A-Za-z0-9._-])" + re.escape(lb) + r"(?![A-Za-z0-9._-])", launchd)
                for lb in labels)
 
