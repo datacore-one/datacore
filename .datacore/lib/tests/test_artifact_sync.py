@@ -35,21 +35,18 @@ REAL_MANIFEST_PATH = Path(__file__).resolve().parent.parent / "jobs" / "manifest
 # --- sync_plan -------------------------------------------------------------
 
 
-def test_client_plan_has_three_pairs_with_today_substituted():
+def test_client_plan_is_the_dated_briefing_only():
+    """answers.yaml and facts.json were pulled for three weeks and never
+    existed on the box -- a pull for an artifact nothing writes. Only the
+    dated briefing has a producer."""
     pairs = sync_plan("client", today="2026-07-30")
 
-    assert len(pairs) == 3
+    assert len(pairs) == 1
     remote_paths = [remote for remote, _local in pairs]
     local_paths = [local for _remote, local in pairs]
 
     assert any("briefings/2026-07-30/app-briefing.json" in r for r in remote_paths)
-    assert any(r.endswith("answers.yaml") for r in remote_paths)
-    assert any(r.endswith("facts.json") for r in remote_paths)
-
-    # local paths mirror the same shape, under the local home
     assert any("briefings/2026-07-30/app-briefing.json" in l for l in local_paths)
-    assert any(l.endswith("answers.yaml") for l in local_paths)
-    assert any(l.endswith("facts.json") for l in local_paths)
     for local in local_paths:
         assert Path(local).is_absolute()
 
@@ -98,7 +95,7 @@ def test_dry_run_returns_command_strings_without_executing(monkeypatch):
 
     results = run_sync("client", dry_run=True, env={"COS_SERVER_SSH": "fake@host"})
 
-    assert len(results) == 3
+    assert len(results) == len(sync_plan("client"))
     for cmd in results:
         assert cmd.startswith("rsync -az --timeout=20 fake@host:")
         assert "\n" not in cmd  # single-line
@@ -130,7 +127,7 @@ def test_dry_run_threads_pinned_today_into_command_strings(monkeypatch):
         "client", dry_run=True, env={"COS_SERVER_SSH": "fake@host"}, today="2019-05-17"
     )
 
-    assert len(results) == 3
+    assert len(results) == len(sync_plan("client"))
     assert any("briefings/2019-05-17/app-briefing.json" in cmd for cmd in results)
 
 
@@ -148,7 +145,7 @@ def test_execution_threads_pinned_today_into_the_command_that_runs(monkeypatch, 
         "client", dry_run=False, env={"COS_SERVER_SSH": "fake@host"}, today="2019-05-17"
     )
 
-    assert len(results) == 3
+    assert len(results) == len(sync_plan("client"))
     assert all(r.startswith("ok:") for r in results)
     briefing_calls = [c for c in calls if "app-briefing.json" in c[-2]]
     assert len(briefing_calls) == 1
@@ -190,7 +187,7 @@ def test_run_sync_defaults_env_to_config_plane_load(monkeypatch):
 
     results = run_sync("client", dry_run=True)  # env omitted entirely
 
-    assert len(results) == 3
+    assert len(results) == len(sync_plan("client"))
     assert all("fake@host" in r for r in results)
 
 
@@ -201,9 +198,15 @@ def test_execution_collects_success_and_failure_without_raising(monkeypatch, tmp
     monkeypatch.setattr(artifact_sync, "LOCAL_BASE", tmp_path / "cos")
     calls = []
 
+    # Independent of what the plan holds: two pairs, one of which fails.
+    monkeypatch.setattr(artifact_sync, "sync_plan", lambda role, today=None: [
+        ("box:~/.datacore/cos/a.json", str(tmp_path / "cos" / "a.json")),
+        ("box:~/.datacore/cos/b.json", str(tmp_path / "cos" / "b.json")),
+    ])
+
     def _fake_run(cmd, capture_output, text, timeout):
         calls.append(cmd)
-        if cmd[-2].endswith("facts.json"):
+        if cmd[-2].endswith("b.json"):
             return subprocess.CompletedProcess(
                 cmd, returncode=23, stdout="", stderr="rsync: connection unexpectedly closed"
             )
@@ -213,10 +216,10 @@ def test_execution_collects_success_and_failure_without_raising(monkeypatch, tmp
 
     results = run_sync("client", dry_run=False, env={"COS_SERVER_SSH": "fake@host"})
 
-    assert len(calls) == 3
+    assert len(calls) == 2
     oks = [r for r in results if r.startswith("ok:")]
     errors = [r for r in results if r.startswith("error:")]
-    assert len(oks) == 2
+    assert len(oks) == 1
     assert len(errors) == 1
     assert "connection unexpectedly closed" in errors[0]
 
@@ -231,7 +234,7 @@ def test_execution_never_raises_on_subprocess_timeout(monkeypatch, tmp_path):
 
     results = run_sync("client", dry_run=False, env={"COS_SERVER_SSH": "fake@host"})
 
-    assert len(results) == 3
+    assert len(results) == len(sync_plan("client"))
     assert all(r.startswith("error:") for r in results)
 
 
@@ -245,7 +248,7 @@ def test_execution_never_raises_on_oserror(monkeypatch, tmp_path):
 
     results = run_sync("client", dry_run=False, env={"COS_SERVER_SSH": "fake@host"})
 
-    assert len(results) == 3
+    assert len(results) == len(sync_plan("client"))
     assert all(r.startswith("error:") for r in results)
 
 
