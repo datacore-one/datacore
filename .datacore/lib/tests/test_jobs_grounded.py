@@ -184,6 +184,20 @@ def test_declared_timer_unit_binds_a_systemd_job():
     assert not grounded._declared_timer_seen(None, timers)
 
 
+def test_declared_launchd_label_binds_a_mac_job():
+    """launchctl list shows labels, not scripts. Same rule as systemd units."""
+    listing = ("PID\tStatus\tLabel\n"
+               "-\t0\tcom.datacore.artifact-pull\n"
+               "412\t0\tio.datacore.config-drift\n")
+    assert grounded._declared_launchd_seen("every 30 min (launchd StartInterval 1800, com.datacore.artifact-pull)", listing)
+    assert grounded._declared_launchd_seen("launchd io.datacore.config-drift @ 08:50, 14:50, 20:50", listing)
+    assert not grounded._declared_launchd_seen("launchd com.datacore.artifact", listing), "a prefix is not the label"
+    assert not grounded._declared_launchd_seen("launchd com.datacore.lens-sync", listing)
+    assert not grounded._declared_launchd_seen("0 7 * * *", listing)
+    assert not grounded._declared_launchd_seen("launchd", listing), "no label named, nothing to bind"
+    assert not grounded._declared_launchd_seen("launchd io.datacore.config-drift", None)
+
+
 def test_schedule_binding_rejects_a_suffixed_or_directory_form_of_the_basename():
     """cli.py.bak and cli.py/ are not the script."""
     assert not grounded._schedule_seen("", "cli.py", "0 5 * * * /x/cli.py.bak\n")

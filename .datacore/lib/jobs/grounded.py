@@ -246,6 +246,34 @@ def _schedule_seen(raw_path: str, stem: str, haystack: str) -> bool:
     return False
 
 
+def _launchd(host: str | None) -> str | None:
+    """`launchctl list` on a mac, or None. macOS jobs are launchd agents, not
+    crontab lines: four mac jobs (artifact-pull, agent-stream-rsync,
+    lens-sync, config-drift) were declared as launchd labels and reported
+    FAIL forever because only crontab and systemd were ever enumerated."""
+    cmd = ["launchctl", "list"] if host is None else [
+        "ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes", host,
+        "launchctl list 2>/dev/null"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+    except (subprocess.SubprocessError, OSError):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+_LAUNCHD_LABEL_RE = re.compile(r"(?<![A-Za-z0-9._-])((?:com|io|org|net)\.[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)(?![A-Za-z0-9._-])")
+
+
+def _declared_launchd_seen(schedule: str | None, launchd: str) -> bool:
+    """Bind a launchd-scheduled job by the LABEL the manifest declares, and
+    only that label, exactly as _declared_timer_seen does for systemd."""
+    if not schedule or not launchd:
+        return False
+    labels = _LAUNCHD_LABEL_RE.findall(str(schedule))
+    return any(re.search(r"(?<![A-Za-z0-9._-])" + re.escape(lb) + r"(?![A-Za-z0-9._-])", launchd)
+               for lb in labels)
+
+
 _TIMER_UNIT_RE = re.compile(r"(?<![A-Za-z0-9@._-])([A-Za-z0-9@._-]+\.timer)(?![A-Za-z0-9@._-])")
 
 
@@ -365,9 +393,10 @@ def check(live: bool = False, machine: str | None = None) -> list[dict]:
 
         if mach not in sched_cache:
             host = None if mach == LOCAL else SSH_ALIAS.get(mach, mach)
-            sched_cache[mach] = (_crontab(host), _systemd(host))
-        cron, timers = sched_cache[mach]
-        if cron is None and timers is None:
+            sched_cache[mach] = (_crontab(host), _systemd(host),
+                                 _launchd(host) if mach == "mac" else None)
+        cron, timers, launchd = sched_cache[mach]
+        if cron is None and timers is None and launchd is None:
             findings.append({"job": name, "binding": "sched", "state": "n-a",
                              "detail": f"{mach} unreachable — not a pass"})
             continue
@@ -376,6 +405,8 @@ def check(live: bool = False, machine: str | None = None) -> list[dict]:
         seen = _schedule_seen(raw, stem, (cron or "") + "\n" + (timers or ""))
         if not seen:
             seen = _declared_timer_seen(j.get("schedule"), timers or "")
+        if not seen:
+            seen = _declared_launchd_seen(j.get("schedule"), launchd or "")
         findings.append({
             "job": name, "binding": "sched",
             "state": "ok" if seen else "FAIL",

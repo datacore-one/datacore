@@ -54,6 +54,25 @@ STATE = pathlib.Path(
 ) / "job-verify-recurrence.json"
 
 
+def _path() -> pathlib.Path:
+    """Resolve the state file at CALL time, not import time.
+
+    Import-time resolution meant a test that set DATACORE_STATE after this
+    module was first imported still wrote to ~/.datacore/state -- and did:
+    eleven test job names (boom-job, log-job x18, telegram-job x18 ...) were
+    found in the production recurrence file on 2026-09-03, inflating the
+    "recurring" summary the alerts read. A module attribute override (tests
+    that set STATE directly) still wins, so both isolation styles work.
+    """
+    env = os.environ.get("DATACORE_STATE")
+    if env and STATE == _DEFAULT_STATE:
+        return pathlib.Path(env) / "job-verify-recurrence.json"
+    return STATE
+
+
+_DEFAULT_STATE = STATE
+
+
 def _load() -> dict:
     """Never raises. A corrupt or absent state file must not stop verification.
 
@@ -62,7 +81,7 @@ def _load() -> dict:
     file take down the check that reports everything else.
     """
     try:
-        d = json.loads(STATE.read_text())
+        d = json.loads(_path().read_text())
         return d if isinstance(d, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -70,10 +89,11 @@ def _load() -> dict:
 
 def _save(d: dict) -> None:
     try:
-        STATE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = STATE.with_suffix(".json.tmp")
+        state = _path()
+        state.parent.mkdir(parents=True, exist_ok=True)
+        tmp = state.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(d, indent=1, sort_keys=True))
-        tmp.replace(STATE)
+        tmp.replace(state)
     except OSError:
         pass
 
@@ -97,8 +117,9 @@ def record(job_name: str, failed: bool, *, today: str | None = None) -> dict:
 
 @contextlib.contextmanager
 def _locked():
-    STATE.parent.mkdir(parents=True, exist_ok=True)
-    lock = STATE.with_suffix(".lock")
+    state = _path()
+    state.parent.mkdir(parents=True, exist_ok=True)
+    lock = state.with_suffix(".lock")
     with open(lock, "a+") as fh:
         try:
             fcntl.flock(fh, fcntl.LOCK_EX)

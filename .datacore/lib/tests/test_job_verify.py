@@ -660,3 +660,24 @@ def test_subprocess_smoke_exit_codes(tmp_path):
     assert r_bad.returncode == 1
     assert r_bad.stdout == ""
     assert "Traceback" not in r_bad.stderr
+
+
+
+def test_running_the_verifier_never_touches_production_recurrence_state(tmp_path, monkeypatch):
+    """The suite-wide conftest fixture redirects DATACORE_STATE; this proves
+    the redirect is honoured by code that was imported BEFORE the fixture ran.
+    Eleven test job names were found in the production file on 2026-09-03."""
+    import json
+    from pathlib import Path as _P
+    prod = _P.home() / ".datacore" / "state" / "job-verify-recurrence.json"
+    before = prod.read_bytes() if prod.exists() else None
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "rec_iso", _P(__file__).parent.parent / "jobs" / "recurrence.py")
+    rec = importlib.util.module_from_spec(spec); spec.loader.exec_module(rec)
+    rec.record("isolation-probe-job", failed=True)
+    assert (tmp_path / "state" / "job-verify-recurrence.json").exists(), "record() did not follow DATACORE_STATE"
+    after = prod.read_bytes() if prod.exists() else None
+    assert before == after, "a test wrote to the PRODUCTION recurrence state"
+    if after:
+        assert "isolation-probe-job" not in json.loads(after)
