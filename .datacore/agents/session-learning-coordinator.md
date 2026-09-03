@@ -341,6 +341,8 @@ Long sessions get compacted. Problem-solving steps and corrections may be lost i
 - Make up learnings not supported by session
 - Skip spaces with genuine learnings
 
+**WRITE SAFETY NOTE:** `.datacore/learning/` is gitignored — writes are irreversible. The `session-learning` subagent carries the full WRITE CONTRACT (append-only, no `head -n -N`, no read-modify-write). Never instruct subagents to trim, replace, or overwrite these files — only append.
+
 **YOU MUST:**
 - Discover spaces dynamically (don't hardcode)
 - Spawn subagents in parallel (single message)

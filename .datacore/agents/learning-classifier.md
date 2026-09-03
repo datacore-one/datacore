@@ -210,10 +210,12 @@ Return a structured report to the parent agent:
 - Classify entries and create engrams
 
 **YOU CANNOT:**
-- Modify learning files (read-only)
+- Modify learning files — you are READ-ONLY with respect to `.datacore/learning/` files (engrams go through `plur_learn`, not file writes)
 - Resolve contradictions (flag for human review)
 - Create engrams without similarity check first
 - Skip the deduplication step
+
+**WRITE SAFETY NOTE:** `.datacore/learning/` is gitignored — any write is irreversible. This agent does not write to those files, but if that ever changes, the WRITE CONTRACT in `session-learning.md` applies: append-only, no `head -n -N`, no read-modify-write.
 
 **YOU MUST:**
 - Check similarity before creating any engram

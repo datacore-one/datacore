@@ -644,13 +644,44 @@ User can skip with "none" or provide input.
 - Open all created/modified files with `open [filepath]` command
 - This allows user to immediately review learnings
 
+## WRITE CONTRACT for .datacore/learning/ files
+
+**These rules are mandatory. `.datacore/learning/` is gitignored and has no recovery path — a destructive write is permanent.**
+
+1. **Append only.** All writes to `patterns.md`, `corrections.md`, and `preferences.md` are pure appends. Never read the file, modify it in memory, and write the result back. Never pipe through any filter (`head`, `sed`, `awk`, `grep`) whose output replaces the original file.
+
+2. **No trailing-line trimming.** If an entry needs a `---` separator, append the separator. Do not strip existing separators or trailing newlines by re-reading and rewriting.
+
+3. **`head -n -N` is forbidden.** This flag is a GNU extension. On macOS and BSD it silently emits empty output and exits non-zero — the empty output destroys the file. Never use it. If trimming is ever genuinely required, use Python (`python3 -c "..."`) or `sed '$d'`; but prefer restructuring the format to avoid trimming entirely.
+
+4. **Replacement guard.** If any code path ever replaces a learning file (e.g., write to temp then mv), it MUST verify the replacement is non-empty AND at least as large as the original before executing the move. If the check fails, abort and report — do not proceed.
+
+5. **Append pattern (correct).** Use the Write tool or the shell append operator:
+   ```bash
+   # Correct: pure append
+   cat >> corrections.md << 'EOF'
+   ## YYYY-MM-DD: Title
+   ...content...
+   ---
+   EOF
+   ```
+   Or use the Write tool in append mode. Do NOT use `cat file | process > file` or any construct that opens the file for writing before the read is complete.
+
+6. **Pre-write rotation (mandatory).** Before writing to any `.datacore/learning/*.md` file, rotate the current file to a timestamped backup:
+   ```bash
+   python3 .datacore/lib/rotate_learning_backup.py "<filepath>"
+   ```
+   This copies the file to `.datacore/state/learning-backups/`, keeping the 7 most recent backups per file. If the file does not yet exist, the command is a no-op. If rotation exits non-zero, **abort the write** and report the error — do not proceed.
+
+   Run this once per file per session (before the first write to that file). There is no need to rotate before every individual append to the same file within a single session.
+
 ## Your Boundaries
 
 **YOU CAN:**
 - Read session context and artifacts
 - Analyze patterns and learnings
 - Create new zettels and insights
-- Update learning files (patterns, corrections, preferences)
+- Update learning files (patterns, corrections, preferences) — **following the WRITE CONTRACT above**
 - Create/update project `OVERVIEW.md` files
 - Suggest agent improvements
 - Create DIP drafts
@@ -660,6 +691,7 @@ User can skip with "none" or provide input.
 - Modify core system configuration
 - Change agent behavior without documentation
 - Override user preferences
+- Use read-modify-write patterns on `.datacore/learning/` files (see WRITE CONTRACT)
 
 **YOU MUST:**
 - Ask for user input on significant learnings
@@ -669,6 +701,7 @@ User can skip with "none" or provide input.
 - Create/update `OVERVIEW.md` after significant project work (concise, onboarding-focused)
 - Summarize learnings added
 - **Open created/modified markdown files** using system open command after writing them (so user can review)
+- Follow the WRITE CONTRACT for all `.datacore/learning/` writes
 
 ## Key Principles
 
