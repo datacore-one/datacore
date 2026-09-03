@@ -681,3 +681,28 @@ def test_running_the_verifier_never_touches_production_recurrence_state(tmp_path
     assert before == after, "a test wrote to the PRODUCTION recurrence state"
     if after:
         assert "isolation-probe-job" not in json.loads(after)
+
+
+def test_a_real_run_forgets_recurrence_records_for_jobs_no_longer_in_the_manifest(tmp_path, monkeypatch, capsys):
+    """box-registry-gc was renamed to mac-registry-gc; winston kept reporting
+    the old name as 3x recurring because no pass could ever reach it."""
+    import json, os
+    state_dir = Path(os.environ["DATACORE_STATE"]); state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "job-verify-recurrence.json").write_text(json.dumps({
+        "ghost-job": {"consecutive": 3, "first_failed": "2026-09-01", "recurring": True}}))
+    artifact = tmp_path / "backup.log"; artifact.write_text("done")
+    manifest = _write_manifest(tmp_path, [_job("backup-notes", "mac", str(artifact))])
+    space = _space(tmp_path)
+    monkeypatch.setenv("DATACORE_ACTOR", "test-actor")
+
+    # a dry run must not touch the counters
+    assert _run_main(["--machine", "mac", "--manifest", str(manifest), "--space", str(space), "--no-emit"]) == 0
+    assert "ghost-job" in json.loads((state_dir / "job-verify-recurrence.json").read_text())
+    capsys.readouterr()
+
+    assert _run_main(["--machine", "mac", "--manifest", str(manifest), "--space", str(space)]) == 0
+    err = capsys.readouterr().err
+    state = json.loads((state_dir / "job-verify-recurrence.json").read_text())
+    assert "ghost-job" not in state, "a record for a job the manifest no longer names must be forgotten"
+    assert "backup-notes" in state, "the live job's pass must still be recorded"
+    assert "forgot ghost-job" in err

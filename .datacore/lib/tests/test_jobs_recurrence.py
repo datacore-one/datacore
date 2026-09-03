@@ -109,3 +109,18 @@ def test_concurrent_records_do_not_lose_updates(rec):
     for t in ts: t.join()
     assert not errors
     assert rec._load()["j"]["consecutive"] == 40
+
+
+
+def test_prune_forgets_jobs_the_manifest_no_longer_names(rec):
+    """A record for a deleted or renamed job can never receive a pass, so it
+    would stay recurring forever: box-registry-gc, 2026-09-03."""
+    for _ in range(3):
+        rec.record("box-registry-gc", failed=True)
+    rec.record("mac-registry-gc", failed=True)
+    assert [r["job"] for r in rec.summary()] == ["box-registry-gc"]
+    gone = rec.prune({"mac-registry-gc", "other"})
+    assert gone == ["box-registry-gc"]
+    assert rec.summary() == []
+    assert "mac-registry-gc" in rec._load(), "a known job's record must survive the prune"
+    assert rec.prune({"mac-registry-gc"}) == [], "idempotent"

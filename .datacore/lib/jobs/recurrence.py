@@ -145,6 +145,24 @@ def _record_unlocked(job_name: str, failed: bool, today: str) -> dict:
     return rec
 
 
+def prune(known: set[str]) -> list[str]:
+    """Drop records for jobs the manifest no longer names. Returns what went.
+
+    A record for a job that no longer exists can never receive a pass, so it
+    stays "recurring" forever and the summary keeps naming it: on 2026-09-03
+    winston reported box-registry-gc 3x recurring for a job that had been
+    renamed to mac-registry-gc that morning. Class 4, applied to the counter.
+    """
+    with _locked():
+        state = _load()
+        gone = sorted(k for k in state if k not in known)
+        if gone:
+            for k in gone:
+                del state[k]
+            _save(state)
+        return gone
+
+
 def describe(job_name: str, rec: dict, n_failures: int) -> str:
     """The alert line. Below the threshold it is unchanged from before.
 

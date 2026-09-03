@@ -117,6 +117,38 @@ def _send_telegram(message: str) -> bool:
 _NO_EMIT = False
 
 
+def _recurrence():
+    """The recurrence module, by package import or by path (same fallback the
+    two call sites below used to carry separately)."""
+    try:
+        from jobs import recurrence as _rec
+    except ImportError:  # pragma: no cover
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "recurrence", Path(__file__).parent / "jobs" / "recurrence.py")
+        _rec = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_rec)
+    return _rec
+
+
+def _prune_recurrence(jobs) -> None:
+    """Forget counters for jobs the manifest no longer names (any machine).
+
+    Runs on every real verification so a renamed or deleted job cannot stay
+    "recurring" forever -- a record with no job can never receive the pass
+    that would reset it.
+    """
+    if _NO_EMIT:
+        return
+    try:
+        gone = _recurrence().prune({j.name for j in jobs})
+    except Exception as exc:  # noqa: BLE001 -- bookkeeping must not stop verification
+        print(f"recurrence prune skipped: {exc}", file=sys.stderr)
+        return
+    for name in gone:
+        print(f"recurrence: forgot {name} (no longer in the manifest)", file=sys.stderr)
+
+
 def _note_pass(job_name: str) -> None:
     """Reset a job's consecutive-failure count.
 
@@ -317,6 +349,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"error: cannot read manifest {manifest_path}: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    _prune_recurrence(jobs)
     machine_jobs = [job for job in jobs if job.machine == args.machine]
 
     if not machine_jobs:
