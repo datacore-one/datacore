@@ -158,6 +158,7 @@ If intent is clear (e.g., "create a new team space for Acme"), proceed directly.
    - Generate `org/inbox.org` and `org/next_actions.org`
    - Generate `_index.md` files
    - Create empty `3-knowledge/insights.md`
+   - Generate `1-tracks/product/feature-ideas.md` from the template below
    - Create `.datacore/learning/{patterns.md,corrections.md,preferences.md}`
 
 6. **Initialize git repository**
@@ -194,6 +195,7 @@ Required Folders:
   [✓/✗] org/ exists
   [✓/✗] 0-inbox/ exists
   [✓/✗] 1-tracks/ exists
+  [✓/✗] 1-tracks/product/feature-ideas.md exists
   [✓/✗] 2-projects/ exists
   [✓/✗] 3-knowledge/ exists
   [✓/✗] 4-archive/ exists
@@ -280,6 +282,7 @@ When generating files from templates, substitute these placeholders:
 ├── 1-tracks/                # REQUIRED
 │   ├── ops/
 │   ├── product/
+│   │   └── feature-ideas.md # REQUIRED — the roadmap inbox
 │   ├── dev/
 │   ├── research/
 │   └── comms/
@@ -349,4 +352,70 @@ Options:
 Local templates not found at .datacore/templates/space/
 
 Please ensure templates exist or check network for GitHub clone.
+```
+
+
+## `1-tracks/product/feature-ideas.md` — the roadmap inbox
+
+Every space gets one, whether or not it has a roadmap yet. It is where an idea
+lands before it is anything: a paper, a competitor's move, a customer request, a
+defect that suggests a feature.
+
+**Why it is required even without a roadmap.** Roadmap fragmentation is not
+caused by carelessness — it is caused by every document being writable, so ideas
+land in whichever one is open and none is wrong enough to fix. A space with a
+designated inbox never develops that problem. A space without one grows five
+roadmaps and then needs a rebuild.
+
+It is also the routing target: `gtd-inbox-processor` sends roadmap-shaped
+captures here rather than to `next_actions.org`, because an idea is not a task
+and filing it as one produces a task nobody can close.
+
+```markdown
+# Feature ideas — the one door into the roadmap
+
+Everything that might become roadmap work enters here first. Nothing goes
+straight into the roadmap.
+
+## The four verdicts
+
+Every idea gets exactly one. No idea leaves a review without one — an idea that
+stays "interesting" for three reviews is a DROP nobody has been willing to write.
+
+| verdict | means | produces |
+|---|---|---|
+| **ADOPT** | We are doing this | a roadmap item, with a definition of done |
+| **TRIAL** | We will find out | an experiment with a hypothesis and a date |
+| **WATCH** | Not now, but real | a re-check date |
+| **DROP** | No | one line of reason, so it is not re-opened |
+
+DROP is a success. The expensive outcome is re-deriving the same no three times.
+
+## How to add an idea
+
+### <one line: what it is>
+- **source:** where it came from
+- **why it might matter:** one sentence
+- **added:** YYYY-MM-DD
+- **verdict:** _(blank until review)_
+
+## The review
+
+Bi-weekly, not weekly — most weeks produce nothing worth a decision, and a
+review that usually has no input stops being attended.
+
+    python3 .datacore/lib/idea_promote.py          # awaiting a verdict
+    python3 .datacore/lib/idea_promote.py --due    # WATCH items due
+
+## Inbox — awaiting a verdict
+
+_(empty)_
+
+## ADOPT — became roadmap items
+
+## TRIAL — running as experiments
+
+## WATCH — real, not now
+
+## DROP — decided against, with the reason
 ```
