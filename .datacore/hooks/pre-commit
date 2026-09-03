@@ -123,7 +123,11 @@ STAGED_BASE=$(echo "$ALL_STAGED" | grep -E '\.base\.md$' || true)
 # PII scan targets: markdown AND structured config formats (yaml/json/toml
 # carried real names in the 2026-07-16 cos/priorities.yaml leak — .md-only
 # scanning missed it).
-STAGED_PII=$(echo "$ALL_STAGED" | grep -E '\.(md|ya?ml|json|toml)$' || true)
+# .txt added 2026-09-03: test fixtures harvested from live artifacts are .txt,
+# and a 20 KB daily journal -- health readings, named people, market
+# positions -- reached a public repo's branch history through that gap.
+# A scan with a file-extension blind spot is a scan an exposure walks around.
+STAGED_PII=$(echo "$ALL_STAGED" | grep -E '\.(md|ya?ml|json|toml|txt)$' || true)
 STAGED_ORG_TEAM=$(echo "$ALL_STAGED" | grep -E '\.(org|team)\.md$' || true)
 STAGED_ENV=$(echo "$ALL_STAGED" | grep -E '\.env$' || true)
 

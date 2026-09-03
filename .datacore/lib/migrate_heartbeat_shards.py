@@ -49,7 +49,13 @@ def main() -> int:
         if apply:
             target.parent.mkdir(parents=True, exist_ok=True)
             payload["actor"] = actor
-            target.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+            # Atomic, like every other writer of this artifact family. A crash
+            # mid-write must leave either no shard (legacy fallback still
+            # works) or a complete one -- never a half-written file that
+            # reduce_heartbeat silently skips while the migration looks done.
+            tmp = target.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+            tmp.replace(target)
             sw.materialize_heartbeat(space)
         moved += 1
 

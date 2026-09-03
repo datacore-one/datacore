@@ -131,3 +131,61 @@ def test_runner_manifest_matches_canonical():
         f"  runner:    {runner}\n"
         f"Editing the canonical file does not change what runs until this is "
         f"synced.")
+
+
+# --- audit 2026-09-03: the schedule binding was a bare substring ---------------
+
+def test_schedule_binding_rejects_a_decoy_line_with_the_same_basename():
+    """`cli.py` must not be satisfied by an unrelated cron line that happens to
+    mention some other cli.py. A verifier that passes on coincidence is worse
+    than no verifier: it says "scheduled" about a job that is not."""
+    decoy = "0 5 * * * /usr/bin/python3 /opt/other/tool/cli.py --unrelated\n"
+    assert not grounded._schedule_seen("~/Data/.datacore/lib/ledger_cli.py", "ledger_cli.py", decoy)
+    assert not grounded._schedule_seen("", "cli.py", "0 5 * * * /x/mycli.py\n")
+
+
+def test_schedule_binding_accepts_the_path_as_written_and_the_bounded_basename():
+    cron = "20 7 * * * /usr/bin/python3 ~/Data/.datacore/lib/ledger_cli.py verify > out.log\n"
+    assert grounded._schedule_seen("~/Data/.datacore/lib/ledger_cli.py", "ledger_cli.py", cron)
+    assert grounded._schedule_seen("", "ledger_cli.py", cron)
+
+
+def test_runner_binding_reports_drift_as_fail_and_absence_as_none(tmp_path, monkeypatch):
+    """The operational counterpart of test_runner_manifest_matches_canonical,
+    which skips wherever there is no runner -- i.e. in every CI run."""
+    canon = tmp_path / "canon.yaml"; canon.write_text("jobs: []\n")
+    runner = tmp_path / "runner.yaml"
+    monkeypatch.setattr(grounded, "MANIFEST", canon)
+    monkeypatch.setattr(grounded, "RUNNER_MANIFEST", runner)
+    assert grounded._runner_binding() is None
+    runner.write_text("jobs: []\n")
+    assert grounded._runner_binding()["state"] == "ok"
+    runner.write_text("jobs: [drifted]\n")
+    assert grounded._runner_binding()["state"] == "FAIL"
+
+
+def test_remote_stat_quotes_the_path(monkeypatch):
+    """grounded's --live cmd@host check sends a manifest path over ssh."""
+    import shlex
+    hostile = "~/Data/x y; touch /tmp/pwned.sh"
+    assert shlex.quote(hostile).startswith("'"), "shlex.quote must wrap a metachar path"
+
+
+def test_declared_timer_unit_binds_a_systemd_job():
+    """list-timers shows units, not scripts. The manifest's declared unit is
+    the only thing that can bind a timer-driven job -- and only that unit."""
+    timers = ("NEXT LEFT LAST PASSED UNIT ACTIVATES\n"
+              "Mon 06:10 4h Sun 18:10 8h datacore-fleet-sync.timer datacore-fleet-sync.service\n")
+    assert grounded._declared_timer_seen("systemd datacore-fleet-sync.timer, 06:10 and 18:10 UTC", timers)
+    assert not grounded._declared_timer_seen("systemd datacore-fleet-sync.timer", "other.timer other.service\n")
+    assert not grounded._declared_timer_seen("systemd fleet-sync.timer", timers), "a shorter name is not the unit"
+    assert not grounded._declared_timer_seen("cron 06:10", timers)
+    assert not grounded._declared_timer_seen("systemd timer", timers), "no unit named, nothing to bind"
+    assert not grounded._declared_timer_seen(None, timers)
+
+
+def test_schedule_binding_rejects_a_suffixed_or_directory_form_of_the_basename():
+    """cli.py.bak and cli.py/ are not the script."""
+    assert not grounded._schedule_seen("", "cli.py", "0 5 * * * /x/cli.py.bak\n")
+    assert not grounded._schedule_seen("", "cli.py", "0 5 * * * /x/cli.py/run\n")
+    assert grounded._schedule_seen("", "cli.py", "0 5 * * * /x/cli.py --flag\n")

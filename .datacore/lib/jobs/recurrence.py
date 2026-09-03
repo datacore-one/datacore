@@ -38,7 +38,9 @@ trusted to measure it.
 """
 from __future__ import annotations
 
+import contextlib
 import datetime
+import fcntl
 import json
 import os
 import pathlib
@@ -84,6 +86,28 @@ def record(job_name: str, failed: bool, *, today: str | None = None) -> dict:
     toward escalation across unrelated incidents.
     """
     today = today or datetime.date.today().isoformat()
+    # Serialise load-modify-save. Two verifiers at once (cron and a hand run)
+    # otherwise race: both read N, both write N+1, and a pass's reset can be
+    # overwritten by a concurrent fail's increment. A counter that can be off
+    # by one is fine; a reset that can be lost is not -- it is how a recovered
+    # job stays "recurring".
+    with _locked():
+        return _record_unlocked(job_name, failed, today)
+
+
+@contextlib.contextmanager
+def _locked():
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    lock = STATE.with_suffix(".lock")
+    with open(lock, "a+") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _record_unlocked(job_name: str, failed: bool, today: str) -> dict:
     state = _load()
     rec = state.get(job_name) or {"consecutive": 0, "first_failed": None}
 

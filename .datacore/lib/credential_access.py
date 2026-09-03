@@ -718,6 +718,13 @@ def _entry_verifier(entry: dict) -> tuple | None:
     base = (entry or {}).get("api_base")
     if not base:
         return None
+    # Defence in depth. The probe sends the REAL credential as a bearer header
+    # to whatever api_base names. The index is a secrets-tier file, so editing
+    # it already implies access -- but a typo, a copied http:// base, or an
+    # internal hostname would still hand the token to the wrong place over a
+    # cleartext link. Refuse anything but https, and report why.
+    if not str(base).lower().startswith("https://"):
+        return None
     if (entry.get("provider") or "").lower() == "gitea":
         return (base.rstrip("/") + "/api/v1/user", "token {v}", "login")
     return (base.rstrip("/"), "Bearer {v}", None)

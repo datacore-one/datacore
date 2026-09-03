@@ -39,6 +39,7 @@ import argparse
 import os
 import pathlib
 import re
+import shlex
 import subprocess
 import sys
 
@@ -58,6 +59,20 @@ LOCAL = os.environ.get("DATACORE_MACHINE", "mac")
 # exists and is unscheduled went undetected by the very checker built to find
 # them. Same map as fixtures.py.
 SSH_ALIAS = {"box": "winston"}
+
+
+def _quote_remote(path: str) -> str:
+    """Quote a path for a remote shell WITHOUT killing tilde expansion.
+
+    shlex.quote("~/Data/x") yields '~/Data/x' -- single-quoted, so the remote
+    shell looks for a directory literally named "~". That broke every remote
+    read on 2026-09-03 and reported nine artifacts unreadable. The tilde must
+    stay bare (it expands to the REMOTE home, which is the point) and only the
+    remainder is quoted: ~/'Data/x y.log'. Bash concatenates the two.
+    """
+    if path.startswith("~/"):
+        return "~/" + shlex.quote(path[2:])
+    return shlex.quote(path)
 
 
 def _raw_path(cmd: str) -> str | None:
@@ -187,12 +202,79 @@ def _systemd(host: str | None) -> str | None:
     return r.stdout if r.returncode == 0 else None
 
 
+RUNNER_MANIFEST = HOME / ".datacore" / "v2-runner" / ".datacore" / "lib" / "jobs" / "manifest.yaml"
+
+
+def _runner_binding() -> dict | None:
+    """The copy that EXECUTES must equal the copy that is edited.
+
+    job_verify_notify.sh reads ~/.datacore/v2-runner, not ~/Data. On mac,
+    plur-claw and hermes that copy governs verification and nothing synced it:
+    seven copies in four states on 2026-09-03. The pytest for this skips where
+    there is no runner, which is every CI run -- so it lives here too, where it
+    runs on the hosts that have one.
+    """
+    if not RUNNER_MANIFEST.exists():
+        return None
+    same = RUNNER_MANIFEST.read_bytes() == MANIFEST.read_bytes()
+    return {"job": "(runner)", "binding": "runner",
+            "state": "ok" if same else "FAIL",
+            "detail": ("runner manifest matches canonical" if same else
+                       f"runner manifest has DRIFTED from canonical — what runs is not "
+                       f"what is edited: {RUNNER_MANIFEST}")}
+
+
+def _schedule_seen(raw_path: str, stem: str, haystack: str) -> bool:
+    """Is this job's script actually referenced by a crontab/timer listing?
+
+    Whole-token match on the path as the manifest wrote it (crontabs write
+    paths verbatim), falling back to the basename bounded by non-path
+    characters. The previous `find(stem)` was a bare substring: `cli.py`
+    passed on any line mentioning any cli.py. A verifier weaker than what it
+    verifies produces false PASSES, the one thing it must never do.
+    """
+    if raw_path:
+        tok = r"(?<![A-Za-z0-9_./-])" + re.escape(raw_path) + r"(?![A-Za-z0-9_./-])"
+        if re.search(tok, haystack):
+            return True
+    if stem:
+        # A basename is almost always the tail of a path, so a preceding "/"
+        # is the expected case and must be allowed; a preceding name char
+        # (mycli.py) or a following one (cli.py.bak, cli.py/) is not.
+        stem_re = r"(?<![A-Za-z0-9_.-])" + re.escape(stem) + r"(?![A-Za-z0-9_./-])"
+        return bool(re.search(stem_re, haystack))
+    return False
+
+
+_TIMER_UNIT_RE = re.compile(r"(?<![A-Za-z0-9@._-])([A-Za-z0-9@._-]+\.timer)(?![A-Za-z0-9@._-])")
+
+
+def _declared_timer_seen(schedule: str | None, timers: str) -> bool:
+    """Bind a systemd-scheduled job by the UNIT the manifest declares.
+
+    `systemctl list-timers` lists units, never the script a unit runs, so the
+    basename match can never succeed for a timer-driven job and box-fleet-sync
+    reported FAIL against a timer that exists. If `schedule:` names a
+    `<unit>.timer`, that unit appearing in the listing is the binding. A
+    schedule that just says "systemd" names nothing and stays unbound.
+    """
+    if not schedule:
+        return False
+    units = _TIMER_UNIT_RE.findall(str(schedule))
+    return any(_TIMER_UNIT_RE.search(timers) and
+               re.search(r"(?<![A-Za-z0-9@._-])" + re.escape(u) + r"(?![A-Za-z0-9@._-])", timers)
+               for u in units)
+
+
 def check(live: bool = False, machine: str | None = None) -> list[dict]:
     doc = yaml.safe_load(MANIFEST.read_text())
     jobs = [j for j in doc["jobs"] if not machine or j["machine"] == machine]
 
     sched_cache: dict[str, tuple[str | None, str | None]] = {}
     findings = []
+    rb = _runner_binding()
+    if rb:
+        findings.append(rb)
 
     for j in jobs:
         name, mach, cmd = j["name"], j["machine"], j.get("cmd", "")
@@ -271,7 +353,7 @@ def check(live: bool = False, machine: str | None = None) -> list[dict]:
             r = subprocess.run(
                 ["ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
                  SSH_ALIAS.get(mach, mach),
-                 f"test -e {remote_path} && echo YES || echo NO"],
+                 f"test -e {_quote_remote(remote_path)} && echo YES || echo NO"],
                 capture_output=True, text=True, timeout=45)
             ok = r.returncode == 0 and "YES" in r.stdout
             findings.append({
@@ -290,7 +372,10 @@ def check(live: bool = False, machine: str | None = None) -> list[dict]:
                              "detail": f"{mach} unreachable — not a pass"})
             continue
         stem = script.name if script else ""
-        seen = (stem and ((cron or "") + (timers or "")).find(stem) >= 0)
+        raw = _raw_path(cmd) or ""
+        seen = _schedule_seen(raw, stem, (cron or "") + "\n" + (timers or ""))
+        if not seen:
+            seen = _declared_timer_seen(j.get("schedule"), timers or "")
         findings.append({
             "job": name, "binding": "sched",
             "state": "ok" if seen else "FAIL",

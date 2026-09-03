@@ -100,3 +100,16 @@ class TestInstanceLocalOverride:
         (store / ".datacore" / "env" / "local.env").write_text("MULTI_KEY=local-key\n")
         assert ca.get_value("MULTI_SECRET") == "secret-value"
         assert ca.get_value("MULTI_ID") == "id-value"
+
+
+def test_entry_verifier_refuses_a_non_https_probe_target():
+    """The probe sends the REAL credential as a bearer header to api_base. An
+    http:// or bare-host base would hand the token over a cleartext link to
+    wherever the index pointed. Audit 2026-09-03."""
+    import importlib.util, pathlib
+    spec = importlib.util.spec_from_file_location(
+        "ca", pathlib.Path(__file__).resolve().parents[1] / "credential_access.py")
+    ca = importlib.util.module_from_spec(spec); spec.loader.exec_module(ca)
+    assert ca._entry_verifier({"api_base": "http://internal/api"}) is None
+    assert ca._entry_verifier({"api_base": "internal/api"}) is None
+    assert ca._entry_verifier({"api_base": "https://gitea.example/", "provider": "gitea"}) is not None

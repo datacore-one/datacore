@@ -17,11 +17,22 @@ SRC = pathlib.Path(__file__).resolve().parents[1] / "ledger" / "attestation_cove
 
 
 def _load(root: pathlib.Path):
+    """attestation_coverage reads DATACORE_ROOT once, at import. Set it for
+    exactly that long. Leaving it set leaked a tmp root into every later
+    test that reads the variable -- test_integration failed only when this
+    file ran first, which is the kind of failure nobody reproduces."""
     import os
+    prev = os.environ.get("DATACORE_ROOT")
     os.environ["DATACORE_ROOT"] = str(root)
-    spec = importlib.util.spec_from_file_location("attcov", SRC)
-    m = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(m)
+    try:
+        spec = importlib.util.spec_from_file_location("attcov", SRC)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+    finally:
+        if prev is None:
+            os.environ.pop("DATACORE_ROOT", None)
+        else:
+            os.environ["DATACORE_ROOT"] = prev
     return m
 
 

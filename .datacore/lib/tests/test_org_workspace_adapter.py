@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import sys
 import shutil
 from pathlib import Path
 
@@ -20,12 +21,20 @@ def work_dir(tmp_path):
 
 
 def run_adapter(*args):
+    """Exit code and JSON body must agree. This helper used to assert exit 0
+    for every call -- including the not-found and refused cases -- which
+    enshrined the defect where an error result exited 0 and a caller trusting
+    the exit code believed a refused write had happened."""
     result = subprocess.run(
         ["python3", str(ADAPTER)] + list(args),
         capture_output=True, text=True,
     )
-    assert result.returncode == 0, f"Adapter failed: {result.stderr}"
-    return json.loads(result.stdout)
+    body = json.loads(result.stdout)
+    if isinstance(body, dict) and body.get("error"):
+        assert result.returncode != 0, f"error result exited 0: {body}"
+    else:
+        assert result.returncode == 0, f"Adapter failed: {result.stderr}"
+    return body
 
 
 class TestAddEnhanced:
@@ -295,3 +304,29 @@ class TestV2LedgerWrite:
         # happens it must carry the REAL actor, not the import role.
         if result.get("ledger_actor"):
             assert result["ledger_actor"] != "genesis"
+
+
+
+def test_refused_add_exits_nonzero(tmp_path):
+    """The refusal used to exit 0 with an error JSON. A caller checking the
+    exit code -- the ventures cadence runner did -- saw success and wrote
+    nothing for 59 runs. Exit code and JSON must agree."""
+    target = tmp_path / "next_actions.org"
+    target.write_text("#+TITLE: t\n")
+    result = subprocess.run(
+        [sys.executable, str(ADAPTER), "add", "--file", str(target),
+         "--heading", "captured in the wrong place", "--state", "TODO"],
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0, result.stdout
+    assert "error" in json.loads(result.stdout)
+    assert target.read_text() == "#+TITLE: t\n", "refused write must not touch the file"
+
+
+def test_exception_result_exits_nonzero(tmp_path):
+    missing = tmp_path / "does-not-exist.org"
+    result = subprocess.run(
+        [sys.executable, str(ADAPTER), "list", "--file", str(missing)],
+        capture_output=True, text=True, timeout=30)
+    body = json.loads(result.stdout) if result.stdout.strip() else {}
+    if body.get("error"):
+        assert result.returncode != 0

@@ -88,3 +88,24 @@ def test_summary_lists_only_recurring_jobs_worst_first(rec):
     s = rec.summary()
     assert [r["job"] for r in s] == ["bad", "worse"]
     assert "fine" not in [r["job"] for r in s]
+
+
+def test_concurrent_records_do_not_lose_updates(rec):
+    """Two verifiers at once -- cron and a hand run -- must not race. Without
+    the lock both read N and both write N+1; worse, a pass's reset could be
+    overwritten by a concurrent fail's increment and a recovered job would stay
+    'recurring'. 40 threads x 1 increment must equal exactly 40."""
+    import threading
+    errors = []
+
+    def go():
+        try:
+            rec.record("j", failed=True, today="2026-09-03")
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    ts = [threading.Thread(target=go) for _ in range(40)]
+    for t in ts: t.start()
+    for t in ts: t.join()
+    assert not errors
+    assert rec._load()["j"]["consecutive"] == 40
