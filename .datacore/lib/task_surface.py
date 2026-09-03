@@ -36,14 +36,14 @@ SURFACES = [
     ("bench",      r"plur-bench|longmemeval|locomo|benchmark|leaderboard|r@\d"),
     ("encode",     r"plur-encode|extract-cli|plur-ai/encode|repo history"),
     ("hub",        r"\bhub\b|marketplace|pack directory|public index|install count|"
-                   r"mcp\.directory|mcp\.so|pulsemcp|smithery|awesome-|directory listing|"
-                   r"registry submission"),
+                   r"mcp\.directory|mcp\.so|mcpservers|pulsemcp|smithery|awesome-|"
+                   r"directory listing|registry submission|submit to \w+\.(org|io|com)"),
     ("website",    r"plur\.ai/|website|docs\.plur\.ai|landing|sitemap|canonical|own\.html"),
     ("comms",      r"\btweet\b|\bx thread\b|@plur_ai|linkedin|reddit|hacker news|"
                    r"show hn|discord|newsletter|campaign|outreach|press|blog|dev\.to|"
                    r"article|announcement|\bpost\b"),
     ("ops",        r"\bdns\b|\btls\b|systemd|\bcron\b|server|backup|rotate|"
-                   r"credential|smoke|monitor|grafana|hetzner|nightshift|runner|"
+                   r"credential|monitor|grafana|hetzner|nightshift|runner|"
                    r"\bci\b cost|self-hosted|infra"),
     # core last and broad: it is the default place work lands, so it must not
     # claim a task another surface has a better claim on.
