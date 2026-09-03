@@ -146,6 +146,9 @@ jobs:
     machine: mac
     schedule: "10 * * * *"
     cmd: "python3 ~/Data/.datacore/lib/detectors/seq_gap.py --fetch > ~/.datacore/state/seq-gap.log 2>&1"
+    # detector contract: 0 clean, 1 findings, 2 could not run. Under the
+    # execution envelope (jobs/run.py, pilot 2026-09-03) 1 is a successful run.
+    exit_ok: [0, 1]
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/seq-gap.log"
