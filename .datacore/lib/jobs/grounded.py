@@ -52,6 +52,31 @@ HOME = pathlib.Path.home()
 # schedule read without ssh.
 LOCAL = os.environ.get("DATACORE_MACHINE", "mac")
 
+# manifest machine name -> ssh alias. The manifest calls winston "box"; ssh does
+# not. Without this every --live check against box returned n-a ("could not
+# tell"), which is honest but useless — and it is why three jobs whose producer
+# exists and is unscheduled went undetected by the very checker built to find
+# them. Same map as fixtures.py.
+SSH_ALIAS = {"box": "winston"}
+
+
+def _raw_path(cmd: str) -> str | None:
+    """The path token exactly as the manifest wrote it, unresolved.
+
+    Remote checks must send `~/...` unexpanded so the remote shell expands it
+    to ITS home. Resolving locally first is how a Mac path was tested on a
+    Linux box.
+    """
+    cd = re.search(r"\bcd\s+(\S+)", cmd)
+    toks = [t for t in re.split(r"\s+", cmd.strip())
+            if t.startswith(("~/", "/", "./")) or "/" in t]
+    for t in toks:
+        if t.endswith((".sh", ".py", ".ts", ".mjs")):
+            if t.startswith("./") and cd:
+                return f"{cd.group(1)}/{t[2:]}"
+            return t.split(">")[0].strip()
+    return toks[0].split(">")[0].strip() if toks else None
+
 
 def _resolve(cmd: str) -> pathlib.Path | None:
     """First filesystem path in a cmd string, resolved.
@@ -237,20 +262,27 @@ def check(live: bool = False, machine: str | None = None) -> list[dict]:
         if not live:
             continue
         if script is not None and not script.exists() and mach != LOCAL:
+            # Send the path as the manifest WROTE it, not as resolved here.
+            # `~/Data/.datacore/lib/cos_backup.sh` resolves to /Users/gregor on
+            # this Mac and must expand to /home/gregor on the box; testing the
+            # locally-resolved path over ssh reported five scripts absent that
+            # are present and running there every night.
+            remote_path = _raw_path(cmd) or str(script)
             r = subprocess.run(
-                ["ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes", mach,
-                 f"test -e {script} && echo YES || echo NO"],
+                ["ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
+                 SSH_ALIAS.get(mach, mach),
+                 f"test -e {remote_path} && echo YES || echo NO"],
                 capture_output=True, text=True, timeout=45)
             ok = r.returncode == 0 and "YES" in r.stdout
             findings.append({
                 "job": name, "binding": "cmd@host",
                 "state": "ok" if ok else ("FAIL" if r.returncode == 0 else "n-a"),
                 "detail": (f"exists on {mach}" if ok else
-                           f"absent on {mach}: {script}" if r.returncode == 0
+                           f"absent on {mach}: {remote_path}" if r.returncode == 0
                            else f"{mach} unreachable — not a pass")})
 
         if mach not in sched_cache:
-            host = None if mach == LOCAL else mach
+            host = None if mach == LOCAL else SSH_ALIAS.get(mach, mach)
             sched_cache[mach] = (_crontab(host), _systemd(host))
         cron, timers = sched_cache[mach]
         if cron is None and timers is None:
