@@ -1,0 +1,7 @@
+# fixture for mac-seq-gap artifact[0]
+# producer artifact: ~/.datacore/state/seq-gap.log on mac
+# harvested: 2026-09-03
+# regex under test: 0 with unpublished events, 0 error
+# represents: SUCCESS
+# ---
+seq-gap: 43 log(s), 0 with unpublished events, 0 error(s)

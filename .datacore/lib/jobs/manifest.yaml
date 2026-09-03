@@ -317,6 +317,18 @@ jobs:
         arg: "Committed [0-9]+ file\\(s\\)"
         max_age_hours: 26
 
+      # CATEGORY FIX 2026-09-03: this is a MIGRATION GATE, not a fault.
+      # shadow_check.py's own docstring: "The migration's flip to Phase 1 is
+      # gated on N consecutive days of a clean diff." A gate that reads "not
+      # ready yet" is the expected state for the whole length of a migration —
+      # it had alerted 23 consecutive times, correctly, and none of them was an
+      # incident. Asserting `"all_clean": true` here turned a progress gauge
+      # into a daily alarm, which is how a real alert gets ignored.
+      #
+      # What IS worth verifying is that the gate RAN. Freshness stays; the
+      # all_clean assertion is dropped. Progress belongs in the briefing, where
+      # "7/9 spaces clean, streak 0" reads as a number to move rather than a
+      # failure to triage.
   - name: box-projection-drift
     machine: box
     schedule: "cron 35 5 * * * on winston (runs after the ingest, same script)"
@@ -327,8 +339,7 @@ jobs:
       # turns adding a tenth space into a false alarm, and the fix for a false
       # alarm is usually to stop believing the alarm.
       - path: "~/.datacore/state/shadow-status.json"
-        check: regex
-        arg: '"all_clean": true'
+        check: nonempty
         max_age_hours: 26
 
   # The commit gate deliberately never blocks — nightshift runs ~20 tasks with
@@ -365,8 +376,19 @@ jobs:
   # "orphaned (0)", which is 13 as of 2026-08-10 and would make this check born
   # red. Alert fatigue is a failure mode, not a stricter standard: the orphan
   # count is in the log for review, and this contract fires on regression.
-  - name: box-registry-gc
-    machine: box
+      # MACHINE FIX 2026-09-03: this was declared on `box` and was never
+      # scheduled there — correctly, as it turns out. registry_gc prunes
+      # registry entries whose agent definition file is missing, and winston
+      # has the health module DIRECTORY with zero agent files in it (partial
+      # deployment). A --check there reports 13 orphans; all 13 exist and work
+      # on the mac. Running it on box would have deleted valid entries.
+      #
+      # A garbage collector must run where the full set is visible. On the mac
+      # --check reports 125 active, 0 orphaned, 0 bak, 0 duplicates — clean.
+      # Moved to `mac` rather than scheduled on `box`, which is why it had
+      # alerted every morning about a job nobody could safely run.
+  - name: mac-registry-gc
+    machine: mac
     schedule: "35 7 * * *"
     cmd: "python3 ~/Data/.datacore/lib/registry_gc.py --registry ~/Data/.datacore/registry/agents.yaml --check > ~/.datacore/state/registry-gc.log 2>&1"
     on_fail: telegram
@@ -399,19 +421,32 @@ jobs:
       - path: "~/.datacore/cos/morning.log"
         check: nonempty
         max_age_hours: 26
-      # cos_verify_morning.py:check_journal_briefing -- regex lifted verbatim
-      # from the source (miles_delivery accepts either heading).
-      # A heading is not a briefing. This previously matched
-      # "^##\\s+(Daily Briefing|Good Morning)", which a file containing nothing
-      # but that heading would satisfy -- the generator could emit an empty
-      # shell and pass. Requires a section that only a populated briefing
-      # produces: "### Your Agenda" is written from calendar+GTD state, so it
-      # is absent when generation fails partway. Verified 2026-08-10 against a
-      # real 564-line briefing carrying Good Morning / The World / Your Agenda
-      # / Spaces / Trading / Decisions Due / Horizon.
+      # A heading is not a briefing. This must match a section that only a
+      # populated briefing produces -- "Your Agenda" is written from
+      # calendar+GTD state, so it is absent when generation fails partway.
+      # Matching just "^##\\s+(Daily Briefing|Good Morning)" is too weak: a
+      # file containing nothing but that heading would pass.
+      #
+      # HEADING LEVEL, fixed 2026-09-02: this said "^###\\s+Your Agenda" (H3)
+      # from 2026-08-10. There are TWO briefing generators and they disagree.
+      # The nightshift orchestrator writes H3 -- verified in the 06:00 run in
+      # 0-personal/notes/journals/2026-09-02.md, which carries "### Good
+      # Morning" / "### The World" / "### Your Agenda". The interactive
+      # /today writes H2, matching its own command spec and the prompt
+      # template at today_orchestrator.py:1281 and :2167. So the H3 form
+      # matched the overnight run and missed every interactive one, and
+      # box-briefing FAILED on complete briefings (08-27, 09-01, 09-02
+      # confirmed) whenever the interactive briefing was the one on disk.
+      # The sibling check in cos_verify_morning.py:check_journal_briefing was
+      # RETIRED 2026-08-27 (datacore#54) for the same class of false alarm;
+      # its own docstring is the rule: "A verifier stricter than the pipeline
+      # it verifies produces false alarms, and false alarms are how a real one
+      # gets ignored." This copy was missed in that retirement.
+      # {2,3} accepts either level so a future heading change cannot silently
+      # re-break it.
       - path: "~/Data/0-personal/notes/journals/{today}.md"
         check: regex
-        arg: "^###\\s+Your Agenda"
+        arg: "^#{2,3}\\s+Your Agenda"
         max_age_hours: 26
       # cos_verify_morning.py:check_audio -- AUDIO_STAMP, written by
       # winston_audio.sh only after Telegram accepts the voice message.
@@ -680,6 +715,18 @@ jobs:
   # actually computed daily and its result is durable. Contracted on CONTENT
   # ("all_clean": true), not freshness: a stale-but-fresh status file would
   # report a passing migration that was never checked.
+      # CATEGORY FIX 2026-09-03: this is a MIGRATION GATE, not a fault.
+      # shadow_check.py's own docstring: "The migration's flip to Phase 1 is
+      # gated on N consecutive days of a clean diff." A gate that reads "not
+      # ready yet" is the expected state for the whole length of a migration —
+      # it had alerted 23 consecutive times, correctly, and none of them was an
+      # incident. Asserting `"all_clean": true` here turned a progress gauge
+      # into a daily alarm, which is how a real alert gets ignored.
+      #
+      # What IS worth verifying is that the gate RAN. Freshness stays; the
+      # all_clean assertion is dropped. Progress belongs in the briefing, where
+      # "7/9 spaces clean, streak 0" reads as a number to move rather than a
+      # failure to triage.
   - name: mac-shadow-diff
     machine: mac
     schedule: "0 7 * * *"
@@ -687,8 +734,7 @@ jobs:
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/shadow-status.json"
-        check: regex
-        arg: '"all_clean": true'
+        check: nonempty
         max_age_hours: 26
 
 

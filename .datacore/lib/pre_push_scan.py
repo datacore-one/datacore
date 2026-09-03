@@ -60,6 +60,11 @@ DATACORE_NEW_FILE_ALLOW = [
     ".datacore/workflows/**",
     ".datacore/hooks/**",
     ".datacore/githooks/**",
+    # terminal entry points: thin wrappers that exec a lib/ script (bin/creds
+    # is `exec creds.py "$@"`). Same class as lib/; nothing lives here that
+    # could not live in lib/. Added 2026-09-03 after the audit branch was
+    # refused on this one file for two days.
+    ".datacore/bin/**",
     ".datacore/config/**",
     ".datacore/tests/**",
     ".datacore/skills/**",
@@ -291,7 +296,7 @@ def main():
         if not any(single_level_match(rel, a) for a in allow_globs):
             blocks.append(
                 f"new file: {p}  (not in .datacore new-file allowlist — "
-                "allowed: agents/ commands/ lib/ dips/ specs/ templates/ "
+                "allowed: agents/ commands/ lib/ bin/ dips/ specs/ templates/ "
                 "registry/ docs/ workflows/ hooks/ githooks/ config/ tests/ "
                 "skills/ cos/*.example modules/*/{agents,commands,lib,...})")
 

@@ -80,11 +80,16 @@ def _today() -> str:
 def sync_plan(role: str, today: str | None = None) -> list[tuple[str, str]]:
     """(remote_path, local_path) pairs to pull for `role`. Pure -- no I/O.
 
-    role "client" (mac): the three CoS briefing artifacts --
-    `app-briefing.json` (dated, under `briefings/{today}/`), `answers.yaml`,
-    and `facts.json` (both un-dated, directly under the cos base) -- paired
-    remote (box, `~/.datacore/cos/...`) to local (this machine's home,
-    same shape).
+    role "client" (mac): the CoS briefing artifact `app-briefing.json`
+    (dated, under `briefings/{today}/`), paired remote (box,
+    `~/.datacore/cos/...`) to local (this machine's home, same shape).
+
+    `answers.yaml` and `facts.json` were listed here from install (2026-08-10)
+    to 2026-09-03 and never existed on the box: nothing there writes them
+    (verified: no producer in lib/ or chief-of-staff/, no file in ~/.datacore/cos).
+    Two guaranteed rsync errors per run kept the agent's last exit at 1 for
+    three weeks, which is the state a REAL failure would show -- bug class 4
+    (a pull for an artifact never written). Re-add a pair when a producer exists.
 
     role "server" (box) or anything else: `[]` -- the box never pulls from
     itself.
@@ -102,8 +107,6 @@ def sync_plan(role: str, today: str | None = None) -> list[tuple[str, str]]:
             f"{REMOTE_BASE}/briefings/{day}/app-briefing.json",
             str(LOCAL_BASE / "briefings" / day / "app-briefing.json"),
         ),
-        (f"{REMOTE_BASE}/answers.yaml", str(LOCAL_BASE / "answers.yaml")),
-        (f"{REMOTE_BASE}/facts.json", str(LOCAL_BASE / "facts.json")),
     ]
 
 

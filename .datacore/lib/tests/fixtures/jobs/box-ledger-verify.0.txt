@@ -1,0 +1,8 @@
+# fixture for box-ledger-verify artifact[0]
+# producer artifact: ~/.datacore/state/ledger-verify.log on box
+# harvested: 2026-09-03
+# regex under test: ^OK 
+# represents: SUCCESS
+# ---
+OK 2 files 1166 events
+OK 2 files 1166 events

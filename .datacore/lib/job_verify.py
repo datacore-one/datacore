@@ -114,6 +114,29 @@ def _send_telegram(message: str) -> bool:
     return result.returncode == 0
 
 
+_NO_EMIT = False
+
+
+def _note_pass(job_name: str) -> None:
+    """Reset a job's consecutive-failure count.
+
+    Must be called for every PASSING job, not only failing ones -- otherwise a
+    job that recovers keeps its old count and escalates on its next unrelated
+    failure, which is a false alarm of exactly the kind this is meant to stop.
+    """
+    try:
+        from jobs import recurrence as _rec
+    except ImportError:  # pragma: no cover
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "recurrence", Path(__file__).parent / "jobs" / "recurrence.py")
+        _rec = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_rec)
+    if _NO_EMIT:
+        return
+    _rec.record(job_name, failed=False)
+
+
 def _dispatch_alert(mode: str, job_name: str, failures: list[str]) -> None:
     """Dispatch exactly one alert for one failing job.
 
@@ -122,7 +145,30 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str]) -> None:
     send itself failed) it falls back to a stderr note rather than
     silently dropping the alert.
     """
-    message = f"job.verify FAILED: {job_name} ({len(failures)} failure(s))"
+    # DIP-0035 Open Question #2, resolved 2026-09-03: a repeated failure must
+    # not render identically to a first one. box-projection-drift had failed 22
+    # consecutive times, correctly, while the drift it reported grew.
+    # Threshold and semantics come from DIP-0031 (">=3 consecutive runs is a
+    # recurring failure"), not from a second number invented here.
+    try:
+        from jobs import recurrence as _rec
+    except ImportError:  # pragma: no cover - path layouts differ per host
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "recurrence", Path(__file__).parent / "jobs" / "recurrence.py")
+        _rec = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_rec)
+
+    # A dry run must not inflate the streak. `--no-emit` is the dry/test flag
+    # (it suppresses ledger events), and running the verifier three times while
+    # testing today pushed four jobs to "3 consecutive runs" that had failed
+    # once. A counter polluted by its own observer is worse than no counter.
+    # Scheduled runs emit, so production counting is unaffected.
+    if _NO_EMIT:
+        message = f"job.verify FAILED: {job_name} ({len(failures)} failure(s))"
+    else:
+        _record = _rec.record(job_name, failed=True)
+        message = _rec.describe(job_name, _record, len(failures))
     if mode == "telegram":
         if not _send_telegram(message):
             print(f"alert: telegram unavailable, logged only ({job_name})", file=sys.stderr)
@@ -250,6 +296,9 @@ def _run_doctor(machine: str, manifest_path: Path) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    # See _dispatch_alert: a dry run must not inflate the recurrence streak.
+    global _NO_EMIT
+    _NO_EMIT = bool(getattr(args, "no_emit", False))
 
     manifest_path = Path(args.manifest) if args.manifest else _default_manifest_path()
 
@@ -296,6 +345,11 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"  - {failure}", file=sys.stderr)
             effective_alert = args.alert if args.alert is not None else job.on_fail
             _dispatch_alert(effective_alert, job.name, failures)
+        else:
+            # Reset on every pass, not only on the transition. A job that
+            # recovers must not carry its old count into an unrelated future
+            # failure and escalate on the first one.
+            _note_pass(job.name)
 
     if any_failed:
         sys.exit(1)

@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# creds — terminal entry point for the Datacore credential broker.
+#
+# `python3 ~/Data/.datacore/lib/creds.py get X --consumer Y` is the documented
+# invocation, and it is long enough that people paraphrase it, get the argument
+# order wrong, or skip the broker and go looking in .env files instead — which
+# is the exact failure the broker exists to prevent.
+#
+# The library already resolves its own root from DATACORE_ROOT (default
+# ~/Data), so this adds no logic: it locates the script and execs it, passing
+# every argument and the exit code straight through.
+#
+# Install:  ln -sf ~/Data/.datacore/bin/creds ~/.local/bin/creds
+set -euo pipefail
+
+DATACORE_ROOT="${DATACORE_ROOT:-$HOME/Data}"
+SCRIPT="$DATACORE_ROOT/.datacore/lib/creds.py"
+
+if [[ ! -f "$SCRIPT" ]]; then
+  echo "creds: broker not found at $SCRIPT" >&2
+  echo "       set DATACORE_ROOT to your Datacore checkout, e.g." >&2
+  echo "       export DATACORE_ROOT=/path/to/Data" >&2
+  exit 127
+fi
+
+# No arguments is a question, not an error — show what the broker can do
+# rather than an argparse usage line with a bare exit 2.
+if [[ $# -eq 0 ]]; then
+  cat <<'USAGE'
+creds — Datacore credential broker
+
+  creds get <id|VAR> --consumer <who>   resolve one credential to stdout
+  creds list                            every credential, with tier
+  creds search <term>                   find one by name or id
+  creds show <id>                       where it lives and what it is
+  creds doctor [--id X]                 is it alive?  ok / FAIL / n-a
+  creds sync                            reassemble this host's env
+  creds add <id> --var V --value ...    index a new credential
+
+Values print on stdout and diagnostics on stderr, so pipe it into the
+consumer rather than echoing it:
+
+  SOME_TOKEN="$(creds get SOME_TOKEN --consumer my-script)"
+
+USAGE
+  exit 0
+fi
+
+exec python3 "$SCRIPT" "$@"

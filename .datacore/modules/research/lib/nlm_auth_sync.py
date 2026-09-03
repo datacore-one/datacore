@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import shutil
 import subprocess
 import sys
@@ -63,6 +64,36 @@ def _run(cmd: list[str], timeout: int) -> tuple[int, str]:
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
+# ssh runs a non-login shell. The servers install nlm to /usr/local/bin (on the
+# default PATH); the Mac installs to ~/go/bin (not on a minimal PATH). Resolve
+# at call time on the remote rather than hardcoding either location.
+REMOTE_NLM = "$(command -v nlm || echo $HOME/go/bin/nlm)"
+
+
+def _nlm_bin() -> str | None:
+    """Absolute path to the `nlm` binary, or None if it is genuinely absent.
+
+    `shutil.which("nlm")` alone is wrong here. nlm is a Go binary installed to
+    ~/go/bin, which is on an interactive shell's PATH but NOT on the minimal
+    PATH launchd/cron hands a scheduled job. So this script ran by hand said
+    "installed" and the same script run on schedule said "nlm is not installed
+    on this machine" -- and, believing that, never refreshed the credential.
+    The podcast pipeline then produced nothing from 2026-08-30 onward while the
+    binary sat in ~/go/bin the whole time (verified 2026-09-02).
+
+    Order: $NLM override, then PATH, then the known install location -- the
+    same precedence nlm_audio_retry.sh already uses.
+    """
+    override = os.environ.get("NLM")
+    if override and os.access(override, os.X_OK):
+        return override
+    found = shutil.which("nlm")
+    if found:
+        return found
+    fallback = os.path.expanduser("~/go/bin/nlm")
+    return fallback if os.access(fallback, os.X_OK) else None
+
+
 def _list_ok(output: str) -> bool:
     """A real listing has the header row. An auth failure prints prose.
 
@@ -74,7 +105,7 @@ def _list_ok(output: str) -> bool:
 
 
 def check_local() -> bool:
-    code, out = _run(["nlm", "notebook", "list"], LIST_TIMEOUT)
+    code, out = _run([_nlm_bin() or "nlm", "notebook", "list"], LIST_TIMEOUT)
     ok = code == 0 and _list_ok(out)
     print(f"  mac          {'ok' if ok else 'FAIL'}   auth {fingerprint(ENV)}")
     if not ok:
@@ -89,7 +120,7 @@ def check_host(host: str) -> str:
     if code != 0:
         print(f"  {host:12} n-a    unreachable — status unknown, NOT assumed healthy")
         return "n-a"
-    code, out = _run(["ssh", host, "nlm notebook list"], LIST_TIMEOUT)
+    code, out = _run(["ssh", host, REMOTE_NLM + " notebook list"], LIST_TIMEOUT)
     ok = code == 0 and _list_ok(out)
     print(f"  {host:12} {'ok' if ok else 'FAIL'}")
     return "ok" if ok else "FAIL"
@@ -99,7 +130,7 @@ def refresh_local() -> bool:
     """Re-extract cookies from the local browser, then prove it worked."""
     print("  refreshing from browser cookies…")
     before = fingerprint(ENV)
-    code, out = _run(["nlm", "auth"], AUTH_TIMEOUT)
+    code, out = _run([_nlm_bin() or "nlm", "auth"], AUTH_TIMEOUT)
     if code != 0:
         print(f"  FAILED: nlm auth exited {code}")
         # The usual cause is no browser profile holding notebook.google.com
@@ -126,7 +157,7 @@ def push(host: str) -> str:
     if code != 0:
         print(f"  {host:12} FAIL   install failed: {out.strip()[:90]}")
         return "FAIL"
-    code, out = _run(["ssh", host, "nlm notebook list"], LIST_TIMEOUT)
+    code, out = _run(["ssh", host, REMOTE_NLM + " notebook list"], LIST_TIMEOUT)
     ok = code == 0 and _list_ok(out)
     print(f"  {host:12} {'ok' if ok else 'FAIL'}   {'verified live' if ok else out.strip()[:80]}")
     return "ok" if ok else "FAIL"
@@ -139,7 +170,7 @@ def main() -> int:
     a = ap.parse_args()
     hosts = [h.strip() for h in a.hosts.split(",") if h.strip()]
 
-    if not shutil.which("nlm"):
+    if not _nlm_bin():
         print("nlm is not installed on this machine — cannot refresh or verify")
         return 2
 

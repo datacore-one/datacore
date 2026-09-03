@@ -230,7 +230,9 @@ def cmd_add(args):
         if not getattr(args, "allow_any_file", False):
             return {"error": f"new tasks go to inbox.org, not {file_path.name} "
                              "(GTD single capture point). Pass --allow-any-file "
-                             "only for a deliberate migration or repair."}
+                             "only for a deliberate migration or repair, or for "
+                             "a generator whose output is already a clarified "
+                             "next action (ventures cadence_runner)."}
 
     # Auto-CREATED timestamp
     if args.created:
@@ -1082,6 +1084,13 @@ def main():
         }
 
     print(json.dumps(result))
+    # A refusal that exits 0 is a failure that does not fail. The ventures
+    # cadence runner checked only the exit code and believed every refused
+    # write had succeeded -- 59 cadence runs, 0 tasks written, with the
+    # cadence log advancing each time. The JSON is for the reader; the exit
+    # code is for the caller, and both must say the same thing.
+    if isinstance(result, dict) and result.get("error"):
+        sys.exit(1)
 
 
 if __name__ == "__main__":

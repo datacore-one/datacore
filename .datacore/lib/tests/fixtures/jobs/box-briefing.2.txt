@@ -1,0 +1,8 @@
+# fixture for box-briefing artifact[2]
+# producer artifact: ~/Data/0-personal/notes/journals/{today}.md on box
+# harvested: 2026-09-03
+# regex under test: ^#{2,3}\s+Your Agenda
+# represents: SUCCESS
+# ---
+## Your Agenda
+## Your Agenda

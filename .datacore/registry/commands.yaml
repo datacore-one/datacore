@@ -1354,3 +1354,31 @@ module_commands:
     related:
     - structural-integrity
     - promote
+
+  accounting:
+    name: Datafund Accounting
+    description: Read-only Datafund accounting — overview, payables, payment planning, spend analysis
+    version: 2.0.0
+    status: active
+    source: 1-datafund/.datacore/modules/datafund-finance/commands/accounting.md
+    module: datafund-finance
+    invokes:
+    - agent: accounting-sync
+      when: sync
+    - agent: accounting-overview
+      when: overview
+    - agent: pending-payments
+      when: payables
+    - agent: payment-planner
+      when: plan
+    - agent: spend-analyzer
+      when: analyze
+    - agent: invoice-classifier
+      when: classify
+    reads:
+      required: []
+    writes: []
+    references:
+      dips: []
+    related: []
+    trigger: accounting overview|accounting sync|accounting payables|datafund accounting

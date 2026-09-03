@@ -12,9 +12,21 @@ from tag_validator import TagValidator
 
 
 def make_space(root: Path, name: str, subdirs: list[str] = None):
-    """Helper: create a space directory with optional subdirectories."""
+    """Create a space the validator can DISCOVER.
+
+    Discovery is marker-based (lib/spaces.py, DIP-0015): a directory is a
+    space iff it carries .datacore/config.yaml with a `space:` block. These
+    tests built bare directories, so the validator found no spaces, scanned
+    no files, reported no issues -- and three tests asserting "reported"
+    failed on main for as long as the marker has existed.
+    """
+    from spaces import MARKER
     space = root / name
     space.mkdir(parents=True, exist_ok=True)
+    marker = space / MARKER
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    with open(marker, "w") as f:
+        yaml.dump({"space": {"name": name, "type": "personal"}}, f)
     for sub in (subdirs or []):
         (space / sub).mkdir(parents=True, exist_ok=True)
     return space

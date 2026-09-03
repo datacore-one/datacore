@@ -131,6 +131,7 @@ ALLOWED_ROOT_FILES = {
     # Keep the two lists in step: the hook is what actually enforces.
     'venture.yaml',
     'hypotheses.yaml',
+    'roadmap.yaml',
     '.DS_Store',
 }
 

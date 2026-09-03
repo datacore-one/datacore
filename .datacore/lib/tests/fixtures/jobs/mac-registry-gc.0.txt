@@ -1,0 +1,7 @@
+# fixture for mac-registry-gc artifact[0]
+# producer artifact: ~/.datacore/state/registry-gc.log on mac
+# harvested: 2026-09-03
+# regex under test: duplicate keys \(0\)
+# represents: SUCCESS
+# ---
+duplicate keys (0): -

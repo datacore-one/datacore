@@ -1,0 +1,8 @@
+# fixture for box-fleet-sync artifact[0]
+# producer artifact: ~/.datacore/state/fleet-sync.log on box
+# harvested: 2026-09-03
+# regex under test: Committed [0-9]+ file\(s\)
+# represents: SUCCESS
+# ---
+Committed 68 file(s); skipped 0 as junk.
+Committed 68 file(s); skipped 0 as junk.

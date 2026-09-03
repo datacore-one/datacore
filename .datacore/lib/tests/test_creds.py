@@ -12,11 +12,22 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from creds import CredentialIndex, CredentialManager
 
 
+def _index_path(root: Path) -> Path:
+    """The one place the tests learn where the index lives: from the manager."""
+    return CredentialManager(data_dir=str(root)).index_path
+
+
 def write_index(root: Path, data: dict):
-    """Write a credential-index.yaml file."""
-    specs = root / ".datacore" / "specs"
-    specs.mkdir(parents=True, exist_ok=True)
-    with open(specs / "credential-index.yaml", "w") as f:
+    """Write a credential-index.yaml file where CredentialManager reads it.
+
+    The index moved from .datacore/specs/ to .datacore/secrets/ (see
+    CredentialManager.__init__); this helper kept writing the old location,
+    so sixteen tests here failed on main and nobody noticed. Bind to the
+    manager's own attribute so the two cannot drift again.
+    """
+    index_path = _index_path(root)
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(index_path, "w") as f:
         yaml.dump(data, f)
 
 
@@ -97,39 +108,39 @@ class TestCredentialIndex:
 
     def test_loads_credentials(self, tmp_path):
         write_index(tmp_path, SAMPLE_INDEX)
-        idx = CredentialIndex(tmp_path / ".datacore" / "specs" / "credential-index.yaml")
+        idx = CredentialIndex(_index_path(tmp_path))
         assert len(idx.credentials) == 3
 
     def test_filter_by_category(self, tmp_path):
         write_index(tmp_path, SAMPLE_INDEX)
-        idx = CredentialIndex(tmp_path / ".datacore" / "specs" / "credential-index.yaml")
+        idx = CredentialIndex(_index_path(tmp_path))
         result = idx.filter(category="ai-services")
         assert len(result) == 1
         assert result[0].id == "test-api-key"
 
     def test_filter_by_tier(self, tmp_path):
         write_index(tmp_path, SAMPLE_INDEX)
-        idx = CredentialIndex(tmp_path / ".datacore" / "specs" / "credential-index.yaml")
+        idx = CredentialIndex(_index_path(tmp_path))
         result = idx.filter(tier="critical")
         assert len(result) == 1
         assert result[0].id == "prod-db-url"
 
     def test_filter_combined(self, tmp_path):
         write_index(tmp_path, SAMPLE_INDEX)
-        idx = CredentialIndex(tmp_path / ".datacore" / "specs" / "credential-index.yaml")
+        idx = CredentialIndex(_index_path(tmp_path))
         result = idx.filter(category="analytics", tier="low")
         assert len(result) == 1
         assert result[0].id == "analytics-key"
 
     def test_filter_no_match(self, tmp_path):
         write_index(tmp_path, SAMPLE_INDEX)
-        idx = CredentialIndex(tmp_path / ".datacore" / "specs" / "credential-index.yaml")
+        idx = CredentialIndex(_index_path(tmp_path))
         result = idx.filter(category="nonexistent")
         assert len(result) == 0
 
     def test_get_by_id(self, tmp_path):
         write_index(tmp_path, SAMPLE_INDEX)
-        idx = CredentialIndex(tmp_path / ".datacore" / "specs" / "credential-index.yaml")
+        idx = CredentialIndex(_index_path(tmp_path))
         cred = idx.get("test-api-key")
         assert cred is not None
         assert cred.name == "Test API Key"
@@ -137,38 +148,38 @@ class TestCredentialIndex:
 
     def test_get_missing_returns_none(self, tmp_path):
         write_index(tmp_path, SAMPLE_INDEX)
-        idx = CredentialIndex(tmp_path / ".datacore" / "specs" / "credential-index.yaml")
+        idx = CredentialIndex(_index_path(tmp_path))
         assert idx.get("nonexistent") is None
 
     def test_search_by_name(self, tmp_path):
         write_index(tmp_path, SAMPLE_INDEX)
-        idx = CredentialIndex(tmp_path / ".datacore" / "specs" / "credential-index.yaml")
+        idx = CredentialIndex(_index_path(tmp_path))
         results = idx.search("posthog")
         assert len(results) == 1
         assert results[0].id == "analytics-key"
 
     def test_search_by_var_name(self, tmp_path):
         write_index(tmp_path, SAMPLE_INDEX)
-        idx = CredentialIndex(tmp_path / ".datacore" / "specs" / "credential-index.yaml")
+        idx = CredentialIndex(_index_path(tmp_path))
         results = idx.search("DATABASE_URL")
         assert len(results) == 1
         assert results[0].id == "prod-db-url"
 
     def test_search_case_insensitive(self, tmp_path):
         write_index(tmp_path, SAMPLE_INDEX)
-        idx = CredentialIndex(tmp_path / ".datacore" / "specs" / "credential-index.yaml")
+        idx = CredentialIndex(_index_path(tmp_path))
         results = idx.search("POSTGRESQL")
         assert len(results) == 1
 
     def test_did_you_mean(self, tmp_path):
         write_index(tmp_path, SAMPLE_INDEX)
-        idx = CredentialIndex(tmp_path / ".datacore" / "specs" / "credential-index.yaml")
+        idx = CredentialIndex(_index_path(tmp_path))
         suggestions = idx.did_you_mean("test-api-ky")
         assert "test-api-key" in suggestions
 
     def test_locations_parsed(self, tmp_path):
         write_index(tmp_path, SAMPLE_INDEX)
-        idx = CredentialIndex(tmp_path / ".datacore" / "specs" / "credential-index.yaml")
+        idx = CredentialIndex(_index_path(tmp_path))
         cred = idx.get("test-api-key")
         assert len(cred.locations) == 1
         assert cred.locations[0].primary is True
@@ -188,7 +199,7 @@ class TestCredentialIndex:
             "domain": "test.eth",
         }]
         write_index(tmp_path, data)
-        idx = CredentialIndex(tmp_path / ".datacore" / "specs" / "credential-index.yaml")
+        idx = CredentialIndex(_index_path(tmp_path))
         cred = idx.get("with-extra")
         assert cred.extra["address"] == "0xABC"
         assert cred.extra["domain"] == "test.eth"
