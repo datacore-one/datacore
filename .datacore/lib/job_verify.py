@@ -114,6 +114,9 @@ def _send_telegram(message: str) -> bool:
     return result.returncode == 0
 
 
+_NO_EMIT = False
+
+
 def _note_pass(job_name: str) -> None:
     """Reset a job's consecutive-failure count.
 
@@ -129,6 +132,8 @@ def _note_pass(job_name: str) -> None:
             "recurrence", Path(__file__).parent / "jobs" / "recurrence.py")
         _rec = _ilu.module_from_spec(_spec)
         _spec.loader.exec_module(_rec)
+    if _NO_EMIT:
+        return
     _rec.record(job_name, failed=False)
 
 
@@ -154,8 +159,16 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str]) -> None:
         _rec = _ilu.module_from_spec(_spec)
         _spec.loader.exec_module(_rec)
 
-    _record = _rec.record(job_name, failed=True)
-    message = _rec.describe(job_name, _record, len(failures))
+    # A dry run must not inflate the streak. `--no-emit` is the dry/test flag
+    # (it suppresses ledger events), and running the verifier three times while
+    # testing today pushed four jobs to "3 consecutive runs" that had failed
+    # once. A counter polluted by its own observer is worse than no counter.
+    # Scheduled runs emit, so production counting is unaffected.
+    if _NO_EMIT:
+        message = f"job.verify FAILED: {job_name} ({len(failures)} failure(s))"
+    else:
+        _record = _rec.record(job_name, failed=True)
+        message = _rec.describe(job_name, _record, len(failures))
     if mode == "telegram":
         if not _send_telegram(message):
             print(f"alert: telegram unavailable, logged only ({job_name})", file=sys.stderr)
@@ -283,6 +296,9 @@ def _run_doctor(machine: str, manifest_path: Path) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    # See _dispatch_alert: a dry run must not inflate the recurrence streak.
+    global _NO_EMIT
+    _NO_EMIT = bool(getattr(args, "no_emit", False))
 
     manifest_path = Path(args.manifest) if args.manifest else _default_manifest_path()
 
