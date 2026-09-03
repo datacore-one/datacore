@@ -205,3 +205,12 @@ def test_schedule_binding_rejects_a_suffixed_or_directory_form_of_the_basename()
     assert not grounded._schedule_seen("", "cli.py", "0 5 * * * /x/cli.py.bak\n")
     assert not grounded._schedule_seen("", "cli.py", "0 5 * * * /x/cli.py/run\n")
     assert grounded._schedule_seen("", "cli.py", "0 5 * * * /x/cli.py --flag\n")
+
+
+def test_a_commented_out_cron_line_is_not_a_schedule():
+    """Independent review 2026-09-03 reproduced a false PASS on a comment."""
+    assert not grounded._schedule_seen("~/x/box_briefing.py", "box_briefing.py",
+                                       "# 0 7 * * * /usr/bin/python3 ~/x/box_briefing.py --arg\n")
+    assert not grounded._schedule_seen("", "box_briefing.py", "   # 0 7 * * * ~/x/box_briefing.py\n")
+    assert grounded._schedule_seen("", "box_briefing.py",
+                                   "# old line\n0 7 * * * ~/x/box_briefing.py\n")

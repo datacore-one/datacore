@@ -187,6 +187,10 @@ CLAUDE.md
 # private repos across five orgs) and CLAUDE.md, so tracking the module here does
 # not expose them — this repo is PUBLIC.
 .datacore/modules/*/
+# `dir/` matches directories only; health is a SYMLINK to a space project and
+# stayed untracked-but-not-ignored, one `git add -A` away from the public repo.
+# Independent review 2026-09-03.
+.datacore/modules/health
 !.datacore/modules/analytics/
 !.datacore/modules/decisions/
 !.datacore/modules/github/

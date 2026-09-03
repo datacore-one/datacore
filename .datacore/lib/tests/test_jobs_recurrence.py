@@ -124,3 +124,21 @@ def test_prune_forgets_jobs_the_manifest_no_longer_names(rec):
     assert rec.summary() == []
     assert "mac-registry-gc" in rec._load(), "a known job's record must survive the prune"
     assert rec.prune({"mac-registry-gc"}) == [], "idempotent"
+
+
+def test_record_survives_a_lock_failure(rec, monkeypatch, capsys):
+    """A read-only or NFS home must degrade to an unserialised update, never
+    abort the verification run that called record()."""
+    def _boom(*a, **k):
+        raise OSError("flock not supported")
+    monkeypatch.setattr(rec.fcntl, "flock", _boom)
+    r = rec.record("j", failed=True)
+    assert r["consecutive"] == 1
+    assert "lock unavailable" in capsys.readouterr().err
+    assert rec._load()["j"]["consecutive"] == 1, "the update must still be persisted"
+
+
+def test_prune_with_no_known_jobs_is_a_no_op(rec):
+    rec.record("j", failed=True)
+    assert rec.prune(set()) == []
+    assert "j" in rec._load(), "an empty manifest must not wipe every counter"
