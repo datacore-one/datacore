@@ -12,12 +12,17 @@ definition of done, so it could not tell whether it had succeeded. The pool had
 drifted there gradually: every hand-added `:AI:`, every agent filing follow-up
 work, every cadence, each individually reasonable.
 
-The fix that lasts is not a backfill, it is a gate. Three properties, checked
-where the tag is written:
+The fix that lasts is not a backfill, it is a gate, checked where the tag is
+written:
 
-    ROADMAP    which outcome this serves        (SELECT)
-    SURFACE    which repo the work lands in     (LOCATE)
-    DONE_WHEN  how the agent knows it finished  (FINISH)
+    SURFACE                            which repo the work lands in   (LOCATE)
+    DONE_WHEN or ACCEPTANCE_CRITERIA   how it knows it finished       (FINISH)
+    ROADMAP                            which outcome it serves        (SELECT)
+                                       — only in a space that HAS a roadmap
+
+It mirrors nightshift_parser._is_executable rather than exceeding it. A gate
+stricter than the executor rejects work the executor would run happily, which
+teaches people to reach for --no-verify, after which it guards nothing.
 
 Normally nothing hits this gate, because sprint_sync.py writes the tag from
 sprint.yaml and fills all three from fields the sprint already carries. It
@@ -31,12 +36,40 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-REQUIRED = {
-    "ROADMAP": "no ROADMAP — the agent cannot tell which outcome this serves",
-    "SURFACE": "no SURFACE — the agent cannot tell which repo to work in",
-    "DONE_WHEN": "no DONE_WHEN — the agent cannot tell when it has finished",
-}
 QUEUED = ("TODO", "NEXT")
+
+# Mirror nightshift_parser._is_executable exactly. A gate STRICTER than the
+# executor rejects work the executor would happily run, which teaches people to
+# pass --no-verify and then guards nothing at all.
+#
+# ACCEPTANCE_CRITERIA is DONE_WHEN's older spelling and several well-specified
+# tasks predate the rename; both are accepted.
+DONE_KEYS = ("DONE_WHEN", "ACCEPTANCE_CRITERIA")
+
+# ROADMAP is required only in a space that HAS a roadmap. 0-personal and
+# 6-meridian have none, and demanding an epic link there is a complaint about a
+# file that does not exist — the same scoping error agent_readiness made.
+REPO = Path(__file__).resolve().parents[2]
+HAS_ROADMAP = {p.parent.name for p in REPO.glob("[0-9]-*/roadmap.yaml")}
+
+
+def _space_of(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(REPO).parts[0]
+    except Exception:
+        return "?"
+
+
+def _missing(props: dict, space: str) -> list[str]:
+    out = []
+    surface = str(props.get("SURFACE") or "").strip()
+    if not surface or surface == "unassigned":
+        out.append("no SURFACE — the agent cannot tell which repo to work in")
+    if not any(str(props.get(k) or "").strip() for k in DONE_KEYS):
+        out.append("no DONE_WHEN — the agent cannot tell when it has finished")
+    if space in HAS_ROADMAP and not str(props.get("ROADMAP") or "").strip():
+        out.append("no ROADMAP — the agent cannot tell which outcome this serves")
+    return out
 
 
 def main(argv: list[str]) -> int:
@@ -67,8 +100,7 @@ def main(argv: list[str]) -> int:
         # prevent. The source task is gated on its own terms.
         if str(props.get("SOURCE_ID") or "").strip():
             continue
-        missing = [k for k in REQUIRED if not str(props.get(k) or "").strip()
-                   or str(props.get(k)).strip() == "unassigned"]
+        missing = _missing(props, _space_of(Path(str(node.path))))
         if missing:
             bad.append((node.heading, missing, props.get("ID")))
 
@@ -80,8 +112,8 @@ def main(argv: list[str]) -> int:
     for heading, missing, tid in bad[:15]:
         print(f"  {heading[:72]}")
         print(f"    {tid or '(no id)'}")
-        for k in missing:
-            print(f"    - {REQUIRED[k]}")
+        for reason in missing:
+            print(f"    - {reason}")
     if len(bad) > 15:
         print(f"  ...and {len(bad) - 15} more")
     print("\nEither give the task all three properties, or drop the :AI: tag —")
