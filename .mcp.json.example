@@ -3,7 +3,7 @@
     "gamma": {
       "command": "node",
       "args": [
-        "/path/to/Data/.datacore/modules/slides/mcp-server/dist/index.js"
+        "${HOME}/Data/.datacore/modules/slides/mcp-server/dist/index.js"
       ],
       "env": {
         "GAMMA_API_KEY": "your-gamma-api-key-here"
