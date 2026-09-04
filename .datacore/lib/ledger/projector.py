@@ -127,6 +127,18 @@ class Projection:
 _BARE_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 
 
+_STAMP_DAY = re.compile(r"([<\[])(\d{4})-(\d{2})-(\d{2}) [A-Za-z]{2,3}(?=[ >\]])")
+
+
+def _fix_day(m: "re.Match") -> str:
+    import datetime as _dt
+    try:
+        day = _dt.date(int(m.group(2)), int(m.group(3)), int(m.group(4))).strftime("%a")
+    except ValueError:
+        return m.group(0)
+    return f"{m.group(1)}{m.group(2)}-{m.group(3)}-{m.group(4)} {day}"
+
+
 def _org_stamp(value):
     """Render a date as a VALID org timestamp: `<YYYY-MM-DD Day>`.
 
@@ -148,6 +160,11 @@ def _org_stamp(value):
     if not value:
         return value
     text = str(value).strip()
+    # A bracketed stamp is passed through -- except its DAY NAME, which is
+    # recomputed from the date. Typed weekdays reach the ledger from org files
+    # (`<2026-07-30 Wed>`; it was a Thursday) and a projection that repeats
+    # them fails the date hook on every autosave (4-forge, 2026-09-04).
+    text = _STAMP_DAY.sub(_fix_day, text)
     m = _BARE_DATE.match(text)
     if not m:
         return text
