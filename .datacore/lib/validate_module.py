@@ -230,9 +230,14 @@ class ModuleValidator:
         """Detect placeholder text in module files."""
         print("Placeholder Detection:")
 
+        # TODO and FIXME count only as MARKERS. Bare `TODO` matched the org
+        # state keyword every module doc uses in prose ("counts pending TODO
+        # items", "TODO/DONE counts") and the research module carried 16
+        # such false positives after code blocks were already excluded
+        # (2026-09-04). A marker is `TODO:` / `FIXME:` or a bracketed form.
         placeholder_patterns = [
-            r'TODO',
-            r'FIXME',
+            r'(?<![\w/])(?:TODO|FIXME)\s*:',
+            r'[\[<{](?:TODO|FIXME)[\]>}]',
             r'\[Replace\s+this\]',
             r'\[Add\s+\w+\s+here\]',
             r'\[Fill.*?\]',
