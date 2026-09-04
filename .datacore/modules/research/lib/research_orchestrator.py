@@ -1237,10 +1237,13 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
     sources_added = 0
     for src in sources:
         try:
-            add_res = subprocess.run(
-                [nlm, 'add', notebook_id, src],
-                capture_output=True, text=True, timeout=60
-            )
+            # Same two-spelling tolerance as notebook creation: the devel
+            # build spells it `source add`, older builds `add`.
+            add_res = None
+            for argv in ([nlm, 'source', 'add', notebook_id, src], [nlm, 'add', notebook_id, src]):
+                add_res = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+                if add_res.returncode == 0:
+                    break
             if add_res.returncode == 0:
                 sources_added += 1
             else:
