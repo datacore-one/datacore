@@ -106,7 +106,22 @@ def _age_days(props: dict) -> float | None:
 
 
 def discover(space: str) -> list[Path]:
-    return sorted((REPO / space).glob("2-projects/*/sprints/*/sprint.yaml"))
+    """Every sprint.yaml under the space, ONE per sprint_id.
+
+    Worktrees duplicate the whole tree, so `2-projects/*/sprints/*` finds the
+    same sprint once per checkout — `enterprise` and `enterprise-wt-ci-gate`
+    both matched, and every sprint appeared twice. Projecting a sprint twice is
+    harmless only by luck; deduplicate on the directory name, which is the
+    sprint id, and prefer the non-worktree path.
+    """
+    found = sorted((REPO / space).glob("2-projects/*/sprints/*/sprint.yaml"))
+    best: dict[str, Path] = {}
+    for p in found:
+        key = p.parent.name
+        prev = best.get(key)
+        if prev is None or ("-wt-" in str(prev) and "-wt-" not in str(p)):
+            best[key] = p
+    return sorted(best.values())
 
 
 def pick(space: str, want: str | None, active: bool) -> list[Path]:
@@ -117,11 +132,35 @@ def pick(space: str, want: str | None, active: bool) -> list[Path]:
             sys.exit(f"no sprint matching {want!r} under {space}/2-projects/*/sprints/")
         return hit
     if active:
-        out = []
+        # `status: active` alone is not enough. Ten sprints from W23 to W31
+        # still said active on 2026-09-04 — months of sprints nobody closed —
+        # and --active --apply would have projected every one of them into
+        # tonight's queue. A sprint whose end date has passed is over whatever
+        # its status field says; the field is a claim, the date is a fact.
+        from datetime import date
+
+        today = date.today()
+        out, expired = [], []
         for p in found:
             d = yaml.safe_load(p.read_text()) or {}
-            if d.get("status") == "active":
-                out.append(p)
+            if d.get("status") != "active":
+                continue
+            end = (d.get("dates") or {}).get("end")
+            if isinstance(end, str):
+                try:
+                    end = date.fromisoformat(end)
+                except ValueError:
+                    end = None
+            if end and end < today:
+                expired.append((p.parent.name, end))
+                continue
+            out.append(p)
+        if expired:
+            print(f"IGNORING {len(expired)} sprint(s) still marked active whose "
+                  f"end date has passed — close them:")
+            for name, end in sorted(expired, key=lambda x: str(x[1])):
+                print(f"   {name} ended {end} ({(today - end).days} days ago)")
+            print()
         return out
     return found
 
