@@ -292,6 +292,9 @@ def render_item(item, *, level: int | None = None) -> list[str]:
     lines.extend("  " + line for line in _drawer(props))
 
     body = (org.get("body") or "").rstrip()
+    # Body text is copied verbatim, so a typed weekday inside it (a DEADLINE
+    # line captured as body, 4-forge 2026-09-04) came back on every projection.
+    body = _STAMP_DAY.sub(_fix_day, body)
     if body:
         lines.extend(body.split("\n"))
     return lines

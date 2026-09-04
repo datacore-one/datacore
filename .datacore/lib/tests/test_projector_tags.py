@@ -37,3 +37,11 @@ def test_typed_weekday_in_a_stamp_is_recomputed():
     assert _org_stamp("[2026-07-30 Wed 09:00]") == "[2026-07-30 Thu 09:00]"
     assert _org_stamp("<2026-07-30 Thu +1w>") == "<2026-07-30 Thu +1w>", "a correct stamp is untouched"
     assert _org_stamp("2026-07-30").startswith("<2026-07-30 Thu"), "bare dates still get bracketed with the right day"
+
+
+def test_typed_weekday_inside_body_text_is_recomputed():
+    """4-forge: a DEADLINE line captured as body text carried <2026-07-30 Wed>."""
+    item = _item("Generate SEO blog post")
+    item.payload["org"] = {"body": "DEADLINE: <2026-07-30 Wed>\nGenerate the post."}
+    text = "\n".join(render_item(item))
+    assert "<2026-07-30 Thu>" in text and "Wed" not in text
