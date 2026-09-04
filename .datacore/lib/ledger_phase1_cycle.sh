@@ -6,7 +6,10 @@
 # Order is the whole point: projecting before ingesting loses a hand edit.
 set -u
 export DATACORE_ROOT="${DATACORE_ROOT:-$HOME/Data}"
-LIB="$DATACORE_ROOT/.datacore/lib"
+# The scripts come from THIS checkout (a runner worktree on main is fine); only
+# the data root is DATACORE_ROOT. A host whose ~/Data sits on someone's feature
+# branch still runs current tooling against its own data.
+LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE="$HOME/.datacore/state"; mkdir -p "$STATE"
 PY=""
 for c in "${DATACORE_PYTHON:-}" python3.13 python3.12 python3.11 python3.10 /opt/homebrew/bin/python3 /usr/local/bin/python3 python3; do
