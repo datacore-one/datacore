@@ -48,10 +48,14 @@ def _with_org_header(space: Path, target: Path, text: str) -> str:
                 header.append(line)
             elif line.strip() and not line.startswith("#"):
                 break
-    if header:
-        (space / HEADER_COPY).write_text("\n".join(header) + "\n")
-    elif (space / HEADER_COPY).exists():
-        header = (space / HEADER_COPY).read_text().splitlines()
+    copy = space / HEADER_COPY
+    if header and not copy.exists():
+        # WRITE ONCE. The copy is tracked; rewriting it on every cycle made
+        # every host a writer of the same file and the transport conflicted
+        # on it within the first hour of Phase 1 (2026-09-05).
+        copy.write_text("\n".join(header) + "\n")
+    elif not header and copy.exists():
+        header = copy.read_text().splitlines()
     body = [l for l in text.splitlines() if not l.startswith("# ")]
     note = "# Generated from the ledger (Phase 1, DIP-0046). Edits here are ingested hourly; the ledger is the record."
     return "\n".join(header + [note] + body) + "\n"
