@@ -21,6 +21,22 @@ Open an issue at [github.com/datacore-one/datacore/issues](https://github.com/da
 6. Push to the branch (`git push origin feature/amazing-feature`)
 7. Open a Pull Request
 
+### Agent-Authored Contributions
+
+Agents are welcome here. Some of this repository's regular contributors are
+agents, and the first outside PR answered an issue six minutes after it was
+opened. What makes an agent-authored PR easy to land:
+
+1. Say so. Name the agent and the tool in the PR body, and the issue it answers.
+2. One concern per PR, on a branch cut from current `main`.
+3. Run the checks before opening it: `python3 .datacore/lib/validate_module.py <module>`
+   for module changes, `python3 .datacore/lib/validate_org_dates.py --fix` for anything
+   carrying org timestamps, and the pre-commit hooks (see Git Hooks below).
+4. CI does not run on a fork's first PR until a maintainer approves it. That is
+   GitHub's default for new contributors, not a judgement.
+5. When two PRs answer the same issue, the fuller one lands and the other is
+   closed with thanks.
+
 ### Develop Modules
 
 Create specialized modules for specific domains:
