@@ -194,6 +194,31 @@ if git diff --cached --name-only | grep -q '^roadmap\.yaml$'; then
   fi
 fi
 
+# A staged org file must not queue work an agent cannot execute.
+#
+# `:AI:` is nightshift's queue, not a label — find_ai_tasks selects exactly the
+# headings carrying it in TODO/NEXT. On 2026-09-04 that queue held 92 tasks of
+# which 4 named a surface and a definition of done, because the tag had been
+# added by hand, by agents and by cadences for months with nothing checking it.
+# Normally sprint_sync writes the tag from sprint.yaml and this never fires; it
+# exists for the hand-added exception, which is the path that caused the drift.
+#
+# Same repo-relative rule as the roadmap check above: staged paths are
+# `org/next_actions.org`, never `5-plur/org/next_actions.org`.
+_staged_org=$(git diff --cached --name-only | grep '^org/.*\.org$' || true)
+if [ -n "$_staged_org" ]; then
+  _gate=""
+  for _c in "$HOME/Data/.datacore/lib/ai_task_gate.py" \
+            "$(git rev-parse --show-toplevel)/../.datacore/lib/ai_task_gate.py"; do
+    [ -f "$_c" ] && { _gate="$_c"; break; }
+  done
+  if [ -n "$_gate" ]; then
+    if ! python3 "$_gate" $_staged_org; then
+      fail=1
+    fi
+  fi
+fi
+
 [ "$fail" = "1" ] && { printf "\nTo bypass (emergency): git commit --no-verify\n"; exit 1; }
 
 exit 0
