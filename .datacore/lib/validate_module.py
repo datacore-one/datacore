@@ -217,6 +217,15 @@ class ModuleValidator:
 
         print()
 
+
+    def _strip_code_blocks(self, text: str) -> str:
+        """Strip fenced and inline code blocks before placeholder scanning."""
+        # Remove fenced blocks (``` ... ```)
+        text = re.sub(r'```[\s\S]*?```', '', text)
+        # Remove inline code (`...`) but not bare backticks
+        text = re.sub(r'`[^`\n]+`', '', text)
+        return text
+
     def check_placeholders(self):
         """Detect placeholder text in module files."""
         print("Placeholder Detection:")
@@ -244,7 +253,8 @@ class ModuleValidator:
                 continue
 
             try:
-                content = file.read_text()
+                raw = file.read_text()
+                content = self._strip_code_blocks(raw)
                 for match in pattern.finditer(content):
                     line_num = content[:match.start()].count('\n') + 1
                     rel_path = file.relative_to(self.module_path)
