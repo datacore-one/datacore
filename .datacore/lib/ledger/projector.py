@@ -175,6 +175,31 @@ def _drawer(props: dict) -> list[str]:
     return out
 
 
+
+_TRAILING_TAG_BLOCK = re.compile(r"\s+:([^\s:]+(?::[^\s:]+)*):\s*$")
+_BAD_TAG_CHAR = re.compile(r"[^A-Za-z0-9_@#%]")
+
+
+def _clean_title_and_tags(title: str, tags) -> tuple[str, list[str]]:
+    """Return (title without an embedded tag block, valid sorted org tags).
+
+    Org allows only [A-Za-z0-9_@#%] in a tag; one hyphen voids every tag on
+    the heading. A heading ingested with `:docs:wrap-up-extracted:` had the
+    whole block left INSIDE its title (the parser saw no valid tags), and this
+    renderer wrote it back verbatim -- so the checkpoint failed the org-tag
+    hook and winston's 5-plur autosave was refused every 15 minutes from
+    2026-09-03. The projection must always be valid org, whatever the ledger
+    holds: embedded blocks are split out, invalid characters become `_`.
+    """
+    title = title or ""
+    found: list[str] = []
+    m = _TRAILING_TAG_BLOCK.search(title)
+    if m:
+        found = m.group(1).split(":")
+        title = title[: m.start()].rstrip()
+    clean = {_BAD_TAG_CHAR.sub("_", t) for t in list(tags or []) + found if t}
+    return title, sorted(clean)
+
 def render_item(item, *, level: int | None = None) -> list[str]:
     """One ledger item as org lines. Pure; no I/O, no clock.
 
@@ -191,9 +216,9 @@ def render_item(item, *, level: int | None = None) -> list[str]:
     if payload.get("section"):
         # A plain heading: no TODO keyword, no drawer beyond its id. Rendering
         # it as a task would invent work that never existed.
-        tags = sorted(payload.get("tags") or [])
+        title, tags = _clean_title_and_tags(item.title, payload.get("tags"))
         tag_str = f"  :{':'.join(tags)}:" if tags else ""
-        out = [f"{stars} {item.title}{tag_str}"]
+        out = [f"{stars} {title}{tag_str}"]
         out.extend("  " + ln for ln in _drawer({"ID": item.id}))
         return out
     # A CLOSED ITEM RENDERS AS DONE, WHATEVER IT WAS BEFORE.
@@ -213,9 +238,9 @@ def render_item(item, *, level: int | None = None) -> list[str]:
     prio = f"[#{priority}] " if priority else ""
     # sorted() again, not redundantly: a payload can reach here from any
     # producer, and determinism must not depend on every producer remembering.
-    tags = sorted(payload.get("tags") or [])
+    title, tags = _clean_title_and_tags(item.title, payload.get("tags"))
     tag_str = f"  :{':'.join(tags)}:" if tags else ""
-    lines = [f"{stars} {state} {prio}{item.title}{tag_str}"]
+    lines = [f"{stars} {state} {prio}{title}{tag_str}"]
 
     if item.status in CLOSED_STATUSES and getattr(item, "closed_at", None):
         # An org CLOSED: stamp, so a weekly report can find finished work by

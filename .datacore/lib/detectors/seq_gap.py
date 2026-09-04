@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import os
 import json
+import time
 import subprocess
 import sys
 from pathlib import Path
@@ -86,7 +87,30 @@ def head_seq(text: str) -> int | None:
     return None
 
 
-def scan_space(space: Path, *, fetch: bool = False) -> list[dict]:
+
+def unpublished_ages_min(text: str, remote_seq: int | None, now_ms: float) -> list[float]:
+    """Ages in minutes of the local events the remote has not got yet."""
+    ages = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        seq = e.get("seq")
+        if not isinstance(seq, int) or (remote_seq is not None and seq <= remote_seq):
+            continue
+        try:
+            ms = float(str(e.get("hlc", "0")).split(".")[0])
+        except ValueError:
+            continue
+        ages.append(max(0.0, (now_ms - ms) / 60000.0))
+    return ages
+
+def scan_space(space: Path, *, fetch: bool = False, grace_min: float = 90.0,
+               now_ms: float | None = None) -> list[dict]:
     """One row per actor log in this space."""
     events_dir = space / ".datacore" / "events"
     if not events_dir.is_dir():
@@ -140,8 +164,20 @@ def scan_space(space: Path, *, fetch: bool = False) -> list[dict]:
             gap = local + 1                      # nothing published at all
         else:
             gap = max(0, local - remote)
+        # PUBLISHING IS HOURLY, DETECTION IS HOURLY, AND THEY ARE FIVE MINUTES
+        # APART. An event written between the :05 publish and the :10 check is
+        # not a gap, it is a queue -- but it read as one, and mac-seq-gap
+        # flapped red for an hour on every such event (2026-09-04, four times).
+        # An event is unpublished only once it has outlived the publish
+        # interval with room to spare; younger ones are reported as pending.
+        pending = 0
+        if gap and remote is not None:
+            ages = unpublished_ages_min(log.read_text(errors="replace"), remote,
+                                        now_ms if now_ms is not None else time.time() * 1000.0)
+            if ages and max(ages) < grace_min:
+                pending, gap = gap, 0
         rows.append({"space": space.name, "actor": actor, "local_seq": local,
-                     "remote_seq": remote, "gap": gap, "error": None})
+                     "remote_seq": remote, "gap": gap, "pending": pending, "error": None})
     return rows
 
 
@@ -165,6 +201,8 @@ def main() -> int:
     ap.add_argument("--space", help="limit to one space by directory name")
     ap.add_argument("--fetch", action="store_true", help="fetch before comparing")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--grace-minutes", type=float, default=90.0,
+                    help="an unpublished event younger than this is pending, not a gap (publish is hourly)")
     args = ap.parse_args()
 
     spaces = [d for d in sorted(args.root.glob("[0-9]-*"))
@@ -180,7 +218,7 @@ def main() -> int:
 
     rows: list[dict] = []
     for sp in spaces:
-        rows.extend(scan_space(sp, fetch=args.fetch))
+        rows.extend(scan_space(sp, fetch=args.fetch, grace_min=args.grace_minutes))
 
     errors = [r for r in rows if r["error"]]
     gaps = [r for r in rows if r["gap"]]
@@ -198,8 +236,10 @@ def main() -> int:
                 print(f"  ok    {r['space']}/{r['actor']}: seq {r['local_seq']} published")
         # Report positively: a count nobody can mistake for "the detector ran and
         # found nothing" versus "the detector did not run" (DIP-0046 §8).
+        pend = sum(r.get("pending") or 0 for r in rows)
+        pend_txt = f", {pend} pending (younger than {args.grace_minutes:.0f} min)" if pend else ""
         print(f"\nseq-gap: {len(rows)} log(s), {len(gaps)} with unpublished events, "
-              f"{len(errors)} error(s)")
+              f"{len(errors)} error(s){pend_txt}")
 
     if errors:
         return 2

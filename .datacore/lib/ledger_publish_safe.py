@@ -88,6 +88,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
     rc = 0
+    # One line per run, always -- a silent run and a run that never happened
+    # look identical in the log, and on 2026-09-04 that hid four hourly runs.
+    import datetime
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+    published = 0
     for space in sorted(p for p in ROOT.glob("[0-9]-*") if (p / ".git").exists()):
         machine, human = split(dirty_tracked(space))
         if not machine:
@@ -97,8 +102,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  would {space.name}: publish {len(machine)} ledger file(s){note}")
             continue
         status, detail = publish(space, machine)
+        published += 1
         print(f"  {status:5} {space.name}: {len(machine)} ledger file(s){note}" + (f" -- {detail}" if detail else ""))
         rc = rc or (0 if status == "ok" else 1)
+    print(f"{stamp} run complete: {published} space(s) published, rc={rc}")
     return rc
 
 
