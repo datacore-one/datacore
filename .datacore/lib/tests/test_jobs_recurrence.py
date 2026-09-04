@@ -142,3 +142,24 @@ def test_prune_with_no_known_jobs_is_a_no_op(rec):
     rec.record("j", failed=True)
     assert rec.prune(set()) == []
     assert "j" in rec._load(), "an empty manifest must not wipe every counter"
+
+
+
+def test_recurring_failures_alert_at_escalation_then_once_a_day(rec):
+    """Below the threshold every failure alerts; at it, once; after it, once a day."""
+    decisions = []
+    for n in range(1, 7):
+        r = rec.record("j", failed=True, today="2026-09-03")
+        a = rec.should_alert(r, today="2026-09-03")
+        decisions.append(a)
+        if a:
+            rec.note_alerted("j", today="2026-09-03")
+    assert decisions == [True, True, True, False, False, False]
+    r = rec.record("j", failed=True, today="2026-09-04")
+    assert rec.should_alert(r, today="2026-09-04") is True, "a new day gets one reminder"
+    rec.note_alerted("j", today="2026-09-04")
+    r = rec.record("j", failed=True, today="2026-09-04")
+    assert rec.should_alert(r, today="2026-09-04") is False
+    rec.record("j", failed=False, today="2026-09-04")
+    r = rec.record("j", failed=True, today="2026-09-04")
+    assert rec.should_alert(r, today="2026-09-04") is True, "a pass resets: the next failure is a first failure again"

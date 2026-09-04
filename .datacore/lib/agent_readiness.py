@@ -7,7 +7,8 @@ finish it without a human in the loop:
 
   1. SELECT   — can it find work that is genuinely available?
   2. LOCATE   — does the work say where it happens?
-  3. FINISH   — does it say what finishing means?
+  3. FINISH   — does the TASK say what finishing means (not just its epic)?
+  3b. BRIEF   — is there enough written down to act on?
   4. VERIFY   — can the agent check that itself?
   5. AVOID    — is work it cannot do clearly marked?
 
@@ -82,14 +83,56 @@ def main():
             f"...and {len(unassigned) - 6} more AI tasks with SURFACE unassigned")
 
     # 3 FINISH ---------------------------------------------------------------
+    #
+    # This check asked the WRONG QUESTION until 2026-09-03: it verified the
+    # EPIC had a done_when and reported zero findings. But an epic condition is
+    # a milestone test, not a task test. Fourteen tasks shared R-070's "fewer
+    # than five PRs are open in core" — an agent that finishes one of them and
+    # checks that condition finds it FALSE, because the other thirteen are not
+    # done. It cannot tell its own work succeeded.
+    #
+    # A task needs its own criterion, or it needs to be the only task under its
+    # epic. Anything else and completion is unobservable to the agent doing it.
+    by_epic = Counter((t.get("properties") or {}).get("ROADMAP") for t in ts
+                      if (t.get("properties") or {}).get("ROADMAP"))
     for t in ai:
         p = t.get("properties") or {}
         rid = p.get("ROADMAP")
+        if p.get("DONE_WHEN"):
+            continue                       # has its own — fine
         epic = items.get(rid) if rid else None
-        if epic and not epic.get("done_when") and not p.get("DONE_WHEN"):
+        if not epic:
+            continue                       # already caught by SELECT
+        if by_epic[rid] > 1:
             findings["finish"].append(
-                f"AI task whose epic {rid} has no definition of done: "
+                f"no task-level DONE_WHEN, and epic {rid}'s condition is shared "
+                f"by {by_epic[rid]} tasks so it cannot tell them apart: "
+                f"{t['heading'][:44]}")
+        elif not epic.get("done_when"):
+            findings["finish"].append(
+                f"neither the task nor epic {rid} says what finishing means: "
                 f"{t['heading'][:50]}")
+
+    # 3b BRIEF ---------------------------------------------------------------
+    # A heading is a label, not an instruction. "Provenance ladder
+    # morning-after: review night report, activate Ed25519, fleet identities"
+    # names three things an agent cannot locate.
+    # A heading that names a RESOLVABLE reference is a brief: the agent can
+    # fetch the issue, open the file, or read the PR. "Rebase plur#919" needs
+    # no prose. What fails is a heading naming something the agent cannot
+    # locate — a report, a tier, a file that does not exist yet.
+    RESOLVABLE = re.compile(
+        r"#\d{2,5}|\b[\w.-]+\.(ts|py|md|json|yaml|yml)\b|https?://|"
+        r"\b(plur|enterprise|exchange)-?ai?/[\w-]+", re.I)
+    for t in ai:
+        p = t.get("properties") or {}
+        has_prose = bool((t.get("body") or "").strip()) or p.get("CONTEXT") \
+            or p.get("NOTE") or p.get("BOOTSTRAP")
+        if has_prose or RESOLVABLE.search(t["heading"]):
+            continue
+        findings["brief"].append(
+            f"names nothing an agent can open — no issue, file or URL, and no "
+            f"context: {t['heading'][:56]}")
 
     # 4 VERIFY ---------------------------------------------------------------
     for i in r["items"]:
@@ -127,6 +170,7 @@ def main():
             + (" ..." if len(unproven) > 8 else ""))
 
     LABEL = {"select": "1 SELECT — can an agent find available work",
+             "brief":  "3b BRIEF — is there enough to act on",
              "locate": "2 LOCATE — does the work say where it happens",
              "finish": "3 FINISH — does it say what finishing means",
              "verify": "4 VERIFY — can the agent check that itself",
@@ -135,7 +179,7 @@ def main():
     total = sum(len(v) for v in findings.values())
     print(f"{len(r['items'])} epics · {len(ts)} open tasks · {len(ai)} tagged :AI:")
     print(f"{total} readiness finding(s)\n")
-    for k in ("select", "locate", "finish", "verify", "avoid"):
+    for k in ("select", "locate", "finish", "brief", "verify", "avoid"):
         rows = findings.get(k) or []
         print(f"── {LABEL[k]} — {len(rows)}")
         for line in rows[:8]:

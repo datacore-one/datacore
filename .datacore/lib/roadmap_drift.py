@@ -22,6 +22,8 @@ Checks, and what each one catches:
                  and nothing distinguishes that from finished
   stale-note     a note asserting a state ("NOT SHIPPED", "as of") older than
                  45 days, which is long enough for the assertion to have rotted
+  stray-roadmap  a file that reads as a roadmap and declares no canonical
+                 pointer — a sixth document is how the first five happened
 """
 import argparse, json, re, subprocess, sys
 from collections import defaultdict
@@ -131,9 +133,38 @@ def main():
                     f"({(date.today() - when).days}d old) — re-check or restate")
                 break
 
+    # A sixth roadmap document is how the first five happened. Any file that
+    # looks like a roadmap and does not declare itself a view is a place an
+    # idea can land unseen by every check in this directory.
+    import glob as _glob
+    for path in _glob.glob(str(REPO / "5-plur/**/*oadmap*.md"), recursive=True) + \
+            _glob.glob(str(REPO / "5-plur/**/ROADMAP.md"), recursive=True):
+        pp = Path(path)
+        rel = pp.relative_to(REPO)
+        if any(x in str(rel) for x in (".git", "node_modules", "worktrees",
+                                       "-wt", "4-archive", "3-knowledge",
+                                       "presentations")):
+            continue
+        # A DATED file is a record of a moment, not a source. `roadmap-review-
+        # 2026-07-13.md` are minutes: append-only, never edited, and nobody
+        # adds an idea to a meeting that already happened. Flagging them buries
+        # the one finding that matters under a dozen that never will.
+        if re.search(r"20\d\d-\d\d-\d\d", pp.name):
+            continue
+        try:
+            head = pp.read_text(errors="ignore")[:1200]
+        except OSError:
+            continue
+        if "CANONICAL POINTER" in head or "source of truth" in head:
+            continue
+        findings["stray-roadmap"].append(
+            f"{rel} reads as a roadmap and declares no canonical pointer — "
+            f"an idea landing there is invisible to every check")
+
     total = sum(len(v) for v in findings.values())
     print(f"{len(items)} epics checked · {total} drift finding(s)\n")
-    for kind in ("gh-rejected", "gh-closed", "gh-open", "no-tasks", "stale-note"):
+    for kind in ("gh-rejected", "gh-closed", "gh-open", "no-tasks",
+                 "stale-note", "stray-roadmap"):
         rows = findings.get(kind) or []
         if not rows:
             continue

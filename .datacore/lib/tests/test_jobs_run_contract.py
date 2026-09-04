@@ -167,3 +167,43 @@ def test_unknown_job_is_reported_as_undeclared(sandbox):
     declare, so it cannot exist unverified."""
     _write(sandbox, [])
     assert _run(sandbox, "nope").returncode == 4
+
+
+
+def test_only_declared_variables_come_from_the_canonical_env_file(sandbox, tmp_path):
+    """The envelope used to copy the whole canonical env file into every job.
+    A job gets what it declares in `env:` / `required_env:` and nothing else."""
+    home = tmp_path / "home"; (home / ".datacore").mkdir(parents=True)
+    (home / ".datacore" / "datacore.env").write_text("WANTED=yes\nSECRET_OTHER=no\n")
+    art = sandbox / "out.txt"
+    _write(sandbox, [_job("envjob", f"printf '%s|%s' \"${{WANTED:-[unset]}}\" \"${{SECRET_OTHER:-[unset]}}\" > {art}",
+                          art, env=["WANTED"])])
+    r = subprocess.run([sys.executable, str(RUN), "envjob"], capture_output=True, text=True,
+                       env=dict(os.environ, DATACORE_ROOT=str(sandbox), HOME=str(home)))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert art.read_text() == "yes|[unset]", art.read_text()
+
+
+def test_manifest_location_is_independent_of_the_jobs_data_root(sandbox, tmp_path):
+    """The runner deployment keeps its manifest under ~/.datacore/v2-runner while
+    jobs' data root stays ~/Data. Conflating the two sent the pilot job to a
+    root with no spaces (exit 2 in 0.2s)."""
+    elsewhere = tmp_path / "runner" / ".datacore" / "lib" / "jobs"; elsewhere.mkdir(parents=True)
+    art = sandbox / "root.txt"
+    (elsewhere / "manifest.yaml").write_text(yaml.safe_dump({"version": 1, "jobs": [
+        _job("rootjob", f"printf '%s' \"$DATACORE_ROOT\" > {art}", art)]}))
+    r = subprocess.run([sys.executable, str(RUN), "--manifest", str(elsewhere / "manifest.yaml"), "rootjob"],
+                       capture_output=True, text=True, env=dict(os.environ, DATACORE_ROOT=str(sandbox)))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert art.read_text() == str(sandbox), "the job must see the DATA root, not the manifest's directory"
+
+
+
+def test_declared_exit_codes_mean_ran_not_failed(sandbox):
+    """A detector exits 1 for findings. With exit_ok the envelope treats that
+    as a run (artifact check decides); without it, 1 is a command failure."""
+    art = sandbox / "det.txt"
+    _write(sandbox, [_job("det", f"echo findings > {art}; exit 1", art, exit_ok=[0, 1]),
+                     _job("strict", f"echo findings > {art}; exit 1", art)])
+    assert _run(sandbox, "det").returncode == 0
+    assert _run(sandbox, "strict").returncode == 2

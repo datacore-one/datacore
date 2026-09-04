@@ -166,6 +166,34 @@ if [ -n "$_dv" ]; then
   fi
 fi
 
+# A staged roadmap.yaml must still validate.
+#
+# The roadmap is only useful because it is checkable, and a check that does not
+# run is a check that does not exist. This is the one chokepoint every edit
+# passes through — a heredoc, an agent, or a hand edit all end here. It runs
+# ONLY when roadmap.yaml is staged, so it costs nothing on an ordinary commit.
+#
+# Deliberately NOT running drift or readiness here: both reach the network or
+# the whole task pool, which is too slow for a commit and would teach people to
+# use --no-verify. Those belong on a cadence.
+# The hook runs INSIDE the space repo, so the staged path is `roadmap.yaml`,
+# not `5-plur/roadmap.yaml`. Matching the repo-relative form is the whole
+# reason the first version of this check silently never fired.
+if git diff --cached --name-only | grep -q '^roadmap\.yaml$'; then
+  _rv=""
+  for _c in "$HOME/Data/.datacore/lib/roadmap_validate.py" \
+            "$(git rev-parse --show-toplevel)/../.datacore/lib/roadmap_validate.py"; do
+    [ -f "$_c" ] && { _rv="$_c"; break; }
+  done
+  if [ -n "$_rv" ]; then
+    if ! python3 "$_rv" >/dev/null 2>&1; then
+      printf "\n\033[1;31mROADMAP INVALID\033[0m — see the errors:\n"
+      python3 "$_rv" 2>&1 | tail -20
+      fail=1
+    fi
+  fi
+fi
+
 [ "$fail" = "1" ] && { printf "\nTo bypass (emergency): git commit --no-verify\n"; exit 1; }
 
 exit 0

@@ -201,6 +201,11 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str]) -> None:
     else:
         _record = _rec.record(job_name, failed=True)
         message = _rec.describe(job_name, _record, len(failures))
+        if not _rec.should_alert(_record):
+            print(f"alert suppressed: {job_name} is recurring "
+                  f"({_record.get('consecutive')}x) and was already escalated today", file=sys.stderr)
+            return
+        _rec.note_alerted(job_name)
     if mode == "telegram":
         if not _send_telegram(message):
             print(f"alert: telegram unavailable, logged only ({job_name})", file=sys.stderr)

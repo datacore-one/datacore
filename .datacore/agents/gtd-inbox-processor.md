@@ -94,6 +94,32 @@ For every item, answer in order:
 
 - **Aspiration** (vague, no clear outcome yet): `someday.org`
 - **Captured fragment** (URL, tweet, half-thought without context): `someday.org` with a "needs-clarify" marker; user re-triages quarterly
+- **Product or roadmap idea** — a capability the product might gain, a technique
+  from a paper, a competitor's move, a customer asking for something that does
+  not exist yet: route to `[space]/1-tracks/product/feature-ideas.md`, NOT to
+  an org file.
+
+  **Why this is not `someday.org`.** An idea is not a deferred task. Filed as a
+  task it produces something nobody can close — there is no action, and the
+  "done" state is a decision that has not been taken. `feature-ideas.md` is the
+  roadmap's inbox and it asks for exactly one thing: a verdict (ADOPT / TRIAL /
+  WATCH / DROP) at the next bi-weekly review.
+
+  Append in the file's own shape and leave `verdict:` blank — a verdict is the
+  review's job, not the capture's:
+
+  ```markdown
+  ### <one line: what it is>
+  - **source:** where it came from
+  - **why it might matter:** one sentence
+  - **added:** YYYY-MM-DD
+  - **verdict:**
+  ```
+
+  **Test:** does it change what the PRODUCT can do, rather than what someone
+  must do? "Ship the pinned-tier fix" is a task — the decision is taken and the
+  work is named. "Dual-memory architectures might help retrieval" is an idea —
+  it needs a verdict before it needs an owner.
 
 **Q3. Does it take less than 2 minutes?**
 - If YES and you can do it RIGHT NOW (auto-process via subagent, send the reply, archive the email, file the receipt): **do it now, do not create a task**. The cost of a task = the cost of doing it.

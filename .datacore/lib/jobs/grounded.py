@@ -380,8 +380,8 @@ def check(live: bool = False, machine: str | None = None) -> list[dict]:
             continue
         if script is not None and not script.exists() and mach != LOCAL:
             # Send the path as the manifest WROTE it, not as resolved here.
-            # `~/Data/.datacore/lib/cos_backup.sh` resolves to /Users/gregor on
-            # this Mac and must expand to /home/gregor on the box; testing the
+            # `~/Data/.datacore/lib/cos_backup.sh` resolves to the Mac's home directory on
+            # this Mac and must expand to the box's home directory; testing the
             # locally-resolved path over ssh reported five scripts absent that
             # are present and running there every night.
             remote_path = _raw_path(cmd) or str(script)

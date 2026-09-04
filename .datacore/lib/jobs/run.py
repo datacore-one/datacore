@@ -56,6 +56,9 @@ import yaml
 
 ROOT = pathlib.Path(os.environ.get("DATACORE_ROOT", pathlib.Path.home() / "Data"))
 MANIFEST = ROOT / ".datacore" / "lib" / "jobs" / "manifest.yaml"
+# Set from --manifest in main(): the runner deployment keeps its manifest under
+# ~/.datacore/v2-runner while jobs' data root (ROOT) stays ~/Data.
+MANIFEST_OVERRIDE: pathlib.Path | None = None
 HOME = pathlib.Path.home()
 
 # The one environment. Deliberately close to what launchd and cron actually
@@ -86,15 +89,21 @@ def normalized_env(job: dict) -> dict[str, str]:
 
     # Declared requirements come from the config plane, never from the
     # invoking shell -- that is what makes by-hand and on-schedule identical.
+    #
+    # ONLY the variables the job declares (`env:` plus `required_env:`) are
+    # taken from the canonical file. The first version copied the whole file
+    # into every job, so any job's stray env dump would have exposed every
+    # credential on the host, not its own. Independent review 2026-09-03.
+    allowed = set(job.get("env") or []) | set(job.get("required_env") or [])
     canonical = HOME / ".datacore" / "datacore.env"
-    if canonical.exists():
+    if allowed and canonical.exists():
         for line in canonical.read_text(errors="replace").splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
             k, v = line.split("=", 1)
             k = k.strip().removeprefix("export ").strip()
-            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k):
+            if k in allowed and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k):
                 env.setdefault(k, v.strip().strip("'\""))
     return env
 
@@ -178,9 +187,18 @@ def run(job: dict, dry: bool = False) -> int:
     if proc.stderr:
         sys.stderr.write(proc.stderr)
 
-    if proc.returncode != 0:
-        print(f"COMMAND FAILED — exit {proc.returncode} after {took:.1f}s")
+    # Detectors exit 1 for "ran, found problems" and 2 for "could not run";
+    # only a crash is a command failure here. A job declares the exit codes
+    # that mean it RAN (`exit_ok`, default [0]); anything else is exit 2.
+    # Found by the mac-seq-gap pilot: its honest "1 unpublished" read as a
+    # command failure.
+    ok_codes = set(job.get("exit_ok") or [0])
+    if proc.returncode not in ok_codes:
+        print(f"COMMAND FAILED — exit {proc.returncode} after {took:.1f}s "
+              f"(exit_ok={sorted(ok_codes)})")
         return 2
+    if proc.returncode != 0:
+        print(f"ran with findings — exit {proc.returncode} after {took:.1f}s; the artifact check decides")
 
     failures = []
     for a in artifacts:
@@ -201,11 +219,17 @@ def run(job: dict, dry: bool = False) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("job", nargs="?")
+    ap.add_argument("--manifest", help="manifest to read (default: <DATACORE_ROOT>/.datacore/lib/jobs/manifest.yaml). "
+                    "The runner deployment keeps its manifest under ~/.datacore/v2-runner while jobs' data "
+                    "root stays ~/Data; conflating the two sent the pilot's job to a root with no spaces.")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--list", action="store_true")
     a = ap.parse_args()
+    global MANIFEST_OVERRIDE
+    MANIFEST_OVERRIDE = pathlib.Path(a.manifest).expanduser() if getattr(a, "manifest", None) else None
 
-    doc = yaml.safe_load(MANIFEST.read_text())
+    manifest_path = MANIFEST_OVERRIDE or MANIFEST
+    doc = yaml.safe_load(manifest_path.read_text())
     jobs = {j["name"]: j for j in doc["jobs"]}
 
     if a.list or not a.job:
