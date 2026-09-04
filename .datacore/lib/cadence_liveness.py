@@ -66,9 +66,16 @@ def collect(root: Path, grace: int, today: date | None = None) -> list:
         if not vy.is_file():
             continue
         try:
-            roles = (yaml.safe_load(vy.read_text()) or {}).get("roles") or {}
+            data = yaml.safe_load(vy.read_text()) or {}
         except Exception:                       # noqa: BLE001
             continue
+        # An archived venture is OFF (2026-09-04: forge, megaphone, fds,
+        # datafund parked until PLUR runs well). Its cadence catalogue is not
+        # a commitment; counting it made 34 "overdue" out of ventures nobody
+        # had switched on. The runner and the heartbeat skip it; so does this.
+        if str(data.get("stage", "")).lower() == "archived":
+            continue
+        roles = data.get("roles") or {}
         if not roles:
             continue
         # cadence_log_path_for FIRST. load_cadence_log_safe quarantines by
