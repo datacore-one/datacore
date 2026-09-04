@@ -64,6 +64,12 @@ git remote -v
 # upstream  https://github.com/datacore-one/datacore.git (fetch)
 ```
 
+### Step 1b: Install Python Dependencies
+
+```bash
+pip install -r .datacore/lib/requirements.txt
+```
+
 ### Step 2: Activate Templates
 
 Copy template files to create your local configuration:
