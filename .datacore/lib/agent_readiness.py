@@ -26,13 +26,41 @@ import yaml
 REPO = Path(__file__).resolve().parents[2]
 ROADMAP = REPO / "5-plur" / "roadmap.yaml"
 ADAPTER = REPO / ".datacore/lib/org_workspace_adapter.py"
-ORG = ["5-plur/org/next_actions.org", "5-plur/org/someday.org",
-       "5-plur/org/inbox.org"]
+# EVERY space, not just 5-plur. nightshift's find_ai_tasks walks the whole data
+# directory — it does not know what a roadmap is — so a queue measured in one
+# space is not the queue that runs. Scoped to 5-plur this check reported ONE
+# finding on 2026-09-04 while the executor was about to select 265 tasks across
+# six spaces, 262 of them with no surface and no definition of done. Third time
+# the same mistake: measure the set the executor actually selects.
+def _org_files() -> list[str]:
+    out = []
+    for space in sorted(REPO.glob("[0-9]-*")):
+        d = space / "org"
+        if d.is_dir():
+            out += [str(p.relative_to(REPO)) for p in sorted(d.glob("*.org"))]
+    return out
+
+
+ORG = _org_files()
 VERIFIABLE = {"test", "metric", "url", "artifact", "merged-pr"}
 JUDGEMENT = {"decision", "signed", "screenshot"}
 
 
 OPEN_STATES = {"NEXT", "TODO", "WAITING", "REVIEW"}
+
+# Only a space that HAS a roadmap can require its tasks to link to one. 5-plur
+# has roadmap.yaml; 0-personal, 6-meridian and the rest do not, and demanding a
+# ROADMAP property there reported 357 findings for a file that does not exist.
+# SURFACE and DONE_WHEN are required everywhere — an agent always needs to know
+# where the work lands and how it will know it finished, roadmap or no roadmap.
+HAS_ROADMAP = {p.parent.name for p in REPO.glob("[0-9]-*/roadmap.yaml")}
+
+
+def _space_of(node) -> str:
+    try:
+        return Path(str(node.file_path)).relative_to(REPO).parts[0]
+    except Exception:
+        return "?"
 
 
 def tasks():
@@ -46,13 +74,22 @@ def tasks():
     gives the real NodeView, body included. It is also faster: one parse
     instead of three subprocesses.
     """
+    import contextlib, io
+
     from org_workspace import OrgWorkspace
 
     ws = OrgWorkspace()
-    for f in ORG:
-        p = REPO / f
-        if p.exists():
-            ws.load(p)
+    # load() prints a line per duplicate ID it regenerates. Across all spaces
+    # that is dozens of lines of unrelated noise on top of this report. The
+    # regeneration is IN MEMORY ONLY — this function never calls save_all() —
+    # so swallowing the log changes nothing on disk. Verified 2026-09-04: org
+    # files are byte-identical after a run.
+    with contextlib.redirect_stdout(io.StringIO()), \
+            contextlib.redirect_stderr(io.StringIO()):
+        for f in ORG:
+            p = REPO / f
+            if p.exists():
+                ws.load(p)
     out = []
     for n in ws.all_nodes():
         if n.todo not in OPEN_STATES:
@@ -60,6 +97,7 @@ def tasks():
         out.append({
             "heading": n.heading or "",
             "state": n.todo,
+            "_space": _space_of(n),
             # SHALLOW, not inherited. org-mode inherits tags from ancestors and
             # org_workspace's `.tags` honours that — but nightshift does not:
             # nightshift_parser matches `(\s+:[\w:]+:)?$` on the heading LINE
@@ -101,8 +139,9 @@ def main():
         p = t.get("properties") or {}
         rid = p.get("ROADMAP")
         if not rid:
-            findings["select"].append(
-                f"AI task with no epic: {t['heading'][:60]}")
+            if t.get("_space") in HAS_ROADMAP:
+                findings["select"].append(
+                    f"AI task with no epic: {t['heading'][:60]}")
             continue
         epic = items.get(rid)
         if epic and epic.get("blocked_on") == "human":
@@ -136,14 +175,17 @@ def main():
     # NB: do not name this walrus `r` — a comprehension's walrus binds in the
     # ENCLOSING scope, and `r` is the parsed roadmap. Doing so replaced the
     # roadmap with a string and killed the VERIFY check thirty lines later.
-    unassigned = [(t, why) for t in ai if (why := _bad_surface(t))]
-    for t, reason in unassigned[:6]:
-        findings["locate"].append(
-            f"AI task — agent cannot tell which repo ({reason}): "
-            f"{t['heading'][:52]}")
-    if len(unassigned) > 6:
-        findings["locate"].append(
-            f"...and {len(unassigned) - 6} more AI tasks with an unusable SURFACE")
+    # ONE finding per task, and let the printer do the truncating. This block
+    # used to append six rows plus a literal "...and N more" row, so the
+    # section reported 7 while 357 tasks were affected — every other check
+    # counts tasks, so the sections were not comparable and the total meant
+    # nothing. Never fold a count into the finding list.
+    for t in ai:
+        reason = _bad_surface(t)
+        if reason:
+            findings["locate"].append(
+                f"AI task — agent cannot tell which repo ({reason}): "
+                f"{t['heading'][:52]}")
 
     # 3 FINISH ---------------------------------------------------------------
     #
@@ -165,7 +207,16 @@ def main():
             continue                       # has its own — fine
         epic = items.get(rid) if rid else None
         if not epic:
-            continue                       # already caught by SELECT
+            # "already caught by SELECT" was true only while SELECT demanded a
+            # ROADMAP on every task. Now that it only demands one where a
+            # roadmap exists, a task outside 5-plur with neither a DONE_WHEN
+            # nor an epic falls through both checks — unfinishable and
+            # unreported. It is the most common shape in the pool, so silently
+            # skipping it made the fleet look clean.
+            findings["finish"].append(
+                f"no DONE_WHEN and no epic to inherit one from — nothing "
+                f"defines success: {t['heading'][:48]}")
+            continue
         if by_epic[rid] > 1:
             findings["finish"].append(
                 f"no task-level DONE_WHEN, and epic {rid}'s condition is shared "
