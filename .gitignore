@@ -354,3 +354,7 @@ skills-lock.json
 # Nightshift sometimes writes here by mistake; ignore prevents pre-commit
 # failures while we route agents to write to the correct space.
 /reports/
+
+# Local virtualenvs and hand-copy backups must never be staged (winston 2026-09-04: `git add -A` staged 3,234 venv files)
+.venv*/
+*.scp-backup
