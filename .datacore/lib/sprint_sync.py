@@ -1,21 +1,30 @@
 #!/usr/bin/env python3
 """Project a sprint into the agent queue, and keep the queue equal to the sprint.
 
-THE PROBLEM THIS SOLVES. Two things both claimed to say what agents work on and
-neither read the other. `sprint.yaml` was written, reviewed and never consumed —
-nothing in the tree read it, and the `miles_routing.sprint_tag_filter` field had
-zero readers. Meanwhile nightshift selects work by one rule: an org heading
-tagged `:AI:` in state TODO or NEXT (see nightshift_parser.find_ai_tasks). So the
-sprint was a document and the queue was a tag, and on 2026-09-04 the tag held 92
-tasks of which 4 named a surface and a definition of done. The other 88 would
-have been picked up by an agent that could not tell which repo they belonged to
-or how it would know it had finished.
+THE PROBLEM THIS SOLVES. `sprint.yaml` was written, reviewed and never consumed:
+nothing in the tree read it, and `miles_routing.sprint_tag_filter` had zero
+readers anywhere.
 
-THE FIX IS A DIRECTION, NOT A SYNC. `sprint.yaml` is the source; the `:AI:` tag
-is a projection of it. This script is the ONLY writer of that tag:
+THERE ARE THREE LEVELS, AND ONLY THE THIRD RUNS. Getting this wrong is the
+single most expensive mistake available here, so it is spelled out:
 
-    in sprint + claimed by an agent   ->  org task exists, tagged :AI:
-    not in sprint                     ->  :AI: removed (the task itself stays)
+  1. A task in next_actions.org            — exists
+  2. ...tagged :AI:                        — is a CANDIDATE
+  3. ...AND referenced from nightshift.org — RUNS
+
+`task_queue.build_queue` keeps only entries whose file is `nightshift.org` and
+drops everything else. On 2026-09-04 the fleet had 261 tasks at level 2 and the
+runner executed 2 — the system already said so on every run ("261 :AI: task(s)
+tagged but not queued — they will NOT run") and it read as noise. 5-plur had no
+nightshift.org at all, so a perfectly specified sprint task would have sat at
+level 2 forever. This script writes all three levels.
+
+THE FIX IS A DIRECTION, NOT A SYNC. `sprint.yaml` is the source; both the tag
+and the queue entry are projections of it:
+
+    in sprint + claimed by an agent   ->  task tagged :AI:, entry in the queue
+    not in sprint                     ->  :AI: removed, queue entry removed
+                                          (the task itself always stays)
 
 Removing the tag does not delete, defer or deprioritise anything. It says "not
 this sprint", which is what a sprint means. The task keeps its ROADMAP link and
@@ -66,9 +75,26 @@ IN_FLIGHT = {"executing", "requeued", "claimed"}
 STALE_AFTER_DAYS = 2
 STAMPS = ("NIGHTSHIFT_STARTED", "NIGHTSHIFT_ROUTED", "NIGHTSHIFT_COMPLETED")
 
+# DIP-0009 v2.0 closed states. A task in one of these is finished; the sprint
+# still lists the item, so the queue must check the TASK, not the sprint.
+CLOSED_STATES = {"DONE", "DEFERRED", "CANCELLED"}
+
 
 def slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", str(s).lower()).strip("-")
+
+
+def tag_slug(s: str) -> str:
+    """An org TAG, which may not contain a hyphen.
+
+    nightshift_parser matches tags as `(\\s+:[\\w:]+:)?$` and `\\w` excludes
+    `-`. A heading ending `:AI:release-blocker:pinned:` therefore matches NO
+    tag group at all: the whole string stays inside the title, the task parses
+    with zero tags, and it is silently never selected. A sprint label of
+    "release-blocker" put exactly one item in that state — queued, well
+    specified, and invisible to the runner. Underscores parse; hyphens do not.
+    """
+    return re.sub(r"[^a-z0-9]+", "_", str(s).lower()).strip("_")
 
 
 def one_line(s: str) -> str:
@@ -81,6 +107,78 @@ def one_line(s: str) -> str:
     """
     s = re.sub(r"-\n(?=[a-z])", "", (s or ""))
     return re.sub(r"\s+", " ", s.strip())
+
+
+QUEUE_HEADER = """#+TITLE: Nightshift Queue — {space}
+#+CATEGORY: Nightshift
+#+FILETAGS: :nightshift:AI:
+#+SEQ_TODO: TODO(t) NEXT(n!) WAITING(w!) REVIEW(r!) | DONE(d!) DEFERRED(f!) CANCELLED(c!)
+#+STARTUP: overview
+
+# GENERATED SECTION BELOW — written by .datacore/lib/sprint_sync.py.
+# The runner executes entries from THIS FILE ONLY (task_queue.build_queue
+# keeps `nightshift.org` entries and drops everything else), so a task tagged
+# :AI: in next_actions.org is a CANDIDATE and nothing more. That distinction
+# cost this sprint its whole premise once already: five perfectly specified
+# sprint tasks sat in next_actions.org where no runner would ever have seen
+# them. Entries here are REFERENCES — SOURCE_ID points at the real task, so
+# the spec cannot drift from the copy that runs.
+
+* Sprint queue
+  :PROPERTIES:
+  :ID: org-sprint-queue-{slug}
+  :END:
+"""
+
+
+def sync_queue(ws, space: str, wanted: list[dict], apply: bool) -> tuple[list, list]:
+    """Mirror the sprint's agent tasks as reference entries in nightshift.org.
+
+    Returns (added, removed). Idempotent: an entry already present is left
+    alone, and an entry whose task is no longer in the sprint is removed.
+    """
+    qfile = REPO / space / "org" / "nightshift.org"
+    if not qfile.exists():
+        if not apply:
+            return [(w["id"], w["title"], "would create " + str(qfile)) for w in wanted], []
+        qfile.parent.mkdir(parents=True, exist_ok=True)
+        qfile.write_text(QUEUE_HEADER.format(space=space, slug=slug(space)))
+    ws.load(qfile)
+
+    want_by_qid = {f"{w['id']}-q": w for w in wanted}
+    have = {}
+    for n in ws.all_nodes():
+        if "nightshift.org" not in str(n.path):  # NodeView exposes .path, not .file_path
+            continue
+        nid = (n.properties or {}).get("ID") or ""
+        if nid.startswith("org-sprint-") and nid.endswith("-q"):
+            have[nid] = n
+
+    added, removed = [], []
+    for qid, w in want_by_qid.items():
+        if qid in have:
+            continue
+        added.append((qid, w["title"], "queued"))
+        if apply:
+            ws.create_node(
+                file=qfile,
+                heading=w["title"],
+                state="NEXT",
+                tags=["AI"] + w["tags"],
+                body=f"Reference entry. The specification lives on {w['id']}.",
+                ID=qid,
+                SOURCE_ID=w["id"],
+                SPACE=space,
+                SPRINT=w["sprint"],
+                ASSIGNEE=w["assignee"],
+                SURFACE=w["surface"],
+            )
+    for qid, node in have.items():
+        if qid not in want_by_qid:
+            removed.append((qid, node.heading[:58]))
+            if apply:
+                ws.remove_node(node)
+    return added, removed
 
 
 def _age_days(props: dict) -> float | None:
@@ -221,6 +319,7 @@ def main() -> int:
     target = org_dir / "next_actions.org"
     keep_ids: set[str] = set()
     created, updated, problems = [], [], []
+    queue_want: list[dict] = []
 
     for sp in paths:
         sprint = yaml.safe_load(sp.read_text()) or {}
@@ -231,7 +330,7 @@ def main() -> int:
         for it in mine:
             tid = f"org-sprint-{slug(sid)}-{slug(it['id'])}"
             keep_ids.add(tid)
-            tags = ["AI"] + [slug(t) for t in (it.get("labels") or [])]
+            tags = ["AI"] + [tag_slug(t) for t in (it.get("labels") or [])]
             props = {
                 "ID": tid,
                 "ROADMAP": str(it["roadmap"]),
@@ -248,6 +347,21 @@ def main() -> int:
                 props["EFFORT"] = str(it["effort_estimate"])
 
             node = ws.find_by_id(tid)
+
+            # A finished item is not re-queued. Without this the sync would
+            # resurrect its own completed work every run: the queue entry is
+            # keyed off the sprint item, not the task's state, so S02-5 —
+            # already DONE — was about to be handed back to an agent.
+            if node is None or node.todo not in CLOSED_STATES:
+                queue_want.append({
+                    "id": tid,
+                    "title": str(it["title"]),
+                    "tags": [tag_slug(t) for t in (it.get("labels") or [])],
+                    "sprint": sid,
+                    "assignee": str(it.get("default_claimer") or ""),
+                    "surface": str(it["surface"]),
+                })
+
             if node is None:
                 if args.apply:
                     ws.create_node(
@@ -268,11 +382,20 @@ def main() -> int:
                         changed.append(k)
                         if args.apply:
                             ws.set_property(node, k, v)
+                # Normalise the WHOLE tag set, not just "is AI present". An
+                # earlier version only added the AI tag and left everything
+                # else alone, so a task that already carried a hyphenated
+                # label kept it — and a hyphen makes nightshift's tag regex
+                # miss the group entirely, giving the task zero tags and
+                # hiding it from selection. Adding AI to a set the parser
+                # cannot read achieves nothing.
                 cur = set(node.shallow_tags or [])
-                if "AI" not in cur:
+                want_tags = set(tags)
+                if not want_tags.issubset(cur) or any("-" in t for t in cur):
                     changed.append("tags")
                     if args.apply:
-                        ws.set_tags(node, sorted(cur | {"AI"}))
+                        keep = {t for t in cur if "-" not in t}
+                        ws.set_tags(node, sorted(keep | want_tags))
                 if changed:
                     updated.append((tid, it["title"], changed))
 
@@ -306,6 +429,9 @@ def main() -> int:
             ws.set_tags(node, [t for t in tags if t != "AI"])
         cleared.append((nid, node.heading[:60]))
 
+    # The queue is a different file from the pool, and only the queue runs.
+    q_added, q_removed = sync_queue(ws, args.space, queue_want, args.apply)
+
     if args.apply:
         ws.save_all()
 
@@ -318,6 +444,13 @@ def main() -> int:
     print(f"queued (updated)   {len(updated)}")
     for tid, title, ch in updated[:12]:
         print(f"   ~ {title[:52]} [{', '.join(ch[:4])}]")
+    print(f"nightshift.org queue entries added   {len(q_added)}")
+    for qid, title, note in q_added[:12]:
+        print(f"   > {title[:62]}  [{note}]")
+    if q_removed:
+        print(f"nightshift.org queue entries removed {len(q_removed)}")
+        for qid, h in q_removed[:8]:
+            print(f"   < {h}")
     print(f"un-queued (:AI: removed, task kept)  {len(cleared)}")
     for nid, h in cleared[:12]:
         print(f"   - {h}")

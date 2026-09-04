@@ -59,6 +59,14 @@ def main(argv: list[str]) -> int:
         if node.todo not in QUEUED or "AI" not in (node.shallow_tags or []):
             continue
         props = node.properties or {}
+        # A queue REFERENCE deliberately carries no spec — SOURCE_ID points at
+        # the task that holds it, so that one record cannot drift from the copy
+        # that runs (task_queue.resolve_queued_task merges them at selection
+        # time, and REFUSES when the pointer dangles). Demanding the spec on
+        # both ends would force the duplication the reference design exists to
+        # prevent. The source task is gated on its own terms.
+        if str(props.get("SOURCE_ID") or "").strip():
+            continue
         missing = [k for k in REQUIRED if not str(props.get(k) or "").strip()
                    or str(props.get(k)).strip() == "unassigned"]
         if missing:
