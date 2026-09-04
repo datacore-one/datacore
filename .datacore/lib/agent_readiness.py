@@ -32,17 +32,45 @@ VERIFIABLE = {"test", "metric", "url", "artifact", "merged-pr"}
 JUDGEMENT = {"decision", "signed", "screenshot"}
 
 
+OPEN_STATES = {"NEXT", "TODO", "WAITING", "REVIEW"}
+
+
 def tasks():
-    out = []
+    """Read the org files directly rather than through the adapter's `list`.
+
+    `org_workspace_adapter.py list` emits heading/state/tags/properties and NO
+    BODY key. The 3b BRIEF check below asks whether there is prose an agent can
+    act on — and against the adapter it was reading `t.get("body")` on a dict
+    that never has one, so the body half of that test was dead from the day it
+    was written and only the property half ever fired. Loading the workspace
+    gives the real NodeView, body included. It is also faster: one parse
+    instead of three subprocesses.
+    """
+    from org_workspace import OrgWorkspace
+
+    ws = OrgWorkspace()
     for f in ORG:
-        r = subprocess.run(["python3", str(ADAPTER), "list", "--file", f,
-                            "--states", "NEXT,TODO,WAITING,REVIEW"],
-                           capture_output=True, text=True, cwd=REPO)
-        if r.returncode:
+        p = REPO / f
+        if p.exists():
+            ws.load(p)
+    out = []
+    for n in ws.all_nodes():
+        if n.todo not in OPEN_STATES:
             continue
-        for t in json.loads(r.stdout)["tasks"]:
-            t["_f"] = f
-            out.append(t)
+        out.append({
+            "heading": n.heading or "",
+            "state": n.todo,
+            # SHALLOW, not inherited. org-mode inherits tags from ancestors and
+            # org_workspace's `.tags` honours that — but nightshift does not:
+            # nightshift_parser matches `(\s+:[\w:]+:)?$` on the heading LINE
+            # and never walks parents. So a live child under a DONE parent
+            # tagged :AI: looks queued to org_workspace and is invisible to the
+            # executor. Four tasks sat in exactly that state on 2026-09-04.
+            # Mirror the executor or this check measures a queue nobody runs.
+            "tags": list(n.shallow_tags or []),
+            "properties": dict(n.properties or {}),
+            "body": (n.body or ""),
+        })
     return out
 
 
@@ -54,7 +82,18 @@ def main():
     r = yaml.safe_load(ROADMAP.read_text())
     items = {i["id"]: i for i in r["items"]}
     ts = tasks()
-    ai = [t for t in ts if "AI" in (t.get("tags") or [])]
+
+    # THE QUEUE IS NOT EVERY :AI: TASK. nightshift_parser.find_ai_tasks selects
+    # `states = ['TODO', 'NEXT']` and nothing else, so a REVIEW-state task
+    # tagged :AI: is work an agent has already DONE and a human has not yet
+    # looked at — the tag is provenance there, not a request. Scoring those for
+    # "can an agent start this" measures a set the executor will never select,
+    # which inflated this report by 52 findings on 2026-09-04 and is the same
+    # wrong-question mistake the FINISH check made (see below). Mirror the
+    # executor: if find_ai_tasks' state list changes, change this with it.
+    QUEUED = ("TODO", "NEXT")
+    tagged = [t for t in ts if "AI" in (t.get("tags") or [])]
+    ai = [t for t in tagged if t.get("state") in QUEUED]
     findings = defaultdict(list)
 
     # 1 SELECT ---------------------------------------------------------------
@@ -72,15 +111,39 @@ def main():
                 f"{t['heading'][:52]}")
 
     # 2 LOCATE ---------------------------------------------------------------
-    unassigned = [t for t in ai
-                  if (t.get("properties") or {}).get("SURFACE") in (None, "unassigned")]
-    for t in unassigned[:6]:
+    # SURFACE has to be one of the DECLARED surfaces, not merely non-empty.
+    # In the wild it carries two incompatible meanings: task_surface.py's
+    # vocabulary ("which repo do I work in" — core, enterprise, hub, ops...)
+    # and, on GEO tasks, a publication URL like "plur.ai/blog (canonical) +
+    # dev.to mirror". The second is useful to a writer and useless to an agent
+    # asking which checkout to open, and an emptiness test passes it. Validate
+    # against the vocabulary so a URL fails LOCATE the way a blank would.
+    sys.path.insert(0, str(REPO / ".datacore/lib"))
+    try:
+        from task_surface import SURFACES as _S, DEFAULT as _D
+        KNOWN = {n for n, _ in _S} | {_D}
+    except Exception:                       # never let the check die on import
+        KNOWN = set()
+
+    def _bad_surface(t):
+        s = (t.get("properties") or {}).get("SURFACE")
+        if s in (None, "", "unassigned"):
+            return "no surface"
+        if KNOWN and s not in KNOWN:
+            return f"surface {s[:28]!r} is not one of {sorted(KNOWN - {'unassigned'})[:4]}..."
+        return None
+
+    # NB: do not name this walrus `r` — a comprehension's walrus binds in the
+    # ENCLOSING scope, and `r` is the parsed roadmap. Doing so replaced the
+    # roadmap with a string and killed the VERIFY check thirty lines later.
+    unassigned = [(t, why) for t in ai if (why := _bad_surface(t))]
+    for t, reason in unassigned[:6]:
         findings["locate"].append(
-            f"AI task with no surface — agent cannot tell which repo: "
-            f"{t['heading'][:56]}")
+            f"AI task — agent cannot tell which repo ({reason}): "
+            f"{t['heading'][:52]}")
     if len(unassigned) > 6:
         findings["locate"].append(
-            f"...and {len(unassigned) - 6} more AI tasks with SURFACE unassigned")
+            f"...and {len(unassigned) - 6} more AI tasks with an unusable SURFACE")
 
     # 3 FINISH ---------------------------------------------------------------
     #
@@ -177,8 +240,9 @@ def main():
              "avoid":  "5 AVOID  — is undoable work clearly marked"}
 
     total = sum(len(v) for v in findings.values())
-    print(f"{len(r['items'])} epics · {len(ts)} open tasks · {len(ai)} tagged :AI:")
-    print(f"{total} readiness finding(s)\n")
+    print(f"{len(r['items'])} epics · {len(ts)} open tasks · "
+          f"{len(tagged)} tagged :AI: · {len(ai)} of them QUEUED (TODO/NEXT)")
+    print(f"{total} readiness finding(s) — against the queue, not the pool\n")
     for k in ("select", "locate", "finish", "brief", "verify", "avoid"):
         rows = findings.get(k) or []
         print(f"── {LABEL[k]} — {len(rows)}")
