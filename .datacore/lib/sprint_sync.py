@@ -150,8 +150,14 @@ def sync_queue(ws, space: str, wanted: list[dict], apply: bool) -> tuple[list, l
     for n in ws.all_nodes():
         if "nightshift.org" not in str(n.path):  # NodeView exposes .path, not .file_path
             continue
-        nid = (n.properties or {}).get("ID") or ""
-        if nid.startswith("org-sprint-") and nid.endswith("-q"):
+        # Identify our own entries by their PROPERTIES, not by an id prefix.
+        # The prefix test only held while every projected task was created by
+        # this script; an ADOPTED task keeps its author's id, so
+        # `org-20260904-trust-surface-q` failed the prefix check and the entry
+        # would have been recreated on every single run.
+        pr = n.properties or {}
+        nid = pr.get("ID") or ""
+        if pr.get("SOURCE_ID") and pr.get("SPRINT") and nid.endswith("-q"):
             have[nid] = n
 
     added, removed = [], []
@@ -213,6 +219,13 @@ def discover(space: str) -> list[Path]:
     sprint id, and prefer the non-worktree path.
     """
     found = sorted((REPO / space).glob("2-projects/*/sprints/*/sprint.yaml"))
+    # Track-level sprints too. Work that is not in one code repo — ops, hub
+    # submissions, bizdev, statutory — has no 2-projects/ home, and filing it
+    # under a code repo's sprints/ would be a lie about where it lives.
+    # It goes under `1-tracks/<track>/sprints/` rather than a bare `sprints/`
+    # at the space root: DIP-0015 fixes the allowed root directories and the
+    # structure hook refuses a new one, correctly.
+    found += sorted((REPO / space).glob("1-tracks/*/sprints/*/sprint.yaml"))
     best: dict[str, Path] = {}
     for p in found:
         key = p.parent.name
@@ -277,7 +290,11 @@ def agent_items(sprint: dict, include_stretch: bool) -> tuple[list[dict], list[s
         claimer = str(it.get("default_claimer") or it.get("owner") or "")
         if not AGENT_CLAIMER.search(claimer):
             continue
-        missing = [f for f in REQUIRED if not it.get(f)]
+        # An adopting item need only name the task; the task already carries
+        # roadmap, surface and its definition of done, and repeating them in the
+        # sprint file creates two copies that drift.
+        required = ("title", "org") if it.get("org") else REQUIRED
+        missing = [f for f in required if not it.get(f)]
         if missing:
             problems.append(
                 f"{it.get('id', '?')} ({claimer}) is claimed by an agent but has no "
@@ -328,15 +345,23 @@ def main() -> int:
         problems += [f"{sid}: {p}" for p in probs]
 
         for it in mine:
-            tid = f"org-sprint-{slug(sid)}-{slug(it['id'])}"
+            # ADOPT vs CREATE. `org: <task-id>` means the task ALREADY EXISTS —
+            # someone wrote it, with its own ROADMAP/SURFACE/DONE_WHEN — and the
+            # sprint is claiming it, not re-describing it. Without this the only
+            # way to sprint an existing task was to create a second one beside
+            # it, which then competes with the original and strips the
+            # original's tag on the same pass. A parallel session hit exactly
+            # that on 2026-09-04 with thirteen roadmap-unblocking tasks.
+            adopted = str(it.get("org") or "").strip()
+            tid = adopted or f"org-sprint-{slug(sid)}-{slug(it['id'])}"
             keep_ids.add(tid)
             tags = ["AI"] + [tag_slug(t) for t in (it.get("labels") or [])]
             props = {
                 "ID": tid,
-                "ROADMAP": str(it["roadmap"]),
-                "MILESTONE": str(it["milestone"]),
-                "SURFACE": str(it["surface"]),
-                "DONE_WHEN": one_line(it["acceptance"]),
+                "ROADMAP": str(it.get("roadmap") or ""),
+                "MILESTONE": str(it.get("milestone") or ""),
+                "SURFACE": str(it.get("surface") or ""),
+                "DONE_WHEN": one_line(it.get("acceptance") or ""),
                 "SPRINT": sid,
                 "SPRINT_ITEM": str(it["id"]),
                 "ASSIGNEE": str(it.get("default_claimer") or ""),
@@ -345,6 +370,34 @@ def main() -> int:
             }
             if it.get("effort_estimate"):
                 props["EFFORT"] = str(it["effort_estimate"])
+
+            if adopted:
+                existing = ws.find_by_id(adopted)
+                if existing is None:
+                    problems.append(
+                        f"{sid}: {it['id']} adopts org task {adopted!r}, which does "
+                        f"not exist — refusing rather than silently creating a "
+                        f"second task under that name")
+                    keep_ids.discard(tid)
+                    continue
+                # The author's own words win. The sprint supplies only what the
+                # task is missing, plus its own SPRINT bookkeeping — overwriting
+                # a DONE_WHEN somebody wrote with one paraphrased into a sprint
+                # file is how the definition of done quietly drifts.
+                have = existing.properties or {}
+                for k in ("ROADMAP", "MILESTONE", "SURFACE", "DONE_WHEN", "REF",
+                          "EFFORT", "ASSIGNEE"):
+                    if str(have.get(k) or "").strip():
+                        props[k] = have[k]
+                gaps = [k for k in ("ROADMAP", "SURFACE", "DONE_WHEN")
+                        if not str(props.get(k) or "").strip()]
+                if gaps:
+                    problems.append(
+                        f"{sid}: {it['id']} adopts {adopted} but neither the "
+                        f"sprint nor the task supplies {', '.join(gaps)} — an "
+                        f"agent still could not run it")
+                    keep_ids.discard(tid)
+                    continue
 
             node = ws.find_by_id(tid)
 
@@ -359,7 +412,7 @@ def main() -> int:
                     "tags": [tag_slug(t) for t in (it.get("labels") or [])],
                     "sprint": sid,
                     "assignee": str(it.get("default_claimer") or ""),
-                    "surface": str(it["surface"]),
+                    "surface": str(props.get("SURFACE") or ""),
                 })
 
             if node is None:
