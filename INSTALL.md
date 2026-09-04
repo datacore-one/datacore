@@ -79,10 +79,10 @@ Copy template files to create your local configuration:
 cp install.yaml.example install.yaml
 
 # GTD org files
-cp 0-personal/org/inbox.org.example 0-personal/org/inbox.org
-cp 0-personal/org/next_actions.org.example 0-personal/org/next_actions.org
-cp 0-personal/org/someday.org.example 0-personal/org/someday.org
-cp 0-personal/org/habits.org.example 0-personal/org/habits.org
+cp .datacore/templates/org/inbox.org.example 0-personal/org/inbox.org
+cp .datacore/templates/org/next_actions.org.example 0-personal/org/next_actions.org
+cp .datacore/templates/org/someday.org.example 0-personal/org/someday.org
+cp .datacore/templates/org/habits.org.example 0-personal/org/habits.org
 
 # Build CLAUDE.md from layers (see Layered Context Pattern below)
 python .datacore/lib/context_merge.py rebuild --path .

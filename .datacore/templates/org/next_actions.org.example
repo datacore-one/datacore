@@ -1,0 +1,26 @@
+#+TITLE: Next Actions
+#+FILETAGS: :next:
+
+* Work
+** TODO Example task                                              :example:
+:PROPERTIES:
+:CREATED: [2025-01-01 Wed]
+:END:
+
+* Personal
+
+* AI Delegation
+Tasks tagged with :AI: are processed by autonomous agents.
+
+** TODO Example AI research task                              :AI:research:
+:PROPERTIES:
+:CREATED: [2025-01-01 Wed]
+:END:
+Research example topic
+
+** TODO Example AI content task                                :AI:content:
+:PROPERTIES:
+:CREATED: [2025-01-01 Wed]
+:END:
+Draft blog post about example topic
+
