@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Task lifecycle and ledger coverage</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin:0; background:#f5f5f5; color:#2d3142;
+         font-family: ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  main { max-width: 1300px; margin: 0 auto; padding: 28px 20px 60px; }
+  .wrap { overflow-x: auto; }
+  svg { min-width: 1100px; display:block; }
+  footer { margin-top: 26px; font-size: 12px; color:#4f5d75; line-height:1.55;
+            border-top:1px solid #d8d8dc; padding-top:14px; }
+  code { font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; }
+</style></head>
+<body><main>
+<div class="wrap"><svg viewBox="0 0 1240 900" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+<rect width="100%" height="100%" fill="#f5f5f5"/>
+<defs>
+<marker id="a" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+<marker id="acc" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+</defs>
+<text x="60" y="52" font-family="Iowan Old Style,Palatino,Georgia,serif" font-size="27" fill="#2d3142">A task’s life, and the three records that watch it</text>
+<text x="60" y="74" font-size="12.5" fill="#4f5d75">Only one of the three can prove anything, and it is the one missing the middle.</text>
+<rect x="150" y="98" width="240" height="46" rx="7" fill="#ffffff" stroke="#2d3142" stroke-width="1.1"/>
+<text x="270.0" y="118" font-size="12.5" font-weight="600" text-anchor="middle" fill="#2d3142">Human capture</text>
+<text x="270.0" y="134" font-size="9.6" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">inbox.org, then processed</text>
+<path d="M270.0 144 V 186" stroke="#4f5d75" stroke-width="1.1" fill="none"/>
+<rect x="420" y="98" width="240" height="46" rx="7" fill="#ffffff" stroke="#2d3142" stroke-width="1.1"/>
+<text x="540.0" y="118" font-size="12.5" font-weight="600" text-anchor="middle" fill="#2d3142">/wrap-up</text>
+<text x="540.0" y="134" font-size="9.6" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">continuations + extracted</text>
+<path d="M540.0 144 V 186" stroke="#4f5d75" stroke-width="1.1" fill="none"/>
+<rect x="690" y="98" width="240" height="46" rx="7" fill="#ffffff" stroke="#2d3142" stroke-width="1.1"/>
+<text x="810.0" y="118" font-size="12.5" font-weight="600" text-anchor="middle" fill="#2d3142">Cadences</text>
+<text x="810.0" y="134" font-size="9.6" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">heartbeat, every 30 min</text>
+<path d="M810.0 144 V 186" stroke="#4f5d75" stroke-width="1.1" fill="none"/>
+<rect x="960" y="98" width="240" height="46" rx="7" fill="#ffffff" stroke="#2d3142" stroke-width="1.1"/>
+<text x="1080.0" y="118" font-size="12.5" font-weight="600" text-anchor="middle" fill="#2d3142">sprint_sync</text>
+<text x="1080.0" y="134" font-size="9.6" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">an active sprint.yaml</text>
+<path d="M1080.0 144 V 186" stroke="#4f5d75" stroke-width="1.1" fill="none"/>
+<path d="M207.5 186 H 1080.0" stroke="#4f5d75" stroke-width="1.1" fill="none"/>
+<path d="M207.5 186 V 236" stroke="#4f5d75" stroke-width="1.4" fill="none" marker-end="url(#a)"/>
+<text x="1088.0" y="179" font-size="9.4" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">four doors, one pool</text>
+<rect x="150" y="242" width="115" height="54" rx="7" fill="#ffffff" stroke="#2d3142" stroke-width="1.1"/>
+<text x="207.5" y="264" font-size="11.6" font-weight="600" text-anchor="middle" fill="#2d3142">exists</text>
+<text x="207.5" y="278" font-size="8.6" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">a heading in an org</text>
+<text x="207.5" y="288" font-size="8.6" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">file</text>
+<path d="M265 269.0 H 280" stroke="#4f5d75" stroke-width="1.2" fill="none" marker-end="url(#a)"/>
+<rect x="283" y="242" width="115" height="54" rx="7" fill="#ffffff" stroke="#2d3142" stroke-width="1.1"/>
+<text x="340.5" y="264" font-size="11.6" font-weight="600" text-anchor="middle" fill="#2d3142">candidate</text>
+<text x="340.5" y="278" font-size="8.6" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">:AI: on its own line</text>
+<path d="M398 269.0 H 413" stroke="#4f5d75" stroke-width="1.2" fill="none" marker-end="url(#a)"/>
+<rect x="416" y="242" width="115" height="54" rx="7" fill="#ffffff" stroke="#2d3142" stroke-width="1.1"/>
+<text x="473.5" y="264" font-size="11.6" font-weight="600" text-anchor="middle" fill="#2d3142">queued</text>
+<text x="473.5" y="278" font-size="8.6" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">in nightshift.org</text>
+<path d="M531 269.0 H 546" stroke="#4f5d75" stroke-width="1.2" fill="none" marker-end="url(#a)"/>
+<rect x="549" y="242" width="115" height="54" rx="7" fill="#ffffff" stroke="#2d3142" stroke-width="1.1"/>
+<text x="606.5" y="264" font-size="11.6" font-weight="600" text-anchor="middle" fill="#2d3142">selected</text>
+<text x="606.5" y="278" font-size="8.6" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">build_queue, cap 20</text>
+<path d="M664 269.0 H 679" stroke="#4f5d75" stroke-width="1.2" fill="none" marker-end="url(#a)"/>
+<rect x="682" y="242" width="115" height="54" rx="7" fill="#fdeee7" stroke="#eb6c36" stroke-width="1.1"/>
+<text x="739.5" y="264" font-size="11.6" font-weight="600" text-anchor="middle" fill="#2d3142">claimed</text>
+<text x="739.5" y="278" font-size="8.6" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">git commit is the lock</text>
+<path d="M797 269.0 H 812" stroke="#4f5d75" stroke-width="1.2" fill="none" marker-end="url(#a)"/>
+<rect x="815" y="242" width="115" height="54" rx="7" fill="#fdeee7" stroke="#eb6c36" stroke-width="1.1"/>
+<text x="872.5" y="264" font-size="11.6" font-weight="600" text-anchor="middle" fill="#2d3142">executed</text>
+<text x="872.5" y="278" font-size="8.6" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">agent runs it</text>
+<path d="M930 269.0 H 945" stroke="#4f5d75" stroke-width="1.2" fill="none" marker-end="url(#a)"/>
+<rect x="948" y="242" width="115" height="54" rx="7" fill="#fdeee7" stroke="#eb6c36" stroke-width="1.1"/>
+<text x="1005.5" y="264" font-size="11.6" font-weight="600" text-anchor="middle" fill="#2d3142">evaluated</text>
+<text x="1005.5" y="278" font-size="8.6" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">six evaluators score</text>
+<path d="M1063 269.0 H 1078" stroke="#4f5d75" stroke-width="1.2" fill="none" marker-end="url(#a)"/>
+<rect x="1081" y="242" width="115" height="54" rx="7" fill="#ffffff" stroke="#2d3142" stroke-width="1.1"/>
+<text x="1138.5" y="264" font-size="11.6" font-weight="600" text-anchor="middle" fill="#2d3142">review / done</text>
+<text x="1138.5" y="278" font-size="8.6" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">a human closes it</text>
+<text x="60" y="264" font-size="9.6" font-weight="600" fill="#2d3142" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">LADDER</text>
+<text x="60" y="278" font-size="8.4" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">eligibility,</text>
+<text x="60" y="288" font-size="8.4" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">not a switch</text>
+<text x="60" y="352" font-size="9.6" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">WHAT EACH RECORD SEES</text>
+<rect x="144" y="366" width="1058" height="54" rx="7" fill="#ffffff" stroke="#d8d8dc" stroke-width="1"/>
+<text x="24" y="388" font-size="9.8" font-weight="600" fill="#2d3142" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">ORG-MODE</text>
+<text x="24" y="401" font-size="8" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">the working state</text>
+<text x="24" y="411" font-size="8" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">not attested</text>
+<circle cx="207.5" cy="386" r="5.4" fill="#2d3142"/>
+<text x="207.5" y="406" font-size="8.1" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">heading</text>
+<circle cx="340.5" cy="386" r="5.4" fill="#2d3142"/>
+<text x="340.5" y="406" font-size="8.1" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">:AI: tag</text>
+<circle cx="473.5" cy="386" r="5.4" fill="#2d3142"/>
+<text x="473.5" y="406" font-size="8.1" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">queue entry</text>
+<path d="M602.0 386 H 611.0" stroke="#d8d8dc" stroke-width="2" stroke-linecap="round"/>
+<circle cx="739.5" cy="386" r="5.4" fill="#2d3142"/>
+<text x="739.5" y="406" font-size="8.1" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">NIGHTSHIFT_STARTED</text>
+<circle cx="872.5" cy="386" r="5.4" fill="#2d3142"/>
+<text x="872.5" y="406" font-size="8.1" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">STATUS</text>
+<circle cx="1005.5" cy="386" r="5.4" fill="#2d3142"/>
+<text x="1005.5" y="406" font-size="8.1" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">SCORE</text>
+<circle cx="1138.5" cy="386" r="5.4" fill="#2d3142"/>
+<text x="1138.5" y="406" font-size="8.1" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">DONE</text>
+<rect x="144" y="434" width="1058" height="54" rx="7" fill="#ffffff" stroke="#d8d8dc" stroke-width="1"/>
+<text x="24" y="456" font-size="9.8" font-weight="600" fill="#2d3142" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">LEDGER</text>
+<text x="24" y="469" font-size="8" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">hash-chained, signed, sealed</text>
+<circle cx="207.5" cy="454" r="5.4" fill="#2d3142"/>
+<text x="207.5" y="474" font-size="8.1" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">item.create</text>
+<path d="M336.0 454 H 345.0" stroke="#d8d8dc" stroke-width="2" stroke-linecap="round"/>
+<path d="M469.0 454 H 478.0" stroke="#d8d8dc" stroke-width="2" stroke-linecap="round"/>
+<path d="M602.0 454 H 611.0" stroke="#d8d8dc" stroke-width="2" stroke-linecap="round"/>
+<circle cx="739.5" cy="454" r="6.4" fill="none" stroke="#eb6c36" stroke-width="1.8" stroke-dasharray="3,2.4"/>
+<text x="739.5" y="474" font-size="8.1" text-anchor="middle" fill="#eb6c36" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">no item.claim</text>
+<circle cx="872.5" cy="454" r="6.4" fill="none" stroke="#eb6c36" stroke-width="1.8" stroke-dasharray="3,2.4"/>
+<text x="872.5" y="474" font-size="8.1" text-anchor="middle" fill="#eb6c36" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">nothing</text>
+<circle cx="1005.5" cy="454" r="6.4" fill="none" stroke="#eb6c36" stroke-width="1.8" stroke-dasharray="3,2.4"/>
+<text x="1005.5" y="474" font-size="8.1" text-anchor="middle" fill="#eb6c36" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">nothing</text>
+<circle cx="1138.5" cy="454" r="5.4" fill="none" stroke="#2d3142" stroke-width="1.6"/>
+<path d="M1133.1 454 A 5.4 5.4 0 0 1 1143.9 454 Z" fill="#2d3142"/>
+<text x="1138.5" y="474" font-size="8.1" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">item.dismiss</text>
+<rect x="144" y="502" width="1058" height="54" rx="7" fill="#ffffff" stroke="#d8d8dc" stroke-width="1"/>
+<text x="24" y="524" font-size="9.8" font-weight="600" fill="#2d3142" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">AGENT STREAM</text>
+<text x="24" y="537" font-size="8" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">live telemetry</text>
+<text x="24" y="547" font-size="8" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">not attested</text>
+<path d="M203.0 522 H 212.0" stroke="#d8d8dc" stroke-width="2" stroke-linecap="round"/>
+<path d="M336.0 522 H 345.0" stroke="#d8d8dc" stroke-width="2" stroke-linecap="round"/>
+<path d="M469.0 522 H 478.0" stroke="#d8d8dc" stroke-width="2" stroke-linecap="round"/>
+<circle cx="606.5" cy="522" r="5.4" fill="#2d3142"/>
+<text x="606.5" y="542" font-size="8.1" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">skipped</text>
+<path d="M735.0 522 H 744.0" stroke="#d8d8dc" stroke-width="2" stroke-linecap="round"/>
+<circle cx="872.5" cy="522" r="5.4" fill="#2d3142"/>
+<text x="872.5" y="542" font-size="8.1" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">started / failed</text>
+<circle cx="1005.5" cy="522" r="5.4" fill="#2d3142"/>
+<text x="1005.5" y="542" font-size="8.1" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">completed</text>
+<circle cx="1138.5" cy="522" r="5.4" fill="#2d3142"/>
+<text x="1138.5" y="542" font-size="8.1" text-anchor="middle" fill="#8d99ae" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">completed</text>
+<rect x="672" y="426" width="401" height="70" rx="9" fill="none" stroke="#eb6c36" stroke-width="1.5" stroke-dasharray="5,4"/>
+<text x="872.5" y="514" font-size="10.4" font-weight="600" text-anchor="middle" fill="#eb6c36">the blind span — the ledger never sees the work itself</text>
+<circle cx="66" cy="612" r="5.4" fill="#2d3142"/><text x="80" y="616" font-size="10" fill="#4f5d75">recorded</text>
+<circle cx="176" cy="612" r="5.4" fill="none" stroke="#2d3142" stroke-width="1.6"/><path d="M170.6 612 A 5.4 5.4 0 0 1 181.4 612 Z" fill="#2d3142"/><text x="190" y="616" font-size="10" fill="#4f5d75">partial — records closure, not completion</text>
+<circle cx="470" cy="612" r="6.4" fill="none" stroke="#eb6c36" stroke-width="1.8" stroke-dasharray="3,2.4"/><text x="484" y="616" font-size="10" fill="#eb6c36">gap — the event type exists and is never written</text>
+<path d="M796 612 H 806" stroke="#d8d8dc" stroke-width="2" stroke-linecap="round"/><text x="816" y="616" font-size="10" fill="#4f5d75">not applicable at this stage</text>
+<line x1="60" y1="638" x2="1180" y2="638" stroke="#d8d8dc" stroke-width="1"/>
+<text x="60" y="660" font-size="11.4" font-weight="600" fill="#2d3142">Queued is priority, not eligibility.</text>
+<text x="60" y="675" font-size="10.1" fill="#4f5d75">run.py calls build_queue(include_pending=True), so a merely-tagged task is eligible too — nightshift.org decides what sorts first.</text>
+<text x="60" y="716" font-size="11.4" font-weight="600" fill="#2d3142">item.complete is never emitted for an org task.</text>
+<text x="60" y="731" font-size="10.1" fill="#4f5d75">The fold requires status == claimed, so completing an unclaimed item is a silent no-op. Fabricating a claim would put a lie in the audit trail, so</text>
+<text x="60" y="744" font-size="10.1" fill="#4f5d75">closure is item.dismiss: “a human closed this”.</text>
+<text x="60" y="772" font-size="11.4" font-weight="600" fill="#2d3142">ledger_claim.py skips org-mirrored items by design.</text>
+<text x="60" y="787" font-size="10.1" fill="#4f5d75">pending = [i for i in claimable if not (i.payload or {}).get(“org”)] — it stopped agents working unattended through a 342-item backlog, so no</text>
+<text x="60" y="800" font-size="10.1" fill="#4f5d75">item.claim is ever written for one.</text>
+<text x="60" y="828" font-size="11.4" font-weight="600" fill="#2d3142">Nightshift emits no ledger events at all.</text>
+<text x="60" y="843" font-size="10.1" fill="#4f5d75">claim.py imports ledger_transport only for a git converge helper; execution goes to the agent stream via _emit_lifecycle. The durable copy is missing,</text>
+<text x="60" y="856" font-size="10.1" fill="#4f5d75">not the data.</text>
+</svg></div>
+<footer>
+Read from the code on 2026-09-04, not from the design docs — the two had drifted in three places.
+Full write-up: <code>.datacore/specs/task-lifecycle-and-ledger-coverage.md</code>.
+The vocabulary to close the gap already exists in <code>EVENT_TYPES</code>: <code>item.claim</code>,
+<code>item.complete</code>, <code>item.clock.start</code>/<code>stop</code> are defined and simply never
+written for org-routed work.
+</footer>
+</main></body></html>
