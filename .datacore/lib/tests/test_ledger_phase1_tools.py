@@ -85,3 +85,12 @@ def test_flip_refuses_until_ledger_and_org_agree_then_flips_and_reverses(tmp_pat
     assert subprocess.run(["git", "ls-files", "--error-unmatch", "org/next_actions.org"], cwd=space, capture_output=True).returncode == 0, "tracked again"
     assert not (space / ".datacore" / "ledger-phase").exists()
     assert "Alpha task" in (space / "org" / "next_actions.org").read_text()
+
+
+def test_header_copy_is_written_once(tmp_path):
+    G = _load("ledger_project_org"); space = _space(tmp_path)
+    (space / ".datacore" / "ledger-phase").write_text("1\n")
+    G.project_space(space); first = (space / ".datacore" / "ledger-org-header").read_text()
+    (space / "org" / "next_actions.org").write_text("#+TITLE: Changed by a host\n* TODO x\n")
+    G.project_space(space)
+    assert (space / ".datacore" / "ledger-org-header").read_text() == first, "the copy never changes after the flip"
