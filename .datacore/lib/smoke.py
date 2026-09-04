@@ -193,6 +193,35 @@ def check_audio_stamp() -> tuple[str, str]:
     return FAIL, f"audio stamp is {out or 'missing'} — no audio today"
 
 
+def check_pinned_budget() -> tuple[str, str]:
+    """Assert the pinned engram set is healthy (fit_count > 0, cost within 20% of baseline)."""
+    lib = DATA / ".datacore" / "lib"
+    audit = lib / "audit_engram_shape.py"
+    assert_script = lib / "assert_pinned_budget.py"
+    if not audit.exists():
+        return WARN, "audit_engram_shape.py not found"
+    if not assert_script.exists():
+        return WARN, "assert_pinned_budget.py not found"
+
+    audit_run = subprocess.run(
+        [sys.executable, str(audit), "--json", "--pinned"],
+        capture_output=True, text=True, timeout=120,
+    )
+    if audit_run.returncode not in (0, 1):
+        # returncode 2 means no engrams matched — store absent or empty store
+        return WARN, f"audit_engram_shape.py exited {audit_run.returncode}: {audit_run.stderr.strip()[:80]}"
+
+    assert_run = subprocess.run(
+        [sys.executable, str(assert_script)],
+        input=audit_run.stdout,
+        capture_output=True, text=True, timeout=10,
+    )
+    detail = (assert_run.stdout or assert_run.stderr).strip()[:120]
+    if assert_run.returncode == 0:
+        return OK, detail
+    return FAIL, detail
+
+
 CHECKS = [
     ("journal", check_journal),
     ("journal_opened", check_journal_opened),
@@ -202,6 +231,7 @@ CHECKS = [
     ("failed_units", check_failed_units),
     ("mail_triage", check_mail_triage),
     ("audio_stamp", check_audio_stamp),
+    ("pinned_budget", check_pinned_budget),
 ]
 
 
