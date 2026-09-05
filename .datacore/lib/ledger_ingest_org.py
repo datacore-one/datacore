@@ -81,25 +81,14 @@ def _this_actor() -> str:
     default actor silently breaks that for every machine except the one the
     default names.
     """
-    import socket
-    explicit = os.environ.get("DATACORE_ACTOR")
-    if explicit:
-        return explicit.strip().lower()
-    host = socket.gethostname().split(".")[0].lower()
     try:
-        import yaml
-        reg = yaml.safe_load(
-            (LIB.parent / "registry" / "infrastructure.yaml").read_text())
-        for name, cfg in (reg.get("servers") or {}).items():
-            if not isinstance(cfg, dict):
-                continue
-            access = cfg.get("access") or {}
-            if host in (access.get("hostname"), name) and access.get("actor"):
-                return str(access["actor"]).lower()
-    except Exception:  # noqa: BLE001
-        pass
-    return host
-
+        from actor_identity import this_actor
+    except ImportError:
+        import importlib.util as _ilu, pathlib as _pl
+        _spec = _ilu.spec_from_file_location("actor_identity", _pl.Path(__file__).resolve().parent / "actor_identity.py")
+        _m = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_m)
+        this_actor = _m.this_actor
+    return this_actor()
 
 def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> dict:
     """Reconcile an already-imported task with what org says about it NOW.
