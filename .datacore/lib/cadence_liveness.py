@@ -54,7 +54,7 @@ DEFAULT_GRACE = 3
 def collect(root: Path, grace: int, today: date | None = None) -> list:
     """Overdue cadences across every space, via the engine that owns this."""
     import yaml
-    from cadence_engine import (cadence_log_path_for, find_overdue_cadences,
+    from cadence_engine import (cadence_log_path_for, find_overdue_cadences, own_cadences,
                             load_cadence_log_safe)
 
     today = today or date.today()
@@ -87,7 +87,14 @@ def collect(root: Path, grace: int, today: date | None = None) -> list:
         except Exception:                       # noqa: BLE001
             continue
         try:
-            for c in find_overdue_cadences(roles, log, today=today):
+            # A cadence owned by an external agent (5-plur's cio is Tris on
+            # hermes) runs where that agent runs and records nothing in this
+            # fleet's shards, so this check can only ever call it overdue. The
+            # heartbeat already excludes those roles from its own work
+            # (own_cadences); the liveness must apply the same rule, or the
+            # box's contract is red by construction (2026-09-05: three of the
+            # last three "overdue" were Tris's).
+            for c in own_cadences(find_overdue_cadences(roles, log, today=today), roles):
                 if getattr(c, "days_overdue", 0) > grace:
                     rows.append((c.days_overdue, space.name, c.role,
                                  c.frequency, c.cadence_name))
