@@ -38,7 +38,8 @@ PROBE_TITLE = "ledger probe — end to end"
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--actor", default=socket.gethostname())
+    from actor_identity import this_actor
+    ap.add_argument("--actor", default=this_actor())
     args = ap.parse_args()
     actor = args.actor
 

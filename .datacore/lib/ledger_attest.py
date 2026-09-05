@@ -148,36 +148,22 @@ def _identity() -> dict:
 
 def _actor() -> str:
     """This machine's ledger identity. Never inferred from a hostname — see
-    DIP-0044: winston's hostname is `bridge`, hermes runs `tris`."""
+    DIP-0044: winston's hostname is `bridge`, hermes runs `tris`.
+
+    The env var and this module's own identity file are consulted first (the
+    attest path must keep working with the identity file it was told to use);
+    everything else is the shared resolver in actor_identity.py."""
     explicit = os.environ.get("DATACORE_ACTOR") or _identity().get("DATACORE_ACTOR")
     if explicit:
         return explicit.strip().lower()
-    host = socket.gethostname().split(".")[0].lower()
     try:
-        import yaml
-        # Find the registry relative to THIS FILE, not DATACORE_ROOT. On hermes
-        # and plur-claw `~/Data` is the AGENT'S OWN SPACE repo and the core
-        # lives in the runner, so a DATACORE_ROOT lookup finds no registry,
-        # falls through to the hostname, and files tris's events under
-        # `transporter` and data's under `holodeck` — the exact DIP-0044
-        # failure this function's own comment warns about. Verified on all five
-        # machines; two were wrong until this changed.
-        candidates = [LIB.parent.parent / ".datacore/registry/infrastructure.yaml",
-                      Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
-                      / ".datacore/registry/infrastructure.yaml"]
-        reg_path = next((c for c in candidates if c.is_file()), None)
-        if reg_path is None:
-            raise FileNotFoundError("no infrastructure registry")
-        reg = yaml.safe_load(reg_path.read_text())
-        for name, cfg in (reg.get("servers") or {}).items():
-            if not isinstance(cfg, dict):
-                continue
-            access = cfg.get("access") or {}
-            if host in (access.get("hostname"), name) and access.get("actor"):
-                return str(access["actor"]).lower()
-    except Exception:  # noqa: BLE001 — a registry problem must not stop a post
-        pass
-    return host
+        from actor_identity import this_actor
+    except ImportError:
+        import importlib.util as _ilu, pathlib as _pl
+        _spec = _ilu.spec_from_file_location("actor_identity", _pl.Path(__file__).resolve().parent / "actor_identity.py")
+        _m = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_m)
+        this_actor = _m.this_actor
+    return this_actor()
 
 
 def _roots() -> list[Path]:

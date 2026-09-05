@@ -137,7 +137,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--root", type=Path, default=Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data")))
     ap.add_argument("--space", required=True)
-    ap.add_argument("--actor", default=os.environ.get("DATACORE_ACTOR") or os.uname().nodename.split(".")[0])
+    from actor_identity import this_actor
+    ap.add_argument("--actor", default=this_actor())
     ap.add_argument("--apply", action="store_true")
     a = ap.parse_args(argv)
     space = a.root / a.space

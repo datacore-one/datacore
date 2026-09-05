@@ -202,7 +202,8 @@ def _ledger_emit(file_path, event_type, payload):
             return None
         _sys.path.insert(0, str(Path(__file__).resolve().parent))
         from ledger.log import EventLog
-        actor = _os.environ.get("DATACORE_ACTOR") or _socket.gethostname().split(".")[0].lower()
+        from actor_identity import this_actor
+        actor = this_actor()
         EventLog(space, actor).append(event_type, payload)
         return actor
     except Exception:      # noqa: BLE001 — see the note above
