@@ -59,3 +59,12 @@ def test_hash_and_percent_are_outside_the_parsers_alphabet():
     node = loads(line + "\n").children[0]
     assert node.heading == "Plain title" and sorted(node.tags) == ["a_b", "enterprise_373", "ok"]
 
+
+
+def test_a_multiline_title_renders_as_one_line():
+    """Thirty ledger-created proof items carried newlines in their titles;
+    the heading showed the first line and a restore read back a different
+    title. A heading is one line, whatever the writer sent."""
+    from ledger.projector import _clean_title_and_tags
+    title, tags = _clean_title_and_tags("Write a file\nNo other content.  Commit it.", ["x"])
+    assert title == "Write a file No other content. Commit it." and tags == ["x"]
