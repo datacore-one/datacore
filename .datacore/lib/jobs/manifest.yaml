@@ -547,6 +547,35 @@ jobs:
         check: nonempty
         max_age_hours: 26
 
+  # ── the unattended principals (product description, stage 2): a contract
+  # and a scoreboard row for each, so "it continues" is measured, not claimed.
+  - name: nightshift-venture-heartbeat
+    machine: nightshift
+    schedule: "continuous (venture-heartbeat.service, one tick every 1800 s)"
+    cmd: "~/Data/.datacore/modules/ventures/server/venture-heartbeat.sh"
+    on_fail: telegram
+    artifacts:
+      # heartbeat_tick() appends one line per tick (venture_heartbeat.py,
+      # "Heartbeat tick: N active, M idle"). Two ticks an hour; two hours
+      # of silence means the loop is dead or wedged.
+      - path: "~/Data/.datacore/state/venture/heartbeat.log"
+        check: regex
+        arg: "Heartbeat tick"
+        max_age_hours: 2
+
+  - name: nightshift-miles-bot
+    machine: nightshift
+    schedule: "*/15 * * * *"
+    cmd: "~/.datacore/v2-runner/.datacore/lib/unit_alive.sh datacore-telegram.service ~/.datacore/state/miles-bot.alive 2>>~/.datacore/state/miles-bot.alive.err"
+    on_fail: telegram
+    artifacts:
+      # The bot has no artifact of its own; unit_alive.sh stamps this file
+      # every 15 minutes while datacore-telegram.service is active and
+      # leaves it alone when it is not, so age is the signal.
+      - path: "~/.datacore/state/miles-bot.alive"
+        check: nonempty
+        max_age_hours: 1
+
   - name: nightshift-github-triage
     machine: nightshift
     schedule: "30 4 * * *"
@@ -676,6 +705,19 @@ jobs:
   # entirely unverified. Found by TESTING the claim "every deployment gap is
   # closed" instead of asserting it -- the claim was false.
 
+  - name: hermes-tris-heartbeat
+    machine: hermes
+    schedule: "tris-heartbeat.timer (every 30 min)"
+    cmd: "/home/gregor/tris-heartbeat.sh"
+    on_fail: telegram
+    artifacts:
+      # tris-heartbeat.sh writes the last report it managed to send to
+      # STATE_FILE (line 81); a report it could not send is logged but not
+      # stamped, so age here means "Tris has not been heard from".
+      - path: "/home/gregor/.hermes/state/heartbeat-last-report"
+        check: nonempty
+        max_age_hours: 2
+
   - name: hermes-creds-sync
     machine: hermes
     schedule: "0 * * * *"
@@ -745,6 +787,22 @@ jobs:
       # all_clean assertion is dropped. Progress belongs in the briefing, where
       # "7/9 spaces clean, streak 0" reads as a number to move rather than a
       # failure to triage.
+
+  - name: plur-claw-ledger-dispatch
+    machine: plur-claw
+    schedule: "*/15 * * * *"
+    cmd: "~/.datacore/v2-runner/.datacore/lib/ledger-claim-pull.sh >> ~/.datacore/state/ledger-dispatch.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      # Every tick ends with one dated "dispatch rc=N" line (ledger-claim-pull.sh).
+      # The previous tick (a root-owned copy) had failed silently on every run
+      # since 2026-08-13 into a log its user could not write; this is the
+      # contract that would have said so on day one.
+      - path: "~/.datacore/state/ledger-dispatch.log"
+        check: regex
+        arg: "dispatch rc="
+        max_age_hours: 1
+
   - name: mac-shadow-diff
     machine: mac
     schedule: "0 7 * * *"
