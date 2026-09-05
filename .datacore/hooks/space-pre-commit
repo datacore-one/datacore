@@ -209,7 +209,11 @@ fi
 #
 # Same repo-relative rule as the roadmap check above: staged paths are
 # `org/next_actions.org`, never `5-plur/org/next_actions.org`.
-_staged_org=$(git diff --cached --name-only | grep '^org/.*\.org$' || true)
+# ACM: a file staged for DELETION is not being committed — its working copy is
+# whatever is on disk (a Phase 1 flip untracks the generated file and leaves it
+# there), and gating that copy refused every flip commit of 2026-09-06 on a
+# task nobody was committing.
+_staged_org=$(git diff --cached --name-only --diff-filter=ACM | grep '^org/.*\.org$' || true)
 if [ -n "$_staged_org" ]; then
   _gate=""
   for _c in "$HOME/Data/.datacore/lib/ai_task_gate.py" \
