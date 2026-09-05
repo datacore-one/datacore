@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# Declare an agent host, or verify it: identity, the crons the job contracts
+# assume, the artifacts they read. Idempotent; run it again after every change.
+#
+#   agent_host_setup.sh --host nightshift|hermes|plur-claw          apply, then verify
+#   agent_host_setup.sh --host NAME --verify                        check, change nothing
+#
+# Why this exists: the box has had an installer with a verify step since
+# 2026-09-03; the other three hosts were configured by hand, so a cron line
+# lived only in a crontab, an identity only in a file someone once placed, and
+# a broken dispatcher tick (plur-claw, since 2026-08-13) had nothing to
+# compare itself against. The product description calls this stage 6:
+# every host rebuildable from its installer.
+set -uo pipefail
+HOST=""; VERIFY_ONLY=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --host) HOST="${2:?--host needs nightshift|hermes|plur-claw}"; shift ;;
+    --verify) VERIFY_ONLY=1 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac; shift
+done
+[ -n "$HOST" ] || { echo "--host is required" >&2; exit 2; }
+RUNNER="${DATACORE_RUNNER:-$HOME/.datacore/v2-runner}"
+LIB="$RUNNER/.datacore/lib"
+STATE="$HOME/.datacore/state"; mkdir -p "$STATE"
+ID_FILE="$HOME/.datacore/identity.env"
+log() { echo "[host-setup] $*"; }
+fail=0
+qgrep() { grep "$@" >/dev/null; }
+
+# ── identity (DIP-0044) ──────────────────────────────────────────────────────
+ACTOR="$(python3 - "$HOST" "$LIB/../registry/infrastructure.yaml" <<'PY'
+import sys, yaml
+host, reg = sys.argv[1], sys.argv[2]
+d = yaml.safe_load(open(reg)) or {}
+print(((d.get("servers") or {}).get(host) or {}).get("access", {}).get("actor", ""))
+PY
+)"
+[ -n "$ACTOR" ] || { log "FAIL registry declares no actor for host $HOST"; exit 2; }
+if [ "$VERIFY_ONLY" = 0 ]; then
+  if ! grep -qsE '^(export )?DATACORE_ACTOR=' "$ID_FILE"; then
+    mkdir -p "$(dirname "$ID_FILE")"
+    printf '%s\n' "# DIP-0044: this machine writes the ledger as one declared actor. Registry: servers.$HOST.access.actor" "DATACORE_ACTOR=$ACTOR" >> "$ID_FILE"
+    log "declared DATACORE_ACTOR=$ACTOR in $ID_FILE"
+  fi
+fi
+
+# ── crons the contracts assume ──────────────────────────────────────────────
+# One line per job, keyed on a marker substring; a stale line with the same
+# marker is replaced, so a path change here reaches the crontab on the next run.
+CRON_LINES=()
+case "$HOST" in
+  nightshift)
+    CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
+    CRON_LINES+=("*/15 * * * * $LIB/unit_alive.sh datacore-telegram.service $STATE/miles-bot.alive 2>>$STATE/miles-bot.alive.err")
+    ;;
+  plur-claw)
+    CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/spaces $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
+    CRON_LINES+=("*/15 * * * * $LIB/ledger-claim-pull.sh >> $STATE/ledger-dispatch.log 2>&1")
+    ;;
+  hermes)
+    : # Tris's heartbeat is a systemd timer (tris-heartbeat.timer); no spaces to project here
+    ;;
+esac
+# lines this installer retires (superseded by one of the above)
+RETIRE=("/usr/local/bin/ledger-pull-data.sh")
+
+marker_of() { printf '%s' "$1" | sed -E 's/^[^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+ //' | cut -c1-60; }
+if [ "$VERIFY_ONLY" = 0 ]; then
+  cur="$(crontab -l 2>/dev/null || true)"
+  new="$cur"
+  for r in "${RETIRE[@]}"; do
+    if printf '%s\n' "$new" | qgrep -F "$r"; then new="$(printf '%s\n' "$new" | grep -vF "$r")"; log "retired cron line: $r"; fi
+  done
+  for line in "${CRON_LINES[@]}"; do
+    m="$(marker_of "$line")"
+    if printf '%s\n' "$new" | qgrep -F "$m"; then
+      new="$(printf '%s\n' "$new" | grep -vF "$m"; printf '%s\n' "$line")"
+    else
+      new="$(printf '%s\n' "$new"; printf '%s\n' "$line")"; log "cron added: $m"
+    fi
+  done
+  printf '%s\n' "$new" | grep -vE '^\s*$' | crontab -
+fi
+
+# ── verify ───────────────────────────────────────────────────────────────────
+grep -qsE "^(export )?DATACORE_ACTOR=$ACTOR\$" "$ID_FILE" && log "OK  identity declared ($ACTOR)" || { log "FAIL identity not declared as $ACTOR in $ID_FILE"; fail=1; }
+res="$(python3 "$LIB/actor_identity.py" 2>/dev/null)"; [ "${res%% *}" = "$ACTOR" ] && log "OK  resolver agrees: $res" || { log "FAIL resolver says '$res', registry says $ACTOR"; fail=1; }
+cur="$(crontab -l 2>/dev/null || true)"
+for line in "${CRON_LINES[@]}"; do
+  m="$(marker_of "$line")"
+  printf '%s\n' "$cur" | qgrep -F "$m" && log "OK  cron: $m" || { log "FAIL cron missing: $m"; fail=1; }
+done
+for r in "${RETIRE[@]}"; do printf '%s\n' "$cur" | qgrep -F "$r" && { log "FAIL retired cron still present: $r"; fail=1; }; done
+[ -x "$LIB/ledger_phase1_cycle.sh" ] && log "OK  runner lib present at $LIB" || { log "FAIL runner lib missing: $LIB"; fail=1; }
+case "$HOST" in
+  nightshift)
+    systemctl show -p Environment --value nightshift-overnight.service 2>/dev/null | tr ' ' '\n' | qgrep -x "DATACORE_ACTOR=nightshift" && log "OK  overnight executor declares its own writer (nightshift)" || { log "FAIL overnight unit does not declare DATACORE_ACTOR=nightshift"; fail=1; }
+    systemctl is-active --quiet datacore-telegram.service && log "OK  Miles bot unit active" || { log "FAIL datacore-telegram.service not active"; fail=1; }
+    systemctl is-active --quiet venture-heartbeat.service && log "OK  venture heartbeat active" || { log "FAIL venture-heartbeat.service not active"; fail=1; }
+    ;;
+  hermes)
+    systemctl is-active --quiet tris-heartbeat.timer && log "OK  tris-heartbeat.timer active" || { log "FAIL tris-heartbeat.timer not active"; fail=1; }
+    systemctl --user is-active --quiet hermes-gateway.service 2>/dev/null && log "OK  hermes gateway (user unit) active" || { log "FAIL hermes-gateway.service (user) not active"; fail=1; }
+    ;;
+  plur-claw)
+    [ -d "$HOME/spaces/5-plur/.git" ] && log "OK  dispatch space present" || { log "FAIL $HOME/spaces/5-plur is not a repository"; fail=1; }
+    ;;
+esac
+[ "$fail" = 0 ] && log "ALL CHECKS PASS ($HOST)" || log "SOME CHECKS FAILED ($HOST)"
+exit $fail
