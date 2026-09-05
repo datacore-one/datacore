@@ -57,11 +57,17 @@ GENERATED_HEADER = (
     "# append an event; this file is a view.\n"
 )
 
-#: Statuses that still represent live work.
-LIVE_STATUSES = ("created", "claimed", "granted")
+#: Statuses that still represent live work. `completed` is live: an agent
+#: has finished, nobody has looked. In org that is REVIEW (DIP-0009), the
+#: state that exists for exactly this hand-off, and it stays in the file until
+#: a human verifies it (item.verify) or closes it in org (ingest -> dismiss).
+#: Until 2026-09-05 completed counted as closed and fell out of the projection
+#: after the retention day: 24 agent-finished tasks in 2-datacore had vanished
+#: from the human's list with nobody having signed them off.
+LIVE_STATUSES = ("created", "claimed", "granted", "completed")
 
-#: Statuses that mean the work is finished.
-CLOSED_STATUSES = ("completed", "verified", "dismissed")
+#: Statuses that mean the work is finished and signed off.
+CLOSED_STATUSES = ("verified", "dismissed")
 
 #: How long finished work stays visible in the projection, as DONE, before it
 #: is archived.
@@ -257,6 +263,8 @@ def render_item(item, *, level: int | None = None) -> list[str]:
     if item.status in CLOSED_STATUSES:
         from .fold import was_finished
         state = "DONE" if was_finished(item) else "CANCELLED"
+    elif item.status == "completed":
+        state = "REVIEW"  # finished by an agent, awaiting a human's sign-off
     else:
         state = payload.get("state") or "TODO"
     priority = org.get("priority")
