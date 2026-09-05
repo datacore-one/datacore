@@ -23,6 +23,7 @@ Commands:
 """
 
 from __future__ import annotations
+import os as _os
 
 import argparse
 import json
@@ -327,6 +328,12 @@ def cmd_add(args):
         "tags": sorted(tags) if tags else None,
         "scheduled": getattr(args, "scheduled", None) or None,
         "space": file_path.parent.parent.name,
+        # Who asked, and how deep the chain is (stage 5). The hop count is
+        # inherited from the environment an executor sets for the agent it
+        # runs (DATACORE_HOPS = its own item's hops + 1), so a chain of
+        # agents creating work for each other is visible and bounded.
+        "requested_by": getattr(args, "requested_by", None) or _os.environ.get("DATACORE_REQUESTED_BY") or None,
+        "hops": int(_os.environ.get("DATACORE_HOPS") or 0),
         # The drawer travels with the item. Without it a Phase 1 space (org
         # generated from the ledger) regenerated every adapter-created task
         # with an empty drawer: SURFACE, DONE_WHEN and JOB, the properties the
@@ -971,6 +978,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--priority", choices=["A", "B", "C"])
     p.add_argument("--created", help="Override CREATED timestamp")
     p.add_argument("--body", help="Task body text (use \\n for newlines)")
+    p.add_argument("--requested-by", dest="requested_by", help="Principal on whose behalf this item is created")
     p.add_argument("--property", action="append", metavar="KEY=VALUE",
                    help="Extra property (repeatable)")
     p.add_argument("--parent", help="Parent heading to nest under")

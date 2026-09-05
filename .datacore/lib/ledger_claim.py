@@ -105,7 +105,7 @@ def classify_route(text: str) -> tuple[str, str]:
 
 
 
-def run_task(title: str, route: str, cwd: Path, item_id: str = "") -> tuple[bool, str, dict]:
+def run_task(title: str, route: str, cwd: Path, item_id: str = "", hops: int = 0, actor: str = "") -> tuple[bool, str, dict]:
     """Execute one item. Returns (ok, detail).
 
     Runs through the executors registry (.datacore/lib/executors) rather than
@@ -261,7 +261,8 @@ def _isolated_check(space: Path, check: str) -> tuple[bool, str]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--space", required=True, type=Path)
-    ap.add_argument("--actor", default="dispatcher")
+    from actor_identity import this_actor
+    ap.add_argument("--actor", default=this_actor())
     ap.add_argument("--limit", type=int, default=3)
     ap.add_argument("--execute", action="store_true",
                     help="actually claim and run; without it, plan only and write nothing")
@@ -373,6 +374,12 @@ def main() -> int:
             continue
 
         # Claim BEFORE working, so an interrupted run is visible as claimed.
+        from claim_gate import check_claim
+        _ok, _why = check_claim(args.actor, item.payload or {})
+        if not _ok:
+            print(f"REFUSED  {(item.payload or {}).get('title', item.id)[:60]}\n         -> {_why}")
+            continue
+
         EventLog(space, args.actor).append(
             "item.claim", {"id": item.id, "owner": args.actor, "route": route, "reason": why})
         ok, detail, meta = run_task(title, route, space, item.id)
