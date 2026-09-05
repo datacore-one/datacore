@@ -94,3 +94,17 @@ def test_header_copy_is_written_once(tmp_path):
     (space / "org" / "next_actions.org").write_text("#+TITLE: Changed by a host\n* TODO x\n")
     G.project_space(space)
     assert (space / ".datacore" / "ledger-org-header").read_text() == first, "the copy never changes after the flip"
+
+
+def test_prepare_closes_items_that_org_already_finished(tmp_path):
+    """DONE in org, live in the ledger: no claim exists, so it is dismissed with kind done."""
+    P = _load("ledger_phase1_prepare"); space = _space(tmp_path)
+    org = (space / "org" / "next_actions.org").read_text().replace("* TODO Beta task", "* DONE Beta task")
+    (space / "org" / "next_actions.org").write_text(org)
+    plan = P.plan(space)
+    assert [c[0] for c in plan["close"]] == ["beta"] and plan["close"][0][1] == "done"
+    P.apply(space, "mac", plan)
+    from ledger.fold import fold, closure_kind
+    from ledger.log import read_events
+    it = fold(read_events(space)).items["beta"]
+    assert it.status == "dismissed" and closure_kind(it) == "done"
