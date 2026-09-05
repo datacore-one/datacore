@@ -19,7 +19,17 @@ done
 [ -n "$PY" ] || { echo "FATAL: no python >= 3.10"; exit 127; }
 cd "$DATACORE_ROOT" || exit 2
 echo "=== $(date -u '+%F %H:%MZ') phase-1 cycle ==="
-PHASE1=$(for d in "$DATACORE_ROOT"/[0-9]-*; do [ "$(cat "$d/.datacore/ledger-phase" 2>/dev/null | tr -d '[:space:]')" = "1" ] && basename "$d"; done)
+# Converge EVERY space first, Phase 1 or not: the marker that says a space is
+# in Phase 1 arrives by pull, and a cycle that pulls only spaces it already
+# knows are in Phase 1 never learns about a flip. On 2026-09-06 nine spaces
+# were flipped on the mac; the box's cycle regenerated five and left four
+# stale until the next fleet sync. Only directories that carry an event log
+# are spaces; archives and stray checkouts under the root are not.
+for d in "$DATACORE_ROOT"/[0-9]-*; do
+  [ -d "$d/.datacore/events" ] && [ -d "$d/.git" ] || continue
+  "$PY" "$LIB/ledger_transport.py" converge --space "$d" > "$STATE/phase1-converge-$(basename "$d").log" 2>&1 || echo "converge $(basename "$d"): $(grep -o '"reason": "[^"]*"' "$STATE/phase1-converge-$(basename "$d").log" | head -1)"
+done
+PHASE1=$(for d in "$DATACORE_ROOT"/[0-9]-*; do [ -d "$d/.datacore/events" ] && [ "$(cat "$d/.datacore/ledger-phase" 2>/dev/null | tr -d '[:space:]')" = "1" ] && basename "$d"; done)
 if [ -z "$PHASE1" ]; then echo "no space in Phase 1; nothing to do"; exit 0; fi
 "$PY" "$LIB/ledger_ingest_org.py" --root "$DATACORE_ROOT" > "$STATE/phase1-ingest.log" 2>&1; echo "ingest  rc=$? $(tail -1 "$STATE/phase1-ingest.log" | cut -c1-100)"
 rc=0
