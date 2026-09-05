@@ -36,6 +36,21 @@ version: 1
 jobs:
   # ── box (Winston / cos-server), root crontab, UTC ────────────────────────
 
+  # Reliability 5 is six daily conditions held thirty days; the scoreboard
+  # computes the day's line from the files the box already writes
+  # (2-datacore/1-tracks/ops/reliability-slo.md is the definition). A day the
+  # scoreboard did not run is a failed day, which is what this contract says.
+  - name: box-reliability-scoreboard
+    machine: box
+    schedule: "20 7 * * *"
+    cmd: "python3 ~/Data/.datacore/lib/reliability_scoreboard.py >> ~/.datacore/cos/scoreboard.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/reliability-scoreboard.log"
+        check: regex
+        arg: "level="
+        max_age_hours: 26
+
   - name: box-backup
     machine: box
     schedule: "30 2 * * *"
