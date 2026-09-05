@@ -28,7 +28,7 @@ stage: growth
 roles:
   cto:
     cadences:
-      daily: [pr-review]
+      weekly: [release-check]
   cio:
     agent: tris
     cadences:
@@ -42,5 +42,5 @@ def test_a_cadence_owned_by_an_external_agent_is_not_this_fleets_liveness(tmp_pa
     (tmp_path / "5-plur").mkdir(); (tmp_path / "5-plur" / "venture.yaml").write_text(VENTURE_WITH_TRIS)
     rows = L.collect(tmp_path, grace=3, today=datetime.date(2026, 9, 5))
     names = {(r[2], r[4]) for r in rows}
-    assert ("cto", "pr-review") in names, "our own never-run cadence is overdue"
+    assert ("cto", "release-check") in names, "our own never-run weekly cadence is overdue (7 days past a 3-day grace)"
     assert ("cio", "geo-sov-scan") not in names, "Tris's cadence is Tris's liveness"
