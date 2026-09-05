@@ -358,11 +358,12 @@ def parse_org_tasks(content: str) -> List[OrgTask]:
                 prop_end = j
                 j += 1
 
-        # Collect body lines (stop at next heading of same or higher level)
+        # Collect body lines (stop at ANY heading — child tasks are processed
+        # independently by the outer loop, not collected as body text).
         body: List[str] = []
         while j < len(lines):
             nl = lines[j]
-            if re.match(r"^\*{1," + str(level) + r"}\s", nl):
+            if re.match(r"^\*+\s", nl):
                 break
             body.append(nl)
             j += 1
