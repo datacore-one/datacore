@@ -64,6 +64,11 @@ TRACKING_PROPS = frozenset({
     "EPIC", "BLOCKER", "MERGE", "PR_URL", "ISSUE_URL",
 })
 
+# ── File-path properties: value is a path to read for GitHub refs ─────────────
+FILE_PATH_PROPS = frozenset({
+    "NIGHTSHIFT_OUTPUT",
+})
+
 # ── Informational properties: bare refs here are skipped ─────────────────────
 SKIP_BARE_PROPS = frozenset({
     "CONTEXT", "ACCEPTANCE_CRITERIA", "BOOTSTRAP", "RESULT", "CANCEL_REASON",
@@ -91,6 +96,13 @@ RE_REPO_REF = re.compile(
     r"([a-zA-Z][a-zA-Z0-9_-]*"            # owner-or-repo  (no dots — avoids version strings)
     r"(?:/[a-zA-Z][a-zA-Z0-9_-]*)?"       # optional /repo
     r")#(\d+)\b"
+)
+
+# ── "REPONAME #NNN" — space before # (e.g. "PLUR #240", "enterprise #389") ───
+# The existing RE_REPO_REF requires no space before #; this pattern catches the
+# space-separated form used in task titles throughout Datacore.
+RE_REPO_SPACE_REF = re.compile(
+    r"(?<![./])\b([a-zA-Z][a-zA-Z0-9_-]+)\s+#(\d{2,})\b"
 )
 
 # ── Org heading: * or ** + state keyword ─────────────────────────────────────
@@ -142,41 +154,68 @@ class OrgTask:
 # Config
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_config(data_dir: Path) -> Dict[str, Tuple[str, str]]:
+def load_config(data_dir: Path) -> Tuple[Dict[str, Tuple[str, str]], Dict[str, Dict[str, Tuple[str, str]]]]:
     """
     Load space→repo mapping from .datacore/config/gh-reconcile.yaml.
-    Returns {space_dirname: (owner, repo)}.
+
+    Returns:
+        primary  : {space_dirname: (owner, repo)}  — primary repo per space
+        secondary: {space_dirname: {shortname: (owner, repo)}}  — extra repos
+                   for resolving "REPONAME #NNN" bare refs (e.g. "enterprise #389")
     Falls back to git remotes for unconfigured spaces.
     """
     config_path = data_dir / ".datacore" / "config" / "gh-reconcile.yaml"
-    mapping: Dict[str, Tuple[str, str]] = {}
+    primary: Dict[str, Tuple[str, str]] = {}
+    secondary: Dict[str, Dict[str, Tuple[str, str]]] = {}
 
     if config_path.exists():
         try:
-            # Minimal YAML parsing (no PyYAML dependency)
             text = config_path.read_text()
-            in_space_repos = False
+            section = None
+            cur_space = None
             for line in text.splitlines():
                 stripped = line.strip()
                 if stripped.startswith("#") or not stripped:
                     continue
                 if stripped == "space_repos:":
-                    in_space_repos = True
+                    section = "space_repos"
                     continue
-                if in_space_repos and stripped and not stripped.startswith("#"):
+                if stripped == "extra_repos:":
+                    section = "extra_repos"
+                    cur_space = None
+                    continue
+                if section == "space_repos":
                     m = re.match(r"^(\S+?):\s+([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)", stripped)
                     if m:
                         space_name = m.group(1).strip("'\"")
                         repo_full = m.group(2).strip("'\"")
                         if "/" in repo_full:
                             owner, repo = repo_full.split("/", 1)
-                            mapping[space_name] = (owner, repo)
+                            primary[space_name] = (owner, repo)
                     elif re.match(r"^\S+:", stripped):
-                        in_space_repos = False
+                        section = None
+                elif section == "extra_repos":
+                    # Indented space name
+                    space_m = re.match(r"^(\S+?):\s*$", stripped)
+                    if space_m:
+                        cur_space = space_m.group(1).strip("'\"")
+                        secondary.setdefault(cur_space, {})
+                        continue
+                    # Indented repo entry under a space
+                    repo_m = re.match(r"^\s+(\S+?):\s+([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)", line)
+                    if repo_m and cur_space:
+                        short = repo_m.group(1).strip("'\"").lower()
+                        repo_full = repo_m.group(2).strip("'\"")
+                        if "/" in repo_full:
+                            o, r = repo_full.split("/", 1)
+                            secondary.setdefault(cur_space, {})[short] = (o, r)
+                    elif re.match(r"^\S+:", stripped):
+                        section = None
+                        cur_space = None
         except Exception as e:
             log.warning(f"Could not read gh-reconcile.yaml: {e}")
 
-    return mapping
+    return primary, secondary
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -361,24 +400,44 @@ def _extract_bare_refs_from(
     text: str,
     space_owner: Optional[str],
     space_repo: Optional[str],
+    extra_repos: Optional[Dict[str, Tuple[str, str]]] = None,
 ) -> List[GithubRef]:
-    """Extract bare refs (PR #N, issue #N, owner/repo#N) from title or tracking props."""
-    refs: List[GithubRef] = []
+    """Extract bare refs (PR #N, issue #N, owner/repo#N) from title or tracking props.
 
-    # owner/repo#NNN  or  reponame#NNN
+    extra_repos maps lowercase short names to (owner, repo) for resolving
+    "REPONAME #NNN" style references beyond the primary space repo.
+    E.g. {"enterprise": ("plur-ai", "enterprise")} resolves "enterprise #389".
+    """
+    refs: List[GithubRef] = []
+    _extra = extra_repos or {}
+
+    # owner/repo#NNN  or  reponame#NNN  (no space before #)
     for m in RE_REPO_REF.finditer(text):
         ref_repo_str = m.group(1)
         num = int(m.group(2))
         if "/" in ref_repo_str:
             owner_part, repo_part = ref_repo_str.split("/", 1)
-            # Sanity: skip if it looks like a version (digits.digits in either part)
             if re.search(r"\d+\.\d+", ref_repo_str):
                 continue
             refs.append(GithubRef(owner_part, repo_part, num, "unknown"))
         else:
-            # Short repo name: only match if it equals the space's configured repo
-            if space_repo and ref_repo_str.lower() == space_repo.lower() and space_owner:
+            lc = ref_repo_str.lower()
+            if space_repo and lc == space_repo.lower() and space_owner:
                 refs.append(GithubRef(space_owner, space_repo, num, "unknown"))
+            elif lc in _extra:
+                o, r = _extra[lc]
+                refs.append(GithubRef(o, r, num, "unknown"))
+
+    # "REPONAME #NNN" — space before # (e.g. "PLUR #240", "enterprise #389")
+    for m in RE_REPO_SPACE_REF.finditer(text):
+        word, num_str = m.group(1), m.group(2)
+        num = int(num_str)
+        lc = word.lower()
+        if space_repo and lc == space_repo.lower() and space_owner:
+            refs.append(GithubRef(space_owner, space_repo, num, "unknown"))
+        elif lc in _extra:
+            o, r = _extra[lc]
+            refs.append(GithubRef(o, r, num, "unknown"))
 
     # PR #NNN
     if space_owner and space_repo:
@@ -393,15 +452,35 @@ def _extract_bare_refs_from(
     return refs
 
 
+def _read_nightshift_output_refs(
+    file_path: str,
+    space_owner: Optional[str],
+    space_repo: Optional[str],
+) -> List[GithubRef]:
+    """Read a NIGHTSHIFT_OUTPUT file and extract GitHub PR/issue URLs from it.
+
+    This allows Review tasks to be auto-closed even if the output file was
+    never explicitly linked with a PR_URL property.  Returns [] if the file
+    is inaccessible or contains no GitHub refs.
+    """
+    try:
+        content = Path(file_path).read_text(encoding="utf-8", errors="replace")
+    except (OSError, ValueError):
+        return []
+    return _extract_urls_from(content)
+
+
 def extract_github_refs(
     task: OrgTask,
     space_owner: Optional[str],
     space_repo: Optional[str],
+    extra_repos: Optional[Dict[str, Tuple[str, str]]] = None,
 ) -> List[GithubRef]:
     """
     Extract all resolvable GitHub refs from a task using conservative rules:
     - Full URLs : everywhere (title + all props + body)
     - Bare refs : title + tracking properties only
+    - NIGHTSHIFT_OUTPUT : full file contents searched for GitHub URLs
     """
     seen: Set[GithubRef] = set()
     refs: List[GithubRef] = []
@@ -420,12 +499,17 @@ def extract_github_refs(
     add(_extract_urls_from(all_text))
 
     # ── 2. Bare refs from title ───────────────────────────────────────────────
-    add(_extract_bare_refs_from(task.title, space_owner, space_repo))
+    add(_extract_bare_refs_from(task.title, space_owner, space_repo, extra_repos))
 
     # ── 3. Bare refs from tracking properties ─────────────────────────────────
     for prop_name, prop_val in task.props.items():
         if prop_name.upper() in TRACKING_PROPS:
-            add(_extract_bare_refs_from(prop_val, space_owner, space_repo))
+            add(_extract_bare_refs_from(prop_val, space_owner, space_repo, extra_repos))
+
+    # ── 4. NIGHTSHIFT_OUTPUT file — read and search for GitHub URLs ────────────
+    for prop_name, prop_val in task.props.items():
+        if prop_name.upper() in FILE_PATH_PROPS and prop_val.strip():
+            add(_read_nightshift_output_refs(prop_val.strip(), space_owner, space_repo))
 
     return refs
 
@@ -621,6 +705,7 @@ def reconcile_file(
     space_owner: Optional[str],
     space_repo: Optional[str],
     dry_run: bool,
+    extra_repos: Optional[Dict[str, Tuple[str, str]]] = None,
 ) -> int:
     """
     Reconcile one org file. Returns number of tasks closed.
@@ -639,7 +724,7 @@ def reconcile_file(
     to_close: List[Tuple[OrgTask, str, Optional[str]]] = []
 
     for task in open_tasks:
-        refs = extract_github_refs(task, space_owner, space_repo)
+        refs = extract_github_refs(task, space_owner, space_repo, extra_repos)
         if not refs:
             continue
 
@@ -708,7 +793,7 @@ def reconcile_all(data_dir: Path, dry_run: bool) -> int:
         log.error(r.stderr.strip())
         return -1  # Distinct from 0 (no tasks closed)
 
-    config = load_config(data_dir)
+    primary_config, secondary_config = load_config(data_dir)
     total_closed = 0
 
     # Discover spaces (e.g. 0-personal, 1-datafund …) — skip archive dirs
@@ -733,8 +818,8 @@ def reconcile_all(data_dir: Path, dry_run: bool) -> int:
         log.info(f"\nSpace: {space_dir.name}")
 
         # Resolve the space's primary GitHub repo
-        if space_dir.name in config:
-            space_owner, space_repo = config[space_dir.name]
+        if space_dir.name in primary_config:
+            space_owner, space_repo = primary_config[space_dir.name]
             log.debug(f"  repo (config): {space_owner}/{space_repo}")
         else:
             remote = get_space_repo_from_remote(space_dir)
@@ -745,6 +830,8 @@ def reconcile_all(data_dir: Path, dry_run: bool) -> int:
                 space_owner = space_repo = None
                 log.debug("  repo: unknown — bare refs won't resolve")
 
+        extra_repos = secondary_config.get(space_dir.name)
+
         # Pull before modifying
         if not dry_run and (space_dir / ".git").exists():
             git_pull_ff(space_dir)
@@ -752,7 +839,7 @@ def reconcile_all(data_dir: Path, dry_run: bool) -> int:
         space_closed = 0
         changed_files: List[Path] = []
         for org_file in org_files:
-            n = reconcile_file(org_file, space_owner, space_repo, dry_run)
+            n = reconcile_file(org_file, space_owner, space_repo, dry_run, extra_repos)
             if n > 0:
                 space_closed += n
                 changed_files.append(org_file)
@@ -779,7 +866,7 @@ def reconcile_all(data_dir: Path, dry_run: bool) -> int:
 
 def verify_patterns(data_dir: Path) -> None:
     """Print what refs would be extracted per task (no API calls)."""
-    config = load_config(data_dir)
+    primary_config, secondary_config = load_config(data_dir)
     space_dirs = sorted(
         d for d in data_dir.iterdir()
         if d.is_dir()
@@ -790,12 +877,13 @@ def verify_patterns(data_dir: Path) -> None:
 
     for space_dir in space_dirs:
         space_owner = space_repo = None
-        if space_dir.name in config:
-            space_owner, space_repo = config[space_dir.name]
+        if space_dir.name in primary_config:
+            space_owner, space_repo = primary_config[space_dir.name]
         else:
             remote = get_space_repo_from_remote(space_dir)
             if remote:
                 space_owner, space_repo = remote
+        extra_repos = secondary_config.get(space_dir.name)
 
         for fname in ["inbox.org", "next_actions.org"]:
             org_file = space_dir / "org" / fname
@@ -804,7 +892,7 @@ def verify_patterns(data_dir: Path) -> None:
             tasks = parse_org_tasks(org_file.read_text(encoding="utf-8"))
             open_tasks = [t for t in tasks if t.state in OPEN_STATES]
             for task in open_tasks:
-                refs = extract_github_refs(task, space_owner, space_repo)
+                refs = extract_github_refs(task, space_owner, space_repo, extra_repos)
                 if refs:
                     print(
                         f"[{space_dir.name}/{fname}:{task.heading_line+1}] "

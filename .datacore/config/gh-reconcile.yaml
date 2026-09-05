@@ -4,7 +4,11 @@
 # "PR #774" or "plur#504" found in task titles, without relying on the space's
 # own git remote (which may point to a notes/space repo, not the code repo).
 #
-# Format: space_repos maps a space directory name to "owner/repo".
+# Format:
+#   space_repos: primary code repo per space (resolves "PR #N", "plur#N", etc.)
+#   extra_repos: additional repos per space (resolves "REPONAME #N" patterns
+#                such as "enterprise #389" or "PLUR #240" cross-space refs)
+#
 # The script falls back to `git remote get-url origin` for unconfigured spaces.
 #
 # Example: 5-plur's git remote is plur-ai/plur-space (the org notes repo),
@@ -14,6 +18,22 @@
 
 space_repos:
   5-plur: plur-ai/plur
-  # 2-datacore: datacore-one/datacore-mcp  # uncomment if 2-datacore tasks ref PRs there
-  # 1-datafund: datafund/verity             # example — adjust to your actual code repo
-  # 3-fds: fairdatasociety/fdp-storage      # example
+  2-datacore: datacore-one/datacore
+  1-datafund: datafund/verity
+  0-personal: plur-ai/plur  # personal tasks most often track plur-ai/plur issues
+
+# extra_repos: additional short-name aliases per space.
+# Used to resolve "REPONAME #NNN" bare refs where the repo name differs from
+# the primary space repo (e.g. "enterprise #389" in 5-plur tasks).
+extra_repos:
+  5-plur:
+    enterprise: plur-ai/enterprise
+    plur: plur-ai/plur
+  0-personal:
+    enterprise: plur-ai/enterprise
+    plur: plur-ai/plur
+    datacore: datacore-one/datacore
+    verity: datafund/verity
+  2-datacore:
+    enterprise: plur-ai/enterprise
+    plur: plur-ai/plur
