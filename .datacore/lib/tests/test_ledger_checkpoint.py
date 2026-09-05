@@ -115,3 +115,22 @@ def test_a_real_loss_is_still_reported():
     assert not ok and detail == "1 lost (e.g. b)", detail
     ok, detail = compare(live, {**live, "a": ("Renamed", "TODO", (), None, None)})
     assert not ok and detail == "1 altered (e.g. a)", detail
+
+
+def test_an_agents_completion_round_trips_as_review(tmp_path):
+    """completed is live and renders REVIEW (2026-09-06); the restore must
+    count it and read it back as the same item, not as one it invented."""
+    import importlib.util, pathlib as _pl, sys as _sys
+    LIB = _pl.Path(__file__).resolve().parents[1]
+    _sys.path.insert(0, str(LIB))
+    from ledger.log import EventLog
+    spec = importlib.util.spec_from_file_location("ck", LIB / "ledger_checkpoint.py")
+    ck = importlib.util.module_from_spec(spec); spec.loader.exec_module(ck)
+    space = tmp_path / "5-plur"; (space / ".datacore" / "events").mkdir(parents=True); (space / "org").mkdir()
+    log = EventLog(space, "nightshift")
+    log.append("item.create", {"id": "t1", "title": "Publish the trust page", "state": "TODO", "tags": ["plur"]})
+    log.append("item.claim", {"id": "t1", "executor": "server:nightshift"})
+    log.append("item.complete", {"id": "t1"})
+    ck.write(space)
+    ok, detail = ck.verify(space)
+    assert ok, detail

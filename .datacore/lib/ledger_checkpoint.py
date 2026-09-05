@@ -52,7 +52,12 @@ from ledger.genesis import import_space  # noqa: E402
 from ledger.log import read_events  # noqa: E402
 from ledger.projector import _clean_title_and_tags, _org_stamp, project, projected_items  # noqa: E402
 
-LIVE = ("created", "claimed", "granted")
+# The projector's own notion of live. Since 2026-09-06 `completed` is live
+# (an agent finished, nobody signed off: REVIEW in org), so a round-trip
+# through the projection carries those items and this side must count them
+# too — with the state the projector renders, or every completed item comes
+# back "invented" and 2-datacore reports 58 of them.
+from ledger.projector import LIVE_STATUSES as LIVE  # noqa: E402
 CHECKPOINT_REL = Path(".datacore") / "checkpoints" / "next_actions.org"
 
 
@@ -178,7 +183,8 @@ def _fingerprint(state, space_filetags: set | None = None,
         # 0-personal as "altered" by a restore that preserved them exactly
         # (2026-08-30), the same false-alarm class as the timestamp and
         # filetag asymmetries above. A missing state MEANS TODO here.
-        out[iid] = (title, p.get("state") or "TODO",
+        rendered_state = "REVIEW" if item.status == "completed" else (p.get("state") or "TODO")
+        out[iid] = (title, rendered_state,
                     tuple(sorted(eff)),
                     _org_stamp(p.get("scheduled")), _org_stamp(p.get("deadline")))
     return out

@@ -227,6 +227,11 @@ def _clean_title_and_tags(title: str, tags) -> tuple[str, list[str]]:
     2026-09-03. The projection must always be valid org, whatever the ledger
     holds: embedded blocks are split out, invalid characters become `_`.
     """
+    # A heading is one line. A title that arrived with newlines (thirty
+    # dispatcher proof items created straight into the ledger in Aug 2026
+    # carried "...\nNo other content...") rendered only its first line, so a
+    # restore read back a different title and reported the item altered.
+    title = " ".join(str(title or "").split())
     title = title or ""
     found: list[str] = []
     m = _TRAILING_TAG_BLOCK.search(title)
