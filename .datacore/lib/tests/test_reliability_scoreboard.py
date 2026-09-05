@@ -4,6 +4,7 @@ import datetime as dt, importlib.util, json, os, pathlib, time
 LIB = pathlib.Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("rs", LIB / "reliability_scoreboard.py")
 M = importlib.util.module_from_spec(spec); spec.loader.exec_module(M)
+M._unit_show = lambda unit: {}  # no systemd in the test box; each test says what the unit reports
 
 
 def _good_box(tmp_path, day):
@@ -81,3 +82,32 @@ def test_r2_sees_a_unit_that_failed_and_recovered_during_the_day(tmp_path, monke
     (cos / "alerts" / ".sent-log").write_text(f"{int(dt.datetime.fromisoformat(day).timestamp()) + 3600} unit http=200 unit-failed:v2-verify.service\n")
     r = M.compute(day, state, cos)
     assert r["checks"]["R2"]["ok"], r["checks"]["R2"]
+
+
+def test_r4_fleet_sync_is_never_vacuous(tmp_path, monkeypatch):
+    day = "2026-09-05"; state, cos = _good_box(tmp_path, day)
+    (state / "fleet-sync.log").unlink()
+    r = M.compute(day, state, cos)
+    assert not r["checks"]["R4"]["ok"] and "never observed" in r["checks"]["R4"]["note"]
+    (state / "fleet-sync.log").write_text("1-datafund  [main]\n  clean (pulled)\n")
+    old = time.time() - 20 * 3600
+    os.utime(state / "fleet-sync.log", (old, old))
+    r = M.compute(day, state, cos)
+    assert not r["checks"]["R4"]["ok"] and "20h old" in r["checks"]["R4"]["note"]
+
+
+def test_r4_reads_the_units_own_result_where_there_is_one(tmp_path, monkeypatch):
+    day = "2026-09-05"; state, cos = _good_box(tmp_path, day)
+    now = time.time()
+    stamp = lambda h: dt.datetime.fromtimestamp(now - h * 3600, dt.timezone.utc).strftime("%a %Y-%m-%d %H:%M:%S UTC")
+    monkeypatch.setattr(M, "_unit_show", lambda unit: {"LoadState": "loaded", "Result": "exit-code", "ExecMainExitTimestamp": stamp(1)})
+    r = M.compute(day, state, cos, now=now)
+    assert not r["checks"]["R4"]["ok"] and "last run exit-code" in r["checks"]["R4"]["note"]
+    monkeypatch.setattr(M, "_unit_show", lambda unit: {"LoadState": "loaded", "Result": "success", "ExecMainExitTimestamp": stamp(20)})
+    r = M.compute(day, state, cos, now=now)
+    assert not r["checks"]["R4"]["ok"] and "timer stopped" in r["checks"]["R4"]["note"]
+    monkeypatch.setattr(M, "_unit_show", lambda unit: {"LoadState": "loaded", "Result": "success", "ExecMainExitTimestamp": ""})
+    assert "never ran" in M.compute(day, state, cos, now=now)["checks"]["R4"]["note"]
+    (state / "fleet-sync.log").write_text("FAIL: stale text from a run that has since succeeded\n")
+    monkeypatch.setattr(M, "_unit_show", lambda unit: {"LoadState": "loaded", "Result": "success", "ExecMainExitTimestamp": stamp(2)})
+    assert M.compute(day, state, cos, now=now)["checks"]["R4"]["ok"]
