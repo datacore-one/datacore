@@ -29,7 +29,7 @@ principals:
       roles: [8-firm:cos]
       cadences: [briefing 04:00, verify-daily 07:10, liveness 07:40, scoreboard 08:10]
     delegates_to: [miles, tris]
-    charter: .datacore/principals/winston.md
+    charter: 8-firm/1-tracks/principals/winston.md
     contracts: box-*
     memory_scope: null
     budget_monthly_usd: null
@@ -45,7 +45,7 @@ principals:
     owns:
       roles: [8-firm:coo, 6-meridian:trader, 6-meridian:operations]
     executors: [nightshift]
-    charter: .datacore/principals/miles.md
+    charter: 8-firm/1-tracks/principals/miles.md
     contracts: nightshift-*
     memory_scope: null
     budget_monthly_usd: null
@@ -60,7 +60,7 @@ principals:
     writes_as: [tris]
     owns:
       roles: [8-firm:cio, 5-plur:(venture.yaml)]
-    charter: .datacore/principals/tris.md
+    charter: 8-firm/1-tracks/principals/tris.md
     contracts: hermes-*
     memory_scope: null
     budget_monthly_usd: null
@@ -75,7 +75,7 @@ principals:
     writes_as: [data]
     owns:
       roles: [8-firm:comms, 5-plur:(venture.yaml)]
-    charter: .datacore/principals/data.md
+    charter: 8-firm/1-tracks/principals/data.md
     contracts: plur-claw-*
     memory_scope: null
     budget_monthly_usd: null
