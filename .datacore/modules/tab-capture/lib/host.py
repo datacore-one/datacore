@@ -87,6 +87,29 @@ def format_entry(tab, today_str):
     return "\n".join(lines)
 
 
+def insert_under_inbox(content, entries):
+    """Place new entries at the end of the "* Inbox" section.
+
+    Entries are "**" headings, so where they land decides whose children
+    they are. Appending at the end of the file put every batch under
+    whatever top-level entry was last: on 2026-09-05, 85 captured tabs sat
+    folded beneath a DONE task, invisible to every outline view and to the
+    GTD tools. The section is the first top-level heading titled Inbox
+    (case-insensitive); entries go before the next top-level heading after
+    it. A file without such a section gets one appended.
+    """
+    lines = content.split("\n")
+    start = next((i for i, l in enumerate(lines)
+                  if re.match(r"^\* +(inbox)\s*$", l, re.IGNORECASE)), None)
+    if start is None:
+        base = content.rstrip("\n")
+        return (base + "\n\n" if base else "") + "* Inbox\n" + entries + "\n"
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("* ")), len(lines))
+    while end > start + 1 and lines[end - 1].strip() == "":
+        end -= 1
+    return "\n".join(lines[:end] + entries.split("\n") + lines[end:])
+
+
 def capture_tabs(tabs, config):
     """Capture tabs to inbox.org, returning result stats."""
     inbox_path = os.path.expanduser(config["inbox_path"])
@@ -120,10 +143,10 @@ def capture_tabs(tabs, config):
 
             if new_tabs:
                 entries = "\n".join(format_entry(t, today_str) for t in new_tabs)
-                # Ensure we start on a new line
-                if content and not content.endswith("\n"):
-                    f.write("\n")
-                f.write(entries + "\n")
+                content = insert_under_inbox(content, entries)
+                f.seek(0)
+                f.write(content)
+                f.truncate()
                 f.flush()
 
             return {
