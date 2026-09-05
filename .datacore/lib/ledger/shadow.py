@@ -168,7 +168,13 @@ def compare(space_dir: Path, org_file: Path | None = None) -> ShadowDiff:
                                              other.read_text(errors="replace")))
             except OSError:
                 continue
+        # BOTH SIDES. In Phase 1 the real file IS a projection and carries every
+        # live item, including ones whose id also sits in inbox.org; dropping
+        # them from the projection only reported them "lost" from a file that
+        # had just been generated from the same ledger (12 in 0-personal on
+        # 2026-09-06). An item that lives elsewhere is compared nowhere.
         shadow = {k: v for k, v in shadow.items() if k not in elsewhere}
+        real = {k: v for k, v in real.items() if k not in elsewhere}
     diff.org_count, diff.projection_count = len(real), len(shadow)
     diff.only_in_org = sorted(set(real) - set(shadow))
     diff.only_in_projection = sorted(set(shadow) - set(real))
