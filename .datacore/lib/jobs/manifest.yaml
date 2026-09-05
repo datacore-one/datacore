@@ -569,13 +569,16 @@ jobs:
     cmd: "~/Data/.datacore/modules/ventures/server/venture-heartbeat.sh"
     on_fail: telegram
     artifacts:
-      # heartbeat_tick() appends one line per tick (venture_heartbeat.py,
-      # "Heartbeat tick: N active, M idle"). Two ticks an hour; two hours
-      # of silence means the loop is dead or wedged.
+      # heartbeat_tick() appends one line per tick to this log, in the form
+      # "<ts> active=N idle=M ventures=K" (venture_heartbeat.py:647; the
+      # "Heartbeat tick:" phrase goes to the journal, not the file — read on
+      # nightshift 2026-09-06). A tick is 1800 s plus the ventures' own time;
+      # gaps up to ~70 min observed. Three hours of silence means the loop is
+      # dead or wedged.
       - path: "~/Data/.datacore/state/venture/heartbeat.log"
         check: regex
-        arg: "Heartbeat tick"
-        max_age_hours: 2
+        arg: "active="
+        max_age_hours: 3
 
   - name: nightshift-miles-bot
     machine: nightshift
