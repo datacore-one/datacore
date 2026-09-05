@@ -27,7 +27,11 @@ if [ -n "$repo_root" ] && [ -f "$repo_root/.datacore/structure-allow" ]; then
   extra_allow=$(grep -v '^#' "$repo_root/.datacore/structure-allow" 2>/dev/null)
 fi
 
-staged=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null)
+# quotePath=false: git quotes a path with a non-ASCII byte ("3-knowledge/…/José-Andrés.md")
+# and the leading quote then reads as an unknown root directory. Four CRM
+# people files refused every autosave on winston's 1-datafund on 2026-09-05,
+# and with it the whole fleet sync of that space.
+staged=$(git -c core.quotePath=false diff --cached --name-only --diff-filter=ACM 2>/dev/null)
 [ -z "$staged" ] && exit 0
 
 vfile=$(mktemp)
