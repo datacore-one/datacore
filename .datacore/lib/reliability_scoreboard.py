@@ -62,8 +62,14 @@ def r1_delivered(state: Path) -> tuple[bool, str]:
 
 
 def r2_loud(cos: Path, day: str) -> tuple[bool, str]:
+    """Every unit that failed TODAY has a sent alert, and no unit alert was
+    burst-suppressed. "Failed today" comes from the journal, not from
+    `systemctl --state=failed` at scoreboard time: a unit that failed at 03:00
+    and was green again by 08:10 is exactly the failure this must not miss.
+    When the journal is unreadable the currently failed units are the
+    fallback and the note says so."""
     sup = [l for l in _lines(cos / "alerts" / "suppressed.log") if l.startswith(f"[{day}") and "burst" in l and "unit-failed:" in l]
-    failed = _failed_units()
+    failed, source = _failed_units_today(day)
     sent = _lines(cos / "alerts" / ".sent-log")
     day_start = dt.datetime.fromisoformat(day).timestamp()
     sent_units = {l.split("unit-failed:", 1)[1].strip() for l in sent
@@ -75,7 +81,31 @@ def r2_loud(cos: Path, day: str) -> tuple[bool, str]:
         notes.append(f"{len(sup)} unit alert(s) burst-suppressed")
     if silent:
         notes.append("failed without a sent alert: " + ", ".join(silent))
-    return ok, ("; ".join(notes) or f"{len(sent_units)} unit alert(s) sent, none suppressed")
+    return ok, ("; ".join(notes) or f"{len(failed)} unit failure(s) today, {len(sent_units)} alerted, none suppressed ({source})")
+
+
+def _journal(args: list[str]) -> str:
+    """The system journal. Plain first (the installer puts the CoS user in
+    systemd-journal); `sudo -n` as the fallback on a box where that has not
+    happened yet, so the day is measured rather than reported unreadable."""
+    for cmd in (["journalctl"], ["sudo", "-n", "journalctl"]):
+        try:
+            out = subprocess.run([*cmd, "--no-pager", "-q", *args], capture_output=True, text=True, timeout=60).stdout
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        if out.strip():
+            return out
+    return ""
+
+
+_FAILED_RE = re.compile(r"systemd\[1\]: ([A-Za-z0-9@._-]+\.service): Failed with result")
+
+
+def _failed_units_today(day: str) -> tuple[set[str], str]:
+    out = _journal(["--since", f"{day} 00:00"])
+    if out:
+        return {m.group(1) for m in _FAILED_RE.finditer(out) if not m.group(1).startswith("alert@")}, "journal"
+    return _failed_units(), "journal unreadable; currently failed units only"
 
 
 def _failed_units() -> set[str]:
@@ -108,13 +138,35 @@ def r4_data_safe(cos: Path, state: Path, now: float) -> tuple[bool, str]:
     return ok, ("; ".join(notes) or "backup offsite, restore proven, fleet converging")
 
 
-def r5_reachable(state: Path, day: str) -> tuple[bool, str]:
+#: The off-box prober's address, as it appears in the daemon's request log.
+PROBER_IP = os.environ.get("COS_PROBER_IP", "100.101.159.42")
+PROBE_MINUTES = int(os.environ.get("COS_PROBE_MINUTES", "15"))
+
+
+def r5_reachable(state: Path, day: str, now: float | None = None) -> tuple[bool, str]:
+    """Measured ON THE BOX from the prober's own hits.
+
+    The probe runs on another host and writes its log there; reading that
+    log here passed vacuously ("no probe log on this host") on 2026-09-05.
+    The daemon logs every GET /health with the caller's address, so the
+    number of hits from the prober today, against the number of probes the
+    day has had time for, is the reachability record the box itself holds.
+    The prober's own log stays the answer on the prober."""
     rows = [l for l in _lines(state / "cos-uptime.log") if l.startswith(day)]
-    if not rows:
-        return True, "no probe log on this host (measured on the prober)"
-    up = sum(1 for l in rows if " UP " in l)
-    ratio = up / len(rows)
-    return ratio >= 0.995, f"{up}/{len(rows)} probes UP ({ratio:.1%})"
+    if rows:
+        up = sum(1 for l in rows if " UP " in l)
+        return up / len(rows) >= 0.995, f"{up}/{len(rows)} probes UP (prober log)"
+    out = _journal(["-u", "datacored", "--since", f"{day} 00:00"])
+    if not out:
+        return False, "no probe log here and the daemon journal is unreadable"
+    hits = sum(1 for l in out.splitlines() if "GET /health" in l and PROBER_IP in l)
+    now = now or dt.datetime.now().timestamp()
+    elapsed_min = max(0.0, (now - dt.datetime.fromisoformat(day).timestamp()) / 60)
+    expected = int(elapsed_min // PROBE_MINUTES)
+    if expected < 4:
+        return True, f"{hits} probe hit(s) so far; too early to judge"
+    ok = hits >= expected - max(1, expected // 200)
+    return ok, f"{hits}/{expected} probe hits from {PROBER_IP} today"
 
 
 def r6_rebuildable(cos: Path, day: str) -> tuple[bool, str]:
@@ -134,7 +186,7 @@ def compute(day: str, state: Path, cos: Path, now: float | None = None) -> dict:
     now = now or dt.datetime.now().timestamp()
     checks = {
         "R1": r1_delivered(state), "R2": r2_loud(cos, day), "R3": r3_unattended(cos, day),
-        "R4": r4_data_safe(cos, state, now), "R5": r5_reachable(state, day), "R6": r6_rebuildable(cos, day),
+        "R4": r4_data_safe(cos, state, now), "R5": r5_reachable(state, day, now), "R6": r6_rebuildable(cos, day),
     }
     passed = all(ok for ok, _ in checks.values())
     log = state / "reliability-scoreboard.log"
