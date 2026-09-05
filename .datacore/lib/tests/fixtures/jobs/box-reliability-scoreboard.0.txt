@@ -1,0 +1,1 @@
+2026-09-05 FAIL streak=0 level=3 R1=FAIL R2=FAIL R3=FAIL R4=ok R5=FAIL R6=ok | R1: recurring: box-cadence-liveness; R2: 2 unit alert(s) burst-suppressed; failed without a sent alert: v2-verify.service; R3: 5 hand intervention(s) logged; R5: 26/82 probe hits from 100.101.159.42 today

@@ -42,7 +42,14 @@ from ledger.verify import check_not_rewound, verify_chain  # noqa: E402
 
 
 def _default_actor() -> str:
-    return os.environ.get("DATACORE_ACTOR") or socket.gethostname()
+    try:
+        from actor_identity import this_actor
+    except ImportError:
+        import importlib.util as _ilu, pathlib as _pl
+        _spec = _ilu.spec_from_file_location("actor_identity", _pl.Path(__file__).resolve().parent / "actor_identity.py")
+        _m = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_m)
+        this_actor = _m.this_actor
+    return this_actor()
 
 
 def _json_dict(raw: str) -> dict:

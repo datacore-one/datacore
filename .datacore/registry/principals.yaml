@@ -1,0 +1,100 @@
+# Principals: who acts in this installation, and which ledger writer logs are
+# theirs (DIP-0044 identity; product description "the contract of being a
+# principal"). A writer log named under `writes_as` may only ever be appended
+# by commits authored with one of the principal's `emails`; v2_verify checks it.
+#
+# Facts only. A field that is not yet decided is null and stays null until the
+# owner decides it — a made-up budget is worse than none.
+version: 1
+principals:
+  gregor:
+    kind: human
+    display: Gregor
+    emails: [gregor@plur.si, gregor@ethswarm.org, dev@datacore.one]
+    github: plur9
+    hosts: [mac]
+    writes_as: [mac]
+    decision: final
+    memory_scope: user:plur:gregor
+    permission_mode: human
+  winston:
+    kind: agent
+    display: Winston
+    role: chief of staff
+    emails: [winston@datacore.one]
+    github: null                        # deliberately under the owner's account (DIP-0044 §4)
+    hosts: [winston]
+    writes_as: [winston, bridge]        # bridge: the hostname-derived log from before DIP-0044
+    owns:
+      roles: [8-firm:cos]
+      cadences: [briefing 04:00, verify-daily 07:10, liveness 07:40, scoreboard 08:10]
+    delegates_to: [miles, tris]
+    charter: .datacore/modules/chief-of-staff/CLAUDE.md
+    contracts: box-*
+    memory_scope: null
+    budget_monthly_usd: null
+    permission_mode: propose            # proposes; the client approves external actions
+  miles:
+    kind: agent
+    display: Miles
+    role: chief of operations
+    emails: [miles@datacore.one, gregor+miles@datafund.io]
+    github: miles-on-nightshift
+    hosts: [nightshift]
+    writes_as: [miles, nightshift]      # nightshift: the executor's log; it commits as Miles
+    owns:
+      roles: [8-firm:coo, 6-meridian:trader, 6-meridian:operations]
+    executors: [nightshift]
+    charter: null
+    contracts: nightshift-*
+    memory_scope: null
+    budget_monthly_usd: null
+    permission_mode: bypass             # bot: bypassPermissions; nightshift: --dangerously-skip-permissions
+  tris:
+    kind: agent
+    display: Tris
+    role: chief intelligence officer
+    emails: [tris@datacore.one]
+    github: tris-on-hermes
+    hosts: [hermes]
+    writes_as: [tris]
+    owns:
+      roles: [8-firm:cio, 5-plur:(venture.yaml)]
+    charter: null
+    contracts: hermes-*
+    memory_scope: null
+    budget_monthly_usd: null
+    permission_mode: yolo               # HERMES_YOLO_MODE=1
+  data:
+    kind: agent
+    display: Mr Data
+    role: communications
+    emails: [mrdata@datacore.one, data@plur.ai]
+    github: data-on-claw
+    hosts: [plur-claw]
+    writes_as: [data]
+    owns:
+      roles: [8-firm:comms, 5-plur:(venture.yaml)]
+    charter: null
+    contracts: plur-claw-*
+    memory_scope: null
+    budget_monthly_usd: null
+    permission_mode: null
+  genesis:
+    kind: migration
+    display: genesis import (2026-08-10, one shot)
+    emails: [gregor@plur.si, winston@datacore.one, miles@datacore.one]
+    hosts: [mac, winston, nightshift]
+    writes_as: [genesis]
+  practice:
+    kind: agent
+    display: The Practice (John, Mick)
+    role: health and longevity practice
+    emails: []
+    github: null
+    hosts: [mac]
+    writes_as: []                       # keeps its own intervention ledger; not yet an event-ledger writer
+    charter: 9-practice/CLAUDE.md
+    memory_scope: agent:john
+    decision: proposes; the client approves every protocol change
+    permission_mode: propose

@@ -271,6 +271,50 @@ def check_identity(rep: Report) -> None:
             "aligned" if not split else f"differ on: {', '.join(split)}")
 
 
+
+def check_writer_authorship(rep: Report) -> None:
+    """Was each writer's log only ever appended by its own principal?
+
+    A per-writer chain is tamper-evident, not authenticated: any account that
+    can push can append to any log. The principals registry binds each writer
+    log to the git identities that may commit to it (Miles commits the
+    executor's `nightshift.jsonl`; the owner commits `mac.jsonl`). Non-merge
+    commits only — a merge that carries another writer's lines is a courier,
+    not an author — and counted from 2026-09-05, the day this check began
+    measuring. Two earlier autosave commits had carried another writer's log
+    (0-personal/nightshift by winston, 6-meridian/mac by miles); they are on
+    the record in the 2026-09-05 architecture audit and are not re-flagged.
+    """
+    sys.path.insert(0, str(LIB))
+    try:
+        from actor_identity import allowed_emails, principals
+    except Exception as exc:  # noqa: BLE001
+        rep.add("0044", "writer logs authored by their principal", None, f"actor_identity unusable: {exc}")
+        return
+    if not principals():
+        rep.add("0044", "writer logs authored by their principal", None, "principals.yaml absent or empty")
+        return
+    foreign, unbound, seen = [], set(), 0
+    for f in sorted(ROOT.glob("[0-9]-*/.datacore/events/*.jsonl")):
+        space, writer = f.parts[-4], f.stem
+        allowed = allowed_emails(writer)
+        if not allowed:
+            unbound.add(writer)
+            continue
+        rc, out = run(["git", "-C", str(ROOT / space), "log", "--no-merges", "--since=2026-09-05",
+                       "--format=%ae", "--", str(f.relative_to(ROOT / space))], 60)
+        if rc != 0:
+            continue
+        seen += 1
+        bad = sorted({e.strip().lower() for e in out.splitlines() if e.strip()} - allowed)
+        if bad:
+            foreign.append(f"{space}/{writer} by {', '.join(bad)[:60]}")
+    ok = not foreign
+    detail = f"{seen} log(s) checked" + (f"; unbound writer(s): {', '.join(sorted(unbound))}" if unbound else "")
+    rep.add("0044", "writer logs authored by their principal", ok,
+            detail if ok else f"{len(foreign)} foreign: " + "; ".join(foreign[:3]))
+
+
 # ── DIP-0046: git transport ─────────────────────────────────────────────────
 def check_transport(rep: Report) -> None:
     t = LIB / "ledger_transport.py"
@@ -639,6 +683,7 @@ def main() -> int:
     check_finality(rep)
     check_app(rep)
     check_declared_identity(rep)
+    check_writer_authorship(rep)
     check_egress(rep)
     if not a.quick:
         check_fleet(rep)
