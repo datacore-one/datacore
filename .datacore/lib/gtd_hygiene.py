@@ -24,6 +24,7 @@ invoked them. This script is the wiring, not new capability.
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from datetime import date, datetime, timezone
@@ -83,6 +84,29 @@ def process_space(org_file: Path, min_age: int, dry_run: bool) -> dict:
     return entry
 
 
+def process_inbox(space_dir: Path, dry_run: bool) -> dict:
+    """inbox.org is a collection point, nothing else.
+
+    archive-done never touched it: org-workspace treats level 1 as
+    structural and archives level 3 and deeper, which in a flat inbox is
+    nothing. Until 2026-09-05, 0-personal had 210 closed tasks at top level
+    and 105 open entries buried under them. inbox_cleanup.py keeps the
+    invariant: open entries under "* Inbox", closed ones out to
+    inbox-archive-<date>.org.
+    """
+    tool = Path(__file__).resolve().parent / 'inbox_cleanup.py'
+    cmd = [sys.executable, str(tool), str(space_dir)] + ([] if dry_run else ['--apply'])
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    entry = {}
+    if proc.returncode != 0:
+        entry['inbox_error'] = (proc.stderr or proc.stdout or 'unknown').strip()[-300:]
+    m = re.search(r'moved into Inbox: (\d+), archived: (\d+)', proc.stdout or '')
+    if m:
+        entry['inbox_moved'] = int(m.group(1))
+        entry['inbox_archived'] = int(m.group(2))
+    return entry
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--dry-run', action='store_true',
@@ -95,16 +119,22 @@ def main() -> int:
     for space in discover_spaces(DATA_DIR):
         space_dir = space.path
         org_file = space_dir / 'org' / 'next_actions.org'
-        if not org_file.exists():
-            continue
-        try:
-            spaces[space_dir.name] = process_space(
-                org_file, args.min_age, args.dry_run)
-        except Exception as exc:  # noqa: BLE001 — one bad space must not stop the rest
-            spaces[space_dir.name] = {
-                'file': str(org_file),
-                'error': f'{type(exc).__name__}: {exc}',
-            }
+        if org_file.exists():
+            try:
+                spaces[space_dir.name] = process_space(
+                    org_file, args.min_age, args.dry_run)
+            except Exception as exc:  # noqa: BLE001 — one bad space must not stop the rest
+                spaces[space_dir.name] = {
+                    'file': str(org_file),
+                    'error': f'{type(exc).__name__}: {exc}',
+                }
+        if (space_dir / 'org' / 'inbox.org').exists():
+            try:
+                spaces.setdefault(space_dir.name, {'file': str(org_file)}).update(
+                    process_inbox(space_dir, args.dry_run))
+            except Exception as exc:  # noqa: BLE001
+                spaces.setdefault(space_dir.name, {'file': str(org_file)})['inbox_error'] = (
+                    f'{type(exc).__name__}: {exc}')
 
     summary = {
         'generated_at': datetime.now(timezone.utc).isoformat(),
@@ -113,6 +143,8 @@ def main() -> int:
         'spaces': spaces,
         'totals': {
             'archived': sum(s.get('archived', 0) for s in spaces.values()),
+            'inbox_archived': sum(s.get('inbox_archived', 0) for s in spaces.values()),
+            'inbox_moved': sum(s.get('inbox_moved', 0) for s in spaces.values()),
             'ids_added': sum(s.get('ids_added', 0) for s in spaces.values()),
             'overdue_deadlines': sum(s.get('overdue_deadlines', 0)
                                      for s in spaces.values()),
@@ -133,6 +165,7 @@ def main() -> int:
     t = summary['totals']
     mode = 'DRY-RUN ' if args.dry_run else ''
     print(f"[gtd-hygiene] {mode}archived={t['archived']} "
+          f"inbox_archived={t['inbox_archived']} inbox_moved={t['inbox_moved']} "
           f"ids_added={t['ids_added']} overdue={t['overdue_deadlines']} "
           f"errors={t['errors']}")
     for name, s in spaces.items():
