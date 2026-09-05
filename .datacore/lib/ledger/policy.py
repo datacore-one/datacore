@@ -115,6 +115,13 @@ class Policy:
     # -- as built directly by every pre-existing caller/test -- keeps
     # behaving exactly as it did before this field existed.
     known_effects: frozenset[str] | None = None
+    #: Per-principal limits (product description, stage 4): `never_effects`
+    #: (refused outright, no grant can allow them), `cosign_effects` (added to
+    #: the global set for this principal), `may_delegate_to` (who this
+    #: principal may address an item to), `max_creates_per_day`, `max_hops`.
+    #: None means the file declares no principals section; claim_gate applies
+    #: its documented defaults then.
+    principals: dict | None = None
 
     @property
     def effective_known_effects(self) -> frozenset[str]:
@@ -186,10 +193,33 @@ def load_policy(path: Path | None = None) -> Policy:
         else:
             known_effects = frozenset(raw_known)
 
+    principals: dict | None = None
+    if "principals" in data:
+        raw_p = data.get("principals")
+        if not isinstance(raw_p, dict):
+            errors.append(f"{path}: 'principals' must be a mapping of name -> limits (got {raw_p!r})")
+        else:
+            principals = {}
+            for name, lim in raw_p.items():
+                lim = lim or {}
+                if not isinstance(lim, dict):
+                    errors.append(f"{path}: principals.{name} must be a mapping (got {lim!r})"); continue
+                for k in ("never_effects", "cosign_effects", "may_delegate_to"):
+                    v = lim.get(k)
+                    if v is not None and not (isinstance(v, list) and all(isinstance(e, str) and e for e in v)):
+                        errors.append(f"{path}: principals.{name}.{k} must be a list of non-empty strings (got {v!r})")
+                for k in ("max_creates_per_day", "max_hops"):
+                    v = lim.get(k)
+                    if v is not None and not (isinstance(v, int) and v >= 0):
+                        errors.append(f"{path}: principals.{name}.{k} must be a non-negative integer (got {v!r})")
+                unknown = sorted(set(lim) - {"never_effects", "cosign_effects", "may_delegate_to", "max_creates_per_day", "max_hops"})
+                if unknown:
+                    errors.append(f"{path}: principals.{name} has unknown key(s): {', '.join(unknown)}")
+                principals[str(name)] = dict(lim)
     if errors:
         raise PolicyError("\n".join(errors))
 
-    return Policy(approver=approver, cosign_effects=cosign_effects, known_effects=known_effects)
+    return Policy(approver=approver, cosign_effects=cosign_effects, known_effects=known_effects, principals=principals)
 
 
 def requires_cosign(policy: Policy, event_type: str, payload: dict) -> bool:
@@ -284,6 +314,21 @@ def guarded_append(
             raise PolicyError(
                 f"item.create payload['effects'] must be a list (got {effects!r})"
             )
+        # Stage 4/5 (product description): who is asking, how deep the chain
+        # is, and how much this writer has created today — decided before the
+        # append, refused loudly, never silently dropped in the fold.
+        try:
+            from claim_gate import check_create
+        except ImportError:  # root lib not importable here (older caller); the effects gate below still applies
+            check_create = None
+        # Active only once the installation declares principals in the policy
+        # file; a bare Policy() (older callers, unit tests) keeps the old gate.
+        if check_create is not None and getattr(policy, "principals", None) is not None:
+            _ok, _why = check_create(getattr(log, "actor", None) or "", payload, policy=policy,
+                                     space_dir=space_dir or getattr(log, "space_dir", None))
+            if not _ok:
+                raise PolicyError(f"item.create refused for {getattr(log, 'actor', '?')}: {_why}")
+
         if effects:
             known = policy.effective_known_effects
             unknown = [e for e in effects if e not in known]

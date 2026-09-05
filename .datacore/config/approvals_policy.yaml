@@ -34,3 +34,21 @@ known_effects:
   - email.send
   - payment
   - prod.deploy
+
+# Per-principal limits (product description, stage 4; DIP-0044 §7). Defaults
+# when a principal is absent: agents get max_hops 3 and 50 creates a day,
+# humans are unbounded (claim_gate.py). `never_effects` cannot be granted.
+principals:
+  gregor: {}
+  winston:
+    never_effects: [payment]
+    may_delegate_to: [miles, tris, data]
+  miles:
+    never_effects: [payment]
+    may_delegate_to: [tris, data]
+  tris:
+    never_effects: [payment, prod.deploy]
+    may_delegate_to: [miles]
+  data:
+    never_effects: [payment, prod.deploy]
+    may_delegate_to: [miles]
