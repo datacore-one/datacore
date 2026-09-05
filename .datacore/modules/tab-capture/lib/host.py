@@ -78,7 +78,11 @@ def format_entry(tab, today_str):
         title = title[:117] + "..."
     url = tab["url"]
     lines = [
-        f"** TODO [[{url}][{title}]]",
+        # Top level: inbox.org is a flat list of entries. A "**" heading appended
+        # at the end became a child of whatever entry was last -- on 2026-09-05
+        # 85 captured tabs sat folded under a DONE task and were invisible to
+        # every outline view and to the GTD tools.
+        f"* TODO [[{url}][{title}]]",
         ":PROPERTIES:",
         f":SOURCE: {url}",
         f":CAPTURED: [{today_str}]",
