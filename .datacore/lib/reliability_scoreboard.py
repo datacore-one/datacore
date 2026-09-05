@@ -30,6 +30,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 
 HOME = Path(os.environ.get("COS_HOME", str(Path.home())))
@@ -132,10 +133,66 @@ def r4_data_safe(cos: Path, state: Path, now: float) -> tuple[bool, str]:
     rage = _age_hours(cos / "restore-check.log", now)
     if not rl or rage is None or rage > 8 * 24 or "restore-check ok" not in rl[-1]:
         ok = False; notes.append("restore check: " + (rl[-1][-60:] if rl else "never run"))
-    fs = _lines(state / "fleet-sync.log")
-    if fs and any(l.startswith("FAIL") for l in fs[-3:]):
-        ok = False; notes.append("fleet sync: " + next(l for l in reversed(fs) if l.startswith("FAIL"))[:70])
+    fs_ok, fs_note = _fleet_sync_state(state, now)
+    if not fs_ok:
+        ok = False; notes.append("fleet sync: " + fs_note)
     return ok, ("; ".join(notes) or "backup offsite, restore proven, fleet converging")
+
+
+FLEET_SYNC_UNIT = "datacore-fleet-sync.service"
+FLEET_SYNC_MAX_AGE_H = 14  # the timer fires at 06:10 and 18:10; a run older than this means the timer stopped
+
+
+def _unit_show(unit: str) -> dict:
+    """systemd's own record of a unit's last run, or {} where there is no such unit."""
+    try:
+        out = subprocess.run(["systemctl", "show", "-p", "LoadState", "-p", "Result", "-p", "ExecMainExitTimestamp", unit],
+                             capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    d = dict(l.split("=", 1) for l in out.splitlines() if "=" in l)
+    return d if d.get("LoadState") == "loaded" else {}
+
+
+def _systemd_epoch(ts: str) -> float | None:
+    """'Sat 2026-09-05 18:20:32 UTC' -> epoch. Empty (never ran) -> None."""
+    m = re.search(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) ?(\S*)", ts or "")
+    if not m:
+        return None
+    naive = dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+    if m.group(2) in ("UTC", "GMT", "Z"):
+        return naive.replace(tzinfo=dt.timezone.utc).timestamp()
+    return time.mktime(naive.timetuple())
+
+
+def _fleet_sync_state(state: Path, now: float) -> tuple[bool, str]:
+    """Did the fleet sync run recently and succeed? Never vacuous.
+
+    Until 2026-09-05 this looked for a FAIL line in the last three lines of
+    whatever log was there, so a host with no log passed, and a host whose
+    timer had stopped kept passing on its last report. Where the sync is a
+    systemd unit, its own Result and exit time are the record; the log is
+    the fallback, and "nothing to read" is a failure, not a pass.
+    """
+    unit = _unit_show(FLEET_SYNC_UNIT)
+    if unit:
+        exit_at = _systemd_epoch(unit.get("ExecMainExitTimestamp", ""))
+        if exit_at is None:
+            return False, "unit never ran"
+        age_h = (now - exit_at) / 3600
+        if unit.get("Result") != "success":
+            return False, f"last run {unit.get('Result') or 'unknown'} ({age_h:.0f}h ago)"
+        if age_h > FLEET_SYNC_MAX_AGE_H:
+            return False, f"last run {age_h:.0f}h ago (timer stopped?)"
+        return True, "ok"
+    fs = _lines(state / "fleet-sync.log")
+    if not fs:
+        return False, "never observed (no unit, no log)"
+    age_h = _age_hours(state / "fleet-sync.log", now)
+    if age_h is None or age_h > FLEET_SYNC_MAX_AGE_H:
+        return False, f"log {age_h:.0f}h old" if age_h is not None else "log unreadable"
+    bad = [l for l in fs if l.startswith("FAIL")]
+    return (not bad), (bad[-1][:70] if bad else "ok")
 
 
 #: The off-box prober's address, as it appears in the daemon's request log.
