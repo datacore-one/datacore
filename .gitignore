@@ -317,6 +317,7 @@ node_modules/
 .datacore/lib/cos-*
 .datacore/lib/winston_*
 .datacore/lib/data_deliver.*
+.datacore/lib/miles_delivery.*
 .datacore/lib/lens_analyze.py
 .datacore/lib/ws_chat_test.py
 
