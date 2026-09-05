@@ -131,7 +131,8 @@ QUEUE_HEADER = """#+TITLE: Nightshift Queue — {space}
 """
 
 
-def sync_queue(ws, space: str, wanted: list[dict], apply: bool) -> tuple[list, list]:
+def sync_queue(ws, space: str, wanted: list[dict], apply: bool,
+               seen_sprints: set[str] | None = None) -> tuple[list, list]:
     """Mirror the sprint's agent tasks as reference entries in nightshift.org.
 
     Returns (added, removed). Idempotent: an entry already present is left
@@ -160,7 +161,7 @@ def sync_queue(ws, space: str, wanted: list[dict], apply: bool) -> tuple[list, l
         if pr.get("SOURCE_ID") and pr.get("SPRINT") and nid.endswith("-q"):
             have[nid] = n
 
-    added, removed = [], []
+    added, removed, skipped_foreign = [], [], []
     for qid, w in want_by_qid.items():
         if qid in have:
             continue
@@ -180,11 +181,24 @@ def sync_queue(ws, space: str, wanted: list[dict], apply: bool) -> tuple[list, l
                 SURFACE=w["surface"],
             )
     for qid, node in have.items():
-        if qid not in want_by_qid:
-            removed.append((qid, node.heading[:58]))
-            if apply:
-                ws.remove_node(node)
-    return added, removed
+        if qid in want_by_qid:
+            continue
+        # ONLY remove an entry whose owning sprint we actually discovered.
+        #
+        # Absence of a sprint file is not absence of a sprint. On the nightshift
+        # host `2-projects/plur/sprints/` does not exist, so this script sees
+        # one sprint where the Mac sees four — and the old logic read "not in
+        # any sprint I found" as "not in any sprint", which would have deleted
+        # 22 live queue entries on the 20:04 run. A checkout that cannot see a
+        # sprint has no standing to judge its work.
+        owner = (node.properties or {}).get("SPRINT")
+        if seen_sprints is not None and owner and owner not in seen_sprints:
+            skipped_foreign.append((qid, node.heading[:52], owner))
+            continue
+        removed.append((qid, node.heading[:58]))
+        if apply:
+            ws.remove_node(node)
+    return added, removed, skipped_foreign
 
 
 def _age_days(props: dict) -> float | None:
@@ -337,10 +351,12 @@ def main() -> int:
     keep_ids: set[str] = set()
     created, updated, problems = [], [], []
     queue_want: list[dict] = []
+    seen_sprints: set[str] = set()
 
     for sp in paths:
         sprint = yaml.safe_load(sp.read_text()) or {}
         sid = sprint.get("sprint_id") or sp.parent.name
+        seen_sprints.add(sid)
         mine, probs = agent_items(sprint, args.stretch)
         problems += [f"{sid}: {p}" for p in probs]
 
@@ -453,7 +469,7 @@ def main() -> int:
                     updated.append((tid, it["title"], changed))
 
     # ---- everything not in the sprint loses the tag ------------------------
-    cleared, held, stuck = [], [], []
+    cleared, held, stuck, foreign = [], [], [], []
     for node in ws.all_nodes():
         if node.todo not in ("TODO", "NEXT"):
             continue
@@ -470,6 +486,12 @@ def main() -> int:
         if nid in keep_ids:
             continue
         props = node.properties or {}
+        # A task belonging to a sprint this checkout cannot see is not ours to
+        # un-queue — same reasoning as the queue guard above.
+        owner = props.get("SPRINT")
+        if owner and owner not in seen_sprints:
+            foreign.append((nid, node.heading[:52], owner))
+            continue
         status = str(props.get("NIGHTSHIFT_STATUS") or "").lower()
         if status in IN_FLIGHT:
             age = _age_days(props)
@@ -483,7 +505,8 @@ def main() -> int:
         cleared.append((nid, node.heading[:60]))
 
     # The queue is a different file from the pool, and only the queue runs.
-    q_added, q_removed = sync_queue(ws, args.space, queue_want, args.apply)
+    q_added, q_removed, q_foreign = sync_queue(
+        ws, args.space, queue_want, args.apply, seen_sprints=seen_sprints)
 
     if args.apply:
         ws.save_all()
@@ -513,6 +536,12 @@ def main() -> int:
         print(f"held in flight (not touched)  {len(held)}")
         for nid, h, s in held[:6]:
             print(f"   = {h} [{s}]")
+    if foreign or q_foreign:
+        n = len(foreign) + len(q_foreign)
+        print(f"\nLEFT ALONE — {n} item(s) belong to a sprint this checkout "
+              f"cannot see; absence of a sprint file is not absence of a sprint")
+        for nid, h, owner in (foreign + q_foreign)[:6]:
+            print(f"   ~ {h}  [{owner}]")
     if stuck:
         print(f"\nSTUCK — claimed to be running, has not moved  {len(stuck)}")
         for nid, h, s, age in stuck:
