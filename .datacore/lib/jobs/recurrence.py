@@ -99,7 +99,8 @@ def _save(d: dict) -> None:
         pass
 
 
-def record(job_name: str, failed: bool, *, today: str | None = None) -> dict:
+def record(job_name: str, failed: bool, *, today: str | None = None,
+           artifact_sig: str | None = None) -> dict:
     """Update and return this job's recurrence record.
 
     Returns {consecutive, first_failed, recurring}. A pass resets the count to
@@ -114,13 +115,13 @@ def record(job_name: str, failed: bool, *, today: str | None = None) -> dict:
     # job stays "recurring".
     try:
         with _locked():
-            return _record_unlocked(job_name, failed, today)
+            return _record_unlocked(job_name, failed, today, artifact_sig)
     except OSError as exc:
         # A home where mkdir or flock fails (read-only, NFS without locks)
         # must not take down verification of every remaining job. Degrade to
         # the unserialised update -- an off-by-one counter, not an aborted run.
         print(f"recurrence: lock unavailable ({exc}); recording without it", file=sys.stderr)
-        return _record_unlocked(job_name, failed, today)
+        return _record_unlocked(job_name, failed, today, artifact_sig)
 
 
 @contextlib.contextmanager
@@ -136,17 +137,30 @@ def _locked():
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
-def _record_unlocked(job_name: str, failed: bool, today: str) -> dict:
+def _record_unlocked(job_name: str, failed: bool, today: str,
+                     artifact_sig: str | None = None) -> dict:
     state = _load()
     rec = state.get(job_name) or {"consecutive": 0, "first_failed": None}
-
     if failed:
-        rec["consecutive"] = int(rec.get("consecutive") or 0) + 1
-        rec["first_failed"] = rec.get("first_failed") or today
-        rec["last_failed"] = today
+        # ONE FAILURE PER ARTIFACT, not per look. The verifier runs every 30
+        # minutes; a producer runs three times a day. Re-reading the same
+        # failed artifact counted mac-config-drift 8x and mac-id-churn 48x on
+        # 2026-09-05 for one and two real failures -- the streak was a clock,
+        # not a count, and the operator learned to ignore it. A signature of
+        # the artifacts (path + mtime) that has not changed since the last
+        # recorded failure is the same failure: reported once, counted once.
+        if artifact_sig and rec.get("artifact_sig") == artifact_sig:
+            rec["same_artifact"] = True
+        else:
+            rec["consecutive"] = int(rec.get("consecutive") or 0) + 1
+            rec["first_failed"] = rec.get("first_failed") or today
+            rec["last_failed"] = today
+            rec["same_artifact"] = False
+            if artifact_sig:
+                rec["artifact_sig"] = artifact_sig
     else:
-        rec = {"consecutive": 0, "first_failed": None, "last_passed": today}
-
+        rec = {"consecutive": 0, "first_failed": None, "last_passed": today,
+               "task_id": rec.get("task_id")}
     rec["recurring"] = rec["consecutive"] >= RECURRING_AFTER
     state[job_name] = rec
     _save(state)
@@ -190,6 +204,23 @@ def should_alert(rec: dict, *, today: str | None = None) -> bool:
     if int(rec.get("consecutive") or 0) == RECURRING_AFTER:
         return True
     return rec.get("last_alerted") != today
+
+
+def note_task(job_name: str, task_id: str | None) -> None:
+    """Remember (or forget) the task filed for this job's recurrence."""
+    try:
+        with _locked():
+            state = _load()
+            rec = state.get(job_name)
+            if isinstance(rec, dict):
+                if task_id:
+                    rec["task_id"] = task_id
+                else:
+                    rec.pop("task_id", None)
+                state[job_name] = rec
+                _save(state)
+    except OSError:
+        pass
 
 
 def note_alerted(job_name: str, *, today: str | None = None) -> None:

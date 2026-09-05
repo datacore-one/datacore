@@ -163,3 +163,24 @@ def test_recurring_failures_alert_at_escalation_then_once_a_day(rec):
     rec.record("j", failed=False, today="2026-09-04")
     r = rec.record("j", failed=True, today="2026-09-04")
     assert rec.should_alert(r, today="2026-09-04") is True, "a pass resets: the next failure is a first failure again"
+
+
+def test_the_same_failed_artifact_is_counted_once(rec):
+    """2026-09-05: the verifier ran every 30 min, the producer three times a day;
+    the streak was a clock. A signature that has not changed is the same failure."""
+    r1 = rec.record("j", failed=True, today="2026-09-05", artifact_sig="log@100")
+    r2 = rec.record("j", failed=True, today="2026-09-05", artifact_sig="log@100")
+    r3 = rec.record("j", failed=True, today="2026-09-05", artifact_sig="log@200")
+    assert (r1["consecutive"], r1["same_artifact"]) == (1, False)
+    assert (r2["consecutive"], r2["same_artifact"]) == (1, True), "unchanged artifact: not counted again"
+    assert (r3["consecutive"], r3["same_artifact"]) == (2, False), "a regenerated artifact that still fails counts"
+
+
+def test_a_pass_keeps_the_task_id_for_the_verifier_to_close(rec):
+    for i in range(3):
+        rec.record("j", failed=True, today="2026-09-05", artifact_sig=f"log@{i}")
+    rec.note_task("j", "org-task-1")
+    r = rec.record("j", failed=False, today="2026-09-06")
+    assert r["consecutive"] == 0 and r["task_id"] == "org-task-1"
+    rec.note_task("j", None)
+    assert "task_id" not in rec._load()["j"]

@@ -706,3 +706,40 @@ def test_a_real_run_forgets_recurrence_records_for_jobs_no_longer_in_the_manifes
     assert "ghost-job" not in state, "a record for a job the manifest no longer names must be forgotten"
     assert "backup-notes" in state, "the live job's pass must still be recorded"
     assert "forgot ghost-job" in err
+
+
+# --- one failure per artifact; a recurring failure files a task -----------------
+
+
+def test_a_recurring_failure_is_counted_per_artifact_and_files_one_task(tmp_path, monkeypatch, capsys):
+    """2026-09-05: mac-id-churn reached 48 'recurrences' for two real failures
+    (verifier every 30 min, producer hourly) and nobody owned it."""
+    import jobs.recurrence as R
+    monkeypatch.setattr(R, "STATE", tmp_path / "rec.json")
+    artifact = tmp_path / "churn.log"
+    manifest = _write_manifest(tmp_path, [_job("mac-id-churn", "mac", str(artifact),
+                                              artifacts=[{"path": str(artifact), "check": "regex", "arg": "0 with findings"}])])
+    space = _space(tmp_path)
+    monkeypatch.setenv("DATACORE_ACTOR", "test-actor")
+    sent, filed, closed = [], [], []
+    monkeypatch.setattr(job_verify, "_send_telegram", lambda msg: sent.append(msg) or True)
+    monkeypatch.setattr(job_verify, "_file_task", lambda job, rec, failures: filed.append(job.name) or "org-task-1")
+    monkeypatch.setattr(job_verify, "_close_task", lambda tid: closed.append(tid) or True)
+    argv = ["--machine", "mac", "--manifest", str(manifest), "--space", str(space), "--alert", "telegram"]
+
+    for i in range(1, 4):                      # three regenerated, still-failing artifacts
+        artifact.write_text(f"id-churn: 11 space(s), 2 with findings (run {i})")
+        os.utime(artifact, (1_700_000_000 + i * 100, 1_700_000_000 + i * 100))
+        assert _run_main(argv) == 1
+    assert filed == ["mac-id-churn"], "the third consecutive failure files exactly one task"
+    assert len(sent) == 3
+
+    assert _run_main(argv) == 1                # same artifact, looked at again
+    assert filed == ["mac-id-churn"] and len(sent) == 3, "an unchanged artifact is neither counted nor alerted again"
+    assert R._load()["mac-id-churn"]["consecutive"] == 3
+
+    artifact.write_text("id-churn: 11 space(s), 0 with findings")
+    os.utime(artifact, (1_700_000_900, 1_700_000_900))
+    assert _run_main(argv) == 0
+    assert closed == ["org-task-1"], "the pass closes the task the streak filed"
+    assert "task_id" not in R._load()["mac-id-churn"]
