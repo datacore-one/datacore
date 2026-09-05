@@ -33,7 +33,7 @@ import hashlib
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from .fold import LedgerState
+from .fold import LedgerState, closure_kind
 
 #: The projection MUST declare its own todo keywords. Without this line
 #: org-mode's custom states (DEFERRED, QUEUED, WORKING, REVIEW, FAILED) parse
@@ -318,11 +318,18 @@ def projected_items(state: LedgerState, *, space: str | None = None) -> list:
     from nothing else, and deciding that with a second copy of this filter is
     how the two drift apart.
     """
+    # A housekeeping closure is not finished work: a twin dismissed after an
+    # id regeneration, or an orphan reconciled away, was never done or dropped
+    # by anyone. Rendering it for the retention day put the same :ID: in the
+    # file twice (2-datacore, 2026-09-05: two subtrees under a CANCELLED twin
+    # and its live successor), which the churn detector counted as duplicates
+    # and org-workspace's dedup would have "repaired" by minting fresh ids.
     return [
         item for item in state.items.values()
         if (item.status in LIVE_STATUSES
             or (item.status in CLOSED_STATUSES
-                and _closed_within(item, CLOSED_RETENTION_DAYS)))
+                and _closed_within(item, CLOSED_RETENTION_DAYS)
+                and closure_kind(item) != "housekeeping"))
         and (space is None or (item.payload or {}).get("space", space) == space)
     ]
 
