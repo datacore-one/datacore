@@ -393,3 +393,25 @@ def test_orphan_gitlink_is_still_protected(repo_pair: Path, tmp_path: Path):
 
     assert git(repo_pair, "rev-parse", "HEAD:orphan").stdout.strip() == before, \
         "an orphan gitlink pointer must not be autosaved"
+
+
+def test_converge_folds_a_writers_own_ref_into_main(repo_pair: Path, tmp_path: Path):
+    """A satellite writer publishes on refs/heads/ledger/<actor>; the next
+    converge on any host merges it into main. Data's claims sat on ledger/data
+    from 2026-08-11 with nothing folding them back."""
+    import ledger_transport as lt
+    origin = tmp_path / "origin.git"
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
+    git(other, "config", "user.email", "d@d"); git(other, "config", "user.name", "data")
+    git(other, "config", "core.hooksPath", str(other / ".git" / "hooks"))
+    ev = other / ".datacore" / "events"; ev.mkdir(parents=True)
+    (ev / "data.jsonl").write_text('{"actor":"data","type":"item.claim","payload":{"id":"x"}}\n')
+    git(other, "add", "-A"); git(other, "commit", "-qm", "ledger: data claim")
+    git(other, "push", "-q", "origin", "HEAD:refs/heads/ledger/data")
+    r = lt.converge(repo_pair)
+    assert r.ok, r
+    assert "origin/ledger/data" in r.context.get("ledger_refs", [])
+    assert (repo_pair / ".datacore" / "events" / "data.jsonl").exists()
+    # and it was published: origin/main now contains the writer's commit
+    assert git(repo_pair, "rev-list", "--count", "origin/main..origin/ledger/data").stdout.strip() == "0"
