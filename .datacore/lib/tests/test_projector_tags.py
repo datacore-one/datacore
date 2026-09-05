@@ -59,14 +59,3 @@ def test_hash_and_percent_are_outside_the_parsers_alphabet():
     node = loads(line + "\n").children[0]
     assert node.heading == "Plain title" and sorted(node.tags) == ["a_b", "enterprise_373", "ok"]
 
-
-def test_org_mode_tag_alphabet_is_kept_verbatim():
-    """`enterprise#373` is a legal org tag. Sanitising it to `enterprise_373`
-    made the projection disagree with the authored file forever (5-plur,
-    org-7aba0a999bc5, 2026-09-06)."""
-    from ledger.projector import _clean_title_and_tags
-    title, tags = _clean_title_and_tags("UX pass on 0.1.6 :AI:pm:enterprise#373:", None)
-    assert title == "UX pass on 0.1.6"
-    assert tags == ["AI", "enterprise#373", "pm"]
-    _, tags = _clean_title_and_tags("x", ["a b", "100%", "c:d"])
-    assert tags == ["100%", "a_b", "c_d"]

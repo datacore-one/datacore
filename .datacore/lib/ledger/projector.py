@@ -208,7 +208,12 @@ _TRAILING_TAG_BLOCK = re.compile(r"\s+:([^\s:]+(?::[^\s:]+)*):\s*$")
 # the checkpoint restore on exactly that from 2026-08-31 -- a tag the renderer
 # considered valid and the parser could not read. What is written here has to
 # come back through that parser unchanged, so its alphabet is the constraint.
-_BAD_TAG_CHAR = re.compile(r"[^A-Za-z0-9_@#%]")  # org-mode's own tag alphabet: letters, digits, _ @ # %
+# The renderer's alphabet is the PARSER's, not Emacs's. Org admits `#` and `%`
+# in a tag, but the vendored orgparse this projection round-trips through does
+# not: `:AI:enterprise#373:infra:pm:` came back as tags (infra, pm) and a title
+# ending in ` :AI:enterprise#373`. Widening this to Emacs's alphabet (tried on
+# 2026-09-06, reverted the same hour) writes a tag the next ingest cannot read.
+_BAD_TAG_CHAR = re.compile(r"[^A-Za-z0-9_@]")
 
 
 def _clean_title_and_tags(title: str, tags) -> tuple[str, list[str]]:
