@@ -40,6 +40,20 @@ jobs:
   # computes the day's line from the files the box already writes
   # (2-datacore/1-tracks/ops/reliability-slo.md is the definition). A day the
   # scoreboard did not run is a failed day, which is what this contract says.
+  - name: box-fleet-probe
+    machine: box
+    schedule: "*/15 * * * *"
+    cmd: "~/Data/.datacore/lib/cos_fleet_probe.sh >> ~/.datacore/cos/fleet-probe.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      # One "<ts> <host> UP|DOWN <ip:port>" line per agent host per run
+      # (cos_fleet_probe.sh). The other direction of cos_uptime_probe: a
+      # host that is down cannot run its own contracts, so the box asks.
+      - path: "~/.datacore/cos/fleet-probe.log"
+        check: regex
+        arg: " UP "
+        max_age_hours: 1
+
   - name: box-reliability-scoreboard
     machine: box
     schedule: "20 7 * * *"
