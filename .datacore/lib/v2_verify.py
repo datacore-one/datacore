@@ -45,14 +45,24 @@ class Check:
     name: str
     ok: bool | None          # True | False | None (could not run)
     detail: str = ""
+    # `skipped` is the fourth word, and it is narrower than n-a. n-a means
+    # "tried, could not tell" — a helper missing, a probe timing out — and it
+    # stays in the could-not-run count because it is a gap someone should
+    # close. `skipped` means the check is NOT APPLICABLE on this host by
+    # design (the fleet probe needs the operator's ssh aliases, which a server
+    # does not and must not hold), so counting it as could-not-run on every
+    # unattended run reported a permanent gap that no one on that host could
+    # close. The exit code never saw the difference; the summary line did.
+    skipped: bool = False
 
 
 @dataclass
 class Report:
     checks: list[Check] = field(default_factory=list)
 
-    def add(self, dip: str, name: str, ok: bool | None, detail: str = "") -> None:
-        self.checks.append(Check(dip, name, ok, detail))
+    def add(self, dip: str, name: str, ok: bool | None, detail: str = "",
+            *, skipped: bool = False) -> None:
+        self.checks.append(Check(dip, name, ok, detail, skipped))
 
     @property
     def failed(self) -> list[Check]:
@@ -60,7 +70,11 @@ class Report:
 
     @property
     def unknown(self) -> list[Check]:
-        return [c for c in self.checks if c.ok is None]
+        return [c for c in self.checks if c.ok is None and not c.skipped]
+
+    @property
+    def skipped(self) -> list[Check]:
+        return [c for c in self.checks if c.skipped]
 
 
 def run(args: list[str], timeout: int = 180) -> tuple[int, str]:
@@ -470,12 +484,32 @@ def check_fleet(rep: Report) -> None:
     # server, every host is simply unreachable — which reports n-a, honestly,
     # but means an unattended run there verifies only itself. Say so in the
     # detail rather than letting "0 ok, 4 unreachable" read as a fleet outage.
-    unreachable, failing, ok_hosts = [], [], []
+    #
+    # And decide that BEFORE probing. Whether an alias exists is a local fact
+    # (`ssh -G` resolves the config without connecting); a host with none is
+    # not a host whose fleet is down, it is a host this check does not apply
+    # to. Probing anyway cost four 10s connect timeouts per run and produced
+    # a "could-not-run" that winston's every-12-hours run has carried since
+    # the checklist shipped — a gap that host cannot close and should not
+    # (servers must not hold fleet keys). Report it as skipped, once, in a
+    # line that says where to run it instead.
+    targets = []
     for name, cfg in servers.items():
-        access = cfg.get("access") or {}
         alias = cfg.get("ssh_alias") or name
         if alias == "-" or name == "mac":
             continue
+        targets.append((name, cfg, alias))
+    configured = [t for t in targets if _alias_configured(t[2])]
+    if targets and not configured:
+        rep.add("fleet", "remote job contracts", None,
+                f"n-a here: none of the {len(targets)} fleet ssh aliases exists "
+                "on this host — run from the operator machine", skipped=True)
+        return
+    no_alias = [name for name, _c, _a in targets if (name, _c, _a) not in configured]
+
+    unreachable, failing, ok_hosts = [], [], []
+    for name, cfg, alias in configured:
+        access = cfg.get("access") or {}
         actor = access.get("actor") or name
         # RUNNER FIRST. On hermes and plur-claw `~/Data` is the AGENT'S OWN
         # SPACE repo (tris-space / data-space), not the Datacore core — the
@@ -505,13 +539,36 @@ def check_fleet(rep: Report) -> None:
 
     note = ""
     if unreachable and not ok_hosts:
-        note = " — no ssh aliases here; run this from the operator machine"
+        note = " — every configured alias failed to connect"
     rep.add("fleet", "remote job contracts",
             None if (unreachable and not failing) else not failing,
             f"{len(ok_hosts)} ok"
             + (f", FAILING: {', '.join(failing)}" if failing else "")
             + (f", {len(unreachable)} unreachable" if unreachable else "")
+            + (f", {len(no_alias)} without an alias here ({', '.join(no_alias)})"
+               if no_alias else "")
             + note)
+
+
+def _alias_configured(alias: str) -> bool:
+    """Does ssh on THIS host know `alias`? Decided without connecting.
+
+    `ssh -G` prints the effective config for a name; for a name that no
+    `Host` block matches it prints exactly what it prints for any unknown
+    name, hostname aside. So an alias is configured iff its resolved config
+    differs from that baseline in some option other than `host`/`hostname`. A bare
+    resolver lookup is deliberately NOT the test: on winston, MagicDNS resolves
+    `nightshift`/`hermes`/`plur-claw` while the box holds no key for any of
+    them, and treating "resolves" as "configured" put the probe right back to
+    four connect failures per run.
+    """
+    rc_base, base = run(["ssh", "-G", "datacore-no-such-alias-probe"], 15)
+    rc, out = run(["ssh", "-G", alias], 15)
+    if rc != 0 or rc_base != 0:
+        return False
+    def opts(text):
+        return {l for l in text.splitlines() if not l.startswith(("host ", "hostname "))}
+    return opts(out) != opts(base)
 
 
 # ── DIP-0042: sequencer / finality ──────────────────────────────────────────
@@ -589,20 +646,23 @@ def main() -> int:
     if a.json:
         print(json.dumps({"checks": [c.__dict__ for c in rep.checks],
                           "failed": len(rep.failed),
-                          "unknown": len(rep.unknown)}, indent=2))
+                          "unknown": len(rep.unknown),
+                          "skipped": len(rep.skipped)}, indent=2))
         return 1 if rep.failed else 0
 
     mark = {True: "\033[32mok  \033[0m", False: "\033[31mFAIL\033[0m", None: "\033[33mn-a \033[0m"}
+    skip = "\033[2mskip\033[0m"
     last_dip = None
     for c in rep.checks:
         if c.dip != last_dip:
             print(f"\n  \033[1mDIP-{c.dip}\033[0m")
             last_dip = c.dip
-        print(f"    {mark[c.ok]} {c.name:<32} {c.detail}")
+        print(f"    {skip if c.skipped else mark[c.ok]} {c.name:<32} {c.detail}")
 
     print(f"\n  {len(rep.checks)} check(s): "
           f"{sum(1 for c in rep.checks if c.ok is True)} ok, "
-          f"{len(rep.failed)} FAIL, {len(rep.unknown)} could-not-run")
+          f"{len(rep.failed)} FAIL, {len(rep.unknown)} could-not-run"
+          + (f", {len(rep.skipped)} not applicable here" if rep.skipped else ""))
     if rep.failed:
         print("  \033[31mv2 REGRESSED\033[0m — " + "; ".join(c.name for c in rep.failed))
     return 1 if rep.failed else 0

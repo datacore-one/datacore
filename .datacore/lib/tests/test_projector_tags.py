@@ -45,3 +45,16 @@ def test_typed_weekday_inside_body_text_is_recomputed():
     item.payload["org"] = {"body": "DEADLINE: <2026-07-30 Wed>\nGenerate the post."}
     text = "\n".join(render_item(item))
     assert "<2026-07-30 Thu>" in text and "Wed" not in text
+
+
+def test_hash_and_percent_are_outside_the_parsers_alphabet():
+    """Org admits `#` and `%` in a tag; the importer this projection must
+    round-trip through does not. `:AI:enterprise#373:infra:pm:` came back from
+    that parser as tags (infra, pm) and a title ending in ` :AI:enterprise#373`
+    (5-plur org-7aba0a999bc5, 2026-08-31). The renderer's alphabet is the
+    parser's, so what is written is what is read back."""
+    line = render_item(_item("Plain title", tags=["enterprise#373", "a%b", "ok"]))[0]
+    assert line.endswith("  :a_b:enterprise_373:ok:"), line
+    from org_workspace._vendor.orgparse import loads
+    node = loads(line + "\n").children[0]
+    assert node.heading == "Plain title" and sorted(node.tags) == ["a_b", "enterprise_373", "ok"]
