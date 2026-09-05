@@ -470,6 +470,82 @@ def _read_nightshift_output_refs(
     return _extract_urls_from(content)
 
 
+# Archive subdirectories (relative to a space root) where nightshift outputs land
+# after processing.  Order matters: check most specific first.
+_NIGHTSHIFT_ARCHIVE_DIRS = [
+    "4-archive/nightshift",           # outbox move (yearly/monthly subdirs)
+    "0-inbox/_archive/nightshift-applied",  # route_dev in-place archive
+]
+
+
+def check_nightshift_output_archived(
+    file_path: str,
+    data_dir: Path,
+    output_index: Optional[Dict[str, str]] = None,
+) -> Optional[Dict]:
+    """
+    Check whether a NIGHTSHIFT_OUTPUT file was archived after processing.
+
+    Returns a terminal result dict when the artifact is confirmed archived,
+    or None when the file is still in-inbox (not yet processed) or not found
+    in any known archive location.
+
+    output_index — optional pre-built {filename: full_path} map for efficiency.
+    If absent a live filesystem scan is performed (slow for many tasks).
+    """
+    orig = Path(file_path)
+    if orig.exists():
+        return None  # Still in 0-inbox — human review is still pending
+
+    stem = orig.name
+    found_at: Optional[str] = None
+
+    if output_index is not None:
+        found_at = output_index.get(stem)
+    else:
+        # Fallback: scan all spaces for the file in archive locations
+        for space in sorted(data_dir.iterdir()):
+            if not (space.is_dir() and space.name and space.name[0].isdigit()):
+                continue
+            for rel in _NIGHTSHIFT_ARCHIVE_DIRS:
+                archive_dir = space / rel
+                if not archive_dir.is_dir():
+                    continue
+                # Files may be nested one level deep (YYYY-MM/ subdirs)
+                for candidate in archive_dir.rglob(stem):
+                    found_at = str(candidate)
+                    break
+            if found_at:
+                break
+
+    if found_at:
+        return {
+            "terminal": True,
+            "kind": "nightshift_output",
+            "closed_at": None,
+            "reason": f"Nightshift output archived: {found_at}",
+        }
+    return None  # Not in any archive — genuinely missing, skip
+
+
+def build_output_index(data_dir: Path) -> Dict[str, str]:
+    """
+    Build a {filename: full_path} index of all nightshift output files found
+    in archive locations across every space.  Call once per reconcile run.
+    """
+    index: Dict[str, str] = {}
+    for space in sorted(data_dir.iterdir()):
+        if not (space.is_dir() and space.name and space.name[0].isdigit()):
+            continue
+        for rel in _NIGHTSHIFT_ARCHIVE_DIRS:
+            archive_dir = space / rel
+            if not archive_dir.is_dir():
+                continue
+            for f in archive_dir.rglob("nightshift-exec-*.md"):
+                index.setdefault(f.name, str(f))
+    return index
+
+
 def extract_github_refs(
     task: OrgTask,
     space_owner: Optional[str],
@@ -706,10 +782,16 @@ def reconcile_file(
     space_repo: Optional[str],
     dry_run: bool,
     extra_repos: Optional[Dict[str, Tuple[str, str]]] = None,
+    data_dir: Optional[Path] = None,
+    output_index: Optional[Dict[str, str]] = None,
 ) -> int:
     """
     Reconcile one org file. Returns number of tasks closed.
     Modifies the file in-place if dry_run is False.
+
+    data_dir + output_index enable the NIGHTSHIFT_OUTPUT archive check:
+    if the task's output file was moved to the nightshift archive the task
+    is marked DONE even with no GitHub ref.
     """
     content = org_file.read_text(encoding="utf-8")
     lines = content.split("\n")
@@ -724,41 +806,52 @@ def reconcile_file(
     to_close: List[Tuple[OrgTask, str, Optional[str]]] = []
 
     for task in open_tasks:
+        # ── Path A: GitHub ref check ──────────────────────────────────────────
         refs = extract_github_refs(task, space_owner, space_repo, extra_repos)
-        if not refs:
-            continue
+        if refs:
+            log.debug(f"      Checking task '{task.title[:70]}' — {len(refs)} ref(s)")
 
-        log.debug(f"      Checking task '{task.title[:70]}' — {len(refs)} ref(s)")
+            terminal_refs: List[Tuple[GithubRef, Dict]] = []
+            open_refs: List[Tuple[GithubRef, Dict]] = []
 
-        terminal_refs: List[Tuple[GithubRef, Dict]] = []
-        open_refs: List[Tuple[GithubRef, Dict]] = []
+            for ref in refs:
+                result = check_github_ref(ref)
+                if result is None:
+                    continue
+                if result["terminal"]:
+                    terminal_refs.append((ref, result))
+                else:
+                    open_refs.append((ref, result))
 
-        for ref in refs:
-            result = check_github_ref(ref)
-            if result is None:
-                # API error — skip this ref but don't block the task
+            if terminal_refs and not open_refs:
+                reason = "; ".join(r["reason"] for _, r in terminal_refs)
+                closed_at = terminal_refs[0][1].get("closed_at")
+                log.info(f"      CLOSE: '{task.title[:70]}' — {reason}")
+                to_close.append((task, reason, closed_at))
+                continue  # No need to check archive path
+
+            if terminal_refs and open_refs:
+                log.info(
+                    f"      Skipping '{task.title[:60]}' — terminal refs found but "
+                    f"also {len(open_refs)} open ref(s)"
+                )
                 continue
-            if result["terminal"]:
-                terminal_refs.append((ref, result))
-            else:
-                open_refs.append((ref, result))
 
-        if not terminal_refs:
-            continue  # Nothing definitively closed
-
-        if open_refs:
-            # Task has some terminal refs AND some open refs — be conservative, skip
-            log.info(
-                f"      Skipping '{task.title[:60]}' — terminal refs found but "
-                f"also {len(open_refs)} open ref(s)"
-            )
+        # ── Path B: NIGHTSHIFT_OUTPUT archive check ───────────────────────────
+        # Close Review: tasks whose output file has been processed and archived.
+        # Only runs when data_dir is provided (not available in verify-patterns mode).
+        if data_dir is None:
             continue
-
-        # All resolvable refs are terminal — mark DONE
-        reason = "; ".join(r["reason"] for _, r in terminal_refs)
-        closed_at = terminal_refs[0][1].get("closed_at")
-        log.info(f"      CLOSE: '{task.title[:70]}' — {reason}")
-        to_close.append((task, reason, closed_at))
+        ns_path = task.props.get("NIGHTSHIFT_OUTPUT", "").strip()
+        if not ns_path:
+            continue
+        archive_result = check_nightshift_output_archived(ns_path, data_dir, output_index)
+        if archive_result:
+            log.info(
+                f"      CLOSE (archived output): '{task.title[:70]}' — "
+                f"{archive_result['reason']}"
+            )
+            to_close.append((task, archive_result["reason"], None))
 
     if not to_close:
         return 0
@@ -794,6 +887,12 @@ def reconcile_all(data_dir: Path, dry_run: bool) -> int:
         return -1  # Distinct from 0 (no tasks closed)
 
     primary_config, secondary_config = load_config(data_dir)
+
+    # Pre-build nightshift output index for archive-aware NIGHTSHIFT_OUTPUT checks.
+    log.debug("Building nightshift output index...")
+    output_index = build_output_index(data_dir)
+    log.debug(f"  {len(output_index)} archived nightshift outputs indexed")
+
     total_closed = 0
 
     # Discover spaces (e.g. 0-personal, 1-datafund …) — skip archive dirs
@@ -839,7 +938,10 @@ def reconcile_all(data_dir: Path, dry_run: bool) -> int:
         space_closed = 0
         changed_files: List[Path] = []
         for org_file in org_files:
-            n = reconcile_file(org_file, space_owner, space_repo, dry_run, extra_repos)
+            n = reconcile_file(
+                org_file, space_owner, space_repo, dry_run, extra_repos,
+                data_dir=data_dir, output_index=output_index,
+            )
             if n > 0:
                 space_closed += n
                 changed_files.append(org_file)
