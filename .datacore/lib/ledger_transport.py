@@ -264,6 +264,27 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         return Result(False, "merge conflict — human needed",
                       {"branch": db, "autosaved": autosaved,
                        "detail": err[:400]})
+    # PER-ACTOR LEDGER REFS. A satellite writer publishes its claims on its
+    # own ref (refs/heads/ledger/<actor>: plur-claw's dispatcher since
+    # 2026-08-10) because only that writer pushes there and a push can never
+    # race. But nothing ever folded those refs back into the default branch:
+    # Data's last claims sat on ledger/data from 2026-08-11 and reached main
+    # only by hand. Every converge now merges each origin/ledger/* ref into the
+    # branch before publishing. Per-writer logs are disjoint files, so this is
+    # a union; a conflict here is a genuine one and stops, like any other.
+    rc, refs_out, _ = _git(space, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/ledger/")
+    merged_refs = []
+    for ref in (refs_out.split() if rc == 0 else []):
+        rc, ahead, _ = _git(space, "rev-list", "--count", f"HEAD..{ref}")
+        if rc != 0 or ahead.strip() == "0":
+            continue
+        rc, mout, err = _git(space, "merge", "--no-edit", ref)
+        if rc != 0:
+            err = "\n".join(x for x in (mout.strip(), err.strip()) if x)
+            _git(space, "merge", "--abort")
+            return Result(False, "merge conflict on a ledger ref — human needed",
+                          {"branch": db, "ref": ref, "autosaved": autosaved, "detail": err[:400]})
+        merged_refs.append(ref)
     # PUBLISH. Converge previously stopped here, which made it a one-way
     # operation: it pulled and never pushed. Every caller means both — `sync`,
     # `./sync pull`, and cos_sync on winston's 15-minute cron all report
@@ -274,13 +295,13 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
     # `publish=False` only for _push_with_retry, which calls this to resolve a
     # non-fast-forward and would otherwise recurse into pushing.
     if not publish:
-        return Result(True, "converged", {"branch": db, "autosaved": autosaved})
+        return Result(True, "converged", {"branch": db, "autosaved": autosaved, "ledger_refs": merged_refs})
     pr = _push_with_retry(space, db)
     if not pr.ok:
         return Result(False, f"converged but not published: {pr.reason}",
                       {"branch": db, "autosaved": autosaved, **pr.context})
     return Result(True, "converged", {"branch": db, "autosaved": autosaved,
-                                      "pushed": pr.context.get("attempts", 1)})
+                                      "pushed": pr.context.get("attempts", 1), "ledger_refs": merged_refs})
 
 
 def _push_with_retry(space: Path, db: str) -> Result:
