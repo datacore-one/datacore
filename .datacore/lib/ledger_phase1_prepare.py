@@ -70,7 +70,7 @@ def org_index(space: Path) -> tuple[dict[str, dict], dict[str, list[str]]]:
                 continue
             eff = sorted(set(node.tags or []) - filetags)
             own = sorted(set(node.shallow_tags or []) - filetags)
-            by_id[tid] = {"title": (node.heading or "").strip(), "tags": eff, "own": own}
+            by_id[tid] = {"title": (node.heading or "").strip(), "tags": eff, "own": own, "state": node.todo}
             by_title[norm(node.heading or "")].append(tid)
     return by_id, by_title
 
@@ -92,11 +92,22 @@ def plan(space: Path) -> dict:
     state = fold(read_events(space))
     by_id, by_title = org_index(space)
     live = [i for i in state.items.values() if i.status in LIVE and not (i.payload or {}).get("section")]
-    dismiss, update = [], []
+    dismiss, update, close = [], [], []
     for item in live:
         if item.id in by_id:
             org = by_id[item.id]
             p = item.payload or {}
+            # STATE: org says finished, the ledger still says live. Nothing ever
+            # emitted item.complete for an org task (the blind span); the
+            # projection would resurrect it as open. Close it the way org did.
+            # item.complete is legal only after a claim, and nobody claimed
+            # these; a dismiss with kind "done" records a finish honestly.
+            if org.get("state") == "DONE":
+                close.append((item.id, "done", "done in org before Phase 1"))
+                continue
+            if org.get("state") == "CANCELLED":
+                close.append((item.id, "dropped", "cancelled in org before Phase 1"))
+                continue
             eff = sorted(set(p.get("effective_tags") or p.get("tags") or []) - set(p.get("filetags") or []))
             if norm(item.title) != norm(org["title"]) or eff != org["tags"]:
                 update.append((item.id, org["title"], org["tags"], org["own"]))
@@ -106,7 +117,7 @@ def plan(space: Path) -> dict:
             dismiss.append((item.id, f"duplicate: superseded by {twins[0]} after the 2026-08-11 id regeneration"))
         else:
             dismiss.append((item.id, "no org task in this space at Phase 1 preparation"))
-    return {"live": len(live), "dismiss": dismiss, "update": update}
+    return {"live": len(live), "dismiss": dismiss, "update": update, "close": close}
 
 
 def apply(space: Path, actor: str, p: dict) -> int:
@@ -117,6 +128,8 @@ def apply(space: Path, actor: str, p: dict) -> int:
     for iid, title, tags, own in p["update"]:
         # both fields: the fingerprint falls back to `tags` when `effective_tags` is empty
         log.append("item.update", {"id": iid, "title": title, "tags": own, "effective_tags": tags}); n += 1
+    for iid, kind, reason in p.get("close", []):
+        log.append("item.dismiss", {"id": iid, "reason": reason, "kind": kind}); n += 1
     return n
 
 
@@ -130,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     space = a.root / a.space
     p = plan(space)
     twins = sum(1 for _, r in p["dismiss"] if r.startswith("duplicate"))
-    print(f"  {a.space}: live={p['live']} dismiss={len(p['dismiss'])} (twins {twins}, no-twin {len(p['dismiss']) - twins}) update={len(p['update'])}")
+    print(f"  {a.space}: live={p['live']} dismiss={len(p['dismiss'])} (twins {twins}, no-twin {len(p['dismiss']) - twins}) update={len(p['update'])} close={len(p.get('close', []))}")
     for iid, title, tags, own in p["update"]:
         print(f"    update {iid}: title={title[:50]!r} tags={tags}")
     if not a.apply:
