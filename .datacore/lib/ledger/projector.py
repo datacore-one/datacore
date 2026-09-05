@@ -194,14 +194,22 @@ def _drawer(props: dict) -> list[str]:
 
 
 _TRAILING_TAG_BLOCK = re.compile(r"\s+:([^\s:]+(?::[^\s:]+)*):\s*$")
-_BAD_TAG_CHAR = re.compile(r"[^A-Za-z0-9_@#%]")
+# The alphabet is the PARSER'S, not org's. Org itself also admits `#` and `%`
+# in a tag, but the importer this projection must round-trip through (the
+# vendored orgparse behind org_workspace) does not: given
+# `:AI:enterprise#373:infra:pm:` it kept `infra`/`pm` and pushed
+# ` :AI:enterprise#373` back INTO the title. 5-plur's org-7aba0a999bc5 failed
+# the checkpoint restore on exactly that from 2026-08-31 -- a tag the renderer
+# considered valid and the parser could not read. What is written here has to
+# come back through that parser unchanged, so its alphabet is the constraint.
+_BAD_TAG_CHAR = re.compile(r"[^A-Za-z0-9_@]")
 
 
 def _clean_title_and_tags(title: str, tags) -> tuple[str, list[str]]:
     """Return (title without an embedded tag block, valid sorted org tags).
 
-    Org allows only [A-Za-z0-9_@#%] in a tag; one hyphen voids every tag on
-    the heading. A heading ingested with `:docs:wrap-up-extracted:` had the
+    Only [A-Za-z0-9_@] survive in a tag; one hyphen voids every tag on the
+    heading. A heading ingested with `:docs:wrap-up-extracted:` had the
     whole block left INSIDE its title (the parser saw no valid tags), and this
     renderer wrote it back verbatim -- so the checkpoint failed the org-tag
     hook and winston's 5-plur autosave was refused every 15 minutes from
@@ -300,6 +308,25 @@ def render_item(item, *, level: int | None = None) -> list[str]:
     return lines
 
 
+def projected_items(state: LedgerState, *, space: str | None = None) -> list:
+    """The items a projection of `state` contains -- the ONE definition.
+
+    Live work, plus work finished recently enough to still be worth seeing;
+    anything closed longer ago belongs to the archive, not the action list.
+    Exposed because the checkpoint verifier must know exactly which ancestors
+    are rendered: a child inherits tags from a parent that is in the file and
+    from nothing else, and deciding that with a second copy of this filter is
+    how the two drift apart.
+    """
+    return [
+        item for item in state.items.values()
+        if (item.status in LIVE_STATUSES
+            or (item.status in CLOSED_STATUSES
+                and _closed_within(item, CLOSED_RETENTION_DAYS)))
+        and (space is None or (item.payload or {}).get("space", space) == space)
+    ]
+
+
 def project(state: LedgerState, *, space: str | None = None) -> Projection:
     """Render live items from `state` as org text.
 
@@ -320,15 +347,7 @@ def project(state: LedgerState, *, space: str | None = None) -> Projection:
     # (which is the entire point of Phase 1) rendered as nothing. A valid event,
     # accepted by fold, producing a task nobody could see. Only an explicit
     # FOREIGN space is excluded now.
-    # Live work, plus work finished recently enough to still be worth seeing.
-    # Anything closed longer ago belongs to the archive, not the action list.
-    items = [
-        item for item in state.items.values()
-        if (item.status in LIVE_STATUSES
-            or (item.status in CLOSED_STATUSES
-                and _closed_within(item, CLOSED_RETENTION_DAYS)))
-        and (space is None or (item.payload or {}).get("space", space) == space)
-    ]
+    items = projected_items(state, space=space)
 
     # Depth-first by parent, so a child is emitted directly under its parent
     # rather than wherever its id happens to sort. Sorting the whole set by id
