@@ -208,7 +208,7 @@ _TRAILING_TAG_BLOCK = re.compile(r"\s+:([^\s:]+(?::[^\s:]+)*):\s*$")
 # the checkpoint restore on exactly that from 2026-08-31 -- a tag the renderer
 # considered valid and the parser could not read. What is written here has to
 # come back through that parser unchanged, so its alphabet is the constraint.
-_BAD_TAG_CHAR = re.compile(r"[^A-Za-z0-9_@]")
+_BAD_TAG_CHAR = re.compile(r"[^A-Za-z0-9_@#%]")  # org-mode's own tag alphabet: letters, digits, _ @ # %
 
 
 def _clean_title_and_tags(title: str, tags) -> tuple[str, list[str]]:

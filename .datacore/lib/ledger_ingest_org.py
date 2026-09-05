@@ -291,6 +291,17 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
                 want["effective_tags"] = eff
         if file_filetags and not (cur.get("filetags") or None):
             want["filetags"] = file_filetags
+        # THE DRAWER, TOO. Only scheduled/deadline/state/tags moved before, so
+        # a property set or changed in org after the item was created never
+        # reached the ledger, and in a Phase 1 space the next projection put
+        # the old drawer back. Authoritative, like effective_tags: the drawer
+        # must equal what the projection will render. ID and CREATED are the
+        # projector's own and are excluded, as genesis excludes them.
+        cur_org = cur.get("org") if isinstance(cur.get("org"), dict) else {}
+        props_now = {k: str(v) for k, v in (node.properties or {}).items() if k not in ("ID", "CREATED")}
+        prio_now = getattr(node, "priority", None) or None
+        if props_now != {k: str(v) for k, v in (cur_org.get("properties") or {}).items()} or prio_now != (cur_org.get("priority") or None):
+            want["org"] = {**cur_org, "priority": prio_now, "properties": props_now}
         diff = {k: v for k, v in want.items() if (cur.get(k) or None) != v}
         if not diff:
             continue

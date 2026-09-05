@@ -297,3 +297,25 @@ def test_terminal_kinds_match_the_ratified_loop():
     would surface as tasks quietly never coming back rather than as an error.
     """
     assert ingest.TERMINAL_KINDS == {"DONE": "done", "CANCELLED": "dropped"}
+
+
+def test_a_property_set_in_org_reaches_the_ledger_and_the_projection(space):
+    """SURFACE, DONE_WHEN and JOB live in the drawer. Before 2026-09-06 the
+    drawer never moved after creation, so a Phase 1 projection put the old
+    (empty) drawer back on every regeneration."""
+    org = space / "org" / "next_actions.org"
+    text = org.read_text(encoding="utf-8")
+    text = text.replace("* NEXT Still working on it\n:PROPERTIES:\n:ID: task-next\n",
+                        "* NEXT [#A] Still working on it\n:PROPERTIES:\n:ID: task-next\n:SURFACE: 2-datacore\n:DONE_WHEN: the file exists\n")
+    org.write_text(text, encoding="utf-8")
+    ingest.sync_state(space, actor="test")
+    item = _items(space)["task-next"]
+    assert item.payload["org"]["properties"] == {"SURFACE": "2-datacore", "DONE_WHEN": "the file exists"}
+    assert item.payload["org"]["priority"] == "A"
+    # settles: a second pass emits nothing new
+    before = len(list(read_events(space)))
+    ingest.sync_state(space, actor="test")
+    assert len(list(read_events(space))) == before
+    from ledger.projector import project
+    rendered = project(fold(read_events(space)), space="0-testspace").text
+    assert ":SURFACE: 2-datacore" in rendered and ":DONE_WHEN: the file exists" in rendered

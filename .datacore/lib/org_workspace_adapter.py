@@ -327,6 +327,17 @@ def cmd_add(args):
         "tags": sorted(tags) if tags else None,
         "scheduled": getattr(args, "scheduled", None) or None,
         "space": file_path.parent.parent.name,
+        # The drawer travels with the item. Without it a Phase 1 space (org
+        # generated from the ledger) regenerated every adapter-created task
+        # with an empty drawer: SURFACE, DONE_WHEN and JOB, the properties the
+        # AI gate and the job verifier key on, vanished on the next projection
+        # (0 of them in 2-datacore's file on 2026-09-05). Same shape genesis
+        # records, so the projector renders both identically.
+        "org": {
+            "priority": getattr(args, "priority", None) or None,
+            "body": (getattr(args, "body", None) or "").replace("\\n", "\n"),
+            "properties": {k: str(v) for k, v in extra_props.items() if k not in ("ID", "CREATED")},
+        },
     }
     _assignee = _assignee_from_tags(file_path, sorted(tags) if tags else None)
     if _assignee:
