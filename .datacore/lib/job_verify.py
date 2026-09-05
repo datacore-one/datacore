@@ -67,6 +67,7 @@ one broken job must never abort verification of the rest of the manifest.
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import os
 import socket
 import subprocess
@@ -166,10 +167,83 @@ def _note_pass(job_name: str) -> None:
         _spec.loader.exec_module(_rec)
     if _NO_EMIT:
         return
-    _rec.record(job_name, failed=False)
+    rec = _rec.record(job_name, failed=False)
+    tid = rec.get("task_id") if isinstance(rec, dict) else None
+    if tid:
+        # The pass is the DONE_WHEN of the task the streak filed.
+        if _close_task(tid):
+            print(f"recovered: task {tid} closed for {job_name}", file=sys.stderr)
+        _rec.note_task(job_name, None)
 
 
-def _dispatch_alert(mode: str, job_name: str, failures: list[str]) -> None:
+def _artifact_signature(job) -> str:
+    """path + mtime of every artifact: the same signature is the same failure."""
+    parts = []
+    today = _dt.date.today().isoformat()
+    for a in getattr(job, "artifacts", []) or []:
+        raw = os.path.expanduser(str(a.path).replace("{today}", today))
+        try:
+            parts.append(f"{raw}@{int(os.stat(raw).st_mtime)}")
+        except OSError:
+            parts.append(f"{raw}@missing")
+    return "|".join(parts)
+
+
+#: Where a recurring failure becomes a task. 2-datacore is the system space; the
+#: machine goes on the task as SURFACE so the owner knows where to look.
+TASK_FILE = os.environ.get("JOB_VERIFY_TASK_FILE") or str(
+    DATACORE_ROOT / "2-datacore" / "org" / "next_actions.org")
+
+
+def _file_task(job, rec: dict, failures: list[str]) -> str | None:
+    """A recurring failure is a defect with no owner; give it one.
+
+    Escalation used to be a differently worded alert, once a day, forever:
+    mac-id-churn reached 48 recurrences with nobody assigned. The third
+    consecutive failure now files ONE task in the system space, with the
+    machine, the job and the failure text, and the pass that ends the streak
+    closes it. Best-effort: the adapter failing must not stop verification.
+    """
+    adapter = Path(__file__).resolve().parent / "org_workspace_adapter.py"
+    heading = (f"job-verify: {job.name} is failing on {job.machine} "
+               f"({rec.get('consecutive')} runs since {rec.get('first_failed')})")
+    body = ("Recurring failure (DIP-0031: 3 or more consecutive runs). Failures this run:\n"
+            + "\n".join(f"- {f}" for f in failures[:6])
+            + f"\nProducer: {getattr(job, 'cmd', '') or 'see manifest'}"
+            + f"\nSchedule: {getattr(job, 'schedule', '') or 'see manifest'}")
+    cmd = [sys.executable, str(adapter), "add", "--allow-any-file", "--file", TASK_FILE,
+           "--state", "TODO", "--heading", heading, "--tags", "datacore,ops,job_verify",
+           "--priority", "B", "--property", f"SURFACE={job.machine}", "--property", f"JOB={job.name}",
+           "--property", (f"DONE_WHEN=job {job.name} passes verification on {job.machine} "
+                          "(job_verify records the pass and closes this)"),
+           "--body", body]
+    try:
+        import json as _json
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        for line in (out.stdout or "").splitlines():
+            line = line.strip()
+            if line.startswith("{"):
+                d = _json.loads(line)
+                if d.get("added") and d.get("id"):
+                    return str(d["id"])
+        print(f"task not filed for {job.name}: {(out.stderr or out.stdout or '').strip()[-200:]}",
+              file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 -- bookkeeping must not stop verification
+        print(f"task not filed for {job.name}: {type(exc).__name__}: {exc}", file=sys.stderr)
+    return None
+
+
+def _close_task(task_id: str) -> bool:
+    adapter = Path(__file__).resolve().parent / "org_workspace_adapter.py"
+    try:
+        out = subprocess.run([sys.executable, str(adapter), "complete", "--file", TASK_FILE,
+                              "--id", task_id], capture_output=True, text=True, timeout=120)
+        return out.returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> None:
     """Dispatch exactly one alert for one failing job.
 
     `log` mode is stderr-only -- no external call is made. `telegram` mode
@@ -199,7 +273,17 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str]) -> None:
     if _NO_EMIT:
         message = f"job.verify FAILED: {job_name} ({len(failures)} failure(s))"
     else:
-        _record = _rec.record(job_name, failed=True)
+        sig = _artifact_signature(job) if job is not None else None
+        _record = _rec.record(job_name, failed=True, artifact_sig=sig)
+        if _record.get("same_artifact"):
+            print(f"alert withheld: {job_name} failed on the same artifact already counted "
+                  f"({_record.get('consecutive')}x); nothing new to report", file=sys.stderr)
+            return
+        if _record.get("recurring") and job is not None and not _record.get("task_id"):
+            tid = _file_task(job, _record, failures)
+            if tid:
+                _rec.note_task(job_name, tid)
+                print(f"recurring: filed task {tid} for {job_name}", file=sys.stderr)
         message = _rec.describe(job_name, _record, len(failures))
         if not _rec.should_alert(_record):
             print(f"alert suppressed: {job_name} is recurring "
@@ -382,7 +466,7 @@ def main(argv: list[str] | None = None) -> None:
             for failure in failures:
                 print(f"  - {failure}", file=sys.stderr)
             effective_alert = args.alert if args.alert is not None else job.on_fail
-            _dispatch_alert(effective_alert, job.name, failures)
+            _dispatch_alert(effective_alert, job.name, failures, job=job)
         else:
             # Reset on every pass, not only on the transition. A job that
             # recovers must not carry its old count into an unrelated future
