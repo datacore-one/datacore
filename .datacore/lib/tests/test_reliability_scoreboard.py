@@ -54,3 +54,30 @@ def test_each_failure_class_fails_its_own_condition(tmp_path, monkeypatch):
     assert not M.compute(day, state, cos)["checks"]["R6"]["ok"]
     (state / "cos-uptime.log").write_text(f"{day}T01:00:01Z DOWN\n" + "".join(f"{day}T{h:02d}:00:01Z UP\n" for h in range(2, 24)))
     assert not M.compute(day, state, cos)["checks"]["R5"]["ok"]
+
+
+def test_r5_is_measured_from_the_probers_hits_when_no_probe_log_is_here(tmp_path, monkeypatch):
+    day = "2026-09-05"; state, cos = _good_box(tmp_path, day)
+    (state / "cos-uptime.log").unlink()
+    now = dt.datetime.fromisoformat(day).timestamp() + 8 * 3600          # 08:00 -> 32 probes expected
+    hits = "\n".join(f"Sep 05 0{i//4}:{(i%4)*15:02d}:01 bridge python[1]: INFO:     100.101.159.42:5 - \"GET /health HTTP/1.1\" 200 OK" for i in range(32))
+    monkeypatch.setattr(M, "_journal", lambda args: hits if "-u" in args else "")
+    monkeypatch.setattr(M, "_failed_units", lambda: set())
+    r = M.compute(day, state, cos, now=now)
+    assert r["checks"]["R5"]["ok"] and "32/32" in r["checks"]["R5"]["note"], r["checks"]["R5"]
+    few = "\n".join(hits.splitlines()[:20])
+    monkeypatch.setattr(M, "_journal", lambda args: few if "-u" in args else "")
+    r = M.compute(day, state, cos, now=now)
+    assert not r["checks"]["R5"]["ok"] and "20/32" in r["checks"]["R5"]["note"]
+
+
+def test_r2_sees_a_unit_that_failed_and_recovered_during_the_day(tmp_path, monkeypatch):
+    day = "2026-09-05"; state, cos = _good_box(tmp_path, day)
+    journal = "Sep 05 03:00:01 bridge systemd[1]: v2-verify.service: Failed with result 'exit-code'.\n"
+    monkeypatch.setattr(M, "_journal", lambda args: journal if "-u" not in args else "")
+    monkeypatch.setattr(M, "_failed_units", lambda: set())          # green again by scoreboard time
+    r = M.compute(day, state, cos)
+    assert not r["checks"]["R2"]["ok"] and "v2-verify.service" in r["checks"]["R2"]["note"]
+    (cos / "alerts" / ".sent-log").write_text(f"{int(dt.datetime.fromisoformat(day).timestamp()) + 3600} unit http=200 unit-failed:v2-verify.service\n")
+    r = M.compute(day, state, cos)
+    assert r["checks"]["R2"]["ok"], r["checks"]["R2"]
