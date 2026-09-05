@@ -73,6 +73,21 @@ if [ -f "$OWNERSHIP" ] && command -v python3 >/dev/null 2>&1 && [ -n "$REFS_INPU
             if git rev-parse --quiet --verify "$TRACKING" >/dev/null 2>&1; then
                 OWN_BASE=$(git merge-base "$l_sha" "$TRACKING" 2>/dev/null || true)
             fi
+            if [ -z "$OWN_BASE" ]; then
+                # A branch origin has never seen (tonight's run branch) has no
+                # tracking ref of its own; its outgoing commits are the ones not
+                # on the remote's default branch, exactly as the content scan
+                # below reasons. Full history was the fallback here, and it
+                # refused every new run branch of a repo whose past holds
+                # another actor's log edits (6-meridian, 2026-09-05: no run
+                # branch could be pushed, so no claim there ever held).
+                for candidate in "refs/remotes/${REMOTE}/main" "refs/remotes/${REMOTE}/master" "refs/remotes/${REMOTE}/develop"; do
+                    if git rev-parse --quiet --verify "$candidate" >/dev/null 2>&1; then
+                        OWN_BASE=$(git merge-base "$l_sha" "$candidate" 2>/dev/null || true)
+                        [ -n "$OWN_BASE" ] && break
+                    fi
+                done
+            fi
             if [ -n "$OWN_BASE" ]; then
                 echo "pre-push: ownership guard: r_sha ${r_sha:0:12} not local — using merge-base ${OWN_BASE:0:12} (fetch first if this recurs)" >&2
                 echo "${OWN_BASE}..${l_sha}"
