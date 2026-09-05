@@ -306,6 +306,24 @@ class TestV2LedgerWrite:
             assert result["ledger_actor"] != "genesis"
 
 
+    def test_add_carries_the_drawer_into_the_ledger(self, work_dir, monkeypatch):
+        """A Phase 1 space regenerates its org file from the ledger; a task
+        created with SURFACE and DONE_WHEN must come back with them."""
+        (work_dir / ".datacore" / "events").mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("DATACORE_ACTOR", "testactor")
+        result = run_adapter("add", "--file", str(work_dir / "inbox.org"),
+                             "--heading", "Drawer-bound task", "--priority", "A",
+                             "--property", "SURFACE=2-datacore", "--property", "DONE_WHEN=the file exists")
+        assert result.get("added") is True and result.get("ledger_actor")
+        import json
+        events = [json.loads(l) for f in (work_dir / ".datacore" / "events").glob("*.jsonl") for l in f.read_text().splitlines() if l.strip()]
+        created = [e for e in events if e["type"] == "item.create" and e["payload"]["id"] == result["id"]]
+        assert len(created) == 1
+        org = created[0]["payload"]["org"]
+        assert org["properties"] == {"SURFACE": "2-datacore", "DONE_WHEN": "the file exists"}
+        assert org["priority"] == "A" and "CREATED" not in org["properties"]
+
+
 
 def test_refused_add_exits_nonzero(tmp_path):
     """The refusal used to exit 0 with an error JSON. A caller checking the
