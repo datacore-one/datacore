@@ -1,0 +1,70 @@
+# Tool-call effects — how an executor's in-flight tool call maps onto the
+# effect vocabulary of approvals_policy.yaml (datacore#30, roadmap D-005).
+#
+# approvals_policy.yaml decides WHO may cause an effect (never_effects per
+# principal, cosign_effects that need a human grant). This file decides WHICH
+# tool calls count as that effect, so the same policy that gates an item at
+# claim time also binds a running task: tool_policy.py classifies every
+# PreToolUse call with these patterns, and a hit on a principal's never-effect
+# is refused while a hit on a cosign effect without a grant is paused.
+#
+# Matching:
+#   tools          fnmatch globs on the tool name; absent = every tool
+#   tool_patterns  regexes on the tool name (MCP tools carry the verb there)
+#   patterns       regexes (case-insensitive) on the call's text: a Bash
+#                  command, a URL, a file path, or the JSON of an MCP input
+#
+# Public file — generic providers and verbs only, never a customer host.
+# Missing an effect here fails OPEN for that call: the outer controls (egress
+# enforcement, the pre-push guard, claim-time cosign) still apply. A pattern
+# that is too broad fails CLOSED on a legitimate call, which the refusal on
+# the ledger makes visible the next morning; loosen it here, not in code.
+version: 1
+# Only tools that can ACT are classified. Read, Grep, Glob, Edit and Write
+# cannot send, pay or deploy by themselves — reading deploy.sh is not a
+# deployment — so they are never an effect; the outer file-level guards
+# (org_guard, restricted paths) own those.
+acting_tools: &acting ["Bash", "WebFetch", "mcp__*"]
+effects:
+  email.send:
+    tools: *acting
+    tool_patterns:
+      - 'send_?(e?mail|message)'
+    patterns:
+      - '\bwinston_send\.py\b'
+      - '\bsendmail\b'
+      - '\bmail\s+-s\b'
+      - '\bmutt\s'
+      - '\bsmtplib\b'
+      - 'gmail/v1/users/[^/\s]+/(messages|drafts)/send'
+      - 'api\.(sendgrid|mailgun|resend|postmarkapp|sparkpost)\.'
+      - '\bgmail_send\b'
+  payment:
+    tools: *acting
+    tool_patterns:
+      - '(create_)?(charge|payment|payout|transfer)'
+      - 'place_?order'
+    patterns:
+      - 'api\.stripe\.com'
+      - '\bstripe\b.*\b(charges?|payment_intents?|transfers?|payouts?)\b'
+      - 'api(-m)?\.paypal\.com'
+      - '\bwise\.com/'
+      - 'revolut\.com/'
+      - '/(spot|futures|delivery|options)/[^\s]*orders\b'
+      - 'hyperliquid[^\s]*/exchange\b'
+      - '\b(eth|usdc|usdt|btc|bzz|icp)\b[^\n]{0,40}\b(send|transfer)\b'
+      - '\bdfx\s+(ledger\s+transfer|canister\s+call\s+\S+\s+(transfer|icrc1_transfer))'
+  prod.deploy:
+    tools: *acting
+    patterns:
+      - '\bgh\s+release\s+(create|upload)\b'
+      - '\bnpm\s+publish\b'
+      - '\btwine\s+upload\b'
+      - '\bdocker\s+push\b'
+      - '\bkubectl\s+(apply|rollout|delete|scale)\b'
+      - '\bterraform\s+(apply|destroy)\b'
+      - '\bsystemctl\s+(--user\s+)?(restart|stop|start|reload)\s'
+      - '\blaunchctl\s+(unload|bootout|kickstart)\b'
+      - '\bdeploy\.sh\b'
+      - '\bagent_update\.py\b[^\n]*--apply'
+      - '\bdistribute\.sh\b'
