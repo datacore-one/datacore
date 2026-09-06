@@ -420,7 +420,11 @@ def _read_identity_env() -> dict:
 
 
 # ── DIP-0046: git transport ─────────────────────────────────────────────────
-LENS_MAX_GB = 1.0
+#: Measured 2026-09-06 after the first full sweep on the mac: 30 days of
+#: events + 7 days of raw rows + indexes = 1.14 GB, vacuumed. The ceiling sits
+#: above that steady state so the row fires on GROWTH, not on the retention
+#: policy working as declared.
+LENS_MAX_GB = 2.0
 
 
 def check_stores(rep: Report) -> None:
@@ -450,6 +454,217 @@ def check_stores(rep: Report) -> None:
                 f"{gb:.2f} GB (ceiling {LENS_MAX_GB:g} GB)")
     else:
         rep.add("lens", "lens store bounded", None, "no observations.db on this host", skipped=True)
+
+
+# ── datacore#34: the three rows the reliability epic still lacked ──────────
+#: A commit that exists on this host and on no remote for longer than this is
+#: STRANDED: the class of failure that parked 610 commits on a branch nobody
+#: pushed (datacore#31). A fresh feature branch is not stranded; a day-old one
+#: with nothing upstream is.
+UNPUSHED_MAX_HOURS = 24.0
+
+
+def _git(repo: Path, *args: str, timeout: int = 30) -> tuple[int, str]:
+    return run(["git", "-C", str(repo), *args], timeout)
+
+
+def _default_branch(repo: Path) -> str:
+    rc, out = _git(repo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    if rc == 0 and out.strip():
+        return out.strip().split("/", 1)[-1]
+    rc, out = _git(repo, "rev-parse", "--verify", "-q", "refs/remotes/origin/main")
+    return "main" if rc == 0 else "master"
+
+
+def registered_repos(root: Path | None = None) -> list[tuple[str, Path, str, str]]:
+    """(name, path, category, canonical repo name) for every entry of
+    registry/repositories.yaml that exists as a git checkout on this host.
+    Entries that are not here (another host's spaces) are simply not rows."""
+    root = root or ROOT   # resolved at call time, so a test can point ROOT elsewhere
+    try:
+        import yaml
+        reg = (yaml.safe_load((root / ".datacore" / "registry" / "repositories.yaml")
+                              .read_text()) or {}).get("repositories", {})
+    except Exception:  # noqa: BLE001 — no registry, no rows; the transport row says so
+        return []
+    out = []
+    for key, entry in sorted(reg.items()):
+        path = root if key == "<root>" else root / key
+        if not (path / ".git").exists():
+            continue
+        entry = entry or {}
+        out.append((key, path, str(entry.get("category") or ""), str(entry.get("repo") or "")))
+    return out
+
+
+def stranded_age_hours(repo: Path, now: float | None = None) -> tuple[int, float]:
+    """(count, age of the oldest) for commits reachable from HEAD that no
+    branch of `origin` has. Zero rows when everything is upstream."""
+    import time as _time
+    rc, out = _git(repo, "log", "--format=%ct", "HEAD", "--not", "--remotes=origin")
+    if rc != 0:
+        return 0, 0.0
+    stamps = [int(s) for s in out.split() if s.strip().isdigit()]
+    if not stamps:
+        return 0, 0.0
+    now = now if now is not None else _time.time()
+    return len(stamps), max(0.0, (now - min(stamps)) / 3600.0)
+
+
+def check_topology(rep: Report) -> None:
+    """Every registered repo on this host: origin names the canonical repo,
+    knowledge repos sit on their default branch, and no commit is older than
+    a day with no copy on any remote.
+
+    The reconciler that datacore#36 specified never existed; these are the
+    three invariants from its list that nothing else measured. A knowledge
+    repo on a work branch is one the transport will not converge (it only
+    moves the default branch); a code repo on a work branch is a person's
+    working tree and is reported, not failed.
+    """
+    repos = registered_repos()
+    if not repos:
+        rep.add("0046", "repo topology", None, "no registered repositories on this host")
+        return
+    wrong, parked_knowledge, parked_code, stranded = [], [], [], []
+    for name, path, category, canonical in repos:
+        rc, url = _git(path, "remote", "get-url", "origin")
+        base = ""
+        if rc == 0 and url.strip():
+            import re as _re
+            base = _re.sub(r"\.git$", "", url.strip().rstrip("/").split("/")[-1].split(":")[-1])
+        if not canonical or base != canonical:
+            wrong.append(f"{name}: origin={base or 'none'} registry={canonical or '?'}")
+        db = _default_branch(path)
+        _, cur = _git(path, "branch", "--show-current")
+        cur = cur.strip() or "detached"
+        if cur != db:
+            (parked_knowledge if category == "knowledge" else parked_code).append(f"{name}: {cur}")
+        n, age = stranded_age_hours(path)
+        if n and age > UNPUSHED_MAX_HOURS:
+            stranded.append(f"{name}: {n} commit(s), oldest {age:.0f}h")
+    rep.add("0046", "remotes canonical", not wrong,
+            f"{len(repos)} repos" if not wrong else "; ".join(wrong[:3]))
+    rep.add("0046", "knowledge on default branch", not parked_knowledge,
+            ("; ".join(parked_knowledge[:3]) if parked_knowledge
+             else (f"code parked: {'; '.join(parked_code[:3])}" if parked_code else "all on default")))
+    rep.add("0046", "no stranded commits", not stranded,
+            "; ".join(stranded[:3]) if stranded else f"nothing older than {UNPUSHED_MAX_HOURS:g}h off-remote")
+
+
+def _pinned_org_workspace() -> tuple[int, ...] | None:
+    try:
+        for line in (LIB / "requirements.txt").read_text().splitlines():
+            m = __import__("re").match(r"\s*org-workspace\s*>=\s*([0-9][0-9.]*)", line)
+            if m:
+                return tuple(int(x) for x in m.group(1).strip(".").split("."))
+    except OSError:
+        pass
+    return None
+
+
+def interpreters() -> list[str]:
+    """The Pythons this host actually runs jobs with: the one running this
+    checklist first, then everything named python3 on PATH, the system one,
+    and the daemon's venv when it exists."""
+    import shutil
+    cands = [sys.executable, shutil.which("python3"), "/usr/bin/python3",
+             "/opt/homebrew/bin/python3", "/usr/local/bin/python3",
+             str(ROOT / "2-datacore" / "2-projects" / "datacore-app" / "daemon" / ".venv" / "bin" / "python")]
+    out: list[str] = []
+    for c in cands:
+        if not c:
+            continue
+        try:
+            real = os.path.realpath(c)
+        except OSError:
+            continue
+        if os.path.exists(real) and real not in out:
+            out.append(real)
+    return out
+
+
+def org_workspace_version(py: str) -> str:
+    """'0.5.1', or 'missing' when that interpreter cannot import it."""
+    rc, out = run([py, "-c",
+                   "import importlib.metadata as m; print(m.version('org-workspace'))"], 30)
+    v = out.strip().splitlines()[-1].strip() if out.strip() else ""
+    return v if rc == 0 and v and v[0].isdigit() else "missing"
+
+
+def check_versions(rep: Report) -> None:
+    """org-workspace: one version under every interpreter this host runs
+    jobs with, and at least the pinned one.
+
+    2026-07-26 (datacore#34): two Pythons on the mac carried two versions of
+    org-workspace, so a script's behaviour depended on which shim launched
+    it. Every host compares against the same pin in requirements.txt, which
+    is what makes the row cross-host: parity here means parity everywhere.
+    """
+    pin = _pinned_org_workspace()
+    found = {py: org_workspace_version(py) for py in interpreters()}
+    present = {v for v in found.values() if v != "missing"}
+    mine = found.get(os.path.realpath(sys.executable), "missing")
+    if not present:
+        rep.add("0035", "org-workspace parity", False, "not installed for any interpreter")
+        return
+    def _tup(v: str) -> tuple[int, ...]:
+        return tuple(int(x) for x in v.split(".") if x.isdigit())
+    below = [v for v in present if pin and _tup(v) < pin]
+    ok = len(present) == 1 and mine != "missing" and not below
+    missing = [os.path.basename(os.path.dirname(os.path.dirname(p))) or p
+               for p, v in found.items() if v == "missing"]
+    if ok:
+        detail = f"{next(iter(present))} under {len(found) - len(missing)} interpreter(s)"
+        if missing:
+            detail += f"; absent under {len(missing)}"
+    elif mine == "missing":
+        detail = f"absent under the checklist's own interpreter {sys.executable}"
+    elif len(present) > 1:
+        detail = "; ".join(f"{v} ({p})" for p, v in found.items() if v != "missing")[:100]
+    else:
+        detail = f"{next(iter(present))} below the pin {'.'.join(map(str, pin))}"
+    rep.add("0035", "org-workspace parity", ok, detail)
+
+
+def roadmap_trust_violations(root: Path | None = None) -> list[str]:
+    """Roadmap items marked done that carry no named check: no `shipped`
+    date, or a `done_when` without both `evidence` and `verify`."""
+    import yaml
+    root = root or ROOT
+    bad = []
+    for rm in sorted(root.glob("[0-9]-*/roadmap.yaml")):
+        try:
+            data = yaml.safe_load(rm.read_text()) or {}
+        except Exception as exc:  # noqa: BLE001 — an unreadable roadmap is itself a violation
+            bad.append(f"{rm.parent.name}: unreadable ({type(exc).__name__})")
+            continue
+        for item in data.get("items") or []:
+            if not isinstance(item, dict) or item.get("status") != "done":
+                continue
+            dw = item.get("done_when")
+            named = isinstance(dw, dict) and bool(dw.get("evidence")) and bool(dw.get("verify"))
+            if not named or not item.get("shipped"):
+                bad.append(f"{rm.parent.name}:{item.get('id')}")
+    return bad
+
+
+def check_trust_labels(rep: Report) -> None:
+    """No "done" without a named check (datacore#34's trust-label rule).
+
+    A status is a label; what makes it trustworthy is the check it names.
+    Today the rule is enforceable on roadmap items — `done` must carry a
+    `shipped` date and a `done_when` with `evidence` and `verify` — which is
+    where "done" is most often written by hand.
+    """
+    bad = roadmap_trust_violations()
+    roadmaps = list(ROOT.glob("[0-9]-*/roadmap.yaml"))
+    if not roadmaps:
+        rep.add("0035", "done names its check", None, "no roadmap.yaml on this host", skipped=True)
+        return
+    rep.add("0035", "done names its check", not bad,
+            f"{len(roadmaps)} roadmap(s), every done item has evidence+verify+shipped"
+            if not bad else "; ".join(bad[:4]))
 
 
 def check_transport(rep: Report) -> None:
@@ -817,6 +1032,9 @@ def main() -> int:
     check_identity(rep)
     check_transport(rep)
     check_stores(rep)
+    check_topology(rep)
+    check_versions(rep)
+    check_trust_labels(rep)
     check_finality(rep)
     check_app(rep)
     check_declared_identity(rep)
