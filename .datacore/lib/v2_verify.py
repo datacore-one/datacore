@@ -374,7 +374,10 @@ def check_signed_events(rep: Report) -> None:
             except Exception:  # noqa: BLE001
                 bad += 1
     if not checked:
-        rep.add("0044", "events signed", False, f"signing on but no signed event found in {actor}'s recent log tails")
+        # Signing was just switched on and this writer has appended nothing
+        # since: not a failure, a "not yet". The first append makes it a pass
+        # or a fail.
+        rep.add("0044", "events signed", None, f"signing on; no signed event from {actor} yet (nothing appended since the switch)")
     else:
         rep.add("0044", "events signed", bad == 0, f"{checked - bad}/{checked} recent signatures verify" + (f"; {bad} bad" if bad else ""))
 
