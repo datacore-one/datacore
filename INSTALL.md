@@ -230,8 +230,8 @@ ls -la ~/Data/
 ls -la ~/Data/0-personal/org/
 ls -la ~/Data/.datacore/
 
-# Test sync
-./sync status
+# Test sync (the transport; the old ./sync script is retired)
+python3 .datacore/lib/ledger_transport.py status
 ```
 
 ## Adding Team Spaces
@@ -475,11 +475,11 @@ python .datacore/lib/zettel_db.py init-all
 ### Sync issues
 
 ```bash
-# Check status of all repos
-./sync status
+# Status of every registered repo (touches nothing)
+python3 .datacore/lib/ledger_transport.py status
 
-# Force pull
-./sync
+# Converge knowledge repos, fast-forward code repos
+python3 .datacore/lib/ledger_transport.py sync
 ```
 
 ### Permission issues

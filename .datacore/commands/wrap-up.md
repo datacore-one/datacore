@@ -801,7 +801,7 @@ python3 ~/Data/.datacore/lib/wrap_up_mechanics.py finalize
 touched, read from the archive's `files_modified` (main thread **and**
 subagents). Everything else dirty in the repo is left alone.
 
-> **Why.** `./sync push` stages everything with `git add --ignore-removal .` and
+> **Why.** The retired `./sync push` staged everything with `git add --ignore-removal .` and
 > commits it as `Sync: <date>`. Correct for a single-session day; wrong the
 > moment two sessions are open, because one session's wrap-up sweeps up the
 > other's half-finished work and pushes it. That was the reported complaint, and
@@ -820,14 +820,15 @@ Every session file lands in exactly one bucket, and **all four are reported**:
 Report the counts for all four in §10. "Nothing to push" and "I left 4 files
 behind" must never read the same.
 
-**Guards it inherits from `./sync`, each bought with an incident:**
+**Guards it inherits from the retired `./sync`, each bought with an incident:**
 - **Refuses to push from a non-default branch** unless `DATACORE_SYNC_ALLOW_BRANCH=1`. A warning alone let 610 commits pile up on a feature branch in 5-plur for two months — 52 zettels, every weekly content calendar since mid-June — pushed, but where nobody reads.
 - **A rejected commit never falls through to a push.** It reports `COMMIT REJECTED` instead of a run that looks clean.
 - **Names the push failure** rather than collapsing four causes into one message.
 - **Reports `preexisting_unpushed_commits`** — a push carries every earlier unpushed commit on the branch. That is git, not a choice, and pretending the push was fully scoped would be false.
 
-**`--scope all`** restores the old behaviour (delegates to `./sync push`). Use it
-only when the user explicitly wants everything swept up.
+**`--scope all`** sweeps everything through the transport (`ledger_transport.py sync`:
+converge every registered knowledge repo, fast-forward code repos, never commit
+code). Use it only when the user explicitly wants everything swept up.
 
 **`--dry-run`** reports what would be committed without doing it.
 

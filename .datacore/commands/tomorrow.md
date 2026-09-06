@@ -127,13 +127,14 @@ All repos synced.
 datacore (root).......... [DIRTY - 5 uncommitted]
 projectspace............. [DIRTY - 1 uncommitted]
 
-Running ./sync push to save work...
-[Commit and push all dirty repos]
+Running the transport to save work...
+[converge every knowledge repo; fast-forward code repos, never commit them]
 
-Done. All repos synced.
+Done. 12 repo(s), 0 needing a human.
 ```
 
-**Uses `./sync push` with retry logic if needed.**
+**Uses `python3 .datacore/lib/ledger_transport.py sync`.** The old `./sync push`
+is retired: it autostashed and swallowed conflicts (datacore#31).
 
 ### 2. Inbox Status
 

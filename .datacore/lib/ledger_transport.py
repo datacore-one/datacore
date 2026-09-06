@@ -132,6 +132,32 @@ def default_branch(space: Path) -> str:
     return out.split("/", 1)[1] if rc == 0 and out.startswith("origin/") else "main"
 
 
+def _in_progress(space: Path) -> str:
+    """What is half-finished in this repo: 'merge' | 'rebase' | 'cherry-pick' |
+    'revert' | 'conflict markers' | ''.
+
+    Both signals matter. MERGE_HEAD says git is mid-merge; leftover markers
+    with no MERGE_HEAD say a person aborted the merge and left the file — a
+    tree the space pre-commit hook refuses where it is installed, and nothing
+    refused where it is not.
+    """
+    rc, gitdir, _ = _git(space, "rev-parse", "--git-dir")
+    if rc == 0 and gitdir.strip():
+        g = Path(gitdir.strip())
+        if not g.is_absolute():
+            g = space / g
+        for marker, name in (("MERGE_HEAD", "merge"), ("rebase-merge", "rebase"),
+                             ("rebase-apply", "rebase"), ("CHERRY_PICK_HEAD", "cherry-pick"),
+                             ("REVERT_HEAD", "revert")):
+            if (g / marker).exists():
+                return name
+    for args in (("diff", "--check"), ("diff", "--cached", "--check")):
+        _, out, _ = _git(space, *args)
+        if "leftover conflict marker" in out:
+            return "conflict markers"
+    return ""
+
+
 def converge(space: Path) -> Result:
     """Receive others' facts: fetch, then MERGE. Never rebase, never reset."""
     cat = classify(space)
@@ -186,6 +212,17 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         # from a closed laptop lid.
         return Result(False, _fetch_reason(err), {"stderr": err.strip()[:200]})
     db = default_branch(space)
+
+    # Never autosave a half-finished merge. A converge that reaches a repo
+    # whose previous merge stopped on a conflict — markers in the tree,
+    # MERGE_HEAD in .git — would `add -A` the markers, commit them as an
+    # autosave and push them to the shared remote. `sync push` did exactly
+    # that (datacore#28). An in-progress merge, rebase or cherry-pick belongs
+    # to whoever started it; the converge steps back and names what it found.
+    busy = _in_progress(space)
+    if busy:
+        return Result(False, f"{busy} in progress — finish or abort it by hand, then converge",
+                      {"branch": db, "in_progress": busy})
 
     # Autosave BEFORE merging. A dirty working file makes git refuse the
     # merge, and refusing forever means never converging — 2-datacore was
@@ -417,28 +454,112 @@ def sync_repo(repo: Path, quiet: bool = False) -> str:
     return outcome
 
 
-def sync_all(root: Path, only: str | None = None, quiet: bool = False) -> int:
-    repos = [d for d in sorted(root.glob("[0-9]-*"))
-             if (d / ".git").exists() and (not only or d.name == only)]
-    outcomes = [sync_repo(r, quiet=quiet) for r in repos]
-    bad = [o for o in outcomes if o in ("conflict", "blocked")]
+def _code_update(repo: Path) -> str:
+    """Bring a CODE repo forward without ever committing for it.
+
+    The retired `./sync` pulled these with `--autostash` and swallowed the
+    result (datacore#31). A code repo is a person's working tree: fetch, then
+    fast-forward the default branch when it is checked out and clean enough
+    to move. Anything else is reported in the operator's vocabulary and left
+    exactly as found.
+
+    'clean' | 'dirty' | 'parked' | 'diverged' | 'offline' | 'blocked'
+    """
+    rc, out, _ = _git(repo, "status", "--porcelain")
+    dirty = bool(out.strip())
+    rc, _, err = _git(repo, "fetch", "-q", "origin")
+    if rc != 0:
+        reason = _fetch_reason(err)
+        return "offline" if "offline" in reason else "blocked"
+    db = default_branch(repo)
+    _, cur, _ = _git(repo, "branch", "--show-current")
+    if cur.strip() != db:
+        return "parked"          # on a work branch — theirs, untouched
+    rc, _, err = _git(repo, "merge", "--ff-only", "-q", f"origin/{db}")
+    if rc != 0:
+        # Either the branch has its own commits (diverged: needs a PR or a
+        # merge by a person) or local edits sit on files the remote moved.
+        return "dirty" if dirty else "diverged"
+    return "dirty" if dirty else "clean"
+
+
+def sync_outcomes(root: Path, only: str | None = None,
+                  include_code: bool = True) -> list[tuple[str, str, str]]:
+    """Every registered repo under `root`, converged or fast-forwarded.
+
+    The registry, not a glob, says what is synced: `[0-9]-*` found only the
+    spaces, and the modules, DIPs and project repos that `./sync` used to
+    pull were left to a script this replaces. Knowledge and agent-personal
+    repos converge (autosave, merge, push); code repos are fast-forwarded and
+    never committed. Returns (name, category, outcome) per repo.
+    """
+    out: list[tuple[str, str, str]] = []
+    for key, entry in _registry(root).items():
+        path = root if key == "<root>" else root / key
+        name = "<root>" if key == "<root>" else key
+        if only and Path(key).name != only and key != only:
+            continue
+        if not (path / ".git").exists():
+            continue
+        cat = str(entry.get("category") or "")
+        if cat == "code":
+            if include_code:
+                out.append((name, cat, _code_update(path)))
+            continue
+        out.append((name, cat, sync_repo(path, quiet=True)))
+    return out
+
+
+HUMAN_NEEDED = ("conflict", "blocked", "diverged")
+
+
+def sync_all(root: Path, only: str | None = None, quiet: bool = False,
+             include_code: bool = True) -> int:
+    outcomes = sync_outcomes(root, only=only, include_code=include_code)
+    bad = [(n, o) for n, _, o in outcomes if o in HUMAN_NEEDED]
     if not quiet:
+        for name, cat, o in outcomes:
+            print(f"{name}: {o}" + (f"  [{cat}]" if cat == "code" else ""))
         print(f"\nsync: {len(outcomes)} repo(s), {len(bad)} needing a human")
     return 1 if bad else 0
+
+
+def status_lines(root: Path) -> list[str]:
+    """One line per registered repo: branch, dirty count, ahead/behind. Touches nothing."""
+    lines = []
+    for key, entry in _registry(root).items():
+        path = root if key == "<root>" else root / key
+        if not (path / ".git").exists():
+            continue
+        _, cur, _ = _git(path, "branch", "--show-current")
+        _, st, _ = _git(path, "status", "--porcelain")
+        db = default_branch(path)
+        rc, ab, _ = _git(path, "rev-list", "--left-right", "--count", f"origin/{db}...HEAD")
+        behind, ahead = (ab.split() + ["?", "?"])[:2] if rc == 0 else ("?", "?")
+        dirty = len([l for l in st.splitlines() if l.strip()])
+        lines.append(f"{key if key != '<root>' else '<root>'}: {cur.strip() or '?'} "
+                     f"dirty={dirty} ahead={ahead} behind={behind} [{entry.get('category', '')}]")
+    return lines
 
 
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="ledger transport")
-    ap.add_argument("op", choices=["converge", "gaps", "classify", "sync"])
+    ap.add_argument("op", choices=["converge", "gaps", "classify", "sync", "status"])
     ap.add_argument("--space", type=Path, help="required for all ops except sync")
     ap.add_argument("--repo", help="sync: limit to one space by directory name")
     ap.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--no-code", action="store_true",
+                    help="sync: knowledge repos only, leave code repos alone")
     a = ap.parse_args()
 
     if a.op == "sync":
-        raise SystemExit(sync_all(a.root, only=a.repo, quiet=a.quiet))
+        raise SystemExit(sync_all(a.root, only=a.repo, quiet=a.quiet,
+                                  include_code=not a.no_code))
+    if a.op == "status":
+        print("\n".join(status_lines(a.root)))
+        raise SystemExit(0)
     if a.space is None:
         ap.error(f"--space is required for {a.op}")
     fn = {"converge": converge, "gaps": gaps, "classify": classify}[a.op]
