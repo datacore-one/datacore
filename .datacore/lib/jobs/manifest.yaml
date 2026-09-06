@@ -742,13 +742,13 @@ jobs:
   - name: hermes-tris-heartbeat
     machine: hermes
     schedule: "tris-heartbeat.timer (every 30 min)"
-    cmd: "/home/gregor/tris-heartbeat.sh"
+    cmd: "~/tris-heartbeat.sh"
     on_fail: telegram
     artifacts:
       # tris-heartbeat.sh writes the last report it managed to send to
       # STATE_FILE (line 81); a report it could not send is logged but not
       # stamped, so age here means "Tris has not been heard from".
-      - path: "/home/gregor/.hermes/state/heartbeat-last-report"
+      - path: "~/.hermes/state/heartbeat-last-report"
         check: nonempty
         max_age_hours: 2
 

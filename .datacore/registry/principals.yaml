@@ -9,11 +9,15 @@
 # month to date); null means "no ceiling declared", and principals_check.py
 # reports it as such every day.
 version: 1
+# Authorship is bound by hash, not by address: `email_sha256` holds the first
+# 16 hex of sha256(lowercased git author email). This repository is public and
+# its boundary check refuses personal addresses in tracked files. To bind a
+# new address: python3 .datacore/lib/actor_identity.py hash you@example.com
 principals:
   gregor:
     kind: human
     display: Gregor
-    emails: [gregor@plur.si, gregor@ethswarm.org, dev@datacore.one]
+    email_sha256: [49d69f113aaa313b, 4e49325caaa8e99d, 36447ff8a6d37b84]
     github: plur9
     hosts: [mac]
     writes_as: [mac]
@@ -24,7 +28,7 @@ principals:
     kind: agent
     display: Winston
     role: chief of staff
-    emails: [winston@datacore.one]
+    email_sha256: [0ca46dadf114ca4d]
     github: null                        # deliberately under the owner's account (DIP-0044 §4)
     hosts: [winston]
     writes_as: [winston, bridge]        # bridge: the hostname-derived log from before DIP-0044
@@ -41,7 +45,7 @@ principals:
     kind: agent
     display: Miles
     role: chief of operations
-    emails: [miles@datacore.one, gregor+miles@datafund.io]
+    email_sha256: [b3c41e5e12e8cdb7, 7b84804c8b3d143e]
     github: miles-on-nightshift
     hosts: [nightshift]
     writes_as: [miles, nightshift]      # nightshift: the executor's log; it commits as Miles
@@ -57,7 +61,7 @@ principals:
     kind: agent
     display: Tris
     role: chief intelligence officer
-    emails: [tris@datacore.one]
+    email_sha256: [6b962a4a3a0068be]
     github: tris-on-hermes
     hosts: [hermes]
     writes_as: [tris]
@@ -72,7 +76,7 @@ principals:
     kind: agent
     display: Mr Data
     role: communications
-    emails: [mrdata@datacore.one, data@plur.ai]
+    email_sha256: [ebb64c306f9de106, 965c4f44b8c259e1]
     github: data-on-claw
     hosts: [plur-claw]
     writes_as: [data]
@@ -86,14 +90,14 @@ principals:
   genesis:
     kind: migration
     display: genesis import (2026-08-10, one shot)
-    emails: [gregor@plur.si, winston@datacore.one, miles@datacore.one]
+    email_sha256: [49d69f113aaa313b, 0ca46dadf114ca4d, b3c41e5e12e8cdb7]
     hosts: [mac, winston, nightshift]
     writes_as: [genesis]
   practice:
     kind: agent
     display: The Practice (John, Mick)
     role: health and longevity practice
-    emails: []
+    email_sha256: []
     github: null
     hosts: [mac]
     writes_as: []                       # keeps its own intervention ledger; not yet an event-ledger writer

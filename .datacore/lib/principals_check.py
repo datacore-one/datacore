@@ -5,7 +5,7 @@ The product description says a principal missing any of its ten things is
 not yet a principal and the system says so. This is where the system says
 so: for each entry in registry/principals.yaml it reports what is declared
 and what is not — charter on disk, contracts in the manifest, budget,
-memory scope, emails, host — and prints one line per principal. Exit 0 with
+memory scope, email hashes, host — and prints one line per principal. Exit 0 with
 the table; the checklist carries it as informational (n-a is never a pass,
 but an undeclared budget is the owner's decision, not an outage).
 
@@ -48,8 +48,8 @@ def check(root: Path = ROOT) -> list[dict]:
         pat = p.get("contracts")
         contracts = [j for j in jobs if pat and fnmatch.fnmatch(j, str(pat))]
         missing = []
-        if not (p.get("emails") or kind == "migration"):
-            missing.append("identity: no emails")
+        if not (p.get("email_sha256") or p.get("emails") or kind == "migration"):
+            missing.append("identity: no email hashes")
         if kind == "agent" and not charter_ok:
             missing.append("purpose: charter missing" if charter else "purpose: no charter")
         if kind == "agent" and not p.get("memory_scope"):
