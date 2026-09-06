@@ -107,3 +107,16 @@ def test_principal_rows_and_outcomes(tmp_path, monkeypatch):
     out = A.outcomes(root, days=1)
     row = next(r for r in out if r["agent"] == "research")
     assert row["completions"] == 2 and row["mean_score"] == 0.7 and row["version"] == "1.0.0"
+
+
+def test_signing_switch_is_read_from_the_identity_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATACORE_LEDGER_SIGN", raising=False)
+    ident = tmp_path / "identity.env"; ident.write_text("DATACORE_ACTOR=miles\nDATACORE_LEDGER_SIGN=1\n")
+    monkeypatch.setenv("DATACORE_IDENTITY_FILE", str(ident))
+    sd = _space(tmp_path)
+    log = EventLog(sd, "miles", keys_dir=tmp_path / "k", registry_path=tmp_path / "r.yaml")
+    assert log.sign is True
+    log.append("item.create", {"id": "s2", "title": "signed by declaration"})
+    assert json.loads((sd / ".datacore" / "events" / "miles.jsonl").read_text().splitlines()[-1])["sig"]
+    ident.write_text("DATACORE_ACTOR=miles\n")
+    assert EventLog(sd, "miles", keys_dir=tmp_path / "k", registry_path=tmp_path / "r.yaml").sign is False

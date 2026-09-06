@@ -90,6 +90,24 @@ class CorruptLogError(ValueError):
     """
 
 
+
+def _identity_file_value(key: str) -> str | None:
+    """A value from ~/.datacore/identity.env (the machine's declaration), or None."""
+    p = Path(os.environ.get("DATACORE_IDENTITY_FILE", str(Path.home() / ".datacore" / "identity.env")))
+    try:
+        for raw in p.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            if line.startswith("export "):
+                line = line[7:].lstrip()
+            k, v = line.split("=", 1)
+            if k.strip() == key:
+                return v.strip().strip("\"'")
+    except OSError:
+        pass
+    return None
+
 class EventLog:
     """Append-only event log for one actor within one space.
 
@@ -124,7 +142,15 @@ class EventLog:
         self.actor = actor
         self.keys_dir = keys_dir
         self.registry_path = registry_path
-        self.sign = sign if sign is not None else os.environ.get("DATACORE_LEDGER_SIGN") == "1"
+        # The switch lives with the identity (DIP-0044 §6): a cron or a unit
+        # rarely exports it, and on 2026-09-06 three hosts had declared signing
+        # in identity.env while every event they appended stayed unsigned.
+        if sign is None:
+            env = os.environ.get("DATACORE_LEDGER_SIGN")
+            if env is None:
+                env = _identity_file_value("DATACORE_LEDGER_SIGN")
+            sign = env == "1"
+        self.sign = sign
         # VALIDATE THE ACTOR NAME. It becomes a filename, so "../x" writes
         # <space>/x.jsonl — inside the space, but OUTSIDE events/, where
         # read_events never globs. The events are written, accepted, chained,

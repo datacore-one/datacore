@@ -67,6 +67,26 @@ case "$HOST" in
     CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/spaces $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
     CRON_LINES+=("*/15 * * * * $LIB/ledger-claim-pull.sh >> $STATE/ledger-dispatch.log 2>&1")
     ;;
+esac
+# ── known hosts the dispatch space needs (plur-claw fetches plur-space over ssh) ──
+# The runner user's known_hosts was empty after the /root -> /home/gregor move
+# (DIP-0044 §3), so every fetch since 2026-08-13 failed "host key verification"
+# and the dispatcher's pull error was swallowed. The key is added only when its
+# fingerprint matches the one GitHub publishes; never blindly.
+ensure_github_host_key() {
+  local kh="$HOME/.ssh/known_hosts"; mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"
+  if ssh-keygen -F github.com -f "$kh" >/dev/null 2>&1; then log "OK  github.com in known_hosts"; return 0; fi
+  [ "$VERIFY_ONLY" = 0 ] || { log "FAIL github.com not in known_hosts"; fail=1; return 0; }
+  local scanned; scanned="$(ssh-keyscan -t ed25519 github.com 2>/dev/null | grep -v '^#')"
+  local fp; fp="$(printf '%s\n' "$scanned" | ssh-keygen -lf - 2>/dev/null | awk '{print $2}')"
+  if [ "$fp" = "SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU" ]; then
+    printf '%s\n' "$scanned" >> "$kh"; chmod 600 "$kh"; log "github.com host key added (fingerprint verified against GitHub's published ed25519 key)"
+  else
+    log "FAIL github.com host key fingerprint did not match GitHub's published key ($fp) — not added"; fail=1
+  fi
+}
+case "$HOST" in
+  plur-claw) ensure_github_host_key ;;
   hermes)
     : # Tris's heartbeat is a systemd timer (tris-heartbeat.timer); no spaces to project here
     ;;
