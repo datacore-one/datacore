@@ -101,3 +101,15 @@ principals:
     memory_scope: agent:john
     decision: proposes; the client approves every protocol change
     permission_mode: propose
+
+# Verify keys (stage 8). Each writer signs its events with a private key that
+# never leaves its host (~/.datacore/keys/<actor>.key); the public half is
+# registered here from the host's own registry so any machine can verify the
+# writer's chain. Collected 2026-09-06 from the hosts' keys/registry.yaml;
+# re-collect with ledger_keys_collect.py after a rotation.
+verify_keys:
+  genesis: f8be73e8a3cbd8ce5eba7901c14c4a49e120fc4083ba760546a604397dd6266d
+  winston: 879693ba05bacf52625de40c75cb75555b3a8fec707ad0ff34f2440b16ad5ba4
+  miles: c44e9552d55dcbf26bb0057877fdfaa829b1736124d5d68d082530b77f05a1c9
+  data: 94ffd37dfa9d15528f8c556a90bfe623b0b7a4abb67478ee045e7663863eb755
+

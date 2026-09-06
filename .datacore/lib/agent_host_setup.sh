@@ -52,6 +52,11 @@ if [ "$VERIFY_ONLY" = 0 ]; then
     printf '%s\n' "DATACORE_LEDGER_SIGN=1" >> "$ID_FILE"; log "signing on for $ACTOR (DATACORE_LEDGER_SIGN=1)"
   fi
   mkdir -p "$HOME/.datacore/keys"; chmod 700 "$HOME/.datacore/keys"
+  # The executor this host runs delegated items through (ledger_claim ->
+  # executors/base.get_executor). plur-claw has no claude binary; it has openclaw.
+  if [ "$HOST" = plur-claw ] && ! grep -qsE '^(export )?DATACORE_EXECUTOR=' "$ID_FILE"; then
+    printf '%s\n' "DATACORE_EXECUTOR=openclaw" >> "$ID_FILE"; log "executor declared: openclaw"
+  fi
 fi
 
 # ── crons the contracts assume ──────────────────────────────────────────────
@@ -64,8 +69,17 @@ case "$HOST" in
     CRON_LINES+=("*/15 * * * * $LIB/unit_alive.sh datacore-telegram.service $STATE/miles-bot.alive 2>>$STATE/miles-bot.alive.err")
     ;;
   plur-claw)
-    CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/spaces $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
-    CRON_LINES+=("*/15 * * * * $LIB/ledger-claim-pull.sh >> $STATE/ledger-dispatch.log 2>&1")
+    # ONE clone per writer per host. Data attests X posts into ~/Data/2-plur-space
+    # (DATACORE_ATTEST_SPACE) and the dispatcher used ~/spaces/5-plur: two copies
+    # of the same writer log forked at seq 22 (found 2026-09-06). The dispatcher
+    # now works in the same clone, and the hourly cycle converges it.
+    CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
+    CRON_LINES+=("*/15 * * * * DISPATCH_SPACE=$HOME/Data/2-plur-space $LIB/ledger-claim-pull.sh >> $STATE/ledger-dispatch.log 2>&1")
+    ;;
+  hermes)
+    # Tris keeps a 5-plur clone at ~/Data/2-plur; the hourly cycle converges it
+    # so its verifier attestations and cadence commits leave the host within the hour.
+    CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
     ;;
 esac
 # ── known hosts the dispatch space needs (plur-claw fetches plur-space over ssh) ──
@@ -134,7 +148,8 @@ case "$HOST" in
     systemctl --user is-active --quiet hermes-gateway.service 2>/dev/null && log "OK  hermes gateway (user unit) active" || { log "FAIL hermes-gateway.service (user) not active"; fail=1; }
     ;;
   plur-claw)
-    [ -d "$HOME/spaces/5-plur/.git" ] && log "OK  dispatch space present" || { log "FAIL $HOME/spaces/5-plur is not a repository"; fail=1; }
+    [ -d "$HOME/Data/2-plur-space/.git" ] && log "OK  dispatch space present ($HOME/Data/2-plur-space)" || { log "FAIL $HOME/Data/2-plur-space is not a repository"; fail=1; }
+    grep -qsE '^(export )?DATACORE_EXECUTOR=openclaw' "$ID_FILE" && log "OK  executor declared: openclaw" || { log "FAIL executor not declared in $ID_FILE"; fail=1; }
     ;;
 esac
 [ "$fail" = 0 ] && log "ALL CHECKS PASS ($HOST)" || log "SOME CHECKS FAILED ($HOST)"

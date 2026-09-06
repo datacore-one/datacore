@@ -136,6 +136,25 @@ def sign(actor: str, data: bytes, keys_dir: Path | None = None) -> str:
     return private_key.sign(data).hex()
 
 
+def known_verify_key(actor: str, registry_path: Path | None = None) -> bool:
+    """Do we hold ANY verify key for this writer (local registry or principals.yaml)?"""
+    registry = _load_registry(registry_path or DEFAULT_REGISTRY_PATH)
+    return bool(registry["actors"].get(actor) or principals_verify_key(actor))
+
+
+def principals_verify_key(actor: str) -> str | None:
+    """The writer's public key as distributed in registry/principals.yaml
+    (`verify_keys`), for hosts that hold no local registry entry for it."""
+    p = DATACORE_ROOT / ".datacore" / "registry" / "principals.yaml"
+    try:
+        import yaml
+        d = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        v = (d.get("verify_keys") or {}).get(actor)
+        return str(v) if v else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def verify(
     actor: str,
     data: bytes,
@@ -149,7 +168,9 @@ def verify(
     """
     registry_path = registry_path or DEFAULT_REGISTRY_PATH
     registry = _load_registry(registry_path)
-    verify_key_hex = registry["actors"].get(actor)
+    # The local registry knows the writers that signed on THIS host; every
+    # other writer's key is distributed through registry/principals.yaml.
+    verify_key_hex = registry["actors"].get(actor) or principals_verify_key(actor)
     if not verify_key_hex:
         return False
 

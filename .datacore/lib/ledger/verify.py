@@ -130,10 +130,17 @@ def verify_chain(path: Path, registry_path: Path | None = None, strict: bool = F
 
         if event.sig != "":
             if not verify_sig(event.actor, canonical_bytes(body), event.sig, registry_path=registry_path):
-                errors.append(
-                    f"line {line_no}: signature verification failed for actor {event.actor!r} "
-                    "(unknown actor or invalid signature)"
-                )
+                from .keys import known_verify_key
+                if known_verify_key(event.actor, registry_path):
+                    errors.append(
+                        f"line {line_no}: signature verification failed for actor {event.actor!r} "
+                        "(invalid signature against the registered key)"
+                    )
+                elif strict:
+                    errors.append(f"line {line_no}: no verify key known for actor {event.actor!r} (strict)")
+                # else: signed by a writer whose key this host does not hold yet --
+                # the chain is intact; the signature is unverifiable here, not
+                # wrong. Keys travel through registry/principals.yaml (verify_keys).
         elif strict:
             errors.append(f"line {line_no}: unsigned event")
 
