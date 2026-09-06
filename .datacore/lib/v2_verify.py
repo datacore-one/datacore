@@ -298,7 +298,7 @@ def check_writer_authorship(rep: Report) -> None:
     """
     sys.path.insert(0, str(LIB))
     try:
-        from actor_identity import allowed_emails, principals
+        from actor_identity import allowed_emails, email_hash, principals
     except Exception as exc:  # noqa: BLE001
         rep.add("0044", "writer logs authored by their principal", None, f"actor_identity unusable: {exc}")
         return
@@ -324,7 +324,7 @@ def check_writer_authorship(rep: Report) -> None:
             if len(parts) < 2:
                 continue
             sha, email = parts[0], parts[1].lower()
-            if email in allowed or any(sha.startswith(r) for r in reviewed):
+            if email_hash(email) in allowed or any(sha.startswith(r) for r in reviewed):
                 continue  # a reviewed incident stays on the record in authorship-reviewed.yaml
             bad.add(email)
         if bad:

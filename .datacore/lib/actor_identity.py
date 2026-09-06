@@ -145,13 +145,38 @@ def principal_of(actor: str, path: Path | None = None) -> tuple[str | None, dict
     return None, {}
 
 
+def email_hash(email: str) -> str:
+    """The form an author email takes in the public registry.
+
+    datacore-one/datacore is public, and its boundary check refuses personal
+    email addresses in tracked files (validate-boundaries.yml, PII scan) —
+    the check went red on 2026-09-06 when principals.yaml listed them plainly.
+    A writer is therefore bound to the first 16 hex of sha256(lowercased
+    email): enough to match a commit author, not enough to publish who the
+    operator is. `python3 actor_identity.py hash you@example.com` prints one.
+    """
+    import hashlib
+    return hashlib.sha256(str(email).strip().lower().encode()).hexdigest()[:16]
+
+
 def allowed_emails(actor: str, path: Path | None = None) -> set[str]:
-    """Git author emails that may append to this writer's log. Empty = unbound."""
+    """Hashes of the git author emails that may append to this writer's log.
+
+    Reads `email_sha256` (the committed form) and, for a private overlay that
+    still lists addresses plainly, `emails` — hashed here so every caller
+    compares one way. Empty = unbound.
+    """
     _, p = principal_of(actor, path)
-    return {str(e).lower() for e in (p.get("emails") or [])}
+    hashes = {str(h).strip().lower() for h in (p.get("email_sha256") or [])}
+    hashes |= {email_hash(e) for e in (p.get("emails") or [])}
+    return hashes
 
 
 if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 2 and sys.argv[1] == "hash":
+        print(email_hash(sys.argv[2]))
+        raise SystemExit(0)
     a, src = resolve()
     print(f"{a or short_hostname()} ({src})")
     raise SystemExit(0 if a else 1)
