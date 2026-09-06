@@ -513,13 +513,18 @@ def cmd_finalize(dry_run: bool, scope: str = "session") -> dict:
     if scope == "session":
         out = finalize_session_scope(dry_run)
     else:
+        # `./sync push` is retired (datacore#21/#28/#31/#39): the transport
+        # converges every registered knowledge repo and fast-forwards code
+        # repos, and it never commits a code repo for you.
         results = []
-        sync = DATACORE_ROOT / "sync"
-        if sync.exists() and not dry_run:
-            rc, o, e = _run([str(sync), "push"], cwd=DATACORE_ROOT, timeout=600)
-            results.append({"target": "./sync push", "ok": rc == 0, "output": (o or e)[-800:]})
+        if dry_run:
+            results.append({"target": "ledger_transport sync", "ok": None, "dry_run": True})
         else:
-            results.append({"target": "./sync push", "ok": None, "dry_run": True})
+            sys.path.insert(0, str(LIB))
+            from ledger_transport import HUMAN_NEEDED, sync_outcomes
+            for name, cat, outcome in sync_outcomes(DATACORE_ROOT):
+                results.append({"target": name, "category": cat, "outcome": outcome,
+                                "ok": outcome not in HUMAN_NEEDED})
         out = {"scope": "all", "pushes": results}
 
     # Index the journal to the knowledge DB (old §11). Path was wrong in the

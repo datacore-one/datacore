@@ -415,3 +415,93 @@ def test_converge_folds_a_writers_own_ref_into_main(repo_pair: Path, tmp_path: P
     assert (repo_pair / ".datacore" / "events" / "data.jsonl").exists()
     # and it was published: origin/main now contains the writer's commit
     assert git(repo_pair, "rev-list", "--count", "origin/main..origin/ledger/data").stdout.strip() == "0"
+
+
+# ── datacore#28 / #31 / #39: the retired `./sync`, and what replaced it ─────
+
+
+def _second_clone(repo_pair: Path, tmp_path: Path) -> Path:
+    origin = git(repo_pair, "remote", "get-url", "origin").stdout.strip()
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", origin, str(other)], check=True)
+    git(other, "config", "user.email", "o@o")
+    git(other, "config", "user.name", "o")
+    git(other, "config", "core.hooksPath", str(other / ".git" / "hooks"))
+    return other
+
+
+def test_converge_steps_back_from_an_in_progress_merge(repo_pair: Path, tmp_path: Path):
+    """A merge someone left half-finished is theirs. `sync push` used to
+    `add -A` the conflict markers and push them (datacore#28)."""
+    other = _second_clone(repo_pair, tmp_path)
+    (other / "seed.txt").write_text("theirs\n")
+    git(other, "commit", "-qam", "theirs")
+    git(other, "push", "-q", "origin", "HEAD:main")
+    (repo_pair / "seed.txt").write_text("mine\n")
+    git(repo_pair, "commit", "-qam", "mine")
+    git(repo_pair, "fetch", "-q", "origin")
+    assert git(repo_pair, "merge", "origin/main").returncode != 0   # conflict, MERGE_HEAD stays
+    head = git(repo_pair, "rev-parse", "HEAD").stdout.strip()
+
+    res = converge(repo_pair)
+
+    assert not res.ok
+    assert "merge in progress" in res.reason
+    assert git(repo_pair, "rev-parse", "HEAD").stdout.strip() == head
+    assert "<" * 7 in (repo_pair / "seed.txt").read_text()   # untouched, for a person
+
+
+def test_leftover_markers_alone_stop_the_autosave(repo_pair: Path):
+    """No MERGE_HEAD (the merge was aborted by hand) but the markers stayed."""
+    # Built from pieces: a literal marker at line start would trip the very
+    # pre-commit guard this test is about.
+    ours, sep, theirs = "<" * 7, "=" * 7, ">" * 7
+    (repo_pair / "seed.txt").write_text(f"{ours} HEAD\nmine\n{sep}\ntheirs\n{theirs} origin/main\n")
+    head = git(repo_pair, "rev-parse", "HEAD").stdout.strip()
+    res = converge(repo_pair)
+    assert not res.ok
+    assert "conflict markers" in res.reason
+    assert git(repo_pair, "rev-parse", "HEAD").stdout.strip() == head
+
+
+def test_sync_outcomes_never_commits_a_code_repo(repo_pair: Path, tmp_path: Path, monkeypatch):
+    import ledger_transport as lt
+    monkeypatch.setattr(lt, "_registry", lambda root: {"work": {"category": "code"}})
+    (repo_pair / "wip.py").write_text("print('half done')\n")
+    head = git(repo_pair, "rev-parse", "HEAD").stdout.strip()
+
+    assert lt.sync_outcomes(tmp_path) == [("work", "code", "dirty")]
+
+    assert git(repo_pair, "rev-parse", "HEAD").stdout.strip() == head
+    assert (repo_pair / "wip.py").read_text() == "print('half done')\n"
+
+
+def test_sync_outcomes_fast_forwards_a_clean_code_repo(repo_pair: Path, tmp_path: Path, monkeypatch):
+    import ledger_transport as lt
+    monkeypatch.setattr(lt, "_registry", lambda root: {"work": {"category": "code"}})
+    other = _second_clone(repo_pair, tmp_path)
+    (other / "new.txt").write_text("x\n")
+    git(other, "add", "-A")
+    git(other, "commit", "-qm", "upstream")
+    git(other, "push", "-q", "origin", "HEAD:main")
+
+    assert lt.sync_outcomes(tmp_path) == [("work", "code", "clean")]
+    assert (repo_pair / "new.txt").exists()
+
+
+def test_sync_outcomes_converges_a_knowledge_repo(repo_pair: Path, tmp_path: Path, monkeypatch):
+    import ledger_transport as lt
+    monkeypatch.setattr(lt, "_registry", lambda root: {"work": {"category": "knowledge"}})
+    (repo_pair / "note.md").write_text("n\n")
+
+    assert lt.sync_outcomes(tmp_path) == [("work", "knowledge", "clean")]
+    assert git(repo_pair, "log", "-1", "--format=%s").stdout.strip() == "ledger: autosave before converge"
+
+
+def test_status_lines_touch_nothing(repo_pair: Path, tmp_path: Path, monkeypatch):
+    import ledger_transport as lt
+    monkeypatch.setattr(lt, "_registry", lambda root: {"work": {"category": "code"}})
+    (repo_pair / "wip.py").write_text("x\n")
+    lines = lt.status_lines(tmp_path)
+    assert len(lines) == 1 and lines[0].startswith("work:") and "dirty=1" in lines[0]
+    assert git(repo_pair, "status", "--porcelain").stdout.strip()   # still dirty, untouched
