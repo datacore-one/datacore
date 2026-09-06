@@ -7,7 +7,7 @@ reviewed:
   - commit: e3c8068e
     space: 5-plur
     writer: winston
-    committed_by: tris@datacore.one
+    committed_as: tris                  # author email hash 6b962a4a3a0068be (see principals.yaml email_sha256)
     date: 2026-09-06
     what: "A geo cadence run on hermes (clone ~/Data/2-plur) committed with `git add -A` and swept two ingest events that a process on that host had written under actor winston (hlc .winston) — a misattributed writer on the wrong host, carried under Tris's name."
     action: "Reviewed 2026-09-06 08:00. Source fix: the hermes clone must write as tris only and stage its own paths; tracked in the 2-datacore inbox."
