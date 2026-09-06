@@ -571,7 +571,10 @@ jobs:
       # Traced end to end: run.py's default (non --command) path ->
       # run_postprocess() -> manifest.build_manifest/write_manifest ->
       # .datacore/state/nightshift/manifest-<date>.yaml. Solid, not inferred.
-      - path: "~/Data/.datacore/state/nightshift/manifest-{today}.yaml"
+      # manifest-latest.yaml is copied from the run's own manifest at the end of
+      # every run (nightshift lib/manifest.py, 2026-09-06). The dated name failed
+      # the 08:00 verification whenever a run that started at 06:03 was still going.
+      - path: "~/Data/.datacore/state/nightshift/manifest-latest.yaml"
         check: nonempty
         max_age_hours: 26
 
