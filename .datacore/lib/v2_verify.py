@@ -665,6 +665,78 @@ def check_trust_labels(rep: Report) -> None:
     rep.add("0035", "done names its check", not bad,
             f"{len(roadmaps)} roadmap(s), every done item has evidence+verify+shipped"
             if not bad else "; ".join(bad[:4]))
+# ── Hooks: every wired command must resolve to a file that exists ───────────
+#: Where Claude Code reads hooks on this host. The user-global file is OUTSIDE
+#: every repository, which is why a repo-scoped hygiene pass (800fd31,
+#: datacore#25) could delete three hook scripts and leave their global wiring
+#: pointing at nothing — silent until the next session started.
+HOOK_SETTINGS = (
+    Path.home() / ".claude" / "settings.json",
+    ROOT / ".datacore" / "settings.json",
+    ROOT / ".claude" / "settings.json",
+    ROOT / ".claude" / "settings.local.json",
+)
+_INTERPRETERS = {"python", "python3", "bash", "sh", "node", "env"}
+
+
+def hook_script_path(command: str) -> Path | None:
+    """The file a hook command runs, or None when it runs a package/binary
+    we cannot resolve to a path (`npx …`, a bare executable on PATH).
+
+    `python3 /x/y.py args` -> /x/y.py; `bash ~/x.sh` -> ~/x.sh;
+    `/abs/script arg` -> /abs/script; `VAR=1 python3 /x.py` -> /x.py.
+    """
+    import shlex
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        parts = command.split()
+    parts = [p for p in parts if "=" not in p or p.startswith(("/", "~", "."))]
+    for tok in parts:
+        if tok in _INTERPRETERS:
+            continue
+        if tok.startswith(("/", "~", ".")):
+            return Path(os.path.expanduser(tok))
+        return None   # first real token is a PATH binary or npx: not a file path
+    return None
+
+
+def hook_commands(settings: Path) -> list[tuple[str, str]]:
+    """(event, command) for every hook wired in one settings file."""
+    try:
+        data = json.loads(settings.read_text())
+    except (OSError, ValueError):
+        return []
+    out = []
+    for event, groups in (data.get("hooks") or {}).items():
+        for g in groups or []:
+            for h in (g or {}).get("hooks") or []:
+                cmd = (h or {}).get("command")
+                if cmd:
+                    out.append((event, cmd))
+    return out
+
+
+def check_hooks(rep: Report) -> None:
+    """Every hook command in the global and project settings files runs a
+    file that exists on this host."""
+    seen_files = 0
+    missing: list[str] = []
+    for settings in HOOK_SETTINGS:
+        cmds = hook_commands(settings)
+        if not cmds:
+            continue
+        seen_files += 1
+        short = str(settings).replace(str(Path.home()), "~")
+        for event, cmd in cmds:
+            p = hook_script_path(cmd)
+            if p is not None and not p.exists():
+                missing.append(f"{short}: {event} -> {p.name}")
+    if not seen_files:
+        rep.add("0036", "hook commands resolve", None, "no settings file with hooks", skipped=True)
+        return
+    rep.add("0036", "hook commands resolve", not missing,
+            f"{seen_files} settings file(s)" if not missing else "; ".join(missing[:3]))
 
 
 def check_transport(rep: Report) -> None:
@@ -1035,6 +1107,7 @@ def main() -> int:
     check_topology(rep)
     check_versions(rep)
     check_trust_labels(rep)
+    check_hooks(rep)
     check_finality(rep)
     check_app(rep)
     check_declared_identity(rep)
