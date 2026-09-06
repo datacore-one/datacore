@@ -87,7 +87,7 @@ case "$HOST" in
     ;;
 esac
 # ── known hosts the dispatch space needs (plur-claw fetches plur-space over ssh) ──
-# The runner user's known_hosts was empty after the /root -> /home/gregor move
+# The runner user's known_hosts was empty after the move from root's home to its own
 # (DIP-0044 §3), so every fetch since 2026-08-13 failed "host key verification"
 # and the dispatcher's pull error was swallowed. The key is added only when its
 # fingerprint matches the one GitHub publishes; never blindly.
