@@ -54,6 +54,20 @@ jobs:
         arg: " UP "
         max_age_hours: 1
 
+  - name: box-agent-outcomes
+    machine: box
+    schedule: "45 5 * * 0"
+    cmd: "python3 ~/Data/.datacore/lib/agent_outcomes.py >> ~/.datacore/cos/agent-outcomes.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      # One header line per weekly run ("<ts> agent-outcomes: N rows over D days")
+      # followed by one row per (agent, version, model): prompt versions tied to
+      # outcomes, stage 7 of the product description.
+      - path: "~/.datacore/cos/agent-outcomes.log"
+        check: regex
+        arg: "agent-outcomes:"
+        max_age_hours: 192
+
   - name: box-reliability-scoreboard
     machine: box
     schedule: "20 7 * * *"

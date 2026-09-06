@@ -1,0 +1,2 @@
+2026-09-06T05:45Z agent-outcomes: 3 (agent, version, model) row(s) over 90 days
+  research       v1.0.0  claude-opus-5           n=  12 score=0.78 proposals=  1 last=2026-09-05 spaces=2-datacore,5-plur

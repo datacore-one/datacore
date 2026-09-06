@@ -422,6 +422,14 @@ def _run_doctor(machine: str, manifest_path: Path) -> None:
     print(report.table)
 
 
+def _attest_space() -> Path:
+    home = Path.home()
+    for cand in (DATACORE_ROOT / "2-datacore", DATACORE_ROOT / "0-personal", home / "spaces" / "5-plur", home / "Data" / "2-datacore"):
+        if (cand / ".datacore" / "events").is_dir() and (cand / ".git").exists():
+            return cand
+    return DATACORE_ROOT
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     # See _dispatch_alert: a dry run must not inflate the recurrence streak.
@@ -434,7 +442,13 @@ def main(argv: list[str] | None = None) -> None:
         _run_doctor(args.machine, manifest_path)
         return
 
-    space = Path(args.space) if args.space else DATACORE_ROOT
+    # The attestation must land in a repository that CONVERGES. The root
+    # checkout on a runner never pushes, so a job.verify written there stayed
+    # on that host forever: on 2026-09-06 not one verifier attestation from
+    # any agent host had reached the operator's machine, and the per-principal
+    # scoreboard rows read "not heard from". First space that carries an event
+    # log wins; the root is the last resort.
+    space = Path(args.space) if args.space else _attest_space()
 
     try:
         jobs = load_manifest(manifest_path)

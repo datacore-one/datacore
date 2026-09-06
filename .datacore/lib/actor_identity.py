@@ -124,7 +124,8 @@ def actor_source() -> str:
     return resolve()[1]
 
 
-def principals(path: Path = PRINCIPALS) -> dict:
+def principals(path: Path | None = None) -> dict:
+    path = path or PRINCIPALS  # resolved at call time so a test can point it elsewhere
     try:
         import yaml
         return (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("principals") or {}
@@ -132,7 +133,7 @@ def principals(path: Path = PRINCIPALS) -> dict:
         return {}
 
 
-def principal_of(actor: str, path: Path = PRINCIPALS) -> tuple[str | None, dict]:
+def principal_of(actor: str, path: Path | None = None) -> tuple[str | None, dict]:
     """The principal a writer log belongs to: its own entry, or the one listing it under writes_as."""
     ps = principals(path)
     a = actor.lower()
@@ -144,7 +145,7 @@ def principal_of(actor: str, path: Path = PRINCIPALS) -> tuple[str | None, dict]
     return None, {}
 
 
-def allowed_emails(actor: str, path: Path = PRINCIPALS) -> set[str]:
+def allowed_emails(actor: str, path: Path | None = None) -> set[str]:
     """Git author emails that may append to this writer's log. Empty = unbound."""
     _, p = principal_of(actor, path)
     return {str(e).lower() for e in (p.get("emails") or [])}
