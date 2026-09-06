@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render 5-plur/roadmap.yaml to a human view.
+"""Render a space's roadmap.yaml to a human view (default space: 5-plur).
 
 The other half of the 2026-08-21 spec: roadmap.yaml is the source, every
 readable roadmap is generated. A stale generated view is then a visible diff
@@ -17,6 +17,7 @@ Usage:
 import argparse
 import html
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -27,7 +28,31 @@ except ImportError:
     sys.exit("pyyaml required: pip install pyyaml")
 
 REPO = Path(__file__).resolve().parents[2]
-ROADMAP = REPO / "5-plur" / "roadmap.yaml"
+
+# One roadmap per space (see roadmap_validate.configure). --space or ROADMAP_SPACE.
+SPACE = os.environ.get("ROADMAP_SPACE", "5-plur")
+NAMES = {"plur": "PLUR"}  # display names that are not the capitalised slug
+
+
+def space_root(space: str) -> Path:
+    """A space is a directory name under the Data root, or an absolute path."""
+    p = Path(space).expanduser()
+    return p if p.is_absolute() else REPO / space
+
+
+def configure(space: str) -> None:
+    global SPACE, SPACE_ROOT, ROADMAP, INTENTS_ORG, NAME, SRC
+    SPACE = space
+    SPACE_ROOT = space_root(space)
+    ROADMAP = SPACE_ROOT / "roadmap.yaml"
+    INTENTS_ORG = SPACE_ROOT / "org" / "intents.org"
+    name = SPACE_ROOT.name
+    slug = name.split("-", 1)[1] if "-" in name and name[0].isdigit() else name
+    NAME = NAMES.get(slug, slug.capitalize())
+    SRC = f"{name}/roadmap.yaml"
+
+
+configure(SPACE)
 
 REDACTED = "Withheld from generated views — embargoed. Read it in roadmap.yaml."
 
@@ -35,8 +60,6 @@ REDACTED = "Withheld from generated views — embargoed. Read it in roadmap.yaml
 def load():
     return yaml.safe_load(ROADMAP.read_text())
 
-
-INTENTS_ORG = REPO / "5-plur" / "org" / "intents.org"
 
 
 def load_intents():
@@ -78,7 +101,7 @@ def public_items(r):
 
 
 def render_md(r):
-    lines = [f"# PLUR Roadmap\n", f"_Generated from `5-plur/roadmap.yaml` — updated {r['updated']}._\n"]
+    lines = [f"# {NAME} Roadmap\n", f"_Generated from `{SRC}` — updated {r['updated']}._\n"]
     ns = r["north_star"]
     lines.append(f"**North star:** {ns['metric']} — {ns['target']} by {ns['by']}"
                  + (f"  ⚠️ **{ns['status']}**" if ns.get("status") else "") + "\n")
@@ -1256,12 +1279,12 @@ def render_html(r):
   <div class="head-top">
     <div style="display:flex;flex-direction:column;gap:10px">
       <span class="eyebrow">Source of truth · consolidated {e(r["updated"])}</span>
-      <h1>PLUR Roadmap</h1>
+      <h1>{e(NAME)} Roadmap</h1>
     </div>
     <span class="valid">{len(items)} items · 0 errors</span>
   </div>
   <div class="srcline">
-    <span>generated from <b>5-plur/roadmap.yaml</b></span>
+    <span>generated from <b>{e(SRC)}</b></span>
     <span>·</span><span>{len(tracks)} tracks</span>
     <span>·</span><span>north star: {e(ns["metric"])} {e(ns["target"])} by {e(ns["by"])}</span>
   </div>
@@ -1401,7 +1424,7 @@ def execution_html(r: dict) -> str:
     for f in ("next_actions.org", "someday.org", "inbox.org"):
         x = subprocess.run(
             ["python3", str(REPO / ".datacore/lib/org_workspace_adapter.py"),
-             "list", "--file", f"5-plur/org/{f}",
+             "list", "--file", str(SPACE_ROOT / "org" / f),
              "--states", "NEXT,TODO,WAITING,REVIEW"],
             capture_output=True, text=True, cwd=REPO)
         if x.returncode:
@@ -1488,7 +1511,11 @@ def main():
     ap.add_argument("--html", metavar="OUT", help="write the HTML view to OUT")
     ap.add_argument("--md", action="store_true", help="print the markdown view")
     ap.add_argument("--json", action="store_true", help="print public items as JSON")
+    ap.add_argument("--space", default=SPACE,
+                    help="space holding roadmap.yaml (directory under the Data "
+                         "root, or an absolute path)")
     args = ap.parse_args()
+    configure(args.space)
     r = load()
 
     if args.json:

@@ -25,7 +25,7 @@ Checks, and what each one catches:
   stray-roadmap  a file that reads as a roadmap and declares no canonical
                  pointer — a sixth document is how the first five happened
 """
-import argparse, json, re, subprocess, sys
+import argparse, json, os, re, subprocess, sys
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -33,10 +33,28 @@ from pathlib import Path
 import yaml
 
 REPO = Path(__file__).resolve().parents[2]
-ROADMAP = REPO / "5-plur" / "roadmap.yaml"
 ADAPTER = REPO / ".datacore/lib/org_workspace_adapter.py"
-ORG = ["5-plur/org/next_actions.org", "5-plur/org/someday.org",
-       "5-plur/org/inbox.org"]
+
+# One roadmap per space (see roadmap_validate.configure). --space or ROADMAP_SPACE.
+SPACE = os.environ.get("ROADMAP_SPACE", "5-plur")
+
+
+def space_root(space: str) -> Path:
+    """A space is a directory name under the Data root, or an absolute path."""
+    p = Path(space).expanduser()
+    return p if p.is_absolute() else REPO / space
+
+
+def configure(space: str) -> None:
+    global SPACE, SPACE_ROOT, ROADMAP, ORG
+    SPACE = space
+    SPACE_ROOT = space_root(space)
+    ROADMAP = SPACE_ROOT / "roadmap.yaml"
+    ORG = [str(SPACE_ROOT / "org" / f)
+           for f in ("next_actions.org", "someday.org", "inbox.org")]
+
+
+configure(SPACE)
 STALE_DAYS = 45
 
 
@@ -84,7 +102,11 @@ def main():
                     help="exit 1 when drift is found (for CI)")
     ap.add_argument("--no-github", action="store_true",
                     help="skip the GitHub checks (offline)")
+    ap.add_argument("--space", default=SPACE,
+                    help="space holding roadmap.yaml (directory under the Data "
+                         "root, or an absolute path)")
     args = ap.parse_args()
+    configure(args.space)
 
     r = yaml.safe_load(ROADMAP.read_text())
     items = r["items"]
@@ -137,10 +159,10 @@ def main():
     # looks like a roadmap and does not declare itself a view is a place an
     # idea can land unseen by every check in this directory.
     import glob as _glob
-    for path in _glob.glob(str(REPO / "5-plur/**/*oadmap*.md"), recursive=True) + \
-            _glob.glob(str(REPO / "5-plur/**/ROADMAP.md"), recursive=True):
+    for path in _glob.glob(str(SPACE_ROOT / "**" / "*oadmap*.md"), recursive=True) + \
+            _glob.glob(str(SPACE_ROOT / "**" / "ROADMAP.md"), recursive=True):
         pp = Path(path)
-        rel = pp.relative_to(REPO)
+        rel = pp.relative_to(REPO) if pp.is_relative_to(REPO) else pp
         if any(x in str(rel) for x in (".git", "node_modules", "worktrees",
                                        "-wt", "4-archive", "3-knowledge",
                                        "presentations")):
