@@ -82,7 +82,8 @@ case "$HOST" in
     CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
     # hermes had contracts in the manifest and nothing running the verifier
     # (found 2026-09-06): its rows read "not heard from" by construction.
-    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine hermes --alert log >> $STATE/job_verify.log 2>&1")
+    # --manifest: hermes has no ~/Data/.datacore/lib; the runner copy is the canonical one (test_runner_manifest_matches_canonical).
+    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine hermes --manifest $LIB/jobs/manifest.yaml --alert log >> $STATE/job_verify.log 2>&1")
     ;;
 esac
 # ── known hosts the dispatch space needs (plur-claw fetches plur-space over ssh) ──
