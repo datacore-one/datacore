@@ -496,6 +496,19 @@ def check_nightshift_output_archived(
     """
     orig = Path(file_path)
     if orig.exists():
+        # File exists at stored path — check if it's already in an archive location.
+        # When the NIGHTSHIFT_OUTPUT property stores the archive path directly (e.g.
+        # after the output was archived and the property was written post-move), the
+        # file exists but is already done.  If the path is outside any archive dir,
+        # it's still in 0-inbox and genuinely pending human review.
+        orig_str = str(orig)
+        if any(arc in orig_str for arc in _NIGHTSHIFT_ARCHIVE_DIRS):
+            return {
+                "terminal": True,
+                "kind": "nightshift_output",
+                "closed_at": None,
+                "reason": f"Nightshift output at archive path: {file_path}",
+            }
         return None  # Still in 0-inbox — human review is still pending
 
     stem = orig.name
