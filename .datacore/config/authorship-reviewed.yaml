@@ -1,0 +1,13 @@
+# Commits the authorship check has flagged and a human has reviewed. Each entry
+# is an incident on the record, not a pardon: the writer's principal, who
+# actually committed, what happened, and what was done about it. The check
+# skips a listed commit and keeps flagging everything else.
+version: 1
+reviewed:
+  - commit: e3c8068e
+    space: 5-plur
+    writer: winston
+    committed_by: tris@datacore.one
+    date: 2026-09-06
+    what: "A geo cadence run on hermes (clone ~/Data/2-plur) committed with `git add -A` and swept two ingest events that a process on that host had written under actor winston (hlc .winston) — a misattributed writer on the wrong host, carried under Tris's name."
+    action: "Reviewed 2026-09-06 08:00. Source fix: the hermes clone must write as tris only and stage its own paths; tracked in the 2-datacore inbox."
