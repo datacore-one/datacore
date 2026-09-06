@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import base64
+import json
 import os
 import re
 import subprocess
@@ -30,6 +31,91 @@ def fetch_pr_diff(repo: str, pr_number: str) -> str:
     return result.stdout
 
 
+def fetch_pr_meta(repo: str, pr_number: str) -> dict:
+    """Fetch PR metadata needed for duplicate detection."""
+    result = subprocess.run(
+        ['gh', 'pr', 'view', pr_number, '--repo', repo,
+         '--json', 'headRefName,baseRefName,closingIssuesReferences'],
+        capture_output=True, text=True, timeout=30
+    )
+    if result.returncode != 0:
+        return {}
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {}
+
+
+def check_duplicate_signals(repo: str, pr_number: str, meta: dict) -> list:
+    """Return duplicate-risk warnings before generating the review.
+
+    Checks three signals independently so any one of them fires a flag:
+    1. All linked issues are already CLOSED.
+    2. No net file change vs base (squash-merge pattern).
+    3. A merged PR exists with the same head branch.
+    """
+    warnings = []
+
+    head_ref = meta.get('headRefName', '')
+    base_ref = meta.get('baseRefName', 'main')
+    linked_issues = meta.get('closingIssuesReferences', [])
+
+    # 1. All linked issues closed?
+    if linked_issues:
+        all_closed = all(i.get('state', '').upper() == 'CLOSED' for i in linked_issues)
+        if all_closed:
+            nums = ', '.join(f"#{i['number']}" for i in linked_issues)
+            warnings.append(
+                f'Linked issue(s) already CLOSED ({nums}) — '
+                'verify this PR is not a duplicate of already-merged work.'
+            )
+
+    if not head_ref:
+        return warnings
+
+    # 2. No net file change vs base (squash-merge pattern):
+    #    head has commits that are not ancestors of base, but all file content
+    #    already matches base (squash left commits but merged the content).
+    compare_result = subprocess.run(
+        ['gh', 'api', f'repos/{repo}/compare/{base_ref}...{head_ref}'],
+        capture_output=True, text=True, timeout=30
+    )
+    if compare_result.returncode == 0:
+        try:
+            cmp = json.loads(compare_result.stdout)
+            ahead_by = cmp.get('ahead_by', 0)
+            changed_files = cmp.get('files', [])
+            if len(changed_files) == 0 and ahead_by > 0:
+                warnings.append(
+                    f'No net file change vs {base_ref}: head is {ahead_by} commit(s) ahead '
+                    'but ZERO files differ — classic squash-merge duplicate pattern; '
+                    'all content is already on base.'
+                )
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # 3. Merged PR with same head branch
+    merged_result = subprocess.run(
+        ['gh', 'pr', 'list', '--repo', repo, '--state', 'merged',
+         '--head', head_ref, '--json', 'number,title'],
+        capture_output=True, text=True, timeout=30
+    )
+    if merged_result.returncode == 0:
+        try:
+            merged_prs = json.loads(merged_result.stdout)
+            if merged_prs:
+                refs = ', '.join(
+                    f"#{p['number']} \"{p['title'][:60]}\"" for p in merged_prs
+                )
+                warnings.append(
+                    f'Merged PR found with same head branch ({head_ref}): {refs}'
+                )
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    return warnings
+
+
 def fetch_pr_files(repo: str, pr_number: str) -> list:
     """Fetch list of changed files."""
     result = subprocess.run(
@@ -42,7 +128,7 @@ def fetch_pr_files(repo: str, pr_number: str) -> list:
 
 def build_review_prompt(repo: str, pr_number: str, pr_title: str,
                         pr_author: str, pr_types: list, diff: str,
-                        files: list) -> str:
+                        files: list, duplicate_warnings: list = None) -> str:
     """Build the prompt for Claude to review the PR."""
     type_instructions = []
     for pr_type in pr_types:
@@ -79,13 +165,28 @@ def build_review_prompt(repo: str, pr_number: str, pr_title: str,
 
     type_block = '\n'.join(type_instructions) if type_instructions else '- General documentation/config change.'
 
+    duplicate_block = ''
+    if duplicate_warnings:
+        items = '\n'.join(f'- {w}' for w in duplicate_warnings)
+        duplicate_block = f"""## ⚠️ Duplicate / Already-Merged Signals
+
+The following signals were detected automatically before this review was generated.
+If **any** of them apply, your verdict MUST NOT be APPROVE.
+Use COMMENT and lead your Summary with a clear duplicate warning.
+
+{items}
+
+---
+
+"""
+
     # Truncate diff if too large
     max_diff_len = 50000
     diff_truncated = diff[:max_diff_len]
     if len(diff) > max_diff_len:
         diff_truncated += f'\n\n... (diff truncated, {len(diff) - max_diff_len} chars omitted)'
 
-    return f"""You are reviewing PR #{pr_number} on {repo}.
+    return f"""{duplicate_block}You are reviewing PR #{pr_number} on {repo}.
 
 **Title:** {pr_title}
 **Author:** {pr_author}
@@ -209,9 +310,17 @@ def main():
     diff = fetch_pr_diff(args.repo, args.pr)
     files = fetch_pr_files(args.repo, args.pr)
 
+    # Pre-check for duplicate / already-merged signals
+    meta = fetch_pr_meta(args.repo, args.pr)
+    dup_warnings = check_duplicate_signals(args.repo, args.pr, meta)
+    if dup_warnings:
+        print(f'Duplicate signals detected ({len(dup_warnings)}):')
+        for w in dup_warnings:
+            print(f'  ⚠ {w}')
+
     # Build and run review
     prompt = build_review_prompt(
-        args.repo, args.pr, title, args.author, pr_types, diff, files
+        args.repo, args.pr, title, args.author, pr_types, diff, files, dup_warnings
     )
     review_text = run_review(prompt)
 
