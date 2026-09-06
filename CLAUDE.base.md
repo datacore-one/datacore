@@ -6,8 +6,8 @@ This file teaches you how to work effectively in this Datacore installation.
 
 You have persistent memory through **two MCP servers** — use both in every session.
 
-**PLUR** (`plur_*` tools) — engram memory engine. Corrections, preferences, and patterns persist across sessions.
-**Datacore** (`datacore.*` tools) — GTD productivity, journal, knowledge files, modules.
+**PLUR** (`plur_*` tools) — engram memory engine. Corrections, preferences, and patterns persist across sessions. Package: `@plur-ai/mcp`
+**Datacore** (`datacore.*` tools) — GTD productivity, journal, knowledge files, modules. Package: `@datacore-one/mcp` (CLI: `@datacore-one/cli`)
 
 ### Session Workflow
 

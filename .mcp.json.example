@@ -1,5 +1,10 @@
 {
   "mcpServers": {
+    "datacore": {
+      "command": "bash",
+      "args": ["-c", "set -a; [ -f .datacore/env/.env ] && source .datacore/env/.env; exec npx -y @datacore-one/mcp@latest"],
+      "comment": "Core Datacore tools: GTD, journal, knowledge, agents, commands. Run from ~/Data/"
+    },
     "gamma": {
       "command": "node",
       "args": [

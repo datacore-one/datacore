@@ -122,9 +122,9 @@ spaces: {}
   #     - repo: datacore/module-comms
 ```
 
-### Step 4: Configure MCP Servers (Optional)
+### Step 4: Configure MCP Servers
 
-MCP (Model Context Protocol) servers provide Claude Code with web search, research, and content generation capabilities.
+MCP (Model Context Protocol) servers give Claude Code structured access to Datacore tools and external services.
 
 ```bash
 # Copy example and fill in your API keys
@@ -134,7 +134,9 @@ cp .mcp.json.example .mcp.json
 cp .datacore/env/.env.example .datacore/env/.env
 ```
 
-Edit `.datacore/env/.env` with your API keys:
+**Required — Datacore MCP** (`@datacore-one/mcp`): Exposes GTD, journal, knowledge, agents, and command tools to your AI assistant. This is pre-configured in `.mcp.json.example` as the first entry and requires no API key — it reads from your `~/Data/` directory automatically.
+
+**Optional — External research servers** (add API keys to `.datacore/env/.env` to enable):
 - **Perplexity** (`PERPLEXITY_API_KEY`): Web-grounded search and research
 - **Exa** (`EXA_API_KEY`): Semantic web search
 - **Jina** (`JINA_API_KEY`): Web content extraction
@@ -142,6 +144,8 @@ Edit `.datacore/env/.env` with your API keys:
 - **Gamma** (`GAMMA_API_KEY`): Presentation generation (set in `.mcp.json`)
 
 See `.mcp.json.example` for the full server configuration.
+
+> **CLI**: `@datacore-one/cli` — setup and management utilities. Install with `npm install -g @datacore-one/cli`.
 
 ### Step 5: Personalize Context (Layered Pattern)
 
