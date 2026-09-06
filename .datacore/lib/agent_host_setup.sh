@@ -80,6 +80,9 @@ case "$HOST" in
     # Tris keeps a 5-plur clone at ~/Data/2-plur; the hourly cycle converges it
     # so its verifier attestations and cadence commits leave the host within the hour.
     CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
+    # hermes had contracts in the manifest and nothing running the verifier
+    # (found 2026-09-06): its rows read "not heard from" by construction.
+    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine hermes --alert log >> $STATE/job_verify.log 2>&1")
     ;;
 esac
 # ── known hosts the dispatch space needs (plur-claw fetches plur-space over ssh) ──
