@@ -83,15 +83,6 @@
   "hooks": {
     "SessionStart": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/hooks/plur_session_start_reminder.py",
-            "timeout": 3
-          }
-        ]
-      },
-      {
         "matcher": "startup",
         "hooks": [
           {
@@ -124,16 +115,6 @@
       }
     ],
     "PreToolUse": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/hooks/plur_session_guard.py",
-            "timeout": 3
-          }
-        ]
-      },
       {
         "matcher": "EnterPlanMode",
         "hooks": [
@@ -270,16 +251,6 @@
       }
     ],
     "PostToolUse": [
-      {
-        "matcher": "mcp__plur__plur_session_start",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/hooks/plur_session_mark.py",
-            "timeout": 3
-          }
-        ]
-      },
       {
         "matcher": "Skill|Bash",
         "hooks": [

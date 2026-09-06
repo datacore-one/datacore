@@ -420,6 +420,38 @@ def _read_identity_env() -> dict:
 
 
 # ── DIP-0046: git transport ─────────────────────────────────────────────────
+LENS_MAX_GB = 1.0
+
+
+def check_stores(rep: Report) -> None:
+    """Derived stores stay out of git and under a ceiling.
+
+    knowledge.db is a regenerable SQLite index; tracked, it churns on every
+    scan and once hit GitHub's 100 MB limit and blocked every push of that
+    space (datacore#29). The Lens store grew from 3.3 GB to 4.4 GB between
+    2026-08-19 and 2026-09-06 with a retention sweep that nothing scheduled
+    (datacore-lens#1); a ceiling here is what notices that before the disk does.
+    """
+    tracked = []
+    for space in sorted(ROOT.glob("[0-9]-*")):
+        if not (space / ".git").exists():
+            continue
+        rc, out = run(["git", "-C", str(space), "ls-files", "--",
+                       ".datacore/*.db", ".datacore/*.db-*", "*.sqlite", "*.sqlite3"], 30)
+        if rc == 0 and out.strip():
+            tracked.append(f"{space.name}: {out.strip().splitlines()[0]}")
+    rep.add("0046", "no tracked derived db", not tracked,
+            "clean" if not tracked else "; ".join(tracked[:3]))
+    home = Path(os.environ.get("DATACORE_LENS_HOME") or (Path.home() / ".datacore" / "lens"))
+    db = home / "observations.db"
+    if db.exists():
+        gb = db.stat().st_size / 1e9
+        rep.add("lens", "lens store bounded", gb <= LENS_MAX_GB,
+                f"{gb:.2f} GB (ceiling {LENS_MAX_GB:g} GB)")
+    else:
+        rep.add("lens", "lens store bounded", None, "no observations.db on this host", skipped=True)
+
+
 def check_transport(rep: Report) -> None:
     t = LIB / "ledger_transport.py"
     if not t.exists():
@@ -784,6 +816,7 @@ def main() -> int:
         check_projection(rep)
     check_identity(rep)
     check_transport(rep)
+    check_stores(rep)
     check_finality(rep)
     check_app(rep)
     check_declared_identity(rep)

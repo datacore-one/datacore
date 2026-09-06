@@ -67,6 +67,7 @@ case "$HOST" in
   nightshift)
     CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
     CRON_LINES+=("*/15 * * * * $LIB/unit_alive.sh datacore-telegram.service $STATE/miles-bot.alive 2>>$STATE/miles-bot.alive.err")
+    CRON_LINES+=("40 8 * * * python3 $HOME/Data/.datacore/modules/nightshift/lib/gate_check.py >> $STATE/nightshift-gate.history 2>&1")
     ;;
   plur-claw)
     # ONE clone per writer per host. Data attests X posts into ~/Data/2-plur-space
