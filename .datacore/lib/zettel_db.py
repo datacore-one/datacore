@@ -237,6 +237,29 @@ def get_connection(space=None):
     return conn
 
 
+def _ensure_unique_terms_index(cursor) -> int:
+    """Create the (file_id, term) unique index; deduplicate first if needed.
+
+    The terms table predates the index. A database that already holds
+    duplicate (file_id, term) rows makes `CREATE UNIQUE INDEX` raise
+    IntegrityError, which took every SessionStart hook down with it
+    (datacore#20) — and without the index the INSERT OR IGNORE writers kept
+    adding duplicates, so the problem only grew. Keep the first row of each
+    pair, then create the index. Returns the number of rows removed.
+    """
+    stmt = "CREATE UNIQUE INDEX IF NOT EXISTS idx_terms_unique ON terms(file_id, term)"
+    try:
+        cursor.execute(stmt)
+        return 0
+    except sqlite3.IntegrityError:
+        cursor.execute(
+            "DELETE FROM terms WHERE id NOT IN "
+            "(SELECT MIN(id) FROM terms GROUP BY file_id, term)")
+        removed = cursor.rowcount if cursor.rowcount is not None else 0
+        cursor.execute(stmt)
+        return removed
+
+
 def init_database(space=None):
     """Initialize the database schema."""
     conn = get_connection(space)
@@ -287,7 +310,7 @@ def init_database(space=None):
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_terms_term ON terms(term)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_terms_file ON terms(file_id)")
-    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_terms_unique ON terms(file_id, term)")
+    _ensure_unique_terms_index(cursor)
 
     # Links/References between files (many-to-many - every reference is a row)
     # Roam-style: [[link]], #tag, #[[tag]] are all page references

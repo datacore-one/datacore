@@ -597,6 +597,23 @@ jobs:
         arg: "active="
         max_age_hours: 3
 
+  - name: nightshift-delegation-gate
+    machine: nightshift
+    schedule: "daily 08:40 UTC (cron), after the overnight run"
+    cmd: "python3 ~/Data/.datacore/modules/nightshift/lib/gate_check.py"
+    on_fail: telegram
+    artifacts:
+      # gate_check.py rewrites this file each run with ONE dated line:
+      # "<date> gate ok: N machine-originated, M plan-only, 0 executed unapproved"
+      # or "<date> gate VIOLATION: ...". Machine-originated tasks (datacore#59/#60)
+      # may only run plan-only unless :APPROVED_BY: was set; a full-mode record
+      # for one is exactly what the gate exists to prevent, and a gate nobody
+      # checks is a promise (triage 2026-09-06).
+      - path: "~/.datacore/state/nightshift-gate.log"
+        check: regex
+        arg: "gate ok"
+        max_age_hours: 26
+
   - name: nightshift-miles-bot
     machine: nightshift
     schedule: "*/15 * * * *"
