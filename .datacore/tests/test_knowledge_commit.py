@@ -56,107 +56,120 @@ def make_repo(tmp: Path) -> Path:
     return repo
 
 
-print("=== classification (deterministic, no LLM) ===")
-check("journal is knowledge",        is_knowledge('journal/2026-07-13.md'), True)
-check("zettel is knowledge",         is_knowledge('3-knowledge/zettel/x.md'), True)
-check("content calendar is knowledge", is_knowledge('1-tracks/comms/cal.md'), True)
-check("org task is knowledge",       is_knowledge('org/next_actions.org'), True)
-check("project source is NOT",       is_knowledge('2-projects/plur/src/a.ts'), False)
-check("module source is NOT",        is_knowledge('.datacore/modules/mail/lib/x.py'), False)
 
-split = classify(['journal/a.md', '2-projects/p/src/b.ts', '3-knowledge/z.md'])
-check("split routes correctly",
-      (sorted(split['knowledge']), split['code']),
-      (['3-knowledge/z.md', 'journal/a.md'], ['2-projects/p/src/b.ts']))
+def main() -> int:
+    """Runs every check; returns the exit code the script always had."""
+    print("=== classification (deterministic, no LLM) ===")
+    check("journal is knowledge",        is_knowledge('journal/2026-07-13.md'), True)
+    check("zettel is knowledge",         is_knowledge('3-knowledge/zettel/x.md'), True)
+    check("content calendar is knowledge", is_knowledge('1-tracks/comms/cal.md'), True)
+    check("org task is knowledge",       is_knowledge('org/next_actions.org'), True)
+    check("project source is NOT",       is_knowledge('2-projects/plur/src/a.ts'), False)
+    check("module source is NOT",        is_knowledge('.datacore/modules/mail/lib/x.py'), False)
 
-with tempfile.TemporaryDirectory() as td:
-    tmp = Path(td)
-    repo = make_repo(tmp)
+    split = classify(['journal/a.md', '2-projects/p/src/b.ts', '3-knowledge/z.md'])
+    check("split routes correctly",
+          (sorted(split['knowledge']), split['code']),
+          (['3-knowledge/z.md', 'journal/a.md'], ['2-projects/p/src/b.ts']))
 
-    print("\n=== THE REGRESSION: agent on a feature branch writes a journal entry ===")
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        repo = make_repo(tmp)
 
-    # Agent checks out a feature branch to do code work — entirely legitimate.
-    git(repo, 'checkout', '-qb', 'ops/b17-sprint-claim')
-    (repo / '2-projects').mkdir(exist_ok=True)
-    (repo / '2-projects' / 'feature.ts').write_text('export const x = 1\n')
-    git(repo, 'add', '-A')
-    git(repo, 'commit', '-qm', 'feat: code work on the sprint branch')
+        print("\n=== THE REGRESSION: agent on a feature branch writes a journal entry ===")
 
-    # While there, it produces knowledge — a journal entry and a zettel.
-    (repo / 'journal' / '2026-07-13.md').write_text('what I did today\n')
-    (repo / '3-knowledge').mkdir(exist_ok=True)
-    (repo / '3-knowledge' / 'zettel.md').write_text('a lesson\n')
+        # Agent checks out a feature branch to do code work — entirely legitimate.
+        git(repo, 'checkout', '-qb', 'ops/b17-sprint-claim')
+        (repo / '2-projects').mkdir(exist_ok=True)
+        (repo / '2-projects' / 'feature.ts').write_text('export const x = 1\n')
+        git(repo, 'add', '-A')
+        git(repo, 'commit', '-qm', 'feat: code work on the sprint branch')
 
-    check("agent is on the feature branch", current_branch(repo), 'ops/b17-sprint-claim')
+        # While there, it produces knowledge — a journal entry and a zettel.
+        (repo / 'journal' / '2026-07-13.md').write_text('what I did today\n')
+        (repo / '3-knowledge').mkdir(exist_ok=True)
+        (repo / '3-knowledge' / 'zettel.md').write_text('a lesson\n')
 
-    r = commit_knowledge(
-        repo,
-        ['journal/2026-07-13.md', '3-knowledge/zettel.md', '2-projects/feature.ts'],
-        'knowledge from a session on a feature branch',
-        push=False,
-    )
+        check("agent is on the feature branch", current_branch(repo), 'ops/b17-sprint-claim')
 
-    # The whole point: knowledge reached main, from a feature branch, untouched.
-    main_files = git(repo, 'ls-tree', '-r', '--name-only', 'main').splitlines()
-    check("journal landed on main",  'journal/2026-07-13.md' in main_files, True)
-    check("zettel landed on main",   '3-knowledge/zettel.md' in main_files, True)
-    check("code did NOT land on main", '2-projects/feature.ts' in main_files, False)
-    check("code was left alone",     r['code_left_alone'], ['2-projects/feature.ts'])
+        r = commit_knowledge(
+            repo,
+            ['journal/2026-07-13.md', '3-knowledge/zettel.md', '2-projects/feature.ts'],
+            'knowledge from a session on a feature branch',
+            push=False,
+        )
 
-    # ...and it did so without disturbing the agent's work in progress.
-    check("HEAD never moved",        current_branch(repo), 'ops/b17-sprint-claim')
-    check("feature commit intact",
-          'feat: code work on the sprint branch' in git(repo, 'log', '--oneline', 'HEAD'),
-          True)
-    # The journal is gone from the FEATURE branch's working tree, on purpose: it
-    # belongs to main, it is committed there, and leaving it untracked here is
-    # what blocks `git checkout main` (see the deadlock section below).
-    check("journal removed from the feature working tree",
-          (repo / 'journal' / '2026-07-13.md').exists(), False)
-    check("code file untouched in the working tree",
-          (repo / '2-projects' / 'feature.ts').exists(), True)
+        # The whole point: knowledge reached main, from a feature branch, untouched.
+        main_files = git(repo, 'ls-tree', '-r', '--name-only', 'main').splitlines()
+        check("journal landed on main",  'journal/2026-07-13.md' in main_files, True)
+        check("zettel landed on main",   '3-knowledge/zettel.md' in main_files, True)
+        check("code did NOT land on main", '2-projects/feature.ts' in main_files, False)
+        check("code was left alone",     r['code_left_alone'], ['2-projects/feature.ts'])
 
-    print("\n=== idempotence: a second wrap-up must not spam empty commits ===")
-    # Recreate it with identical content — otherwise the file simply does not
-    # exist and we would be asserting a no-op for the wrong reason.
-    (repo / 'journal' / '2026-07-13.md').write_text('what I did today\n')
-    before = git(repo, 'rev-parse', 'main')
-    r2 = commit_knowledge(repo, ['journal/2026-07-13.md'], 'same content again',
-                          push=False)
-    check("no-op when content unchanged", r2['commit'], '')
-    check("main did not move",            git(repo, 'rev-parse', 'main'), before)
+        # ...and it did so without disturbing the agent's work in progress.
+        check("HEAD never moved",        current_branch(repo), 'ops/b17-sprint-claim')
+        check("feature commit intact",
+              'feat: code work on the sprint branch' in git(repo, 'log', '--oneline', 'HEAD'),
+              True)
+        # The journal is gone from the FEATURE branch's working tree, on purpose: it
+        # belongs to main, it is committed there, and leaving it untracked here is
+        # what blocks `git checkout main` (see the deadlock section below).
+        check("journal removed from the feature working tree",
+              (repo / 'journal' / '2026-07-13.md').exists(), False)
+        check("code file untouched in the working tree",
+              (repo / '2-projects' / 'feature.ts').exists(), True)
 
-    # A no-op must not delete the file either — nothing landed, so nothing is safe
-    # to throw away. Losing an uncommitted journal entry here would be the exact
-    # data loss this whole exercise exists to prevent.
-    check("no-op leaves the file on disk",
-          (repo / 'journal' / '2026-07-13.md').exists(), True)
-    (repo / 'journal' / '2026-07-13.md').unlink()  # tidy for the deadlock check
+        print("\n=== idempotence: a second wrap-up must not spam empty commits ===")
+        # Recreate it with identical content — otherwise the file simply does not
+        # exist and we would be asserting a no-op for the wrong reason.
+        (repo / 'journal' / '2026-07-13.md').write_text('what I did today\n')
+        before = git(repo, 'rev-parse', 'main')
+        r2 = commit_knowledge(repo, ['journal/2026-07-13.md'], 'same content again',
+                              push=False)
+        check("no-op when content unchanged", r2['commit'], '')
+        check("main did not move",            git(repo, 'rev-parse', 'main'), before)
 
-    print("\n=== the deadlock: agent must still be able to return to main ===")
-    # After a plumbing commit the file is on main but UNTRACKED here, and git
-    # then refuses to switch branches ("untracked working tree files would be
-    # overwritten by checkout"). That would strand the agent on the feature
-    # branch AND break check_and_repair_git()'s stray-branch recovery, which
-    # recovers by checking out main. A fix that jams the other fix.
-    check("no untracked litter left behind",
-          [l for l in git(repo, 'status', '--porcelain').splitlines()
-           if l.startswith('??')],
-          [])
+        # A no-op must not delete the file either — nothing landed, so nothing is safe
+        # to throw away. Losing an uncommitted journal entry here would be the exact
+        # data loss this whole exercise exists to prevent.
+        check("no-op leaves the file on disk",
+              (repo / 'journal' / '2026-07-13.md').exists(), True)
+        (repo / 'journal' / '2026-07-13.md').unlink()  # tidy for the deadlock check
 
-    co = subprocess.run(['git', 'checkout', 'main'], cwd=repo,
-                        capture_output=True, text=True)
-    check("agent CAN check out main afterwards", co.returncode, 0)
-    check("actually on main now", current_branch(repo), 'main')
-    check("and the journal is there, tracked",
-          (repo / 'journal' / '2026-07-13.md').read_text(), 'what I did today\n')
+        print("\n=== the deadlock: agent must still be able to return to main ===")
+        # After a plumbing commit the file is on main but UNTRACKED here, and git
+        # then refuses to switch branches ("untracked working tree files would be
+        # overwritten by checkout"). That would strand the agent on the feature
+        # branch AND break check_and_repair_git()'s stray-branch recovery, which
+        # recovers by checking out main. A fix that jams the other fix.
+        check("no untracked litter left behind",
+              [l for l in git(repo, 'status', '--porcelain').splitlines()
+               if l.startswith('??')],
+              [])
 
-    print("\n=== already on the default branch: use the ordinary path ===")
-    (repo / 'journal' / 'onmain.md').write_text('written while on main\n')
-    sha = commit_to_branch(repo, 'main', ['journal/onmain.md'], 'on main', push=False)
-    check("committed normally when HEAD == target", bool(sha), True)
-    check("working tree is clean afterwards", git(repo, 'status', '--porcelain'), '')
-    check("HEAD advanced on main", git(repo, 'log', '-1', '--format=%s'), 'on main')
+        co = subprocess.run(['git', 'checkout', 'main'], cwd=repo,
+                            capture_output=True, text=True)
+        check("agent CAN check out main afterwards", co.returncode, 0)
+        check("actually on main now", current_branch(repo), 'main')
+        check("and the journal is there, tracked",
+              (repo / 'journal' / '2026-07-13.md').read_text(), 'what I did today\n')
 
-print(f"\n{PASS} passed, {FAIL} failed")
-sys.exit(1 if FAIL else 0)
+        print("\n=== already on the default branch: use the ordinary path ===")
+        (repo / 'journal' / 'onmain.md').write_text('written while on main\n')
+        sha = commit_to_branch(repo, 'main', ['journal/onmain.md'], 'on main', push=False)
+        check("committed normally when HEAD == target", bool(sha), True)
+        check("working tree is clean afterwards", git(repo, 'status', '--porcelain'), '')
+        check("HEAD advanced on main", git(repo, 'log', '-1', '--format=%s'), 'on main')
+
+    print(f"\n{PASS} passed, {FAIL} failed")
+    return 1 if FAIL else 0
+
+
+def test_script_style_checks_pass():
+    # pytest entry: the file used to run at import and call sys.exit(0),
+    # which aborted collection of the whole directory (2026-09-06).
+    assert main() == 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
