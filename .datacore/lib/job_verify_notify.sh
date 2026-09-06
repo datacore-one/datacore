@@ -86,10 +86,11 @@ _deliver() {
   # /root/.datacore paths were a stale fact about a host that no longer runs
   # as root -- "Permission denied" on every relay since, so every alert from
   # this workstation was "logged only" and nobody was reading the log. Found
-  # 2026-09-03. winston_send.py documents its env file as ~/.config/cos.env.
+  # 2026-09-03. Since 2026-09-05 winston_send.py loads its own environment
+  # (cos_env.py: cos.env -> .env -> local.env, later wins); WINSTON_BOT_TOKEN
+  # lives only in local.env, so sourcing cos.env here would find nothing.
   printf '%s\n' "$msg" | ssh -o ConnectTimeout=15 -o BatchMode=yes "$RELAY_HOST" \
-    'set -a; . ~/.config/cos.env; set +a;
-     python3 ~/Data/.datacore/modules/chief-of-staff/server/lib/winston_send.py' \
+    'python3 ~/Data/.datacore/modules/chief-of-staff/server/lib/winston_send.py' \
     >>"$LOG" 2>&1 && return 0
   printf 'RELAY FAILED: could not deliver via %s\n' "$RELAY_HOST" >> "$LOG"; return 1
 }
