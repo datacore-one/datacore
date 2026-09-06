@@ -44,6 +44,14 @@ if [ "$VERIFY_ONLY" = 0 ]; then
     printf '%s\n' "# DIP-0044: this machine writes the ledger as one declared actor. Registry: servers.$HOST.access.actor" "DATACORE_ACTOR=$ACTOR" >> "$ID_FILE"
     log "declared DATACORE_ACTOR=$ACTOR in $ID_FILE"
   fi
+  # Stage 8: every event this writer appends is signed with its own key
+  # (ledger/keys.py, opt-in switch in ledger/log.py). The key is generated on
+  # first use under ~/.datacore/keys; the public half is registered in
+  # .datacore/keys/registry.yaml so any host can verify the writer's chain.
+  if ! grep -qsE '^(export )?DATACORE_LEDGER_SIGN=' "$ID_FILE"; then
+    printf '%s\n' "DATACORE_LEDGER_SIGN=1" >> "$ID_FILE"; log "signing on for $ACTOR (DATACORE_LEDGER_SIGN=1)"
+  fi
+  mkdir -p "$HOME/.datacore/keys"; chmod 700 "$HOME/.datacore/keys"
 fi
 
 # ── crons the contracts assume ──────────────────────────────────────────────
@@ -86,6 +94,7 @@ fi
 
 # ── verify ───────────────────────────────────────────────────────────────────
 grep -qsE "^(export )?DATACORE_ACTOR=$ACTOR\$" "$ID_FILE" && log "OK  identity declared ($ACTOR)" || { log "FAIL identity not declared as $ACTOR in $ID_FILE"; fail=1; }
+grep -qsE '^(export )?DATACORE_LEDGER_SIGN=1' "$ID_FILE" && log "OK  events signed (DATACORE_LEDGER_SIGN=1)" || { log "FAIL signing not declared in $ID_FILE"; fail=1; }
 res="$(python3 "$LIB/actor_identity.py" 2>/dev/null)"; [ "${res%% *}" = "$ACTOR" ] && log "OK  resolver agrees: $res" || { log "FAIL resolver says '$res', registry says $ACTOR"; fail=1; }
 cur="$(crontab -l 2>/dev/null || true)"
 for line in "${CRON_LINES[@]}"; do

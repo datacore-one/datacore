@@ -52,3 +52,10 @@ principals:
   data:
     never_effects: [payment, prod.deploy]
     may_delegate_to: [miles]
+
+# Arbitration across principals (product description, stage 5). Earlier
+# outranks later: a principal may close or release another principal's item
+# only if it precedes the owner here; agents not listed cannot override each
+# other at all. The client outranks everyone; the chief of staff outranks the
+# agents.
+arbitration: [gregor, winston]

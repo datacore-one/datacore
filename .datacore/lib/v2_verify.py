@@ -315,6 +315,87 @@ def check_writer_authorship(rep: Report) -> None:
             detail if ok else f"{len(foreign)} foreign: " + "; ".join(foreign[:3]))
 
 
+
+def check_principals(rep: Report) -> None:
+    """Every agent principal has its ten things, or the checklist says which
+    are missing. Informational (n-a, never a pass): an undeclared budget is
+    the owner's decision, not an outage, but it must not be invisible."""
+    sys.path.insert(0, str(LIB))
+    try:
+        from principals_check import check
+        rows = check(ROOT)
+    except Exception as exc:  # noqa: BLE001
+        rep.add("0044", "principals complete", None, f"principals_check unusable: {exc}")
+        return
+    agents = [r for r in rows if r["kind"] == "agent"]
+    incomplete = [r for r in agents if r["missing"]]
+    if not agents:
+        rep.add("0044", "principals complete", None, "no agent principals registered")
+    elif not incomplete:
+        rep.add("0044", "principals complete", True, f"{len(agents)}/{len(agents)} agent principals have their ten things")
+    else:
+        rep.add("0044", "principals complete", None,
+                f"{len(agents) - len(incomplete)}/{len(agents)} complete; " + "; ".join(f"{r['principal']}: {', '.join(r['missing'])}" for r in incomplete)[:220])
+
+
+def check_signed_events(rep: Report) -> None:
+    """Stage 8: are this writer's events signed, and do the signatures verify
+    with the key the keys registry holds for it? Off is reported, not hidden."""
+    sys.path.insert(0, str(LIB))
+    import socket
+    try:
+        from actor_identity import this_actor
+        from ledger.keys import verify as key_verify, DEFAULT_REGISTRY_PATH
+        from ledger.events import canonical_bytes, body_dict
+    except Exception as exc:  # noqa: BLE001
+        rep.add("0044", "events signed", None, f"signing libs unusable: {exc}")
+        return
+    ident = _read_identity_env()
+    if ident.get("DATACORE_LEDGER_SIGN") != "1":
+        rep.add("0044", "events signed", None, "signing off (DATACORE_LEDGER_SIGN is not 1 in identity.env)")
+        return
+    actor = this_actor()
+    checked = bad = 0
+    for f in ROOT.glob(f"[0-9]-*/.datacore/events/{actor}.jsonl"):
+        lines = [l for l in f.read_text(errors="replace").splitlines() if l.strip()][-20:]
+        for line in lines:
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            sig = e.get("sig")
+            if not sig:
+                continue
+            checked += 1
+            body = {k: v for k, v in e.items() if k not in ("sig", "hash")}  # log.py signs the body before hash and sig are added
+            try:
+                if not key_verify(actor, canonical_bytes(body), sig):
+                    bad += 1
+            except Exception:  # noqa: BLE001
+                bad += 1
+    if not checked:
+        rep.add("0044", "events signed", False, f"signing on but no signed event found in {actor}'s recent log tails")
+    else:
+        rep.add("0044", "events signed", bad == 0, f"{checked - bad}/{checked} recent signatures verify" + (f"; {bad} bad" if bad else ""))
+
+
+def _read_identity_env() -> dict:
+    p = Path.home() / ".datacore" / "identity.env"
+    out = {}
+    try:
+        for raw in p.read_text().splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            if line.startswith("export "):
+                line = line[7:].lstrip()
+            k, v = line.split("=", 1)
+            out[k.strip()] = v.strip().strip("\"'")
+    except OSError:
+        pass
+    return out
+
+
 # ── DIP-0046: git transport ─────────────────────────────────────────────────
 def check_transport(rep: Report) -> None:
     t = LIB / "ledger_transport.py"
@@ -684,6 +765,8 @@ def main() -> int:
     check_app(rep)
     check_declared_identity(rep)
     check_writer_authorship(rep)
+    check_principals(rep)
+    check_signed_events(rep)
     check_egress(rep)
     if not a.quick:
         check_fleet(rep)

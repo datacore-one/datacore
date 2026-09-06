@@ -122,6 +122,8 @@ class Policy:
     #: None means the file declares no principals section; claim_gate applies
     #: its documented defaults then.
     principals: dict | None = None
+    #: Arbitration order across principals (stage 5): earlier outranks later.
+    arbitration: tuple[str, ...] | None = None
 
     @property
     def effective_known_effects(self) -> frozenset[str]:
@@ -216,10 +218,18 @@ def load_policy(path: Path | None = None) -> Policy:
                 if unknown:
                     errors.append(f"{path}: principals.{name} has unknown key(s): {', '.join(unknown)}")
                 principals[str(name)] = dict(lim)
+    arbitration: tuple[str, ...] | None = None
+    if "arbitration" in data:
+        raw_a = data.get("arbitration")
+        if not (isinstance(raw_a, list) and all(isinstance(e, str) and e for e in raw_a)):
+            errors.append(f"{path}: 'arbitration' must be a list of non-empty principal names (got {raw_a!r})")
+        else:
+            arbitration = tuple(raw_a)
     if errors:
         raise PolicyError("\n".join(errors))
 
-    return Policy(approver=approver, cosign_effects=cosign_effects, known_effects=known_effects, principals=principals)
+    return Policy(approver=approver, cosign_effects=cosign_effects, known_effects=known_effects,
+                  principals=principals, arbitration=arbitration)
 
 
 def requires_cosign(policy: Policy, event_type: str, payload: dict) -> bool:
@@ -307,6 +317,27 @@ def guarded_append(
     cryptographic guarantee (that requires `DATACORE_LEDGER_SIGN=1`).
     """
     policy = policy if policy is not None else load_policy()
+
+    if type == "item.grant" and policy is not None:
+        # Stage 4: a grant is the approver's act. Any other writer minting a
+        # grant would let an agent widen its own authority by delegation.
+        who = getattr(log, "actor", None) or ""
+        if who != policy.approver:
+            raise PolicyError(f"item.grant refused for {who!r}: only the approver ({policy.approver}) may grant")
+    if type in ("item.dismiss", "item.release", "owner.set") and policy is not None and getattr(policy, "arbitration", None):
+        # Stage 5: closing, releasing or reassigning ANOTHER principal's item is
+        # arbitration, and the order in the policy file decides who may.
+        who = getattr(log, "actor", None) or ""
+        sd = space_dir or getattr(log, "space_dir", None)
+        if sd is not None:
+            try:
+                from claim_gate import check_override
+            except ImportError:
+                check_override = None
+            if check_override is not None:
+                _ok, _why = check_override(who, payload.get("id"), Path(sd), policy=policy)
+                if not _ok:
+                    raise PolicyError(f"{type} refused for {who!r}: {_why}")
 
     if type == "item.create":
         effects = payload.get("effects")

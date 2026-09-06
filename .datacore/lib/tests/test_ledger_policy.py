@@ -10,6 +10,17 @@ from __future__ import annotations
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _register_test_writers(tmp_path_factory, monkeypatch):
+    """Since 2026-09-06 an item.create by an unregistered writer is refused
+    before any other check (claim_gate). These tests use short-lived writer
+    names; register them for the duration of each test."""
+    import actor_identity
+    p = tmp_path_factory.mktemp("reg") / "principals.yaml"
+    p.write_text("principals:\n  worker: {kind: agent, writes_as: [worker, w, agent]}\n  human: {kind: human, writes_as: [human, approver, mac, test]}\n")
+    monkeypatch.setattr(actor_identity, "PRINCIPALS", p)
+
 from ledger.events import EVENT_TYPES
 from ledger.log import EventLog, read_events
 from ledger.policy import Policy, PolicyError, guarded_append, load_policy, requires_cosign
