@@ -375,7 +375,7 @@ def main() -> int:
 
         # Claim BEFORE working, so an interrupted run is visible as claimed.
         from claim_gate import check_claim
-        _ok, _why = check_claim(args.actor, item.payload or {})
+        _ok, _why = check_claim(args.actor, item.payload or {}, space_dir=space)
         if not _ok:
             print(f"REFUSED  {(item.payload or {}).get('title', item.id)[:60]}\n         -> {_why}")
             continue

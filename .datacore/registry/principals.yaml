@@ -4,7 +4,10 @@
 # by commits authored with one of the principal's `emails`; v2_verify checks it.
 #
 # Facts only. A field that is not yet decided is null and stays null until the
-# owner decides it — a made-up budget is worse than none.
+# owner decides it — a made-up budget is worse than none. `budget_monthly_usd`
+# is enforced at claim time by claim_gate once declared (spend.record events,
+# month to date); null means "no ceiling declared", and principals_check.py
+# reports it as such every day.
 version: 1
 principals:
   gregor:
@@ -31,7 +34,7 @@ principals:
     delegates_to: [miles, tris]
     charter: 8-firm/1-tracks/principals/winston.md
     contracts: box-*
-    memory_scope: null
+    memory_scope: agent:winston
     budget_monthly_usd: null
     permission_mode: propose            # proposes; the client approves external actions
   miles:
@@ -47,7 +50,7 @@ principals:
     executors: [nightshift]
     charter: 8-firm/1-tracks/principals/miles.md
     contracts: nightshift-*
-    memory_scope: null
+    memory_scope: agent:miles
     budget_monthly_usd: null
     permission_mode: bypass             # bot: bypassPermissions; nightshift: --dangerously-skip-permissions
   tris:
@@ -62,7 +65,7 @@ principals:
       roles: [8-firm:cio, 5-plur:(venture.yaml)]
     charter: 8-firm/1-tracks/principals/tris.md
     contracts: hermes-*
-    memory_scope: null
+    memory_scope: agent:tris
     budget_monthly_usd: null
     permission_mode: yolo               # HERMES_YOLO_MODE=1
   data:
@@ -77,9 +80,9 @@ principals:
       roles: [8-firm:comms, 5-plur:(venture.yaml)]
     charter: 8-firm/1-tracks/principals/data.md
     contracts: plur-claw-*
-    memory_scope: null
+    memory_scope: agent:data
     budget_monthly_usd: null
-    permission_mode: null
+    permission_mode: propose            # drafts; a human approves anything that leaves
   genesis:
     kind: migration
     display: genesis import (2026-08-10, one shot)

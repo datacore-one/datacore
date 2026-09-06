@@ -51,6 +51,42 @@ OUT = Path.home() / ".datacore" / "state" / "cadence-liveness.log"
 DEFAULT_GRACE = 3
 
 
+def sunset_reviews(root: Path, today: date | None = None) -> tuple[list[tuple[str, str, str]], list[tuple[str, str]]]:
+    """Stage 7: every recurring commitment has a review date and sunsets by
+    default. A venture may declare `cadence_reviews: {<cadence>: YYYY-MM-DD}`;
+    this reports cadences past their review date (defend or drop) and cadences
+    with no review date at all (the product's rule, unmet). Reported, not
+    enforced: dropping a cadence is the owner's act."""
+    import yaml
+    today = today or date.today()
+    past, undated = [], []
+    for vy in sorted(root.glob("[0-9]-*/venture.yaml")):
+        try:
+            v = yaml.safe_load(vy.read_text()) or {}
+        except Exception:  # noqa: BLE001
+            continue
+        if str(v.get("status") or "").lower() == "archived":
+            continue
+        reviews = v.get("cadence_reviews") or {}
+        names = set()
+        for role in (v.get("roles") or {}).values():
+            for lst in ((role or {}).get("cadences") or {}).values():
+                for c in (lst or []):
+                    names.add(str(c))
+        for c in sorted(names):
+            due = reviews.get(c)
+            if not due:
+                undated.append((vy.parent.name, c))
+                continue
+            try:
+                d = date.fromisoformat(str(due))
+            except ValueError:
+                undated.append((vy.parent.name, c)); continue
+            if d <= today:
+                past.append((vy.parent.name, c, d.isoformat()))
+    return past, undated
+
+
 def collect(root: Path, grace: int, today: date | None = None) -> list:
     """Overdue cadences across every space, via the engine that owns this."""
     import yaml
@@ -119,7 +155,10 @@ def main() -> int:
         lines.append(f"  {days:5}d  {space:<12} {role}.{freq}.{name}")
     # LAST LINE IS THE CONTRACT. Anchored so a report listing overdue
     # cadences can never pass by containing a 0 somewhere in a name.
-    lines.append(f"{len(rows)} cadence(s) overdue")
+    _past, _undated = sunset_reviews(root, today)
+    for _sp, _c, _d in _past:
+        lines.append(f"  past review: {_sp} {_c} (review due {_d})")
+    lines.append(f"{len(rows)} cadence(s) overdue; sunset review: {len(_past)} past due, {len(_undated)} without a review date")
     OUT.write_text("\n".join(lines) + "\n")
     print(lines[-1])
     return 0

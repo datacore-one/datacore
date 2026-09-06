@@ -235,6 +235,68 @@ def r6_rebuildable(cos: Path, day: str) -> tuple[bool, str]:
     return not fails, (f"{len(fails)} FAIL line(s)" if fails else "0 FAIL")
 
 
+
+def principal_rows(root: Path, now: float | None = None, hours: float = 26.0) -> list[dict]:
+    """One row per agent principal (product description: a scoreboard row per
+    principal). Its health is what its own machine's verifier attested to the
+    ledger (job_verify -> metric.attest job.verify) within the window: how many
+    contracts passed, how many failed, how long ago. A principal nobody has
+    heard from is a row that says so, not a missing row."""
+    import glob, sys
+    now = now or time.time()
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        from actor_identity import principals
+        ps = principals(root / ".datacore" / "registry" / "principals.yaml")
+    except Exception:  # noqa: BLE001
+        return []
+    latest: dict[str, dict] = {}
+    for f in glob.glob(str(root / "[0-9]-*" / ".datacore" / "events" / "*.jsonl")) + glob.glob(str(root / ".datacore" / "events" / "*.jsonl")):
+        writer = Path(f).stem
+        for line in Path(f).read_text(errors="replace").splitlines():
+            if '"job.verify"' not in line:
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            p = e.get("payload") or {}
+            if p.get("metric") != "job.verify":
+                continue
+            ms = str(e.get("hlc", "")).split(".")[0]
+            if not ms.isdigit():
+                continue
+            t = int(ms) / 1000
+            if now - t > hours * 3600:
+                continue
+            job = str(p.get("job") or "")
+            cur = latest.setdefault(writer, {})
+            if job not in cur or cur[job]["t"] < t:
+                cur[job] = {"t": t, "ok": bool(p.get("ok"))}
+    rows = []
+    for name, p in ps.items():
+        if str(p.get("kind") or "") != "agent":
+            continue
+        writers = {str(w) for w in (p.get("writes_as") or [])} | {name}
+        jobs: dict[str, dict] = {}
+        for w in writers:
+            for job, rec in latest.get(w, {}).items():
+                if job not in jobs or jobs[job]["t"] < rec["t"]:
+                    jobs[job] = rec
+        if not jobs:
+            rows.append({"principal": name, "ok": None, "note": f"not heard from in {hours:.0f}h"})
+            continue
+        failing = sorted(j for j, r in jobs.items() if not r["ok"])
+        age_h = (now - max(r["t"] for r in jobs.values())) / 3600
+        rows.append({"principal": name, "ok": not failing,
+                     "note": f"{len(jobs) - len(failing)}/{len(jobs)} contracts verified {age_h:.0f}h ago" + (f"; failing: {', '.join(failing)[:80]}" if failing else "")})
+    return rows
+
+
+def principal_lines(rows: list[dict]) -> list[str]:
+    return [f"  principal={r['principal']} {'ok' if r['ok'] else ('n-a' if r['ok'] is None else 'FAIL')} | {r['note']}" for r in rows]
+
+
 def level(streak: int) -> int:
     return 5 if streak >= 30 else 4 if streak >= 7 else 3
 
@@ -277,6 +339,9 @@ def main() -> int:
     state, cos = Path(a.state), Path(a.cos)
     r = compute(a.date, state, cos)
     out = line(r)
+    prow = principal_rows(Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data"))))
+    for ln in principal_lines(prow):
+        print(ln)
     if not a.no_write:
         state.mkdir(parents=True, exist_ok=True)
         log = state / "reliability-scoreboard.log"

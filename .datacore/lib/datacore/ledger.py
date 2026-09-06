@@ -118,7 +118,12 @@ FUND_KINDS = frozenset({
 
 # Everything `attest` accepts. Kept as a union so a caller cannot pass a kind
 # from neither vocabulary without it being a plain typo.
-ATTEST_KINDS = EGRESS_KINDS | CREDENTIAL_KINDS | FUND_KINDS
+# Inbound sessions: a chat session is where a principal's authority is
+# exercised interactively, and until 2026-09-06 it left no mark on the
+# record. Not egress — nothing leaves — so no module manifest entry is due.
+SESSION_KINDS = frozenset({"chat.session"})
+
+ATTEST_KINDS = EGRESS_KINDS | CREDENTIAL_KINDS | FUND_KINDS | SESSION_KINDS
 
 
 def _core_lib() -> Path | None:
