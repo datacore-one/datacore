@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate 5-plur/roadmap.yaml against its spec.
+"""Validate a space's roadmap.yaml against its spec (default space: 5-plur).
 
 The roadmap's forcing function is that every item serves an intent. This makes
 it mechanical: a `serves` entry that does not resolve to an INTENT_ID in
@@ -10,13 +10,14 @@ Companion to roadmap_align.py, which maps org tasks and GitHub issues onto the
 same graph. This one checks the roadmap file itself.
 
 Usage:
-    python3 .datacore/lib/roadmap_validate.py [--file 5-plur/roadmap.yaml]
+    python3 .datacore/lib/roadmap_validate.py [--space 2-datacore] [--file roadmap.yaml]
     python3 .datacore/lib/roadmap_validate.py --query blocked_on=human
     python3 .datacore/lib/roadmap_validate.py --query horizon=now
     python3 .datacore/lib/roadmap_validate.py --coverage
 """
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -27,8 +28,39 @@ except ImportError:
     sys.exit("pyyaml required: pip install pyyaml")
 
 REPO = Path(__file__).resolve().parents[2]
-DEFAULT_ROADMAP = REPO / "5-plur" / "roadmap.yaml"
-INTENTS_ORG = REPO / "5-plur" / "org" / "intents.org"
+
+# One roadmap per space, one set of tools. Every path below derives from the
+# selected space, so a second roadmap can never validate against the first
+# one's intent graph by accident. Select with --space or ROADMAP_SPACE.
+SPACE = os.environ.get("ROADMAP_SPACE", "5-plur")
+
+
+def space_root(space: str) -> Path:
+    """A space is a directory name under the Data root, or an absolute path."""
+    p = Path(space).expanduser()
+    return p if p.is_absolute() else REPO / space
+
+
+def configure(space: str) -> None:
+    """Point every path at `space`. Runs at import and again for --space."""
+    global SPACE, SPACE_ROOT, SPACE_TAG, DEFAULT_ROADMAP, INTENTS_ORG, SPACE_ORG, ORG_FILES
+    SPACE = space
+    SPACE_ROOT = space_root(space)
+    name = SPACE_ROOT.name
+    # `5-plur` -> `plur`: the tag a task in the personal space carries when
+    # it belongs to this space.
+    SPACE_TAG = name.split("-", 1)[1] if "-" in name and name[0].isdigit() else name
+    DEFAULT_ROADMAP = SPACE_ROOT / "roadmap.yaml"
+    INTENTS_ORG = SPACE_ROOT / "org" / "intents.org"
+    SPACE_ORG = [str(SPACE_ROOT / "org" / f)
+                 for f in ("next_actions.org", "someday.org", "inbox.org")]
+    # The space's own org files, plus the personal space where a task for
+    # this space is tagged with its short name.
+    ORG_FILES = SPACE_ORG + ["0-personal/org/next_actions.org",
+                             "0-personal/org/someday.org"]
+
+
+configure(SPACE)
 
 ITEM_KEYS = {
     "id", "track", "title", "outcome", "serves", "drive", "horizon", "status",
@@ -195,9 +227,7 @@ def validate(roadmap: dict, intent_ids: set) -> list:
     return errors
 
 
-ORG_FILES = ["5-plur/org/next_actions.org", "5-plur/org/someday.org",
-             "5-plur/org/inbox.org", "0-personal/org/next_actions.org",
-             "0-personal/org/someday.org"]
+# ORG_FILES is set by configure(): the space's org files plus 0-personal.
 
 THEMES = {
     "packs / hub": r"\bpack|hub\b|marketplace|listing|seller",
@@ -243,8 +273,8 @@ def report_orphans(roadmap):
             continue
         for task in json.loads(r.stdout)["tasks"]:
             tags = set(task.get("tags") or [])
-            if not ("plur" in tags or f.startswith("5-plur")
-                    or "plur" in task["heading"].lower()):
+            if not (SPACE_TAG in tags or f in SPACE_ORG
+                    or SPACE_TAG in task["heading"].lower()):
                 continue
             total += 1
             if (task.get("properties") or {}).get("ID") in refs:
@@ -255,7 +285,7 @@ def report_orphans(roadmap):
             for k in hits:
                 buckets[k].append(task["heading"])
 
-    print(f"{total} PLUR-scoped open tasks · {covered} referenced by a roadmap item "
+    print(f"{total} {SPACE_TAG.upper()}-scoped open tasks · {covered} referenced by a roadmap item "
           f"· {total - covered} orphaned\n")
     print("Most orphans are correct — the roadmap is not a backlog. Look for a\n"
           "cluster big enough to be outcome-level with no theme in the file.\n")
@@ -268,14 +298,19 @@ def report_orphans(roadmap):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--file", default=str(DEFAULT_ROADMAP))
+    ap.add_argument("--space", default=SPACE,
+                    help="space holding roadmap.yaml and org/intents.org: a "
+                         "directory under the Data root, or an absolute path")
+    ap.add_argument("--file", default=None,
+                    help="roadmap file (default: <space>/roadmap.yaml)")
     ap.add_argument("--query", help="field=value, e.g. blocked_on=human")
     ap.add_argument("--coverage", action="store_true", help="intent coverage + orphan intents")
     ap.add_argument("--orphans", action="store_true",
                     help="PLUR org tasks with no roadmap item, clustered by theme")
     args = ap.parse_args()
 
-    roadmap = yaml.safe_load(Path(args.file).read_text())
+    configure(args.space)
+    roadmap = yaml.safe_load(Path(args.file or DEFAULT_ROADMAP).read_text())
     intent_ids = load_intent_ids(INTENTS_ORG)
     items = roadmap.get("items") or []
 
