@@ -359,3 +359,6 @@ skills-lock.json
 # Local virtualenvs and hand-copy backups must never be staged (winston 2026-09-04: `git add -A` staged 3,234 venv files)
 .venv*/
 *.scp-backup
+# per-machine signing key registry (public halves). Distribution is registry/principals.yaml verify_keys;
+# nightshift's run postprocess committed this file to its root run branch on 2026-09-06 and the push guard refused it.
+.datacore/keys/
