@@ -272,6 +272,17 @@ def check_identity(rep: Report) -> None:
 
 
 
+def _reviewed_commits() -> set[str]:
+    """Short hashes a human has reviewed (config/authorship-reviewed.yaml)."""
+    p = ROOT / ".datacore" / "config" / "authorship-reviewed.yaml"
+    try:
+        import yaml
+        d = yaml.safe_load(p.read_text()) or {}
+        return {str(e.get("commit", "")).strip() for e in (d.get("reviewed") or []) if e.get("commit")}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
 def check_writer_authorship(rep: Report) -> None:
     """Was each writer's log only ever appended by its own principal?
 
@@ -294,6 +305,7 @@ def check_writer_authorship(rep: Report) -> None:
     if not principals():
         rep.add("0044", "writer logs authored by their principal", None, "principals.yaml absent or empty")
         return
+    reviewed = _reviewed_commits()
     foreign, unbound, seen = [], set(), 0
     for f in sorted(ROOT.glob("[0-9]-*/.datacore/events/*.jsonl")):
         space, writer = f.parts[-4], f.stem
@@ -302,13 +314,21 @@ def check_writer_authorship(rep: Report) -> None:
             unbound.add(writer)
             continue
         rc, out = run(["git", "-C", str(ROOT / space), "log", "--no-merges", "--since=2026-09-05",
-                       "--format=%ae", "--", str(f.relative_to(ROOT / space))], 60)
+                       "--format=%h %ae", "--", str(f.relative_to(ROOT / space))], 60)
         if rc != 0:
             continue
         seen += 1
-        bad = sorted({e.strip().lower() for e in out.splitlines() if e.strip()} - allowed)
+        bad = set()
+        for line in out.splitlines():
+            parts = line.strip().split()
+            if len(parts) < 2:
+                continue
+            sha, email = parts[0], parts[1].lower()
+            if email in allowed or any(sha.startswith(r) for r in reviewed):
+                continue  # a reviewed incident stays on the record in authorship-reviewed.yaml
+            bad.add(email)
         if bad:
-            foreign.append(f"{space}/{writer} by {', '.join(bad)[:60]}")
+            foreign.append(f"{space}/{writer} by {', '.join(sorted(bad))[:60]}")
     ok = not foreign
     detail = f"{seen} log(s) checked" + (f"; unbound writer(s): {', '.join(sorted(unbound))}" if unbound else "")
     rep.add("0044", "writer logs authored by their principal", ok,
