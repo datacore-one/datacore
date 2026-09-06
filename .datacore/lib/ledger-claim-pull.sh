@@ -11,9 +11,15 @@
 # tick prints one dated line so a job contract can see it ran.
 set -uo pipefail
 RUNNER="${DATACORE_RUNNER:-$HOME/.datacore/v2-runner}"
-S="${DISPATCH_SPACE:-$HOME/spaces/5-plur}"
+S="${DISPATCH_SPACE:-${DATACORE_ATTEST_SPACE:-$HOME/spaces/5-plur}}"
 LIMIT="${DISPATCH_LIMIT:-2}"
 PY="${DATACORE_PYTHON:-python3}"
+# The host's declarations travel with the tick: executor, agent name, attest space.
+if [ -f "$HOME/.datacore/identity.env" ]; then
+  while IFS='=' read -r k v; do
+    case "$k" in DATACORE_EXECUTOR|OPENCLAW_AGENT|DATACORE_ATTEST_SPACE|DATACORE_LEDGER_SIGN) export "$k=$(printf '%s' "$v" | sed -E "s/^['\"]//; s/['\"]$//")";; esac
+  done < <(grep -E '^(DATACORE_EXECUTOR|OPENCLAW_AGENT|DATACORE_ATTEST_SPACE|DATACORE_LEDGER_SIGN)=' "$HOME/.datacore/identity.env")
+fi
 ACTOR="$("$PY" "$RUNNER/.datacore/lib/actor_identity.py" 2>/dev/null | cut -d' ' -f1)"
 [ -n "$ACTOR" ] || { echo "$(date -Is) dispatch rc=2 no declared actor (DIP-0044)"; exit 2; }
 cd "$S" || { echo "$(date -Is) dispatch rc=2 space missing: $S"; exit 2; }
