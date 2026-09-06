@@ -25,8 +25,8 @@ def test_hook_script_path_resolves_the_file_a_command_runs():
     assert vv.hook_script_path("python3 /x/y.py --flag a") == Path("/x/y.py")
     assert vv.hook_script_path("bash ~/Data/.datacore/hooks/org-date-fix.sh") == \
         Path.home() / "Data" / ".datacore" / "hooks" / "org-date-fix.sh"
-    assert vv.hook_script_path("/Users/x/.plur/bin/plur-hook hook-session-guard") == \
-        Path("/Users/x/.plur/bin/plur-hook")
+    assert vv.hook_script_path("/opt/plur/bin/plur-hook hook-session-guard") == \
+        Path("/opt/plur/bin/plur-hook")
     assert vv.hook_script_path("CLAUDE_HOOK_EVENT_NAME=PostToolUseFailure python3 /x/h.py") == \
         Path("/x/h.py")
     # Package runners and PATH binaries are not files we can check.
