@@ -180,3 +180,38 @@ def test_registration_survives_a_runtime_that_rejects_the_tool(as_tris):
     c = Ctx()
     hp.register(c)                      # must not raise: the hooks are the point
     assert c.hooks == ["pre_tool_call", "on_session_start"]
+
+
+# ── finding the fleet lib ───────────────────────────────────────────────────
+
+def test_lib_is_found_in_the_runner_clone_when_the_data_root_has_none(tmp_path, monkeypatch):
+    """hermes keeps spaces in ~/Data and code in ~/.datacore/v2-runner —
+    the layout that made the first deploy report INERT (2026-09-07)."""
+    runner = tmp_path / ".datacore" / "v2-runner" / ".datacore" / "lib"
+    runner.mkdir(parents=True)
+    (runner / "actor_identity.py").write_text("")
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path / "Data"))
+    monkeypatch.delenv("DATACORE_LIB", raising=False)
+    monkeypatch.setattr(hp.Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(hp.sys, "path", list(hp.sys.path))
+    assert hp._lib() is True
+    assert str(runner) in hp.sys.path
+
+
+def test_datacore_lib_env_wins_and_a_host_without_datacore_stays_inert(tmp_path, monkeypatch):
+    override = tmp_path / "custom" / "lib"
+    override.mkdir(parents=True)
+    (override / "actor_identity.py").write_text("")
+    monkeypatch.setenv("DATACORE_LIB", str(override))
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path / "Data"))
+    monkeypatch.setattr(hp.Path, "home", staticmethod(lambda: tmp_path / "empty"))
+    monkeypatch.setattr(hp.sys, "path", list(hp.sys.path))
+    assert hp.lib_candidates()[0] == override
+    assert hp._lib() is True
+
+    monkeypatch.delenv("DATACORE_LIB")
+    monkeypatch.setattr(hp.sys, "path", list(hp.sys.path))
+    assert hp._lib() is False
+    d = hp.identity(refresh=True)
+    assert d["ok"] is False and "no .datacore/lib found (tried" in d["why"]
+

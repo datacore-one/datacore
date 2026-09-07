@@ -68,14 +68,33 @@ def _root() -> Path:
     return Path(os.environ.get("DATACORE_ROOT") or (Path.home() / "Data"))
 
 
+def lib_candidates() -> list[Path]:
+    """Where the fleet lib can be, most specific first.
+
+    A host does not always keep its code under its data root. hermes keeps
+    spaces in ~/Data and the code in the v2-runner clone, which is exactly
+    why `ledger_transport._registry` grew the same fallback on 2026-09-07
+    (datacore#139) after failing twice a day for a fortnight. The plugin
+    deployed there reported INERT for the same reason, five minutes after
+    that fix landed."""
+    out = []
+    override = os.environ.get("DATACORE_LIB")
+    if override:
+        out.append(Path(override))
+    out.append(_root() / ".datacore" / "lib")
+    out.append(Path.home() / ".datacore" / "v2-runner" / ".datacore" / "lib")
+    return out
+
+
 def _lib() -> bool:
     """Put the fleet lib on the path. False when this host has no Datacore."""
-    lib = _root() / ".datacore" / "lib"
-    if not (lib / "actor_identity.py").exists():
-        return False
-    if str(lib) not in sys.path:
-        sys.path.insert(0, str(lib))
-    return True
+    for lib in lib_candidates():
+        if not (lib / "actor_identity.py").exists():
+            continue
+        if str(lib) not in sys.path:
+            sys.path.insert(0, str(lib))
+        return True
+    return False
 
 
 _IDENTITY: dict | None = None
@@ -93,7 +112,8 @@ def identity(refresh: bool = False) -> dict:
            "permission_mode": "", "ok": False, "why": ""}
     try:
         if not _lib():
-            out["why"] = f"no .datacore/lib under {_root()}"
+            tried = ", ".join(str(p) for p in lib_candidates())
+            out["why"] = f"no .datacore/lib found (tried {tried})"
             _IDENTITY = out
             return out
         from actor_identity import principal_of, this_actor  # noqa: PLC0415
