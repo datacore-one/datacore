@@ -542,6 +542,53 @@ def cmd_finalize(dry_run: bool, scope: str = "session") -> dict:
 # audit  (§16 + §18)
 # --------------------------------------------------------------------------
 
+def session_scope_rows(mine: list[str], repos: list[dict]) -> tuple[dict, str]:
+    """Score this session's files; describe everything else.
+
+    `mine` are absolute paths from the session archive; `repos` is
+    repo_status(). A session file counts against the session when it is
+    still dirty in its repo, or when the repo that owns it has unpushed
+    commits. Project repos are never auto-committed, so a session file
+    inside one is reported, not scored. Repos this session did not touch
+    are described in the second value and never fail the audit."""
+    status = {r["repo"]: r for r in repos}
+    project_repos = [p.parent for p in DATACORE_ROOT.glob("[0-9]-*/2-projects/*/.git")]
+    owners = [DATACORE_ROOT] + [s for s in spaces() if (s / ".git").exists()]
+    by_repo: dict[str, set[str]] = {}
+    in_project: list[str] = []
+    for f in mine:
+        fp = Path(f)
+        if any(str(fp).startswith(str(pr) + os.sep) for pr in project_repos):
+            in_project.append(str(fp))
+            continue
+        owner = max((r for r in owners if str(fp).startswith(str(r) + os.sep)),
+                    key=lambda r: len(str(r)), default=None)
+        if owner is None:
+            continue                       # unversioned: finalize reports these
+        name = str(owner.relative_to(DATACORE_ROOT)) if owner != DATACORE_ROOT else "."
+        by_repo.setdefault(name, set()).add(str(fp.relative_to(owner)))
+    uncommitted, unpushed = [], []
+    for name, rel in sorted(by_repo.items()):
+        repo = DATACORE_ROOT if name == "." else DATACORE_ROOT / name
+        left = sorted(rel & git_dirty(repo))
+        if left:
+            uncommitted.append(f"{name}: {left[:3]}")
+        if status.get(name, {}).get("unpushed_commits"):
+            unpushed.append(f"{name}: {status[name]['unpushed_commits']} commit(s)")
+    ok = not uncommitted and not unpushed
+    if ok:
+        detail = (f"{len(by_repo)} repo(s) this session touched are clean and pushed"
+                  + (f"; {len(in_project)} file(s) in project repos left to their owner" if in_project else ""))
+    else:
+        detail = "; ".join((["uncommitted " + ", ".join(uncommitted)] if uncommitted else [])
+                           + (["unpushed " + ", ".join(unpushed)] if unpushed else []))
+    other_dirty = [r["repo"] for r in repos if r["dirty_files"] and r["repo"] not in by_repo]
+    other_unpushed = [r["repo"] for r in repos if r["unpushed_commits"] and r["repo"] not in by_repo]
+    others = ("nothing dirty or unpushed outside this session's repos" if not (other_dirty or other_unpushed)
+              else f"dirty: {other_dirty}; unpushed: {other_unpushed} — other sessions or project checkouts, not scored")
+    return {"ok": ok, "detail": detail}, others
+
+
 def cmd_audit() -> dict:
     today = date.today().isoformat()
     checks = []
@@ -564,13 +611,20 @@ def cmd_audit() -> dict:
     check("session archived", archived,
           "learning sweep will pick it up" if archived else "run preflight")
 
+    # SESSION SCOPE, like finalize. "All repos pushed" and "no uncommitted
+    # work" used to count every repo under the root, so a wrap-up that had
+    # committed and pushed everything it touched still scored 4/6 whenever
+    # another session, or the owner's own project checkout, was dirty. The
+    # audit asserts what this session was responsible for; what belongs to
+    # other sessions is reported, never scored (2026-09-07).
+    mine, err = session_files()
     repos = repo_status()
-    unpushed = [r for r in repos if r["unpushed_commits"]]
-    dirty = [r for r in repos if r["dirty_files"]]
-    check("all repos pushed", not unpushed,
-          f"{len(unpushed)} unpushed: {[r['repo'] for r in unpushed]}")
-    check("no uncommitted work", not dirty,
-          f"{len(dirty)} dirty: {[r['repo'] for r in dirty]}")
+    own, others = session_scope_rows(mine, repos)
+    if err:
+        check("session work committed and pushed", False, err)
+    else:
+        check("session work committed and pushed", own["ok"], own["detail"])
+    check("other sessions' work left alone", True, others)
 
     cs = context_sync_check()
     check("context in sync", not cs["registry_changed"], cs["action"])
