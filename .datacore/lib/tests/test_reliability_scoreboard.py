@@ -111,3 +111,18 @@ def test_r4_reads_the_units_own_result_where_there_is_one(tmp_path, monkeypatch)
     (state / "fleet-sync.log").write_text("FAIL: stale text from a run that has since succeeded\n")
     monkeypatch.setattr(M, "_unit_show", lambda unit: {"LoadState": "loaded", "Result": "success", "ExecMainExitTimestamp": stamp(2)})
     assert M.compute(day, state, cos, now=now)["checks"]["R4"]["ok"]
+
+
+def test_r6_ignores_an_ok_line_that_quotes_a_fail(tmp_path):
+    """--verify quotes yesterday's scoreboard line and '0 failed units' inside
+    OK lines; only a line whose verdict is FAIL counts (2026-09-07)."""
+    day = "2026-09-05"; state, cos = _good_box(tmp_path, day)
+    (cos / "verify-daily.log").write_text(
+        f"{day} [cos-setup] OK  0 failed systemd units\n"
+        f"{day} [cos-setup] OK  scoreboard: 2026-09-04 FAIL streak=0 level=3 R6=FAIL | R6: 4 FAIL\n"
+        f"{day} 0 (interventions.log)\n"
+        f"{day} [cos-setup] ALL CHECKS PASS\n")
+    assert M.compute(day, state, cos)["checks"]["R6"]["ok"]
+    (cos / "verify-daily.log").write_text(f"{day} [cos-setup] FAIL heartbeat cron scheduled\n")
+    assert not M.compute(day, state, cos)["checks"]["R6"]["ok"]
+

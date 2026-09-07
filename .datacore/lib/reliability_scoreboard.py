@@ -226,12 +226,20 @@ def r5_reachable(state: Path, day: str, now: float | None = None) -> tuple[bool,
     return ok, f"{hits}/{expected} probe hits from {PROBER_IP} today"
 
 
+_R6_FAIL = re.compile(r"^\S+ (?:\S+ )?(?:\[[^\]]+\] )?FAIL\b")
+
+
 def r6_rebuildable(cos: Path, day: str) -> tuple[bool, str]:
     rows = _lines(cos / "verify-daily.log")
     today = [l for l in rows if l.startswith(day)]
     if not today:
         return False, "no --verify run logged today"
-    fails = [l for l in today if " FAIL " in l or l.split(" ", 1)[-1].startswith("FAIL")]
+    # A FAIL line is one whose VERDICT is FAIL — `<date> [cos-setup] FAIL <check>`
+    # or `<date> <time> FAIL <check>` — never an OK line that quotes the word.
+    # 2026-09-07: --verify printed "OK  scoreboard: 2026-09-06 FAIL streak=0 …"
+    # (yesterday's line, quoted as a check), the substring match counted it,
+    # and R6 failed today's scoreboard on a day every check had passed.
+    fails = [l for l in today if _R6_FAIL.match(l)]
     return not fails, (f"{len(fails)} FAIL line(s)" if fails else "0 FAIL")
 
 
