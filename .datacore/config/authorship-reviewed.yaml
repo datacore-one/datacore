@@ -11,3 +11,10 @@ reviewed:
     date: 2026-09-06
     what: "A geo cadence run on hermes (clone ~/Data/2-plur) committed with `git add -A` and swept two ingest events that a process on that host had written under actor winston (hlc .winston) — a misattributed writer on the wrong host, carried under Tris's name."
     action: "Reviewed 2026-09-06 08:00. Source fix: the hermes clone must write as tris only and stage its own paths; tracked in the 2-datacore inbox."
+  - commit: c7138535
+    space: 5-plur
+    writer: winston
+    committed_as: tris                  # author email hash 6b962a4a3a0068be
+    date: 2026-09-07
+    what: "Same cause as e3c8068e, one day later: the Hermes cron job geo-research-tris (06:00 UTC) followed its skill file geo-cadence-operations/SKILL.md, which said to open EventLog(actor='winston', sign=False) for task creation; one item.create for a geo review landed in winston.jsonl, and the transport's autosave at 06:25 committed the file under Tris's name."
+    action: "Reviewed 2026-09-07. Source fixed: the skill now uses this_actor() (tris) and leaves signing to identity.env; the transport no longer autosaves a writer log that belongs to another declared principal (it unstages it, commits the rest and stops, naming the file). Tris's memory store still carries the old instruction three times; the guard makes that harmless."
