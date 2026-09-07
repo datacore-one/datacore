@@ -168,7 +168,7 @@ def test_registration_wires_both_hooks_and_the_tool(as_tris):
 
     hp.register(Ctx())
     assert [n for n, _ in calls["hooks"]] == ["pre_tool_call", "on_session_start"]
-    assert calls["tools"] == ["datacore_whoami"]
+    assert calls["tools"][0] == "datacore_whoami" and len(calls["tools"]) == 4
 
 
 def test_registration_survives_a_runtime_that_rejects_the_tool(as_tris):
@@ -214,4 +214,87 @@ def test_datacore_lib_env_wins_and_a_host_without_datacore_stays_inert(tmp_path,
     assert hp._lib() is False
     d = hp.identity(refresh=True)
     assert d["ok"] is False and "no .datacore/lib found (tried" in d["why"]
+
+
+# ── acting through tools (gap 1) ────────────────────────────────────────────
+
+def test_the_ledger_tool_takes_no_actor_and_uses_our_own(as_tris, tmp_path, monkeypatch):
+    """The incident was a shell string whose actor was a quoted literal. The
+    tool has no actor argument at all: it comes from the registry."""
+    import types
+    space = tmp_path / "2-plur" / ".datacore"
+    space.mkdir(parents=True)
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
+
+    seen = {}
+
+    class FakeLog:
+        def __init__(self, space_dir, actor):
+            seen["space_dir"], seen["actor"] = space_dir, actor
+        def append(self, etype, payload):
+            seen["type"], seen["payload"] = etype, payload
+            return types.SimpleNamespace(seq=7, hash="abc123def456")
+
+    monkeypatch.setitem(sys.modules, "ledger.events",
+                        types.SimpleNamespace(EVENT_TYPES=frozenset({"item.create", "item.update"})))
+    monkeypatch.setitem(sys.modules, "ledger.log", types.SimpleNamespace(EventLog=FakeLog))
+
+    out = hp.ledger_append_handler(space="2-plur", type="item.create",
+                                   payload={"id": "org-1", "title": "x"},
+                                   actor="winston")          # ignored: no such parameter
+    assert seen["actor"] == "tris"
+    assert seen["type"] == "item.create" and seen["payload"]["id"] == "org-1"
+    assert "appended item.create to 2-plur as tris" in out and "seq=7" in out
+
+    assert "not a declared event type" in hp.ledger_append_handler(
+        space="2-plur", type="item.invented", payload={"id": "x"})
+    assert "payload must be a non-empty object" in hp.ledger_append_handler(
+        space="2-plur", type="item.create", payload={})
+    assert "is not a space under" in hp.ledger_append_handler(
+        space="9-nope", type="item.create", payload={"id": "x"})
+
+
+def test_the_ledger_tool_refuses_without_a_declared_principal(monkeypatch):
+    monkeypatch.setattr(hp, "_IDENTITY", {"ok": False, "why": "x", "actor": "", "principal": "",
+                                          "display": "", "role": "", "permission_mode": ""})
+    out = hp.ledger_append_handler(space="2-plur", type="item.create", payload={"id": "x"})
+    assert out.startswith("Refused: this host has no declared principal")
+
+
+def test_approval_decide_attributes_the_decision_to_this_principal(as_tris, tmp_path, monkeypatch):
+    cq = tmp_path / "cos_questions.py"
+    cq.write_text("")
+    monkeypatch.setattr(hp, "_cos_questions", lambda: cq)
+    calls = []
+    monkeypatch.setattr(hp, "_run", lambda argv, timeout=45: (calls.append(argv), (0, "decided: a1 approved"))[1])
+    out = hp.approval_decide_handler(id="a1", decision="approve")
+    assert out == "decided: a1 approved"
+    assert calls[0][-2:] == ["--by", "tris.telegram"]
+    assert "decide" in calls[0] and "a1" in calls[0]
+
+
+def test_approval_decide_refuses_a_guess_and_a_bad_verb(as_tris, tmp_path, monkeypatch):
+    cq = tmp_path / "cos_questions.py"; cq.write_text("")
+    monkeypatch.setattr(hp, "_cos_questions", lambda: cq)
+    monkeypatch.setattr(hp, "_run", lambda *a, **k: (0, "should not run"))
+    assert "an approval id is required" in hp.approval_decide_handler(id="  ", decision="approve")
+    assert "must be 'approve' or 'dismiss'" in hp.approval_decide_handler(id="a1", decision="maybe")
+
+
+def test_approval_tools_say_so_on_a_host_without_the_script(as_tris, monkeypatch):
+    monkeypatch.setattr(hp, "_cos_questions", lambda: None)
+    assert "not available on this host" in hp.approvals_pending_handler()
+    assert "not available on this host" in hp.approval_decide_handler(id="a1", decision="approve")
+
+
+def test_all_four_tools_register(as_tris):
+    names = []
+
+    class Ctx:
+        def register_hook(self, name, cb): pass
+        def register_tool(self, **kw): names.append(kw["name"])
+
+    hp.register(Ctx())
+    assert names == ["datacore_whoami", "datacore_approvals_pending",
+                     "datacore_approval_decide", "datacore_ledger_append"]
 
