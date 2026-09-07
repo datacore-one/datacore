@@ -310,7 +310,10 @@ jobs:
     artifacts:
       - path: "~/.datacore/state/cadence-liveness.log"
         check: regex
-        arg: "^0 cadence\\(s\\) overdue$"
+        # The last line grew a sunset-review clause on 2026-09-06 (1523c72) and
+        # the script crashed on an undefined name until 2026-09-07; both left
+        # this contract red for reasons that were not overdue cadences.
+        arg: "^0 cadence\\(s\\) overdue; sunset review: 0 past due, [0-9]+ without a review date$"
         max_age_hours: 26
 
   - name: box-deploy-drift
