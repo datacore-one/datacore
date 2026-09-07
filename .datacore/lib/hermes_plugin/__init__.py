@@ -309,18 +309,158 @@ def whoami_handler(**_kw) -> str:
                        "root": str(_root())}, indent=2)
 
 
+
+# ---- acting through tools, not shell strings -------------------------------
+# GAP 1 of the Winston-as-Hermes note. The wrong-actor incident was possible
+# because a ledger write was a shell string the model composed: the actor was
+# a quoted literal in a prompt, and a skill file supplied the wrong one. These
+# tools take no actor at all — the runtime fixes it from the registry — and an
+# approval decision is likewise a tool call rather than a command line.
+
+def _cos_questions() -> Path | None:
+    for lib in lib_candidates():
+        cq = lib / "cos_questions.py"
+        if cq.exists():
+            return cq
+    return None
+
+
+def _run(argv: list[str], timeout: int = 45) -> tuple[int, str]:
+    import subprocess
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
+    except subprocess.TimeoutExpired:
+        return 124, f"timed out after {timeout}s"
+    except OSError as exc:
+        return 127, str(exc)
+
+
+APPROVALS_PENDING_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "datacore_approvals_pending",
+        "description": ("Approvals waiting on the principal, through the daemon. Use this "
+                        "when asked what is pending, or to find the id for a decision "
+                        "described in words rather than by id."),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+}
+
+APPROVAL_DECIDE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "datacore_approval_decide",
+        "description": ("Approve or dismiss one pending approval, by id. Only ever call this "
+                        "for a decision the principal stated explicitly in this conversation; "
+                        "never infer one, and never decide on their behalf."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "The approval id, from datacore_approvals_pending."},
+                "decision": {"type": "string", "enum": ["approve", "dismiss"]},
+            },
+            "required": ["id", "decision"],
+        },
+    },
+}
+
+LEDGER_APPEND_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "datacore_ledger_append",
+        "description": ("Append one event to a space's ledger. The actor is this agent's own, "
+                        "fixed by the runtime — there is no actor argument, and no way to write "
+                        "another principal's log."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "space": {"type": "string", "description": "Space directory, e.g. '2-plur' or '8-firm'."},
+                "type": {"type": "string", "description": "Event type, e.g. item.create, item.update, item.complete."},
+                "payload": {"type": "object", "description": "Event payload. For item.create include id and title."},
+            },
+            "required": ["space", "type", "payload"],
+        },
+    },
+}
+
+
+def approvals_pending_handler(**_kw) -> str:
+    cq = _cos_questions()
+    if cq is None:
+        return "Approvals are not available on this host (no cos_questions.py in the fleet lib)."
+    rc, out = _run([sys.executable, str(cq), "pending"])
+    return out or f"no output (rc={rc})"
+
+
+def approval_decide_handler(id: str = "", decision: str = "", **_kw) -> str:  # noqa: A002
+    ident = identity()
+    if not ident["ok"]:
+        return "Refused: this host has no declared principal, so a decision cannot be attributed."
+    if decision not in ("approve", "dismiss"):
+        return "Refused: decision must be 'approve' or 'dismiss'."
+    if not id.strip():
+        return "Refused: an approval id is required — list them with datacore_approvals_pending."
+    cq = _cos_questions()
+    if cq is None:
+        return "Approvals are not available on this host (no cos_questions.py in the fleet lib)."
+    rc, out = _run([sys.executable, str(cq), "decide", id.strip(), decision,
+                    "--by", f"{ident['principal']}.telegram"])
+    if rc == 0:
+        return out or f"decided: {id} {decision}d"
+    # rc 1 is "missing or already decided" — a fact to relay, not an error to retry.
+    return out or f"could not decide {id} (rc={rc})"
+
+
+def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
+    # The event type arrives as `type` (the schema's property name). It is read
+    # from kwargs rather than taken as a parameter, because binding the name
+    # `type` would shadow the builtin used in the error paths below.
+    ident = identity()
+    if not ident["ok"]:
+        return "Refused: this host has no declared principal, so it cannot write a ledger."
+    if not _lib():
+        return "Refused: the fleet lib is not on this host."
+    try:
+        from ledger.events import EVENT_TYPES  # noqa: PLC0415
+        from ledger.log import EventLog  # noqa: PLC0415
+    except Exception as exc:  # noqa: BLE001
+        return f"Refused: the ledger library did not import ({type(exc).__name__})."
+    etype = str(kw.get("type") or "").strip()
+    if etype not in EVENT_TYPES:
+        return (f"Refused: {etype!r} is not a declared event type. "
+                f"Known: {', '.join(sorted(EVENT_TYPES))}.")
+    if not isinstance(payload, dict) or not payload:
+        return "Refused: payload must be a non-empty object."
+    space_dir = _root() / space.strip().strip("/")
+    if not (space_dir / ".datacore").is_dir():
+        return f"Refused: {space!r} is not a space under {_root()}."
+    try:
+        # No actor argument by design: it comes from the registry, never the model.
+        ev = EventLog(space_dir=space_dir, actor=ident["actor"]).append(etype, payload)
+    except Exception as exc:  # noqa: BLE001
+        return f"Ledger append failed: {type(exc).__name__}: {exc}"
+    return (f"appended {etype} to {space} as {ident['actor']} "
+            f"(seq={getattr(ev, 'seq', '?')} hash={str(getattr(ev, 'hash', ''))[:12]})")
+
 def register(ctx) -> None:
     ctx.register_hook("pre_tool_call", pre_tool_call)
     ctx.register_hook("on_session_start", on_session_start)
-    try:
-        ctx.register_tool(
-            name="datacore_whoami", toolset="datacore", schema=WHOAMI_SCHEMA,
-            handler=whoami_handler,
-            description="This agent's Datacore principal, actor and guard state.",
-            emoji="🪪",
-        )
-    except Exception as exc:  # noqa: BLE001 — hooks matter more than the tool
-        logger.warning("datacore: could not register datacore_whoami (%s)", exc)
+    for name, schema, handler, desc, emoji in (
+        ("datacore_whoami", WHOAMI_SCHEMA, whoami_handler,
+         "This agent's Datacore principal, actor and guard state.", "🪪"),
+        ("datacore_approvals_pending", APPROVALS_PENDING_SCHEMA, approvals_pending_handler,
+         "Approvals waiting on the principal.", "📋"),
+        ("datacore_approval_decide", APPROVAL_DECIDE_SCHEMA, approval_decide_handler,
+         "Approve or dismiss one approval the principal decided explicitly.", "✅"),
+        ("datacore_ledger_append", LEDGER_APPEND_SCHEMA, ledger_append_handler,
+         "Append an event to a space ledger as this agent's own actor.", "📒"),
+    ):
+        try:
+            ctx.register_tool(name=name, toolset="datacore", schema=schema,
+                              handler=handler, description=desc, emoji=emoji)
+        except Exception as exc:  # noqa: BLE001 — hooks matter more than any tool
+            logger.warning("datacore: could not register %s (%s)", name, exc)
     d = identity()
     logger.info("datacore plugin: %s",
                 f"{d['principal']} as {d['actor']} — guards in force" if d["ok"]
