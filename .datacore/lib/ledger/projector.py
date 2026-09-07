@@ -317,13 +317,29 @@ def render_item(item, *, level: int | None = None) -> list[str]:
         props["CREATED"] = f"[{genesis['date']}]"
     lines.extend("  " + line for line in _drawer(props))
 
-    body = (org.get("body") or "").rstrip()
+    body = strip_drawers((org.get("body") or "").rstrip())
     # Body text is copied verbatim, so a typed weekday inside it (a DEADLINE
     # line captured as body, 4-forge 2026-09-04) came back on every projection.
     body = _STAMP_DAY.sub(_fix_day, body)
     if body:
         lines.extend(body.split("\n"))
     return lines
+
+
+_DRAWER_BLOCK = re.compile(r"^[ \t]*:PROPERTIES:[ \t]*\n(?:.*\n)*?[ \t]*:END:[ \t]*\n?", re.M)
+
+
+def strip_drawers(body: str) -> str:
+    """A properties drawer is structure, never prose: the one drawer an item
+    has is rendered from its payload above the body. Sixteen items in 5-plur
+    carried a second drawer INSIDE their body text (an earlier id-rewrite
+    left the old drawer behind, and ingest copied the body verbatim), so the
+    projection printed `:ID: org-70b200f505da` twice and id_churn failed
+    hourly for two days. Dropped at render time so the ledger's history
+    stays as written; genesis drops them at ingest too."""
+    if ":PROPERTIES:" not in body:
+        return body
+    return _DRAWER_BLOCK.sub("", body + ("\n" if not body.endswith("\n") else "")).rstrip("\n")
 
 
 def projected_items(state: LedgerState, *, space: str | None = None) -> list:

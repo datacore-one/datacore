@@ -39,6 +39,7 @@ from pathlib import Path
 from .events import Event  # noqa: F401  (re-exported for callers/tests)
 from .fold import fold
 from .log import EventLog, read_events
+from .projector import strip_drawers as _strip_drawers
 
 #: Human workflow states.
 HUMAN_STATES = ("TODO", "NEXT", "WAITING", "DEFERRED")
@@ -256,7 +257,10 @@ def task_payload(node, space: str, date: str, rung: str) -> dict:
         "effective_tags": sorted(t for t in (node.tags or []) if t),
         "org": {
             "priority": node.priority,
-            "body": node.body or "",
+            # A second drawer inside the body (left behind by an id rewrite)
+            # is structure, not prose; captured verbatim it made the
+            # projection print an :ID: twice (5-plur, 2026-09-05..07).
+            "body": _strip_drawers(node.body or ""),
             "properties": {
                 k: v for k, v in (node.properties or {}).items()
                 if k not in ("ID", "CREATED")
