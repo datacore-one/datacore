@@ -1,0 +1,19 @@
+name: datacore
+version: "1.0.0"
+description: >-
+  Datacore principal plugin for Hermes. Gives a Hermes agent the identity the
+  fleet already declares for it (DIP-0044): its actor and principal are
+  injected into memory every session, a pre_tool_call gate refuses a ledger
+  write under another principal's name, and the fleet's tool-effect policy
+  (approvals_policy.yaml) applies to Hermes tool calls exactly as it does to
+  nightshift and Miles. Inert when DATACORE_ROOT holds no .datacore/lib.
+author: Datacore
+kind: standalone
+hooks:
+  - pre_tool_call
+  - on_session_start
+provides_tools:
+  - datacore_whoami
+provides_hooks:
+  - pre_tool_call
+  - on_session_start

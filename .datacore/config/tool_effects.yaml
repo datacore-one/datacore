@@ -24,7 +24,16 @@ version: 1
 # cannot send, pay or deploy by themselves — reading deploy.sh is not a
 # deployment — so they are never an effect; the outer file-level guards
 # (org_guard, restricted paths) own those.
-acting_tools: &acting ["Bash", "WebFetch", "mcp__*"]
+# Every tool that can reach the world, across the runtimes the fleet runs:
+# Claude Code / the SDK (Bash, WebFetch, mcp__*) and Hermes (terminal,
+# execute_code, write_file, patch, web_extract, browser_*, computer_use,
+# delegate_task, cronjob). A tool absent from this list is invisible to the
+# classifier, which is why Winston — a Hermes agent — was ungoverned until
+# 2026-09-07 while nightshift and Miles were not.
+acting_tools: &acting
+  ["Bash", "WebFetch", "mcp__*",
+   "terminal", "execute_code", "write_file", "patch", "web_extract",
+   "browser_*", "computer_use", "delegate_task", "cronjob"]
 effects:
   email.send:
     tools: *acting
