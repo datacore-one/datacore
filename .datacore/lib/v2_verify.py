@@ -526,7 +526,7 @@ def check_topology(rep: Report) -> None:
     if not repos:
         rep.add("0046", "repo topology", None, "no registered repositories on this host")
         return
-    wrong, parked_knowledge, parked_code, stranded = [], [], [], []
+    wrong, parked_knowledge, parked_code, stranded, code_unpushed = [], [], [], [], []
     for name, path, category, canonical in repos:
         rc, url = _git(path, "remote", "get-url", "origin")
         base = ""
@@ -542,14 +542,22 @@ def check_topology(rep: Report) -> None:
             (parked_knowledge if category == "knowledge" else parked_code).append(f"{name}: {cur}")
         n, age = stranded_age_hours(path)
         if n and age > UNPUSHED_MAX_HOURS:
-            stranded.append(f"{name}: {n} commit(s), oldest {age:.0f}h")
+            # The transport pushes a KNOWLEDGE repo every cycle, so a day-old
+            # commit with no remote copy there is work at risk — FAIL. A CODE
+            # repo is a person's working tree (a box-side fix awaiting
+            # reconciliation, a feature branch): pushing is a deliberate act,
+            # so it is reported here for the deploy-drift review, not failed.
+            (stranded if category == "knowledge" else code_unpushed).append(
+                f"{name}: {n} commit(s), oldest {age:.0f}h")
     rep.add("0046", "remotes canonical", not wrong,
             f"{len(repos)} repos" if not wrong else "; ".join(wrong[:3]))
     rep.add("0046", "knowledge on default branch", not parked_knowledge,
             ("; ".join(parked_knowledge[:3]) if parked_knowledge
              else (f"code parked: {'; '.join(parked_code[:3])}" if parked_code else "all on default")))
     rep.add("0046", "no stranded commits", not stranded,
-            "; ".join(stranded[:3]) if stranded else f"nothing older than {UNPUSHED_MAX_HOURS:g}h off-remote")
+            ("; ".join(stranded[:3]) if stranded
+             else (f"code unpushed: {'; '.join(code_unpushed[:3])}" if code_unpushed
+                   else f"nothing older than {UNPUSHED_MAX_HOURS:g}h off-remote")))
 
 
 def _pinned_org_workspace() -> tuple[int, ...] | None:
@@ -644,7 +652,11 @@ def roadmap_trust_violations(root: Path | None = None) -> list[str]:
                 continue
             dw = item.get("done_when")
             named = isinstance(dw, dict) and bool(dw.get("evidence")) and bool(dw.get("verify"))
-            if not named or not item.get("shipped"):
+            # `shipped` must be STATED, not necessarily a date: `shipped:
+            # false` is an author saying "closed, nothing shipped" (a retired
+            # item — the schema has no retired status), which is a named
+            # outcome; a missing or null `shipped` is not.
+            if not named or item.get("shipped") is None:
                 bad.append(f"{rm.parent.name}:{item.get('id')}")
     return bad
 

@@ -100,13 +100,17 @@ def test_topology_code_parked_is_reported_not_failed(fixture_root):
     assert row.ok is True and "code parked: .datacore/modules/mod: feature" in row.detail
 
 
+def _old_local_commit(repo: Path, hours: int = 30) -> None:
+    (repo / "new").write_text("y\n")
+    _git(repo, "add", "new")
+    old = str(int(time.time()) - hours * 3600)
+    _git(repo, "commit", "-q", "-m", "local only",
+         env={"GIT_COMMITTER_DATE": f"@{old} +0000", "GIT_AUTHOR_DATE": f"@{old} +0000"})
+
+
 def test_stranded_commit_older_than_a_day_fails(fixture_root):
     space = _repo_with_remote(fixture_root, "2-space", "datacore-space")
-    (space / "new").write_text("y\n")
-    _git(space, "add", "new")
-    old = str(int(time.time()) - 30 * 3600)
-    _git(space, "commit", "-q", "-m", "local only",
-         env={"GIT_COMMITTER_DATE": f"@{old} +0000", "GIT_AUTHOR_DATE": f"@{old} +0000"})
+    _old_local_commit(space)
     n, age = vv.stranded_age_hours(space)
     assert n == 1 and 29 < age < 31
     _registry(fixture_root, {"2-space": {"category": "knowledge", "repo": "datacore-space"}})
@@ -114,6 +118,19 @@ def test_stranded_commit_older_than_a_day_fails(fixture_root):
     vv.check_topology(rep)
     row = {c.name: c for c in rep.checks}["no stranded commits"]
     assert row.ok is False and row.detail.startswith("2-space: 1 commit(s), oldest 30h")
+
+
+def test_unpushed_code_commit_is_reported_not_failed(fixture_root):
+    # A box-side fix awaiting reconciliation, or a feature branch: a person's
+    # working tree. The deploy-drift review reads the detail; the row stays ok.
+    code = _repo_with_remote(fixture_root, ".datacore/modules/mod", "datacore-mod")
+    _old_local_commit(code)
+    _registry(fixture_root, {".datacore/modules/mod": {"category": "code", "repo": "datacore-mod"}})
+    rep = vv.Report()
+    vv.check_topology(rep)
+    row = {c.name: c for c in rep.checks}["no stranded commits"]
+    assert row.ok is True
+    assert row.detail.startswith("code unpushed: .datacore/modules/mod: 1 commit(s), oldest 30h")
 
 
 def test_fresh_unpushed_commit_is_not_stranded(fixture_root):
@@ -201,6 +218,9 @@ def test_done_without_verify_or_shipped_fails(fixture_root):
          "done_when": {"condition": "c", "evidence": "test"}},
         {"id": "X-004", "status": "done", "shipped": None,
          "done_when": {"condition": "c", "evidence": "test", "verify": "pytest"}},
+        # A retired item: `shipped: false` is a stated outcome, not a missing one.
+        {"id": "X-005", "status": "done", "shipped": False,
+         "done_when": {"condition": "c", "evidence": "decision", "verify": "the exposure is gone"}},
     ])
     assert vv.roadmap_trust_violations(fixture_root) == ["5-space:X-003", "5-space:X-004"]
     rep = vv.Report()
