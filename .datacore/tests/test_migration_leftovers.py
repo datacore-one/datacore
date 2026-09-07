@@ -73,3 +73,21 @@ def test_both_rows_are_added(tmp_path, monkeypatch):
     vv.check_migration_leftovers(rep)
     names = [c.name for c in rep.checks]
     assert names == ["no PATH link into another user's home", "service processes are managed"]
+
+
+def test_a_shell_that_merely_mentions_the_service_is_not_flagged(tmp_path):
+    """The first version matched its own operator: `ps | grep 'hermes_cli.main
+    gateway'` carries the search string in its own cmdline, so the row failed
+    on the command used to investigate it (2026-09-08)."""
+    procfs = tmp_path / "proc"
+    _proc(procfs, "111409",
+          "bash -c ps -eo pid,cmd | grep hermes_cli.main gateway",
+          "/user.slice/user-1000.slice/session-31472.scope")
+    _proc(procfs, "222", "sudo -n systemctl --user stop hermes-gateway.service",
+          "/user.slice/user-1000.slice/session-9.scope")
+    _proc(procfs, "3960788", "python -m hermes_cli.main gateway run",
+          "/user.slice/user-0.slice/user@0.service/app.slice/hermes-gateway.service")
+
+    found = vv.unmanaged_service_processes(procfs=procfs, uid=1000)
+    assert len(found) == 1 and found[0].startswith("pid 3960788:")
+

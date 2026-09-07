@@ -1127,6 +1127,15 @@ def foreign_home_links(bindirs=("/usr/local/bin",)) -> list[str]:
     return out
 
 
+# Shells, search and transport tools: a process whose argv[0] is one of these
+# is talking ABOUT a service, not being one.
+_NOT_A_SERVICE = frozenset({
+    "bash", "sh", "zsh", "dash", "fish", "grep", "egrep", "fgrep", "rg", "ps",
+    "awk", "sed", "ssh", "sshd", "sudo", "su", "env", "xargs", "tee", "watch",
+    "timeout", "pgrep", "pkill", "systemctl", "journalctl",
+})
+
+
 def cgroup_is_managed(cgroup: str, uid: int) -> bool:
     """True when this cgroup is a systemd unit belonging to THIS user (or the
     system manager). `user-0.slice` for a non-root user is the orphan case."""
@@ -1153,8 +1162,19 @@ def unmanaged_service_processes(names=("hermes_cli.main gateway", "datacored"),
         if not proc.name.isdigit():
             continue
         try:
-            cmd = (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="ignore")
+            raw = (proc / "cmdline").read_bytes()
+            argv = [a for a in raw.split(b"\0") if a]
+            if not argv:
+                continue
+            cmd = b" ".join(argv).decode(errors="ignore")
             if not any(n in cmd for n in names):
+                continue
+            # A SHELL THAT MENTIONS THE NAME IS NOT THE SERVICE. The first
+            # version matched its own operator: `ps | grep "hermes_cli.main
+            # gateway"` carries the search string in its own cmdline, so the
+            # row failed on the very command used to investigate it. Judge by
+            # what is EXECUTING, not by what the text mentions.
+            if Path(argv[0].decode(errors="ignore")).name in _NOT_A_SERVICE:
                 continue
             cgroup = (proc / "cgroup").read_text().strip().splitlines()[-1]
         except (OSError, IndexError):
