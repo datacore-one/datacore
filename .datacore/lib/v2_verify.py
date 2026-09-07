@@ -1098,6 +1098,93 @@ def check_finality(rep: Report) -> None:
             + (f"; MISMATCH: {', '.join(bad)}" if bad else ""))
 
 
+
+def foreign_home_links(bindirs=("/usr/local/bin",)) -> list[str]:
+    """PATH symlinks whose target lives in a home directory this user cannot
+    read — a command that resolves for root and dies for the service user."""
+    import pwd
+    me = pwd.getpwuid(os.getuid()).pw_name
+    out = []
+    for d in bindirs:
+        try:
+            entries = list(Path(d).iterdir())
+        except OSError:
+            continue
+        for link in entries:
+            try:
+                if not link.is_symlink():
+                    continue
+                target = os.readlink(link)
+            except OSError:
+                continue
+            if not target.startswith(("/root/", "/home/", "/Users/")):
+                continue
+            owner = target.split("/")[2] if target.startswith(("/home/", "/Users/")) else "root"
+            if owner == me:
+                continue
+            if not os.access(target, os.X_OK):
+                out.append(f"{link.name} -> {target} (owner {owner}, not executable by {me})")
+    return out
+
+
+def cgroup_is_managed(cgroup: str, uid: int) -> bool:
+    """True when this cgroup is a systemd unit belonging to THIS user (or the
+    system manager). `user-0.slice` for a non-root user is the orphan case."""
+    if ".service" not in cgroup:
+        return False
+    return f"user-{uid}.slice" in cgroup or "/system.slice/" in cgroup
+
+
+def unmanaged_service_processes(names=("hermes_cli.main gateway", "datacored"),
+                                procfs: Path | None = None, uid: int | None = None) -> list[str]:
+    """Long-lived service processes running outside any systemd unit.
+
+    A service-user migration leaves the OLD user's process running: it has no
+    unit, logs nowhere, and keeps doing its job — a second Telegram consumer,
+    a second writer. On 2026-09-07 a gateway orphaned by the 2026-08-13
+    root->gregor move had been running 25 days in `user-0.slice`, and was
+    found only because someone went looking for a third poller."""
+    procfs = procfs or Path("/proc")
+    uid = os.getuid() if uid is None else uid
+    if sys.platform != "linux" and procfs == Path("/proc"):
+        return []
+    out = []
+    for proc in sorted(procfs.iterdir()):
+        if not proc.name.isdigit():
+            continue
+        try:
+            cmd = (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="ignore")
+            if not any(n in cmd for n in names):
+                continue
+            cgroup = (proc / "cgroup").read_text().strip().splitlines()[-1]
+        except (OSError, IndexError):
+            continue
+        if cgroup_is_managed(cgroup, uid):
+            continue
+        short = cmd.strip()[:60]
+        out.append(f"pid {proc.name}: {short} [{cgroup.split(':')[-1]}]")
+    return out
+
+
+def check_migration_leftovers(rep: Report) -> None:
+    """The residue of a service-user move, as rows instead of incidents.
+
+    The 2026-08-13 root->gregor move left three things behind, each found
+    separately and weeks apart: an orphaned gateway process, a `plur` symlink
+    into root's home that the service user could not execute, and a deploy
+    key. Three incidents, one cause. These two rows catch that cause."""
+    links = foreign_home_links()
+    rep.add("0044", "no PATH link into another user's home", not links,
+            "; ".join(links[:3]) if links else "every PATH symlink resolves for this user")
+    if sys.platform != "linux":
+        rep.add("0044", "service processes are managed", None, "linux only")
+        return
+    orphans = unmanaged_service_processes()
+    rep.add("0044", "service processes are managed", not orphans,
+            "; ".join(orphans[:3]) if orphans
+            else "no service process outside a systemd unit")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="v2 verification checklist")
     ap.add_argument("--json", action="store_true")
@@ -1120,6 +1207,7 @@ def main() -> int:
     check_versions(rep)
     check_trust_labels(rep)
     check_hooks(rep)
+    check_migration_leftovers(rep)
     check_finality(rep)
     check_app(rep)
     check_declared_identity(rep)
