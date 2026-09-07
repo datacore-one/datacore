@@ -40,6 +40,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -87,9 +88,24 @@ def _repo_lock(space: Path):
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
+SHIPPED_REGISTRY = Path(__file__).resolve().parents[2] / ".datacore" / "registry" / "repositories.yaml"
+
+
 def _registry(root: Path) -> dict:
+    """The repository registry: the root's own copy, else the one that ships
+    with this code tree.
+
+    A host whose code lives outside its data root (hermes: the runner clone
+    holds the code, `~/Data` there is a plain directory of space clones) has no
+    `.datacore/registry` under `--root`. Until 2026-09-06 `sync` globbed the
+    spaces and classified each against the code tree's registry; the
+    registry-driven sync that replaced it read `root/.datacore/registry` only
+    and raised FileNotFoundError twice a day on hermes (datacore-fleet-sync,
+    from 18:10 UTC 2026-09-06) — a traceback where an outcome belonged."""
     import yaml
     p = root / ".datacore" / "registry" / "repositories.yaml"
+    if not p.exists() and SHIPPED_REGISTRY.exists():
+        p = SHIPPED_REGISTRY
     return (yaml.safe_load(p.read_text()) or {}).get("repositories", {})
 
 
@@ -156,6 +172,53 @@ def _in_progress(space: Path) -> str:
         if "leftover conflict marker" in out:
             return "conflict markers"
     return ""
+
+
+_WRITER_LOG = re.compile(r"(?:^|/)\.datacore/events/([A-Za-z0-9_-]+)\.jsonl$")
+
+
+def _own_principal() -> tuple[str | None, str]:
+    """This host's principal and the actor it writes as (DIP-0044); (None, "")
+    when identity cannot be resolved — the guard then stands down rather than
+    refusing every autosave on a host with a half-configured identity."""
+    try:
+        from actor_identity import principal_of, this_actor
+        actor = this_actor()
+        return principal_of(actor)[0], actor
+    except Exception:  # noqa: BLE001 — identity is advisory here, never a crash
+        return None, ""
+
+
+def _principal_of(writer: str) -> str | None:
+    try:
+        from actor_identity import principal_of
+        return principal_of(writer)[0]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def foreign_writer_logs(space: Path) -> list[tuple[str, str, str]]:
+    """Staged writer logs that belong to a DIFFERENT declared principal than
+    this host's: (path, writer, principal).
+
+    Only a declared-against-declared mismatch counts. A writer nobody has
+    declared (a hostname-derived log from before DIP-0044) is still autosaved
+    as before, and a host whose own principal is unknown refuses nothing:
+    the guard exists for the one case the registry can actually decide."""
+    own, _ = _own_principal()
+    if not own:
+        return []
+    _, staged, _ = _git(space, "diff", "--cached", "--name-only")
+    out = []
+    for line in (staged or "").splitlines():
+        m = _WRITER_LOG.search(line.strip())
+        if not m:
+            continue
+        writer = m.group(1)
+        principal = _principal_of(writer)
+        if principal and principal != own:
+            out.append((line.strip(), writer, principal))
+    return out
 
 
 def converge(space: Path) -> Result:
@@ -265,6 +328,20 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         # whose only change is a submodule pointer could never sync again.
         # Observed on nightshift: 2 commits ahead, 7 behind, dirty only in
         # `.datacore/dips`, unable to converge at all.
+        # NEVER AUTOSAVE ANOTHER PRINCIPAL'S WRITER LOG. Per-writer logs are
+        # the ledger's authorship (DIP-0044): `<space>/.datacore/events/tris.jsonl`
+        # is Tris's word and nobody else's. On 2026-09-06 and again on
+        # 2026-09-07 a cadence on hermes appended to `winston.jsonl`, and this
+        # autosave committed the file under Tris's name — an approval-capable
+        # log carrying events its principal never made, signed into main by
+        # a host that is not its principal's. The verifier caught it after the
+        # fact; the transport must not carry it in the first place. Unstage
+        # it, commit the rest, and stop: the file stays in the working tree,
+        # visible, for whoever owns the process that wrote it.
+        foreign = foreign_writer_logs(space)
+        for path, _writer, _principal in foreign:
+            _git(space, "restore", "--staged", "--", path)
+
         rc_staged, _, _ = _git(space, "diff", "--cached", "--quiet")
         if rc_staged == 0:                      # 0 = no staged changes remain
             autosaved = False
@@ -286,6 +363,15 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
             detail = (cout + cerr).strip()
             return Result(False, "autosave refused by pre-commit hook",
                           {"detail": detail[:400]})
+        if foreign:
+            own_principal, own_actor = _own_principal()
+            named = "; ".join(f"{path} belongs to {principal} (writer {writer})"
+                              for path, writer, principal in foreign)
+            return Result(False,
+                          f"foreign writer log left uncommitted: {named} — this host writes "
+                          f"as {own_actor or '?'} for {own_principal or 'an undeclared principal'}; "
+                          f"find the process writing under that name and stop it (DIP-0044)",
+                          {"branch": db, "foreign": [p for p, _, _ in foreign]})
 
     rc, mout, err = _git(space, "merge", "--no-edit", f"origin/{db}")
     if rc != 0:
@@ -517,6 +603,10 @@ def sync_all(root: Path, only: str | None = None, quiet: bool = False,
              include_code: bool = True) -> int:
     outcomes = sync_outcomes(root, only=only, include_code=include_code)
     bad = [(n, o) for n, _, o in outcomes if o in HUMAN_NEEDED]
+    if not outcomes and not quiet:
+        print(f"sync: no registered repository is checked out under {root} "
+              f"({len(_registry(root))} registered) — the hourly phase-1 cycle "
+              f"converges what is here by path")
     if not quiet:
         for name, cat, o in outcomes:
             print(f"{name}: {o}" + (f"  [{cat}]" if cat == "code" else ""))
