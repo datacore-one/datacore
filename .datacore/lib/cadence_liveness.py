@@ -147,9 +147,11 @@ def main() -> int:
     ap.add_argument("--grace-days", type=int, default=DEFAULT_GRACE)
     a = ap.parse_args()
 
-    rows = collect(Path(a.root).expanduser(), a.grace_days)
+    root = Path(a.root).expanduser()
+    today = date.today()
+    rows = collect(root, a.grace_days)
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    lines = [f"=== {date.today().isoformat()} cadence liveness "
+    lines = [f"=== {today.isoformat()} cadence liveness "
              f"(grace {a.grace_days}d) ==="]
     for days, space, role, freq, name in rows:
         lines.append(f"  {days:5}d  {space:<12} {role}.{freq}.{name}")
