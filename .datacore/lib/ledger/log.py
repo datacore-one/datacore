@@ -409,6 +409,22 @@ def read_events(space_dir: Path) -> list[Event]:
     for path in sorted(events_dir.glob("*.jsonl")):
         raw = path.read_bytes()
         file_events, _valid_len = _parse_log_bytes(raw, path)
+        for e in file_events:
+            # Which chain this event came from. A writer may own MORE THAN ONE
+            # log -- datacore#148 gave a run branch its own `<actor>-run-<date>`
+            # file so a run and the hourly cycle stop extending one chain on two
+            # git branches. `seq` restarts at 0 in each file, because the chain
+            # unit is the FILE: `verify_chain` takes a single path and checks
+            # linkage within it.
+            #
+            # So provenance has to travel with the event. Without it a reader
+            # that merges every file cannot tell "the same event twice" from
+            # "two chains that both start at 0", and keying on `actor` alone
+            # reports every run branch as a forked log. Set as a plain
+            # attribute, never a dataclass field: `to_line` serializes via
+            # `asdict`, so a declared field would enter the on-disk format and
+            # the hash body with it.
+            e.log = path.stem
         events.extend(file_events)
     events.sort(key=lambda e: e.hlc)
     return events

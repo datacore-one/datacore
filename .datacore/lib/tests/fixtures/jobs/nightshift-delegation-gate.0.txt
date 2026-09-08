@@ -1,0 +1,8 @@
+# fixture for nightshift-delegation-gate artifact[0]
+# producer artifact: ~/.datacore/state/nightshift-gate.log on nightshift
+# harvested: 2026-09-08
+# regex under test: gate ok
+# represents: SUCCESS
+# ---
+2026-09-08 gate ok: 0 machine-originated, 0 plan-only, 0 approved, 0 executed unapproved (10 records, 0 legacy)
+2026-09-08 gate ok: 0 machine-originated, 0 plan-only, 0 approved, 0 executed unapproved (10 records, 0 legacy)
