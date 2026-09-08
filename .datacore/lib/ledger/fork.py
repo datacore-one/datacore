@@ -1,9 +1,17 @@
 """Fork detection: has one actor's log split into two histories?
 
-THE INVARIANT: `(actor, seq)` identifies exactly one event, forever. Everything
-downstream depends on it — a merge is a union only because two machines can
-never disagree about what `mac` seq 139 is, and `state_root` is comparable only
-because both sides folded the same events.
+THE INVARIANT: within ONE log file, `seq` identifies exactly one event, forever.
+Everything downstream depends on it — a merge is a union only because two
+machines can never disagree about what `mac.jsonl` seq 139 is, and `state_root`
+is comparable only because both sides folded the same events.
+
+Read "one log file", not "one actor": since datacore#148 a writer may own
+several logs (`<actor>.jsonl` plus a `<actor>-run-<date>.jsonl` per run branch),
+and `seq` restarts at 0 in each, because `verify_chain` takes a single path and
+checks linkage within it. The functions here are already file-scoped — they
+compare two versions of ONE blob — so the invariant holds as stated for every
+caller in this module. `seal._self_consistent` is the reader that merges every
+file at once, and it keys on the log for exactly this reason.
 
 It broke in production on 2026-08-13. In 5-plur, seq 139 was an `item.update`
 on one machine and an `item.dismiss` on another. It was found only because git
