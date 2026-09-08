@@ -105,18 +105,36 @@ def settled(events: list[Event]):
 
 
 def _self_consistent(events: list[Event]) -> list[tuple[str, int]]:
-    """(actor, seq) pairs that appear more than once with different hashes.
+    """(log, seq) pairs that appear more than once with different hashes.
 
     A fork that arrives via sync lands INSIDE the event set the sequencer is
     about to certify. verify_seal recomputes the root from those same events,
     so it agrees with itself and reports success — certifying a history another
     machine will disagree with. That is the worst thing finality can do, so it
     is checked before the root comparison rather than after.
+
+    THE KEY IS THE LOG FILE, NOT THE ACTOR. It read `(actor, seq)` until
+    2026-09-08, which was right while a writer owned exactly one file. It stopped
+    being right when datacore#148 gave a run branch its own `<actor>-run-<date>`
+    log: `seq` restarts at 0 per file, so one actor legitimately has several
+    events at seq 0 — different events, different hashes, no fork. The stricter
+    key turned that design into a permanent false alarm; measured on 5-plur it
+    reported 88 forked pairs, every one of them a base log against its own
+    run-branch sibling and not one between two independent writers.
+
+    Weakening it costs nothing real. Two machines that genuinely fork a chain
+    write the SAME file name, so they still collide here. What is no longer
+    flagged is a collision across two different files, which is not a fork:
+    `verify_chain` takes one path and checks linkage within it, so the chain —
+    and therefore the identity of `seq` — is scoped to the file.
+
+    Events with no `log` attribute (constructed in memory rather than read from
+    disk) fall back to the actor, which is exactly the old behavior.
     """
     seen: dict[tuple[str, int], str] = {}
     bad: list[tuple[str, int]] = []
     for e in events:
-        k = (e.actor, e.seq)
+        k = (getattr(e, "log", None) or e.actor, e.seq)
         if k in seen and seen[k] != e.hash:
             bad.append(k)
         seen[k] = e.hash
@@ -133,9 +151,9 @@ def verify_seal(events: list[Event]) -> tuple[bool | None, str]:
     forked = _self_consistent(events)
     if forked:
         a, sq = forked[0]
-        return False, (f"FORKED LOG: {len(forked)} (actor, seq) pair(s) have two "
-                       f"different events, e.g. {a} seq {sq}. A seal over a fork "
-                       f"certifies a history other machines reject — refusing.")
+        return False, (f"FORKED LOG: {len(forked)} (log, seq) pair(s) have two "
+                       f"different events, e.g. log {a} seq {sq}. A seal over a "
+                       f"fork certifies a history other machines reject — refusing.")
 
     seal = latest_seal(events)
     if seal is None:
