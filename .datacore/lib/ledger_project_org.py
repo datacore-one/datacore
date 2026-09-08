@@ -44,6 +44,10 @@ def _with_org_header(space: Path, target: Path, text: str) -> str:
     src = target if target.exists() else None
     if src is not None:
         for line in src.read_text(errors="replace").splitlines():
+            if line.startswith("#+SEQ_TODO:") or line.startswith("#+TODO:"):
+                # Projector emits the canonical SEQ_TODO; carrying these from the
+                # existing file duplicates them by 1 on every cycle (2026-09-08).
+                continue
             if line.startswith("#+"):
                 header.append(line)
             elif line.strip() and not line.startswith("#"):
