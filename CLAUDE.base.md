@@ -247,13 +247,66 @@ When the user corrects a recalled fact: call `plur_learn` immediately, then `plu
 
 ## Guardrails
 
-### Over-engineering check
-Before proposing any new system, module, DIP, or architectural change:
-1. What is the simplest version that solves the actual problem?
-2. Is there an existing module/tool/pattern that already covers 80% of this?
-3. Will this create maintenance burden disproportionate to its value?
+### Over-engineering check — the reuse ladder
+Before writing code, stop at the first rung that holds:
 
-If a task can be done in <20 lines of shell script, do that first. Propose the module/system version only if the user explicitly asks.
+1. **Does this need to exist at all?** Speculative need → skip it, say so in one line.
+2. **Is it already in this codebase?** A helper, lib, pattern or module that already
+   lives here → reuse it. **Look before you write.** Re-implementing what sits a few
+   files over is the most common waste.
+3. **Does the stdlib do it?** Use it.
+4. **Does an already-installed dependency solve it?** Use it. Never add a new one for
+   what a few lines can do.
+5. **Can it be one line?** One line.
+6. **Only then:** the minimum code that works.
+
+Then the maintenance question: will this create burden disproportionate to its value?
+If a task can be done in <20 lines of shell, do that first. Propose the module/system
+version only if the user explicitly asks.
+
+Rung 2 is the one that pays and the one that gets skipped. Measured 2026-09-08 on a
+four-way run of the same issue: the issue said in as many words that a relevant module
+already existed and should be coordinated with rather than duplicated. **Three of four
+runs never opened it**; one wrote 404 lines into a file the issue never mentioned. The
+run that climbed the ladder was the only one that found it. Wrong-target work costs
+twice — once to write, once for a human to reject.
+
+Adapted from ponytail (DietrichGebert/ponytail, MIT). The ladder is adopted; the
+plugin is on trial separately.
+
+### Settle the spec before a change larger than a fix
+For anything bigger than a bug fix, the spec is settled **before** implementation:
+what "done" looks like, stated as a condition someone else could check. Write it into
+the task's `DONE_WHEN`. If the request is ambiguous, resolve the ambiguity by asking
+now rather than discovering it mid-run — an agent will not stop to ask, it will run a
+wrong answer to completion.
+
+### Loop design gate
+Before any new agent loop, cadence, or scheduled job ships, run it past all five:
+
+1. **Goal is a correct platitude** ("manage it well") → it spins and burns. Can the
+   exit condition be machine-judged yes/no?
+2. **The judge is the defendant** → the agent confidently declares itself fine.
+   Verification must be independent of execution.
+3. **Gates only on "all tests pass"** → the agent deletes the tests. A done-criterion
+   needs a **boundary** beside it: what it must NOT do.
+4. **Counts on the agent asking mid-run** → it will not. Front-load every clarification.
+5. **Stale docs and memory** → the faster it loops, the more it errs.
+
+Three red lines, no exceptions: **judgment stays with the human**; **responsibility
+does not transfer** (anything whose failure you cannot afford is not handed over
+automatically); and a **self-rewriting loop needs stricter review, not looser**.
+
+Adapted from ECC's `loop-design-check` (affaan-m/ECC, MIT). Failure mode 2 was live
+here until 2026-09-08: nightshift graded its own work against its own tests, through a
+gate that returned "passed" on every path including failure.
+
+### Size the work before dispatching it
+Ask whether the task fits the budget it is being given, and decompose it if not. An
+agent stopped mid-flight by a turn cap returns nothing, having spent everything.
+Measured 2026-09-08: four runs, 324 turns, a full day's compute budget, zero
+completions — every one of them cut off by a cap nobody had checked the task against. This is the largest single source
+of waste and it costs nothing to avoid.
 
 ### Tool Selection Discipline
 Before invoking any MCP tool, apply the locality test:
