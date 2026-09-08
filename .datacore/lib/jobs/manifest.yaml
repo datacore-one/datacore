@@ -492,7 +492,18 @@ jobs:
       # re-break it.
       - path: "~/Data/0-personal/notes/journals/{today}.md"
         check: regex
-        arg: "^#{2,3}\\s+Your Agenda"
+        # ASSERT WHAT THE PRODUCER GUARANTEES, NOT A TITLE THE MODEL CHOSE.
+        # "Your Agenda" was a section in nightshift's /today template. When
+        # the briefing moved to Winston on 2026-09-08 (one producer per
+        # artifact) the journal block became a render of the MODEL's own
+        # sections — Good Morning, The World, The Ask, Focus — and this
+        # contract began failing on a heading nothing emits any more. It had
+        # already failed this way once before, on 2026-08-16.
+        #
+        # The heading is the structural guarantee: cos_journal.py always
+        # writes "## Daily Briefing" and replaces that block in place. A
+        # section title is a model's choice and will change again.
+        arg: '^##\s+Daily Briefing'
         max_age_hours: 26
       # cos_verify_morning.py:check_audio -- AUDIO_STAMP, written by
       # winston_audio.sh only after Telegram accepts the voice message.
