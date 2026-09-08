@@ -22,7 +22,7 @@
 #   - modules/mail/server/triage-email.sh (email triage state paths)
 #   - modules/github/server/triage-github.sh (github triage cache paths)
 #   - modules/nightshift/server/nightshift-*.{service,timer} (six target timers: exact OnCalendar + ExecStart)
-#   - modules/nightshift/manifest.py + lib/postprocess.py + lib/run.py (nightshift-overnight's manifest-{today}.yaml, traced end to end)
+#   - modules/nightshift/lib/manifest.py + lib/postprocess.py + lib/run.py (nightshift-overnight's manifest-{today}.yaml, traced end to end)
 #   - modules/outbox/lib/archive_sync.py (nightshift-outbox: stdout-only JSON, no persisted file found)
 #   - modules/nightshift/lib/today_orchestrator.py (market-phase* freshness glob, reader side only)
 #   - modules/nightshift/CLAUDE.md ("Output Location" + service unit Descriptions for inbox-process)
