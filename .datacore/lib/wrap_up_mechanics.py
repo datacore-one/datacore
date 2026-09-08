@@ -350,7 +350,7 @@ def _default_branch_ok(repo: Path) -> tuple[bool, str]:
     return False, branch
 
 
-def finalize_session_scope(dry_run: bool) -> dict:
+def finalize_session_scope(dry_run: bool, allow_journal_shrink: bool = False) -> dict:
     """Commit and push ONLY what this session touched.
 
     `./sync push` stages everything with `git add --ignore-removal .` and
@@ -449,15 +449,17 @@ def finalize_session_scope(dry_run: bool) -> dict:
         # REFUSE TO COMMIT A JOURNAL THAT LOST A SECTION. Checked before the
         # commit, not after: once it is pushed the damage is on the shared
         # remote and every other machine pulls it.
-        lost_here = headings_lost_in_worktree(repo, staged)
+        lost_here = [] if allow_journal_shrink else journal_damage_in_worktree(repo, staged)
         if lost_here:
             entry["ok"] = False
             entry["note"] = ("REFUSED — a journal in this commit would LOSE content: "
                              + "; ".join(lost_here)
                              + ". A journal is append-only: your entry is an addition, and "
                              "no other session's section may disappear. If a writer subagent "
-                             "is still running, wait for it. To recover the file: "
-                             "git checkout -- <path>. Override only after diffing it yourself.")
+                             "is still running, wait for it — /wrap-up §8 must not run "
+                             "until §5's coordinator has returned. To recover the file: "
+                             "git checkout -- <path>. To commit anyway, having diffed it "
+                             "yourself: finalize --allow-journal-shrink.")
             results.append(entry)
             continue
 
@@ -524,7 +526,7 @@ def finalize_session_scope(dry_run: bool) -> dict:
     }
 
 
-def headings_lost_in_worktree(repo: Path, rel_paths: list[str]) -> list[str]:
+def journal_damage_in_worktree(repo: Path, rel_paths: list[str]) -> list[str]:
     """Journal paths whose pending change DELETES a section heading.
 
     Same signal as `journal_sections_lost`, asked one step earlier: before the
@@ -552,12 +554,31 @@ def headings_lost_in_worktree(repo: Path, rel_paths: list[str]) -> list[str]:
         gone = [h for h in removed if h not in added]
         if gone:
             lost.append(f"{rel}: {len(gone)} heading(s) removed — {'; '.join(gone[:3])}")
+            continue
+
+        # SHRINKING IS DAMAGE TOO. A heading check alone misses a write caught
+        # mid-file that drops body lines while leaving every heading standing:
+        # measured 2026-09-08, a journal going 0 insertions / 4 deletions with
+        # all headings intact passed the heading check untouched. Journals are
+        # append-only by convention, so a net loss of lines is not an ordinary
+        # edit -- it is either a mid-write commit or a rewrite, and both want a
+        # human to look before they reach the shared remote.
+        rc3, stat, _ = _run(["git", "diff", "HEAD", "--numstat", "--", rel],
+                            cwd=repo, timeout=60)
+        if rc3 == 0 and stat:
+            parts = stat.split("\t")
+            if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+                ins, dele = int(parts[0]), int(parts[1])
+                if dele > ins:
+                    lost.append(f"{rel}: net loss of {dele - ins} line(s) "
+                                f"(+{ins}/-{dele}) with no heading removed")
     return lost
 
 
-def cmd_finalize(dry_run: bool, scope: str = "session") -> dict:
+def cmd_finalize(dry_run: bool, scope: str = "session",
+                 allow_journal_shrink: bool = False) -> dict:
     if scope == "session":
-        out = finalize_session_scope(dry_run)
+        out = finalize_session_scope(dry_run, allow_journal_shrink)
     else:
         # `./sync push` is retired (datacore#21/#28/#31/#39): the transport
         # converges every registered knowledge repo and fast-forwards code
@@ -744,6 +765,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("step", choices=["preflight", "meta", "finalize", "audit"])
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--allow-journal-shrink", action="store_true",
+                    help="finalize only: commit a journal that loses lines or a section "
+                         "anyway. The refusal exists because /wrap-up §8 can run while a "
+                         "journal writer is mid-file; pass this only after diffing the "
+                         "file yourself and confirming the loss is intended.")
     ap.add_argument("--scope", choices=["session", "all"], default="session",
                     help="finalize only: 'session' commits just this session's files "
                          "(default); 'all' delegates to ./sync push, which stages "
@@ -755,7 +781,7 @@ def main() -> int:
     elif args.step == "meta":
         result = cmd_meta()
     elif args.step == "finalize":
-        result = cmd_finalize(args.dry_run, args.scope)
+        result = cmd_finalize(args.dry_run, args.scope, args.allow_journal_shrink)
     else:
         result = cmd_audit()
 

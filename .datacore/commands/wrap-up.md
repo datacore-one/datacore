@@ -604,7 +604,24 @@ Session archived: .datacore/state/sessions/archive/YYYY-MM-DD/<id>/ ✓
 
 **No "additional insights" prompt.** If the user wants to force a specific insight into memory now rather than waiting for the sweep, they say so via §0e bulk feedback: *"also capture: the rebase-on-fork pattern for stale dependency PRs"* — call `plur_learn` on it directly in the same pass.
 
-> **Parallel execution:** While the coordinator runs in background, immediately proceed to steps 7-9. Those work from conversation context and do not depend on its output. Nothing in this command now blocks on a learning agent.
+> **Parallel execution — §7 ONLY.** While the coordinator runs in background you
+> may proceed to step 7, which works from conversation context alone.
+>
+> **§8 and §9 MUST WAIT for the coordinator to return.** They are not independent
+> of it: §8 (`finalize`) commits the paths in the session archive's
+> `files_modified`, and the journals the coordinator is writing are *precisely*
+> those paths — scoping to the session does not avoid the race, it guarantees it.
+> §9 (`audit`) then asserts "personal journal written" and "session work
+> committed and pushed", both of which are claims about the coordinator's output.
+>
+> Reproduced 2026-09-08: with a writer mid-file, finalize committed a 7-line
+> journal that had 16 lines and 3 sections at rest, kept 1 section, and reported
+> ok=true. This paragraph used to say "immediately proceed to steps 7-9", and on
+> the one run that day which avoided the race, it did so only because the agent
+> disobeyed this line. A spec whose safe execution requires ignoring it is the bug.
+>
+> `finalize` now refuses such a commit on its own, so this is defence in depth,
+> not the only guard. Do not "optimize" the wait back out.
 
 ### 6. Tasks & Delegation (paired — one decision, two destinations)
 
