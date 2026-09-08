@@ -300,7 +300,15 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
         cur_org = cur.get("org") if isinstance(cur.get("org"), dict) else {}
         props_now = {k: str(v) for k, v in (node.properties or {}).items() if k not in ("ID", "CREATED")}
         prio_now = getattr(node, "priority", None) or None
-        if props_now != {k: str(v) for k, v in (cur_org.get("properties") or {}).items()} or prio_now != (cur_org.get("priority") or None):
+        # "org" not in cur: item was created without the org block (e.g. via
+        # the adapter CLI). Without this clause, genesis never fills the gap
+        # for headings with no properties and no priority -- they always match
+        # the empty defaults and the condition never fires, leaving the item
+        # permanently without an org block. ledger_claim.py uses org-block
+        # presence to distinguish org-mirrored tasks from delegation items;
+        # a missing block makes the claim filter treat an org task as a
+        # delegation item and agents claim it unattended. See datacore#161.
+        if "org" not in cur or props_now != {k: str(v) for k, v in (cur_org.get("properties") or {}).items()} or prio_now != (cur_org.get("priority") or None):
             want["org"] = {**cur_org, "priority": prio_now, "properties": props_now}
         diff = {k: v for k, v in want.items() if (cur.get(k) or None) != v}
         if not diff:
