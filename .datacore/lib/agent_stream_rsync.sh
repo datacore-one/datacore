@@ -22,8 +22,18 @@
 set -euo pipefail
 
 REMOTE_HOST="${AGENT_STREAM_REMOTE_HOST:-nightshift}"
-REMOTE_USER="${AGENT_STREAM_REMOTE_USER:-deploy}"
-REMOTE_PATH="${AGENT_STREAM_REMOTE_PATH:-<HOME>/.datacore/cos/agent-stream/}"
+# The service user moved from deploy to gregor (DIP-0044, 2026-08-13) and
+# this default did not follow. With the <HOME> bug above fixed, rsync
+# reached /home/deploy/... , found nothing, and exited 0 -- the job would
+# have gone GREEN while syncing an empty file list. A silent no-op is
+# worse than the crash it replaced.
+REMOTE_USER="${AGENT_STREAM_REMOTE_USER:-gregor}"
+# A LITERAL PLACEHOLDER, NEVER SUBSTITUTED. `<HOME>` reached production and
+# bash read it as input redirection: every run since died with
+# "HOME: No such file or directory" and mac-agent-stream-rsync failed
+# with it. An rsync path without a leading / is already relative to the
+# remote user's home, so the prefix was never needed.
+REMOTE_PATH="${AGENT_STREAM_REMOTE_PATH:-.datacore/cos/agent-stream/}"
 LOCAL_PATH="${AGENT_STREAM_LOCAL_PATH:-$HOME/.datacore/cos/agent-stream/}"
 
 mkdir -p "$LOCAL_PATH"
