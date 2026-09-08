@@ -284,6 +284,19 @@ def main() -> int:
             log.info(f"{space_dir.name}: {n} task(s) closed{suffix}")
             for c in closed:
                 log.info(f"  CLOSE{suffix}: {c['heading'][:70]} (sched {c['scheduled']}, {c['days_past']}d ago)")
+            if not args.dry_run:
+                # Phase 1 spaces: org/next_actions.org is generated from ledger.
+                # Run sync_state to persist DONE markers into the ledger before
+                # the next projection overwrites them.
+                phase1_marker = space_dir / ".datacore" / "ledger-phase"
+                if phase1_marker.exists() and phase1_marker.read_text().strip() == "1":
+                    try:
+                        from ledger_ingest_org import sync_state  # type: ignore[import]
+                        result = sync_state(space_dir)
+                        dismissed = result.get("dismissed", 0)
+                        log.info(f"  Ledger ingest: {dismissed} closed in {space_dir.name}")
+                    except Exception as exc:
+                        log.warning(f"  Ledger ingest failed for {space_dir.name}: {exc}")
         total_closed += n
         all_closed.extend(closed)
 
