@@ -44,11 +44,27 @@ import sys
 from pathlib import Path
 
 
-def git(repo: Path, *args: str) -> tuple[int, str]:
+# AN UNREACHABLE HOST MUST FAIL IN SECONDS, NOT MINUTES. Measured on the mac
+# with a work VPN capturing the route to Gitea on 2026-09-08: a single fetch
+# took 75 s to give up. Eleven spaces, several of them Gitea-backed, and the
+# detector blew its own runtime budget and was killed — so the job failed on
+# a TIMEOUT while the artifact it should have written never appeared, and
+# `mac-seq-gap` alerted for a third day running.
+#
+# ssh's default ConnectTimeout is the OS TCP timeout, which is the 75 s. Five
+# seconds is far longer than any reachable host needs and turns a hung sweep
+# into a fast, honest "unverifiable".
+SSH_FAIL_FAST = "ssh -o ConnectTimeout=5 -o BatchMode=yes"
+
+
+def git(repo: Path, *args: str, timeout: int = 30) -> tuple[int, str]:
     """(returncode, stdout). Never raises — a git failure is data here."""
+    env = {**os.environ}
+    env.setdefault("GIT_SSH_COMMAND", SSH_FAIL_FAST)
+    env.setdefault("GIT_TERMINAL_PROMPT", "0")      # never block on credentials
     try:
         r = subprocess.run(["git", *args], cwd=repo, capture_output=True,
-                           text=True, timeout=60)
+                           text=True, timeout=timeout, env=env)
         return r.returncode, (r.stdout or "")
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 1, f"{type(exc).__name__}: {exc}"
@@ -272,6 +288,24 @@ def main() -> int:
         unver_txt = f", {len(unver)} unverifiable (remote unreachable)" if unver else ""
         print(f"\nseq-gap: {len(rows)} log(s), {len(gaps)} with unpublished events, "
               f"{len(errors)} error(s){unver_txt}{pend_txt}")
+        # NAME THE CAUSE, IN THE ARTIFACT. "20 unverifiable" is a fact; "a
+        # full-tunnel VPN is capturing the subnet blackpi lives on" is a fact
+        # someone can act on. Three days of `mac-seq-gap` alerts said the
+        # former and nobody could act on it.
+        #
+        # And say plainly that the sweep is DEGRADED: an unverifiable log is
+        # not a clean one, so a run that checked 31 of 51 must not read as a
+        # pass. It is not a failure either -- nothing is broken and nobody is
+        # paged -- which is exactly why it needs its own word.
+        if unver:
+            try:
+                sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+                import network_context
+                print(network_context.explain())
+            except Exception as exc:  # noqa: BLE001 — an explanation must never fail a check
+                print(f"network: could not diagnose ({type(exc).__name__})")
+            print(f"DEGRADED: verified {len(rows) - len(unver)} of {len(rows)} log(s); "
+                  f"{len(unver)} could not be checked at all")
 
     if errors:
         return 2

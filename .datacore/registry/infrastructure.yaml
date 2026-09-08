@@ -1,6 +1,14 @@
 servers:
   mac:
     purpose: Primary workstation — human sessions, Claude Code, org authoring
+    # A WORKSTATION IS NOT A DEGRADED SERVER. It sleeps, it roams
+    # networks, it carries work in progress. Being asleep, on a
+    # feature branch or dirty is NORMAL here and an incident on a
+    # server. Checks read this to set expectations -- never to skip:
+    # exempting this machine would have hidden the three real fleet
+    # bugs it found first on 2026-09-08 (the 75s fetch hang, the
+    # worktree owning main, the sleeping crons).
+    kind: workstation
     ssh_alias: '-'
     deploy_method: local working copy (~/Data)
     services: []
@@ -23,6 +31,7 @@ servers:
   winston:
     manifest_machine: box
     purpose: Chief of Staff — briefings, approvals, merge gatekeeper
+    kind: server
     ssh_alias: winston
     deploy_method: rsync + cron
     services:
@@ -41,6 +50,7 @@ servers:
       hostname: bridge
   nightshift:
     purpose: Overnight AI task execution (systemd timers); Miles Telegram bot
+    kind: server
     ssh_alias: nightshift
     deploy_method: git pull + systemctl restart
     services:
@@ -62,6 +72,7 @@ servers:
       hostname: nightshift
   hermes:
     purpose: Tris — Hermes agent gateway + PLUR bridge
+    kind: server
     ssh_alias: hermes
     deploy_method: agent_update.py --host hermes --apply
     services:
@@ -79,6 +90,7 @@ servers:
       hostname: transporter
   plur-claw:
     purpose: Mr Data — OpenClaw agent host
+    kind: server
     ssh_alias: plur-claw
     deploy_method: ssh + manual
     services: []
