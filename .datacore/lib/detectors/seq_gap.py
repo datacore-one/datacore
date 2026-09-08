@@ -288,6 +288,24 @@ def main() -> int:
         unver_txt = f", {len(unver)} unverifiable (remote unreachable)" if unver else ""
         print(f"\nseq-gap: {len(rows)} log(s), {len(gaps)} with unpublished events, "
               f"{len(errors)} error(s){unver_txt}{pend_txt}")
+        # NAME THE CAUSE, IN THE ARTIFACT. "20 unverifiable" is a fact; "a
+        # full-tunnel VPN is capturing the subnet blackpi lives on" is a fact
+        # someone can act on. Three days of `mac-seq-gap` alerts said the
+        # former and nobody could act on it.
+        #
+        # And say plainly that the sweep is DEGRADED: an unverifiable log is
+        # not a clean one, so a run that checked 31 of 51 must not read as a
+        # pass. It is not a failure either -- nothing is broken and nobody is
+        # paged -- which is exactly why it needs its own word.
+        if unver:
+            try:
+                sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+                import network_context
+                print(network_context.explain())
+            except Exception as exc:  # noqa: BLE001 — an explanation must never fail a check
+                print(f"network: could not diagnose ({type(exc).__name__})")
+            print(f"DEGRADED: verified {len(rows) - len(unver)} of {len(rows)} log(s); "
+                  f"{len(unver)} could not be checked at all")
 
     if errors:
         return 2
