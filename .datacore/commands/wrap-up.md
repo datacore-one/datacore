@@ -213,6 +213,21 @@ Tasks to create (one per spec step, mark in_progress when starting, completed wh
 
 **Why this exists:** Spec step counts in past sessions: 17 spec steps, 9 tasks created, 6 silently skipped (observed 2026-05-29 SMK wrap-up; previously documented as ENG-2026-0512-044 on 2026-05-12 but recurred 17 days later). Memory engrams alone are insufficient — execution-time discipline failure. The hook is the structural defense; one-task-per-step is the readability defense.
 
+**CRITICAL — §5 and §8 touch the same files. Never commit a journal by hand.**
+§5 spawns writer subagents that are still editing today's journals when control
+returns to you. §8 (`finalize`) is scoped to the session archive's files and is
+the ONLY sanctioned way to commit them. On 2026-09-08 a wrap-up ran
+`git add journal/... && git commit && git push` on a journal while a writer was
+mid-file: 269 lines — four unrelated sessions' entries — went to the shared
+remote as a deletion, and `audit` still reported 6/6, because every check it had
+asks whether a commit exists and reached the remote, never what it contained.
+
+So: wait for every §5 subagent to report before §8, never stage a journal path
+yourself, and if you ever do stage one, diff it first (`git diff --numstat` —
+deletions must be zero). `finalize` now REFUSES a commit whose journal loses a
+section heading, and `audit` has a matching check, but neither can see a commit
+you made outside them.
+
 **CRITICAL:** Step 5 must use `journal-coordinator` — NEVER spawn `journal-entry-writer` directly with a hardcoded space name. The coordinator discovers all relevant spaces automatically. Bypassing it silently skips spaces with actual work, including root system files.
 
 ### 0c. Inference-First Model (MANDATORY READ — supersedes the old "always prompt" rule)
