@@ -67,6 +67,21 @@ def default_branch(repo: Path) -> str:
     return out.split("/", 1)[1] if rc == 0 and out.startswith("origin/") else "main"
 
 
+def _offline(err: str) -> bool:
+    """Is this fetch failure a condition rather than a fault?
+
+    Mirrors ledger_transport._fetch_reason: an auth rejection, an untrusted
+    host key or a missing repo is something an operator must fix and stays an
+    error. Anything else -- no route, DNS, timeout -- is offline."""
+    e = (err or "").lower()
+    for fault in ("permission denied", "authentication failed",
+                  "host key verification failed", "repository not found",
+                  "does not appear to be a git repo"):
+        if fault in e:
+            return False
+    return True
+
+
 def head_seq(text: str) -> int | None:
     """Highest `seq` in a JSONL log, or None if the log has no readable events.
 
@@ -124,10 +139,20 @@ def scan_space(space: Path, *, fetch: bool = False, grace_min: float = 90.0,
     # "23 log(s), 0 with unpublished events, 0 error(s)".
     #
     # "I could not verify" is its own answer, and it is not "fine".
+    #
+    # OFFLINE IS NOT AN ERROR, IT IS A CONDITION -- the distinction
+    # ledger_transport already draws, and for the same reason. A closed laptop,
+    # a VPN that captured the route to the Gitea host, a train: none of these
+    # is a fault anyone can act on, and counting them as errors failed
+    # `mac-seq-gap` five times in a row on 2026-09-07 because a work VPN was
+    # left on. A DENIED KEY IS NOT OFFLINE, though, and must still be an error:
+    # that one never clears on its own.
     stale = False
+    unreachable = False
     if fetch:
-        rc_fetch, _ = git(space, "fetch", "-q", "--prune")
+        rc_fetch, ferr = git(space, "fetch", "-q", "--prune")
         stale = rc_fetch != 0
+        unreachable = stale and _offline(ferr)
 
     db = default_branch(space)
     rows = []
@@ -137,10 +162,13 @@ def scan_space(space: Path, *, fetch: bool = False, grace_min: float = 90.0,
         local = head_seq(log.read_text(errors="replace"))
 
         if stale:
+            why = ("remote unreachable — comparison would use a stale ref, "
+                   "cannot verify")
             rows.append({"space": space.name, "actor": actor, "local_seq": local,
                          "remote_seq": None, "gap": None,
-                         "error": "remote unreachable — comparison would use a "
-                                  "stale ref, cannot verify"})
+                         "unverifiable": unreachable,
+                         "error": None if unreachable else why,
+                         "note": why})
             continue
 
         rc, out = git(space, "show", f"origin/{db}:{rel}")
@@ -238,8 +266,12 @@ def main() -> int:
         # found nothing" versus "the detector did not run" (DIP-0046 §8).
         pend = sum(r.get("pending") or 0 for r in rows)
         pend_txt = f", {pend} pending (younger than {args.grace_minutes:.0f} min)" if pend else ""
+        unver = [r for r in rows if r.get("unverifiable")]
+        # Named, never hidden: "could not check" is its own answer and must be
+        # visible, but it is not a failure the job contract should trip on.
+        unver_txt = f", {len(unver)} unverifiable (remote unreachable)" if unver else ""
         print(f"\nseq-gap: {len(rows)} log(s), {len(gaps)} with unpublished events, "
-              f"{len(errors)} error(s){pend_txt}")
+              f"{len(errors)} error(s){unver_txt}{pend_txt}")
 
     if errors:
         return 2
