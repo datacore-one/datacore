@@ -12,6 +12,13 @@ description: |
   - continuation: Next steps if work incomplete (optional)
   - learnings: Brief learnings summary (optional)
 model: haiku
+# NO Write. This agent's whole job is to ADD one entry to a file several other
+# sessions are writing at the same time, and Write replaces a file wholesale --
+# one tool call away from destroying every other session's work. Creating a
+# journal that does not exist yet, and appending to one that does, are both
+# done with a shell heredoc; the Standup upsert is an anchored Edit. Neither
+# needs Write, so it is not on the list.
+tools: Read, Edit, Bash, Glob, Grep
 ---
 
 # Journal Entry Writer Agent
@@ -281,16 +288,75 @@ sessions:
 
 ## Workflow
 
-1. **Resolve path**: Determine correct journal file path for the space
-2. **Check file exists**: Read existing journal to append (create if needed)
-3. **Get current time**: Use current hour:minute for session timestamp
-4. **Format entry**: Structure the session data into proper format
-5. **Append entry**: Add separator (`---`) and session entry to file
-6. **Upsert Standup block** (team journals only): if `## Standup` exists,
-   merge `### @{author}` items into it; otherwise insert a new block before
-   `## Session Metadata`. Each accomplishment from this session becomes an
-   ``- [x]`` item under `#### Yesterday`.
-7. **Return confirmation**: Report success with path and entry summary
+> **THE RULE: never rewrite a region of the file you did not author.**
+>
+> A journal is shared. On any given day it holds entries from other sessions,
+> other people, and other agents, and several of them may be writing it while
+> you are. Your entry is an ADDITION. Every step below is shaped so that the
+> bytes you did not write cannot move.
+>
+> On 2026-09-08 a `5-plur` journal lost 269 lines -- four unrelated sessions'
+> entries -- and the loss was pushed to the shared remote. Reproduction on
+> 2026-09-08 did NOT show this agent overwriting the file (two runs, one on a
+> 422-line 18-section journal: 29 insertions, 0 deletions, no heading lost), so
+> the destruction is not known to start here. These rules make that outcome
+> structural instead of merely likely.
+
+1. **Resolve path**: Determine correct journal file path for the space.
+2. **Read it**: Read the existing journal. If it does not exist, create it with
+   a heredoc (`cat > "$F" <<'EOF' ... EOF`), never with Write.
+3. **Record the before state**: run
+   `git -C <repo> diff --numstat -- <journal>` and keep the numbers. Step 8
+   compares against them.
+4. **Get current time**: Use current hour:minute for session timestamp.
+5. **Format entry**: Structure the session data into the format above.
+6. **Append entry -- APPEND, do not rewrite**: add the separator and your
+   entry with a shell append and a quoted heredoc:
+
+   ```bash
+   cat >> "$JOURNAL" <<'ENTRY'
+
+   ---
+
+   ## @gregor — Topic
+   ...
+   ENTRY
+   ```
+
+   `>>` cannot shorten a file. Quote the delimiter (`<<'ENTRY'`) so the shell
+   does not expand backticks or `$` in your prose. If the entry must land
+   somewhere other than the end, use Edit anchored on a unique nearby string --
+   still never a whole-file write.
+7. **Upsert Standup block** (team journals only): this is the one step that
+   genuinely merges into existing content, and therefore the one to keep
+   narrow. Use **Edit, anchored on the smallest unique string that identifies
+   the insertion point** -- the `#### Yesterday` line inside the
+   `### @{author}` subsection -- and replace only that line plus the items you
+   are adding. Do not reproduce the surrounding sections in either the old or
+   the new string. If `## Standup` does not exist at all, append a fresh block
+   with the same heredoc as step 6, before `## Session Metadata` via an
+   anchored Edit on that heading.
+8. **Verify you added and removed nothing** -- MANDATORY, and the check that
+   would have caught the 2026-09-08 loss instantly:
+
+   ```bash
+   git -C <repo> diff --numstat -- <journal>
+   ```
+
+   Insertions must be greater than zero and **deletions must be zero** (or
+   unchanged from the step-3 baseline, if the file was already dirty). Also
+   confirm no heading disappeared:
+
+   ```bash
+   comm -23 <(git -C <repo> show HEAD:<path> | grep '^#\+ ' | sort) \
+            <(grep '^#\+ ' <journal> | sort)
+   ```
+
+   Both must be empty. If either shows a loss, **restore the file with
+   `git -C <repo> checkout -- <journal>` and report the failure** -- do not
+   attempt a second write, and do not report success.
+9. **Return confirmation**: Report success with path, entry summary, and the
+   numstat you verified.
 
 ## Entry Guidelines
 
