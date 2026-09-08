@@ -99,7 +99,7 @@ class TestJournalSectionLoss:
         j = repo / "journal" / "2026-09-08.md"
         j.write_text("# 2026-09-08\n\n## @me — my session\n\n- my line\n")
 
-        lost = wm.headings_lost_in_worktree(repo, ["journal/2026-09-08.md"])
+        lost = wm.journal_damage_in_worktree(repo, ["journal/2026-09-08.md"])
         assert len(lost) == 1
         assert "@someone-else" in lost[0]
 
@@ -109,7 +109,7 @@ class TestJournalSectionLoss:
         j = repo / "journal" / "2026-09-08.md"
         j.write_text(j.read_text() + "\n## @me — second session\n\n- another line\n")
 
-        assert wm.headings_lost_in_worktree(repo, ["journal/2026-09-08.md"]) == []
+        assert wm.journal_damage_in_worktree(repo, ["journal/2026-09-08.md"]) == []
 
     def test_rewriting_a_section_in_place_is_silent(self, tmp_path):
         """The briefing splice replaces its own block every morning. Scoring
@@ -118,7 +118,7 @@ class TestJournalSectionLoss:
         j = repo / "journal" / "2026-09-08.md"
         j.write_text("# d\n\n## Daily Briefing\n\n- fresh text\n")
 
-        assert wm.headings_lost_in_worktree(repo, ["journal/2026-09-08.md"]) == []
+        assert wm.journal_damage_in_worktree(repo, ["journal/2026-09-08.md"]) == []
 
     def test_non_journal_paths_are_not_inspected(self, tmp_path):
         repo = _repo(tmp_path, TWO_SECTIONS)
@@ -127,4 +127,27 @@ class TestJournalSectionLoss:
         subprocess.run(["git", "commit", "-qm", "n"], cwd=repo, check=True, capture_output=True)
         (repo / "notes.md").write_text("")
 
-        assert wm.headings_lost_in_worktree(repo, ["notes.md"]) == []
+        assert wm.journal_damage_in_worktree(repo, ["notes.md"]) == []
+
+    def test_body_only_shrink_is_caught_too(self, tmp_path):
+        """A write caught mid-file can drop body lines with every heading still
+        standing. Measured 2026-09-08: +0/-4, all headings intact, and the
+        heading check alone said nothing."""
+        repo = _repo(tmp_path, "# d\n\n## @a - one\n\n- a1\n- a2\n- a3\n\n## @b - two\n\n- b1\n- b2\n")
+        j = repo / "journal" / "2026-09-08.md"
+        j.write_text("# d\n\n## @a - one\n\n- a1\n\n## @b - two\n\n- b1\n")
+
+        dmg = wm.journal_damage_in_worktree(repo, ["journal/2026-09-08.md"])
+        assert len(dmg) == 1
+        assert "net loss" in dmg[0]
+
+    def test_the_real_2026_09_08_appends_still_commit(self, tmp_path):
+        """Regression bar: the two journal writes that were CORRECT that day
+        were +26/-0 (5-plur) and +97/-0 (0-personal). Neither may start
+        failing, or the guard costs more than it saves."""
+        for added in (26, 97):
+            repo = _repo(tmp_path / f"n{added}", TWO_SECTIONS)
+            j = repo / "journal" / "2026-09-08.md"
+            j.write_text(j.read_text() + "\n## @me - new entry\n\n"
+                         + "".join(f"- line {i}\n" for i in range(added - 2)))
+            assert wm.journal_damage_in_worktree(repo, ["journal/2026-09-08.md"]) == []
