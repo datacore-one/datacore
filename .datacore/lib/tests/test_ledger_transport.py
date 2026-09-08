@@ -201,9 +201,17 @@ def test_seq_gap_reports_unverifiable_when_fetch_fails(tmp_path: Path, monkeypat
     rows = seq_gap.scan_space(space, fetch=True)
 
     assert calls["fetch"] == 1
-    assert rows and all(r["error"] for r in rows), "a failed fetch must mark rows unverifiable"
+    # datacore#150 split these: an unreachable remote is UNVERIFIABLE (a
+    # condition — a VPN, a closed lid), while a denied key or a missing repo
+    # stays an ERROR (a fault someone must fix). Counting the first as an
+    # error failed mac-seq-gap five times over a VPN toggle.
+    assert rows, "a failed fetch must still produce rows"
+    assert all(r.get("unverifiable") for r in rows), "offline rows are unverifiable"
+    assert not any(r["error"] for r in rows), "offline is a condition, not an error"
+    assert all("cannot verify" in (r.get("note") or "") for r in rows), \
+        "and the reason must still be visible"
     assert all(r["gap"] is None for r in rows), "must not claim a gap of zero"
-    assert "unreachable" in rows[0]["error"]
+    assert "unreachable" in rows[0]["note"], "the note carries the reason now, not error"
 
 
 def test_submodule_only_change_still_converges(repo_pair: Path, tmp_path: Path):

@@ -66,10 +66,32 @@ class Result:
         return self.ok
 
 
+# AN UNREACHABLE HOST MUST FAIL IN SECONDS, NOT MINUTES. Measured against a
+# blackhole address by the chaos harness on 2026-09-08: a single converge sat
+# for 75 s before giving up, because ssh's default ConnectTimeout is the OS
+# TCP timeout. A sweep over ten spaces then costs twelve minutes of pure
+# waiting, which is how `mac-seq-gap` lost its artifact for three days --
+# the job was killed before it could write anything at all.
+#
+# Five seconds is far longer than any reachable host needs. The distinction
+# this preserves is the one that matters: a fast refusal still reads as
+# `blocked` (auth, missing repo), and only a genuine timeout reads as
+# `offline`. Failing fast makes that classification arrive sooner; it does
+# not blur it.
+SSH_FAIL_FAST = "ssh -o ConnectTimeout=5 -o BatchMode=yes"
+
+
+def _net_env() -> dict:
+    env = {**os.environ}
+    env.setdefault("GIT_SSH_COMMAND", SSH_FAIL_FAST)
+    env.setdefault("GIT_TERMINAL_PROMPT", "0")   # never block waiting for a password
+    return env
+
+
 def _git(repo: Path, *args: str, timeout: int = 120) -> tuple[int, str, str]:
     try:
         r = subprocess.run(["git", *args], cwd=repo, capture_output=True,
-                           text=True, timeout=timeout)
+                           text=True, timeout=timeout, env=_net_env())
         return r.returncode, (r.stdout or ""), (r.stderr or "")
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 1, "", f"{type(exc).__name__}: {exc}"
