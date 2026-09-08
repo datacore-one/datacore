@@ -44,11 +44,27 @@ import sys
 from pathlib import Path
 
 
-def git(repo: Path, *args: str) -> tuple[int, str]:
+# AN UNREACHABLE HOST MUST FAIL IN SECONDS, NOT MINUTES. Measured on the mac
+# with a work VPN capturing the route to Gitea on 2026-09-08: a single fetch
+# took 75 s to give up. Eleven spaces, several of them Gitea-backed, and the
+# detector blew its own runtime budget and was killed — so the job failed on
+# a TIMEOUT while the artifact it should have written never appeared, and
+# `mac-seq-gap` alerted for a third day running.
+#
+# ssh's default ConnectTimeout is the OS TCP timeout, which is the 75 s. Five
+# seconds is far longer than any reachable host needs and turns a hung sweep
+# into a fast, honest "unverifiable".
+SSH_FAIL_FAST = "ssh -o ConnectTimeout=5 -o BatchMode=yes"
+
+
+def git(repo: Path, *args: str, timeout: int = 30) -> tuple[int, str]:
     """(returncode, stdout). Never raises — a git failure is data here."""
+    env = {**os.environ}
+    env.setdefault("GIT_SSH_COMMAND", SSH_FAIL_FAST)
+    env.setdefault("GIT_TERMINAL_PROMPT", "0")      # never block on credentials
     try:
         r = subprocess.run(["git", *args], cwd=repo, capture_output=True,
-                           text=True, timeout=60)
+                           text=True, timeout=timeout, env=env)
         return r.returncode, (r.stdout or "")
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 1, f"{type(exc).__name__}: {exc}"
