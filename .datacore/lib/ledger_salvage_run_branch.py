@@ -64,8 +64,12 @@ def rechain(events: list[dict]) -> list[dict]:
     from ledger.events import body_dict, compute_hash
     from ledger.verify import GENESIS
 
+    # seq STARTS AT 0. verify_chain reports "seq gap (expected seq=0, got 1)"
+    # on the first line otherwise — found by the stress harness within an hour
+    # of this tool being written, after it had already been applied to three
+    # real logs.
     out, prev = [], GENESIS
-    for i, e in enumerate(events, start=1):
+    for i, e in enumerate(events, start=0):
         body = body_dict(i, e["hlc"], e["actor"], e["type"], e.get("payload") or {}, prev)
         h = compute_hash(body)
         # `sig` is part of the on-disk record, not of the hashed body. An
@@ -155,10 +159,12 @@ def salvage(repo: Path, branch: str, apply: bool = False) -> int:
 
     from ledger.verify import verify_chain
     for _src, dest, _ in plan:
-        res = verify_chain(repo / dest)
-        ok = res[0] if isinstance(res, tuple) else bool(res)
-        print(f"  verify {dest}: {'ok' if ok else 'FAILED'}")
-        if not ok:
+        # verify_chain returns [] for a VALID chain and a list of errors
+        # otherwise. Reading it as a truthiness test inverted the verdict, so
+        # this printed "ok" for the three logs it had just written wrong.
+        errs = verify_chain(repo / dest)
+        print(f"  verify {dest}: {'ok' if not errs else f'{len(errs)} error(s): ' + str(errs[:2])}")
+        if errs:
             return 8
     print(f"{repo.name}: merged {branch} into {db}")
     return 0
