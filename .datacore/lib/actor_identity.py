@@ -28,6 +28,7 @@ uses it to check that a log was only ever appended by its own principal.
 from __future__ import annotations
 
 import os
+import re
 import socket
 import sys
 from pathlib import Path
@@ -133,10 +134,23 @@ def principals(path: Path | None = None) -> dict:
         return {}
 
 
+_RUN_SUFFIX = re.compile(r"-run-\d{4}-\d{2}-\d{2}$")
+
+
+def base_writer(name: str) -> str:
+    """The canonical writer behind a branch-scoped log.
+
+    `nightshift-run-2026-09-06` is nightshift writing on a run branch, not a
+    new principal. Without this the authorship row reports every run log as an
+    unbound writer, and the whole point of the branch-scoped file -- keeping
+    one writer's chain unforked -- would cost us the authorship check."""
+    return _RUN_SUFFIX.sub("", (name or "").strip().lower())
+
+
 def principal_of(actor: str, path: Path | None = None) -> tuple[str | None, dict]:
     """The principal a writer log belongs to: its own entry, or the one listing it under writes_as."""
     ps = principals(path)
-    a = actor.lower()
+    a = base_writer(actor)
     if a in ps:
         return a, ps[a]
     for name, p in ps.items():
