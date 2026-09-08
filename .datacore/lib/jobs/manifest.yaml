@@ -118,21 +118,18 @@ jobs:
         check: nonempty
         max_age_hours: 26
 
-  - name: box-github-triage
-    machine: box
-    schedule: "45 3 * * *"
-    cmd: "~/Data/.datacore/lib/cos_github.sh"
-    on_fail: telegram
-    artifacts:
-      - path: "~/.datacore/cos/github-triage.log"
-        check: nonempty
-        max_age_hours: 26
-      # triage-github.sh: SCAN_FILE="$CACHE_DIR/scan_cache.json", written by
-      # github_scanner.py --format json.
-      - path: "~/Data/.datacore/modules/github/data/scan_cache.json"
-        check: nonempty
-        max_age_hours: 26
-
+  # RETIRED 2026-09-08: box-github-triage. Two hosts ran one script, and
+  # the owner was not the one running it. Miles is the CTO and holds the
+  # GitHub access, so the triage is his (nightshift-github-triage, moved
+  # to 03:30); Winston reads the result through the synced scan cache.
+  # Nothing but this job's own verifier ever read ~/.datacore/cos/
+  # github-triage.log, so retiring it costs the briefing nothing.
+  #
+  # Deliberately a cron and not a delegation: the scan decides nothing,
+  # and wrapping a deterministic job in a daily hand-off would move it
+  # into the class that asserts its own completion. The judgement --
+  # what the findings mean -- stays where it already is, in the
+  # briefing, and a genuine delegation is for the exceptions it finds.
   - name: box-merge-runs
     # 50 3, not 45 3: deliberately off cos_sync.sh's */15 grid (:00/:15/
     # :30/:45) -- the merge critical section takes a per-repo flock, but
@@ -632,7 +629,11 @@ jobs:
 
   - name: nightshift-github-triage
     machine: nightshift
-    schedule: "30 4 * * *"
+    # 03:30, not 04:30: Winston's briefing is generated at 04:00 and reads
+    # the scan cache Miles publishes. Behind it, the briefing quotes
+    # yesterday's triage -- which it did for as long as this job pointed
+    # at a script that did not exist and the box ran its own copy.
+    schedule: "30 3 * * *"
     # server/triage-github.sh HAS NEVER EXISTED. The real script is
     # modules/github/lib/triage_github.sh (lib not server, underscore not
     # hyphen). Both spellings look plausible, so this job failed on a
