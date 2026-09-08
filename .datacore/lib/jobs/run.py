@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import glob
 import json
 import os
 import pathlib
@@ -109,8 +110,25 @@ def normalized_env(job: dict) -> dict[str, str]:
 
 
 def _artifact_path(raw: str) -> pathlib.Path:
+    """The file this artifact refers to, expanding a glob to its NEWEST match.
+
+    A glob was never expanded: the path came back containing a literal `*`,
+    which no file is ever named, so every job declaring one reported "artifact
+    absent after run" forever. Three did (mac-agent-stream-rsync,
+    mac-artifact-pull, box-cos-sync) and none of them could ever have passed --
+    a check that cannot succeed teaches an operator to ignore it.
+
+    Newest match, because these are dated series (events-<date>.jsonl,
+    briefings/<date>/...): the freshness window is the point of the check.
+    An unmatched glob still returns the literal path, so the failure message
+    stays the honest "absent" rather than a confusing one about a directory.
+    """
     p = raw.replace("{today}", datetime.date.today().isoformat())
-    return HOME / p[2:] if p.startswith("~/") else pathlib.Path(p)
+    path = HOME / p[2:] if p.startswith("~/") else pathlib.Path(p)
+    if not any(ch in str(path) for ch in "*?["):
+        return path
+    matches = sorted(glob.glob(str(path)), key=lambda m: os.stat(m).st_mtime, reverse=True)
+    return pathlib.Path(matches[0]) if matches else path
 
 
 def _check_artifact(spec: dict, before: float | None) -> tuple[bool, str]:
