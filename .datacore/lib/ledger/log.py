@@ -137,6 +137,7 @@ class EventLog:
         keys_dir: Path | None = None,
         registry_path: Path | None = None,
         sign: bool | None = None,
+        log_name: str | None = None,
     ) -> None:
         self.space_dir = Path(space_dir)
         self.actor = actor
@@ -163,7 +164,32 @@ class EventLog:
                 f"invalid actor name {actor!r}: expected lowercase letters, "
                 f"digits, '-' or '_' (it becomes the log filename)"
             )
-        self.path = self.space_dir / ".datacore" / "events" / f"{actor}.jsonl"
+        # THE FILE, NOT THE ACTOR. `log_name` splits "who wrote this" from
+        # "which file it lands in". They were the same thing until 2026-09-08,
+        # and that is why every nightshift run branch conflicted:
+        #
+        #   the run appends to nightshift.jsonl on `nightshift/<date>`
+        #   the hourly cycle appends to nightshift.jsonl on `main`
+        #
+        # One writer, one append-only chain, TWO branches. On 5-plur's
+        # 2026-09-06 branch that was 79 events against main's 71, both chained
+        # from the same base. Git calls it a content conflict; a union merge
+        # would "resolve" it into two chains claiming the same `prev`, which
+        # verify_chain rejects as broken linkage. The premise in claim.py --
+        # "per-writer logs are disjoint files, so a merge is a union that
+        # cannot conflict" -- holds ACROSS writers and fails within one.
+        #
+        # A branch-scoped file makes the premise true again: it is genuinely
+        # disjoint, starts its own chain at GENESIS, and read_events() already
+        # globs every *.jsonl, so nothing downstream changes.
+        name = log_name or actor
+        if not _VALID_ACTOR.fullmatch(name):
+            raise ValueError(
+                f"invalid log name {name!r}: expected lowercase letters, "
+                f"digits, '-' or '_' (it becomes the log filename)"
+            )
+        self.log_name = name
+        self.path = self.space_dir / ".datacore" / "events" / f"{name}.jsonl"
         if self.sign:
             # Acceptable to do at init (keeps callers/tests hermetic): idempotent,
             # reuses an existing key rather than regenerating.
@@ -218,8 +244,12 @@ class EventLog:
                 # tracked file cannot rewind the memory of how far it got.
                 # State is machine-local and disposable by design — losing it
                 # only costs the guard, never data.
+                # Keyed by LOG FILE, not actor. The guard asks "has this file
+                # been rewound?", and a branch-scoped log is a different file
+                # with its own seq run starting at 1 — under an actor-keyed
+                # mark its first append looks like a rewind of the shared log.
                 hwm_path = (self.path.parent.parent / "state" / "seq-hwm"
-                            / f"{self.actor}.seq")
+                            / f"{self.log_name}.seq")
                 hwm = -1
                 try:
                     hwm = int(hwm_path.read_text().strip())
