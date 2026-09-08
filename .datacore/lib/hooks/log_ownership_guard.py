@@ -55,6 +55,17 @@ ACTOR_LOG = re.compile(r"^(?:.*/)?\.datacore/events/([A-Za-z0-9_-]+)\.jsonl$")
 SHARED_ROLE_LOGS = {"genesis"}
 
 
+_RUN_SUFFIX = re.compile(r"-run-\d{4}-\d{2}-\d{2}$")
+
+
+def base_writer(name: str) -> str:
+    """The canonical writer behind a branch-scoped log name (datacore#148).
+
+    Kept local rather than imported from actor_identity: this runs as a git
+    hook, where an import failure would block every push in the fleet."""
+    return _RUN_SUFFIX.sub("", (name or "").strip().lower())
+
+
 def _registry_actors(root: Path, host: str) -> list[str]:
     """Which ledger actors this MACHINE may write, per the registry.
 
@@ -215,8 +226,15 @@ def main(argv: list[str]) -> int:
     for rng in argv:
         for f in changed(rng):
             m = ACTOR_LOG.match(f)
-            if m and m.group(1).lower() not in mine \
-                    and m.group(1).lower() not in SHARED_ROLE_LOGS:
+            if not m:
+                continue
+            # A branch-scoped log (`<actor>-run-<date>.jsonl`, datacore#148) is
+            # the SAME writer on a run branch, not a stranger. The filename is
+            # the file, not the identity — the third place that conflated them,
+            # after principal_of() and the seq high-water mark. Resolve through
+            # base_writer() so the guard keeps catching a genuine foreign log.
+            who = base_writer(m.group(1))
+            if who not in mine and who not in SHARED_ROLE_LOGS:
                 foreign.add(m.group(1))
 
     if not foreign:
