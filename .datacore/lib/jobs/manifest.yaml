@@ -633,7 +633,13 @@ jobs:
   - name: nightshift-github-triage
     machine: nightshift
     schedule: "30 4 * * *"
-    cmd: "bash ~/Data/.datacore/modules/github/server/triage-github.sh"
+    # server/triage-github.sh HAS NEVER EXISTED. The real script is
+    # modules/github/lib/triage_github.sh (lib not server, underscore not
+    # hyphen). Both spellings look plausible, so this job failed on a
+    # missing file rather than obviously, and the box quietly took the
+    # work over. Miles owns GitHub triage -- he is the CTO and holds the
+    # access; Winston reads the result through the synced scan cache.
+    cmd: "bash ~/Data/.datacore/modules/github/lib/triage_github.sh"
     on_fail: telegram
     artifacts:
       - path: "~/Data/.datacore/modules/github/data/scan_cache.json"
