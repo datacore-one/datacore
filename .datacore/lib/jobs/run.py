@@ -177,14 +177,26 @@ def run(job: dict, dry: bool = False) -> int:
 
     # pipefail matters: `cmd | tail` otherwise reports tail's status. That is
     # engram ENG-2026-08-19-018 and it recurs because nothing enforces it.
-    started = time.time()
-    proc = subprocess.run(["/bin/bash", "-o", "pipefail", "-c", job["cmd"]],
-                          env=env, capture_output=True, text=True)
-    took = time.time() - started
+    # A CONTINUOUS SERVICE IS VERIFIED BY ITS ARTIFACT, NOT BY RE-RUNNING IT.
+    # For a daemon, `cmd` documents what the unit starts; running it here
+    # either blocks until something kills it (mac-lens-sync: exit 124, a
+    # timeout reported as a failed job) or starts a SECOND copy of a service
+    # already running. Both were live on 2026-09-08. "Is it still producing?"
+    # is the real question, and the artifact checks below are what answer it.
+    continuous = str(job.get("schedule", "")).strip().lower().startswith("continuous")
+    took = 0.0
+    if continuous:
+        print("continuous service — not re-run; its artifact is the verification")
+        proc = None
+    else:
+        started = time.time()
+        proc = subprocess.run(["/bin/bash", "-o", "pipefail", "-c", job["cmd"]],
+                              env=env, capture_output=True, text=True)
+        took = time.time() - started
 
-    if proc.stdout:
+    if proc is not None and proc.stdout:
         sys.stdout.write(proc.stdout)
-    if proc.stderr:
+    if proc is not None and proc.stderr:
         sys.stderr.write(proc.stderr)
 
     # Detectors exit 1 for "ran, found problems" and 2 for "could not run";
@@ -193,11 +205,11 @@ def run(job: dict, dry: bool = False) -> int:
     # Found by the mac-seq-gap pilot: its honest "1 unpublished" read as a
     # command failure.
     ok_codes = set(job.get("exit_ok") or [0])
-    if proc.returncode not in ok_codes:
+    if proc is not None and proc.returncode not in ok_codes:
         print(f"COMMAND FAILED — exit {proc.returncode} after {took:.1f}s "
               f"(exit_ok={sorted(ok_codes)})")
         return 2
-    if proc.returncode != 0:
+    if proc is not None and proc.returncode != 0:
         print(f"ran with findings — exit {proc.returncode} after {took:.1f}s; the artifact check decides")
 
     failures = []
