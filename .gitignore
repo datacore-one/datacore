@@ -362,3 +362,6 @@ skills-lock.json
 # per-machine signing key registry (public halves). Distribution is registry/principals.yaml verify_keys;
 # nightshift's run postprocess committed this file to its root run branch on 2026-09-06 and the push guard refused it.
 .datacore/keys/
+
+# Datacore lib virtualenv (winston 2026-09-09: 709 venv files staged via git add -A, same failure mode as 2026-09-04)
+.datacore/venv/

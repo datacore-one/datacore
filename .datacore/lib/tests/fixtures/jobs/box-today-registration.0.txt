@@ -1,0 +1,8 @@
+# fixture for box-today-registration artifact[0]
+# producer artifact: ~/.datacore/state/today-registration.log on box
+# harvested: 2026-09-09
+# regex under test: 0 problem\(s\)
+# represents: SUCCESS
+# ---
+0 problem(s); 13 section(s), 13 registered producer(s)
+0 problem(s); 13 section(s), 13 registered producer(s)
