@@ -34,6 +34,46 @@ jobs:
       - name: Validate .base.md layers for private content
         run: python .datacore/lib/context_merge.py validate --path .
 
+  # ── Layer 1b: The gates that must never be red ─────────────────
+  # CI RAN NO TESTS AT ALL until 2026-09-09. Four workflows, every one of them
+  # validating boundaries, layers or tags -- so "checks passed" never meant a
+  # test had run, and a gate could sit red indefinitely with nobody told.
+  #
+  # It did. `test_hook_commands_resolve.py` exists precisely to catch a hook
+  # registered in settings whose script is not present, and it was failing on
+  # `command_receipt.py` and `command_suggest.py` -- both committed only on the
+  # unmerged branch `feat/command-discoverability`, while the registration in
+  # `.claude/settings.json` is not branch-scoped and so applied everywhere. A
+  # UserPromptSubmit hook that cannot start blocks EVERY prompt, so a file
+  # missing from one branch became a total lockout on all of them.
+  #
+  # Deliberately NOT the whole suite yet: several suites carry known failures
+  # that predate this, and turning them all on at once would make every PR red
+  # and teach everyone to ignore the signal -- which is the same disease. This
+  # runs the gates whose whole purpose is to fail loudly, and more move here as
+  # they are made green.
+  validate-gates:
+    name: Gates
+    if: >-
+      github.event.action != 'labeled' ||
+      github.event.label.name != 'ready-for-review'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install test dependencies
+        run: pip install pytest pyyaml
+
+      - name: Every registered hook resolves to a file that exists
+        run: python -m pytest -q .datacore/tests/test_hook_commands_resolve.py
+
   # ── Layer 2: Structural Validation ─────────────────────────────
   validate-tags:
     name: Validate Tags

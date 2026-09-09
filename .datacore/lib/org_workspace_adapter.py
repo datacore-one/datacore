@@ -217,6 +217,37 @@ def _ledger_emit(file_path, event_type, payload):
     except Exception:      # noqa: BLE001 — see the note above
         return None
 
+def _observed(file_path, task_id, keys):
+    """Re-read the task FROM DISK and report what is actually there.
+
+    RETURN EVIDENCE, NOT A CLAIM (datacore#173). `{"updated": true}` asserts a
+    success the caller cannot check, and on 2026-09-08 sixteen writes each
+    reported success while five had silently reverted by morning -- schedules
+    back to their old dates, a WAITING task back at NEXT. The caller was told
+    sixteen times that work was rescheduled and could not tell which four rows
+    were real.
+
+    Returned as `observed`, alongside the existing `changes`. `changes` is what
+    was asked for; `observed` is what the file says afterwards. When they
+    disagree, the write did not take.
+    """
+    try:
+        ws = _load_ws(file_path)
+        node = ws.find_by_id(task_id)
+        if node is None:
+            return {"_error": "task not found on re-read"}
+        props = node.properties or {}
+        out = {k: props.get(k) for k in keys if k not in ("STATE", "SCHEDULED", "DEADLINE")}
+        if "STATE" in keys:
+            out["STATE"] = node.todo
+        for k in ("SCHEDULED", "DEADLINE"):
+            if k in keys:
+                out[k] = str(getattr(node, k.lower(), None) or props.get(k) or "")
+        return out
+    except Exception as exc:      # noqa: BLE001 — evidence is best-effort
+        return {"_error": f"{type(exc).__name__}: {exc}"}
+
+
 def cmd_add(args):
     """Add a new task to an org file."""
     ws = _load_ws(args.file)
@@ -429,7 +460,8 @@ def cmd_complete(args):
         "reason": "completed via org_workspace_adapter",
     })
     return {"completed": True, "heading": node.heading, "id": node.id(),
-            "ledger_actor": emitted}
+            "ledger_actor": emitted,
+            "observed": _observed(file_path, node.id(), {"STATE"})}
 
 
 # ---------------------------------------------------------------------------
@@ -993,12 +1025,14 @@ def cmd_update(args):
         _payload["org"]["state"] = node.todo
     emitted = _ledger_emit(file_path, "item.update", _payload)
 
+    _keys = set(_props) | {"STATE", "SCHEDULED", "DEADLINE"}
     return {
         "updated": True,
         "id": node.id(),
         "heading": node.heading,
         "changes": changes,
         "ledger_actor": emitted,
+        "observed": _observed(file_path, node.id(), _keys),
     }
 
 

@@ -351,6 +351,37 @@ jobs:
         # the point.
         max_age_hours: 3
 
+  # ── /today registration wiring ─────────────────────────────────────────
+  # Every briefing section must have exactly one producer, and every agent a
+  # module names must exist. On 2026-09-08 `briefing.yaml` listed eight
+  # sections — a stale July copy — while producers existed for sections not in
+  # the list and sections in the list had no producer. Four days passed before
+  # anyone noticed, because no check could have noticed.
+  #
+  # Runs HERE and not in GitHub CI: modules are separate repos and
+  # briefing.yaml is gitignored, so a bare checkout has neither and the
+  # validator would pass vacuously. It now refuses to, and this is the host
+  # that actually has the whole tree.
+  # THE BOX NEEDS ITS OWN CHECK. Modules are separate repos and several are
+  # unreachable from winston — `metacognition` and `health` are not git repos
+  # there, `meetings` cannot reach GitHub over https, and `comms`/`nightshift`
+  # fail ssh auth. Their wiring got to the box by scp on 2026-09-09, so a
+  # redeploy or a fresh clone silently loses it and the briefing quietly
+  # composes sections from nothing. This makes that loud.
+  - name: box-today-registration
+    machine: box
+    schedule: "cron 20 3 * * * on winston"
+    cmd: "python3 ~/Data/.datacore/lib/today_registry.py --validate"
+    exit_ok: true
+    on_fail: telegram
+
+  - name: mac-today-registration
+    machine: mac
+    schedule: "cron 25 * * * * on mac"
+    cmd: "python3 ~/Data/.datacore/lib/today_registry.py --validate"
+    exit_ok: true
+    on_fail: telegram
+
   - name: box-cadence-liveness
     machine: box
     # THE CATCHER NEEDS A CATCHER. cadence_engine has computed overdue
