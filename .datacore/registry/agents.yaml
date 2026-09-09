@@ -1537,6 +1537,137 @@ agents:
     can_be_called_by:
     - nightshift-orchestrator
 module_agents:
+
+  # ── Daily-briefing section agents (2026-09-09) ─────────────────────────
+  winston:
+    description: "Chief of Staff — writes 'Data's Observation', the closing read of the day"
+    version: 1.0.0
+    source: .datacore/modules/chief-of-staff/agents/winston.md
+    module: chief-of-staff
+    model: sonnet
+    tools:
+    - Read
+    - Grep
+    - Glob
+    - Bash
+    skills:
+    - narrative-synthesis
+    - briefing-section
+    triggers:
+      tags: []
+      commands:
+      - /today
+    reads:
+      required: []
+      contextual: []
+    writes:
+    - briefing section observation
+  # One agent per briefing section. Registered so today_registry.validate()
+  # rule 4 can assert that an agent a module names actually exists. These four
+  # sections had NO agent at all, which is why each read as a single sentence.
+  the-world:
+    description: "Writes 'The World' \u2014 one narrative arc from 9 feeds, markets once, sourced links"
+    version: 1.0.0
+    source: .datacore/modules/news/agents/the-world.md
+    module: news
+    model: sonnet
+    tools:
+    - Read
+    - Grep
+    - Glob
+    - Bash
+    skills:
+    - news-synthesis
+    - market-narrative
+    - briefing-section
+    triggers:
+      tags: []
+      commands:
+      - /today
+    reads:
+      required:
+      - .datacore/modules/news/commands/today-hook.md
+      contextual: []
+    writes:
+    - briefing section the_world
+  the-ask:
+    description: "Writes 'The Ask' \u2014 decisions needing a verdict, with options and the cost of\
+  \ silence"
+    version: 1.0.0
+    source: .datacore/modules/chief-of-staff/agents/the-ask.md
+    module: chief-of-staff
+    model: sonnet
+    tools:
+    - Read
+    - Grep
+    - Glob
+    - Bash
+    skills:
+    - decision-framing
+    - escalation
+    - briefing-section
+    triggers:
+      tags: []
+      commands:
+      - /today
+    reads:
+      required:
+      - .datacore/modules/chief-of-staff/commands/today-hook.md
+      contextual: []
+    writes:
+    - briefing section the_ask
+  system-pulse:
+    description: "Writes 'System Pulse' \u2014 budgets, error rates, delivery, fleet drift, shipped,\
+  \ cadences"
+    version: 1.0.0
+    source: .datacore/modules/chief-of-staff/agents/system-pulse.md
+    module: chief-of-staff
+    model: sonnet
+    tools:
+    - Read
+    - Grep
+    - Glob
+    - Bash
+    skills:
+    - fleet-health
+    - observability
+    - briefing-section
+    triggers:
+      tags: []
+      commands:
+      - /today
+    reads:
+      required:
+      - .datacore/modules/chief-of-staff/commands/today-hook.md
+      contextual: []
+    writes:
+    - briefing section system_pulse
+  metacognition-pulse:
+    description: Writes 'Metacognition' last, taking the assembled briefing as its input
+    version: 1.0.0
+    source: .datacore/modules/metacognition/agents/metacognition-pulse.md
+    module: metacognition
+    model: sonnet
+    tools:
+    - Read
+    - Grep
+    - Glob
+    - Bash
+    skills:
+    - knowledge-pulse
+    - reflection
+    - briefing-section
+    triggers:
+      tags: []
+      commands:
+      - /today
+    reads:
+      required:
+      - .datacore/modules/metacognition/commands/today-hook.md
+      contextual: []
+    writes:
+    - briefing section metacognition
+
   emergency-stop-trader:
     description: Emergency intervention for trading framework violations
     version: 1.0.0

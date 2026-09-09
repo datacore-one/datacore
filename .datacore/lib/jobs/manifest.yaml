@@ -351,6 +351,24 @@ jobs:
         # the point.
         max_age_hours: 3
 
+  # ── /today registration wiring ─────────────────────────────────────────
+  # Every briefing section must have exactly one producer, and every agent a
+  # module names must exist. On 2026-09-08 `briefing.yaml` listed eight
+  # sections — a stale July copy — while producers existed for sections not in
+  # the list and sections in the list had no producer. Four days passed before
+  # anyone noticed, because no check could have noticed.
+  #
+  # Runs HERE and not in GitHub CI: modules are separate repos and
+  # briefing.yaml is gitignored, so a bare checkout has neither and the
+  # validator would pass vacuously. It now refuses to, and this is the host
+  # that actually has the whole tree.
+  - name: mac-today-registration
+    machine: mac
+    schedule: "cron 25 * * * * on mac"
+    cmd: "python3 ~/Data/.datacore/lib/today_registry.py --validate"
+    exit_ok: true
+    on_fail: telegram
+
   - name: box-cadence-liveness
     machine: box
     # THE CATCHER NEEDS A CATCHER. cadence_engine has computed overdue

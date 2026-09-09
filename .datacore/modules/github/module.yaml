@@ -72,7 +72,11 @@ settings:
     default: []
 
 hooks:
-  today: commands/today-hook.md
+  today:
+    - section: github_triage
+      prompt: commands/today-hook.md
+      stage: gather
+      refresh: true
 
 context:
   priority: on_match
