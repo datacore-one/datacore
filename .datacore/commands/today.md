@@ -339,6 +339,38 @@ This step exists because its absence was a real bug. Wrap-up §6 deferred engram
 
 ---
 
+## Step 8c: Read the week this day belongs to
+
+    python3 .datacore/lib/weekly_plan_fragment.py read
+
+The briefing has always started from tasks and the calendar, as if no week had
+been planned. On 2026-09-09 a week was planned in detail — priorities, sequencing
+thesis, metrics to move, five falsifiable predictions — and nothing read it. No
+code referenced the file, this command contained zero mentions of "weekly", and
+the fragment directory held only `health.json`.
+
+The plan is now a fragment on the same contract as health. Read it, and let it
+frame the day rather than restating it:
+
+- **Focus comes from the week's priorities**, not only from what happens to be
+  scheduled. A task nobody scheduled can still be the most important thing today
+  if the week says so.
+- **Say when the day has drifted.** If today was planned as a maker day and the
+  calendar now holds three meetings, that is worth one sentence.
+- **Check the predictions, do not repeat them.** They were frozen to be tested.
+  If one is visibly failing on Wednesday, say so on Wednesday rather than at
+  Friday's review.
+- **Report the numbers against their targets** — the metrics the week meant to
+  move, and where they stand now.
+
+**A missing plan stays visibly missing.** If the read returns nothing, say the
+week was not planned. Do not reconstruct one from the task list and present it as
+though it were the plan — that is the failure this replaces.
+
+**Note the age.** A plan written Monday is still the plan on Friday, but it is
+not news, and a briefing that forgets the difference guides Wednesday with
+Monday's assumptions after Tuesday invalidated them.
+
 ## Step 9: Compute GTD Health
 
 ```python

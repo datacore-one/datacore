@@ -1044,4 +1044,22 @@ jobs:
         arg: '0 FAIL'
         max_age_hours: 26
 
+  # Winston plans the week on Sunday morning so the principal reviews rather than
+  # starts. Before 2026-09-09 the week was planned when someone remembered, from
+  # whatever tasks happened to be scheduled — 13 of 2,979 on the day it was
+  # measured. Sunday and not Monday: Monday morning is for starting.
+  - name: box-weekly-plan
+    machine: box
+    schedule: "cron 0 7 * * 0 on winston"
+    cmd: ~/Data/.datacore/lib/cos_weekly_plan.sh
+    on_fail: telegram
+    artifacts:
+      - path: ~/.datacore/state/weekly-plan.log
+        check: regex
+        arg: "weekly-plan: draft written"
+        max_age_hours: 170
+      - path: ~/.datacore/cos/fragments/*/weekly-plan.json
+        check: exists
+        max_age_hours: 170
+
 unverified_jobs_see_comment_above: true
