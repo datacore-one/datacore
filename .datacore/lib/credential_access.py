@@ -673,6 +673,17 @@ NO_PROBE = {
     # perfectly good key, and a false FAIL is worse than an honest n-a.
     "POSTHOG_API_KEY": "host is region-specific (us/eu/self-hosted); declare api_base on the entry to enable",
     "GITEA_TOKEN": "self-hosted; declare api_base on the entry and _entry_verifier will probe it",
+    # GitLab, same shape as Gitea: the endpoint belongs to the installation.
+    # Declaring `api_base: https://<host>` on the entry enables a real probe of
+    # /api/v4/user. It stays n-a for an installation reachable only over plain
+    # http or on a private address, because the probe sends the REAL token as a
+    # bearer header and _entry_verifier refuses to do that over cleartext —
+    # an honest n-a beats a check that leaks the credential it is checking.
+    "GITLAB_TOKEN": "self-hosted; declare api_base (https only) on the entry and _entry_verifier will probe /api/v4/user",
+    # The OAuth application secret is not a bearer token: proving it means
+    # completing an authorization-code exchange, which needs a browser round
+    # trip and a user. Nothing to probe on a timer.
+    "GITLAB_CLIENT_SECRET": "OAuth app secret — verifying it requires a full authorization-code exchange with a user present",
     "COINGECKO_API_KEY": "demo and pro tiers take different auth params; probing the wrong one reports a good key dead",
 
     # No introspection endpoint that does not consume quota or produce output.
@@ -727,6 +738,12 @@ def _entry_verifier(entry: dict) -> tuple | None:
         return None
     if (entry.get("provider") or "").lower() == "gitea":
         return (base.rstrip("/") + "/api/v1/user", "token {v}", "login")
+    # GitLab: /api/v4/user is free, read-only and unmetered, and a 200 proves
+    # the token authenticates AS someone rather than merely reaching the host.
+    # Matching on `username` rather than on status alone means a login page
+    # served with 200 by a proxy in front of a dead GitLab cannot pass.
+    if (entry.get("provider") or "").lower() == "gitlab":
+        return (base.rstrip("/") + "/api/v4/user", "Bearer {v}", "username")
     return (base.rstrip("/"), "Bearer {v}", None)
 
 
@@ -853,9 +870,16 @@ def verify_value(var: str, value: str, timeout: int = 25,
     if var in OAUTH1_SETS:
         return _oauth1_probe(entry or {}, var, value, timeout)
 
-    if var in NO_PROBE:
+    # An `api_base` declared ON THE ENTRY is an explicit operator opt-in, so it
+    # outranks the standing NO_PROBE reason. Order matters: NO_PROBE used to be
+    # checked first, which made GITEA_TOKEN's own note — "declare api_base and
+    # _entry_verifier will probe it" — impossible to act on. The reason still
+    # applies to every entry that declares nothing, which is all of them by
+    # default; it just stops overriding a decision someone made deliberately.
+    entry_spec = _entry_verifier(entry or {})
+    if var in NO_PROBE and entry_spec is None:
         return "n-a", f"no probe by design: {NO_PROBE[var]}"
-    spec = VERIFIERS.get(var) or _entry_verifier(entry or {})
+    spec = VERIFIERS.get(var) or entry_spec
     if not spec or not spec[0]:
         return "n-a", "no verifier declared for this variable"
     url, auth, expect = spec
