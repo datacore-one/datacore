@@ -36,5 +36,23 @@ rc=0
 for s in $PHASE1; do
   "$PY" "$LIB/ledger_transport.py" converge --space "$s" > "$STATE/phase1-converge-$s.log" 2>&1 || { echo "converge $s: $(grep -o '"reason": "[^"]*"' "$STATE/phase1-converge-$s.log" | head -1)"; rc=1; }
 done
-"$PY" "$LIB/ledger_project_org.py" --all 2>&1 | grep -v "authored" ; echo "project rc=$?"
+# `... | grep -v authored ; echo "rc=$?"` read GREP's status, not the
+# projector's, so this printed `project rc=0` unconditionally -- a projection
+# crash, and every REFUSED line, exited 0 and alerted nobody. PIPESTATUS[0] is
+# the projector's own status, and it now feeds the script's exit code.
+"$PY" "$LIB/ledger_project_org.py" --all 2>&1 | grep -v "authored"
+prc=${PIPESTATUS[0]}
+echo "project rc=$prc"
+[ "$prc" -eq 0 ] || rc=$prc
+
+# One truncated line a job contract can assert on. Without it this cycle is the
+# only unverified step in the Phase 1 loop: it appears in no jobs/manifest.yaml
+# entry, so nothing has ever checked that it ran, let alone that it succeeded.
+if [ "$rc" -eq 0 ]; then
+  echo "OK phase1-cycle $(date -u +%Y-%m-%dT%H:%M:%SZ) spaces=$(echo $PHASE1 | wc -w | tr -d ' ')" \
+    > "$STATE/phase1-cycle-status.txt"
+else
+  echo "FAIL phase1-cycle $(date -u +%Y-%m-%dT%H:%M:%SZ) rc=$rc" \
+    > "$STATE/phase1-cycle-status.txt"
+fi
 exit $rc
