@@ -1487,9 +1487,9 @@ module_commands:
     module: mail
   _deprecated-meeting-agenda:
     name: _deprecated-meeting-agenda
-    description: UNDOCUMENTED — _deprecated-meeting-agenda.md has no description frontmatter
+    description: "DEPRECATED — superseded by /weekly and /standup; generates structured agendas for daily/weekly/product meetings (logic now in agenda-generator agent)"
     version: 0.1.0
-    status: active
+    status: deprecated
     source: .datacore/modules/meetings/commands/_deprecated-meeting-agenda.md
     module: meetings
   megaphone-campaign:
@@ -1627,7 +1627,7 @@ module_commands:
     module: ventures
   ventures-today-hook:
     name: today-hook
-    description: UNDOCUMENTED — today-hook.md has no description frontmatter
+    description: Venture portfolio section for /today — per-venture status, overdue cadences, budget, and hypothesis health
     version: 0.1.0
     status: active
     source: .datacore/modules/ventures/commands/today-hook.md
