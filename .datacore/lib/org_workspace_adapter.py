@@ -416,7 +416,20 @@ def cmd_complete(args):
     ws.transition(node, "DONE")
     ws.save(file_path)
 
-    return {"completed": True, "heading": node.heading, "id": node.id()}
+    # THE LEDGER HEARS ABOUT COMPLETIONS TOO. `cmd_add` has emitted
+    # `item.create` since DIP-0046 C4b; complete and update emitted nothing, so
+    # every state change and every property edit an agent made lived only in the
+    # org file. For a Phase 1 space that file is a PROJECTION regenerated hourly
+    # from the ledger, so the edit survives until the next cycle and then
+    # silently reverts. For inbox.org it survives, but the ledger -- the record
+    # every other reader consults -- stays wrong until the nightly sweep.
+    emitted = _ledger_emit(file_path, "item.dismiss", {
+        "id": node.id(),
+        "kind": "completed",
+        "reason": "completed via org_workspace_adapter",
+    })
+    return {"completed": True, "heading": node.heading, "id": node.id(),
+            "ledger_actor": emitted}
 
 
 # ---------------------------------------------------------------------------
@@ -963,11 +976,29 @@ def cmd_update(args):
 
     ws.save(file_path)
 
+    # Same reason as cmd_complete: an org-only property edit is lost on the next
+    # projection. Carry the CURRENT state of the fields this command can touch,
+    # so a reader folding the ledger sees what the file says.
+    _props = {k: str(v) for k, v in (node.properties or {}).items()
+              if k not in ("ID", "CREATED")}
+    _payload = {
+        "id": node.id(),
+        "title": node.heading,
+        "org": {
+            "priority": getattr(node, "priority", None) or None,
+            "properties": _props,
+        },
+    }
+    if node.todo:
+        _payload["org"]["state"] = node.todo
+    emitted = _ledger_emit(file_path, "item.update", _payload)
+
     return {
         "updated": True,
         "id": node.id(),
         "heading": node.heading,
         "changes": changes,
+        "ledger_actor": emitted,
     }
 
 
