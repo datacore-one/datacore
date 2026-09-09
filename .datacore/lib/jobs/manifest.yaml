@@ -374,6 +374,14 @@ jobs:
     cmd: "python3 ~/Data/.datacore/lib/today_registry.py --validate"
     exit_ok: true
     on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/today-registration.log"
+        check: regex
+        # The validator refuses to pass vacuously, so "0 problem(s)" cannot be
+        # reached by a host that lost its module manifests — it reports that it
+        # cannot verify anything instead.
+        arg: "0 problem\\(s\\)"
+        max_age_hours: 4
 
   - name: mac-today-registration
     machine: mac
@@ -381,6 +389,14 @@ jobs:
     cmd: "python3 ~/Data/.datacore/lib/today_registry.py --validate"
     exit_ok: true
     on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/today-registration.log"
+        check: regex
+        # The validator refuses to pass vacuously, so "0 problem(s)" cannot be
+        # reached by a host that lost its module manifests — it reports that it
+        # cannot verify anything instead.
+        arg: "0 problem\\(s\\)"
+        max_age_hours: 3
 
   - name: box-cadence-liveness
     machine: box
