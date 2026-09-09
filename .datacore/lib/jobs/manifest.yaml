@@ -22,7 +22,7 @@
 #   - modules/mail/server/triage-email.sh (email triage state paths)
 #   - modules/github/server/triage-github.sh (github triage cache paths)
 #   - modules/nightshift/server/nightshift-*.{service,timer} (six target timers: exact OnCalendar + ExecStart)
-#   - modules/nightshift/manifest.py + lib/postprocess.py + lib/run.py (nightshift-overnight's manifest-{today}.yaml, traced end to end)
+#   - modules/nightshift/lib/manifest.py + lib/postprocess.py + lib/run.py (nightshift-overnight's manifest-{today}.yaml, traced end to end)
 #   - modules/outbox/lib/archive_sync.py (nightshift-outbox: stdout-only JSON, no persisted file found)
 #   - modules/nightshift/lib/today_orchestrator.py (market-phase* freshness glob, reader side only)
 #   - modules/nightshift/CLAUDE.md ("Output Location" + service unit Descriptions for inbox-process)
@@ -282,6 +282,122 @@ jobs:
         arg: "0 space\\(s\\) failed"
         max_age_hours: 26
 
+  # ── Phase 1 cycle (DIP-0046) ───────────────────────────────────────────
+  # THE ONLY UNVERIFIED STEP IN THE LEDGER LOOP UNTIL 2026-09-09. This cycle
+  # ingests org edits into the ledger and regenerates next_actions.org, hourly,
+  # on every host. It appeared in NO manifest entry, so nothing ever checked
+  # that it ran or that it succeeded -- and it could not have reported failure
+  # anyway: the script piped the projector into `grep` and read `$?` from grep,
+  # printing `project rc=0` unconditionally. A projection crash exited 0.
+  #
+  # Verified per host rather than once, because the hosts do not agree: hermes
+  # ran the same cycle against clones named `2-plur`/`3-firm`, the projector
+  # scopes by directory name, and it therefore projected 6 lines where mac
+  # projected 12,956 -- after which the orphan sweep dismissed the missing
+  # items INTO THE SHARED LEDGER. 25 such dismissals are on record. Hermes's
+  # cron is disabled pending a rename and is deliberately absent here: a
+  # contract for a job that must not run would fail forever.
+  - name: mac-phase1-cycle
+    machine: mac
+    schedule: "cron 25 * * * * on mac"
+    cmd: "~/Data/.datacore/lib/ledger_phase1_cycle.sh"   # mac
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/phase1-cycle-status.txt"
+        check: regex
+        # `^OK ` and nothing looser. The script writes FAIL with the rc when any
+        # converge, ingest or projection step fails, and a REFUSED projection is
+        # a failure: refusing means the org file holds work the ledger has never
+        # seen, which is the one state this loop must never paper over.
+        arg: "^OK phase1-cycle"
+        # Hourly job. 3h tolerates a missed run and a slow one; a laptop asleep
+        # for longer than that has genuinely stopped ingesting, and saying so is
+        # the point.
+        max_age_hours: 3
+
+  - name: box-phase1-cycle
+    machine: box
+    schedule: "cron 25 * * * * on winston"
+    cmd: "~/Data/.datacore/lib/ledger_phase1_cycle.sh"   # winston
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/phase1-cycle-status.txt"
+        check: regex
+        # `^OK ` and nothing looser. The script writes FAIL with the rc when any
+        # converge, ingest or projection step fails, and a REFUSED projection is
+        # a failure: refusing means the org file holds work the ledger has never
+        # seen, which is the one state this loop must never paper over.
+        arg: "^OK phase1-cycle"
+        # Hourly job. 3h tolerates a missed run and a slow one; a laptop asleep
+        # for longer than that has genuinely stopped ingesting, and saying so is
+        # the point.
+        max_age_hours: 3
+
+  - name: nightshift-phase1-cycle
+    machine: nightshift
+    schedule: "cron 25 * * * * on nightshift"
+    cmd: "~/Data/.datacore/lib/ledger_phase1_cycle.sh"   # nightshift
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/phase1-cycle-status.txt"
+        check: regex
+        # `^OK ` and nothing looser. The script writes FAIL with the rc when any
+        # converge, ingest or projection step fails, and a REFUSED projection is
+        # a failure: refusing means the org file holds work the ledger has never
+        # seen, which is the one state this loop must never paper over.
+        arg: "^OK phase1-cycle"
+        # Hourly job. 3h tolerates a missed run and a slow one; a laptop asleep
+        # for longer than that has genuinely stopped ingesting, and saying so is
+        # the point.
+        max_age_hours: 3
+
+  # ── /today registration wiring ─────────────────────────────────────────
+  # Every briefing section must have exactly one producer, and every agent a
+  # module names must exist. On 2026-09-08 `briefing.yaml` listed eight
+  # sections — a stale July copy — while producers existed for sections not in
+  # the list and sections in the list had no producer. Four days passed before
+  # anyone noticed, because no check could have noticed.
+  #
+  # Runs HERE and not in GitHub CI: modules are separate repos and
+  # briefing.yaml is gitignored, so a bare checkout has neither and the
+  # validator would pass vacuously. It now refuses to, and this is the host
+  # that actually has the whole tree.
+  # THE BOX NEEDS ITS OWN CHECK. Modules are separate repos and several are
+  # unreachable from winston — `metacognition` and `health` are not git repos
+  # there, `meetings` cannot reach GitHub over https, and `comms`/`nightshift`
+  # fail ssh auth. Their wiring got to the box by scp on 2026-09-09, so a
+  # redeploy or a fresh clone silently loses it and the briefing quietly
+  # composes sections from nothing. This makes that loud.
+  - name: box-today-registration
+    machine: box
+    schedule: "cron 20 3 * * * on winston"
+    cmd: "python3 ~/Data/.datacore/lib/today_registry.py --validate"
+    exit_ok: true
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/today-registration.log"
+        check: regex
+        # The validator refuses to pass vacuously, so "0 problem(s)" cannot be
+        # reached by a host that lost its module manifests — it reports that it
+        # cannot verify anything instead.
+        arg: "0 problem\\(s\\)"
+        max_age_hours: 4
+
+  - name: mac-today-registration
+    machine: mac
+    schedule: "cron 25 * * * * on mac"
+    cmd: "python3 ~/Data/.datacore/lib/today_registry.py --validate"
+    exit_ok: true
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/today-registration.log"
+        check: regex
+        # The validator refuses to pass vacuously, so "0 problem(s)" cannot be
+        # reached by a host that lost its module manifests — it reports that it
+        # cannot verify anything instead.
+        arg: "0 problem\\(s\\)"
+        max_age_hours: 3
+
   - name: box-cadence-liveness
     machine: box
     # THE CATCHER NEEDS A CATCHER. cadence_engine has computed overdue
@@ -492,7 +608,18 @@ jobs:
       # re-break it.
       - path: "~/Data/0-personal/notes/journals/{today}.md"
         check: regex
-        arg: "^#{2,3}\\s+Your Agenda"
+        # ASSERT WHAT THE PRODUCER GUARANTEES, NOT A TITLE THE MODEL CHOSE.
+        # "Your Agenda" was a section in nightshift's /today template. When
+        # the briefing moved to Winston on 2026-09-08 (one producer per
+        # artifact) the journal block became a render of the MODEL's own
+        # sections — Good Morning, The World, The Ask, Focus — and this
+        # contract began failing on a heading nothing emits any more. It had
+        # already failed this way once before, on 2026-08-16.
+        #
+        # The heading is the structural guarantee: cos_journal.py always
+        # writes "## Daily Briefing" and replaces that block in place. A
+        # section title is a model's choice and will change again.
+        arg: '^##\s+Daily Briefing'
         max_age_hours: 26
       # cos_verify_morning.py:check_audio -- AUDIO_STAMP, written by
       # winston_audio.sh only after Telegram accepts the voice message.

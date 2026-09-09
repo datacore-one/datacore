@@ -299,6 +299,25 @@ def test_terminal_kinds_match_the_ratified_loop():
     assert ingest.TERMINAL_KINDS == {"DONE": "done", "CANCELLED": "dropped"}
 
 
+def test_org_block_added_to_adapter_created_item(space):
+    """An item created without an org block (e.g. via the adapter CLI) gets
+    the org block filled in by sync_state even when the heading has no
+    properties and no priority.
+
+    Without this, ledger_claim.py's org-mirror filter would treat the item as
+    a delegation item (no org block = not a mirror) and agents would claim it
+    unattended. See datacore#161."""
+    ingest.sync_state(space, actor="test")
+    item = _items(space)["task-next"]
+    # item was created with just {id, title} — no org key in payload
+    assert "org" in item.payload, "org block must be added even when empty"
+    assert isinstance(item.payload["org"], dict)
+    # settles: a second pass emits nothing new
+    before = len(list(read_events(space)))
+    ingest.sync_state(space, actor="test")
+    assert len(list(read_events(space))) == before
+
+
 def test_a_property_set_in_org_reaches_the_ledger_and_the_projection(space):
     """SURFACE, DONE_WHEN and JOB live in the drawer. Before 2026-09-06 the
     drawer never moved after creation, so a Phase 1 projection put the old

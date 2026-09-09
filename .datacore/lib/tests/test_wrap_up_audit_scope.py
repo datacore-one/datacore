@@ -59,3 +59,95 @@ def test_an_unpushed_session_repo_fails(tmp_path, monkeypatch):
     repos[1]["unpushed_commits"] = 2
     own, _ = wm.session_scope_rows([str(root / "0-personal" / "org" / "inbox.org")], repos)
     assert own["ok"] is False and own["detail"] == "unpushed 0-personal: 2 commit(s)"
+
+
+# ---------------------------------------------------------------------------
+# A journal commit that LOSES a section (2026-09-08)
+# ---------------------------------------------------------------------------
+
+import subprocess  # noqa: E402
+
+
+def _repo(tmp_path, body: str) -> Path:
+    """A git repo holding one journal, committed."""
+    repo = tmp_path / "space"
+    (repo / "journal").mkdir(parents=True)
+    (repo / "journal" / "2026-09-08.md").write_text(body)
+    for cmd in (["git", "init", "-q", "."],
+                ["git", "config", "user.email", "t@t"],
+                ["git", "config", "user.name", "t"],
+                ["git", "add", "-A"],
+                ["git", "commit", "-qm", "fixture"]):
+        subprocess.run(cmd, cwd=repo, check=True, capture_output=True)
+    return repo
+
+
+TWO_SECTIONS = (
+    "# 2026-09-08\n\n"
+    "## @someone-else — their session\n\n- their line\n\n"
+    "## @me — my session\n\n- my line\n"
+)
+
+
+class TestJournalSectionLoss:
+    """`audit` scored 6/6 through a commit that deleted 269 lines of four
+    unrelated sessions' entries, because every check it had asks whether a
+    commit exists and reached the remote, never what it contained."""
+
+    def test_losing_someone_elses_section_is_caught(self, tmp_path):
+        repo = _repo(tmp_path, TWO_SECTIONS)
+        j = repo / "journal" / "2026-09-08.md"
+        j.write_text("# 2026-09-08\n\n## @me — my session\n\n- my line\n")
+
+        lost = wm.journal_damage_in_worktree(repo, ["journal/2026-09-08.md"])
+        assert len(lost) == 1
+        assert "@someone-else" in lost[0]
+
+    def test_appending_your_own_entry_is_silent(self, tmp_path):
+        """The common case must not fire, or the check gets switched off."""
+        repo = _repo(tmp_path, TWO_SECTIONS)
+        j = repo / "journal" / "2026-09-08.md"
+        j.write_text(j.read_text() + "\n## @me — second session\n\n- another line\n")
+
+        assert wm.journal_damage_in_worktree(repo, ["journal/2026-09-08.md"]) == []
+
+    def test_rewriting_a_section_in_place_is_silent(self, tmp_path):
+        """The briefing splice replaces its own block every morning. Scoring
+        that as destruction would make this fire daily and be disabled."""
+        repo = _repo(tmp_path, "# d\n\n## Daily Briefing\n\n- old text\n")
+        j = repo / "journal" / "2026-09-08.md"
+        j.write_text("# d\n\n## Daily Briefing\n\n- fresh text\n")
+
+        assert wm.journal_damage_in_worktree(repo, ["journal/2026-09-08.md"]) == []
+
+    def test_non_journal_paths_are_not_inspected(self, tmp_path):
+        repo = _repo(tmp_path, TWO_SECTIONS)
+        (repo / "notes.md").write_text("## a\n")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "n"], cwd=repo, check=True, capture_output=True)
+        (repo / "notes.md").write_text("")
+
+        assert wm.journal_damage_in_worktree(repo, ["notes.md"]) == []
+
+    def test_body_only_shrink_is_caught_too(self, tmp_path):
+        """A write caught mid-file can drop body lines with every heading still
+        standing. Measured 2026-09-08: +0/-4, all headings intact, and the
+        heading check alone said nothing."""
+        repo = _repo(tmp_path, "# d\n\n## @a - one\n\n- a1\n- a2\n- a3\n\n## @b - two\n\n- b1\n- b2\n")
+        j = repo / "journal" / "2026-09-08.md"
+        j.write_text("# d\n\n## @a - one\n\n- a1\n\n## @b - two\n\n- b1\n")
+
+        dmg = wm.journal_damage_in_worktree(repo, ["journal/2026-09-08.md"])
+        assert len(dmg) == 1
+        assert "net loss" in dmg[0]
+
+    def test_the_real_2026_09_08_appends_still_commit(self, tmp_path):
+        """Regression bar: the two journal writes that were CORRECT that day
+        were +26/-0 (5-plur) and +97/-0 (0-personal). Neither may start
+        failing, or the guard costs more than it saves."""
+        for added in (26, 97):
+            repo = _repo(tmp_path / f"n{added}", TWO_SECTIONS)
+            j = repo / "journal" / "2026-09-08.md"
+            j.write_text(j.read_text() + "\n## @me - new entry\n\n"
+                         + "".join(f"- line {i}\n" for i in range(added - 2)))
+            assert wm.journal_damage_in_worktree(repo, ["journal/2026-09-08.md"]) == []

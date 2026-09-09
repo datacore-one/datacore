@@ -14,9 +14,14 @@ STATE="$HOME/.datacore/state"; mkdir -p "$STATE"
 PY=""
 for c in "${DATACORE_PYTHON:-}" python3.13 python3.12 python3.11 python3.10 /opt/homebrew/bin/python3 /usr/local/bin/python3 python3; do
   [ -n "$c" ] || continue; command -v "$c" >/dev/null 2>&1 || continue
-  "$c" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null && { PY="$c"; break; }
+  # VERSION IS NOT ENOUGH -- IT MUST ALSO IMPORT YAML. Under cron this happened
+  # to pick an interpreter with PyYAML; under launchd (2026-09-09) the same loop
+  # picked one without it and every projection died with ModuleNotFoundError
+  # while the converge steps had already succeeded. job_verify_notify.sh has
+  # tested `import yaml` alongside the version since the same failure hit it.
+  "$c" -c 'import sys, yaml; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null && { PY="$c"; break; }
 done
-[ -n "$PY" ] || { echo "FATAL: no python >= 3.10"; exit 127; }
+[ -n "$PY" ] || { echo "FATAL: no python >= 3.10 that can import yaml"; exit 127; }
 cd "$DATACORE_ROOT" || exit 2
 echo "=== $(date -u '+%F %H:%MZ') phase-1 cycle ==="
 # Converge EVERY space first, Phase 1 or not: the marker that says a space is
@@ -36,5 +41,23 @@ rc=0
 for s in $PHASE1; do
   "$PY" "$LIB/ledger_transport.py" converge --space "$s" > "$STATE/phase1-converge-$s.log" 2>&1 || { echo "converge $s: $(grep -o '"reason": "[^"]*"' "$STATE/phase1-converge-$s.log" | head -1)"; rc=1; }
 done
-"$PY" "$LIB/ledger_project_org.py" --all 2>&1 | grep -v "authored" ; echo "project rc=$?"
+# `... | grep -v authored ; echo "rc=$?"` read GREP's status, not the
+# projector's, so this printed `project rc=0` unconditionally -- a projection
+# crash, and every REFUSED line, exited 0 and alerted nobody. PIPESTATUS[0] is
+# the projector's own status, and it now feeds the script's exit code.
+"$PY" "$LIB/ledger_project_org.py" --all 2>&1 | grep -v "authored"
+prc=${PIPESTATUS[0]}
+echo "project rc=$prc"
+[ "$prc" -eq 0 ] || rc=$prc
+
+# One truncated line a job contract can assert on. Without it this cycle is the
+# only unverified step in the Phase 1 loop: it appears in no jobs/manifest.yaml
+# entry, so nothing has ever checked that it ran, let alone that it succeeded.
+if [ "$rc" -eq 0 ]; then
+  echo "OK phase1-cycle $(date -u +%Y-%m-%dT%H:%M:%SZ) spaces=$(echo $PHASE1 | wc -w | tr -d ' ')" \
+    > "$STATE/phase1-cycle-status.txt"
+else
+  echo "FAIL phase1-cycle $(date -u +%Y-%m-%dT%H:%M:%SZ) rc=$rc" \
+    > "$STATE/phase1-cycle-status.txt"
+fi
 exit $rc

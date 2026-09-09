@@ -350,7 +350,7 @@ def _default_branch_ok(repo: Path) -> tuple[bool, str]:
     return False, branch
 
 
-def finalize_session_scope(dry_run: bool) -> dict:
+def finalize_session_scope(dry_run: bool, allow_journal_shrink: bool = False) -> dict:
     """Commit and push ONLY what this session touched.
 
     `./sync push` stages everything with `git add --ignore-removal .` and
@@ -446,6 +446,23 @@ def finalize_session_scope(dry_run: bool) -> dict:
         _, ahead, _ = _run(["git", "rev-list", "--count", "@{u}..HEAD"], cwd=repo, timeout=30)
         entry["preexisting_unpushed_commits"] = int(ahead) if ahead.isdigit() else 0
 
+        # REFUSE TO COMMIT A JOURNAL THAT LOST A SECTION. Checked before the
+        # commit, not after: once it is pushed the damage is on the shared
+        # remote and every other machine pulls it.
+        lost_here = [] if allow_journal_shrink else journal_damage_in_worktree(repo, staged)
+        if lost_here:
+            entry["ok"] = False
+            entry["note"] = ("REFUSED — a journal in this commit would LOSE content: "
+                             + "; ".join(lost_here)
+                             + ". A journal is append-only: your entry is an addition, and "
+                             "no other session's section may disappear. If a writer subagent "
+                             "is still running, wait for it — /wrap-up §8 must not run "
+                             "until §5's coordinator has returned. To recover the file: "
+                             "git checkout -- <path>. To commit anyway, having diffed it "
+                             "yourself: finalize --allow-journal-shrink.")
+            results.append(entry)
+            continue
+
         if dry_run:
             entry["ok"] = None
             entry["note"] = "dry run — would stage, commit and push the listed files only"
@@ -509,9 +526,59 @@ def finalize_session_scope(dry_run: bool) -> dict:
     }
 
 
-def cmd_finalize(dry_run: bool, scope: str = "session") -> dict:
+def journal_damage_in_worktree(repo: Path, rel_paths: list[str]) -> list[str]:
+    """Journal paths whose pending change DELETES a section heading.
+
+    Same signal as `journal_sections_lost`, asked one step earlier: before the
+    commit rather than after it. A journal is append-only by convention, so a
+    heading that is removed and not re-added means a whole section stopped
+    existing -- someone else's session entry, usually.
+
+    This is the guard for the 2026-09-08 loss. The main session ran
+    `git add <journal> && git commit && git push` while a writer subagent was
+    still working, staging a mid-write tree without ever diffing it. Nothing
+    between the write and the remote asked what was in the file.
+    """
+    journals = [r for r in rel_paths
+                if "/journal/" in f"/{r}" or "/notes/journals/" in f"/{r}"]
+    lost: list[str] = []
+    for rel in journals:
+        rc, diff, _ = _run(["git", "diff", "HEAD", "--unified=0", "--", rel],
+                           cwd=repo, timeout=60, strip=False)
+        if rc != 0 or not diff:
+            continue
+        removed = [ln[1:].strip() for ln in diff.splitlines()
+                   if ln.startswith("-#") and not ln.startswith("---")]
+        added = {ln[1:].strip() for ln in diff.splitlines()
+                 if ln.startswith("+#") and not ln.startswith("+++")}
+        gone = [h for h in removed if h not in added]
+        if gone:
+            lost.append(f"{rel}: {len(gone)} heading(s) removed — {'; '.join(gone[:3])}")
+            continue
+
+        # SHRINKING IS DAMAGE TOO. A heading check alone misses a write caught
+        # mid-file that drops body lines while leaving every heading standing:
+        # measured 2026-09-08, a journal going 0 insertions / 4 deletions with
+        # all headings intact passed the heading check untouched. Journals are
+        # append-only by convention, so a net loss of lines is not an ordinary
+        # edit -- it is either a mid-write commit or a rewrite, and both want a
+        # human to look before they reach the shared remote.
+        rc3, stat, _ = _run(["git", "diff", "HEAD", "--numstat", "--", rel],
+                            cwd=repo, timeout=60)
+        if rc3 == 0 and stat:
+            parts = stat.split("\t")
+            if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+                ins, dele = int(parts[0]), int(parts[1])
+                if dele > ins:
+                    lost.append(f"{rel}: net loss of {dele - ins} line(s) "
+                                f"(+{ins}/-{dele}) with no heading removed")
+    return lost
+
+
+def cmd_finalize(dry_run: bool, scope: str = "session",
+                 allow_journal_shrink: bool = False) -> dict:
     if scope == "session":
-        out = finalize_session_scope(dry_run)
+        out = finalize_session_scope(dry_run, allow_journal_shrink)
     else:
         # `./sync push` is retired (datacore#21/#28/#31/#39): the transport
         # converges every registered knowledge repo and fast-forwards code
@@ -589,6 +656,57 @@ def session_scope_rows(mine: list[str], repos: list[dict]) -> tuple[dict, str]:
     return {"ok": ok, "detail": detail}, others
 
 
+def journal_sections_lost() -> list[str]:
+    """Today's commits that DELETED a section heading from a journal.
+
+    WHY THIS EXISTS. On 2026-09-08 a wrap-up committed and pushed a journal
+    that had lost 269 lines -- four unrelated sessions' entries -- and this
+    audit still passed 6/6. Every check it had asks whether a commit exists
+    and reached the remote. None asks what the commit CONTAINED, so a
+    destructive commit is indistinguishable from a correct one.
+
+    Journals are append-only by convention: a session adds its own entry and
+    leaves every other session's alone. So the signal is not "lines were
+    removed" -- a reformat or a typo fix removes lines -- it is "a `## ` or
+    `### ` heading was removed", which means a whole section stopped existing.
+    That keeps the check quiet on ordinary edits and loud on the one thing
+    that actually destroys someone else's work.
+
+    Reports rather than judges intent: a deliberate repair also deletes
+    headings, and the point is that a human looks.
+    """
+    today = date.today().isoformat()
+    paths = [f"*journal/{today}.md", f"*notes/journals/{today}.md"]
+    out: list[str] = []
+    repos = [DATACORE_ROOT] + [s_ for s_ in spaces() if (s_ / ".git").exists()]
+    for repo in repos:
+        rc, shas, _ = _run(["git", "log", "--since=midnight", "--format=%H", "--"]
+                           + paths, cwd=repo)
+        if rc != 0 or not shas:
+            continue
+        for sha in shas.splitlines():
+            sha = sha.strip()
+            if not sha:
+                continue
+            rc2, diff, _ = _run(["git", "show", "--unified=0", "--format=", sha,
+                                 "--"] + paths, cwd=repo, strip=False)
+            if rc2 != 0:
+                continue
+            removed = [ln[1:].strip() for ln in diff.splitlines()
+                       if ln.startswith("-#") and not ln.startswith("---")]
+            added = {ln[1:].strip() for ln in diff.splitlines()
+                     if ln.startswith("+#") and not ln.startswith("+++")}
+            # Removed AND re-added is a rewrite in place, not a loss. The
+            # briefing splice replaces its own `## Daily Briefing` block on
+            # every run; scoring that as destruction would make this check
+            # fire every morning and be switched off within a week.
+            lost = [h for h in removed if h not in added]
+            if lost:
+                out.append(f"{repo.name} {sha[:8]} removed "
+                           f"{len(lost)} heading(s): {'; '.join(lost[:3])}")
+    return out
+
+
 def cmd_audit() -> dict:
     today = date.today().isoformat()
     checks = []
@@ -626,6 +744,10 @@ def cmd_audit() -> dict:
         check("session work committed and pushed", own["ok"], own["detail"])
     check("other sessions' work left alone", True, others)
 
+    lost = journal_sections_lost()
+    check("no journal section destroyed today", not lost,
+          "; ".join(lost) if lost else "today's journal commits only added sections")
+
     cs = context_sync_check()
     check("context in sync", not cs["registry_changed"], cs["action"])
 
@@ -643,6 +765,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("step", choices=["preflight", "meta", "finalize", "audit"])
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--allow-journal-shrink", action="store_true",
+                    help="finalize only: commit a journal that loses lines or a section "
+                         "anyway. The refusal exists because /wrap-up §8 can run while a "
+                         "journal writer is mid-file; pass this only after diffing the "
+                         "file yourself and confirming the loss is intended.")
     ap.add_argument("--scope", choices=["session", "all"], default="session",
                     help="finalize only: 'session' commits just this session's files "
                          "(default); 'all' delegates to ./sync push, which stages "
@@ -654,7 +781,7 @@ def main() -> int:
     elif args.step == "meta":
         result = cmd_meta()
     elif args.step == "finalize":
-        result = cmd_finalize(args.dry_run, args.scope)
+        result = cmd_finalize(args.dry_run, args.scope, args.allow_journal_shrink)
     else:
         result = cmd_audit()
 

@@ -12,6 +12,7 @@ LIB = Path(__file__).resolve().parents[1]
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from ledger.events import Event  # noqa: E402
 from ledger.log import EventLog, read_events  # noqa: E402
 from ledger.seal import (  # noqa: E402
     build_seal_payload, latest_seal, settled, settled_events, verify_seal, watermarks,
@@ -113,3 +114,58 @@ class TestDetection:
         ok, detail = verify_seal(read_events(space))
         assert ok is None
         assert "behind" in detail
+
+
+class TestForkKeyIsTheLogFile:
+    """Regression, 2026-09-08. `_self_consistent` keyed on `(actor, seq)`.
+
+    That was right while a writer owned one file. datacore#148 gave a run branch
+    its own `<actor>-run-<date>` log, `seq` restarts at 0 in each file, and the
+    check began reporting every run branch as a forked log — 88 pairs on 5-plur,
+    every one a base log against its own run sibling. The seal then refused, and
+    the fleet's morning verification alerted on it nightly.
+    """
+
+    def test_one_actor_two_logs_is_not_a_fork(self, space):
+        """The exact production shape: `nightshift.jsonl` and
+        `nightshift-run-<date>.jsonl` both start at seq 0."""
+        EventLog(space, "nightshift").append("item.create", {"id": "a", "title": "base"})
+        EventLog(space, "nightshift", log_name="nightshift-run-2026-09-08").append(
+            "item.create", {"id": "b", "title": "run"})
+
+        evs = read_events(space)
+        by_seq0 = [e for e in evs if e.seq == 0 and e.actor == "nightshift"]
+        assert len(by_seq0) == 2, "precondition: both logs start at seq 0"
+        assert by_seq0[0].hash != by_seq0[1].hash, "precondition: different events"
+        assert {e.log for e in by_seq0} == {"nightshift", "nightshift-run-2026-09-08"}
+
+        ok, reason = verify_seal(evs)
+        assert "FORKED" not in reason, reason
+        assert ok is not False, reason
+
+    def test_a_real_fork_in_one_log_is_still_caught(self, space):
+        """Weakening the key must not cost the detection it exists for. Two
+        machines that genuinely fork a chain write the SAME file name."""
+        from ledger.seal import _self_consistent
+
+        EventLog(space, "mac").append("item.create", {"id": "a", "title": "one"})
+        base = read_events(space)[0]
+
+        twin = Event(seq=base.seq, hlc=base.hlc, actor=base.actor, type=base.type,
+                     payload={"id": "a", "title": "OTHER"}, prev=base.prev,
+                     hash="0" * 64, sig="")
+        twin.log = base.log  # same file: this is what a fork looks like
+
+        forked = _self_consistent([base, twin])
+        assert forked == [(base.log, base.seq)], forked
+
+    def test_in_memory_events_fall_back_to_the_actor(self):
+        """Events built in memory carry no `log`; the old key still applies."""
+        from ledger.seal import _self_consistent
+
+        def ev(h):
+            return Event(seq=0, hlc="h", actor="mac", type="item.create",
+                         payload={}, prev="", hash=h, sig="")
+
+        assert _self_consistent([ev("a" * 64), ev("b" * 64)]) == [("mac", 0)]
+        assert _self_consistent([ev("a" * 64), ev("a" * 64)]) == []

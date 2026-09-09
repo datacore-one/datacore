@@ -1,0 +1,159 @@
+# Ventures, their standing, and the numbers that say whether they are working.
+#
+# WHY THIS FILE EXISTS. Weekly planning read the task list, which records where
+# attention already went. It cannot show neglect, because neglect is an absence
+# and a list only holds what is present. Measured 2026-09-09: the raise carried
+# 25 tasks against Datacore infra's 155, while holding the densest concentration
+# of priority-A in the file — and investor meetings taken, across nineteen deck
+# versions, was zero. Zero meetings generate zero tasks. Only a metric shows that.
+#
+# Keep this SMALL. Three or four numbers per venture. A dashboard nobody fills in
+# is worse than four numbers that are true.
+#
+# `source: manual` means a human writes it. That is fine — but a manual number
+# with a stale `as_of` is a guess, and the weekly review should say so.
+#
+# Values below are DELIBERATELY UNSET where the agent does not know them. An
+# invented baseline is worse than a blank one: it gets trusted later.
+
+updated: 2026-09-09
+
+tiers:
+  primary:   [plur, datacore]
+  secondary: [meridian]
+  vehicle:   [datafund]
+  paused:    [fds, megaphone]
+
+# Corrected 2026-09-09 by the owner. Datafund is not a venture with its own
+# roadmap to build — it is the payroll and legal entity, and the work carried out
+# under it IS PLUR. Do not open planning conversations about "datafund strategy",
+# and do not report it as a primary venture missing a roadmap: it is not missing
+# one, it does not need one. Its numbers are real and belong to PLUR's revenue.
+#
+# fds and megaphone are PAUSED, not neglected. Basic reading only, no gap
+# analysis, no prompting to revive them.
+
+ventures:
+
+  plur:
+    space: 5-plur
+    standing: primary
+    why: The memory-layer bet. Enterprise is the revenue path.
+    metrics:
+      - id: npm-downloads-month
+        name: npm downloads per month (@plur-ai/mcp + cli)
+        source: "npm view @plur-ai/mcp"
+        value: 8617
+        as_of: 2026-09-03
+        target: null
+      - id: github-stars
+        name: GitHub stars (plur-ai/plur)
+        source: "gh api repos/plur-ai/plur --jq .stargazers_count"
+        value: 245
+        as_of: 2026-09-03
+        target: null
+      - id: enterprise-revenue-contracted
+        name: Contracted enterprise revenue, EUR
+        source: manual
+        value: null
+        as_of: null
+        target: null
+        note: One signed customer. First invoice sent 2026-09-08.
+      - id: investor-meetings-taken
+        name: Investor meetings taken
+        source: manual
+        value: 0
+        as_of: 2026-09-09
+        target: null
+        note: >-
+          Zero for the entire life of the deck, through nineteen versions. This
+          is the number the task list could never have surfaced, and the reason
+          this file exists.
+
+  datacore:
+    space: 2-datacore
+    standing: primary
+    why: The system the other ventures are run from. Its failures cost every other venture time.
+    metrics:
+      - id: tasks-closed-vs-created
+        name: Tasks closed minus created, per week
+        source: "org_workspace_adapter.py"
+        value: null
+        as_of: null
+        target: null
+        note: >-
+          W36 (08-31..09-06) closed ZERO. The list only grows until this is
+          positive, and every count over it is inflated until the duplicate
+          sweep runs.
+      - id: nightshift-output-approved
+        name: Overnight output approved, share of executed
+        source: "2-datacore/.datacore/reviews/"
+        value: null
+        as_of: null
+        target: null
+        note: 40 of 42 review rows undecided on 2026-09-08.
+      - id: briefing-complete
+        name: Morning briefing delivered complete
+        source: "0-personal/notes/journals/"
+        value: null
+        as_of: null
+        target: null
+        note: >-
+          Lost 8 sections on 2026-09-08 when /today was disabled and its module
+          hooks were never ported. 1 of 18 inline hooks reaches the producer.
+
+  datafund:
+    space: 1-datafund
+    standing: vehicle
+    why: >-
+      Payroll and the local legal entity. The work done under it is PLUR — its
+      revenue and contracts are PLUR's, recorded here because that is where the
+      invoices are raised. It is not a venture to build a roadmap for.
+    metrics:
+      - id: invoiced-revenue
+        name: Invoiced revenue, EUR, rolling quarter
+        source: manual
+        value: null
+        as_of: null
+        target: null
+      - id: accounts-opened
+        name: New accounts opened
+        source: manual
+        value: null
+        as_of: null
+        target: null
+        note: Slovenia sales sprint has "open the first two accounts" open since 2026-07-29.
+      - id: contracts-signed
+        name: Contracts signed
+        source: manual
+        value: null
+        as_of: null
+        target: null
+
+  meridian:
+    space: 6-meridian
+    standing: secondary
+    why: Capital, run by bots. Secondary by explicit decision — supervised, not built.
+    metrics:
+      - id: nav
+        name: NAV
+        source: "modules/trading/lib/gateio/today_summary.py"
+        value: null
+        as_of: null
+        target: null
+      - id: max-drawdown
+        name: Max drawdown
+        source: manual
+        value: null
+        as_of: null
+        target: null
+      - id: sharpe
+        name: Sharpe
+        source: "trading:monthly-performance"
+        value: null
+        as_of: null
+        target: null
+
+# Spaces with no venture entry are dormant by bandwidth, not broken:
+# 3-fds, 4-forge, 7-megaphone, 8-firm, 9-practice, 0-personal.
+# They get the basic reading in venture_coverage.py and no demand for documents.

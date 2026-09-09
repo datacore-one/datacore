@@ -51,6 +51,7 @@ def _load_ws(*paths: str, state_config=None):
 def _node_to_dict(node) -> dict:
     """Convert a NodeView to a JSON-serializable dict."""
     from org_workspace.query import _to_date
+    from org_workspace._compat import get_multiline_property
     sched = _to_date(node.scheduled)
     deadline = _to_date(node.deadline)
     closed = _to_date(node.closed)
@@ -65,7 +66,13 @@ def _node_to_dict(node) -> dict:
         "scheduled": sched.isoformat() if sched else None,
         "deadline": deadline.isoformat() if deadline else None,
         "closed": closed.isoformat() if closed else None,
-        "properties": dict(node.properties),
+        # Use get_multiline_property so "|"-continuation values are expanded to
+        # their full text. dict(node.properties) returns just "|" for multiline
+        # properties and is unusable for any consumer of BOOTSTRAP or KEY_FILES.
+        "properties": {
+            k: (get_multiline_property(node.node, k) or v)
+            for k, v in node.properties.items()
+        },
     }
 
 
@@ -210,6 +217,37 @@ def _ledger_emit(file_path, event_type, payload):
     except Exception:      # noqa: BLE001 — see the note above
         return None
 
+def _observed(file_path, task_id, keys):
+    """Re-read the task FROM DISK and report what is actually there.
+
+    RETURN EVIDENCE, NOT A CLAIM (datacore#173). `{"updated": true}` asserts a
+    success the caller cannot check, and on 2026-09-08 sixteen writes each
+    reported success while five had silently reverted by morning -- schedules
+    back to their old dates, a WAITING task back at NEXT. The caller was told
+    sixteen times that work was rescheduled and could not tell which four rows
+    were real.
+
+    Returned as `observed`, alongside the existing `changes`. `changes` is what
+    was asked for; `observed` is what the file says afterwards. When they
+    disagree, the write did not take.
+    """
+    try:
+        ws = _load_ws(file_path)
+        node = ws.find_by_id(task_id)
+        if node is None:
+            return {"_error": "task not found on re-read"}
+        props = node.properties or {}
+        out = {k: props.get(k) for k in keys if k not in ("STATE", "SCHEDULED", "DEADLINE")}
+        if "STATE" in keys:
+            out["STATE"] = node.todo
+        for k in ("SCHEDULED", "DEADLINE"):
+            if k in keys:
+                out[k] = str(getattr(node, k.lower(), None) or props.get(k) or "")
+        return out
+    except Exception as exc:      # noqa: BLE001 — evidence is best-effort
+        return {"_error": f"{type(exc).__name__}: {exc}"}
+
+
 def cmd_add(args):
     """Add a new task to an org file."""
     ws = _load_ws(args.file)
@@ -275,14 +313,23 @@ def cmd_add(args):
                 parent_node = n
                 break
 
-    # Build extra properties
+    # Build extra properties.  Values containing \n are separated into
+    # multiline_props and routed through ws.set_property() after node creation
+    # because create_node() writes kwargs directly as `:KEY: {v}` — bare
+    # unindented continuation lines — while set_property() calls
+    # set_multiline_property() which produces correct `|`-continuation format.
     extra_props = {}
     extra_props["CREATED"] = created
+    multiline_props = {}
     if getattr(args, 'property', None):
         for prop in args.property:
             if "=" in prop:
                 k, v = prop.split("=", 1)
-                extra_props[k] = v
+                v = v.replace("\\n", "\n")  # handle \n escape sequences like --body does
+                if "\n" in v:
+                    multiline_props[k] = v
+                else:
+                    extra_props[k] = v
 
     # Body text
     body = getattr(args, 'body', None)
@@ -298,6 +345,11 @@ def cmd_add(args):
     )
 
     node_id = node.id()
+
+    # Multi-line properties: written via set_property() which uses
+    # set_multiline_property() and serialises | continuations correctly.
+    for k, v in multiline_props.items():
+        ws.set_property(node, k, v)
 
     # SCHEDULED must be a planning keyword BEFORE :PROPERTIES:, not inside it.
     if args.scheduled:
@@ -322,6 +374,10 @@ def cmd_add(args):
                 break
         file_path.write_text("\n".join(lines))
         ws.reload(file_path)
+    elif multiline_props:
+        # No scheduled block ran its save; flush the dirty multiline property
+        # changes that set_property() left in memory.
+        ws.save(file_path)
 
     _create_payload = {
         "id": node_id, "title": args.heading, "state": "TODO",
@@ -343,7 +399,10 @@ def cmd_add(args):
         "org": {
             "priority": getattr(args, "priority", None) or None,
             "body": (getattr(args, "body", None) or "").replace("\\n", "\n"),
-            "properties": {k: str(v) for k, v in extra_props.items() if k not in ("ID", "CREATED")},
+            "properties": {
+                **{k: str(v) for k, v in extra_props.items() if k not in ("ID", "CREATED")},
+                **{k: str(v) for k, v in multiline_props.items()},
+            },
         },
     }
     _assignee = _assignee_from_tags(file_path, sorted(tags) if tags else None)
@@ -388,7 +447,21 @@ def cmd_complete(args):
     ws.transition(node, "DONE")
     ws.save(file_path)
 
-    return {"completed": True, "heading": node.heading, "id": node.id()}
+    # THE LEDGER HEARS ABOUT COMPLETIONS TOO. `cmd_add` has emitted
+    # `item.create` since DIP-0046 C4b; complete and update emitted nothing, so
+    # every state change and every property edit an agent made lived only in the
+    # org file. For a Phase 1 space that file is a PROJECTION regenerated hourly
+    # from the ledger, so the edit survives until the next cycle and then
+    # silently reverts. For inbox.org it survives, but the ledger -- the record
+    # every other reader consults -- stays wrong until the nightly sweep.
+    emitted = _ledger_emit(file_path, "item.dismiss", {
+        "id": node.id(),
+        "kind": "completed",
+        "reason": "completed via org_workspace_adapter",
+    })
+    return {"completed": True, "heading": node.heading, "id": node.id(),
+            "ledger_actor": emitted,
+            "observed": _observed(file_path, node.id(), {"STATE"})}
 
 
 # ---------------------------------------------------------------------------
@@ -915,8 +988,9 @@ def cmd_update(args):
         for prop in args.property:
             if "=" in prop:
                 k, v = prop.split("=", 1)
-                ws.set_property(node, k, v)
-                changes.append(f"{k}={v}")
+                v = v.replace("\\n", "\n")  # handle \n escape sequences like --body does
+                ws.set_property(node, k, v)  # routes \n values through set_multiline_property
+                changes.append(f"{k}={v!r}")
 
     # Scheduled
     if args.scheduled:
@@ -934,11 +1008,31 @@ def cmd_update(args):
 
     ws.save(file_path)
 
+    # Same reason as cmd_complete: an org-only property edit is lost on the next
+    # projection. Carry the CURRENT state of the fields this command can touch,
+    # so a reader folding the ledger sees what the file says.
+    _props = {k: str(v) for k, v in (node.properties or {}).items()
+              if k not in ("ID", "CREATED")}
+    _payload = {
+        "id": node.id(),
+        "title": node.heading,
+        "org": {
+            "priority": getattr(node, "priority", None) or None,
+            "properties": _props,
+        },
+    }
+    if node.todo:
+        _payload["org"]["state"] = node.todo
+    emitted = _ledger_emit(file_path, "item.update", _payload)
+
+    _keys = set(_props) | {"STATE", "SCHEDULED", "DEADLINE"}
     return {
         "updated": True,
         "id": node.id(),
         "heading": node.heading,
         "changes": changes,
+        "ledger_actor": emitted,
+        "observed": _observed(file_path, node.id(), _keys),
     }
 
 

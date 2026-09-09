@@ -1,0 +1,12 @@
+# fixture for box-phase1-cycle artifact[0]
+# producer artifact: ~/.datacore/state/phase1-cycle-status.txt on box
+# harvested: 2026-09-09
+# regex under test: ^OK phase1-cycle
+# represents: SUCCESS (derived)
+# The contract lands before the artifact can exist: this host has not yet
+# run the fixed ledger_phase1_cycle.sh, so there is nothing to harvest.
+# Derived from mac's REAL harvested output, which every host produces from
+# the same script and the same line. Replace with a real harvest
+# (`fixtures.py --harvest --force`) once the script has run on box.
+# ---
+OK phase1-cycle 2026-09-08T22:08:14Z spaces=10

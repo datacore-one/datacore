@@ -33,28 +33,11 @@ def build_required_hooks(datacore_root: str) -> dict:
     """Define the hooks that must exist in settings.json."""
     hooks_dir = f"{datacore_root}/.datacore/lib/hooks"
     return {
-        "SessionStart": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": f"python3 {hooks_dir}/plur_session_start_reminder.py",
-                        "timeout": 3,
-                    }
-                ]
-            }
-        ],
+        # plur_session_start_reminder.py / plur_session_guard.py retired in
+        # 800fd31 ("wave 1 hygiene: one set of hooks") and #133. Do not wire
+        # them: the PreToolUse "*" guard denied every tool call once its script
+        # was deleted, which silently broke every `claude -p` gate subprocess.
         "PreToolUse": [
-            {
-                "matcher": "*",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": f"python3 {hooks_dir}/plur_session_guard.py",
-                        "timeout": 3,
-                    }
-                ],
-            },
             {
                 # DIP-0029: inject command-scoped engrams on Skill/SlashCommand/Agent invocation.
                 # Fallback layer for harnesses that don't parse `recall:` frontmatter on commands.
@@ -68,18 +51,7 @@ def build_required_hooks(datacore_root: str) -> dict:
                 ],
             },
         ],
-        "PostToolUse": [
-            {
-                "matcher": "mcp__plur__plur_session_start",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": f"python3 {hooks_dir}/plur_session_mark.py",
-                        "timeout": 3,
-                    }
-                ],
-            }
-        ],
+        # PostToolUse plur_session_mark.py also retired in 800fd31 / #133.
         "UserPromptSubmit": [
             {
                 "hooks": [
@@ -171,9 +143,8 @@ def main():
     # Verify hook scripts exist
     hooks_dir = Path(datacore_root) / ".datacore" / "lib" / "hooks"
     required_scripts = [
-        "plur_session_start_reminder.py",
-        "plur_session_guard.py",
-        "plur_session_mark.py",
+        # plur_session_{start_reminder,guard,mark}.py retired in 800fd31
+        # ("wave 1 hygiene: one set of hooks") / #133 — no longer required.
         "plur_inject_wrapper.py",
         "command_recall_inject.py",  # DIP-0029
     ]

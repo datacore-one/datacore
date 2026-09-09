@@ -348,3 +348,105 @@ def test_exception_result_exits_nonzero(tmp_path):
     body = json.loads(result.stdout) if result.stdout.strip() else {}
     if body.get("error"):
         assert result.returncode != 0
+
+
+class TestEveryMutationReachesTheLedger:
+    """add/update/complete must all emit. 2026-09-09: only `add` did.
+
+    `cmd_add` has emitted `item.create` since DIP-0046 C4b; update and complete
+    emitted nothing, so every state change and property edit an agent made
+    lived only in the org file. Where that file is a Phase 1 projection it is
+    regenerated hourly from the ledger, so the edit reverted silently; where it
+    is `inbox.org` it survived, but the ledger every other reader consults
+    stayed wrong until the nightly sweep.
+
+    These assertions fold the log FROM DISK. They never trust the adapter's own
+    return value — a tool reporting its own success is what let this stand.
+    """
+
+    @staticmethod
+    def _space(tmp_path):
+        space = tmp_path / "5-testspace"
+        (space / ".datacore" / "events").mkdir(parents=True)
+        (space / "org").mkdir(parents=True)
+        (space / "org" / "inbox.org").write_text("#+TITLE: Inbox\n")
+        return space
+
+    @staticmethod
+    def _events(space, task_id):
+        out = []
+        for f in sorted((space / ".datacore" / "events").glob("*.jsonl")):
+            for ln in f.read_text().splitlines():
+                if ln.strip():
+                    e = json.loads(ln)
+                    if (e.get("payload") or {}).get("id") == task_id:
+                        out.append(e)
+        return out
+
+    def test_add_update_and_complete_all_emit(self, tmp_path):
+        space = self._space(tmp_path)
+        org = str(space / "org" / "inbox.org")
+
+        added = run_adapter("add", "--file", org, "--allow-any-file",
+                            "--heading", "A task the ledger should hear about",
+                            "--state", "TODO", "--property", "SURFACE=core")
+        tid = added["id"]
+        assert [e["type"] for e in self._events(space, tid)] == ["item.create"]
+
+        run_adapter("update", "--file", org, "--id", tid,
+                    "--property", "CONTEXT=why this task exists")
+        evs = self._events(space, tid)
+        upd = [e for e in evs if e["type"] == "item.update"]
+        assert upd, "update reached the org file but not the ledger"
+        props = ((upd[-1]["payload"].get("org") or {}).get("properties") or {})
+        assert props.get("CONTEXT") == "why this task exists"
+
+        run_adapter("complete", "--file", org, "--id", tid)
+        types = [e["type"] for e in self._events(space, tid)]
+        assert "item.dismiss" in types, f"complete did not emit: {types}"
+
+
+class TestWritesSurviveAProjectionRebuild:
+    """datacore#173's third ask: write, force a projection rebuild, assert.
+
+    This is the check the other two cannot make. Emitting an event proves the
+    ledger heard; returning `observed` proves the file says so a millisecond
+    later. Only regenerating the projection proves the write is still there
+    tomorrow morning — which is exactly what five writes on 2026-09-08 were
+    not.
+    """
+
+    @staticmethod
+    def _phase1_space(tmp_path):
+        space = tmp_path / "5-testspace"
+        (space / ".datacore" / "events").mkdir(parents=True)
+        (space / "org").mkdir(parents=True)
+        (space / ".datacore" / "ledger-phase").write_text("1\n")
+        (space / "org" / "inbox.org").write_text("#+TITLE: Inbox\n")
+        subprocess.run(["git", "init", "-q", "."], cwd=space, capture_output=True)
+        return space
+
+    def test_an_update_survives_regenerating_next_actions(self, tmp_path):
+        space = self._phase1_space(tmp_path)
+        org = str(space / "org" / "inbox.org")
+
+        tid = run_adapter("add", "--file", org, "--allow-any-file",
+                          "--heading", "A task whose schedule must survive the night",
+                          "--state", "NEXT", "--property", "SURFACE=core")["id"]
+        run_adapter("update", "--file", org, "--id", tid,
+                    "--property", "DONE_WHEN=the projection still says so")
+
+        # Regenerate the projection from the ledger — the thing that used to
+        # erase these writes.
+        proj = ADAPTER.parent / "ledger_project_org.py"
+        r = subprocess.run(["python3", str(proj), "--space", space.name,
+                            "--root", str(tmp_path)],
+                           capture_output=True, text=True, timeout=180)
+        assert r.returncode == 0, f"projection failed: {r.stdout}{r.stderr}"
+
+        rendered = (space / "org" / "next_actions.org").read_text()
+        assert tid in rendered, "the task did not survive the rebuild"
+        assert "the projection still says so" in rendered, (
+            "DONE_WHEN was written, reported, and then erased by the rebuild — "
+            "the exact 2026-09-08 failure"
+        )

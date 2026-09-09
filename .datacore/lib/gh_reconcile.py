@@ -963,15 +963,31 @@ def reconcile_all(data_dir: Path, dry_run: bool) -> int:
         total_closed += space_closed
 
         if space_closed > 0 and not dry_run and changed_files:
-            today_str = date.today().isoformat()
-            msg = (
-                f"nightshift: gh-reconcile {today_str} — "
-                f"{space_closed} task(s) auto-closed"
-            )
-            if git_commit_push(space_dir, changed_files, msg):
-                log.info(f"  Committed and pushed {space_dir.name}")
+            # Phase 1 spaces: org/next_actions.org is gitignored (generated from ledger).
+            # Persist closures into the ledger via sync_state instead of git commit.
+            phase1_marker = space_dir / ".datacore" / "ledger-phase"
+            is_phase1 = phase1_marker.exists() and phase1_marker.read_text().strip() == "1"
+
+            if is_phase1:
+                try:
+                    sys.path.insert(0, str(Path(__file__).resolve().parent))
+                    from ledger_ingest_org import sync_state  # type: ignore[import]
+                    result = sync_state(space_dir)
+                    dismissed = result.get("dismissed", 0)
+                    updated = result.get("updated", 0)
+                    log.info(f"  Ledger ingest: {dismissed} closed, {updated} updated in {space_dir.name}")
+                except Exception as exc:
+                    log.warning(f"  Ledger ingest failed for {space_dir.name}: {exc}")
             else:
-                log.error(f"  Failed to commit/push {space_dir.name}")
+                today_str = date.today().isoformat()
+                msg = (
+                    f"nightshift: gh-reconcile {today_str} — "
+                    f"{space_closed} task(s) auto-closed"
+                )
+                if git_commit_push(space_dir, changed_files, msg):
+                    log.info(f"  Committed and pushed {space_dir.name}")
+                else:
+                    log.error(f"  Failed to commit/push {space_dir.name}")
 
     return total_closed
 
