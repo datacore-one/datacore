@@ -14,8 +14,10 @@ Exit codes: 0 = success (videos found), 1 = failure (no videos or errors).
 """
 
 import json
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Optional, Dict, List, Any
 from urllib.parse import urlparse, parse_qs
 
@@ -169,6 +171,25 @@ def fetch_transcript(video_id: str) -> Dict[str, Any]:
         return error_result
 
 
+
+def _yt_dlp_binary() -> str:
+    """
+    Where yt-dlp actually is, for a caller that is not on our PATH.
+
+    A bare `yt-dlp` resolves against the PATH of whatever process invoked this
+    script. That is fine from a shell and wrong from a daemon: The Practice runs
+    this from inside its own virtualenv, whose bin/ is not on the daemon's PATH,
+    so the bare name found nothing while a perfectly good yt-dlp sat next to the
+    interpreter running this very file.
+
+    Look beside sys.executable first, then fall back to the PATH.
+    """
+    beside = Path(sys.executable).parent / 'yt-dlp'
+    if beside.exists():
+        return str(beside)
+    return shutil.which('yt-dlp') or 'yt-dlp'
+
+
 def fetch_metadata(video_id: str) -> Dict[str, Any]:
     """Fetch video metadata using yt-dlp.
 
@@ -188,7 +209,7 @@ def fetch_metadata(video_id: str) -> Dict[str, Any]:
     try:
         url = f'https://www.youtube.com/watch?v={video_id}'
         result = subprocess.run(
-            ['yt-dlp', '--dump-json', '--no-download', url],
+            [_yt_dlp_binary(), '--dump-json', '--no-download', url],
             capture_output=True,
             text=True,
             timeout=60,
@@ -247,7 +268,7 @@ def fetch_playlist_videos(playlist_id: str) -> Dict[str, Any]:
     try:
         url = f'https://www.youtube.com/playlist?list={playlist_id}'
         result = subprocess.run(
-            ['yt-dlp', '--flat-playlist', '--dump-json', url],
+            [_yt_dlp_binary(), '--flat-playlist', '--dump-json', url],
             capture_output=True,
             text=True,
             timeout=120,
