@@ -1443,13 +1443,6 @@ module_commands:
     status: active
     source: .datacore/modules/github/commands/triage-github.md
     module: github
-  gordon-today-hook:
-    name: today-hook
-    description: UNDOCUMENTED — today-hook.md has no description frontmatter
-    version: 0.1.0
-    status: active
-    source: .datacore/modules/gordon/commands/today-hook.md
-    module: gordon
   health:
     name: health
     description: Start your daily health journey - an ethereal, conversational entry point that surfaces relevant insights and widgets based on your questions.
@@ -1639,3 +1632,21 @@ module_commands:
     status: active
     source: .datacore/modules/ventures/commands/today-hook.md
     module: ventures
+
+  # Appended 2026-09-09 by command_registry_audit.py --fix.
+  # These files existed and were unreachable through the registry;
+  # an agent following the documented lookup path could not find them.
+  engage:
+    name: engage
+    description: X feed engagement — likes, follows, drafts replies and queues them for Telegram approval
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/datacore-campaigns/commands/engage.md
+    module: datacore-campaigns
+  engagement:
+    name: engagement
+    description: X conversation engagement pipeline — discover threads, draft replies, approve/reject via Telegram
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/datacore-campaigns/commands/engagement.md
+    module: datacore-campaigns
