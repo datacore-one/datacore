@@ -1,0 +1,9 @@
+# represents: SUCCESS
+# fixture for box-weekly-plan artifact[0]
+# producer artifact: ~/.datacore/state/weekly-plan.log on box
+# harvested: 2026-09-09 (constructed from the runner's own echo lines)
+=== weekly-plan 2026-09-13T07:00:04Z ===
+sync: 38 repo(s), 0 needing a human
+registry entries (commands + module_commands): 114
+weekly-plan: draft written
+weekly-plan: done 2026-09-13T07:06:41Z
