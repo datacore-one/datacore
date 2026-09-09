@@ -1,0 +1,7 @@
+# fixture for mac-phase1-cycle artifact[0]
+# producer artifact: ~/.datacore/state/phase1-cycle-status.txt on mac
+# harvested: 2026-09-09
+# regex under test: ^OK phase1-cycle
+# represents: SUCCESS
+# ---
+OK phase1-cycle 2026-09-08T22:08:14Z spaces=10

@@ -348,3 +348,59 @@ def test_exception_result_exits_nonzero(tmp_path):
     body = json.loads(result.stdout) if result.stdout.strip() else {}
     if body.get("error"):
         assert result.returncode != 0
+
+
+class TestEveryMutationReachesTheLedger:
+    """add/update/complete must all emit. 2026-09-09: only `add` did.
+
+    `cmd_add` has emitted `item.create` since DIP-0046 C4b; update and complete
+    emitted nothing, so every state change and property edit an agent made
+    lived only in the org file. Where that file is a Phase 1 projection it is
+    regenerated hourly from the ledger, so the edit reverted silently; where it
+    is `inbox.org` it survived, but the ledger every other reader consults
+    stayed wrong until the nightly sweep.
+
+    These assertions fold the log FROM DISK. They never trust the adapter's own
+    return value — a tool reporting its own success is what let this stand.
+    """
+
+    @staticmethod
+    def _space(tmp_path):
+        space = tmp_path / "5-testspace"
+        (space / ".datacore" / "events").mkdir(parents=True)
+        (space / "org").mkdir(parents=True)
+        (space / "org" / "inbox.org").write_text("#+TITLE: Inbox\n")
+        return space
+
+    @staticmethod
+    def _events(space, task_id):
+        out = []
+        for f in sorted((space / ".datacore" / "events").glob("*.jsonl")):
+            for ln in f.read_text().splitlines():
+                if ln.strip():
+                    e = json.loads(ln)
+                    if (e.get("payload") or {}).get("id") == task_id:
+                        out.append(e)
+        return out
+
+    def test_add_update_and_complete_all_emit(self, tmp_path):
+        space = self._space(tmp_path)
+        org = str(space / "org" / "inbox.org")
+
+        added = run_adapter("add", "--file", org, "--allow-any-file",
+                            "--heading", "A task the ledger should hear about",
+                            "--state", "TODO", "--property", "SURFACE=core")
+        tid = added["id"]
+        assert [e["type"] for e in self._events(space, tid)] == ["item.create"]
+
+        run_adapter("update", "--file", org, "--id", tid,
+                    "--property", "CONTEXT=why this task exists")
+        evs = self._events(space, tid)
+        upd = [e for e in evs if e["type"] == "item.update"]
+        assert upd, "update reached the org file but not the ledger"
+        props = ((upd[-1]["payload"].get("org") or {}).get("properties") or {})
+        assert props.get("CONTEXT") == "why this task exists"
+
+        run_adapter("complete", "--file", org, "--id", tid)
+        types = [e["type"] for e in self._events(space, tid)]
+        assert "item.dismiss" in types, f"complete did not emit: {types}"
