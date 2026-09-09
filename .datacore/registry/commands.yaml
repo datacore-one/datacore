@@ -1382,3 +1382,260 @@ module_commands:
       dips: []
     related: []
     trigger: accounting overview|accounting sync|accounting payables|datafund accounting
+
+  # Appended 2026-09-09 by command_registry_audit.py --fix.
+  # These files existed and were unreachable through the registry;
+  # an agent following the documented lookup path could not find them.
+  today-hook:
+    name: today-hook
+    description: today-hook command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/analytics/commands/today-hook.md
+    module: analytics
+  weekly-plan:
+    name: weekly-plan
+    description: Shape the week — measure, allocate, sequence, delegate, snapshot
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/chief-of-staff/commands/weekly-plan.md
+    module: chief-of-staff
+    trigger: weekly plan|weekly planning|plan the week|plan my week|shape the week|week plan
+  demo-video:
+    name: demo-video
+    description: demo-video command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/comms/commands/demo-video.md
+    module: comms
+  feed-engage:
+    name: feed-engage
+    description: feed-engage command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/comms/commands/feed-engage.md
+    module: comms
+  audit-app:
+    name: audit-app
+    description: Audit an existing Datacore app against canonical scaffold and spec
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/datacore-appbuilder/commands/audit-app.md
+    module: datacore-appbuilder
+  scaffold-app:
+    name: scaffold-app
+    description: Scaffold a new Datacore app (desktop, saas, or panel) from canonical templates
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/datacore-appbuilder/commands/scaffold-app.md
+    module: datacore-appbuilder
+  github-today-hook:
+    name: today-hook
+    description: today-hook command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/github/commands/today-hook.md
+    module: github
+  triage-github:
+    name: triage-github
+    description: triage-github command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/github/commands/triage-github.md
+    module: github
+  gordon-today-hook:
+    name: today-hook
+    description: UNDOCUMENTED — today-hook.md has no description frontmatter
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/gordon/commands/today-hook.md
+    module: gordon
+  health:
+    name: health
+    description: Start your daily health journey - an ethereal, conversational entry point that surfaces relevant insights and widgets based on your questions.
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/health/commands/health.md
+    module: health
+  lens-disclosure:
+    name: lens-disclosure
+    description: lens-disclosure command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/lens/commands/lens-disclosure.md
+    module: lens
+  lens-status:
+    name: lens-status
+    description: lens-status command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/lens/commands/lens-status.md
+    module: lens
+  lens-summary:
+    name: lens-summary
+    description: lens-summary command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/lens/commands/lens-summary.md
+    module: lens
+  nightshift-hook:
+    name: nightshift-hook
+    description: nightshift-hook command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/mail/commands/nightshift-hook.md
+    module: mail
+  mail-today-hook:
+    name: today-hook
+    description: today-hook command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/mail/commands/today-hook.md
+    module: mail
+  _deprecated-meeting-agenda:
+    name: _deprecated-meeting-agenda
+    description: UNDOCUMENTED — _deprecated-meeting-agenda.md has no description frontmatter
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/meetings/commands/_deprecated-meeting-agenda.md
+    module: meetings
+  megaphone-campaign:
+    name: megaphone-campaign
+    description: Megaphone Campaign — batch pipeline for a set of companies
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/megaphone-websites/commands/megaphone-campaign.md
+    module: megaphone-websites
+  megaphone-dashboard:
+    name: megaphone-dashboard
+    description: megaphone-dashboard command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/megaphone-websites/commands/megaphone-dashboard.md
+    module: megaphone-websites
+  megaphone-prospect:
+    name: megaphone-prospect
+    description: megaphone-prospect command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/megaphone-websites/commands/megaphone-prospect.md
+    module: megaphone-websites
+  megaphone:
+    name: megaphone
+    description: megaphone command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/megaphone-websites/commands/megaphone.md
+    module: megaphone-websites
+  challenge:
+    name: challenge
+    description: challenge command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/metacognition/commands/challenge.md
+    module: metacognition
+  connect:
+    name: connect
+    description: connect command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/metacognition/commands/connect.md
+    module: metacognition
+  drift:
+    name: drift
+    description: drift command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/metacognition/commands/drift.md
+    module: metacognition
+  emerge:
+    name: emerge
+    description: emerge command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/metacognition/commands/emerge.md
+    module: metacognition
+  ghost:
+    name: ghost
+    description: ghost command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/metacognition/commands/ghost.md
+    module: metacognition
+  graduate:
+    name: graduate
+    description: graduate command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/metacognition/commands/graduate.md
+    module: metacognition
+  ideas:
+    name: ideas
+    description: ideas command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/metacognition/commands/ideas.md
+    module: metacognition
+  metacognition-today-hook:
+    name: today-hook
+    description: today-hook command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/metacognition/commands/today-hook.md
+    module: metacognition
+  trace:
+    name: trace
+    description: trace command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/metacognition/commands/trace.md
+    module: metacognition
+  research-nightshift-hook:
+    name: nightshift-hook
+    description: nightshift-hook command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/research/commands/nightshift-hook.md
+    module: research
+  tutor-today-hook:
+    name: today-hook
+    description: today-hook command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/tutor/commands/today-hook.md
+    module: tutor
+  ceo-review:
+    name: ceo-review
+    description: CEO-mode plan review — challenge the premise, find the 10-star product, expand scope when scope creates leverage
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/ventures/commands/ceo-review.md
+    module: ventures
+  eng-review:
+    name: eng-review
+    description: Engineering plan lock-in — architecture, code quality, test coverage diagram, performance, failure modes, task synthesis
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/ventures/commands/eng-review.md
+    module: ventures
+  office-hours:
+    name: office-hours
+    description: YC-style structured brainstorming via six forcing questions — produces a design doc, never code
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/ventures/commands/office-hours.md
+    module: ventures
+  retro:
+    name: retro
+    description: Sprint retrospective with team-aware growth notes, HITL classification, engram capture, and command extraction
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/ventures/commands/retro.md
+    module: ventures
+  ventures-today-hook:
+    name: today-hook
+    description: UNDOCUMENTED — today-hook.md has no description frontmatter
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/ventures/commands/today-hook.md
+    module: ventures
