@@ -32,6 +32,7 @@ them. Anything excluded is printed under its reason, so the claim is auditable.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import re
 import sys
@@ -130,7 +131,25 @@ def files_for(profile: str) -> list[Path]:
     return [p for p in found if p.is_file()]
 
 
-def importable(dist: str) -> tuple[bool, str]:
+def _venv_site_packages() -> str | None:
+    """`.datacore/venv`'s site-packages, via the module that already decides it.
+
+    NOT OPTIONAL, AND NOT COSMETIC. On the Mac, `feedparser` and `gTTS` live
+    only in that venv and are reached by scripts calling
+    `venv_bootstrap.activate()` — the documented arrangement, because Homebrew's
+    python is externally managed. A checker that ignores it reports two
+    perfectly working dependencies as missing, and a report with known false
+    entries is one nobody reads the true entries of.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from venv_bootstrap import venv_site_packages
+        return venv_site_packages(str(DATACORE_ROOT))
+    except Exception:                                     # noqa: BLE001
+        return None
+
+
+def importable(dist: str) -> tuple[bool, str, str]:
     """Does `import <dist>` actually succeed under this interpreter?
 
     IT MUST BE A REAL IMPORT, IN A SUBPROCESS. The first version of this called
@@ -146,13 +165,22 @@ def importable(dist: str) -> tuple[bool, str]:
     down with it.
     """
     mod = IMPORT_NAME.get(dist, dist.replace("-", "_"))
+    venv = _venv_site_packages()
+    env = dict(os.environ)
+    if venv:
+        env["PYTHONPATH"] = os.pathsep.join(
+            [p for p in (venv, env.get("PYTHONPATH")) if p])
+    code = (f"import {mod} as _m, sys; "
+            f"print(getattr(_m, '__file__', '') or 'builtin')")
     proc = subprocess.run(
-        [sys.executable, "-c", f"import {mod}"],
-        capture_output=True, text=True, timeout=120)
+        [sys.executable, "-c", code],
+        capture_output=True, text=True, timeout=180, env=env)
     if proc.returncode == 0:
-        return True, ""
+        where = (proc.stdout or "").strip()
+        loc = "venv" if venv and where.startswith(venv) else "system"
+        return True, loc, ""
     tail = (proc.stderr or "").strip().splitlines()
-    return False, (tail[-1] if tail else f"exit {proc.returncode}")[:96]
+    return False, "", (tail[-1] if tail else f"exit {proc.returncode}")[:96]
 
 
 def main() -> int:
@@ -174,9 +202,9 @@ def main() -> int:
         if dist in EXCLUDE:
             excluded.append(dist)
             continue
-        good, err = importable(dist)
+        good, loc, err = importable(dist)
         if good:
-            ok.append(dist)
+            ok.append(dist if loc == "system" else f"{dist} (venv)")
         else:
             missing.append(dist)
             why[dist] = err
