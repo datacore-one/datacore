@@ -24,6 +24,26 @@ principals:
     decision: final
     memory_scope: user:plur:gregor
     permission_mode: human
+  crt:
+    kind: human
+    display: Črt
+    email_sha256: [7a1321c7850a2474]
+    github: crtahlin
+    hosts: [crt]
+    writes_as: [crt]
+    permission_mode: human
+    # Added 2026-09-10. He had been contributing to 1-datafund and 5-plur since
+    # 2026-05 — 72 authored commits and 31 dated journal entries — and landed
+    # nothing after 2026-09-01. No principal, no instance and no ledger writer
+    # existed for him, so when the fleet moved to the DIP-0046 transport his
+    # machine had nowhere to publish: every other actor has a per-writer log and
+    # there is still no crt.jsonl in either space.
+    #
+    # decision and memory_scope are absent rather than guessed, per this file's
+    # own rule that an undecided field stays null: `decision: final` is the
+    # owner's, and a memory scope that does not exist would point his writes at
+    # nothing. He also has no entry in verify_keys until his host generates a
+    # key — until then his events are unsigned, which v2_verify will report.
   winston:
     kind: agent
     display: Winston
