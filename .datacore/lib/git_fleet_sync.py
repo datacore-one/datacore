@@ -38,6 +38,11 @@ Usage:
     python3 .datacore/lib/git_fleet_sync.py [data_dir] [--execute] [--pull]
                                             [--hold=repo1,repo2]
 
+Persistent exclusion (alternatives to --hold that survive across runs):
+    .datacore/config/sync-exclude.yaml   list under 'exclude:' key (repo names)
+    DATACORE_SYNC_EXCLUDE env var        space-separated repo names
+    .datacore-nosync in a repo root      per-repo opt-out marker file
+
 Intended to run on a timer on every agent host (nightshift, hermes, plur-claw).
 Without that, agents silently re-strand: neither hermes nor plur-claw had any
 cron or timer touching git, which is why Tris accumulated 53 uncommitted files
@@ -45,9 +50,11 @@ over two months and nobody ever saw his research.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+import yaml
 
 # Filenames matching these are never committed.
 JUNK_SUFFIXES = ('.pyc', '.orig', '.rej', '.swp')
@@ -231,6 +238,12 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
 
     if repo.name in hold:
         result['status'] = 'SKIP — held back explicitly (--hold)'
+        return result
+
+    # Per-repo opt-out: a .datacore-nosync marker in the repo root skips it
+    # from both pull and push without requiring any central config update.
+    if (repo / '.datacore-nosync').exists():
+        result['status'] = 'SKIP — .datacore-nosync marker present'
         return result
 
     if not branch:
@@ -424,6 +437,30 @@ def find_repos(root: Path) -> list:
     return sorted(set(repos))
 
 
+def load_sync_exclude(root: Path) -> tuple:
+    """Load the persistent exclusion list from config file and env var.
+
+    Returns a tuple of repo names to skip from ALL sync operations (neither
+    pull nor push). These are merged with any --hold= flag at runtime.
+
+    Sources checked (all merged):
+      .datacore/config/sync-exclude.yaml  —  list under the 'exclude:' key
+      DATACORE_SYNC_EXCLUDE env var        —  space-separated repo names
+    """
+    excluded: set = set()
+    config_path = root / '.datacore' / 'config' / 'sync-exclude.yaml'
+    if config_path.exists():
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f) or {}
+        for entry in cfg.get('exclude', []):
+            if entry:
+                excluded.add(str(entry).strip())
+    for entry in os.environ.get('DATACORE_SYNC_EXCLUDE', '').split():
+        if entry:
+            excluded.add(entry)
+    return tuple(excluded)
+
+
 def main() -> int:
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
     execute = '--execute' in sys.argv
@@ -434,6 +471,8 @@ def main() -> int:
     for a in sys.argv[1:]:
         if a.startswith('--hold='):
             hold = tuple(x.strip() for x in a.split('=', 1)[1].split(',') if x.strip())
+
+    hold = hold + load_sync_exclude(root)
 
     if not execute:
         print("DRY RUN — nothing will be committed. Pass --execute to act.\n")
