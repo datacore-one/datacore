@@ -1,6 +1,12 @@
 # Git LFS Configuration for Datacore
 # See DIP-0015: Semantic Organization
 
+# Union merge for additive-list files: independently-added lines combine
+# automatically, eliminating the recurring conflict on fork-and-overlay installs
+# (new upstream entries collide with fork-local entries on every merge).
+# Fixes root cause described in datacore#31.
+/.gitignore merge=union
+
 # Video/Audio → Git LFS
 *.mp4 filter=lfs diff=lfs merge=lfs -text
 *.mov filter=lfs diff=lfs merge=lfs -text
