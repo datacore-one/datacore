@@ -1,0 +1,45 @@
+# Infrastructure: the machines this installation runs on, what each is for,
+# and how work reaches it.
+#
+# THIS IS THE TEMPLATE. The real file is `infrastructure.yaml`, which is
+# gitignored and never leaves the installation. It carries ssh aliases, deploy
+# methods and access notes for every host — a map of a private network, and the
+# single most useful file an attacker could read about this setup. Copy it to
+# `infrastructure.yaml` and fill it in locally.
+#
+# Values here are placeholders. Never commit real host names, aliases or access
+# details to a public repository, even when each looks harmless on its own:
+# together they are the topology.
+servers:
+  laptop:
+    purpose: primary workstation — interactive sessions, local agent runs
+    kind: workstation
+    ssh_alias: null              # not reachable inbound; nothing deploys to it
+    deploy_method: local working copy
+    services: []
+    ledger_actors: [laptop]      # writer logs this host may append to
+    notes: >
+      The machine that is not always on. Schedule work here with launchd or an
+      equivalent that coalesces missed runs after wake — cron silently drops a
+      job whose slot passed while the lid was shut.
+    access:
+      who: owner
+      how: physical
+
+  server:
+    purpose: always-on host — scheduled jobs, briefing generation, delivery
+    kind: vps
+    ssh_alias: your-ssh-alias    # the alias in ~/.ssh/config, never an address
+    deploy_method: rsync + cron  # or: git pull + service restart
+    services:
+      - name: morning-pipeline
+        schedule: "0 4 * * *"
+      - name: verify
+        schedule: "10 7 * * *"
+    ledger_actors: [assistant]
+    notes: >
+      Runs unattended. Anything it needs must be provisioned ahead of time —
+      it cannot prompt anyone.
+    access:
+      who: owner
+      how: ssh key

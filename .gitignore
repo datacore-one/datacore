@@ -327,6 +327,14 @@ node_modules/
 .datacore/cos/*
 !.datacore/cos/*.example
 
+# Private network topology — NEVER in the public repo, same rule as
+# .datacore/cos/* above. These name the humans, the agents, the hosts they run
+# on, the GitHub accounts they act under and the ssh aliases that reach them.
+# Every value looks harmless alone; together they are a map of the network.
+# Only the sanitized *.example templates are tracked.
+.datacore/registry/principals.yaml
+.datacore/registry/infrastructure.yaml
+
 # session-local artifacts
 .datacore/logs/
 .mcp.json.bak-*
