@@ -110,6 +110,11 @@
             "type": "command",
             "command": "python3 ~/Data/.datacore/lib/session_time_guardian.py",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/hooks/command_suggest.py",
+            "timeout": 5
           }
         ]
       }
@@ -132,6 +137,11 @@
             "type": "command",
             "command": "python3 ~/Data/.datacore/lib/active_memory.py --event skill",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/hooks/command_receipt.py",
+            "timeout": 3
           }
         ]
       },
