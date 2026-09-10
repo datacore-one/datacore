@@ -245,6 +245,17 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
         result['status'] = f'SKIP — {gated}'
         return result
 
+    # Never commit or stage during an in-progress merge or rebase.
+    # A sweep that fires mid-conflict stages marker-laden files and pushes
+    # them to shared remotes — observed 2026-06-09 (issue #28): a background
+    # sync committed literal <<<<<<</<=======/>>>>>>> markers to two files on
+    # origin/main of a shared repo while a hand-resolution was in progress.
+    if (repo / '.git' / 'MERGE_HEAD').exists() or \
+       (repo / '.git' / 'rebase-merge').is_dir() or \
+       (repo / '.git' / 'rebase-apply').is_dir():
+        result['status'] = 'SKIP — merge/rebase in progress; resolve first'
+        return result
+
     # Sync is bidirectional. Pushing agent work out is only half of it — an agent
     # that never pulls drifts onto a stale snapshot of shared knowledge and stops
     # seeing anyone else's. Tris's tris-space was 195 commits behind when this was
@@ -349,6 +360,14 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
         # datafund-space on 2026-07-21. Skip deletions; surface them for a human.
         if 'D' in xy:
             result['skipped'].append((path, 'DELETION — not auto-committed (needs a human)'))
+            continue
+        # Unmerged files (UU, AU, UA, DD, DU, UD) contain conflict markers or
+        # represent an unresolved state — committing them corrupts the repo.
+        # The MERGE_HEAD guard above catches the common case; this is a
+        # belt-and-suspenders catch for any unmerged path that slips through
+        # (e.g. `git add -u` already ran on some files before the guard fired).
+        if 'U' in xy:
+            result['skipped'].append((path, 'MERGE CONFLICT — unresolved; resolve before syncing'))
             continue
         reason = is_junk(repo, path, tracked)
         if reason:
