@@ -1,0 +1,12 @@
+# Core and OCR service runtime; no test tools or global site-packages.
+# Research, calendar providers, and full local speech models have separate
+# optional dependency requirements and must be qualified independently.
+-r requirements.txt
+-r ocr-server/requirements.txt
+
+# Preserve interfaces and security versions already qualified by this audit.
+# Upgrade these deliberately with the runtime compatibility suite.
+mcp==1.28.1
+org-workspace==0.5.1
+cryptography==50.0.0
+requests==2.33.0

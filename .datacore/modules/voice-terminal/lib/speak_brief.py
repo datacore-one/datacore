@@ -423,16 +423,9 @@ def _generate_audio_gtts(text, output_path=None):
     except ImportError:
         pass
 
-    from gtts import gTTS
-
-    if output_path is None:
-        f = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
-        output_path = f.name
-        f.close()
-
     print("Using gTTS fallback (Google TTS, no local models required)...")
-    tts = gTTS(text=text, lang="en", slow=False)
-    tts.save(str(output_path))
+    from speech_transport import synthesize_google
+    output_path = synthesize_google(text, output_path, allow_cloud=True)
 
     # Rough duration estimate: ~150 words/minute
     duration = len(text.split()) / 150 * 60
