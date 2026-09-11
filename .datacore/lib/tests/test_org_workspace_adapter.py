@@ -263,6 +263,13 @@ class TestInboxProcessing:
 
 
 class TestV2LedgerWrite:
+    @pytest.fixture
+    def work_dir(self, tmp_path):
+        org = tmp_path / '9-fixture/org'
+        org.mkdir(parents=True)
+        shutil.copy(FIXTURES / 'inbox.org', org / 'inbox.org')
+        return org
+
     """DIP-0046 C4b: the adapter is the v2 write path for BOTH connectors."""
 
     def test_new_tasks_are_refused_outside_inbox(self, work_dir):
@@ -295,28 +302,25 @@ class TestV2LedgerWrite:
         said `genesis`, so the ledger could not say who created 89% of its own
         items, and a write could sit un-ingested for a day.
         """
-        (work_dir / ".datacore" / "events").mkdir(parents=True, exist_ok=True)
+        (work_dir.parent / ".datacore" / "events").mkdir(parents=True, exist_ok=True)
         monkeypatch.setenv("DATACORE_ACTOR", "testactor")
         result = run_adapter("add", "--file", str(work_dir / "inbox.org"),
                              "--heading", "Ledger-bound task")
         assert result.get("added") is True
-        # The emit must never fail the caller, so absence is tolerated; when it
-        # happens it must carry the REAL actor, not the import role.
-        if result.get("ledger_actor"):
-            assert result["ledger_actor"] != "genesis"
+        assert result['ledger_actor'] == 'testactor'
 
 
     def test_add_carries_the_drawer_into_the_ledger(self, work_dir, monkeypatch):
         """A Phase 1 space regenerates its org file from the ledger; a task
         created with SURFACE and DONE_WHEN must come back with them."""
-        (work_dir / ".datacore" / "events").mkdir(parents=True, exist_ok=True)
+        (work_dir.parent / ".datacore" / "events").mkdir(parents=True, exist_ok=True)
         monkeypatch.setenv("DATACORE_ACTOR", "testactor")
         result = run_adapter("add", "--file", str(work_dir / "inbox.org"),
                              "--heading", "Drawer-bound task", "--priority", "A",
                              "--property", "SURFACE=2-datacore", "--property", "DONE_WHEN=the file exists")
         assert result.get("added") is True and result.get("ledger_actor")
         import json
-        events = [json.loads(l) for f in (work_dir / ".datacore" / "events").glob("*.jsonl") for l in f.read_text().splitlines() if l.strip()]
+        events = [json.loads(l) for f in (work_dir.parent / ".datacore" / "events").glob("*.jsonl") for l in f.read_text().splitlines() if l.strip()]
         created = [e for e in events if e["type"] == "item.create" and e["payload"]["id"] == result["id"]]
         assert len(created) == 1
         org = created[0]["payload"]["org"]

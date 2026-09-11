@@ -142,7 +142,8 @@ jobs:
             .datacore/lib/tests/test_ledger_phase1_tools.py \
             .datacore/lib/tests/test_ledger_checkpoint.py \
             .datacore/lib/tests/test_org_workspace_adapter.py \
-            .datacore/lib/tests/test_org_ledger_roundtrip.py
+            .datacore/lib/tests/test_org_ledger_roundtrip.py \
+            .datacore/lib/tests/test_org_space.py
           ruff check --select F821,F822,F823,E9 .datacore
 
   runtime-profile:

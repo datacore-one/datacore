@@ -199,22 +199,19 @@ def _assignee_from_tags(file_path, tags):
 
 
 def _ledger_emit(file_path, event_type, payload):
-    authoritative = False
+    from org_space import ledger_space_for_file
+    space = ledger_space_for_file(file_path)
+    if space is None:
+        return None
+    from ledger_project_org import phase, ORG
+    # Determine authority before the optional Phase-0 mirror error boundary.
+    # An unreadable/invalid marker cannot downgrade a Phase-1 write to optional.
+    authoritative = phase(space) == 1
     try:
-        import os as _os
-        space = None
-        for parent in Path(file_path).resolve().parents:
-            if (parent / ".datacore" / "events").is_dir():
-                space = parent
-                break
-        if space is None:
-            return None
         _sys.path.insert(0, str(Path(__file__).resolve().parent))
         from ledger.log import EventLog
         from actor_identity import this_actor
         actor = this_actor()
-        from ledger_project_org import phase, ORG
-        authoritative = phase(space) == 1
         if authoritative and Path(file_path).resolve() == (space / ORG).resolve() and event_type in ('item.update', 'item.dismiss'):
             from ledger.fold import fold
             from ledger.log import read_events

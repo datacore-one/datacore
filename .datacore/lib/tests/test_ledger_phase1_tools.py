@@ -74,6 +74,31 @@ def test_project_org_only_generates_in_phase_1_and_keeps_the_header(tmp_path):
     assert "Alpha task" in text and "Nobody has this in org" in text, "the ledger drives the file now"
 
 
+def test_projector_reports_every_space_and_refuses_without_source_disclosure(tmp_path, capsys):
+    G = _load('ledger_project_org')
+    space = _space(tmp_path)
+    assert G.main(['--root', str(tmp_path), '--all', '--json']) == 0
+    assert json.loads(capsys.readouterr().out) == {'version': 1, 'spaces': [
+        {'space': space.name, 'status': 'authored'}]}
+    (space / '.datacore/ledger-phase').write_text('1\n')
+    before = (space / 'org/next_actions.org').read_bytes()
+    assert G.main(['--root', str(tmp_path), '--all', '--json']) == 1
+    assert json.loads(capsys.readouterr().out) == {'version': 1, 'spaces': [
+        {'space': space.name, 'status': 'refused'}]}
+    assert (space / 'org/next_actions.org').read_bytes() == before
+
+
+@pytest.mark.parametrize('marker', ['', '2', '01', 'unknown'])
+def test_invalid_authority_mode_cannot_be_treated_as_authored(tmp_path, marker):
+    G = _load('ledger_project_org')
+    space = _space(tmp_path)
+    (space / '.datacore/ledger-phase').write_text(marker)
+    before = (space / 'org/next_actions.org').read_bytes()
+    with pytest.raises(ValueError, match='phase marker'):
+        G.project_space(space)
+    assert (space / 'org/next_actions.org').read_bytes() == before
+
+
 def test_flip_refuses_until_ledger_and_org_agree_then_flips_and_reverses(tmp_path):
     F = _load("ledger_phase1_flip"); P = _load("ledger_phase1_prepare"); space = _space(tmp_path)
     _git(space, "init", "-q", "-b", "main"); _git(space, "config", "user.email", "t@t"); _git(space, "config", "user.name", "t")

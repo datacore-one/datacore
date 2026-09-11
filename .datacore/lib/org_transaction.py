@@ -252,6 +252,20 @@ class SafeOrgWorkspace(OrgWorkspace):
         transaction = _current.get()
         if transaction:
             transaction.watch(path)
+        # The dependency silently repairs duplicate IDs while loading. A
+        # later unrelated save would then rewrite identity and references.
+        # Explicit repair must happen before ordinary reads or mutations.
+        from org_workspace._vendor.orgparse import loads
+        source = Path(path).read_text(encoding='utf-8')
+        identities = [node.get_property('ID') for node in loads(source)[1:]
+                      if node.get_property('ID')]
+        if len(identities) != len(set(identities)):
+            raise ValueError('duplicate Org IDs require explicit identity reconciliation')
+        # Loading a file again replaces its own index entries.
+        for identity in identities:
+            existing = self.find_by_id(identity)
+            if existing is not None and existing.path.resolve() != Path(path).resolve():
+                raise ValueError('duplicate Org IDs across files require explicit identity reconciliation')
         return super().load(path)
 
     def _safe_write(self, path, content):

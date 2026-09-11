@@ -15,6 +15,7 @@ Projecting without ingesting first is how a hand edit gets lost.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -72,9 +73,12 @@ def _with_org_header(space: Path, target: Path, text: str, *, remember: bool = T
 
 def phase(space: Path) -> int:
     try:
-        return int((space / MARKER).read_text().strip() or "0")
-    except (FileNotFoundError, ValueError):
+        value = (space / MARKER).read_text().strip()
+    except FileNotFoundError:
         return 0
+    if value not in ('0', '1'):
+        raise ValueError('invalid ledger phase marker; source-of-truth mode is unverified')
+    return int(value)
 
 
 @serialized
@@ -141,17 +145,26 @@ def main(argv: list[str] | None = None) -> int:
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--space")
     g.add_argument("--all", action="store_true")
+    ap.add_argument("--json", action="store_true", help="emit a complete versioned result for automation")
     ap.add_argument("--force", action="store_true",
                     help="bypass the legacy import scan; full source-preservation "
                          "checks still apply and cannot be overridden")
     a = ap.parse_args(argv)
     spaces = [a.root / a.space] if a.space else sorted(p for p in a.root.glob("[0-9]-*") if (p / ".datacore" / "events").is_dir())
     refused = 0
+    results = []
     for s in spaces:
         line = project_space(s, force=a.force)
         if line.startswith("REFUSED"):
             refused += 1
-        print(f"  {s.name:14} {line}")
+        status = ('refused' if line.startswith('REFUSED') else
+                  'generated' if line.startswith('generated ') else 'authored')
+        results.append({'space': s.name, 'status': status})
+        if not a.json:
+            print(f"  {s.name:14} {line}")
+    if a.json:
+        # No task titles, source content or exception details in automation output.
+        print(json.dumps({'version': 1, 'spaces': results}))
     # Non-zero so a caller can tell. A refusal that exits 0 is the same silence
     # this guard exists to break.
     return 1 if refused else 0

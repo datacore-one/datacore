@@ -149,3 +149,23 @@ def test_dedup_preserves_different_bodies_and_original_identifiers(documents):
     exercise()
     text = source.read_text()
     assert ':ID: duplicate' in text and 'shared body' in text and 'unique body' in text
+@pytest.mark.parametrize('across_files', [False, True])
+def test_load_cannot_silently_reassign_duplicate_identity(tmp_path, across_files):
+    from org_transaction import SafeOrgWorkspace, serialized
+    first = tmp_path / 'first.org'
+    second = tmp_path / 'second.org'
+    text = '* TODO One\n:PROPERTIES:\n:ID: shared\n:END:\n'
+    first.write_text(text if across_files else text + text.replace('One', 'Two'))
+    second.write_text(text.replace('One', 'Two'))
+    before = {p: p.read_bytes() for p in (first, second)}
+    @serialized
+    def attempt():
+        ws = SafeOrgWorkspace()
+        ws.load(first)
+        if across_files:
+            ws.load(second)
+        ws.set_heading(ws.find_by_id('shared'), 'Changed')
+        ws.save(first)
+    with pytest.raises(ValueError, match='duplicate Org IDs'):
+        attempt()
+    assert {p: p.read_bytes() for p in before} == before
