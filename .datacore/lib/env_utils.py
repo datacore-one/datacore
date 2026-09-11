@@ -16,7 +16,7 @@ def parse_env_value(value: str) -> str:
     import shlex
     value = value.strip()
     if value.startswith(("'", '"')):
-        parts = shlex.split(value, comments=False, posix=True)
+        parts = shlex.split(value, comments=True, posix=True)
         if len(parts) != 1:
             raise ValueError("invalid quoted environment value")
         return parts[0]
@@ -24,24 +24,45 @@ def parse_env_value(value: str) -> str:
 
 
 def parse_env_file(path: Path) -> Dict[str, str]:
-    """Parse a .env file into a dict. Skips comments and blank lines."""
+    """Parse literal assignments completely before callers apply any value.
+
+    Blank lines/comments are allowed. Ambiguous, duplicate, malformed or
+    unreadable configuration is an error; diagnostics never echo its values.
+    """
     result = {}
     path = Path(path)
-    if not path.exists():
+    try:
+        with path.open('rb') as f:
+            raw = f.read(1_048_577)
+    except FileNotFoundError:
+        if path.is_symlink():
+            raise ValueError('environment file symlink is unavailable') from None
         return result
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if line.startswith("export "):
-                line = line[7:]
-            if "=" in line:
-                key, _, val = line.partition("=")
-                key = key.strip()
-                val = parse_env_value(val)
-                if key:
-                    result[key] = val
+    except OSError:
+        raise ValueError('environment file is unreadable') from None
+    if len(raw) > 1_048_576:
+        raise ValueError('environment file exceeds 1 MiB')
+    try:
+        lines = raw.decode('utf-8').splitlines()
+    except UnicodeError:
+        raise ValueError('environment file is not UTF-8') from None
+    for number, line in enumerate(lines, 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:]
+        key, separator, val = line.partition('=')
+        key = key.strip()
+        if not separator or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) or key in result:
+            raise ValueError(f'invalid or duplicate environment assignment at line {number}')
+        try:
+            val = parse_env_value(val)
+        except ValueError:
+            raise ValueError(f'invalid quoted environment value at line {number}') from None
+        if '\0' in val:
+            raise ValueError(f'invalid environment value at line {number}')
+        result[key] = val
     return result
 
 
@@ -60,10 +81,12 @@ def load_env_files(paths: Optional[List[Path]] = None, override: bool = False) -
         ]
 
     loaded = {}
+    pending = {}
     for p in paths:
         parsed = parse_env_file(p)
         for k, v in parsed.items():
-            if override or k not in os.environ:
-                os.environ[k] = v
+            if override or (k not in os.environ and k not in pending):
+                pending[k] = v
             loaded[k] = v
+    os.environ.update(pending)
     return loaded

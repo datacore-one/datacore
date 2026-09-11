@@ -96,6 +96,7 @@ jobs:
             .datacore/lib/tests/test_writeback_preservation.py \
             .datacore/lib/tests/test_conflict_preservation.py \
             .datacore/lib/tests/test_credential_preservation.py \
+            .datacore/lib/tests/test_env_configuration.py \
             .datacore/lib/tests/test_git_privacy.py \
             .datacore/lib/tests/test_git_preservation.py \
             .datacore/lib/tests/test_ledger_publish_safe.py \
