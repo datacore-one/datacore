@@ -10,6 +10,7 @@ or credential boundary.
 from __future__ import annotations
 
 import os
+import stat
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -51,6 +52,26 @@ def publication_hooks(repo: Path) -> Path:
         raise RuntimeError('Cannot resolve configured Git hooks')
     path = Path(result.stdout.strip())
     return (repo / path).resolve() if not path.is_absolute() else path
+
+
+def allocate_publication_workspace(repo: Path) -> Path:
+    """Retain recovery data with its repository, outside OS temporary cleanup.
+
+    The shared Git directory also gives linked worktrees one recovery location.
+    This is deliberately outside tracked source paths and private to its owner.
+    Allocation does not authorize automatic reclamation of earlier workspaces.
+    """
+    common = Path(_checked(repo, 'rev-parse', '--path-format=absolute', '--git-common-dir')).resolve()
+    root = common / 'datacore-publication-workspaces'
+    try:
+        root.mkdir(mode=0o700, exist_ok=True)
+        metadata = root.lstat()
+        if (not stat.S_ISDIR(metadata.st_mode) or root.is_symlink()
+                or metadata.st_uid != os.getuid() or metadata.st_mode & 0o077):
+            raise RuntimeError('Publication recovery directory requires private owner permissions')
+        return Path(tempfile.mkdtemp(prefix='publication-', dir=root)).resolve()
+    except OSError:
+        raise RuntimeError('Cannot allocate persistent publication recovery workspace') from None
 
 
 @dataclass(frozen=True)

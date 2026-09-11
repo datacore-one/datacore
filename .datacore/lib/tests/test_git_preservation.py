@@ -198,6 +198,267 @@ def test_publication_filename_is_literal_not_a_git_pattern(repo):
     assert git(repo, 'cat-file', '-e', 'HEAD:notes/report-other.md', check=False).returncode != 0
 
 
+@pytest.mark.parametrize('hook_setting', ['default', 'relative', 'absolute'])
+def test_cross_branch_publication_enforces_configured_commit_hooks(repo, tmp_path, hook_setting):
+    git(repo, 'checkout', '-qb', 'feature')
+    hooks = repo / '.git/hooks' if hook_setting != 'absolute' else tmp_path / 'hooks'
+    hooks.mkdir(exist_ok=True)
+    if hook_setting == 'default':
+        git(repo, 'config', '--unset', 'core.hooksPath')
+    else:
+        git(repo, 'config', 'core.hooksPath', '.git/hooks' if hook_setting == 'relative' else str(hooks))
+    hook = hooks / 'pre-commit'
+    hook.write_text('#!/bin/sh\nexit 1\n'); hook.chmod(0o755)
+    note = repo / 'notes/new.md'; note.write_text('valuable unpublished output\n')
+    (repo / 'other.txt').write_text('independent staged output\n'); git(repo, 'add', 'other.txt')
+    before = (git(repo, 'rev-parse', 'main').stdout, git(repo, 'rev-parse', 'HEAD').stdout,
+              (repo / '.git/index').read_bytes())
+    with pytest.raises(knowledge.GitError):
+        knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'hook must reject', push=False)
+    assert (git(repo, 'rev-parse', 'main').stdout, git(repo, 'rev-parse', 'HEAD').stdout,
+            (repo / '.git/index').read_bytes()) == before
+    assert note.read_text() == 'valuable unpublished output\n'
+
+
+def test_cross_branch_publishes_the_validated_bytes_not_a_later_symlink(repo, tmp_path, monkeypatch):
+    git(repo, 'checkout', '-qb', 'feature')
+    note = repo / 'notes/new.md'; note.write_text('captured output\n')
+    outside = tmp_path / 'private.txt'; outside.write_text('unrelated private bytes\n')
+    original = knowledge._git
+    changed = []
+    def race(path, *args, **kwargs):
+        if 'hash-object' in args and not changed:
+            note.unlink(); note.symlink_to(outside); changed.append(True)
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(knowledge, '_git', race)
+    knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'capture once', push=False)
+    assert changed, 'the race must occur after source capture and before hashing'
+    assert git(repo, 'show', 'main:notes/new.md').stdout == 'captured output\n'
+    assert note.is_symlink() and outside.read_text() == 'unrelated private bytes\n'
+
+
+def test_cross_branch_refuses_a_destination_checked_out_elsewhere(repo, tmp_path):
+    git(repo, 'checkout', '-qb', 'feature')
+    other = tmp_path / 'other-writer'
+    git(repo, 'worktree', 'add', str(other), 'main')
+    note = repo / 'notes/new.md'; note.write_text('own output\n')
+    (other / 'notes/base.md').write_text('another writer has unsaved work\n')
+    before = git(repo, 'rev-parse', 'main').stdout
+    with pytest.raises(knowledge.GitError):
+        knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'do not move their HEAD', push=False)
+    assert git(repo, 'rev-parse', 'main').stdout == before
+    assert (other / 'notes/base.md').read_text() == 'another writer has unsaved work\n'
+
+
+@pytest.mark.parametrize('change', ['extra-file', 'changed-output', 'changed-parent'])
+def test_cross_branch_hook_cannot_change_the_published_tree_or_parent(repo, tmp_path, change):
+    git(repo, 'checkout', '-qb', 'feature')
+    hooks = tmp_path / 'checks'; hooks.mkdir()
+    git(repo, 'config', 'core.hooksPath', str(hooks))
+    if change == 'changed-parent':
+        body = 'git -c core.hooksPath=/dev/null commit --allow-empty -m unexpected-parent\n'
+    elif change == 'extra-file':
+        body = 'echo unexpected > extra.txt\ngit add extra.txt\n'
+    else:
+        body = 'echo changed > notes/new.md\ngit add notes/new.md\n'
+    hook = hooks / 'pre-commit'; hook.write_text('#!/bin/sh\n'+body); hook.chmod(0o755)
+    note = repo / 'notes/new.md'; note.write_text('captured output\n')
+    before = git(repo, 'rev-parse', 'main').stdout
+    with pytest.raises(knowledge.GitError):
+        knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'checked tree', push=False)
+    assert git(repo, 'rev-parse', 'main').stdout == before
+    assert note.read_text() == 'captured output\n'
+    assert git(repo, 'branch', '--show-current').stdout.strip() == 'feature'
+
+
+def test_cross_branch_rechecks_destination_and_reserves_against_checkout(repo, tmp_path, monkeypatch):
+    git(repo, 'checkout', '-qb', 'feature')
+    note = repo / 'notes/new.md'; note.write_text('own output\n')
+    base = git(repo, 'rev-parse', 'main').stdout.strip()
+    new_tip = git(repo, 'commit-tree', f'{base}^{{tree}}', '-p', base, '-m', 'other writer').stdout.strip()
+    original = knowledge._git
+    races = []
+    def advance(path, *args, **kwargs):
+        if args[:2] == ('update-ref', 'refs/heads/main'):
+            checkout = git(repo, 'worktree', 'add', str(tmp_path / 'competing-checkout'), 'main', check=False)
+            assert checkout.returncode != 0, 'Git must reserve the target during publication'
+            git(repo, 'update-ref', 'refs/heads/main', new_tip, base)
+            races.append(True)
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(knowledge, '_git', advance)
+    with pytest.raises(knowledge.GitError):
+        knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'stale base', push=False)
+    assert races and git(repo, 'rev-parse', 'main').stdout.strip() == new_tip
+    assert note.read_text() == 'own output\n'
+    git(repo, 'worktree', 'add', str(tmp_path / 'released-checkout'), 'main')
+
+
+def test_cross_branch_push_uses_captured_commit_even_if_local_branch_advances(repo, tmp_path, monkeypatch):
+    remote = tmp_path / 'remote.git'; git(repo, 'init', '--bare', str(remote))
+    git(repo, 'remote', 'add', 'origin', str(remote)); git(repo, 'push', 'origin', 'main')
+    git(repo, 'checkout', '-qb', 'feature')
+    note = repo / 'notes/new.md'; note.write_text('own output\n')
+    original = knowledge._git
+    advanced = []
+    def race(path, *args, **kwargs):
+        if args[0] == 'push':
+            base = git(repo, 'rev-parse', 'main').stdout.strip()
+            other = git(repo, 'commit-tree', f'{base}^{{tree}}', '-p', base, '-m', 'not authorized by this call').stdout.strip()
+            git(repo, 'update-ref', 'refs/heads/main', other, base); advanced.append(other)
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(knowledge, '_git', race)
+    published = knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'exact source')
+    assert advanced and git(repo, 'rev-parse', 'main').stdout.strip() == advanced[0]
+    assert git(remote, 'rev-parse', 'main').stdout.strip() == published
+
+
+def test_cross_branch_ignored_hook_hardlink_cannot_truncate_external_file(repo, tmp_path):
+    (repo / '.gitignore').write_text('notes/new.md\n')
+    git(repo, 'add', '.gitignore'); git(repo, 'commit', '-qm', 'ignore generated notes')
+    git(repo, 'checkout', '-qb', 'feature')
+    hooks = tmp_path / 'checks'; hooks.mkdir()
+    outside = tmp_path / 'independent-file'; outside.write_text('independent data\n')
+    hook = hooks / 'post-checkout'
+    hook.write_text('#!/bin/sh\nln '+shlex.quote(str(outside))+' notes/new.md\n'); hook.chmod(0o755)
+    git(repo, 'config', 'core.hooksPath', str(hooks))
+    note = repo / 'notes/new.md'; note.write_text('published output\n')
+    knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'no truncation', push=False)
+    assert outside.read_text() == 'independent data\n'
+    assert git(repo, 'show', 'main:notes/new.md').stdout == 'published output\n'
+
+
+def test_cross_branch_non_utf8_hook_error_is_sanitized_and_retains_late_output(repo, tmp_path):
+    git(repo, 'checkout', '-qb', 'feature')
+    hooks = tmp_path / 'checks'; hooks.mkdir()
+    hook = hooks / 'pre-commit'
+    hook.write_text('#!/bin/sh\nprintf "\\377 private-output" >&2\necho recover > ignored-recovery\nexit 1\n')
+    hook.chmod(0o755); git(repo, 'config', 'core.hooksPath', str(hooks))
+    note = repo / 'notes/new.md'; note.write_text('own output\n')
+    with pytest.raises(knowledge.GitError) as error:
+        knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'refused', push=False)
+    assert 'private-output' not in str(error.value)
+    worktrees = git(repo, 'worktree', 'list', '--porcelain').stdout.splitlines()
+    retained = [Path(line[9:]) for line in worktrees if line.startswith('worktree ')]
+    assert any((path / 'ignored-recovery').read_text() == 'recover\n'
+               for path in retained if (path / 'ignored-recovery').exists())
+    assert note.read_text() == 'own output\n'
+
+
+@pytest.mark.parametrize('branch', ['main', 'feature'])
+@pytest.mark.parametrize('path', ['notes/missing.md', 'notes'])
+def test_publication_missing_or_non_file_output_is_not_acknowledged(repo, branch, path):
+    if branch == 'feature':
+        git(repo, 'checkout', '-qb', branch)
+    before = git(repo, 'rev-parse', 'main').stdout
+    with pytest.raises(knowledge.GitError, match='missing or not a regular file'):
+        knowledge.commit_to_branch(repo, 'main', [path], 'no silent omission', push=False)
+    assert git(repo, 'rev-parse', 'main').stdout == before
+
+
+def test_same_branch_rejecting_hook_cannot_claim_there_is_nothing_to_commit(repo, tmp_path):
+    hooks = tmp_path / 'checks'; hooks.mkdir()
+    hook = hooks / 'pre-commit'
+    hook.write_text('#!/bin/sh\nprintf "nothing to commit\\n\\377 private-output" >&2\nexit 1\n')
+    hook.chmod(0o755); git(repo, 'config', 'core.hooksPath', str(hooks))
+    (repo / 'notes/new.md').write_text('unpublished output\n')
+    before = git(repo, 'rev-parse', 'main').stdout
+    with pytest.raises(knowledge.GitError) as error:
+        knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'must refuse', push=False)
+    assert 'private-output' not in str(error.value)
+    assert git(repo, 'rev-parse', 'main').stdout == before
+
+
+@pytest.mark.parametrize('branch', ['main', 'feature'])
+def test_publication_ignores_inherited_repository_and_index_selectors(repo, tmp_path, monkeypatch, branch):
+    if branch == 'feature':
+        git(repo, 'checkout', '-qb', branch)
+    other = tmp_path / 'unrelated-repository'; other.mkdir()
+    git(other, 'init', '-qb', 'main')
+    (repo / 'notes/new.md').write_text('own output\n')
+    with monkeypatch.context() as environment:
+        environment.setenv('GIT_DIR', str(other / '.git'))
+        environment.setenv('GIT_WORK_TREE', str(other))
+        environment.setenv('GIT_INDEX_FILE', str(other / '.git/index'))
+        sha = knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'intended repo', push=False)
+    assert sha == git(repo, 'rev-parse', 'main').stdout.strip()
+    assert git(other, 'rev-parse', '--verify', 'HEAD', check=False).returncode != 0
+    assert not (other / '.git/index').exists()
+
+
+@pytest.mark.parametrize('filter_kind', ['eol', 'custom'])
+def test_cross_branch_capture_preserves_git_filters_and_retry_idempotency(repo, filter_kind):
+    attr = 'text eol=lf' if filter_kind == 'eol' else 'filter=marker'
+    (repo / '.gitattributes').write_text('notes/*.md '+attr+'\n')
+    git(repo, 'add', '.gitattributes'); git(repo, 'commit', '-qm', 'attributes')
+    if filter_kind == 'custom':
+        git(repo, 'config', 'filter.marker.clean', 'sed s/WORK:/CANON:/g')
+        git(repo, 'config', 'filter.marker.smudge', 'cat')
+        git(repo, 'config', 'filter.marker.required', 'true')
+    git(repo, 'checkout', '-qb', 'feature')
+    path = repo / 'notes/new.md'
+    raw = b'line\r\n' if filter_kind == 'eol' else b'WORK: output\n'
+    canonical = 'line\n' if filter_kind == 'eol' else 'CANON: output\n'
+    path.write_bytes(raw)
+    sha = knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'canonical content', push=False)
+    assert git(repo, 'show', f'{sha}:notes/new.md').stdout == canonical
+    assert knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'retry', push=False) == ''
+    assert path.read_bytes() == raw
+
+
+def test_cross_branch_required_filter_failure_preserves_destination(repo):
+    (repo / '.gitattributes').write_text('notes/*.new filter=marker\n')
+    git(repo, 'add', '.gitattributes'); git(repo, 'commit', '-qm', 'required filter')
+    git(repo, 'config', 'filter.marker.clean', 'false')
+    git(repo, 'config', 'filter.marker.required', 'true')
+    git(repo, 'checkout', '-qb', 'feature')
+    path = repo / 'notes/output.new'; path.write_bytes(b'preserve these bytes')
+    before = git(repo, 'rev-parse', 'main').stdout
+    with pytest.raises(knowledge.GitError):
+        knowledge.commit_to_branch(repo, 'main', ['notes/output.new'], 'must refuse', push=False)
+    assert git(repo, 'rev-parse', 'main').stdout == before
+    assert path.read_bytes() == b'preserve these bytes'
+
+
+def test_publication_recovery_uses_persistent_private_git_storage(repo, tmp_path, monkeypatch):
+    import worktree_lifecycle
+    volatile = tmp_path / 'os-temporary'; volatile.mkdir()
+    monkeypatch.setattr(worktree_lifecycle.tempfile, 'tempdir', str(volatile))
+    parent = worktree_lifecycle.allocate_publication_workspace(repo)
+    assert parent.is_relative_to(repo / '.git/datacore-publication-workspaces')
+    assert parent.stat().st_mode & 0o077 == 0
+    assert parent.parent.stat().st_mode & 0o077 == 0
+    git(repo, 'checkout', '-qb', 'feature')
+    (repo / 'notes/new.md').write_text('output\n')
+    knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'retained safely', push=False)
+    worktrees = git(repo, 'worktree', 'list', '--porcelain').stdout.splitlines()
+    retained = [Path(line[9:]) for line in worktrees if line.startswith('worktree ') and Path(line[9:]) != repo]
+    assert retained and all(path.is_relative_to(parent.parent) for path in retained)
+    assert not list(volatile.iterdir())
+
+
+@pytest.mark.parametrize('unsafe', ['symlink', 'shared'])
+def test_publication_recovery_refuses_untrusted_directory(repo, tmp_path, unsafe):
+    import worktree_lifecycle
+    root = repo / '.git/datacore-publication-workspaces'
+    if unsafe == 'symlink':
+        outside = tmp_path / 'outside'; outside.mkdir()
+        root.symlink_to(outside, target_is_directory=True)
+    else:
+        root.mkdir(mode=0o755)
+        root.chmod(0o755)
+    with pytest.raises(RuntimeError, match='private owner permissions'):
+        worktree_lifecycle.allocate_publication_workspace(repo)
+
+
+def test_linked_worktrees_share_one_persistent_recovery_root(repo, tmp_path):
+    import worktree_lifecycle
+    linked = tmp_path / 'linked'
+    git(repo, 'worktree', 'add', '--detach', str(linked), 'HEAD')
+    first = worktree_lifecycle.allocate_publication_workspace(repo)
+    second = worktree_lifecycle.allocate_publication_workspace(linked)
+    assert first.parent == second.parent and first != second
+
+
 @pytest.mark.parametrize('stage', ['host', 'origin'])
 def test_relay_preserves_forked_history_without_reset_or_push(repo, monkeypatch, stage):
     calls = []
