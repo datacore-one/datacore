@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 import re
 import tempfile
+import time
 
 from .genesis import body_text, task_payload
 from .edits import EditConflict, merge_values, conditional_payload
@@ -118,7 +119,7 @@ def sync_generated(space, state, actor, dry_run=False):
     """Plan all changes before emitting; stale unchanged projection fields are inert."""
     from .log import EventLog
     current_text = (Path(space) / 'org/next_actions.org').read_text(encoding='utf-8')
-    proposed = project(state, space=Path(space).name).text
+    proposed = project(state, space=Path(space).name, as_of=time.time()).text
     merged = reconcile(space, current_text, proposed)
     live = snapshot(proposed, Path(space).name)
     updates, dismissals = [], []

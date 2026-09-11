@@ -18,6 +18,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 LIB = Path(__file__).resolve().parent
@@ -126,7 +127,7 @@ def project_space(space: Path, force: bool = False) -> str:
         return (f"REFUSED — {len(pending)} heading(s) in {ORG} are not in the "
                 f"ledger; ingest first, then project ({titles})")
 
-    text = project(fold(read_events(space)), space=space.name).text
+    text = project(fold(read_events(space)), space=space.name, as_of=time.time()).text
     target = space / ORG
     text = _with_org_header(space, target, text)
     target.parent.mkdir(parents=True, exist_ok=True)

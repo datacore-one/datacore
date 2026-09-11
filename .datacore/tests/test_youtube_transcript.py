@@ -2,10 +2,9 @@
 """Tests for youtube_transcript.py — YouTube transcript extraction engine."""
 
 import json
-import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -771,7 +770,7 @@ class TestCLI:
     """Test the CLI entry point."""
 
     @patch('youtube_transcript.process_url')
-    def test_cli_prints_json(self, mock_process):
+    def test_cli_prints_json(self, mock_process, monkeypatch, capsys):
         """CLI should output valid JSON to stdout."""
         mock_process.return_value = {
             'type': 'video',
@@ -780,17 +779,14 @@ class TestCLI:
             'errors': [],
         }
 
-        script_path = Path(__file__).parent.parent / 'lib' / 'youtube_transcript.py'
-        result = subprocess.run(
-            ['python3', str(script_path), '--url', 'https://www.youtube.com/watch?v=test123'],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        # We can't easily mock the subprocess call, so just check it runs
-        # (it will attempt real network calls unless we mock differently)
-        # The important thing is the script is importable and has main()
-        assert result.returncode in (0, 1)  # 0 if videos, 1 if errors
+        import youtube_transcript
+        url = 'https://www.youtube.com/watch?v=test123'
+        monkeypatch.setattr(sys, 'argv', ['youtube_transcript.py', '--url', url])
+        with pytest.raises(SystemExit) as result:
+            youtube_transcript.main()
+        assert result.value.code == 0
+        mock_process.assert_called_once_with(url)
+        assert json.loads(capsys.readouterr().out) == mock_process.return_value
 
     def test_module_importable(self):
         """Module should be importable without side effects."""

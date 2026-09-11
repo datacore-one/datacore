@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import warnings
 
@@ -80,7 +81,33 @@ async def main():
         speech.synthesize_google('Synthetic runtime fixture.', target, allow_cloud=True)
         assert target.read_bytes() == b'fixture mp3 bytes' and requests
         results['real_gtts_formatter_without_unsafe_transport_or_click_editor'] = 'PASS'
-    results['versions'] = {name: md.version(name) for name in ('mcp', 'pydantic', 'pydantic-settings', 'gtts', 'click')}
+        # Use actual dependency result types at the adapter boundary, with
+        # provider requests replaced by synthetic transcript delivery.
+        from unittest.mock import patch
+        from youtube_transcript_api import YouTubeTranscriptApi
+        from youtube_transcript_api._transcripts import (
+            Transcript, TranscriptList, FetchedTranscript, FetchedTranscriptSnippet,
+        )
+        import youtube_transcript
+        fetched = FetchedTranscript([FetchedTranscriptSnippet('Synthetic transcript.', 0.0, 1.0)],
+                                    'fixture', 'English', 'en', False)
+        transcript = Transcript(None, 'fixture', 'https://example.invalid/fixture', 'English', 'en', False, [])
+        available = TranscriptList('fixture', {'en': transcript}, {}, [])
+        with patch.object(YouTubeTranscriptApi, 'list', return_value=available), \
+                patch.object(Transcript, 'fetch', return_value=fetched):
+            result = youtube_transcript.fetch_transcript('fixture')
+        assert result['error'] is None
+        assert result['transcript'] == 'Synthetic transcript.'
+        assert result['transcript_timestamped'] == fetched.to_raw_data()
+        results['transcript_dependency_result_types'] = 'PASS'
+        cli = subprocess.run([youtube_transcript._yt_dlp_binary(), '--ignore-config', '--version'],
+                             cwd=base, env={'HOME': str(base), 'PATH': os.environ.get('PATH', os.defpath)},
+                             capture_output=True, text=True, timeout=10, check=True)
+        from packaging.version import Version
+        assert Version(cli.stdout.strip()) == Version(md.version('yt-dlp'))
+        results['declared_metadata_cli_version'] = 'PASS'
+    results['versions'] = {name: md.version(name) for name in (
+        'mcp', 'pydantic', 'pydantic-settings', 'gtts', 'click', 'youtube-transcript-api', 'yt-dlp')}
     print(json.dumps(results, indent=2))
 
 

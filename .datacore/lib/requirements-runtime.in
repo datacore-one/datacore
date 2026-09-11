@@ -8,5 +8,7 @@
 # Upgrade these deliberately with the runtime compatibility suite.
 mcp==1.28.1
 org-workspace==0.5.1
+youtube-transcript-api==1.2.4
+yt-dlp==2026.8.19
 cryptography==50.0.0
 requests==2.33.0

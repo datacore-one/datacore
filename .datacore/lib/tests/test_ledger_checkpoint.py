@@ -123,6 +123,22 @@ def test_a_real_loss_is_still_reported():
     assert not ok and detail == "1 altered (e.g. a)", detail
 
 
+def test_source_file_tag_loss_is_detected_and_mixed_scopes_round_trip():
+    from copy import deepcopy
+    first = _item('a', 'First source', level=1)
+    second = _item('b', 'Second source', level=1)
+    first.payload['filetags'] = ['first']
+    second.payload['filetags'] = ['second']
+    state = _state(first, second)
+    damaged = deepcopy(state)
+    damaged.items['a'].payload['filetags'] = []
+    assert not compare(_fingerprint(state), _fingerprint(damaged))[0]
+    live, restored, _ = round_trip(state, '9-fixture')
+    assert compare(live, restored)[0]
+    assert live['a'][2] == ('first',)
+    assert live['b'][2] == ('second',)
+
+
 @pytest.mark.parametrize('field,value', [('body', 'valuable notes'), ('properties', {'CUSTOM': 'valuable'}),
                                       ('priority', 'A'), ('created', '[2026-09-11 Fri 08:45]')])
 def test_view_diagnostic_detects_nonheading_data_loss(field, value):

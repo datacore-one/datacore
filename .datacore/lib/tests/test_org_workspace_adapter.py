@@ -26,7 +26,7 @@ def run_adapter(*args):
     enshrined the defect where an error result exited 0 and a caller trusting
     the exit code believed a refused write had happened."""
     result = subprocess.run(
-        ["python3", str(ADAPTER)] + list(args),
+        [sys.executable, str(ADAPTER)] + list(args),
         capture_output=True, text=True,
     )
     body = json.loads(result.stdout)
@@ -320,7 +320,7 @@ class TestV2LedgerWrite:
                              "--property", "SURFACE=2-datacore", "--property", "DONE_WHEN=the file exists")
         assert result.get("added") is True and result.get("ledger_actor")
         import json
-        events = [json.loads(l) for f in (work_dir.parent / ".datacore" / "events").glob("*.jsonl") for l in f.read_text().splitlines() if l.strip()]
+        events = [json.loads(line) for f in (work_dir.parent / ".datacore" / "events").glob("*.jsonl") for line in f.read_text().splitlines() if line.strip()]
         created = [e for e in events if e["type"] == "item.create" and e["payload"]["id"] == result["id"]]
         assert len(created) == 1
         org = created[0]["payload"]["org"]
@@ -443,7 +443,7 @@ class TestWritesSurviveAProjectionRebuild:
         # Regenerate the projection from the ledger — the thing that used to
         # erase these writes.
         proj = ADAPTER.parent / "ledger_project_org.py"
-        r = subprocess.run(["python3", str(proj), "--space", space.name,
+        r = subprocess.run([sys.executable, str(proj), "--space", space.name,
                             "--root", str(tmp_path)],
                            capture_output=True, text=True, timeout=180)
         assert r.returncode == 0, f"projection failed: {r.stdout}{r.stderr}"

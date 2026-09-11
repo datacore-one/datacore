@@ -129,7 +129,7 @@ def _heading_tags(state, known: set[str], iid: str) -> set[str]:
     base = p.get("tags")
     if parent and parent not in known:
         base = p.get("effective_tags") or p.get("tags") or []
-    return set(_clean_title_and_tags(item.title, base)[1])
+    return set(_clean_title_and_tags(item.title, list(base or []) + list(p.get('filetags') or []))[1])
 
 
 def _fingerprint(state, space_filetags: set | None = None,
@@ -151,14 +151,10 @@ def _fingerprint(state, space_filetags: set | None = None,
     derived from the ledger's parent links, see `_rendered_tags` -- not the
     per-item snapshot recorded at import.
 
-    FILE-LEVEL tags are subtracted from both sides. `#+FILETAGS: :gtd:` applies
-    to every item in the file, so it carries no per-item information -- but the
-    two sides disagree about it: a promoted orphan's snapshot may carry the
-    filetag of the file it was ingested from, while re-importing a projection
-    that reproduces the FILETAGS line picks up the projection's. That asymmetry
-    reported 16 untagged items in 0-personal as "altered", every one of them
-    differing by exactly the same constant. Subtracting it compares what is
-    actually per-item.
+    Source-file tags are part of each task's effective tags. A combined view
+    puts only their intersection in its header, so they must also be compared
+    when represented directly on individual headings. An explicitly supplied
+    common space tag set may be removed symmetrically for legacy diagnostics.
     """
     known = {i.id for i in projected_items(state, space=space)}
     out = {}
@@ -178,17 +174,8 @@ def _fingerprint(state, space_filetags: set | None = None,
         if p.get("section"):
             continue
         eff = _rendered_tags(state, known, iid)
-        # Subtract the item's OWN recorded filetags, and also the file the
-        # round-trip actually goes through. The restored side is re-imported
-        # from a projection carrying next_actions.org's `#+FILETAGS:`, so it
-        # always records and subtracts those -- while an item that never sat in
-        # next_actions.org has `filetags: None` and subtracts nothing.
-        # 0-personal's org-20260831-203052 lives in inbox.org, carries `gtd`
-        # (next_actions' filetag) in `tags`, and failed the round-trip on
-        # exactly that one tag. Subtracting the space's filetags on BOTH sides
-        # compares like with like instead of asking the live side to have
-        # recorded something only the projection can know.
-        eff -= set(p.get("filetags") or [])
+        # Remove only an explicitly supplied common space constant, never
+        # discard a source-specific tag that could be lost or reassigned.
         eff -= (space_filetags or set())
         title = _clean_title_and_tags(item.title, p.get("tags"))[0]
         # Normalise timestamps before comparing. Some writers store a bare

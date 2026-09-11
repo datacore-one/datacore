@@ -11,6 +11,8 @@ packaging>=24.0       # verify runtime versions against declared requirements
 # live in .datacore/venv — see venv_site_packages() in venv_bootstrap.py.
 feedparser>=6.0   # news module: feed_fetcher.py
 gTTS>=2.5         # voice-terminal: speak_brief.py fallback when kokoro_onnx is absent
+youtube-transcript-api>=1.2.4,<1.3  # transcript reader uses the instance/list API
+yt-dlp>=2026.8.19  # transcript reader's metadata/playlist subprocess
 
 # Calendar sync (optional - needed for /today calendar integration)
 # google-api-python-client>=2.0

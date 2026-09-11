@@ -2,9 +2,7 @@
 """Tests for org_parser.py — Tier 0 (Parser Unification)."""
 
 import json
-import os
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -154,7 +152,7 @@ CLOCK: [2026-02-21 Sat 09:00]--[2026-02-21 Sat 10:00] =>  1:00
         content = org_file.read_text()
         # New entry should be first (newest first)
         lines = content.split('\n')
-        logbook_idx = next(i for i, l in enumerate(lines) if ':LOGBOOK:' in l)
+        logbook_idx = next(i for i, line in enumerate(lines) if ':LOGBOOK:' in line)
         assert '2026-02-22' in lines[logbook_idx + 1]
         assert '2026-02-21' in lines[logbook_idx + 2]
 
@@ -226,7 +224,7 @@ DEADLINE: <2026-12-31 Wed>
         import subprocess
         parser_path = Path(__file__).parent.parent / 'lib' / 'org_parser.py'
         result = subprocess.run(
-            ['python3', str(parser_path), 'deadlines',
+            [sys.executable, str(parser_path), 'deadlines',
              '--file', str(org_file), '--days', '365'],
             capture_output=True, text=True,
         )
@@ -247,7 +245,7 @@ DEADLINE: <2026-12-31 Wed>
         import subprocess
         parser_path = Path(__file__).parent.parent / 'lib' / 'org_parser.py'
         result = subprocess.run(
-            ['python3', str(parser_path), 'write-clock',
+            [sys.executable, str(parser_path), 'write-clock',
              '--file', str(org_file),
              '--heading-line', '2',
              '--start', '2026-02-22T10:00',

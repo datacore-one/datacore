@@ -7,6 +7,7 @@ cffi==2.1.1
 charset-normalizer==3.5.1
 click==8.5.0
 cryptography==50.0.0
+defusedxml==0.7.1
 h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
@@ -43,3 +44,5 @@ typing-inspection==0.4.4
 typing_extensions==4.16.0
 urllib3==2.7.0
 uvicorn==0.52.4
+youtube-transcript-api==1.2.4
+yt-dlp==2026.8.19

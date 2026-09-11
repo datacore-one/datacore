@@ -1,7 +1,7 @@
 # Core and OCR runtime profile
 
 `requirements-runtime.in` declares the core library, feed reader, optional
-cloud speech formatter and OCR service dependencies. `requirements-runtime.txt`
+cloud speech formatter, transcript reader and OCR service dependencies. `requirements-runtime.txt`
 locks their transitive versions and artifact hashes. It is separate from the
 test-tool environment in `requirements-audit.txt`.
 
@@ -28,6 +28,10 @@ checks a custom MCP lifespan, and exercises the installed gTTS formatter with
 its unsafe transport and Click editor/pager functions disabled. It makes no
 provider speech request. This check does not establish OS isolation, validate
 fleet coordination, or qualify other modules' separate dependency profiles.
+It also verifies the transcript adapter against actual library result types
+with synthetic provider delivery, and runs the declared metadata CLI's local
+version command with user configuration disabled. No video provider is queried;
+provider availability and credentials require separate authorized checks.
 
 CI checks the locked profile on Linux with Python 3.10, 3.12 and 3.14. A host
 still needs its own service, native-library and installed-module qualification.

@@ -7,7 +7,8 @@ generated artifact instead of multi-writer mutable state.
 Three properties, each of which exists because of a specific way this can go
 wrong:
 
-DETERMINISTIC. Same `LedgerState` in, byte-identical text out, every time, on
+DETERMINISTIC. Same `LedgerState` and explicit retention instant in,
+byte-identical text out, every time, on
 every machine. Nothing here reads the clock, the hostname, an absolute path,
 or a set/dict in nondeterministic order. Without this, two machines rendering
 the same state produce different bytes and every drift check is a false alarm
@@ -27,6 +28,7 @@ resolving it. Only its provenance changes -- announced by a header.
 from __future__ import annotations
 
 import re
+import math
 from datetime import date
 
 import hashlib
@@ -83,7 +85,7 @@ CLOSED_STATUSES = ("verified", "dismissed")
 CLOSED_RETENTION_DAYS = 1
 
 
-def _closed_within(item, days: int) -> bool:
+def _closed_within(item, days: int, as_of: float | None) -> bool:
     """Was this item closed inside the retention window?
 
     `closed_at` is an HLC -- "<ms-epoch>.<counter>.<actor>" -- so the timestamp
@@ -92,13 +94,16 @@ def _closed_within(item, days: int) -> bool:
     retro-fitted field cannot resurrect a year of finished work into the
     projection on first run.
     """
+    # Replay and backups retain closed items by default. A presentation caller
+    # must supply one explicit instant to request a rolling retention window.
+    if as_of is None:
+        return True
     raw = getattr(item, "closed_at", None)
     if not raw:
         return False
     try:
-        import time
         ms = float(str(raw).split(".")[0])
-        return (time.time() - ms / 1000.0) <= days * 86400
+        return math.isfinite(ms) and (as_of - ms / 1000.0) <= days * 86400
     except (ValueError, TypeError):
         return False
 
@@ -131,6 +136,7 @@ class Projection:
 
 
 _BARE_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+_WEEKDAYS = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
 
 
 _STAMP_DAY = re.compile(r"([<\[])(\d{4})-(\d{2})-(\d{2}) [A-Za-z]{2,3}(?=[ >\]])")
@@ -139,7 +145,7 @@ _STAMP_DAY = re.compile(r"([<\[])(\d{4})-(\d{2})-(\d{2}) [A-Za-z]{2,3}(?=[ >\]])
 def _fix_day(m: "re.Match") -> str:
     import datetime as _dt
     try:
-        day = _dt.date(int(m.group(2)), int(m.group(3)), int(m.group(4))).strftime("%a")
+        day = _WEEKDAYS[_dt.date(int(m.group(2)), int(m.group(3)), int(m.group(4))).weekday()]
     except ValueError:
         return m.group(0)
     return f"{m.group(1)}{m.group(2)}-{m.group(3)}-{m.group(4)} {day}"
@@ -178,7 +184,7 @@ def _org_stamp(value):
         d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
     except ValueError:
         return text          # not a real date; emit as-is rather than invent one
-    return f"<{text} {d.strftime('%a')}>"
+    return f"<{text} {_WEEKDAYS[d.weekday()]}>"
 
 def _drawer(props: dict) -> list[str]:
     """A PROPERTIES drawer with keys in sorted order.
@@ -290,9 +296,9 @@ def render_item(item, *, level: int | None = None) -> list[str]:
         try:
             import datetime
             ms = float(str(item.closed_at).split(".")[0])
-            when = datetime.datetime.fromtimestamp(ms / 1000.0)
-            lines.append("  CLOSED: " + when.strftime("[%Y-%m-%d %a %H:%M]"))
-        except (ValueError, TypeError):
+            when = datetime.datetime.fromtimestamp(ms / 1000.0, datetime.timezone.utc)
+            lines.append(f"  CLOSED: [{when:%Y-%m-%d} {_WEEKDAYS[when.weekday()]} {when:%H:%M}]")
+        except (ValueError, TypeError, OverflowError, OSError):
             pass
 
     sched, dead = _org_stamp(payload.get("scheduled")), _org_stamp(payload.get("deadline"))
@@ -366,16 +372,21 @@ def strip_drawers(body: str) -> str:
                    for literal, chunk in _body_chunks(body + ('\n' if not body.endswith('\n') else ''))).rstrip('\n')
 
 
-def projected_items(state: LedgerState, *, space: str | None = None) -> list:
+def projected_items(state: LedgerState, *, space: str | None = None,
+                    as_of: float | None = None) -> list:
     """The items a projection of `state` contains -- the ONE definition.
 
-    Live work, plus work finished recently enough to still be worth seeing;
-    anything closed longer ago belongs to the archive, not the action list.
+    Live work and closed work; an explicit UTC epoch instant applies the
+    action-list retention window. No instant means a complete replay view.
     Exposed because the checkpoint verifier must know exactly which ancestors
     are rendered: a child inherits tags from a parent that is in the file and
     from nothing else, and deciding that with a second copy of this filter is
     how the two drift apart.
     """
+    if as_of is not None and (isinstance(as_of, bool)
+                             or not isinstance(as_of, (float, int))
+                             or not math.isfinite(as_of)):
+        raise ValueError('projection retention instant must be finite epoch seconds')
     # A housekeeping closure is not finished work: a twin dismissed after an
     # id regeneration, or an orphan reconciled away, was never done or dropped
     # by anyone. Rendering it for the retention day put the same :ID: in the
@@ -386,13 +397,14 @@ def projected_items(state: LedgerState, *, space: str | None = None) -> list:
         item for item in state.items.values()
         if (item.status in LIVE_STATUSES
             or (item.status in CLOSED_STATUSES
-                and _closed_within(item, CLOSED_RETENTION_DAYS)
+                and _closed_within(item, CLOSED_RETENTION_DAYS, as_of)
                 and closure_kind(item) != "housekeeping"))
         and (space is None or (item.payload or {}).get("space", space) == space)
     ]
 
 
-def project(state: LedgerState, *, space: str | None = None) -> Projection:
+def project(state: LedgerState, *, space: str | None = None,
+            as_of: float | None = None) -> Projection:
     """Render live items from `state` as org text.
 
     Items are ordered by id -- a total, stable order that does not depend on
@@ -416,7 +428,7 @@ def project(state: LedgerState, *, space: str | None = None) -> Projection:
     # (which is the entire point of Phase 1) rendered as nothing. A valid event,
     # accepted by fold, producing a task nobody could see. Only an explicit
     # FOREIGN space is excluded now.
-    items = projected_items(state, space=space)
+    items = projected_items(state, space=space, as_of=as_of)
 
     # Depth-first by parent, so a child is emitted directly under its parent
     # rather than wherever its id happens to sort. Sorting the whole set by id
@@ -435,10 +447,14 @@ def project(state: LedgerState, *, space: str | None = None) -> Projection:
 
     ordered: list = []
 
-    def _walk(parent_id, depth):
-        for child in by_parent.get(parent_id, []):
-            ordered.append((child, depth))
-            _walk(child.id, depth + 1)
+    pending = [(item, 1) for item in reversed(by_parent.get(None, []))]
+    while pending:
+        child, depth = pending.pop()
+        ordered.append((child, depth))
+        pending.extend((item, depth + 1) for item in reversed(by_parent.get(child.id, [])))
+    if len(ordered) != len(items):
+        from .edits import EditConflict
+        raise EditConflict('cyclic parent relationships; preserve all items and reconcile their hierarchy')
 
     # NOTE: `depth` here is the tree depth. Recorded level is preferred below,
     # but CLAMPED to this + nothing deeper, because org files legitimately skip
@@ -447,7 +463,6 @@ def project(state: LedgerState, *, space: str | None = None) -> Projection:
     # and inherit its tags -- three tasks in 5-plur picked up anthropic/outreach
     # exactly this way.
 
-    _walk(None, 1)
     # Depth comes from each item's RECORDED level, not from its position in
     # this walk. The two differ whenever a task sat under a plain section
     # heading: that heading is not a task, so it is not a ledger item, so the
@@ -481,22 +496,21 @@ def project(state: LedgerState, *, space: str | None = None) -> Projection:
     items = resolved
 
     lines = [GENERATED_HEADER.rstrip("\n"), "", SEQ_TODO]
-    filetags: list[str] = []
-    for item in items:
-        ft = (item.payload or {}).get("filetags") if not isinstance(item, tuple) else None
-        if ft:
-            filetags = ft
-            break
-    if not filetags:
-        for cand in state.items.values():
-            ft = (cand.payload or {}).get("filetags")
-            if ft:
-                filetags = ft
-                break
+    # Source-file tags apply only to their original items. A combined view
+    # may promote the intersection to its file header; other tags travel on
+    # their own headings rather than leaking to unrelated tasks.
+    source_tags = [set((item.payload or {}).get('filetags') or []) for item, _ in items]
+    common_tags = set.intersection(*source_tags) if source_tags else set()
+    filetags = _clean_title_and_tags('', common_tags)[1]
     if filetags:
         lines.append("#+FILETAGS: :" + ":".join(filetags) + ":")
     lines.append("")
     for item, depth in items:
+        extra = set((item.payload or {}).get('filetags') or []) - common_tags
+        if extra:
+            payload = dict(item.payload)
+            payload['tags'] = sorted(set(payload.get('tags') or []) | extra)
+            item = replace(item, payload=payload)
         lines.extend(render_item(item, level=depth))
         lines.append("")
     return Projection(text="\n".join(lines).rstrip("\n") + "\n", item_count=len(items))
