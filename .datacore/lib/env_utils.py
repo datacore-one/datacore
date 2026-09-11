@@ -13,13 +13,49 @@ def _data_root() -> Path:
 
 def parse_env_value(value: str, *, inline_comments: bool = False) -> str:
     """Decode a literal shell-quoted value without expansion or execution."""
-    import shlex
     value = value.strip()
     if value.startswith(("'", '"')):
-        parts = shlex.split(value, comments=True, posix=True)
-        if len(parts) != 1:
+        # shlex preserves backslashes before $ and ` inside double quotes,
+        # unlike both POSIX shells and systemd EnvironmentFile. Decode the
+        # quoted token explicitly, without ever expanding variables/commands.
+        out = []
+        quote = None
+        ended = False
+        i = 0
+        while i < len(value):
+            char = value[i]
+            if quote == "'":
+                if char == "'":
+                    quote = None
+                else:
+                    out.append(char)
+            elif quote == '"':
+                if char == '"':
+                    quote = None
+                elif char == "\\" and i + 1 < len(value) and value[i + 1] in '\\"$`':
+                    i += 1
+                    out.append(value[i])
+                else:
+                    out.append(char)
+            elif char == '#':
+                break
+            elif char.isspace():
+                ended = True
+            elif ended:
+                raise ValueError("invalid quoted environment value")
+            elif char in "\"'":
+                quote = char
+            elif char == "\\":
+                i += 1
+                if i == len(value):
+                    raise ValueError("invalid quoted environment value")
+                out.append(value[i])
+            else:
+                out.append(char)
+            i += 1
+        if quote is not None:
             raise ValueError("invalid quoted environment value")
-        return parts[0]
+        return ''.join(out)
     if inline_comments:
         value = re.split(r'\s+#', value, maxsplit=1)[0].rstrip()
     return value

@@ -1,6 +1,5 @@
 """Malformed configuration must not leak values or partially select credentials."""
 import os
-from pathlib import Path
 
 import pytest
 from env_utils import parse_env_file, load_env_files
@@ -57,3 +56,16 @@ def test_valid_layer_precedence_is_preserved(tmp_path, monkeypatch, override, ex
         assert os.environ['FIXTURE_KEY'] == expected
     finally:
         os.environ.pop('FIXTURE_KEY', None)
+
+
+@pytest.mark.parametrize('value', [
+    '$HOME', '$(printf INJECTION)', '`printf INJECTION`',
+    "quote' dollar$ and back`tick", r'slash\$ and slash\`',
+])
+def test_shell_and_systemd_escaped_values_are_literal(tmp_path, value):
+    import re
+    # POSIX double quotes and systemd EnvironmentFile use these four escapes.
+    encoded = '"' + re.sub(r'([\\"$`])', r'\\\1', value) + '"'
+    path = tmp_path / 'runtime.env'
+    path.write_text('FIXTURE=' + encoded + '\n')
+    assert parse_env_file(path) == {'FIXTURE': value}
