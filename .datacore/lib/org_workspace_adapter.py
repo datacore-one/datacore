@@ -35,7 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tag_utils import sanitize_org_tags  # noqa: E402
-from org_transaction import SafeOrgWorkspace, serialized
+from org_transaction import SafeOrgWorkspace, new_org_id, serialized
 
 
 def _load_ws(*paths: str, state_config=None):
@@ -728,10 +728,9 @@ def cmd_ensure_ids(args):
     (read-copy-merge-assign protocol, dirty tracking). After saving, reloads
     so the ID index is updated for any subsequent in-process lookups.
 
-    Handles duplicate headings by using an incrementing disambiguator so that
-    tasks with identical text get unique IDs.
+    New captures use independent UUIDs, including identical headings created
+    in separate files or on separate hosts. Existing identities never change.
     """
-    from org_workspace.identifiers import generate_id
     ws = _load_ws(args.file)
     file_path = Path(args.file).resolve()
 
@@ -741,25 +740,15 @@ def cmd_ensure_ids(args):
         if node.id():
             seen_ids.add(node.id())
 
-    # Track how many times each heading has been seen (for disambiguation).
-    heading_counts: dict[str, int] = {}
-
     pending = []
     for node in ws.all_nodes():
         if not node.todo:
             continue
         if node.id():
             continue
-        # Count occurrences of this heading so far to build disambiguator.
-        count = heading_counts.get(node.heading, 0)
-        heading_counts[node.heading] = count + 1
-        disambiguator = str(count) if count > 0 else None
-        new_id = generate_id(node.heading, disambiguator=disambiguator)
-        # Fallback: keep incrementing until unique (handles hash collisions).
-        extra = count
+        new_id = new_org_id()
         while new_id in seen_ids:
-            extra += 1
-            new_id = generate_id(node.heading, disambiguator=str(extra))
+            new_id = new_org_id()
         seen_ids.add(new_id)
         pending.append((node, new_id))
 

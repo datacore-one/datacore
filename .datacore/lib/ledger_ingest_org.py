@@ -112,7 +112,6 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
       FIELDS  scheduled/deadline/state changed -> item.update carrying only the
               keys that actually differ.
     """
-    from org_workspace import OrgWorkspace
     org_file = space / "org" / "next_actions.org"
     if not org_file.exists():
         return {"dismissed": 0, "updated": 0}
@@ -134,7 +133,7 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
                 break
     except OSError:
         pass
-    ws = OrgWorkspace(); ws.load(str(org_file))
+    ws = SafeOrgWorkspace(); ws.load(str(org_file))
     state = fold(read_events(space))
     log = None
     dismissed = updated = 0
@@ -390,19 +389,23 @@ def ensure_ids(space: Path, adapter: Path | None = None) -> str:
     if (adapter is not None and Path(adapter).resolve() != installed
             or Path(org_workspace_adapter.__file__).resolve() != installed):
         raise ValueError('ID preparation requires the matching installed core adapter')
+    files = [space / 'org' / name for name in ORG_FILES
+             if (space / 'org' / name).exists()]
+    # Validate the complete identity namespace before changing any file. A
+    # workspace per file hides collisions and lets ingestion conflate tasks.
+    ws = SafeOrgWorkspace()
+    for f in files:
+        ws.load(f)
     touched = []
-    for name in ORG_FILES:
-        f = space / "org" / name
-        if not f.exists():
-            continue
+    for f in files:
         result = org_workspace_adapter.cmd_ensure_ids(Namespace(file=str(f)))
         if not isinstance(result, dict) or result.get('error'):
             raise RuntimeError('ID preparation was refused')
-        ws = SafeOrgWorkspace()
         ws.load(str(f))
-        if any(node.todo and not node.id() for node in ws.all_nodes()):
+        if any(node.path.resolve() == f.resolve() and node.todo and not node.id()
+               for node in ws.all_nodes()):
             raise RuntimeError('ID preparation did not persist every task identity')
-        touched.append(f'{name}:ok')
+        touched.append(f'{f.name}:ok')
     return " ".join(touched) or "no org files"
 
 

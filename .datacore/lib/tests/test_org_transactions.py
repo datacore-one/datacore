@@ -11,6 +11,44 @@ import org_transaction as tx
 import org_workspace_adapter as adapter
 
 
+def test_independent_workspace_creation_cannot_conflate_equal_headings(tmp_path, monkeypatch):
+    import org_workspace.workspace as upstream
+    original = upstream.generate_id
+    from datetime import datetime
+    monkeypatch.setattr(upstream, 'generate_id', lambda heading, *args, **kwargs:
+                        original(heading, datetime(2026, 1, 1), **kwargs))
+    paths = [tmp_path / 'first.org', tmp_path / 'second.org']
+    for path in paths:
+        path.write_text('')
+    identities = []
+    @tx.serialized
+    def create(path, body):
+        ws = tx.SafeOrgWorkspace()
+        ws.load(path)
+        node = ws.create_node(path, 'Same title', state='NEXT', body=body)
+        ws.save(path)
+        return node.id()
+    for index, path in enumerate(paths):
+        identities.append(create(path, f'Independent capture {index}'))
+    assert len(set(identities)) == 2
+    for index, path in enumerate(paths):
+        assert f'Independent capture {index}' in path.read_text()
+
+
+def test_creation_cannot_reuse_an_existing_identity(tmp_path):
+    path = tmp_path / 'tasks.org'
+    text = '* NEXT Existing\n:PROPERTIES:\n:ID: retained\n:END:\nOriginal.\n'
+    path.write_text(text)
+    @tx.serialized
+    def attempt():
+        ws = tx.SafeOrgWorkspace()
+        ws.load(path)
+        ws.create_node(path, 'Different task', ID='retained')
+    with pytest.raises(ValueError, match='duplicate Org IDs'):
+        attempt()
+    assert path.read_text() == text
+
+
 @pytest.fixture
 def documents(tmp_path, monkeypatch):
     monkeypatch.setattr(adapter, '_ledger_emit', lambda *a, **k: False)

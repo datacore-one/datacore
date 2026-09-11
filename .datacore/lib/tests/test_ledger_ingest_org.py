@@ -28,6 +28,56 @@ from ledger.fold import closure_kind, fold  # noqa: E402
 from ledger.log import EventLog, read_events  # noqa: E402
 
 
+def test_identity_preparation_distinguishes_same_heading_across_files(tmp_path, monkeypatch):
+    from datetime import datetime
+    import org_workspace.identifiers as identifiers
+    space = tmp_path / '0-fixture'
+    (space / 'org').mkdir(parents=True)
+    files = [space / 'org' / name for name in ingest.ORG_FILES]
+    for index, path in enumerate(files):
+        path.write_text(f'* NEXT Same heading\nDistinct capture {index}.\n')
+    original = identifiers.generate_id
+    monkeypatch.setattr(identifiers, 'generate_id', lambda heading, **kwargs:
+                        original(heading, timestamp=datetime(2026, 1, 1), **kwargs))
+    ingest.ensure_ids(space)
+    ws = ingest.SafeOrgWorkspace()
+    for path in files:
+        ws.load(path)
+    identities = [node.id() for node in ws.all_nodes() if node.todo]
+    assert len(identities) == len(set(identities)) == 2
+    prepared = [path.read_bytes() for path in files]
+    ingest.ensure_ids(space)
+    assert [path.read_bytes() for path in files] == prepared
+    for index, path in enumerate(files):
+        assert f'Distinct capture {index}.' in path.read_text()
+
+
+def test_existing_cross_file_identity_collision_refuses_without_rewriting(tmp_path):
+    space = tmp_path / '0-fixture'
+    (space / 'org').mkdir(parents=True)
+    files = [space / 'org' / name for name in ingest.ORG_FILES]
+    for index, path in enumerate(files):
+        path.write_text(f'* NEXT Capture {index}\n:PROPERTIES:\n:ID: shared\n:END:\nBody {index}.\n')
+    before = [path.read_bytes() for path in files]
+    with pytest.raises(ValueError, match='duplicate Org IDs'):
+        ingest.ensure_ids(space)
+    assert [path.read_bytes() for path in files] == before
+
+
+@pytest.mark.parametrize('reader', [ingest.scan, ingest.sync_state])
+def test_direct_ingest_reader_refuses_duplicate_identity(tmp_path, reader):
+    space = tmp_path / '0-fixture'
+    (space / 'org').mkdir(parents=True)
+    path = space / 'org/next_actions.org'
+    text = ('* NEXT One\n:PROPERTIES:\n:ID: shared\n:END:\nFirst body.\n'
+            '* NEXT Two\n:PROPERTIES:\n:ID: shared\n:END:\nSecond body.\n')
+    path.write_text(text)
+    with pytest.raises(ValueError, match='duplicate Org IDs'):
+        reader(space)
+    assert path.read_text() == text
+    assert list(read_events(space)) == []
+
+
 def test_id_preparation_failure_stops_ingestion(tmp_path, monkeypatch):
     import subprocess
     space = tmp_path / '0-fixture'

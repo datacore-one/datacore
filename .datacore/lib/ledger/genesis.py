@@ -302,7 +302,7 @@ def scan(space_dir: Path, org_file: Path | None = None) -> ScanResult:
     lib = Path(__file__).resolve().parents[1]
     if str(lib) not in sys.path:
         sys.path.insert(0, str(lib))
-    from org_workspace import OrgWorkspace
+    from org_transaction import SafeOrgWorkspace
 
     org_file = org_file or (space_dir / "org" / "next_actions.org")
     result = ScanResult()
@@ -312,7 +312,7 @@ def scan(space_dir: Path, org_file: Path | None = None) -> ScanResult:
     known = set(fold(read_events(space_dir)).items.keys())
     sections: dict[str, dict] = {}
 
-    ws = OrgWorkspace()
+    ws = SafeOrgWorkspace()
     ws.load(str(org_file))
 
     # File-level tags apply to every heading in the file. They are not any

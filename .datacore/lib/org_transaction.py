@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import uuid
 from pathlib import Path
 
 from file_utils import atomic_write_json, atomic_write_text, file_lock, fsync_directory
@@ -18,6 +19,11 @@ from org_workspace import OrgWorkspace
 from org_workspace.workspace import CatastrophicShrinkError
 
 _current = ContextVar("org_transaction", default=None)
+
+
+def new_org_id():
+    """Mint an independent capture identity; never infer identity from its title."""
+    return str(uuid.uuid4())
 
 
 def watch_file(path):
@@ -232,13 +238,23 @@ class SafeOrgWorkspace(OrgWorkspace):
         if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_@#%+.-]+", key):
             raise ValueError("invalid Org property name")
 
-    def create_node(self, file, heading, *args, **kwargs):
+    def create_node(self, file, heading, state=None, parent=None, level=None,
+                    tags=None, body=None, dedup=False, **kwargs):
         self._heading(heading)
-        # Keyword properties follow the dependency's create_node signature;
-        # structural arguments are not property keys.
-        for key in set(kwargs) - {"state", "parent", "level", "tags", "body", "dedup"}:
+        for key in kwargs:
             self._property_key(key)
-        return super().create_node(file, heading, *args, **kwargs)
+        # A heading and a second-resolution timestamp are not an identity:
+        # independent workspaces/hosts can create different captures with both.
+        # Preserve caller-supplied identities; ordinary creation uses DIP-0009's
+        # UUID protocol. Explicit heading-based dedup remains opt-in upstream.
+        if not dedup:
+            if "ID" not in kwargs:
+                kwargs["ID"] = new_org_id()
+            if self.find_by_id(kwargs["ID"]) is not None:
+                raise ValueError("duplicate Org IDs require explicit identity reconciliation")
+        return super().create_node(file, heading, state=state, parent=parent,
+                                   level=level, tags=tags, body=body, dedup=dedup,
+                                   **kwargs)
 
     def set_heading(self, node, value):
         self._heading(value)
