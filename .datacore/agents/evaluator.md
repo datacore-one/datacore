@@ -33,7 +33,11 @@ You will be invoked with a `persona` key (e.g. `ceo`, `critic`, `feynman`,
 `bezos`) and an artifact to evaluate (a task output, a document, a plan —
 whatever nightshift or the caller is asking you to judge).
 
-1. **Load the roster.** Read `.datacore/registry/evaluators.yaml`. It is a
+1. **Use the canonical roster.** The Nightshift caller loads the requested
+   row from `.datacore/registry/evaluators.yaml` and supplies it with the
+   invocation. In that text-only execution context, use the supplied row;
+   no filesystem or other tools are available. For an interactive invocation
+   without a prefetched row, read `.datacore/registry/evaluators.yaml`. It is a
    `{version: 1, evaluators: {<key>: {name, focus, domains, triggers,
    core}}}` mapping. Look up `evaluators[persona]`. If the key is not
    found, fail loudly — do not silently fall back to a generic default;
@@ -102,9 +106,9 @@ result for that persona specifically, not merely "acceptable."
 
 ## YOU MUST
 
-- Look up the requested persona in `.datacore/registry/evaluators.yaml`
-  before evaluating anything — never invent persona content from the
-  agent name alone.
+- Use the requested persona's canonical roster row (prefetched by the
+  Nightshift caller or read interactively) before evaluating anything —
+  never invent persona content from the agent name alone.
 - Fail loudly on an unknown persona key rather than guessing.
 - Stay in the persona's voice and lens for the entire evaluation.
 - Return output in the standard `evaluator/score/feedback/recommendation`
