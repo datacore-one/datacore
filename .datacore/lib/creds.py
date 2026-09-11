@@ -133,10 +133,18 @@ class RotationIndex:
         self._load()
 
     def _load(self):
-        if not self.path.exists():
-            return
-        with open(self.path) as f:
-            data = yaml.safe_load(f) or {}
+        import json
+        try:
+            self._source = self.path.read_bytes()
+        except FileNotFoundError:
+            self._source = None
+        data = yaml.safe_load(self._source) if self._source is not None else {"credentials": []}
+        if not isinstance(data, dict) or not isinstance(data.get("credentials"), list):
+            raise ValueError("invalid rotation index; restore it before writing")
+        self._document = data
+        names = [entry.get("env_var") if isinstance(entry, dict) else None for entry in data["credentials"]]
+        if any(not isinstance(name, str) or not name for name in names) or len(set(names)) != len(names):
+            raise ValueError("rotation entries require unique environment variable names")
         for entry in data.get("credentials", []):
             re = RotationEntry(
                 provider=entry.get("provider", ""),
@@ -152,11 +160,12 @@ class RotationIndex:
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        data = {
+        data = {**self._document,
             "version": "1.0",
             "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "credentials": [
                 {
+                    **next((entry for entry in self._document.get("credentials", []) if entry.get("env_var") == e.env_var), {}),
                     "credential": e.credential,
                     "provider": e.provider,
                     "provider_url": e.provider_url,
@@ -169,8 +178,18 @@ class RotationIndex:
                 for e in self.entries
             ],
         }
-        with open(self.path, "w") as f:
-            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+        from file_utils import atomic_write_text, file_lock
+        with file_lock(self.path):
+            try:
+                current = self.path.read_bytes()
+            except FileNotFoundError:
+                current = None
+            if current != self._source:
+                raise ValueError("rotation index changed; reload before saving")
+            text = yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
+            atomic_write_text(self.path, text)
+            self._source = text.encode()
+            self._document = data
 
     def get(self, env_var: str) -> Optional[RotationEntry]:
         return self._index.get(env_var)
@@ -807,49 +826,20 @@ class CredentialManager:
             return 1
         path = Path(store.split(":", 1)[1]).expanduser()
 
-        try:
-            cur = _json.loads(path.read_text()) if path.exists() else {}
-        except (OSError, ValueError):
-            cur = {}
-        blk = cur.setdefault("claudeAiOauth", {})
-        old = blk.get("accessToken", "")
-        blk["accessToken"] = token
-        blk.pop("refreshToken", None)      # see docstring — this is the point
-        blk.pop("expiresAt", None)
-        blk.setdefault("scopes", ["user:inference", "user:profile"])
-
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # BACK UP THE OUTGOING VALUE FIRST. This overwrite is irreversible and
-        # the credential it replaces cannot be re-derived — only re-minted, which
-        # needs an interactive browser login on that specific host.
-        #
-        # Added after destroying nightshift's token on 2026-08-19 by running this
-        # command with a dummy value to test an ownership guard. The guard was
-        # correct; it had simply not been distributed to nightshift yet, so
-        # nothing stopped the write, and there was no backup to undo it. A write
-        # path for an unrecoverable credential must not depend on the caller
-        # being careful.
-        if old:
-            bak = path.with_suffix(path.suffix + ".prev")
-            try:
-                bak.write_text(_json.dumps(cur | {"claudeAiOauth": {**blk, "accessToken": old}}))
-                os.chmod(bak, 0o600)
-                print(f"  previous value saved to {bak}", file=sys.stderr)
-            except OSError as e:
-                print(f"  WARNING: could not back up the previous value ({e}) — "
-                      f"aborting rather than making an unrecoverable overwrite",
-                      file=sys.stderr)
-                return 1
-        path.write_text(_json.dumps(cur))
-        os.chmod(path, 0o600)
-        print(f"  wrote {ca.fingerprint(old)} -> {ca.fingerprint(token)}  {path}",
-              file=sys.stderr)
-        print("  cleared refreshToken/expiresAt — a long-lived token has no "
-              "refresh pair", file=sys.stderr)
-
+        # A rejected or unverifiable replacement must not displace the
+        # currently usable store. Probe only the candidate value.
         state, detail = ca.verify_value("CLAUDE_CODE_OAUTH_TOKEN", token)
-        print(f"  live check: {state} — {detail}", file=sys.stderr)
-        return 0 if state == "ok" else 1
+        if state != "ok":
+            print(f"  candidate token not verified ({state}); store unchanged", file=sys.stderr)
+            return 1
+        from credential_store import adopt_oauth_token
+        try:
+            old = adopt_oauth_token(path, token)
+        except (OSError, ValueError) as exc:
+            print(f"  credential update failed ({type(exc).__name__}); preserve the store and backups", file=sys.stderr)
+            return 1
+        print(f"  wrote {ca.fingerprint(old)} -> {ca.fingerprint(token)}  {path}", file=sys.stderr)
+        return 0
 
     def cmd_sync(self, instance: str = None) -> int:
         """Run sync.sh from the secrets repo."""
@@ -985,7 +975,8 @@ class CredentialManager:
             return 1
 
         if not value:
-            value = input(f"Value for {var_name}: ").strip()
+            import getpass
+            value = getpass.getpass(f"Value for {var_name}: ")
             if not value:
                 print("Value is required.")
                 return 1
@@ -1035,7 +1026,6 @@ class CredentialManager:
             env_file = secrets_dir / "spaces" / f"{space}.env"
         elif scope == "project":
             env_file = secrets_dir / "projects" / f"{project}.env"
-            env_file.parent.mkdir(parents=True, exist_ok=True)
         else:
             print(f"Unknown scope: {scope}")
             return 1
@@ -1044,49 +1034,33 @@ class CredentialManager:
             print(f"Target file does not exist: {env_file}")
             return 1
 
-        # Append to env file
-        with open(env_file, "a") as f:
-            f.write(f"\n{var_name}={value}\n")
-        print(f"Added {var_name} to {env_file.relative_to(secrets_dir)}")
+        entry = {
+            "id": cred_id, "name": description or cred_id, "type": "api_key",
+            "tier": tier, "scope": scope, "category": category,
+            "provider": provider, "var_name": var_name, "description": description,
+        }
+        if scope == "space":
+            entry["space"] = space
+        if scope == "project":
+            entry["project"] = project
+        from credential_store import add_credential
+        try:
+            env_file, index_file = add_credential(secrets_dir, env_file, entry, value)
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            print(f"Credential addition refused ({type(exc).__name__}); existing data preserved.", file=sys.stderr)
+            return 1
+        print(f"Added {var_name} to {env_file.relative_to(secrets_dir)} and the canonical index")
 
-        # Add to credential index
-        index_file = secrets_dir / "credential-index.yaml"
-        if index_file.exists():
-            with open(index_file) as f:
-                index_data = yaml.safe_load(f) or {}
-            entry = {
-                "id": cred_id,
-                "name": description or cred_id,
-                "type": "api_key",
-                "tier": tier,
-                "scope": scope,
-                "category": category,
-                "provider": provider,
-                "var_name": var_name,
-                "description": description,
-            }
-            if scope == "space":
-                entry["space"] = space
-            if scope == "project":
-                entry["project"] = project
-            index_data.setdefault("credentials", []).append(entry)
-            with open(index_file, "w") as f:
-                yaml.dump(index_data, f, default_flow_style=False, sort_keys=False)
-            # Also update the specs copy
-            specs_index = self.data_dir / ".datacore" / "specs" / "credential-index.yaml"
-            if specs_index.exists():
-                import shutil
-                shutil.copy2(index_file, specs_index)
-            print(f"Added to credential index")
-
-        # Commit in secrets repo
         import subprocess
-        subprocess.run(["git", "add", "-A"], cwd=str(secrets_dir), capture_output=True)
-        subprocess.run(
-            ["git", "commit", "-m", f"feat: add credential {cred_id}"],
-            cwd=str(secrets_dir), capture_output=True
-        )
-        print(f"Committed to secrets repo")
+        files = [str(path.relative_to(secrets_dir.resolve())) for path in (env_file, index_file)]
+        try:
+            subprocess.run(["git", "add", "--", *files], cwd=str(secrets_dir), capture_output=True, check=True)
+            subprocess.run(["git", "commit", "--only", "-m", f"feat: add credential {cred_id}", "--", *files],
+                           cwd=str(secrets_dir), capture_output=True, check=True)
+        except (OSError, subprocess.CalledProcessError):
+            print("Credential stored durably, but Git commit failed; review the retained changes before retrying.", file=sys.stderr)
+            return 1
+        print("Committed the credential store and index to the secrets repo")
         print(f"\nNext: run 'creds sync' to assemble, then push to BlackPi")
         return 0
 

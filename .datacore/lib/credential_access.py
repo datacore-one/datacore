@@ -40,6 +40,8 @@ As a library:
 """
 from __future__ import annotations
 
+from secret_http import urlopen as _secret_urlopen
+
 import argparse
 import hashlib
 import os
@@ -290,8 +292,8 @@ def _read_var(path: Path, var: str) -> str | None:
             line = line[7:]
         if line.startswith(var + "="):
             v = line.split("=", 1)[1].strip()
-            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
-                v = v[1:-1]
+            from env_utils import parse_env_value
+            v = parse_env_value(v)
             return v
     return None
 
@@ -806,17 +808,12 @@ def _oauth1_probe(entry: dict, primary_var: str, value: str,
 
     try:
         req = urllib.request.Request(url, headers={"Authorization": header})
-        with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310
+        with _secret_urlopen(req, timeout=timeout) as r:  # noqa: S310
             body = r.read().decode(errors="replace")
         who = ((_json.loads(body) or {}).get("data") or {}).get("username")
         return "ok", f"OAuth1 signature accepted — @{who}" if who else "OAuth1 signature accepted"
     except urllib.error.HTTPError as e:
-        detail = ""
-        try:
-            detail = e.read().decode(errors="replace")[:120].replace("\n", " ")
-        except Exception:  # noqa: BLE001, S110
-            pass
-        return "FAIL", f"HTTP {e.code} {detail}".strip()
+        return "FAIL", f"HTTP {e.code}"
     except Exception as e:  # noqa: BLE001
         return "n-a", f"probe failed: {type(e).__name__}"
 
@@ -912,14 +909,14 @@ def verify_value(var: str, value: str, timeout: int = 25,
                     req.add_header("Authorization", spec.format(v=value))
         if "anthropic.com" in url:
             req.add_header("anthropic-version", "2023-06-01")
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _secret_urlopen(req, timeout=timeout) as r:
             body = r.read(400).decode(errors="ignore")
         ok = (expect in body) if expect else True
         return ("ok", f"HTTP {r.status}") if ok else ("FAIL", f"HTTP {r.status}, unexpected body")
     except urllib.error.HTTPError as e:
-        return "FAIL", f"HTTP {e.code} {e.read(160).decode(errors='ignore')[:100]}"
+        return "FAIL", f"HTTP {e.code}"
     except Exception as e:  # noqa: BLE001 — a network fault is n-a, not a failure
-        return "n-a", f"probe failed: {type(e).__name__}: {str(e)[:80]}"
+        return "n-a", f"probe failed: {type(e).__name__}"
 
 
 def test_divergent() -> int:
