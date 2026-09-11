@@ -473,3 +473,15 @@ def test_list_order_is_authoritative_even_when_hlc_order_disagrees():
     loser_entries = [h for h in item.history if "item.claim" in h and "mac" in h]
     assert len(loser_entries) == 1
     assert "no-op" in loser_entries[0]
+
+
+def test_losing_claim_cannot_complete_the_winners_inflight_work():
+    events = [
+        _ev(0, '1.0.mac', 'mac', 'item.create', {'id': 't'}),
+        _ev(1, '2.0.mac', 'mac', 'item.claim', {'id': 't'}),
+        _ev(2, '3.0.pi', 'pi', 'item.claim', {'id': 't'}),
+        _ev(3, '4.0.pi', 'pi', 'item.complete', {'id': 't'}),
+    ]
+    item = fold(events).items['t']
+    assert item.status == 'claimed' and item.owner == 'mac'
+    assert 'not owner' in item.history[-1]

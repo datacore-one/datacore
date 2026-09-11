@@ -34,7 +34,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .events import Event
+from .events import Event, body_dict, canonical_bytes, compute_hash
 from .fold import fold
 
 
@@ -46,18 +46,22 @@ class Seal:
     state_root: str
     hlc: str
     sequencer: str
+    version: int = 1
+    event_set_hash: str = ""
 
     def includes(self, event: Event) -> bool:
-        wm = self.watermarks.get(event.actor)
+        key = (getattr(event, "log", None) or event.actor) if self.version == 2 else event.actor
+        wm = self.watermarks.get(key)
         return wm is not None and event.seq <= wm
 
 
-def watermarks(events: list[Event]) -> dict[str, int]:
+def watermarks(events: list[Event], *, per_log=True) -> dict[str, int]:
     """Highest seq seen per actor — the frontier this machine can attest to."""
     out: dict[str, int] = {}
     for e in events:
-        if e.seq > out.get(e.actor, -1):
-            out[e.actor] = e.seq
+        key = (getattr(e, "log", None) or e.actor) if per_log else e.actor
+        if e.seq > out.get(key, -1):
+            out[key] = e.seq
     return out
 
 
@@ -74,12 +78,17 @@ def latest_seal(events: list[Event]) -> Seal | None:
         return None
     newest = max(seals, key=lambda e: e.hlc)
     p = newest.payload or {}
-    wm = p.get("watermarks") or {}
+    wm = p.get("watermarks")
+    if (not isinstance(wm, dict) or any(not isinstance(k, str) or not k or type(v) is not int or v < 0 for k, v in wm.items())
+            or type(p.get("version", 1)) is not int or p.get("version", 1) not in {1, 2}):
+        raise ValueError("invalid or unsupported seal frontier")
     return Seal(
         watermarks={str(k): int(v) for k, v in wm.items()},
         state_root=str(p.get("state_root") or ""),
         hlc=newest.hlc,
         sequencer=newest.actor,
+        version=p.get("version", 1),
+        event_set_hash=p.get("event_set_hash", ""),
     )
 
 
@@ -93,7 +102,10 @@ def settled_events(events: list[Event]) -> list[Event]:
     seal = latest_seal(events)
     if seal is None:
         return []
-    return [e for e in events if e.type != "ledger.seal" and seal.includes(e)]
+    ok, detail = verify_seal(events)
+    if ok is not True:
+        raise ValueError("unverified settlement: " + detail)
+    return _covered_events(events, seal)
 
 
 def settled(events: list[Event]):
@@ -155,9 +167,14 @@ def verify_seal(events: list[Event]) -> tuple[bool | None, str]:
                        f"different events, e.g. log {a} seq {sq}. A seal over a "
                        f"fork certifies a history other machines reject — refusing.")
 
-    seal = latest_seal(events)
+    try:
+        seal = latest_seal(events)
+    except (ValueError, TypeError, AttributeError):
+        return False, "invalid or unsupported seal"
     if seal is None:
         return None, "no seal yet"
+    if seal.version != 2:
+        return None, "legacy seal has an ambiguous actor frontier; re-seal with version 2"
 
     # A seal naming an actor this machine has never seen cannot be verified
     # here — it is not wrong, we are behind. Say so rather than failing.
@@ -166,7 +183,16 @@ def verify_seal(events: list[Event]) -> tuple[bool | None, str]:
     if behind:
         return None, f"behind the seal for: {', '.join(sorted(behind))}"
 
-    recomputed = fold(settled_events(events)).state_root()
+    if _chain_issue([event for event in events if seal.includes(event)]):
+        return False, "SEAL MISMATCH: incomplete or invalid covered log chain"
+    covered = _covered_events(events, seal)
+    if _event_set_hash(covered) != seal.event_set_hash:
+        return False, "SEAL MISMATCH: covered event set differs"
+    for event in covered:
+        body = body_dict(event.seq, event.hlc, event.actor, event.type, event.payload, event.prev)
+        if compute_hash(body) != event.hash:
+            return False, "SEAL MISMATCH: invalid event hash"
+    recomputed = fold(covered).state_root()
     if recomputed == seal.state_root:
         n = sum(seal.watermarks.values()) + len(seal.watermarks)
         # COVERAGE IS NOT CORRECTNESS. A seal is internally consistent as long
@@ -198,8 +224,39 @@ def build_seal_payload(events: list[Event]) -> dict:
     seals a seal — that would make the root depend on sealing history rather
     than on the work, and two sequencer runs over identical work would differ.
     """
+    if _self_consistent(events) or _chain_issue(events):
+        raise ValueError("cannot seal an incomplete or invalid log chain")
     work = [e for e in events if e.type != "ledger.seal"]
     return {
+        "version": 2,
+        "event_set_hash": _event_set_hash(work),
         "watermarks": watermarks(work),
         "state_root": fold(work).state_root(),
     }
+
+
+def _covered_events(events, seal):
+    return [event for event in events if event.type != "ledger.seal" and seal.includes(event)]
+
+
+def _event_set_hash(events):
+    import hashlib
+    rows = [{"log": getattr(e, "log", None) or e.actor, "seq": e.seq, "hash": e.hash,
+             "body": body_dict(e.seq, e.hlc, e.actor, e.type, e.payload, e.prev)} for e in events]
+    rows.sort(key=lambda row: (row["log"], row["seq"], row["hash"]))
+    return hashlib.sha256(canonical_bytes({"version": 2, "events": rows})).hexdigest()
+
+
+def _chain_issue(events):
+    """Validate complete chain prefixes, including earlier seal events."""
+    chains = {}
+    for event in events:
+        chains.setdefault(getattr(event, "log", None) or event.actor, []).append(event)
+    for chain in chains.values():
+        expected_seq, expected_prev = 0, "GENESIS"
+        for event in sorted(chain, key=lambda event: event.seq):
+            body = body_dict(event.seq, event.hlc, event.actor, event.type, event.payload, event.prev)
+            if event.seq != expected_seq or event.prev != expected_prev or compute_hash(body) != event.hash:
+                return True
+            expected_seq, expected_prev = event.seq + 1, event.hash
+    return False

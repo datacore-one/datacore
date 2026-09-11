@@ -25,6 +25,7 @@ import os
 import sys
 import urllib.parse
 import urllib.request
+from secret_http import urlopen as secret_urlopen
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -78,7 +79,7 @@ def send_telegram(text: str):
     try:
         data = urllib.parse.urlencode({'chat_id': chat, 'text': text, 'parse_mode': 'HTML'}).encode()
         req = urllib.request.Request(f'https://api.telegram.org/bot{bot}/sendMessage', data=data)
-        urllib.request.urlopen(req, timeout=10)
+        secret_urlopen(req, timeout=10)
     except Exception:
         pass
 

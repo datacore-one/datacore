@@ -206,7 +206,7 @@ class TestGitHubAdapterPush:
     @patch.object(GitHubAdapter, "_run_gh")
     def test_close_task(self, mock_run_gh):
         """Closes GitHub issue."""
-        adapter = GitHubAdapter({})
+        adapter = GitHubAdapter({"repos": [{"owner": "test", "repo": "repo"}]})
 
         mock_run_gh.return_value = (True, "", "")
 

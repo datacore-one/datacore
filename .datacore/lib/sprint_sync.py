@@ -320,6 +320,9 @@ def agent_items(sprint: dict, include_stretch: bool) -> tuple[list[dict], list[s
     return mine, problems
 
 
+from org_transaction import serialized
+
+@serialized
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--space", default="5-plur")
@@ -338,7 +341,7 @@ def main() -> int:
         print("no sprint selected — pass --sprint <id> or mark one status: active")
         return 0
 
-    from org_workspace import OrgWorkspace
+    from org_transaction import SafeOrgWorkspace as OrgWorkspace
 
     org_dir = REPO / args.space / "org"
     org_files = [p for p in (org_dir / "next_actions.org", org_dir / "inbox.org",

@@ -427,7 +427,8 @@ def _notify_daemon(root: Path) -> None:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=5):
+        from secret_http import urlopen
+        with urlopen(req, timeout=5, allow_loopback=True):
             pass
         print("notified daemon: ledger.sweep.complete")
     except urllib.error.HTTPError as exc:

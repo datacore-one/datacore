@@ -23,7 +23,7 @@ import argparse, pathlib, re, sys
 from collections import defaultdict
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from org_workspace import OrgWorkspace
+from org_transaction import SafeOrgWorkspace as OrgWorkspace
 from spaces import discover_spaces  # noqa: E402
 
 OPEN = {"TODO", "NEXT", "WAITING"}
@@ -33,6 +33,31 @@ def norm(h: str) -> str:
     return re.sub(r'^\[#[abc]\]\s*', '', re.sub(r'\s+', ' ', h).strip().lower())
 
 
+def fingerprint(node):
+    """Matching titles alone do not establish that task data is redundant."""
+    return (
+        node.heading, node.todo, node.priority, tuple(sorted(node.tags or [])),
+        tuple(sorted((k, str(v)) for k, v in (node.properties or {}).items()
+                     if k not in {"ID", "CREATED"})),
+        str(node.scheduled) if node.scheduled else None,
+        str(node.deadline) if node.deadline else None, node.body,
+        tuple(fingerprint(child) for child in node.children),
+    )
+
+
+def retire_duplicate(ws, keep, duplicate):
+    """Retain the original ID, body and descendants for references/recovery."""
+    if fingerprint(keep) != fingerprint(duplicate):
+        return False
+    ws.transition(duplicate, "CANCELLED")
+    ws.set_property(duplicate, "DEDUPE_OF", keep.id())
+    ws.set_property(duplicate, "CLOSED_REASON", "identical active task retained under DEDUPE_OF")
+    return True
+
+
+from org_transaction import serialized
+
+@serialized
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
@@ -63,14 +88,17 @@ def main() -> int:
             kept += 1
             print(f"  KEEP  {keep.heading[:66]}  (props={len(keep.properties or {})}, sched={keep.scheduled or '-'})")
             for d in drop:
+                if fingerprint(keep) != fingerprint(d):
+                    print("  retain: matching title has different task data")
+                    continue
                 removed += 1
                 print(f"  drop    id={d.id() or 'NO-ID'} props={len(d.properties or {})} sched={d.scheduled or '-'}")
                 if args.apply:
-                    ws.remove_node(d)
+                    retire_duplicate(ws, keep, d)
         if args.apply:
             ws.save(str(f))
 
-    verb = "removed" if args.apply else "would remove"
+    verb = "retired (data preserved)" if args.apply else "would retire (data preserved)"
     print(f"\n{verb} {removed} redundant copies across {kept} duplicated headings")
     if not args.apply:
         print("dry run — re-run with --apply")

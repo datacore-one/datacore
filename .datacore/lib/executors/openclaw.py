@@ -1,99 +1,57 @@
-"""openclaw.py -- Executor adapter for OpenClaw (the runtime Data runs on).
+"""One isolated OpenClaw headless turn scoped to the dispatched workspace.
 
-The registry had adapters for `claude-code`, `hermes` and `api`, but not for
-OpenClaw, so the one machine in the fleet running it -- plur-claw, actor
-`data`, model codex/gpt-5.5 -- had no way to be addressed through the same
-interface as everyone else. That gap is why a dispatcher written against
-`claude -p` reported Data as having no agent runtime, when in fact it has a
-perfectly good one that is simply not Claude.
-
-`openclaw agent` runs a single turn via the already-running Gateway. Two
-details are load-bearing:
-
-  --agent main is MANDATORY. Without a target session openclaw exits with
-  "No target session selected. Use --agent <id>, --session-key <key>, ..."
-  and does no work at all. `main` is the default agent's id on plur-claw
-  (identity "Data", workspace ~/.openclaw/workspace); override with
-  $OPENCLAW_AGENT where an installation names it differently.
-
-  The CLI decorates stdout with box-drawing rules and doctor warnings. Those
-  lines are stripped here rather than by every caller, because a caller that
-  forgets leaves the banner in the model's answer -- and a downstream schema
-  parse then fails on text the agent never wrote.
-
-Like `hermes`, this CLI emits no machine-readable usage envelope, so cost is
-always estimated and the spend ref always carries the `:est` suffix.
+Requires a runtime with `agent exec`. The gateway's persistent main session
+cannot implement the executor contract: its workspace is configured on the
+server and does not follow the client's process cwd. No gateway fallback is
+used. The runtime's own sandbox and tool policies remain deployment controls.
 """
-
 from __future__ import annotations
 
+import json
+import math
 import os
+from pathlib import Path
 import shutil
 import subprocess
+from process_run import run as run_process
 
 from .base import Executor, estimate_cost_cents, register
-
-# Box-drawing and status glyphs the CLI prints around real output.
-_CHROME = ("│", "◇", "├", "╮", "╯", "─", "┌", "└", "┐", "┘")
-
-
-def _configured_model() -> str | None:
-    """Primary model from openclaw.json, labelled as configured rather than observed."""
-    import json
-    from pathlib import Path as _P
-    try:
-        cfg = json.loads((_P.home() / ".openclaw" / "openclaw.json").read_text())
-        primary = cfg["agents"]["defaults"]["model"]["primary"]
-        return f"{primary} (configured)" if primary else None
-    except Exception:  # noqa: BLE001 -- never fail a run over provenance metadata
-        return None
 
 
 @register
 class OpenClawExecutor(Executor):
-    """One agent turn through the OpenClaw Gateway."""
-
     name = "openclaw"
 
     def _invoke(self, prompt: str, timeout_s: int) -> tuple[str, int]:
         binary = shutil.which("openclaw")
         if binary is None:
             raise RuntimeError("'openclaw' binary not found on PATH")
-
-        agent = os.environ.get("OPENCLAW_AGENT", "main")
-        # OpenClaw prints only the agent's reply -- no envelope, so there is no
-        # served-model to read. The configured primary is the best available
-        # answer and is marked as such IN THE VALUE, because a fallback would
-        # make it silently wrong and an unlabelled guess in an audit trail is
-        # worse than an absent field.
-        self._model = _configured_model()
-        # cwd matters as much here as for claude-code: an OpenClaw/Hermes agent
-        # otherwise works in its OWN workspace, so the proof file lands somewhere
-        # the check never looks. Data ran, reported success, and wrote nothing
-        # into the space -- `run()` accepted cwd from the dispatcher and only
-        # claude_code was wired to use it.
-        result = subprocess.run(
-            [binary, "agent", "--agent", agent, "--message", prompt],
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            check=False,
-            cwd=str(self._cwd) if self._cwd else None,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"openclaw exited {result.returncode}: {result.stderr.strip()[:300]}")
-
-        text = "\n".join(
-            line for line in (result.stdout or "").splitlines()
-            if not any(g in line for g in _CHROME)
-        ).strip()
-
-        # A turn that produced only chrome produced no answer. Say so, rather
-        # than returning "" for the base class to treat as a successful empty
-        # response -- that is how a failure becomes a green result.
-        if not text:
-            raise RuntimeError("openclaw produced no output beyond CLI chrome")
-
-        self._cost_estimated = True
-        return text, estimate_cost_cents(prompt, text)
+        workspace = str(Path(self._cwd or os.getcwd()).resolve())
+        command = [binary, "agent", "exec", "--message-file", "-", "--cwd", workspace,
+                   "--timeout", str(timeout_s), "--json"]
+        config = os.environ.get("DATACORE_OPENCLAW_CONFIG")
+        if config:
+            command.extend(["--config", config])
+        result = run_process(command, input=prompt, capture_output=True, text=True,
+                                timeout=timeout_s + 15, check=False, cwd=workspace,
+                                env=self._execution_env())
+        try:
+            envelope = json.loads(result.stdout)
+        except (ValueError, TypeError):
+            raise RuntimeError(f"openclaw returned an invalid result (exit {result.returncode}); agent exec is required") from None
+        if not isinstance(envelope, dict) or not isinstance(envelope.get("final"), str):
+            raise RuntimeError("openclaw returned an invalid result envelope")
+        if isinstance(envelope.get("model"), str):
+            self._model = envelope["model"]
+        text = envelope["final"]
+        if result.returncode != 0 or envelope.get("ok") is not True or envelope.get("status") != "ok":
+            self._in_band_error = f"openclaw execution failed (exit {result.returncode})"
+        elif not text.strip():
+            self._in_band_error = "openclaw produced no final output"
+        cost = envelope.get("costUsd")
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool) and math.isfinite(cost) and cost >= 0:
+            cents = round(cost * 100)
+        else:
+            cents = estimate_cost_cents(prompt, text)
+            self._cost_estimated = True
+        return text, cents

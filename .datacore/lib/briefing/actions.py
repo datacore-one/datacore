@@ -212,6 +212,8 @@ def act(space_dir: Path, item_id: str, action: str, actor: str,
     # produces exactly the old payload.
     payload = {"id": item_id}
     if detail:
+        if "id" in detail and detail["id"] != item_id:
+            raise ValueError("action detail cannot select another item")
         payload.update({k: v for k, v in detail.items() if v not in (None, "")})
     log = EventLog(space_dir, actor)
-    return log.append(event_type, payload)
+    return guarded_append(log, event_type, payload, space_dir=space_dir)

@@ -156,7 +156,11 @@ def a4_seal_over_fork():
         ev["hash"] = "f" * 64
         p.write_text("\n".join(lines + [_j.dumps(ev, separators=(",", ":"), sort_keys=True)]) + "\n")
 
-    EventLog(s, "winston").append("ledger.seal", build_seal_payload(read_events(s)))
+    with pytest.raises(ValueError, match="invalid log chain"):
+        build_seal_payload(read_events(s))
+    # A malformed seal imported from another writer must also be refused.
+    EventLog(s, "winston").append("ledger.seal", {"version": 2, "watermarks": {},
+                                               "state_root": "0" * 64, "event_set_hash": "0" * 64})
     ok, detail = verify_seal(read_events(s))
     # A seal that verifies over a forked log is the dangerous outcome: it
     # certifies a history that another machine will disagree with.
@@ -317,8 +321,14 @@ class TestGuardIsRecoverable:
         monkeypatch.setenv("DATACORE_HWM_OVERRIDE", "1")
         EventLog(s, "mac").append("item.create", {"id": "b", "title": "y"})
 
-    def test_unparseable_mark_degrades_permissively(self, tmp_path):
-        """Garbage must not block work: the mark is a net, not an authority."""
+    def test_unparseable_mark_preserves_log_pending_explicit_recovery(self, tmp_path):
+        """A damaged witness cannot establish whether history was rewound."""
+        from ledger.log import CorruptLogError
         s, hwm = self._prep(tmp_path)
         hwm.write_text("not-a-number")
-        EventLog(s, "mac").append("item.create", {"id": "b", "title": "y"})
+        path = s / '.datacore/events/mac.jsonl'
+        before = path.read_bytes()
+        with pytest.raises(CorruptLogError, match='witness'):
+            EventLog(s, "mac").append("item.create", {"id": "b", "title": "y"})
+        assert path.read_bytes() == before
+        assert hwm.read_text() == 'not-a-number'

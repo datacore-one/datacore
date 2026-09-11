@@ -20,10 +20,13 @@ RUN = pathlib.Path(__file__).resolve().parents[1] / "jobs" / "run.py"
 
 
 @pytest.fixture
-def sandbox():
+def sandbox(monkeypatch):
     """A throwaway DATACORE_ROOT with its own manifest."""
     with tempfile.TemporaryDirectory() as d:
         root = pathlib.Path(d)
+        home = root / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
         (root / ".datacore" / "lib" / "jobs").mkdir(parents=True)
         yield root
 
@@ -207,3 +210,14 @@ def test_declared_exit_codes_mean_ran_not_failed(sandbox):
                      _job("strict", f"echo findings > {art}; exit 1", art)])
     assert _run(sandbox, "det").returncode == 0
     assert _run(sandbox, "strict").returncode == 2
+
+
+def test_duplicate_job_names_are_refused_before_any_command(sandbox):
+    artifact = sandbox / "must-not-be-written"
+    first = _job("duplicate", "true", artifact)
+    second = _job("duplicate", f"echo corrupted > {artifact}", artifact)
+    _write(sandbox, [first, second])
+    result = _run(sandbox, "duplicate")
+    assert result.returncode == 3
+    assert "duplicate job name" in result.stdout
+    assert not artifact.exists()

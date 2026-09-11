@@ -43,7 +43,7 @@ def test_a_command_never_invoked_fails_the_check():
     with tempfile.TemporaryDirectory() as td:
         r = run(["--check", "weekly-plan"], Path(td))
         assert r.returncode == 1
-        assert "was NOT invoked" in r.stdout
+        assert "No invocation receipt" in r.stdout
 
 
 def test_a_leading_slash_is_the_same_command():
@@ -71,3 +71,16 @@ def test_listing_a_day_shows_what_ran():
         assert "3 invocation(s)" in out
         for name in ("today", "weekly-plan", "wrap-up"):
             assert f"/{name}" in out
+
+
+def test_query_error_cannot_report_success():
+    from datetime import datetime, timezone
+    with tempfile.TemporaryDirectory() as td:
+        home = Path(td)
+        path = home / '.datacore/state/command-runs' / (datetime.now(timezone.utc).date().isoformat() + '.jsonl')
+        path.parent.mkdir(parents=True)
+        path.write_text('{invalid SYNTHETIC-SECRET')
+        result = run(['--check', 'today'], home)
+        assert result.returncode == 2
+        assert 'SYNTHETIC-SECRET' not in result.stdout + result.stderr
+        assert path.read_text() == '{invalid SYNTHETIC-SECRET'

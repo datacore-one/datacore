@@ -35,7 +35,9 @@ import re
 import sys
 from pathlib import Path
 
-STATE_DIR = Path("/tmp/plur-sessions")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from hook_state import state_path
+from file_utils import atomic_write_json
 # Tools that must stay available so the spilled file can actually be read.
 READERS = {"Read", "Bash", "Grep", "Glob", "ToolSearch"}
 SPILL_PAT = re.compile(
@@ -45,8 +47,7 @@ PATH_PAT = re.compile(r"(/[^\s\"']*tool-results/[^\s\"']+\.txt)")
 
 
 def _state(sid: str) -> Path:
-    safe = re.sub(r"[^A-Za-z0-9_-]", "", sid or "nosession")
-    return STATE_DIR / f"injection-gate-{safe}"
+    return state_path("injection-gate", sid)
 
 
 def _load() -> dict:
@@ -72,10 +73,7 @@ def mark(data: dict) -> None:
     m = PATH_PAT.search(resp)
     if not m:
         return
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    _state(data.get("session_id", "")).write_text(
-        json.dumps({"path": m.group(1), "armed": True})
-    )
+    atomic_write_json(_state(data.get("session_id", "")), {"path": m.group(1), "armed": True})
 
 
 def check(data: dict) -> None:
@@ -105,8 +103,7 @@ def check(data: dict) -> None:
                         "credential handling — live in the middle of that file, not at its "
                         "head or tail. Reading the first and last few KB is how a redaction "
                         "rule gets skipped (2026-09-07).\n\n"
-                        "Read it IN FULL first — slice with python in ~80,000-char spans:\n"
-                        f"  python3 -c \"print(open('{path}').read()[0:80000])\"\n\n"
+                        "Read the complete file using the Read tool.\n\n"
                         "This gate lifts automatically once that file is read."
                     ),
                 }

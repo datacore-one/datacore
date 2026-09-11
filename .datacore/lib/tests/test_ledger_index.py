@@ -74,6 +74,18 @@ def test_build_index_then_query(tmp_path):
     assert spend_by_actor(db_path) == _EXPECTED_SPEND
 
 
+def test_failed_rebuild_preserves_the_complete_previous_index(tmp_path):
+    state = _folded_state(tmp_path)
+    path = tmp_path / 'index.db'
+    build_index(state, path)
+    # Duplicate SQL primary key fails after all DROP/CREATE statements.
+    state.items['duplicate'] = state.items['t1']
+    with pytest.raises(sqlite3.IntegrityError):
+        build_index(state, path)
+    assert items_by(path) == _EXPECTED_ITEMS
+    assert spend_by_actor(path) == _EXPECTED_SPEND
+
+
 def test_build_index_creates_parent_dirs(tmp_path):
     state = _folded_state(tmp_path)
     db_path = tmp_path / "nested" / "dir" / "index.db"

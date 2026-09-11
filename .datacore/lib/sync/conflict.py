@@ -7,12 +7,11 @@ Detects when both org-mode and external tools have changed since last sync,
 and resolves conflicts based on configurable strategies.
 """
 
-import hashlib
 import json
 import os
 import sqlite3
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -239,30 +238,22 @@ class ConflictDetector:
         external_task: ExternalTask
     ) -> Optional[ConflictField]:
         """Check for description/body conflicts."""
-        org_body = (org_task.body or "").strip()
-        external_body = (external_task.body or "").strip()
+        org_body = org_task.body or ""
+        external_body = external_task.body or ""
 
-        # Use content hash for comparison
-        org_hash = self._content_hash(org_body)
-        external_hash = self._content_hash(external_body)
-
-        if org_hash != external_hash:
+        # These values become replacement data, including after queue reload.
+        # Preserve the original content; whitespace can be significant.
+        if org_body != external_body:
             # Only report if both have content (not just one-way update)
             if org_body and external_body:
                 return ConflictField(
                     field_name="description",
                     conflict_type=ConflictType.DESCRIPTION,
-                    org_value=org_body[:200] + "..." if len(org_body) > 200 else org_body,
-                    external_value=external_body[:200] + "..." if len(external_body) > 200 else external_body
+                    org_value=org_body,
+                    external_value=external_body
                 )
 
         return None
-
-    def _content_hash(self, content: str) -> str:
-        """Generate hash for content comparison."""
-        # Normalize whitespace
-        normalized = " ".join(content.split())
-        return hashlib.md5(normalized.encode()).hexdigest()
 
     def _check_priority_conflict(
         self,
@@ -462,13 +453,10 @@ class ConflictResolver:
         Simple strategy: if one is a subset of the other, use the longer one.
         Otherwise, concatenate with separator.
         """
-        org_normalized = org_desc.strip().lower()
-        external_normalized = external_desc.strip().lower()
-
-        # If one contains the other, use the longer
-        if org_normalized in external_normalized:
+        # Only exact containment proves that no original characters are lost.
+        if org_desc in external_desc:
             return external_desc
-        if external_normalized in org_normalized:
+        if external_desc in org_desc:
             return org_desc
 
         # Concatenate with separator
@@ -503,7 +491,7 @@ class ConflictQueue:
         if db_path:
             self.db_path = Path(db_path)
         else:
-            data_dir = Path(os.environ.get("DATA_DIR", os.path.expanduser("~/Data")))
+            data_dir = Path(os.environ.get("DATA_DIR") or os.environ.get("DATACORE_ROOT") or Path.home() / "Data")
             self.db_path = data_dir / ".datacore" / "state" / "sync_history.db"
 
         self._ensure_tables()
@@ -564,19 +552,13 @@ class ConflictQueue:
                     "conflict_type": f.conflict_type.value,
                     "org_value": f.org_value,
                     "external_value": f.external_value,
+                    "last_synced_value": f.last_synced_value,
                 }
                 for f in conflict.fields
             ],
-            "org_task": {
-                "id": conflict.org_task.id if conflict.org_task else None,
-                "title": conflict.org_task.title if conflict.org_task else None,
-                "file_path": conflict.org_task.file_path if conflict.org_task else None,
-            } if conflict.org_task else None,
-            "external_task": {
-                "id": conflict.external_task.id if conflict.external_task else None,
-                "title": conflict.external_task.title if conflict.external_task else None,
-                "url": conflict.external_task.url if conflict.external_task else None,
-            } if conflict.external_task else None,
+            "snapshot_version": 1,
+            "org_task": asdict(conflict.org_task) if conflict.org_task else None,
+            "external_task": asdict(conflict.external_task) if conflict.external_task else None,
         }
 
         with self._get_connection() as conn:
@@ -588,7 +570,7 @@ class ConflictQueue:
                 conflict.external_id,
                 conflict.org_task_id,
                 conflict.detected_at.isoformat(),
-                json.dumps(conflict_data)
+                json.dumps(conflict_data, default=_snapshot_json)
             ))
             conn.commit()
             conflict.id = cursor.lastrowid
@@ -643,6 +625,7 @@ class ConflictQueue:
                 conflict_type=ConflictType(f["conflict_type"]),
                 org_value=f["org_value"],
                 external_value=f["external_value"],
+                last_synced_value=f.get("last_synced_value"),
             )
             for f in data.get("fields", [])
         ]
@@ -653,6 +636,8 @@ class ConflictQueue:
             org_task_id=row["org_task_id"],
             detected_at=datetime.fromisoformat(row["detected_at"]),
             fields=fields,
+            org_task=_restore_task(data.get("org_task"), OrgTask) if data.get("snapshot_version") == 1 else None,
+            external_task=_restore_task(data.get("external_task"), ExternalTask) if data.get("snapshot_version") == 1 else None,
             resolved=bool(row["resolved"]),
             resolved_at=datetime.fromisoformat(row["resolved_at"]) if row["resolved_at"] else None,
             resolution_strategy=ConflictStrategy(row["resolution_strategy"]) if row["resolution_strategy"] else None,
@@ -756,40 +741,40 @@ class ConflictQueue:
             conn.commit()
 
 
-def load_conflict_config() -> Dict[str, ConflictStrategy]:
-    """
-    Load conflict resolution config from settings.yaml.
+def _snapshot_json(value):
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if value is Priority.NONE:
+        return "NONE"
+    if isinstance(value, Enum):
+        return value.value
+    raise TypeError(f"unsupported conflict snapshot type: {type(value).__name__}")
 
-    Returns:
-        Dict mapping conflict type names to strategies
-    """
-    import yaml
 
-    data_dir = Path(os.environ.get("DATA_DIR", os.path.expanduser("~/Data")))
+def _restore_task(snapshot, task_type):
+    if snapshot is None:
+        return None
+    values = dict(snapshot)
+    for key in ("sync_updated", "deadline", "scheduled", "created_at", "updated_at", "due_date"):
+        if values.get(key) is not None:
+            values[key] = datetime.fromisoformat(values[key])
+    if task_type is OrgTask:
+        values["state"] = TaskState(values["state"])
+        if values.get("priority") is not None:
+            values["priority"] = Priority.NONE if values["priority"] == "NONE" else Priority(values["priority"])
+    return task_type(**values)
 
-    # Try local settings first, then base settings
-    for settings_file in ["settings.local.yaml", "settings.yaml"]:
-        settings_path = data_dir / ".datacore" / settings_file
-        if settings_path.exists():
-            try:
-                with open(settings_path) as f:
-                    settings = yaml.safe_load(f)
 
-                conflict_config = settings.get("sync", {}).get("conflict_resolution", {})
-
-                # Convert string values to enums
-                result = {}
-                for key, value in conflict_config.items():
-                    try:
-                        result[key] = ConflictStrategy(value)
-                    except ValueError:
-                        pass  # Invalid strategy, skip
-
-                return result
-            except Exception:
-                pass
-
-    return {}
+def load_conflict_config(data_dir=None, *, settings=None) -> Dict[str, ConflictStrategy]:
+    """Use the same layered configuration as the engine; invalid rules fail."""
+    from sync.config import load_settings
+    root = Path(data_dir or os.environ.get("DATA_DIR") or os.environ.get("DATACORE_ROOT") or Path.home() / "Data")
+    if settings is None:
+        settings = load_settings(root)
+    config = settings.get("sync", {}).get("conflict_resolution", {})
+    if not isinstance(config, dict):
+        raise ValueError("conflict_resolution must be a mapping")
+    return {key: ConflictStrategy(value) for key, value in config.items()}
 
 
 if __name__ == "__main__":

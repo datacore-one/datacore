@@ -69,12 +69,10 @@ ZETTEL_DIR = _setting_path('zettel_output_dir', PERSONAL / 'notes' / '2-knowledg
 COMPANIES_DIR = PERSONAL / '3-knowledge' / 'reference' / 'companies'
 PEOPLE_DIR_DF = DATAFUND / '3-knowledge' / 'reference' / 'people'
 PEOPLE_DIR_PERSONAL = PERSONAL / '3-knowledge' / 'reference' / 'people'
-LANDSCAPE_FILE = DATAFUND / '1-tracks' / 'research' / 'Industry landscape.md'
+LANDSCAPE_FILE = _setting_path('industry_landscape_file', PERSONAL / '3-knowledge' / 'reference' / 'Industry landscape.md')
 REPORTS_DIR = _setting_path('reports_output_dir', PERSONAL / 'content' / 'reports')
 JOURNAL_DIR = PERSONAL / 'notes' / 'journals'
 PODCAST_DIR = _setting_path('podcast_output_dir', PERSONAL / 'content' / 'podcasts')
-# NOTE: industry_landscape_file setting default contradicts the working path
-# below (LANDSCAPE_FILE) — deliberately NOT wired until module.yaml is corrected.
 TODAY = date.today().isoformat()
 
 
@@ -196,121 +194,152 @@ DOMAIN_COOKIE_ENV = {
 
 
 def _cookies_for(url: str) -> Optional[str]:
-    """Return Cookie header value if env var is set for the URL's domain."""
+    """Bind subscription credentials to their HTTPS domain, never URL text."""
+    try:
+        parsed = parse_public_url(url)
+    except ValueError:
+        return None
+    if parsed.scheme != 'https' or parsed.port not in (None, 443):
+        return None
+    host = parsed.hostname.lower().rstrip('.')
     for domain, env_var in DOMAIN_COOKIE_ENV.items():
-        if domain in url:
-            val = os.environ.get(env_var, '').strip()
-            if val:
-                return val
+        if host == domain or host.endswith('.' + domain):
+            return os.environ.get(env_var, '').strip() or None
     return None
 
 
 def _fetch_jina(url: str) -> Optional[str]:
-    """Try Jina Reader (clean markdown extraction)."""
+    """Explicitly enabled public-URL proxy; credentials stay on its origin."""
+    if _SETTINGS.get('allow_url_proxies') is not True:
+        return None
     jina_key = os.environ.get('JINA_API_KEY', '')
     if not jina_key:
         return None
     try:
-        jina_url = f"https://r.jina.ai/{url}"
-        req = urllib.request.Request(jina_url, headers={
-            'Authorization': f'Bearer {jina_key}',
-            'Accept': 'text/markdown',
-        })
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            content = resp.read().decode('utf-8', errors='replace')
-            if len(content) > 200:
-                return content[:15000]
-    except Exception as e:
-        log(f"  Jina failed for {url}: {e}")
-    return None
+        parsed = parse_public_url(url)
+        public_addresses(parsed.hostname, parsed.port or (443 if parsed.scheme == 'https' else 80))
+        content = download_public(f"https://r.jina.ai/{url}", max_bytes=2 * 1024 * 1024,
+            headers={'Authorization': f'Bearer {jina_key}', 'Accept': 'text/markdown'}).decode('utf-8', errors='replace')
+        return content[:15000] if len(content) > 200 else None
+    except (OSError, ValueError):
+        log("  Jina fetch failed")
+        return None
 
 
 def _fetch_direct(url: str, with_cookies: bool = False) -> Optional[str]:
-    """Direct HTTP fetch with HTML-strip. Optionally include subscription cookies."""
+    """Bounded public HTTP fetch with origin-bound explicit credentials."""
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
-        }
-        if with_cookies:
-            cookies = _cookies_for(url)
-            if cookies:
-                headers['Cookie'] = cookies
-                log(f"  Using subscription cookies for {url[:60]}")
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            content = resp.read().decode('utf-8', errors='replace')
-            content = re.sub(r'<[^>]+>', ' ', content)
-            content = re.sub(r'\s+', ' ', content)
-            if len(content) > 500:  # paywall stubs are typically <500 chars
-                return content[:15000]
-            log(f"  Direct fetch returned only {len(content)} chars — likely paywall stub")
-    except Exception as e:
-        log(f"  Direct fetch failed for {url}: {e}")
+        cookies = _cookies_for(url) if with_cookies else None
+        content = download_public(url, max_bytes=2 * 1024 * 1024,
+            headers={'Cookie': cookies} if cookies else None).decode('utf-8', errors='replace')
+        content = re.sub(r'<[^>]+>', ' ', content)
+        content = re.sub(r'\s+', ' ', content)
+        if len(content) > 500:
+            return content[:15000]
+        log("  Direct fetch returned too little content")
+    except (OSError, ValueError):
+        log("  Direct fetch failed")
     return None
 
 
 def _fetch_wayback(url: str) -> Optional[str]:
-    """Wayback Machine fallback for paywalled / blocked URLs."""
+    """An archive lookup discloses the source URL and requires opt-in."""
+    if _SETTINGS.get('allow_url_proxies') is not True:
+        return None
     try:
-        avail_url = f"https://archive.org/wayback/available?url={urllib.parse.quote(url)}"
-        with urllib.request.urlopen(avail_url, timeout=15) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
+        parsed = parse_public_url(url)
+        public_addresses(parsed.hostname, parsed.port or (443 if parsed.scheme == 'https' else 80))
+        avail_url = f"https://archive.org/wayback/available?url={urllib.parse.quote(url, safe='')}"
+        data = json.loads(download_public(avail_url, max_bytes=1024 * 1024))
         snap = data.get('archived_snapshots', {}).get('closest', {})
         if not snap.get('available') or not snap.get('url'):
-            log(f"  No Wayback snapshot for {url}")
             return None
-        wb_url = snap['url']
-        log(f"  Wayback snapshot: {wb_url}")
-        # Prefer Jina on the Wayback URL (best chance of clean text)
-        content = _fetch_jina(wb_url) or _fetch_direct(wb_url)
-        if content and len(content) > 200:
-            return content
-    except Exception as e:
-        log(f"  Wayback fallback failed for {url}: {e}")
-    return None
+        return _fetch_direct(snap['url']) or _fetch_jina(snap['url'])
+    except (OSError, ValueError):
+        log("  Archive fetch failed")
+        return None
 
 
 def fetch_url(url: str) -> Optional[str]:
-    """Fetch and extract text content from a URL.
-
-    Fallback chain:
-      1. If paywall domain AND a subscription cookie env var is set →
-         direct fetch with Cookie header (freshest content)
-      2. Jina Reader (works for most public URLs)
-      3. Direct fetch without cookies
-      4. Wayback Machine snapshot (last resort)
-    """
+    """Fetch directly; source URLs reach extraction/archive proxies only by opt-in."""
     if not url:
         return None
-
-    is_paywalled = any(d in url for d in PAYWALL_DOMAINS)
-    has_subscription = is_paywalled and _cookies_for(url) is not None
-
-    # 1. Subscription-authenticated fetch for paywalled domains we have cookies for
-    if has_subscription:
-        content = _fetch_direct(url, with_cookies=True)
-        if content:
-            return content
-        log(f"  Subscription fetch returned no content — falling back")
-
-    # 2. Jina Reader (skip for paywalled if we already tried cookies and failed)
-    if not is_paywalled:
-        content = _fetch_jina(url)
-        if content:
-            return content
-        content = _fetch_direct(url)
-        if content:
-            return content
-
-    # 3. Wayback as final fallback
-    log(f"  Trying Wayback Machine for {url[:60]}")
-    return _fetch_wayback(url)
+    content = _fetch_direct(url, with_cookies=_cookies_for(url) is not None)
+    if content:
+        return content
+    if _SETTINGS.get('allow_url_proxies') is True:
+        return _fetch_jina(url) or _fetch_wayback(url)
+    return None
 
 
 # ---- Process single item with Claude ----
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / 'lib'))
 from ops_markers import AUTH_FAILURE_MARKERS  # noqa: E402
+from text_model import claude_text_options
+from generated_notes import create_note as _create_note
+from public_download import download as download_public, parse_public_url, public_addresses
+from file_utils import locked_read_modify_write_text as _locked_text
+from org_literal import scalar as org_scalar, prose as org_prose
+from org_transaction import SafeOrgWorkspace as _SafeOrgWorkspace, serialized, watch_file, write_org_text as _write_org_text
+from contextvars import ContextVar
+from functools import wraps
+from publication_manifest import PublicationManifest
+
+_outputs = ContextVar('research_outputs', default=None)
+
+
+def _record_output(path, content):
+    manifest = _outputs.get()
+    if manifest is not None:
+        manifest.record(path, content)
+
+
+def create_note(*args, **kwargs):
+    path = _create_note(*args, **kwargs)
+    _record_output(path, kwargs['content'] if 'content' in kwargs else args[2])
+    return path
+
+
+def write_org_text(path, content):
+    _write_org_text(path, content)
+    _record_output(path, content)
+
+
+def locked_read_modify_write_text(path, modifier):
+    written = []
+    def apply(previous):
+        content = modifier(previous)
+        written.append(content)
+        return content
+    _locked_text(path, apply)
+    _record_output(path, written[0])
+
+
+class SafeOrgWorkspace(_SafeOrgWorkspace):
+    def _safe_write(self, path, content):
+        super()._safe_write(path, content)
+        _record_output(path, content)
+
+
+def track_publication(function):
+    @wraps(function)
+    def run(*args, **kwargs):
+        manifest = PublicationManifest(PERSONAL)
+        token = _outputs.set(manifest)
+        try:
+            result = function(*args, **kwargs)
+            if manifest.paths:
+                try:
+                    manifest.publish(f'nightshift: research processing {TODAY}')
+                    log(f'Published {len(manifest.paths)} recorded research output files')
+                except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+                    log(f'Publication failed; outputs retained locally: {error}')
+                    return 1
+            return result
+        finally:
+            _outputs.reset(token)
+    return run
 
 
 def _claude_json(prompt: str, timeout: int, label: str) -> Optional[Dict[str, Any]]:
@@ -324,7 +353,7 @@ def _claude_json(prompt: str, timeout: int, label: str) -> Optional[Dict[str, An
     then failed to parse and was skipped. These prompts are self-contained
     text-in/JSON-out; they need no workspace, so they get none.
 
-    Uses claude_agent_sdk.query() with bypassPermissions + $0.50 budget cap.
+    Uses text-only claude_agent_sdk.query() with a $0.50 budget cap.
     asyncio.run() bridges the async SDK into the synchronous pipeline.
 
     Reports what actually came back on a parse failure. The bare
@@ -334,7 +363,7 @@ def _claude_json(prompt: str, timeout: int, label: str) -> Optional[Dict[str, An
     """
     async def _run(workdir: str) -> Optional[str]:
         options = ClaudeAgentOptions(
-            permission_mode='bypassPermissions',
+            **claude_text_options(),
             cwd=workdir,
             max_budget_usd=0.50,
         )
@@ -376,8 +405,8 @@ def _claude_json(prompt: str, timeout: int, label: str) -> Optional[Dict[str, An
         return None
     try:
         return json.loads(output)
-    except json.JSONDecodeError as first_error:
-        pass
+    except json.JSONDecodeError as error:
+        first_error = str(error)  # exception targets are cleared after an except block
 
     # Repair invalid escape sequences, then try once more.
     #
@@ -474,15 +503,7 @@ def write_literature_note(data: Dict[str, str]) -> Optional[Path]:
     articles_dir = LITERATURE_DIR / 'articles'
     articles_dir.mkdir(parents=True, exist_ok=True)
 
-    filename = data.get('filename', 'untitled.md')
-    # Sanitize filename
-    filename = re.sub(r'[^\w\s\-.]', '', filename)
-    if not filename.endswith('.md'):
-        filename += '.md'
-
-    path = articles_dir / filename
-    path.write_text(data.get('content', ''), encoding='utf-8')
-    return path
+    return create_note(articles_dir, data.get('filename', 'untitled.md'), data.get('content', ''))
 
 
 def _slug(s: str) -> str:
@@ -517,23 +538,23 @@ def write_companies(companies: List[Dict[str, str]], source_url: str) -> List[Pa
         slug = _slug(name)
         if not slug or slug.lower() in existing:
             continue
-        # Datafund-relevant verticals go to 1-datafund; everything else 0-personal
+        # Model-derived categories cannot authorize publishing private source
+        # material into a shared space. New stubs remain personal for review.
         cat = (c.get('category') or '').lower()
-        target_dir = df_companies if cat in ('rwa', 'crypto', 'web3', 'fintech', 'data',
-                                              'health', 'identity', 'tokenization') else COMPANIES_DIR
+        target_dir = COMPANIES_DIR
         target_dir.mkdir(parents=True, exist_ok=True)
         path = target_dir / f"{slug}.md"
         content = f"""---
 type: contact
 entity_type: company
-name: "{name}"
+name: {json.dumps(name)}
 status: draft
 relationship_status: discovered
 relevance: 2
-industries: [{cat or 'unknown'}]
-website: {c.get('website', '')}
+industries: {json.dumps([cat or 'unknown'])}
+website: {json.dumps(c.get('website', ''))}
 discovered_in: "Daily research {TODAY}"
-source: {source_url}
+source: {json.dumps(source_url)}
 created: {TODAY}
 updated: {TODAY}
 ---
@@ -548,7 +569,7 @@ updated: {TODAY}
 
 Auto-captured from research pipeline {TODAY}. Source: {source_url}
 """
-        path.write_text(content, encoding='utf-8')
+        path = create_note(target_dir, f"{slug}.md", content)
         created.append(path)
         existing.add(slug.lower())
     return created
@@ -572,19 +593,19 @@ def write_people(people: List[Dict[str, str]], source_url: str) -> List[Path]:
         slug = _slug(name)
         if not slug or slug.lower() in existing:
             continue
-        target_dir = PEOPLE_DIR_DF if PEOPLE_DIR_DF.exists() else PEOPLE_DIR_PERSONAL
+        target_dir = PEOPLE_DIR_PERSONAL
         target_dir.mkdir(parents=True, exist_ok=True)
         path = target_dir / f"{slug}.md"
         content = f"""---
 type: contact
 entity_type: person
-name: "{name}"
+name: {json.dumps(name)}
 status: draft
 relationship_status: discovered
-role: "{p.get('role', '')}"
-organization: "{p.get('organization', '')}"
+role: {json.dumps(p.get('role', ''))}
+organization: {json.dumps(p.get('organization', ''))}
 discovered_in: "Daily research {TODAY}"
-source: {source_url}
+source: {json.dumps(source_url)}
 created: {TODAY}
 updated: {TODAY}
 ---
@@ -602,12 +623,13 @@ updated: {TODAY}
 
 Auto-captured from research pipeline {TODAY}. Source: {source_url}
 """
-        path.write_text(content, encoding='utf-8')
+        path = create_note(target_dir, f"{slug}.md", content)
         created.append(path)
         existing.add(slug.lower())
     return created
 
 
+@serialized
 def append_landscape_rows(companies: List[Dict[str, str]]) -> List[str]:
     """Append landscape rows for companies that aren't already in the table.
 
@@ -616,7 +638,8 @@ def append_landscape_rows(companies: List[Dict[str, str]]) -> List[str]:
     if not companies or not LANDSCAPE_FILE.exists():
         return []
 
-    text = LANDSCAPE_FILE.read_text(encoding='utf-8')
+    watch_file(LANDSCAPE_FILE)
+    text = LANDSCAPE_FILE.read_bytes().decode('utf-8')
     appended_names = []
     new_rows = []
     for c in companies:
@@ -643,7 +666,7 @@ def append_landscape_rows(companies: List[Dict[str, str]]) -> List[str]:
 
     header = f"\n## {TODAY} — Auto-captured peers from research pipeline\n\n"
     text = text.rstrip() + '\n' + header + '\n'.join(new_rows) + '\n'
-    LANDSCAPE_FILE.write_text(text, encoding='utf-8')
+    write_org_text(LANDSCAPE_FILE, text)
     return appended_names
 
 
@@ -652,12 +675,7 @@ def write_zettels(zettels: List[Dict[str, str]]) -> List[Path]:
     ZETTEL_DIR.mkdir(parents=True, exist_ok=True)
     paths = []
     for z in zettels:
-        filename = z.get('filename', 'untitled.md')
-        filename = re.sub(r'[^\w\s\-.]', '', filename)
-        if not filename.endswith('.md'):
-            filename += '.md'
-        path = ZETTEL_DIR / filename
-        path.write_text(z.get('content', ''), encoding='utf-8')
+        path = create_note(ZETTEL_DIR, z.get('filename', 'untitled.md'), z.get('content', ''))
         paths.append(path)
     return paths
 
@@ -665,6 +683,7 @@ def write_zettels(zettels: List[Dict[str, str]]) -> List[Path]:
 MAX_FETCH_ATTEMPTS = 3
 
 
+@serialized
 def note_fetch_failure(item: Dict[str, str]) -> Optional[int]:
     """Count a failed fetch on the item; after MAX_FETCH_ATTEMPTS park it.
 
@@ -677,6 +696,7 @@ def note_fetch_failure(item: Dict[str, str]) -> Optional[int]:
     to WAITING with a :RESULT: that says exactly what is needed. The queue
     drains; the summary names what is parked.
     """
+    watch_file(RESEARCH_ORG)
     try:
         content = RESEARCH_ORG.read_text(encoding='utf-8')
     except OSError:
@@ -714,15 +734,14 @@ def note_fetch_failure(item: Dict[str, str]) -> Optional[int]:
         lines.insert(hi + 1, f"{indent}:RESULT: unfetchable after {attempts} attempts (paywall/403, no archive) "
                              f"-- provide the text, a PDF, or an archive link, then set TODO again")
         log(f"  PARKED as WAITING after {attempts} failed fetches -- needs a readable source")
-    p = RESEARCH_ORG
-    tmp = p.with_suffix(p.suffix + '.tmp')
-    tmp.write_text('\n'.join(lines), encoding='utf-8')
-    tmp.replace(p)
+    write_org_text(RESEARCH_ORG, '\n'.join(lines))
     return attempts
 
 
+@serialized
 def mark_done(item: Dict[str, str], output_path: str, zettel_names: List[str]):
     """Mark a research item as DONE in the org file."""
+    watch_file(RESEARCH_ORG)
     content = RESEARCH_ORG.read_text(encoding='utf-8')
     old_heading = item['heading_line']
     new_heading = old_heading.replace(' TODO ', ' DONE ')
@@ -760,11 +779,12 @@ def mark_done(item: Dict[str, str], output_path: str, zettel_names: List[str]):
                     break
             break
 
-    RESEARCH_ORG.write_text('\n'.join(lines), encoding='utf-8')
+    write_org_text(RESEARCH_ORG, '\n'.join(lines))
 
 
 # ---- Main Pipeline ----
 
+@serialized
 def auto_archive_stale_research(max_age_days: int = 60) -> int:
     """Move research_learning.org items older than max_age_days to a dated
     archive file. Prevents the queue from accumulating stale items that the
@@ -776,13 +796,6 @@ def auto_archive_stale_research(max_age_days: int = 60) -> int:
     import sys
     from datetime import date
     from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / '2-datacore' / '2-projects' / 'org-workspace' / 'src'))
-    try:
-        from org_workspace import OrgWorkspace
-        import org_workspace.workspace as wsmod
-    except ImportError:
-        log("org_workspace not importable; skipping auto-archive")
-        return 0
 
     if not RESEARCH_ORG.exists():
         return 0
@@ -793,70 +806,66 @@ def auto_archive_stale_research(max_age_days: int = 60) -> int:
     archive_path = archive_dir / f'research_learning-auto-archived-{today_d.isoformat()}.org'
 
     # Bulk archive may shrink the source heavily — temporarily raise guard.
-    original_threshold = wsmod.OrgWorkspace._MAX_SHRINK_FRACTION
-    wsmod.OrgWorkspace._MAX_SHRINK_FRACTION = 0.85
+    ws = SafeOrgWorkspace()
+    ws._MAX_SHRINK_FRACTION = 0.85
+    ws.load(RESEARCH_ORG)
 
-    try:
-        ws = OrgWorkspace()
-        ws.load(RESEARCH_ORG)
+    # Create archive file if first time today
+    if not archive_path.exists():
+        ws._safe_write(archive_path,
+            f"#+TITLE: Research auto-archive {today_d.isoformat()}\n"
+            f"#+CATEGORY: ResearchArchive\n"
+            f"#+FILETAGS: :archive:research:auto:\n"
+            f"#+STARTUP: overview\n\n"
+            f"* Auto-archived stale research items (>{max_age_days}d)\n"
+            f"  :PROPERTIES:\n"
+            f"  :ID: org-research-auto-archive-{today_d.isoformat()}\n"
+            f"  :END:\n"
+        )
+    ws.load(archive_path)
 
-        # Create archive file if first time today
-        if not archive_path.exists():
-            archive_path.write_text(
-                f"#+TITLE: Research auto-archive {today_d.isoformat()}\n"
-                f"#+CATEGORY: ResearchArchive\n"
-                f"#+FILETAGS: :archive:research:auto:\n"
-                f"#+STARTUP: overview\n\n"
-                f"* Auto-archived stale research items (>{max_age_days}d)\n"
-                f"  :PROPERTIES:\n"
-                f"  :ID: org-research-auto-archive-{today_d.isoformat()}\n"
-                f"  :END:\n"
-            )
-        ws.load(archive_path)
+    opens = [n for n in ws.all_nodes()
+             if 'research_learning.org' in str(n.path)
+             and '.archive' not in str(n.path)
+             and n.todo and n.todo not in ('DONE', 'CANCELLED', 'CLOSED', 'FAILED')]
 
-        opens = [n for n in ws.all_nodes()
-                 if 'research_learning.org' in str(n.path)
-                 and '.archive' not in str(n.path)
-                 and n.todo and n.todo not in ('DONE', 'CANCELLED', 'CLOSED', 'FAILED')]
+    stale_ids = []
+    for n in opens:
+        raw = n.get_property('CREATED') or n.get_property('RECEIVED') or ''
+        m = re.search(r'(\d{4}-\d{2}-\d{2})', raw)
+        if not m:
+            # Undated items >max_age_days assumed stale (no provenance)
+            # but only if the FILE itself is older than max_age_days — we
+            # don't want to archive items added yesterday that lack a date.
+            # Heuristic: undated items get a grace period of max_age_days
+            # before they're considered stale. Since we have no created
+            # date for them, we don't archive on this pass — they stay
+            # until they accrue a date or get manually triaged.
+            continue
+        d = date(*[int(x) for x in m.group().split('-')])
+        if (today_d - d).days > max_age_days:
+            stale_ids.append(n.id())
 
-        stale_ids = []
-        for n in opens:
-            raw = n.get_property('CREATED') or n.get_property('RECEIVED') or ''
-            m = re.search(r'(\d{4}-\d{2}-\d{2})', raw)
-            if not m:
-                # Undated items >max_age_days assumed stale (no provenance)
-                # but only if the FILE itself is older than max_age_days — we
-                # don't want to archive items added yesterday that lack a date.
-                # Heuristic: undated items get a grace period of max_age_days
-                # before they're considered stale. Since we have no created
-                # date for them, we don't archive on this pass — they stay
-                # until they accrue a date or get manually triaged.
-                continue
-            d = date(*[int(x) for x in m.group().split('-')])
-            if (today_d - d).days > max_age_days:
-                stale_ids.append(n.id())
+    if not stale_ids:
+        return 0
 
-        if not stale_ids:
-            return 0
-
-        log(f"Auto-archiving {len(stale_ids)} research items older than {max_age_days}d...")
-        archive_target = archive_path.resolve()
-        moved = 0
-        for tid in stale_ids:
+    log(f"Auto-archiving {len(stale_ids)} research items older than {max_age_days}d...")
+    archive_target = archive_path.resolve()
+    moved = 0
+    for tid in stale_ids:
+        node = ws.find_by_id(tid)
+        if not node:
+            continue
+        try:
+            ws.set_property(node, 'AUTO_ARCHIVED', today_d.isoformat())
             node = ws.find_by_id(tid)
-            if not node:
-                continue
-            try:
-                ws.set_property(node, 'AUTO_ARCHIVED', today_d.isoformat())
-                node = ws.find_by_id(tid)
-                ws.refile(node, archive_target)
-                moved += 1
-            except Exception as e:
-                log(f"  archive failed for {tid}: {e}")
-        ws.save_all()
-        return moved
-    finally:
-        wsmod.OrgWorkspace._MAX_SHRINK_FRACTION = original_threshold
+            ws.refile(node, archive_target)
+            moved += 1
+        except Exception as e:
+            log(f"  archive failed for {tid}: {e}")
+    ws.save_all()
+    return moved
+
 
 
 # ---- Daily news section processor ----
@@ -955,7 +964,7 @@ created: {TODAY}
 # Daily News Brief {TODAY}
 
 """
-    brief_path.write_text(front + brief_md.rstrip() + '\n', encoding='utf-8')
+    brief_path = create_note(REPORTS_DIR, brief_path.name, front + brief_md.rstrip() + '\n')
     log(f"  Daily news brief: {brief_path}")
 
     # Extract entities → CRM + landscape
@@ -972,22 +981,31 @@ created: {TODAY}
     actions = data.get('action_items') or []
     if actions and inbox.exists():
         try:
-            text = inbox.read_text(encoding='utf-8')
-            blocks = []
-            for a in actions[:5]:
-                title = (a.get('title') or '').replace('\n', ' ').strip()
-                ctx = (a.get('context') or '').replace('\n', ' ').strip()
-                if not title:
-                    continue
-                blocks.append(f"** TODO {title} :daily-news:research:\n:PROPERTIES:\n:CREATED: [{TODAY}]\n:SOURCE: Daily news brief {TODAY}\n:RESEARCH_URL: {brief_path.relative_to(DATA_DIR)}\n:END:\n{ctx}\n")
-            inbox.write_text(text.rstrip() + '\n\n' + '\n'.join(blocks), encoding='utf-8')
-            log(f"  Daily-news action items added: {len(blocks)}")
+            count = append_news_actions(inbox, actions[:5], brief_path)
+            log(f"  Daily-news action items added: {count}")
         except Exception as e:
             log(f"  Inbox append failed: {e}")
 
     return brief_path
 
 
+@serialized
+def append_news_actions(inbox, actions, brief_path):
+    watch_file(inbox)
+    text = inbox.read_bytes().decode('utf-8')
+    blocks = []
+    for action in actions:
+        title = (action.get('title') or '').strip()
+        context = action.get('context') or ''
+        if title:
+            literal_context = '\n'.join(org_prose(context))
+            blocks.append(f"** TODO {org_scalar(title)} :daily-news:research:\n:PROPERTIES:\n:CREATED: [{TODAY}]\n:SOURCE: Daily news brief {TODAY}\n:RESEARCH_URL: {org_scalar(str(brief_path.relative_to(DATA_DIR)))}\n:END:\n{literal_context}\n")
+    if blocks:
+        write_org_text(inbox, text + '\n\n' + '\n'.join(blocks))
+    return len(blocks)
+
+
+@track_publication
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Research Orchestrator')
@@ -1109,11 +1127,8 @@ def main():
         if failed:
             section += f"\nFailed to process: {len(failed)} items (kept as TODO for retry)\n"
 
-        if journal_path.exists():
-            existing = journal_path.read_text()
-            journal_path.write_text(existing + section, encoding='utf-8')
-        else:
-            journal_path.write_text(f"---\ndate: {TODAY}\ntype: daily\n---\n{section}", encoding='utf-8')
+        locked_read_modify_write_text(journal_path, lambda existing:
+            (existing if existing is not None else f"---\ndate: {TODAY}\ntype: daily\n---\n") + section)
 
         log(f"Journal updated: {journal_path}")
 
@@ -1150,17 +1165,8 @@ def main():
         except Exception as e:
             log(f"Telegram push failed (non-fatal): {e}")
 
-    # Step 6: Git commit + push
-    try:
-        subprocess.run(['git', 'add', '-A'], cwd=PERSONAL, capture_output=True, timeout=10)
-        subprocess.run(
-            ['git', 'commit', '-m', f'nightshift: research processing {TODAY} ({len(processed)} items)'],
-            cwd=PERSONAL, capture_output=True, timeout=10
-        )
-        subprocess.run(['git', 'push'], cwd=PERSONAL, capture_output=True, timeout=30)
-        log("Committed and pushed")
-    except Exception as e:
-        log(f"Git error: {e}")
+    # The outer publication scope commits only this run's recorded outputs
+    # after checking their hashes and the checkout's original clean state.
 
     # Summary
     log(f"\n{'='*50}")
@@ -1367,7 +1373,8 @@ def send_telegram_summary(processed: List[Dict[str, Any]], failed: List[Dict[str
             }).encode('utf-8'),
             method='POST'
         )
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        from secret_http import urlopen
+        with urlopen(req, timeout=15) as resp:
             ok = resp.status == 200
         log(f"  Telegram push: {'ok' if ok else 'failed'}")
         return ok
@@ -1377,4 +1384,4 @@ def send_telegram_summary(processed: List[Dict[str, Any]], failed: List[Dict[str
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

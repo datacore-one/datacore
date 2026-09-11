@@ -80,17 +80,17 @@ def test_prose_about_another_principal_is_not_a_write(as_tris):
     assert hp.foreign_actor_write("actor='winston' is what the old skill said") is None
 
 
-def test_an_unresolved_identity_refuses_nothing(monkeypatch):
+def test_an_unresolved_identity_refuses_execution(monkeypatch):
     monkeypatch.setattr(hp, "_IDENTITY", {"actor": "", "principal": "", "display": "",
                                           "role": "", "permission_mode": "",
                                           "ok": False, "why": "no registry"})
     assert hp.foreign_actor_write(WRITE) is None
-    assert hp.pre_tool_call("execute_code", {"code": WRITE}) is None
+    assert hp.pre_tool_call("execute_code", {"code": WRITE})["action"] == "block"
 
 
-def test_a_broken_guard_never_blocks_the_agent(as_tris, monkeypatch):
+def test_a_broken_guard_refuses_execution(as_tris, monkeypatch):
     monkeypatch.setattr(hp, "call_text", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
-    assert hp.pre_tool_call("terminal", {"command": WRITE}) is None
+    assert hp.pre_tool_call("terminal", {"command": WRITE})["action"] == "block"
 
 
 # ── identity in memory ──────────────────────────────────────────────────────
@@ -238,6 +238,8 @@ def test_the_ledger_tool_takes_no_actor_and_uses_our_own(as_tris, tmp_path, monk
     monkeypatch.setitem(sys.modules, "ledger.events",
                         types.SimpleNamespace(EVENT_TYPES=frozenset({"item.create", "item.update"})))
     monkeypatch.setitem(sys.modules, "ledger.log", types.SimpleNamespace(EventLog=FakeLog))
+    monkeypatch.setitem(sys.modules, "ledger.policy", types.SimpleNamespace(
+        guarded_append=lambda log, kind, payload: log.append(kind, payload)))
 
     out = hp.ledger_append_handler(space="2-plur", type="item.create",
                                    payload={"id": "org-1", "title": "x"},
@@ -261,16 +263,15 @@ def test_the_ledger_tool_refuses_without_a_declared_principal(monkeypatch):
     assert out.startswith("Refused: this host has no declared principal")
 
 
-def test_approval_decide_attributes_the_decision_to_this_principal(as_tris, tmp_path, monkeypatch):
+def test_agent_cannot_manufacture_an_authenticated_human_decision(as_tris, tmp_path, monkeypatch):
     cq = tmp_path / "cos_questions.py"
     cq.write_text("")
     monkeypatch.setattr(hp, "_cos_questions", lambda: cq)
     calls = []
     monkeypatch.setattr(hp, "_run", lambda argv, timeout=45: (calls.append(argv), (0, "decided: a1 approved"))[1])
     out = hp.approval_decide_handler(id="a1", decision="approve")
-    assert out == "decided: a1 approved"
-    assert calls[0][-2:] == ["--by", "tris.telegram"]
-    assert "decide" in calls[0] and "a1" in calls[0]
+    assert "authenticated human approval interface" in out
+    assert calls == []
 
 
 def test_approval_decide_refuses_a_guess_and_a_bad_verb(as_tris, tmp_path, monkeypatch):
@@ -298,3 +299,24 @@ def test_all_four_tools_register(as_tris):
     assert names == ["datacore_whoami", "datacore_approvals_pending",
                      "datacore_approval_decide", "datacore_ledger_append"]
 
+
+
+@pytest.mark.parametrize('space', ['../outside', '/tmp/outside', '.', '..', 'one/two'])
+def test_ledger_tool_refuses_space_traversal(as_tris, space):
+    assert 'direct child' in hp.ledger_append_handler(space=space, type='item.create', payload={'id': 'x'})
+
+
+def test_ledger_tool_refuses_symlink_escape(as_tris, tmp_path, monkeypatch):
+    root = tmp_path / 'root'
+    outside = tmp_path / 'outside'
+    (outside / '.datacore').mkdir(parents=True)
+    root.mkdir()
+    (root / '2-team').symlink_to(outside, target_is_directory=True)
+    monkeypatch.setenv('DATACORE_ROOT', str(root))
+    assert 'not a space under' in hp.ledger_append_handler(space='2-team', type='item.create', payload={'id': 'x'})
+    assert not (outside / '.datacore' / 'events').exists()
+
+
+def test_missing_policy_lib_refuses_call(as_tris, monkeypatch):
+    monkeypatch.setattr(hp, '_lib', lambda: False)
+    assert hp.pre_tool_call('terminal', {'command': 'echo hello'})['action'] == 'block'

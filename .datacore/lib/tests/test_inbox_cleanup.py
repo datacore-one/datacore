@@ -65,3 +65,42 @@ def test_a_clean_file_is_left_alone():
     out, arch, stats = M.clean(text, "2026-09-05")
     assert arch is None and stats["archived"] == 0 and stats["moved_into_inbox"] == 0
     assert out.strip() == text.strip()
+
+
+def test_inbox_after_closed_sections_keeps_the_correct_index():
+    text = '* DONE old\n* Inbox\n** TODO keep\n* Other\n** TODO other\n'
+    out, archive, _ = M.clean(text, '2026-09-10')
+    assert out.startswith('* Inbox\n** TODO keep\n')
+    assert '* Other\n** TODO other' in out
+    assert 'DONE old' in archive
+
+
+def test_no_open_grandchild_disappears_into_an_archive():
+    text = '* Inbox\n** DONE closed\n*** CANCELLED closed child\n**** TODO unfinished\n:PROPERTIES:\n:ID: preserve\n:END:\n'
+    out, archive, _ = M.clean(text, '2026-09-10')
+    assert '** TODO unfinished' in out and ':ID: preserve' in out
+    assert 'unfinished' not in archive and ':ID: preserve' not in archive
+
+
+def test_failed_archive_write_restores_both_original_files(tmp_path, monkeypatch):
+    import sys
+    import pytest
+    import org_transaction as tx
+    org = tmp_path / 'org'
+    org.mkdir()
+    source = org / 'inbox.org'
+    target = org / 'inbox-archive-2026-09-10.org'
+    source.write_text(MESS)
+    target.write_text('* Archived\n** DONE previous\n')
+    originals = {source: source.read_bytes(), target: target.read_bytes()}
+    real_write = tx.atomic_write_text
+    def fail_target(path, content):
+        if path == target:
+            raise OSError('injected archive failure')
+        real_write(path, content)
+    monkeypatch.setattr(tx, 'atomic_write_text', fail_target)
+    monkeypatch.setattr(sys, 'argv', ['inbox_cleanup', str(tmp_path), '--apply', '--today', '2026-09-10'])
+    with pytest.raises(OSError, match='archive failure'):
+        M.main()
+    for path, content in originals.items():
+        assert path.read_bytes() == content

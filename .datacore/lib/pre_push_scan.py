@@ -8,7 +8,7 @@ outgoing range) on stdin. Applies three layers of policy from
 1. Path denylist   — forbidden_paths / warning_patterns.paths globs
                      against every added/modified path in the range.
 2. Content scan    — forbidden_content regexes (case-insensitive)
-                     against the ADDED diff lines of the range, plus
+                     against complete changed Git blobs in the range, plus
                      patterns from the optional PRIVATE customer
                      denylist (private_patterns_file). The private file
                      is read at runtime and must never be committed.
@@ -28,6 +28,9 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
+
+from git_privacy import changed_paths, git_bytes, tree_entries
 
 DEFAULT_DENYLIST = os.path.join(
     os.environ.get("DATA_DIR", os.path.expanduser("~/Data")),
@@ -153,56 +156,39 @@ def load_yaml(path):
 
 
 def collect_changes(commits):
-    """Return (added_paths, modified_paths) across the commit range."""
+    """Return exact added/modified paths, including root and merge commits."""
     added, modified = set(), set()
     for sha in commits:
-        r = git(["diff-tree", "--no-commit-id", "--root", "-r",
-                 "--name-status", sha])
-        if r.returncode != 0:
-            eprint(f"pre-push-scan: WARNING: git diff-tree failed for {sha}: "
-                   f"{r.stderr.strip()}")
-            continue
-        for line in r.stdout.splitlines():
-            if not line.strip():
-                continue
-            parts = line.split("\t")
-            status = parts[0]
-            if status.startswith("A") and len(parts) > 1:
-                added.add(parts[1])
-            elif status.startswith("M") and len(parts) > 1:
-                modified.add(parts[1])
-            elif (status.startswith("R") or status.startswith("C")) \
-                    and len(parts) > 2:
-                added.add(parts[2])  # rename/copy target is a new path
+        new, changed = changed_paths(Path.cwd(), sha)
+        added.update(new)
+        modified.update(changed)
     return added, modified
 
 
 def added_lines_by_file(commits):
-    """Yield (path, line) for every ADDED diff line across the range."""
+    """Scan complete changed blobs, never working-tree files or quoted diffs.
+
+    Full blobs also catch content assembled during a merge or made sensitive
+    by a neighboring edit. Deduplicate repeated versions, not filenames.
+    """
+    seen = set()
     for sha in commits:
-        # -c diff.noprefix=false: guarantee the 'b/' prefix regardless of
-        # user config so the '+++ b/' parse below is stable.
-        r = subprocess.run(
-            ["git", "-c", "diff.noprefix=false", "diff-tree",
-             "--no-commit-id", "--root", "-r", "-p", "-U0", sha],
-            capture_output=True, text=True, check=False)
-        if r.returncode != 0:
-            continue
-        current = None
-        for line in r.stdout.splitlines():
-            if line.startswith("+++ b/"):
-                current = line[6:]
-            elif line.startswith("+++"):
-                current = None  # /dev/null (deletion)
-            elif line.startswith("+") and not line.startswith("+++") \
-                    and current is not None:
-                yield current, line[1:]
+        added, modified = changed_paths(Path.cwd(), sha)
+        touched = added | modified
+        for mode, kind, oid, path in tree_entries(Path.cwd(), sha):
+            if path not in touched or kind != "blob" or (path, oid) in seen:
+                continue
+            seen.add((path, oid))
+            content = git_bytes(Path.cwd(), "cat-file", "blob", oid)
+            for line in content.decode("utf-8", "replace").splitlines():
+                yield path, line
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=True, help="org/name being pushed to")
     ap.add_argument("--denylist", default=DEFAULT_DENYLIST)
+    ap.add_argument("--index", action="store_true", help="scan staged Git objects instead of stdin commits")
     args = ap.parse_args()
 
     try:
@@ -215,7 +201,7 @@ def main():
         eprint(f"pre-push-scan: FATAL: cannot read denylist {args.denylist}: {e}")
         return 2
 
-    commits = [c.strip() for c in sys.stdin.read().split() if c.strip()]
+    commits = [":index"] if args.index else [c.strip() for c in sys.stdin.read().split() if c.strip()]
     if not commits:
         eprint("pre-push-scan: no commits to scan — nothing to do")
         return 0
@@ -300,7 +286,7 @@ def main():
                 "registry/ docs/ workflows/ hooks/ githooks/ config/ tests/ "
                 "skills/ cos/*.example modules/*/{agents,commands,lib,...})")
 
-    # --- 3. Content scan of added lines -----------------------------------
+    # --- 3. Content scan of complete changed blobs -----------------------------------
     seen = set()
     for path, line in added_lines_by_file(commits):
         if match_any(path, exemptions):
@@ -330,4 +316,8 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (OSError, ValueError) as exc:
+        eprint(f"pre-push-scan: FATAL: validation could not complete: {exc}")
+        sys.exit(2)

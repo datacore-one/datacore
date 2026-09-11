@@ -14,11 +14,12 @@ holding secrets.
 
 from __future__ import annotations
 
-import fcntl
 import os
+import re
 from pathlib import Path
 
 import yaml
+from file_utils import atomic_write_text, atomic_write_yaml, file_lock
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
@@ -31,40 +32,42 @@ DEFAULT_KEYS_DIR = Path.home() / ".datacore" / "keys"
 DEFAULT_REGISTRY_PATH = DATACORE_ROOT / ".datacore" / "keys" / "registry.yaml"
 
 
+def validate_actor_name(actor: str) -> None:
+    """Key and log identifiers share one filename-safe namespace."""
+    if not isinstance(actor, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", actor):
+        raise ValueError(f"invalid actor name {actor!r}: expected lowercase letters, digits, '-' or '_'")
+
+
 def _key_path(actor: str, keys_dir: Path | None) -> Path:
+    validate_actor_name(actor)
     return (keys_dir or DEFAULT_KEYS_DIR) / f"{actor}.key"
 
 
 def _lock_path(actor: str, keys_dir: Path) -> Path:
+    validate_actor_name(actor)
     return keys_dir / f".{actor}.lock"
 
 
-def _load_registry(registry_path: Path) -> dict:
-    """Load the registry YAML, tolerating structural corruption.
-
-    Guarantees a return value of the shape {"actors": {...}} no matter what
-    is on disk: missing file, unparseable YAML (partial write, merge-conflict
-    markers), a non-mapping top-level document (e.g. a YAML list), or a
-    present-but-null/non-mapping `actors` key all fall back to an empty
-    actors mapping rather than raising. Callers (ensure_keypair, verify) rely
-    on this to never propagate a malformed on-disk registry as an exception.
-    """
-    if not registry_path.exists():
-        return {"actors": {}}
+def _load_registry(registry_path: Path, *, strict: bool = False) -> dict:
+    """Verification fails closed; mutation refuses to replace invalid data."""
     try:
         data = yaml.safe_load(registry_path.read_text())
-    except yaml.YAMLError:
+    except FileNotFoundError:
         return {"actors": {}}
-    if not isinstance(data, dict):
+    except (OSError, yaml.YAMLError):
+        if strict:
+            raise
         return {"actors": {}}
-    if not isinstance(data.get("actors"), dict):
-        data["actors"] = {}
+    if not isinstance(data, dict) or not isinstance(data.get("actors"), dict):
+        if strict:
+            raise ValueError(f"invalid signing registry at {registry_path}; preserving existing data")
+        return {"actors": {}}
     return data
 
 
 def _save_registry(registry_path: Path, data: dict) -> None:
     registry_path.parent.mkdir(parents=True, exist_ok=True)
-    registry_path.write_text(yaml.safe_dump(data, sort_keys=True))
+    atomic_write_yaml(registry_path, data)
 
 
 def ensure_keypair(
@@ -89,33 +92,27 @@ def ensure_keypair(
     """
     keys_dir = keys_dir or DEFAULT_KEYS_DIR
     registry_path = registry_path or DEFAULT_REGISTRY_PATH
-    keys_dir.mkdir(parents=True, exist_ok=True)
     key_path = _key_path(actor, keys_dir)
-    lock_path = _lock_path(actor, keys_dir)
-
-    with open(lock_path, "a+b") as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
-        try:
-            # Re-check under the lock: another process may have just created
-            # (or upserted) this actor's key while we were waiting for it.
-            if key_path.exists():
-                private_key = Ed25519PrivateKey.from_private_bytes(
-                    bytes.fromhex(key_path.read_text().strip())
-                )
-            else:
-                private_key = Ed25519PrivateKey.generate()
-                key_path.write_text(private_key.private_bytes_raw().hex())
-                os.chmod(key_path, 0o600)
-
-            verify_key_hex = private_key.public_key().public_bytes_raw().hex()
-
-            registry = _load_registry(registry_path)
-            registry["actors"][actor] = verify_key_hex
-            _save_registry(registry_path, registry)
-
-            return verify_key_hex
-        finally:
-            fcntl.flock(lock_file, fcntl.LOCK_UN)
+    # Lock the key AND the shared registry, in a consistent order. Per-actor
+    # locks alone lose entries when different actors start simultaneously.
+    with file_lock(key_path), file_lock(registry_path):
+        registry = _load_registry(registry_path, strict=True)
+        exists = key_path.exists()
+        if exists:
+            private_key = Ed25519PrivateKey.from_private_bytes(
+                bytes.fromhex(key_path.read_text().strip())
+            )
+        else:
+            private_key = Ed25519PrivateKey.generate()
+        verify_key_hex = private_key.public_key().public_bytes_raw().hex()
+        registered = registry["actors"].get(actor)
+        if registered is not None and registered != verify_key_hex:
+            raise ValueError(f"signing key for {actor!r} differs from its registered identity; restore the key or rotate explicitly")
+        if not exists:
+            atomic_write_text(key_path, private_key.private_bytes_raw().hex())
+        registry["actors"][actor] = verify_key_hex
+        _save_registry(registry_path, registry)
+        return verify_key_hex
 
 
 def sign(actor: str, data: bytes, keys_dir: Path | None = None) -> str:
@@ -178,5 +175,5 @@ def verify(
         public_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(verify_key_hex))
         public_key.verify(bytes.fromhex(sig_hex), data)
         return True
-    except (ValueError, InvalidSignature):
+    except (TypeError, ValueError, InvalidSignature):
         return False

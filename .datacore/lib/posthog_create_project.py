@@ -16,16 +16,17 @@ import os
 import re
 import sys
 import urllib.request
+from secret_http import urlopen as secret_urlopen
 
 ENV_FILE = os.path.expanduser("~/Data/.datacore/env/.env")
 
 
 def load_key():
-    with open(ENV_FILE) as f:
-        for line in f:
-            if line.startswith("POSTHOG_API_KEY="):
-                return line.split("=", 1)[1].strip()
-    sys.exit("POSTHOG_API_KEY not found in .env")
+    from env_utils import parse_env_file
+    key = os.environ.get("POSTHOG_API_KEY") or parse_env_file(ENV_FILE).get("POSTHOG_API_KEY")
+    if not key:
+        sys.exit("POSTHOG_API_KEY not found in .env")
+    return key
 
 
 def api(host, path, key, method="GET", body=None):
@@ -35,7 +36,7 @@ def api(host, path, key, method="GET", body=None):
     req.add_header("Authorization", f"Bearer {key}")
     req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req) as r:
+        with secret_urlopen(req) as r:
             return r.status, json.load(r)
     except urllib.error.HTTPError as e:
         return e.code, json.loads(e.read().decode() or "{}")

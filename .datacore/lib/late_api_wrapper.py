@@ -8,7 +8,8 @@ Prevents scheduling posts with broken or non-public links.
 import json
 import sys
 from pathlib import Path
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from secret_http import urlopen
 from urllib.error import HTTPError
 from typing import Dict, Optional, List
 

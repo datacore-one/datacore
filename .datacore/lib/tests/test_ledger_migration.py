@@ -159,12 +159,12 @@ def test_tags_are_sorted_not_set_ordered(space):
     assert rendered == sorted(rendered), f"tags not sorted: {rendered}"
 
 
-def test_projection_excludes_finished_items():
+def test_projection_keeps_agent_completed_items_for_human_review():
     state = LedgerState()
     state.items["a"] = ItemState("a", "live", None, "created", payload={"id": "a"})
     state.items["b"] = ItemState("b", "gone", None, "completed", payload={"id": "b"})
     text = project(state).text
-    assert "live" in text and "gone" not in text
+    assert "* TODO live" in text and "* REVIEW gone" in text
 
 
 def test_projection_order_is_stable_regardless_of_insertion(tmp_path):

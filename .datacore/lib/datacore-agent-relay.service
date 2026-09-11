@@ -29,7 +29,10 @@ ExecStart=/usr/bin/python3 <HOME>/Data/.datacore/lib/agent_stream_relay.py
 Restart=always
 RestartSec=5
 Environment=PORT=18891
-Environment=HOST=0.0.0.0
+Environment=HOST=127.0.0.1
+# For remote access, explicitly select a private interface or authenticated TLS proxy.
+UMask=0077
+NoNewPrivileges=true
 
 # Keep the process under reasonable limits — the relay is tiny but
 # misbehaving agents could spam it.

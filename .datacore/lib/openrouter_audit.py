@@ -14,6 +14,7 @@ The API key is read from OPENROUTER_API_KEY, or --key-file (a file containing
 one `sk-or-...` token). The key is never printed.
 """
 import argparse, json, os, re, sys, urllib.request
+from secret_http import urlopen as secret_urlopen
 
 DEFAULT_MODEL = "openai/gpt-5.6-sol-pro"
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
@@ -99,7 +100,7 @@ def main():
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=1800) as r:
+        with secret_urlopen(req, timeout=1800) as r:
             data = json.load(r)
     except urllib.error.HTTPError as e:
         sys.exit(f"HTTP {e.code}: {e.read().decode()[:600]}")

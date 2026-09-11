@@ -20,6 +20,9 @@ import sys
 from pathlib import Path
 
 
+from org_transaction import serialized
+
+@serialized
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("space")
@@ -28,7 +31,7 @@ def main() -> int:
 
     root = Path.home() / "Data"
     sys.path.insert(0, str(root / ".datacore" / "lib"))
-    from org_workspace import OrgWorkspace  # noqa: PLC0415
+    from org_transaction import SafeOrgWorkspace as OrgWorkspace  # noqa: PLC0415
     # ONE definition of "executable", imported rather than restated. Writing
     # the rule again here first flagged 93 tasks against the gate's 27: it
     # missed that ACCEPTANCE_CRITERIA is DONE_WHEN's older spelling, and that

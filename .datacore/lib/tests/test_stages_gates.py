@@ -125,7 +125,7 @@ def test_signing_switch_is_read_from_the_identity_file(tmp_path, monkeypatch):
 def test_distributed_verify_key_verifies_a_signed_chain(tmp_path, monkeypatch):
     """A host that never saw the writer's key verifies its chain through
     principals.yaml's verify_keys; a writer with no key anywhere is
-    unverifiable (not an error) unless strict."""
+    unverifiable and must report a verification error."""
     from ledger import keys as K
     from ledger.verify import verify_chain
     sd = _space(tmp_path); keys_dir = tmp_path / "k"; reg = tmp_path / "r.yaml"
@@ -143,9 +143,9 @@ def test_distributed_verify_key_verifies_a_signed_chain(tmp_path, monkeypatch):
     f.write_text(json.dumps(line, separators=(",", ":"), sort_keys=True) + "\n")
     errs = verify_chain(f, registry_path=empty)
     assert errs and "signature" in errs[0]
-    # unknown writer: unverifiable, not an error; strict refuses
+    # Unknown writer: neither verification mode may report success.
     (tmp_path / ".datacore" / "registry" / "principals.yaml").write_text("principals: {}\nverify_keys: {}\n")
     sd2 = tmp_path / "5-x"; (sd2 / ".datacore" / "events").mkdir(parents=True)
     EventLog(sd2, "ghost", keys_dir=keys_dir, registry_path=tmp_path / "r2.yaml", sign=True).append("item.create", {"id": "g", "title": "x"})
-    assert verify_chain(sd2 / ".datacore" / "events" / "ghost.jsonl", registry_path=empty) == []
+    assert verify_chain(sd2 / ".datacore" / "events" / "ghost.jsonl", registry_path=empty)
     assert verify_chain(sd2 / ".datacore" / "events" / "ghost.jsonl", registry_path=empty, strict=True)

@@ -6,6 +6,9 @@
 
 name: Validate PR
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
@@ -22,17 +25,18 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 
       - name: Validate .base.md layers for private content
-        run: python .datacore/lib/context_merge.py validate --path .
+        run: python .datacore/lib/git_privacy.py --revision HEAD
 
   # ── Layer 1b: The gates that must never be red ─────────────────
   # CI RAN NO TESTS AT ALL until 2026-09-09. Four workflows, every one of them
@@ -61,18 +65,71 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 
       - name: Install test dependencies
-        run: pip install pytest pyyaml
+        run: pip install --only-binary=":all:" -r .datacore/lib/requirements-audit.txt
+
+      - name: Install native OCR tools
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr poppler-utils
 
       - name: Every registered hook resolves to a file that exists
         run: python -m pytest -q .datacore/tests/test_hook_commands_resolve.py
+
+      - name: Security and data-preservation invariants
+        env:
+          DATACORE_ROOT: ${{ github.workspace }}
+          DATACORE_STATE: ${{ runner.temp }}/datacore-audit-state
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: |
+          python -m pytest -q \
+            .datacore/lib/tests/test_persistence_adversarial.py \
+            .datacore/lib/tests/test_org_transactions.py \
+            .datacore/lib/tests/test_archive_preservation.py \
+            .datacore/lib/tests/test_writeback_preservation.py \
+            .datacore/lib/tests/test_conflict_preservation.py \
+            .datacore/lib/tests/test_credential_preservation.py \
+            .datacore/lib/tests/test_git_privacy.py \
+            .datacore/lib/tests/test_git_preservation.py \
+            .datacore/lib/tests/test_ledger_publish_safe.py \
+            .datacore/tests/test_knowledge_commit.py \
+            .datacore/tests/test_agent_wrap_up.py \
+            .datacore/modules/research/lib/tests/test_queue_drain.py \
+            .datacore/lib/tests/test_http_receivers.py \
+            .datacore/lib/tests/test_http_boundary_siblings.py \
+            .datacore/lib/tests/test_hook_privacy_state.py \
+            .datacore/lib/tests/test_public_download.py \
+            .datacore/lib/tests/test_download_deadlines.py \
+            .datacore/lib/tests/test_command_receipt.py \
+            .datacore/lib/tests/test_receipt_preservation.py \
+            .datacore/lib/tests/test_ocr_limits.py \
+            .datacore/lib/tests/test_native_ocr_preservation.py \
+            .datacore/lib/tests/test_agent_stream_store.py \
+            .datacore/lib/tests/test_stream_tail_preservation.py \
+            .datacore/lib/tests/test_ledger_keys.py \
+            .datacore/lib/tests/test_policy_adversarial.py \
+            .datacore/lib/tests/test_seal_preservation.py \
+            .datacore/lib/tests/test_executor_isolation.py \
+            .datacore/lib/tests/test_process_lifecycle.py \
+            .datacore/lib/tests/test_jobs_manifest.py \
+            .datacore/lib/tests/test_jobs_run_contract.py \
+            .datacore/tests/test_principal_email_hashes.py \
+            .datacore/lib/tests/test_artifact_verification.py \
+            .datacore/lib/tests/test_agent_workspace.py \
+            .datacore/lib/tests/test_catalog_identity.py \
+            .datacore/lib/tests/test_sync_safety.py \
+            .datacore/lib/tests/test_calendar_safety.py \
+            .datacore/lib/tests/test_classification_preservation.py \
+            .datacore/lib/tests/test_text_model.py
+          ruff check --select F821,F822,F823,E9 .datacore
+
 
   # ── Layer 2: Structural Validation ─────────────────────────────
   validate-tags:
@@ -84,10 +141,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 
@@ -111,12 +170,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 
@@ -125,34 +185,26 @@ jobs:
 
       - name: Detect changed modules and validate
         run: |
-          CHANGED_MODULES=$(git diff --name-only origin/main...HEAD | grep '\.datacore/modules/.*/module\.yaml$' || true)
-          if [ -z "$CHANGED_MODULES" ]; then
-            echo "No module.yaml files changed, skipping module validation"
-            exit 0
-          fi
-          echo "Changed module files:"
-          echo "$CHANGED_MODULES"
-          FAILED=0
-          while IFS= read -r modfile; do
-            if [ -z "$modfile" ]; then
-              continue
-            fi
-            MOD_DIR=$(dirname "$modfile")
-            echo ""
-            echo "Validating module at: $MOD_DIR"
-            if ! python .datacore/lib/validate_module.py "$MOD_DIR"; then
-              FAILED=1
-            fi
-          done <<< "$CHANGED_MODULES"
-          if [ $FAILED -eq 1 ]; then
-            echo "::error::Module validation failed"
-            exit 1
-          fi
-          echo "All changed modules validated successfully"
+          python - <<'PYCODE'
+          import os
+          import subprocess
+          import sys
+          paths = subprocess.check_output([
+              "git", "diff", "--name-only", "--diff-filter=ACMR", "-z", "origin/main...HEAD"
+          ]).split(b"\0")
+          modules = [os.fsdecode(path) for path in paths if path.startswith(b".datacore/modules/")
+                     and path.endswith(b"/module.yaml")]
+          for path in modules:
+              subprocess.run([sys.executable, ".datacore/lib/validate_module.py",
+                              os.path.dirname(path)], check=True)
+          PYCODE
 
   # ── Layer 3: Deep Review (on label, advisory) ──────────────────
   deep-review:
     name: Deep PR Review
+    permissions:
+      contents: read
+      pull-requests: write
     if: >-
       github.event.action == 'labeled' &&
       github.event.label.name == 'ready-for-review'
@@ -160,12 +212,14 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.sha }}
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 

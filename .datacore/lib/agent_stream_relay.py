@@ -44,7 +44,7 @@ own filesystem after rsync. Keeping the relay write-only makes auth,
 caching, and rate-limiting trivial.
 
 Storage
-=======
+-------
 
     ~/.datacore/cos/agent-stream/events-YYYY-MM-DD.jsonl
 
@@ -91,10 +91,13 @@ import secrets
 import sys
 import uuid
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from agent_stream_store import EventConflict, append_events
+from file_utils import atomic_write_text, file_lock
+from http_utils import BoundedHTTPServer, RequestError, bearer_matches, read_body
 
 EVENT_LOG_DIR = Path.home() / ".datacore" / "cos" / "agent-stream"
 TOKEN_FILE = Path(
@@ -104,7 +107,7 @@ TOKEN_FILE = Path(
     )
 )
 DEFAULT_PORT = int(os.environ.get("PORT", "18891"))
-DEFAULT_HOST = os.environ.get("HOST", "0.0.0.0")  # bind all so Tailscale reaches us
+DEFAULT_HOST = os.environ.get("HOST", "127.0.0.1")
 
 VERSION = "1.0"
 
@@ -113,27 +116,37 @@ VERSION = "1.0"
 
 
 def _today_log() -> Path:
-    EVENT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    EVENT_LOG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     return EVENT_LOG_DIR / f"events-{datetime.now(tz=timezone.utc).date().isoformat()}.jsonl"
 
 
 def _ensure_token() -> str:
     """Read or generate the relay's bearer token. 0600 perms."""
-    TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    if TOKEN_FILE.exists():
-        return TOKEN_FILE.read_text().strip()
-    token = secrets.token_urlsafe(32)
-    TOKEN_FILE.write_text(token)
-    try:
+    TOKEN_FILE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with file_lock(TOKEN_FILE):
+        try:
+            token = TOKEN_FILE.read_text().strip()
+        except FileNotFoundError:
+            token = secrets.token_urlsafe(32)
+            atomic_write_text(TOKEN_FILE, token)
+        if not token:
+            raise ValueError("relay token file is empty; configure a nonempty token")
         os.chmod(TOKEN_FILE, 0o600)
-    except OSError:
-        pass
-    print(f"[relay] generated new token at {TOKEN_FILE}", flush=True)
-    return token
+        return token
 
 
 def _normalise(ev: dict[str, Any]) -> dict[str, Any]:
     """Fill in id/ts and clamp fields to the agent-stream contract."""
+    for key in ("type", "agent", "summary"):
+        if not isinstance(ev.get(key), str) or not ev[key]:
+            raise ValueError(f"{key} must be a nonempty string")
+    for key in ("id", "ts"):
+        if key in ev and (not isinstance(ev[key], str) or not ev[key] or len(ev[key]) > 256):
+            raise ValueError(f"{key} must be a nonempty bounded string")
+    if "severity" in ev and not isinstance(ev["severity"], str):
+        raise ValueError("severity must be a string")
+    if ev.get("details") is not None and not isinstance(ev["details"], dict):
+        raise ValueError("details must be an object")
     out: dict[str, Any] = {
         "id": ev.get("id") or uuid.uuid4().hex,
         "ts": ev.get("ts") or datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
@@ -165,18 +178,14 @@ class RelayHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
 
     def _check_auth(self) -> bool:
         if not self.token:
-            return True
-        header = self.headers.get("Authorization", "")
-        if not header.startswith("Bearer "):
-            self._send_json(401, {"ok": False, "error": "missing bearer token"})
+            self._send_json(503, {"ok": False, "error": "authentication is not configured"})
             return False
-        if header[len("Bearer "):].strip() != self.token:
+        if not bearer_matches(self.headers, self.token):
             self._send_json(401, {"ok": False, "error": "invalid bearer token"})
             return False
         return True
@@ -184,14 +193,8 @@ class RelayHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if urlparse(self.path).path.rstrip("/") != "/health":
             return self._send_json(404, {"ok": False, "error": "not found"})
-        log = _today_log()
-        count = 0
-        try:
-            if log.is_file():
-                count = sum(1 for _ in log.open())
-        except OSError:
-            pass
-        self._send_json(200, {"ok": True, "version": VERSION, "events_today": count})
+        # Health is public and constant-cost; it must not scan private logs.
+        self._send_json(200, {"ok": True, "version": VERSION})
 
     def do_POST(self) -> None:
         if urlparse(self.path).path.rstrip("/") != "/events":
@@ -200,39 +203,28 @@ class RelayHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-        except ValueError:
-            length = 0
-        if length <= 0 or length > 1_000_000:
-            return self._send_json(400, {"ok": False, "error": "missing or oversized body"})
-        try:
-            raw = self.rfile.read(length)
+            raw = read_body(self)
             data = json.loads(raw)
-        except (json.JSONDecodeError, OSError):
+        except RequestError as exc:
+            return self._send_json(exc.status, {"ok": False, "error": str(exc)})
+        except (ValueError, UnicodeError, RecursionError):
             return self._send_json(400, {"ok": False, "error": "invalid JSON"})
 
         rows: list[dict[str, Any]] = data if isinstance(data, list) else [data]
-        if not rows:
-            return self._send_json(400, {"ok": False, "error": "empty payload"})
-
-        log = _today_log()
-        existed = log.exists()
-        written = 0
+        if not rows or len(rows) > 1000 or any(not isinstance(ev, dict) for ev in rows):
+            return self._send_json(400, {"ok": False, "error": "expected 1 to 1000 event objects"})
         try:
-            with log.open("a", encoding="utf-8") as fh:
-                for ev in rows:
-                    if not isinstance(ev, dict):
-                        continue
-                    ev = _normalise(ev)
-                    fh.write(json.dumps(ev, ensure_ascii=False) + "\n")
-                    written += 1
-            if not existed:
-                try:
-                    os.chmod(log, 0o600)
-                except OSError:
-                    pass
-        except OSError as exc:
-            return self._send_json(500, {"ok": False, "error": f"write failed: {exc}"})
+            rows = [_normalise(ev) for ev in rows]
+            # Validate the entire serialization before opening the store.
+            json.dumps(rows, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        except (ValueError, UnicodeError, RecursionError):
+            return self._send_json(400, {"ok": False, "error": "invalid event fields"})
+        try:
+            written = append_events(_today_log(), rows)
+        except EventConflict:
+            return self._send_json(409, {"ok": False, "error": "event ID conflict"})
+        except (OSError, ValueError):
+            return self._send_json(500, {"ok": False, "error": "event storage unavailable"})
 
         self._send_json(200, {"ok": True, "written": written})
 
@@ -240,7 +232,7 @@ class RelayHandler(BaseHTTPRequestHandler):
 def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
     token = _ensure_token()
     RelayHandler.token = token
-    server = ThreadingHTTPServer((host, port), RelayHandler)
+    server = BoundedHTTPServer((host, port), RelayHandler)
     print(f"[relay] listening on http://{host}:{port}  ·  token at {TOKEN_FILE}", flush=True)
     print(f"[relay] storage: {EVENT_LOG_DIR}", flush=True)
     try:

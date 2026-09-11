@@ -22,6 +22,9 @@ import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "lib"))
+from secret_http import urlopen as secret_urlopen
+from env_utils import parse_env_value
 
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", Path.home() / "Data"))
@@ -72,6 +75,7 @@ def discover_credentials() -> dict:
             if not line or line.startswith("#") or "=" not in line:
                 continue
             k, v = line.split("=", 1)
+            v = parse_env_value(v)
             k, v = k.strip(), v.strip()
             if k == "TELEGRAM_BOT_TOKEN" and "TELEGRAM_BOT_TOKEN" not in env_data:
                 env_data["TELEGRAM_BOT_TOKEN"] = v
@@ -109,7 +113,7 @@ def validate_bot_token(token: str) -> dict:
     """Call Telegram getMe to validate the bot token."""
     try:
         url = f"https://api.telegram.org/bot{token}/getMe"
-        with urllib.request.urlopen(url, timeout=10) as resp:
+        with secret_urlopen(url, timeout=10) as resp:
             data = json.loads(resp.read())
         if data.get("ok"):
             bot = data["result"]
@@ -136,7 +140,7 @@ def send_test_message(token: str, chat_id: str) -> dict:
             f"https://api.telegram.org/bot{token}/sendMessage",
             data=data,
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with secret_urlopen(req, timeout=10) as resp:
             result = json.loads(resp.read())
         if result.get("ok"):
             return {"ok": True, "message_id": result["result"].get("message_id")}

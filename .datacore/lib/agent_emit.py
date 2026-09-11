@@ -31,12 +31,12 @@ Two env vars (both optional):
   AGENT_STREAM_RELAY_TOKEN bearer token for the relay (read once,
                             cached for process lifetime)
 
-If RELAY_URL is set, transport flips to HTTP. If the POST fails
-(network blip, relay down), we fall back to local file append so
-the event isn't lost — it'll be picked up by rsync next cycle.
+If RELAY_URL is set, every event is first retained in a durable sibling
+agent-stream-outbox directory. Confirmed relay acceptance removes it. New
+successful sends retry older events; schedule `agent_emit.py --flush` to
+retry while idle. Inbound sync must never replace the outbox directory.
 
-No external dependencies. Pure stdlib so it runs in the leanest
-agent processes (Telegram bot, cron-driven scripts).
+Uses the shared Datacore file helpers and their core dependencies.
 """
 from __future__ import annotations
 
@@ -63,46 +63,25 @@ _relay_fallback_warned = False
 
 def _warn_relay_down(reason: str) -> None:
     """One warning per process when a configured relay stops accepting
-    events. The local-file fallback preserves the events, but the
+    events. The durable outbox preserves the events, and the
     operator should learn the relay is down from the logs — not from
     noticing the stream went quiet days later."""
     global _relay_fallback_warned
     if not _relay_fallback_warned:
-        print(f"[agent-stream] WARNING: relay {_RELAY_URL} unreachable "
-              f"({reason}); falling back to local file append for the "
-              f"rest of this process", file=sys.stderr)
+        print(f"[agent-stream] WARNING: relay unavailable ({reason}); "
+              "event retained in the relay outbox", file=sys.stderr)
         _relay_fallback_warned = True
 
 
 def _post_to_relay(ev: dict[str, Any]) -> bool:
     """Best-effort POST to the relay. Returns True on success, False on
-    any error (network, status, parse). Caller falls back to local file
-    append on False, so we never silently lose an event."""
-    if not _RELAY_URL:
-        return False
-    try:
-        import urllib.request
-        import urllib.error
-        req = urllib.request.Request(
-            _RELAY_URL + "/events",
-            data=json.dumps(ev).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                **({"Authorization": f"Bearer {_RELAY_TOKEN}"} if _RELAY_TOKEN else {}),
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            ok = 200 <= resp.status < 300
-            if not ok:
-                _warn_relay_down(f"HTTP {resp.status}")
-            return ok
-    except (urllib.error.URLError, OSError, ValueError) as exc:
-        _warn_relay_down(f"{type(exc).__name__}: {exc}")
-        return False
-    except Exception as exc:
-        _warn_relay_down(f"{type(exc).__name__}: {exc}")
-        return False
+    any error (network, status, parse). The durable outbox remains queued
+    on False."""
+    from relay_client import post_event
+    ok = post_event(ev, _RELAY_URL, _RELAY_TOKEN, timeout=3)
+    if not ok:
+        _warn_relay_down("request or acknowledgement failed")
+    return ok
 
 
 def emit(
@@ -143,27 +122,30 @@ def emit(
         "details": details or None,
     }
 
-    # 1) Try the relay if configured. If it works, we're done — the
-    # canonical store on nightshift gets the row immediately, rsync ships
-    # it to the Mac on the next cycle, the Mac watcher fires.
-    if _RELAY_URL and _post_to_relay(ev):
-        return ev
+    # 1) A configured relay has a separate durable outgoing queue.
+    if _RELAY_URL:
+        from agent_outbox import enqueue, acknowledge
+        try:
+            # Persist before sending, outside the inbound rsync directory.
+            # Interrupted acknowledgement is an idempotent relay retry.
+            enqueue(_outbox_dir(), ev)
+            if _post_to_relay(ev):
+                acknowledge(_outbox_dir(), ev)
+                try:
+                    flush_pending(limit=10)
+                except (OSError, ValueError) as exc:
+                    _warn_relay_down(type(exc).__name__)
+            return ev
+        except (OSError, ValueError):
+            return {}
 
-    # 2) Fall back to local file append. Either no relay configured (the
-    # agent runs on the same host as datacored), or the relay was
-    # unreachable (network blip — at least we keep the event locally).
+    # 2) Without a configured relay, publish to the local canonical stream.
     try:
         EVENT_LOG_DIR.mkdir(parents=True, exist_ok=True)
         date_str = datetime.now(tz=timezone.utc).date().isoformat()
         log_path = EVENT_LOG_DIR / f"events-{date_str}.jsonl"
-        existed = log_path.exists()
-        with log_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(ev, ensure_ascii=False) + "\n")
-        if not existed:
-            try:
-                os.chmod(log_path, 0o600)
-            except OSError:
-                pass
+        from agent_stream_store import append_events
+        append_events(log_path, [ev])
         return ev
     except Exception:
         return {}
@@ -193,14 +175,34 @@ def emit_message(
         extra["message_id"] = message_id
     if details:
         extra.update(details)
+    event_id = None
+    if message_id:
+        import hashlib
+        # Message identifiers are scoped to a conversation/account, not global.
+        scope = (details or {}).get("chat_id") or recipient
+        if scope is not None:
+            identity = json.dumps([agent, channel, str(scope), str(message_id)], separators=(",", ":"))
+            event_id = "message-" + hashlib.sha256(identity.encode()).hexdigest()
     return emit(
         event_type=f"{channel}.message",
         agent=agent,
         summary=summary,
         severity="info",
         details=extra,
-        event_id=f"{channel}-{message_id}" if message_id else None,
+        event_id=event_id,
     )
+
+
+def _outbox_dir():
+    return EVENT_LOG_DIR.with_name(EVENT_LOG_DIR.name + '-outbox')
+
+
+def flush_pending(limit=100):
+    """Retry retained relay events; successful sends alone remove queued data."""
+    if not _RELAY_URL:
+        raise ValueError('relay URL is not configured')
+    from agent_outbox import flush
+    return flush(_outbox_dir(), _post_to_relay, limit=limit)
 
 
 def emit_task(
@@ -239,6 +241,11 @@ def emit_task(
 
 
 if __name__ == "__main__":
+    if '--flush' in sys.argv[1:]:
+        sent = flush_pending()
+        remaining = len(list(_outbox_dir().glob('*.json')))
+        print(json.dumps({'sent': sent, 'remaining': remaining}))
+        raise SystemExit(1 if remaining else 0)
     # Smoke test from the CLI:
     #   python3 ~/Data/.datacore/lib/agent_emit.py
     out = emit(

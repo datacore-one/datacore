@@ -244,6 +244,9 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from datetime import date
+from org_transaction import serialized, watch_file, write_org_text
+from archive_files import archive_file
+
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -316,41 +319,16 @@ def _split_entry_id(entry_id: str) -> Tuple[str, str]:
     return section, name
 
 
+@serialized
 def _atomic_write_text(path: Path, text: str) -> None:
-    """Write `text` to `path` via tmp-file + os.replace in the same
-    directory, so a same-filesystem rename is atomic: a crash before
-    os.replace leaves the original file untouched; os.replace itself is
-    atomic, so readers never see a partially-written file.
-
-    Mode preservation: `tempfile.mkstemp` always creates its temp file
-    0600 (owner read/write only), regardless of the target's existing
-    permissions. Replacing an existing, more permissive file (e.g. 0644,
-    the norm for a tracked registry.yaml) with that temp file would
-    silently downgrade it to 0600 on every apply() run. If `path` already
-    exists, its current mode is copied onto the temp file before
-    os.replace, so the replace is a pure content swap — permissions
-    untouched. If `path` doesn't exist yet (e.g. a first-time
-    agents-deprecated.yaml), there's nothing to preserve, so mkstemp's
-    0600 default is left as-is (a reasonable default for a freshly
-    created file, not a downgrade of anything).
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
-    )
-    tmp_path = Path(tmp_name)
-    try:
-        if path.exists():
-            os.chmod(tmp_path, stat.S_IMODE(path.stat().st_mode))
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        os.replace(str(tmp_path), str(path))
-    except BaseException:
-        try:
-            tmp_path.unlink()
-        except OSError:
-            pass
-        raise
+    """Publish registry text under the shared recovery transaction."""
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
+    watch_file(path)
+    write_org_text(path, text)
+    if mode is not None:
+        os.chmod(path, mode)
+        with path.open("rb") as handle:
+            os.fsync(handle.fileno())
 
 
 def _split_header(text: str) -> Tuple[List[str], str]:
@@ -685,6 +663,18 @@ def audit(registry_path: Path, agents_dirs: Optional[List[Path]] = None) -> GcRe
 
 
 def apply(report: GcReport, registry_path: Path, archive_dir: Path) -> List[str]:
+    # Invalid/no-op requests do not create persistent lock artifacts.
+    raw = Path(registry_path).read_text(encoding="utf-8")
+    duplicates = _scan_duplicate_keys(raw)
+    if duplicates:
+        raise DuplicateKeyError("registry has duplicate keys: " + ", ".join(duplicates))
+    if not report.has_actionable():
+        return []
+    return _apply_serialized(report, registry_path, archive_dir)
+
+
+@serialized
+def _apply_serialized(report: GcReport, registry_path: Path, archive_dir: Path) -> List[str]:
     """Mutate the registry + filesystem per `report`, across BOTH
     AGENT_SECTIONS. See module docstring for the crash-safe ordering
     guarantee, the shared-source collision guard, and the idempotency
@@ -695,6 +685,7 @@ def apply(report: GcReport, registry_path: Path, archive_dir: Path) -> List[str]
 
     # --- 0. pre-flight duplicate-key abort — unconditional, before any
     # other check, before any file is opened for writing -------------------
+    watch_file(registry_path)
     raw_text = registry_path.read_text(encoding="utf-8")
     dup_keys = _scan_duplicate_keys(raw_text)
     if dup_keys:
@@ -708,6 +699,11 @@ def apply(report: GcReport, registry_path: Path, archive_dir: Path) -> List[str]
     if not report.has_actionable():
         return actions
 
+    current = audit(registry_path)
+    for field in ("deprecated", "orphaned_entries", "bak_files"):
+        if not set(getattr(report, field)).issubset(getattr(current, field)):
+            raise ValueError("registry changed after audit; generate a fresh report before applying")
+
     base_dir = _base_dir(registry_path)
     registry_header, body_text = _split_header(raw_text)
     data = yaml.safe_load(body_text) if body_text.strip() else {}
@@ -720,6 +716,7 @@ def apply(report: GcReport, registry_path: Path, archive_dir: Path) -> List[str]
     archive_yaml_path = registry_path.parent / "archive" / ARCHIVE_YAML_NAME
     archive_header: List[str] = []
     archived_by_section: Dict[str, dict] = {section: {} for section in AGENT_SECTIONS}
+    watch_file(archive_yaml_path)
     if archive_yaml_path.exists():
         archive_header, archived_data = _read_yaml_with_header(archive_yaml_path)
         for section in AGENT_SECTIONS:
@@ -787,14 +784,13 @@ def apply(report: GcReport, registry_path: Path, archive_dir: Path) -> List[str]
                         f"{_rel(dest_abs, base_dir)} already exists "
                         f"(unrelated file) — moved to {_rel(final_dest_abs, base_dir)} instead"
                     )
-                shutil.move(str(src_abs), str(final_dest_abs))
+                final_dest_abs = archive_file(src_abs, final_dest_abs, root=base_dir)
                 entry["source"] = _rel(final_dest_abs, base_dir)
                 actions.append(f"moved def file: {src_rel} -> {entry['source']}")
             elif dest_abs.exists():
-                # Already moved by a prior apply that crashed before writing
-                # the archive yaml / rewriting the registry — just repoint
-                # this entry at where the file already is.
-                entry["source"] = _rel(dest_abs, base_dir)
+                # A filename match does not prove this is the missing source.
+                # New interrupted moves recover from the journal before apply.
+                raise ValueError("missing registry source has an ambiguous archive destination; manual recovery required")
         archived_by_section[section][name] = entry
         actions.append(f"archived deprecated entry '{entry_id}'")
 
@@ -839,8 +835,8 @@ def apply(report: GcReport, registry_path: Path, archive_dir: Path) -> List[str]
         if not bak_path.is_absolute():
             bak_path = base_dir / bak_path
         if bak_path.exists():
-            bak_path.unlink()
-            actions.append(f"deleted {bak}")
+            saved = archive_file(bak_path, archive_yaml_path.parent / "backups" / bak_path.name, root=base_dir)
+            actions.append(f"archived backup {bak} -> {_rel(saved, base_dir)}")
 
     # --- 6. unregistered files: never touched -----------------------------
 

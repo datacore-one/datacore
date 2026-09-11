@@ -23,7 +23,7 @@ def _register_test_writers(tmp_path_factory, monkeypatch):
 
 from ledger.events import EVENT_TYPES
 from ledger.log import EventLog, read_events
-from ledger.policy import Policy, PolicyError, guarded_append, load_policy, requires_cosign
+from ledger.policy import Policy, PolicyError, guarded_append, load_policy, requires_cosign, approval_payload_hash
 
 DEFAULT_EFFECTS = frozenset({"email.send", "payment", "prod.deploy"})
 
@@ -347,7 +347,7 @@ def test_guarded_append_blocks_replay_of_same_approval_ref(tmp_path):
     create against the same id, reusing the same (still-valid) grant, must
     be rejected as a replay -- not silently re-validated."""
     grant_log = _mk_log(tmp_path, "human")
-    grant = grant_log.append("approval.grant", {"item": "t1"})
+    grant = grant_log.append("approval.grant", {"item": "t1", "payload_hash": approval_payload_hash({"id": "t1", "effects": ["email.send"]})})
 
     log = _mk_log(tmp_path, "worker")
     payload = {
@@ -456,7 +456,7 @@ def test_guarded_append_scans_empty_space_without_crashing(tmp_path):
 
 def test_guarded_append_accepts_valid_grant(tmp_path):
     grant_log = _mk_log(tmp_path, "human")
-    grant = grant_log.append("approval.grant", {"item": "t1"})
+    grant = grant_log.append("approval.grant", {"item": "t1", "payload_hash": approval_payload_hash({'id': 't1', 'title': 'send an email', 'effects': ['email.send']})})
 
     log = _mk_log(tmp_path, "worker")
     payload = {
@@ -486,12 +486,12 @@ def test_guarded_append_passes_through_non_cosign_events_untouched(tmp_path):
     assert events[0].hash == event.hash
 
 
-def test_guarded_append_item_claim_never_requires_cosign(tmp_path):
-    """item.claim/complete on an already-created side-effect item do NOT
-    re-require approval -- the create is the gate, not every downstream op."""
+def test_guarded_append_claim_refuses_unguarded_effectful_create(tmp_path):
+    """Importing a low-level create cannot bypass approval at execution."""
     log = _mk_log(tmp_path, "worker")
-    event = guarded_append(log, "item.claim", {"id": "t1", "effects": ["email.send"]})
-    assert event.type == "item.claim"
+    log.append("item.create", {"id": "t1", "effects": ["email.send"]})
+    with pytest.raises(PolicyError, match="approval_ref"):
+        guarded_append(log, "item.claim", {"id": "t1", "effects": ["email.send"]})
 
 
 def test_guarded_append_accepts_custom_policy(tmp_path):
@@ -499,7 +499,7 @@ def test_guarded_append_accepts_custom_policy(tmp_path):
     policy = Policy(approver="gregor", cosign_effects=frozenset({"custom.effect"}))
 
     grant_log = _mk_log(tmp_path, "gregor")
-    grant = grant_log.append("approval.grant", {"item": "t1"})
+    grant = grant_log.append("approval.grant", {"item": "t1", "payload_hash": approval_payload_hash({'id': 't1', 'effects': ['custom.effect']})})
 
     log = _mk_log(tmp_path, "worker")
     payload = {

@@ -56,6 +56,11 @@ import time
 import yaml
 
 ROOT = pathlib.Path(os.environ.get("DATACORE_ROOT", pathlib.Path.home() / "Data"))
+for library in (pathlib.Path(__file__).resolve().parents[1], ROOT / ".datacore" / "lib"):
+    if (library / "process_run.py").is_file():
+        sys.path.insert(0, str(library))
+        break
+from process_run import run as run_process
 MANIFEST = ROOT / ".datacore" / "lib" / "jobs" / "manifest.yaml"
 # Set from --manifest in main(): the runner deployment keeps its manifest under
 # ~/.datacore/v2-runner while jobs' data root (ROOT) stays ~/Data.
@@ -105,7 +110,13 @@ def normalized_env(job: dict) -> dict[str, str]:
             k, v = line.split("=", 1)
             k = k.strip().removeprefix("export ").strip()
             if k in allowed and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k):
-                env.setdefault(k, v.strip().strip("'\""))
+                value = v.strip()
+                if value.startswith(("\"", "'")):
+                    parts = shlex.split(value, comments=False)
+                    if len(parts) != 1:
+                        raise ValueError("invalid quoted job environment value")
+                    value = parts[0]
+                env.setdefault(k, value)
     return env
 
 
@@ -208,8 +219,16 @@ def run(job: dict, dry: bool = False) -> int:
         proc = None
     else:
         started = time.time()
-        proc = subprocess.run(["/bin/bash", "-o", "pipefail", "-c", job["cmd"]],
-                              env=env, capture_output=True, text=True)
+        timeout = job.get("timeout_seconds", 3600)
+        if type(timeout) not in (int, float) or not 0 < timeout <= 86400:
+            print("PRECONDITION FAILED — timeout_seconds must be in (0, 86400]")
+            return 3
+        try:
+            proc = run_process(["/bin/bash", "-o", "pipefail", "-c", job["cmd"]],
+                               env=env, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            print(f"COMMAND FAILED — timed out after {timeout}s; foreground process group stopped")
+            return 2
         took = time.time() - started
 
     if proc is not None and proc.stdout:
@@ -259,7 +278,13 @@ def main() -> int:
     MANIFEST_OVERRIDE = pathlib.Path(a.manifest).expanduser() if getattr(a, "manifest", None) else None
 
     manifest_path = MANIFEST_OVERRIDE or MANIFEST
-    doc = yaml.safe_load(manifest_path.read_text())
+    from jobs.manifest import validate_manifest
+    try:
+        doc = yaml.safe_load(manifest_path.read_text())
+        validate_manifest(doc, roster_path=ROOT / ".datacore/registry/infrastructure.yaml")
+    except (OSError, ValueError, yaml.YAMLError) as error:
+        print(f"PRECONDITION FAILED — invalid job manifest: {error}")
+        return 3
     jobs = {j["name"]: j for j in doc["jobs"]}
 
     if a.list or not a.job:

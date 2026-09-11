@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -60,7 +61,7 @@ def trapped_repos(host: str, root: str, data_dir: Path) -> list[dict]:
     whether the host's HEAD is an ancestor of it.
     """
     script = (
-        f'for d in {root}/[0-9]-*/; do '
+        f'for d in {shlex.quote(root)}/[0-9]-*/; do '
         f'  [ -d "$d/.git" ] || continue; '
         f'  echo "$(basename $d) $(git -C "$d" rev-parse HEAD 2>/dev/null) '
         f'$(git -C "$d" remote get-url origin 2>/dev/null) '
@@ -82,7 +83,7 @@ def trapped_repos(host: str, root: str, data_dir: Path) -> list[dict]:
             # same "cannot go green" failure this check was rewritten to
             # avoid. Only a host that is BOTH ahead and unable to push has
             # work stuck behind an access gap.
-            probe = _ssh(host, f'cd {root}/{repo} && '
+            probe = _ssh(host, f'cd {shlex.quote(root + "/" + repo)} && '
                                f'n=$(git rev-list --count @{{u}}..HEAD 2>/dev/null || echo 0) && '
                                f'if git push --dry-run origin HEAD >/dev/null 2>&1; '
                                f'then echo "CANPUSH $n"; else echo "NOPUSH $n"; fi')
@@ -107,7 +108,7 @@ def trapped_repos(host: str, root: str, data_dir: Path) -> list[dict]:
 
 
 def ledger_forks(repo: Path) -> list[str]:
-    """Ledger files in `repo` holding two events with one (actor, seq).
+    """Ledger files in `repo` whose chain, signature or rewind check fails.
 
     A merge must never create these. `(actor, seq)` identifies exactly one
     event forever (DIP-0046), so two events sharing it is a fork — and a
@@ -119,31 +120,20 @@ def ledger_forks(repo: Path) -> list[str]:
     So the guard lives HERE, at the moment of creation, not only in a
     checker somewhere else on a schedule.
     """
-    import collections
+    from ledger.verify import verify_chain, check_not_rewound
     bad = []
     events = Path(repo) / '.datacore' / 'events'
     if not events.is_dir():
         return bad
     for f in sorted(events.glob('*.jsonl')):
-        seen = collections.defaultdict(set)
         try:
-            for line in f.read_text(errors='replace').splitlines():
-                if not line.strip():
-                    continue
-                try:
-                    e = json.loads(line)
-                except ValueError:
-                    continue
-                key = (e.get('actor'), e.get('seq'))
-                if key[1] is None:
-                    continue
-                seen[key].add(e.get('hash') or line)
-        except OSError:
-            continue
-        forked = [k for k, v in seen.items() if len(v) > 1]
-        if forked:
-            bad.append(f"{f.name}: {len(forked)} forked (actor,seq) "
-                       f"e.g. {forked[0]}")
+            if f.is_symlink():
+                raise ValueError('symbolic ledger path')
+            errors = verify_chain(f) + check_not_rewound(f)
+            if errors:
+                bad.append(f'{f.name}: ledger integrity verification failed')
+        except (OSError, ValueError, TypeError, AttributeError, KeyError):
+            bad.append(f'{f.name}: ledger integrity could not be established')
     return bad
 
 
@@ -181,12 +171,16 @@ def _local_clone_for(data_dir: Path, host_remote: str) -> Path | None:
 def relay(host: str, root: str, repo: str, data_dir: Path,
           dry_run: bool = False) -> str:
     """Fetch `repo` from `host`, converge locally, push onward."""
-    host_remote = _ssh(host, f'git -C {root}/{repo} remote get-url origin'
+    host_remote = _ssh(host, f'git -C {shlex.quote(root + "/" + repo)} remote get-url origin'
                        ).stdout.strip()
     local = _local_clone_for(data_dir, host_remote)
     if local is None:
         return (f"{repo}: no local clone of {host_remote or 'its remote'} on "
                 f"this machine — cannot relay")
+
+    clean = _run(['git', '-C', str(local), 'status', '--porcelain', '--untracked-files=all'])
+    if clean.returncode or clean.stdout.strip():
+        return f'{repo}: REFUSED — preserve existing working/index changes before relay'
 
     remote_name = f'relay-{host}'
     remote_url = f'{host}:{root}/{repo}'
@@ -213,14 +207,8 @@ def relay(host: str, root: str, repo: str, data_dir: Path,
         merge = _run(['git', '-C', str(local), 'merge', '--no-edit',
                       f'{remote_name}/{branch}'], timeout=300)
         if merge.returncode != 0:
-            resolver = data_dir / '.datacore' / 'lib' / 'resolve_ledger_conflicts.py'
-            if resolver.is_file():
-                _run(['python3', str(resolver), repo], cwd=str(data_dir),
-                     timeout=300)
-            if _run(['git', '-C', str(local), 'ls-files', '-u']).stdout.strip():
-                _run(['git', '-C', str(local), 'merge', '--abort'])
-                return (f"{repo}: merge from {host} conflicts beyond the "
-                        f"resolver — needs a human")
+            return (f"{repo}: merge from {host} failed; conflict/index evidence "
+                    f"retained for review; nothing pushed")
 
         # NEVER PUSH A FORK. The merge above can only have combined two
         # per-writer logs, and if it produced two events sharing an
@@ -229,9 +217,8 @@ def relay(host: str, root: str, repo: str, data_dir: Path,
         # safe where it was.
         forks = ledger_forks(local)
         if forks:
-            _run(['git', '-C', str(local), 'reset', '--hard', 'HEAD~1'])
             return (f"{repo}: REFUSED — merging {host} would fork the ledger "
-                    f"({'; '.join(forks)[:160]}). Merge reverted; nothing "
+                    f"({'; '.join(forks)[:160]}). Local history retained; nothing "
                     f"pushed. Resolve by hand.")
 
         # Converge with origin before pushing. The relaying machine is not
@@ -241,15 +228,11 @@ def relay(host: str, root: str, repo: str, data_dir: Path,
         pull = _run(['git', '-C', str(local), 'pull', '--no-rebase', '-q',
                      'origin', branch], timeout=300)
         if pull.returncode != 0:
-            resolver = data_dir / '.datacore' / 'lib' / 'resolve_ledger_conflicts.py'
-            if resolver.is_file():
-                _run(['python3', str(resolver), repo], cwd=str(data_dir),
-                     timeout=300)
-            if _run(['git', '-C', str(local), 'ls-files', '-u']).stdout.strip():
-                _run(['git', '-C', str(local), 'merge', '--abort'])
-                return (f"{repo}: host work merged locally, but converging "
-                        f"with origin conflicts beyond the resolver — "
-                        f"needs a human (nothing lost)")
+            return (f"{repo}: origin convergence failed; local commits and "
+                    f"conflict/index evidence retained; nothing pushed")
+
+        if ledger_forks(local):
+            return f'{repo}: REFUSED — origin convergence failed ledger integrity; local evidence retained'
 
         push = _run(['git', '-C', str(local), 'push', 'origin', branch],
                     timeout=300)

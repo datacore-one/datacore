@@ -6,6 +6,9 @@ hash, and side-effecting proposals refused rather than silently created.
 import json
 import sys
 import pathlib
+import pytest
+
+pytestmark = pytest.mark.usefixtures("briefing_principals")
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 

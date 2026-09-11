@@ -9,8 +9,11 @@ hooks or settings to `claude -p`, and Miles ran with bypassPermissions and no
 hooks. Once a task was executing, "never payment" was a sentence in a YAML
 file, not a wall.
 
-This module is the wall. One classifier — config/tool_effects.yaml maps tool
-calls onto the same effect vocabulary — and one decision, keyed by principal:
+This module classifies declared tool calls and applies a decision keyed by
+principal. It is a runtime guard, not an OS security boundary: arbitrary code
+under the same OS identity can bypass pattern matching or change local policy.
+Hosts executing untrusted tasks require an independently enforced sandbox and
+credential isolation. config/tool_effects.yaml maps calls to effects:
 
     never-effect hit      -> refused  (no grant can allow it)
     cosign effect, no     -> paused   (the model is told to leave a proposal;
@@ -36,18 +39,19 @@ Context reaches the hook through the environment the executor sets:
   DATACORE_POLICY_GRANTED    comma-separated effects a human already granted
                              for this task (the task's :GRANTED_EFFECTS:)
 
-Fails OPEN when the policy or effects file cannot be read — a broken hook
-that blocks every call is an outage of its own, and a run with no policy is
-what every run was before this file existed — and says so on stderr. A
+Unreadable or malformed policy, unknown principals and malformed hook
+requests are denied. Restore valid policy before retrying. A
 classification hit is decided even when the ledger cannot be written: the
 record is evidence, not the gate.
 """
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import os
 import re
+import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -82,14 +86,19 @@ class Decision:
 # ── effects ─────────────────────────────────────────────────────────────────
 def load_effects(path: Path | None = None) -> dict[str, dict]:
     """{effect: {tools, tool_patterns, patterns}} from tool_effects.yaml.
-    An unreadable file is an empty vocabulary: every call allowed, which is
-    the pre-policy behaviour, reported on stderr by the caller."""
+    An unreadable or malformed vocabulary cannot authorize tool use."""
     import yaml
     p = Path(path or DEFAULT_EFFECTS_FILE)
-    data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    data = yaml.safe_load(p.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("effects"), dict) or not data["effects"]:
+        raise ValueError("tool effects must contain a nonempty effects mapping")
     out: dict[str, dict] = {}
     for name, spec in (data.get("effects") or {}).items():
-        spec = spec or {}
+        if not isinstance(spec, dict):
+            raise ValueError("effect specification must be a mapping")
+        for key in ("tools", "tool_patterns", "patterns"):
+            if key in spec and (not isinstance(spec[key], list) or any(not isinstance(v, str) for v in spec[key])):
+                raise ValueError(f"{key} must be a list of strings")
         out[str(name)] = {
             "tools": [str(t) for t in (spec.get("tools") or [])],
             "tool_patterns": [re.compile(str(r), re.I) for r in (spec.get("tool_patterns") or [])],
@@ -135,7 +144,12 @@ def limits_for(principal: str, policy_path: Path | None = None) -> tuple[set[str
     """(never_effects, cosign_effects) for a principal from approvals_policy.yaml.
     An unlisted principal gets the global cosign set and no never-effects."""
     from ledger.policy import load_policy
-    policy = load_policy(Path(policy_path or DEFAULT_POLICY_FILE))
+    path = Path(policy_path or DEFAULT_POLICY_FILE)
+    if not path.is_file():
+        raise ValueError("executor policy is missing")
+    policy = load_policy(path)
+    if policy.principals is None or principal not in policy.principals:
+        raise ValueError("executor principal has no declared policy")
     entry = (policy.principals or {}).get(principal) or {}
     never = {str(e) for e in (entry.get("never_effects") or [])}
     cosign = set(policy.cosign_effects) | {str(e) for e in (entry.get("cosign_effects") or [])}
@@ -154,10 +168,10 @@ def principal_for(actor: str | None = None) -> str:
 def decide(principal: str, tool_name: str, tool_input, granted=(),
            effects: dict[str, dict] | None = None,
            policy_path: Path | None = None) -> Decision:
+    never, cosign = limits_for(principal, policy_path)
     hit = classify(tool_name, tool_input, effects)
     if not hit:
         return Decision(True, hit, "no policy effect", "allow")
-    never, cosign = limits_for(principal, policy_path)
     forbidden = hit & never
     if forbidden:
         what = ", ".join(sorted(forbidden))
@@ -195,7 +209,9 @@ def record_refusal(decision: Decision, *, principal: str, tool_name: str,
             "effects": sorted(decision.effects),
             "kind": decision.kind,
             "reason": decision.reason[:300],
-            "detail": detail[:200],
+            # Commands and structured inputs may contain credentials or
+            # personal content. Correlate refusals without copying that data.
+            "detail_sha256": hashlib.sha256(detail.encode()).hexdigest(),
         })
         return True
     except Exception as e:  # noqa: BLE001 — the record is evidence, not the gate
@@ -230,15 +246,17 @@ def evaluate_hook(payload: dict, env=None, *, record: bool = True,
                   policy_path: Path | None = None) -> dict | None:
     """The PreToolUse decision for one call. Returns the hook's JSON output
     when the call is refused or paused, None when it may proceed."""
-    tool_name = str((payload or {}).get("tool_name") or "")
+    if not isinstance(payload, dict) or not isinstance(payload.get("tool_name"), str) or not payload["tool_name"]:
+        return deny_output("invalid tool-policy request")
+    tool_name = payload["tool_name"]
     tool_input = (payload or {}).get("tool_input") or {}
     ctx = context_from_env(env)
     try:
         effects = effects if effects is not None else load_effects()
         decision = decide(ctx["principal"], tool_name, tool_input, ctx["granted"], effects, policy_path)
-    except Exception as e:  # noqa: BLE001 — fail open, loudly
-        print(f"[tool-policy] policy unavailable ({type(e).__name__}: {e}); call allowed", file=sys.stderr)
-        return None
+    except Exception as e:  # noqa: BLE001 — unavailable policy cannot authorize work
+        print(f"[tool-policy] policy unavailable ({type(e).__name__}); call refused", file=sys.stderr)
+        return deny_output("execution policy unavailable; restore valid policy before retrying")
     if decision.allow:
         return None
     if record:
@@ -252,6 +270,7 @@ def hook_main() -> int:
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, EOFError, ValueError):
+        print(json.dumps(deny_output("invalid tool-policy JSON request")))
         return 0
     out = evaluate_hook(payload)
     if out is not None:
@@ -262,7 +281,7 @@ def hook_main() -> int:
 def settings_json(guard: Path | None = None, timeout: int = 8) -> str:
     """The `--settings` JSON that wires the guard as a PreToolUse hook on
     every tool, for `claude -p` runs that load no other settings."""
-    cmd = f"python3 {guard or GUARD}"
+    cmd = f"python3 {shlex.quote(str(guard or GUARD))}"
     return json.dumps({"hooks": {"PreToolUse": [
         {"matcher": "*", "hooks": [{"type": "command", "command": cmd, "timeout": timeout}]}]}})
 

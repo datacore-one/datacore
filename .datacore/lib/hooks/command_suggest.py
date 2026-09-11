@@ -29,11 +29,12 @@ Register under UserPromptSubmit:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
-REPO = Path.home() / "Data"
+REPO = Path(os.environ.get("DATACORE_ROOT", Path(__file__).resolve().parents[3]))
 REGISTRY = REPO / ".datacore" / "registry" / "commands.yaml"
 MAPS = ("commands", "module_commands")
 MAX_SUGGESTIONS = 4

@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 
 LIB = Path(__file__).resolve().parent
-REGISTRY_DIR = LIB.parent / "registry"
+REGISTRY_DIR = Path(os.environ.get("DATACORE_ROOT", str(LIB.parent.parent))) / ".datacore" / "registry"
 INFRA = REGISTRY_DIR / "infrastructure.yaml"
 PRINCIPALS = REGISTRY_DIR / "principals.yaml"
 IDENTITY_FILE = Path(os.environ.get("DATACORE_IDENTITY_FILE", str(Path.home() / ".datacore" / "identity.env")))

@@ -653,22 +653,13 @@ class HookExecutor:
     def _append_to_yaml_list(self, path: Path, entries: List[Dict[str, Any]]) -> None:
         """Load a YAML list file, extend with new entries, and save back.
 
-        If the file is missing or corrupt the list starts empty.
+        A missing file starts empty; unreadable or malformed data is preserved.
         Parent directories are created automatically.
         Uses atomic writes with advisory locking for crash safety.
         """
-        from file_utils import locked_read_modify_write_yaml
+        from state_store import YamlStateStore
 
-        path.parent.mkdir(parents=True, exist_ok=True)
-
-        def _modifier(existing_data):
-            existing = []
-            if isinstance(existing_data, list):
-                existing = existing_data
-            existing.extend(entries)
-            return existing
-
-        locked_read_modify_write_yaml(path, _modifier)
+        YamlStateStore(path.name, default=[], data_root=path.parent).append_to_list(entries)
 
     def _hook_learning_extract(self, agent_id: str, result: Dict, config: Dict) -> HookResult:
         """

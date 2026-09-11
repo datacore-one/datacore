@@ -59,11 +59,13 @@ from __future__ import annotations
 import fcntl
 import os
 import re
+import warnings
 from pathlib import Path
 
 from .events import EVENT_TYPES, Event, body_dict, canonical_bytes, compute_hash, from_line, to_line
 from .hlc import tick
 from .keys import ensure_keypair, sign
+from file_utils import atomic_write_text, fsync_directory
 
 
 #: An actor name becomes a filename; anything else can escape events/.
@@ -103,7 +105,8 @@ def _identity_file_value(key: str) -> str | None:
                 line = line[7:].lstrip()
             k, v = line.split("=", 1)
             if k.strip() == key:
-                return v.strip().strip("\"'")
+                from env_utils import parse_env_value
+                return parse_env_value(v)
     except OSError:
         pass
     return None
@@ -222,6 +225,10 @@ class EventLog:
                     # at the new (truncated) end regardless of seek position.
                     f.truncate(valid_len)
                     f.flush()
+                # A complete JSON object without its final delimiter is valid
+                # history. Repair framing before appending another object.
+                if valid_len and raw[:valid_len][-1:] != b"\n":
+                    f.write(b"\n")
                 last = events[-1] if events else None
 
                 # HIGH-WATER MARK: refuse to append against a REWOUND log.
@@ -253,8 +260,14 @@ class EventLog:
                 hwm = -1
                 try:
                     hwm = int(hwm_path.read_text().strip())
-                except (OSError, ValueError):
+                    if hwm < 0:
+                        raise ValueError("negative high-water mark")
+                except FileNotFoundError:
                     pass
+                except ValueError as exc:
+                    if os.environ.get("DATACORE_HWM_OVERRIDE") != "1":
+                        raise CorruptLogError("invalid sequence witness; preserve it and verify history before explicit recovery") from exc
+                    hwm = -1
                 tail_seq = last.seq if last is not None else -1
                 if tail_seq < hwm and os.environ.get("DATACORE_HWM_OVERRIDE") != "1":
                     # NAME THE RECOVERY, or the guard becomes a brick.
@@ -337,6 +350,8 @@ class EventLog:
 
                 f.write((to_line(event) + "\n").encode("utf-8"))
                 f.flush()
+                os.fsync(f.fileno())
+                fsync_directory(self.path.parent)
                 # Record the mark only AFTER the event is on disk, so a crash
                 # between the two leaves the guard permissive rather than
                 # blocking a legitimate retry. Failure to write it is never
@@ -344,9 +359,11 @@ class EventLog:
                 # stop the work.
                 try:
                     hwm_path.parent.mkdir(parents=True, exist_ok=True)
-                    hwm_path.write_text(str(seq))
-                except OSError:
-                    pass
+                    atomic_write_text(hwm_path, str(seq))
+                except OSError as exc:
+                    # The event is already durable. Report degraded rewind
+                    # detection without pretending the event itself failed.
+                    warnings.warn(f"event committed but sequence witness update failed ({exc.__class__.__name__})", RuntimeWarning)
                 return event
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)
@@ -359,7 +376,7 @@ def _parse_log_bytes(raw: bytes, path: Path) -> tuple[list[Event], int]:
     parseable lines -- i.e. the safe truncation point if the tail is torn.
     A well-formed file (every line parses) has `valid_byte_length == len(raw)`.
 
-    Only the LAST line, if unparseable, is treated as a torn/in-flight write
+    Only an unterminated LAST line, if unparseable, is treated as a torn/in-flight write
     and excluded (not raised); it is simply absent from `valid_events` and
     excluded from the byte count. An unparseable line anywhere else raises
     `CorruptLogError` naming `path` and its 1-based line number -- that
@@ -375,21 +392,21 @@ def _parse_log_bytes(raw: bytes, path: Path) -> tuple[list[Event], int]:
     n = len(lines)
     for i, raw_line in enumerate(lines):
         is_last = i == n - 1
+        terminated = not is_last or raw.endswith(b"\n")
         line = raw_line.strip()
         if not line:
-            if not is_last:
-                valid_len += len(raw_line) + 1  # + the "\n" split on
+            valid_len += len(raw_line) + int(terminated)
             continue
         try:
             event = from_line(line.decode("utf-8"))
         except Exception as exc:
-            if is_last:
+            if is_last and not terminated:
                 break  # torn tail -- valid_len already excludes it
             raise CorruptLogError(
                 f"corrupt event log {path}: malformed line {i + 1}: {exc}"
             ) from exc
         events.append(event)
-        valid_len += len(raw_line) + 1
+        valid_len += len(raw_line) + int(terminated)
 
     return events, valid_len
 

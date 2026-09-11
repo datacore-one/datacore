@@ -35,12 +35,46 @@ MACHINE_WRITTEN = (
 
 
 def _git(space: pathlib.Path, *args: str, timeout: int = 120) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", str(space), *args], capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(["git", "--literal-pathspecs", "-C", str(space), *args], capture_output=True, text=True, timeout=timeout)
 
 
 def dirty_tracked(space: pathlib.Path) -> list[str]:
-    r = _git(space, "status", "--porcelain", "--untracked-files=no", timeout=60)
-    return [line[3:].strip() for line in r.stdout.splitlines() if line.strip()]
+    r = _git(space, 'status', '--porcelain', '-z', '--untracked-files=all', timeout=60)
+    if r.returncode:
+        raise RuntimeError('cannot establish repository status')
+    paths = []
+    for entry in r.stdout.split('\0'):
+        if not entry:
+            continue
+        status, name = entry[:2], entry[3:]
+        if any(flag in status for flag in 'RCU') or (name.startswith(MACHINE_WRITTEN) and 'D' in status):
+            raise RuntimeError('rename, conflict or machine-file deletion requires review')
+        paths.append(name)
+    return paths
+
+
+def _outgoing_is_machine_only(space):
+    commits = _git(space, 'rev-list', '@{u}..HEAD')
+    if commits.returncode:
+        return False
+    rows = commits.stdout.splitlines()
+    if len(rows) > 1000:
+        return False  # large historical publication needs explicit review
+    for commit in rows:
+        paths = _git(space, 'diff-tree', '--root', '-m', '--no-commit-id', '--name-only', '-r', '-z', commit)
+        if paths.returncode:
+            return False
+        for name in paths.stdout.split('\0'):
+            if not name or name.startswith(MACHINE_WRITTEN):
+                continue
+            # A merge may include human files already present upstream. Do
+            # not mistake those for new exposure, but inspect every outgoing
+            # commit so an added-then-reverted private file cannot ride along.
+            local = _git(space, 'ls-tree', '-z', commit, '--', name)
+            remote = _git(space, 'ls-tree', '-z', '@{u}', '--', name)
+            if local.returncode or remote.returncode or local.stdout != remote.stdout:
+                return False
+    return True
 
 
 def only_machine_written(paths: list[str]) -> bool:
@@ -59,24 +93,39 @@ def publish(space: pathlib.Path, machine: list[str]) -> tuple[str, str]:
     Returns (status, detail): "ok", or "held" (committed locally, could not
     reach or reconcile with origin -- the next run pushes), or "FAIL".
     """
-    r = _git(space, "add", "--", *machine)
-    if r.returncode:
-        return "FAIL", f"add: {r.stderr.strip()[-160:]}"
-    r = _git(space, "commit", "-q", "-m", f"ledger: publish {len(machine)} machine-written file(s)", "--", *machine)
-    if r.returncode:
-        return "FAIL", f"commit: {(r.stderr or r.stdout).strip()[-160:]}"
+    if machine and not only_machine_written(machine):
+        return 'FAIL', 'publication contains a non-machine path'
+    for name in machine:
+        path = space / name
+        if (pathlib.Path(name).is_absolute() or '..' in pathlib.Path(name).parts or path.is_symlink()
+                or not path.resolve().is_relative_to(space.resolve())
+                or not path.resolve().relative_to(space.resolve()).as_posix().startswith(MACHINE_WRITTEN)):
+            return 'FAIL', 'publication path escapes its repository'
+    if machine:
+        r = _git(space, "add", "--", *machine)
+        if r.returncode:
+            return "FAIL", f"add: {r.stderr.strip()[-160:]}"
+        r = _git(space, "commit", "-q", "-m", f"ledger: publish {len(machine)} machine-written file(s)", "--", *machine)
+        if r.returncode:
+            return "FAIL", f"commit: {(r.stderr or r.stdout).strip()[-160:]}"
     r = _git(space, "fetch", "-q", timeout=300)
     if r.returncode:
         return "held", f"fetch: {r.stderr.strip()[-120:]}"
     up = _git(space, "rev-parse", "--abbrev-ref", "@{u}")
     if up.returncode:
         return "held", "no upstream branch"
-    behind = _git(space, "rev-list", "--count", "HEAD..@{u}").stdout.strip()
-    if behind not in ("", "0"):
+    behind_result = _git(space, "rev-list", "--count", "HEAD..@{u}")
+    behind = behind_result.stdout.strip()
+    if behind_result.returncode or not behind.isdecimal():
+        return 'held', 'cannot establish upstream position'
+    if not _outgoing_is_machine_only(space):
+        return 'held', 'outgoing history includes unreviewed human changes or cannot be verified'
+    if behind != '0':
         m = _git(space, "merge", "--no-edit", "@{u}")
         if m.returncode:
-            _git(space, "merge", "--abort")
-            return "held", f"merge with upstream refused: {(m.stderr or m.stdout).strip()[-160:]}"
+            return "held", 'merge with upstream failed; conflict files and index stages retained'
+    if not _outgoing_is_machine_only(space):
+        return 'held', 'merged outgoing history requires review'
     r = _git(space, "push", "-q", timeout=300)
     if r.returncode:
         return "held", f"push: {r.stderr.strip()[-160:]}"
@@ -94,9 +143,20 @@ def main(argv: list[str] | None = None) -> int:
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%MZ")
     published = 0
     for space in sorted(p for p in ROOT.glob("[0-9]-*") if (p / ".git").exists()):
-        machine, human = split(dirty_tracked(space))
-        if not machine:
+        try:
+            machine, human = split(dirty_tracked(space))
+        except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired):
+            print(f'  FAIL  {space.name}: repository status requires review')
+            rc = 1
             continue
+        if not machine:
+            ahead = _git(space, 'rev-list', '--count', '@{u}..HEAD')
+            if ahead.returncode:
+                print(f'  held  {space.name}: cannot establish pending publication')
+                rc = 1
+                continue
+            if ahead.stdout.strip() == '0':
+                continue
         note = f" (leaving {len(human)} human file(s) untouched)" if human else ""
         if a.dry_run:
             print(f"  would {space.name}: publish {len(machine)} ledger file(s){note}")

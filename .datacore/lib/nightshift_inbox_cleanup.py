@@ -13,6 +13,7 @@ from collections import defaultdict
 from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from archive_files import archive_file
 from spaces import discover_spaces as _discover_spaces  # noqa: E402
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", Path.home() / "Data"))
@@ -170,7 +171,7 @@ def main():
     for space, fp, meta in all_files:
         nt = normalize_title(meta["title"])
         if nt:
-            title_groups[nt].append((space, fp, meta))
+            title_groups[(space, nt, __import__("hashlib").sha256(fp.read_bytes()).hexdigest())].append((space, fp, meta))
         else:
             no_title.append((space, fp, meta))
 
@@ -264,7 +265,7 @@ def main():
         dest = archive_path(space, fp.name, parse_frontmatter(fp).get("created", ""))
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
-            shutil.move(str(fp), str(dest))
+            archive_file(fp, dest, root=DATA_DIR)
             archived += 1
         except Exception as e:
             print(f"  ERROR moving {fp.name}: {e}")

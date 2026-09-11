@@ -68,3 +68,47 @@ def test_dry_run_changes_nothing(tmp_path, monkeypatch):
     before = _git(space, "rev-parse", "HEAD").stdout
     assert L.main(["--dry-run"]) == 0
     assert _git(space, "rev-parse", "HEAD").stdout == before
+
+
+def test_new_writer_log_is_published(tmp_path, monkeypatch):
+    root, space, origin = _fleet(tmp_path); monkeypatch.setattr(L, 'ROOT', root)
+    name = '.datacore/events/new-writer.jsonl'
+    (space / name).write_text('{"seq":0}\n')
+    assert L.main([]) == 0
+    assert _git(origin, 'show', 'main:' + name).stdout == '{"seq":0}\n'
+
+
+def test_failed_push_is_retried_without_any_new_file_changes(tmp_path, monkeypatch):
+    root, space, origin = _fleet(tmp_path); monkeypatch.setattr(L, 'ROOT', root)
+    path = space / '.datacore/events/mac.jsonl'; path.write_text('{"seq":1}\n{"seq":2}\n')
+    real = L._git
+    def offline(repo, *args, **kwargs):
+        if args[0] == 'push': return subprocess.CompletedProcess(args, 1, '', 'simulated offline')
+        return real(repo, *args, **kwargs)
+    monkeypatch.setattr(L, '_git', offline)
+    assert L.main([]) == 1
+    assert _git(space, 'status', '--porcelain').stdout == ''
+    monkeypatch.setattr(L, '_git', real)
+    assert L.main([]) == 0
+    assert '"seq":2' in _git(origin, 'show', 'main:.datacore/events/mac.jsonl').stdout
+
+
+def test_private_committed_then_reverted_history_cannot_ride_with_ledger(tmp_path, monkeypatch):
+    root, space, origin = _fleet(tmp_path); monkeypatch.setattr(L, 'ROOT', root)
+    before = _git(origin, 'rev-parse', 'main').stdout
+    draft = space / 'private.md'; draft.write_text('private draft')
+    _git(space, 'add', 'private.md'); _git(space, 'commit', '-qm', 'private draft')
+    _git(space, 'rm', 'private.md'); _git(space, 'commit', '-qm', 'remove draft')
+    (space / '.datacore/events/mac.jsonl').write_text('{"seq":1}\n{"seq":2}\n')
+    assert L.main([]) == 1
+    assert _git(origin, 'rev-parse', 'main').stdout == before
+
+
+def test_git_status_failure_cannot_look_clean(tmp_path, monkeypatch):
+    root, space, origin = _fleet(tmp_path); monkeypatch.setattr(L, 'ROOT', root)
+    real = L._git
+    def fail(repo, *args, **kwargs):
+        if args[0] == 'status': return subprocess.CompletedProcess(args, 1, '', 'unreadable index')
+        return real(repo, *args, **kwargs)
+    monkeypatch.setattr(L, '_git', fail)
+    assert L.main([]) == 1

@@ -9,12 +9,9 @@ way for gated code to append such events -- calling `EventLog.append`
 directly bypasses it entirely, so callers that need enforcement must go
 through this module.
 
-Only `item.create` is gated. Once a side-effecting item has been created
-(with a valid grant attached), its downstream lifecycle events --
-`item.claim`, `item.complete`, etc. -- are NOT re-checked: the create is the
-gate. This keeps the check singular and unambiguous (one grant per item,
-referenced once, at creation) rather than requiring a fresh grant for every
-event a long-running item ever emits.
+Creation, updates, and claims validate the complete current payload. A grant
+remains usable for unchanged content; editing approved content requires a new
+content-bound grant. Claim-time validation also catches unguarded imports.
 
 The grant mechanism: a payload requiring cosign must carry `approval_ref`,
 the `hash` of an existing event in the same space (per `ledger.log.read_events`,
@@ -81,6 +78,8 @@ policy YAML file and (via `guarded_append`) scanning the space's event log.
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -88,6 +87,7 @@ import yaml
 
 from .events import Event
 from .log import EventLog, read_events
+from file_utils import file_lock
 
 DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
 
@@ -247,7 +247,39 @@ def requires_cosign(policy: Policy, event_type: str, payload: dict) -> bool:
     return bool(set(effects) & policy.cosign_effects)
 
 
+def approval_payload_hash(payload: dict) -> str:
+    """Bind approval to complete proposed content, not just its chosen ID."""
+    bound = {key: value for key, value in payload.items()
+             if key not in {"approval_ref", "assignee_absent"}}
+    bound.setdefault("effects", [])
+    encoded = json.dumps(bound, sort_keys=True, separators=(",", ":"),
+                         ensure_ascii=False, allow_nan=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def guarded_append(
+    log: EventLog,
+    type: str,
+    payload: dict,
+    policy: Policy | None = None,
+    space_dir: Path | None = None,
+) -> Event:
+    """Bind the policy read and append to one space and one local lock.
+
+    The lock serializes cooperating processes on this host. Independent
+    offline hosts are not globally serialized by this lock; deployment must
+    use a single execution authority for effects that require exclusivity.
+    """
+    actual_space = Path(log.space_dir).resolve()
+    if space_dir is not None and Path(space_dir).resolve() != actual_space:
+        raise PolicyError("approval space differs from the destination space")
+    if not isinstance(payload, dict):
+        raise PolicyError("event payload must be an object")
+    with file_lock(actual_space / ".datacore" / "state" / "policy"):
+        return _guarded_append_locked(log, type, payload, policy, actual_space)
+
+
+def _guarded_append_locked(
     log: EventLog,
     type: str,
     payload: dict,
@@ -318,12 +350,60 @@ def guarded_append(
     """
     policy = policy if policy is not None else load_policy()
 
-    if type == "item.grant" and policy is not None:
+    append_payload = payload
+    previously_approved = False
+    if type in {"item.claim", "item.update"}:
+        from .fold import fold
+        events = read_events(space_dir)
+        item = fold(events).items.get(payload.get("id"))
+        if item is None:
+            raise PolicyError("item does not exist")
+        previously_approved = any(e.type == "item.create" and e.payload.get("id") == item.id
+                                  and e.payload.get("approval_ref") for e in events)
+        if type == "item.update":
+            if item.status != "created":
+                raise PolicyError("item content cannot change after execution has started")
+            for key in ("requested_by", "hops", "root"):
+                if key in payload and payload[key] != item.payload.get(key):
+                    raise PolicyError(f"creation authority field {key} is immutable")
+            from claim_gate import check_override
+            allowed, reason = check_override(log.actor, item.id, space_dir, policy)
+            if not allowed:
+                raise PolicyError(reason)
+            merged = {**item.payload, **payload}
+            if isinstance(payload.get("org"), dict) and isinstance(item.payload.get("org"), dict):
+                merged["org"] = {**item.payload["org"], **payload["org"]}
+            payload = merged
+        else:
+            payload = dict(item.payload)
+
+    if type == "item.claim":
+        from .fold import fold
+        from claim_gate import check_claim
+        item = fold(read_events(space_dir)).items.get(payload.get("id"))
+        if item is None or item.status != "created":
+            raise PolicyError("item is missing or no longer available to claim")
+        current_hash = approval_payload_hash(item.payload)
+        if append_payload.get("payload_hash") not in (None, current_hash):
+            raise PolicyError("item changed after dispatch selection; select it again")
+        append_payload = {**append_payload, "payload_hash": current_hash}
+        who = log.actor
+        assignee = (item.payload or {}).get("assignee")
+        if assignee:
+            from actor_identity import principal_of
+            actor_principal = principal_of(who)[0]
+            if who != assignee and (actor_principal is None or principal_of(assignee)[0] != actor_principal):
+                raise PolicyError("item is assigned to another principal")
+        ok, reason = check_claim(who, item.payload, policy=policy, space_dir=space_dir)
+        if not ok:
+            raise PolicyError(reason)
+
+    if type in {"item.grant", "approval.grant"} and policy is not None:
         # Stage 4: a grant is the approver's act. Any other writer minting a
         # grant would let an agent widen its own authority by delegation.
         who = getattr(log, "actor", None) or ""
         if who != policy.approver:
-            raise PolicyError(f"item.grant refused for {who!r}: only the approver ({policy.approver}) may grant")
+            raise PolicyError(f"{type} refused for {who!r}: only the approver ({policy.approver}) may grant")
     if type in ("item.dismiss", "item.release", "owner.set") and policy is not None and getattr(policy, "arbitration", None):
         # Stage 5: closing, releasing or reassigning ANOTHER principal's item is
         # arbitration, and the order in the policy file decides who may.
@@ -339,22 +419,19 @@ def guarded_append(
                 if not _ok:
                     raise PolicyError(f"{type} refused for {who!r}: {_why}")
 
-    if type == "item.create":
+    if type in {"item.create", "item.update", "item.claim"}:
         effects = payload.get("effects")
-        if effects is not None and not isinstance(effects, list):
+        if effects is not None and (not isinstance(effects, list) or any(not isinstance(e, str) or not e for e in effects)):
             raise PolicyError(
                 f"item.create payload['effects'] must be a list (got {effects!r})"
             )
         # Stage 4/5 (product description): who is asking, how deep the chain
         # is, and how much this writer has created today — decided before the
         # append, refused loudly, never silently dropped in the fold.
-        try:
-            from claim_gate import check_create
-        except ImportError:  # root lib not importable here (older caller); the effects gate below still applies
-            check_create = None
+        from claim_gate import check_create
         # Active only once the installation declares principals in the policy
         # file; a bare Policy() (older callers, unit tests) keeps the old gate.
-        if check_create is not None and getattr(policy, "principals", None) is not None:
+        if type == "item.create" and getattr(policy, "principals", None) is not None:
             _ok, _why = check_create(getattr(log, "actor", None) or "", payload, policy=policy,
                                      space_dir=space_dir or getattr(log, "space_dir", None))
             if not _ok:
@@ -371,10 +448,23 @@ def guarded_append(
                     "fix the typo)"
                 )
 
-    if not requires_cosign(policy, type, payload):
-        return log.append(type, payload)
+    needs_cosign = (type in {"item.create", "item.update", "item.claim"}
+                   and (previously_approved or requires_cosign(policy, "item.create", payload)))
+    if type in {"item.create", "item.update", "item.claim"} and policy.principals:
+        from actor_identity import principal_of
+        principal = principal_of(log.actor)[0]
+        limits = policy.principals.get(principal, {})
+        needs_cosign |= bool(set(payload.get("effects") or []) & set(limits.get("cosign_effects") or []))
+    if not needs_cosign:
+        return log.append(type, append_payload)
 
-    space_dir = space_dir if space_dir is not None else log.space_dir
+    validate_approval(log, payload, policy, creating=type == "item.create")
+    return log.append(type, append_payload)
+
+
+def validate_approval(log: EventLog, payload: dict, policy: Policy, *, creating=False) -> None:
+    """Validate one content-bound grant without appending or changing state."""
+    space_dir = log.space_dir
 
     approval_ref = payload.get("approval_ref")
     if not approval_ref:
@@ -400,6 +490,14 @@ def guarded_append(
             f"but policy requires approver {policy.approver!r}"
         )
 
+    if getattr(log, "sign", False):
+        from .events import body_dict, canonical_bytes, compute_hash
+        from .keys import verify
+        body = body_dict(grant.seq, grant.hlc, grant.actor, grant.type, grant.payload, grant.prev)
+        if grant.hash != compute_hash(body) or not grant.sig or not verify(
+                grant.actor, canonical_bytes(body), grant.sig, registry_path=log.registry_path):
+            raise PolicyError("approval grant signature could not be verified")
+
     item_id = payload.get("id")
     if not isinstance(item_id, str) or not item_id:
         raise PolicyError("gated item.create requires a non-empty id")
@@ -416,7 +514,8 @@ def guarded_append(
             f"which does not match this event's id {item_id!r}"
         )
 
-    if any(e.type == "item.create" and e.payload.get("id") == item_id for e in events):
+    if creating and any(e.type == "item.create" and e.payload.get("id") == item_id for e in events):
         raise PolicyError(f"item already created: {item_id!r}")
 
-    return log.append(type, payload)
+    if grant.payload.get("payload_hash") != approval_payload_hash(payload):
+        raise PolicyError("approval does not bind this payload; obtain a grant for the exact proposed content")
