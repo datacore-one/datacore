@@ -200,3 +200,73 @@ def test_executor_refuses_payload_changed_after_claim(tmp_path, policy, monkeypa
     executor._actor, executor._space, executor._item = 'worker', tmp_path, 'one'
     with pytest.raises(PolicyError, match='claimed payload'):
         executor._execution_env()
+
+
+def _conditional_task(space, policy):
+    from ledger.fold import fold
+    (space / '.datacore').mkdir(exist_ok=True)
+    (space / '.datacore/ledger-edit-protocol').write_text('1\n')
+    log = EventLog(space, 'worker', sign=False)
+    task = _approved_task(space, policy, {
+        'id': 'one', 'title': 'original', 'effects': ['email.send'],
+        'org': {'body': 'instructions', 'properties': {'A': 'base', 'B': 'base'}}})
+    guarded_append(log, 'item.create', task, policy)
+    return log, fold(read_events(space)).items['one']
+
+
+def test_conditional_update_approval_binds_replayed_content(tmp_path, policy):
+    from ledger.edits import conditional_payload
+    from ledger.fold import fold
+    from ledger.policy import approval_payload_hash
+    log, before = _conditional_task(tmp_path, policy)
+    approved = _approved_task(tmp_path, policy, {**before.payload, 'title': 'amended'})
+    update = conditional_payload(before, {'title': 'amended', 'approval_ref': approved['approval_ref']})
+    guarded_append(log, 'item.update', update, policy)
+    after = fold(read_events(tmp_path)).items['one']
+    assert after.payload == approved
+    assert '_merge' not in after.payload
+    claim = guarded_append(log, 'item.claim', {'id': 'one'}, policy)
+    assert claim.payload['payload_hash'] == approval_payload_hash(approved)
+
+
+@pytest.mark.parametrize('approve_merged', [False, True])
+def test_conditional_approval_accounts_for_unseen_disjoint_edits(tmp_path, policy, approve_merged):
+    from ledger.edits import conditional_payload
+    from ledger.fold import fold
+    log, before = _conditional_task(tmp_path, policy)
+    proposed = {'body': 'instructions', 'properties': {'A': 'local', 'B': 'base'}}
+    remote = {'body': 'instructions', 'properties': {'A': 'base', 'B': 'remote'}}
+    log.append('item.update', {'id': 'one', 'org': remote})
+    expected = {'body': 'instructions', 'properties': {'A': 'local', 'B': 'remote'}}
+    approved = _approved_task(tmp_path, policy, {
+        **before.payload, 'org': expected if approve_merged else proposed})
+    update = conditional_payload(before, {'org': proposed, 'approval_ref': approved['approval_ref']})
+    if not approve_merged:
+        events = read_events(tmp_path)
+        with pytest.raises(PolicyError, match='bind'):
+            guarded_append(log, 'item.update', update, policy)
+        assert read_events(tmp_path) == events
+        assert fold(events).items['one'].payload['org'] == remote
+    else:
+        guarded_append(log, 'item.update', update, policy)
+        assert fold(read_events(tmp_path)).items['one'].payload['org'] == expected
+        guarded_append(log, 'item.claim', {'id': 'one'}, policy)
+
+
+@pytest.mark.parametrize('variant', ['malformed', 'conflicting', 'terminal'])
+def test_guarded_conditional_update_rejects_invalid_or_conflicting_precondition(tmp_path, policy, variant):
+    from ledger.edits import conditional_payload
+    from ledger.fold import fold
+    log, before = _conditional_task(tmp_path, policy)
+    approved = _approved_task(tmp_path, policy, {**before.payload, 'title': 'amended'})
+    update = conditional_payload(before, {'title': 'amended', 'approval_ref': approved['approval_ref']},
+                                 terminal=variant == 'terminal')
+    if variant == 'malformed':
+        update['_merge'] = None
+    elif variant == 'conflicting':
+        log.append('item.update', {'id': 'one', 'title': 'concurrent title'})
+    events = read_events(tmp_path)
+    with pytest.raises(PolicyError, match='conditional|concurrent'):
+        guarded_append(log, 'item.update', update, policy)
+    assert read_events(tmp_path) == events
+    assert not fold(events).items['one'].edit_conflicts

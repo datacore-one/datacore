@@ -193,7 +193,11 @@ def _drawer(props: dict) -> list[str]:
         value = props[key]
         if value is None or value == "":
             continue
-        out.append(f":{key}: {value}")
+        if isinstance(value, str) and "\n" in value:
+            out.append(f":{key}: |")
+            out.extend(":   " + line for line in value.split("\n"))
+        else:
+            out.append(f":{key}: {value}")
     out.append(":END:")
     return out
 
@@ -254,14 +258,6 @@ def render_item(item, *, level: int | None = None) -> list[str]:
     org = payload.get("org") or {}
 
     stars = "*" * level
-    if payload.get("section"):
-        # A plain heading: no TODO keyword, no drawer beyond its id. Rendering
-        # it as a task would invent work that never existed.
-        title, tags = _clean_title_and_tags(item.title, payload.get("tags"))
-        tag_str = f"  :{':'.join(tags)}:" if tags else ""
-        out = [f"{stars} {title}{tag_str}"]
-        out.extend("  " + ln for ln in _drawer({"ID": item.id}))
-        return out
     # A CLOSED ITEM RENDERS AS DONE, WHATEVER IT WAS BEFORE.
     #
     # The payload keeps the state the task had while it was live (TODO, NEXT,
@@ -270,7 +266,9 @@ def render_item(item, *, level: int | None = None) -> list[str]:
     # rather than an omission. `dismissed` renders as CANCELLED: giving up on
     # something and finishing it are different outcomes and a weekly report
     # that conflates them is not worth reading.
-    if item.status in CLOSED_STATUSES:
+    if payload.get("section"):
+        state = None
+    elif item.status in CLOSED_STATUSES:
         from .fold import was_finished
         state = "DONE" if was_finished(item) else "CANCELLED"
     elif item.status == "completed":
@@ -283,7 +281,8 @@ def render_item(item, *, level: int | None = None) -> list[str]:
     # producer, and determinism must not depend on every producer remembering.
     title, tags = _clean_title_and_tags(item.title, payload.get("tags"))
     tag_str = f"  :{':'.join(tags)}:" if tags else ""
-    lines = [f"{stars} {state} {prio}{title}{tag_str}"]
+    keyword = f"{state} " if state else ""
+    lines = [f"{stars} {keyword}{prio}{title}{tag_str}"]
 
     if item.status in CLOSED_STATUSES and getattr(item, "closed_at", None):
         # An org CLOSED: stamp, so a weekly report can find finished work by
@@ -313,20 +312,44 @@ def render_item(item, *, level: int | None = None) -> list[str]:
     # ":CREATED: [1970-01-01]" would dress a known-unknown up as a fact --
     # the precise thing the ladder exists to avoid. An item whose date was
     # defaulted simply carries no CREATED, which is honest and greppable.
-    if genesis.get("date") and genesis.get("rung") != "genesis_fallback":
+    if org.get("created"):
+        props["CREATED"] = org["created"]
+    elif genesis.get("date") and genesis.get("rung") not in ("genesis_fallback", "section"):
         props["CREATED"] = f"[{genesis['date']}]"
     lines.extend("  " + line for line in _drawer(props))
 
     body = strip_drawers((org.get("body") or "").rstrip())
-    # Body text is copied verbatim, so a typed weekday inside it (a DEADLINE
-    # line captured as body, 4-forge 2026-09-04) came back on every projection.
-    body = _STAMP_DAY.sub(_fix_day, body)
+    # Repair legacy planning lines, while preserving quoted/literal examples
+    # and ordinary prose. A date-looking string is not necessarily metadata.
+    body = ''.join(chunk if literal else re.sub(
+        r'(?m)^[ \t]*(?:DEADLINE|SCHEDULED|CLOSED|CLOCK):[^\n]*',
+        lambda match: _STAMP_DAY.sub(_fix_day, match.group()), chunk)
+        for literal, chunk in _body_chunks(body))
     if body:
         lines.extend(body.split("\n"))
     return lines
 
 
 _DRAWER_BLOCK = re.compile(r"^[ \t]*:PROPERTIES:[ \t]*\n(?:.*\n)*?[ \t]*:END:[ \t]*\n?", re.M)
+
+
+def _body_chunks(body: str):
+    """Keep Org blocks opaque to legacy metadata repair, including unclosed ones."""
+    block, lines = None, []
+    for line in body.splitlines(keepends=True):
+        start = re.match(r'^[ \t]*#\+BEGIN(_[\w-]+|:)(?:\s|$)', line, re.I)
+        end = re.match(r'^[ \t]*#\+END(_[\w-]+|:)(?:\s|$)', line, re.I)
+        if block is None and start:
+            if lines:
+                yield False, ''.join(lines)
+            block, lines = start.group(1).lower(), [line]
+        else:
+            lines.append(line)
+            if block is not None and end and end.group(1).lower() == block:
+                yield True, ''.join(lines)
+                block, lines = None, []
+    if lines:
+        yield block is not None, ''.join(lines)
 
 
 def strip_drawers(body: str) -> str:
@@ -339,7 +362,8 @@ def strip_drawers(body: str) -> str:
     stays as written; genesis drops them at ingest too."""
     if ":PROPERTIES:" not in body:
         return body
-    return _DRAWER_BLOCK.sub("", body + ("\n" if not body.endswith("\n") else "")).rstrip("\n")
+    return ''.join(chunk if literal else _DRAWER_BLOCK.sub('', chunk)
+                   for literal, chunk in _body_chunks(body + ('\n' if not body.endswith('\n') else ''))).rstrip('\n')
 
 
 def projected_items(state: LedgerState, *, space: str | None = None) -> list:
@@ -376,6 +400,10 @@ def project(state: LedgerState, *, space: str | None = None) -> Projection:
     user can see (title, date) would reorder the file whenever a task was
     renamed, producing diff noise that hides real change.
     """
+    if any(item.edit_conflicts for item in state.items.values()
+           if space is None or item.payload.get('space') in (None, space)):
+        from .edits import EditConflict
+        raise EditConflict('unresolved replicated edits; preserve the file and reconcile event conflicts')
     # An ABSENT space means "this space", not "no space".
     #
     # This filter was `payload["space"] == space`, so an item whose payload
@@ -490,11 +518,19 @@ def write(projection: Projection, path: Path, *, last_written_sha: str | None = 
     Returns the sha256 of what was written, to be passed back as
     `last_written_sha` next time.
     """
-    if path.exists() and last_written_sha is not None and not force:
-        found = _sha(path)
-        if found != last_written_sha:
-            raise ProjectionConflict(path, last_written_sha, found)
+    from org_transaction import serialized, watch_file, write_org_text
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(projection.text, encoding="utf-8")
-    return projection.sha256
+    @serialized
+    def publish():
+        before = watch_file(path)["before"]
+        if before is not None and not force:
+            found = hashlib.sha256(before.encode("utf-8")).hexdigest()
+            if last_written_sha is None:
+                if before != projection.text:
+                    raise ProjectionConflict(path, "explicit source precondition required", found)
+            elif found != last_written_sha:
+                raise ProjectionConflict(path, last_written_sha, found)
+        write_org_text(path, projection.text)
+        return projection.sha256
+
+    return publish()

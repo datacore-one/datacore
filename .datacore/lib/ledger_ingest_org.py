@@ -115,6 +115,10 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
     org_file = space / "org" / "next_actions.org"
     if not org_file.exists():
         return {"dismissed": 0, "updated": 0}
+    from ledger_project_org import phase
+    if phase(space) == 1:
+        from ledger.projection_state import sync_generated
+        return sync_generated(space, fold(read_events(space)), actor or _this_actor(), dry_run)
     # File-level tags, parsed the way genesis does. Items created through the
     # adapter/ingest never recorded `filetags`, while genesis-imported ones
     # do — checkpoint-verify then compares unlike data and reports the same

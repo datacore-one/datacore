@@ -217,6 +217,8 @@ class Executor:
             task = fold(read_events(Path(self._space))).items.get(self._item)
             if task is None or task.status != "claimed" or task.owner != self._actor:
                 raise PolicyError("executor requires this actor's current claim")
+            if task.edit_conflicts:
+                raise PolicyError("unresolved replicated edits prevent execution")
             if task.claimed_payload_hash != approval_payload_hash(task.payload):
                 raise PolicyError("claimed payload is missing or changed; revalidate before execution")
             if task.payload.get("approval_ref"):

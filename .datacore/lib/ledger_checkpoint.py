@@ -38,7 +38,10 @@ the machine is not one.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -58,7 +61,20 @@ from ledger.projector import _clean_title_and_tags, _org_stamp, project, project
 # too — with the state the projector renders, or every completed item comes
 # back "invented" and 2-datacore reports 58 of them.
 from ledger.projector import LIVE_STATUSES as LIVE  # noqa: E402
+from org_transaction import serialized, watch_file, write_org_text  # noqa: E402
 CHECKPOINT_REL = Path(".datacore") / "checkpoints" / "next_actions.org"
+SNAPSHOT_REL = Path(".datacore") / "checkpoints" / "ledger.json"
+VIEW_FIELDS = ('title', 'state', 'tags', 'scheduled', 'deadline', 'body', 'properties', 'priority', 'created')
+
+
+def checkpoint_paths(space: Path) -> tuple[Path, Path]:
+    """Disjoint backup files for each declared writer, as for event chains."""
+    from actor_identity import this_actor
+    actor = this_actor(strict=True)
+    if not re.fullmatch(r'[a-z0-9][a-z0-9_-]*', actor):
+        raise ValueError('checkpoint requires a declared safe writer identity')
+    directory = space / '.datacore/checkpoints' / actor
+    return directory / 'next_actions.org', directory / 'ledger.json'
 
 
 def _default_root() -> Path:
@@ -118,7 +134,12 @@ def _heading_tags(state, known: set[str], iid: str) -> set[str]:
 
 def _fingerprint(state, space_filetags: set | None = None,
                  space: str | None = None) -> dict[str, tuple]:
-    """The fields a restore must preserve. Not the state root: a fresh import
+    """Editable task-view fidelity, separate from complete snapshot restoration.
+
+    This diagnostic also covers notes, properties, priority and creation time.
+    It does not claim Org can preserve ledger-only authority or history; verify()
+    restores those from the full saved event snapshot and checks its state root.
+    A fresh import
     writes new events with new hashes and hlcs, so the CHAIN differs by design
     -- what must survive is the ITEMS.
 
@@ -184,21 +205,103 @@ def _fingerprint(state, space_filetags: set | None = None,
         # (2026-08-30), the same false-alarm class as the timestamp and
         # filetag asymmetries above. A missing state MEANS TODO here.
         rendered_state = "REVIEW" if item.status == "completed" else (p.get("state") or "TODO")
+        org = p.get('org') or {}
+        created = org.get('created')
+        genesis = p.get('genesis') or {}
+        if not created and genesis.get('date') and genesis.get('rung') not in ('genesis_fallback', 'section'):
+            created = f"[{genesis['date']}]"
         out[iid] = (title, rendered_state,
                     tuple(sorted(eff)),
-                    _org_stamp(p.get("scheduled")), _org_stamp(p.get("deadline")))
+                    _org_stamp(p.get("scheduled")), _org_stamp(p.get("deadline")),
+                    (org.get('body') or '').rstrip(), org.get('properties') or {},
+                    org.get('priority'), created or None)
     return out
 
 
+@serialized
 def write(space: Path) -> Path:
-    state = fold(read_events(space))
+    """Save the complete observed event set alongside the human-readable view.
+
+    Org alone cannot restore terminal history, approvals, claims, unknown event
+    types or fields that its renderer does not represent. A versioned snapshot
+    carries every original chain; neither file is acknowledged before both are
+    durably published in the recoverable filesystem transaction.
+    """
+    from ledger.events import to_line
+    events = read_events(space)
+    state = fold(events)
     text = project(state, space=space.name).text
-    dest = space / CHECKPOINT_REL
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(".org.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(dest)          # atomic: a half-written restore point is worse
-    return dest                # than none, and this file only matters in a crisis
+    dest, snapshot_path = checkpoint_paths(space)
+    chains = {}
+    for event in events:
+        chains.setdefault(event.log + '.jsonl', []).append(event)
+    chains = {name: ''.join(to_line(event) + '\n' for event in sorted(chain, key=lambda e: e.seq))
+              for name, chain in chains.items()}
+    document = {'version': 1, 'state_root': state.state_root(), 'chains': chains,
+                'org_sha256': hashlib.sha256(text.encode('utf-8')).hexdigest()}
+    saved = watch_file(snapshot_path)['before']
+    previous_org = watch_file(dest)['before']
+    legacy_org = watch_file(space / CHECKPOINT_REL)['before']
+    if saved is not None:
+        previous = json.loads(saved)
+        _restore(previous, space.name)
+        if previous_org is None or hashlib.sha256(previous_org.encode()).hexdigest() != previous['org_sha256']:
+            raise ValueError('previous checkpoint was changed; preserve and reconcile it before replacement')
+        # Append-only history cannot shrink. A lost/rewound live log must not
+        # replace the last good backup with the damaged state.
+        for filename, old_chain in previous['chains'].items():
+            if not chains.get(filename, '').startswith(old_chain):
+                raise ValueError('live ledger lost or replaced saved history; refusing checkpoint replacement')
+    elif previous_org is not None or legacy_org is not None:
+        # First format upgrade retains the old Org-only restore point.
+        previous_org = previous_org if previous_org is not None else legacy_org
+        digest = hashlib.sha256(previous_org.encode()).hexdigest()
+        archive = dest.with_name(f'legacy-{digest}.org')
+        before_archive = watch_file(archive)['before']
+        if before_archive not in (None, previous_org):
+            raise ValueError('legacy checkpoint archive conflicts')
+        if before_archive is None:
+            write_org_text(archive, previous_org)
+    # Test the saved representation before replacing the previous checkpoint.
+    _restore(document, space.name)
+    write_org_text(dest, text)
+    write_org_text(snapshot_path, json.dumps(document, sort_keys=True) + '\n')
+    return dest
+
+
+def _restore(document, name):
+    """Actually restore a saved snapshot in disposable storage and verify it.
+
+    These are integrity checks, not independent signer authentication. The
+    checkpoint must be obtained from the deployment's trusted backup source.
+    """
+    from ledger.events import body_dict, compute_hash, from_line
+    if (not isinstance(document, dict) or document.get('version') != 1
+            or not isinstance(document.get('chains'), dict)
+            or not isinstance(document.get('state_root'), str)
+            or not isinstance(document.get('org_sha256'), str)):
+        raise ValueError('invalid checkpoint metadata')
+    with tempfile.TemporaryDirectory(prefix='ledger-restore-') as temporary:
+        scratch = Path(temporary) / name
+        folder = scratch / '.datacore/events'
+        folder.mkdir(parents=True)
+        for filename, text in document['chains'].items():
+            if (not isinstance(filename, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*\.jsonl', filename)
+                    or not isinstance(text, str) or not text.endswith('\n')):
+                raise ValueError('invalid saved chain')
+            previous = 'GENESIS'
+            for sequence, line in enumerate(text.splitlines()):
+                event = from_line(line)
+                if (event.seq != sequence or event.prev != previous
+                        or event.hash != compute_hash(body_dict(event.seq, event.hlc, event.actor,
+                                                              event.type, event.payload, event.prev))):
+                    raise ValueError('saved event chain fails integrity verification')
+                previous = event.hash
+            (folder / filename).write_text(text, encoding='utf-8')
+        restored = fold(read_events(scratch))
+        if restored.state_root() != document['state_root']:
+            raise ValueError('restored state differs from saved state root')
+        return restored
 
 
 def _space_filetags(space: Path) -> set:
@@ -255,43 +358,24 @@ def compare(live: dict, restored: dict) -> tuple[bool, str]:
 
 
 def verify(space: Path) -> tuple[bool, str]:
-    """Rebuild from the checkpoint in a scratch space and compare.
-
-    STALENESS IS NOT CORRUPTION, and conflating them made this tool lie.
-
-    The checkpoint on disk is written once a day. Every item appended to the
-    ledger after that write is, trivially, absent from it -- so comparing the
-    stored file against the CURRENT ledger reported ordinary new work as data
-    loss. On 2026-08-13 that read as "4 of 9 spaces would NOT restore, 23 items
-    lost". Re-writing first and re-running dropped it to 1 lost item: 22 of the
-    23 were tasks created since breakfast.
-
-    That is the worst failure mode available to this particular tool. Its whole
-    purpose is answering "could we actually re-genesis from this?", and an
-    answer that cries corruption on a healthy system is one the operator learns
-    to wave away -- leaving nothing to raise the alarm when a restore genuinely
-    breaks.
-
-    So project FRESH from the same ledger being compared against. That isolates
-    the question this is meant to answer -- does the projection round-trip? --
-    from "is the file on disk current?", which is the write step's job and is
-    reported separately below.
-    """
-    cp = space / CHECKPOINT_REL
+    """Verify the files actually saved, without first regenerating a backup."""
+    cp, snapshot_path = checkpoint_paths(space)
     if not cp.is_file():
         return False, "no checkpoint written yet"
 
-    state = fold(read_events(space))
-    live, restored, fresh = round_trip(state, space.name, _space_filetags(space))
-    ok, detail = compare(live, restored)
-
-    # Report the on-disk file's age as its own fact. A stale checkpoint is a
-    # real problem -- it is what a restore would actually start from -- but it is
-    # a DIFFERENT problem from a projection that cannot round-trip, and the two
-    # need different fixes: run the write step, versus fix the projector.
-    if cp.read_text(encoding="utf-8", errors="replace") != fresh:
-        detail += " [on-disk checkpoint is behind the ledger — run: write]"
-    return ok, detail
+    try:
+        document = json.loads(snapshot_path.read_text(encoding='utf-8'))
+        if hashlib.sha256(cp.read_bytes()).hexdigest() != document.get('org_sha256'):
+            return False, 'saved Org checkpoint differs from its snapshot checksum'
+        restored = _restore(document, space.name)
+    except FileNotFoundError:
+        return False, 'legacy Org-only checkpoint has no complete ledger snapshot; write a new checkpoint'
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        return False, f'saved checkpoint cannot be restored ({type(exc).__name__})'
+    detail = f'{len(restored.items)} item(s), including full payloads and history, restored from saved checkpoint'
+    if restored.state_root() != fold(read_events(space)).state_root():
+        detail += ' [valid older restore point; current ledger has changed — run: write]'
+    return True, detail
 
 
 def main() -> int:

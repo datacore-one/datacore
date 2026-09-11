@@ -38,7 +38,7 @@ def git(repo: Path, *args: str) -> subprocess.CompletedProcess:
 def repo_pair(tmp_path: Path, monkeypatch):
     """A clone with a real origin, registered so the transport will act on it."""
     origin = tmp_path / "origin.git"
-    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+    subprocess.run(["git", "init", "-q", "--bare", "--initial-branch=main", str(origin)], check=True)
     work = tmp_path / "work"
     subprocess.run(["git", "clone", "-q", str(origin), str(work)], check=True)
     git(work, "config", "user.email", "t@t")

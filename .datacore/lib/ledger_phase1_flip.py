@@ -15,16 +15,22 @@ item (the shadow diff is clean for this space). Refuses otherwise.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 LIB = Path(__file__).resolve().parent
 sys.path.insert(0, str(LIB))
 from ledger_project_org import MARKER, ORG, phase, project_space  # noqa: E402
+from ledger_transport import _repo_lock  # noqa: E402
+from org_transaction import delete_file, serialized, watch_file, write_org_text  # noqa: E402
+from file_utils import fsync_directory  # noqa: E402
 
 IGNORE_LINE = "org/next_actions.org"
+PENDING = Path(".datacore/state/phase-transition.json")
 
 
 def git(space: Path, *args: str) -> subprocess.CompletedProcess:
@@ -32,68 +38,150 @@ def git(space: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def shadow_clean(space: Path) -> tuple[bool, str]:
-    from ledger_checkpoint import _fingerprint  # noqa: E402
-    from ledger.fold import fold
-    from ledger.log import read_events
     from ledger.genesis import scan
-    live = _fingerprint(fold(read_events(space)))
     before = scan(space)
     unimported = len(before.importable)
-    ids_in_org = set()
-    for f in (space / "org").glob("*.org"):
-        for line in f.read_text(errors="replace").splitlines():
-            if line.strip().startswith(":ID:"):
-                ids_in_org.add(line.split(":ID:", 1)[1].strip())
-    extra = sorted(set(live) - ids_in_org)
     if unimported:
         return False, f"{unimported} org task(s) not yet in the ledger — ingest first"
-    if extra:
-        return False, f"{len(extra)} live ledger item(s) with no org task — run ledger_phase1_prepare first"
-    return True, f"{len(live)} live items agree"
+    # The ledger also owns independent items. Absence from this source file
+    # is not evidence for deleting them. project_space checks full source
+    # preservation before publication and may safely add those extra items.
+    return True, 'source IDs admitted; full content preservation checked during projection'
+
+
+class TransitionRefused(RuntimeError):
+    pass
+
+
+@serialized
+def _prepare(space: Path, destination: int):
+    """Persist a complete local transition, or recover ALL its files.
+
+    Git publication follows this transaction. A failed hook/commit leaves a
+    complete local transition with a durable pending record; retry publishes
+    it. It must not pretend that the new phase has already been committed.
+    """
+    for path in (MARKER, ORG, PENDING, Path(".gitignore")):
+        if (space / path).is_symlink():
+            raise TransitionRefused("transition paths must not be symbolic links")
+        watch_file(space / path)
+    if destination == 1:
+        ok, why = shadow_clean(space)
+        if not ok:
+            raise TransitionRefused(why)
+        write_org_text(space / MARKER, "1\n")
+    result = project_space(space)
+    if not result.startswith("generated"):
+        raise TransitionRefused(result)
+    gi = space / ".gitignore"
+    lines = gi.read_text().splitlines() if gi.exists() else []
+    if destination == 1:
+        if IGNORE_LINE not in lines:
+            lines += ["# Phase 1 (DIP-0046): generated from the ledger", IGNORE_LINE]
+    else:
+        lines = [line for line in lines if line != IGNORE_LINE and not line.startswith("# Phase 1 (DIP-0046):")]
+        delete_file(space / MARKER)
+    write_org_text(gi, "\n".join(lines) + ("\n" if lines else ""))
+    write_org_text(space / PENDING, json.dumps({"version": 1, "phase": destination}) + "\n")
+
+
+def _publish(space: Path, destination: int):
+    """Use an isolated index; hooks still run, other staged work is untouched.
+
+    Hold Git's real index lock through commit and index installation. Failure
+    before commit preserves the original index byte for byte. A crash after
+    commit leaves Git's conventional index.lock for explicit recovery.
+    """
+    result = git(space, "rev-parse", "--path-format=absolute", "--git-path", "index")
+    if result.returncode:
+        raise TransitionRefused("cannot locate the repository index")
+    index = Path(result.stdout.strip())
+    lock = index.with_name(index.name + ".lock")
+    fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    temporary = None
+    try:
+        if git(space, "diff", "--cached", "--quiet").returncode:
+            raise TransitionRefused("index changed before publication; preserving staged work")
+        tmp_fd, tmp_name = tempfile.mkstemp(prefix="phase-index-", dir=index.parent)
+        os.close(tmp_fd)
+        temporary = Path(tmp_name)
+        temporary.unlink()  # Git requires an absent index or a valid index.
+        env = {**os.environ, "GIT_INDEX_FILE": str(temporary)}
+        def checked(*args):
+            proc = subprocess.run(["git", "-C", str(space), *args], env=env,
+                                  capture_output=True, text=True)
+            if proc.returncode:
+                # Hook output can contain user data or credentials.
+                raise TransitionRefused(f"Git {args[0]} failed (exit {proc.returncode}); local transition remains pending")
+            return proc
+        checked("read-tree", "HEAD")
+        checked("add", "--", ".gitignore")
+        if destination == 1:
+            checked("add", "--", str(MARKER))
+            checked("rm", "--cached", "--ignore-unmatch", "--", str(ORG))
+        else:
+            checked("add", "--", str(ORG))
+            checked("rm", "--cached", "--ignore-unmatch", "--", str(MARKER))
+        changed = checked("diff", "--cached", "--name-only").stdout.strip()
+        if changed:
+            checked("commit", "-q", "-m", f"phase {destination}: transition Org ownership (DIP-0046)")
+        with os.fdopen(fd, "wb") as handle:
+            fd = None
+            handle.write(temporary.read_bytes())
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(lock, index)
+        fsync_directory(index.parent)
+    finally:
+        if fd is not None:
+            os.close(fd)
+        lock.unlink(missing_ok=True)
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+@serialized
+def _clear_pending(space):
+    delete_file(space / PENDING)
+
+
+def _transition(space: Path, destination: int, apply: bool) -> int:
+    with _repo_lock(space):
+        try:
+            pending_path = space / PENDING
+            pending = json.loads(pending_path.read_text()) if pending_path.exists() else None
+            if pending is not None and pending != {"version": 1, "phase": destination}:
+                raise TransitionRefused("a different or invalid transition is pending; reconcile it first")
+            if phase(space) == destination and pending is None:
+                print(f"  already Phase {destination}")
+                return 0
+            # An isolated index must not turn another caller's staged changes
+            # into a misleading inverse diff after advancing HEAD.
+            clean = git(space, "diff", "--cached", "--quiet")
+            if clean.returncode:
+                raise TransitionRefused("index is not clean or cannot be inspected; commit/stash staged work first")
+            if not apply:
+                print(f"  dry run — would validate content, transition to Phase {destination}, then commit")
+                return 0
+            if pending is None:
+                _prepare(space, destination)
+            elif phase(space) != destination:
+                raise TransitionRefused("pending transition and phase marker disagree")
+            _publish(space, destination)
+            _clear_pending(space)
+            print(f"  Phase {destination} committed")
+            return 0
+        except (TransitionRefused, OSError, ValueError) as exc:
+            print(f"  REFUSED — {exc}")
+            return 1
 
 
 def flip(space: Path, apply: bool) -> int:
-    ok, why = shadow_clean(space)
-    print(f"  precondition: {why}")
-    if not ok:
-        return 1
-    if phase(space) == 1:
-        print("  already Phase 1"); return 0
-    if not apply:
-        print("  dry run — would write marker, ignore + untrack org/next_actions.org, generate, commit"); return 0
-    (space / MARKER).parent.mkdir(parents=True, exist_ok=True)
-    (space / MARKER).write_text("1\n")
-    gi = space / ".gitignore"
-    lines = gi.read_text().splitlines() if gi.exists() else []
-    if IGNORE_LINE not in lines:
-        gi.write_text("\n".join(lines + ["# Phase 1 (DIP-0046): generated from the ledger, never authored", IGNORE_LINE]) + "\n")
-    git(space, "rm", "-q", "--cached", str(ORG))
-    print("  " + project_space(space))
-    git(space, "add", ".gitignore", str(MARKER))
-    r = git(space, "commit", "-q", "-m", "phase 1: org/next_actions.org is generated from the ledger (DIP-0046)")
-    if r.returncode:
-        print("  commit refused:\n" + (r.stderr or r.stdout)[-400:]); return 1
-    print(f"  flipped: {git(space, 'log', '--oneline', '-1').stdout.strip()[:70]}")
-    return 0
+    return _transition(space, 1, apply)
 
 
 def reverse(space: Path, apply: bool) -> int:
-    if phase(space) != 1:
-        print("  not in Phase 1"); return 0
-    if not apply:
-        print("  dry run — would remove marker + ignore line and commit the generated file as authored"); return 0
-    print("  " + project_space(space))
-    (space / MARKER).unlink(missing_ok=True)
-    gi = space / ".gitignore"
-    keep = [l for l in gi.read_text().splitlines() if l != IGNORE_LINE and "Phase 1 (DIP-0046)" not in l]
-    gi.write_text("\n".join(keep) + ("\n" if keep else ""))
-    git(space, "add", ".gitignore", str(ORG))
-    git(space, "rm", "-q", "--cached", "--ignore-unmatch", str(MARKER))
-    r = git(space, "commit", "-q", "-m", "phase 0: org/next_actions.org is authored again (projection committed as the file)")
-    if r.returncode:
-        print("  commit refused:\n" + (r.stderr or r.stdout)[-400:]); return 1
-    print(f"  reversed: {git(space, 'log', '--oneline', '-1').stdout.strip()[:70]}")
-    return 0
+    return _transition(space, 0, apply)
 
 
 def main(argv: list[str] | None = None) -> int:

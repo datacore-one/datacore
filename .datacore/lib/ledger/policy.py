@@ -35,8 +35,7 @@ until every check has passed).
 
 Policy is loaded from YAML at `<DATACORE_ROOT>/.datacore/config/approvals_policy.yaml`
 by default (a tracked, public, secret-free file -- it is policy, not key
-material, despite living in `.datacore/keys/` alongside the signing-key
-registry). A missing file is not an error: it resolves to the default policy
+material). A missing file is not an error: it resolves to the default policy
 (`approver="human"`, `cosign_effects={email.send, payment, prod.deploy}`,
 `known_effects` falling back to that same set -- see below).
 A *present but malformed* file raises `PolicyError` listing every problem
@@ -59,20 +58,19 @@ set of legitimate effects in `known_effects` turns that silent miss into a
 loud, immediate rejection. A legitimate non-cosign effect must be
 explicitly added to a custom `known_effects` list to be usable at all.
 
-TRUST BOUNDARY: while signing is dormant (ENG-2026-0729-030), actor strings
-are self-declared -- `approval.grant` authenticity rests on process
-boundaries (who can write to the space's `<actor>.jsonl` file), not
-cryptography. It becomes cryptographic only when `DATACORE_LEDGER_SIGN=1`
-gives the approver a keypair (see `ledger.log.EventLog`'s `sign` parameter
-and `ledger.keys`). Until then, this gate prevents ACCIDENTAL ungated side
-effects (an item.create slipping into existence with no human ever having
-looked at it) -- it does NOT defend against adversarial forgery: any
-process able to write to `policy.approver`'s actor file in this space can
-forge a self-declared grant. Do not present this gate as tamper-proof
-until signing is switched on.
+TRUST BOUNDARY: this is a cooperative control within one owner-controlled
+installation. Unsigned actor strings are self-declared. With signing enabled,
+validate_approval verifies a grant against the configured public-key registry;
+that only establishes an independent identity boundary if approver private
+keys, registry changes and the consuming policy are protected from the caller.
+Sharing an OS identity or credentials does not provide that protection. Signing
+alone does not prevent raw execution, policy bypass or cross-host duplicate
+side effects. Deployments needing those guarantees require independent access
+controls and an execution/commit authority that enforces them.
 
-Deterministic: no clock reads, no randomness. The only I/O is reading the
-policy YAML file and (via `guarded_append`) scanning the space's event log.
+The local policy lock serializes cooperating appenders on this host. It does
+not serialize an independent host or an unguarded writer.
+
 """
 
 from __future__ import annotations
@@ -236,10 +234,9 @@ def requires_cosign(policy: Policy, event_type: str, payload: dict) -> bool:
     """True iff `event_type == "item.create"` and `payload["effects"]`
     intersects `policy.cosign_effects`.
 
-    Only `item.create` is ever gated -- downstream lifecycle events
-    (`item.claim`, `item.complete`, ...) against an already-created item
-    never require a (re-)grant, regardless of their `effects`. A missing or
-    empty `effects` payload never requires cosign.
+    This predicate identifies effectful proposals. guarded_append also applies
+    it to post-update and claimed content and retains an existing approval
+    requirement. A missing or empty effects list alone does not require cosign.
     """
     if event_type != "item.create":
         return False
@@ -286,67 +283,17 @@ def _guarded_append_locked(
     policy: Policy | None = None,
     space_dir: Path | None = None,
 ) -> Event:
-    """Append `type`/`payload` to `log`, enforcing the cosign gate first.
+    """Validate the writer and exact resulting content before appending.
 
-    For any `item.create`, `payload.get("effects")` -- if present at all --
-    must be a `list`, checked BEFORE `requires_cosign` ever looks at it:
-    a malformed `effects` (e.g. a bare string, which Python would happily
-    iterate character-by-character) fails closed with `PolicyError` rather
-    than silently deciding gating from garbage. (`requires_cosign` itself
-    stays permissively typed -- this is the one place that pre-validates
-    for it.)
+    Creation authority and effect vocabulary are checked on create. Updates
+    preserve creation authority and validate the same merged content as replay.
+    Claims bind current content and revalidate approval, assignment, policy and
+    availability. An already approved item keeps its approval requirement even
+    if an unguarded update removes its effects. Explicit reconciliation is
+    required before conflicted content can be edited or claimed.
 
-    Immediately after that shape check, every effect named in the list is
-    checked against `policy.effective_known_effects` (the closed effects
-    vocabulary -- see module docstring). ANY effect not in that set raises
-    `PolicyError` naming it, unconditionally -- this runs regardless of
-    whether `requires_cosign` would even trigger, so a typo'd effect can
-    never silently bypass cosign by simply failing to match
-    `cosign_effects` either.
-
-    If `requires_cosign(policy, type, payload)` is False, this is exactly
-    `log.append(type, payload)` -- non-gated events pass straight through,
-    untouched. (Duplicate/replay `item.create`s for the same `id` are NOT
-    rejected here when ungated -- that is `ledger.fold`'s business, which
-    already treats a second `item.create` against an existing id as a
-    history no-op.)
-
-    If it is True, ALL of the following must hold, checked in order, each
-    raising `PolicyError` naming exactly which one failed the instant it
-    fails (nothing later is even evaluated):
-      1. `payload["approval_ref"]` is present/non-empty.
-      2. It is the `hash` of an existing event in the space (found via
-         `read_events(space_dir)`, which merges every actor's file).
-      3. That event's `type` is `"approval.grant"`.
-      4. That event's `actor` equals `policy.approver`.
-      5. `payload["id"]` (the new event's own id) is a non-empty string --
-         checked explicitly, and BEFORE the comparison below, so a
-         cosign-gated create with no `id` at all can never slip through by
-         coincidentally matching an equally id-less grant (both sides
-         defaulting to `None` would otherwise compare equal -- the
-         vacuous-match bypass this method must never allow).
-      6. The matched grant's `payload["item"]` is ALSO a non-empty string
-         -- likewise checked explicitly before comparing, for the same
-         reason: a grant with no item binding must never validate any
-         create, no matter what that create's `id` is (or isn't).
-      7. `payload["id"] == grant.payload["item"]`.
-      8. No event in the space is already an `item.create` with this same
-         `id` -- a granted `approval_ref` authorizes creating an item
-         exactly once; replaying the same ref against a second attempt at
-         the same `id` is rejected as "item already created", not
-         silently re-validated.
-
-    All of the above happens BEFORE `log.append` is called, so a rejected
-    event never touches the log file.
-
-    `policy` defaults to `load_policy()` (the tracked default path).
-    `space_dir` defaults to `log.space_dir` (the space `log` itself writes
-    into) -- a space with zero events yet is handled the same as any other:
-    the ref simply won't be found.
-
-    See the module docstring's TRUST BOUNDARY note: every actor check here
-    is a string comparison against a self-declared field, not yet a
-    cryptographic guarantee (that requires `DATACORE_LEDGER_SIGN=1`).
+    A rejected operation never calls log.append. The caller holds this space's
+    local policy lock; this does not establish distributed execution exclusion.
     """
     policy = policy if policy is not None else load_policy()
 
@@ -358,6 +305,13 @@ def _guarded_append_locked(
         item = fold(events).items.get(payload.get("id"))
         if item is None:
             raise PolicyError("item does not exist")
+        if item.edit_conflicts:
+            resolution = payload.get('_merge')
+            if (type != 'item.update' or not isinstance(resolution, dict)
+                    or not isinstance(resolution.get('resolves'), list)
+                    or not all(isinstance(key, str) for key in resolution['resolves'])
+                    or not set(item.edit_conflicts).issubset(resolution.get('resolves', []))):
+                raise PolicyError('unresolved replicated edits require explicit reconciliation')
         previously_approved = any(e.type == "item.create" and e.payload.get("id") == item.id
                                   and e.payload.get("approval_ref") for e in events)
         if type == "item.update":
@@ -370,10 +324,11 @@ def _guarded_append_locked(
             allowed, reason = check_override(log.actor, item.id, space_dir, policy)
             if not allowed:
                 raise PolicyError(reason)
-            merged = {**item.payload, **payload}
-            if isinstance(payload.get("org"), dict) and isinstance(item.payload.get("org"), dict):
-                merged["org"] = {**item.payload["org"], **payload["org"]}
-            payload = merged
+            from .edits import EditConflict, update_payload
+            try:
+                payload = update_payload(item, payload)
+            except EditConflict as exc:
+                raise PolicyError(str(exc)) from exc
         else:
             payload = dict(item.payload)
 

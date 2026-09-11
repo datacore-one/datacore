@@ -533,7 +533,7 @@ These will appear in tomorrow's /today briefing.
 >
 > That filter is deliberate — without it the first live pull reported "343 claimable items" and agents would have started working through a personal backlog unattended across five machines. The consequence for this step: **queueing a task into `nightshift.org` does not make it available to the v2 fleet, and never will.** Nightshift picks it up; `ledger_claim` does not.
 >
-> Every space is still at DIP-0043 Phase 0 (no `phase1-active` marker anywhere), so this step's org writes remain correct. When a space flips to Phase 1 its `next_actions.org` becomes generated and read-only, and this step's task movement must become event emission for that space. Check the marker before assuming; the answer is per-space and never "the whole installation is on v2".
+> Determine each space's mode from its `.datacore/ledger-phase` file; `1` means `org/next_actions.org` is an editable ledger projection. Do not infer mode from the obsolete `phase1-active` marker or assume every space shares one mode. Use the canonical adapter for supported updates and completions. A refused projection or reconciliation means preserve the files and resolve the disagreement; it is never permission to force a replacement. Direct file movement from a generated projection requires corresponding ledger reconciliation.
 
 **Main AI delegation happens here via Nightshift module:**
 

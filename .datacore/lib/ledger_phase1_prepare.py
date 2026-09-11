@@ -1,158 +1,113 @@
 #!/usr/bin/env python3
-"""Make a space's ledger and its org file agree, in the ledger, before Phase 1.
+"""Reconcile authored next_actions.org before enabling generated projections.
 
-Two things keep a space's shadow diff dirty for months and neither is fixed by
-editing org:
+Only Phase 0 source edits are eligible. An absent ID or similar title never
+proves that a ledger item is disposable: unmatched items remain intact and
+will be added to the projection. Destructive deduplication requires an
+explicit, separately reviewed operator decision with retained history.
 
-  TWINS    After the 2026-08-11 id regeneration, every task in org carried a new
-           id and the next ingest created a NEW ledger item for each. The old
-           items stayed live with no org task. 2-datacore: 271 of 272 orphans
-           have a same-title task alive under another id. Retire the old one
-           as housekeeping (never as abandoned work), naming the twin.
-  DRIFT    Ingest fills holes; it never removes a tag or rewrites a title the
-           ledger already holds. A task whose tags or title moved in org stays
-           "changed" forever. Emit the org values as an update.
-
-Ledger only: this never touches an org file. Dry-run by default.
-
-    ledger_phase1_prepare.py --space 2-datacore [--root DIR] [--actor mac] [--apply]
+Dry-run by default. Conditional edits require every active reader to have
+been upgraded and ledger-edit-protocol=1 enabled before --apply.
 """
 from __future__ import annotations
 
 import argparse
-import collections
-import inspect
+from copy import deepcopy
+import hashlib
 import os
-import re
-import sys
 from pathlib import Path
+import sys
 
 LIB = Path(__file__).resolve().parent
 sys.path.insert(0, str(LIB))
+from ledger.edits import EditConflict, conditional_payload, update_payload  # noqa: E402
 from ledger.fold import fold  # noqa: E402
 from ledger.log import EventLog, read_events  # noqa: E402
-
-LIVE = ("created", "claimed", "granted")
-STATE_RE = re.compile(r"^\*+\s+(?:(?:TODO|NEXT|DONE|WAITING|REVIEW|CANCELLED|DEFERRED|QUEUED)\s+)?(?:\[#[A-C]\]\s+)?(.*?)(?:\s+:[^\s]+:)?\s*$")
-ID_RE = re.compile(r"^\s*:ID:\s*(\S+)\s*$")
-TAGS_RE = re.compile(r"\s+:([^\s:]+(?::[^\s:]+)*):\s*$")
+from ledger.projector import project  # noqa: E402
+from ledger.projection_state import snapshot  # noqa: E402
+from org_transaction import serialized, watch_file  # noqa: E402
 
 
-def norm(title: str) -> str:
-    return re.sub(r"\s+", " ", title or "").strip().lower()
-
-
-def org_index(space: Path) -> tuple[dict[str, dict], dict[str, list[str]]]:
-    """id -> {title, tags (effective, minus filetags)}; normalised title -> [ids].
-
-    Effective tags, not heading tags: the ledger's fingerprint is inherited
-    tags included (ledger_checkpoint._fingerprint), so comparing against the
-    heading alone would "fix" every child task by stripping what it inherits.
-    """
-    from org_workspace import OrgWorkspace
-    by_id: dict[str, dict] = {}
-    by_title: dict[str, list[str]] = collections.defaultdict(list)
-    for f in sorted((space / "org").glob("*.org")):
-        ws = OrgWorkspace()
-        try:
-            ws.load(f)
-        except Exception as exc:  # noqa: BLE001
-            print(f"  skip {f.name}: {exc}", file=sys.stderr); continue
-        filetags = set()
-        for line in f.read_text(errors="replace").splitlines()[:40]:
-            m = re.match(r"#\+FILETAGS:\s*:?(.*?):?\s*$", line, re.I)
-            if m:
-                filetags = {t for t in m.group(1).split(":") if t}
-        for node in ws.all_nodes():
-            props = node.properties or {}
-            tid = props.get("ID")
-            if not tid:
-                continue
-            eff = sorted(set(node.tags or []) - filetags)
-            own = sorted(set(node.shallow_tags or []) - filetags)
-            by_id[tid] = {"title": (node.heading or "").strip(), "tags": eff, "own": own, "state": node.todo}
-            by_title[norm(node.heading or "")].append(tid)
-    return by_id, by_title
-
-
-def _open_log(space: Path, actor: str) -> EventLog:
-    params = list(inspect.signature(EventLog.__init__).parameters)
-    kwargs = {}
-    for name in params[1:]:
-        if name in ("space", "space_dir", "root"):
-            kwargs[name] = space
-        elif name in ("events_dir", "log_dir", "path"):
-            kwargs[name] = space / ".datacore" / "events"
-        elif name == "actor":
-            kwargs[name] = actor
-    return EventLog(**kwargs)
-
-
+@serialized
 def plan(space: Path) -> dict:
+    marker = watch_file(space / '.datacore/ledger-phase')['before']
+    if marker is not None and marker.strip() != '0':
+        raise EditConflict('preparation requires authored Phase 0; generated edits must use normal ingestion')
+    text = watch_file(space / 'org/next_actions.org')['before']
+    if text is None:
+        raise EditConflict('authored next_actions.org is missing; preserve the ledger')
     state = fold(read_events(space))
-    by_id, by_title = org_index(space)
-    live = [i for i in state.items.values() if i.status in LIVE and not (i.payload or {}).get("section")]
-    dismiss, update, close = [], [], []
-    for item in live:
-        if item.id in by_id:
-            org = by_id[item.id]
-            p = item.payload or {}
-            # STATE: org says finished, the ledger still says live. Nothing ever
-            # emitted item.complete for an org task (the blind span); the
-            # projection would resurrect it as open. Close it the way org did.
-            # item.complete is legal only after a claim, and nobody claimed
-            # these; a dismiss with kind "done" records a finish honestly.
-            if org.get("state") == "DONE":
-                close.append((item.id, "done", "done in org before Phase 1"))
-                continue
-            if org.get("state") == "CANCELLED":
-                close.append((item.id, "dropped", "cancelled in org before Phase 1"))
-                continue
-            eff = sorted(set(p.get("effective_tags") or p.get("tags") or []) - set(p.get("filetags") or []))
-            if norm(item.title) != norm(org["title"]) or eff != org["tags"]:
-                update.append((item.id, org["title"], org["tags"], org["own"]))
+    source = snapshot(text, space.name)['items']
+    rendered = snapshot(project(state, space=space.name).text, space.name)['items']
+    events = []
+    for identity, fields in source.items():
+        item = state.items.get(identity)
+        if item is None:
+            raise EditConflict('source heading is not in the ledger; ingest before preparation')
+        if identity not in rendered:
+            raise EditConflict('source contains a nonprojectable item; preserve and reconcile its history explicitly')
+        changes = {key: value for key, value in fields.items()
+                   if key != 'created' and value != rendered[identity].get(key)}
+        if not changes:
             continue
-        twins = [t for t in by_title.get(norm(item.title), []) if t != item.id]
-        if twins:
-            dismiss.append((item.id, f"duplicate: superseded by {twins[0]} after the 2026-08-11 id regeneration"))
-        else:
-            dismiss.append((item.id, "no org task in this space at Phase 1 preparation"))
-    return {"live": len(live), "dismiss": dismiss, "update": update, "close": close}
+        if item.status != 'created':
+            raise EditConflict('cannot automatically edit an item whose execution or closure has started')
+        terminal = changes.get('state') in ('DONE', 'CANCELLED')
+        kind = 'done' if changes.get('state') == 'DONE' else 'dropped'
+        if terminal:
+            changes.pop('state')
+        expected = deepcopy(item)
+        if changes:
+            update = conditional_payload(item, changes)
+            events.append({'type': 'item.update', 'payload': update})
+            expected.payload = update_payload(item, update)
+        if terminal:
+            events.append({'type': 'item.dismiss', 'payload': conditional_payload(expected,
+                {'kind': kind, 'reason': 'explicit terminal state in authored Phase 0 Org'}, terminal=True)})
+    return {'version': 1, 'state_root': state.state_root(),
+            'source_sha256': hashlib.sha256(text.encode()).hexdigest(),
+            'events': events, 'unmatched': sorted(set(rendered) - set(source))}
 
 
-def apply(space: Path, actor: str, p: dict) -> int:
-    log = _open_log(space, actor)
-    n = 0
-    for iid, reason in p["dismiss"]:
-        log.append("item.dismiss", {"id": iid, "reason": reason, "kind": "housekeeping"}); n += 1
-    for iid, title, tags, own in p["update"]:
-        # both fields: the fingerprint falls back to `tags` when `effective_tags` is empty
-        log.append("item.update", {"id": iid, "title": title, "tags": own, "effective_tags": tags}); n += 1
-    for iid, kind, reason in p.get("close", []):
-        log.append("item.dismiss", {"id": iid, "reason": reason, "kind": kind}); n += 1
-    return n
+@serialized
+def apply(space: Path, actor: str, proposed: dict) -> int:
+    # Check the full plan again, including source bytes and event state. A
+    # caller cannot silently apply an old plan after either side changed.
+    if plan(space) != proposed:
+        raise EditConflict('preparation plan is stale; review a fresh plan')
+    log = EventLog(space, actor)
+    for event in proposed['events']:
+        log.append(event['type'], event['payload'])
+    # A concurrent append can still arrive on another writer's chain. Its
+    # preconditions preserve both proposals and make the conflict explicit.
+    if any(item.edit_conflicts for item in fold(read_events(space)).items.values()):
+        raise EditConflict('concurrent preparation conflict; proposals retained for explicit reconciliation')
+    return len(proposed['events'])
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--root", type=Path, default=Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data")))
-    ap.add_argument("--space", required=True)
+    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
+    ap.add_argument('--root', type=Path, default=Path(os.environ.get('DATACORE_ROOT', Path.home() / 'Data')))
+    ap.add_argument('--space', required=True)
     from actor_identity import this_actor
-    ap.add_argument("--actor", default=this_actor())
-    ap.add_argument("--apply", action="store_true")
-    a = ap.parse_args(argv)
-    space = a.root / a.space
-    p = plan(space)
-    twins = sum(1 for _, r in p["dismiss"] if r.startswith("duplicate"))
-    print(f"  {a.space}: live={p['live']} dismiss={len(p['dismiss'])} (twins {twins}, no-twin {len(p['dismiss']) - twins}) update={len(p['update'])} close={len(p.get('close', []))}")
-    for iid, title, tags, own in p["update"]:
-        print(f"    update {iid}: title={title[:50]!r} tags={tags}")
-    if not a.apply:
-        print("  dry run — re-run with --apply"); return 0
-    n = apply(space, a.actor, p)
-    print(f"  appended {n} event(s) as {a.actor}")
+    ap.add_argument('--actor', default=this_actor())
+    ap.add_argument('--apply', action='store_true')
+    args = ap.parse_args(argv)
+    space = args.root / args.space
+    try:
+        proposed = plan(space)
+        print(f"  {args.space}: {len(proposed['events'])} planned event(s); "
+              f"{len(proposed['unmatched'])} unmatched ledger item(s) preserved")
+        if not args.apply:
+            print('  dry run — review source changes, then re-run with --apply')
+            return 0
+        count = apply(space, args.actor, proposed)
+    except (EditConflict, OSError, UnicodeError) as exc:
+        print(f'REFUSED: {exc}', file=sys.stderr)
+        return 1
+    print(f'  appended {count} event(s) as {args.actor}')
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     raise SystemExit(main())

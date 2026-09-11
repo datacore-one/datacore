@@ -162,26 +162,10 @@ def _section_payload(node, space: str) -> dict:
     plain heading rather than a TODO, and so a consumer can filter them out
     when it wants tasks only.
     """
-    own = getattr(node, "shallow_tags", None)
-    tags = sorted(t for t in (own if own is not None else (node.tags or [])) if t)
-    return {
-        "id": node.get_property("ID"),
-        "title": node.heading,
-        "state": None,
-        "section": True,
-        "space": space,
-        "tags": tags,
-        #: The task's EFFECTIVE tags in the source file, inheritance included.
-        #: Normally redundant -- the projection rebuilds the tree, so org
-        #: re-derives them. But a task whose parent is DONE has no parent in
-        #: the projection, so it silently loses whatever it inherited from it.
-        #: Kept so a promoted orphan can carry its tags explicitly instead.
-        "effective_tags": sorted(t for t in (node.tags or []) if t),
-        "level": getattr(node, "level", None),
-        "parent": _parent_id(node),
-        "org": {"priority": None, "body": "", "properties": {}},
-        "genesis": {"date": GENESIS_FALLBACK, "rung": "section"},
-    }
+    date, rung = valid_time(node)
+    payload = task_payload(node, space, date, rung)
+    payload.update(section=True, state=None)
+    return payload
 
 
 def _outline(node) -> list[dict]:
@@ -215,6 +199,25 @@ def _outline(node) -> list[dict]:
     return chain
 
 
+def body_text(node) -> str:
+    """Raw body, excluding property continuations that the parser calls body.
+
+    NodeView.body is a display value: it removes Org link targets. Structured
+    line items retain source text and identify continuation lines by position.
+    """
+    raw = node.node
+    lines, drawer = [], False
+    for index, item in enumerate(raw._line_items):
+        kind = type(item).__name__
+        if kind == 'PropertyDrawerStartLine':
+            drawer = True
+        elif kind == 'PropertyDrawerEndLine':
+            drawer = False
+        elif not drawer and raw._is_body_line_item(index, item):
+            lines.append(item.render())
+    return '\n'.join(lines)
+
+
 def task_payload(node, space: str, date: str, rung: str) -> dict:
     """One task as an `item.create` payload.
 
@@ -237,13 +240,14 @@ def task_payload(node, space: str, date: str, rung: str) -> dict:
     # (firm, plur, research) came back as (firm, infra, plur, research,
     # security). Store what the task itself declares; let org-mode do
     # inheritance, which is its job.
+    from org_workspace._compat import get_multiline_property
     own = getattr(node, "shallow_tags", None)
     if own is None:
         own = node.tags or []
     tags = sorted(t for t in own if t)
     return {
         "id": node.get_property("ID"),
-        "title": node.heading,
+        "title": node.node.get_heading(format='raw'),
         "state": node.todo,
         "space": space,
         "scheduled": str(node.scheduled) if node.scheduled else None,
@@ -257,12 +261,13 @@ def task_payload(node, space: str, date: str, rung: str) -> dict:
         "effective_tags": sorted(t for t in (node.tags or []) if t),
         "org": {
             "priority": node.priority,
+            "created": node.get_property("CREATED") or None,
             # A second drawer inside the body (left behind by an id rewrite)
             # is structure, not prose; captured verbatim it made the
             # projection print an :ID: twice (5-plur, 2026-09-05..07).
-            "body": _strip_drawers(node.body or ""),
+            "body": body_text(node),
             "properties": {
-                k: v for k, v in (node.properties or {}).items()
+                k: get_multiline_property(node.node, k) for k in (node.properties or {})
                 if k not in ("ID", "CREATED")
             },
         },

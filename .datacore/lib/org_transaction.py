@@ -41,6 +41,14 @@ def move_file(source, destination):
     transaction.move(Path(source).absolute(), Path(destination).absolute())
 
 
+def delete_file(path):
+    """Remove a watched file with the same recovery guarantees as a write."""
+    transaction = _current.get()
+    if transaction is None:
+        raise RuntimeError("file deletion requires a serialized transaction")
+    transaction.delete(Path(path).absolute())
+
+
 def journal_path():
     state = Path(os.environ.get("DATACORE_STATE", Path.home() / ".datacore" / "state"))
     return state / "org-transaction.json"
@@ -155,6 +163,25 @@ class Transaction:
                     atomic_write_json(self.path, {"version": 1, "files": self.files})
                 raise
             src["current"], dst["current"] = None, digest(content)
+        except BaseException:
+            self.failed = True
+            raise
+
+    def delete(self, path):
+        if path.is_symlink():
+            raise RecoveryRequired("refusing symbolic-link deletion")
+        entry = self.watch(path)
+        if digest(read_text(path)) != entry["current"]:
+            raise RecoveryRequired("file changed before deletion")
+        if entry["current"] is None:
+            return
+        try:
+            entry["versions"].append(None)
+            atomic_write_json(self.path, {"version": 1, "files": self.files})
+            self.started = True
+            path.unlink()
+            fsync_directory(path.parent)
+            entry["current"] = None
         except BaseException:
             self.failed = True
             raise

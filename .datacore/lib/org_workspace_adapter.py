@@ -199,6 +199,7 @@ def _assignee_from_tags(file_path, tags):
 
 
 def _ledger_emit(file_path, event_type, payload):
+    authoritative = False
     try:
         import os as _os
         space = None
@@ -212,9 +213,19 @@ def _ledger_emit(file_path, event_type, payload):
         from ledger.log import EventLog
         from actor_identity import this_actor
         actor = this_actor()
-        EventLog(space, actor).append(event_type, payload)
+        from ledger_project_org import phase, ORG
+        authoritative = phase(space) == 1
+        if authoritative and Path(file_path).resolve() == (space / ORG).resolve() and event_type in ('item.update', 'item.dismiss'):
+            from ledger.fold import fold
+            from ledger.log import read_events
+            from ledger.projection_state import sync_generated
+            sync_generated(space, fold(read_events(space)), actor)
+        else:
+            EventLog(space, actor).append(event_type, payload)
         return actor
-    except Exception:      # noqa: BLE001 — see the note above
+    except Exception:      # Phase 0 keeps authored Org as its durable source.
+        if authoritative:
+            raise  # Phase 1 must not acknowledge a failed authoritative write.
         return None
 
 def _observed(file_path, task_id, keys):
@@ -364,32 +375,13 @@ def cmd_add(args):
         # changes that set_property() left in memory.
         ws.save(file_path)
 
-    _create_payload = {
-        "id": node_id, "title": args.heading, "state": "TODO",
-        "tags": sorted(tags) if tags else None,
-        "scheduled": getattr(args, "scheduled", None) or None,
-        "space": file_path.parent.parent.name,
-        # Who asked, and how deep the chain is (stage 5). The hop count is
-        # inherited from the environment an executor sets for the agent it
-        # runs (DATACORE_HOPS = its own item's hops + 1), so a chain of
-        # agents creating work for each other is visible and bounded.
-        "requested_by": getattr(args, "requested_by", None) or _os.environ.get("DATACORE_REQUESTED_BY") or None,
-        "hops": int(_os.environ.get("DATACORE_HOPS") or 0),
-        # The drawer travels with the item. Without it a Phase 1 space (org
-        # generated from the ledger) regenerated every adapter-created task
-        # with an empty drawer: SURFACE, DONE_WHEN and JOB, the properties the
-        # AI gate and the job verifier key on, vanished on the next projection
-        # (0 of them in 2-datacore's file on 2026-09-05). Same shape genesis
-        # records, so the projector renders both identically.
-        "org": {
-            "priority": getattr(args, "priority", None) or None,
-            "body": (getattr(args, "body", None) or "").replace("\\n", "\n"),
-            "properties": {
-                **{k: str(v) for k, v in extra_props.items() if k not in ("ID", "CREATED")},
-                **{k: str(v) for k, v in multiline_props.items()},
-            },
-        },
-    }
+    from ledger.genesis import task_payload, valid_time
+    created_date, rung = valid_time(node)
+    _create_payload = task_payload(node, file_path.parent.parent.name, created_date, rung)
+    _create_payload.update(
+        requested_by=getattr(args, "requested_by", None) or _os.environ.get("DATACORE_REQUESTED_BY") or None,
+        hops=int(_os.environ.get("DATACORE_HOPS") or 0),
+    )
     _assignee = _assignee_from_tags(file_path, sorted(tags) if tags else None)
     if _assignee:
         _create_payload["assignee"] = _assignee
@@ -441,7 +433,7 @@ def cmd_complete(args):
     # every other reader consults -- stays wrong until the nightly sweep.
     emitted = _ledger_emit(file_path, "item.dismiss", {
         "id": node.id(),
-        "kind": "completed",
+        "kind": "done",
         "reason": "completed via org_workspace_adapter",
     })
     return {"completed": True, "heading": node.heading, "id": node.id(),
@@ -1002,21 +994,22 @@ def cmd_update(args):
 
     ws.save(file_path)
 
-    # Same reason as cmd_complete: an org-only property edit is lost on the next
-    # projection. Carry the CURRENT state of the fields this command can touch,
-    # so a reader folding the ledger sees what the file says.
-    _props = {k: str(v) for k, v in (node.properties or {}).items()
-              if k not in ("ID", "CREATED")}
-    _payload = {
-        "id": node.id(),
-        "title": node.heading,
-        "org": {
-            "priority": getattr(node, "priority", None) or None,
-            "properties": _props,
-        },
-    }
-    if node.todo:
-        _payload["org"]["state"] = node.todo
+    from ledger.genesis import task_payload, valid_time
+    created_date, rung = valid_time(node)
+    current = task_payload(node, file_path.parent.parent.name, created_date, rung)
+    _props = current['org']['properties']
+    _payload = {'id': node.id()}
+    if getattr(args, 'new_heading', None):
+        _payload['title'] = current['title']
+    if args.state:
+        _payload['state'] = current['state']
+    if args.tags:
+        _payload['tags'] = current['tags']
+        _payload['effective_tags'] = current['effective_tags']
+    if args.scheduled:
+        _payload['scheduled'] = current['scheduled']
+    if getattr(args, 'property', None):
+        _payload['org'] = {'properties': _props}
     emitted = _ledger_emit(file_path, "item.update", _payload)
 
     _keys = set(_props) | {"STATE", "SCHEDULED", "DEADLINE"}

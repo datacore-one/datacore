@@ -4,13 +4,21 @@
 #   converge  this host's ledger logs with everyone else's (git transport)
 #   project   for spaces in Phase 1 only: org/next_actions.org <- ledger
 # Order is the whole point: projecting before ingesting loses a hand edit.
-set -u
+set -uo pipefail
 export DATACORE_ROOT="${DATACORE_ROOT:-$HOME/Data}"
 # The scripts come from THIS checkout (a runner worktree on main is fine); only
 # the data root is DATACORE_ROOT. A host whose ~/Data sits on someone's feature
 # branch still runs current tooling against its own data.
 LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-STATE="$HOME/.datacore/state"; mkdir -p "$STATE"
+STATE="${DATACORE_STATE:-$HOME/.datacore/state}"
+mkdir -p "$STATE" || exit 2
+finish() {
+  local result="$1"
+  local label=FAIL
+  [ "$result" -eq 0 ] && label=OK
+  printf "%s phase1-cycle %s rc=%s\n" "$label" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$result" > "$STATE/phase1-cycle-status.txt" || return 2
+  return "$result"
+}
 PY=""
 for c in "${DATACORE_PYTHON:-}" python3.13 python3.12 python3.11 python3.10 /opt/homebrew/bin/python3 /usr/local/bin/python3 python3; do
   [ -n "$c" ] || continue; command -v "$c" >/dev/null 2>&1 || continue
@@ -30,17 +38,31 @@ echo "=== $(date -u '+%F %H:%MZ') phase-1 cycle ==="
 # were flipped on the mac; the box's cycle regenerated five and left four
 # stale until the next fleet sync. Only directories that carry an event log
 # are spaces; archives and stray checkouts under the root are not.
+rc=0
 for d in "$DATACORE_ROOT"/[0-9]-*; do
   [ -d "$d/.datacore/events" ] && [ -d "$d/.git" ] || continue
-  "$PY" "$LIB/ledger_transport.py" converge --space "$d" > "$STATE/phase1-converge-$(basename "$d").log" 2>&1 || echo "converge $(basename "$d"): $(grep -o '"reason": "[^"]*"' "$STATE/phase1-converge-$(basename "$d").log" | head -1)"
+  "$PY" "$LIB/ledger_transport.py" converge --space "$d" > "$STATE/phase1-converge-$(basename "$d").log" 2>&1 || { echo "converge $(basename "$d"): failed; see its log"; rc=1; }
 done
-PHASE1=$(for d in "$DATACORE_ROOT"/[0-9]-*; do [ -d "$d/.datacore/events" ] && [ "$(cat "$d/.datacore/ledger-phase" 2>/dev/null | tr -d '[:space:]')" = "1" ] && basename "$d"; done)
-if [ -z "$PHASE1" ]; then echo "no space in Phase 1; nothing to do"; exit 0; fi
-"$PY" "$LIB/ledger_ingest_org.py" --root "$DATACORE_ROOT" > "$STATE/phase1-ingest.log" 2>&1; echo "ingest  rc=$? $(tail -1 "$STATE/phase1-ingest.log" | cut -c1-100)"
-rc=0
-for s in $PHASE1; do
-  "$PY" "$LIB/ledger_transport.py" converge --space "$s" > "$STATE/phase1-converge-$s.log" 2>&1 || { echo "converge $s: $(grep -o '"reason": "[^"]*"' "$STATE/phase1-converge-$s.log" | head -1)"; rc=1; }
+# A failed receive may leave a merge in progress. Never ingest or replace
+# files from that intermediate state.
+if [ "$rc" -ne 0 ]; then finish "$rc"; exit $?; fi
+PHASE1=()
+for d in "$DATACORE_ROOT"/[0-9]-*; do
+  if [ -d "$d/.datacore/events" ] && [ "$(cat "$d/.datacore/ledger-phase" 2>/dev/null | tr -d '[:space:]')" = "1" ]; then
+    PHASE1+=("$d")
+  fi
 done
+if [ "${#PHASE1[@]}" -eq 0 ]; then echo "no space in Phase 1; nothing to do"; finish 0; exit $?; fi
+"$PY" "$LIB/ledger_ingest_org.py" --root "$DATACORE_ROOT" > "$STATE/phase1-ingest.log" 2>&1
+rc=$?
+echo "ingest rc=$rc"
+# Existing IDs do not prove that edited bodies/properties reached the ledger.
+# On any ingest failure preserve every source file and stop before projection.
+if [ "$rc" -ne 0 ]; then finish "$rc"; exit $?; fi
+for s in "${PHASE1[@]}"; do
+  "$PY" "$LIB/ledger_transport.py" converge --space "$s" > "$STATE/phase1-converge-$(basename "$s").log" 2>&1 || { echo "converge $(basename "$s"): failed; see its log"; rc=1; }
+done
+if [ "$rc" -ne 0 ]; then finish "$rc"; exit $?; fi
 # `... | grep -v authored ; echo "rc=$?"` read GREP's status, not the
 # projector's, so this printed `project rc=0` unconditionally -- a projection
 # crash, and every REFUSED line, exited 0 and alerted nobody. PIPESTATUS[0] is
@@ -50,14 +72,5 @@ prc=${PIPESTATUS[0]}
 echo "project rc=$prc"
 [ "$prc" -eq 0 ] || rc=$prc
 
-# One truncated line a job contract can assert on. Without it this cycle is the
-# only unverified step in the Phase 1 loop: it appears in no jobs/manifest.yaml
-# entry, so nothing has ever checked that it ran, let alone that it succeeded.
-if [ "$rc" -eq 0 ]; then
-  echo "OK phase1-cycle $(date -u +%Y-%m-%dT%H:%M:%SZ) spaces=$(echo $PHASE1 | wc -w | tr -d ' ')" \
-    > "$STATE/phase1-cycle-status.txt"
-else
-  echo "FAIL phase1-cycle $(date -u +%Y-%m-%dT%H:%M:%SZ) rc=$rc" \
-    > "$STATE/phase1-cycle-status.txt"
-fi
-exit $rc
+finish "$rc"
+exit $?

@@ -32,11 +32,13 @@ them. Anything excluded is printed under its reason, so the claim is auditable.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
-import re
 import sys
 from pathlib import Path
+
+from packaging.requirements import Requirement
 
 DATACORE_ROOT = Path(__file__).resolve().parents[1]
 
@@ -99,23 +101,33 @@ EXCLUDE = {
     "playwright==1.49.1": "forge browser automation",
 }
 
-_NAME = re.compile(r"^([A-Za-z0-9._-]+)")
-
-
 def parse(path: Path) -> list[str]:
-    """Distribution names declared in one requirements file."""
+    """Validated requirements, retaining version and marker constraints.
+
+    Unsupported pip directives are errors, never an empty healthy report.
+    Include files are resolved relative to their declaring file.
+    """
+    return _parse(path, set())
+
+
+def _parse(path: Path, visiting: set[Path]) -> list[str]:
+    path = path.resolve()
+    if path in visiting:
+        raise ValueError(f"recursive requirements include: {path.name}")
+    visiting = visiting | {path}
     out: list[str] = []
-    try:
-        text = path.read_text()
-    except OSError:
-        return out
-    for line in text.splitlines():
+    for line in path.read_text().splitlines():
         line = line.split("#", 1)[0].strip()
-        if not line or line.startswith("-"):
+        if not line:
             continue
-        m = _NAME.match(line)
-        if m:
-            out.append(m.group(1).lower())
+        if line.startswith(("-r ", "--requirement ")):
+            out.extend(_parse(path.parent / line.split(None, 1)[1], visiting))
+            continue
+        requirement = Requirement(line)
+        if requirement.url:
+            raise ValueError(f"cannot verify source identity for {requirement.name}")
+        if requirement.marker is None or requirement.marker.evaluate():
+            out.append(str(requirement))
     return out
 
 
@@ -164,19 +176,31 @@ def importable(dist: str) -> tuple[bool, str, str]:
     outright rather than raise, and that must be reported, not take the report
     down with it.
     """
-    mod = IMPORT_NAME.get(dist, dist.replace("-", "_"))
+    requirement = Requirement(dist)
+    name = requirement.name.lower().replace("_", "-")
+    mod = IMPORT_NAME.get(name, name.replace("-", "_"))
     venv = _venv_site_packages()
     env = dict(os.environ)
-    if venv:
-        env["PYTHONPATH"] = os.pathsep.join(
-            [p for p in (venv, env.get("PYTHONPATH")) if p])
-    code = (f"import {mod} as _m, sys; "
-            f"print(getattr(_m, '__file__', '') or 'builtin')")
-    proc = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True, text=True, timeout=180, env=env)
+    # Match activate(): append, never prepend. Prepending a newer fallback
+    # would pass while a scheduled job still imports the older system copy.
+    code = ("import sys, importlib, importlib.metadata as md, json; "
+            f"fallback={venv!r}; "
+            "sys.path.extend([fallback] if fallback and fallback not in sys.path else []); "
+            f"module=importlib.import_module({mod!r}); "
+            f"print(json.dumps([getattr(module, '__file__', '') or 'builtin', md.version({requirement.name!r})]))")
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True, text=True, timeout=180, env=env)
+    except subprocess.TimeoutExpired:
+        return False, "", "import timed out after 180s"
     if proc.returncode == 0:
-        where = (proc.stdout or "").strip()
+        try:
+            where, version = json.loads(proc.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            return False, "", "invalid import probe result"
+        if not requirement.specifier.contains(version, prereleases=True):
+            return False, "", f"installed {version}, requires {requirement.specifier}"
         loc = "venv" if venv and where.startswith(venv) else "system"
         return True, loc, ""
     tail = (proc.stderr or "").strip().splitlines()
@@ -191,16 +215,24 @@ def main() -> int:
     a = ap.parse_args()
 
     wanted: dict[str, list[str]] = {}
-    for f in files_for(a.profile):
-        for dist in parse(f):
-            wanted.setdefault(dist, []).append(
-                str(f.relative_to(DATACORE_ROOT)))
+    try:
+        for f in files_for(a.profile):
+            for dist in parse(f):
+                wanted.setdefault(dist, []).append(
+                    str(f.relative_to(DATACORE_ROOT)))
+    except (OSError, ValueError) as exc:
+        print(f"cannot verify requirements: {exc}", file=sys.stderr)
+        return 1
+    if not wanted:
+        print("cannot verify an empty dependency profile", file=sys.stderr)
+        return 1
 
     missing, excluded, ok = [], [], []
     why: dict[str, str] = {}
     for dist in sorted(wanted):
-        if dist in EXCLUDE:
-            excluded.append(dist)
+        name = Requirement(dist).name.lower().replace("_", "-")
+        if name in EXCLUDE:
+            excluded.append(name)
             continue
         good, loc, err = importable(dist)
         if good:

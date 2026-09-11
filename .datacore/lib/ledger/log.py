@@ -204,6 +204,9 @@ class EventLog:
         """
         if type not in EVENT_TYPES:
             raise ValueError(f"unknown event type: {type!r} (expected one of {sorted(EVENT_TYPES)})")
+        if type in ('item.update', 'item.dismiss') and isinstance(payload, dict) and '_merge' in payload:
+            from .edits import require_edit_protocol
+            require_edit_protocol(self.space_dir)
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # "a+b": creates the file if absent, allows both read (for the tail)

@@ -19,20 +19,26 @@ safe to call unconditionally.
 
 from __future__ import annotations
 
-import glob
 import os
 import sys
+import sysconfig
 
 _DATA_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def venv_site_packages(data_root: str | None = None) -> str | None:
-    """Return the venv's site-packages path, or None if there is no venv."""
+    """Return only a fallback compatible with this interpreter's Python ABI.
+
+    A venv created by another Python minor version is not an import directory
+    for this process, even when some pure-Python packages happen to work.
+    Free-threaded Python also uses a distinct extension ABI (the ``t`` suffix).
+    """
     root = data_root or _DATA_ROOT
-    matches = sorted(
-        glob.glob(os.path.join(root, "venv", "lib", "python*", "site-packages"))
-    )
-    return matches[-1] if matches else None
+    version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    if sysconfig.get_config_var("Py_GIL_DISABLED"):
+        version += "t"
+    path = os.path.join(root, "venv", "lib", version, "site-packages")
+    return path if os.path.isdir(path) else None
 
 
 def activate(data_root: str | None = None) -> bool:
