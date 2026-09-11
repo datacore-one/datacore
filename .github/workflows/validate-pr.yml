@@ -98,6 +98,8 @@ jobs:
             .datacore/lib/tests/test_credential_preservation.py \
             .datacore/lib/tests/test_env_configuration.py \
             .datacore/lib/tests/test_ledger_ingest_org.py \
+            .datacore/lib/tests/test_ledger_transport.py \
+            .datacore/lib/tests/test_transport_foreign_writer.py \
             .datacore/lib/tests/test_git_privacy.py \
             .datacore/lib/tests/test_git_preservation.py \
             .datacore/lib/tests/test_ledger_publish_safe.py \
