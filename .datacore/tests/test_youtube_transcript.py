@@ -443,7 +443,7 @@ class TestFetchMetadata:
         mock_run.assert_called_once()
         args = mock_run.call_args
         cmd = args[0][0] if args[0] else args[1].get('args', [])
-        assert 'yt-dlp' in cmd
+        assert Path(cmd[0]).name == 'yt-dlp'
         assert '--dump-json' in cmd
         assert '--no-download' in cmd
         assert 'https://www.youtube.com/watch?v=abc123' in cmd
@@ -521,7 +521,7 @@ class TestFetchPlaylistVideos:
         mock_run.assert_called_once()
         args = mock_run.call_args
         cmd = args[0][0] if args[0] else args[1].get('args', [])
-        assert 'yt-dlp' in cmd
+        assert Path(cmd[0]).name == 'yt-dlp'
         assert '--flat-playlist' in cmd
         assert '--dump-json' in cmd
 

@@ -21,8 +21,8 @@ Usage:
        echo '{"type":"query","id":"probe-1","prompt":"read /tmp/probe-test.txt then write /tmp/probe-test.out","cwd":"/tmp"}' \
          | timeout 30 node chat-sidecar.mjs
 
-  2. Inspect the resulting file: cat /tmp/datacore-hook-env-probe.json
-     Expected: {"DATACORE_HEADLESS": "1", ...}
+  2. Inspect the private hook-state directory under DATACORE_STATE or ~/.datacore/state
+     Expected: {"DATACORE_HEADLESS": true, ...}
      If empty/missing keys → env did NOT propagate.
 
 This script is intended to be wired as a PreToolUse hook on a temp
@@ -35,15 +35,18 @@ import os
 import pathlib
 import sys
 
-OUT = pathlib.Path("/tmp/datacore-hook-env-probe.json")
+from file_utils import atomic_write_json
+from hook_state import state_path
 
-env_snapshot = {k: v for k, v in os.environ.items() if k.startswith("DATACORE_") or k == "CLAUDE_AGENT_SDK"}
-OUT.write_text(json.dumps(env_snapshot, sort_keys=True, indent=2))
 
-# Hook contract: PreToolUse hooks read JSON from stdin. Pass it through so we
-# don't break tool execution.
-try:
-    payload = sys.stdin.read()
-    sys.stdout.write(payload)
-except Exception:
-    pass
+def main():
+    # Observe only the propagation flags this probe exists to test. Prefix
+    # matching would copy DATACORE_* credentials into diagnostics.
+    snapshot = {key: os.environ.get(key) == "1" for key in (
+        "DATACORE_HEADLESS", "DATACORE_NO_SPEND", "CLAUDE_AGENT_SDK")}
+    atomic_write_json(state_path("env-probe"), snapshot)
+    sys.stdout.write(sys.stdin.read())
+
+
+if __name__ == "__main__":
+    main()

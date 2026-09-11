@@ -49,6 +49,8 @@ settings:
   wake_word: "hey_datacore"
   stt_model: "medium"
   tts_engine: "kokoro"
+  # Explicit consent to send briefing text to Google if local TTS fails.
+  allow_cloud_tts: false
   tts_voice: "af_heart"
   tts_speed: 1.12   # 1.0 read as plodding at ~145 wpm; 1.12 lands ~162 wpm (Gregor, 2026-08-31)
   language: "en"

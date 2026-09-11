@@ -1,7 +1,7 @@
 # Datacore core dependencies
 pyyaml>=6.0
 org-workspace>=0.5.1   # main's pin kept: 0.5.1 was published 2026-08-10 to fix 7 dead nightshift services; the branch's >=0.4.4 would regress that
-cryptography>=41  # relaxed from >=42: box parity ruling 2026-07-30 (box pins an older cryptography)
+cryptography>=50.0.0  # includes current certificate, curve-validation and bundled OpenSSL fixes
 
 # Module deps that were never declared and so were never installed. Both
 # modules failed silently for weeks: news served 13-day-old cached headlines

@@ -238,10 +238,12 @@ EXEMPLARY | GOOD | NEEDS_WORK
 
 def run_review(prompt: str) -> str:
     """Run the review via Claude CLI, piping prompt via stdin."""
-    result = subprocess.run(
-        ['claude', '-p'],
+    from process_run import run as run_process
+    from text_model import claude_text_command
+    result = run_process(
+        claude_text_command(),
         input=prompt,
-        capture_output=True, text=True, timeout=300,
+        capture_output=True, text=True, timeout=300, check=True,
         cwd=str(DATA_DIR)
     )
     return result.stdout

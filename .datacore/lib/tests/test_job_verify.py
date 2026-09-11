@@ -669,12 +669,18 @@ def test_running_the_verifier_never_touches_production_recurrence_state(tmp_path
     Eleven test job names were found in the production file on 2026-09-03."""
     import json
     from pathlib import Path as _P
-    prod = _P.home() / ".datacore" / "state" / "job-verify-recurrence.json"
-    before = prod.read_bytes() if prod.exists() else None
+    home = tmp_path / "home"
+    monkeypatch.setattr(_P, "home", classmethod(lambda cls: home))
+    prod = home / ".datacore" / "state" / "job-verify-recurrence.json"
+    prod.parent.mkdir(parents=True)
+    prod.write_text('{"existing-job": {"consecutive": 2}}')
+    before = prod.read_bytes()
+    monkeypatch.delenv("DATACORE_STATE")
     import importlib.util
     spec = importlib.util.spec_from_file_location(
         "rec_iso", _P(__file__).parent.parent / "jobs" / "recurrence.py")
     rec = importlib.util.module_from_spec(spec); spec.loader.exec_module(rec)
+    monkeypatch.setenv("DATACORE_STATE", str(tmp_path / "state"))
     rec.record("isolation-probe-job", failed=True)
     assert (tmp_path / "state" / "job-verify-recurrence.json").exists(), "record() did not follow DATACORE_STATE"
     after = prod.read_bytes() if prod.exists() else None

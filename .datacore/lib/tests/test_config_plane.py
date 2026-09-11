@@ -701,14 +701,17 @@ def test_doctor_never_touches_os_environ(tmp_path, monkeypatch):
     assert sentinel_key not in os.environ
 
 
-def test_doctor_default_legacy_sources_is_module_constant(tmp_path):
+def test_doctor_default_legacy_sources_is_module_constant(tmp_path, monkeypatch):
     # legacy_sources=None (the default) means "use LEGACY_SOURCES" -- since
     # those real paths won't exist in a test sandbox, they're silently
     # skipped, but the call must not raise.
-    manifest = _write_manifest(tmp_path, [_job("mac-a", "mac")])
+    legacy = _write_file(tmp_path / "legacy.env", "FOO=bar\n")
+    monkeypatch.setattr(config_plane, "LEGACY_SOURCES", {"legacy.env": legacy})
+    manifest = _write_manifest(tmp_path, [_job("mac-a", "mac", ["FOO"])])
     canonical = _write_file(tmp_path / "canonical-env", "")
     report = doctor("mac", manifest_path=manifest, canonical_path=canonical)
     assert isinstance(report, DoctorReport)
+    assert "legacy.env" in report.table
 
 
 def test_doctor_default_canonical_path_is_canonical_path_constant(tmp_path, monkeypatch):

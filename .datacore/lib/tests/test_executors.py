@@ -378,7 +378,7 @@ class TestClaudeCodeAdapter:
         def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 0, stdout=fake_stdout, stderr="")
 
-        monkeypatch.setattr(claude_code_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(claude_code_mod, "run_process", fake_run)
         executor = claude_code_mod.ClaudeCodeExecutor()
 
         result = executor.run("hello")
@@ -399,7 +399,7 @@ class TestClaudeCodeAdapter:
         def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 0, stdout=fake_stdout, stderr="")
 
-        monkeypatch.setattr(claude_code_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(claude_code_mod, "run_process", fake_run)
         executor = claude_code_mod.ClaudeCodeExecutor()
 
         result = executor.run("hello")
@@ -418,7 +418,7 @@ class TestClaudeCodeAdapter:
         def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom: auth failed")
 
-        monkeypatch.setattr(claude_code_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(claude_code_mod, "run_process", fake_run)
         executor = claude_code_mod.ClaudeCodeExecutor()
 
         result = executor.run("hello")
@@ -442,7 +442,7 @@ class TestClaudeCodeAdapter:
         def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 0, stdout=fake_stdout, stderr="")
 
-        monkeypatch.setattr(claude_code_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(claude_code_mod, "run_process", fake_run)
         executor = claude_code_mod.ClaudeCodeExecutor()
 
         result = executor.run("hello")
@@ -474,7 +474,7 @@ class TestClaudeCodeAdapter:
         def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 0, stdout=fake_stdout, stderr="")
 
-        monkeypatch.setattr(claude_code_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(claude_code_mod, "run_process", fake_run)
         executor = claude_code_mod.ClaudeCodeExecutor()
 
         result = executor.run("hello")
@@ -494,7 +494,7 @@ class TestClaudeCodeAdapter:
         def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 0, stdout=fake_stdout, stderr="")
 
-        monkeypatch.setattr(claude_code_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(claude_code_mod, "run_process", fake_run)
         executor = claude_code_mod.ClaudeCodeExecutor()
 
         result = executor.run("hello")
@@ -519,7 +519,7 @@ class TestClaudeCodeAdapter:
         def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 0, stdout=fake_stdout, stderr="")
 
-        monkeypatch.setattr(claude_code_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(claude_code_mod, "run_process", fake_run)
         executor = claude_code_mod.ClaudeCodeExecutor()
 
         result = executor.run("hello")
@@ -547,11 +547,12 @@ class TestHermesAdapter:
         import executors.hermes as hermes_mod
 
         monkeypatch.setattr(hermes_mod.shutil, "which", lambda name: "/usr/bin/hermes")
+        monkeypatch.setattr(hermes_mod.os.path, "isfile", lambda path: True)
 
         def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 0, stdout="hermes reply\n", stderr="")
 
-        monkeypatch.setattr(hermes_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(hermes_mod, "run_process", fake_run)
         executor = hermes_mod.HermesExecutor()
 
         result = executor.run("hello")
@@ -566,11 +567,12 @@ class TestHermesAdapter:
         import executors.hermes as hermes_mod
 
         monkeypatch.setattr(hermes_mod.shutil, "which", lambda name: "/usr/bin/hermes")
+        monkeypatch.setattr(hermes_mod.os.path, "isfile", lambda path: True)
 
         def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="connection refused")
 
-        monkeypatch.setattr(hermes_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(hermes_mod, "run_process", fake_run)
         executor = hermes_mod.HermesExecutor()
 
         result = executor.run("hello")
@@ -712,7 +714,7 @@ class TestClaudeCodeSpawnContract:
             return subprocess.CompletedProcess(
                 cmd, 0, stdout=json.dumps({"result": "ok"}), stderr="")
 
-        monkeypatch.setattr(m.subprocess, "run", fake_run)
+        monkeypatch.setattr(m, "run_process", fake_run)
         m.ClaudeCodeExecutor().run("hello", cwd=cwd)
         return seen
 

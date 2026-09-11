@@ -57,7 +57,7 @@ continues; it is never silently dropped and never crashes the whole fold.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 from .events import Event
 
@@ -91,6 +91,7 @@ class ItemState:
     #: projector a second, divergent view of history. Copied (not aliased) so
     #: fold stays non-mutating over its input.
     payload: dict = field(default_factory=dict)
+    claimed_payload_hash: str | None = None
 
 
 @dataclass
@@ -124,11 +125,7 @@ class LedgerState:
         h = hashlib.sha256()
         for iid in sorted(self.items):
             it = self.items[iid]
-            h.update(canonical_bytes({
-                "id": iid, "title": it.title,
-                "owner": it.owner, "status": it.status,
-                "payload": it.payload or {},
-            }))
+            h.update(canonical_bytes({"key": iid, "item": asdict(it)}))
         h.update(canonical_bytes({"spend": dict(sorted(self.spend.items()))}))
         h.update(canonical_bytes({"orphans": sorted(self.orphans)}))
         return h.hexdigest()
@@ -240,6 +237,7 @@ def _handle_claim(state: LedgerState, event: Event) -> None:
         _note(item, event, f"no-op (already claimed, status={item.status})")
         return
     item.owner = event.actor
+    item.claimed_payload_hash = event.payload.get("payload_hash")
     item.status = "claimed"
     _note(item, event, "applied")
 
@@ -273,6 +271,9 @@ def _handle_complete(state: LedgerState, event: Event) -> None:
         return
     if item.status != "claimed":
         _note(item, event, f"no-op (illegal transition from status={item.status})")
+        return
+    if item.owner != event.actor:
+        _note(item, event, f"no-op (not owner, owner={item.owner!r})")
         return
     item.status = "completed"
     item.closed_at = event.hlc

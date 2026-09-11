@@ -51,9 +51,8 @@ def test_org_charset_holds_for_every_registry_tag():
     import re
     import yaml
 
-    registry = Path.home() / "Data" / ".datacore" / "tags.yaml"
-    if not registry.exists():
-        return  # registry is optional for this check
+    registry = Path(__file__).resolve().parents[2] / "tags.yaml"
+    assert registry.exists()
     raw = yaml.safe_load(registry.read_text()) or {}
 
     # Tag names are the second-level keys (top level is the section, e.g.

@@ -130,17 +130,10 @@ def verify_chain(path: Path, registry_path: Path | None = None, strict: bool = F
 
         if event.sig != "":
             if not verify_sig(event.actor, canonical_bytes(body), event.sig, registry_path=registry_path):
-                from .keys import known_verify_key
-                if known_verify_key(event.actor, registry_path):
-                    errors.append(
-                        f"line {line_no}: signature verification failed for actor {event.actor!r} "
-                        "(invalid signature against the registered key)"
-                    )
-                elif strict:
-                    errors.append(f"line {line_no}: no verify key known for actor {event.actor!r} (strict)")
-                # else: signed by a writer whose key this host does not hold yet --
-                # the chain is intact; the signature is unverifiable here, not
-                # wrong. Keys travel through registry/principals.yaml (verify_keys).
+                errors.append(
+                    f"line {line_no}: signature verification failed for actor {event.actor!r} "
+                    "(unknown actor or invalid signature)"
+                )
         elif strict:
             errors.append(f"line {line_no}: unsigned event")
 
@@ -183,8 +176,12 @@ def check_not_rewound(path: Path) -> list[str]:
     hwm_path = path.parent.parent / "state" / "seq-hwm" / f"{actor}.seq"
     try:
         hwm = int(hwm_path.read_text().strip())
-    except (OSError, ValueError):
+        if hwm < 0:
+            raise ValueError("negative witness")
+    except FileNotFoundError:
         return []
+    except (OSError, ValueError):
+        return ["sequence witness is unreadable or invalid; rewind status cannot be verified"]
 
     tail = -1
     try:
@@ -197,7 +194,7 @@ def check_not_rewound(path: Path) -> list[str]:
             except (ValueError, TypeError):
                 continue
     except OSError:
-        return []
+        return ["log is unreadable; rewind status cannot be verified"]
 
     if tail < hwm:
         return [f"TRUNCATED: log ends at seq {tail} but this machine wrote up to "

@@ -28,10 +28,7 @@ def sb(monkeypatch):
             monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
     spec = importlib.util.spec_from_file_location("speak_brief_t", LIB)
     mod = importlib.util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(mod)
-    except Exception as e:  # pragma: no cover - environment-dependent
-        pytest.skip(f"speak_brief not importable here: {e}")
+    spec.loader.exec_module(mod)
     return mod
 
 
@@ -88,23 +85,72 @@ def test_claude_cli_strips_the_api_key_from_its_env(sb, monkeypatch):
     `claude -p` routed to the metered API instead of the Max subscription.
     """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dead")
+    monkeypatch.setattr("shutil.which", lambda _: "/fake/claude")
     captured = {}
 
     def fake_run(*args, **kwargs):
         captured["env"] = kwargs.get("env", {})
+        captured["cmd"] = args[0]
+        captured["input"] = kwargs.get("input")
         return _CompletedProcess()
 
-    monkeypatch.setattr(sb.subprocess, "run", fake_run)
+    monkeypatch.setattr(sb, "run_process", fake_run)
     assert sb._try_claude_cli("prompt") == "ok"
     assert "ANTHROPIC_API_KEY" not in captured["env"]
     assert captured["env"], "the rest of the environment must still be passed through"
+    cmd = captured["cmd"]
+    assert cmd[0] == "/fake/claude"
+    assert "--dangerously-skip-permissions" not in cmd
+    assert cmd[cmd.index("--tools") + 1] == ""
+    assert "--strict-mcp-config" in cmd and "--safe-mode" in cmd
+    assert "--no-session-persistence" in cmd
+    assert "prompt" not in cmd and captured["input"] == "prompt"
 
 
 def test_claude_cli_raises_with_detail_on_nonzero_exit(sb, monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda _: "/fake/claude")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(
-        sb.subprocess, "run",
+        sb, "run_process",
         lambda *a, **k: _CompletedProcess(returncode=1, stdout="", stderr="Not logged in"),
     )
     with pytest.raises(RuntimeError, match="Not logged in"):
         sb._try_claude_cli("prompt")
+
+
+def test_missing_cli_skips_without_launching_a_process(sb, monkeypatch):
+    monkeypatch.setattr('shutil.which', lambda _: None)
+    def forbidden(*a, **k):
+        raise AssertionError('no executable should run')
+    monkeypatch.setattr(sb, 'run_process', forbidden)
+    assert sb._try_claude_cli('untrusted prompt') is None
+
+
+def test_local_tts_failure_does_not_send_text_to_cloud_by_default(sb, monkeypatch):
+    monkeypatch.setattr(sb, '_SETTINGS', {'allow_cloud_tts': False})
+    def fail(*a, **k):
+        raise ImportError('local model unavailable')
+    monkeypatch.setattr(sb, '_generate_audio_kokoro', fail)
+    # The gate is before imports or network calls, including direct calls.
+    with pytest.raises(RuntimeError, match='Cloud speech is disabled'):
+        sb.generate_audio('private briefing')
+    with pytest.raises(RuntimeError, match='Cloud speech is disabled'):
+        sb._generate_audio_gtts('private briefing')
+
+
+def test_explicit_cloud_opt_in_allows_tts_fallback(sb, monkeypatch, tmp_path):
+    monkeypatch.setattr(sb, '_SETTINGS', {'allow_cloud_tts': True})
+    module = types.ModuleType('gtts')
+    received = []
+    class TTS:
+        def __init__(self, text, **kwargs):
+            received.append(text)
+        def save(self, path):
+            Path(path).write_bytes(b'fake audio')
+    module.gTTS = TTS
+    monkeypatch.setitem(sys.modules, 'gtts', module)
+    bootstrap = types.ModuleType('venv_bootstrap')
+    bootstrap.activate = lambda: None
+    monkeypatch.setitem(sys.modules, 'venv_bootstrap', bootstrap)
+    result, _ = sb._generate_audio_gtts('approved briefing', output_path=tmp_path / 'audio.mp3')
+    assert received == ['approved briefing'] and result.read_bytes() == b'fake audio'

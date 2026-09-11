@@ -6,7 +6,7 @@ environments (the stdout/stderr redirect to devnull breaks the SSH
 file-sync subprocess).
 
 Uses the hermes_oneshot.py wrapper script which calls AIAgent directly
-with HERMES_YOLO_MODE=1 and os._exit(0) for clean termination.
+with a required Datacore tool hook and os._exit(0) for clean termination.
 
 Cost is always estimated via `estimate_cost_cents` (chars/4 tokens at
 the documented shadow-accounting rate in `base.py`) -- `self._cost_estimated`
@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from process_run import run as run_process
 import sys
 
 from .base import Executor, estimate_cost_cents, register
@@ -92,34 +93,29 @@ class HermesExecutor(Executor):
             "python3"
         )
 
+        env = self._execution_env()
+        env["PATH"] = _hermes_env(self._cwd)["PATH"]
+        if self._cwd:
+            env["TERMINAL_CWD"] = str(self._cwd)
+        env["HERMES_YOLO_MODE"] = "0"
+        env["HERMES_ACCEPT_HOOKS"] = "0"
         if os.path.isfile(wrapper) and os.path.isfile(python):
             # `cwd` is set for the wrapper process itself, but it is NOT what
             # places the agent -- see _hermes_env(). Hermes takes the agent's
             # working directory from its terminal backend, so TERMINAL_CWD in
             # the env is the load-bearing part and this is merely tidy.
-            result = subprocess.run(
-                [python, wrapper, prompt],
+            result = run_process(
+                [python, wrapper, "--stdin"],
                 capture_output=True,
                 text=True,
                 timeout=timeout_s,
                 check=False,
                 cwd=str(self._cwd) if self._cwd else None,
-                env=_hermes_env(self._cwd),
+                env=env,
+                input=prompt,
             )
         else:
-            # Fallback: use the hermes CLI directly
-            binary = shutil.which("hermes")
-            if binary is None:
-                raise RuntimeError("'hermes' binary not found on PATH")
-
-            result = subprocess.run(
-                [binary, "chat", "-q", prompt],
-                capture_output=True,
-                text=True,
-                timeout=timeout_s,
-                check=False,
-                cwd=str(self._cwd) if self._cwd else None,
-            )
+            raise RuntimeError("Hermes policy wrapper or interpreter is unavailable; install the configured Hermes runtime")
 
         if result.returncode != 0:
             raise RuntimeError(f"hermes exited {result.returncode}: {result.stderr.strip()}")

@@ -10,14 +10,17 @@ refusal on the ledger. Exit 0 either way: the JSON is the decision.
 from __future__ import annotations
 
 import sys
+import json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 try:
     from tool_policy import hook_main
-except Exception as e:  # noqa: BLE001 — a missing library must not block every call
-    print(f"[tool-policy] guard unavailable ({type(e).__name__}: {e}); call allowed", file=sys.stderr)
+except Exception as e:  # noqa: BLE001 — policy failure cannot authorize work
+    print(f"[tool-policy] guard unavailable ({type(e).__name__}); call refused", file=sys.stderr)
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+        "permissionDecision": "deny", "permissionDecisionReason": "execution policy guard unavailable"}}))
     sys.exit(0)
 
 if __name__ == "__main__":

@@ -1428,3 +1428,29 @@ class TestNestedDuplicateKeys:
         nested = [d for d in report.duplicate_keys if "/" in d]
         assert nested == []
 
+
+
+def test_stale_deprecation_report_cannot_archive_a_reactivated_agent(tmp_path):
+    fx = build_fixture(tmp_path)
+    report = audit(fx['registry_path'], [fx['agents_dir']])
+    before = yaml.safe_load(fx['registry_path'].read_text())
+    for entry in before['agents'].values():
+        if isinstance(entry, dict):
+            entry.pop('deprecated', None)
+            if entry.get('status') == 'deprecated':
+                entry['status'] = 'active'
+    # A stale original report must be refused, not applied to current state.
+    fx['registry_path'].write_text(yaml.safe_dump(before))
+    snapshot = fx['registry_path'].read_bytes()
+    with pytest.raises(ValueError, match='changed after audit'):
+        apply(report, fx['registry_path'], fx['archive_dir'])
+    assert fx['registry_path'].read_bytes() == snapshot
+
+
+def test_backup_cleanup_preserves_backup_bytes_in_archive(tmp_path):
+    fx = build_fixture(tmp_path)
+    backup = fx['registry_dir'] / 'agents.yaml.bak'
+    original = backup.read_bytes()
+    apply(audit(fx['registry_path'], [fx['agents_dir']]), fx['registry_path'], fx['archive_dir'])
+    assert not backup.exists()
+    assert (fx['registry_dir'] / 'archive' / 'backups' / backup.name).read_bytes() == original

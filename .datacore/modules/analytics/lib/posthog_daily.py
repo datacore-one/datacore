@@ -4,6 +4,10 @@
 import json
 import os
 import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "lib"))
+from secret_http import urlopen as secret_urlopen
+from env_utils import parse_env_value
 import urllib.request
 import urllib.error
 from datetime import datetime, timedelta
@@ -26,7 +30,7 @@ def get_api_key():
             for line in f:
                 line = line.strip()
                 if line.startswith("POSTHOG_API_KEY=") and not line.startswith("#"):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+                    return parse_env_value(line.split("=", 1)[1])
     return None
 
 def query_hogql(api_key, project_id, hogql):
@@ -37,7 +41,7 @@ def query_hogql(api_key, project_id, hogql):
         "Content-Type": "application/json",
     })
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with secret_urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read())
             return data.get("results", [])
     except (urllib.error.URLError, json.JSONDecodeError) as e:

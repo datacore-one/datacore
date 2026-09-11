@@ -6,7 +6,7 @@ oneshot module redirects stdout/stderr to devnull, which breaks the SSH
 terminal backend's file sync subprocess.
 
 This wrapper calls AIAgent.run_conversation() directly, avoiding the
-redirect. It sets HERMES_YOLO_MODE=1 for auto-approval and uses os._exit()
+redirect. It installs the Datacore policy gate, refuses auto-approval, and uses os._exit()
 to skip cleanup that can also hang.
 
 Usage:
@@ -18,16 +18,38 @@ Exit code 1 = agent failure or empty response.
 """
 import sys, os, time
 
-os.environ.setdefault("HERMES_YOLO_MODE", "1")
-os.environ.setdefault("HERMES_ACCEPT_HOOKS", "1")
-os.environ.setdefault("HERMES_HOME", os.path.expanduser("~/.hermes"))
+
+def install_policy_guard():
+    """Install at the runtime's common dispatch hook before any conversation."""
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from hermes_cli import plugins
+    from hermes_plugin import pre_tool_call
+    original = plugins.get_pre_tool_call_block_message
+    if not callable(original):
+        raise RuntimeError("Hermes runtime does not expose the required tool policy hook")
+
+    def guarded(tool_name, args, *positional, **kwargs):
+        try:
+            decision = pre_tool_call(tool_name=tool_name, args=args)
+            if decision and decision.get("action") == "block":
+                return decision["message"]
+            return original(tool_name, args, *positional, **kwargs)
+        except Exception:
+            return "Datacore runtime policy unavailable; tool execution refused"
+
+    plugins.get_pre_tool_call_block_message = guarded
+
 
 def main():
+    os.environ["HERMES_YOLO_MODE"] = "0"
+    os.environ["HERMES_ACCEPT_HOOKS"] = "0"
+    os.environ.setdefault("HERMES_HOME", os.path.expanduser("~/.hermes"))
     if len(sys.argv) < 2:
         print("Usage: hermes_oneshot.py <prompt> [--toolsets t1,t2,...]", file=sys.stderr)
         sys.exit(2)
 
-    prompt = sys.argv[1]
+    prompt = sys.stdin.read() if sys.argv[1] == "--stdin" else sys.argv[1]
     toolsets = ["file", "terminal"]  # sensible defaults for ledger tasks
 
     if "--toolsets" in sys.argv:
@@ -59,6 +81,7 @@ def main():
         platform="cli",
     )
 
+    install_policy_guard()
     result = agent.run_conversation(prompt)
     response = result.get("final_response") or ""
 

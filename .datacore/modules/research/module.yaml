@@ -39,6 +39,9 @@ optional:
   - crm@>=0.2.0
 
 settings:
+  allow_url_proxies:
+    description: "Allow sending source URLs to Jina Reader and Wayback after direct fetch fails"
+    default: false
   enabled:
     description: "Enable research module"
     default: true
@@ -59,7 +62,7 @@ settings:
     default: "0-personal/notes/2-knowledge/zettel"
   industry_landscape_file:
     description: "Path to industry landscape file"
-    default: "1-datafund/1-tracks/research/Industry landscape.md"
+    default: "0-personal/3-knowledge/reference/Industry landscape.md"
   research_org_file:
     description: "Path to research_learning.org"
     default: "0-personal/org/research_learning.org"

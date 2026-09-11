@@ -30,20 +30,22 @@ from .base import (
 )
 
 
-def load_label_mapping_from_registry() -> Dict[str, str]:
+def load_label_mapping_from_registry(data_dir=None) -> Dict[str, str]:
     """Load label mapping from tags.yaml registry."""
-    data_dir = Path(os.environ.get("DATA_DIR", os.path.expanduser("~/Data")))
-    registry_path = data_dir / ".datacore" / "config" / "tags.yaml"
+    data_dir = Path(data_dir or os.environ.get("DATA_DIR") or os.environ.get("DATACORE_ROOT") or Path.home() / "Data")
+    registry_path = data_dir / ".datacore" / "tags.yaml"
 
     if not registry_path.exists():
         return {}
 
-    try:
-        with open(registry_path) as f:
-            registry = yaml.safe_load(f)
-        return registry.get("sync_label_mapping", {})
-    except Exception:
-        return {}
+    with open(registry_path, encoding="utf-8") as f:
+        registry = yaml.safe_load(f)
+    if not isinstance(registry, dict):
+        raise ValueError("tag registry must be a mapping")
+    mapping = registry.get("sync_label_mapping", {})
+    if not isinstance(mapping, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in mapping.items()):
+        raise ValueError("sync label mapping must map strings to strings")
+    return mapping
 
 
 class GitHubAdapter(TaskSyncAdapter):
@@ -88,7 +90,7 @@ class GitHubAdapter(TaskSyncAdapter):
         }
 
         # Try loading from registry first
-        registry_mapping = load_label_mapping_from_registry()
+        registry_mapping = load_label_mapping_from_registry(config.get("data_dir"))
 
         # Merge: defaults < registry < config overrides
         self.label_mapping = {**default_mapping, **registry_mapping}
@@ -180,10 +182,20 @@ class GitHubAdapter(TaskSyncAdapter):
 
     def _parse_external_id(self, external_id: str) -> tuple[str, str, int] | None:
         """Parse external ID to (owner, repo, number)."""
-        match = re.match(r"github:([^/]+)/([^#]+)#(\d+)", external_id)
+        match = re.fullmatch(r"github:([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)#([1-9]\d*)", external_id)
         if match:
             return match.group(1), match.group(2), int(match.group(3))
         return None
+
+    def _authorized_ref(self, ref):
+        parsed = self._parse_external_id(ref.external_id)
+        if ref.adapter != "github" or parsed is None:
+            return None
+        owner, repo, _ = parsed
+        if not any(str(r.get("owner", "")).lower() == owner.lower()
+                   and str(r.get("repo", "")).lower() == repo.lower() for r in self.repos):
+            return None
+        return parsed
 
     def pull_changes(self, since: Optional[datetime] = None) -> List[TaskChange]:
         """Fetch issues from configured repos."""
@@ -198,13 +210,19 @@ class GitHubAdapter(TaskSyncAdapter):
                 "issue", "list",
                 "-R", f"{owner}/{repo}",
                 "--json", "number,title,state,url,createdAt,updatedAt,body,labels,assignees",
-                "--limit", "100"
+                # gh paginates internally up to this bound. Reaching it is
+                # an incomplete snapshot, never a successful truncated pull.
+                "--limit", "10000"
             ]
 
             # Get open issues
             success, stdout, stderr = self._run_gh(args + ["--state", "open"])
+            if not success or not stdout:
+                raise RuntimeError("GitHub open-issue snapshot failed")
             if success and stdout:
                 issues = json.loads(stdout)
+                if not isinstance(issues, list) or len(issues) >= 10000:
+                    raise ValueError("GitHub snapshot is malformed or exceeds the 10000-issue limit")
                 for issue_data in issues:
                     task = self._parse_issue(issue_data, owner, repo)
                     if since is None or task.updated_at > since:
@@ -216,8 +234,12 @@ class GitHubAdapter(TaskSyncAdapter):
 
             # Get recently closed issues
             success, stdout, stderr = self._run_gh(args + ["--state", "closed"])
+            if not success or not stdout:
+                raise RuntimeError("GitHub closed-issue snapshot failed")
             if success and stdout:
                 issues = json.loads(stdout)
+                if not isinstance(issues, list) or len(issues) >= 10000:
+                    raise ValueError("GitHub snapshot is malformed or exceeds the 10000-issue limit")
                 for issue_data in issues:
                     task = self._parse_issue(issue_data, owner, repo)
                     if since is None or task.updated_at > since:
@@ -236,6 +258,7 @@ class GitHubAdapter(TaskSyncAdapter):
 
         for change in changes:
             if change.org_task is None:
+                result.add_error("change has no org task")
                 continue
 
             task = change.org_task
@@ -260,6 +283,10 @@ class GitHubAdapter(TaskSyncAdapter):
                         # Reopen if needed
                         if self._reopen_task(ref):
                             result.items_updated += 1
+                        else:
+                            result.add_error("failed to reopen issue")
+                else:
+                    result.add_error("state change has no external ID")
 
             elif change.change_type == ChangeType.UPDATED:
                 if task.external_id:
@@ -268,6 +295,10 @@ class GitHubAdapter(TaskSyncAdapter):
                         result.items_updated += 1
                     else:
                         result.add_error(f"Failed to update: {task.title}")
+                else:
+                    result.add_error("update has no external ID")
+            else:
+                result.add_error("unsupported GitHub change type")
 
             result.items_processed += 1
 
@@ -330,7 +361,7 @@ class GitHubAdapter(TaskSyncAdapter):
 
     def update_task(self, ref: ExternalTaskRef, task: OrgTask) -> bool:
         """Update existing GitHub issue."""
-        parsed = self._parse_external_id(ref.external_id)
+        parsed = self._authorized_ref(ref)
         if not parsed:
             return False
 
@@ -364,17 +395,18 @@ class GitHubAdapter(TaskSyncAdapter):
 
         # Update labels separately (gh edit doesn't replace labels well)
         if success and labels:
-            self._run_gh([
+            labels_ok, _, _ = self._run_gh([
                 "issue", "edit", str(number),
                 "-R", f"{owner}/{repo}",
                 "--add-label", ",".join(labels)
             ])
+            success = success and labels_ok
 
         return success
 
     def close_task(self, ref: ExternalTaskRef) -> bool:
         """Close GitHub issue."""
-        parsed = self._parse_external_id(ref.external_id)
+        parsed = self._authorized_ref(ref)
         if not parsed:
             return False
 
@@ -389,7 +421,7 @@ class GitHubAdapter(TaskSyncAdapter):
 
     def _reopen_task(self, ref: ExternalTaskRef) -> bool:
         """Reopen GitHub issue."""
-        parsed = self._parse_external_id(ref.external_id)
+        parsed = self._authorized_ref(ref)
         if not parsed:
             return False
 

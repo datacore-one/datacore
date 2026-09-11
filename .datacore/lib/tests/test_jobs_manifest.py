@@ -252,7 +252,8 @@ def test_empty_string_cmd_is_error(tmp_path):
     assert "cmd" in msg
 
 
-def test_unknown_machine_is_error(tmp_path):
+def test_unknown_machine_is_error(tmp_path, monkeypatch):
+    _synthetic_roster(tmp_path, monkeypatch)
     data = {
         "version": 1,
         "jobs": [
@@ -566,7 +567,8 @@ def test_nonempty_check_must_have_no_arg(tmp_path):
 # --- everything wrong at once: one raise, every problem listed -----------
 
 
-def test_multiple_problems_across_manifest_collected_into_one_error(tmp_path):
+def test_multiple_problems_across_manifest_collected_into_one_error(tmp_path, monkeypatch):
+    _synthetic_roster(tmp_path, monkeypatch)
     data = {
         "version": 1,
         "jobs": [
@@ -839,3 +841,24 @@ def test_real_manifest_box_briefing_declares_require_synced_repos():
     assert "box-briefing" in by_name
     briefing = by_name["box-briefing"]
     assert "~/Data/0-personal" in briefing.require_synced_repos
+
+
+def _synthetic_roster(tmp_path, monkeypatch):
+    import jobs.manifest
+    path=tmp_path/'infrastructure.yaml'
+    path.write_text('servers:\n  mac: {}\n  nightshift: {}\n')
+    monkeypatch.setattr(jobs.manifest, '_ROSTER_PATH', path)
+
+
+@pytest.mark.parametrize('content', ['[', '[]', 'servers: []', 'servers: {mac: invalid}'])
+def test_invalid_present_roster_never_disables_validation(tmp_path, content):
+    from jobs.manifest import known_machines
+    path=tmp_path/'roster';path.write_text(content)
+    with pytest.raises(ManifestError): known_machines(path)
+
+
+def test_empty_roster_means_no_machine_is_registered(tmp_path):
+    roster=tmp_path/'roster';roster.write_text('servers: {}')
+    path=_write(tmp_path,{'version':1,'jobs':[{'name':'test','machine':'mac','schedule':'daily','cmd':'true','artifacts':[{'path':'output'}]}]})
+    with pytest.raises(ManifestError,match='unknown machine'):
+        load_manifest(path,roster_path=roster)

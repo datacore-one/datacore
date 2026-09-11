@@ -15,7 +15,7 @@ Endpoints:
 
 Auth:
     Bearer token from DAEMON_AUTH_TOKEN env var.
-    If not set, auth is disabled (useful on tailnet where network-layer auth suffices).
+    Missing tokens deny authenticated operations and prevent server startup.
 
 The auth token is set in ~/config/nightshift.env as DAEMON_AUTH_TOKEN=<secret>.
 The datacore-app stores it in ~/.datacore/app/remote.json after the install wizard.
@@ -26,11 +26,15 @@ import os
 import sys
 import threading
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "lib"))
+from secret_http import urlopen as secret_urlopen
+from env_utils import parse_env_value
+from http_utils import BoundedHTTPServer, bearer_matches, read_body, RequestError
 
 
-DATA_DIR = Path(os.environ.get("DATA_DIR", Path.home() / "Data"))
+DATA_DIR = Path(os.environ.get("DATA_DIR", os.environ.get("DATACORE_ROOT", Path.home() / "Data")))
 JOURNAL_DIR = DATA_DIR / "0-personal" / "notes" / "journals"
 ENV_DIR = DATA_DIR / ".datacore" / "env"
 
@@ -45,7 +49,7 @@ def _load_auth_token() -> str:
         if env_file.exists():
             for line in env_file.read_text().splitlines():
                 if line.startswith("DAEMON_AUTH_TOKEN="):
-                    return line.split("=", 1)[1].strip()
+                    return parse_env_value(line.split("=", 1)[1])
     return ""
 
 
@@ -60,7 +64,7 @@ def _load_telegram_token() -> str:
         if env_file.exists():
             for line in env_file.read_text().splitlines():
                 if line.startswith("TELEGRAM_BOT_TOKEN="):
-                    return line.split("=", 1)[1].strip()
+                    return parse_env_value(line.split("=", 1)[1])
     return ""
 
 
@@ -93,21 +97,17 @@ AUTH_TOKEN = _load_auth_token()
 class HealthHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         # Suppress default access log noise; use structured output instead
-        print(f"[daemon_health] {self.address_string()} {fmt % args}", flush=True)
+        return  # request targets can contain secrets
 
     def _check_auth(self) -> bool:
-        """Return True if auth passes (or no token configured)."""
-        if not AUTH_TOKEN:
-            return True  # open — rely on network-layer auth (tailnet, SSH port-forward)
-        header = self.headers.get("Authorization", "")
-        return header == f"Bearer {AUTH_TOKEN}"
+        """Missing or ambiguous credentials always deny access."""
+        return bearer_matches(self.headers, AUTH_TOKEN)
 
     def _send_json(self, code: int, payload: dict):
         body = json.dumps(payload, indent=2).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
 
@@ -122,7 +122,6 @@ class HealthHandler(BaseHTTPRequestHandler):
                 "service": "nightshift-daemon",
                 "version": "1.0.0",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "telegram_configured": bool(_load_telegram_token()),
             })
 
         elif self.path == "/daemon/status":
@@ -140,12 +139,18 @@ class HealthHandler(BaseHTTPRequestHandler):
             })
 
         else:
-            self._send_error(404, f"not found: {self.path}")
+            self._send_error(404, "not found")
 
     def do_POST(self):
         if self.path == "/daemon/test-telegram":
             if not self._check_auth():
                 self._send_error(401, "unauthorized")
+                return
+
+            try:
+                read_body(self, limit=1024)
+            except RequestError as error:
+                self._send_error(error.status, str(error))
                 return
 
             # Send a smoke-test message via Telegram
@@ -159,7 +164,7 @@ class HealthHandler(BaseHTTPRequestHandler):
                     if env_file.exists():
                         for line in env_file.read_text().splitlines():
                             if line.startswith("TELEGRAM_CHAT_ID="):
-                                chat_id = line.split("=", 1)[1].strip()
+                                chat_id = parse_env_value(line.split("=", 1)[1])
                                 break
 
             if not token or not chat_id:
@@ -179,17 +184,17 @@ class HealthHandler(BaseHTTPRequestHandler):
                     f"https://api.telegram.org/bot{token}/sendMessage",
                     data=data,
                 )
-                with urllib.request.urlopen(req, timeout=10) as resp:
+                with secret_urlopen(req, timeout=10) as resp:
                     result = json.loads(resp.read())
                 if result.get("ok"):
                     self._send_json(200, {"ok": True, "message": "Test message sent to Telegram."})
                 else:
-                    self._send_json(502, {"ok": False, "error": str(result)})
+                    self._send_json(502, {"ok": False, "error": "Telegram rejected the request"})
             except Exception as e:
-                self._send_json(502, {"ok": False, "error": str(e)})
+                self._send_json(502, {"ok": False, "error": "Telegram request failed"})
 
         else:
-            self._send_error(404, f"not found: {self.path}")
+            self._send_error(404, "not found")
 
 
 def main():
@@ -203,9 +208,9 @@ def main():
     if AUTH_TOKEN:
         print(f"[daemon_health] Auth: DAEMON_AUTH_TOKEN configured ({len(AUTH_TOKEN)} chars)")
     else:
-        print("[daemon_health] Auth: OPEN (no DAEMON_AUTH_TOKEN set — use network-layer auth)")
+        raise SystemExit("DAEMON_AUTH_TOKEN must be configured")
 
-    server = HTTPServer((args.bind, args.port), HealthHandler)
+    server = BoundedHTTPServer((args.bind, args.port), HealthHandler)
     print(f"[daemon_health] Listening on {args.bind}:{args.port}")
     print(f"[daemon_health] Health:  http://{args.bind}:{args.port}/daemon/health")
     print(f"[daemon_health] Status:  http://{args.bind}:{args.port}/daemon/status")
@@ -214,6 +219,8 @@ def main():
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n[daemon_health] Shutting down.")
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":

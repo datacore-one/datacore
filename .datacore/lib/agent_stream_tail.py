@@ -58,57 +58,53 @@ POLL_INTERVAL = float(os.environ.get("POLL_INTERVAL", "3.0"))
 MAX_LINE_BYTES = int(os.environ.get("MAX_LINE_BYTES", str(2 * 1024 * 1024)))
 DEDUP_WINDOW = int(os.environ.get("DEDUP_WINDOW", "256"))
 
-if not RELAY_URL:
-    print("agent_stream_tail: AGENT_STREAM_RELAY_URL not set", file=sys.stderr)
-    sys.exit(2)
-if MODE not in ("openclaw", "hermes"):
-    print(f"agent_stream_tail: MODE must be openclaw|hermes, got {MODE!r}", file=sys.stderr)
-    sys.exit(2)
-if not GLOB_PATTERN:
-    print("agent_stream_tail: GLOB not set", file=sys.stderr)
-    sys.exit(2)
+def validate_configuration():
+    if not RELAY_URL or not RELAY_TOKEN:
+        raise ValueError("relay URL and token are required")
+    if MODE not in ("openclaw", "hermes") or not GLOB_PATTERN:
+        raise ValueError("MODE must be openclaw|hermes and GLOB must be set")
+    if not (0 < POLL_INTERVAL <= 3600 and 0 < MAX_LINE_BYTES <= 2 * 1024 * 1024 and 0 < DEDUP_WINDOW <= 10000):
+        raise ValueError("invalid tailer resource limits")
+
+# The service may install this entry point separately; helpers come from the
+# explicitly selected Datacore code checkout.
+sys.path.insert(0, str(Path(os.environ.get("DATACORE_LIB") or
+    Path(os.environ.get("DATACORE_ROOT") or Path.home() / "Data") / ".datacore/lib")))
+from file_utils import atomic_write_text, file_lock
+from agent_outbox import enqueue, acknowledge, flush
+from relay_client import post_event as _relay_post
 
 
 # ─── State ─────────────────────────────────────────────────────────────────
 
 def load_state() -> dict[str, Any]:
-    if STATE_FILE.exists():
-        try:
-            return json.loads(STATE_FILE.read_text())
-        except Exception:
-            pass
-    return {"files": {}, "seen_ids": []}
+    try:
+        state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"files": {}, "seen_ids": []}
+    if not isinstance(state, dict) or not isinstance(state.get("files"), dict) or not isinstance(state.get("seen_ids"), list):
+        raise ValueError("invalid tailer state; restore it before continuing")
+    return state
 
 
 def save_state(state: dict[str, Any]) -> None:
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = STATE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, separators=(",", ":")))
-    tmp.replace(STATE_FILE)
+    atomic_write_text(STATE_FILE, json.dumps(state, separators=(",", ":")))
 
 
-# ─── Relay client ──────────────────────────────────────────────────────────
+def _outbox():
+    return STATE_FILE.parent / "relay-outbox"
+
+
+def _send(ev):
+    return _relay_post(ev, RELAY_URL, RELAY_TOKEN)
+
 
 def post_event(ev: dict[str, Any]) -> bool:
-    try:
-        req = urllib.request.Request(
-            f"{RELAY_URL}/events",
-            data=json.dumps(ev).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                **(
-                    {"Authorization": f"Bearer {RELAY_TOKEN}"}
-                    if RELAY_TOKEN
-                    else {}
-                ),
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            return 200 <= resp.status < 300
-    except Exception as exc:
-        print(f"agent_stream_tail: relay POST failed: {exc}", file=sys.stderr)
-        return False
+    # The source cursor may advance only after an independent durable copy.
+    enqueue(_outbox(), ev)
+    if _send(ev):
+        acknowledge(_outbox(), ev)
+    return True
 
 
 # ─── Parsers ───────────────────────────────────────────────────────────────
@@ -126,7 +122,7 @@ def _summarise(text: str, *, limit: int = 220) -> str:
     return text
 
 
-def parse_openclaw(line: bytes, file_id: str) -> dict[str, Any] | None:
+def parse_openclaw(line: bytes, file_id: str, offset: int = 0) -> dict[str, Any] | None:
     """Parse one line of an OpenClaw trajectory.jsonl file."""
     try:
         rec = json.loads(line)
@@ -143,7 +139,7 @@ def parse_openclaw(line: bytes, file_id: str) -> dict[str, Any] | None:
     seq = rec.get("seq")
     summary = f"completed turn ({model_id})"
     return {
-        "id": f"openclaw-{session_id}-{seq}-completed" if session_id else None,
+        "id": "openclaw-" + __import__("hashlib").sha256((AGENT_NAME + "\0" + file_id + "\0" + str(offset)).encode() + b"\0" + line).hexdigest(),
         "type": "agent.message",
         "agent": AGENT_NAME,
         "ts": ts,
@@ -158,7 +154,7 @@ def parse_openclaw(line: bytes, file_id: str) -> dict[str, Any] | None:
     }
 
 
-def parse_hermes(line: bytes, file_id: str) -> dict[str, Any] | None:
+def parse_hermes(line: bytes, file_id: str, offset: int = 0) -> dict[str, Any] | None:
     """Parse one line of a Hermes Agent session jsonl file."""
     try:
         rec = json.loads(line)
@@ -185,7 +181,8 @@ def parse_hermes(line: bytes, file_id: str) -> dict[str, Any] | None:
     ts = rec.get("timestamp") or ""
     # Use timestamp + offset hash for ID stability
     file_basename = Path(file_id).name
-    line_hash = hash(line) & 0xFFFFFFFF
+    import hashlib
+    line_hash = hashlib.sha256((AGENT_NAME + "\0" + file_id + "\0" + str(offset)).encode() + b"\0" + line).hexdigest()
     return {
         "id": f"hermes-{file_basename}-{ts}-{line_hash}",
         "type": "agent.message",
@@ -244,28 +241,25 @@ def tail_file(path: Path, file_state: dict[str, Any], dedup: set[str]) -> int:
                     break
                 buf += chunk
                 if len(buf) > MAX_LINE_BYTES * 4:
-                    # Pathological: drop everything before the last newline
-                    last_nl = buf.rfind(b"\n")
-                    if last_nl > 0:
-                        buf = buf[last_nl + 1:]
-                    else:
-                        buf = b""
+                    raise ValueError("source record exceeds capacity; checkpoint preserved")
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
                     if not line.strip():
                         continue
                     if len(line) > MAX_LINE_BYTES:
-                        continue
-                    ev = PARSER(line, str(path))
+                        raise ValueError("source record exceeds capacity; checkpoint preserved")
+                    ev = PARSER(line, str(path), fh.tell() - len(buf) - len(line) - 1)
                     if not ev:
                         continue
                     eid = ev.get("id")
                     if eid:
                         if eid in dedup:
                             continue
+                    if not post_event(ev):
+                        return emitted
+                    if eid:
                         dedup.add(eid)
-                    if post_event(ev):
-                        emitted += 1
+                    emitted += 1
             new_offset = fh.tell() - len(buf)
     except OSError:
         return 0
@@ -276,13 +270,20 @@ def tail_file(path: Path, file_state: dict[str, Any], dedup: set[str]) -> int:
 
 
 def main() -> int:
+    validate_configuration()
+    # One owner for the checkpoint through the whole polling lifetime.
+    with file_lock(STATE_FILE, timeout=1):
+        return _run_loop()
+
+
+def _run_loop() -> int:
     state = load_state()
     files = state.setdefault("files", {})
     seen_ids = state.setdefault("seen_ids", [])
     dedup = set(seen_ids)
 
     print(
-        f"agent_stream_tail: agent={AGENT_NAME} mode={MODE} relay={RELAY_URL} "
+        f"agent_stream_tail: agent={AGENT_NAME} mode={MODE} "
         f"glob={GLOB_PATTERN} state={STATE_FILE}",
         file=sys.stderr,
         flush=True,
@@ -290,6 +291,7 @@ def main() -> int:
 
     while True:
         try:
+            flush(_outbox(), _send, limit=10)
             paths = sorted(Path(p) for p in glob.glob(GLOB_PATTERN))
             for path in paths:
                 fkey = str(path)

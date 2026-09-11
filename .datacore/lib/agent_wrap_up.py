@@ -55,8 +55,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from knowledge_commit import (  # noqa: E402
-    classify, commit_knowledge, current_branch, default_branch,
+    classify, commit_knowledge, current_branch, default_branch, GitError,
 )
+from org_transaction import serialized, watch_file, write_org_text
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -79,9 +80,25 @@ def _porcelain(repo: Path) -> str:
        Stripping the line shifts every column and eats the first character of the
        path.
     """
-    r = subprocess.run(['git', 'status', '--porcelain', '--untracked-files=all'],
+    r = subprocess.run(['git', 'status', '--porcelain', '-z', '--untracked-files=all'],
                        cwd=repo, capture_output=True, text=True)
-    return (r.stdout or '').rstrip('\n') if r.returncode == 0 else ''
+    if r.returncode:
+        raise GitError('cannot establish wrap-up repository status')
+    return r.stdout
+
+
+def _branch_bytes(repo, branch, path):
+    tree = subprocess.run(['git', '--literal-pathspecs', 'ls-tree', '-z', branch, '--', path], cwd=repo, capture_output=True)
+    if tree.returncode:
+        raise GitError('cannot read journal branch')
+    if not tree.stdout:
+        return None
+    if not tree.stdout.startswith((b'100644 ', b'100755 ')):
+        raise GitError('journal branch path is not a regular file')
+    blob = subprocess.run(['git', 'show', f'{branch}:{path}'], cwd=repo, capture_output=True)
+    if blob.returncode:
+        raise GitError('cannot read journal history')
+    return blob.stdout
 
 
 def discover_spaces(data_dir: Path) -> list:
@@ -98,10 +115,12 @@ def discover_spaces(data_dir: Path) -> list:
 def changed_paths(repo: Path) -> list:
     """Paths the agent touched in this repo, junk excluded."""
     out = []
-    for line in _porcelain(repo).splitlines():
-        if not line.strip():
+    for line in _porcelain(repo).split('\0'):
+        if not line:
             continue
-        path = line[3:].strip().strip('"')
+        if any(flag in line[:2] for flag in 'RCU'):
+            raise GitError('wrap-up rename or conflict requires review')
+        path = line[3:]
         name = Path(path).name
         if '.bak' in name or name.endswith(('.pyc', '.swp', '.orig')):
             continue
@@ -110,6 +129,10 @@ def changed_paths(repo: Path) -> list:
         if any(p in ('__pycache__', 'node_modules', '.venv', 'dist')
                for p in Path(path).parts):
             continue
+        candidate = repo / path
+        if (line[:2] == '??' and candidate.is_file() and not candidate.is_symlink()
+                and _branch_bytes(repo, default_branch(repo), path) == candidate.read_bytes()):
+            continue  # already published on the default branch; retain the copy
         out.append(path)
     return out
 
@@ -130,43 +153,39 @@ def _strip_heading(text: str, date: str) -> str:
     return text.strip('\n')
 
 
+@serialized
 def write_journal(space: Path, agent: str, text: str, date: str,
                   stamp: str) -> Path:
-    """Append this agent's entry to the space's journal for today.
+    """Append under the shared journal transaction, preserving both sources.
 
-    The journal lives on the DEFAULT BRANCH, and that is the only authoritative
-    copy. The working tree frequently does not have it: knowledge_commit deletes
-    the local copy after landing it on main, because leaving it untracked there is
-    what stops git from switching branches.
-
-    So a naive `if not jp.exists(): write fresh` destroys history. Concretely:
-    Miles wraps up (journal -> main, local copy removed); Tris wraps up, finds no
-    local journal, writes a fresh one containing only his own entry, and commits
-    it over main. Miles's entry is gone. That is the very data loss this whole
-    exercise exists to prevent, reintroduced by the fix for it.
-
-    Base on the branch copy. Never drop it.
+    The default branch and retained working copy can each contain newer data.
+    A complete prefix relation is safe to extend; divergent text requires
+    reconciliation. Publication never deletes the retained working copy.
     """
+    datetime.strptime(date, '%Y-%m-%d')
     jp = journal_path(space, date)
+    if jp.is_symlink() or not jp.resolve().is_relative_to(space.resolve()):
+        raise GitError('journal path escapes its space')
+    watch_file(jp)
     jp.parent.mkdir(parents=True, exist_ok=True)
     rel = jp.relative_to(space).as_posix()
 
-    branch_text = _git(space, 'show', f'{default_branch(space)}:{rel}')
-    wt_text = jp.read_text() if jp.exists() else ''
+    branch_text = (_branch_bytes(space, default_branch(space), rel) or b'').decode('utf-8')
+    wt_text = jp.read_bytes().decode('utf-8') if jp.exists() else ''
 
-    if branch_text and wt_text.startswith(branch_text.rstrip('\n')):
+    if branch_text and wt_text.startswith(branch_text):
         base = wt_text                      # working tree = branch + local additions
     elif branch_text and not wt_text:
         base = branch_text                  # local copy was cleaned up after landing
+    elif branch_text and wt_text and branch_text.startswith(wt_text):
+        base = branch_text
     elif branch_text and wt_text:
-        # Divergent. Keep BOTH — never silently drop committed history.
-        base = (branch_text.rstrip('\n') + '\n\n'
-                + _strip_heading(wt_text, date))
+        raise GitError('journal versions diverged; preserve both for reconciliation')
     else:
         base = wt_text or f'# {date}\n'
 
     entry = f'\n## {agent.title()} — {stamp}\n\n{text.strip()}\n'
-    jp.write_text(base.rstrip('\n') + '\n' + entry)
+    write_org_text(jp, base + ('' if base.endswith('\n') else '\n') + entry)
     return jp
 
 
@@ -191,7 +210,7 @@ def wrap_up(data_dir: Path, agent: str, tier: str, summary: str,
         wrote_journal = None
 
         if split['knowledge'] or tier != 'tick':
-            if text:
+            if text and not dry_run:
                 jp = write_journal(space, agent, text, date, stamp)
                 wrote_journal = str(jp.relative_to(space))
                 changed = changed_paths(space)   # re-read: the journal is new

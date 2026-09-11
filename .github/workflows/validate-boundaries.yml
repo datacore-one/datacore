@@ -15,6 +15,9 @@
 
 name: Validate Boundaries
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     branches: [main]
@@ -28,105 +31,9 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
-      - name: Root-level allowlist
-        run: |
-          echo "Checking all tracked files against root-level allowlist..."
-
-          ALLOWED_ROOT_DIRS="^(\\.datacore|\\.github|\\.plur)/"
-
-          # Build ALLOWED_ROOT_FILES from the shared config (skip comment/blank lines,
-          # join fragments with '|', wrap in anchors).
-          _ALLOWLIST_FILE=".datacore/config/root-allowlist.txt"
-          if [ ! -f "$_ALLOWLIST_FILE" ]; then
-            echo "Error: root-allowlist.txt not found at $_ALLOWLIST_FILE"
-            exit 1
-          fi
-          _JOINED=$(grep -v '^\s*#' "$_ALLOWLIST_FILE" | grep -v '^\s*$' | paste -sd '|' -)
-          ALLOWED_ROOT_FILES="^(${_JOINED})$"
-
-          VIOLATIONS=""
-          while IFS= read -r file; do
-            [ -z "$file" ] && continue
-
-            if echo "$file" | grep -qE "$ALLOWED_ROOT_DIRS"; then
-              continue
-            fi
-            if echo "$file" | grep -qE "$ALLOWED_ROOT_FILES"; then
-              continue
-            fi
-
-            VIOLATIONS="${VIOLATIONS}  ${file}\n"
-          done < <(git ls-files)
-
-          if [ -n "$VIOLATIONS" ]; then
-            echo "::error::Files tracked outside allowed root-level paths"
-            echo ""
-            echo "The system repo only tracks .datacore/, .github/, and root config files."
-            echo "All other content belongs in a space repo ([0-9]-*/)."
-            echo ""
-            echo "Offending files:"
-            echo -e "$VIOLATIONS"
-            exit 1
-          fi
-
-          echo "Root-level allowlist: PASS"
-
-      - name: API key scan
-        run: |
-          echo "Scanning all tracked files for API key patterns..."
-
-          PATTERNS='(xai-[a-zA-Z0-9]{20,}|sk-ant-[a-zA-Z0-9]{20,}|sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36})'
-
-          HITS=$(git ls-files -z | xargs -0 grep -lE "$PATTERNS" 2>/dev/null || true)
-
-          if [ -n "$HITS" ]; then
-            echo "::error::API key patterns found in tracked files"
-            echo "$HITS"
-            exit 1
-          fi
-
-          echo "API key scan: PASS"
-
-      - name: PII email scan
-        run: |
-          echo "Scanning tracked markdown files for personal emails..."
-
-          ALLOWED='@example\.com|dev@datacore\.one|nightshift@datacore\.one|security@datacore\.one|module-bot@datacore\.one|noreply@|git@github\.com'
-
-          HITS=$(git ls-files '*.md' '*.yaml' '*.yml' -z | xargs -0 grep -oEh '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' 2>/dev/null | grep -vE "$ALLOWED" | grep -vE 'REDACTED' | sort -u || true)
-
-          if [ -n "$HITS" ]; then
-            echo "::error::Personal email addresses found in tracked files"
-            echo "$HITS"
-            exit 1
-          fi
-
-          echo "PII email scan: PASS"
-
-      - name: Personal path scan
-        run: |
-          echo "Scanning tracked files for absolute personal paths..."
-
-          # Match /Users/<user>/ and /home/<user>/ but EXCLUDE template/CI
-          # usernames that are legitimate in a public OSS repo:
-          #   - /home/deploy   = server deploy template (per ENG-2026-0511-083)
-          #   - /home/runner   = GitHub Actions runner
-          #   - /home/user     = generic doc example
-          #   - /Users/runner  = macOS GitHub Actions runner
-          PATH_PATTERN='/Users/(?!runner\b)[a-zA-Z]|/home/(?!(?:deploy|runner|user)\b)[a-zA-Z]'
-          HITS=$(git ls-files -z | xargs -0 grep -lP "$PATH_PATTERN" 2>/dev/null | grep -v '.example$' | grep -v '.github/workflows/' | grep -v '.datacore/hooks/' || true)
-
-          if [ -n "$HITS" ]; then
-            echo "::error::Absolute personal paths found in tracked files"
-            echo "$HITS"
-            # Show the offending lines
-            for f in $HITS; do
-              echo "--- $f ---"
-              grep -nP "$PATH_PATTERN" "$f" | head -3
-            done
-            exit 1
-          fi
-
-          echo "Personal path scan: PASS"
+      - name: Validate committed boundaries and privacy
+        run: python3 .datacore/lib/git_privacy.py --revision HEAD

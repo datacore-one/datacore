@@ -84,11 +84,14 @@ DEMO_PAT = re.compile(
 
 # Once a session has been flagged as a demo, it stays flagged. A demo does not
 # stop being a demo because the next prompt lacks the word.
-STICKY = "/tmp/plur-sessions/demo-mode-{sid}"
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from hook_state import state_path
+from file_utils import atomic_write_text
 
 
 def _sticky_path(sid: str) -> str:
-    return STICKY.format(sid=re.sub(r"[^A-Za-z0-9_-]", "", sid or "nosession"))
+    return str(state_path("demo-mode", sid))
 
 
 def main() -> None:
@@ -109,9 +112,7 @@ def main() -> None:
             demo = True
         elif DEMO_PAT.search(prompt):
             demo = True
-            os.makedirs("/tmp/plur-sessions", exist_ok=True)
-            with open(path, "w") as fh:
-                fh.write("1")
+            atomic_write_text(Path(path), "1")
     except OSError:
         # Sticky state is an optimisation. Fall back to per-prompt detection
         # rather than failing open on the rules themselves.

@@ -122,10 +122,15 @@ class OrgCalendarEntry(OrgEntry):
     location: Optional[str] = None
     attendees: List[str] = field(default_factory=list)
     tags: List[str] = field(default_factory=list)
+    # Imported events retain their explicit type. None preserves the legacy
+    # inference for locally constructed entries that predate this field.
+    all_day: Optional[bool] = None
 
     @property
     def is_all_day(self) -> bool:
         """Check if event is all-day (no time component)."""
+        if self.all_day is not None:
+            return self.all_day
         if self.timestamp is None:
             return True
         return self.timestamp.hour == 0 and self.timestamp.minute == 0 and self.end_time is None
@@ -204,6 +209,7 @@ class SyncResult:
         """Add an error message."""
         self.errors.append(error)
         self.items_failed += 1
+        self.success = False
 
 
 class TaskSyncAdapter(ABC):

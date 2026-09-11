@@ -1,9 +1,7 @@
 # An actor pulls delegated items from the ledger and executes them.
 #
-# Installed on a root box (WorkingDirectory=/root/Data) and on a non-root box
-# (User=<account>, $HOME/Data) -- substitute the path and add User= for the
-# non-root box. Data (plur-claw) runs the cron variant instead, because it also
-# has to git pull/push around the dispatch: see ledger-dispatch-pull.sh.
+# Install as a user unit. Set DATACORE_ACTOR in the private environment file.
+# Each physical writer requires its own actor and ledger identity.
 #
 # --limit 2 is deliberate. An actor that drains the whole queue in one tick
 # starves every other actor of anything to claim, which turns a fleet into a
@@ -15,9 +13,10 @@
 
 [Unit]
 Description=Pull delegated items from the ledger and execute them
-Documentation=file:.datacore/lib/ledger_dispatch.py
+Documentation=file:.datacore/lib/ledger_claim.py
 
 [Service]
 Type=oneshot
-WorkingDirectory=/root/Data
-ExecStart=/usr/bin/python3 /root/Data/.datacore/lib/ledger_dispatch.py --space /root/Data/2-datacore --actor winston --limit 2 --execute
+WorkingDirectory=%h/Data
+EnvironmentFile=%h/.config/datacore/dispatcher.env
+ExecStart=/usr/bin/python3 %h/Data/.datacore/lib/ledger_claim.py --space %h/Data/2-datacore --limit 2 --execute

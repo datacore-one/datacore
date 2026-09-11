@@ -39,6 +39,7 @@ from ledger.fold import fold  # noqa: E402
 from ledger.index import build_index, items_by  # noqa: E402
 from ledger.log import EventLog, read_events  # noqa: E402
 from ledger.verify import check_not_rewound, verify_chain  # noqa: E402
+from ledger.policy import approval_payload_hash, guarded_append, load_policy
 
 
 def _default_actor() -> str:
@@ -84,11 +85,25 @@ def cmd_append(args: argparse.Namespace) -> None:
     actor = args.actor or _default_actor()
     log = EventLog(Path(args.space), actor)
     try:
-        event = log.append(args.type, args.payload)
+        event = guarded_append(log, args.type, args.payload)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(1)
     print(json.dumps({"hash": event.hash, "hlc": event.hlc}))
+
+
+def cmd_approve(args):
+    """Record exactly the proposal supplied by the authorized local approver."""
+    actor = args.actor or _default_actor()
+    policy = load_policy()
+    if actor != policy.approver:
+        raise ValueError("only the configured approver can approve a proposal")
+    item_id = args.payload.get("id")
+    if not isinstance(item_id, str) or not item_id:
+        raise ValueError("approval proposal requires an item id")
+    event = guarded_append(EventLog(Path(args.space), actor), "approval.grant",
+        {"item": item_id, "payload_hash": approval_payload_hash(args.payload)}, policy=policy)
+    print(json.dumps({"approval_ref": event.hash, "payload_hash": event.payload["payload_hash"]}))
 
 
 def cmd_verify(args: argparse.Namespace) -> None:
@@ -142,6 +157,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--payload", required=True, type=_json_dict, help="Event payload (JSON object)")
     p.add_argument("--actor", default=None, help="Actor id (default: $DATACORE_ACTOR or hostname)")
 
+    p = sub.add_parser("approve", help="Approve the exact proposed item.create payload")
+    p.add_argument("--space", required=True)
+    p.add_argument("--payload", required=True, type=_json_dict)
+    p.add_argument("--actor", default=None)
+
     p = sub.add_parser("verify", help="Verify every writer's hash chain in a space")
     p.add_argument("--space", required=True, help="Space directory root")
     p.add_argument("--strict", action="store_true", help="Flag unsigned events as errors")
@@ -159,6 +179,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 COMMANDS = {
     "append": cmd_append,
+    "approve": cmd_approve,
     "verify": cmd_verify,
     "items": cmd_items,
     "balances": cmd_balances,

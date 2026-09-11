@@ -1,15 +1,15 @@
-"""Suite-wide isolation.
-
-DATACORE_STATE is redirected to a per-test tmp dir for EVERY test here.
-Without it, test_job_verify.py -- which calls job_verify.main() in-process --
-wrote eleven invented job names into ~/.datacore/state/job-verify-recurrence.json
-(log-job x18, telegram-job x18, ...), inflating the "recurring" summary that
-the production alerts read. recurrence.py is the only consumer of the variable
-(verified 2026-09-03), so redirecting it cannot starve a test of real state.
-"""
+"""Shared disposable identity fixtures; state isolation is in .datacore/conftest.py."""
 import pytest
 
 
-@pytest.fixture(autouse=True)
-def _isolated_datacore_state(tmp_path, monkeypatch):
-    monkeypatch.setenv("DATACORE_STATE", str(tmp_path / "state"))
+@pytest.fixture
+def briefing_principals(tmp_path, monkeypatch):
+    """Exercise real policy checks with declared, disposable identities."""
+    import actor_identity
+    import ledger.policy
+    registry = tmp_path / "principals.yaml"
+    registry.write_text("principals:\n  human: {kind: human}\n  worker: {kind: agent}\n  agent: {kind: agent}\n  t: {kind: agent}\n")
+    policy = tmp_path / "approvals.yaml"
+    policy.write_text("version: 1\napprover: human\ncosign_effects: [email.send, payment, prod.deploy]\nprincipals:\n  worker: {}\n  agent: {}\n  t: {}\n")
+    monkeypatch.setattr(actor_identity, "PRINCIPALS", registry)
+    monkeypatch.setattr(ledger.policy, "DEFAULT_POLICY_PATH", policy)

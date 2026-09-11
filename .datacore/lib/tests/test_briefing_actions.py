@@ -41,18 +41,19 @@ ACTOR = "worker"
 
 
 @pytest.fixture(autouse=True)
-def _no_signing(monkeypatch):
+def _no_signing(monkeypatch, briefing_principals):
     # Hermetic: default (unsigned) EventLog must never touch real key
     # material, regardless of what's in the ambient environment.
     monkeypatch.delenv("DATACORE_LEDGER_SIGN", raising=False)
 
 
-def _grant(space_dir, approver, item_id):
+def _grant(space_dir, approver, item_id, title):
     """Append an `approval.grant` for `item_id`, signed by `approver`, via
     a plain EventLog -- mirrors how ledger.policy tests seed grants.
     """
     grant_log = EventLog(space_dir, approver, sign=False)
-    return grant_log.append("approval.grant", {"item": item_id})
+    from ledger.policy import approval_payload_hash
+    return grant_log.append("approval.grant", {"item": item_id, "payload_hash": approval_payload_hash({"id": item_id, "title": title, "effects": ["email.send"]})})
 
 
 # --- item_id ---------------------------------------------------------------
@@ -330,7 +331,7 @@ def test_side_effect_item_with_valid_grant_is_created(tmp_path):
     policy = Policy(approver="human", cosign_effects=frozenset({"email.send"}))
     text = "Email the client"
     tid = item_id(text)
-    grant = _grant(space, "human", tid)
+    grant = _grant(space, "human", tid, text)
 
     items = [{"text": text, "effects": ["email.send"], "approval_ref": grant.hash}]
 
@@ -414,7 +415,9 @@ def test_act_claim_appends_item_claim(tmp_path):
     event = act(space, tid, "claim", ACTOR)
 
     assert event.type == "item.claim"
-    assert event.payload == {"id": tid}
+    from ledger.policy import approval_payload_hash
+    current = fold(read_events(space)).items[tid]
+    assert event.payload == {"id": tid, "payload_hash": approval_payload_hash(current.payload)}
     assert event.actor == ACTOR
 
     state = fold(read_events(space))
@@ -576,7 +579,7 @@ def test_acceptance_side_effect_cycle_blocked_then_granted_then_created(tmp_path
     state_before_grant = fold(read_events(space))
     assert tid not in state_before_grant.items
 
-    grant = _grant(space, "human", tid)
+    grant = _grant(space, "human", tid, text)
 
     item_with_ref = {**item, "approval_ref": grant.hash}
     second = materialize([item_with_ref], space, materializer_actor, policy=policy)

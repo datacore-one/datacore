@@ -48,7 +48,7 @@ def test_registry_binds_by_hash_and_accepts_a_plain_overlay():
 
 
 def test_committed_registry_contains_no_address():
-    text = (ROOT / ".datacore" / "registry" / "principals.yaml").read_text()
+    text = (ROOT / ".datacore" / "registry" / "principals.yaml.example").read_text()
     live = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
     assert not EMAIL.search(live), "an email address is back in the public registry"
     assert "email_sha256:" in live
@@ -56,7 +56,7 @@ def test_committed_registry_contains_no_address():
 
 def test_every_writer_in_the_registry_is_bound_or_declared_unbound():
     import yaml
-    ps = yaml.safe_load((ROOT / ".datacore" / "registry" / "principals.yaml").read_text())["principals"]
+    ps = yaml.safe_load((ROOT / ".datacore" / "registry" / "principals.yaml.example").read_text())["principals"]
     for name, p in ps.items():
         if p.get("writes_as"):
-            assert allowed_emails(name) or name == "practice", f"{name}: writers with no author bound"
+            assert allowed_emails(name, ROOT / ".datacore/registry/principals.yaml.example"), f"{name}: writers with no author bound"

@@ -100,8 +100,10 @@ def _git(repo: Path, *args: str, timeout: int = 120) -> tuple[int, str, str]:
 @contextmanager
 def _repo_lock(space: Path):
     """Exclusive, per-repo, SAME-MACHINE ONLY. See the module docstring."""
-    LOCK_DIR.mkdir(parents=True, exist_ok=True)
-    lock = LOCK_DIR / f"{space.name}.lock"
+    # Honor the same state-root override used by jobs/recurrence and tests.
+    lock_dir = Path(os.environ["DATACORE_STATE"]) / "locks" if os.environ.get("DATACORE_STATE") else LOCK_DIR
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock = lock_dir / f"{space.name}.lock"
     with open(lock, "w") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:

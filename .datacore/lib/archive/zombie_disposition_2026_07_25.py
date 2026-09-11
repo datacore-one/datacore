@@ -21,11 +21,13 @@ import argparse
 import sys
 from pathlib import Path
 
-from org_workspace import OrgWorkspace
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from org_transaction import SafeOrgWorkspace as OrgWorkspace, serialized
 
 MARKER = "zombie triage 2026-07-25 (state-vocabulary repair) — promote to NEXT or CANCEL"
 
 
+@serialized
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("data_dir", type=Path)

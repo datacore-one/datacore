@@ -5,28 +5,36 @@
 #
 # Usage:
 #   cd .datacore/modules/whatsapp/templates
-#   docker-compose up -d
+#   docker compose --env-file /private/path/waha.env up -d
 #
 # First run:
-#   1. Start container: docker-compose up -d
+#   1. Set a generated API key in a mode-0600 file outside the repository.
+#      Start with docker compose --env-file /private/path/waha.env up -d.
 #   2. Check logs: docker-compose logs -f waha
-#   3. Get QR code: curl http://localhost:3000/api/default/auth/qr
+#   3. Get QR code via the authenticated local API (X-Api-Key header).
 #   4. Scan QR code in WhatsApp mobile app
-#   5. Verify: curl http://localhost:3000/api/sessions/default
+#   5. Verify the local session with the same authentication header.
 
 version: '3.8'
 
 services:
   waha:
-    image: devlikeapro/waha:latest
+    image: devlikeapro/waha@sha256:527ff3d634925adb26d596883d7b3ca502c080f737af3c2af2be0c973c511533 # public latest digest, 2026-09-10
     container_name: datacore-waha
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       # Session configuration
       - WHATSAPP_DEFAULT_ENGINE=WEBJS
       - WHATSAPP_RESTART_ALL_SESSIONS=true
+
+      # Explicit key required; clients send it in X-Api-Key.
+      - WAHA_API_KEY=${WAHA_API_KEY:?Set a strong WAHA_API_KEY in a private environment file}
+      - WAHA_DASHBOARD_ENABLED=false
+      - WHATSAPP_SWAGGER_ENABLED=false
+      - WAHA_PRINT_QR=false
+      - WHATSAPP_API_KEY_EXCLUDE_PATH=health
 
       # API configuration
       - WHATSAPP_API_PORT=3000

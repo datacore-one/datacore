@@ -59,6 +59,10 @@ def build_index(state: LedgerState, db_path: Path) -> None:
 
     with closing(sqlite3.connect(db_path)) as conn:
         with conn:  # transaction: commits on clean exit, rolls back on exception
+            # sqlite3 starts implicit transactions for DML, not these DDL
+            # statements. Begin explicitly so readers keep the old snapshot
+            # and any failed rebuild restores all previous tables and rows.
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute("DROP TABLE IF EXISTS items")
             conn.execute("DROP TABLE IF EXISTS spend")
             conn.execute(

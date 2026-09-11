@@ -7,6 +7,8 @@ import subprocess
 import sys
 from datetime import date
 from pathlib import Path
+from process_run import run as run_process
+from text_model import claude_text_command
 
 DATA_DIR = Path(os.environ.get('DATA_DIR', Path.home() / 'Data'))
 PERSONAL = DATA_DIR / '0-personal'
@@ -129,8 +131,8 @@ Output the report in markdown. Be analytical and specific to the projects listed
 """
 
     try:
-        result = subprocess.run(
-            ['claude', '-p', '--dangerously-skip-permissions', '--output-format', 'text', prompt],
+        result = run_process(
+            claude_text_command(), input=prompt,
             cwd=DATA_DIR, capture_output=True, text=True, timeout=120
         )
         if result.returncode == 0:

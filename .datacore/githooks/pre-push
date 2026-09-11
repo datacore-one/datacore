@@ -43,7 +43,7 @@ FALLBACK_PROTECTED="plur-ai/plur datacore-one/datacore datacore-one/datacore-dip
 # including the LFS pre-push hook. Without explicit chaining, new LFS
 # objects are never uploaded (3-fds silently accumulated 460 objects /
 # 824 MB unpushed by 2026-06-10 exactly this way).
-REFS_INPUT=$(cat || true)
+REFS_INPUT=$(cat)
 
 OWNERSHIP="$DATA_DIR/.datacore/lib/hooks/log_ownership_guard.py"
 
@@ -186,26 +186,24 @@ fi
 IS_PROTECTED=0
 if [ -f "$DENYLIST" ]; then
     if [ "$PYTHON_OK" = "1" ]; then
-        IS_PROTECTED=$(python3 -c "
+        IS_PROTECTED=$(python3 - "$DENYLIST" "$REPO" <<'PY_POLICY'
 import sys, yaml
-with open('$DENYLIST') as f:
+with open(sys.argv[1]) as f:
     d = yaml.safe_load(f)
-print('1' if '$REPO' in d.get('protected_repos', []) else '0')
-" 2>/dev/null) || IS_PROTECTED=""
+if not isinstance(d, dict) or not isinstance(d.get('protected_repos'), list):
+    raise ValueError('invalid public repository policy')
+print('1' if sys.argv[2] in d['protected_repos'] else '0')
+PY_POLICY
+        ) || IS_PROTECTED=""
         if [ -z "$IS_PROTECTED" ]; then
-            echo "pre-push: ⚠ python/yaml parse of denylist FAILED — using grep fallback to determine protection" >&2
+            IS_PROTECTED=1
             PYTHON_OK=0
         fi
+    else
+        # A present policy that cannot be parsed cannot exempt a repository.
+        IS_PROTECTED=1
     fi
-    if [ "$PYTHON_OK" = "0" ]; then
-        # Conservative grep fallback: any listed occurrence of the repo name
-        # in the denylist counts as protected (fail toward protection).
-        if grep -qE "^[[:space:]]*-[[:space:]]*${REPO}[[:space:]]*$" "$DENYLIST" 2>/dev/null; then
-            IS_PROTECTED=1
-        else
-            IS_PROTECTED=0
-        fi
-    fi
+
 else
     echo "pre-push: ⚠ denylist NOT FOUND at $DENYLIST — using built-in fallback protected list" >&2
     case " $FALLBACK_PROTECTED " in
@@ -228,51 +226,10 @@ echo "pre-push: $REPO is PROTECTED — running policy chain…" >&2
 [ -f "$SCANNER" ]   || fail_closed "scanner script missing"
 
 # ---- Collect outgoing commit range per ref --------------------------------
-ALL_RANGE=""
-while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
-    [ -z "$local_ref" ] && continue
-    if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
-        echo "pre-push: $remote_ref is a deletion — nothing to scan" >&2
-        continue
-    fi
-
-    if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
-        # New branch — diff against the closest remote-tracking branch
-        BASE=""
-        for candidate in "${REMOTE}/main" "${REMOTE}/master" "${REMOTE}/develop"; do
-            if git rev-parse --quiet --verify "$candidate" >/dev/null 2>&1; then
-                BASE="$candidate"
-                break
-            fi
-        done
-        if [ -n "$BASE" ]; then
-            RANGE=$(git rev-list "${BASE}..${local_sha}" 2>/dev/null || true)
-        else
-            echo "pre-push: ⚠ new branch, no ${REMOTE} tracking base found — scanning last 50 commits as safety net" >&2
-            RANGE=$(git rev-list "$local_sha" 2>/dev/null | head -50 || true)
-        fi
-    elif git rev-parse --quiet --verify "${remote_sha}^{commit}" >/dev/null 2>&1; then
-        RANGE=$(git rev-list "${remote_sha}..${local_sha}" 2>/dev/null || true)
-    else
-        # Remote SHA not present locally (force-push over unknown history /
-        # stale tracking refs). Previously this crashed rev-list and the
-        # scan was SILENTLY SKIPPED. Now: scan everything not already on a
-        # tracking ref of this remote.
-        echo "pre-push: ⚠ remote SHA ${remote_sha:0:12} not present locally — scanning commits not on any ${REMOTE} tracking ref" >&2
-        if git for-each-ref --format='x' "refs/remotes/${REMOTE}" 2>/dev/null | grep -q x; then
-            RANGE=$(git rev-list "$local_sha" --not --remotes="$REMOTE" 2>/dev/null || true)
-            if [ -z "$RANGE" ]; then
-                echo "pre-push: all commits of ${local_sha:0:12} already covered by ${REMOTE} tracking refs — nothing new exposed" >&2
-            fi
-        else
-            echo "pre-push: ⚠ no ${REMOTE} tracking refs at all — scanning last 50 commits as safety net" >&2
-            RANGE=$(git rev-list "$local_sha" 2>/dev/null | head -50 || true)
-        fi
-    fi
-
-    [ -n "$RANGE" ] && ALL_RANGE="${ALL_RANGE}${RANGE}
-"
-done <<< "$REFS_INPUT"
+RANGE_TOOL="$DATA_DIR/.datacore/lib/git_privacy.py"
+[ -f "$RANGE_TOOL" ] || fail_closed "Git range validator missing"
+ALL_RANGE=$(printf '%s\n' "$REFS_INPUT" | python3 "$RANGE_TOOL" --outgoing "$REMOTE") \
+    || fail_closed "cannot establish outgoing commits; fetch the remote and retry"
 
 if [ -z "$ALL_RANGE" ]; then
     echo "pre-push: ✓ no outgoing commits to scan" >&2
