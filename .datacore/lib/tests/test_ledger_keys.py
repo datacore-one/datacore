@@ -3,6 +3,7 @@
 import multiprocessing
 
 import yaml
+import pytest
 
 from ledger.keys import ensure_keypair, sign, verify
 
@@ -30,24 +31,27 @@ def test_verify_and_ensure_keypair_survive_actors_null(tmp_path):
     reg = tmp_path / "r.yaml"
     reg.write_text("actors: null\n")
     assert not verify("miles", b"payload", "00" * 64, registry_path=reg)
-    vk = ensure_keypair("miles", keys_dir=tmp_path / "k", registry_path=reg)
-    assert vk in reg.read_text()
+    with pytest.raises(ValueError, match="invalid signing registry"):
+        ensure_keypair("miles", keys_dir=tmp_path / "k", registry_path=reg)
+    assert reg.read_text() == "actors: null\n"
 
 
 def test_verify_and_ensure_keypair_survive_invalid_yaml(tmp_path):
     reg = tmp_path / "r.yaml"
     reg.write_text("{[")
     assert not verify("miles", b"payload", "00" * 64, registry_path=reg)
-    vk = ensure_keypair("miles", keys_dir=tmp_path / "k", registry_path=reg)
-    assert vk in reg.read_text()
+    with pytest.raises(yaml.YAMLError):
+        ensure_keypair("miles", keys_dir=tmp_path / "k", registry_path=reg)
+    assert reg.read_text() == "{["
 
 
 def test_verify_and_ensure_keypair_survive_toplevel_list(tmp_path):
     reg = tmp_path / "r.yaml"
     reg.write_text("- foo\n- bar\n")
     assert not verify("miles", b"payload", "00" * 64, registry_path=reg)
-    vk = ensure_keypair("miles", keys_dir=tmp_path / "k", registry_path=reg)
-    assert vk in reg.read_text()
+    with pytest.raises(ValueError, match="invalid signing registry"):
+        ensure_keypair("miles", keys_dir=tmp_path / "k", registry_path=reg)
+    assert reg.read_text() == "- foo\n- bar\n"
 
 
 # --- concurrent cold-start locking -------------------------------------------

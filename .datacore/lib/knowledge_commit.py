@@ -74,7 +74,7 @@ class GitError(RuntimeError):
 
 
 def _git(repo: Path, *args: str, env=None, check=True) -> str:
-    r = subprocess.run(['git', *args], cwd=repo, capture_output=True,
+    r = subprocess.run(['git', '--literal-pathspecs', *args], cwd=repo, capture_output=True,
                        text=True, env=env)
     if check and r.returncode != 0:
         raise GitError(f"git {' '.join(args)}: {(r.stderr or '').strip()}")
@@ -129,15 +129,15 @@ def _push_converging(repo: Path, branch: str, sha: str) -> None:
             raise GitError(
                 f"{repo.name}: committed locally on {branch} ({sha[:10]}) but "
                 f"push failed — {msg}")
+    if _git(repo, 'status', '--porcelain', '--untracked-files=all'):
+        raise GitError('publication committed locally; preserve working/index changes before converging with origin')
     try:
         _git(repo, 'pull', '--no-rebase', 'origin', branch)
     except GitError as e:
-        _git(repo, 'merge', '--abort', check=False)
         raise GitError(
             f"{repo.name}: committed locally on {branch} ({sha[:10]}); remote "
             f"moved and the converge-merge conflicted — needs a human "
-            f"(resolve_ledger_conflicts.py handles the usual journal/org "
-            f"cases). {e}")
+            f"(conflict files and index stages are retained). {e}")
     _git(repo, 'push', 'origin', branch)
 
 
@@ -151,7 +151,16 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
 
     Returns the new commit sha, or '' if there was nothing to do.
     """
-    paths = [p for p in paths if (repo / p).is_file()]
+    repo = Path(repo).resolve()
+    checked = []
+    for value in paths:
+        path = Path(value)
+        target = repo / path
+        if path.is_absolute() or target.is_symlink() or not target.resolve().is_relative_to(repo):
+            raise GitError('publication path escapes its repository')
+        if target.is_file():
+            checked.append(path.as_posix())
+    paths = checked
     if not paths:
         return ''
 
@@ -173,11 +182,13 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
         # journal, org and inbox updates all bounced off a hook complaint
         # about files this code never touched.
         r = subprocess.run(
-            ['git', '-C', str(repo), 'commit', '-m', message, '--', *paths],
+            ['git', '--literal-pathspecs', '-C', str(repo), 'commit', '-m', message, '--', *paths],
             capture_output=True, text=True)
         if r.returncode != 0:
             out = (r.stdout or '') + (r.stderr or '')
             if 'nothing to commit' in out or 'nothing added to commit' in out:
+                if push:
+                    _push_converging(repo, branch, _git(repo, 'rev-parse', 'HEAD'))
                 return ''
             raise GitError(f"git commit: {out.strip()[:400]}")
         sha = _git(repo, 'rev-parse', 'HEAD')
@@ -190,6 +201,26 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
         base = _git(repo, 'rev-parse', f'refs/heads/{branch}')
     except GitError:
         raise GitError(f"{repo.name}: no local branch '{branch}' to commit onto")
+
+    # A file from an older feature branch is not a replacement for a newer
+    # default-branch file. Refuse the ambiguous merge before writing any ref.
+    for rel in paths:
+        def read_at(ref):
+            mode = _git(repo, 'ls-tree', ref, '--', rel)
+            if not mode:
+                return None
+            if not mode.startswith(('100644 ', '100755 ')):
+                raise GitError('publication target is not a regular file')
+            result = subprocess.run(['git', 'show', f'{ref}:{rel}'], cwd=repo, capture_output=True)
+            if result.returncode:
+                raise GitError('cannot read publication base')
+            return result.stdout
+        source, destination = read_at('HEAD'), read_at(base)
+        content = (repo / rel).read_bytes()
+        preserving_append = (destination is not None and Path(rel).suffix in {'.md', '.org'}
+                             and destination.endswith(b'\n') and content.startswith(destination))
+        if source != destination and content != destination and not preserving_append:
+            raise GitError(f'{rel}: destination has independent changes; reconcile both versions before publication')
 
     tmp_index = tempfile.NamedTemporaryFile(delete=False, suffix='.idx')
     tmp_index.close()
@@ -210,6 +241,10 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
         # No-op guard: if the tree is identical to the branch tip's, committing
         # would create an empty commit on every wrap-up forever.
         if tree == _git(repo, 'rev-parse', f'{base}^{{tree}}'):
+            # A previous attempt may have committed before its push failed.
+            # Unchanged local content does not acknowledge remote delivery.
+            if push:
+                _git(repo, 'push', 'origin', branch)
             return ''
 
         sha = _git(repo, 'commit-tree', tree, '-p', base, '-m', message, env=env)
@@ -218,21 +253,8 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
     finally:
         os.unlink(tmp_index.name)
 
-    # The file is now on `branch`, but it is still sitting UNTRACKED in this
-    # branch's working tree — and git will then refuse to switch branches:
-    #
-    #   error: The following untracked working tree files would be overwritten
-    #          by checkout: journal/2026-07-13.md
-    #
-    # That would deadlock the agent onto the feature branch, and in particular it
-    # would break check_and_repair_git()'s stray-branch recovery, which works by
-    # checking out the default branch. A fix that jams the other fix.
-    #
-    # The content is committed and safe on `branch`, so the working-tree copy is
-    # litter. Drop it — but only if it is untracked HERE (a tracked file is a real
-    # modification on this branch and is not ours to throw away), and only after
-    # confirming the blob actually landed.
-    _drop_landed_untracked(repo, branch, paths)
+    # Retain working copies. A later edit may already differ from the committed
+    # blob; publishing on another branch never grants authority to delete it.
 
     if push:
         try:
@@ -247,27 +269,6 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
                 f"with origin and push. {e}")
 
     return sha
-
-
-def _drop_landed_untracked(repo: Path, branch: str, paths) -> None:
-    """Remove working-tree copies of files we just committed onto another branch.
-
-    Only touches paths that are untracked on the CURRENT branch and verifiably
-    present in `branch`. Anything else is left exactly as we found it.
-    """
-    for rel in paths:
-        tracked = _git(repo, 'ls-files', '--', rel, check=False)
-        if tracked:
-            continue  # tracked here — a real change on this branch, not litter
-
-        landed = _git(repo, 'cat-file', '-e', f'{branch}:{rel}', check=False)
-        # cat-file -e prints nothing and exits 0 on success; use rev-parse to be sure.
-        try:
-            _git(repo, 'rev-parse', f'{branch}:{rel}')
-        except GitError:
-            continue  # did not actually land — keep the file, do not lose data
-
-        (repo / rel).unlink(missing_ok=True)
 
 
 def commit_knowledge(repo: Path, paths, message: str, push: bool = True) -> dict:

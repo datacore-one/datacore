@@ -35,6 +35,7 @@ from sync.conflict import (
     ConflictStrategy,
     load_conflict_config,
 )
+from sync.config import load_settings, merge
 
 
 class SyncEngine:
@@ -62,7 +63,7 @@ class SyncEngine:
         Args:
             data_dir: Path to ~/Data. If None, uses DATA_DIR env or ~/Data.
         """
-        self.data_dir = Path(data_dir or os.environ.get("DATA_DIR", os.path.expanduser("~/Data")))
+        self.data_dir = Path(data_dir or os.environ.get("DATA_DIR") or os.environ.get("DATACORE_ROOT") or Path.home() / "Data")
         self.config_dir = self.data_dir / ".datacore"
         self.adapters: Dict[str, TaskSyncAdapter] = {}
         self.config: Dict[str, Any] = {}
@@ -80,63 +81,53 @@ class SyncEngine:
         Returns:
             True if config loaded successfully.
         """
-        settings_path = self.config_dir / "settings.yaml"
-        local_settings_path = self.config_dir / "settings.local.yaml"
-
+        # Disable old adapters before reload: a disabled or invalid new
+        # configuration must never leave old outbound integrations active.
+        self.adapters = {}
         self.config = {}
-
-        # Load base settings
-        if settings_path.exists():
-            with open(settings_path) as f:
-                self.config = yaml.safe_load(f) or {}
-
-        # Merge local settings (overrides)
-        if local_settings_path.exists():
-            with open(local_settings_path) as f:
-                local_config = yaml.safe_load(f) or {}
-                self._deep_merge(self.config, local_config)
+        self.config = load_settings(self.config_dir.parent)
 
         # Initialize adapters from config
-        self._init_adapters()
-
-        # Initialize conflict resolution
-        self._init_conflict_resolution()
+        try:
+            self._init_adapters()
+            self._init_conflict_resolution()
+        except Exception:
+            self.adapters = {}
+            raise
 
         return True
 
     def _deep_merge(self, base: dict, override: dict):
         """Deep merge override into base dict."""
-        for key, value in override.items():
-            if key in base and isinstance(base[key], dict) and isinstance(value, dict):
-                self._deep_merge(base[key], value)
-            else:
-                base[key] = value
+        merge(base, override)
 
     def _init_adapters(self):
         """Initialize configured adapters."""
         sync_config = self.config.get("sync", {})
         adapters_config = sync_config.get("adapters", {})
 
+        initialized = {}
         for adapter_name, adapter_config in adapters_config.items():
+            if not isinstance(adapter_config, dict) or type(adapter_config.get("enabled", False)) is not bool:
+                raise ValueError("adapter configuration requires a boolean enabled flag")
             if not adapter_config.get("enabled", False):
                 continue
 
             adapter_class = get_adapter(adapter_name)
-            if adapter_class:
-                try:
-                    self.adapters[adapter_name] = adapter_class(adapter_config)
-                except Exception as e:
-                    print(f"Warning: Failed to initialize {adapter_name} adapter: {e}")
+            if adapter_class is None:
+                raise ValueError(f"enabled sync adapter {adapter_name!r} is unavailable")
+            initialized[adapter_name] = adapter_class(config={**adapter_config, "data_dir": str(self.data_dir)})
+        self.adapters = initialized
 
     def _init_conflict_resolution(self):
         """Initialize conflict detection and resolution."""
         # Load conflict config from settings
-        conflict_config = load_conflict_config()
+        conflict_config = load_conflict_config(self.data_dir, settings=self.config)
 
         # Initialize components
         self.conflict_detector = ConflictDetector()
         self.conflict_resolver = ConflictResolver(conflict_config)
-        self.conflict_queue = ConflictQueue()
+        self.conflict_queue = ConflictQueue(self.config_dir / "state" / "sync_history.db")
 
     def is_enabled(self) -> bool:
         """Check if sync is enabled in config."""
@@ -166,13 +157,13 @@ class SyncEngine:
 
         for adapter_name, adapter in self.adapters.items():
             if not adapter.is_configured():
-                continue
+                raise RuntimeError(f"enabled adapter {adapter_name!r} is not configured")
 
             try:
                 changes = adapter.pull_changes(since)
                 all_changes.extend(changes)
             except Exception as e:
-                print(f"Error pulling from {adapter_name}: {e}")
+                raise RuntimeError(f"pull failed for {adapter_name!r}; no complete snapshot available") from e
 
         return all_changes
 
@@ -204,6 +195,8 @@ class SyncEngine:
                     if default not in changes_by_adapter:
                         changes_by_adapter[default] = []
                     changes_by_adapter[default].append(change)
+                else:
+                    result.add_error("no adapter is configured for the change")
 
         # Push to each adapter
         for adapter_name, adapter_changes in changes_by_adapter.items():
@@ -216,10 +209,14 @@ class SyncEngine:
                     result.items_updated += adapter_result.items_updated
                     result.items_failed += adapter_result.items_failed
                     result.errors.extend(adapter_result.errors)
+                    if not adapter_result.success or adapter_result.items_processed != len(adapter_changes):
+                        result.add_error(f"{adapter_name}: incomplete or unsuccessful push")
                 except Exception as e:
-                    result.add_error(f"{adapter_name}: {str(e)}")
+                    result.add_error(f"{adapter_name}: push failed")
+            else:
+                result.add_error(f"adapter {adapter_name!r} is unavailable")
 
-        result.success = result.items_failed == 0
+        result.success = result.items_failed == 0 and not result.errors
         return result
 
     def detect_conflicts(
@@ -325,28 +322,14 @@ class SyncEngine:
         Returns:
             Dict with sync statistics.
         """
-        stats = {
-            "success": True,
-            "pull": {"count": 0, "errors": []},
+        # Applying pulled changes and detecting local changes are not yet
+        # implemented. Never advance a cursor for work that was not persisted.
+        return {
+            "success": False,
+            "pull": {"count": 0, "errors": ["bidirectional sync persistence is not implemented"]},
             "push": {"count": 0, "errors": []},
             "timestamp": datetime.now().isoformat(),
         }
-
-        # Pull external changes
-        try:
-            changes = self.pull_all(self._last_sync)
-            stats["pull"]["count"] = len(changes)
-            # TODO: Route changes to org-mode via router
-        except Exception as e:
-            stats["pull"]["errors"].append(str(e))
-            stats["success"] = False
-
-        # TODO: Detect org-mode changes and push
-        # This requires comparing org files with last sync state
-
-        self._last_sync = datetime.now()
-
-        return stats
 
     def diagnostic(self) -> Dict[str, Any]:
         """

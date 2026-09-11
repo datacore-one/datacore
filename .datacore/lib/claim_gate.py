@@ -44,6 +44,9 @@ def _limits(actor: str, policy=None) -> tuple[str | None, dict, dict]:
 
 
 def check_claim(actor: str, payload: dict | None, policy=None, space_dir: Path | None = None) -> tuple[bool, str]:
+    if policy is None:
+        from ledger.policy import load_policy
+        policy = load_policy()
     name, entry, lims = _limits(actor, policy)
     if name is None:
         return False, f"unregistered writer {actor!r} — declare it in registry/principals.yaml"
@@ -57,28 +60,21 @@ def check_claim(actor: str, payload: dict | None, policy=None, space_dir: Path |
     return True, f"{name} may claim"
 
 
+def _event_date(event):
+    milliseconds = int(event.hlc.split(".", 1)[0])
+    return dt.datetime.fromtimestamp(milliseconds / 1000, dt.timezone.utc).date()
+
+
 def creates_today(space_dir: Path | None, actor: str, today: dt.date | None = None) -> int:
-    """How many item.create events this writer appended today, from its own log."""
+    """Count a principal's creates across aliases and all branch-scoped logs."""
     if not space_dir:
         return 0
-    f = Path(space_dir) / ".datacore" / "events" / f"{actor}.jsonl"
-    if not f.exists():
-        return 0
+    from ledger.log import read_events
+    principal, _ = principal_of(actor)
     today = today or dt.datetime.now(dt.timezone.utc).date()
-    n = 0
-    for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
-        if '"item.create"' not in line:
-            continue
-        try:
-            e = json.loads(line)
-        except ValueError:
-            continue
-        if e.get("type") != "item.create":
-            continue
-        ms = str(e.get("hlc", "")).split(".")[0]
-        if ms.isdigit() and dt.datetime.fromtimestamp(int(ms) / 1000, dt.timezone.utc).date() == today:
-            n += 1
-    return n
+    return sum(1 for event in read_events(space_dir)
+               if principal_of(event.actor)[0] == principal and event.type == "item.create"
+               and _event_date(event) == today)
 
 
 def check_create(actor: str, payload: dict | None, policy=None, space_dir: Path | None = None,
@@ -90,17 +86,18 @@ def check_create(actor: str, payload: dict | None, policy=None, space_dir: Path 
     human = str(entry.get("kind") or "") == "human"
     max_hops = lims.get("max_hops", DEFAULT_MAX_HOPS)
     hops = payload.get("hops", 0)
-    try:
-        hops = int(hops or 0)
-    except (TypeError, ValueError):
-        return False, f"hops must be an integer (got {hops!r})"
+    if isinstance(hops, bool) or not isinstance(hops, int) or hops < 0:
+        return False, f"hops must be a nonnegative integer (got {hops!r})"
     if not human and hops > max_hops:
         return False, f"delegation chain is {hops} hops deep; {name} may go {max_hops}"
     assignee = payload.get("assignee")
     requester = payload.get("requested_by") or actor
+    requester_name, _, _ = _limits(str(requester), policy)
+    if requester_name != name:
+        return False, "requested_by must identify the acting principal"
     if assignee and assignee != requester:
-        rname, _, rlims = _limits(str(requester), policy)
-        allowed = rlims.get("may_delegate_to")
+        rname = name
+        allowed = lims.get("may_delegate_to")
         if allowed is not None and assignee not in allowed:
             return False, f"{rname or requester} may not delegate to {assignee} (may_delegate_to: {', '.join(allowed) or 'nobody'})"
     if assignee and assignee != actor:
@@ -116,34 +113,18 @@ def check_create(actor: str, payload: dict | None, policy=None, space_dir: Path 
 
 
 def month_to_date_cents(space_dir: Path | None, writers: list[str], today: dt.date | None = None) -> int:
-    """Spend recorded this calendar month by any of a principal's writer logs."""
+    """Use the canonical spend fold across every chain owned by these writers."""
     if not space_dir:
         return 0
+    from ledger.log import read_events
+    from ledger.fold import fold
+    from actor_identity import base_writer
+    principals = {principal_of(writer)[0] or base_writer(writer) for writer in writers}
     today = today or dt.datetime.now(dt.timezone.utc).date()
-    total = 0
-    for w in writers:
-        f = Path(space_dir) / ".datacore" / "events" / f"{w}.jsonl"
-        if not f.exists():
-            continue
-        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
-            if '"spend.record"' not in line:
-                continue
-            try:
-                e = json.loads(line)
-            except ValueError:
-                continue
-            if e.get("type") != "spend.record":
-                continue
-            ms = str(e.get("hlc", "")).split(".")[0]
-            if not ms.isdigit():
-                continue
-            d = dt.datetime.fromtimestamp(int(ms) / 1000, dt.timezone.utc).date()
-            if (d.year, d.month) == (today.year, today.month):
-                try:
-                    total += int((e.get("payload") or {}).get("cents") or 0)
-                except (TypeError, ValueError):
-                    pass
-    return total
+    events = [event for event in read_events(space_dir)
+              if (principal_of(event.actor)[0] or base_writer(event.actor)) in principals and event.type == "spend.record"
+              and (_event_date(event).year, _event_date(event).month) == (today.year, today.month)]
+    return sum(fold(events).spend.values())
 
 
 def check_budget(actor: str, space_dir: Path | None = None, today: dt.date | None = None) -> tuple[bool, str]:
@@ -216,7 +197,7 @@ def check_override(actor: str, item_id: str | None, space_dir: Path, policy=None
         from ledger.log import read_events
         state = fold(read_events(Path(space_dir)))
     except Exception as exc:  # noqa: BLE001
-        return True, f"could not fold {space_dir}: {exc}"
+        return False, f"cannot establish item ownership ({type(exc).__name__})"
     item = state.items.get(item_id)
     if item is None or not getattr(item, "owner", None):
         return True, "unowned"

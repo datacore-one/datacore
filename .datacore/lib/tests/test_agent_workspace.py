@@ -103,3 +103,60 @@ def test_cleanup_frees_the_id_for_reuse(source: Path, tmp_path: Path):
     cleanup(create(source, "recycle", root=tmp_path / "wt"))
     ws = create(source, "recycle", root=tmp_path / "wt")
     assert ws.path.is_dir()
+
+
+@pytest.mark.parametrize('kind', ['tracked', 'untracked', 'ignored'])
+def test_cleanup_preserves_uncommitted_files(source, tmp_path, kind):
+    ws = create(source, 'unfinished', root=tmp_path / 'wt')
+    path = ws.path / ('seed.txt' if kind == 'tracked' else 'draft.txt')
+    if kind == 'ignored':
+        (source / '.git/info/exclude').write_text('draft.txt\n')
+    path.write_text('valuable unfinished work\n')
+    with pytest.raises(IsolationError):
+        cleanup(ws)
+    assert path.read_text() == 'valuable unfinished work\n'
+    assert git(source, 'rev-parse', '--verify', ws.branch).strip()
+
+
+def test_cleanup_preserves_on_history_failure(source, tmp_path, monkeypatch):
+    import agent_workspace
+    ws = create(source, 'uncertain', root=tmp_path / 'wt')
+    original = agent_workspace._git
+    def fail_history(repo, *args, **kwargs):
+        if args[0] == 'rev-list':
+            return 1, '', 'cannot read object'
+        return original(repo, *args, **kwargs)
+    monkeypatch.setattr(agent_workspace, '_git', fail_history)
+    with pytest.raises(IsolationError):
+        cleanup(ws)
+    assert ws.path.exists()
+    assert git(source, 'rev-parse', '--verify', ws.branch).strip()
+
+
+def test_cleanup_cannot_force_delete_unmerged_commits(source, tmp_path):
+    ws = create(source, 'keep-commits', root=tmp_path / 'wt')
+    (ws.path / 'seed.txt').write_text('new committed work\n')
+    git(ws.path, 'commit', '-qam', 'work')
+    tip = git(source, 'rev-parse', ws.branch)
+    with pytest.raises(IsolationError):
+        cleanup(ws, keep_branch_if_commits=False)
+    assert ws.path.exists()
+    assert git(source, 'rev-parse', ws.branch) == tip
+
+
+@pytest.mark.parametrize('late_edit', [False, True])
+def test_failed_removal_never_falls_back_to_recursive_deletion(source, tmp_path, monkeypatch, late_edit):
+    import agent_workspace
+    ws = create(source, 'retained', root=tmp_path / 'wt')
+    original = agent_workspace._git
+    def interrupt_remove(repo, *args, **kwargs):
+        if args[:2] == ('worktree', 'remove'):
+            if not late_edit:
+                return 1, '', 'removal failed'
+            (ws.path / 'seed.txt').write_text('late writer data\n')
+        return original(repo, *args, **kwargs)
+    monkeypatch.setattr(agent_workspace, '_git', interrupt_remove)
+    with pytest.raises(IsolationError):
+        cleanup(ws)
+    assert ws.path.exists()
+    assert (ws.path / 'seed.txt').read_text() == ('late writer data\n' if late_edit else 'seed\n')

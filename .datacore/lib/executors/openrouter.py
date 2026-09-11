@@ -34,6 +34,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+from secret_http import urlopen as secret_urlopen
 
 from .base import ESTIMATE_CENTS_PER_MILLION_TOKENS, Executor, estimate_cost_cents, register
 
@@ -90,7 +91,7 @@ class OpenRouterExecutor(Executor):
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            with secret_urlopen(req, timeout=timeout_s) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             try:

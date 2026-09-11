@@ -31,6 +31,7 @@ import json
 import shutil
 import os
 import subprocess
+from process_run import run as run_process
 
 from .base import ESTIMATE_CENTS_PER_MILLION_TOKENS, Executor, estimate_cost_cents, register
 
@@ -94,36 +95,16 @@ class ClaudeCodeExecutor(Executor):
         if binary is None:
             raise RuntimeError("'claude' binary not found on PATH")
 
-        # THREE THINGS THE REGISTRY REFACTOR DROPPED, each restored here with
-        # the reason it exists, because losing them was silent and cost days.
-        #
-        # --permission-mode acceptEdits: without a permission mode the agent is
-        #   READ-ONLY. It declines every Write, then reports fluently and exits
-        #   0, so the caller sees success and the check fails for a reason that
-        #   looks like refusal. Verified on nightshift 2026-08-14: identical
-        #   prompt, `acceptEdits` writes the file, no flag does not.
-        #   NOT --dangerously-skip-permissions: that is refused outright under
-        #   root, which is exactly winston's situation, and it is a blanket
-        #   grant where this is the narrow one.
-        #
-        # cwd: the agent must work in the space it was dispatched for.
-        #   `acceptEdits` is scoped to the working directory, so a wrong cwd
-        #   silently makes every write a denied out-of-scope write.
-        #
-        # env with DATACORE_HEADLESS: the PreToolUse PLUR guard demands
-        #   plur_session_start, which is unsatisfiable where the MCP server is
-        #   not connected -- it then refuses every tool call and exits 0.
-        #   Passed explicitly rather than relying on the parent process having
-        #   mutated os.environ, which is how it came to be a coincidence.
-        env = {**os.environ, "DATACORE_HEADLESS": "1"}
-        result = subprocess.run(
-            [binary, "-p", prompt, "--permission-mode", "acceptEdits",
-             "--output-format", "json"],
+        from tool_policy import settings_json
+        env = {**self._execution_env(), "DATACORE_HEADLESS": "1"}
+        result = run_process(
+            [binary, "-p", "--permission-mode", "acceptEdits",
+             "--settings", settings_json(), "--output-format", "json"],
             capture_output=True,
             text=True,
             timeout=timeout_s,
             check=False,
-            stdin=subprocess.DEVNULL,
+            input=prompt,
             cwd=str(self._cwd) if self._cwd else None,
             env=env,
         )

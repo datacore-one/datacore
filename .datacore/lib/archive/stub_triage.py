@@ -16,13 +16,14 @@ Usage:
 """
 import sys
 import os
-import shutil
+import tempfile
 import sqlite3
 import argparse
 from pathlib import Path
 from datetime import datetime
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from archive_files import archive_file
 from zettel_db import get_db_path, DATA_ROOT
 
 META_STUBS = {'stub', 'needs-content', 'chatgpt-export', 'Telegram Export December 2025'}
@@ -85,19 +86,15 @@ def execute_delete(delete_list, dry_run=True):
 
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
     moved = 0
-    log_path = ARCHIVE_DIR / f"triage-log-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
-
-    with open(log_path, 'w') as log:
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", prefix="triage-log-", suffix=".txt", dir=ARCHIVE_DIR, delete=False) as log:
+        log_path = Path(log.name)
         for stub_id, title, path, real_incoming, reason in delete_list:
             src = Path(path)
             if not src.exists():
                 log.write(f"SKIP (missing): {path} | reason={reason}\n")
                 continue
             dst = ARCHIVE_DIR / src.name
-            # Handle name collisions
-            if dst.exists():
-                dst = ARCHIVE_DIR / f"{src.stem}_{stub_id}{src.suffix}"
-            shutil.move(str(src), str(dst))
+            dst = archive_file(src, dst, root=DATA_ROOT)
             log.write(f"MOVED: {path} -> {dst} | reason={reason} | links={real_incoming}\n")
             moved += 1
 

@@ -22,7 +22,14 @@ import argparse
 import subprocess
 import tempfile
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "lib"))
+from secret_http import urlopen as secret_urlopen
+from env_utils import parse_env_value
 from datetime import date, timedelta
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "lib"))
+from process_run import run as run_process
+from text_model import claude_text_command
 
 MODELS_DIR = Path(__file__).parent.parent / "models"
 JOURNAL_DIR = Path.home() / "Data" / "0-personal" / "notes" / "journals"
@@ -32,7 +39,7 @@ def _module_settings():
     These were hardcoded until 2026-08-31, which meant module.yaml's tts_voice and
     tts_speed looked configurable but had no effect whatsoever.
     """
-    fallback = {"tts_voice": "af_heart", "tts_speed": 1.0}
+    fallback = {"tts_voice": "af_heart", "tts_speed": 1.0, "allow_cloud_tts": False}
     try:
         import yaml
         cfg = Path(__file__).resolve().parent.parent / "module.yaml"
@@ -40,6 +47,7 @@ def _module_settings():
         return {
             "tts_voice": s.get("tts_voice") or fallback["tts_voice"],
             "tts_speed": float(s.get("tts_speed") or fallback["tts_speed"]),
+            "allow_cloud_tts": s.get("allow_cloud_tts") is True,
         }
     except Exception:
         return fallback
@@ -243,12 +251,13 @@ def _try_claude_cli(prompt):
     precedence over the claude.ai login and routes to the metered API instead.
     """
     import shutil
-    if not shutil.which("claude"):
+    executable = shutil.which("claude")
+    if not executable:
         return None
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
-    result = subprocess.run(
-        ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "text", prompt],
-        capture_output=True, text=True, timeout=180, env=env, stdin=subprocess.DEVNULL,
+    result = run_process(
+        claude_text_command(executable), input=prompt,
+        capture_output=True, text=True, timeout=180, env=env,
     )
     if result.returncode != 0:
         raise RuntimeError(
@@ -272,7 +281,7 @@ def _try_openrouter(prompt):
         }).encode(),
         headers={"Authorization": f"Bearer {or_key}", "Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    with secret_urlopen(req, timeout=60) as resp:
         return json.loads(resp.read())["choices"][0]["message"]["content"]
 
 
@@ -399,6 +408,8 @@ def _generate_audio_kokoro(text, voice=DEFAULT_VOICE, speed=DEFAULT_SPEED, outpu
 
 def _generate_audio_gtts(text, output_path=None):
     """Fallback TTS via gTTS (Google). No local models needed. Returns (path, duration)."""
+    if not _SETTINGS.get("allow_cloud_tts", False):
+        raise RuntimeError("Cloud speech is disabled; enable allow_cloud_tts in voice-terminal/module.yaml to send briefing text to Google")
     # gtts lives in .datacore/venv — system python is PEP-668 managed. Callers
     # invoke this as a bare `python3`, so the venv needs to be on sys.path.
     import sys as _sys
@@ -434,11 +445,11 @@ def generate_audio(text, voice=DEFAULT_VOICE, speed=DEFAULT_SPEED, output_path=N
     try:
         return _generate_audio_kokoro(text, voice=voice, speed=speed, output_path=output_path)
     except FileNotFoundError as e:
-        print(f"Kokoro unavailable ({e}) — trying gTTS")
+        print(f"Kokoro unavailable ({e})")
     except ImportError:
-        print("kokoro_onnx not installed — trying gTTS")
+        print("kokoro_onnx not installed")
     except Exception as e:
-        print(f"Kokoro error ({e}) — trying gTTS")
+        print(f"Kokoro error ({e})")
 
     return _generate_audio_gtts(text, output_path=output_path)
 
@@ -481,14 +492,14 @@ def _load_telegram_creds(env_file=None):
         for line in env_path.read_text().strip().split("\n"):
             if "=" in line and not line.startswith("#"):
                 k, v = line.split("=", 1)
-                env.setdefault(k.strip(), v.strip())
+                env.setdefault(k.strip(), parse_env_value(v))
     # Also check nightshift.env (server config)
     ns_env = Path.home() / "config" / "nightshift.env"
     if ns_env.exists():
         for line in ns_env.read_text().strip().split("\n"):
             if "=" in line and not line.startswith("#"):
                 k, v = line.split("=", 1)
-                env.setdefault(k.strip(), v.strip())
+                env.setdefault(k.strip(), parse_env_value(v))
 
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN") or env.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID") or env.get("TELEGRAM_CHAT_ID")
@@ -512,7 +523,7 @@ def _telegram_send_file(bot_token, chat_id, audio_path, api_method, field_name, 
         url, data=body,
         headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
     )
-    with urllib.request.urlopen(req) as resp:
+    with secret_urlopen(req) as resp:
         return json.loads(resp.read())
 
 

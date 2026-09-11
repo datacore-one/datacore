@@ -34,7 +34,7 @@ from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from org_workspace import OrgWorkspace  # noqa: E402
+from org_transaction import SafeOrgWorkspace as OrgWorkspace  # noqa: E402
 from task_audit import normalize, parse_date, OPEN_STATES  # noqa: E402
 
 CLOSABLE = {'TODO', 'NEXT', 'WAITING', 'REVIEW'}
@@ -164,6 +164,9 @@ def plan_digests(tasks):
     return actions
 
 
+from org_transaction import serialized
+
+@serialized
 def apply_actions(actions):
     by_file = defaultdict(list)
     for a in actions:

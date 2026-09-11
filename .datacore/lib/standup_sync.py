@@ -19,9 +19,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from org_workspace import OrgWorkspace, Query
+from org_workspace import Query
+from org_transaction import SafeOrgWorkspace as OrgWorkspace, serialized
 
 
+@serialized
 def get_standup_tasks(space_path: str, contributor: str) -> list[dict]:
     """Get all :standup: tagged tasks for a contributor from next_actions.org."""
     org_file = Path(space_path) / "org" / "next_actions.org"
@@ -173,39 +175,38 @@ def _parse_updates_format(content: str, contributor: str) -> list[dict]:
     return items
 
 
+@serialized
 def create_standup_task(space_path: str, contributor: str, text: str) -> dict:
-    """Create an org task tagged :standup: for a standup item."""
+    """Create a standup task through the current workspace mutation API."""
     org_file = Path(space_path) / "org" / "next_actions.org"
     if not org_file.exists():
         return {"error": f"File not found: {org_file}"}
-
     ws = OrgWorkspace()
-    ws.load(str(org_file))
-
+    ws.load(org_file)
     today = date.today().isoformat()
-    task_id = f"{Path(space_path).name[:2]}-{today.replace('-', '')}-{hash(text) % 1000:03d}"
-
-    # Find or create a Standup section
-    standup_parent = None
-    for node in ws.root.children:
-        if "standup" in node.heading.lower():
-            standup_parent = node
-            break
-
-    if standup_parent is None:
-        standup_parent = ws.root.add_child(heading="Standup Items", todo="")
-        standup_parent.tags = []
-
-    new_task = standup_parent.add_child(heading=text, todo="TODO")
-    new_task.tags = ["standup"]
-    new_task.set_property("ID", task_id)
-    new_task.set_property("ASSIGNEE", contributor)
-    new_task.set_property("SOURCE", f"journal/{today}")
-    new_task.set_property("CREATED", today)
-
+    parent = next((node for node in ws.all_nodes()
+                   if node.level == 1 and node.heading.lower() == "standup items"), None)
+    if parent is None:
+        parent = ws.create_node(org_file, "Standup Items")
+    task = ws.create_node(org_file, text, state="TODO", parent=parent,
+                          tags=["standup"], ASSIGNEE=contributor or "",
+                          SOURCE=f"journal/{today}")
+    identity = task.id()
     ws.save()
+    return {"id": identity, "heading": text, "state": "TODO"}
 
-    return {"id": task_id, "heading": text, "state": "TODO"}
+
+@serialized
+def check_off(space_path: str, identity: str) -> dict:
+    org_file = Path(space_path) / "org" / "next_actions.org"
+    ws = OrgWorkspace()
+    ws.load(org_file)
+    node = ws.find_by_id(identity)
+    if node is None:
+        return {"error": f"Task {identity} not found"}
+    ws.transition(node, "DONE")
+    ws.save()
+    return {"id": identity, "state": "DONE"}
 
 
 def carryover(space_path: str, contributor: str) -> dict:
@@ -248,15 +249,6 @@ if __name__ == "__main__":
     elif args.command == "create":
         result = create_standup_task(args.space, args.contributor, args.text)
     elif args.command == "check-off":
-        org_file = Path(args.space) / "org" / "next_actions.org"
-        ws = OrgWorkspace()
-        ws.load(str(org_file))
-        node = ws.find_by_id(args.id)
-        if node:
-            node.todo = "DONE"
-            ws.save()
-            result = {"id": args.id, "state": "DONE"}
-        else:
-            result = {"error": f"Task {args.id} not found"}
+        result = check_off(args.space, args.id)
 
     print(json.dumps(result, indent=2))

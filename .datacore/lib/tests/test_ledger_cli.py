@@ -15,6 +15,23 @@ from pathlib import Path
 CLI = Path(__file__).parent.parent / "ledger_cli.py"
 
 
+def test_cli_approval_binds_the_exact_payload(tmp_path):
+    space = tmp_path / 'space'
+    space.mkdir()
+    payload = {'id': 'approved', 'title': 'send the approved draft', 'effects': ['email.send']}
+    result = run_cli('approve', '--space', str(space), '--payload', json.dumps(payload),
+                     tmp_path=tmp_path, actor='human')
+    assert result.returncode == 0, result.stderr
+    payload['approval_ref'] = json.loads(result.stdout)['approval_ref']
+    substituted = {**payload, 'title': 'different target'}
+    denied = run_cli('append', '--space', str(space), '--type', 'item.create',
+                     '--payload', json.dumps(substituted), tmp_path=tmp_path)
+    assert denied.returncode == 1 and 'payload' in denied.stderr
+    accepted = run_cli('append', '--space', str(space), '--type', 'item.create',
+                       '--payload', json.dumps(payload), tmp_path=tmp_path)
+    assert accepted.returncode == 0, accepted.stderr
+
+
 def _env(tmp_path, actor="test-actor"):
     """A minimal, hermetic env: DATACORE_ACTOR set, DATACORE_LEDGER_SIGN
     unset regardless of the ambient environment, so appended events are
@@ -23,6 +40,19 @@ def _env(tmp_path, actor="test-actor"):
     env.pop("DATACORE_LEDGER_SIGN", None)
     env["DATACORE_ACTOR"] = actor
     env["HOME"] = str(tmp_path)  # keep ~/.datacore/keys out of the picture entirely
+    env["DATACORE_ROOT"] = str(tmp_path)
+    import socket
+    import yaml
+    registry = tmp_path / '.datacore' / 'registry'
+    registry.mkdir(parents=True, exist_ok=True)
+    actors = ['test-actor', 'mac', 'pi', 'human', socket.gethostname().split('.')[0].lower()]
+    (registry / 'principals.yaml').write_text(yaml.safe_dump({'principals': {
+        name: {'kind': 'human' if name == 'human' else 'agent', 'writes_as': [name]} for name in actors}}))
+    config = tmp_path / '.datacore' / 'config'
+    config.mkdir(parents=True, exist_ok=True)
+    (config / 'approvals_policy.yaml').write_text(yaml.safe_dump({'version': 1,
+        'approver': 'human', 'cosign_effects': ['email.send'],
+        'principals': {name: {} for name in actors}}))
     return env
 
 
@@ -245,6 +275,6 @@ def test_default_actor_from_hostname_when_env_unset(tmp_path):
         capture_output=True, text=True, env=env,
     )
     assert r.returncode == 0, r.stderr
-    hostname = socket.gethostname()
+    hostname = socket.gethostname().split('.')[0].lower()
     log_file = space / ".datacore" / "events" / f"{hostname}.jsonl"
     assert log_file.exists()

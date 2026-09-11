@@ -37,6 +37,7 @@ import re
 import sys
 from datetime import date
 from pathlib import Path
+from org_transaction import serialized, watch_file, write_org_text
 
 OPEN = ("TODO", "NEXT", "WAITING", "REVIEW")
 CLOSED = ("DONE", "CANCELLED", "DEFERRED")
@@ -78,6 +79,30 @@ def demote(block):
     return [("*" + l) if re.match(r"^\*+ ", l) else l for l in block]
 
 
+def detach_open_descendants(block):
+    """Archive no unfinished descendant, including below a closed child."""
+    remaining, moved = [block[0]], []
+    i = 1
+    while i < len(block):
+        match = re.match(r"^(\*+) ", block[i])
+        if match and state_of(block[i]) in OPEN:
+            level = len(match.group(1))
+            end = i + 1
+            while end < len(block):
+                next_heading = re.match(r"^(\*+) ", block[end])
+                if next_heading and len(next_heading.group(1)) <= level:
+                    break
+                end += 1
+            # Every detached subtree becomes a direct child of Inbox.
+            moved.append([line[level - 2:] if re.match(r"^\*+ ", line) else line
+                          for line in block[i:end]])
+            i = end
+        else:
+            remaining.append(block[i])
+            i += 1
+    return remaining, moved
+
+
 def clean(text: str, today: str):
     lines = text.split("\n")
     pre, tops = split_top(lines)
@@ -90,31 +115,37 @@ def clean(text: str, today: str):
     new_tops = []
     for i, b in enumerate(tops):
         if i == idx:
+            inbox_idx = len(new_tops)
             new_tops.append(b); continue
         st = state_of(b[0])
         own, subs = split_l2(b)
         if st in CLOSED:
             # open children go to the Inbox; the rest leaves with the parent
-            orphans = [s for s in subs if state_of(s[0]) in OPEN]
-            keep = [s for s in subs if state_of(s[0]) not in OPEN]
+            closed, orphans = detach_open_descendants(b)
             moved.extend(orphans)
-            archived.append(demote(own + [l for s in keep for l in s]))
+            archived.append(demote(closed))
             continue
         # an open task or a section at top level stays; its closed children leave
         closed_kids = [s for s in subs if state_of(s[0]) in CLOSED]
         rest = [s for s in subs if state_of(s[0]) not in CLOSED]
-        archived.extend(closed_kids)
+        for child in closed_kids:
+            closed, orphans = detach_open_descendants(child)
+            archived.append(closed)
+            moved.extend(orphans)
         new_tops.append(own + [l for s in rest for l in s])
     # the Inbox section itself: closed children leave, orphans arrive at its end
-    own, subs = split_l2(new_tops[idx])
+    own, subs = split_l2(new_tops[inbox_idx])
     closed_kids = [s for s in subs if state_of(s[0]) in CLOSED]
     rest = [s for s in subs if state_of(s[0]) not in CLOSED]
-    archived.extend(closed_kids)
+    for child in closed_kids:
+        closed, orphans = detach_open_descendants(child)
+        archived.append(closed)
+        moved.extend(orphans)
     inbox = own + [l for s in rest for l in s]
     while len(inbox) > 1 and inbox[-1].strip() == "":
         inbox.pop()
     inbox += [l for s in moved for l in s]
-    new_tops[idx] = inbox + [""]
+    new_tops[inbox_idx] = inbox + [""]
     out = "\n".join(pre + [l for b in new_tops for l in b]).rstrip("\n") + "\n"
     arch = None
     if archived:
@@ -132,41 +163,43 @@ def parses(path: Path) -> bool:
         print(f"  does not parse: {e}", file=sys.stderr); return False
 
 
+@serialized
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("space"); ap.add_argument("--apply", action="store_true")
     ap.add_argument("--today", default=date.today().isoformat())
     a = ap.parse_args()
+    a.today = date.fromisoformat(a.today).isoformat()
     src = Path(a.space) / "org" / "inbox.org"
     if not src.exists():
         print(f"{a.space}: no org/inbox.org"); return 0
-    out, arch, stats = clean(src.read_text(), a.today)
+    watch_file(src)
+    before = src.read_bytes().decode('utf-8')
+    out, arch, stats = clean(before, a.today)
     target = src.with_name(f"inbox-archive-{a.today}.org")
+    watch_file(target)
     if arch and target.exists():
         # a second run the same day appends to the day's archive
-        arch = target.read_text().rstrip("\n") + "\n" + arch.split("\n", 3)[3]
+        arch = target.read_bytes().decode('utf-8').rstrip("\n") + "\n" + arch.split("\n", 3)[3]
     verb = "applied" if a.apply else "would apply"
     print(f"{a.space}: {verb} -- Inbox created: {stats['inbox_created']}, moved into Inbox: {stats['moved_into_inbox']}, archived: {stats['archived']}"
           + (f" -> {target.name}" if arch else ""))
     if not a.apply:
         return 0
-    if out == src.read_text() and not arch:
+    if out == before and not arch:
         return 0
-    backup = src.with_suffix(".org.pre-cleanup")
-    backup.write_text(src.read_text())
-    src.write_text(out)
+    write_org_text(src, out)
     if arch:
-        target.write_text(arch)
+        write_org_text(target, arch)
     ok = parses(src) and (arch is None or parses(target))
     if not ok:
-        src.write_text(backup.read_text())
-        if arch and not target.exists():
-            pass
-        print(f"{a.space}: result did not parse -- inbox.org restored from {backup.name}", file=sys.stderr)
-        return 2
-    backup.unlink()
+        raise ValueError("cleanup result did not parse; transaction rolled back")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(2)

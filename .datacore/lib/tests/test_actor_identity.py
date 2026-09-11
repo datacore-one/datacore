@@ -47,7 +47,7 @@ def test_principal_binds_writer_logs_to_emails(tmp_path):
     p = tmp_path / "principals.yaml"
     p.write_text("principals:\n  miles:\n    emails: [miles@datacore.one]\n    writes_as: [miles, nightshift]\n")
     assert AI.principal_of("nightshift", p)[0] == "miles"
-    assert AI.allowed_emails("NIGHTSHIFT", p) == {"miles@datacore.one"}
+    assert AI.allowed_emails("NIGHTSHIFT", p) == {AI.email_hash("miles@datacore.one")}
     assert AI.allowed_emails("unknown", p) == set()
 
 

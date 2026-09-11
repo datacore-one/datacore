@@ -20,6 +20,10 @@ import sys
 from pathlib import Path
 from datetime import datetime, timedelta
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from credential_files import calendar_token_path, write_private_text
+from file_utils import file_lock
+
 # Credentials storage
 CREDS_DIR = Path(__file__).parent.parent.parent.parent / "env" / "credentials"
 CLIENT_SECRETS_FILE = CREDS_DIR / "google_calendar_client_secret.json"
@@ -32,28 +36,21 @@ _LEGACY_PICKLE_FILE = CREDS_DIR / "google_calendar_token.pickle"
 
 
 def _token_file_for(account=None):
-    """Get token file path for a named account."""
-    if not account or account == "default":
-        return _DEFAULT_TOKEN
-    return CREDS_DIR / f"google_calendar_token_{account}.json"
+    return calendar_token_path(CREDS_DIR, _DEFAULT_TOKEN, account)
 
 
 def _migrate_pickle_token():
-    """Migrate legacy pickle token to JSON format if needed."""
+    """Preserve legacy files, but never execute a serialized Python object."""
     if _LEGACY_PICKLE_FILE.exists() and not _DEFAULT_TOKEN.exists():
-        import pickle
-        try:
-            with open(_LEGACY_PICKLE_FILE, 'rb') as f:
-                creds = pickle.load(f)
-            CREDS_DIR.mkdir(parents=True, exist_ok=True)
-            _DEFAULT_TOKEN.write_text(creds.to_json())
-            _LEGACY_PICKLE_FILE.rename(_LEGACY_PICKLE_FILE.with_suffix('.pickle.bak'))
-            print(f"Migrated token from pickle to JSON: {_DEFAULT_TOKEN}")
-        except Exception as e:
-            print(f"WARNING: Failed to migrate pickle token: {e}")
+        print("Legacy pickle credentials are not loaded. Re-authenticate to create a JSON token; the original file is preserved.", file=sys.stderr)
 
 
 def get_credentials(account=None):
+    with file_lock(_token_file_for(account), timeout=30):
+        return _credentials_unlocked(account)
+
+
+def _credentials_unlocked(account=None):
     """Get valid user credentials from storage or run auth flow."""
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
@@ -107,7 +104,7 @@ def get_credentials(account=None):
             creds = flow.run_local_server(port=0)
 
         CREDS_DIR.mkdir(parents=True, exist_ok=True)
-        token_file.write_text(creds.to_json())
+        write_private_text(token_file, creds.to_json())
         print(f"Credentials saved to {token_file}", file=sys.stderr)
 
     return creds

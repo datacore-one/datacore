@@ -70,6 +70,7 @@ import json
 import os
 import socket
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -189,6 +190,7 @@ class Executor:
         # than read a real usage/cost figure from their transport; reset by
         # `run()` before every call so a stale True from a prior call can
         # never leak into the next one's ref.
+        self._run_lock = threading.Lock()
         self._cost_estimated = False
         # Set by `_invoke` implementations that detect an in-band content
         # error (transport succeeded, cost was incurred, but the response
@@ -199,6 +201,30 @@ class Executor:
         self._cwd = None
         self._model: str | None = None
 
+    def _execution_env(self) -> dict:
+        """Bind subprocess context to this dispatch, never ambient grants."""
+        from tool_policy import principal_for
+        env = dict(os.environ)
+        env.update(DATACORE_ACTOR=self._actor,
+                   DATACORE_POLICY_PRINCIPAL=principal_for(self._actor),
+                   DATACORE_POLICY_TASK=self._item or "",
+                   DATACORE_POLICY_SPACE=str(self._space or ""),
+                   DATACORE_POLICY_GRANTED="")
+        if self._item and self._space:
+            from ledger.fold import fold
+            from ledger.log import read_events
+            from ledger.policy import load_policy, validate_approval, approval_payload_hash, PolicyError
+            task = fold(read_events(Path(self._space))).items.get(self._item)
+            if task is None or task.status != "claimed" or task.owner != self._actor:
+                raise PolicyError("executor requires this actor's current claim")
+            if task.claimed_payload_hash != approval_payload_hash(task.payload):
+                raise PolicyError("claimed payload is missing or changed; revalidate before execution")
+            if task.payload.get("approval_ref"):
+                log = EventLog(Path(self._space), self._actor)
+                validate_approval(log, task.payload, load_policy())
+                env["DATACORE_POLICY_GRANTED"] = ",".join(task.payload.get("effects") or [])
+        return env
+
     def _invoke(self, prompt: str, timeout_s: int) -> tuple[str, int]:
         """Real transport call. MUST be overridden by subclasses. Returns
         `(text, cost_cents)`. Free to raise -- `run()` never lets an
@@ -206,7 +232,15 @@ class Executor:
         raise NotImplementedError
 
     def run(self, prompt: str, *, schema: dict | None = None, timeout_s: int = 300,
-            cwd=None, space=None, item: str | None = None) -> ExecResult:
+            cwd=None, space=None, item: str | None = None, actor: str | None = None) -> ExecResult:
+        # Adapters report metadata through instance fields. Keep one call's
+        # workspace, model, error and accounting together through publication.
+        with self._run_lock:
+            return self._run(prompt, schema=schema, timeout_s=timeout_s,
+                             cwd=cwd, space=space, item=item, actor=actor)
+
+    def _run(self, prompt: str, *, schema: dict | None = None, timeout_s: int = 300,
+             cwd=None, space=None, item: str | None = None, actor: str | None = None) -> ExecResult:
         """Run the executor. Never raises -- every failure mode becomes
         `ExecResult.error` instead. See the module docstring for the full
         contract (schema handling, spend emission, timeout mapping).
@@ -219,6 +253,9 @@ class Executor:
         process ignores it; one that does reads `self._cwd`.
         """
         self._cwd = cwd
+        self._actor = None
+        self._space = space
+        self._item = item
         effective_prompt = prompt
         if schema is not None:
             try:
@@ -230,6 +267,7 @@ class Executor:
         self._in_band_error = None
         self._model = None
         try:
+            self._actor = actor or os.environ.get("DATACORE_ACTOR") or _default_actor()
             text, cost_cents = self._invoke(effective_prompt, timeout_s)
         except subprocess.TimeoutExpired as exc:
             return ExecResult(
@@ -303,7 +341,7 @@ class Executor:
                 # The caller knows the space and the item. Both are optional so
                 # non-dispatch callers keep working unchanged.
                 space_dir = Path(space) if space else _default_space_dir()
-                actor = os.environ.get("DATACORE_ACTOR") or _default_actor()
+                actor = self._actor
                 log = EventLog(space_dir, actor)
                 ref = f"executor:{self.name}"
                 if self._cost_estimated:

@@ -98,23 +98,24 @@ class TestAppendToList:
         assert result[2]["id"] == 6
 
     def test_append_to_list_handles_corrupt_file(self, tmp_path):
-        """append_to_list recovers from corrupt YAML."""
+        """A parse failure must preserve the original file for recovery."""
         f = tmp_path / "state" / "queue.yaml"
         f.parent.mkdir(parents=True)
         f.write_text("not: a: valid: yaml: list: {{{{")
         store = YamlStateStore("state/queue.yaml", default=[], data_root=tmp_path)
-        store.append_to_list([{"id": 1}])
-        result = store.load()
-        assert len(result) == 1
+        original = f.read_bytes()
+        with pytest.raises(yaml.YAMLError):
+            store.append_to_list([{"id": 1}])
+        assert f.read_bytes() == original
 
     def test_append_to_list_handles_non_list_content(self, tmp_path):
-        """append_to_list starts fresh if file contains a dict instead of list."""
+        """Unexpected valid content is data, not permission to discard it."""
         store = YamlStateStore("state/queue.yaml", default=[], data_root=tmp_path)
         store.save({"not": "a list"})
-        store.append_to_list([{"id": 1}])
-        result = store.load()
-        assert len(result) == 1
-        assert result[0]["id"] == 1
+        original = store.path.read_bytes()
+        with pytest.raises(ValueError, match="YAML list"):
+            store.append_to_list([{"id": 1}])
+        assert store.path.read_bytes() == original
 
     def test_append_max_size_zero_means_unlimited(self, tmp_path):
         """max_size=0 (default) means no cap."""

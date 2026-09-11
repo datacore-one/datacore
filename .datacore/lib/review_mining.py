@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from secret_http import urlopen as secret_urlopen
 import os
 import sys
 from dataclasses import asdict, dataclass, field
@@ -192,7 +193,7 @@ class SerpAPIAdapter:
                 }
             )
         )
-        with urllib.request.urlopen(search_url, timeout=30) as r:
+        with secret_urlopen(search_url, timeout=30) as r:
             search_data = json.loads(r.read().decode())
 
         place = None
@@ -232,7 +233,7 @@ class SerpAPIAdapter:
             if next_token:
                 params["next_page_token"] = next_token
             review_url = "https://serpapi.com/search.json?" + urllib.parse.urlencode(params)
-            with urllib.request.urlopen(review_url, timeout=30) as r:
+            with secret_urlopen(review_url, timeout=30) as r:
                 review_data = json.loads(r.read().decode())
 
             page = review_data.get("reviews", [])
@@ -632,7 +633,7 @@ def _call_openrouter(prompt: str) -> dict:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=120) as r:
+        with secret_urlopen(req, timeout=120) as r:
             data = json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"OpenRouter HTTP error: {e.code} {e.read().decode()}")

@@ -2,6 +2,7 @@
 """Shared YAML state file utility. Eliminates duplicate _load/_save patterns across lib/."""
 
 import os
+from copy import deepcopy
 import yaml
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,7 @@ class YamlStateStore:
         """
         root = data_root or _data_root()
         self.path = root / relative_path
-        self._default = default if default is not None else {}
+        self._default = deepcopy(default) if default is not None else {}
 
     def load(self) -> Any:
         if self.path.exists():
@@ -31,8 +32,8 @@ class YamlStateStore:
                 data = yaml.safe_load(f)
                 if data is not None:
                     return data
-                return self._default.copy() if isinstance(self._default, dict) else self._default
-        return self._default.copy() if isinstance(self._default, dict) else self._default
+                return deepcopy(self._default)
+        return deepcopy(self._default)
 
     def save(self, data: Any) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -41,9 +42,9 @@ class YamlStateStore:
     def append_to_list(self, entries: list, max_size: int = 0) -> None:
         """Load a YAML file as a list, append entries, optionally cap size, and save."""
         def _modifier(existing_data):
-            existing = []
-            if isinstance(existing_data, list):
-                existing = existing_data
+            if existing_data is not None and not isinstance(existing_data, list):
+                raise ValueError(f"expected a YAML list at {self.path}; preserving existing data")
+            existing = existing_data if existing_data is not None else []
             existing.extend(entries)
             if max_size > 0:
                 existing = existing[-max_size:]

@@ -111,11 +111,8 @@ def main() -> int:
         check("feature commit intact",
               'feat: code work on the sprint branch' in git(repo, 'log', '--oneline', 'HEAD'),
               True)
-        # The journal is gone from the FEATURE branch's working tree, on purpose: it
-        # belongs to main, it is committed there, and leaving it untracked here is
-        # what blocks `git checkout main` (see the deadlock section below).
-        check("journal removed from the feature working tree",
-              (repo / 'journal' / '2026-07-13.md').exists(), False)
+        check("publication retains the journal working copy",
+              (repo / 'journal' / '2026-07-13.md').read_text(), 'what I did today\n')
         check("code file untouched in the working tree",
               (repo / '2-projects' / 'feature.ts').exists(), True)
 
@@ -134,18 +131,13 @@ def main() -> int:
         # data loss this whole exercise exists to prevent.
         check("no-op leaves the file on disk",
               (repo / 'journal' / '2026-07-13.md').exists(), True)
-        (repo / 'journal' / '2026-07-13.md').unlink()  # tidy for the deadlock check
 
-        print("\n=== the deadlock: agent must still be able to return to main ===")
-        # After a plumbing commit the file is on main but UNTRACKED here, and git
-        # then refuses to switch branches ("untracked working tree files would be
-        # overwritten by checkout"). That would strand the agent on the feature
-        # branch AND break check_and_repair_git()'s stray-branch recovery, which
-        # recovers by checking out main. A fix that jams the other fix.
-        check("no untracked litter left behind",
-              [l for l in git(repo, 'status', '--porcelain').splitlines()
-               if l.startswith('??')],
-              [])
+        print("\n=== explicit reconciliation retains copies before changing branches ===")
+        check("zettel working copy also retained", (repo / '3-knowledge/zettel.md').read_text(), 'a lesson\n')
+        # The operator can explicitly retain these copies in the feature
+        # branch before switching. Publication itself must never delete them.
+        git(repo, 'add', '--', 'journal/2026-07-13.md', '3-knowledge/zettel.md')
+        git(repo, 'commit', '-qm', 'retain knowledge copies explicitly')
 
         co = subprocess.run(['git', 'checkout', 'main'], cwd=repo,
                             capture_output=True, text=True)

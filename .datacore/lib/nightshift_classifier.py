@@ -115,7 +115,7 @@ class FileRecord:
     linked_files: list = field(default_factory=list)
     category: str = ""      # archive | knowledge | failed | review | duplicate
     knowledge_score: float = 0.0
-    content_hash: str = ""  # first 2000 chars hash for dedup content comparison
+    content_hash: str = ""  # full source-byte digest; absent means not comparable
     keywords: list = field(default_factory=list)  # extracted from headings/bold terms
 
 
@@ -437,15 +437,15 @@ def build_records(discovered: list[dict]) -> list[FileRecord]:
         path = item["path"]
 
         try:
-            text = path.read_text(errors="replace")
+            raw = path.read_bytes()
+            text = raw.decode('utf-8')
         except Exception as e:
-            read_errors.append(f"{path.name}: {e}")
-            text = ""
+            raise OSError(f"cannot classify unreadable source: {path.name}") from e
 
         meta = parse_metadata_from_text(text, path)
         word_count = len(text.split())
         struct_score = compute_structure_score(text)
-        content_hash = hashlib.sha256(text[:2000].encode()).hexdigest()[:12]
+        content_hash = hashlib.sha256(raw).hexdigest()
 
         rec = FileRecord(
             path=str(path.relative_to(DATA_DIR)),
@@ -511,7 +511,10 @@ def dedup_records(records: list[FileRecord]) -> list[FileRecord]:
                 # Group by content_hash for exact-match dedup
                 by_hash = defaultdict(list)
                 for r in ft_group:
-                    by_hash[r.content_hash].append(r)
+                    if not r.content_hash:
+                        result.append(r)
+                    else:
+                        by_hash[r.content_hash].append(r)
 
                 for content_hash, hash_group in by_hash.items():
                     if len(hash_group) == 1:
@@ -874,9 +877,10 @@ def cmd_archive(execute: bool = False):
 
         if execute:
             try:
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(str(src), str(dest))
-                src.unlink()
+                from archive_files import archive_file
+                if not f.get("content_hash"):
+                    raise ValueError("scan has no source digest; rescan before archiving")
+                archive_file(src, dest, root=DATA_DIR, expected_hash=f["content_hash"])
                 moved += 1
             except Exception as e:
                 print(f"  ERROR: {f['filename']}: {e}")

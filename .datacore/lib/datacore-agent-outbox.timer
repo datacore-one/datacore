@@ -1,0 +1,10 @@
+[Unit]
+Description=Retry pending Datacore relay events every minute
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+Unit=datacore-agent-outbox.service
+
+[Install]
+WantedBy=timers.target

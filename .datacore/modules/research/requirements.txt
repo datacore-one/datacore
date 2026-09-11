@@ -13,3 +13,6 @@
 # installs into ~/.local, not the system tree.)
 
 claude-agent-sdk>=0.2.148
+
+# Security floor also applies when an older MCP dependency is already installed.
+mcp>=1.28.1

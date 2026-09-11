@@ -64,7 +64,7 @@ def cmd_emit(space: Path, force: bool) -> int:
 
     payload = build_seal_payload(events)
     prev = latest_seal(events)
-    if prev and prev.state_root == payload["state_root"]:
+    if prev and prev.version == 2 and prev.event_set_hash == payload["event_set_hash"]:
         # Nothing has happened since the last seal. Emitting anyway would grow
         # the log with events that carry no information and make "when did
         # state last change?" unanswerable from the seal history.
@@ -73,7 +73,7 @@ def cmd_emit(space: Path, force: bool) -> int:
 
     EventLog(space, actor).append("ledger.seal", payload)
     n = len(payload["watermarks"])
-    print(f"  {space.name}: sealed {payload['state_root'][:12]} over {n} actor(s)")
+    print(f"  {space.name}: sealed {payload['state_root'][:12]} over {n} log(s)")
     return 0
 
 
@@ -81,7 +81,7 @@ def cmd_status(space: Path) -> int:
     ok, detail = verify_seal(read_events(space))
     mark = {True: "ok  ", False: "FAIL", None: "n-a "}[ok]
     print(f"  {mark} {space.name:<14} {detail}")
-    return 1 if ok is False else 0
+    return 0 if ok is True else (2 if ok is None else 1)
 
 
 def main() -> int:

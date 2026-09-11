@@ -699,7 +699,7 @@ class StructuralIntegrityChecker:
             try:
                 if file_path.stat().st_size > MAX_SIZE:
                     continue
-                file_hash = hashlib.md5(file_path.read_bytes()).hexdigest()
+                file_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
                 hash_to_files.setdefault(file_hash, []).append(file_path)
             except Exception:
                 pass

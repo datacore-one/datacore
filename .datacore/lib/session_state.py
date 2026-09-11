@@ -6,8 +6,9 @@ cross-session interference (the ralph-loop class of bugs).
 
 State files: {DATACORE_ROOT}/.datacore/state/sessions/{session_id}.json
 """
-import json, glob, os, sys, tempfile, time
+import json, glob, os, sys, time
 from pathlib import Path
+from file_utils import atomic_write_json, file_lock, locked_read_modify_write_json
 
 # Get absolute paths using DATACORE_ROOT
 DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
@@ -42,22 +43,14 @@ def _state_file(session_id=None):
     sid = session_id or _get_session_id()
     if not sid:
         return None
+    if not isinstance(sid, str) or sid in (".", "..") or any(c in sid for c in ("/", "\\", "\x00")):
+        raise ValueError("session ID must be a single filename component")
     return os.path.join(STATE_DIR, f"{sid}.json")
 
 
 def _atomic_write(path, data):
-    """Write JSON data atomically (temp file + rename)."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd, tmppath = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
-    try:
-        os.write(fd, json.dumps(data).encode())
-        os.close(fd)
-        os.rename(tmppath, path)
-    except Exception:
-        os.close(fd)
-        if os.path.exists(tmppath):
-            os.remove(tmppath)
-        raise
+    """Use the shared complete-write and durability invariant."""
+    atomic_write_json(Path(path), data)
 
 
 def session_exists(session_id=None):
@@ -78,7 +71,17 @@ def create_session(prompt="", session_id=None):
         "first_prompt": prompt[:200],
         "last_inject_domain": None,
     }
-    _atomic_write(path, state)
+    with file_lock(Path(path)):
+        try:
+            with open(path, encoding="utf-8") as source:
+                existing = json.load(source)
+        except FileNotFoundError:
+            existing = None
+        if existing is not None:
+            if not isinstance(existing, dict):
+                raise ValueError("session state must be an object")
+            return existing
+        _atomic_write(path, state)
     _debug(f"session created: {state['session_id'][:12]}... prompt={prompt[:50]}")
     return state
 
@@ -100,16 +103,22 @@ def update_session(session_id=None, **kwargs):
     path = _state_file(session_id)
     if not path:
         return
-    state = read_session(session_id) or {}
-    state.update(kwargs)
-    _atomic_write(path, state)
+    def modify(state):
+        if state is None:
+            state = {}
+        if not isinstance(state, dict):
+            raise ValueError("session state must be an object")
+        state.update(kwargs)
+        return state
+    locked_read_modify_write_json(Path(path), modify)
 
 
 def cleanup_session(session_id=None):
     """Remove session state file."""
     path = _state_file(session_id)
-    if path and os.path.exists(path):
-        os.remove(path)
+    if path:
+        with file_lock(Path(path)):
+            Path(path).unlink(missing_ok=True)
         _debug(f"session cleaned up: {os.path.basename(path)}")
 
 
@@ -117,7 +126,8 @@ def cleanup_all_sessions():
     """Remove all session state files."""
     if os.path.isdir(STATE_DIR):
         for f in glob.glob(os.path.join(STATE_DIR, "*.json")):
-            os.remove(f)
+            with file_lock(Path(f)):
+                Path(f).unlink(missing_ok=True)
             _debug(f"stale session cleaned: {os.path.basename(f)}")
 
 
@@ -128,10 +138,13 @@ def cleanup_stale_sessions(max_age_hours=24):
     cutoff = time.time() - (max_age_hours * 3600)
     for f in glob.glob(os.path.join(STATE_DIR, "*.json")):
         try:
-            if os.path.getmtime(f) < cutoff:
-                os.remove(f)
-                _debug(f"stale session cleaned: {os.path.basename(f)}")
-        except OSError:
+            with file_lock(Path(f)):
+                # Recheck after acquiring the same lock as create/update: an
+                # active session may have refreshed while cleanup waited.
+                if os.path.getmtime(f) < cutoff:
+                    os.remove(f)
+                    _debug(f"stale session cleaned: {os.path.basename(f)}")
+        except FileNotFoundError:
             pass
 
 

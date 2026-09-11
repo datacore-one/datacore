@@ -27,12 +27,10 @@ WHAT IT DOES. Three things, all from the registry the fleet already keeps:
              same `metric.attest policy.refusal` in the ledger as the Claude
              SDK hook. A refusal reaches the model as the block message.
 
-FAILS OPEN, ALWAYS. Every entry point is wrapped: a missing DATACORE_ROOT, an
-unreadable registry, an import error in the fleet lib — the agent keeps
-working and the plugin is simply not in force. A guard that can take the
-gateway down would be worse than the exposure it closes. `datacore_whoami`
-says whether it is actually in force, so "inert" is visible rather than
-assumed.
+Guard failures refuse tool execution. This plugin is a policy check, not an
+OS sandbox: arbitrary code with the same filesystem credentials can bypass
+it, and deployed runtimes must supply an independent execution boundary.
+
 """
 from __future__ import annotations
 
@@ -258,7 +256,7 @@ def policy_block(tool_name: str, args) -> str | None:
     """The fleet's tool-effect decision for this call, as a block reason."""
     try:
         if not _lib():
-            return None
+            return "Datacore policy library is unavailable; restore it before executing tools"
         from tool_policy import evaluate_hook  # noqa: PLC0415
         out = evaluate_hook({"tool_name": tool_name, "tool_input": args or {}})
         if not out:
@@ -267,20 +265,23 @@ def policy_block(tool_name: str, args) -> str | None:
         if spec.get("permissionDecision") not in ("deny", "ask"):
             return None
         return str(spec.get("permissionDecisionReason") or "refused by the Datacore tool policy")
-    except Exception as exc:  # noqa: BLE001 — policy failure must not stop the agent
-        logger.debug("datacore: policy check skipped (%s)", exc)
-        return None
+    except Exception as exc:  # noqa: BLE001 — unavailable policy cannot authorize work
+        logger.warning("datacore: policy unavailable (%s)", type(exc).__name__)
+        return "Datacore policy unavailable; tool execution refused"
 
 
 def pre_tool_call(tool_name: str = "", args=None, **_kw):
     """Hermes pre_tool_call: {"action": "block", "message": ...} or None."""
     try:
+        if not identity()["ok"]:
+            return {"action": "block", "message": "Datacore identity unresolved; restore the principal registry"}
         text = call_text(tool_name, args)
         reason = foreign_actor_write(text) or policy_block(tool_name, args)
         if reason:
             return {"action": "block", "message": reason}
     except Exception as exc:  # noqa: BLE001
-        logger.debug("datacore: pre_tool_call skipped (%s)", exc)
+        logger.warning("datacore: pre_tool_call failed (%s)", type(exc).__name__)
+        return {"action": "block", "message": "Datacore policy check failed; tool execution refused"}
     return None
 
 
@@ -404,12 +405,10 @@ def approval_decide_handler(id: str = "", decision: str = "", **_kw) -> str:  # 
     cq = _cos_questions()
     if cq is None:
         return "Approvals are not available on this host (no cos_questions.py in the fleet lib)."
-    rc, out = _run([sys.executable, str(cq), "decide", id.strip(), decision,
-                    "--by", f"{ident['principal']}.telegram"])
-    if rc == 0:
-        return out or f"decided: {id} {decision}d"
-    # rc 1 is "missing or already decided" — a fact to relay, not an error to retry.
-    return out or f"could not decide {id} (rc={rc})"
+    # Model-produced arguments do not prove a human decision. In particular,
+    # never manufacture a .telegram identity for an agent-initiated action.
+    return "Refused: decisions require the authenticated human approval interface; this agent may only list proposals."
+
 
 
 def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
@@ -424,6 +423,7 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
     try:
         from ledger.events import EVENT_TYPES  # noqa: PLC0415
         from ledger.log import EventLog  # noqa: PLC0415
+        from ledger.policy import guarded_append  # noqa: PLC0415
     except Exception as exc:  # noqa: BLE001
         return f"Refused: the ledger library did not import ({type(exc).__name__})."
     etype = str(kw.get("type") or "").strip()
@@ -432,12 +432,15 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
                 f"Known: {', '.join(sorted(EVENT_TYPES))}.")
     if not isinstance(payload, dict) or not payload:
         return "Refused: payload must be a non-empty object."
-    space_dir = _root() / space.strip().strip("/")
-    if not (space_dir / ".datacore").is_dir():
+    root = _root().resolve()
+    if not isinstance(space, str) or not space or Path(space).name != space or space in {".", ".."}:
+        return "Refused: space must name one direct child of the configured data root."
+    space_dir = (root / space).resolve()
+    if space_dir.parent != root or not (space_dir / ".datacore").is_dir():
         return f"Refused: {space!r} is not a space under {_root()}."
     try:
         # No actor argument by design: it comes from the registry, never the model.
-        ev = EventLog(space_dir=space_dir, actor=ident["actor"]).append(etype, payload)
+        ev = guarded_append(EventLog(space_dir=space_dir, actor=ident["actor"]), etype, payload)
     except Exception as exc:  # noqa: BLE001
         return f"Ledger append failed: {type(exc).__name__}: {exc}"
     return (f"appended {etype} to {space} as {ident['actor']} "

@@ -11,6 +11,18 @@ def _data_root() -> Path:
     return Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
 
 
+def parse_env_value(value: str) -> str:
+    """Decode a literal shell-quoted value without expansion or execution."""
+    import shlex
+    value = value.strip()
+    if value.startswith(("'", '"')):
+        parts = shlex.split(value, comments=False, posix=True)
+        if len(parts) != 1:
+            raise ValueError("invalid quoted environment value")
+        return parts[0]
+    return value
+
+
 def parse_env_file(path: Path) -> Dict[str, str]:
     """Parse a .env file into a dict. Skips comments and blank lines."""
     result = {}
@@ -27,7 +39,7 @@ def parse_env_file(path: Path) -> Dict[str, str]:
             if "=" in line:
                 key, _, val = line.partition("=")
                 key = key.strip()
-                val = val.strip().strip("'\"")
+                val = parse_env_value(val)
                 if key:
                     result[key] = val
     return result

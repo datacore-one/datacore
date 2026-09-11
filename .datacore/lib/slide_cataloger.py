@@ -201,8 +201,8 @@ def extract_pdf(filepath: Path) -> dict | None:
 
 
 def content_hash(content: str) -> str:
-    """Generate short hash for content deduplication."""
-    return hashlib.md5(content.encode()).hexdigest()[:8]
+    """Stable full content digest for catalog metadata."""
+    return hashlib.sha256(content.encode()).hexdigest()
 
 
 def build_catalog(source_dir: Path, output_dir: Path) -> dict:
@@ -254,11 +254,11 @@ def build_catalog(source_dir: Path, output_dir: Path) -> dict:
 
         # Check for content duplicates
         full_hash = content_hash(result["full_content"])
-        is_duplicate = full_hash in content_hashes
+        is_duplicate = result["full_content"] in content_hashes
         if is_duplicate:
-            duplicate_of = content_hashes[full_hash]
+            duplicate_of = content_hashes[result["full_content"]]
         else:
-            content_hashes[full_hash] = f"pres-{pres_id:03d}"
+            content_hashes[result["full_content"]] = f"pres-{pres_id:03d}"
             duplicate_of = None
 
         entry = {
@@ -303,11 +303,11 @@ def build_catalog(source_dir: Path, output_dir: Path) -> dict:
 
         # Check for content duplicates
         full_hash = content_hash(result["full_content"])
-        is_duplicate = full_hash in content_hashes
+        is_duplicate = result["full_content"] in content_hashes
         if is_duplicate:
-            duplicate_of = content_hashes[full_hash]
+            duplicate_of = content_hashes[result["full_content"]]
         else:
-            content_hashes[full_hash] = f"pres-{pres_id:03d}"
+            content_hashes[result["full_content"]] = f"pres-{pres_id:03d}"
             duplicate_of = None
 
         entry = {

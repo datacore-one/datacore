@@ -9,7 +9,7 @@ Rejects posts with non-200 responses or non-user-facing content.
 import re
 import sys
 import time
-from urllib.request import Request, urlopen
+from public_download import probe
 from urllib.error import HTTPError, URLError
 from typing import List, Dict, Tuple
 
@@ -115,27 +115,10 @@ class LinkVerifier:
                     details['reason'] = f"URL matches reject pattern: {pattern}"
                     return False, details
 
-            # Make HEAD request first (faster)
-            req = Request(url, method='HEAD')
-            req.add_header('User-Agent', self.user_agent)
-
-            try:
-                with urlopen(req, timeout=self.TIMEOUT) as response:
-                    details['status_code'] = response.status
-                    details['content_type'] = response.headers.get('Content-Type', '')
-                    details['redirect_url'] = response.url if response.url != url else None
-
-            except HTTPError as e:
-                # Some servers don't support HEAD, try GET
-                if e.code == 405:
-                    req = Request(url, method='GET')
-                    req.add_header('User-Agent', self.user_agent)
-                    with urlopen(req, timeout=self.TIMEOUT) as response:
-                        details['status_code'] = response.status
-                        details['content_type'] = response.headers.get('Content-Type', '')
-                        details['redirect_url'] = response.url if response.url != url else None
-                else:
-                    raise
+            status, content_type, final_url = probe(url)
+            details['status_code'] = status
+            details['content_type'] = content_type
+            details['redirect_url'] = final_url if final_url != url else None
 
             # Check status code
             if details['status_code'] != 200:

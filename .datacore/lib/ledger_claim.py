@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import os
 import subprocess
+from process_run import run as run_process
 import sys
 from pathlib import Path
 
@@ -52,6 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from briefing.actions import act  # noqa: E402
 from ledger.fold import fold  # noqa: E402
 from ledger.log import EventLog, read_events  # noqa: E402
+from ledger.policy import guarded_append, PolicyError, approval_payload_hash
 from executors import get_executor  # noqa: E402
 from ops_markers import AUTH_FAILURE_MARKERS  # noqa: E402
 
@@ -118,7 +120,7 @@ def run_task(title: str, route: str, cwd: Path, item_id: str = "", hops: int = 0
     one its operator chose instead of whichever the probe happened to try first.
     """
     framing = ROUTE_FRAMING.get(route, ROUTE_FRAMING[DEFAULT_ROUTE])
-    prompt = f"{framing}\n\nTask: {title}\n\nBe brief. Report what you found."
+    prompt = f"{framing}\n\nTask: {title}\n\nBe brief. Report what you found. If you change files, commit only your task changes; preserve unrelated staged and working-tree changes."
 
     import time as _time
     meta: dict = {}
@@ -135,7 +137,7 @@ def run_task(title: str, route: str, cwd: Path, item_id: str = "", hops: int = 0
     started = _time.monotonic()
     # space and item travel with the call so the spend event lands in a log
     # that gets folded, under the declared actor, linked to what incurred it.
-    res = ex.run(prompt, timeout_s=TIMEOUT, cwd=cwd, space=cwd, item=item_id)
+    res = ex.run(prompt, timeout_s=TIMEOUT, cwd=cwd, space=cwd, item=item_id, actor=actor or None)
     # Recorded for EVERY outcome, not just success: a failure that cost real
     # money is exactly the one worth being able to add up later.
     meta = {"executor": ex.name,
@@ -199,6 +201,27 @@ def _journal(space: Path, actor: str, lines: list[str]) -> None:
         pass
 
 
+def _artifact_tree_clean(space):
+    """Only ledger append records may differ from the checked commit."""
+    root = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=space, capture_output=True, text=True)
+    if root.returncode:
+        return False
+    root_path = Path(root.stdout.strip()).resolve()
+    try:
+        event_prefix = (Path(space).resolve().relative_to(root_path) / ".datacore/events").as_posix() + "/"
+    except ValueError:
+        return False
+    paths = []
+    for command in (["git", "diff", "--name-only", "-z", "HEAD"],
+                    ["git", "ls-files", "--others", "--exclude-standard", "-z"]):
+        result = subprocess.run(command, cwd=root_path, capture_output=True)
+        if result.returncode:
+            return False
+        paths.extend(os.fsdecode(name) for name in result.stdout.split(b"\0") if name)
+    return all(name.startswith(event_prefix) and "/" not in name[len(event_prefix):]
+               and (name.endswith(".jsonl") or name.endswith(".lock")) for name in paths)
+
+
 def _isolated_check(space: Path, check: str) -> tuple[bool, str]:
     """Check a fresh worktree of the committed result, not the agent's directory.
 
@@ -232,9 +255,9 @@ def _isolated_check(space: Path, check: str) -> tuple[bool, str]:
     same green.
     """
     import tempfile
-    subprocess.run(["git", "add", "-A"], cwd=space, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "dispatch: agent output"],
-                   cwd=space, capture_output=True)
+    if not _artifact_tree_clean(space):
+        print("         -> check FAILED CLOSED: commit task changes before artifact verification; existing index and files preserved")
+        return False, ""
     rc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=space,
                         capture_output=True, text=True)
     if rc.returncode != 0:
@@ -243,16 +266,19 @@ def _isolated_check(space: Path, check: str) -> tuple[bool, str]:
     head = rc.stdout.strip()
     with tempfile.TemporaryDirectory(prefix="check-") as tmp:
         wt = Path(tmp) / "verify"
-        add = subprocess.run(["git", "worktree", "add", "--detach", str(wt), head],
+        add = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "worktree", "add", "--detach", str(wt), head],
                              cwd=space, capture_output=True, text=True)
         if add.returncode != 0:
             print(f"         -> check FAILED CLOSED: no isolated worktree "
                   f"({(add.stderr or '').strip()[:90]})")
             return False, head
         try:
-            ok = subprocess.run(check, shell=True, cwd=str(wt),
-                                capture_output=True, timeout=120).returncode == 0
-            return ok, head
+            ok = run_process(check, shell=True, cwd=str(wt),
+                             capture_output=True, timeout=120).returncode == 0
+            current = subprocess.run(["git", "rev-parse", "HEAD"], cwd=space, capture_output=True, text=True)
+            return ok and current.returncode == 0 and current.stdout.strip() == head and _artifact_tree_clean(space), head
+        except subprocess.TimeoutExpired:
+            return False, head
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", str(wt)],
                            cwd=space, capture_output=True)
@@ -380,9 +406,15 @@ def main() -> int:
             print(f"REFUSED  {(item.payload or {}).get('title', item.id)[:60]}\n         -> {_why}")
             continue
 
-        EventLog(space, args.actor).append(
-            "item.claim", {"id": item.id, "owner": args.actor, "route": route, "reason": why})
-        ok, detail, meta = run_task(title, route, space, item.id)
+        try:
+            guarded_append(EventLog(space, args.actor),
+                "item.claim", {"id": item.id, "owner": args.actor, "route": route, "reason": why,
+                               "payload_hash": approval_payload_hash(item.payload)})
+        except PolicyError as exc:
+            print(f"REFUSED  {title[:70]}: {exc}")
+            refused += 1
+            continue
+        ok, detail, meta = run_task(title, route, space, item.id, actor=args.actor)
         if ok and check:
             # The ONLY thing that completes an item. An agent that declined
             # produces fluent, confident prose and exits 0; two attempts at

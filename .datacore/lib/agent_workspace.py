@@ -33,7 +33,6 @@ event.
 """
 from __future__ import annotations
 
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -85,20 +84,28 @@ def create(source: Path, task_id: str, *, root: Path | None = None) -> Workspace
 
 
 def cleanup(ws: Workspace, *, keep_branch_if_commits: bool = True) -> str:
-    """Remove the worktree. Keep the branch when it carries work."""
+    """Remove a clean, stopped worker's checkout; preserve uncertain state."""
+    rc, status, _ = _git(ws.path, 'status', '--porcelain', '--untracked-files=all', '--ignored=matching')
+    if rc or status:
+        raise IsolationError('worktree has uncommitted/ignored files or cannot be inspected; preserved for review')
     rc, out, _ = _git(ws.source, "rev-list", "--count", f"{_base(ws)}..{ws.branch}")
-    commits = int(out.strip() or 0) if rc == 0 else 0
+    if rc or not out.strip().isdecimal():
+        raise IsolationError('cannot establish branch history; worktree and branch preserved')
+    commits = int(out.strip())
+    if commits and not keep_branch_if_commits:
+        raise IsolationError('cleanup cannot discard unmerged commits; preserve or merge the branch first')
 
-    _git(ws.source, "worktree", "remove", "--force", str(ws.path))
-    if ws.path.exists():
-        shutil.rmtree(ws.path, ignore_errors=True)
-    _git(ws.source, "worktree", "prune")
+    rc, _, _ = _git(ws.source, 'worktree', 'remove', '--', str(ws.path))
+    if rc:
+        raise IsolationError('Git refused worktree removal; existing state preserved without forced cleanup')
 
     if commits and keep_branch_if_commits:
         # Deleting a branch that holds commits to tidy up is how 610 of them
         # were stranded. An orphan branch is findable; a deleted one is not.
         return f"kept {ws.branch} ({commits} commit(s))"
-    _git(ws.source, "branch", "-D", ws.branch)
+    rc, _, _ = _git(ws.source, 'branch', '-d', '--', ws.branch)
+    if rc:
+        return f'kept {ws.branch} (Git refused branch deletion)'
     return f"removed {ws.branch}"
 
 

@@ -1,0 +1,17 @@
+# Install as a user unit after replacing <HOME> and selecting a private
+# environment file defining AGENT_STREAM_RELAY_URL and AGENT_STREAM_RELAY_TOKEN.
+[Unit]
+Description=Retry durable Datacore relay outbox
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=<HOME>/.datacore/agent-stream-relay.env
+ExecStart=/usr/bin/python3 <HOME>/Data/.datacore/lib/agent_emit.py --flush
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=<HOME>/.datacore
+TimeoutStartSec=360

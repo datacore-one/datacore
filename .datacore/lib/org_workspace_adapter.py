@@ -35,12 +35,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tag_utils import sanitize_org_tags  # noqa: E402
+from org_transaction import SafeOrgWorkspace, serialized
 
 
 def _load_ws(*paths: str, state_config=None):
     """Load an OrgWorkspace from one or more file paths."""
-    from org_workspace import OrgWorkspace
-    ws = OrgWorkspace(state_config=state_config)
+    ws = SafeOrgWorkspace(state_config=state_config)
     for p in paths:
         path = Path(p).resolve()
         if path.exists():
@@ -357,23 +357,8 @@ def cmd_add(args):
             sched_dt = datetime.strptime(args.scheduled, "%Y-%m-%d")
         except ValueError:
             return {"error": f"Invalid scheduled date format: '{args.scheduled}'. Use YYYY-MM-DD."}
-        _wdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        day_name = _wdays[sched_dt.weekday()]
-        sched_line = f"SCHEDULED: <{args.scheduled} {day_name}>"
-
+        ws.set_scheduled(node, sched_dt.date())
         ws.save(file_path)
-        lines = file_path.read_text().split("\n")
-        id_line_idx = next(
-            (i for i, l in enumerate(lines) if f":ID: {node_id}" in l), None
-        )
-        if id_line_idx is None:
-            return {"error": "SCHEDULED not inserted: could not locate node ID in file after creation", "id": node_id}
-        for j in range(id_line_idx, -1, -1):
-            if ":PROPERTIES:" in lines[j]:
-                lines.insert(j, sched_line)
-                break
-        file_path.write_text("\n".join(lines))
-        ws.reload(file_path)
     elif multiline_props:
         # No scheduled block ran its save; flush the dirty multiline property
         # changes that set_property() left in memory.
@@ -546,8 +531,9 @@ def cmd_archive_done(args):
 
     # Ensure archive file loaded if it exists
     archive_path = default_archive_path(file_path)
-    if archive_path.exists():
-        ws.load(archive_path)
+    if not archive_path.exists():
+        ws._safe_write(archive_path, "#+TITLE: Archive\n")
+    ws.load(archive_path)
 
     archived = archive_done(ws, older_than_days=args.min_age)
     ws.save_all()
@@ -900,6 +886,14 @@ def cmd_move(args):
             return {"error": f"Target parent not found in {args.target}: '{args.parent}'"}
 
     # Capture parent heading before refile (refile reloads, making NodeViews stale)
+    if target_parent is not None:
+        if target_parent.path != to_path:
+            return {"error": "Target parent must be in the target file"}
+        ancestor = target_parent.node
+        while ancestor is not None:
+            if ancestor is node.node:
+                return {"error": "Cannot move a task into itself or its descendant"}
+            ancestor = ancestor.parent
     parent_heading = target_parent.heading if target_parent else None
 
     # Refile
@@ -992,14 +986,19 @@ def cmd_update(args):
                 ws.set_property(node, k, v)  # routes \n values through set_multiline_property
                 changes.append(f"{k}={v!r}")
 
-    # Scheduled
+    # Scheduled. "none" clears it: a task moved to NEXT or someday should not
+    # keep a stale date that keeps it looking overdue.
     if args.scheduled:
-        try:
-            sched_dt = datetime.strptime(args.scheduled, "%Y-%m-%d").date()
-        except ValueError:
-            return {"error": f"Invalid date: '{args.scheduled}'. Use YYYY-MM-DD."}
-        ws.set_scheduled(node, sched_dt)
-        changes.append(f"scheduled→{args.scheduled}")
+        if args.scheduled.strip().lower() == "none":
+            ws.set_scheduled(node, None)
+            changes.append("scheduled→(cleared)")
+        else:
+            try:
+                sched_dt = datetime.strptime(args.scheduled, "%Y-%m-%d").date()
+            except ValueError:
+                return {"error": f"Invalid date: '{args.scheduled}'. Use YYYY-MM-DD or 'none'."}
+            ws.set_scheduled(node, sched_dt)
+            changes.append(f"scheduled→{args.scheduled}")
 
     # Heading
     if getattr(args, 'new_heading', None):
@@ -1159,6 +1158,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     return parser
 
+
+# Direct Python callers and CLI dispatch share the same lock/recovery boundary.
+for _name, _function in list(globals().items()):
+    if _name.startswith("cmd_") and callable(_function):
+        globals()[_name] = serialized(_function)
 
 COMMAND_MAP = {
     "count": cmd_count,

@@ -32,6 +32,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from secret_http import urlopen as secret_urlopen
 from pathlib import Path
 
 SECRETS = Path.home() / 'Data/.datacore/secrets/spaces'
@@ -70,13 +71,8 @@ def load_credentials(space: str) -> dict[str, str]:
     path = SECRETS / f'{space}.env'
     if not path.exists():
         sys.exit(f'No credential file at {path}')
-    values: dict[str, str] = {}
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith('#') or '=' not in line:
-            continue
-        key, _, value = line.partition('=')
-        values[key.strip()] = value.strip().strip('"').strip("'")
+    from env_utils import parse_env_file
+    values = parse_env_file(path)
     missing = [k for k in REQUIRED if not values.get(k)]
     if missing:
         sys.exit(f'Missing in {path}: {", ".join(missing)}')
@@ -133,7 +129,7 @@ def post(text: str, creds: dict[str, str], reply_to: str | None, quote: str | No
         'Content-Type': 'application/json',
     })
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with secret_urlopen(request, timeout=30) as response:
             return json.loads(response.read())
     except urllib.error.HTTPError as error:
         sys.exit(f'X refused ({error.code}): {error.read().decode()[:400]}')

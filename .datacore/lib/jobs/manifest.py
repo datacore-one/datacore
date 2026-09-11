@@ -38,24 +38,28 @@ _MACHINE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _ROSTER_PATH = Path(__file__).resolve().parents[1].parent / "registry" / "infrastructure.yaml"
 
 
-def known_machines() -> frozenset[str] | None:
-    """Machine names the installation's roster declares, or None if absent.
-
-    Shape validation alone is not enough: a typo silently creates a job for a
-    host that does not exist, which can never pass and never alerts. When a
-    roster is present it is authoritative; when it is not (a fresh install,
-    a test fixture) validation falls back to shape only.
-    """
+def known_machines(path: Path | None = None) -> frozenset[str] | None:
+    """Absent installation config permits shape-only validation; invalid does not."""
+    path = path or _ROSTER_PATH
     try:
-        data = yaml.safe_load(_ROSTER_PATH.read_text())
-        names = set()
-        for host, cfg in (data.get("servers") or {}).items():
-            names.add(host)
-            if isinstance(cfg, dict) and cfg.get("manifest_machine"):
-                names.add(cfg["manifest_machine"])
-        return frozenset(names) or None
-    except Exception:
+        data = yaml.safe_load(path.read_text())
+    except FileNotFoundError:
         return None
+    except (OSError, yaml.YAMLError) as error:
+        raise ManifestError("cannot read a valid machine roster") from error
+    if not isinstance(data, dict) or not isinstance(data.get("servers"), dict):
+        raise ManifestError("machine roster must contain a servers mapping")
+    names = set()
+    for host, cfg in data["servers"].items():
+        if not isinstance(host, str) or not _MACHINE_RE.fullmatch(host) or not isinstance(cfg, dict):
+            raise ManifestError("invalid machine roster entry")
+        names.add(host)
+        alias = cfg.get("manifest_machine")
+        if alias is not None:
+            if not isinstance(alias, str) or not _MACHINE_RE.fullmatch(alias):
+                raise ManifestError("invalid manifest_machine alias")
+            names.add(alias)
+    return frozenset(names)
 CHECKS = frozenset({"exists", "nonempty", "json_has_keys", "regex", "min_bytes"})
 ON_FAILS = frozenset({"log", "telegram"})
 
@@ -91,7 +95,7 @@ class Job:
     require_synced_repos: list[str] = field(default_factory=list)
 
 
-def load_manifest(path: Path) -> list[Job]:
+def load_manifest(path: Path, *, roster_path: Path | None = None) -> list[Job]:
     """Load and validate a job manifest, returning its jobs.
 
     Raises `ManifestError` (carrying every problem found, one per line) if
@@ -100,8 +104,12 @@ def load_manifest(path: Path) -> list[Job]:
     declares two jobs with the same name. Unknown top-level or per-job
     keys are ignored.
     """
-    path = Path(path)
-    data = yaml.safe_load(path.read_text())
+    return validate_manifest(yaml.safe_load(Path(path).read_text()), roster_path=roster_path)
+
+
+def validate_manifest(data, *, roster_path: Path | None = None) -> list[Job]:
+    """Validate the same parsed document the caller will execute."""
+    machines = known_machines(roster_path)
 
     if not isinstance(data, dict):
         raise ManifestError(f"manifest root must be a mapping (got {type(data).__name__})")
@@ -110,7 +118,7 @@ def load_manifest(path: Path) -> list[Job]:
 
     if "version" not in data:
         errors.append("missing required 'version' field (must be 1)")
-    elif data["version"] != 1:
+    elif type(data["version"]) is not int or data["version"] != 1:
         errors.append(f"'version' must be 1 (got {data['version']!r})")
 
     if "jobs" not in data:
@@ -125,7 +133,7 @@ def load_manifest(path: Path) -> list[Job]:
     seen_names: set[str] = set()
     jobs: list[Job] = []
     for index, raw_job in enumerate(raw_jobs):
-        job = _build_job(raw_job, index, errors, seen_names)
+        job = _build_job(raw_job, index, errors, seen_names, machines)
         if job is not None:
             jobs.append(job)
 
@@ -153,7 +161,7 @@ def _require_str(raw: dict, key: str, ref: str, errors: list[str]) -> str | None
     return value
 
 
-def _build_job(raw: object, index: int, errors: list[str], seen_names: set[str]) -> Job | None:
+def _build_job(raw: object, index: int, errors: list[str], seen_names: set[str], machines: frozenset[str] | None) -> Job | None:
     if not isinstance(raw, dict):
         errors.append(f"job #{index}: must be a mapping (got {type(raw).__name__})")
         return None
@@ -169,8 +177,8 @@ def _build_job(raw: object, index: int, errors: list[str], seen_names: set[str])
             seen_names.add(name)
 
     machine = _require_str(raw, "machine", ref, errors)
-    _known = known_machines()
-    if machine is not None and _known and machine not in _known:
+    _known = machines
+    if machine is not None and _known is not None and machine not in _known:
         errors.append(
             f"{ref}: unknown machine {machine!r} "
             f"(not in the installation roster: {', '.join(sorted(_known))})"

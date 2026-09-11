@@ -92,9 +92,9 @@ def test_tris_may_never_deploy(policy_file):
     assert d.blocked and d.kind == "never" and "prod.deploy" in d.reason
 
 
-def test_unlisted_principal_gets_global_cosign_and_no_nevers(policy_file):
-    never, cosign = tp.limits_for("someone-new", policy_file)
-    assert never == set() and cosign == {"email.send", "payment", "prod.deploy"}
+def test_unlisted_principal_cannot_bypass_declared_limits(policy_file):
+    with pytest.raises(ValueError, match="declared"):
+        tp.limits_for("someone-new", policy_file)
 
 
 # ── the record ──────────────────────────────────────────────────────────────
@@ -160,13 +160,14 @@ def test_absent_policy_file_means_the_shipped_defaults(tmp_path):
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_hook_fails_open_when_policy_is_unreadable(tmp_path, capsys):
+def test_hook_fails_closed_when_policy_is_unreadable(tmp_path, capsys):
     bad = tmp_path / "broken.yaml"
     bad.write_text("approver: [unclosed\ncosign_effects: {")
     env = {"DATACORE_POLICY_PRINCIPAL": "miles"}
     out = tp.evaluate_hook({"tool_name": "Bash", "tool_input": {"command": "npm publish"}},
                            env=env, effects=EFFECTS, policy_path=bad)
-    assert out is None and "call allowed" in capsys.readouterr().err
+    assert out['hookSpecificOutput']['permissionDecision'] == 'deny'
+    assert "call refused" in capsys.readouterr().err
 
 
 def test_hook_main_protocol(monkeypatch, capsys, tmp_path, policy_file):
@@ -199,3 +200,24 @@ def test_principal_for_maps_a_writer_to_its_principal(tmp_path, monkeypatch):
     assert tp.principal_for("nightshift") == "miles"
     assert tp.principal_for("miles") == "miles"
     assert tp.principal_for("stranger") == "stranger"
+
+
+@pytest.mark.parametrize('payload', [None, [], 'text', {}, {'tool_name': None}])
+def test_malformed_hook_requests_are_denied(payload):
+    assert tp.evaluate_hook(payload, record=False)['hookSpecificOutput']['permissionDecision'] == 'deny'
+
+
+def test_unclassified_call_still_requires_available_policy(tmp_path):
+    result = tp.evaluate_hook({'tool_name': 'Read', 'tool_input': {'file_path': 'file'}},
+        env={'DATACORE_POLICY_PRINCIPAL': 'missing'}, effects=EFFECTS,
+        policy_path=tmp_path / 'missing.yaml', record=False)
+    assert result['hookSpecificOutput']['permissionDecision'] == 'deny'
+
+
+def test_refusal_does_not_copy_sensitive_tool_input(tmp_path, monkeypatch):
+    monkeypatch.setenv('DATACORE_LEDGER_SIGN', '0')
+    space = _space(tmp_path)
+    decision = tp.Decision(False, {'payment'}, 'refused', 'never')
+    assert tp.record_refusal(decision, principal='miles', tool_name='Bash',
+        space_dir=space, actor='nightshift', detail='token=PRIVATE-TEST-TOKEN')
+    assert 'PRIVATE-TEST-TOKEN' not in next((space / '.datacore/events').glob('*.jsonl')).read_text()

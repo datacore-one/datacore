@@ -25,6 +25,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from secret_http import urlopen as secret_urlopen
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -39,16 +40,9 @@ DEFAULT_GEMINI_MODEL = "gemini-3.1-pro-preview"
 
 def load_env() -> None:
     """Load .datacore/env/.env into os.environ without clobbering real env vars."""
-    if not ENV_FILE.exists():
-        return
-    for line in ENV_FILE.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key, value = key.strip(), value.strip().strip("'\"")
-        if value and key not in os.environ:
-            os.environ[key] = value
+    from env_utils import parse_env_file
+    for key, value in parse_env_file(ENV_FILE).items():
+        os.environ.setdefault(key, value)
 
 
 def _post(url: str, payload: dict, headers: dict, timeout: int) -> dict:
@@ -59,11 +53,10 @@ def _post(url: str, payload: dict, headers: dict, timeout: int) -> dict:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with secret_urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode()[:600]
-        raise RuntimeError(f"HTTP {exc.code} from {url}: {detail}") from exc
+        raise RuntimeError(f"API HTTP {exc.code}") from None
 
 
 def ask_perplexity(prompt: str, model: str, timeout: int) -> dict:

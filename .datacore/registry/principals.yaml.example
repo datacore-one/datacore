@@ -24,7 +24,7 @@ principals:
   owner:
     kind: human
     display: Owner
-    email_sha256: [0000000000000000]
+    email_sha256: ["0000000000000000"]
     github: your-github-handle
     hosts: [laptop]              # short host names, not FQDNs or addresses
     writes_as: [laptop]          # the ledger writer logs this principal owns
@@ -36,7 +36,7 @@ principals:
   teammate:
     kind: human
     display: Teammate
-    email_sha256: [1111111111111111]
+    email_sha256: ["1111111111111111"]
     github: their-github-handle
     hosts: [their-machine]
     writes_as: [their-machine]
@@ -49,7 +49,7 @@ principals:
     kind: agent
     display: Assistant
     role: chief of staff
-    email_sha256: [2222222222222222]
+    email_sha256: ["2222222222222222"]
     github: null                 # may act under the owner's account (DIP-0044 §4)
     hosts: [server]
     writes_as: [assistant]

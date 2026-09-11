@@ -155,7 +155,7 @@ class TestGoogleCalendarAdapter:
 
         lines = adapter._entry_to_org_lines(entry)
 
-        assert "** Weekly Sync" in lines
+        assert '** Calendar: "Weekly Sync"' in lines
         assert any(":EXTERNAL_ID: calendar:primary/abc123" in line for line in lines)
         assert any("Location: Zoom" in line for line in lines)
         assert any("Attendees: team@example.com" in line for line in lines)
