@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -250,25 +251,56 @@ def check_projection(rep: Report) -> None:
 
 # ── DIP-0044: actor identity ────────────────────────────────────────────────
 def check_identity(rep: Report) -> None:
+    """Check declarations without conflating administration and runtime users."""
     reg = ROOT / ".datacore" / "registry" / "infrastructure.yaml"
     try:
         import yaml
-        servers = (yaml.safe_load(reg.read_text()) or {}).get("servers") or {}
-    except Exception as exc:  # noqa: BLE001
-        rep.add("0044", "actor registry", None, f"unreadable: {exc}")
+
+        class UniqueKeysLoader(yaml.SafeLoader):
+            def construct_mapping(self, node, deep=False):
+                self.flatten_mapping(node)
+                seen = set()
+                for key_node, _ in node.value:
+                    key = self.construct_object(key_node, deep=deep)
+                    if not isinstance(key, str) or key in seen:
+                        raise ValueError('invalid or duplicate identity configuration key')
+                    seen.add(key)
+                return super().construct_mapping(node, deep=deep)
+
+        with reg.open('rb') as source:
+            raw = source.read(1_048_577)
+        if len(raw) > 1_048_576:
+            raise ValueError('identity registry is too large')
+        document = yaml.load(raw.decode('utf-8'), Loader=UniqueKeysLoader)
+        servers = document.get('servers') if isinstance(document, dict) else None
+        if not isinstance(servers, dict) or not servers:
+            raise ValueError('nonempty servers mapping required')
+        if any(not isinstance(c, dict) or not isinstance(c.get('access'), dict)
+               for c in servers.values()):
+            raise ValueError('server access mapping required')
+    except (OSError, ImportError) as exc:
+        rep.add("0044", "actor registry", None, f"unavailable ({type(exc).__name__})")
+        return
+    except (UnicodeError, ValueError, yaml.YAMLError):
+        rep.add("0044", "actor registry", False, "invalid or ambiguous identity configuration")
         return
     missing = [n for n, c in servers.items()
-               if isinstance(c, dict) and not (c.get("access") or {}).get("actor")]
+               if not isinstance(c['access'].get('actor'), str)
+               or not re.fullmatch(r'[a-z0-9][a-z0-9_-]*', c['access']['actor'])]
     rep.add("0044", "every machine has an actor", not missing,
             f"{len(servers) - len(missing)}/{len(servers)}" +
             (f"; missing: {', '.join(missing)}" if missing else ""))
-    # ssh_user == service_user: they differed on exactly one box and that single
-    # divergence produced three wrong diagnoses in one session.
-    split = [n for n, c in servers.items() if isinstance(c, dict)
-             and (a := c.get("access") or {}).get("ssh_user")
-             and a.get("service_user") and a["ssh_user"] != a["service_user"]]
-    rep.add("0044", "ssh_user == service_user", not split,
-            "aligned" if not split else f"differ on: {', '.join(split)}")
+    invalid = []
+    for name, config in servers.items():
+        access = config['access']
+        required = ['service_user'] + ([] if config.get('ssh_alias') == '-' else ['ssh_user'])
+        if any(not isinstance(access.get(key), str)
+               or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.-]*\$?', access[key])
+               for key in required):
+            invalid.append(name)
+    rep.add("0044", "execution identities declared", not invalid,
+            (f"invalid/missing on: {', '.join(invalid)}; " if invalid else "")
+            + "declarations only; runtime privileges not checked")
 
 
 
