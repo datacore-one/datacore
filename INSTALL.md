@@ -136,6 +136,17 @@ cp .datacore/env/.env.example .datacore/env/.env
 
 **Required — Datacore MCP** (`@datacore-one/mcp`): Exposes GTD, journal, knowledge, agents, and command tools to your AI assistant. This is pre-configured in `.mcp.json.example` as the first entry and requires no API key — it reads from your `~/Data/` directory automatically.
 
+**Required — PLUR memory MCP** (`@plur-ai/mcp`): Persistent memory (engrams) across sessions. Because PLUR is global — one store for all your projects — add it at **user scope** in `~/.claude/mcp.json`, not in the project `.mcp.json`. This prevents duplicate configs and unpredictable behaviour.
+
+```json
+// Add to ~/.claude/mcp.json (user scope, not the project .mcp.json)
+{
+  "mcpServers": {
+    "plur": { "command": "npx", "args": ["-y", "@plur-ai/mcp@latest"] }
+  }
+}
+```
+
 **Optional — External research servers** (add API keys to `.datacore/env/.env` to enable):
 - **Perplexity** (`PERPLEXITY_API_KEY`): Web-grounded search and research
 - **Exa** (`EXA_API_KEY`): Semantic web search
@@ -144,6 +155,8 @@ cp .datacore/env/.env.example .datacore/env/.env
 - **Gamma** (`GAMMA_API_KEY`): Presentation generation (set in `.mcp.json`)
 
 See `.mcp.json.example` for the full server configuration.
+
+> **Note:** After copying `.mcp.json`, Claude Code will prompt you to approve each MCP server on first use. If you dismiss the prompt accidentally, tools will show "Connected" but expose nothing. Fix with `claude mcp reset-project-choices` and restart Claude Code.
 
 > **CLI**: `@datacore-one/cli` — setup and management utilities. Install with `npm install -g @datacore-one/cli`.
 
@@ -467,6 +480,24 @@ python .datacore/lib/zettel_db.py init-all
 ```
 
 ## Troubleshooting
+
+### MCP tools not working (tools missing despite "Connected" status)
+
+Claude Code requires project-scope MCP servers to be approved on first use. If you dismissed the prompt (or it never appeared), the server shows "✓ Connected" but exposes zero tools. The fix:
+
+```bash
+claude mcp reset-project-choices
+# Then restart Claude Code and approve each server when prompted
+```
+
+To verify tools are actually registered, open Claude Code and ask: *"what MCP tools do you have access to?"*
+
+**Stale npx cache:** `npx` can silently serve a cached old version. All entries in `.mcp.json.example` use the `@latest` suffix to force the current version. If you wrote your own entry without `@latest`, add it:
+```json
+{ "command": "npx", "args": ["-y", "@datacore-one/mcp@latest"] }
+```
+
+**Duplicate config across scopes:** Having the same server in both `~/.claude/mcp.json` (user scope) and `.mcp.json` (project scope) leads to unpredictable behaviour. Use project scope (`.mcp.json`) for project-specific servers like `datacore`, and user scope (`~/.claude/mcp.json`) for global servers like `plur`.
 
 ### Database errors
 
