@@ -25,7 +25,7 @@
 # THIS MUST RUN ON THE MAC. The session archive lives under
 # .datacore/state/, which is gitignored and machine-local — sessions happen
 # here, so the corpus is here. Unlike the ledger, this cannot move to winston.
-set -u
+set -uo pipefail
 
 # HOLD A POWER ASSERTION FOR THE WHOLE RUN. launchd starts a missed job on wake,
 # but nothing stops the Mac going back to sleep DURING one, and a `claude -p`
@@ -43,33 +43,17 @@ if [ -z "${DATACORE_SWEEP_CAFFEINATED:-}" ] && command -v caffeinate >/dev/null 
   exec caffeinate -i -s "$0" "$@"
 fi
 
-export DATACORE_ROOT="${DATACORE_ROOT:-$HOME/Data}"
-LIB="$DATACORE_ROOT/.datacore/lib"
-STATE="$HOME/.datacore/state"
+source "$(dirname -- "${BASH_SOURCE[0]}")/runtime_shell.sh" || exit 2
+datacore_runtime_init || exit $?
 
-# Resolve python by capability, not by path — the ledger job's hard-won rule.
-# macOS ships 3.9, which cannot parse this codebase's PEP-604 unions.
-PY=""
-for c in "${DATACORE_PYTHON:-}" python3.13 python3.12 python3.11 python3.10 \
-         /opt/homebrew/bin/python3 /usr/local/bin/python3 python3; do
-  [ -n "$c" ] || continue
-  command -v "$c" >/dev/null 2>&1 || continue
-  if "$c" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
-    PY="$c"; break
-  fi
-done
-if [ -z "$PY" ]; then
-  echo "FATAL: no python >= 3.10 found; the sweep cannot run." >&2
-  exit 127
-fi
-
-mkdir -p "$STATE"
 echo "=== $(date '+%F %T') session learning daily ==="
 echo "python: $PY"
 
 "$PY" "$LIB/session_archive.py" --backfill 2 --status pending > "$STATE/session-archive.log" 2>&1
-echo "archive rc=$?"
+archive_rc=$?
+echo "archive rc=$archive_rc"
 tail -1 "$STATE/session-archive.log"
+[ "$archive_rc" -eq 0 ] || exit "$archive_rc"
 
 "$PY" "$LIB/session_learning_sweep.py" --backlog
 sweep_rc=$?
@@ -79,5 +63,7 @@ echo "sweep rc=$sweep_rc"
 # grows is the failure mode worth catching — same reason ledger_ingest_org
 # reports drift rather than silently importing it.
 "$PY" "$LIB/session_learning_sweep.py" --status | tail -3
+status_rc=$?
 
-exit $sweep_rc
+[ "$sweep_rc" -eq 0 ] || exit "$sweep_rc"
+exit "$status_rc"

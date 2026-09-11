@@ -5,13 +5,8 @@
 #   project   for spaces in Phase 1 only: org/next_actions.org <- ledger
 # Order is the whole point: projecting before ingesting loses a hand edit.
 set -uo pipefail
-export DATACORE_ROOT="${DATACORE_ROOT:-$HOME/Data}"
-# The scripts come from THIS checkout (a runner worktree on main is fine); only
-# the data root is DATACORE_ROOT. A host whose ~/Data sits on someone's feature
-# branch still runs current tooling against its own data.
-LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-STATE="${DATACORE_STATE:-$HOME/.datacore/state}"
-mkdir -p "$STATE" || exit 2
+source "$(dirname -- "${BASH_SOURCE[0]}")/runtime_shell.sh" || exit 2
+datacore_runtime_init || exit $?
 finish() {
   local result="$1"
   local label=FAIL
@@ -19,17 +14,6 @@ finish() {
   printf "%s phase1-cycle %s rc=%s\n" "$label" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$result" > "$STATE/phase1-cycle-status.txt" || return 2
   return "$result"
 }
-PY=""
-for c in "${DATACORE_PYTHON:-}" python3.13 python3.12 python3.11 python3.10 /opt/homebrew/bin/python3 /usr/local/bin/python3 python3; do
-  [ -n "$c" ] || continue; command -v "$c" >/dev/null 2>&1 || continue
-  # VERSION IS NOT ENOUGH -- IT MUST ALSO IMPORT YAML. Under cron this happened
-  # to pick an interpreter with PyYAML; under launchd (2026-09-09) the same loop
-  # picked one without it and every projection died with ModuleNotFoundError
-  # while the converge steps had already succeeded. job_verify_notify.sh has
-  # tested `import yaml` alongside the version since the same failure hit it.
-  "$c" -c 'import sys, yaml; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null && { PY="$c"; break; }
-done
-[ -n "$PY" ] || { echo "FATAL: no python >= 3.10 that can import yaml"; exit 127; }
 cd "$DATACORE_ROOT" || exit 2
 echo "=== $(date -u '+%F %H:%MZ') phase-1 cycle ==="
 # Converge EVERY space first, Phase 1 or not: the marker that says a space is

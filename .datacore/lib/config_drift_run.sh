@@ -19,9 +19,10 @@
 # does not answer is reported, never skipped. This only removes the cases where
 # the local machine, not the remote one, was the reason.
 set -u
-export DATACORE_ROOT="${DATACORE_ROOT:-$HOME/Data}"
+source "$(dirname -- "${BASH_SOURCE[0]}")/runtime_shell.sh" || exit 2
+datacore_runtime_init || exit $?
 SOCK=$(launchctl getenv SSH_AUTH_SOCK 2>/dev/null || true)
 [ -n "$SOCK" ] && export SSH_AUTH_SOCK="$SOCK"
 
-exec /opt/homebrew/bin/python3 "$DATACORE_ROOT/.datacore/lib/detectors/config_drift.py" \
-    > "$HOME/.datacore/state/config-drift.log" 2>&1
+exec "$PY" "$LIB/detectors/config_drift.py" \
+    > "$STATE/config-drift.log" 2>&1

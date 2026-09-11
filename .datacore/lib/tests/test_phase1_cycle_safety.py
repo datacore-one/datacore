@@ -31,6 +31,7 @@ def test_failure_never_reaches_a_dependent_write(tmp_path, fail_stage, expected)
     trace = tmp_path / 'trace'
     state = tmp_path / 'state'
     shutil.copyfile(LIB / 'ledger_phase1_cycle.sh', scripts / 'cycle.sh')
+    shutil.copyfile(LIB / 'runtime_shell.sh', scripts / 'runtime_shell.sh')
     stub = '''import os,sys,json
 from pathlib import Path
 trace=Path(os.environ['AUDIT_TRACE'])

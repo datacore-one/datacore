@@ -17,24 +17,9 @@
 # everything above.
 set -uo pipefail
 
-export DATACORE_ROOT="${DATACORE_ROOT:-$HOME/Data}"
-LIB="$DATACORE_ROOT/.datacore/lib"
-STATE="$HOME/.datacore/state"
+source "$(dirname -- "${BASH_SOURCE[0]}")/runtime_shell.sh" || exit 2
+datacore_runtime_init || exit $?
 OUT="$STATE/v2-verify.log"
-mkdir -p "$STATE"
-
-# Same capability-based resolution as ledger_daily: a hardcoded interpreter is
-# what killed the nightly cycle when it moved to a different OS.
-PY=""
-for c in "${DATACORE_PYTHON:-}" python3.13 python3.12 python3.11 python3.10 \
-         /opt/homebrew/bin/python3 /usr/local/bin/python3 python3; do
-  [ -n "$c" ] || continue
-  command -v "$c" >/dev/null 2>&1 || continue
-  if "$c" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
-    PY="$c"; break
-  fi
-done
-[ -n "$PY" ] || { echo "v2-verify: no python >= 3.10" > "$OUT"; exit 127; }
 
 {
   echo "=== $(date -u '+%F %T') UTC — v2 verify on $(hostname -s) ==="
@@ -42,7 +27,7 @@ done
   rc=$?
   echo "v2-verify: exit $rc"
 } > "$OUT" 2>&1
-rc=$(grep -oE 'exit [0-9]+' "$OUT" | tail -1 | awk '{print $2}')
+# Keep the process status directly; log text is never an exit-status source.
 
 # Alert only on a real failure. The checklist prints "0 FAIL" when healthy, and
 # an alert that fires on every run is one nobody reads — the same reason the

@@ -140,6 +140,7 @@ jobs:
             .datacore/lib/tests/test_attestation_consumers.py \
             .datacore/lib/tests/test_cron_install.py \
             .datacore/lib/tests/test_phase1_cycle_safety.py \
+            .datacore/lib/tests/test_scheduled_runtime_boundaries.py \
             .datacore/lib/tests/test_projection_reconciliation.py \
             .datacore/lib/tests/test_replicated_edits.py \
             .datacore/lib/tests/test_ledger_migration.py \
