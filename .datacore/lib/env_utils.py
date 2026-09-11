@@ -11,7 +11,7 @@ def _data_root() -> Path:
     return Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
 
 
-def parse_env_value(value: str) -> str:
+def parse_env_value(value: str, *, inline_comments: bool = False) -> str:
     """Decode a literal shell-quoted value without expansion or execution."""
     import shlex
     value = value.strip()
@@ -20,14 +20,18 @@ def parse_env_value(value: str) -> str:
         if len(parts) != 1:
             raise ValueError("invalid quoted environment value")
         return parts[0]
+    if inline_comments:
+        value = re.split(r'\s+#', value, maxsplit=1)[0].rstrip()
     return value
 
 
-def parse_env_file(path: Path) -> Dict[str, str]:
+def parse_env_file(path: Path, *, inline_comments: bool = False) -> Dict[str, str]:
     """Parse literal assignments completely before callers apply any value.
 
     Blank lines/comments are allowed. Ambiguous, duplicate, malformed or
     unreadable configuration is an error; diagnostics never echo its values.
+    inline_comments preserves the CoS contract for unquoted whitespace-#
+    comments. The default preserves literal unquoted values for core callers.
     """
     result = {}
     path = Path(path)
@@ -57,7 +61,7 @@ def parse_env_file(path: Path) -> Dict[str, str]:
         if not separator or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) or key in result:
             raise ValueError(f'invalid or duplicate environment assignment at line {number}')
         try:
-            val = parse_env_value(val)
+            val = parse_env_value(val, inline_comments=inline_comments)
         except ValueError:
             raise ValueError(f'invalid quoted environment value at line {number}') from None
         if '\0' in val:

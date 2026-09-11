@@ -27,6 +27,13 @@ def test_missing_optional_environment_differs_from_broken_link(tmp_path):
         parse_env_file(link)
 
 
+@pytest.mark.parametrize('inline_comments,expected', [(False, 'literal#value # comment'), (True, 'literal#value')])
+def test_unquoted_comment_policy_is_explicit(tmp_path, inline_comments, expected):
+    path = tmp_path / 'env'
+    path.write_text('KEY=literal#value # comment\n')
+    assert parse_env_file(path, inline_comments=inline_comments) == {'KEY': expected}
+
+
 def test_later_invalid_file_cannot_partially_change_environment(tmp_path, monkeypatch):
     monkeypatch.setenv('FIXTURE_KEY', 'original')
     monkeypatch.delenv('FIXTURE_NEW', raising=False)
