@@ -23,7 +23,7 @@ done
 [ -n "$HOST" ] || { echo "--host is required" >&2; exit 2; }
 RUNNER="${DATACORE_RUNNER:-$HOME/.datacore/v2-runner}"
 LIB="$RUNNER/.datacore/lib"
-STATE="$HOME/.datacore/state"; mkdir -p "$STATE"
+STATE="${DATACORE_STATE:-$HOME/.datacore/state}"
 ID_FILE="$HOME/.datacore/identity.env"
 log() { echo "[host-setup] $*"; }
 fail=0
@@ -63,13 +63,16 @@ fi
 # One line per job, keyed on a marker substring; a stale line with the same
 # marker is replaced, so a path change here reaches the crontab on the next run.
 CRON_LINES=()
+CRON_KEYS=()
 case "$HOST" in
   nightshift)
+    CRON_KEYS=(phase1-cycle bot-alive gate-check)
     CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
     CRON_LINES+=("*/15 * * * * $LIB/unit_alive.sh datacore-telegram.service $STATE/miles-bot.alive 2>>$STATE/miles-bot.alive.err")
     CRON_LINES+=("40 8 * * * python3 $HOME/Data/.datacore/modules/nightshift/lib/gate_check.py >> $STATE/nightshift-gate.history 2>&1")
     ;;
   plur-claw)
+    CRON_KEYS=(phase1-cycle ledger-claim)
     # ONE clone per writer per host. Data attests X posts into ~/Data/2-plur-space
     # (DATACORE_ATTEST_SPACE) and the dispatcher used ~/spaces/5-plur: two copies
     # of the same writer log forked at seq 22 (found 2026-09-06). The dispatcher
@@ -78,6 +81,7 @@ case "$HOST" in
     CRON_LINES+=("*/15 * * * * DISPATCH_SPACE=$HOME/Data/2-plur-space $LIB/ledger-claim-pull.sh >> $STATE/ledger-dispatch.log 2>&1")
     ;;
   hermes)
+    CRON_KEYS=(phase1-cycle job-verify)
     # Tris keeps a 5-plur clone at ~/Data/2-plur; the hourly cycle converges it
     # so its verifier attestations and cadence commits leave the host within the hour.
     CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
@@ -113,34 +117,22 @@ esac
 # lines this installer retires (superseded by one of the above)
 RETIRE=("/usr/local/bin/ledger-pull-data.sh")
 
-marker_of() { printf '%s' "$1" | sed -E 's/^[^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+ //' | cut -c1-60; }
+# Stable ownership keys and executable-aware legacy matching are shared with
+# verification. A commented/stale invocation cannot satisfy the contract.
+CRON_ARGS=(--state "$STATE/cron-recovery")
+for ((i=0; i<${#CRON_LINES[@]}; i++)); do
+  CRON_ARGS+=(--entry "${CRON_KEYS[$i]}" "${CRON_LINES[$i]}")
+done
+for r in "${RETIRE[@]}"; do CRON_ARGS+=(--retire "$r"); done
 if [ "$VERIFY_ONLY" = 0 ]; then
-  cur="$(crontab -l 2>/dev/null || true)"
-  new="$cur"
-  for r in "${RETIRE[@]}"; do
-    if printf '%s\n' "$new" | qgrep -F "$r"; then new="$(printf '%s\n' "$new" | grep -vF "$r")"; log "retired cron line: $r"; fi
-  done
-  for line in "${CRON_LINES[@]}"; do
-    m="$(marker_of "$line")"
-    if printf '%s\n' "$new" | qgrep -F "$m"; then
-      new="$(printf '%s\n' "$new" | grep -vF "$m"; printf '%s\n' "$line")"
-    else
-      new="$(printf '%s\n' "$new"; printf '%s\n' "$line")"; log "cron added: $m"
-    fi
-  done
-  printf '%s\n' "$new" | grep -vE '^\s*$' | crontab -
+  python3 "$LIB/cron_install.py" "${CRON_ARGS[@]}" || fail=1
 fi
 
 # ── verify ───────────────────────────────────────────────────────────────────
 grep -qsE "^(export )?DATACORE_ACTOR=$ACTOR\$" "$ID_FILE" && log "OK  identity declared ($ACTOR)" || { log "FAIL identity not declared as $ACTOR in $ID_FILE"; fail=1; }
 grep -qsE '^(export )?DATACORE_LEDGER_SIGN=1' "$ID_FILE" && log "OK  events signed (DATACORE_LEDGER_SIGN=1)" || { log "FAIL signing not declared in $ID_FILE"; fail=1; }
 res="$(python3 "$LIB/actor_identity.py" 2>/dev/null)"; [ "${res%% *}" = "$ACTOR" ] && log "OK  resolver agrees: $res" || { log "FAIL resolver says '$res', registry says $ACTOR"; fail=1; }
-cur="$(crontab -l 2>/dev/null || true)"
-for line in "${CRON_LINES[@]}"; do
-  m="$(marker_of "$line")"
-  printf '%s\n' "$cur" | qgrep -F "$m" && log "OK  cron: $m" || { log "FAIL cron missing: $m"; fail=1; }
-done
-for r in "${RETIRE[@]}"; do printf '%s\n' "$cur" | qgrep -F "$r" && { log "FAIL retired cron still present: $r"; fail=1; }; done
+python3 "$LIB/cron_install.py" --verify "${CRON_ARGS[@]}" || fail=1
 [ -x "$LIB/ledger_phase1_cycle.sh" ] && log "OK  runner lib present at $LIB" || { log "FAIL runner lib missing: $LIB"; fail=1; }
 case "$HOST" in
   nightshift)

@@ -129,6 +129,8 @@ jobs:
             .datacore/lib/tests/test_classification_preservation.py \
             .datacore/lib/tests/test_text_model.py \
             .datacore/lib/tests/test_host_deps.py \
+            .datacore/lib/tests/test_attestation_consumers.py \
+            .datacore/lib/tests/test_cron_install.py \
             .datacore/lib/tests/test_phase1_cycle_safety.py \
             .datacore/lib/tests/test_projection_reconciliation.py \
             .datacore/lib/tests/test_replicated_edits.py \

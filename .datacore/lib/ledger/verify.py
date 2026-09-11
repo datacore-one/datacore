@@ -109,9 +109,25 @@ def verify_chain(path: Path, registry_path: Path | None = None, strict: bool = F
             continue
         parsed.append((line_no, event))
 
+    return errors + verify_events(parsed, registry_path=registry_path, strict=strict)
+
+
+def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = None,
+                  strict: bool = False) -> list[str]:
+    """Verify one already-read chain without rereading a mutable source file.
+
+    Callers preserve chain order and supply record numbers. This shares the
+    diagnostic integrity rules with readers that need a consistent snapshot.
+    """
+    errors: list[str] = []
     expected_prev = GENESIS
     expected_seq = 0
     for line_no, event in parsed:
+        if (type(event.seq) is not int or event.seq < 0
+                or not all(isinstance(v, str) for v in (event.hlc, event.actor, event.type, event.prev, event.hash, event.sig))
+                or not isinstance(event.payload, dict)):
+            errors.append(f"line {line_no}: invalid event field types")
+            continue
         body = body_dict(event.seq, event.hlc, event.actor, event.type, event.payload, event.prev)
 
         if compute_hash(body) != event.hash:
