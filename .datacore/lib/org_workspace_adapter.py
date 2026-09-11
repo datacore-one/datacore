@@ -986,14 +986,19 @@ def cmd_update(args):
                 ws.set_property(node, k, v)  # routes \n values through set_multiline_property
                 changes.append(f"{k}={v!r}")
 
-    # Scheduled
+    # Scheduled. "none" clears it: a task moved to NEXT or someday should not
+    # keep a stale date that keeps it looking overdue.
     if args.scheduled:
-        try:
-            sched_dt = datetime.strptime(args.scheduled, "%Y-%m-%d").date()
-        except ValueError:
-            return {"error": f"Invalid date: '{args.scheduled}'. Use YYYY-MM-DD."}
-        ws.set_scheduled(node, sched_dt)
-        changes.append(f"scheduled→{args.scheduled}")
+        if args.scheduled.strip().lower() == "none":
+            ws.set_scheduled(node, None)
+            changes.append("scheduled→(cleared)")
+        else:
+            try:
+                sched_dt = datetime.strptime(args.scheduled, "%Y-%m-%d").date()
+            except ValueError:
+                return {"error": f"Invalid date: '{args.scheduled}'. Use YYYY-MM-DD or 'none'."}
+            ws.set_scheduled(node, sched_dt)
+            changes.append(f"scheduled→{args.scheduled}")
 
     # Heading
     if getattr(args, 'new_heading', None):
