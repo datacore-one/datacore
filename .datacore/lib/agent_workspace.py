@@ -26,16 +26,19 @@ Two rules make this safe rather than merely present:
   indistinguishable from success right up until two runs corrupt each other,
   and it is the specific failure this module exists to make impossible.
 
-Cleanup removes the worktree but KEEPS the branch when it holds commits.
-Deleting a branch with work on it to tidy up is how 610 commits were stranded;
-an orphan branch is findable, and `git worktree prune` is not a data-loss
-event.
+Cleanup retires the directory beside its old location and KEEPS the branch
+when it holds commits. Retired directories retain late/ignored writes and a
+detached commit anchor; they require separate reclamation after writers have
+stopped and their contents have been reviewed. Task IDs with no new commits
+can be reused without erasing the retired generation.
 """
 from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+from worktree_lifecycle import git_environment, retire_worktree
 
 
 class IsolationError(RuntimeError):
@@ -51,7 +54,8 @@ class Workspace:
 
 def _git(repo: Path, *args: str, timeout: int = 120) -> tuple[int, str, str]:
     r = subprocess.run(["git", "-C", str(repo), *args],
-                       capture_output=True, text=True, timeout=timeout)
+                       capture_output=True, text=True, errors='replace', timeout=timeout,
+                       env=git_environment())
     return r.returncode, (r.stdout or ""), (r.stderr or "")
 
 
@@ -64,6 +68,15 @@ def create(source: Path, task_id: str, *, root: Path | None = None) -> Workspace
     """A private checkout on `agent/<task-id>`. Raises rather than degrading."""
     if not task_id or "/" in task_id or task_id.strip() != task_id:
         raise IsolationError(f"unusable task id for a branch name: {task_id!r}")
+    # Subsequent executor Git commands run outside this helper. A per-command
+    # override while creating the worktree cannot preserve their hooks. Git's
+    # default shared hooks or an absolute operator-configured path work in all
+    # checkouts; a relative path can disappear or load branch-controlled hooks.
+    rc, hooks, _ = _git(source, 'config', '--path', '--get', 'core.hooksPath')
+    if rc not in (0, 1):
+        raise IsolationError('cannot inspect configured Git hooks')
+    if rc == 0 and (not hooks.strip() or not Path(hooks.strip()).is_absolute()):
+        raise IsolationError('agent workspaces require an absolute hooksPath or Git default hooks')
     branch = f"agent/{task_id}"
     base = root or (Path.home() / ".datacore" / "worktrees")
     path = base / task_id
@@ -84,7 +97,7 @@ def create(source: Path, task_id: str, *, root: Path | None = None) -> Workspace
 
 
 def cleanup(ws: Workspace, *, keep_branch_if_commits: bool = True) -> str:
-    """Remove a clean, stopped worker's checkout; preserve uncertain state."""
+    """Retire a clean worker's checkout without deleting possible late writes."""
     rc, status, _ = _git(ws.path, 'status', '--porcelain', '--untracked-files=all', '--ignored=matching')
     if rc or status:
         raise IsolationError('worktree has uncommitted/ignored files or cannot be inspected; preserved for review')
@@ -95,18 +108,19 @@ def cleanup(ws: Workspace, *, keep_branch_if_commits: bool = True) -> str:
     if commits and not keep_branch_if_commits:
         raise IsolationError('cleanup cannot discard unmerged commits; preserve or merge the branch first')
 
-    rc, _, _ = _git(ws.source, 'worktree', 'remove', '--', str(ws.path))
-    if rc:
-        raise IsolationError('Git refused worktree removal; existing state preserved without forced cleanup')
+    try:
+        retired = retire_worktree(ws.source, ws.path)
+    except RuntimeError as exc:
+        raise IsolationError(str(exc)) from None
 
     if commits and keep_branch_if_commits:
         # Deleting a branch that holds commits to tidy up is how 610 of them
         # were stranded. An orphan branch is findable; a deleted one is not.
-        return f"kept {ws.branch} ({commits} commit(s))"
-    rc, _, _ = _git(ws.source, 'branch', '-d', '--', ws.branch)
+        return f"kept {ws.branch} ({commits} commit(s)); retained workspace at {retired.path}"
+    rc, _, _ = _git(ws.source, 'update-ref', '-d', f'refs/heads/{ws.branch}', retired.head)
     if rc:
         return f'kept {ws.branch} (Git refused branch deletion)'
-    return f"removed {ws.branch}"
+    return f"removed {ws.branch}; retained workspace at {retired.path}"
 
 
 def _base(ws: Workspace) -> str:
