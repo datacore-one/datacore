@@ -91,6 +91,9 @@ jobs:
         run: |
           python -m pytest -q \
             .datacore/lib/tests/test_persistence_adversarial.py \
+            .datacore/lib/tests/test_file_utils.py \
+            .datacore/lib/tests/test_markdown_sections.py \
+            .datacore/lib/tests/test_journal_store.py \
             .datacore/lib/tests/test_org_transactions.py \
             .datacore/lib/tests/test_archive_preservation.py \
             .datacore/lib/tests/test_writeback_preservation.py \
