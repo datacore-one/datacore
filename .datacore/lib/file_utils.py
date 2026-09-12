@@ -77,14 +77,17 @@ def atomic_write_yaml(path: Path, data: Any) -> None:
 
 
 @contextmanager
-def file_lock(path: Path, timeout: float = 5.0):
+def file_lock(path: Path, timeout: float = 5.0, *, lock_path: Path | None = None):
     """Advisory file lock using fcntl.flock().
 
     Creates a stable .lock file next to the target. Lock errors propagate;
     timeout expires before entering the protected body. Never unlink the
     lock file: waiters must continue to coordinate on the same inode.
+    An explicit lock_path interoperates with an existing provider's lock
+    naming contract; it must be chosen by trusted integration code.
     """
-    lock_path = path.parent / f".{path.name}.lock"
+    path = Path(path)
+    lock_path = Path(lock_path) if lock_path is not None else path.parent / f".{path.name}.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     if timeout < 0:
         raise ValueError("lock timeout must be nonnegative")

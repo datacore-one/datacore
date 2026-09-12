@@ -18,9 +18,9 @@ WHAT IT DOES. Three things, all from the registry the fleet already keeps:
 
   authorship A pre_tool_call gate refuses a call that would write the ledger
              under a DIFFERENT declared principal's name. Only a
-             declared-against-declared mismatch is refused: an undeclared
-             writer, or a host whose own identity cannot be resolved, is left
-             alone — the guard exists for the one case the registry can decide.
+             declared-against-declared mismatch is refused by this diagnostic.
+             An unresolved local identity separately refuses all tool execution.
+             This textual diagnostic does not constrain arbitrary same-user code.
 
   policy     Every acting tool call goes through tool_policy.evaluate_hook —
              the same classifier, the same approvals_policy.yaml limits, the
@@ -102,7 +102,7 @@ def identity(refresh: bool = False) -> dict:
     """{actor, principal, display, role, permission_mode, ok, why}.
 
     `ok` is False whenever the plugin cannot bind this host to a declared
-    principal — the guards stand down in that state and say so."""
+    principal; the pre-tool gate refuses execution in that state."""
     global _IDENTITY
     if _IDENTITY is not None and not refresh:
         return _IDENTITY
@@ -125,7 +125,7 @@ def identity(refresh: bool = False) -> dict:
             out["why"] = f"actor {actor!r} is not a declared principal"
         else:
             out["ok"] = True
-    except Exception as exc:  # noqa: BLE001 — identity is advisory, never fatal
+    except Exception as exc:  # noqa: BLE001 — unresolved identity fails the tool gate
         out["why"] = f"{type(exc).__name__}: {exc}"
     _IDENTITY = out
     return out
@@ -167,29 +167,40 @@ def sync_memory_block(path: Path | None = None, ident: dict | None = None) -> st
     block = identity_block(ident)
     if not block:
         return "skipped"
-    p = path or memory_file()
+    p = Path(path or memory_file())
+    if not _lib():
+        return "unwritable: Datacore file transaction library unavailable"
+    from file_utils import atomic_write_text, file_lock
+
     try:
-        text = p.read_text(encoding="utf-8") if p.exists() else ""
+        # Match Hermes MemoryStore._file_lock exactly. The default Datacore
+        # .MEMORY.md.lock name would not coordinate with provider writes.
+        with file_lock(p, lock_path=p.with_suffix(p.suffix + ".lock")):
+            try:
+                text = p.read_bytes().decode("utf-8")
+            except FileNotFoundError:
+                text = ""
+            except (OSError, UnicodeError) as exc:
+                return f"unreadable: {type(exc).__name__}"
+            starts, ends = text.count(MARK_START), text.count(MARK_END)
+            if starts or ends:
+                if starts != 1 or ends != 1 or text.index(MARK_START) >= text.index(MARK_END):
+                    return "unreadable: ambiguous identity markers; source preserved"
+                head, _, rest = text.partition(MARK_START)
+                _, _, tail = rest.partition(MARK_END)
+                new = head + block + tail
+                outcome = "unchanged" if new == text else "updated"
+            else:
+                # Preserve authored bytes, including trailing whitespace.
+                new = text + ("\n\n" if text else "") + block + "\n"
+                outcome = "added"
+            if outcome != "unchanged":
+                # Provider writes preserve configured symlinks. Publish via a
+                # unique flushed temporary sibling of that same target.
+                atomic_write_text(p.resolve(), new)
+            return outcome
     except OSError as exc:
-        return f"unreadable: {exc}"
-    if MARK_START in text and MARK_END in text:
-        head, _, rest = text.partition(MARK_START)
-        _, _, tail = rest.partition(MARK_END)
-        new = head + block + tail
-        outcome = "unchanged" if new == text else "updated"
-    else:
-        new = (text.rstrip("\n") + "\n\n" + block + "\n") if text.strip() else block + "\n"
-        outcome = "added"
-    if outcome == "unchanged":
-        return outcome
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_text(new, encoding="utf-8")
-        tmp.replace(p)
-    except OSError as exc:
-        return f"unwritable: {exc}"
-    return outcome
+        return f"unwritable: {type(exc).__name__}"
 
 
 def on_session_start(**_kw):
@@ -467,4 +478,4 @@ def register(ctx) -> None:
     d = identity()
     logger.info("datacore plugin: %s",
                 f"{d['principal']} as {d['actor']} — guards in force" if d["ok"]
-                else f"inert ({d['why']})")
+                else f"identity unavailable; tools refused ({d['why']})")

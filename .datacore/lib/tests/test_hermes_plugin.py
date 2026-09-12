@@ -128,6 +128,106 @@ def test_memory_sync_does_nothing_without_an_identity(tmp_path, monkeypatch):
     assert not m.exists()
 
 
+def test_memory_sync_waits_for_provider_lock_and_preserves_its_write(tmp_path, as_tris):
+    import subprocess
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    memory = tmp_path / "MEMORY.md"
+    memory.write_text("Original memory\n")
+    code = (
+        "import fcntl, pathlib, sys; p=pathlib.Path(sys.argv[1]); "
+        "f=open(str(p)+'.lock','a+'); fcntl.flock(f,fcntl.LOCK_EX); "
+        "print('locked',flush=True); sys.stdin.readline(); "
+        "p.write_text(p.read_text()+'Concurrent provider memory\\n')"
+    )
+    child = subprocess.Popen([sys.executable, "-I", "-c", code, str(memory)],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    started = Event()
+    def sync():
+        started.set()
+        return hp.sync_memory_block(memory)
+    try:
+        assert child.stdout.readline().strip() == "locked"
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(sync)
+            assert started.wait(5)
+            # Acknowledgement while the provider still owns the lock is unsafe.
+            from concurrent.futures import TimeoutError
+            try:
+                with pytest.raises(TimeoutError):
+                    pending.result(timeout=0.15)
+            finally:
+                child.communicate("release\n", timeout=5)
+            assert pending.result(timeout=5) == "added"
+    finally:
+        if child.poll() is None:
+            child.communicate("release\n", timeout=5)
+    text = memory.read_text()
+    assert "Original memory" in text and "Concurrent provider memory" in text
+    assert text.count(hp.MARK_START) == 1
+
+
+def test_memory_sync_never_uses_a_preexisting_fixed_temp_path(tmp_path, as_tris):
+    memory = tmp_path / "MEMORY.md"
+    memory.write_text("Preserved memory\n")
+    other = tmp_path / "other"
+    other.write_text("Other valid data\n")
+    temporary = tmp_path / "MEMORY.md.tmp"
+    temporary.symlink_to(other)
+    assert hp.sync_memory_block(memory) == "added"
+    assert other.read_text() == "Other valid data\n"
+    assert temporary.is_symlink()
+    assert not memory.is_symlink()
+
+
+@pytest.mark.parametrize("source", [
+    hp.MARK_START + "\nUnclosed content\n",
+    hp.MARK_END + "\nUnopened content\n",
+    hp.MARK_END + "\nValid unrelated data\n" + hp.MARK_START,
+    hp.MARK_START + "\nFirst\n" + hp.MARK_START + "\nSecond\n" + hp.MARK_END,
+])
+def test_memory_sync_refuses_ambiguous_markers_without_erasing_content(tmp_path, as_tris, source):
+    memory = tmp_path / "MEMORY.md"
+    memory.write_text(source)
+    assert hp.sync_memory_block(memory).startswith("unreadable:")
+    assert memory.read_text() == source
+
+
+def test_memory_sync_preserves_configured_symlink(tmp_path, as_tris):
+    target = tmp_path / "actual-memory"
+    target.write_text("Managed memory\n")
+    memory = tmp_path / "MEMORY.md"
+    memory.symlink_to(target)
+    assert hp.sync_memory_block(memory) == "added"
+    assert memory.is_symlink()
+    assert "Managed memory" in target.read_text()
+    assert hp.MARK_START in target.read_text()
+
+
+def test_memory_sync_lock_failure_preserves_source(tmp_path, as_tris, monkeypatch):
+    import functools
+    import file_utils
+    memory = tmp_path / "MEMORY.md"
+    memory.write_bytes(b"Original bytes\n\n ")
+    original = memory.read_bytes()
+    with file_utils.file_lock(memory, lock_path=tmp_path / "MEMORY.md.lock"):
+        monkeypatch.setattr(file_utils, "file_lock", functools.partial(file_utils.file_lock, timeout=0))
+        assert hp.sync_memory_block(memory).startswith("unwritable:")
+    assert memory.read_bytes() == original
+
+
+def test_memory_sync_preserves_invalid_encoding_and_valid_trailing_bytes(tmp_path, as_tris):
+    memory = tmp_path / "MEMORY.md"
+    memory.write_bytes(b"Invalid UTF-8 \xff")
+    assert hp.sync_memory_block(memory).startswith("unreadable:")
+    assert memory.read_bytes() == b"Invalid UTF-8 \xff"
+    source = b"Valid authored Unicode \xe2\x82\xac\n\n \n"
+    memory.write_bytes(source)
+    assert hp.sync_memory_block(memory) == "added"
+    assert memory.read_bytes().startswith(source)
+
+
 # ── fleet policy reaches Hermes tool names ──────────────────────────────────
 
 def test_hermes_acting_tools_are_classified_like_claude_code_ones():
