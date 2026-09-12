@@ -597,6 +597,43 @@ def test_same_branch_late_head_cannot_replace_the_acknowledged_commit(repo, tmp_
     assert git(remote, 'rev-parse', 'refs/heads/main').stdout == before
 
 
+def test_caller_snapshot_cannot_acknowledge_an_intervening_noop(repo):
+    before = git(repo, 'rev-parse', 'HEAD').stdout.strip()
+    (repo / 'notes/new.md').write_text('Newly saved content.\n')
+    git(repo, 'add', '--', 'notes/new.md')
+    git(repo, 'commit', '-m', 'intervening commit')
+    current = git(repo, 'rev-parse', 'HEAD').stdout.strip()
+    with pytest.raises(knowledge.GitError, match='advanced since caller capture'):
+        knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'old context',
+                                   push=False, expected_head=before)
+    assert git(repo, 'rev-parse', 'HEAD').stdout.strip() == current
+    assert (repo / 'notes/new.md').read_text() == 'Newly saved content.\n'
+    assert not (repo / '.git/datacore-publication-pending.json').exists()
+
+
+@pytest.mark.parametrize('change', ['commit', 'branch'])
+def test_reservation_cannot_capture_a_later_source_context(repo, monkeypatch, change):
+    (repo / 'notes/new.md').write_text('Keep this output.\n')
+    original = knowledge._commit_selected
+    changed = []
+
+    def race(*args, **kwargs):
+        if change == 'commit':
+            git(repo, 'add', '--', 'notes/new.md')
+            git(repo, 'commit', '-m', 'other writer')
+        else:
+            git(repo, 'checkout', '-b', 'other-context')
+        changed.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(knowledge, '_commit_selected', race)
+    with pytest.raises(knowledge.GitError, match='advanced since reservation'):
+        knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'captured context', push=False)
+    assert changed
+    assert (repo / 'notes/new.md').read_text() == 'Keep this output.\n'
+    assert (repo / '.git/datacore-publication-pending.json').exists()
+
+
 @pytest.mark.parametrize('branch', ['main', 'feature'])
 def test_publication_ignores_inherited_repository_and_index_selectors(repo, tmp_path, monkeypatch, branch):
     if branch == 'feature':

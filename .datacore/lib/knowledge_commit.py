@@ -236,8 +236,10 @@ def _publication_mode(repo: Path, base: str, rel: str, mode: str) -> str:
 def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, push: bool,
                        *, append_only: bool = False, publication=None) -> str:
     """Reserve the target checkout; validate a detached commit before advancing it."""
-    base = _git(repo, 'rev-parse', '--verify', f'refs/heads/{branch}^{{commit}}')
-    source = _git(repo, 'rev-parse', '--verify', 'HEAD^{commit}')
+    base = (publication.data['target_head'] if publication is not None else
+            _git(repo, 'rev-parse', '--verify', f'refs/heads/{branch}^{{commit}}'))
+    source = (publication.data['source_head'] if publication is not None else
+              _git(repo, 'rev-parse', '--verify', 'HEAD^{commit}'))
     captured = {rel: _capture(repo, rel) for rel in paths}
     hooks = publication_hooks(repo)
     parent = allocate_publication_workspace(repo)
@@ -337,7 +339,8 @@ def _push_converging(repo: Path, branch: str, sha: str) -> None:
 
 
 def commit_to_branch(repo: Path, branch: str, paths, message: str,
-                     push: bool = True, *, append_only: bool = False) -> str:
+                     push: bool = True, *, append_only: bool = False,
+                     expected_head: str | None = None) -> str:
     """Commit `paths` onto an explicit branch.
 
     When HEAD is elsewhere, only private worktrees are checked out and the
@@ -350,6 +353,9 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
     newline-terminated byte prefix, including when source HEAD already contains
     that version. It refuses truncation or replacement of published log entries.
 
+    expected_head binds a caller's prior target snapshot, including no-change
+    results. A concurrent commit cannot substitute a different publication base.
+
     Returns the new commit sha, or '' if there was nothing to do.
     """
     repo = Path(repo).resolve()
@@ -358,6 +364,12 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
     except RuntimeError:
         raise GitError('Source inventory is unavailable or unresolved; no publication attempted') from None
     _git(repo, 'check-ref-format', f'refs/heads/{branch}')
+    if expected_head is not None:
+        from git_publication import _oid
+        try:
+            _oid(expected_head)
+        except ValueError:
+            raise GitError('expected publication head must be an immutable object identity') from None
     checked = []
     for value in paths:
         path = Path(value)
@@ -375,6 +387,8 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
     from publication_state import reserve
     try:
         with reserve(repo, branch, paths) as reservation:
+            if expected_head is not None and reservation.data['target_head'] != expected_head:
+                raise GitError('publication target advanced since caller capture; work retained')
             return _commit_selected(repo, branch, paths, message, push, append_only, reservation)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         if isinstance(exc, GitError):
@@ -385,6 +399,10 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
 def _commit_selected(repo, branch, paths, message, push, append_only, reservation):
 
     head = current_branch(repo)
+    source_branch = f'refs/heads/{head}' if head else ''
+    if (source_branch != reservation.data['source_branch']
+            or _git(repo, 'rev-parse', '--verify', 'HEAD^{commit}') != reservation.data['source_head']):
+        raise GitError('publication source advanced since reservation; work retained')
     if append_only and head == branch:
         raise GitError('append-only publication requires an isolated destination branch')
 
@@ -393,7 +411,7 @@ def _commit_selected(repo, branch, paths, message, push, append_only, reservatio
     # out branch without touching index/worktree makes the tree read as dirty in
     # reverse. Use the ordinary path.
     if head == branch:
-        base = _git(repo, 'rev-parse', '--verify', 'HEAD^{commit}')
+        base = reservation.data['source_head']
         tree = _expected_tree(repo, base, paths)
         reservation.expected(tree)
         if current_branch(repo) != branch or _git(repo, 'rev-parse', 'HEAD') != base:
