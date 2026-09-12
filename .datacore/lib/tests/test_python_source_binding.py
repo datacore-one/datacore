@@ -21,7 +21,7 @@ def environment(tmp_path):
                                  'session_firstmsg.py', 'session_bootstrap.py', 'active_memory.py'])
 def test_hook_uses_installed_helpers_and_preserves_selected_data_root(tmp_path, hook):
     installed = tmp_path / 'installed';installed.mkdir()
-    for name in [hook, 'session_state.py', 'file_utils.py']:
+    for name in [hook, 'session_state.py', 'file_utils.py', 'plur_cli.py', 'process_run.py']:
         shutil.copy2(LIB / name, installed / name)
     stale = tmp_path / 'Data/.datacore/lib';stale.mkdir(parents=True)
     (stale / 'session_state.py').write_text("raise RuntimeError('DATA_CODE_SELECTED')\n")

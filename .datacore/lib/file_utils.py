@@ -14,7 +14,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
-import yaml
 
 
 def _log(msg: str):
@@ -72,6 +71,7 @@ def atomic_write_json(path: Path, data: Any, indent: int = 2) -> None:
 
 def atomic_write_yaml(path: Path, data: Any) -> None:
     """Write YAML atomically."""
+    import yaml
     content = yaml.safe_dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True)
     atomic_write_text(path, content)
 
@@ -115,6 +115,7 @@ def locked_read_modify_write_yaml(path: Path, modifier: Callable[[Any], Any]) ->
         path: YAML file to modify
         modifier: function that takes current data (or None) and returns new data
     """
+    import yaml
     with file_lock(path):
         existing = None
         try:

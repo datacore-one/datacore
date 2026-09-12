@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass, field
 from state_store import YamlStateStore
+import plur_cli
 
 # Status constants for learning candidates and embed queue
 STATUS_PENDING = "pending"
@@ -297,16 +298,15 @@ class HookExecutor:
         """
         Inject relevant engrams into agent context via PLUR CLI.
 
-        Uses `npx @plur-ai/cli inject` for runtime engram selection.
+        Uses the installed `plur inject` for runtime engram selection.
         """
         try:
-            import subprocess
-            result = subprocess.run(
-                ['npx', '@plur-ai/cli', 'inject', task_context, '--json'],
+            result = plur_cli.run(
+                'inject', task_context, '--json',
                 capture_output=True, text=True, timeout=15
             )
             if result.returncode != 0:
-                self._log(f"    PLUR inject failed: {result.stderr.strip()}")
+                self._log(f"    PLUR inject failed with exit {result.returncode}")
                 return None
 
             import json as _json
@@ -324,7 +324,7 @@ class HookExecutor:
             self._log(f"    Injected {data.get('count', 0)} engrams via PLUR CLI")
             return f"## Applicable Engrams\n\n{engram_text}"
         except Exception as e:
-            self._log(f"    Engram injection failed: {e}")
+            self._log(f"    Engram injection failed: {type(e).__name__}")
             return None
 
     # Allowed extensions for file loading via hooks

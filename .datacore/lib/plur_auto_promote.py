@@ -28,6 +28,8 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import plur_cli
+
 OBS_DIR = Path(os.path.expanduser("~/.plur/observations"))
 ENGRAMS_FILE = Path(os.path.expanduser("~/.plur/engrams.yaml"))
 
@@ -193,7 +195,7 @@ def create_engram_via_mcp(candidate):
     """Create an engram via plur_learn MCP tool (through CLI)."""
     # Use plur CLI to create engram
     cmd = [
-        "npx", "@plur-ai/cli", "learn",
+        "learn",
         "--statement", candidate["statement"],
         "--type", candidate["type"],
         "--scope", candidate.get("scope", "global"),
@@ -204,12 +206,12 @@ def create_engram_via_mcp(candidate):
         cmd.extend(["--tag", tag])
 
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=15
+        result = plur_cli.run(
+            *cmd, capture_output=True, text=True, timeout=15
         )
         return result.returncode == 0, result.stdout.strip()
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        return False, str(e)
+    except (subprocess.TimeoutExpired, OSError, ValueError) as e:
+        return False, type(e).__name__
 
 
 def main():

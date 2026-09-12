@@ -1,147 +1,131 @@
 #!/usr/bin/env python3
-"""Wrapper around plur hook-inject that adds forceful session start reminder
-if the sentinel file doesn't exist yet.
+"""Inject memory using the installed CLI, with private per-session exclusion.
 
-Runs async (settings.json: async: true, timeout: 90) — the CLI cold-start
-loads the BGE embedder (~20s with a 4k-engram store), too slow for a
-blocking hook. Inner subprocess timeout stays under the hook's 90s budget.
-
-The child is launched in its own process group (start_new_session=True) so a
-timeout kills the whole tree. The CLI spawns a `node … plur hook-inject`
-grandchild; killing only the direct child (as subprocess.run's timeout does)
-orphaned that grandchild to PID 1, where it kept spinning at high CPU forever
-— the orphan leak in datacore-one/datacore#33. A non-blocking per-session
-lock stops overlapping invocations from stacking multiple ~20s embedder loads.
+The async hook has a 90-second budget; the child gets 85 seconds and foreground
+process-group cleanup. Session reminders are advisory, never authorization.
 """
+import argparse
 import fcntl
 import json
 import os
+import re
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
-# Prefer the plur-init-installed shim (direct node invocation, no npx
-# resolution overhead); fall back to npx when it isn't installed.
-_SHIM = Path.home() / ".plur" / "bin" / "plur-hook"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from hook_state import state_path
+import plur_cli
+import process_run
 
-# Inner subprocess budget — stays under the hook's 90s async timeout.
 _TIMEOUT = 85
+_MAX_STDIN = 512 * 1024
+_MAX_SESSION = 4096
 
 
 def _hook_cmd():
-    if _SHIM.exists():
-        return [str(_SHIM), "hook-inject"]
-    return ["npx", "@plur-ai/cli", "hook-inject"]
+    return plur_cli.command('hook-inject')
 
 
-def _kill_group(pid):
-    """SIGTERM then SIGKILL the child's entire process group, so the CLI's
-    node grandchild cannot orphan to PID 1 and keep spinning."""
+def _run_hook(stdin_data, timeout=_TIMEOUT, rehydrate=False):
     try:
-        pgid = os.getpgid(pid)
-    except (ProcessLookupError, OSError):
-        return
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.killpg(pgid, sig)
-        except (ProcessLookupError, OSError):
-            return
-        time.sleep(0.15)
-
-
-def _run_hook(stdin_data, timeout=_TIMEOUT):
-    """Run hook-inject in its own process group. On timeout, kill the whole
-    group and return "" instead of crashing. Returns the child's stdout."""
-    try:
-        with subprocess.Popen(
-            _hook_cmd(),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            start_new_session=True,  # child leads its own process group
-        ) as proc:
-            try:
-                stdout, _ = proc.communicate(input=stdin_data, timeout=timeout)
-                return stdout
-            except subprocess.TimeoutExpired:
-                _kill_group(proc.pid)
-                try:
-                    proc.communicate(timeout=5)
-                except subprocess.TimeoutExpired:
-                    pass
-                return ""
-    except (FileNotFoundError, OSError):
-        return ""
+        command = _hook_cmd() + (['--rehydrate'] if rehydrate else [])
+        result = process_run.run(
+            command, input=stdin_data, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True, timeout=timeout,
+        )
+        return result.stdout if result.returncode == 0 else ''
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return ''
 
 
 def _try_lock(session_id):
-    """Non-blocking per-session lock. Returns the held file object on success,
-    or None when another inject is already running (skip to avoid pile-up).
-    flock releases automatically if the holder dies, so it never goes stale."""
-    lock_path = Path(tempfile.gettempdir()) / f"plur-inject-{session_id or 'nosess'}.lock"
-    f = None
+    """Lock a private hashed path without following links or truncating data.
+
+    Keep the inode after unlocking: unlinking a held lock can let subsequent
+    callers lock different inodes and both enter the protected operation.
+    """
+    fd = None
     try:
-        f = open(lock_path, "w")
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return f
-    except OSError:
-        if f is not None:
-            f.close()
+        if not isinstance(session_id, str) or len(session_id) > _MAX_SESSION:
+            return None
+        path = state_path('plur-inject', session_id)
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_nlink != 1 or info.st_mode & 0o077):
+            raise ValueError('PLUR inject lock must be private regular state')
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = os.fdopen(fd, 'r+')
+        fd = None
+        return result
+    except (OSError, ValueError, UnicodeError):
         return None
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
-def main():
-    # Read stdin for session_id
+def _session_marked(session_id):
+    # PLUR's legacy advisory sentinel uses raw UUIDs. Only accept the bounded
+    # ASCII safe subset, avoiding traversal and sanitization collisions. Never
+    # follow a link or rely on another user's marker. This does not grant tools.
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', session_id):
+        return False
     try:
-        stdin_data = sys.stdin.read()
+        info = (Path(tempfile.gettempdir()) / f'plur-session-{session_id}').lstat()
+        return (stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
+                and info.st_nlink == 1 and not info.st_mode & 0o022)
+    except OSError:
+        return False
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--rehydrate', action='store_true')
+    args = parser.parse_args(argv)
+    try:
+        stdin_data = sys.stdin.read(_MAX_STDIN + 1)
+        if len(stdin_data) > _MAX_STDIN:
+            raise ValueError('hook input is too large')
         data = json.loads(stdin_data) if stdin_data.strip() else {}
-    except (json.JSONDecodeError, EOFError):
-        stdin_data = ""
-        data = {}
+        if not isinstance(data, dict):
+            raise ValueError('hook input must be an object')
+        session_id = data.get('session_id', '')
+        if not isinstance(session_id, str) or len(session_id) > _MAX_SESSION:
+            raise ValueError('invalid session identity')
+    except (ValueError, EOFError, RecursionError):
+        print('{}')
+        return
 
-    session_id = data.get("session_id", "")
-
-    # Run the original hook-inject, FORWARDING the hook payload on stdin —
-    # hook-inject reads {prompt} from stdin for prompt-aware injection.
-    # Swallowing it here (pre-2026-07-06 bug) degraded every injection to
-    # a generic 'general session' query.
-    #
-    # Skip the expensive inject if another one is already in flight for this
-    # session (a prior run still loading the embedder) — prevents overlapping
-    # ~20s embedder loads from stacking up under rapid tool/prompt bursts.
     lock = _try_lock(session_id)
+    stdout = ''
     if lock is not None:
         try:
-            stdout = _run_hook(stdin_data)
+            stdout = _run_hook(stdin_data, rehydrate=args.rehydrate)
         finally:
-            lock.close()  # releases flock
-    else:
-        stdout = ""
-
+            lock.close()
     try:
         output = json.loads(stdout) if stdout.strip() else {}
-    except json.JSONDecodeError:
+        if not isinstance(output, dict):
+            output = {}
+    except (ValueError, RecursionError):
         output = {}
 
-    # If session not started, prepend forceful reminder. Skip reminder in
-    # headless contexts (chat-sidecar bootstraps the session itself); the
-    # injection itself still runs. This runs even when the inject timed out
-    # or was skipped, so the session-start guard reminder is never lost.
-    sentinel = f"{tempfile.gettempdir()}/plur-session-{session_id}" if session_id else ""
-    if sentinel and not os.path.exists(sentinel) and not os.environ.get("DATACORE_HEADLESS"):
-        existing = output.get("additionalContext", "")
-        reminder = (
-            ">>> MANDATORY: Call plur_session_start IMMEDIATELY before any other action. "
-            "A PreToolUse guard will block all tools until you do. <<<"
-        )
-        output["additionalContext"] = f"{reminder}\n\n{existing}" if existing else reminder
-
+    if session_id and not _session_marked(session_id) and not os.environ.get('DATACORE_HEADLESS'):
+        existing = output.get('additionalContext', '')
+        if not isinstance(existing, str):
+            existing = ''
+        reminder = 'Call plur_session_start before beginning work to load session memory.'
+        output['additionalContext'] = f'{reminder}\n\n{existing}' if existing else reminder
     print(json.dumps(output))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
+    def terminate(signum, _frame):
+        raise SystemExit(128 + signum)
+    signal.signal(signal.SIGTERM, terminate)
     main()

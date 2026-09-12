@@ -9,8 +9,12 @@ Usage:
 """
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from file_utils import atomic_write_json, file_lock
 
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 
@@ -32,6 +36,8 @@ def detect_datacore_root():
 def build_required_hooks(datacore_root: str) -> dict:
     """Define the hooks that must exist in settings.json."""
     hooks_dir = f"{datacore_root}/.datacore/lib/hooks"
+    def hook_command(name, *args):
+        return shlex.join(["python3", str(Path(hooks_dir) / name), *args])
     return {
         # plur_session_start_reminder.py / plur_session_guard.py retired in
         # 800fd31 ("wave 1 hygiene: one set of hooks") and #133. Do not wire
@@ -45,7 +51,7 @@ def build_required_hooks(datacore_root: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": f"python3 {hooks_dir}/command_recall_inject.py",
+                        "command": hook_command("command_recall_inject.py"),
                         "timeout": 3,
                     }
                 ],
@@ -57,7 +63,7 @@ def build_required_hooks(datacore_root: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": f"python3 {hooks_dir}/plur_inject_wrapper.py",
+                        "command": hook_command("plur_inject_wrapper.py"),
                         # async+90s (2026-07-06, matches PLUR PR #502): the CLI cold-start
                         # loads the BGE embedder for hybrid search (~20s once the store
                         # passes a few thousand engrams) — a sync 15s timeout gets killed
@@ -76,7 +82,7 @@ def build_required_hooks(datacore_root: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "npx @plur-ai/cli hook-inject --rehydrate",
+                        "command": hook_command("plur_inject_wrapper.py", "--rehydrate"),
                         "timeout": 90,
                         "async": True,
                     }
@@ -116,6 +122,15 @@ def merge_hooks(settings: dict, required: dict) -> tuple[dict, list[str], list[s
 
     added = []
     upgraded = []
+    # Retire only the exact legacy command this installer owned. Preserve
+    # other commands, including those grouped into the same hook entry.
+    if "PostCompact" in required:
+        for entry in settings["hooks"].get("PostCompact", []):
+            retained = [h for h in entry.get("hooks", [])
+                        if h.get("command") != "npx @plur-ai/cli hook-inject --rehydrate"]
+            if len(retained) != len(entry.get("hooks", [])):
+                entry["hooks"] = retained
+                upgraded.append("  PostCompact (installed CLI migration)")
     for event, entries in required.items():
         if event not in settings["hooks"]:
             settings["hooks"][event] = []
@@ -130,9 +145,15 @@ def merge_hooks(settings: dict, required: dict) -> tuple[dict, list[str], list[s
                 else:
                     settings["hooks"][event].append(entry)
                 added.append(f"  {event} ({desc})")
-            elif existing.get("hooks") != entry.get("hooks"):
-                existing["hooks"] = entry["hooks"]
-                upgraded.append(f"  {event} ({desc})")
+            else:
+                replacements = {h["command"]: h for h in entry["hooks"]}
+                merged_hooks = [replacements.get(h.get("command"), h)
+                                for h in existing.get("hooks", [])]
+                present = {h.get("command") for h in merged_hooks}
+                merged_hooks.extend(h for h in entry["hooks"] if h["command"] not in present)
+                if merged_hooks != existing.get("hooks"):
+                    existing["hooks"] = merged_hooks
+                    upgraded.append(f"  {event} ({desc})")
 
     return settings, added, upgraded
 
@@ -159,24 +180,21 @@ def main():
     # Ensure ~/.claude/ exists
     SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    # Read existing settings
-    if SETTINGS_PATH.exists():
-        with open(SETTINGS_PATH) as f:
-            settings = json.load(f)
-    else:
-        settings = {}
-
     required = build_required_hooks(datacore_root)
-    settings, added, upgraded = merge_hooks(settings, required)
-
-    if not added and not upgraded:
-        print("✓ All PLUR session hooks already configured")
-        return
-
-    # Write back
-    with open(SETTINGS_PATH, "w") as f:
-        json.dump(settings, f, indent=2)
-        f.write("\n")
+    with file_lock(SETTINGS_PATH):
+        # A read or parse failure must preserve the prior settings. Publish
+        # once, after the complete merge, without a truncate/write window.
+        if SETTINGS_PATH.is_symlink():
+            raise ValueError("settings must be a regular local file")
+        if SETTINGS_PATH.exists():
+            settings = json.loads(SETTINGS_PATH.read_text())
+        else:
+            settings = {}
+        settings, added, upgraded = merge_hooks(settings, required)
+        if not added and not upgraded:
+            print("✓ All PLUR session hooks already configured")
+            return
+        atomic_write_json(SETTINGS_PATH, settings)
 
     if added:
         print("✓ Configured PLUR session hooks in ~/.claude/settings.json:")

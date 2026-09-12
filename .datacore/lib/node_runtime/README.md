@@ -76,3 +76,18 @@ evidence, not a patch or a runtime security boundary. Any change that enables
 archive installation/extraction requires a new assessment, including destination
 symlinks and private temporary directories. Do not suppress the scanner match
 or describe the library itself as fixed. Refresh advisory data for each release.
+
+### CLI selection during execution
+
+Datacore hooks and agent memory injection invoke an already installed `plur`
+command. Managed services set `DATACORE_PLUR_CLI` to the qualified release's
+`bin/plur` path and provide its approved Node executable on the service PATH.
+An explicit missing, relative, or invalid CLI path fails without falling back
+to another installation. Interactive use may resolve `plur` from PATH.
+Neither path downloads or installs packages while processing a hook.
+
+The shared `plur_cli.py` entry point accepts a foreground timeout; configured
+hooks leave cleanup time inside the harness's outer timeout. Session injection
+uses a private per-session lock. These are application reliability controls;
+the service identity, code ownership, credentials, and data permissions remain
+separate deployment requirements.
