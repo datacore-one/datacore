@@ -1,5 +1,12 @@
 # Pinned Hermes runtime source
 
+Set `DATACORE_HERMES_PYTHON` in the executor service to the absolute Python
+executable in the qualified installed release. An invalid or missing explicit
+interpreter refuses execution; it does not fall back to another installation.
+For existing installations without this setting, the legacy
+`~/.hermes/hermes-agent/venv/bin/python3` location remains supported. Selecting
+an interpreter does not establish an OS or credential boundary.
+
 This kit prepares `hermes-agent==0.19.0+datacore.1` from the immutable public
 0.19.0 source archive. It includes security dependency updates, tool-provenance
 preservation during compaction, and transactional, replay-bounded todo writes.

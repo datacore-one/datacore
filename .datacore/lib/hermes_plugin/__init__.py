@@ -340,8 +340,11 @@ def _cos_questions() -> Path | None:
 def _run(argv: list[str], timeout: int = 45) -> tuple[int, str]:
     import subprocess
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        from process_run import run
+        r = run(argv, capture_output=True, text=True, timeout=timeout)
         return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
+    except ImportError:
+        return 127, "Canonical process runner is unavailable."
     except subprocess.TimeoutExpired:
         return 124, f"timed out after {timeout}s"
     except OSError as exc:
@@ -387,7 +390,7 @@ LEDGER_APPEND_SCHEMA = {
         "parameters": {
             "type": "object",
             "properties": {
-                "space": {"type": "string", "description": "Space directory, e.g. '2-plur' or '8-firm'."},
+                "space": {"type": "string", "description": "Discovered space directory relative to the data root, including nested spaces."},
                 "type": {"type": "string", "description": "Event type, e.g. item.create, item.update, item.complete."},
                 "payload": {"type": "object", "description": "Event payload. For item.create include id and title."},
             },
@@ -435,6 +438,7 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
         from ledger.events import EVENT_TYPES  # noqa: PLC0415
         from ledger.log import EventLog  # noqa: PLC0415
         from ledger.policy import guarded_append  # noqa: PLC0415
+        from spaces import discover_spaces  # noqa: PLC0415
     except Exception as exc:  # noqa: BLE001
         return f"Refused: the ledger library did not import ({type(exc).__name__})."
     etype = str(kw.get("type") or "").strip()
@@ -443,12 +447,23 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
                 f"Known: {', '.join(sorted(EVENT_TYPES))}.")
     if not isinstance(payload, dict) or not payload:
         return "Refused: payload must be a non-empty object."
-    root = _root().resolve()
-    if not isinstance(space, str) or not space or Path(space).name != space or space in {".", ".."}:
-        return "Refused: space must name one direct child of the configured data root."
-    space_dir = (root / space).resolve()
-    if space_dir.parent != root or not (space_dir / ".datacore").is_dir():
-        return f"Refused: {space!r} is not a space under {_root()}."
+    if (not isinstance(space, str) or not space or "\0" in space
+            or Path(space).is_absolute() or ".." in Path(space).parts
+            or str(Path(space)) != space or space == "."):
+        return "Refused: space must be a canonical relative space directory."
+    try:
+        root = _root().resolve(strict=True)
+        space_dir = root / space
+        # Resolve through the same discovery rules used by other automated
+        # writers. Metadata directories alone are not space identity; aliases
+        # must not provide another route to a canonical space's ledger.
+        known = discover_spaces(root, reject_aliases=True, reject_invalid=True)
+        if (space_dir.resolve(strict=True) != space_dir
+                or space_dir not in {entry.path for entry in known}
+                or not (space_dir / ".datacore").is_dir()):
+            return "Refused: directory is not a space under the configured data root."
+    except (OSError, RuntimeError, ValueError):
+        return "Refused: directory is not a space under the configured data root, or discovery is invalid."
     try:
         # No actor argument by design: it comes from the registry, never the model.
         ev = guarded_append(EventLog(space_dir=space_dir, actor=ident["actor"]), etype, payload)

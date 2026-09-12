@@ -14,7 +14,8 @@ Usage:
     python3 hermes_oneshot.py 'your prompt here' --toolsets file,terminal
 
 Exit code 0 = success, response on stdout.
-Exit code 1 = agent failure or empty response.
+Exit code 1 = agent failure, incomplete response or empty response. Useful
+partial text remains on stdout; its presence does not indicate success.
 """
 import sys, os, time
 
@@ -70,6 +71,7 @@ def main():
 
     runtime = resolve_runtime_provider(target_model=model)
 
+    install_policy_guard()
     agent = AIAgent(
         api_key=runtime.get("api_key"),
         base_url=runtime.get("base_url"),
@@ -81,9 +83,11 @@ def main():
         platform="cli",
     )
 
-    install_policy_guard()
     result = agent.run_conversation(prompt)
-    response = result.get("final_response") or ""
+    response = result.get("final_response") if isinstance(result, dict) else None
+    complete = (isinstance(result, dict)
+                and result.get("completed", True) is True
+                and not any(result.get(flag) for flag in ("failed", "partial", "error")))
 
     # FLUSH BEFORE os._exit -- it does not.
     #
@@ -102,10 +106,13 @@ def main():
     # rather than as its answer being dropped on the floor. Every Tris
     # dispatch failed this way, and it only reproduces when captured, never
     # when run by hand.
-    if response:
+    if isinstance(response, str) and response.strip():
         print(response)
         sys.stdout.flush()
-        os._exit(0)
+        if not complete:
+            print("hermes_oneshot: incomplete provider result", file=sys.stderr)
+            sys.stderr.flush()
+        os._exit(0 if complete else 1)
     else:
         print("hermes_oneshot: no response produced", file=sys.stderr)
         sys.stderr.flush()

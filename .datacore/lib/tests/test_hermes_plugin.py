@@ -324,6 +324,7 @@ def test_the_ledger_tool_takes_no_actor_and_uses_our_own(as_tris, tmp_path, monk
     import types
     space = tmp_path / "2-plur" / ".datacore"
     space.mkdir(parents=True)
+    (space.parent / "org").mkdir()  # a discoverable legacy space, before marker migration
     monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
 
     seen = {}
@@ -344,6 +345,7 @@ def test_the_ledger_tool_takes_no_actor_and_uses_our_own(as_tris, tmp_path, monk
     out = hp.ledger_append_handler(space="2-plur", type="item.create",
                                    payload={"id": "org-1", "title": "x"},
                                    actor="winston")          # ignored: no such parameter
+    assert out.startswith("appended item.create"), out
     assert seen["actor"] == "tris"
     assert seen["type"] == "item.create" and seen["payload"]["id"] == "org-1"
     assert "appended item.create to 2-plur as tris" in out and "seq=7" in out
@@ -361,6 +363,67 @@ def test_the_ledger_tool_refuses_without_a_declared_principal(monkeypatch):
                                           "display": "", "role": "", "permission_mode": ""})
     out = hp.ledger_append_handler(space="2-plur", type="item.create", payload={"id": "x"})
     assert out.startswith("Refused: this host has no declared principal")
+
+
+@pytest.mark.parametrize("relative", ["research", "team/clients/example"])
+def test_ledger_tool_resolves_marked_spaces_without_local_ordinals(as_tris, tmp_path, monkeypatch, relative):
+    import types
+    space = tmp_path / relative
+    (space / ".datacore").mkdir(parents=True)
+    (space / ".datacore/config.yaml").write_text("space:\n  name: example\n  type: team\n")
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
+    seen = []
+    monkeypatch.setitem(sys.modules, "ledger.log", types.SimpleNamespace(
+        EventLog=lambda **kwargs: seen.append(kwargs)))
+    monkeypatch.setitem(sys.modules, "ledger.policy", types.SimpleNamespace(
+        guarded_append=lambda *args: types.SimpleNamespace(seq=1, hash="a" * 64)))
+    out = hp.ledger_append_handler(space=relative, type="item.create", payload={"id": "example"})
+    assert out.startswith("appended item.create"), out
+    assert seen == [{"space_dir": space, "actor": "tris"}]
+
+
+@pytest.mark.parametrize("target", ["metadata-only", "../outside", "research/../research", "alias", "research//", "research/."])
+def test_ledger_tool_refuses_undiscovered_paths_and_aliases(as_tris, tmp_path, monkeypatch, target):
+    import types
+    root = tmp_path / "data"
+    root.mkdir()
+    (root / "metadata-only/.datacore").mkdir(parents=True)
+    space = root / "research"
+    (space / ".datacore").mkdir(parents=True)
+    (space / ".datacore/config.yaml").write_text("space:\n  name: example\n  type: team\n")
+    (root / "alias").symlink_to(space, target_is_directory=True)
+    monkeypatch.setenv("DATACORE_ROOT", str(root))
+    seen = []
+    monkeypatch.setitem(sys.modules, "ledger.log", types.SimpleNamespace(
+        EventLog=lambda **kwargs: seen.append(kwargs)))
+    out = hp.ledger_append_handler(space=target, type="item.create", payload={"id": "example"})
+    assert out.startswith("Refused:"), out
+    assert seen == []
+
+
+def test_ledger_tool_preserves_malformed_space_metadata(as_tris, tmp_path, monkeypatch):
+    source = tmp_path / "2-example/.datacore/config.yaml"
+    source.parent.mkdir(parents=True)
+    raw = b"space: [broken\nprivate_fixture: do-not-disclose\n"
+    source.write_bytes(raw)
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
+    out = hp.ledger_append_handler(space="2-example", type="item.create", payload={"id": "example"})
+    assert out.startswith("Refused:") and "do-not-disclose" not in out
+    assert source.read_bytes() == raw and not (source.parent / "events").exists()
+
+
+def test_plugin_timeout_stops_owned_descendant_before_late_write(tmp_path):
+    import time
+    marker = tmp_path / "late-write"
+    ready = tmp_path / "ready"
+    child = ("import pathlib,time; pathlib.Path(" + repr(str(ready)) + ").write_text('ready'); "
+             "time.sleep(1); pathlib.Path(" + repr(str(marker)) + ").write_text('late')")
+    parent = "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c'," + repr(child) + "]); time.sleep(10)"
+    rc, output = hp._run([sys.executable, "-I", "-c", parent], timeout=0.5)
+    assert rc == 124 and "timed out" in output
+    assert ready.read_text() == "ready"
+    time.sleep(0.8)
+    assert not marker.exists()
 
 
 def test_agent_cannot_manufacture_an_authenticated_human_decision(as_tris, tmp_path, monkeypatch):
@@ -401,9 +464,9 @@ def test_all_four_tools_register(as_tris):
 
 
 
-@pytest.mark.parametrize('space', ['../outside', '/tmp/outside', '.', '..', 'one/two'])
+@pytest.mark.parametrize('space', ['../outside', '/tmp/outside', '.', '..', 'one/two', 'a\0b'])
 def test_ledger_tool_refuses_space_traversal(as_tris, space):
-    assert 'direct child' in hp.ledger_append_handler(space=space, type='item.create', payload={'id': 'x'})
+    assert hp.ledger_append_handler(space=space, type='item.create', payload={'id': 'x'}).startswith('Refused:')
 
 
 def test_ledger_tool_refuses_symlink_escape(as_tris, tmp_path, monkeypatch):
