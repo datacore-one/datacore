@@ -10,21 +10,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
+from yaml_safety import UniqueStringKeyLoader
 
 
 class PolicyError(ValueError):
     """Execution must wait until the operator's policy can be interpreted."""
 
 
-class _PolicyLoader(yaml.SafeLoader):
-    def construct_mapping(self, node, deep=False):
-        result = {}
-        for key_node, value_node in node.value:
-            key = self.construct_object(key_node, deep=deep)
-            if not isinstance(key, str) or key in result:
-                raise PolicyError('policy contains a duplicate or non-string key')
-            result[key] = self.construct_object(value_node, deep=deep)
-        return result
+class _PolicyLoader(UniqueStringKeyLoader):
+    error_type = PolicyError
+    context = 'policy'
 
 
 def snooze_time(value) -> datetime | None:

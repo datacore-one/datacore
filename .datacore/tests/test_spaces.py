@@ -11,7 +11,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from spaces import (  # noqa: E402
     MAX_DEPTH,
-    Space,
     discover_spaces,
     discovery_discrepancy,
     find_space,
@@ -58,6 +57,87 @@ def test_malformed_marker_is_skipped_not_raised(tmp_path):
 
     assert read_marker(tmp_path / "1-alpha") is None
     assert [s.name for s in discover_spaces(tmp_path, include_legacy=False)] == ["beta"]
+
+
+@pytest.mark.parametrize('content', [b'- unexpected-list\n', b'unexpected scalar\n', b'\xff\xfe\n'])
+def test_invalid_marker_shape_or_encoding_cannot_break_other_spaces(tmp_path, content):
+    bad = tmp_path / '1-invalid/.datacore/config.yaml'
+    bad.parent.mkdir(parents=True)
+    bad.write_bytes(content)
+    make_space(tmp_path, '2-valid', 'valid')
+    assert read_marker(bad.parent.parent) is None
+    assert [item.name for item in discover_spaces(tmp_path)] == ['valid']
+
+
+def test_marker_error_does_not_log_private_configuration_values(tmp_path, caplog):
+    marker = tmp_path / '1-invalid/.datacore/config.yaml'
+    marker.parent.mkdir(parents=True)
+    marker.write_text('space: [fixture-private-configuration-value\n')
+    assert read_marker(marker.parent.parent) is None
+    assert 'fixture-private-configuration-value' not in caplog.text
+
+
+@pytest.mark.parametrize('parent_link', [False, True])
+def test_marker_cannot_borrow_another_directories_identity(tmp_path, parent_link):
+    other = make_space(tmp_path, 'other', 'private-owner')
+    candidate = tmp_path / '1-candidate'
+    candidate.mkdir()
+    if parent_link:
+        (candidate / '.datacore').symlink_to(other / '.datacore', target_is_directory=True)
+    else:
+        (candidate / '.datacore').mkdir()
+        (candidate / '.datacore/config.yaml').symlink_to(other / '.datacore/config.yaml')
+    assert read_marker(candidate) is None
+    assert [space.path for space in discover_spaces(tmp_path)] == [other]
+
+
+@pytest.mark.parametrize('content', ['space: [unclosed\n', '- unexpected\n', 'space: invalid\n'])
+def test_invalid_declared_marker_cannot_fall_back_to_legacy_identity(tmp_path, content):
+    candidate = tmp_path / '1-candidate'
+    (candidate / 'org').mkdir(parents=True)
+    marker = candidate / '.datacore/config.yaml'
+    marker.parent.mkdir()
+    marker.write_text(content)
+    valid = make_space(tmp_path, '2-valid', 'valid')
+    assert [space.path for space in discover_spaces(tmp_path, include_legacy=True)] == [valid]
+
+
+def test_legacy_discovery_never_reintroduces_a_symlinked_space(tmp_path):
+    valid = make_space(tmp_path, '1-valid', 'valid')
+    (tmp_path / '2-alias').symlink_to(valid, target_is_directory=True)
+    assert [space.path for space in discover_spaces(tmp_path, include_legacy=True)] == [valid]
+
+
+def test_config_without_declared_space_remains_compatible_with_legacy_discovery(tmp_path):
+    candidate = tmp_path / '1-legacy'
+    (candidate / 'org').mkdir(parents=True)
+    marker = candidate / '.datacore/config.yaml'
+    marker.parent.mkdir()
+    marker.write_text('modules: [fixture]\n')
+    result = discover_spaces(tmp_path, include_legacy=True)
+    assert len(result) == 1 and result[0].path == candidate and not result[0].marked
+
+
+@pytest.mark.parametrize('content', [
+    'space: {name: first}\nspace: {name: second}\n',
+    'space: {name: first, name: second}\n',
+    'space: {name: [not, an, identity]}\n',
+])
+def test_ambiguous_identity_never_falls_back_to_another_name(tmp_path, content):
+    candidate = tmp_path / '1-candidate'
+    (candidate / 'org').mkdir(parents=True)
+    marker = candidate / '.datacore/config.yaml'
+    marker.parent.mkdir()
+    marker.write_text(content)
+    assert read_marker(candidate) is None
+    assert discover_spaces(tmp_path, include_legacy=True) == []
+
+
+def test_unambiguous_yaml_alias_remains_supported(tmp_path):
+    marker = tmp_path / 'named/.datacore/config.yaml'
+    marker.parent.mkdir(parents=True)
+    marker.write_text('defaults: &identity {name: fixture, type: team}\nspace: *identity\n')
+    assert read_marker(marker.parent.parent) == {'name': 'fixture', 'type': 'team'}
 
 
 # ── discovery ────────────────────────────────────────────────────────────────
@@ -157,6 +237,13 @@ def test_union_includes_unmarked_legacy_dirs(tmp_path):
     unmarked = next(s for s in discover_spaces(tmp_path, include_legacy=True) if s.name == "unmarked")
     assert unmarked.marked is False
     assert unmarked.type == "unknown"
+
+
+def test_default_discovery_cannot_assume_another_installation_migrated(tmp_path):
+    marked = make_space(tmp_path, '1-marked', 'marked')
+    legacy = make_legacy_space(tmp_path, '2-retained')
+    assert {space.path for space in discover_spaces(tmp_path)} == {marked, legacy}
+    assert {space.path for space in discover_spaces(tmp_path, include_legacy=False)} == {marked}
 
 
 def test_marker_wins_over_legacy_for_same_directory(tmp_path):

@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from yaml_safety import UniqueStringKeyLoader
 
 log = logging.getLogger(__name__)
 
@@ -94,6 +95,27 @@ def data_root() -> Path:
     return Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
 
 
+def _configuration(path: Path) -> dict | None:
+    marker = path / MARKER
+    if not marker.exists() and not marker.is_symlink():
+        return None
+    if not marker.is_file() or marker.resolve(strict=True) != path.resolve(strict=True) / MARKER:
+        raise ValueError('space configuration crosses its directory boundary')
+    loaded = yaml.load(marker.read_text(encoding='utf-8'), Loader=UniqueStringKeyLoader)
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, dict):
+        raise ValueError('space configuration is not a mapping')
+    if 'space' in loaded:
+        block = loaded['space']
+        if not isinstance(block, dict):
+            raise ValueError('space marker is not a mapping')
+        for key in ('name', 'type', 'owner'):
+            if key in block and block[key] is not None and not isinstance(block[key], str):
+                raise ValueError('space identity fields must be strings')
+    return loaded
+
+
 def read_marker(path: Path) -> dict | None:
     """The ``space:`` block from ``path``'s marker, or None if it is not a space.
 
@@ -101,13 +123,14 @@ def read_marker(path: Path) -> dict | None:
     rather than raising — one bad file must not take out discovery for every
     other space.
     """
-    marker = path / MARKER
-    if not marker.is_file():
-        return None
     try:
-        loaded = yaml.safe_load(marker.read_text(encoding="utf-8")) or {}
-    except (yaml.YAMLError, OSError) as exc:
-        log.warning("space marker unreadable, skipping: %s (%s)", marker, exc)
+        loaded = _configuration(path)
+    except (yaml.YAMLError, OSError, UnicodeError, ValueError):
+        # YAML diagnostics include source lines, which may hold credentials or
+        # other private configuration. Report the file, never parser excerpts.
+        log.warning("space marker unreadable, skipping: %s", path / MARKER)
+        return None
+    if loaded is None:
         return None
     block = loaded.get("space")
     if not isinstance(block, dict):
@@ -167,10 +190,21 @@ def _legacy_dirs(root: Path) -> list[Path]:
        (e.g. a ``1-tracks/`` that leaked to the install root) whose names
        happen to match the glob.
     """
+    def valid_configuration(path):
+        try:
+            _configuration(path)
+        except (yaml.YAMLError, OSError, UnicodeError, ValueError):
+            return False
+        # Invalid explicit identity cannot regain admission through a heuristic.
+        # A valid older config without a space block remains migratable.
+        return True
+
     return sorted(
         p for p in root.glob(LEGACY_GLOB)
         if p.is_dir()
+        and not p.is_symlink()
         and not any(p.name.endswith(suffix) for suffix in LEGACY_SKIP_SUFFIXES)
+        and valid_configuration(p)
         and _looks_like_space(p)
     )
 
@@ -195,7 +229,7 @@ def discover_spaces(
     root: Path | None = None,
     *,
     types: set[str] | None = None,
-    include_legacy: bool = False,
+    include_legacy: bool = True,
 ) -> list[Space]:
     """Every space under ``root``, marker-discovered (and optionally legacy).
 
@@ -204,9 +238,10 @@ def discover_spaces(
         types: keep only these ``space.type`` values. Legacy directories have
             no declared type, so a ``types`` filter necessarily excludes them.
         include_legacy: also return ``[0-9]-*/`` directories that carry no
-            marker.  Defaults to False now that discovery_discrepancy() is
-            empty for this install; set True only when investigating gaps
-            during migration to a new install.
+            marker. Defaults to True: completing migration in one installation
+            cannot establish that every supported installation has migrated.
+            Identity-sensitive callers may explicitly require marked spaces;
+            unknown legacy types never satisfy an explicit type filter.
 
     Returns:
         Spaces sorted by path. Marker-discovered entries win over legacy ones

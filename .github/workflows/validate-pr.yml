@@ -163,6 +163,7 @@ jobs:
           python -m pytest -q \
             .datacore/lib/tests/test_hooks.py \
             .datacore/tests/test_org_parser.py \
+            .datacore/tests/test_spaces.py \
             .datacore/tests/test_youtube_transcript.py
           ruff check --select F821,F822,F823,E9 .datacore
 
