@@ -7,6 +7,7 @@ import tarfile
 
 import pytest
 from hermes_runtime import prepare as runtime
+from hermes_runtime import verify_environment as verification
 
 
 def archive(entries):
@@ -113,3 +114,76 @@ def test_preparation_accepts_relative_command_line_paths(tmp_path, recipe, monke
     target = Path('prepared')
     assert runtime.prepare(Path('source.tar.gz'), target, kit=Path('kit')) == target
     assert (target / 'example.txt').read_bytes() == b'patched\n'
+
+
+def verification_kit(tmp_path, requirements):
+    profile = 'datacore-telegram'
+    raw = requirements.encode()
+    (tmp_path / (profile + '.requirements.txt')).write_bytes(raw)
+    (tmp_path / 'manifest.json').write_text(json.dumps({
+        'format_version': 1, 'version': '0.19.0+datacore.1',
+        'requirements_sha256': {profile: hashlib.sha256(raw).hexdigest()},
+    }))
+    return profile
+
+
+def test_runtime_lock_uses_platform_markers_and_normalized_names(tmp_path):
+    profile = verification_kit(tmp_path,
+        'Example_Package==1.2.3 \\\n    --hash=sha256:' + 'a' * 64 + '\n'
+        'example-package==9.0; python_version < "2" --hash=sha256:' + 'b' * 64 + '\n')
+    expected = verification.expected_packages(profile, kit=tmp_path)
+    assert expected == {'hermes-agent': '0.19.0+datacore.1', 'example-package': '1.2.3'}
+    result = verification.compare_packages(expected, [('hermes_agent', '0.19.0+datacore.1'),
+                                                       ('Example_Package', '1.2.3')])
+    assert result['status'] == 'PASS'
+
+
+@pytest.mark.parametrize('requirement', [
+    'example>=1.0', 'example==1.*', 'example @ https://invalid.example/package.whl',
+])
+def test_runtime_verifier_refuses_unpinned_inputs(tmp_path, requirement):
+    profile = verification_kit(tmp_path, requirement + ' --hash=sha256:' + 'a' * 64 + '\n')
+    with pytest.raises(ValueError):
+        verification.expected_packages(profile, kit=tmp_path)
+
+
+def test_runtime_verifier_refuses_missing_hash_and_active_duplicates(tmp_path):
+    profile = verification_kit(tmp_path, 'example==1.2.3\n')
+    with pytest.raises(ValueError, match='hash'):
+        verification.expected_packages(profile, kit=tmp_path)
+    profile = verification_kit(tmp_path, ('example==1.2.3 --hash=sha256:' + 'a' * 64 + '\n') * 2)
+    with pytest.raises(ValueError, match='duplicate'):
+        verification.expected_packages(profile, kit=tmp_path)
+
+
+def test_runtime_verifier_rejects_changed_lock_and_profile_paths(tmp_path):
+    profile = verification_kit(tmp_path, 'example==1.2.3 --hash=sha256:' + 'a' * 64 + '\n')
+    (tmp_path / (profile + '.requirements.txt')).write_text('example==9.0\n')
+    with pytest.raises(ValueError, match='checksum'):
+        verification.expected_packages(profile, kit=tmp_path)
+    with pytest.raises(ValueError, match='profile'):
+        verification.expected_packages('../other', kit=tmp_path)
+
+
+def test_runtime_verifier_detects_missing_extra_stale_and_duplicate_distributions():
+    result = verification.compare_packages({'one': '1', 'two': '2'},
+                                           [('one', '0'), ('ONE', '0'), ('three', '3')])
+    assert result == {'status': 'DRIFT', 'packages': 2, 'missing': ['two'],
+                      'extra': ['three'], 'version_mismatch': ['one'],
+                      'duplicate_distributions': ['one']}
+
+
+def test_shipped_runtime_profiles_are_hashed_and_exactly_pinned():
+    for profile in verification.PROFILES:
+        expected = verification.expected_packages(profile)
+        assert expected['hermes-agent'] == '0.19.0+datacore.1'
+        assert expected['cryptography'] == '50.0.0'
+        assert expected['python-telegram-bot'] == '22.6'
+        assert ('elevenlabs' in expected) == profile.endswith('-tts')
+
+
+@pytest.mark.parametrize('manifest', [[], {'format_version': True}])
+def test_runtime_verifier_refuses_invalid_manifest_types(tmp_path, manifest):
+    (tmp_path / 'manifest.json').write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match='manifest'):
+        verification.expected_packages('datacore-telegram', kit=tmp_path)

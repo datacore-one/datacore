@@ -56,3 +56,23 @@ Private plugins must be supplied through their authorized distribution path
 and checked offline. Do not publish installed private package inventories to a
 public resolver. Keep the previous environment and a consistent state backup
 available for recovery; a package rollback alone does not undo a schema upgrade.
+
+## Installed environment verification
+
+Install the runtime export into a separate base environment without build/test
+tools. Keep that base administrator-owned and read-only to the executor. Build
+at its final absolute prefix: copying a virtual environment to a different path
+can leave console-script interpreters pointing at the build directory.
+
+Run the repository verifier with the installed Python in an empty working
+directory (the kit must be supplied from an administrator-controlled path):
+
+```sh
+/path/to/runtime/venv/bin/python -I -B /path/to/kit/verify_environment.py datacore-telegram
+```
+
+Use `datacore-telegram-tts` for the ElevenLabs profile. The verifier authenticates
+the selected requirements export and rejects missing, additional, duplicate or
+different-version distributions. Private plugin overlays need a separate
+declared artifact, integrity check and integration test. This package inventory
+check does not establish OS isolation, backend health or successful migration.
