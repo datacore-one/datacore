@@ -46,6 +46,8 @@ import sys
 import uuid
 from pathlib import Path
 
+from git_inventory import require_resolved
+
 from worktree_lifecycle import (
     allocate_publication_workspace, git_environment, publication_hooks, retire_worktree,
 )
@@ -299,6 +301,10 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
     Returns the new commit sha, or '' if there was nothing to do.
     """
     repo = Path(repo).resolve()
+    try:
+        require_resolved(repo)
+    except RuntimeError:
+        raise GitError('Source inventory is unavailable or unresolved; no publication attempted') from None
     _git(repo, 'check-ref-format', f'refs/heads/{branch}')
     checked = []
     for value in paths:

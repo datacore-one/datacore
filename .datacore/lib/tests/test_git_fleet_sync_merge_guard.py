@@ -1,7 +1,7 @@
 """Regression tests for the merge/rebase-in-progress guards in git_fleet_sync.
 
 Issue #28: a background sync fired during a hand-resolution and pushed literal
-<<<<<<< / ======= / >>>>>>> conflict markers to origin/main of a shared repo.
+Git conflict markers to origin/main of a shared repo.
 
 Two guards prevent this:
   1. MERGE_HEAD / rebase-merge / rebase-apply presence → skip the whole repo
@@ -12,8 +12,6 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
-
-import pytest
 
 LIB = Path(__file__).resolve().parents[1]
 if str(LIB) not in sys.path:
@@ -33,7 +31,7 @@ def test_source_has_merge_head_guard():
 
 def test_source_has_unmerged_file_guard():
     src = (LIB / "git_fleet_sync.py").read_text()
-    assert "'U' in xy" in src, "unmerged-file (UU/AU/UA) guard missing from git_fleet_sync.py"
+    assert "change.unmerged" in src, "complete unmerged-index guard missing from git_fleet_sync.py"
     assert "MERGE CONFLICT" in src, "MERGE CONFLICT skip label missing from git_fleet_sync.py"
 
 
@@ -77,19 +75,27 @@ def test_rebase_merge_dir_skips_repo(tmp_path):
     assert result['committed'] == []
 
 
-def test_unmerged_file_is_skipped_not_committed(tmp_path):
+def test_unmerged_file_is_skipped_not_committed(tmp_path, monkeypatch):
     """A file with a U in its porcelain XY status must land in skipped, not committed."""
-    # The porcelain 'U' flag is produced during an in-progress merge, but we
-    # can simulate it by inspecting the is_junk + staging-loop logic without a
-    # full two-branch merge. We verify via a source-parse that the XY guard is
-    # upstream of the commit call — sufficient for the regression.
-    src = (LIB / "git_fleet_sync.py").read_text()
-
-    # Find the staging loop
-    loop_start = src.index("for line in porcelain.splitlines():")
-    # The 'U' guard must appear before the git add call
-    u_guard_pos = src.index("'U' in xy", loop_start)
-    git_add_pos = src.index("git', 'add'", loop_start)
-    assert u_guard_pos < git_add_pos, (
-        "unmerged-file guard ('U' in xy) must come before 'git add' in the staging loop"
-    )
+    _init_repo(tmp_path)
+    monkeypatch.setattr(fs, 'review_gate', lambda *args: '')
+    def git(*args, check=True):
+        return subprocess.run(['git', *args], cwd=tmp_path, check=check, capture_output=True)
+    git('checkout', '-b', 'other')
+    (tmp_path / 'file.txt').write_text('other\n')
+    git('commit', '-am', 'other')
+    git('checkout', 'main')
+    (tmp_path / 'file.txt').write_text('main\n')
+    git('commit', '-am', 'main')
+    assert git('merge', 'other', check=False).returncode != 0
+    # Exercise the secondary guard even if merge metadata is missing. The
+    # actual unmerged index stages and conflict-marked file remain intact.
+    (tmp_path / '.git' / 'MERGE_HEAD').unlink()
+    before = git('ls-files', '--stage', '-z').stdout
+    contents = (tmp_path / 'file.txt').read_bytes()
+    result = fs.sync_repo(tmp_path, execute=True)
+    assert result['committed'] == []
+    assert any(path == 'file.txt' and 'MERGE CONFLICT' in reason
+               for path, reason in result['skipped'])
+    assert git('ls-files', '--stage', '-z').stdout == before
+    assert (tmp_path / 'file.txt').read_bytes() == contents

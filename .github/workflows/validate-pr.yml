@@ -102,6 +102,8 @@ jobs:
             .datacore/lib/tests/test_transport_foreign_writer.py \
             .datacore/lib/tests/test_git_privacy.py \
             .datacore/lib/tests/test_git_preservation.py \
+            .datacore/lib/tests/test_publication_status_paths.py \
+            .datacore/lib/tests/test_unmerged_publication.py \
             .datacore/lib/tests/test_identity_verification.py \
             .datacore/lib/tests/test_ledger_publish_safe.py \
             .datacore/tests/test_knowledge_commit.py \

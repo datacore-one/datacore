@@ -97,21 +97,12 @@ def git_status_entries(repo: Path, *paths: str) -> list[tuple[str, str]]:
     # files inside (ENG-2026-0714-008). A session that creates a new folder of
     # files would then match none of them against `files_modified`, and every one
     # would be misreported as "invisible to git" instead of "new, commit me".
-    cmd = ["git", "status", "--porcelain", "-z", "-uall"] + (["--", *paths] if paths else [])
-    rc, out, _ = _run(cmd, cwd=repo, timeout=60, strip=False)
-    if rc != 0:
-        return []
-    parts = out.split("\0")
-    entries, i = [], 0
-    while i < len(parts):
-        entry = parts[i]
-        i += 1
-        if len(entry) < 4:
-            continue
-        status, path = entry[:2], entry[3:]
-        entries.append((status, path))
-        if "R" in status or "C" in status:
-            i += 1                      # skip the origin path of a rename/copy
+    from git_inventory import changes
+    entries = []
+    for change in changes(repo, *paths):
+        entries.append((change.status, change.path))
+        if change.source is not None and 'R' in change.status:
+            entries.append(('D ', change.source))
     return entries
 
 
