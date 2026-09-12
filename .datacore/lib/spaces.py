@@ -44,7 +44,7 @@ MARKER = Path(".datacore") / "config.yaml"
 
 #: Legacy pattern. Retained so a space that has not yet gained a marker keeps
 #: being discovered. Remove once discovery_discrepancy() is empty everywhere.
-LEGACY_GLOB = "[0-9]-*"
+LEGACY_GLOB = "[0-9]*-*"
 
 #: Directory name suffixes that match LEGACY_GLOB but are never spaces.
 #: ``-archive`` dirs are archival stores; ``.git`` suffix indicates a bare repo.
@@ -225,6 +225,7 @@ def _legacy_dirs(root: Path) -> list[Path]:
     return sorted(
         p for p in root.glob(LEGACY_GLOB)
         if p.is_dir()
+        and p.name.partition("-")[0].isdigit()
         and not p.is_symlink()
         and not any(p.name.endswith(suffix) for suffix in LEGACY_SKIP_SUFFIXES)
         and valid_configuration(p)

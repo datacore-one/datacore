@@ -63,3 +63,21 @@ Regenerate the lock using the command in its header with uv 0.12.13, then scan
 the resulting package set and run compatibility checks before adoption. A
 successful dependency resolver or zero scanner matches alone does not qualify
 an installation.
+
+Keep `--no-strip-extras` when regenerating. Python 3.10's bundled pip 23.0.1
+otherwise treats the transitive `pyjwt[crypto]` requirement separately from the
+bare pinned package and fails the hashed installation. CI exercises a new
+standard-library virtual environment, including its bundled installer.
+
+## Installed MCP verification
+
+Managed MCP clients select the installed library with absolute `DATACORE_LIB`
+and its qualified interpreter with absolute `DATACORE_PYTHON`. An explicit
+unavailable selection must not fall back to code in the mutable data checkout
+or to a different interpreter. The read-only `ledger_health.py --root ROOT`
+helper emits version 1 JSON with verified, broken and unverified space counts.
+It uses canonical marker/legacy discovery, the selected root's public-key
+registry, chain checks and retained sequence witnesses. Busy writers, missing
+verification inputs and incomplete discovery remain unverified. No data or
+diagnostic excerpts are returned. This is a bounded local observation, not a
+cross-host atomic snapshot or an OS isolation boundary.
