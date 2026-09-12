@@ -425,7 +425,18 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
         result['status'] = f"COMMIT FAILED: {(c.stderr or '').strip()[:120]}"
         return result
 
-    p = subprocess.run(['git', 'push', 'origin', default], cwd=repo,
+    from git_publication import push_arguments
+    captured = subprocess.run(['git', 'rev-parse', '--verify', 'HEAD^{commit}'],
+                              cwd=repo, capture_output=True, text=True, timeout=30)
+    if captured.returncode:
+        result['status'] = 'committed; publication identity unavailable'
+        return result
+    try:
+        args = push_arguments(captured.stdout.strip(), f'refs/heads/{default}')
+    except ValueError:
+        result['status'] = 'committed; publication identity invalid'
+        return result
+    p = subprocess.run(['git', *args], cwd=repo,
                        capture_output=True, text=True)
     if p.returncode != 0:
         result['status'] = f"committed, PUSH FAILED: {(p.stderr or '').strip()[:120]}"

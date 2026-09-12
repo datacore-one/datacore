@@ -65,28 +65,6 @@ def _git(repo: Path, *args: str) -> str:
     return (r.stdout or '').strip() if r.returncode == 0 else ''
 
 
-def _porcelain(repo: Path) -> str:
-    """Changed paths, as FILES.
-
-    Two traps here, both of which produce a silent no-op rather than an error:
-
-    1. `--porcelain` alone COLLAPSES untracked directories: a brand-new
-       `3-knowledge/` full of zettels reports as the single line `?? 3-knowledge/`.
-       knowledge_commit only commits files, so every one of those zettels would be
-       filtered out and the wrap-up would cheerfully report "(no change)".
-       `-uall` expands them.
-
-    2. Leading whitespace is significant — ' M path' means modified-not-staged.
-       Stripping the line shifts every column and eats the first character of the
-       path.
-    """
-    r = subprocess.run(['git', 'status', '--porcelain', '-z', '--untracked-files=all'],
-                       cwd=repo, capture_output=True, text=True)
-    if r.returncode:
-        raise GitError('cannot establish wrap-up repository status')
-    return r.stdout
-
-
 def _branch_bytes(repo, branch, path):
     tree = subprocess.run(['git', '--literal-pathspecs', 'ls-tree', '-z', branch, '--', path], cwd=repo, capture_output=True)
     if tree.returncode:
@@ -115,12 +93,15 @@ def discover_spaces(data_dir: Path) -> list:
 def changed_paths(repo: Path) -> list:
     """Paths the agent touched in this repo, junk excluded."""
     out = []
-    for line in _porcelain(repo).split('\0'):
-        if not line:
-            continue
-        if any(flag in line[:2] for flag in 'RCU'):
+    from git_inventory import changes
+    try:
+        inventory = changes(repo)
+    except RuntimeError:
+        raise GitError('cannot establish wrap-up repository status') from None
+    for entry in inventory:
+        if entry.unmerged or any(flag in entry.status for flag in 'RC'):
             raise GitError('wrap-up rename or conflict requires review')
-        path = line[3:]
+        path = entry.path
         name = Path(path).name
         if '.bak' in name or name.endswith(('.pyc', '.swp', '.orig')):
             continue
@@ -130,7 +111,7 @@ def changed_paths(repo: Path) -> list:
                for p in Path(path).parts):
             continue
         candidate = repo / path
-        if (line[:2] == '??' and candidate.is_file() and not candidate.is_symlink()
+        if (entry.status == '??' and candidate.is_file() and not candidate.is_symlink()
                 and _branch_bytes(repo, default_branch(repo), path) == candidate.read_bytes()):
             continue  # already published on the default branch; retain the copy
         out.append(path)

@@ -504,8 +504,16 @@ def _push_with_retry(space: Path, db: str) -> Result:
     on another host. Bounded because an unbounded retry against a genuinely
     diverged remote is a spin, not a recovery.
     """
+    from git_publication import push_arguments
     for attempt in range(1, PUSH_ATTEMPTS + 1):
-        rc, _, err = _git(space, "push", "origin", f"HEAD:{db}")
+        rc, captured, _ = _git(space, 'rev-parse', '--verify', 'HEAD^{commit}')
+        if rc:
+            return Result(False, 'publication commit cannot be established')
+        try:
+            args = push_arguments(captured.strip(), f'refs/heads/{db}')
+        except ValueError:
+            return Result(False, 'publication commit/ref is invalid')
+        rc, _, err = _git(space, *args)
         if rc == 0:
             return Result(True, "pushed", {"attempts": attempt})
         low = err.lower()
@@ -515,7 +523,7 @@ def _push_with_retry(space: Path, db: str) -> Result:
                 return Result(False, "push rejected and converge failed",
                               {"attempt": attempt, "converge": c.reason})
             continue
-        return Result(False, "push failed", {"attempt": attempt, "stderr": err.strip()[:300]})
+        return Result(False, "push failed; inspect local remote configuration", {"attempt": attempt})
     return Result(False, f"push still rejected after {PUSH_ATTEMPTS} attempts",
                   {"hint": "remote is moving faster than we can converge"})
 

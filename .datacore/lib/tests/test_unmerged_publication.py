@@ -77,3 +77,18 @@ def test_knowledge_publisher_preserves_unmerged_index(conflict):
         knowledge_commit.commit_to_branch(repo, 'main', ['added'], 'do not resolve implicitly')
     assert git(origin, 'rev-parse', 'main') == before
     assert git(repo, 'ls-files', '--stage', '-z') == index
+
+
+def test_machine_publication_and_wrap_up_refuse_add_add_conflicts(conflict):
+    import agent_wrap_up
+    import ledger_publish_safe
+    repo, origin = conflict
+    index = git(repo, 'ls-files', '--stage', '-z')
+    before = git(origin, 'rev-parse', 'main')
+    with pytest.raises(agent_wrap_up.GitError):
+        agent_wrap_up.changed_paths(repo)
+    with pytest.raises(RuntimeError):
+        ledger_publish_safe.dirty_tracked(repo)
+    assert ledger_publish_safe.publish(repo, [])[0] == 'FAIL'
+    assert git(repo, 'ls-files', '--stage', '-z') == index
+    assert git(origin, 'rev-parse', 'main') == before

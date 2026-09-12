@@ -80,6 +80,15 @@ class GitError(RuntimeError):
     non_fast_forward = False
 
 
+def _push_commit(repo: Path, branch: str, sha: str) -> None:
+    from git_publication import push_arguments
+    try:
+        args = push_arguments(sha, f'refs/heads/{branch}')
+    except ValueError:
+        raise GitError('Publication commit/ref is invalid; no push attempted') from None
+    _git(repo, *args)
+
+
 def _run_git(repo: Path, *args: str, env=None, input_bytes=None):
     environment = git_environment()
     if env is not None:
@@ -256,7 +265,7 @@ def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, 
             raise GitError('publication workspace retirement failed; retained work requires inspection')
     if push:
         # A later local branch advance is not part of this publication.
-        _git(repo, 'push', 'origin', f'{sha or base}:refs/heads/{branch}')
+        _push_commit(repo, branch, sha or base)
     return sha
 
 
@@ -269,7 +278,7 @@ def _push_converging(repo: Path, branch: str, sha: str) -> None:
     'uncommitted' when it was committed and merely unpushed.
     """
     try:
-        _git(repo, 'push', 'origin', branch)
+        _push_commit(repo, branch, sha)
         return
     except GitError as e:
         msg = str(e)
@@ -277,6 +286,8 @@ def _push_converging(repo: Path, branch: str, sha: str) -> None:
             raise GitError(
                 f"{repo.name}: committed locally on {branch} ({sha[:10]}) but "
                 f"push failed — {msg}")
+    if current_branch(repo) != branch or _git(repo, 'rev-parse', 'HEAD') != sha:
+        raise GitError('Publication source advanced; captured work retained for separate reconciliation')
     if _git(repo, 'status', '--porcelain', '--untracked-files=all'):
         raise GitError('publication committed locally; preserve working/index changes before converging with origin')
     try:
@@ -286,7 +297,7 @@ def _push_converging(repo: Path, branch: str, sha: str) -> None:
             f"{repo.name}: committed locally on {branch} ({sha[:10]}); remote "
             f"moved and the converge-merge conflicted — needs a human "
             f"(conflict files and index stages are retained). {e}")
-    _git(repo, 'push', 'origin', branch)
+    _push_commit(repo, branch, _git(repo, 'rev-parse', 'HEAD'))
 
 
 def commit_to_branch(repo: Path, branch: str, paths, message: str,
