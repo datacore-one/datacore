@@ -66,32 +66,60 @@ def _root() -> Path:
     return Path(os.environ.get("DATACORE_ROOT") or (Path.home() / "Data"))
 
 
-def lib_candidates() -> list[Path]:
-    """Where the fleet lib can be, most specific first.
+# These modules carry identity, authorization and data-preservation decisions.
+# One interpreter must not combine them from different installed releases.
+_CORE_MODULES = frozenset({"actor_identity", "tool_policy", "yaml_safety",
+                           "file_utils", "process_run", "spaces", "ledger"})
+_CORE_FILES = tuple(name + ".py" for name in sorted(_CORE_MODULES - {"ledger"})) + ("ledger/__init__.py",)
 
-    A host does not always keep its code under its data root. hermes keeps
-    spaces in ~/Data and the code in the v2-runner clone, which is exactly
-    why `ledger_transport._registry` grew the same fallback on 2026-09-07
-    (datacore#139) after failing twice a day for a fortnight. The plugin
-    deployed there reported INERT for the same reason, five minutes after
-    that fix landed."""
-    out = []
-    override = os.environ.get("DATACORE_LIB")
-    if override:
-        out.append(Path(override))
-    out.append(_root() / ".datacore" / "lib")
-    out.append(Path.home() / ".datacore" / "v2-runner" / ".datacore" / "lib")
-    return out
+
+def lib_candidates() -> list[Path]:
+    """Bind bundled plugins to their code, independently of the selected data.
+
+    An explicit administrator binding is exclusive, including when invalid.
+    Legacy standalone copies may still discover a complete data/runner checkout;
+    managed deployments must supply DATACORE_LIB for those copies.
+    """
+    if "DATACORE_LIB" in os.environ:
+        override = os.environ["DATACORE_LIB"]
+        if not override or "\0" in override:
+            return []
+        path = Path(override)
+        if not path.is_absolute() or ".." in path.parts:
+            return []
+        return [path]
+    source = Path(__file__).resolve()
+    if source.parent.name == "hermes_plugin" and source.parent.parent.name == "lib":
+        # Return even an incomplete installation. A missing policy file must
+        # refuse execution, not select an older copy from writable data.
+        return [source.parent.parent]
+    return [_root() / ".datacore" / "lib",
+            Path.home() / ".datacore" / "v2-runner" / ".datacore" / "lib"]
 
 
 def _lib() -> bool:
-    """Put the fleet lib on the path. False when this host has no Datacore."""
-    for lib in lib_candidates():
-        if not (lib / "actor_identity.py").exists():
-            continue
-        if str(lib) not in sys.path:
-            sys.path.insert(0, str(lib))
-        return True
+    """Select one complete library; refuse already-loaded code from another."""
+    for candidate in lib_candidates():
+        try:
+            try:
+                lib = candidate.resolve(strict=True)
+            except FileNotFoundError:
+                continue
+            if not all((lib / name).is_file() and (lib / name).resolve().is_relative_to(lib)
+                       for name in _CORE_FILES):
+                continue
+            for name, module in list(sys.modules.items()):
+                if name.split(".", 1)[0] not in _CORE_MODULES:
+                    continue
+                origin = getattr(module, "__file__", None)
+                if not origin or not Path(origin).resolve().is_relative_to(lib):
+                    return False
+            # Merely finding the path somewhere in sys.path does not give it
+            # precedence over an earlier stale or caller-supplied library.
+            sys.path[:] = [str(lib), *(entry for entry in sys.path if entry != str(lib))]
+            return True
+        except (OSError, ValueError, RuntimeError):
+            return False
     return False
 
 

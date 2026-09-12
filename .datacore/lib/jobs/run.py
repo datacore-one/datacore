@@ -56,10 +56,10 @@ import time
 import yaml
 
 ROOT = pathlib.Path(os.environ.get("DATACORE_ROOT", pathlib.Path.home() / "Data"))
-for library in (pathlib.Path(__file__).resolve().parents[1], ROOT / ".datacore" / "lib"):
-    if (library / "process_run.py").is_file():
-        sys.path.insert(0, str(library))
-        break
+library = pathlib.Path(__file__).resolve().parents[1]
+if not (library / "process_run.py").is_file():
+    raise RuntimeError("installed process-control helper is missing")
+sys.path.insert(0, str(library))
 from process_run import run as run_process
 MANIFEST = ROOT / ".datacore" / "lib" / "jobs" / "manifest.yaml"
 # Set from --manifest in main(): the runner deployment keeps its manifest under

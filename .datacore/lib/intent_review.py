@@ -171,8 +171,10 @@ def main() -> int:
     if not today:
         import subprocess
         today = subprocess.run(
-            [sys.executable, str(root / ".datacore" / "lib" / "date_utils.py"), "today"],
-            capture_output=True, text=True).stdout.strip() or "unknown"
+            [sys.executable, str(Path(__file__).resolve().parent / "date_utils.py"), "today"],
+            capture_output=True, text=True, check=True, timeout=10).stdout.strip()
+        if not today:
+            raise RuntimeError("installed date helper returned no date")
     text = build(root, today)
     dest = root / a.out
     dest.write_text(text)

@@ -40,7 +40,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
-LIB = DATACORE_ROOT / ".datacore" / "lib"
+LIB = Path(__file__).resolve().parent
 ARCHIVE_DIR = DATACORE_ROOT / ".datacore" / "state" / "sessions" / "archive"
 
 # Dev servers Claude starts for preview and never cleans up.

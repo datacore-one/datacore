@@ -142,6 +142,8 @@ jobs:
             .datacore/lib/tests/test_process_lifecycle.py \
             .datacore/lib/tests/test_hermes_plugin.py \
             .datacore/lib/tests/test_hermes_dispatch.py \
+            .datacore/lib/tests/test_hermes_source_binding.py \
+            .datacore/lib/tests/test_python_source_binding.py \
             .datacore/lib/tests/test_jobs_manifest.py \
             .datacore/lib/tests/test_jobs_run_contract.py \
             .datacore/tests/test_principal_email_hashes.py \

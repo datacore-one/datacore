@@ -46,6 +46,23 @@ embedded in command arguments or the nonsecret profile. The launcher supplies a
 fresh environment; shell startup, interpreter injection and identity overrides
 are refused. It does not inherit operator or service-manager secrets.
 
+## Code and data binding
+
+`DATACORE_ROOT` selects data, not a policy implementation. A bundled Hermes
+plugin and the bundled hook/job entrypoints use helpers from their own code
+installation. A partial installation must fail before executing protected work.
+An explicit `DATACORE_LIB` is exclusive: invalid or missing overrides cannot
+fall back to data-checkout code. The plugin and stream tailer refuse to combine
+already-imported identity, policy or persistence modules from another release.
+Restart the process when changing its installed code directory.
+
+Standalone copies of the stream tailer require an explicit `DATACORE_LIB` when
+their helpers are not adjacent. Legacy standalone Hermes plugins can discover
+a complete data/runner checkout, but managed deployments must bind them
+explicitly to the administrator-controlled release. A symlink to the bundled
+plugin resolves back to that release. Code-path binding is not OS isolation;
+the service boundary and immutable release permissions remain necessary.
+
 ## Persistent state and cutover
 
 Systemd owns identity allocation and the persistent directory

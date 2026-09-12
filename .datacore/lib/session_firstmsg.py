@@ -20,7 +20,8 @@ import json, sys, os
 from pathlib import Path
 
 DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
-sys.path.insert(0, str(DATACORE_ROOT / ".datacore" / "lib"))
+# Helper code belongs to this installation; DATACORE_ROOT selects data.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import session_state
 from session_state import session_exists, create_session, _debug
 

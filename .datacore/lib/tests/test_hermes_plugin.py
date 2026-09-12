@@ -284,12 +284,24 @@ def test_registration_survives_a_runtime_that_rejects_the_tool(as_tris):
 
 # ── finding the fleet lib ───────────────────────────────────────────────────
 
+
+def standalone_library(path, monkeypatch):
+    """A copied plugin with a complete library and no preloaded core modules."""
+    for name in hp._CORE_FILES:
+        file = path / name
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text("")
+    monkeypatch.setattr(hp, "__file__", str(path.parent / "plugins/datacore/__init__.py"))
+    for name in list(hp.sys.modules):
+        if name.split(".", 1)[0] in hp._CORE_MODULES:
+            monkeypatch.delitem(hp.sys.modules, name)
+
 def test_lib_is_found_in_the_runner_clone_when_the_data_root_has_none(tmp_path, monkeypatch):
     """hermes keeps spaces in ~/Data and code in ~/.datacore/v2-runner —
     the layout that made the first deploy report INERT (2026-09-07)."""
     runner = tmp_path / ".datacore" / "v2-runner" / ".datacore" / "lib"
     runner.mkdir(parents=True)
-    (runner / "actor_identity.py").write_text("")
+    standalone_library(runner, monkeypatch)
     monkeypatch.setenv("DATACORE_ROOT", str(tmp_path / "Data"))
     monkeypatch.delenv("DATACORE_LIB", raising=False)
     monkeypatch.setattr(hp.Path, "home", staticmethod(lambda: tmp_path))
@@ -301,7 +313,7 @@ def test_lib_is_found_in_the_runner_clone_when_the_data_root_has_none(tmp_path, 
 def test_datacore_lib_env_wins_and_a_host_without_datacore_stays_inert(tmp_path, monkeypatch):
     override = tmp_path / "custom" / "lib"
     override.mkdir(parents=True)
-    (override / "actor_identity.py").write_text("")
+    standalone_library(override, monkeypatch)
     monkeypatch.setenv("DATACORE_LIB", str(override))
     monkeypatch.setenv("DATACORE_ROOT", str(tmp_path / "Data"))
     monkeypatch.setattr(hp.Path, "home", staticmethod(lambda: tmp_path / "empty"))
