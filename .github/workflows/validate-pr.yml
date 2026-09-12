@@ -96,6 +96,10 @@ jobs:
             .datacore/lib/tests/test_journal_store.py \
             .datacore/lib/tests/test_org_transactions.py \
             .datacore/lib/tests/test_archive_preservation.py \
+            .datacore/lib/tests/test_closed_archive_safety.py \
+            .datacore/lib/tests/test_decision_board_safety.py \
+            .datacore/lib/tests/test_git_fleet_sync_size_guard.py \
+            .datacore/lib/tests/test_tracked_derived_safety.py \
             .datacore/lib/tests/test_hygiene_output_contract.py \
             .datacore/lib/tests/test_writeback_preservation.py \
             .datacore/lib/tests/test_conflict_preservation.py \

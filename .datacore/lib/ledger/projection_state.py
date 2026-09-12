@@ -7,6 +7,8 @@ that a conflicting file is authoritative: bootstrap requires agreement.
 from __future__ import annotations
 
 from collections import Counter
+from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 import hashlib
 import json
@@ -24,6 +26,19 @@ FIELDS = ('title', 'state', 'scheduled', 'deadline', 'tags', 'effective_tags', '
 
 
 ProjectionConflict = EditConflict
+
+
+_reviewed = ContextVar('reviewed_ledger_roots', default=None)
+
+
+@contextmanager
+def reviewed_state(roots):
+    """Bind an explicit review to the ledger version used to plan its edits."""
+    token = _reviewed.set(roots)
+    try:
+        yield
+    finally:
+        _reviewed.reset(token)
 
 
 def _preamble(text):
@@ -117,7 +132,11 @@ def guard_projection(space, current_text, proposed_text):
 
 def sync_generated(space, state, actor, dry_run=False):
     """Plan all changes before emitting; stale unchanged projection fields are inert."""
-    from .log import EventLog
+    from .log import EventLog, read_events
+    from .fold import fold
+    expected = _reviewed.get()
+    if expected is not None and expected.get(str(Path(space).resolve())) != state.state_root():
+        raise ProjectionConflict('reviewed ledger state changed; rebuild the decision board')
     current_text = (Path(space) / 'org/next_actions.org').read_text(encoding='utf-8')
     proposed = project(state, space=Path(space).name, as_of=time.time()).text
     merged = reconcile(space, current_text, proposed)
@@ -149,8 +168,10 @@ def sync_generated(space, state, actor, dry_run=False):
         raise ProjectionConflict('removed heading needs explicit archive/deletion evidence')
     if not dry_run:
         log = EventLog(space, actor)
-        for payload in updates:
-            log.append('item.update', payload)
-        for payload in dismissals:
-            log.append('item.dismiss', payload)
+        for kind, payload in [('item.update', p) for p in updates] + [('item.dismiss', p) for p in dismissals]:
+            event = log.append(kind, payload)
+            if expected is not None:
+                item = fold(read_events(space)).items[payload['id']]
+                if event.hash in item.edit_conflicts:
+                    raise ProjectionConflict('concurrent ledger edit refused the reviewed decision; reconcile its retained event')
     return {'dismissed': len(dismissals), 'updated': len(updates)}

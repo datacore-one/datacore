@@ -6,6 +6,12 @@
 .datacore/state/
 .datacore/learning/
 
+# Derived / regenerable indexes — never commit these
+.datacore/knowledge.db
+.datacore/knowledge.db-journal
+.datacore/knowledge.db-wal
+.datacore/knowledge.db-shm
+
 # Composed context files (generated)
 CLAUDE.md
 SCAFFOLDING.md

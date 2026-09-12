@@ -136,6 +136,27 @@ cp .datacore/env/.env.example .datacore/env/.env
 
 **Required — Datacore MCP** (`@datacore-one/mcp`): Exposes GTD, journal, knowledge, agents, and command tools to your AI assistant. This is pre-configured in `.mcp.json.example` as the first entry and requires no API key — it reads from your `~/Data/` directory automatically.
 
+**PLUR memory MCP** (`@plur-ai/mcp`): Connect the installed, qualified memory
+provider for this security context. Choose local/project scope when access is
+specific to Datacore. Use user scope only when the same credentials and data
+access are intended for every project on that account. Configuration scope does
+not provide OS or credential isolation.
+
+Install and verify the declared [Node/PLUR profile](.datacore/lib/node_runtime/README.md)
+first. Configure its absolute Node and server entry-point paths; do not acquire
+packages with `npx` while starting a server. For example, after replacing both
+paths with the verified installation paths:
+
+```bash
+claude mcp add --transport stdio --scope local plur -- \
+  /absolute/path/to/qualified/node \
+  /absolute/path/to/qualified/node_modules/@plur-ai/mcp/dist/index.js
+```
+
+Claude Code stores local and user configuration in `~/.claude.json`; project
+configuration uses `.mcp.json`. Its CLI handles scope-specific updates. See the
+[official MCP scope documentation](https://code.claude.com/docs/en/mcp#mcp-installation-scopes).
+
 **Optional — External research servers** (add API keys to `.datacore/env/.env` to enable):
 - **Perplexity** (`PERPLEXITY_API_KEY`): Web-grounded search and research
 - **Exa** (`EXA_API_KEY`): Semantic web search
@@ -144,6 +165,8 @@ cp .datacore/env/.env.example .datacore/env/.env
 - **Gamma** (`GAMMA_API_KEY`): Presentation generation (set in `.mcp.json`)
 
 See `.mcp.json.example` for the full server configuration.
+
+> **Note:** Interactive Claude Code sessions request approval for project MCP servers. If a server is disabled by an earlier choice, inspect `/mcp` and use `claude mcp reset-project-choices` to reconsider that choice. Connection status alone does not prove that its tools work.
 
 > **CLI**: `@datacore-one/cli` — setup and management utilities. Install with `npm install -g @datacore-one/cli`.
 
@@ -467,6 +490,27 @@ python .datacore/lib/zettel_db.py init-all
 ```
 
 ## Troubleshooting
+
+### MCP tools not working
+
+Inspect `/mcp` or `claude mcp list` for the selected server, its scope and startup
+errors. Interactive project-server approval choices can be reset with:
+
+```bash
+claude mcp reset-project-choices
+```
+
+Then restart and approve the intended project server. Verify discovery and a
+safe read using the installed server; a connection indicator is insufficient.
+
+If versions differ from the release profile, reconcile the explicit executable,
+entry point and locked dependencies, then rerun protocol and persistence checks.
+Do not use `@latest` or clear caches as an unverified runtime upgrade.
+
+Claude Code resolves same-name configurations by precedence: local, then project,
+then user. Inspect the selected entry instead of assuming a duplicate is merged
+or random. Different clients may use different configuration locations. See the
+[official MCP configuration reference](https://code.claude.com/docs/en/mcp#mcp-installation-scopes).
 
 ### Database errors
 
