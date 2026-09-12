@@ -6,6 +6,32 @@ preservation during compaction, and transactional, replay-bounded todo writes.
 Unreplayable historical todo state stops recovery instead of silently restoring
 an older plan. Existing transcripts are preserved.
 
+The backport also protects HTTP retries and persisted scheduler state:
+
+- Webhook delivery IDs are scoped to the profile and route. Failed direct
+  delivery remains retryable; a concurrent pending retry receives 503.
+- API idempotency belongs to one adapter, endpoint and session scope. Identical
+  concurrent requests share one complete response; conflicting reuse of a key
+  receives 409. Failed and partial outcomes are not retained as successes.
+- Responses report unsuccessful execution truthfully. Configured persistent
+  storage cannot silently fall back to memory, damaged rows remain available
+  for repair, and shutdown drains accepted HTTP requests before closing storage.
+- Cron settings preserve the scheduler's current completed-run counter. Every
+  mutation and automatic repair requires the correct OS file lock; contention
+  or malformed storage refuses mutation without overwriting the source.
+- File publication stages cross-filesystem copies before renaming them, and
+  syncs content and the parent directory on the qualified POSIX runtime.
+
+Idempotency records remain bounded and process-local. Webhook asynchronous 202
+responses acknowledge admission, not durable completion. These controls do not
+establish distributed execution ownership or an OS security boundary.
+
+HTTP object payloads permit at most 64 nested containers; literal text does not
+count as nesting. Busy bind-mounted individual files cannot support atomic
+replacement: writes now fail while preserving the old file. Mount the containing
+directory or use a rename-capable storage path. A directory-sync failure after
+rename reports failure while retaining the complete newly published file.
+
 `manifest.json` records the source, patch, lockfile and requirements hashes.
 The upstream source and its license remain in the prepared tree. This kit does
 not contain private plugins, credentials, installed inventories or session data.
@@ -48,8 +74,10 @@ python -m build --wheel --no-isolation /path/to/new-source
 ```
 
 Install the resulting wheel with `--no-index --no-deps` and run `pip check`.
-The regression tests are in `tests/test_datacore_compression_provenance.py` in
-the prepared source. Qualify the selected upstream tests, actual integration
+The regression tests are in `tests/test_datacore_compression_provenance.py`,
+`tests/test_datacore_http_adapters.py` and the expanded
+`tests/test_atomic_replace_symlinks.py` in the prepared source.
+Qualify the selected upstream tests, actual integration
 plugins and synthetic state migration before changing an active service.
 
 Private plugins must be supplied through their authorized distribution path
