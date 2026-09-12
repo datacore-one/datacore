@@ -33,6 +33,7 @@ when the result would not parse.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from datetime import date
@@ -168,11 +169,16 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("space"); ap.add_argument("--apply", action="store_true")
     ap.add_argument("--today", default=date.today().isoformat())
+    ap.add_argument("--json", action="store_true", help="Return counts and actual written paths")
     a = ap.parse_args()
     a.today = date.fromisoformat(a.today).isoformat()
     src = Path(a.space) / "org" / "inbox.org"
     if not src.exists():
-        print(f"{a.space}: no org/inbox.org"); return 0
+        if a.json:
+            print(json.dumps({'moved_into_inbox': 0, 'archived': 0, 'written_files': []}))
+        else:
+            print(f"{a.space}: no org/inbox.org")
+        return 0
     watch_file(src)
     before = src.read_bytes().decode('utf-8')
     out, arch, stats = clean(before, a.today)
@@ -182,11 +188,16 @@ def main() -> int:
         # a second run the same day appends to the day's archive
         arch = target.read_bytes().decode('utf-8').rstrip("\n") + "\n" + arch.split("\n", 3)[3]
     verb = "applied" if a.apply else "would apply"
-    print(f"{a.space}: {verb} -- Inbox created: {stats['inbox_created']}, moved into Inbox: {stats['moved_into_inbox']}, archived: {stats['archived']}"
-          + (f" -> {target.name}" if arch else ""))
+    if not a.json:
+        print(f"{a.space}: {verb} -- Inbox created: {stats['inbox_created']}, moved into Inbox: {stats['moved_into_inbox']}, archived: {stats['archived']}"
+              + (f" -> {target.name}" if arch else ""))
     if not a.apply:
+        if a.json:
+            print(json.dumps({**stats, 'written_files': []}))
         return 0
     if out == before and not arch:
+        if a.json:
+            print(json.dumps({**stats, 'written_files': []}))
         return 0
     write_org_text(src, out)
     if arch:
@@ -194,6 +205,8 @@ def main() -> int:
     ok = parses(src) and (arch is None or parses(target))
     if not ok:
         raise ValueError("cleanup result did not parse; transaction rolled back")
+    if a.json:
+        print(json.dumps({**stats, 'written_files': [str(src)] + ([str(target)] if arch else [])}))
     return 0
 
 

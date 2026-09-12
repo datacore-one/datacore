@@ -81,6 +81,8 @@ def dirty_paths(repo: Path) -> list[str]:
 
 
 def require_resolved(repo: Path) -> list[Change]:
+    from publication_state import require_clear
+    require_clear(repo)
     inventory = changes(repo)
     if any(change.unmerged for change in inventory):
         raise RuntimeError('Unresolved Git index requires explicit resolution before publication')

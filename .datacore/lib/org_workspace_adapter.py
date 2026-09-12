@@ -520,14 +520,18 @@ def cmd_archive_done(args):
 
     # Ensure archive file loaded if it exists
     archive_path = default_archive_path(file_path)
-    if not archive_path.exists():
+    archive_created = not archive_path.exists()
+    if archive_created:
         ws._safe_write(archive_path, "#+TITLE: Archive\n")
     ws.load(archive_path)
 
     archived = archive_done(ws, older_than_days=args.min_age)
     ws.save_all()
 
-    return {"dry_run": False, "archived_count": len(archived), "archived": archived}
+    written = ([str(file_path), str(archive_path)] if archived
+               else [str(archive_path)] if archive_created else [])
+    return {"dry_run": False, "archived_count": len(archived), "archived": archived,
+            "written_files": written}
 
 
 # ---------------------------------------------------------------------------
@@ -761,7 +765,8 @@ def cmd_ensure_ids(args):
         ws.save(file_path)
         ws.reload(file_path)  # updates ID index so find_by_id() works immediately
 
-    return {"added_count": len(added), "nodes": added}
+    return {"added_count": len(added), "nodes": added,
+            "written_files": [str(file_path)] if added else []}
 
 
 # ---------------------------------------------------------------------------

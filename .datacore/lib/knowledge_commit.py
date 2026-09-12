@@ -43,6 +43,7 @@ import os
 import stat
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -90,11 +91,12 @@ def _push_commit(repo: Path, branch: str, sha: str) -> None:
 
 
 def _run_git(repo: Path, *args: str, env=None, input_bytes=None):
+    from git_publication import durable_git_arguments
     environment = git_environment()
     if env is not None:
         environment.update(env)
     try:
-        return subprocess.run(['git', '--literal-pathspecs', *args], cwd=repo, capture_output=True,
+        return subprocess.run(durable_git_arguments(['git', '--literal-pathspecs', *args]), cwd=repo, capture_output=True,
                               input=input_bytes, env=environment, timeout=120)
     except (OSError, subprocess.TimeoutExpired):
         raise GitError('Git publication failed or timed out; local work retained') from None
@@ -204,8 +206,35 @@ def _read_at(repo: Path, ref: str, rel: str) -> bytes | None:
     return result.stdout
 
 
+def _expected_tree(repo: Path, base: str, paths: list[str]) -> str:
+    """Capture the authorized tree without borrowing or changing the index.
+
+    Normal Git commit hooks still run. This independent tree is the value their
+    resulting commit must match before it can be acknowledged or published.
+    Git retains the captured blobs even if a later writer changes the source.
+    """
+    captured = {rel: _capture(repo, rel) for rel in paths}
+    with tempfile.TemporaryDirectory(prefix='datacore-publication-index-') as directory:
+        environment = {'GIT_INDEX_FILE': str(Path(directory) / 'index')}
+        _git(repo, 'read-tree', base, env=environment)
+        for rel, (content, mode) in captured.items():
+            mode = _publication_mode(repo, base, rel, mode)
+            blob = _git(repo, 'hash-object', '-w', f'--path={rel}', '--stdin', input_bytes=content)
+            _git(repo, 'update-index', '--add', '--cacheinfo', f'{mode},{blob},{rel}', env=environment)
+        return _git(repo, 'write-tree', env=environment)
+
+
+def _publication_mode(repo: Path, base: str, rel: str, mode: str) -> str:
+    if _git(repo, 'config', '--bool', '--get', 'core.filemode', check=False) == 'false':
+        # Match git add on filesystems where executable bits are unreliable:
+        # keep a tracked mode, and introduce ordinary files without +x.
+        existing = _git(repo, 'ls-tree', base, '--', rel).split(' ', 1)[0]
+        return existing if existing in ('100644', '100755') else '100644'
+    return mode
+
+
 def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, push: bool,
-                       *, append_only: bool = False) -> str:
+                       *, append_only: bool = False, publication=None) -> str:
     """Reserve the target checkout; validate a detached commit before advancing it."""
     base = _git(repo, 'rev-parse', '--verify', f'refs/heads/{branch}^{{commit}}')
     source = _git(repo, 'rev-parse', '--verify', 'HEAD^{commit}')
@@ -232,6 +261,7 @@ def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, 
         if _git(candidate, 'status', '--porcelain', '--untracked-files=all'):
             raise GitError('checkout hook changed publication workspace; all output retained')
         for rel, (content, mode) in captured.items():
+            mode = _publication_mode(candidate, base, rel, mode)
             # --path preserves the target tree's clean filters and encoding/EOL
             # rules while still reading only the previously captured bytes.
             blob = _git(candidate, 'hash-object', '-w', f'--path={rel}', '--stdin', input_bytes=content)
@@ -250,6 +280,8 @@ def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, 
             _write_capture(candidate, rel, content, mode)
             _git(candidate, 'update-index', '--add', '--cacheinfo', f'{mode},{blob},{rel}')
         tree = _git(candidate, 'write-tree')
+        if publication is not None:
+            publication.expected(tree)
         if tree != _git(repo, 'rev-parse', f'{base}^{{tree}}'):
             _git(candidate, '-c', f'core.hooksPath={hooks}', 'commit', '-m', message)
             sha = _git(candidate, 'rev-parse', 'HEAD')
@@ -259,6 +291,8 @@ def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, 
                     or _git(candidate, 'diff', '--cached', '--name-only')):
                 raise GitError('commit hook changed publication content or parents; candidate retained')
             _git(repo, 'update-ref', f'refs/heads/{branch}', sha, base)
+        if publication is not None:
+            publication.verified = True
     finally:
         errors = []
         for path in reversed(created):
@@ -293,16 +327,13 @@ def _push_converging(repo: Path, branch: str, sha: str) -> None:
                 f"push failed — {msg}")
     if current_branch(repo) != branch or _git(repo, 'rev-parse', 'HEAD') != sha:
         raise GitError('Publication source advanced; captured work retained for separate reconciliation')
-    if _git(repo, 'status', '--porcelain', '--untracked-files=all'):
-        raise GitError('publication committed locally; preserve working/index changes before converging with origin')
     try:
-        _git(repo, 'pull', '--no-rebase', 'origin', branch)
-    except GitError as e:
+        from git_integration import integrate
+        integrate(repo, sha, f'refs/heads/{branch}')
+    except (OSError, RuntimeError, subprocess.SubprocessError):
         raise GitError(
             f"{repo.name}: committed locally on {branch} ({sha[:10]}); remote "
-            f"moved and the converge-merge conflicted — needs a human "
-            f"(conflict files and index stages are retained). {e}")
-    _push_commit(repo, branch, _git(repo, 'rev-parse', 'HEAD'))
+            'integration was not acknowledged; source and private recovery state retained') from None
 
 
 def commit_to_branch(repo: Path, branch: str, paths, message: str,
@@ -311,7 +342,8 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
 
     When HEAD is elsewhere, only private worktrees are checked out and the
     shared HEAD/index/files stay unchanged. When HEAD is on the target, the
-    existing pathspec commit behavior applies. This helper does not establish
+    pathspec commit must match an independently captured tree and parent before
+    acknowledgment or publication. This helper does not establish
     process isolation or grant execution ownership.
 
     append_only requires an isolated destination and preserves its complete
@@ -340,6 +372,18 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
     if not paths:
         return ''
 
+    from publication_state import reserve
+    try:
+        with reserve(repo, branch, paths) as reservation:
+            return _commit_selected(repo, branch, paths, message, push, append_only, reservation)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        if isinstance(exc, GitError):
+            raise
+        raise GitError('publication failed; retained state and local work require inspection') from None
+
+
+def _commit_selected(repo, branch, paths, message, push, append_only, reservation):
+
     head = current_branch(repo)
     if append_only and head == branch:
         raise GitError('append-only publication requires an isolated destination branch')
@@ -349,6 +393,16 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
     # out branch without touching index/worktree makes the tree read as dirty in
     # reverse. Use the ordinary path.
     if head == branch:
+        base = _git(repo, 'rev-parse', '--verify', 'HEAD^{commit}')
+        tree = _expected_tree(repo, base, paths)
+        reservation.expected(tree)
+        if current_branch(repo) != branch or _git(repo, 'rev-parse', 'HEAD') != base:
+            raise GitError('publication source changed during capture; retained work requires reconciliation')
+        if tree == _git(repo, 'rev-parse', f'{base}^{{tree}}'):
+            reservation.verified = True
+            if push:
+                _push_converging(repo, branch, base)
+            return ''
         for p in paths:
             _git(repo, 'add', '--', p)
         # Commit with an explicit pathspec, not the whole index. A pathspec
@@ -359,20 +413,22 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
         # 2026-08-24 that blocked every batch-end commit for four days —
         # journal, org and inbox updates all bounced off a hook complaint
         # about files this code never touched.
-        if not _git(repo, 'diff', '--cached', '--name-only', 'HEAD', '--', *paths):
-            if push:
-                _push_converging(repo, branch, _git(repo, 'rev-parse', 'HEAD'))
-            return ''
         # Hook output is not a machine-readable success signal. A failing hook
         # saying "nothing to commit" must still refuse publication.
         _git(repo, 'commit', '-m', message, '--', *paths)
-        sha = _git(repo, 'rev-parse', 'HEAD')
+        sha = _git(repo, 'rev-parse', '--verify', 'HEAD^{commit}')
+        if (current_branch(repo) != branch
+                or _git(repo, 'rev-parse', f'{sha}^{{tree}}') != tree
+                or _git(repo, 'show', '-s', '--format=%P', sha) != base):
+            raise GitError('commit content, parent or branch changed; local commits retained, publication refused')
+        reservation.verified = True
         if push:
             _push_converging(repo, branch, sha)
         return sha
 
     try:
-        return _commit_off_branch(repo, branch, paths, message, push, append_only=append_only)
+        return _commit_off_branch(repo, branch, paths, message, push, append_only=append_only,
+                                  publication=reservation)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         if isinstance(exc, GitError):
             raise

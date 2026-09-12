@@ -1,7 +1,9 @@
 """Actual Git conflicts and publication never discard the other writer's data."""
 from pathlib import Path
+import json
 import shlex
 import subprocess
+import sys
 
 import pytest
 
@@ -366,6 +368,233 @@ def test_same_branch_rejecting_hook_cannot_claim_there_is_nothing_to_commit(repo
         knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'must refuse', push=False)
     assert 'private-output' not in str(error.value)
     assert git(repo, 'rev-parse', 'main').stdout == before
+
+
+@pytest.mark.parametrize('change', ['extra-file', 'changed-output', 'changed-parent'])
+def test_same_branch_hooks_cannot_expand_acknowledged_publication(repo, tmp_path, change):
+    remote = tmp_path / 'remote.git'
+    git(repo, 'init', '--bare', str(remote))
+    git(repo, 'remote', 'add', 'origin', str(remote))
+    git(repo, 'push', 'origin', 'main')
+    before = git(remote, 'rev-parse', 'refs/heads/main').stdout
+    hooks = tmp_path / 'checks'
+    hooks.mkdir()
+    git(repo, 'config', 'core.hooksPath', str(hooks))
+    if change == 'changed-parent':
+        body = 'git -c core.hooksPath=/dev/null commit --allow-empty -m unexpected-parent\n'
+    elif change == 'extra-file':
+        body = 'echo private-draft > extra.txt\ngit add extra.txt\n'
+    else:
+        body = 'echo changed > notes/new.md\ngit add notes/new.md\n'
+    hook = hooks / 'pre-commit'
+    hook.write_text('#!/bin/sh\n' + body)
+    hook.chmod(0o755)
+    (repo / 'notes/new.md').write_text('declared output\n')
+    with pytest.raises(knowledge.GitError):
+        knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'declared publication')
+    assert git(remote, 'rev-parse', 'refs/heads/main').stdout == before
+
+
+def test_retry_cannot_publish_a_previously_rejected_hook_commit(repo, tmp_path):
+    remote = tmp_path / 'remote.git'
+    git(repo, 'init', '--bare', str(remote))
+    git(repo, 'remote', 'add', 'origin', str(remote))
+    git(repo, 'push', 'origin', 'main')
+    before = git(remote, 'rev-parse', 'refs/heads/main').stdout
+    hooks = tmp_path / 'checks'
+    hooks.mkdir()
+    git(repo, 'config', 'core.hooksPath', str(hooks))
+    hook = hooks / 'pre-commit'
+    hook.write_text('#!/bin/sh\necho private-draft > extra.txt\ngit add extra.txt\n')
+    hook.chmod(0o755)
+    (repo / 'notes/new.md').write_text('declared output\n')
+    with pytest.raises(knowledge.GitError):
+        knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'first attempt')
+    hook.unlink()
+    with pytest.raises(knowledge.GitError):
+        knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'retry')
+    assert git(remote, 'rev-parse', 'refs/heads/main').stdout == before
+    assert (repo / 'extra.txt').read_text() == 'private-draft\n'
+
+
+def test_crash_after_commit_keeps_publication_unverified_across_processes(repo, tmp_path):
+    from git_inventory import require_resolved
+    remote = tmp_path / 'remote.git'
+    git(repo, 'init', '--bare', str(remote))
+    git(repo, 'remote', 'add', 'origin', str(remote))
+    git(repo, 'push', 'origin', 'main')
+    before = git(remote, 'rev-parse', 'refs/heads/main').stdout
+    (repo / 'notes/new.md').write_text('survives interruption\n')
+    script = '''
+import os, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[2])
+import knowledge_commit as knowledge
+original = knowledge._git
+def interrupted(repo, *args, **kwargs):
+    result = original(repo, *args, **kwargs)
+    if args[0] == 'commit':
+        os._exit(73)
+    return result
+knowledge._git = interrupted
+knowledge.commit_to_branch(Path(sys.argv[1]), 'main', ['notes/new.md'], 'interrupted')
+'''
+    result = subprocess.run([sys.executable, '-c', script, str(repo), str(Path(knowledge.__file__).parent)],
+                            capture_output=True, timeout=30)
+    assert result.returncode == 73, result.stderr
+    with pytest.raises(RuntimeError, match='Unverified publication'):
+        require_resolved(repo)
+    with pytest.raises(knowledge.GitError):
+        knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'retry after crash')
+    assert git(remote, 'rev-parse', 'refs/heads/main').stdout == before
+    assert git(repo, 'show', 'HEAD:notes/new.md').stdout == 'survives interruption\n'
+    assert (repo / 'notes/new.md').read_text() == 'survives interruption\n'
+
+
+@pytest.mark.parametrize('hook_exit', [0, 1])
+def test_rejected_capture_survives_restaging_and_git_pruning(repo, tmp_path, hook_exit):
+    note = repo / 'notes/new.md'
+    note.write_text('Original valid output.\n')
+    hooks = tmp_path / 'checks'
+    hooks.mkdir()
+    git(repo, 'config', 'core.hooksPath', str(hooks))
+    hook = hooks / 'pre-commit'
+    hook.write_text('#!/bin/sh\necho replaced > notes/new.md\ngit add notes/new.md\n'
+                    f'exit {hook_exit}\n')
+    hook.chmod(0o755)
+    with pytest.raises(knowledge.GitError):
+        knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'attempt', push=False)
+    if hook_exit == 0:
+        record_path = repo / '.git/datacore-publication-pending.json'
+    else:
+        assert not (repo / '.git/datacore-publication-pending.json').exists()
+        records = list((repo / '.git/datacore-publication-workspaces').glob('*/publication-intent.json'))
+        assert len(records) == 1
+        record_path = records[0]
+    record = json.loads(record_path.read_text())
+    git(repo, 'add', '--', 'notes/new.md')
+    git(repo, 'prune', '--expire=now')
+    assert git(repo, 'show', record['expected_ref'] + ':notes/new.md').stdout == 'Original valid output.\n'
+    assert note.read_text() == 'replaced\n'
+
+
+def test_normal_commit_hook_observes_durable_git_options_despite_unsafe_defaults(repo, tmp_path):
+    git(repo, 'config', 'core.fsync', 'none')
+    git(repo, 'config', 'core.fsyncMethod', 'writeout-only')
+    hooks = tmp_path / 'checks'
+    hooks.mkdir()
+    git(repo, 'config', 'core.hooksPath', str(hooks))
+    hook = hooks / 'pre-commit'
+    hook.write_text('#!/bin/sh\n'
+                    'test "$(git config core.fsync)" = committed,reference || exit 41\n'
+                    'test "$(git config core.fsyncMethod)" = fsync || exit 42\n')
+    hook.chmod(0o755)
+    (repo / 'notes/new.md').write_text('Explicitly flushed publication.\n')
+    commit = knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'durable', push=False)
+    assert git(repo, 'show', f'{commit}:notes/new.md').stdout == 'Explicitly flushed publication.\n'
+    assert git(repo, 'config', '--local', 'core.fsync').stdout.strip() == 'none'
+    assert git(repo, 'config', '--local', 'core.fsyncMethod').stdout.strip() == 'writeout-only'
+
+
+def test_pending_publication_blocks_other_linked_worktree_publishers(repo, tmp_path):
+    from publication_state import reserve
+    from git_inventory import require_resolved
+    other = tmp_path / 'other-checkout'
+    git(repo, 'worktree', 'add', '-b', 'other', str(other))
+    with reserve(repo, 'main', ['notes/base.md']):
+        with pytest.raises(RuntimeError, match='Unverified publication'):
+            require_resolved(other)
+        with pytest.raises(FileExistsError):
+            with reserve(other, 'other', ['notes/base.md']):
+                pytest.fail('another publisher entered the reserved repository')
+    require_resolved(other)  # a no-change attempt releases only its own record
+
+
+@pytest.mark.parametrize('branch', ['main', 'feature'])
+def test_publication_respects_disabled_filesystem_mode_tracking(repo, branch):
+    git(repo, 'config', 'core.filemode', 'false')
+    if branch == 'feature':
+        git(repo, 'checkout', '-qb', branch)
+    output = repo / 'notes/new.md'
+    output.write_text('valid output on a filesystem without trusted executable bits\n')
+    output.chmod(0o755)
+    sha = knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'content publication', push=False)
+    assert git(repo, 'ls-tree', sha, '--', 'notes/new.md').stdout.startswith('100644 ')
+    assert output.read_text().startswith('valid output')
+
+
+def diverged_publication(repo, tmp_path):
+    remote = tmp_path / 'remote.git'
+    git(repo, 'init', '--bare', str(remote))
+    git(repo, 'remote', 'add', 'origin', str(remote))
+    git(repo, 'push', 'origin', 'main')
+    git(repo, 'checkout', '-qb', 'remote-writer')
+    (repo / 'notes/remote.md').write_text('Remote writer content.\n')
+    git(repo, 'add', '--', 'notes/remote.md')
+    git(repo, 'commit', '-qm', 'remote work')
+    remote_tip = git(repo, 'rev-parse', 'HEAD').stdout.strip()
+    git(repo, 'push', 'origin', f'{remote_tip}:refs/heads/main')
+    git(repo, 'checkout', '-q', 'main')
+    (repo / 'notes/local.md').write_text('Captured local content.\n')
+    git(repo, 'add', '--', 'notes/local.md')
+    git(repo, 'commit', '-qm', 'captured work')
+    return remote, remote_tip, git(repo, 'rev-parse', 'HEAD').stdout.strip()
+
+
+def test_convergence_hooks_cannot_expand_the_remote_publication(repo, tmp_path):
+    remote, remote_tip, captured = diverged_publication(repo, tmp_path)
+    before_index = (repo / '.git/index').read_bytes()
+    hooks = tmp_path / 'checks'
+    hooks.mkdir()
+    git(repo, 'config', 'core.hooksPath', str(hooks))
+    hook = hooks / 'pre-merge-commit'
+    hook.write_text('#!/bin/sh\necho private-draft > extra.txt\ngit add extra.txt\n')
+    hook.chmod(0o755)
+    with pytest.raises(RuntimeError):
+        knowledge._push_converging(repo, 'main', captured)
+    assert git(remote, 'rev-parse', 'refs/heads/main').stdout.strip() == remote_tip
+    assert git(repo, 'rev-parse', 'HEAD').stdout.strip() == captured
+    assert (repo / '.git/index').read_bytes() == before_index
+    assert not (repo / 'extra.txt').exists()
+
+
+def test_convergence_preserves_both_histories_and_the_dirty_source_checkout(repo, tmp_path):
+    remote, remote_tip, captured = diverged_publication(repo, tmp_path)
+    (repo / 'unrelated').write_text('Uncommitted private content.\n')
+    git(repo, 'add', '--', 'unrelated')
+    before_index = (repo / '.git/index').read_bytes()
+    knowledge._push_converging(repo, 'main', captured)
+    assert git(remote, 'show', '-s', '--format=%P', 'main').stdout.split() == [remote_tip, captured]
+    assert git(remote, 'show', 'main:notes/remote.md').stdout == 'Remote writer content.\n'
+    assert git(remote, 'show', 'main:notes/local.md').stdout == 'Captured local content.\n'
+    assert git(remote, 'cat-file', '-e', 'main:unrelated', check=False).returncode != 0
+    assert git(repo, 'rev-parse', 'HEAD').stdout.strip() == captured
+    assert (repo / '.git/index').read_bytes() == before_index
+    assert (repo / 'unrelated').read_text() == 'Uncommitted private content.\n'
+
+
+def test_same_branch_late_head_cannot_replace_the_acknowledged_commit(repo, tmp_path, monkeypatch):
+    remote = tmp_path / 'remote.git'
+    git(repo, 'init', '--bare', str(remote))
+    git(repo, 'remote', 'add', 'origin', str(remote))
+    git(repo, 'push', 'origin', 'main')
+    before = git(remote, 'rev-parse', 'refs/heads/main').stdout
+    (repo / 'notes/new.md').write_text('declared output\n')
+    original = knowledge._git
+    advanced = []
+
+    def race(path, *args, **kwargs):
+        result = original(path, *args, **kwargs)
+        if args[0] == 'commit':
+            git(repo, 'commit', '--allow-empty', '-m', 'another writer')
+            advanced.append(True)
+        return result
+
+    monkeypatch.setattr(knowledge, '_git', race)
+    with pytest.raises(knowledge.GitError):
+        knowledge.commit_to_branch(repo, 'main', ['notes/new.md'], 'declared publication')
+    assert advanced
+    assert git(remote, 'rev-parse', 'refs/heads/main').stdout == before
 
 
 @pytest.mark.parametrize('branch', ['main', 'feature'])
