@@ -138,7 +138,7 @@ def read_marker(path: Path) -> dict | None:
     return block
 
 
-def _walk(root: Path, depth: int = 1):
+def _walk(root: Path, depth: int = 1, *, reject_aliases: bool = False):
     """Directories worth testing for a marker, breadth-first, depth-bounded."""
     if depth > MAX_DEPTH:
         return
@@ -147,10 +147,14 @@ def _walk(root: Path, depth: int = 1):
     except (PermissionError, OSError):
         return
     for entry in entries:
-        if entry.name in SKIP_DIRS or entry.is_symlink():
+        if entry.name in SKIP_DIRS:
+            continue
+        if entry.is_symlink():
+            if reject_aliases and _looks_like_space(entry):
+                raise ValueError('space alias crosses its directory boundary')
             continue
         yield entry
-        yield from _walk(entry, depth + 1)
+        yield from _walk(entry, depth + 1, reject_aliases=reject_aliases)
 
 
 def _looks_like_space(path: Path) -> bool:
@@ -163,6 +167,10 @@ def _looks_like_space(path: Path) -> bool:
        marker path, but included here for symmetry).
     2. ``org/`` subdirectory — every Datacore space has GTD org files.
     3. ``CLAUDE.base.md`` — every Datacore space has a layered context file.
+    4. ``.datacore/events/`` or ``0-inbox/`` — ledger/report spaces may not
+       have generated their first Org projection yet.
+    5. ``.git`` — existing Git-only spaces still need preflight/recovery before
+       their first data file or marker; migration cannot silently omit them.
 
     A bare ``.datacore/`` directory (e.g. one that contains only a
     ``knowledge.db`` and no subdirectories) does **not** qualify; that
@@ -171,6 +179,9 @@ def _looks_like_space(path: Path) -> bool:
     """
     return (
         (path / ".datacore" / "config.yaml").is_file()
+        or (path / '.git').exists()
+        or (path / '.datacore/events').is_dir()
+        or (path / '0-inbox').is_dir()
         or (path / "org").is_dir()
         or (path / "CLAUDE.base.md").is_file()
     )
@@ -230,6 +241,7 @@ def discover_spaces(
     *,
     types: set[str] | None = None,
     include_legacy: bool = True,
+    reject_aliases: bool = False,
 ) -> list[Space]:
     """Every space under ``root``, marker-discovered (and optionally legacy).
 
@@ -242,6 +254,9 @@ def discover_spaces(
             cannot establish that every supported installation has migrated.
             Identity-sensitive callers may explicitly require marked spaces;
             unknown legacy types never satisfy an explicit type filter.
+        reject_aliases: automated writers may refuse a directory symlink
+            that looks like a space, instead of silently excluding its work.
+            Code/dependency symlinks without space artifacts stay excluded.
 
     Returns:
         Spaces sorted by path. Marker-discovered entries win over legacy ones
@@ -250,7 +265,11 @@ def discover_spaces(
     root = root or data_root()
     found: dict[Path, Space] = {}
 
-    for candidate in _walk(root):
+    block = read_marker(root)
+    if block is not None:
+        found[root] = _from_marker(root, block)
+
+    for candidate in _walk(root, reject_aliases=reject_aliases):
         block = read_marker(candidate)
         if block is not None:
             found[candidate] = _from_marker(candidate, block)

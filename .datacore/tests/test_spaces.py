@@ -36,6 +36,48 @@ def test_reads_marker(tmp_path):
     assert read_marker(tmp_path / "1-alpha") == {"name": "alpha", "type": "team"}
 
 
+def test_install_root_marker_participates_in_discovery_and_ownership(tmp_path):
+    make_space(tmp_path, '.', 'installation', 'meta')
+    child = make_space(tmp_path, 'group/client', 'client', 'client')
+    assert [s.path for s in discover_spaces(tmp_path)] == [tmp_path, child]
+    assert find_space(tmp_path / '0-inbox/report.md', tmp_path).name == 'installation'
+    assert find_space(child / 'org/inbox.org', tmp_path).name == 'client'
+    assert [s.path for s in discover_spaces(tmp_path, types={'client'})] == [child]
+
+
+def test_legacy_ledger_space_is_not_dropped_before_first_projection(tmp_path):
+    space = tmp_path / '1-legacy'
+    (space / '.datacore/events').mkdir(parents=True)
+    assert [s.path for s in discover_spaces(tmp_path)] == [space]
+    assert discover_spaces(tmp_path, types={'team'}) == []
+
+
+def test_legacy_report_space_is_not_dropped_before_first_followup(tmp_path):
+    space = tmp_path / '1-legacy'
+    (space / '0-inbox').mkdir(parents=True)
+    assert [s.path for s in discover_spaces(tmp_path)] == [space]
+
+
+def test_legacy_git_only_space_still_requires_preflight_before_migration(tmp_path):
+    space = tmp_path / '1-legacy'
+    (space / '.git').mkdir(parents=True)
+    assert [s.path for s in discover_spaces(tmp_path)] == [space]
+    assert discover_spaces(tmp_path, types={'team'}) == []
+
+
+@pytest.mark.parametrize('location', ['alias', 'owner/client'])
+def test_writer_discovery_refuses_space_aliases_at_any_depth(tmp_path, location):
+    root = tmp_path / 'Data'
+    root.mkdir()
+    foreign = make_space(tmp_path, 'foreign', 'foreign')
+    alias = root / location
+    alias.parent.mkdir(parents=True, exist_ok=True)
+    alias.symlink_to(foreign, target_is_directory=True)
+    assert discover_spaces(root) == []
+    with pytest.raises(ValueError, match='boundary'):
+        discover_spaces(root, reject_aliases=True)
+
+
 def test_directory_without_marker_is_not_a_space(tmp_path):
     (tmp_path / "plain").mkdir()
     assert read_marker(tmp_path / "plain") is None

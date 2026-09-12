@@ -151,7 +151,18 @@ def main(argv: list[str] | None = None) -> int:
                     help="bypass the legacy import scan; full source-preservation "
                          "checks still apply and cannot be overridden")
     a = ap.parse_args(argv)
-    spaces = [a.root / a.space] if a.space else sorted(p for p in a.root.glob("[0-9]-*") if (p / ".datacore" / "events").is_dir())
+    from spaces import discover_spaces
+    root = a.root.resolve(strict=True)
+    if a.space:
+        relative = Path(a.space)
+        selected = root / relative
+        if (relative.is_absolute() or '..' in relative.parts or selected.is_symlink()
+                or selected.resolve() != selected or not selected.is_dir()):
+            ap.error('space must be an existing directory within the selected root')
+        spaces = [selected]
+    else:
+        spaces = [space.path for space in discover_spaces(root, reject_aliases=True)
+                  if (space.path / '.datacore/events').is_dir()]
     refused = 0
     results = []
     for s in spaces:
@@ -160,9 +171,10 @@ def main(argv: list[str] | None = None) -> int:
             refused += 1
         status = ('refused' if line.startswith('REFUSED') else
                   'generated' if line.startswith('generated ') else 'authored')
-        results.append({'space': s.name, 'status': status})
+        relative = s.relative_to(root).as_posix()
+        results.append({'space': relative, 'status': status})
         if not a.json:
-            print(f"  {s.name:14} {line}")
+            print(f"  {relative:14} {line}")
     if a.json:
         # No task titles, source content or exception details in automation output.
         print(json.dumps({'version': 1, 'spaces': results}))

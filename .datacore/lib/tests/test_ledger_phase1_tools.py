@@ -88,6 +88,38 @@ def test_projector_reports_every_space_and_refuses_without_source_disclosure(tmp
     assert (space / 'org/next_actions.org').read_bytes() == before
 
 
+def test_projector_includes_named_nested_and_installation_spaces(tmp_path, capsys):
+    G = _load('ledger_project_org')
+    expected = ['.', 'named', 'one/client', 'two/client']
+    preserved = {}
+    for number, relative in enumerate(expected):
+        space = tmp_path / relative
+        (space / '.datacore/events').mkdir(parents=True)
+        (space / '.datacore/config.yaml').write_text(f'space:\n  name: fixture-{number}\n  type: team\n')
+        (space / 'org').mkdir()
+        source = space / 'org/next_actions.org'
+        source.write_text('* TODO Authored source remains authoritative\n')
+        preserved[source] = source.read_bytes()
+    assert G.main(['--root', str(tmp_path), '--all', '--json']) == 0
+    assert json.loads(capsys.readouterr().out) == {'version': 1, 'spaces': [
+        {'space': name, 'status': 'authored'} for name in expected]}
+    assert all(source.read_bytes() == before for source, before in preserved.items())
+
+
+@pytest.mark.parametrize('selection', ['../foreign', '/outside', 'link'])
+def test_projector_cannot_select_outside_root(tmp_path, monkeypatch, selection):
+    G = _load('ledger_project_org')
+    data = tmp_path / 'Data'
+    data.mkdir()
+    foreign = tmp_path / 'foreign'
+    foreign.mkdir()
+    (data / 'link').symlink_to(foreign, target_is_directory=True)
+    monkeypatch.setattr(G, 'project_space', lambda *a, **kw: pytest.fail('escaped selection reached projection'))
+    with pytest.raises(SystemExit) as caught:
+        G.main(['--root', str(data), '--space', selection, '--json'])
+    assert caught.value.code == 2
+
+
 @pytest.mark.parametrize('marker', ['', '2', '01', 'unknown'])
 def test_invalid_authority_mode_cannot_be_treated_as_authored(tmp_path, marker):
     G = _load('ledger_project_org')
