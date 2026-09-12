@@ -6,6 +6,7 @@ Wants=network-online.target
 [Service]
 Type=exec
 DynamicUser=yes
+User=dc-%i
 StateDirectory=datacore-workers/%i
 StateDirectoryMode=0700
 WorkingDirectory=/var/lib/datacore-workers/%i

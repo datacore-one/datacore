@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import stat
 import sys
@@ -114,6 +115,14 @@ def check_boundary(name: str) -> None:
     uid = os.getuid()
     if uid != os.geteuid() or not 61184 <= uid <= 65519:
         raise Refused('an independent systemd dynamic identity is required')
+    try:
+        identity = pwd.getpwuid(uid).pw_name
+    except KeyError as error:
+        raise Refused('the worker identity cannot be resolved') from error
+    # Template instances otherwise inherit the same default User. Checking the
+    # instance name also catches a missing or overridden User=dc-%i directive.
+    if identity != f'dc-{name}':
+        raise Refused('worker identity does not match the runtime context')
     # DynamicUser can reuse a same-named static account. Never accept a local
     # administrator-created account in place of the allocated transient UID.
     for line in Path('/etc/passwd').read_text().splitlines():

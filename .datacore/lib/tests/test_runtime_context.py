@@ -1,6 +1,7 @@
 """Worker startup preserves explicit credential scope and refuses unsafe state."""
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -121,6 +122,27 @@ def test_direct_operator_invocation_fails_before_reading_credentials(uid, monkey
     monkeypatch.setattr(os, 'geteuid', lambda: uid)
     monkeypatch.setattr(runtime, '_json_file', lambda *a, **k: pytest.fail('read credentials before refusing identity'))
     with pytest.raises(runtime.Refused):
+        runtime.launch('test')
+
+
+@pytest.mark.parametrize('identity', ['datacore-runtime', 'dc-other', 'dc-test-extra'])
+def test_shared_or_other_dynamic_identity_refused_before_credentials(identity, monkeypatch):
+    monkeypatch.setattr(os, 'getuid', lambda: 62001)
+    monkeypatch.setattr(os, 'geteuid', lambda: 62001)
+    monkeypatch.setattr(runtime.pwd, 'getpwuid', lambda uid: SimpleNamespace(pw_name=identity))
+    monkeypatch.setattr(runtime, '_json_file', lambda *a, **k: pytest.fail('read credentials before refusing shared identity'))
+    with pytest.raises(runtime.Refused, match='identity does not match'):
+        runtime.launch('test')
+
+
+def test_unresolvable_dynamic_identity_refused_before_credentials(monkeypatch):
+    monkeypatch.setattr(os, 'getuid', lambda: 62001)
+    monkeypatch.setattr(os, 'geteuid', lambda: 62001)
+    def missing(uid):
+        raise KeyError(uid)
+    monkeypatch.setattr(runtime.pwd, 'getpwuid', missing)
+    monkeypatch.setattr(runtime, '_json_file', lambda *a, **k: pytest.fail('read credentials before refusing unresolved identity'))
+    with pytest.raises(runtime.Refused, match='cannot be resolved'):
         runtime.launch('test')
 
 

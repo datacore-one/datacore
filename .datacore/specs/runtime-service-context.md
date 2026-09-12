@@ -11,6 +11,9 @@ ProtectProc and the other declared sandbox settings. Qualify it on the actual
 host; an ignored or unsupported directive is not a successful deployment.
 The launcher refuses root, ordinary login accounts, missing privilege limits,
 nonprivate state, malformed profiles and credential scope mismatches.
+Each instance explicitly uses `User=dc-%i`; the launcher checks that the OS
+identity matches its context. Omitting this directive lets template instances
+share systemd's default user and permits access to peer process environments.
 
 ## Files
 
@@ -74,6 +77,11 @@ writable, and acknowledged local state survives restart. Use disposable data
 for destructive and interruption tests. Process/credential isolation does not
 supply network service authentication, cross-host fencing or external-effect
 idempotency; these require their own controls and verification.
+
+Keep two distinct contexts running simultaneously and verify different UIDs,
+denial of peer process-environment reads and signal permission, and denial of
+peer state and credentials in both directions. Testing only against an operator
+account does not establish isolation between workers.
 
 The profile is not a declaration that a pre-existing gateway has been isolated.
 Only an installed, negatively tested service establishes that deployment fact.
