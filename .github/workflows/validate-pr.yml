@@ -136,6 +136,7 @@ jobs:
             .datacore/lib/tests/test_actor_identity.py \
             .datacore/lib/tests/test_seal_preservation.py \
             .datacore/lib/tests/test_executor_isolation.py \
+            .datacore/lib/tests/test_runtime_context.py \
             .datacore/lib/tests/test_process_lifecycle.py \
             .datacore/lib/tests/test_jobs_manifest.py \
             .datacore/lib/tests/test_jobs_run_contract.py \
