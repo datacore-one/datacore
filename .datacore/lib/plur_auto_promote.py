@@ -3,7 +3,7 @@
 
 Scans observation logs and existing engrams to find patterns that appear
 across multiple Datacore spaces. When the same pattern is observed in 2+
-spaces, promotes it to global scope (or creates a new global engram).
+workspaces, proposes it for human review before any engram is published.
 
 This bridges observation data → engram promotion, feeding the meta-engram
 pipeline. A meta-engram aggregates multiple promoted patterns into
@@ -21,59 +21,22 @@ Pipeline:
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
 from pathlib import Path
+
+import observation_metadata
 
 import plur_cli
 
-OBS_DIR = Path(os.path.expanduser("~/.plur/observations"))
+OBS_DIR = observation_metadata.directory()
 ENGRAMS_FILE = Path(os.path.expanduser("~/.plur/engrams.yaml"))
-
-# Datacore spaces match [0-9]-* pattern (discovered, not hardcoded)
-SPACE_PATTERN = re.compile(r"^[0-9]-[a-zA-Z0-9_-]+$")
 
 
 def load_observations(days=14):
-    """Load observations from the last N days."""
-    observations = []
-    cutoff = datetime.now() - timedelta(days=days)
-
-    if not OBS_DIR.exists():
-        return observations
-
-    for f in sorted(OBS_DIR.glob("*.jsonl")):
-        try:
-            date = datetime.strptime(f.stem, "%Y-%m-%d")
-            if date < cutoff:
-                continue
-        except ValueError:
-            continue
-
-        with open(f) as fh:
-            for line in fh:
-                line = line.strip()
-                if line:
-                    try:
-                        observations.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
-
-    return observations
-
-
-def extract_space(cwd):
-    """Extract Datacore space from working directory."""
-    if "/Data/" not in cwd:
-        return None
-    after_data = cwd.split("/Data/")[1]
-    first_dir = after_data.split("/")[0]
-    if SPACE_PATTERN.match(first_dir):
-        return first_dir
-    return None
+    """Only current metadata is eligible for automatic pattern analysis."""
+    return observation_metadata.load(OBS_DIR, days)
 
 
 def find_cross_space_error_patterns(observations, min_spaces=2):
@@ -83,11 +46,11 @@ def find_cross_space_error_patterns(observations, min_spaces=2):
 
     for obs in observations:
         if obs.get("success") is False or obs.get("error"):
-            space = extract_space(obs.get("cwd", ""))
+            space = obs.get("workspace")
             if not space:
                 continue
             tool = obs.get("tool", "unknown")
-            error = str(obs.get("error", ""))[:100]  # Normalize by prefix
+            error = "tool failure"  # Failure content is intentionally never captured.
             key = f"{tool}:{error[:50]}"
             error_by_space[key][space] += 1
 
@@ -107,10 +70,12 @@ def find_cross_space_tool_sequences(observations, min_spaces=2):
         if obs.get("event") != "PreToolUse":
             continue
         sid = obs.get("session_id", "")
-        sessions[sid]["tools"].append(obs.get("tool", ""))
-        space = extract_space(obs.get("cwd", ""))
-        if space:
-            sessions[sid]["space"] = space
+        space = obs.get("workspace")
+        if not sid or not space:
+            continue
+        key = (sid, space)
+        sessions[key]["tools"].append(obs.get("tool", ""))
+        sessions[key]["space"] = space
 
     # Extract 3-tool sequences per space
     seq_by_space = defaultdict(lambda: defaultdict(int))
@@ -137,7 +102,7 @@ def find_cross_space_tool_preferences(observations, min_spaces=3):
     tool_spaces = defaultdict(lambda: defaultdict(int))
 
     for obs in observations:
-        space = extract_space(obs.get("cwd", ""))
+        space = obs.get("workspace")
         if not space:
             continue
         tool = obs.get("tool", "")
@@ -167,8 +132,8 @@ def generate_promotion_candidates(observations, min_spaces=2):
             "scope": "global",
             "domain": "tool-usage",
             "statement": f"{tool} commonly fails across spaces: {error}",
-            "rationale": f"Observed in {len(spaces)} spaces ({', '.join(spaces.keys())}), {total} total failures. Cross-space pattern → global engram.",
-            "tags": ["auto-promoted", "cross-space", "error-pattern", tool.lower()],
+            "rationale": f"Observed in {len(spaces)} spaces ({', '.join(spaces.keys())}), {total} total failures. Candidate requires scope and content review.",
+            "tags": ["review-candidate", "cross-space", "error-pattern", tool.lower()],
             "confidence": min(0.5 + (len(spaces) * 0.15), 0.9),
             "spaces": list(spaces.keys()),
         })
@@ -182,8 +147,8 @@ def generate_promotion_candidates(observations, min_spaces=2):
             "scope": "global",
             "domain": "workflow",
             "statement": f"Common cross-space workflow: {seq}",
-            "rationale": f"Sequence appears in {len(spaces)} spaces ({', '.join(spaces.keys())}), {total} total occurrences. Promoting to global.",
-            "tags": ["auto-promoted", "cross-space", "workflow-pattern"],
+            "rationale": f"Sequence appears in {len(spaces)} spaces ({', '.join(spaces.keys())}), {total} total occurrences. Candidate requires scope and content review.",
+            "tags": ["review-candidate", "cross-space", "workflow-pattern"],
             "confidence": min(0.4 + (len(spaces) * 0.1) + (total * 0.02), 0.85),
             "spaces": list(spaces.keys()),
         })
@@ -231,7 +196,7 @@ def main():
     # Count observations per space
     space_counts = Counter()
     for obs in observations:
-        space = extract_space(obs.get("cwd", ""))
+        space = obs.get("workspace")
         if space:
             space_counts[space] += 1
 
@@ -264,19 +229,9 @@ def main():
         print("(dry-run mode — no engrams created)")
         return
 
-    # Create engrams
-    print("## Creating engrams...\n")
-    created = 0
-    for c in candidates:
-        ok, msg = create_engram_via_mcp(c)
-        status = "OK" if ok else "FAIL"
-        print(f"  [{status}] {c['statement'][:80]}")
-        if ok:
-            created += 1
-        elif msg:
-            print(f"         {msg}")
-
-    print(f"\nCreated {created}/{len(candidates)} engrams.")
+    # DIP-0019 §6/§7 requires human review of concrete candidates and
+    # cross-domain abstraction. Observation counts cannot authorize publication.
+    print("Review required: approve or edit these candidates through /daily-review or /learn; no engrams created.")
 
 
 if __name__ == "__main__":

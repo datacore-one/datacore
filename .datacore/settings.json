@@ -200,7 +200,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/plur_cli.py --timeout 1 hook-observe >/dev/null",
+            "command": "python3 ~/Data/.datacore/lib/hooks/plur_observe.py >/dev/null",
             "timeout": 3
           }
         ]
@@ -276,7 +276,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/plur_cli.py --timeout 1 hook-observe --post >/dev/null",
+            "command": "python3 ~/Data/.datacore/lib/hooks/plur_observe.py --post >/dev/null",
             "timeout": 3
           }
         ]

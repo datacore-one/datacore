@@ -118,6 +118,7 @@ jobs:
             .datacore/lib/tests/test_http_receivers.py \
             .datacore/lib/tests/test_http_boundary_siblings.py \
             .datacore/lib/tests/test_hook_privacy_state.py \
+            .datacore/lib/tests/test_observation_privacy.py \
             .datacore/lib/tests/test_plur_hook_boundaries.py \
             .datacore/lib/tests/test_plur_cli_selection.py \
             .datacore/lib/tests/test_public_download.py \

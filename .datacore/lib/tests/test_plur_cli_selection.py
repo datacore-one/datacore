@@ -118,7 +118,7 @@ def test_installer_failed_publication_preserves_all_settings(tmp_path, monkeypat
     root = tmp_path / 'installation'
     scripts = root / '.datacore/lib/hooks'
     scripts.mkdir(parents=True)
-    for name in ('plur_inject_wrapper.py', 'command_recall_inject.py'):
+    for name in ('plur_inject_wrapper.py', 'command_recall_inject.py', 'plur_observe.py'):
         (scripts / name).write_text('')
     settings = tmp_path / 'settings.json'
     original = '{"permissions":{"allow":["Read"]},"custom":"preserve"}\n'

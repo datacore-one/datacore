@@ -30,7 +30,7 @@ def detect_datacore_root():
     if default.exists():
         return str(default)
     # Fallback: parent of this script
-    return str(Path(__file__).resolve().parent.parent.parent)
+    return str(Path(__file__).resolve().parents[3])
 
 
 def build_required_hooks(datacore_root: str) -> dict:
@@ -106,6 +106,39 @@ def _find_matching_entry(existing_entries: list, new_entry: dict) -> dict | None
     return None
 
 
+def _observation_replacement(command, required):
+    """Migrate an existing known PLUR observation command without adding one."""
+    if not isinstance(command, str):
+        return None
+    try:
+        parts = shlex.split(command)
+        if not parts:
+            return None
+        if parts[0] == "npx":
+            parts = parts[1:]
+            if parts and parts[0] in {"-y", "--yes"}:
+                parts = parts[1:]
+            if not parts or not (parts[0] == "@plur-ai/cli" or parts[0].startswith("@plur-ai/cli@")):
+                return None
+        elif Path(parts[0]).name not in {"plur", "plur-hook"}:
+            return None
+        arguments = parts[1:]
+        if not arguments or arguments.pop(0) != "hook-observe":
+            return None
+        redirect = ""
+        if arguments[-1:] == [">/dev/null"]:
+            arguments.pop(); redirect = " >/dev/null"
+        elif arguments[-2:] == [">", "/dev/null"]:
+            arguments = arguments[:-2]; redirect = " >/dev/null"
+        if arguments not in ([], ["--post"], ["--failure"]):
+            return None
+        wrapper = required["UserPromptSubmit"][0]["hooks"][0]["command"]
+        installed_hook = Path(shlex.split(wrapper)[1]).with_name("plur_observe.py")
+        return shlex.join(["python3", str(installed_hook), *arguments]) + redirect
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+
+
 def merge_hooks(settings: dict, required: dict) -> tuple[dict, list[str], list[str]]:
     """Merge required hooks into settings, returning (updated, added_list, upgraded_list).
 
@@ -122,6 +155,13 @@ def merge_hooks(settings: dict, required: dict) -> tuple[dict, list[str], list[s
 
     added = []
     upgraded = []
+    for event, entries in settings["hooks"].items():
+        for existing_entry in entries:
+            for hook in existing_entry.get("hooks", []):
+                replacement = _observation_replacement(hook.get("command", ""), required)
+                if replacement is not None:
+                    hook["command"] = replacement
+                    upgraded.append(f"  {event} (private observation metadata)")
     # Retire only the exact legacy command this installer owned. Preserve
     # other commands, including those grouped into the same hook entry.
     if "PostCompact" in required:
@@ -168,6 +208,7 @@ def main():
         # ("wave 1 hygiene: one set of hooks") / #133 — no longer required.
         "plur_inject_wrapper.py",
         "command_recall_inject.py",  # DIP-0029
+        "plur_observe.py",
     ]
     missing = [s for s in required_scripts if not (hooks_dir / s).exists()]
     if missing:
