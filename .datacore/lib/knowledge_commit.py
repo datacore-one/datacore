@@ -204,7 +204,8 @@ def _read_at(repo: Path, ref: str, rel: str) -> bytes | None:
     return result.stdout
 
 
-def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, push: bool) -> str:
+def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, push: bool,
+                       *, append_only: bool = False) -> str:
     """Reserve the target checkout; validate a detached commit before advancing it."""
     base = _git(repo, 'rev-parse', '--verify', f'refs/heads/{branch}^{{commit}}')
     source = _git(repo, 'rev-parse', '--verify', 'HEAD^{commit}')
@@ -238,7 +239,11 @@ def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, 
             if normalized.returncode:
                 raise GitError('cannot verify captured publication blob')
             original, destination = _read_at(repo, source, rel), _read_at(repo, base, rel)
-            preserving_append = (destination is not None and Path(rel).suffix in {'.md', '.org'}
+            if (append_only and destination is not None and normalized.stdout != destination
+                    and (not normalized.stdout.startswith(destination)
+                         or (destination and not destination.endswith(b'\n')))):
+                raise GitError('append-only publication would replace existing bytes; both versions retained')
+            preserving_append = (destination is not None and (append_only or Path(rel).suffix in {'.md', '.org'})
                                  and destination.endswith(b'\n') and normalized.stdout.startswith(destination))
             if original != destination and normalized.stdout != destination and not preserving_append:
                 raise GitError(f'{rel}: destination has independent changes; reconcile both versions before publication')
@@ -301,13 +306,17 @@ def _push_converging(repo: Path, branch: str, sha: str) -> None:
 
 
 def commit_to_branch(repo: Path, branch: str, paths, message: str,
-                     push: bool = True) -> str:
+                     push: bool = True, *, append_only: bool = False) -> str:
     """Commit `paths` onto an explicit branch.
 
     When HEAD is elsewhere, only private worktrees are checked out and the
     shared HEAD/index/files stay unchanged. When HEAD is on the target, the
     existing pathspec commit behavior applies. This helper does not establish
     process isolation or grant execution ownership.
+
+    append_only requires an isolated destination and preserves its complete
+    newline-terminated byte prefix, including when source HEAD already contains
+    that version. It refuses truncation or replacement of published log entries.
 
     Returns the new commit sha, or '' if there was nothing to do.
     """
@@ -332,6 +341,8 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
         return ''
 
     head = current_branch(repo)
+    if append_only and head == branch:
+        raise GitError('append-only publication requires an isolated destination branch')
 
     # If we are already standing on the target, there is nothing clever to do —
     # and plumbing would be actively WRONG here: moving the ref under a checked
@@ -361,7 +372,7 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
         return sha
 
     try:
-        return _commit_off_branch(repo, branch, paths, message, push)
+        return _commit_off_branch(repo, branch, paths, message, push, append_only=append_only)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         if isinstance(exc, GitError):
             raise

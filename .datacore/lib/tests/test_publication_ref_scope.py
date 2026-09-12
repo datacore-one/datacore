@@ -162,6 +162,24 @@ def test_missing_submodule_commit_is_not_implicitly_published(tmp_path):
     assert git(child_origin, 'rev-parse', 'main') == old_child
 
 
+def test_append_only_mode_preserves_the_base_even_when_source_head_matches_it(tmp_path):
+    repo, origin = fixture(tmp_path)
+    log = repo / 'events.jsonl'
+    complete = '{"seq":1}\n{"seq":2}\n'
+    log.write_text(complete)
+    git(repo, 'add', '--', 'events.jsonl')
+    git(repo, 'commit', '-qm', 'complete log')
+    git(repo, 'branch', 'candidate')
+    before = git(repo, 'rev-parse', 'candidate')
+    log.write_text('{"seq":1}\n')
+    with pytest.raises(knowledge_commit.GitError, match='append-only'):
+        knowledge_commit.commit_to_branch(repo, 'candidate', ['events.jsonl'], 'stale replacement',
+                                          push=False, append_only=True)
+    assert git(repo, 'rev-parse', 'candidate') == before
+    assert git(repo, 'show', 'candidate:events.jsonl') == complete.strip()
+    assert log.read_text() == '{"seq":1}\n'
+
+
 @pytest.mark.parametrize('commit,destination,expected', [
     ('HEAD', 'refs/heads/main', None),
     ('0' * 40, 'refs/heads/main', None),
