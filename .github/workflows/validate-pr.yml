@@ -141,6 +141,7 @@ jobs:
             .datacore/lib/tests/test_jobs_run_contract.py \
             .datacore/tests/test_principal_email_hashes.py \
             .datacore/lib/tests/test_artifact_verification.py \
+            .datacore/lib/tests/test_ledger_execution_admission.py \
             .datacore/lib/tests/test_agent_workspace.py \
             .datacore/lib/tests/test_catalog_identity.py \
             .datacore/lib/tests/test_sync_safety.py \

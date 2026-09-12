@@ -71,6 +71,9 @@ def proposals(artifact: dict) -> list[dict]:
             item: dict = {"text": entry["task"].strip()}
             if entry.get("effects"):
                 item["effects"] = entry["effects"]
+            for field in ('assignee', 'check', 'execution_installation'):
+                if field in entry:
+                    item[field] = entry[field]
             out.append(item)
     return out
 
