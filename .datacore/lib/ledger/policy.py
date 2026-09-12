@@ -145,10 +145,14 @@ def load_policy(path: Path | None = None) -> Policy:
     top-level keys are ignored (forward compatibility).
     """
     path = Path(path) if path is not None else DEFAULT_POLICY_PATH
-    if not path.exists():
+    if not path.exists() and not path.is_symlink():
         return Policy(approver=DEFAULT_APPROVER, cosign_effects=DEFAULT_COSIGN_EFFECTS)
 
-    data = yaml.safe_load(path.read_text())
+    from yaml_safety import UniqueStringKeyLoader
+    try:
+        data = yaml.load(path.read_text(encoding='utf-8'), Loader=UniqueStringKeyLoader)
+    except (OSError, UnicodeError, ValueError, yaml.YAMLError):
+        raise PolicyError('approvals policy is unreadable or ambiguous') from None
 
     if not isinstance(data, dict):
         raise PolicyError(
@@ -159,14 +163,14 @@ def load_policy(path: Path | None = None) -> Policy:
 
     if "version" not in data:
         errors.append(f"{path}: missing required 'version' field (must be 1)")
-    elif data["version"] != 1:
-        errors.append(f"{path}: 'version' must be 1 (got {data['version']!r})")
+    elif type(data["version"]) is not int or data["version"] != 1:
+        errors.append(f"{path}: 'version' must be integer 1")
 
     approver = data.get("approver")
     if "approver" not in data:
         errors.append(f"{path}: missing required 'approver' field")
     elif not isinstance(approver, str) or not approver:
-        errors.append(f"{path}: 'approver' must be a non-empty string (got {approver!r})")
+        errors.append(f"{path}: 'approver' must be a non-empty string")
 
     raw_effects = data.get("cosign_effects")
     cosign_effects: frozenset[str] = frozenset()
@@ -176,7 +180,7 @@ def load_policy(path: Path | None = None) -> Policy:
         isinstance(e, str) and e for e in raw_effects
     ):
         errors.append(
-            f"{path}: 'cosign_effects' must be a list of non-empty strings (got {raw_effects!r})"
+            f"{path}: 'cosign_effects' must be a list of non-empty strings"
         )
     else:
         cosign_effects = frozenset(raw_effects)
@@ -188,7 +192,7 @@ def load_policy(path: Path | None = None) -> Policy:
             isinstance(e, str) and e for e in raw_known
         ):
             errors.append(
-                f"{path}: 'known_effects' must be a list of non-empty strings (got {raw_known!r})"
+                f"{path}: 'known_effects' must be a list of non-empty strings"
             )
         else:
             known_effects = frozenset(raw_known)
@@ -197,30 +201,29 @@ def load_policy(path: Path | None = None) -> Policy:
     if "principals" in data:
         raw_p = data.get("principals")
         if not isinstance(raw_p, dict):
-            errors.append(f"{path}: 'principals' must be a mapping of name -> limits (got {raw_p!r})")
+            errors.append(f"{path}: 'principals' must be a mapping of name -> limits")
         else:
             principals = {}
             for name, lim in raw_p.items():
-                lim = lim or {}
                 if not isinstance(lim, dict):
-                    errors.append(f"{path}: principals.{name} must be a mapping (got {lim!r})"); continue
+                    errors.append(f"{path}: each principals entry must be a mapping"); continue
                 for k in ("never_effects", "cosign_effects", "may_delegate_to"):
                     v = lim.get(k)
                     if v is not None and not (isinstance(v, list) and all(isinstance(e, str) and e for e in v)):
-                        errors.append(f"{path}: principals.{name}.{k} must be a list of non-empty strings (got {v!r})")
+                        errors.append(f"{path}: principals entry '{k}' must be a list of non-empty strings")
                 for k in ("max_creates_per_day", "max_hops"):
                     v = lim.get(k)
-                    if v is not None and not (isinstance(v, int) and v >= 0):
-                        errors.append(f"{path}: principals.{name}.{k} must be a non-negative integer (got {v!r})")
+                    if v is not None and not (type(v) is int and v >= 0):
+                        errors.append(f"{path}: principals entry '{k}' must be a non-negative integer")
                 unknown = sorted(set(lim) - {"never_effects", "cosign_effects", "may_delegate_to", "max_creates_per_day", "max_hops"})
                 if unknown:
-                    errors.append(f"{path}: principals.{name} has unknown key(s): {', '.join(unknown)}")
+                    errors.append(f"{path}: principals entry has unknown key(s)")
                 principals[str(name)] = dict(lim)
     arbitration: tuple[str, ...] | None = None
     if "arbitration" in data:
         raw_a = data.get("arbitration")
         if not (isinstance(raw_a, list) and all(isinstance(e, str) and e for e in raw_a)):
-            errors.append(f"{path}: 'arbitration' must be a list of non-empty principal names (got {raw_a!r})")
+            errors.append(f"{path}: 'arbitration' must be a list of non-empty principal names")
         else:
             arbitration = tuple(raw_a)
     if errors:

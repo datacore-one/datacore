@@ -129,9 +129,30 @@ def principals(path: Path | None = None) -> dict:
     path = path or PRINCIPALS  # resolved at call time so a test can point it elsewhere
     try:
         import yaml
-        return (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("principals") or {}
-    except Exception:  # noqa: BLE001
+        from yaml_safety import UniqueStringKeyLoader
+        loaded = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueStringKeyLoader)
+        if not isinstance(loaded, dict) or not isinstance(loaded.get('principals'), dict):
+            raise ValueError('principal registry must contain a principals mapping')
+        entries = loaded['principals']
+        owners = {}
+        for name, entry in entries.items():
+            if not name or name != base_writer(name) or not isinstance(entry, dict):
+                raise ValueError('invalid principal identity')
+            writers = entry.get('writes_as', [])
+            if (not isinstance(writers, list)
+                    or any(not isinstance(w, str) or not w or w.strip() != w for w in writers)):
+                raise ValueError('invalid principal writer aliases')
+            for writer in {name, *(base_writer(w) for w in writers)}:
+                if writer in owners and owners[writer] != name:
+                    raise ValueError('writer belongs to multiple principals')
+                owners[writer] = name
+        return entries
+    except FileNotFoundError:
+        if Path(path).is_symlink():
+            raise ValueError('principal registry is unavailable') from None
         return {}
+    except (OSError, UnicodeError, ValueError, yaml.YAMLError):
+        raise ValueError('principal registry is invalid or ambiguous') from None
 
 
 _RUN_SUFFIX = re.compile(r"-run-\d{4}-\d{2}-\d{2}$")
@@ -154,7 +175,7 @@ def principal_of(actor: str, path: Path | None = None) -> tuple[str | None, dict
     if a in ps:
         return a, ps[a]
     for name, p in ps.items():
-        if a in [str(w).lower() for w in (p.get("writes_as") or [])]:
+        if a in [base_writer(w) for w in (p.get("writes_as") or [])]:
             return name, p
     return None, {}
 

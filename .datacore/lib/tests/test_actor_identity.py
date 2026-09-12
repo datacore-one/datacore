@@ -51,8 +51,24 @@ def test_principal_binds_writer_logs_to_emails(tmp_path):
     assert AI.allowed_emails("unknown", p) == set()
 
 
-def test_the_real_registry_declares_every_known_writer():
-    ps = AI.principals()
+def test_explicit_registry_declares_every_expected_writer(tmp_path):
+    registry = tmp_path / 'principals.yaml'
+    registry.write_text('principals:\n'
+                        '  human: {writes_as: [mac, data]}\n'
+                        '  agent: {writes_as: [winston, miles, nightshift, tris]}\n'
+                        '  migration: {writes_as: [genesis, bridge]}\n')
+    ps = AI.principals(registry)
     bound = {w for p in ps.values() for w in (p.get("writes_as") or [])} | set(ps)
     for writer in ("mac", "winston", "miles", "nightshift", "tris", "data", "genesis", "bridge"):
         assert writer in bound, writer
+        assert AI.principal_of(writer, registry)[0] in ps
+    assert AI.principal_of('unregistered-writer', registry) == (None, {})
+
+
+def test_bundled_registry_template_has_unambiguous_identity():
+    registry = LIB.parent / 'registry/principals.yaml.example'
+    ps = AI.principals(registry)
+    assert set(ps) == {'owner', 'teammate', 'assistant'}
+    for name, entry in ps.items():
+        for writer in [name, *entry.get('writes_as', [])]:
+            assert AI.principal_of(writer, registry)[0] == name

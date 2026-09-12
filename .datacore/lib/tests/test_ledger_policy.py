@@ -109,6 +109,50 @@ def test_load_policy_reports_multiple_problems_together(tmp_path):
     assert "cosign_effects" in msg
 
 
+@pytest.mark.parametrize('extra', [
+    'cosign_effects: []\n',
+    'principals:\n  worker:\n    never_effects: [payment]\n    never_effects: []\n',
+    'true: misleading-key\n',
+])
+def test_policy_refuses_ambiguous_configuration(tmp_path, extra):
+    path = tmp_path / 'policy.yaml'
+    path.write_text('version: 1\napprover: human\ncosign_effects: [payment]\n' + extra)
+    with pytest.raises(PolicyError):
+        load_policy(path)
+
+
+@pytest.mark.parametrize('value', ['false', '0', '[]', 'null'])
+def test_policy_malformed_principal_limits_cannot_become_empty_limits(tmp_path, value):
+    path = tmp_path / 'policy.yaml'
+    path.write_text('version: 1\napprover: human\ncosign_effects: [payment]\n'
+                    'principals:\n  worker: ' + value + '\n')
+    with pytest.raises(PolicyError):
+        load_policy(path)
+
+
+@pytest.mark.parametrize('field', ['version', 'max_hops', 'max_creates_per_day'])
+def test_policy_boolean_cannot_become_an_integer_requirement(tmp_path, field):
+    path = tmp_path / 'policy.yaml'
+    text = 'version: 1\napprover: human\ncosign_effects: [payment]\n'
+    if field == 'version':
+        text = text.replace('version: 1', 'version: true')
+    else:
+        text += 'principals:\n  worker:\n    ' + field + ': true\n'
+    path.write_text(text)
+    with pytest.raises(PolicyError):
+        load_policy(path)
+
+
+def test_policy_diagnostic_does_not_echo_rejected_source_values(tmp_path):
+    path = tmp_path / 'policy.yaml'
+    secret = 'fixture-sensitive-value'
+    path.write_text('version: 1\napprover: human\ncosign_effects: ' + secret + '\n')
+    with pytest.raises(PolicyError) as error:
+        load_policy(path)
+    assert secret not in str(error.value)
+    assert 'cosign_effects' in str(error.value)
+
+
 # --- known_effects (closed effects vocabulary, final-review wave) ---------
 
 

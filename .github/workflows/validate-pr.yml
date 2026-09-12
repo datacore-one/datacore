@@ -132,6 +132,8 @@ jobs:
             .datacore/lib/tests/test_stream_tail_preservation.py \
             .datacore/lib/tests/test_ledger_keys.py \
             .datacore/lib/tests/test_policy_adversarial.py \
+            .datacore/lib/tests/test_ledger_policy.py \
+            .datacore/lib/tests/test_actor_identity.py \
             .datacore/lib/tests/test_seal_preservation.py \
             .datacore/lib/tests/test_executor_isolation.py \
             .datacore/lib/tests/test_process_lifecycle.py \

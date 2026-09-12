@@ -12,6 +12,55 @@ from ledger.log import EventLog, read_events
 from ledger.policy import Policy, PolicyError, guarded_append
 
 
+def test_tool_classifier_refuses_a_duplicate_effect_rule(tmp_path):
+    from tool_policy import load_effects
+    path = tmp_path / 'effects.yaml'
+    path.write_text('effects:\n  payment: {tools: [Bash], patterns: [pay]}\n'
+                    '  payment: {}\n')
+    with pytest.raises(ValueError):
+        load_effects(path)
+
+
+def test_tool_policy_parse_failure_does_not_leak_source_through_exception_chain(tmp_path):
+    import traceback
+    from tool_policy import load_effects
+    path = tmp_path / 'effects.yaml'
+    path.write_text('effects: [fixture-sensitive-parser-value\n')
+    with pytest.raises(ValueError) as error:
+        load_effects(path)
+    assert 'fixture-sensitive-parser-value' not in ''.join(traceback.format_exception(error.value))
+
+
+@pytest.mark.parametrize('duplicate_key', [True, False])
+def test_principal_lookup_refuses_ambiguous_writer_authority(tmp_path, duplicate_key):
+    path = tmp_path / 'principals.yaml'
+    text = 'principals:\n'
+    if duplicate_key:
+        text += '  powerful: {writes_as: [other-writer]}\n'
+    text += ('  restricted: {writes_as: [restricted-writer]}\n'
+             '  powerful: {writes_as: [restricted-writer]}\n')
+    path.write_text(text)
+    with pytest.raises(ValueError):
+        actor_identity.principal_of('restricted-writer', path)
+
+
+@pytest.mark.parametrize('missing', [False, True])
+def test_failed_identity_lookup_cannot_select_a_fallback_execution_policy(tmp_path, monkeypatch, missing):
+    import tool_policy
+    registry = tmp_path / 'principals.yaml'
+    if not missing:
+        registry.write_text('principals: [invalid]\n')
+    monkeypatch.setattr(actor_identity, 'PRINCIPALS', registry)
+    monkeypatch.setenv('DATACORE_ACTOR', 'worker')
+    policy = tmp_path / 'policy.yaml'
+    policy.write_text('version: 1\napprover: human\ncosign_effects: []\n'
+                      'principals:\n  unknown: {}\n  worker: {}\n')
+    decision = tool_policy.evaluate_hook({'tool_name': 'Read', 'tool_input': {'path': 'fixture'}},
+                                         env={}, record=False, effects={}, policy_path=policy)
+    assert decision is not None
+    assert decision['hookSpecificOutput']['permissionDecision'] == 'deny'
+
+
 @pytest.fixture
 def policy(tmp_path, monkeypatch):
     registry = tmp_path / "principals.yaml"
