@@ -1,0 +1,30 @@
+{
+  "format_version": 1,
+  "upstream_version": "0.19.0",
+  "version": "0.19.0+datacore.1",
+  "source_url": "https://files.pythonhosted.org/packages/c1/2c/5eca471374c1b48555a8f0b988c06b19a93ae33a6c0e67845e47fc3a5628/hermes_agent-0.19.0.tar.gz",
+  "source_sha256": "ac986bede64a2785436676c0ea084ec586574f8cb00a9d047e095b435d3e21c0",
+  "archive_root": "hermes_agent-0.19.0",
+  "patch_sha256": "ebd9eb7cefa3530a0bfb0a1d4ae59fced4bb56c96d4fb81a267af928d5070a6c",
+  "lock_sha256": "23140ebed3795fcd0b782fbd4a0d5ca770a9f2b8c5b8b09333948a1614c00731",
+  "requirements_sha256": {
+    "datacore-telegram": "738a8a4574b53f358de03a312bf6ab35bbf55a21bfff3533b2aadfb62d948688",
+    "datacore-telegram-tts": "9412a9033eba850187ca87d2db7a3d4ab3fea3015e3de7379eb99832e829d295",
+    "datacore-telegram-verification": "8d900aebd4688b1a06228bbc25f72252a611ee8c807a96259dcf70b7b439c88a",
+    "datacore-telegram-tts-verification": "7783f4bb6937c7ea207b3e75579949c60ad4e1370645ec6a3ae91e46f5a3dbf2"
+  },
+  "patched_files_sha256": {
+    "agent/conversation_compression.py": "ebd033291cafc1359b1ad309fd315149291a231435720490910635c95dcaf367",
+    "agent/todo_snapshot.py": "67ead6fa309cb668848e802d6ad89446fa2c3475275ec099a87e5f565573f4a2",
+    "pyproject.toml": "1019beaf257a8101b9f259e48cd1478d0bbc3759f1bbb7165c8b10fadb340713",
+    "run_agent.py": "a990fd8d35986b66457b1905e18b8f846d06067a63136f2c315877fd138d298e",
+    "tests/test_datacore_compression_provenance.py": "205788d2625aff5f5a31d346347f87550c8c7b2d720390730297c4f8beddaced",
+    "tools/lazy_deps.py": "d9c6c2b98c9d8f6d6d95b9073cda9953217c31c8e958638f3c1dbdbb63691550",
+    "tools/todo_tool.py": "bc900d35f0816bc29ff36b890200abf0bcbdd8190f37a3da29c3f202ba2f9a76"
+  },
+  "qualified_runtime": {
+    "os": "Linux",
+    "architecture": "x86_64",
+    "python": "3.12.3"
+  }
+}

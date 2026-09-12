@@ -19,6 +19,18 @@ def rename_noreplace(source, destination):
         raise ValueError('cannot archive a symbolic link')
     if not source.is_file():
         raise ValueError('archive source must be a regular file')
+    _rename_noreplace(source, destination)
+
+
+def rename_directory_noreplace(source, destination):
+    """Publish a prepared directory without replacing a concurrent result."""
+    source, destination = Path(source), Path(destination)
+    if source.is_symlink() or not source.is_dir():
+        raise ValueError('prepared source must be a directory, not a link')
+    _rename_noreplace(source, destination)
+
+
+def _rename_noreplace(source: Path, destination: Path):
     destination.parent.mkdir(parents=True, exist_ok=True)
     if os.name == 'nt':
         os.rename(source, destination)  # Windows rejects existing destinations.
