@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "node": {
+    "version": "22.23.2",
+    "linux_x64_url": "https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-x64.tar.xz",
+    "linux_x64_archive_sha256": "d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307",
+    "linux_x64_binary_sha256": "3517c2df0b2f8cd7f422b4b8450ef81c6889f08eb03e281d6de9079b15e6a327"
+  },
+  "datacore_mcp": {
+    "repository": "https://github.com/datacore-one/datacore-mcp",
+    "commit": "381b43d4c742d04a070a6157ec2bca110f047142"
+  },
+  "required_packages": [
+    "@plur-ai/mcp",
+    "@plur-ai/cli",
+    "@plur-ai/core",
+    "@huggingface/transformers",
+    "onnxruntime-node",
+    "better-sqlite3",
+    "sharp"
+  ],
+  "files": {
+    "plur.package.json": "64c73153fcb06121298287a54b734c3df894e8cd1c2f539a4e0db5a765754d27",
+    "plur.package-lock.json": "870d4595010bdeb5db0d38b37da3274431e9629276dbe18526d0776d2531c996",
+    "verify-plur.mjs": "2d53e2ccff04153625f156e20bd86caa13609e0f8bb9c71c80b623f652705295",
+    "deny-archive.cjs": "6949d223d0070383de2001218c06d24ac1e7f924ecc10fb86d1f4eebc9c48fe6"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "datacore-plur-runtime",
+  "version": "0.19.4-datacore.1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@plur-ai/mcp": "0.19.4",
+    "@plur-ai/cli": "0.19.4",
+    "@plur-ai/core": "0.19.4"
+  },
+  "overrides": {
+    "js-yaml": "4.3.2",
+    "sharp": "0.35.4",
+    "adm-zip": "0.6.0",
+    "hono": "4.13.7",
+    "fast-uri": "3.1.7",
+    "qs": "6.16.0"
+  }
+}
