@@ -184,6 +184,60 @@ def test_unambiguous_yaml_alias_remains_supported(tmp_path):
 
 # ── discovery ────────────────────────────────────────────────────────────────
 
+@pytest.mark.parametrize('location', ['', 'nested/invalid'])
+@pytest.mark.parametrize('content', [b'space: [', b'space: [\xff', b'[invalid]',
+                                    b'space: {name: first, name: second}',
+                                    b'space: {name: true}'])
+def test_identity_sensitive_discovery_refuses_invalid_markers(tmp_path, location, content):
+    good = make_space(tmp_path, 'good', 'good')
+    marker = tmp_path / location / '.datacore/config.yaml'
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_bytes(content)
+    assert [space.path for space in discover_spaces(tmp_path)] == [good]
+    with pytest.raises(ValueError, match='discovery refused'):
+        discover_spaces(tmp_path, reject_invalid=True)
+    assert marker.read_bytes() == content
+
+
+@pytest.mark.parametrize('identity', ['{}', '{name: null}', '{name: ""}',
+                                     '{name: "datacore "}', '{name: " "}'])
+def test_sensitive_discovery_never_infers_an_incomplete_marked_identity(tmp_path, identity):
+    marker = tmp_path / '2-datacore/.datacore/config.yaml'
+    marker.parent.mkdir(parents=True)
+    content = 'space: ' + identity + '\n'
+    marker.write_text(content)
+    # Diagnostic discovery remains compatible with older, incomplete markers.
+    assert len(discover_spaces(tmp_path)) == 1
+    with pytest.raises(ValueError, match='identity invalid; discovery refused'):
+        discover_spaces(tmp_path, reject_invalid=True)
+    assert marker.read_text() == content
+
+
+def test_sensitive_discovery_preserves_unmarked_legacy_and_global_configuration(tmp_path):
+    (tmp_path / '.datacore').mkdir()
+    (tmp_path / '.datacore/config.yaml').write_text('nightshift: {require_manifest: true}\n')
+    legacy = tmp_path / '1-datacore'
+    (legacy / 'org').mkdir(parents=True)
+    found = discover_spaces(tmp_path, reject_invalid=True)
+    assert [(space.path, space.name, space.marked) for space in found] == [
+        (legacy, 'datacore', False)]
+
+
+def test_sensitive_discovery_refuses_incomplete_directory_reads(tmp_path, monkeypatch):
+    source = make_space(tmp_path, 'nested/authority', 'datacore')
+    original = Path.iterdir
+
+    def interrupted(path):
+        if path == source.parent:
+            raise OSError('fixture directory read failure')
+        return original(path)
+
+    monkeypatch.setattr(Path, 'iterdir', interrupted)
+    assert discover_spaces(tmp_path) == []
+    with pytest.raises(ValueError, match='discovery refused'):
+        discover_spaces(tmp_path, reject_invalid=True)
+
+
 def test_finds_marked_spaces(tmp_path):
     make_space(tmp_path, "1-alpha", "alpha")
     make_space(tmp_path, "2-beta", "beta", type_="personal")

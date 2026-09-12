@@ -161,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
             ap.error('space must be an existing directory within the selected root')
         spaces = [selected]
     else:
-        spaces = [space.path for space in discover_spaces(root, reject_aliases=True)
+        spaces = [space.path for space in discover_spaces(root, reject_aliases=True, reject_invalid=True)
                   if (space.path / '.datacore/events').is_dir()]
     refused = 0
     results = []

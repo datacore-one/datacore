@@ -116,16 +116,18 @@ def _configuration(path: Path) -> dict | None:
     return loaded
 
 
-def read_marker(path: Path) -> dict | None:
+def read_marker(path: Path, *, strict: bool = False) -> dict | None:
     """The ``space:`` block from ``path``'s marker, or None if it is not a space.
 
-    A malformed or unreadable marker is not a space, and says so in the log
-    rather than raising — one bad file must not take out discovery for every
-    other space.
+    Diagnostic discovery logs and excludes malformed or unreadable markers.
+    Strict callers instead refuse discovery, so an unreadable identity cannot
+    silently remove existing work from an automated admission decision.
     """
     try:
         loaded = _configuration(path)
     except (yaml.YAMLError, OSError, UnicodeError, ValueError):
+        if strict:
+            raise ValueError('space marker unreadable; discovery refused') from None
         # YAML diagnostics include source lines, which may hold credentials or
         # other private configuration. Report the file, never parser excerpts.
         log.warning("space marker unreadable, skipping: %s", path / MARKER)
@@ -135,16 +137,23 @@ def read_marker(path: Path) -> dict | None:
     block = loaded.get("space")
     if not isinstance(block, dict):
         return None
+    if strict:
+        name = block.get('name')
+        if not isinstance(name, str) or not name or name.strip() != name:
+            raise ValueError('space identity invalid; discovery refused')
     return block
 
 
-def _walk(root: Path, depth: int = 1, *, reject_aliases: bool = False):
+def _walk(root: Path, depth: int = 1, *, reject_aliases: bool = False,
+          reject_invalid: bool = False):
     """Directories worth testing for a marker, breadth-first, depth-bounded."""
     if depth > MAX_DEPTH:
         return
     try:
         entries = sorted(p for p in root.iterdir() if p.is_dir())
     except (PermissionError, OSError):
+        if reject_invalid:
+            raise ValueError('space traversal incomplete; discovery refused') from None
         return
     for entry in entries:
         if entry.name in SKIP_DIRS:
@@ -154,7 +163,8 @@ def _walk(root: Path, depth: int = 1, *, reject_aliases: bool = False):
                 raise ValueError('space alias crosses its directory boundary')
             continue
         yield entry
-        yield from _walk(entry, depth + 1, reject_aliases=reject_aliases)
+        yield from _walk(entry, depth + 1, reject_aliases=reject_aliases,
+                         reject_invalid=reject_invalid)
 
 
 def _looks_like_space(path: Path) -> bool:
@@ -242,6 +252,7 @@ def discover_spaces(
     types: set[str] | None = None,
     include_legacy: bool = True,
     reject_aliases: bool = False,
+    reject_invalid: bool = False,
 ) -> list[Space]:
     """Every space under ``root``, marker-discovered (and optionally legacy).
 
@@ -257,6 +268,10 @@ def discover_spaces(
         reject_aliases: automated writers may refuse a directory symlink
             that looks like a space, instead of silently excluding its work.
             Code/dependency symlinks without space artifacts stay excluded.
+        reject_invalid: refuse incomplete traversal, malformed configuration
+            or incomplete marked identities instead of treating an
+            undiscoverable space as absent. Identity-sensitive admission and
+            automated writers must not expand work on that basis.
 
     Returns:
         Spaces sorted by path. Marker-discovered entries win over legacy ones
@@ -265,12 +280,12 @@ def discover_spaces(
     root = root or data_root()
     found: dict[Path, Space] = {}
 
-    block = read_marker(root)
+    block = read_marker(root, strict=reject_invalid)
     if block is not None:
         found[root] = _from_marker(root, block)
 
-    for candidate in _walk(root, reject_aliases=reject_aliases):
-        block = read_marker(candidate)
+    for candidate in _walk(root, reject_aliases=reject_aliases, reject_invalid=reject_invalid):
+        block = read_marker(candidate, strict=reject_invalid)
         if block is not None:
             found[candidate] = _from_marker(candidate, block)
 
