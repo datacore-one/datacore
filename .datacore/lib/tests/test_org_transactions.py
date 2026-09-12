@@ -116,6 +116,71 @@ def test_recovery_never_overwrites_an_external_edit(documents):
     assert 'original body' in tx.journal_path().read_text()
 
 
+@pytest.mark.parametrize('replacement', ['edit', 'symlink', 'new-file'])
+def test_watched_but_unwritten_source_does_not_block_owned_rollback(tmp_path, monkeypatch, replacement):
+    monkeypatch.setenv('DATACORE_STATE', str(tmp_path / 'state'))
+    source, output = tmp_path / 'source.md', tmp_path / 'output.md'
+    neighbor = tmp_path / 'neighbor.md'
+    neighbor.write_text('Independent retained content\n')
+    if replacement != 'new-file':
+        source.write_text('Original input\n')
+    output.write_text('Previous output\n')
+
+    @tx.serialized
+    def attempt():
+        tx.watch_file(source)
+        tx.write_org_text(output, 'Unacknowledged output\n')
+        if replacement == 'symlink':
+            source.unlink()
+            source.symlink_to(neighbor)
+        else:
+            source.write_text('Independent retained content\n')
+        raise ValueError('source changed before acknowledgement')
+
+    with pytest.raises(ValueError, match='source changed'):
+        attempt()
+    assert output.read_text() == 'Previous output\n'
+    assert source.read_text() == neighbor.read_text() == 'Independent retained content\n'
+    assert source.is_symlink() is (replacement == 'symlink')
+    assert not tx.journal_path().exists()
+
+
+def test_change_receipts_exclude_reads_noops_and_reverted_writes(tmp_path, monkeypatch):
+    monkeypatch.setenv('DATACORE_STATE', str(tmp_path / 'state'))
+    paths = {name: tmp_path / (name + '.md') for name in ('read', 'noop', 'revert', 'write', 'move')}
+    for path in paths.values():
+        path.write_text('Original\n')
+    destination = tmp_path / 'archive.md'
+
+    @tx.serialized
+    def mutate():
+        tx.watch_file(paths['read'])
+        tx.write_org_text(paths['noop'], 'Original\n')
+        tx.write_org_text(paths['revert'], 'Intermediate\n')
+        tx.write_org_text(paths['revert'], 'Original\n')
+        tx.write_org_text(paths['write'], 'Acknowledged\n')
+        tx.move_file(paths['move'], destination)
+        assert tx.changed_files() == {str(paths['write']): tx.digest('Acknowledged\n'),
+                                      str(paths['move']): None,
+                                      str(destination): tx.digest('Original\n')}
+    mutate()
+
+
+def test_historical_recovery_journal_does_not_own_unwritten_inputs(tmp_path, monkeypatch):
+    monkeypatch.setenv('DATACORE_STATE', str(tmp_path / 'state'))
+    source, output = tmp_path / 'source.md', tmp_path / 'output.md'
+    source.write_text('New independent input\n')
+    output.write_text('Interrupted output\n')
+    tx.atomic_write_json(tx.journal_path(), {'version': 1, 'files': {
+        str(source): {'before': 'Old input\n', 'versions': [tx.digest('Old input\n')]},
+        str(output): {'before': 'Old output\n', 'versions': [tx.digest('Old output\n'),
+                                                            tx.digest('Interrupted output\n')]},
+    }})
+    tx.recover(tx.journal_path())
+    assert source.read_text() == 'New independent input\n'
+    assert output.read_text() == 'Old output\n'
+
+
 def test_concurrent_moves_keep_both_tasks_exactly_once(documents):
     source, target = documents
     with ThreadPoolExecutor(max_workers=2) as pool:

@@ -55,6 +55,21 @@ def delete_file(path):
     transaction.delete(Path(path).absolute())
 
 
+def changed_files():
+    """Return paths actually changed by this transaction and their final hashes.
+
+    Reads and no-op writes confer no output ownership. Callers may record a
+    publication intent inside this transaction, so it survives exactly when
+    the corresponding data changes survive. None identifies a removed source;
+    publication still requires an explicit preserved-move receipt for it.
+    """
+    transaction = _current.get()
+    if transaction is None:
+        raise RuntimeError('change receipts require a serialized transaction')
+    return {name: entry['current'] for name, entry in transaction.files.items()
+            if digest(entry['before']) != entry['current']}
+
+
 def journal_path():
     state = Path(os.environ.get("DATACORE_STATE", Path.home() / ".datacore" / "state"))
     return state / "org-transaction.json"
@@ -83,6 +98,7 @@ def recover(path):
     if not isinstance(document, dict) or document.get("version") != 1 or not isinstance(document.get("files"), dict):
         raise RecoveryRequired("invalid Org transaction journal; preserve it for recovery")
     files = document["files"]
+    owned = {}
     # Check EVERY file before restoring any; a later conflict must not leave
     # an otherwise untouched transaction half rolled back.
     for name, entry in files.items():
@@ -93,9 +109,15 @@ def recover(path):
                 or (entry["before"] is not None and not isinstance(entry["before"], str))
                 or digest(entry["before"]) not in entry["versions"]):
             raise RecoveryRequired("invalid Org transaction backup")
+        if len(entry['versions']) == 1:
+            # Historical journals included every watched input. No mutation
+            # was attempted for this entry: the transaction cannot restore it
+            # or require it to stay unchanged before rolling back its outputs.
+            continue
+        owned[name] = entry
         if target.is_symlink() or digest(read_text(target)) not in entry["versions"]:
             raise RecoveryRequired("Org file changed outside its transaction; journal retained for manual recovery")
-    for name, entry in files.items():
+    for name, entry in owned.items():
         target = Path(name)
         before = entry["before"]
         if before is None:
@@ -115,6 +137,11 @@ class Transaction:
         self.failed = False
         self.started = False
 
+    def persist(self):
+        """Journal intended mutations; a watched input is not rollback-owned."""
+        owned = {name: entry for name, entry in self.files.items() if len(entry['versions']) > 1}
+        atomic_write_json(self.path, {'version': 1, 'files': owned})
+
     def watch(self, path):
         path = Path(path).resolve()
         name = str(path)
@@ -131,7 +158,7 @@ class Transaction:
             entry["versions"].append(digest(content))
             # Durable journal BEFORE the file can change, including on a
             # write that replaces successfully but then fails directory fsync.
-            atomic_write_json(self.path, {"version": 1, "files": self.files})
+            self.persist()
             self.started = True
             atomic_write_text(path, content)
             entry["current"] = digest(content)
@@ -156,7 +183,7 @@ class Transaction:
         try:
             src["versions"].append(None)
             dst["versions"].append(digest(content))
-            atomic_write_json(self.path, {"version": 1, "files": self.files})
+            self.persist()
             self.started = True
             try:
                 rename_noreplace(source, destination)
@@ -166,7 +193,7 @@ class Transaction:
                 if not destination_was_watched:
                     del self.files[destination_key]
                     src["versions"].pop()
-                    atomic_write_json(self.path, {"version": 1, "files": self.files})
+                    self.persist()
                 raise
             src["current"], dst["current"] = None, digest(content)
         except BaseException:
@@ -183,7 +210,7 @@ class Transaction:
             return
         try:
             entry["versions"].append(None)
-            atomic_write_json(self.path, {"version": 1, "files": self.files})
+            self.persist()
             self.started = True
             path.unlink()
             fsync_directory(path.parent)

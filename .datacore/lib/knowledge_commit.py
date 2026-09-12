@@ -206,21 +206,35 @@ def _read_at(repo: Path, ref: str, rel: str) -> bytes | None:
     return result.stdout
 
 
-def _expected_tree(repo: Path, base: str, paths: list[str]) -> str:
+def _capture_outputs(repo, base, paths, moves):
+    from publication_moves import validate_captures
+    removed = {move.source for move in moves}
+    captured = {rel: _capture(repo, rel) for rel in paths if rel not in removed}
+    validate_captures(repo, base, moves, captured)
+    return captured
+
+
+def _expected_tree(repo: Path, base: str, paths: list[str], moves=()) -> str:
     """Capture the authorized tree without borrowing or changing the index.
 
     Normal Git commit hooks still run. This independent tree is the value their
     resulting commit must match before it can be acknowledged or published.
     Git retains the captured blobs even if a later writer changes the source.
     """
-    captured = {rel: _capture(repo, rel) for rel in paths}
+    from publication_moves import verify_archive_blob
+    captured = _capture_outputs(repo, base, paths, moves)
+    archives = {move.destination: move for move in moves}
     with tempfile.TemporaryDirectory(prefix='datacore-publication-index-') as directory:
         environment = {'GIT_INDEX_FILE': str(Path(directory) / 'index')}
         _git(repo, 'read-tree', base, env=environment)
         for rel, (content, mode) in captured.items():
             mode = _publication_mode(repo, base, rel, mode)
             blob = _git(repo, 'hash-object', '-w', f'--path={rel}', '--stdin', input_bytes=content)
+            if rel in archives:
+                verify_archive_blob(archives[rel], _run_git(repo, 'cat-file', 'blob', blob).stdout)
             _git(repo, 'update-index', '--add', '--cacheinfo', f'{mode},{blob},{rel}', env=environment)
+        for move in moves:
+            _git(repo, 'update-index', '--force-remove', '--', move.source, env=environment)
         return _git(repo, 'write-tree', env=environment)
 
 
@@ -234,13 +248,15 @@ def _publication_mode(repo: Path, base: str, rel: str, mode: str) -> str:
 
 
 def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, push: bool,
-                       *, append_only: bool = False, publication=None) -> str:
+                       *, append_only: bool = False, publication=None, moves=()) -> str:
     """Reserve the target checkout; validate a detached commit before advancing it."""
     base = (publication.data['target_head'] if publication is not None else
             _git(repo, 'rev-parse', '--verify', f'refs/heads/{branch}^{{commit}}'))
     source = (publication.data['source_head'] if publication is not None else
               _git(repo, 'rev-parse', '--verify', 'HEAD^{commit}'))
-    captured = {rel: _capture(repo, rel) for rel in paths}
+    from publication_moves import checked_moves, verify_archive_blob
+    captured = _capture_outputs(repo, base, paths, moves)
+    archives = {move.destination: move for move in moves}
     hooks = publication_hooks(repo)
     parent = allocate_publication_workspace(repo)
     reservation, candidate = parent / 'target', parent / 'candidate'
@@ -270,6 +286,8 @@ def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, 
             normalized = _run_git(candidate, 'cat-file', 'blob', blob)
             if normalized.returncode:
                 raise GitError('cannot verify captured publication blob')
+            if rel in archives:
+                verify_archive_blob(archives[rel], normalized.stdout)
             original, destination = _read_at(repo, source, rel), _read_at(repo, base, rel)
             if (append_only and destination is not None and normalized.stdout != destination
                     and (not normalized.stdout.startswith(destination)
@@ -281,6 +299,9 @@ def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, 
                 raise GitError(f'{rel}: destination has independent changes; reconcile both versions before publication')
             _write_capture(candidate, rel, content, mode)
             _git(candidate, 'update-index', '--add', '--cacheinfo', f'{mode},{blob},{rel}')
+        for move in moves:
+            if _read_at(candidate, base, move.source) is not None:
+                _git(candidate, 'rm', '--', move.source)
         tree = _git(candidate, 'write-tree')
         if publication is not None:
             publication.expected(tree)
@@ -292,6 +313,7 @@ def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, 
                     or _git(candidate, 'diff', '--name-only')
                     or _git(candidate, 'diff', '--cached', '--name-only')):
                 raise GitError('commit hook changed publication content or parents; candidate retained')
+            checked_moves(repo, moves)
             _git(repo, 'update-ref', f'refs/heads/{branch}', sha, base)
         if publication is not None:
             publication.verified = True
@@ -340,7 +362,7 @@ def _push_converging(repo: Path, branch: str, sha: str) -> None:
 
 def commit_to_branch(repo: Path, branch: str, paths, message: str,
                      push: bool = True, *, append_only: bool = False,
-                     expected_head: str | None = None) -> str:
+                     expected_head: str | None = None, moves=()) -> str:
     """Commit `paths` onto an explicit branch.
 
     When HEAD is elsewhere, only private worktrees are checked out and the
@@ -356,6 +378,10 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
     expected_head binds a caller's prior target snapshot, including no-change
     results. A concurrent commit cannot substitute a different publication base.
 
+    moves pairs an explicitly captured source version with its preserved archive.
+    Only those missing source paths may be deleted; newer source or archive
+    versions, reappearing files and lossy Git filters refuse publication.
+
     Returns the new commit sha, or '' if there was nothing to do.
     """
     repo = Path(repo).resolve()
@@ -370,6 +396,14 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
             _oid(expected_head)
         except ValueError:
             raise GitError('expected publication head must be an immutable object identity') from None
+    from publication_moves import checked_moves
+    try:
+        moves = checked_moves(repo, moves)
+        if append_only and moves:
+            raise ValueError('append-only publication cannot move files')
+    except (OSError, TypeError, ValueError) as exc:
+        raise GitError('invalid preserved move; no publication attempted') from exc
+    removed = {move.source for move in moves}
     checked = []
     for value in paths:
         path = Path(value)
@@ -381,6 +415,11 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
             raise GitError('publication source is missing or not a regular file; no deletion was requested')
         checked.append(path.as_posix())
     paths = checked
+    if set(paths).intersection(removed):
+        raise GitError('a move source cannot also be an output file')
+    for move in moves:
+        paths.extend([move.source, move.destination])
+    paths = list(dict.fromkeys(paths))
     if not paths:
         return ''
 
@@ -389,14 +428,14 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
         with reserve(repo, branch, paths) as reservation:
             if expected_head is not None and reservation.data['target_head'] != expected_head:
                 raise GitError('publication target advanced since caller capture; work retained')
-            return _commit_selected(repo, branch, paths, message, push, append_only, reservation)
-    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            return _commit_selected(repo, branch, paths, message, push, append_only, reservation, moves)
+    except (OSError, RuntimeError, TypeError, ValueError, subprocess.SubprocessError) as exc:
         if isinstance(exc, GitError):
             raise
         raise GitError('publication failed; retained state and local work require inspection') from None
 
 
-def _commit_selected(repo, branch, paths, message, push, append_only, reservation):
+def _commit_selected(repo, branch, paths, message, push, append_only, reservation, moves=()):
 
     head = current_branch(repo)
     source_branch = f'refs/heads/{head}' if head else ''
@@ -412,7 +451,7 @@ def _commit_selected(repo, branch, paths, message, push, append_only, reservatio
     # reverse. Use the ordinary path.
     if head == branch:
         base = reservation.data['source_head']
-        tree = _expected_tree(repo, base, paths)
+        tree = _expected_tree(repo, base, paths, moves)
         reservation.expected(tree)
         if current_branch(repo) != branch or _git(repo, 'rev-parse', 'HEAD') != base:
             raise GitError('publication source changed during capture; retained work requires reconciliation')
@@ -421,7 +460,10 @@ def _commit_selected(repo, branch, paths, message, push, append_only, reservatio
             if push:
                 _push_converging(repo, branch, base)
             return ''
-        for p in paths:
+        # An untracked source or an already-published deletion has no index
+        # entry to stage. Its paired destination is still explicitly verified.
+        selected = [p for p in paths if (repo / p).is_file() or _read_at(repo, base, p) is not None]
+        for p in selected:
             _git(repo, 'add', '--', p)
         # Commit with an explicit pathspec, not the whole index. A pathspec
         # commit runs against a temporary index holding only these paths, so
@@ -433,7 +475,7 @@ def _commit_selected(repo, branch, paths, message, push, append_only, reservatio
         # about files this code never touched.
         # Hook output is not a machine-readable success signal. A failing hook
         # saying "nothing to commit" must still refuse publication.
-        _git(repo, 'commit', '-m', message, '--', *paths)
+        _git(repo, 'commit', '-m', message, '--', *selected)
         sha = _git(repo, 'rev-parse', '--verify', 'HEAD^{commit}')
         if (current_branch(repo) != branch
                 or _git(repo, 'rev-parse', f'{sha}^{{tree}}') != tree
@@ -446,7 +488,7 @@ def _commit_selected(repo, branch, paths, message, push, append_only, reservatio
 
     try:
         return _commit_off_branch(repo, branch, paths, message, push, append_only=append_only,
-                                  publication=reservation)
+                                  publication=reservation, moves=moves)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         if isinstance(exc, GitError):
             raise
