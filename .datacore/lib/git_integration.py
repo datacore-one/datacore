@@ -31,7 +31,8 @@ def _oid(value):
     return value
 
 
-def integrate(repo: Path, source: str, destination_ref: str, *, command=None) -> None:
+def integrate(repo: Path, source: str, destination_ref: str, *, command=None,
+              authorize_source=None) -> None:
     """Publish a verified merge; leave the original branch/index/files alone.
 
     command is the caller's bounded Git transport adapter, when supplied. It
@@ -54,11 +55,15 @@ def integrate(repo: Path, source: str, destination_ref: str, *, command=None) ->
     pushed = git(repo, 'remote', 'get-url', '--push', '--all', 'origin').splitlines()
     if len(fetched) != 1 or fetched != pushed:
         raise IntegrationError('Integration requires one identical fetch/push origin')
+    from publication_history import origin_url
+    origin = origin_url(repo)
     hooks = publication_hooks(repo)
     namespace = 'refs/datacore/publication/' + uuid.uuid4().hex
     base_ref = namespace + '/base'
-    git(repo, 'fetch', '--no-tags', '--no-write-fetch-head', 'origin', f'{destination_ref}:{base_ref}')
+    git(repo, 'fetch', '--no-tags', '--no-write-fetch-head', origin, f'{destination_ref}:{base_ref}')
     base = _oid(git(repo, 'rev-parse', '--verify', base_ref + '^{commit}'))
+    if authorize_source is not None:
+        authorize_source(base, origin)
     ancestry = execute(repo, ['git', 'merge-base', '--is-ancestor', source, base])
     if ancestry.returncode == 0:
         git(repo, 'update-ref', '-d', base_ref, base)
@@ -79,7 +84,9 @@ def integrate(repo: Path, source: str, destination_ref: str, *, command=None) ->
         raise IntegrationError('Integration content or parents changed; candidate retained')
     result_ref = namespace + '/result'
     git(repo, 'update-ref', result_ref, result, '0' * len(result))
-    git(worktree, *push_arguments(result, destination_ref, expected=base), hooks=hooks)
+    arguments = push_arguments(result, destination_ref, expected=base)
+    arguments[-2] = origin
+    git(worktree, *arguments, hooks=hooks)
     from worktree_lifecycle import retire_worktree
     retire_worktree(repo, worktree)
     git(repo, 'update-ref', '-d', result_ref, result)

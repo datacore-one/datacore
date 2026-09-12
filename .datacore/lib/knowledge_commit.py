@@ -83,11 +83,23 @@ class GitError(RuntimeError):
 
 def _push_commit(repo: Path, branch: str, sha: str) -> None:
     from git_publication import push_arguments
+    from publication_history import checked_destination
     try:
         args = push_arguments(sha, f'refs/heads/{branch}')
     except ValueError:
         raise GitError('Publication commit/ref is invalid; no push attempted') from None
+    origin, base_ref, base = checked_destination(repo, branch, sha)
+    ancestry = _run_git(repo, 'merge-base', '--is-ancestor', base, sha)
+    if ancestry.returncode:
+        error = GitError('Publication destination advanced; explicit integration required')
+        error.non_fast_forward = ancestry.returncode == 1
+        raise error
+    # A lease is safe only after verifying the candidate preserves this base.
+    # Bind transport to the URL we verified, even if a hook changes origin.
+    args = push_arguments(sha, f'refs/heads/{branch}', expected=base)
+    args[-2] = origin
     _git(repo, *args)
+    _git(repo, 'update-ref', '-d', base_ref, base)
 
 
 def _run_git(repo: Path, *args: str, env=None, input_bytes=None):
@@ -108,7 +120,7 @@ def _git(repo: Path, *args: str, env=None, check=True, input_bytes=None) -> str:
         # Hook/transport output can include private file contents or URL credentials.
         error = GitError('Git publication command failed; inspect local Git configuration and hooks')
         error.non_fast_forward = 'push' in args and any(
-            marker in (r.stderr or b'') for marker in (b'non-fast-forward', b'fetch first', b'behind'))
+            marker in (r.stderr or b'') for marker in (b'non-fast-forward', b'fetch first', b'behind', b'stale info'))
         raise error
     return (r.stdout or b'').decode('utf-8', errors='replace').strip()
 
@@ -316,7 +328,10 @@ def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, 
             checked_moves(repo, moves)
             _git(repo, 'update-ref', f'refs/heads/{branch}', sha, base)
         if publication is not None:
-            publication.verified = True
+            if sha:
+                publication.verify_commit(sha)
+            else:
+                publication.verified = True
     finally:
         errors = []
         for path in reversed(created):
@@ -353,7 +368,10 @@ def _push_converging(repo: Path, branch: str, sha: str) -> None:
         raise GitError('Publication source advanced; captured work retained for separate reconciliation')
     try:
         from git_integration import integrate
-        integrate(repo, sha, f'refs/heads/{branch}')
+        from publication_history import require_verified
+        integrate(repo, sha, f'refs/heads/{branch}',
+                  authorize_source=lambda base, origin: require_verified(
+                      repo, branch, sha, base, origin=origin))
     except (OSError, RuntimeError, subprocess.SubprocessError):
         raise GitError(
             f"{repo.name}: committed locally on {branch} ({sha[:10]}); remote "
@@ -481,7 +499,7 @@ def _commit_selected(repo, branch, paths, message, push, append_only, reservatio
                 or _git(repo, 'rev-parse', f'{sha}^{{tree}}') != tree
                 or _git(repo, 'show', '-s', '--format=%P', sha) != base):
             raise GitError('commit content, parent or branch changed; local commits retained, publication refused')
-        reservation.verified = True
+        reservation.verify_commit(sha)
         if push:
             _push_converging(repo, branch, sha)
         return sha

@@ -126,6 +126,12 @@ def test_cross_branch_publication_keeps_working_copy(repo):
 
 
 def test_cross_branch_retry_pushes_existing_commit_and_keeps_reporting_failure(repo, tmp_path):
+    remote = tmp_path / 'available.git'
+    unavailable = tmp_path / 'unavailable.git'
+    git(repo, 'init', '--bare', str(remote))
+    git(repo, 'remote', 'add', 'origin', str(remote))
+    git(repo, 'push', 'origin', 'main')
+    remote.rename(unavailable)
     git(repo, 'checkout', '-qb', 'feature')
     path = repo / 'notes/retry.md'
     path.write_text('durable local knowledge\n')
@@ -136,9 +142,7 @@ def test_cross_branch_retry_pushes_existing_commit_and_keeps_reporting_failure(r
     with pytest.raises(knowledge.GitError):
         knowledge.commit_to_branch(repo, 'main', ['notes/retry.md'], 'second attempt')
     assert git(repo, 'rev-parse', 'main').stdout.strip() == pending
-    remote = tmp_path / 'available.git'
-    git(repo, 'init', '--bare', str(remote))
-    git(repo, 'remote', 'add', 'origin', str(remote))
+    unavailable.rename(remote)
     assert knowledge.commit_to_branch(repo, 'main', ['notes/retry.md'], 'retry') == ''
     assert git(remote, 'rev-parse', 'main').stdout.strip() == pending
     assert path.read_text() == 'durable local knowledge\n'
@@ -536,8 +540,7 @@ def diverged_publication(repo, tmp_path):
     git(repo, 'push', 'origin', f'{remote_tip}:refs/heads/main')
     git(repo, 'checkout', '-q', 'main')
     (repo / 'notes/local.md').write_text('Captured local content.\n')
-    git(repo, 'add', '--', 'notes/local.md')
-    git(repo, 'commit', '-qm', 'captured work')
+    knowledge.commit_to_branch(repo, 'main', ['notes/local.md'], 'captured work', push=False)
     return remote, remote_tip, git(repo, 'rev-parse', 'HEAD').stdout.strip()
 
 

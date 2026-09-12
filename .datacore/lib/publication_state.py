@@ -47,6 +47,7 @@ def require_clear(repo):
 
 class Reservation:
     def __init__(self, repo, branch, paths):
+        from publication_history import scope_for
         self.repo = Path(repo)
         self.path = _path(repo)
         self.verified = False
@@ -57,6 +58,7 @@ class Reservation:
             'target_branch': 'refs/heads/' + branch,
             'target_head': _git(repo, 'rev-parse', '--verify', f'refs/heads/{branch}^{{commit}}'),
             'paths': list(paths), 'expected_tree': None,
+            'publication_scope': scope_for(repo, branch),
         }
         self.data['expected_ref'] = 'refs/datacore/publication-captures/' + self.data['token']
 
@@ -81,6 +83,12 @@ class Reservation:
         return (_git(self.repo, 'symbolic-ref', '-q', 'HEAD') == self.data['source_branch']
                 and _git(self.repo, 'rev-parse', '--verify', 'HEAD^{commit}') == self.data['source_head']
                 and _git(self.repo, 'rev-parse', '--verify', self.data['target_branch']) == self.data['target_head'])
+
+    def verify_commit(self, commit):
+        from publication_history import record
+        record(self.repo, self.data['publication_scope'], commit,
+               self.data['target_head'], self.data['expected_tree'])
+        self.verified = True
 
     def clear(self):
         metadata = self.path.lstat()
