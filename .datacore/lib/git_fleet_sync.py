@@ -385,8 +385,18 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
         reason = is_junk(repo, path, tracked)
         if reason:
             result['skipped'].append((path, reason))
-        else:
-            to_add.append(path)
+            continue
+        # GitHub's hard push limit is 100 MB; warn and skip anything ≥50 MB so
+        # there is headroom before a binary artifact causes a blocked push.
+        # Observed 2026-06-11: knowledge.db hit 100 MB and blocked ALL pushes.
+        full_path = repo / path
+        if full_path.is_file():
+            size_mb = full_path.stat().st_size / (1024 * 1024)
+            if size_mb >= 50:
+                result['skipped'].append(
+                    (path, f'oversized ({size_mb:.1f} MB ≥ 50 MB limit) — add to .gitignore'))
+                continue
+        to_add.append(path)
 
     if not to_add:
         result['status'] = 'nothing to commit (all junk)'

@@ -232,6 +232,7 @@ class StructuralIntegrityChecker:
         # Full mode checks
         if not self.quick_mode:
             self._check_naming_conventions()
+            self._check_tracked_derived_files()
             self._check_git_lfs()
             self._check_empty_folders()
             self._check_wiki_links()
@@ -493,6 +494,39 @@ class StructuralIntegrityChecker:
         # Lowercase and clean up multiple hyphens
         result = re.sub(r'-+', '-', result.lower()).strip('-')
         return f"{result}{ext.lower()}"
+
+    # -------------------------------------------------------------------------
+    # Check: Tracked Derived Files
+    # -------------------------------------------------------------------------
+
+    def _check_tracked_derived_files(self):
+        """Flag derived/regenerable files that must never be git-tracked (issue #29)."""
+        self.checks_run += 1
+
+        MUST_NOT_TRACK = [
+            '.datacore/knowledge.db',
+            '.datacore/knowledge.db-journal',
+        ]
+
+        try:
+            result = subprocess.run(
+                ['git', '-C', str(self.space_path), 'ls-files'] + MUST_NOT_TRACK,
+                capture_output=True, text=True, timeout=10
+            )
+            tracked = [f.strip() for f in result.stdout.splitlines() if f.strip()]
+            for f in tracked:
+                self.issues.append(Issue(
+                    severity='error',
+                    check_type='tracked_derived',
+                    path=self.space_path / f,
+                    message=f"Derived file is git-tracked and will bloat the repo: {f}",
+                    fix_suggestion=(
+                        f"git rm --cached '{f}' && echo '{f}' >> .gitignore && git commit -m 'chore: untrack derived file'"
+                    ),
+                    auto_fixable=False,
+                ))
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
 
     # -------------------------------------------------------------------------
     # Check: Git LFS
