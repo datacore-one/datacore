@@ -448,3 +448,23 @@ def test_same_space_may_carry_different_ordinals_per_install(tmp_path):
     assert name_a.name == name_b.name == "thing"
     assert (name_a.ordinal, name_b.ordinal) == (5, 9)
     assert a != b
+
+
+@pytest.mark.parametrize('alias_name', ['4-team', 'legacy/team', 'other-label'])
+def test_strict_discovery_keeps_one_canonical_space_with_redundant_alias(tmp_path, alias_name):
+    canonical = make_space(tmp_path, '3-team', 'team')
+    alias = tmp_path / alias_name
+    alias.parent.mkdir(parents=True, exist_ok=True)
+    alias.symlink_to(canonical, target_is_directory=True)
+    spaces = discover_spaces(tmp_path, reject_aliases=True, reject_invalid=True)
+    assert [(space.path, space.name) for space in spaces] == [(canonical, 'team')]
+    assert alias.is_symlink() and alias.resolve() == canonical
+    assert find_space(alias / 'org/inbox.org', tmp_path).path == canonical
+
+
+@pytest.mark.parametrize('target_name', ['2-projects/hidden', 'a/b/c/d/e/f/hidden'])
+def test_space_alias_cannot_expand_the_canonical_discovery_boundary(tmp_path, target_name):
+    target = make_space(tmp_path, target_name, 'hidden')
+    (tmp_path / '1-alias').symlink_to(target, target_is_directory=True)
+    with pytest.raises(ValueError, match='boundary'):
+        discover_spaces(tmp_path, reject_aliases=True, reject_invalid=True)

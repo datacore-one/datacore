@@ -145,7 +145,7 @@ def read_marker(path: Path, *, strict: bool = False) -> dict | None:
 
 
 def _walk(root: Path, depth: int = 1, *, reject_aliases: bool = False,
-          reject_invalid: bool = False):
+          reject_invalid: bool = False, aliases: list[Path] | None = None):
     """Directories worth testing for a marker, breadth-first, depth-bounded."""
     if depth > MAX_DEPTH:
         return
@@ -160,11 +160,13 @@ def _walk(root: Path, depth: int = 1, *, reject_aliases: bool = False,
             continue
         if entry.is_symlink():
             if reject_aliases and _looks_like_space(entry):
-                raise ValueError('space alias crosses its directory boundary')
+                if aliases is None:
+                    raise ValueError('space alias crosses its directory boundary')
+                aliases.append(entry)
             continue
         yield entry
         yield from _walk(entry, depth + 1, reject_aliases=reject_aliases,
-                         reject_invalid=reject_invalid)
+                         reject_invalid=reject_invalid, aliases=aliases)
 
 
 def _looks_like_space(path: Path) -> bool:
@@ -265,9 +267,10 @@ def discover_spaces(
             cannot establish that every supported installation has migrated.
             Identity-sensitive callers may explicitly require marked spaces;
             unknown legacy types never satisfy an explicit type filter.
-        reject_aliases: automated writers may refuse a directory symlink
-            that looks like a space, instead of silently excluding its work.
-            Code/dependency symlinks without space artifacts stay excluded.
+        reject_aliases: automated writers refuse space symlinks whose targets
+            are not independently discovered canonical spaces within the root.
+            A redundant compatibility link never adds a space or supplies an
+            identity. Code/dependency symlinks stay excluded without traversal.
         reject_invalid: refuse incomplete traversal, malformed configuration
             or incomplete marked identities instead of treating an
             undiscoverable space as absent. Identity-sensitive admission and
@@ -279,12 +282,14 @@ def discover_spaces(
     """
     root = root or data_root()
     found: dict[Path, Space] = {}
+    aliases: list[Path] = []
 
     block = read_marker(root, strict=reject_invalid)
     if block is not None:
         found[root] = _from_marker(root, block)
 
-    for candidate in _walk(root, reject_aliases=reject_aliases, reject_invalid=reject_invalid):
+    for candidate in _walk(root, reject_aliases=reject_aliases, reject_invalid=reject_invalid,
+                           aliases=aliases):
         block = read_marker(candidate, strict=reject_invalid)
         if block is not None:
             found[candidate] = _from_marker(candidate, block)
@@ -300,6 +305,20 @@ def discover_spaces(
                 owner=None,
                 marked=False,
             )
+
+    # Never follow aliases to discover work. Only an already validated space
+    # may have redundant legacy paths; aliases cannot reach outside the root,
+    # skipped directories, or the depth bound. Return canonical entries only.
+    if reject_aliases:
+        canonical_root = root.resolve(strict=True)
+        canonical = {path.resolve(strict=True) for path in found}
+        for alias in aliases:
+            try:
+                target = alias.resolve(strict=True)
+                if not target.is_relative_to(canonical_root) or target not in canonical:
+                    raise ValueError('unresolved alias')
+            except (OSError, RuntimeError, ValueError):
+                raise ValueError('space alias has no canonical space within discovery boundary') from None
 
     spaces = sorted(found.values(), key=lambda s: s.path)
     if types is not None:
