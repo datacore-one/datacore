@@ -105,3 +105,47 @@ def test_no_clobber_parent_swap_cannot_redirect_publication(tmp_path, monkeypatc
         atomic_write_text_within(root, inside / 'report.md', 'complete result', overwrite=False)
     assert list(outside.iterdir()) == []
     assert (root / 'retained/report.md').read_text() == 'complete result'
+
+
+def test_no_clobber_competitor_during_temporary_link_window(tmp_path, monkeypatch):
+    target = tmp_path / 'record'
+    original = os.link
+    observed = []
+    def link(*args, **kwargs):
+        original(*args, **kwargs)
+        assert target.stat().st_nlink == 2
+        # The first writer pauses after publishing its complete file but before
+        # removing its temporary name. A second writer must refuse creation.
+        with pytest.raises(FileExistsError):
+            atomic_write_text_within(tmp_path, target, 'competitor', overwrite=False)
+        observed.append(target.read_text())
+    monkeypatch.setattr(os, 'link', link)
+    atomic_write_text_within(tmp_path, target, 'retained winner', overwrite=False)
+    assert observed == ['retained winner']
+    assert target.read_text() == 'retained winner' and target.stat().st_nlink == 1
+
+
+def test_no_clobber_interrupted_publication_retains_both_names(tmp_path):
+    temporary = tmp_path / '.interrupted.tmp'
+    temporary.write_text('complete but unacknowledged')
+    target = tmp_path / 'record'
+    os.link(temporary, target)
+    with pytest.raises(FileExistsError):
+        atomic_write_text_within(tmp_path, target, 'replacement', overwrite=False)
+    assert target.read_bytes() == temporary.read_bytes() == b'complete but unacknowledged'
+    assert target.stat().st_nlink == 2
+
+
+@pytest.mark.parametrize('overwrite', [True, False])
+def test_removed_destination_cannot_be_acknowledged_after_directory_flush(tmp_path, monkeypatch, overwrite):
+    import stat
+    target = tmp_path / 'record'
+    original = os.fsync
+    def flush(fd):
+        original(fd)
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            target.unlink()
+    monkeypatch.setattr(os, 'fsync', flush)
+    with pytest.raises(FileNotFoundError):
+        atomic_write_text_within(tmp_path, target, 'complete', overwrite=overwrite)
+    assert not target.exists()

@@ -157,7 +157,7 @@ def atomic_write_text_within(root, path, content, *, overwrite=True):
             chain.append((parent, part, child))
             parent = child
 
-        def validate():
+        def validate(*, published=False):
             for held_parent, name, held_child in chain:
                 seen = os.stat(name, dir_fd=held_parent, follow_symlinks=False)
                 held = os.fstat(held_child)
@@ -169,7 +169,14 @@ def atomic_write_text_within(root, path, content, *, overwrite=True):
             try:
                 seen = os.stat(relative.name, dir_fd=parent, follow_symlinks=False)
             except FileNotFoundError:
+                if published:
+                    raise
                 return
+            if not overwrite and not published:
+                # No-clobber callers never operate on an existing destination.
+                # A competing publication can still have its temporary hard
+                # link here; report contention without interpreting that file.
+                raise FileExistsError('publication target already exists')
             if not stat.S_ISREG(seen.st_mode) or seen.st_nlink != 1:
                 raise ValueError('publication target must be a regular file with one link')
 
@@ -200,7 +207,7 @@ def atomic_write_text_within(root, path, content, *, overwrite=True):
             os.unlink(temporary, dir_fd=parent)
         temporary = None
         os.fsync(parent)
-        validate()
+        validate(published=True)
     finally:
         if temporary is not None and parent is not None:
             try:
