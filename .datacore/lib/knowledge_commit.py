@@ -45,7 +45,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from git_inventory import require_resolved
 
@@ -140,8 +140,14 @@ def current_branch(repo: Path) -> str:
 
 def is_knowledge(path: str) -> bool:
     """Does this path hold content that is useless anywhere but the default branch?"""
-    p = path.lstrip('./')
-    return p.startswith(KNOWLEDGE_PREFIXES)
+    if not isinstance(path, str) or not path or '\0' in path:
+        return False
+    parsed = PurePosixPath(path)
+    if parsed.is_absolute() or '..' in parsed.parts:
+        return False
+    # Normalize explicit ./ components without stripping a filename's leading
+    # dot. lstrip('./') misclassified every .datacore state path as code.
+    return parsed.as_posix().startswith(KNOWLEDGE_PREFIXES)
 
 
 def classify(paths) -> dict:

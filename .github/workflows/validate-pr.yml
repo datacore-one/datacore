@@ -123,6 +123,7 @@ jobs:
             .datacore/lib/tests/test_identity_verification.py \
             .datacore/lib/tests/test_ledger_publish_safe.py \
             .datacore/tests/test_knowledge_commit.py \
+            .datacore/lib/tests/test_knowledge_path_classification.py \
             .datacore/tests/test_agent_wrap_up.py \
             .datacore/modules/research/lib/tests/test_queue_drain.py \
             .datacore/lib/tests/test_http_receivers.py \
