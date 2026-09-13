@@ -272,3 +272,35 @@ def test_load_cannot_silently_reassign_duplicate_identity(tmp_path, across_files
     with pytest.raises(ValueError, match='duplicate Org IDs'):
         attempt()
     assert {p: p.read_bytes() for p in before} == before
+
+
+@pytest.mark.parametrize('marker', ['<' * 7 + ' ours', '|' * 7 + ' base', '=' * 7, '>' * 7 + ' theirs', '<' * 10 + ' ours'])
+def test_unresolved_org_cannot_be_reviewed_projected_or_mutated(tmp_path, monkeypatch, marker):
+    from intent_sources import org_nodes
+    from ledger.projection_state import snapshot
+    import org_workspace_adapter as adapter
+    monkeypatch.setenv('DATACORE_STATE', str(tmp_path / 'private-state'))
+    source = '* TODO Keep authored work\n' + marker + '\n* TODO Another branch\n'
+    path = tmp_path / 'inbox.org'
+    path.write_text(source)
+    for action in (lambda: org_nodes(tmp_path, path), lambda: snapshot(source, 'fixture'),
+                   lambda: adapter.cmd_add(adapter.build_parser().parse_args(
+                       ['add', '--file', str(path), '--heading', 'unrelated capture']))):
+        with pytest.raises(ValueError, match='conflict'):
+            action()
+        assert path.read_text() == source
+
+
+@pytest.mark.parametrize('body', [
+    '#+begin_example\n' + '<' * 7 + ' ours\n' + '=' * 7 + '\n' + '>' * 7 + ' theirs\n#+end_example\n',
+    '#+BEGIN_SRC text\n' + '<' * 7 + ' ours\n' + '=' * 7 + '\n' + '>' * 7 + ' theirs\n#+END_SRC\n',
+    ': ' + '<' * 7 + ' ours\n: ' + '=' * 7 + '\n: ' + '>' * 7 + ' theirs\n',
+])
+def test_literal_conflict_examples_remain_readable(tmp_path, body):
+    from intent_sources import org_nodes
+    from ledger.projection_state import snapshot
+    source = '* TODO Task\n:PROPERTIES:\n:ID: example\n:END:\n' + body
+    path = tmp_path / 'inbox.org'
+    path.write_text(source)
+    assert len(org_nodes(tmp_path, path)) == 1
+    assert 'example' in snapshot(source, 'fixture')['items']

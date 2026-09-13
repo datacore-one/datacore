@@ -299,6 +299,8 @@ class SafeOrgWorkspace(OrgWorkspace):
         # Explicit repair must happen before ordinary reads or mutations.
         from org_workspace._vendor.orgparse import loads
         source = Path(path).read_text(encoding='utf-8')
+        from org_literal import require_resolved_source
+        require_resolved_source(source)
         identities = [node.get_property('ID') for node in loads(source)[1:]
                       if node.get_property('ID')]
         if len(identities) != len(set(identities)):

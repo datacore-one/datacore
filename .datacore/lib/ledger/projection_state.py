@@ -55,6 +55,8 @@ def _preamble(text):
 
 def snapshot(text, space):
     """Full editable task fields; reject ambiguous IDs instead of deduplicating."""
+    from org_literal import require_resolved_source
+    require_resolved_source(text)
     from org_workspace import OrgWorkspace
     from org_workspace._vendor.orgparse import loads
     # Inspect parsed property IDs before OrgWorkspace's duplicate repair.

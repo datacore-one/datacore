@@ -59,6 +59,8 @@ def org_nodes(root, path, *, required=False):
         if required:
             raise IntentInputError('Org evidence disappeared during review')
         return []
+    from org_literal import require_resolved_source
+    require_resolved_source(source)
     # The declared parser's vocabulary remains the baseline; per-file headers
     # extend it. Parse the bounded snapshot directly, without writing a copy or
     # invoking OrgWorkspace's implicit in-memory duplicate-ID repair.
