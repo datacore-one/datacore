@@ -92,3 +92,43 @@ numeric-directory scans if discovery fails. Personal capture requires exactly
 one personal space (or a canonical unmarked legacy personal space); team or
 ambiguous destinations cannot become the default. This routing rule does not
 replace OS permissions or credential isolation.
+
+## Private state and preserved upgrades
+
+Module code stays in `.datacore/modules`; private mutable state belongs in
+`[canonical-space]/.datacore/module-data/[module-name]`. This root and its
+namespace directories must be private to the runtime identity (0700, files
+0600). A module's `dataPath` points to its `data` subdirectory. Existing
+`data`, `state`, or `settings.local.yaml` in the code or historical scoped
+module directory prevent registration until explicitly migrated. Registration
+must not silently substitute an empty store or move data itself.
+
+Stop all writers, take and verify a backup (including SQLite WAL state), and
+run the selected installed interpreter and helper as the data-owning identity:
+
+```sh
+/path/to/runtime/bin/python -I /path/to/core/.datacore/lib/module_data_migrate.py \
+  --root /path/to/data --space stable-space-name --module module-name \
+  --source /path/to/legacy/module --quiesced
+```
+
+`--quiesced` asserts an operator prerequisite; it does not stop services or
+prove that a database is consistent. The helper verifies and flushes a private
+copy, then retains originals under `.datacore/module-data-backups`. Its staged
+receipt keeps MCP registration unavailable during an interrupted migration.
+Retry the same command after correcting the failure. Changed originals or an
+existing unrelated destination require reconciliation; neither is overwritten.
+Cross-filesystem retirement fails with both copies retained. Arrange a supported
+same-filesystem retirement before proceeding; do not delete the original to
+bypass an incomplete receipt. Recheck ownership after any service-identity
+handoff, read preserved records through the real module, and retain the backup.
+Rollback must include writes made after cutover, not restore a stale snapshot.
+
+The workflow CLI stores diagnostic phase state in absolute `DATACORE_STATE`,
+defaulting to the runtime user's private `~/.datacore/state`. A code-relative or
+data-root-relative `workflow_state.yaml` at a different location blocks writes
+until preserved migration. Under stopped writers, retain the original, copy to
+the private state directory, validate the YAML, and retire the legacy file to
+private backup before restart. Phase updates serialize and atomically publish;
+malformed or unreadable state is never replaced with an empty mapping. The CLI
+remains scaffolding: its tool/agent/output handlers do not dispatch real work.

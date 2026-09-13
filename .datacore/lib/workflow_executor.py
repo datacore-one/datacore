@@ -13,18 +13,18 @@ Usage:
 import argparse
 import logging
 import os
+import stat
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from file_utils import file_lock, atomic_write_text
+from yaml_safety import UniqueStringKeyLoader
 
 logger = logging.getLogger("workflow_executor")
-
-STATE_DIR = Path(__file__).resolve().parent.parent / "state"
-STATE_FILE = STATE_DIR / "workflow_state.yaml"
-
 
 # ---------------------------------------------------------------------------
 # Schema helpers
@@ -104,26 +104,61 @@ def load_workflow(yaml_path: str) -> Workflow:
 # State persistence
 # ---------------------------------------------------------------------------
 
-def _load_state() -> dict[str, Any]:
-    """Load the workflow state file, creating it if absent."""
-    if not STATE_FILE.exists():
-        return {"workflows": {}}
+def _state_file() -> Path:
+    selected = os.environ.get('DATACORE_STATE')
+    if selected is not None and (not selected or not Path(selected).is_absolute()):
+        raise WorkflowError('invalid explicit runtime state directory')
+    directory = Path(selected) if selected is not None else Path.home() / '.datacore/state'
+    directory = directory.resolve()
+    target = directory / 'workflow_state.yaml'
+    legacy = [Path(__file__).resolve().parent.parent / 'state/workflow_state.yaml']
+    data_root = os.environ.get('DATACORE_ROOT')
+    if data_root:
+        if not Path(data_root).is_absolute():
+            raise WorkflowError('invalid explicit data root')
+        legacy.append(Path(data_root) / '.datacore/state/workflow_state.yaml')
+    if any((p.exists() or p.is_symlink()) and p.absolute() != target for p in legacy):
+        raise WorkflowError('legacy workflow state requires preserved migration before new writes')
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    info = directory.stat()
+    if info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        raise WorkflowError('runtime state directory must be private to its identity')
+    return target
+
+
+def _read_state(target: Path) -> dict[str, Any]:
     try:
-        with open(STATE_FILE) as f:
-            state = yaml.safe_load(f) or {}
-    except yaml.YAMLError:
-        logger.warning("Corrupt workflow state file — resetting")
-        state = {}
-    if "workflows" not in state:
-        state["workflows"] = {}
-    return state
-
-
-def _save_state(state: dict[str, Any]) -> None:
-    """Persist the workflow state to disk."""
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    with open(STATE_FILE, "w") as f:
-        yaml.safe_dump(state, f, default_flow_style=False, sort_keys=False)
+        fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return {'workflows': {}}
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 4 * 1024**2:
+            raise WorkflowError('invalid workflow state file')
+        raw = bytearray()
+        while True:
+            chunk = os.read(fd, min(65536, 4 * 1024**2 + 1 - len(raw)))
+            if not chunk:
+                break
+            raw.extend(chunk)
+            if len(raw) > 4 * 1024**2:
+                raise WorkflowError('workflow state exceeds limit')
+        after = os.fstat(fd)
+        if (len(raw) != info.st_size or info.st_mtime_ns != after.st_mtime_ns
+                or info.st_ctime_ns != after.st_ctime_ns):
+            raise WorkflowError('workflow state changed during read; original preserved')
+        try:
+            state = yaml.load(raw.decode('utf-8'), Loader=UniqueStringKeyLoader)
+        except (ValueError, yaml.YAMLError):
+            raise WorkflowError('workflow state is malformed; original preserved') from None
+        if not isinstance(state, dict) or not isinstance(state.get('workflows'), dict):
+            raise WorkflowError('invalid workflow state mapping; original preserved')
+        for value in state['workflows'].values():
+            if not isinstance(value, dict) or not isinstance(value.get('phases'), dict):
+                raise WorkflowError('invalid stored workflow; original preserved')
+        return state
+    finally:
+        os.close(fd)
 
 
 def _update_phase_state(
@@ -133,18 +168,20 @@ def _update_phase_state(
     detail: str = "",
 ) -> None:
     """Record completion state for a single phase."""
-    state = _load_state()
-    wf_state = state["workflows"].setdefault(workflow_name, {
-        "last_run": None,
-        "phases": {},
-    })
-    wf_state["last_run"] = datetime.now(timezone.utc).isoformat()
-    wf_state["phases"][phase_name] = {
-        "status": status,
-        "detail": detail,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-    _save_state(state)
+    if any(not isinstance(value, str) or len(value) > 10000 for value in (workflow_name, phase_name, status, detail)):
+        raise WorkflowError('invalid workflow state values')
+    target = _state_file()
+    with file_lock(target):
+        state = _read_state(target)
+        wf_state = state['workflows'].setdefault(workflow_name, {'last_run': None, 'phases': {}})
+        wf_state['last_run'] = datetime.now(timezone.utc).isoformat()
+        wf_state['phases'][phase_name] = {
+            'status': status, 'detail': detail, 'timestamp': datetime.now(timezone.utc).isoformat(),
+        }
+        content = yaml.safe_dump(state, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        if len(content.encode('utf-8')) > 4 * 1024**2:
+            raise WorkflowError('workflow state exceeds limit; original preserved')
+        atomic_write_text(target, content)
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ Advisory locking via fcntl.flock() prevents concurrent session corruption.
 import fcntl
 import json
 import os
+import stat
 import sys
 import tempfile
 import time
@@ -91,8 +92,11 @@ def file_lock(path: Path, timeout: float = 5.0, *, lock_path: Path | None = None
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     if timeout < 0:
         raise ValueError("lock timeout must be nonnegative")
-    lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     try:
+        info = os.fstat(lock_fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError('lock must be a regular file with one link')
         deadline = time.monotonic() + timeout
         while True:
             try:
