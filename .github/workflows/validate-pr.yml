@@ -101,6 +101,7 @@ jobs:
             .datacore/lib/tests/test_git_fleet_sync_size_guard.py \
             .datacore/lib/tests/test_tracked_derived_safety.py \
             .datacore/lib/tests/test_ledger_health.py \
+            .datacore/lib/tests/test_space_catalog.py \
             .datacore/lib/tests/test_hygiene_output_contract.py \
             .datacore/lib/tests/test_writeback_preservation.py \
             .datacore/lib/tests/test_conflict_preservation.py \

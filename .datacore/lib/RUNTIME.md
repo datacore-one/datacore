@@ -81,3 +81,14 @@ registry, chain checks and retained sequence witnesses. Busy writers, missing
 verification inputs and incomplete discovery remain unverified. No data or
 diagnostic excerpts are returned. This is a bounded local observation, not a
 cross-host atomic snapshot or an OS isolation boundary.
+
+The `space_catalog.py --root ROOT` helper exposes the same canonical discovery
+as version 1 JSON (`spaces`: relative `path`, stable `name`, `type`, `marked`).
+Root spaces use `.`. Duplicate names, malformed markers, incomplete traversal
+and unresolved space aliases fail with a nonzero status and a content-free
+error. MCP full mode requires this helper and the declared Python environment;
+standalone core mode remains Python-independent. Clients must not substitute
+numeric-directory scans if discovery fails. Personal capture requires exactly
+one personal space (or a canonical unmarked legacy personal space); team or
+ambiguous destinations cannot become the default. This routing rule does not
+replace OS permissions or credential isolation.
