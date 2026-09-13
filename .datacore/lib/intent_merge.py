@@ -37,11 +37,11 @@ import argparse
 import re
 import sys
 from collections import Counter
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from spaces import discover_spaces  # noqa: E402
+from intent_sources import files, org_nodes, spaces, text as source_text  # noqa: E402
 
 #: Phrases that mark a reversal. Deliberately narrow, and narrowed FURTHER
 #: after a first run fired on "retire" inside a bug report and "dropped" in a
@@ -81,23 +81,26 @@ def completed(root: Path) -> list[dict]:
     miss the accomplishment.
     """
     out = []
-    heading = re.compile(r"^\*+\s+DONE\s+(.*?)(?:\s+(:[A-Za-z0-9_@#%:]+:))?\s*$")
-    for space_obj in discover_spaces(root):
-        for f in sorted((space_obj.path / "org").glob("*.org")):
-            try:
-                txt = f.read_text(errors="ignore")
-            except OSError:
-                continue
-            space = f.parent.parent.name
-            for line in txt.splitlines():
-                m = heading.match(line)
-                if not m:
+    root = Path(root).resolve(strict=True)
+    for entry in spaces(root):
+        identities = set()
+        for f in files(root, root / entry['path'] / 'org', '.org'):
+            for node in org_nodes(root, f, required=True):
+                if node.todo != 'DONE':
                     continue
-                title = re.sub(r"^\[#[ABC]\]\s*", "", m.group(1) or "").strip()
-                tags = tuple(t for t in (m.group(2) or "").strip(":").split(":") if t)
+                identity = node.get_property('ID')
+                if identity and identity in identities:
+                    raise ValueError('duplicate completed task identity; reconcile evidence before counting')
+                if identity:
+                    identities.add(identity)
+                title = node.heading.strip()
+                closed = node.closed.start if node.closed else None
+                if isinstance(closed, datetime):
+                    closed = closed.date()
                 if title:
-                    out.append({"space": space, "title": title, "tags": tags,
-                                "file": f.name})
+                    out.append({'space': entry['name'], 'title': title,
+                                'tags': tuple(node.tags or ()), 'file': f.name,
+                                'closed': closed})
     return out
 
 
@@ -111,22 +114,22 @@ def decision_records(root: Path) -> list[dict]:
     5-plur/3-knowledge/decisions/2026-07-24-token-killed-*.md
     """
     out = []
-    for space_obj in discover_spaces(root):
-        d = space_obj.path / "3-knowledge" / "decisions"
-        if not d.is_dir():
-            continue
-        for f in sorted(d.glob("*.md")):
-            try:
-                text = f.read_text(errors="ignore")
-            except OSError:
-                continue
-            out.append({"space": space_obj.path.name, "file": f.name,
+    root = Path(root).resolve(strict=True)
+    for entry in spaces(root):
+        d = root / entry['path'] / '3-knowledge/decisions'
+        for f in files(root, d, '.md'):
+            text = source_text(root, f)
+            if text is None:
+                raise ValueError('decision disappeared during review')
+            match = re.match(r'^(\d{4}-\d{2}-\d{2})(?:-|\.)', f.name)
+            recorded = date.fromisoformat(match[1]) if match else None
+            out.append({"space": entry['name'], "file": f.name, 'date': recorded,
                         "text": text,
                         "reverses": bool(REVERSAL.search(text[:2000]))})
     return out
 
 
-def merge(root: Path, since: date) -> dict:
+def merge(root: Path, since: date | None = None) -> dict:
     from priority_score import IntentGraph
     from intent_tasks import place
 
@@ -134,6 +137,16 @@ def merge(root: Path, since: date) -> dict:
     open_tasks = place(root, g)["index"]
     done = completed(root)
     decisions = decision_records(root)
+    undated = [t for t in done if since is not None and t['closed'] is None]
+    undated_decisions = sum(1 for d in decisions if since is not None and d['date'] is None)
+    if since is not None:
+        done = [t for t in done if t['closed'] is not None and t['closed'] >= since]
+        decisions = [d for d in decisions if d['date'] is not None and d['date'] >= since]
+    uncertain = set()
+    for task in undated:
+        node = g.match(task['title'], task['space'], task['tags'])
+        if node is not None:
+            uncertain.update({node.id} | g.ancestors(node.id))
 
     hits: Counter = Counter()
     unplaced: list[dict] = []
@@ -156,23 +169,27 @@ def merge(root: Path, since: date) -> dict:
         tasks = open_tasks.get(nid, 0)
         if evidence:
             confirmed.append((nid, n, tasks, evidence))
-        elif not tasks:
+        elif not tasks and nid not in uncertain:
             dormant.append((nid, n))
 
     return {"graph": g, "confirmed": confirmed, "dormant": dormant,
             "candidates": candidates, "done": len(done),
-            "unplaced": unplaced, "decisions": len(decisions)}
+            "unplaced": unplaced, "decisions": len(decisions),
+            'undated_done': len(undated), 'undated_decisions': undated_decisions}
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=str(Path.home() / "Data"))
-    ap.add_argument("--since", default="2026-06-01")
+    ap.add_argument("--since", help="include dated evidence since YYYY-MM-DD; report undated evidence separately")
     a = ap.parse_args()
     root = Path(a.root).expanduser()
-    since = date(*map(int, a.since.split("-")))
+    since = date.fromisoformat(a.since) if a.since else None
 
     r = merge(root, since)
+    if since is not None:
+        print(f"  Evidence since {since}: {r['undated_done']} undated completions and "
+              f"{r['undated_decisions']} undated decisions excluded from dated counts; source data retained.")
     placed = r["done"] - len(r["unplaced"])
     print(f"  {r['done']} DONE tasks (incl. archives); {placed} placed "
           f"({100 * placed // max(1, r['done'])}%), "

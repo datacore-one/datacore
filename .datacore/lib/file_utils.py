@@ -22,6 +22,74 @@ def _log(msg: str):
     print(f"[file_utils] {msg}", file=sys.stderr)
 
 
+def read_text_within(root, path, *, limit=16 * 1024**2):
+    """Bounded UTF-8 snapshot beneath a real root, without following aliases.
+
+    Only absence returns None. Permission, decoding, type and concurrent-change
+    errors propagate. Directory descriptors bind each lookup, so replacing an
+    intermediate directory with a symlink cannot redirect a subsequent open.
+    This read boundary does not isolate processes sharing an OS identity.
+    """
+    root = Path(root).resolve(strict=True)
+    path = Path(path)
+    relative = path.relative_to(root)
+    if (not relative.parts or '..' in relative.parts
+            or type(limit) is not int or limit < 0):
+        raise ValueError('invalid bounded source read')
+    descriptors = []
+    chain = []
+    try:
+        parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        descriptors.append(parent)
+        for part in relative.parts[:-1]:
+            try:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                dir_fd=parent)
+            except FileNotFoundError:
+                return None
+            descriptors.append(child)
+            chain.append((parent, part, child))
+            parent = child
+        try:
+            fd = os.open(relative.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                         dir_fd=parent)
+        except FileNotFoundError:
+            return None
+        descriptors.append(fd)
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > limit:
+            raise ValueError('source must be a bounded regular file with one link')
+        raw = bytearray()
+        while True:
+            chunk = os.read(fd, min(65536, limit + 1 - len(raw)))
+            if not chunk:
+                break
+            raw.extend(chunk)
+            if len(raw) > limit:
+                raise ValueError('source exceeds read limit')
+        def stamp(info):
+            return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+                    info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        if (stamp(before) != stamp(os.fstat(fd)) or len(raw) != before.st_size
+                or stamp(before) != stamp(os.stat(relative.name, dir_fd=parent, follow_symlinks=False))):
+            raise ValueError('source changed during read')
+        for parent_fd, name, child_fd in chain:
+            observed = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            held = os.fstat(child_fd)
+            if (observed.st_dev, observed.st_ino, observed.st_mode) != (
+                    held.st_dev, held.st_ino, held.st_mode):
+                raise ValueError('source directory changed during read')
+        held_root = os.fstat(descriptors[0])
+        observed_root = root.lstat()
+        if (held_root.st_dev, held_root.st_ino, held_root.st_mode) != (
+                observed_root.st_dev, observed_root.st_ino, observed_root.st_mode):
+            raise ValueError('source root changed during read')
+        return raw.decode('utf-8')
+    finally:
+        for fd in reversed(descriptors):
+            os.close(fd)
+
+
 def atomic_write_text(path: Path, content: str) -> None:
     """Publish complete UTF-8 content only after flushing it to disk.
 

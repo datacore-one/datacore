@@ -167,28 +167,15 @@ def build(root: Path, today: str) -> str:
     return "\n".join(L) + "\n"
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--root", default=str(Path.home() / "Data"))
-    ap.add_argument("--out", default="Intent-Graph-Review.md", help="filename in private runtime state")
-    ap.add_argument("--date", default="")
-    a = ap.parse_args()
-    root = Path(a.root).expanduser().resolve(strict=True)
+def publish(root: Path, filename: str, builder) -> tuple[Path, str]:
+    """One private durable publication path for every combined intent report."""
+    root = Path(root).expanduser().resolve(strict=True)
     if not root.is_dir():
         raise ValueError('data root is not a directory')
-    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.md', a.out):
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.md', filename):
         raise ValueError('review output must be a Markdown filename, not a path')
     installation = hashlib.sha256(str(root).encode('utf-8')).hexdigest()
-    dest = private_state_directory('intent-reviews/' + installation, data_root=root) / a.out
-    today = a.date
-    if not today:
-        import subprocess
-        today = subprocess.run(
-            [sys.executable, str(Path(__file__).resolve().parent / "date_utils.py"), "today"],
-            capture_output=True, text=True, check=True, timeout=10).stdout.strip()
-        if not today:
-            raise RuntimeError("installed date helper returned no date")
-    today = date.fromisoformat(today).isoformat()
+    dest = private_state_directory('intent-reviews/' + installation, data_root=root) / filename
     # Serialize generation as well as publication: an older slow generation
     # must not finish after a newer invocation and replace its complete report.
     with file_lock(dest):
@@ -201,8 +188,28 @@ def main() -> int:
             if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
                     or info.st_uid != os.geteuid() or info.st_mode & 0o077):
                 raise ValueError('existing review must be a private regular file with one link')
-        text = build(root, today)
+        text = builder()
         atomic_write_text(dest, text)
+    return dest, text
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--root", default=str(Path.home() / "Data"))
+    ap.add_argument("--out", default="Intent-Graph-Review.md", help="filename in private runtime state")
+    ap.add_argument("--date", default="")
+    a = ap.parse_args()
+    root = Path(a.root).expanduser().resolve(strict=True)
+    today = a.date
+    if not today:
+        import subprocess
+        today = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve().parent / "date_utils.py"), "today"],
+            capture_output=True, text=True, check=True, timeout=10).stdout.strip()
+        if not today:
+            raise RuntimeError("installed date helper returned no date")
+    today = date.fromisoformat(today).isoformat()
+    dest, text = publish(root, a.out, lambda: build(root, today))
     print(f"  wrote {dest} ({len(text.splitlines())} lines)")
     return 0
 

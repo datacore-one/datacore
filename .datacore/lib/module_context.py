@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import stat
 
+from file_utils import read_text_within as read_text
 from module_data_migrate import _private
 from space_catalog import catalog
 
@@ -27,47 +28,6 @@ def parse_json(raw):
     def invalid(_):
         raise ValueError('nonfinite JSON value')
     return json.loads(raw, object_pairs_hook=_unique, parse_constant=invalid)
-
-
-def read_text(root, path, *, limit=16 * 1024**2):
-    """Read a bounded regular single-link file within an explicit real root."""
-    root = Path(root).resolve(strict=True)
-    path = Path(path)
-    relative = path.relative_to(root)
-    if not relative.parts or any(p in ('.', '..') for p in relative.parts):
-        raise ValueError('invalid module data file')
-    current = root
-    for part in relative.parts[:-1]:
-        current /= part
-        try:
-            info = current.lstat()
-        except FileNotFoundError:
-            return None
-        if not stat.S_ISDIR(info.st_mode):
-            raise ValueError('module data directory is aliased or invalid')
-    try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except FileNotFoundError:
-        return None
-    try:
-        before = os.fstat(fd)
-        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > limit:
-            raise ValueError('module data file is unsafe or exceeds limit')
-        raw = bytearray()
-        while True:
-            chunk = os.read(fd, min(65536, limit + 1 - len(raw)))
-            if not chunk:
-                break
-            raw.extend(chunk)
-            if len(raw) > limit:
-                raise ValueError('module data exceeds limit')
-        after = path.lstat()
-        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
-                after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns) or len(raw) != before.st_size:
-            raise ValueError('module data changed during read')
-        return raw.decode('utf-8')
-    finally:
-        os.close(fd)
 
 
 @dataclass(frozen=True)

@@ -10,7 +10,7 @@ prove the graph is internally tidy while nothing beneath it is being done.
 Placement is by declaration first, inference second:
 
   1. an explicit `:INTENT:` property on the task
-  2. a focus-area tag mapped in .datacore/intent-map.yaml
+  2. a focus-area tag mapped in the applicable .datacore/tags.yaml registry
   3. keyword overlap with a node title
 
 Order matters. Tasks already carry `:plur:`, `:datacore:`, `:sales:`, so ~20
@@ -32,31 +32,21 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from spaces import discover_spaces  # noqa: E402
+from intent_sources import org_nodes, spaces  # noqa: E402
 
-OPEN_STATES = ("TODO", "NEXT", "WAITING")
+OPEN_STATES = frozenset({'TODO', 'NEXT', 'WAITING', 'REVIEW', 'QUEUED', 'WORKING', 'FAILED'})
 
 
 def _tasks(root: Path):
     """Every open task across every space, with its space and tags."""
-    try:
-        from org_workspace import OrgWorkspace
-    except ImportError:
-        return []
+    root = Path(root).resolve(strict=True)
     out = []
-    for space in discover_spaces(root):
-        f = space.path / "org" / "next_actions.org"
-        if not f.exists():
-            continue
-        ws = OrgWorkspace()
-        try:
-            ws.load(str(f))
-        except Exception:
-            continue
-        for n in ws.all_nodes():
-            if getattr(n, "todo", None) in OPEN_STATES:
+    for space in spaces(root):
+        f = root / space['path'] / 'org/next_actions.org'
+        for n in org_nodes(root, f):
+            if n.todo in OPEN_STATES or (n.todo in n.env.todo_keys and n.todo != 'DEFERRED'):
                 out.append({
-                    "space": f.parent.parent.name,
+                    "space": space['name'],
                     "heading": (n.heading or "").strip(),
                     "tags": tuple(n.tags or ()),
                     "intent": n.get_property("INTENT"),
@@ -73,15 +63,20 @@ def place(root: Path, graph) -> dict:
 
     for t in tasks:
         nid, method = None, "none"
-        if t["intent"] and t["intent"] in graph.nodes:
-            nid, method = t["intent"], "property"
+        if t["intent"]:
+            candidate = graph.resolve_id(t['intent'], t['space'])
+            if candidate in graph.nodes:
+                nid, method = candidate, 'property'
         else:
+            declared = False
             for tag in t["tags"]:
-                cand = graph.tag_map.get(str(tag).lower())
-                if cand and cand in graph.nodes:
-                    nid, method = cand, "tag"
+                cand = graph.tag_intent(tag, t['space'])
+                if cand is not None:
+                    declared = True
+                    if cand in graph.nodes:
+                        nid, method = cand, "tag"
                     break
-            if nid is None:
+            if nid is None and not declared:
                 node = graph.match(t["heading"], t["space"], ())
                 if node is not None:
                     nid, method = node.id, "keyword"

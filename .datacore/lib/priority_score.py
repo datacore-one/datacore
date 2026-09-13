@@ -47,13 +47,8 @@ import sys
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-try:
-    import yaml
-except ImportError:  # pragma: no cover
-    yaml = None
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from spaces import discover_spaces  # noqa: E402
+from intent_sources import IntentInputError, mapping, org_nodes, spaces  # noqa: E402
 
 #: Work matching nothing on the graph. `task_queue.calculate_priority` treats
 #: 5 as neutral, so unmapped work keeps exactly today's behaviour — absence of
@@ -118,10 +113,12 @@ def _keywords(title: str) -> tuple[str, ...]:
 
 class IntentGraph:
     def __init__(self, nodes: dict[str, Node], spotlight: list[dict],
-                 tag_map: dict[str, str]):
+                 tag_map: dict[str, str], *, space_tags=None, space_paths=None):
         self.nodes = nodes
         self.spotlight = spotlight
         self.tag_map = tag_map
+        self.space_tags = space_tags or {}
+        self.space_paths = space_paths or {}
 
     # ── loading ──────────────────────────────────────────────────────────
 
@@ -134,75 +131,114 @@ class IntentGraph:
         graph could only ever describe one venture, which is why 154 tasks in
         six other spaces had no branch to hang from.
 
-        Space ids are namespaced (`5-plur:north-star`) so two ventures may both
+        Space ids are namespaced (`example:north-star`) so two ventures may both
         have a "growth" node, while `:SERVES:` can still cross spaces when one
         venture's work genuinely serves another's goal.
         """
-        root = Path(root)
-        nodes = cls._read_org(root / INTENTS_ORG)
-        for space in discover_spaces(root):
-            f = space.path / "org" / "intents.org"
-            if f.is_file():
-                nodes.update(cls._read_org(f, prefix=space.path.name))
-        cls._resolve_serves(nodes)
-        return cls(nodes, cls._read_spotlight(root / SPOTLIGHT_YAML),
-                   cls._read_tag_map(root))
+        root = Path(root).resolve(strict=True)
+        entries = spaces(root)
+        nodes = cls._read_org(root / INTENTS_ORG, root=root)
+        for entry in entries:
+            nodes.update(cls._read_org(root / entry['path'] / 'org/intents.org',
+                                       prefix=entry['name'], root=root))
+        paths = {entry['name']: entry['path'] for entry in entries}
+        tags = cls._read_tag_map(root)
+        scoped = {entry['name']: cls._read_tag_map(root, entry['path']) for entry in entries
+                  if entry['path'] != '.'}
+        graph = cls(nodes, cls._read_spotlight(root / SPOTLIGHT_YAML, root=root),
+                    tags, space_tags=scoped, space_paths=paths)
+        graph._resolve_serves()
+        graph._validate_dag()
+        for item in graph.spotlight:
+            item['id'] = graph.resolve_id(item['id'])
+        return graph
 
-    @staticmethod
-    def _resolve_serves(nodes: dict[str, Node]) -> None:
+    def canonical_space(self, value: str) -> str:
+        if not value:
+            return ''
+        candidates = {name for name, path in self.space_paths.items()
+                      if value in (name, path, Path(path).name)}
+        # Old ordinal-qualified references remain readable after a renumbering.
+        # Only an existing stable identity can supply the suffix's meaning.
+        legacy = re.fullmatch(r'[0-9]+-(.+)', value)
+        if legacy and legacy[1] in self.space_paths:
+            candidates.add(legacy[1])
+        if len(candidates) > 1:
+            raise IntentInputError('ambiguous legacy space reference')
+        return next(iter(candidates), value)
+
+    def resolve_id(self, target: str, space: str = '') -> str:
+        if ':' in target:
+            prefix, identity = target.split(':', 1)
+            if prefix == '@root':
+                return identity
+            return f'{self.canonical_space(prefix)}:{identity}'
+        space = self.canonical_space(space)
+        local = f'{space}:{target}'
+        if space and local in self.nodes:
+            return local
+        return target
+
+    def _resolve_serves(self) -> None:
         """Rewrite `:SERVES:` targets to fully-qualified ids.
 
         A bare id resolves within its own space first, then globally — so a
         space's file stays readable without repeating its own prefix, and a
         deliberate cross-space link (`5-plur:knowledge-exchange`) still works.
         """
-        for nid, n in list(nodes.items()):
+        for nid, n in list(self.nodes.items()):
             space = nid.split(":", 1)[0] if ":" in nid else ""
-            fixed = []
-            for target in n.serves:
-                if target in nodes:
-                    fixed.append(target)
-                elif space and f"{space}:{target}" in nodes:
-                    fixed.append(f"{space}:{target}")
-                else:
-                    # Keep it unresolved rather than dropping it: gaps() reports
-                    # a broken link, which is a finding, not noise to swallow.
-                    fixed.append(target)
-            nodes[nid] = replace(n, serves=tuple(fixed))
+            # Missing targets remain visible to gaps(); never guess another id.
+            self.nodes[nid] = replace(n, serves=tuple(self.resolve_id(t, space) for t in n.serves))
+
+    def _validate_dag(self):
+        # Kahn's algorithm avoids recursion limits on valid deep graphs.
+        pending = {nid: set(self.parents(nid)) for nid in self.nodes}
+        children = {nid: [] for nid in self.nodes}
+        for nid, parents in pending.items():
+            for parent in parents:
+                children[parent].append(nid)
+        ready = [nid for nid, parents in pending.items() if not parents]
+        count = 0
+        while ready:
+            parent = ready.pop()
+            count += 1
+            for child in children[parent]:
+                pending[child].remove(parent)
+                if not pending[child]:
+                    ready.append(child)
+        if count != len(self.nodes):
+            raise IntentInputError('intent graph contains a cycle; preserve and repair the source')
 
     @staticmethod
-    def _read_org(f: Path, prefix: str = "") -> dict[str, Node]:
-        """No bespoke parser: org-workspace already models this file."""
-        if not f.is_file():
-            return {}
-        try:
-            from org_workspace import OrgWorkspace
-        except ImportError:
-            return {}
-        ws = OrgWorkspace()
-        try:
-            ws.load(str(f))
-        except Exception:
-            return {}
-
+    def _read_org(f: Path, prefix: str = "", *, root=None) -> dict[str, Node]:
+        """Use the declared Org parser on a bounded read-only snapshot."""
         nodes: dict[str, Node] = {}
         stack: list[tuple[int, str]] = []   # (heading depth, id)
-        for n in ws.all_nodes():
+        for n in org_nodes(root or f.parent, f):
+            depth = n.level
+            while stack and stack[-1][0] >= depth:
+                stack.pop()
             nid = n.get_property("INTENT_ID")
             if not nid:
                 continue
+            if not isinstance(nid, str) or re.search(r'[:\s]', nid):
+                raise IntentInputError('intent id must be an unqualified nonempty token')
             # Namespace by space so two ventures may share a node name.
             nid = f"{prefix}:{nid}" if prefix else nid
-            depth = getattr(n, "level", None) or len(stack) + 1
-            while stack and stack[-1][0] >= depth:
-                stack.pop()
+            if nid in nodes:
+                raise IntentInputError('duplicate intent id; preserve and reconcile the source')
             parent = stack[-1][1] if stack else None
             title = (n.heading or "").strip()
             serves = tuple((n.get_property("SERVES") or "").split())
-            space_tag = n.get_property("SPACE") or prefix
             lane_kw = tuple((n.get_property("KEYWORDS") or "").lower().split())
+            if (n.get_property('SWITCH') or '').strip().lower() not in ('', 'on', 'off'):
+                raise IntentInputError('invalid intent lane switch')
+            level = n.get_property('LEVEL') or '0'
+            if not re.fullmatch(r'[0-9]+', level):
+                raise IntentInputError('invalid intent level')
             nodes[nid] = Node(id=nid, title=title,
-                              level=int(n.get_property("LEVEL") or 0),
+                              level=int(level),
                               success=(n.get_property("SUCCESS") or "").strip(),
                               serves=serves, parent=parent,
                               keywords=_keywords(title),
@@ -218,31 +254,40 @@ class IntentGraph:
         return nodes
 
     @staticmethod
-    def _read_spotlight(f: Path) -> list[dict]:
+    def _read_spotlight(f: Path, *, root=None) -> list[dict]:
         """This week's spotlight. Deliberately NOT part of the graph: the graph
         is where you're heading, the spotlight is what you're doing about it
         now. Re-ranking on Monday must not look like a change of direction."""
-        if not (yaml and f.is_file()):
-            return []
-        try:
-            data = yaml.safe_load(f.read_text()) or {}
-        except Exception:
-            return []
+        data = mapping(root or f.parent, f)
+        values = data.get('spotlight', data.get('priorities', []))
+        if not isinstance(values, list):
+            raise IntentInputError('spotlight must be a list')
         out = []
-        for i, p in enumerate(data.get("spotlight") or data.get("priorities") or [], 1):
+        for i, p in enumerate(values, 1):
             if isinstance(p, str):
                 out.append({"id": p, "rank": i, "keywords": ()})
             elif isinstance(p, dict):
+                rank = p.get('rank', i)
+                if isinstance(rank, str) and rank.isascii() and rank.isdigit():
+                    rank = int(rank)
+                keywords = p.get('keywords', [])
+                if (type(rank) is not int or rank < 1 or not isinstance(keywords, list)
+                        or any(not isinstance(k, str) or not k for k in keywords)
+                        or any(key in p and not isinstance(p[key], str)
+                               for key in ('id', 'intent', 'statement', 'priority'))):
+                    raise IntentInputError('invalid spotlight entry')
                 out.append({
-                    "id": str(p.get("id") or p.get("intent") or ""),
-                    "rank": int(p.get("rank") or i),
+                    "id": p.get("id") or p.get("intent") or "",
+                    "rank": rank,
                     "statement": str(p.get("statement") or p.get("priority") or ""),
-                    "keywords": tuple(str(k).lower() for k in (p.get("keywords") or [])),
+                    "keywords": tuple(k.lower() for k in keywords),
                 })
+            else:
+                raise IntentInputError('invalid spotlight entry')
         return out
 
     @staticmethod
-    def _read_tag_map(root: Path) -> dict[str, str]:
+    def _read_tag_map(root: Path, relative: str = '.') -> dict[str, str]:
         """Focus-area tag -> intent id, read from the DIP-0014 tag registries.
 
         NOT a new registry. DIP-0014 already declares tags "a coding language"
@@ -251,32 +296,57 @@ class IntentGraph:
         is exactly that, so it is an `intent:` field on existing entries rather
         than a parallel file that would drift from them.
 
-        Root registry first, then space registries, which may override for
-        their own space (`:comms:` means something different in each venture).
-
-        Tasks already carry `:plur:` (311), `:gtd:` (320), `:enterprise:` (46).
-        Mapping tags places hundreds of tasks without editing any of them.
+        Read one registry at a time. System bindings have priority; a local
+        tag's interpretation is available only to tasks from that same space.
         """
         out: dict[str, str] = {}
-        files = [root / ".datacore" / "tags.yaml"]
-        files += [s.path / ".datacore" / "tags.yaml" for s in discover_spaces(root)]
-        for f in files:
-            if not (yaml and f.is_file()):
-                continue
-            try:
-                data = yaml.safe_load(f.read_text()) or {}
-            except Exception:
-                continue
-            for section in data.values():
-                if not isinstance(section, dict):
+        data = mapping(root, root / relative / '.datacore/tags.yaml')
+        def entry(tag, spec):
+            if not isinstance(spec, dict) or 'intent' not in spec:
+                return
+            identity = spec['intent']
+            if not isinstance(identity, str) or not identity or re.search(r'\s', identity):
+                raise IntentInputError('invalid tag intent binding')
+            alias = spec.get('org', '')
+            if not isinstance(alias, str):
+                raise IntentInputError('invalid tag alias')
+            for key in (tag, alias.strip(':')):
+                if not key:
                     continue
+                if not isinstance(key, str):
+                    raise IntentInputError('invalid tag identity')
+                key = key.lower()
+                if key in out and out[key] != identity:
+                    raise IntentInputError('ambiguous tag intent binding')
+                out[key] = identity
+        # Current keyed sections and DIP-0014's tags/category/list format.
+        for name, section in data.items():
+            if name == 'tags':
+                if not isinstance(section, dict):
+                    raise IntentInputError('invalid tag registry')
+                for category in section.values():
+                    if isinstance(category, list):
+                        for spec in category:
+                            if not isinstance(spec, dict) or not isinstance(spec.get('id'), str):
+                                raise IntentInputError('invalid tag registry entry')
+                            entry(spec['id'], spec)
+                    elif isinstance(category, dict):
+                        for tag, spec in category.items():
+                            entry(tag, spec)
+                    else:
+                        raise IntentInputError('invalid tag category')
+            elif isinstance(section, dict):
                 for tag, spec in section.items():
-                    if isinstance(spec, dict) and spec.get("intent"):
-                        out[str(tag).lower()] = str(spec["intent"])
-                        org = str(spec.get("org") or "").strip(":").lower()
-                        if org:
-                            out[org] = str(spec["intent"])
+                    entry(tag, spec)
         return out
+
+    def tag_intent(self, tag: str, space: str = '') -> str | None:
+        tag = str(tag).lower()
+        if tag in self.tag_map:
+            return self.resolve_id(self.tag_map[tag])
+        space = self.canonical_space(space)
+        target = self.space_tags.get(space, {}).get(tag)
+        return self.resolve_id(target, space) if target is not None else None
 
     # ── graph ────────────────────────────────────────────────────────────
 
@@ -301,8 +371,8 @@ class IntentGraph:
     def is_high_leverage(self, nid: str) -> bool:
         """Serves more than one intent — the source doc's definition, and its
         stated reason to work on something first."""
-        n = self.nodes.get(nid)
-        return bool(n and n.serves)
+        return len({identity for identity in {nid} | self.ancestors(nid)
+                    if identity in self.nodes and self.nodes[identity].level == 1}) > 1
 
     def leaves(self) -> list[Node]:
         """Structural leaves — nodes with no children declared beneath them."""
@@ -346,24 +416,32 @@ class IntentGraph:
         work that carries no mapped tag.
         """
         for t in tags or ():
-            nid = self.tag_map.get(str(t).lower())
-            if nid and nid in self.nodes:
-                return self.nodes[nid]
+            nid = self.tag_intent(t, container)
+            if nid is not None:
+                # A broken declaration stays unplaced; guessing would conceal it.
+                return self.nodes.get(nid)
         # Container is deliberately NOT part of the haystack. Blending it in
         # let a space directory named after a node ("9-nightshift") match that
         # node for every item inside it, scoring the whole space identically —
         # the same saturation bug in a new place. Scoping now comes from the
         # tag registry, so the container is context, never evidence.
         hay = (text or "").lower()
-        best, best_hits = None, 0
+        container = self.canonical_space(container)
+        best, best_key, ambiguous = None, (0, 0, 0), False
         for n in self.nodes.values():
+            owner = n.id.split(':', 1)[0] if ':' in n.id else ''
+            if container and owner and owner != container:
+                continue
             if not n.keywords:
                 continue
             h = self._hits(hay, n.keywords)
-            # Deeper nodes are more specific, so break ties downward.
-            if h > best_hits or (h and h == best_hits and best and n.level > best.level):
-                best, best_hits = n, h
-        return best
+            # Content matches first, then local ownership, then specificity.
+            key = (h, int(bool(container) and owner == container), n.level)
+            if h and key > best_key:
+                best, best_key, ambiguous = n, key, False
+            elif h and key == best_key:
+                ambiguous = True
+        return None if ambiguous else best
 
     def spotlight_rank(self, nid: str | None) -> int | None:
         """Is this node, or anything it serves, named in this week's spotlight?"""
@@ -373,7 +451,7 @@ class IntentGraph:
         best = None
         for s in self.spotlight:
             if s.get("id") and s["id"] in family:
-                best = min(best or 99, s["rank"])
+                best = s['rank'] if best is None else min(best, s['rank'])
         return best
 
     def hard_gate(self, text: str, tags=()) -> str | None:
@@ -430,7 +508,7 @@ class IntentGraph:
             # saturation that made all 209 tasks in a space rank identically.
             for s in self.spotlight:
                 if s.get("keywords") and self._hits(text.lower(), s["keywords"]):
-                    return SPOTLIT - (s["rank"] - 1) * 0.5
+                    return max(ON_GRAPH, SPOTLIT - (s["rank"] - 1) * 0.5)
             return NEUTRAL
         rank = self.spotlight_rank(node.id)
         if rank is not None:

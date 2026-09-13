@@ -159,6 +159,10 @@ jobs:
             .datacore/lib/tests/test_hermes_source_binding.py \
             .datacore/lib/tests/test_python_source_binding.py \
             .datacore/lib/tests/test_intent_review_privacy.py \
+            .datacore/lib/tests/test_priority_score.py \
+            .datacore/lib/tests/test_intent_input_integrity.py \
+            .datacore/lib/tests/test_intent_evidence.py \
+            .datacore/lib/tests/test_bounded_read_integrity.py \
             .datacore/lib/tests/test_private_state_boundary.py \
             .datacore/lib/tests/test_jobs_manifest.py \
             .datacore/lib/tests/test_jobs_run_contract.py \
