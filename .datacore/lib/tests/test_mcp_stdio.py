@@ -6,14 +6,45 @@ from pathlib import Path
 import subprocess
 import sys
 import resource
+import shutil
+import sysconfig
 
 import pytest
 
 import mcp_stdio as launcher
 
 
+@pytest.fixture(scope='session')
+def provider_python(tmp_path_factory):
+    # The test runner's shared tool cache is not a qualified installed provider:
+    # its binary may be owned by another build identity or writable by a group.
+    # Provision our own actual interpreter without altering that shared cache.
+    root = tmp_path_factory.mktemp('provider-python').resolve()
+    # Provision from the base interpreter: Python 3.10 can otherwise write the
+    # surrounding venv's bin directory as the new environment's base home.
+    subprocess.run([str(Path(sys.executable).resolve()), '-I', '-m', 'venv',
+                    '--without-pip', '--copies', str(root)],
+                   capture_output=True, text=True, timeout=30, check=True)
+    for binary in (root / 'bin').iterdir():
+        if binary.is_file() and not binary.is_symlink():
+            binary.chmod(0o700)
+    # Hosted Python builds can use an origin-relative libpython RUNPATH. Keep
+    # the copied interpreter runnable after ambient loader variables are removed.
+    library = sysconfig.get_config_var('LDLIBRARY')
+    libdir = sysconfig.get_config_var('LIBDIR')
+    if library and libdir and ('.so' in library or library.endswith('.dylib')):
+        source = Path(libdir) / library
+        if source.is_file():
+            target = root / 'lib' / source.resolve().name
+            shutil.copyfile(source, target)
+            target.chmod(0o600)
+            if source.name != target.name:
+                (root / 'lib' / source.name).symlink_to(target.name)
+    return root / 'bin/python'
+
+
 @pytest.fixture
-def configured(tmp_path):
+def configured(tmp_path, provider_python):
     private = tmp_path.resolve() / 'provider'
     private.mkdir(mode=0o700)
     script = private / 'server.py'
@@ -28,7 +59,7 @@ print(json.dumps({'assigned':os.getenv('EXAMPLE_ASSIGNED_KEY'),
     'home':os.getenv('HOME'), 'cwd':os.getcwd(), 'descriptor':inherited,
     'prefix':sys.prefix, 'input':sys.stdin.readline().strip()}))
 ''')
-    profile = {'version': 1, 'command': [sys.executable, '-I', str(script), '9999'],
+    profile = {'version': 1, 'command': [str(provider_python), '-I', str(script), '9999'],
                'home': str(private), 'cwd': str(private), 'environment': {},
                'credential_names': ['EXAMPLE_ASSIGNED_KEY'],
                'credential_sha256': launcher.credential_digest({'EXAMPLE_ASSIGNED_KEY': 'assigned-fixture'})}
@@ -65,7 +96,7 @@ def test_actual_child_has_only_assigned_credentials_and_no_extra_descriptor(conf
         assert data['descriptor'] is False
         assert data['home'] == data['cwd'] == str(private)
         assert data['input'] == 'stdio retained'
-        assert data['prefix'] == sys.prefix  # preserving the selected venv is essential
+        assert data['prefix'] == str(Path(profile['command'][0]).parent.parent)
     finally:
         os.close(read_fd)
         os.close(write_fd)
@@ -179,6 +210,16 @@ def test_installer_symlink_cannot_avoid_command_validation(configured):
     entry.symlink_to(target)
     profile['command'] = [str(entry), '--yes', 'example-provider']
     with pytest.raises(ValueError, match='package acquisition'):
+        launcher.build_launch(profile, {'EXAMPLE_ASSIGNED_KEY': 'assigned-fixture'})
+
+
+def test_group_writable_provider_binary_is_still_refused(configured):
+    private, profile = configured
+    executable = private / 'python'
+    shutil.copyfile(profile['command'][0], executable)
+    executable.chmod(0o770)
+    profile['command'][0] = str(executable)
+    with pytest.raises(ValueError, match='qualified installed executable'):
         launcher.build_launch(profile, {'EXAMPLE_ASSIGNED_KEY': 'assigned-fixture'})
 
 
