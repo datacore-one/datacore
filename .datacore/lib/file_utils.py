@@ -7,6 +7,7 @@ Advisory locking via fcntl.flock() prevents concurrent session corruption.
 import fcntl
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -63,6 +64,54 @@ def fsync_directory(path: Path) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def private_state_directory(namespace: str = '', *, data_root: Path | None = None) -> Path:
+    """Create runtime state outside data/code repositories, with private modes.
+
+    This validates the application's output boundary. It does not isolate two
+    processes running as the same OS identity; use separate service identities
+    for that. Existing aliases or unsafe permissions fail without chmod/moves.
+    """
+    selected = os.environ.get('DATACORE_STATE')
+    directory = Path(selected) if selected is not None else Path.home() / '.datacore/state'
+    if (selected == '' or not directory.is_absolute() or directory == Path(directory.anchor)
+            or '..' in directory.parts
+            or directory.resolve() != directory):
+        raise ValueError('runtime state must have an absolute unaliased path')
+    components = namespace.split('/') if namespace else []
+    if any(not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}', part) for part in components):
+        raise ValueError('invalid private state namespace')
+    root = data_root if data_root is not None else os.environ.get('DATACORE_ROOT', Path.home() / 'Data')
+    if not root or not Path(root).is_absolute():
+        raise ValueError('invalid data root for private state')
+    excluded = (Path(root).resolve(), Path(__file__).resolve().parent)
+    if any(directory.is_relative_to(path) for path in excluded):
+        raise ValueError('runtime state cannot be stored in data or installed code')
+    target = directory.joinpath(*components)
+    # Git ownership, including linked worktrees, is independent of ignore rules.
+    for parent in (target, *target.parents):
+        if os.path.lexists(parent / '.git'):
+            raise ValueError('private runtime state cannot be stored in a Git repository')
+    current = Path(directory.anchor)
+    for component in target.parts[1:]:
+        current /= component
+        try:
+            current.mkdir(mode=0o700)
+            fsync_directory(current.parent)
+        except FileExistsError:
+            pass
+        info = current.lstat()
+        if not stat.S_ISDIR(info.st_mode):
+            raise ValueError('private state directory cannot be a symbolic link or special file')
+        if info.st_uid not in (0, os.geteuid()):
+            raise ValueError('private state ancestor has an unrelated owner')
+        if current.is_relative_to(directory):
+            if info.st_uid != os.geteuid() or info.st_mode & 0o077:
+                raise ValueError('runtime state directory must be private to its identity')
+        elif info.st_mode & 0o022 and not (info.st_uid == 0 and info.st_mode & stat.S_ISVTX):
+            raise ValueError('private state ancestor permits unrelated writes')
+    return target
 
 
 def atomic_write_json(path: Path, data: Any, indent: int = 2) -> None:

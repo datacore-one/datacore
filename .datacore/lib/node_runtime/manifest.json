@@ -8,7 +8,7 @@
   },
   "datacore_mcp": {
     "repository": "https://github.com/datacore-one/datacore-mcp",
-    "commit": "381b43d4c742d04a070a6157ec2bca110f047142"
+    "commit": "8e50c3b0143578598f19a9693bd46cdd92066950"
   },
   "required_packages": [
     "@plur-ai/mcp",

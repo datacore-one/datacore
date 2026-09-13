@@ -112,6 +112,7 @@ jobs:
             .datacore/lib/tests/test_env_configuration.py \
             .datacore/lib/tests/test_ledger_ingest_org.py \
             .datacore/lib/tests/test_ledger_transport.py \
+            .datacore/lib/tests/test_transport_lock_safety.py \
             .datacore/lib/tests/test_transport_foreign_writer.py \
             .datacore/lib/tests/test_git_privacy.py \
             .datacore/lib/tests/test_git_preservation.py \
@@ -157,6 +158,8 @@ jobs:
             .datacore/lib/tests/test_hermes_dispatch.py \
             .datacore/lib/tests/test_hermes_source_binding.py \
             .datacore/lib/tests/test_python_source_binding.py \
+            .datacore/lib/tests/test_intent_review_privacy.py \
+            .datacore/lib/tests/test_private_state_boundary.py \
             .datacore/lib/tests/test_jobs_manifest.py \
             .datacore/lib/tests/test_jobs_run_contract.py \
             .datacore/tests/test_principal_email_hashes.py \

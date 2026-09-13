@@ -14,7 +14,7 @@ import re
 import uuid
 from pathlib import Path
 
-from file_utils import atomic_write_json, atomic_write_text, file_lock, fsync_directory
+from file_utils import atomic_write_json, atomic_write_text, file_lock, fsync_directory, private_state_directory
 from org_workspace import OrgWorkspace
 from org_workspace.workspace import CatastrophicShrinkError
 
@@ -71,8 +71,7 @@ def changed_files():
 
 
 def journal_path():
-    state = Path(os.environ.get("DATACORE_STATE", Path.home() / ".datacore" / "state"))
-    return state / "org-transaction.json"
+    return private_state_directory() / "org-transaction.json"
 
 
 def read_text(path):

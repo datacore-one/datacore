@@ -1,5 +1,6 @@
 """A data checkout cannot replace an installed hook's code or subprocesses."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -113,11 +114,18 @@ def test_stream_tailer_uses_installed_outbox_and_transport(tmp_path):
 @pytest.mark.parametrize('broken', [False, True])
 def test_review_date_helper_is_installed_and_failure_preserves_document(tmp_path, broken):
     installed = tmp_path / 'installed/lib';installed.mkdir(parents=True)
-    shutil.copy2(LIB / 'intent_review.py', installed / 'intent_review.py')
+    for name in ['intent_review.py', 'file_utils.py']:
+        shutil.copy2(LIB / name, installed / name)
     stale = tmp_path / 'Data/.datacore/lib';stale.mkdir(parents=True)
     (stale / 'date_utils.py').write_text("print('1900-01-01')\n")
     (installed / 'date_utils.py').write_text('raise SystemExit(17)\n' if broken else "print('2030-01-02')\n")
-    output = tmp_path / 'Data/review.md';output.write_text('Original review\n')
+    key = hashlib.sha256(str((tmp_path / 'Data').resolve()).encode()).hexdigest()
+    directory = tmp_path / 'state'
+    for component in ('', 'intent-reviews', key):
+        if component:
+            directory /= component
+        directory.mkdir(mode=0o700)
+    output = directory / 'review.md';output.write_text('Original review\n');output.chmod(0o600)
     code = '''import runpy,sys
 ns=runpy.run_path(sys.argv[1],run_name='fixture')
 g=ns['main'].__globals__;g['build']=lambda root,today:'Date: '+today+'\\n'

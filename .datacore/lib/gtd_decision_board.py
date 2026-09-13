@@ -463,8 +463,9 @@ def build(args):
             f"<style>{css}</style></head><body><div id=\"app\"></div>"
             f"{_json_block('data', data)}<script>{js}</script></body></html>\n")
 
-    root = Path(os.environ.get('DATACORE_STATE', Path.home() / '.datacore/state')) / 'decision-boards'
-    out = _private_path(Path(args.out) if args.out else root / f"{today.isoformat()}-{args.slug}.html", create_parent=True)
+    from file_utils import private_state_directory
+    selected = Path(args.out) if args.out else private_state_directory('decision-boards') / f"{today.isoformat()}-{args.slug}.html"
+    out = _private_path(selected, create_parent=True)
     if len(page.encode()) > MAX_DOCUMENT:
         raise ValueError('board exceeds document size limit')
     mapping = {r["id"]: dict(r.get("apply") or {}, title=r["title"]) for s in sections for r in s["rows"]}

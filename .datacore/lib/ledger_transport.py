@@ -37,7 +37,6 @@ reintroduce lost updates (DIP-0046 §10).
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import re
@@ -50,9 +49,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ledger.log import EventLog  # noqa: E402
+from file_utils import file_lock, private_state_directory  # noqa: E402
 
 PUSH_ATTEMPTS = 3
-LOCK_DIR = Path.home() / ".datacore" / "state" / "locks"
 
 
 @dataclass
@@ -100,16 +99,12 @@ def _git(repo: Path, *args: str, timeout: int = 120) -> tuple[int, str, str]:
 @contextmanager
 def _repo_lock(space: Path):
     """Exclusive, per-repo, SAME-MACHINE ONLY. See the module docstring."""
-    # Honor the same state-root override used by jobs/recurrence and tests.
-    lock_dir = Path(os.environ["DATACORE_STATE"]) / "locks" if os.environ.get("DATACORE_STATE") else LOCK_DIR
-    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_dir = private_state_directory('locks')
     lock = lock_dir / f"{space.name}.lock"
-    with open(lock, "w") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+    # Retain the existing lock name/inode for cooperating callers. Opening a
+    # lock never truncates it or follows an alias; contention has a deadline.
+    with file_lock(lock, lock_path=lock, timeout=120):
+        yield
 
 
 SHIPPED_REGISTRY = Path(__file__).resolve().parents[2] / ".datacore" / "registry" / "repositories.yaml"

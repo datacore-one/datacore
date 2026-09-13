@@ -21,7 +21,7 @@ from typing import Any
 
 import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from file_utils import file_lock, atomic_write_text
+from file_utils import file_lock, atomic_write_text, private_state_directory
 from yaml_safety import UniqueStringKeyLoader
 
 logger = logging.getLogger("workflow_executor")
@@ -105,11 +105,10 @@ def load_workflow(yaml_path: str) -> Workflow:
 # ---------------------------------------------------------------------------
 
 def _state_file() -> Path:
-    selected = os.environ.get('DATACORE_STATE')
-    if selected is not None and (not selected or not Path(selected).is_absolute()):
-        raise WorkflowError('invalid explicit runtime state directory')
-    directory = Path(selected) if selected is not None else Path.home() / '.datacore/state'
-    directory = directory.resolve()
+    try:
+        directory = private_state_directory()
+    except ValueError as exc:
+        raise WorkflowError(str(exc)) from None
     target = directory / 'workflow_state.yaml'
     legacy = [Path(__file__).resolve().parent.parent / 'state/workflow_state.yaml']
     data_root = os.environ.get('DATACORE_ROOT')
@@ -119,10 +118,6 @@ def _state_file() -> Path:
         legacy.append(Path(data_root) / '.datacore/state/workflow_state.yaml')
     if any((p.exists() or p.is_symlink()) and p.absolute() != target for p in legacy):
         raise WorkflowError('legacy workflow state requires preserved migration before new writes')
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    info = directory.stat()
-    if info.st_uid != os.geteuid() or info.st_mode & 0o077:
-        raise WorkflowError('runtime state directory must be private to its identity')
     return target
 
 

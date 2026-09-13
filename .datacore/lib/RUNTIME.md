@@ -222,3 +222,28 @@ the private state directory, validate the YAML, and retire the legacy file to
 private backup before restart. Phase updates serialize and atomically publish;
 malformed or unreadable state is never replaced with an empty mapping. The CLI
 remains scaffolding: its tool/agent/output handlers do not dispatch real work.
+
+Private diagnostic state uses the shared `file_utils.private_state_directory`
+boundary. Its absolute root and children must be owned by the runtime identity
+and mode 0700, with no symlink aliases, unrelated writable ancestors, or Git
+repository ancestry. Neither the selected data root nor installed code is a
+valid state destination. Existing unsafe directories fail without silently
+changing their ownership or permissions; reconcile them with writers stopped.
+Workflow state, hook diagnostics, Org recovery journals, ledger transport locks,
+and default decision boards use this same validation. Preserve pending recovery
+journals while reconciling an existing state directory; changing permissions or
+location does not resolve an interrupted transaction. Transport retains its
+existing per-space lock inode, refuses file aliases, and waits at most 120
+seconds for another local holder. This is local coordination only.
+
+`intent_review.py` combines the owner's accessible spaces and therefore writes
+only to `DATACORE_STATE/intent-reviews/<installation-digest>/`. The digest binds
+the canonical data-root path; different installations do not replace each
+other's reports. `--out` is a Markdown filename within that directory, not an
+export path. Existing shared reports are retained without alteration. Review
+their readers separately before any deliberate removal or redistribution.
+Report generation and durable publication share one lock, and a failed build
+or pre-publication write preserves the previous complete report. Reports are
+0600 and source text is rendered literally. Moving the data root creates a new
+report namespace and retains the old one. This command does not authorize
+cross-space reads: its OS identity must already be entitled to every input.
