@@ -112,6 +112,9 @@ def _keywords(title: str) -> tuple[str, ...]:
 
 
 class IntentGraph:
+    # Consumers must refuse legacy loaders that turn invalid sources into emptiness.
+    INPUT_CONTRACT_VERSION = 1
+
     def __init__(self, nodes: dict[str, Node], spotlight: list[dict],
                  tag_map: dict[str, str], *, space_tags=None, space_paths=None):
         self.nodes = nodes
@@ -474,6 +477,15 @@ class IntentGraph:
         either separator. `:APPROVED_BY:` on a task is the human override;
         callers enforce that, not this method.
         """
+        match = self.blocked_lane(text, tags)
+        if match is None:
+            return None
+        node, kw = match
+        why = f" — {node.why}" if node.why else ""
+        return f"lane OFF: '{node.title}' [{node.id}] matched '{kw}'{why}"
+
+    def blocked_lane(self, text: str, tags=()):
+        """Structured lane identity; persisted wake decisions must not parse prose."""
         low = f"{text} {' '.join(tags)}".lower()
         tokens = set(re.findall(r"[a-z0-9]+", low))
         for node in self.nodes.values():
@@ -486,9 +498,7 @@ class IntentGraph:
                 else:
                     hit = kw in tokens
                 if hit:
-                    why = f" — {node.why}" if node.why else ""
-                    return (f"lane OFF: '{node.title}' [{node.id}] "
-                            f"matched '{kw}'{why}")
+                    return node, kw
         return None
 
     def score_10(self, text: str, container: str = "", tags=()) -> float:

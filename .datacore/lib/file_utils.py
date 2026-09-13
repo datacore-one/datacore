@@ -125,6 +125,81 @@ def atomic_write_text(path: Path, content: str) -> None:
         raise
 
 
+def atomic_write_text_within(root, path, content):
+    """Durable publication through held directory descriptors, refusing aliases.
+
+    Parent creation and replacement cannot be redirected by a symlink swap.
+    A moved directory is reported as failure; this is not OS isolation against
+    another process that can rename directories under the same identity.
+    """
+    import uuid
+    root = Path(root).resolve(strict=True)
+    relative = Path(path).relative_to(root)
+    if not relative.parts or '..' in relative.parts:
+        raise ValueError('invalid bounded publication')
+    descriptors, chain = [], []
+    temporary = None
+    parent = None
+    try:
+        parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        descriptors.append(parent)
+        for part in relative.parts[:-1]:
+            try:
+                os.mkdir(part, mode=0o700, dir_fd=parent)
+                os.fsync(parent)
+            except FileExistsError:
+                pass
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=parent)
+            descriptors.append(child)
+            chain.append((parent, part, child))
+            parent = child
+
+        def validate():
+            for held_parent, name, held_child in chain:
+                seen = os.stat(name, dir_fd=held_parent, follow_symlinks=False)
+                held = os.fstat(held_child)
+                if (seen.st_dev, seen.st_ino, seen.st_mode) != (held.st_dev, held.st_ino, held.st_mode):
+                    raise ValueError('publication directory changed')
+            seen, held = root.lstat(), os.fstat(descriptors[0])
+            if (seen.st_dev, seen.st_ino, seen.st_mode) != (held.st_dev, held.st_ino, held.st_mode):
+                raise ValueError('publication root changed')
+            try:
+                seen = os.stat(relative.name, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                return
+            if not stat.S_ISREG(seen.st_mode) or seen.st_nlink != 1:
+                raise ValueError('publication target must be a regular file with one link')
+
+        validate()
+        temporary = '.' + uuid.uuid4().hex + '.tmp'
+        fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
+                     0o600, dir_fd=parent)
+        try:
+            remaining = memoryview(content.encode('utf-8'))
+            while remaining:
+                count = os.write(fd, remaining)
+                if count <= 0:
+                    raise OSError('file write made no progress')
+                remaining = remaining[count:]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        validate()
+        os.replace(temporary, relative.name, src_dir_fd=parent, dst_dir_fd=parent)
+        temporary = None
+        os.fsync(parent)
+        validate()
+    finally:
+        if temporary is not None and parent is not None:
+            try:
+                os.unlink(temporary, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+        for fd in reversed(descriptors):
+            os.close(fd)
+
+
 def fsync_directory(path: Path) -> None:
     """Persist directory entry changes (create/rename) on supported hosts."""
     fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
