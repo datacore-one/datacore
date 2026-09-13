@@ -411,6 +411,18 @@ def closure_kind(item) -> str:
     return "done"
 
 
+def org_task_state(item):
+    """Effective GTD state; ownership completion still awaits review."""
+    payload = item.payload or {}
+    if payload.get('section'):
+        return None
+    if item.status in ('verified', 'dismissed'):
+        return 'DONE' if was_finished(item) else 'CANCELLED'
+    if item.status == 'completed':
+        return 'REVIEW'
+    return payload.get('state') or 'TODO'
+
+
 def was_finished(item) -> bool:
     """True only for work that was actually completed."""
     return closure_kind(item) == "done"

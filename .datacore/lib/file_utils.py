@@ -125,7 +125,7 @@ def atomic_write_text(path: Path, content: str) -> None:
         raise
 
 
-def atomic_write_text_within(root, path, content):
+def atomic_write_text_within(root, path, content, *, overwrite=True):
     """Durable publication through held directory descriptors, refusing aliases.
 
     Parent creation and replacement cannot be redirected by a symlink swap.
@@ -133,6 +133,8 @@ def atomic_write_text_within(root, path, content):
     another process that can rename directories under the same identity.
     """
     import uuid
+    if type(overwrite) is not bool:
+        raise ValueError('overwrite policy must be boolean')
     root = Path(root).resolve(strict=True)
     relative = Path(path).relative_to(root)
     if not relative.parts or '..' in relative.parts:
@@ -186,7 +188,16 @@ def atomic_write_text_within(root, path, content):
         finally:
             os.close(fd)
         validate()
-        os.replace(temporary, relative.name, src_dir_fd=parent, dst_dir_fd=parent)
+        if overwrite:
+            os.replace(temporary, relative.name, src_dir_fd=parent, dst_dir_fd=parent)
+        else:
+            # Atomic no-clobber publication using the held directory. Neither
+            # an existing file nor one created after validation can be replaced.
+            # An interruption before unlink can leave the complete temporary
+            # hard link; this is unacknowledged state requiring reconciliation.
+            os.link(temporary, relative.name, src_dir_fd=parent, dst_dir_fd=parent,
+                    follow_symlinks=False)
+            os.unlink(temporary, dir_fd=parent)
         temporary = None
         os.fsync(parent)
         validate()

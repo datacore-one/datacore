@@ -272,15 +272,8 @@ def render_item(item, *, level: int | None = None) -> list[str]:
     # rather than an omission. `dismissed` renders as CANCELLED: giving up on
     # something and finishing it are different outcomes and a weekly report
     # that conflates them is not worth reading.
-    if payload.get("section"):
-        state = None
-    elif item.status in CLOSED_STATUSES:
-        from .fold import was_finished
-        state = "DONE" if was_finished(item) else "CANCELLED"
-    elif item.status == "completed":
-        state = "REVIEW"  # finished by an agent, awaiting a human's sign-off
-    else:
-        state = payload.get("state") or "TODO"
+    from .fold import org_task_state
+    state = org_task_state(item)
     priority = org.get("priority")
     prio = f"[#{priority}] " if priority else ""
     # sorted() again, not redundantly: a payload can reach here from any
