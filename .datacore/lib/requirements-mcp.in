@@ -1,0 +1,6 @@
+# Python helpers used by the full Datacore MCP provider. Discovery needs YAML;
+# ledger-health verification also imports Ed25519 signature verification.
+# Keep versions aligned with the qualified core runtime, without OCR/services.
+-c requirements-runtime.txt
+cryptography
+pyyaml

@@ -71,6 +71,31 @@ standard-library virtual environment, including its bundled installer.
 
 ## Installed MCP verification
 
+Full-mode MCP uses `requirements-mcp.in` / `requirements-mcp.txt` for its
+Python helpers. This minimal profile is constrained to the same versions as
+the core runtime: YAML discovery and cryptographic ledger verification, plus
+their transitive dependencies. The discovery-only test subset is insufficient
+for `ledger_health.py`. Optional module executors require their own declared
+dependencies and qualification.
+
+Provision a new environment without seeded installer packages. A separately
+qualified pip installation (22.3 or later) can manage it with `--python`:
+
+```sh
+python3 -m venv --without-pip /absolute/new-mcp-python
+python3 -m pip --isolated --python /absolute/new-mcp-python/bin/python install \
+  --index-url https://pypi.org/simple --require-hashes --only-binary=:all: \
+  -r .datacore/lib/requirements-mcp.txt
+python3 -m pip --isolated --python /absolute/new-mcp-python/bin/python check
+/absolute/new-mcp-python/bin/python -I .datacore/lib/mcp_runtime_smoke.py
+```
+
+The smoke check uses fresh helper processes, canonical nested-space discovery,
+actual signed synthetic events, busy-writer refusal, missing-key uncertainty,
+tamper detection and recovery. It accesses no operator stores or providers.
+CI exercises this separate profile on Python 3.10, 3.12 and 3.14. Bind the
+qualified interpreter through `DATACORE_PYTHON` in the provider profile below.
+
 The checked-in `.mcp.json.example` is a template: replace every absolute
 placeholder with a qualified installed path. Each provider starts through
 `mcp_stdio.py --profile /private/provider/profile.json --credentials

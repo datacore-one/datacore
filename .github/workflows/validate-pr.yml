@@ -212,6 +212,12 @@ jobs:
           "$RUNNER_TEMP/datacore-runtime/bin/python" -m pip check
       - name: Start, exercise and restart the installed runtime
         run: '"$RUNNER_TEMP/datacore-runtime/bin/python" .datacore/lib/runtime_smoke.py'
+      - name: Verify the minimal MCP helper runtime
+        run: |
+          python -m venv --without-pip "$RUNNER_TEMP/datacore-mcp-runtime"
+          python -m pip --isolated --python "$RUNNER_TEMP/datacore-mcp-runtime/bin/python" install --index-url https://pypi.org/simple --require-hashes --only-binary=:all: -r .datacore/lib/requirements-mcp.txt
+          python -m pip --isolated --python "$RUNNER_TEMP/datacore-mcp-runtime/bin/python" check
+          "$RUNNER_TEMP/datacore-mcp-runtime/bin/python" -I .datacore/lib/mcp_runtime_smoke.py
 
 
   # ── Layer 2: Structural Validation ─────────────────────────────
