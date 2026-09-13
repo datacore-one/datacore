@@ -149,6 +149,7 @@ jobs:
             .datacore/lib/tests/test_seal_preservation.py \
             .datacore/lib/tests/test_executor_isolation.py \
             .datacore/lib/tests/test_runtime_context.py \
+            .datacore/lib/tests/test_mcp_stdio.py \
             .datacore/lib/tests/test_hermes_runtime.py \
             .datacore/lib/tests/test_node_runtime.py \
             .datacore/lib/tests/test_process_lifecycle.py \

@@ -71,6 +71,63 @@ standard-library virtual environment, including its bundled installer.
 
 ## Installed MCP verification
 
+The checked-in `.mcp.json.example` is a template: replace every absolute
+placeholder with a qualified installed path. Each provider starts through
+`mcp_stdio.py --profile /private/provider/profile.json --credentials
+/private/provider/secrets.json`, using the selected Python interpreter with
+`-I`. Startup does not source the shared environment file or invoke a package
+installer. Install and verify each required server beforehand; remove unused
+provider entries from the client configuration.
+
+Each profile and credential file must be a regular, single-link file with
+permissions `0600`, in a private `0700` directory. Provision the declared
+private HOME and working directory before startup. Directory/file aliases,
+malformed or duplicate JSON, extra credentials and loader/environment overrides
+are refused. A missing or invalid profile produces a generic startup error,
+without including configuration or credential contents. For example:
+
+```json
+{
+  "version": 1,
+  "command": ["/opt/datacore/providers/node/bin/node", "/opt/datacore/providers/datacore/dist/index.js"],
+  "home": "/private/provider/home",
+  "cwd": "/private/provider/work",
+  "environment": {
+    "DATACORE_PATH": "/absolute/authorized/data-root",
+    "DATACORE_LIB": "/opt/datacore/current/.datacore/lib",
+    "DATACORE_PYTHON": "/opt/datacore/python/bin/python"
+  },
+  "credential_names": [],
+  "credential_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+}
+```
+
+These paths are illustrative, not an installed release layout. An empty
+credential list requires an empty `{}` credential file. For a provider needing
+an API key, declare that key's environment name in `credential_names` and store
+only that exact key in its private credential JSON. Non-secret provider options
+go in `environment`; do not duplicate credential names there. Python provider
+commands must include `-I`. The selected virtual-environment entry point is
+preserved even when its interpreter is a symlink to a base Python binary.
+
+The profile's `credential_sha256` must match
+`mcp_stdio.credential_digest(credentials)`, which hashes canonical JSON (sorted
+keys, ASCII escaping, compact separators, no NaN). The example contains the
+digest of `{}`. Compute the digest when provisioning or rotating credentials;
+keep it private with the profile. A partially updated profile/credential pair
+refuses startup even when the old and new credentials use identical key names.
+Stop the provider, provision and validate both files, then restart it. This
+binding detects mixed configuration versions; it is not an authentication
+boundary against a principal who can modify both private files.
+
+Profiles are trusted operator/administrator configuration. The launcher passes
+only the explicit environment and stdio descriptors to the installed command.
+It does not restrict that program's subsequent network access or filesystem
+access under its OS identity. Run mutually untrusted contexts under the
+independent runtime service identities; private HOME/environment selection by
+itself is not OS or credential isolation. The active installation must still
+be reconciled and tested before this template is considered deployed.
+
 Managed MCP clients select the installed library with absolute `DATACORE_LIB`
 and its qualified interpreter with absolute `DATACORE_PYTHON`. An explicit
 unavailable selection must not fall back to code in the mutable data checkout
