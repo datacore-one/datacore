@@ -63,6 +63,10 @@ MAX_DEPTH = 5
 #: Never descended into. ``2-projects`` holds cloned repositories with their own
 #: dependency trees and is the single biggest cost in an unbounded walk.
 SKIP_DIRS = frozenset({
+    # Installed code, fixtures, dependencies and private module state are not
+    # data-space discovery roots. In particular, an external module-code Git
+    # symlink must not be mistaken for an external legacy space alias.
+    ".datacore",
     ".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache",
     ".pytest_cache", ".ruff_cache", "2-projects", "4-archive", ".obsidian",
     "dist", "build", ".next", "target",

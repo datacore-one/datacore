@@ -39,6 +39,18 @@ def test_identity_survives_ordinal_rename(tmp_path):
     assert after['path'] == '22-local'
 
 
+def test_installed_module_code_is_not_a_space_or_external_space_alias(tmp_path):
+    root = tmp_path / 'install'
+    marker(root, 'named', 'space')
+    provider = tmp_path / 'installed-provider'
+    (provider / '.git').mkdir(parents=True)
+    modules = root / '.datacore/modules'
+    modules.mkdir(parents=True)
+    (modules / 'provider').symlink_to(provider, target_is_directory=True)
+    marker(root, '.datacore/modules/bundled-fixture', 'not-a-data-space')
+    assert [s['name'] for s in catalog(root)['spaces']] == ['space']
+
+
 def test_duplicate_identity_refuses_instead_of_selecting_first(tmp_path):
     marker(tmp_path, 'a', 'same')
     marker(tmp_path, 'b', 'same')
