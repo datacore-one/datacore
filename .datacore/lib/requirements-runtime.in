@@ -12,3 +12,5 @@ youtube-transcript-api==1.2.4
 yt-dlp==2026.8.19
 cryptography==50.0.0
 requests==2.33.0
+# Preserve authored YAML in installed venture/registry mutation paths.
+ruamel.yaml==0.19.1
