@@ -124,6 +124,14 @@ bypass an incomplete receipt. Recheck ownership after any service-identity
 handoff, read preserved records through the real module, and retain the backup.
 Rollback must include writes made after cutover, not restore a stale snapshot.
 
+Installed Python modules use `module_context.resolve` with their code path and
+explicit `DATACORE_ROOT`; optional `DATACORE_SPACE` is a canonical stable name.
+Without it, exactly one verified personal destination is required. The helper
+enforces private directories and completed, space-bound migration receipts.
+Read-only resolution creates no store. Its bounded file reader rejects aliases,
+nonregular files, changed reads and malformed UTF-8. This shared routing path
+does not replace the runtime's OS and credential boundaries.
+
 The workflow CLI stores diagnostic phase state in absolute `DATACORE_STATE`,
 defaulting to the runtime user's private `~/.datacore/state`. A code-relative or
 data-root-relative `workflow_state.yaml` at a different location blocks writes

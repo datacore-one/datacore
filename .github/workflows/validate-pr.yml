@@ -103,6 +103,7 @@ jobs:
             .datacore/lib/tests/test_ledger_health.py \
             .datacore/lib/tests/test_space_catalog.py \
             .datacore/lib/tests/test_module_data_migrate.py \
+            .datacore/lib/tests/test_module_context.py \
             .datacore/lib/tests/test_workflow_state_preservation.py \
             .datacore/lib/tests/test_hygiene_output_contract.py \
             .datacore/lib/tests/test_writeback_preservation.py \
