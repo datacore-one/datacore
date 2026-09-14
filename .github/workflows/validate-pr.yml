@@ -139,6 +139,7 @@ jobs:
             .datacore/lib/tests/test_public_post_tls.py \
             .datacore/lib/tests/test_speech_transport.py \
             .datacore/lib/tests/test_execution_controls.py \
+            .datacore/lib/tests/test_policy_preservation.py \
             .datacore/modules/voice-terminal/tests/test_llm_fallback.py \
             .datacore/lib/tests/test_command_receipt.py \
             .datacore/lib/tests/test_receipt_preservation.py \

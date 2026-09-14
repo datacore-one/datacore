@@ -28,7 +28,9 @@ def test_only_missing_optional_policy_is_default(tmp_path, monkeypatch):
         read_policy(path)
     def denied(*a, **kw):
         raise PermissionError('fixture sensitive detail')
-    monkeypatch.setattr(Path, 'open', denied)
+    path.unlink()
+    path.write_text('enabled: false')
+    monkeypatch.setattr('execution_controls.read_text_within', denied)
     with pytest.raises(PolicyError, match='unreadable') as failure:
         read_policy(path)
     assert 'sensitive' not in str(failure.value)
