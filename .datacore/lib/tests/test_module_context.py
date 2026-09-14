@@ -25,7 +25,7 @@ def test_private_context_binds_canonical_identity_and_keeps_code_unchanged(layou
     value = resolve('acme/news', code)
     assert value.name == 'mine'
     assert value.space == space
-    assert value.data == space / '.datacore/module-data/acme/news/data'
+    assert value.data == space / '.datacore/modules/acme/news/data'
     (value.data / 'retained').write_text('private')
     assert list(code.iterdir()) == []
     assert value.data.stat().st_mode & 0o077 == 0
@@ -105,3 +105,68 @@ def test_short_reads_preserve_complete_unicode_and_duplicate_json_is_refused(tmp
         parse_json('{"items": [1], "items": []}')
     with pytest.raises(ValueError):
         parse_json('{"score": NaN}')
+
+
+def test_existing_separate_user_data_is_retained_without_migration(layout):
+    _, space, code = layout
+    parent = space / '.datacore/modules/news'
+    data = parent / 'data'
+    data.mkdir(parents=True, mode=0o700)
+    (data / 'note').write_bytes(b'original data')
+    (parent / 'settings.local.yaml').write_text('local: retained\n')
+    before = (data.stat().st_ino, (data / 'note').stat().st_ino)
+    assert resolve('news', code).data == data
+    assert resolve('news', code, create=False).data == data
+    assert before == (data.stat().st_ino, (data / 'note').stat().st_ino)
+    assert (data / 'note').read_bytes() == b'original data'
+    assert not (space / '.datacore/module-data').exists()
+
+
+def test_already_separate_new_layout_is_not_moved_back(layout):
+    _, space, code = layout
+    data = space / '.datacore/module-data/news/data'
+    data.mkdir(parents=True, mode=0o700)
+    for parent in (data.parent, data.parent.parent):
+        parent.chmod(0o700)
+    (data / 'note').write_text('retained')
+    assert resolve('news', code).data == data
+    assert not (space / '.datacore/modules/news').exists()
+
+
+def test_two_existing_stores_refuse_without_selecting_or_overwriting(layout):
+    _, space, code = layout
+    for directory in ('modules', 'module-data'):
+        data = space / '.datacore' / directory / 'news/data'
+        data.mkdir(parents=True, mode=0o700)
+        (data / 'note').write_text(directory)
+    with pytest.raises(ValueError, match='multiple'):
+        resolve('news', code)
+    for directory in ('modules', 'module-data'):
+        assert (space / '.datacore' / directory / 'news/data/note').read_text() == directory
+
+
+@pytest.mark.parametrize('linked', [False, True])
+def test_code_installed_in_space_gets_separate_data_without_renaming_code(layout, linked):
+    _, space, provider = layout
+    installed = space / '.datacore/modules/news'
+    installed.parent.mkdir(parents=True)
+    if linked:
+        installed.symlink_to(provider, target_is_directory=True)
+    else:
+        installed.mkdir()
+    (installed / 'module.yaml').write_text('name: news\n')
+    assert resolve('news', installed).data == space / '.datacore/module-data/news/data'
+    assert not (installed / 'data').exists()
+    assert (installed / 'module.yaml').read_text() == 'name: news\n'
+
+
+def test_symlinked_existing_data_does_not_gain_compatibility_exception(layout):
+    root, space, code = layout
+    outside = root.parent / 'outside'
+    outside.mkdir()
+    parent = space / '.datacore/modules/news'
+    parent.mkdir(parents=True)
+    (parent / 'data').symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match='aliased'):
+        resolve('news', code)
+    assert list(outside.iterdir()) == []
