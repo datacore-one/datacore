@@ -1,9 +1,28 @@
 """Worker startup preserves explicit credential scope and refuses unsafe state."""
 import json
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+
+def test_exported_private_state_works_through_systemd_state_alias(profile, tmp_path, monkeypatch):
+    import file_utils
+    physical = tmp_path / 'physical-worker'
+    physical.mkdir(mode=0o700)
+    state = tmp_path / 'managed-state'
+    state.mkdir()
+    (state / 'test').symlink_to(physical)
+    monkeypatch.setattr(runtime, 'STATE', state)
+    _, environment = runtime.build_launch('test', profile, {'EXAMPLE_API_KEY': 'fixture'})
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    private = file_utils.private_state_directory('policy-regression')
+    assert private == physical / 'state/policy-regression'
+    assert Path(environment['HOME']) == physical
+    assert Path(environment['DATACORE_ROOT']) == physical / 'Data'
+    assert private.stat().st_mode & 0o077 == 0
 
 import runtime_context as runtime
 
@@ -23,8 +42,8 @@ def test_explicit_credentials_and_arguments_do_not_inherit_operator_environment(
     command, env = runtime.build_launch('test', profile, {'EXAMPLE_API_KEY': 'assigned-only'})
     assert command == profile['command'] and command is not profile['command']
     assert env['EXAMPLE_API_KEY'] == 'assigned-only'
-    assert env['DATACORE_ROOT'] == '/var/lib/datacore-workers/test/Data'
-    assert env['HOME'] == '/var/lib/datacore-workers/test'
+    assert env['DATACORE_ROOT'] == str((runtime.STATE / 'test').resolve() / 'Data')
+    assert env['HOME'] == str((runtime.STATE / 'test').resolve())
     assert not {'SSH_AUTH_SOCK', 'AWS_SECRET_ACCESS_KEY', 'PYTHONPATH'} & set(env)
     assert 'other-context-secret' not in env.values()
     assert 'assigned-only' not in command

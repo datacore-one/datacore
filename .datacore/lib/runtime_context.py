@@ -100,7 +100,10 @@ def build_launch(name: str, profile: dict, secrets: dict) -> tuple[list[str], di
             or len(names) != len(set(names)) or set(names) != set(credentials)
             or set(environment) & set(credentials)):
         raise Refused('credential scope differs from the runtime profile')
-    home = str(STATE / name)
+    # DynamicUser StateDirectory may be a systemd-managed alias into /var/lib/private.
+    # launch() verifies this instance's ownership and cwd before building the
+    # environment. Export the physical directory so core no-alias APIs can use it.
+    home = str((STATE / name).resolve())
     clean = {
         'HOME': home, 'PATH': str(Path(command[0]).parent) + ':/usr/bin:/bin',
         'LANG': 'C.UTF-8', 'PYTHONNOUSERSITE': '1',
