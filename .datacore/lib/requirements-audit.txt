@@ -39,6 +39,7 @@ referencing==0.37.0
 reportlab==4.4.5
 requests==2.33.0
 rpds-py==2026.6.3
+ruamel.yaml==0.19.1
 ruff==0.15.5
 sse-starlette==3.4.11
 starlette==1.6.0
