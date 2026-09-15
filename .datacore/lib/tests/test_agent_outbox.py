@@ -14,7 +14,10 @@ def test_relay_failure_is_preserved_outside_the_synced_directory(tmp_path, monke
     monkeypatch.setattr(emitter, '_RELAY_URL', 'https://relay.example.test')
     monkeypatch.setattr(emitter, '_post_to_relay', lambda row: False)
     event = emitter.emit('test', 'test', 'retained', event_id='one')
-    assert event['id'] == 'one'
+    # The caller's key states dedup intent; identity is the content, so an ID
+    # can never name two different events (see test_agent_event_identity).
+    assert event['dedup_key'] == 'one'
+    assert event['id'] != 'one' and len(event['id']) == 64
     shutil.rmtree(canonical)  # simulate complete replacement by inbound sync
     received = []
     monkeypatch.setattr(emitter, '_post_to_relay', lambda row: received.append(row) or True)

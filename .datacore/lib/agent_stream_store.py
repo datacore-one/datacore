@@ -32,11 +32,16 @@ def append_events(path: Path, rows: list[dict]) -> int:
             previous = raw.decode("utf-8")
         except FileNotFoundError:
             previous = ""
+        # The scan stays wide so a retry that crosses date rotation still
+        # deduplicates. What changed is that a duplicate ALREADY on disk no
+        # longer raises (see remember): scanning was never the bug, refusing
+        # new work because of old history was.
         paths = sorted(path.parent.glob('events-????-??-??.jsonl')) if re.fullmatch(r'events-\d{4}-\d{2}-\d{2}\.jsonl', path.name) else []
         paths = [other for other in paths if other != path]
         if len(paths) > MAX_RETAINED_FILES:
             raise ValueError('agent stream retention capacity exceeded; archive old logs')
         known = {}
+        seen_keys: set[str] = set()
         total = len(previous.encode('utf-8'))
 
         def remember(text):
@@ -45,9 +50,12 @@ def append_events(path: Path, rows: list[dict]) -> int:
                 if not isinstance(row, dict) or not isinstance(row.get('id'), str) or not row['id']:
                     raise ValueError('invalid existing agent event')
                 content = _content_hash(row)
-                if row['id'] in known and known[row['id']] != content:
-                    raise EventConflict('existing event ID names different content')
-                known[row['id']] = content
+                # A duplicate already on disk is history, not a reason to refuse
+                # new work. First write wins for comparison purposes.
+                known.setdefault(row['id'], content)
+                key = row.get('dedup_key')
+                if isinstance(key, str) and key:
+                    seen_keys.add(key)
 
         remember(previous)
         for other in paths:
@@ -64,6 +72,11 @@ def append_events(path: Path, rows: list[dict]) -> int:
             content = _content_hash(row)
             if row["id"] in known and known[row["id"]] != content:
                 raise EventConflict("event ID already names different content")
+            key = row.get("dedup_key")
+            if isinstance(key, str) and key and key in seen_keys:
+                continue          # the caller asked for this to dedup; first wins
+            if isinstance(key, str) and key:
+                seen_keys.add(key)
             if row["id"] not in known:
                 additions.append(json.dumps(row, ensure_ascii=False, allow_nan=False))
                 known[row["id"]] = content

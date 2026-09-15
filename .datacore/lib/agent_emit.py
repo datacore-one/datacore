@@ -43,6 +43,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import hashlib
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -84,6 +85,16 @@ def _post_to_relay(ev: dict[str, Any]) -> bool:
     return ok
 
 
+def _event_identity(event: dict[str, Any]) -> str:
+    """Content address for an agent event, reusing the ledger's canonical form."""
+    try:
+        from ledger.events import canonical_bytes
+        body = {key: value for key, value in event.items() if key != "id"}
+        return hashlib.sha256(canonical_bytes(body)).hexdigest()
+    except Exception:  # noqa: BLE001 - identity must never break the caller's work
+        return uuid.uuid4().hex
+
+
 def emit(
     event_type: str,
     agent: str,
@@ -113,14 +124,29 @@ def emit(
     if severity not in _VALID_SEVERITIES:
         severity = "info"
     ev = {
-        "id": event_id or uuid.uuid4().hex,
-        "ts": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
+        # Microseconds, not seconds: identity is the content, so two genuine
+        # occurrences in the same second would otherwise hash identically and
+        # the second would vanish as a "duplicate". Transport retries resend
+        # the row already built, keeping its original ts and id, so real
+        # idempotency is unaffected.
+        "ts": datetime.now(tz=timezone.utc).isoformat(timespec="microseconds"),
         "type": event_type,
         "agent": agent,
         "summary": str(summary)[:300],
         "severity": severity,
         "details": details or None,
     }
+    # A caller-supplied key states intent to deduplicate; it is NOT the
+    # identity. `task-cos-cadence-triage-2026-07-24-started` names a task and
+    # a day, so three runs that day all claimed it, and because the store
+    # refuses one ID naming two contents, a single July collision blocked
+    # every agent write from 2026-09-11 onward.
+    if event_id:
+        ev["dedup_key"] = str(event_id)
+    # Identity is the content, as it is for ledger events: equal content is
+    # the same event, different content is a different event, so an ID can
+    # never name two things and the conflict is unreachable by construction.
+    ev["id"] = _event_identity(ev)
 
     # 1) A configured relay has a separate durable outgoing queue.
     if _RELAY_URL:
@@ -235,8 +261,13 @@ def emit_task(
         agent=agent,
         summary=summary or f"{s}: {task}",
         severity=severity,
-        details={"task": task, **(details or {})},
-        event_id=f"task-{task_id}-{s}" if task_id else None,
+        details={"task": task, "task_id": task_id, **(details or {})},
+        # No dedup key. `task-{task_id}-{status}` CORRELATES a task's events;
+        # it does not identify one occurrence. CoS task ids carry a date, so
+        # using it to deduplicate collapsed every re-run that day into a single
+        # record -- three cadence runs on 2026-07-24 would have become one, and
+        # silently. Identity is the content; the task id stays in details so
+        # started/completed can still be paired.
     )
 
 
