@@ -12,6 +12,7 @@ Or via pytest: pytest test_plur_inject_wrapper.py
 import importlib.util
 import os
 import tempfile
+import shlex
 import time
 from pathlib import Path
 
@@ -35,15 +36,15 @@ def _alive(pid):
         return True
 
 
-def test_timeout_kills_whole_process_group():
+def test_timeout_kills_whole_process_group(tmp_path):
     mod = _load()
-    pidfile = Path(tempfile.gettempdir()) / "plur_test_grandchild.pid"
+    pidfile = tmp_path / "grandchild.pid"
     if pidfile.exists():
         pidfile.unlink()
 
     # Fake hook: spawn a long-sleeping grandchild, record its PID, then block.
     # If the wrapper kills only the direct child, the grandchild survives.
-    script = f"sleep 60 & echo $! > {pidfile}; sleep 60"
+    script = f"sleep 60 & echo $! > {shlex.quote(str(pidfile))}; sleep 60"
     mod._hook_cmd = lambda: ["sh", "-c", script]
 
     out = mod._run_hook("", timeout=1)  # forces the timeout path
@@ -62,5 +63,6 @@ def test_timeout_kills_whole_process_group():
 
 
 if __name__ == "__main__":
-    test_timeout_kills_whole_process_group()
+    with tempfile.TemporaryDirectory() as directory:
+        test_timeout_kills_whole_process_group(Path(directory))
     print("PASS: timeout kills the whole process group (no orphan)")

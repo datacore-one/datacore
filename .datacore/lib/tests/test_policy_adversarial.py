@@ -12,6 +12,55 @@ from ledger.log import EventLog, read_events
 from ledger.policy import Policy, PolicyError, guarded_append
 
 
+def test_tool_classifier_refuses_a_duplicate_effect_rule(tmp_path):
+    from tool_policy import load_effects
+    path = tmp_path / 'effects.yaml'
+    path.write_text('effects:\n  payment: {tools: [Bash], patterns: [pay]}\n'
+                    '  payment: {}\n')
+    with pytest.raises(ValueError):
+        load_effects(path)
+
+
+def test_tool_policy_parse_failure_does_not_leak_source_through_exception_chain(tmp_path):
+    import traceback
+    from tool_policy import load_effects
+    path = tmp_path / 'effects.yaml'
+    path.write_text('effects: [fixture-sensitive-parser-value\n')
+    with pytest.raises(ValueError) as error:
+        load_effects(path)
+    assert 'fixture-sensitive-parser-value' not in ''.join(traceback.format_exception(error.value))
+
+
+@pytest.mark.parametrize('duplicate_key', [True, False])
+def test_principal_lookup_refuses_ambiguous_writer_authority(tmp_path, duplicate_key):
+    path = tmp_path / 'principals.yaml'
+    text = 'principals:\n'
+    if duplicate_key:
+        text += '  powerful: {writes_as: [other-writer]}\n'
+    text += ('  restricted: {writes_as: [restricted-writer]}\n'
+             '  powerful: {writes_as: [restricted-writer]}\n')
+    path.write_text(text)
+    with pytest.raises(ValueError):
+        actor_identity.principal_of('restricted-writer', path)
+
+
+@pytest.mark.parametrize('missing', [False, True])
+def test_failed_identity_lookup_cannot_select_a_fallback_execution_policy(tmp_path, monkeypatch, missing):
+    import tool_policy
+    registry = tmp_path / 'principals.yaml'
+    if not missing:
+        registry.write_text('principals: [invalid]\n')
+    monkeypatch.setattr(actor_identity, 'PRINCIPALS', registry)
+    monkeypatch.setenv('DATACORE_ACTOR', 'worker')
+    policy = tmp_path / 'policy.yaml'
+    policy.write_text('version: 1\napprover: human\ncosign_effects: []\n'
+                      'principals:\n  unknown: {}\n  worker: {}\n')
+    decision = tool_policy.evaluate_hook({'tool_name': 'Read', 'tool_input': {'path': 'fixture'}},
+                                         env={}, record=False, effects={}, policy_path=policy)
+    assert decision is not None
+    assert decision['hookSpecificOutput']['permissionDecision'] == 'deny'
+
+
 @pytest.fixture
 def policy(tmp_path, monkeypatch):
     registry = tmp_path / "principals.yaml"
@@ -200,3 +249,73 @@ def test_executor_refuses_payload_changed_after_claim(tmp_path, policy, monkeypa
     executor._actor, executor._space, executor._item = 'worker', tmp_path, 'one'
     with pytest.raises(PolicyError, match='claimed payload'):
         executor._execution_env()
+
+
+def _conditional_task(space, policy):
+    from ledger.fold import fold
+    (space / '.datacore').mkdir(exist_ok=True)
+    (space / '.datacore/ledger-edit-protocol').write_text('1\n')
+    log = EventLog(space, 'worker', sign=False)
+    task = _approved_task(space, policy, {
+        'id': 'one', 'title': 'original', 'effects': ['email.send'],
+        'org': {'body': 'instructions', 'properties': {'A': 'base', 'B': 'base'}}})
+    guarded_append(log, 'item.create', task, policy)
+    return log, fold(read_events(space)).items['one']
+
+
+def test_conditional_update_approval_binds_replayed_content(tmp_path, policy):
+    from ledger.edits import conditional_payload
+    from ledger.fold import fold
+    from ledger.policy import approval_payload_hash
+    log, before = _conditional_task(tmp_path, policy)
+    approved = _approved_task(tmp_path, policy, {**before.payload, 'title': 'amended'})
+    update = conditional_payload(before, {'title': 'amended', 'approval_ref': approved['approval_ref']})
+    guarded_append(log, 'item.update', update, policy)
+    after = fold(read_events(tmp_path)).items['one']
+    assert after.payload == approved
+    assert '_merge' not in after.payload
+    claim = guarded_append(log, 'item.claim', {'id': 'one'}, policy)
+    assert claim.payload['payload_hash'] == approval_payload_hash(approved)
+
+
+@pytest.mark.parametrize('approve_merged', [False, True])
+def test_conditional_approval_accounts_for_unseen_disjoint_edits(tmp_path, policy, approve_merged):
+    from ledger.edits import conditional_payload
+    from ledger.fold import fold
+    log, before = _conditional_task(tmp_path, policy)
+    proposed = {'body': 'instructions', 'properties': {'A': 'local', 'B': 'base'}}
+    remote = {'body': 'instructions', 'properties': {'A': 'base', 'B': 'remote'}}
+    log.append('item.update', {'id': 'one', 'org': remote})
+    expected = {'body': 'instructions', 'properties': {'A': 'local', 'B': 'remote'}}
+    approved = _approved_task(tmp_path, policy, {
+        **before.payload, 'org': expected if approve_merged else proposed})
+    update = conditional_payload(before, {'org': proposed, 'approval_ref': approved['approval_ref']})
+    if not approve_merged:
+        events = read_events(tmp_path)
+        with pytest.raises(PolicyError, match='bind'):
+            guarded_append(log, 'item.update', update, policy)
+        assert read_events(tmp_path) == events
+        assert fold(events).items['one'].payload['org'] == remote
+    else:
+        guarded_append(log, 'item.update', update, policy)
+        assert fold(read_events(tmp_path)).items['one'].payload['org'] == expected
+        guarded_append(log, 'item.claim', {'id': 'one'}, policy)
+
+
+@pytest.mark.parametrize('variant', ['malformed', 'conflicting', 'terminal'])
+def test_guarded_conditional_update_rejects_invalid_or_conflicting_precondition(tmp_path, policy, variant):
+    from ledger.edits import conditional_payload
+    from ledger.fold import fold
+    log, before = _conditional_task(tmp_path, policy)
+    approved = _approved_task(tmp_path, policy, {**before.payload, 'title': 'amended'})
+    update = conditional_payload(before, {'title': 'amended', 'approval_ref': approved['approval_ref']},
+                                 terminal=variant == 'terminal')
+    if variant == 'malformed':
+        update['_merge'] = None
+    elif variant == 'conflicting':
+        log.append('item.update', {'id': 'one', 'title': 'concurrent title'})
+    events = read_events(tmp_path)
+    with pytest.raises(PolicyError, match='conditional|concurrent'):
+        guarded_append(log, 'item.update', update, policy)
+    assert read_events(tmp_path) == events
+    assert not fold(events).items['one'].edit_conflicts

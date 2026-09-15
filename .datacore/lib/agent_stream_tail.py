@@ -66,10 +66,30 @@ def validate_configuration():
     if not (0 < POLL_INTERVAL <= 3600 and 0 < MAX_LINE_BYTES <= 2 * 1024 * 1024 and 0 < DEDUP_WINDOW <= 10000):
         raise ValueError("invalid tailer resource limits")
 
-# The service may install this entry point separately; helpers come from the
-# explicitly selected Datacore code checkout.
-sys.path.insert(0, str(Path(os.environ.get("DATACORE_LIB") or
-    Path(os.environ.get("DATACORE_ROOT") or Path.home() / "Data") / ".datacore/lib")))
+def _code_library():
+    # A copied standalone service must declare its code directory. Selecting
+    # data never authorizes a different implementation of outbox persistence.
+    if "DATACORE_LIB" in os.environ:
+        value = os.environ["DATACORE_LIB"]
+        if not value or "\0" in value or not Path(value).is_absolute() or ".." in Path(value).parts:
+            raise ValueError("invalid explicit Datacore library")
+        library = Path(value).resolve(strict=True)
+    else:
+        library = Path(__file__).resolve().parent
+    names = ("file_utils", "agent_outbox", "relay_client")
+    for name in names:
+        source = library / (name + ".py")
+        if not source.is_file() or not source.resolve().is_relative_to(library):
+            raise RuntimeError("installed tailer helpers unavailable; declare DATACORE_LIB")
+        if name in sys.modules:
+            origin = getattr(sys.modules[name], "__file__", None)
+            if not origin or not Path(origin).resolve().is_relative_to(library):
+                raise RuntimeError("tailer helpers belong to another installation")
+    return library
+
+
+_library = str(_code_library())
+sys.path[:] = [_library, *(entry for entry in sys.path if entry != _library)]
 from file_utils import atomic_write_text, file_lock
 from agent_outbox import enqueue, acknowledge, flush
 from relay_client import post_event as _relay_post

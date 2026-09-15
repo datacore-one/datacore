@@ -34,7 +34,9 @@ from __future__ import annotations
 import argparse
 import datetime
 import os
-import re
+from copy import deepcopy
+from dataclasses import replace
+import stat
 import sys
 from pathlib import Path
 
@@ -43,6 +45,9 @@ sys.path.insert(0, str(LIB))
 
 from ledger.fold import closure_kind, fold, was_finished  # noqa: E402
 from ledger.log import read_events  # noqa: E402
+from ledger.projector import render_item, SEQ_TODO  # noqa: E402
+from org_transaction import serialized, watch_file, write_org_text  # noqa: E402
+from org_workspace._vendor.orgparse import loads  # noqa: E402
 
 CLOSED = ("completed", "verified", "dismissed")
 
@@ -57,8 +62,9 @@ def _closed_dt(item) -> datetime.datetime | None:
     if not raw:
         return None
     try:
-        return datetime.datetime.fromtimestamp(float(str(raw).split(".")[0]) / 1000.0)
-    except (ValueError, TypeError, OSError):
+        return datetime.datetime.fromtimestamp(float(str(raw).split(".")[0]) / 1000.0,
+                                               datetime.timezone.utc)
+    except (ValueError, TypeError, OverflowError, OSError):
         return None
 
 
@@ -88,11 +94,72 @@ def closed_items(space: Path) -> list:
     return [i for i in state.items.values() if i.status in CLOSED and _closed_dt(i)]
 
 
+class ArchiveConflict(ValueError):
+    """Existing archive content needs reconciliation; never silently replace it."""
+
+
+def _safe_archive_path(space: Path, target: Path) -> None:
+    if space.absolute() != space.resolve() or not space.is_dir():
+        raise ArchiveConflict('archive space must be a canonical directory')
+    for part in (space / '4-archive', space / '4-archive/done', target):
+        if part.is_symlink():
+            raise ArchiveConflict('archive path must not contain symbolic links')
+        try:
+            info = part.stat()
+        except FileNotFoundError:
+            continue
+        if part == target:
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ArchiveConflict('archive must be a regular file with one link')
+        elif not stat.S_ISDIR(info.st_mode):
+            raise ArchiveConflict('archive parent must be a directory')
+
+
+def _archived_entries(text: str) -> dict[str, str]:
+    """Use actual property drawers, never ID-shaped text inside task notes."""
+    nodes = list(loads(text))[1:]
+    lines = text.splitlines(keepends=True)
+    entries = {}
+    for index, node in enumerate(nodes):
+        identity = node.get_property('ID')
+        if not identity:
+            continue
+        if identity in entries:
+            raise ArchiveConflict('duplicate identity in existing archive')
+        end = next((later.linenumber - 1 for later in nodes[index + 1:]
+                    if later.level <= node.level), len(lines))
+        entries[identity] = ''.join(lines[node.linenumber - 1:end]).rstrip()
+    return entries
+
+
+def _archive_entry(item) -> str:
+    payload = deepcopy(item.payload or {})
+    org = payload['org'] = payload.get('org') or {}
+    properties = org['properties'] = org.get('properties') or {}
+    # The archive moves each task to a root heading. Preserve tags formerly
+    # inherited from its parent/file, just as the projector promotes orphans.
+    payload['tags'] = sorted(set(payload.get('effective_tags') or payload.get('tags') or [])
+                             | set(payload.get('filetags') or []))
+    if item.owner:
+        properties['OWNER'] = item.owner
+    text = '\n'.join(render_item(replace(item, payload=payload), level=1)) + '\n'
+    nodes = list(loads(text))[1:]
+    if (len([node for node in nodes if node.level == 1]) != 1
+            or set(_archived_entries(text)) != {item.id}
+            or nodes[0].get_property('ID') != item.id):
+        raise ArchiveConflict('task cannot be archived without changing its identity or structure')
+    return text.rstrip()
+
+
+@serialized
 def archive(space: Path, days: int) -> tuple[int, int]:
-    """Append items closed before the window to the monthly archive."""
-    cutoff = datetime.datetime.now() - datetime.timedelta(days=days)
+    """Durably preserve complete terminal tasks, or refuse ambiguous old content."""
+    if isinstance(days, bool) or not isinstance(days, int) or days < 0:
+        raise ValueError('archive retention must be a non-negative integer')
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
     stale = [i for i in closed_items(space)
-             if _closed_dt(i) < cutoff and closure_kind(i) != "housekeeping"]
+             if i.status in ('verified', 'dismissed')
+             and _closed_dt(i) < cutoff and closure_kind(i) != "housekeeping"]
     if not stale:
         return 0, 0
 
@@ -101,40 +168,39 @@ def archive(space: Path, days: int) -> tuple[int, int]:
     for item in stale:
         by_month.setdefault(_closed_dt(item).strftime("%Y-%m"), []).append(item)
 
+    planned = []
     for month, items in sorted(by_month.items()):
         dest = space / "4-archive" / "done" / f"{month}.org"
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        existing = dest.read_text(encoding="utf-8") if dest.exists() else ""
+        _safe_archive_path(space, dest)
+        existing = watch_file(dest)['before'] or ''
         if not existing:
-            existing = f"#+TITLE: Completed work — {month}\n#+FILETAGS: :archive:done:\n"
-            dest.write_text(existing, encoding="utf-8")
-        have = set(re.findall(r":ID:\s*(\S+)", existing))
+            existing = f"#+TITLE: Completed work — {month}\n{SEQ_TODO}\n"
+        have = _archived_entries(existing)
 
         chunk: list[str] = []
-        for item in sorted(items, key=lambda i: _closed_dt(i)):
+        for item in sorted(items, key=lambda i: (_closed_dt(i), i.id)):
+            entry = _archive_entry(item)
             if item.id in have:
+                if have[item.id] != entry:
+                    raise ArchiveConflict('archived identity has different content; preserve both versions for reconciliation')
                 skipped += 1
                 continue
-            p = item.payload or {}
-            state = "DONE" if was_finished(item) else "CANCELLED"
-            tags = sorted(p.get("tags") or [])
-            tag_str = f"  :{':'.join(tags)}:" if tags else ""
-            chunk.append(f"* {state} {item.title}{tag_str}")
-            chunk.append("  CLOSED: " + _closed_dt(item).strftime("[%Y-%m-%d %a %H:%M]"))
-            chunk.append("  :PROPERTIES:")
-            chunk.append(f"  :ID: {item.id}")
-            if item.owner:
-                chunk.append(f"  :OWNER: {item.owner}")
-            chunk.append("  :END:")
+            chunk.append(entry)
+            have[item.id] = entry
             written += 1
         if chunk:
-            with dest.open("a", encoding="utf-8") as fh:
-                fh.write("\n".join(chunk) + "\n")
+            planned.append((dest, existing.rstrip('\n') + '\n\n' + '\n\n'.join(chunk) + '\n'))
+    # Validate every month before changing any; the transaction also restores
+    # earlier replacements when a later write or durability barrier fails.
+    for dest, text in planned:
+        _safe_archive_path(space, dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        write_org_text(dest, text)
     return written, skipped
 
 
 def report(space: Path, days: int) -> str:
-    since = datetime.datetime.now() - datetime.timedelta(days=days)
+    since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
     items = [i for i in closed_items(space)
              if _closed_dt(i) >= since and closure_kind(i) != "housekeeping"]
     if not items:

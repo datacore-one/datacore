@@ -41,3 +41,6 @@
 *.xlsx filter=lfs diff=lfs merge=lfs -text
 *.pages filter=lfs diff=lfs merge=lfs -text
 *.numbers filter=lfs diff=lfs merge=lfs -text
+
+# Unified patches encode blank context lines with a required leading space.
+.datacore/lib/hermes_runtime/source.patch whitespace=-blank-at-eol

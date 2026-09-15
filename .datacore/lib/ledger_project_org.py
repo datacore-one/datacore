@@ -15,8 +15,10 @@ Projecting without ingesting first is how a hand edit gets lost.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
+import time
 from pathlib import Path
 
 LIB = Path(__file__).resolve().parent
@@ -25,6 +27,8 @@ from ledger.fold import fold  # noqa: E402
 from ledger.log import read_events  # noqa: E402
 from ledger.genesis import scan  # noqa: E402
 from ledger.projector import project  # noqa: E402
+from ledger.projection_state import STATE, base_document, guard_projection, ProjectionConflict  # noqa: E402
+from org_transaction import serialized, watch_file, write_org_text  # noqa: E402
 
 MARKER = Path(".datacore") / "ledger-phase"
 ORG = Path("org") / "next_actions.org"
@@ -33,7 +37,7 @@ ORG = Path("org") / "next_actions.org"
 HEADER_COPY = Path(".datacore") / "ledger-org-header"
 
 
-def _with_org_header(space: Path, target: Path, text: str) -> str:
+def _with_org_header(space: Path, target: Path, text: str, *, remember: bool = True) -> str:
     """Keep the authored file's `#+TITLE/#+CATEGORY/#+STARTUP/#+TAGS/...` lines.
 
     The projector opens with a GENERATED banner and no in-buffer settings; an
@@ -54,28 +58,41 @@ def _with_org_header(space: Path, target: Path, text: str) -> str:
             elif line.strip() and not line.startswith("#"):
                 break
     copy = space / HEADER_COPY
-    if header and not copy.exists():
+    if header and not copy.exists() and remember:
         # WRITE ONCE. The copy is tracked; rewriting it on every cycle made
         # every host a writer of the same file and the transport conflicted
         # on it within the first hour of Phase 1 (2026-09-05).
-        copy.write_text("\n".join(header) + "\n")
+        write_org_text(copy, "\n".join(header) + "\n")
     elif not header and copy.exists():
         header = copy.read_text().splitlines()
-    body = [l for l in text.splitlines() if not l.startswith("# ")]
+    from ledger.projector import GENERATED_HEADER
+    # Remove only our generated prefix. Comments in task bodies are data.
+    body = text.removeprefix(GENERATED_HEADER).splitlines()
     note = "# Generated from the ledger (Phase 1, DIP-0046). Edits here are ingested hourly; the ledger is the record."
     return "\n".join(header + [note] + body) + "\n"
 
 
 def phase(space: Path) -> int:
     try:
-        return int((space / MARKER).read_text().strip() or "0")
-    except (FileNotFoundError, ValueError):
+        value = (space / MARKER).read_text().strip()
+    except FileNotFoundError:
         return 0
+    if value not in ('0', '1'):
+        raise ValueError('invalid ledger phase marker; source-of-truth mode is unverified')
+    return int(value)
 
 
+@serialized
 def project_space(space: Path, force: bool = False) -> str:
     if phase(space) != 1:
         return "phase 0, authored — not generated"
+
+    target = space / ORG
+    if target.is_symlink():
+        return "REFUSED — projection target must not be a symbolic link"
+    before = watch_file(target)["before"]
+    watch_file(space / STATE)
+    watch_file(space / HEADER_COPY)
 
     # REFUSE TO PROJECT OVER CONTENT THE LEDGER HAS NEVER SEEN.
     #
@@ -110,13 +127,16 @@ def project_space(space: Path, force: bool = False) -> str:
         return (f"REFUSED — {len(pending)} heading(s) in {ORG} are not in the "
                 f"ledger; ingest first, then project ({titles})")
 
-    text = project(fold(read_events(space)), space=space.name).text
+    text = project(fold(read_events(space)), space=space.name, as_of=time.time()).text
     target = space / ORG
     text = _with_org_header(space, target, text)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(".org.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, target)
+    try:
+        guard_projection(space, before, text)
+    except ProjectionConflict as exc:
+        return f"REFUSED — {exc}"
+    write_org_text(target, text)
+    write_org_text(space / STATE, base_document(text))
     return f"generated {ORG} ({text.count(chr(10))} lines)"
 
 
@@ -126,18 +146,38 @@ def main(argv: list[str] | None = None) -> int:
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--space")
     g.add_argument("--all", action="store_true")
+    ap.add_argument("--json", action="store_true", help="emit a complete versioned result for automation")
     ap.add_argument("--force", action="store_true",
-                    help="project even when the org file holds headings the ledger "
-                         "has never seen. This DESTROYS them. Operator override, "
-                         "never a routine run.")
+                    help="bypass the legacy import scan; full source-preservation "
+                         "checks still apply and cannot be overridden")
     a = ap.parse_args(argv)
-    spaces = [a.root / a.space] if a.space else sorted(p for p in a.root.glob("[0-9]-*") if (p / ".datacore" / "events").is_dir())
+    from spaces import discover_spaces
+    root = a.root.resolve(strict=True)
+    if a.space:
+        relative = Path(a.space)
+        selected = root / relative
+        if (relative.is_absolute() or '..' in relative.parts or selected.is_symlink()
+                or selected.resolve() != selected or not selected.is_dir()):
+            ap.error('space must be an existing directory within the selected root')
+        spaces = [selected]
+    else:
+        spaces = [space.path for space in discover_spaces(root, reject_aliases=True, reject_invalid=True)
+                  if (space.path / '.datacore/events').is_dir()]
     refused = 0
+    results = []
     for s in spaces:
         line = project_space(s, force=a.force)
         if line.startswith("REFUSED"):
             refused += 1
-        print(f"  {s.name:14} {line}")
+        status = ('refused' if line.startswith('REFUSED') else
+                  'generated' if line.startswith('generated ') else 'authored')
+        relative = s.relative_to(root).as_posix()
+        results.append({'space': relative, 'status': status})
+        if not a.json:
+            print(f"  {relative:14} {line}")
+    if a.json:
+        # No task titles, source content or exception details in automation output.
+        print(json.dumps({'version': 1, 'spaces': results}))
     # Non-zero so a caller can tell. A refusal that exits 0 is the same silence
     # this guard exists to break.
     return 1 if refused else 0

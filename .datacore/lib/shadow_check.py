@@ -51,6 +51,7 @@ def main() -> int:
             "org": d.org_count, "projected": d.projection_count,
             "lost": d.only_in_org, "extra": d.only_in_projection,
             "changed": sorted(d.changed), "clean": d.clean,
+            "problems": d.problems,
         }
         clean += 1 if d.clean else 0
         print(f"  {d}")

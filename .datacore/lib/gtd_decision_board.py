@@ -5,9 +5,9 @@ gtd_decision_board.py — a GTD weekly review, rendered as a decision board.
 Follows .datacore/skills/decision-board: a local, PLUR-branded page with one
 decision per row, a suggested answer on each, a "Note for Claude" field, and a
 Save that downloads <slug>.decisions.json. The page is written to
-.datacore/state/decision-boards/ (gitignored) and is never published.
+$DATACORE_STATE/decision-boards/ (owner-only) and is never published.
 
-Reads org files through org-workspace (never raw text) and never writes one.
+Reads org files through org-workspace. Explicit application uses its recoverable adapter.
 Applying the saved choices is a separate, explicit step.
 
 What needs a call:
@@ -33,8 +33,11 @@ Usage:
     [--prefill w37-weekly-review.decisions.json]
 """
 import argparse
+import base64
 import hashlib
 import json
+import os
+import stat
 import re
 import sys
 from datetime import date, datetime, timedelta
@@ -43,11 +46,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from org_workspace_adapter import _load_ws, _node_to_dict  # noqa: E402
+from org_transaction import serialized, watch_file, write_org_text, digest  # noqa: E402
+from file_utils import atomic_write_json, atomic_write_text, file_lock  # noqa: E402
 
 ASSETS = HERE / "decision_board"
-BOARDS = HERE.parent / "state" / "decision-boards"
-FONT_HREF = ("https://fonts.googleapis.com/css2?family=Outfit:wght@200;300;400;500"
-             "&family=JetBrains+Mono:wght@400;500&display=swap")
+MAX_DOCUMENT = 8 * 1024 * 1024
 OPEN = ("TODO", "NEXT", "WAITING", "REVIEW")
 PRIVATE_TAGS = {"health", "medical", "family", "finance", "personal-finance", "private"}
 
@@ -141,11 +144,11 @@ def _option(section, key, nxt, when):
     if section == "review" and key == "next":
         return "Rework it", "Back to NEXT on your own list."
     table = {
-        "next": ("Do next", "Stays on your next-actions list, with no date; an old date is cleared."),
+        "next": ("Do next", "Marked NEXT in its current file; its old scheduled date is cleared."),
         "defer": (f"Defer to {_fmt(when)}",
                   f"Becomes TODO, scheduled {_fmt(when)}. Write another date in the note to change it."),
-        "delegate": ("Delegate", "Tagged :AI: for nightshift, or handed to whoever you name in the note."),
-        "someday": ("Someday", "Set aside as someday (DEFERRED): out of the weekly view, nothing deleted."),
+        "delegate": ("Plan delegation", "Records a delegation request for review; no worker is started."),
+        "someday": ("Someday", "Moved to someday.org as a passive TODO; all task content is preserved."),
         "drop": ("Drop", "Marked CANCELLED; it stays in the file's history."),
         "accept": ("Accept", "Marked DONE."),
         "done": ("Already done", "Marked DONE: it already happened."),
@@ -229,25 +232,105 @@ def _json_block(name, obj):
     return f'<script type="application/json" id="{name}">{s}</script>'
 
 
+def _private_path(raw, *, create_parent=False):
+    path = Path(raw).absolute()
+    if any(part.is_symlink() for part in (path, *path.parents)):
+        raise ValueError('decision artifacts must not use symbolic links')
+    if create_parent:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    parent = path.parent.stat()
+    if parent.st_uid != os.getuid() or parent.st_mode & 0o077:
+        raise ValueError('decision artifacts require an owner-only directory')
+    if path.exists():
+        info = path.stat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+            raise ValueError('decision artifact must be an owned regular single-link file')
+    return path
+
+
+def _read_json(path):
+    with Path(path).open('rb') as stream:
+        raw = stream.read(MAX_DOCUMENT + 1)
+    if len(raw) > MAX_DOCUMENT:
+        raise ValueError('decision document exceeds size limit')
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate JSON key in decision document')
+            result[key] = value
+        return result
+    return json.loads(raw, object_pairs_hook=unique)
+
+
+def _build_id(data):
+    meta = {k: v for k, v in data['meta'].items() if k not in ('build', 'asOf')}
+    return hashlib.sha256(json.dumps({'meta': meta, 'sections': data['sections']},
+                                    sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def _inputs_current(inputs):
+    from org_space import validate_org_write_path
+    for name, expected in inputs.items():
+        path = Path(name)
+        if not path.is_absolute() or path != validate_org_write_path(path):
+            raise ValueError('decision input path changed or is not canonical')
+        if digest(watch_file(path)['before']) != expected:
+            raise ValueError('reviewed input changed; rebuild the board before applying')
+
+
+def _authority(inputs, *, require_projection=False):
+    """Record each source's persistence model; generated input must be current."""
+    from ledger_project_org import phase, ORG
+    from ledger.log import read_events
+    from ledger.fold import fold
+    from ledger.projector import project
+    from ledger.projection_state import snapshot
+    from org_space import ledger_space_for_file
+    result = {}
+    for name in inputs:
+        path = Path(name)
+        space = ledger_space_for_file(path)
+        if path.parent.name == 'org' and phase(path.parent.parent) == 1 and space is None:
+            raise ValueError('generated source has no available ledger')
+        mode = phase(space) if space is not None else 0
+        current = {'space': str(space) if space else None, 'phase': mode}
+        if mode == 1 and path == (space / ORG).resolve():
+            state = fold(read_events(space))
+            if require_projection and any(item.edit_conflicts for item in state.items.values()):
+                raise ValueError('unresolved ledger conflicts must be reconciled before review')
+            if require_projection and snapshot(path.read_text(), space.name) != snapshot(project(state, space=space.name).text, space.name):
+                raise ValueError('generated Org and ledger differ; reconcile before building a review')
+            current['root'] = state.state_root()
+        result[name] = current
+    return result
+
+
+@serialized
 def build(args):
     today = date.fromisoformat(args.today)
     nxt = today + timedelta(days=(7 - today.weekday()) % 7 or 7)
     later = nxt + timedelta(days=14)
     red = _redactor(args.redact or [])
-    overrides = json.loads(Path(args.overrides).read_text()) if args.overrides else {}
-    week = json.loads(Path(args.week).read_text()) if args.week else {}
-    prefill = {}
-    if args.prefill and Path(args.prefill).exists():
-        prefill = json.loads(Path(args.prefill).read_text()).get("decisions", {})
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,99}', args.slug):
+        raise ValueError('invalid board slug')
+    overrides = _read_json(args.overrides) if args.overrides else {}
+    week = _read_json(args.week) if args.week else {}
+    if not isinstance(overrides, dict) or not isinstance(week, dict):
+        raise ValueError('week and overrides must be objects')
+    prefill = _read_json(args.prefill) if args.prefill else None
+    inputs = {}
 
     raw = {k: [] for k, *_ in SECTIONS}
     sources, open_count, quiet = [], 0, 0
     plan = [(p, False) for p in args.files] + [(p, True) for p in (args.projects or [])]
     multi_space = len({Path(f).resolve().parent.parent.name for f, _ in plan}) > 1
     for f, is_project in plan:
-        path = Path(f)
-        if not path.exists():
-            continue
+        from org_space import validate_org_write_path
+        path = validate_org_write_path(f)
+        if str(path) in inputs:
+            raise ValueError('duplicate source file on decision board')
+        inputs[str(path)] = digest(watch_file(path)['before'])
         space = path.resolve().parent.parent.name
         sources.append(f"{space}/{path.name}" if multi_space else path.name)
         is_inbox = path.name == "inbox.org"
@@ -287,9 +370,15 @@ def build(args):
             if section != "review" and "done" not in keys:
                 keys.append("done")
             when = _date(ov.get("defer")) or when
+            from ledger_project_org import phase, ORG
+            from org_space import ledger_space_for_file
+            space_root = ledger_space_for_file(path)
+            generated = space_root is not None and phase(space_root) == 1 and path == (space_root / ORG).resolve()
             opts = []
             for k in keys:
                 lab, cons = _option(section, k, nxt, when)
+                if k == 'someday' and generated:
+                    lab, cons = f'Bench until {_fmt(when)}', f'DEFERRED in place, with a wake date of {_fmt(when)}.'
                 lab = (ov.get("labels") or {}).get(k, lab)
                 cons = (ov.get("consequences") or {}).get(k, cons)
                 opts.append({"value": k, "label": red(lab), "consequence": red(cons)})
@@ -313,6 +402,8 @@ def build(args):
     for s in week.get("sections", []):
         rows = []
         for i, r in enumerate(s.get("rows", []), 1):
+            if r.get('apply'):
+                raise ValueError('week rows cannot supply task mutation targets')
             rows.append(dict(r, id=f"{s['prefix']}{i}"))
         sections.append({"key": s["key"], "label": s["label"], "hint": s.get("hint", ""),
                          "rows": rows, "noted": s.get("noted", [])})
@@ -340,37 +431,46 @@ def build(args):
                               "Choose, add a note where it helps, and save; your org files change only "
                               "after you say “apply the decisions”."),
         "asOf": args.as_of or datetime.now().strftime("%Y-%m-%d %H:%M"),
-        # Row ids are positional, so a rebuild can shift them. The build stamp
-        # keys the page's saved choices and is echoed into the decisions file,
-        # and `apply` refuses a file saved from a different build.
-        "build": datetime.now().isoformat(timespec="seconds"),
+        # Content identity binds positional rows, choices and exact input bytes.
+        "schema": 2, "inputs": inputs, "authority": _authority(inputs, require_projection=True),
         "sources": sources, "open": open_count, "total": total,
         "path": [["Read", f"{open_count} open items · {len(sources)} files"],
                  ["Picked", f"{total} need a call"],
                  ["Your calls", "decided on this page"],
                  ["Applied", "after you say “apply the decisions”"]],
     }
-    data = {"meta": meta, "sections": sections, "prefill": prefill}
+    data = {"meta": meta, "sections": sections, "prefill": {}}
+    _validate_rows(data)
+    meta['build'] = _build_id(data)
+    if prefill is not None:
+        _validate_saved(data, prefill)
+        data['prefill'] = prefill['decisions']
+    # Parsing and classification must describe exactly these watched bytes.
+    for name, expected in inputs.items():
+        if digest(Path(name).read_bytes().decode('utf-8')) != expected:
+            raise ValueError('input changed while building the board')
 
     css = (ASSETS / "board.css").read_text()
     js = (ASSETS / "board.js").read_text()
     if "</script" in js.lower():
         raise SystemExit("board.js contains a literal </script")
     title = args.title.replace("&", "&amp;").replace("<", "&lt;")
+    script_hash = base64.b64encode(hashlib.sha256(js.encode()).digest()).decode()
+    csp = f"default-src 'none'; script-src 'sha256-{script_hash}'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
     page = ("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-            f"<title>{title}</title>"
-            '<link rel="preconnect" href="https://fonts.googleapis.com">'
-            '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
-            f'<link rel="stylesheet" href="{FONT_HREF}">'
+            f'<meta http-equiv="Content-Security-Policy" content="{csp}"><title>{title}</title>'
             f"<style>{css}</style></head><body><div id=\"app\"></div>"
             f"{_json_block('data', data)}<script>{js}</script></body></html>\n")
 
-    out = Path(args.out) if args.out else BOARDS / f"{today.isoformat()}-{args.slug}.html"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(page)
+    from file_utils import private_state_directory
+    selected = Path(args.out) if args.out else private_state_directory('decision-boards') / f"{today.isoformat()}-{args.slug}.html"
+    out = _private_path(selected, create_parent=True)
+    if len(page.encode()) > MAX_DOCUMENT:
+        raise ValueError('board exceeds document size limit')
     mapping = {r["id"]: dict(r.get("apply") or {}, title=r["title"]) for s in sections for r in s["rows"]}
-    out.with_suffix(".map.json").write_text(json.dumps(mapping, ensure_ascii=False, indent=1))
+    atomic_write_json(_private_path(out.with_suffix('.map.json')), mapping)
+    atomic_write_text(out, page)
 
     recs = {}
     for s in sections:
@@ -387,20 +487,64 @@ def build(args):
 # ---------------------------------------------------------------------------
 
 def _adapter(argv):
-    import subprocess
-    r = subprocess.run([sys.executable, str(HERE / "org_workspace_adapter.py")] + argv,
-                       capture_output=True, text=True)
-    try:
-        return json.loads(r.stdout or "{}")
-    except json.JSONDecodeError:
-        return {"error": (r.stdout or r.stderr or "no output").strip()[:300]}
+    # In-process calls retain the canonical transaction across a move+update.
+    from org_workspace_adapter import build_parser, COMMAND_MAP
+    args = build_parser().parse_args(argv)
+    return COMMAND_MAP[args.command](args)
+
+
+def _validate_rows(data):
+    if not isinstance(data, dict) or not isinstance(data.get('meta'), dict) or not isinstance(data.get('sections'), list):
+        raise ValueError('invalid board document')
+    rows, sections = {}, set()
+    for section in data['sections']:
+        if not isinstance(section, dict) or not isinstance(section.get('key'), str) or section['key'] in sections:
+            raise ValueError('duplicate or invalid section identity')
+        sections.add(section['key'])
+        for row in section.get('rows', []):
+            if not isinstance(row, dict) or not isinstance(row.get('id'), str) or not row['id'] or row['id'] in rows:
+                raise ValueError('duplicate or invalid row identity')
+            options = row.get('options')
+            if not isinstance(options, list) or not options or any(not isinstance(o, dict) or not isinstance(o.get('value'), str) for o in options):
+                raise ValueError('invalid row options')
+            keys = [o['value'] for o in options]
+            if len(keys) != len(set(keys)) or (row.get('suggested') is not None and row['suggested'] not in keys):
+                raise ValueError('ambiguous row options')
+            rows[row['id']] = row
+    return rows
 
 
 def _board_rows(board):
-    t = Path(board).read_text()
-    m = re.search(r'<script type="application/json" id="data">(.*?)</script>', t, re.S)
-    data = json.loads(m.group(1))
-    return data, {r["id"]: r for s in data["sections"] for r in s.get("rows", [])}
+    path = _private_path(board)
+    if path.stat().st_size > MAX_DOCUMENT:
+        raise ValueError('board exceeds document size limit')
+    match = re.search(r'<script type="application/json" id="data">(.*?)</script>', path.read_text(), re.S)
+    if not match:
+        raise ValueError('board has no embedded data')
+    data = json.loads(match.group(1))
+    return data, _validate_rows(data)
+
+
+def _validate_saved(data, saved):
+    meta, rows = data['meta'], _validate_rows(data)
+    if meta.get('schema') != 2 or not isinstance(meta.get('inputs'), dict):
+        raise ValueError('rebuild this legacy board before applying')
+    if not isinstance(saved, dict) or not meta.get('build') or saved.get('build') != meta['build'] or saved.get('board') != meta.get('slug'):
+        raise ValueError('saved decisions do not belong to this board build')
+    if meta['build'] != _build_id(data):
+        raise ValueError('board content does not match its build identity')
+    decisions = saved.get('decisions')
+    if not isinstance(decisions, dict):
+        raise ValueError('decisions must be an object')
+    for rid, decision in decisions.items():
+        if rid not in rows or not isinstance(decision, dict):
+            raise ValueError('unknown row or malformed decision')
+        choice, note = decision.get('choice'), decision.get('note', '')
+        if not isinstance(note, str) or len(note) > 8000 or '\x00' in note:
+            raise ValueError('invalid decision note')
+        if choice is not None and choice not in [o['value'] for o in rows[rid]['options']]:
+            raise ValueError('choice was not offered on this board')
+    return decisions
 
 
 def _ops(row, choice, note, today, someday_parent):
@@ -435,17 +579,18 @@ def _ops(row, choice, note, today, someday_parent):
         # and a move is not a ledger event: a task moved to someday.org comes
         # back on the next projection (seen 2026-09-11). There, someday is a
         # state the ledger records — DEFERRED, in place.
-        space = Path(f).resolve().parent.parent
-        try:
-            phase1 = (space / ".datacore" / "ledger-phase").read_text().strip() == "1"
-        except OSError:
-            phase1 = False
-        if phase1 and Path(f).name == "next_actions.org":
-            return [base + ["--state", "DEFERRED", "--scheduled", "none"]
-                    + props([f"SOMEDAY={tag}"])]
+        from ledger_project_org import phase, ORG
+        from org_space import ledger_space_for_file
+        space = ledger_space_for_file(f)
+        if space is not None and phase(space) == 1 and Path(f).resolve() == (space / ORG).resolve():
+            when = _date(note) or _date(a.get('defer'))
+            if not when or when <= date.fromisoformat(today):
+                raise ValueError('benching a generated task requires a future wake date')
+            return [base + ['--state', 'DEFERRED', '--scheduled', when.isoformat()]
+                    + props([f'SOMEDAY={tag}'])]
         target = str(Path(f).parent / "someday.org")
         move = ["move", "--from", f, "--to", target, "--id", oid]
-        if someday_parent and "0-personal" in target:
+        if someday_parent and Path(target).parent.parent.name == "0-personal":
             move += ["--parent-id", someday_parent]
         return [move, ["update", "--file", target, "--id", oid, "--state", "TODO",
                        "--scheduled", "none"] + props()]
@@ -454,68 +599,98 @@ def _ops(row, choice, note, today, someday_parent):
     return None
 
 
-def apply_cmd(args):
-    today = args.today or date.today().isoformat()
-    data, rows = _board_rows(args.board)
-    saved = json.loads(Path(args.decisions).read_text())
-    built, saved_build = (data.get("meta") or {}).get("build"), saved.get("build")
-    if built and saved_build and built != saved_build:
-        raise SystemExit(f"Refusing: these decisions were saved from build {saved_build}, "
-                         f"but {args.board} is build {built}. Row ids may point at different tasks.")
-    decisions = saved.get("decisions", {})
-    log = Path(args.board).with_suffix(".applied.json")
-    applied = json.loads(log.read_text()) if log.exists() else {}
-    plan, for_claude, skipped = [], [], []
-    for rid, d in decisions.items():
-        ch, note = d.get("choice"), (d.get("note") or "").strip()
-        row = rows.get(rid)
-        if row is None:
-            skipped.append((rid, "not on this board"))
+@serialized
+def _prepare(data, rows, saved, receipt, today, someday_parent):
+    decisions = _validate_saved(data, saved)
+    meta = data['meta']
+    if receipt:
+        if receipt.get('build') != meta['build'] or receipt.get('version') != 2:
+            raise ValueError('receipt belongs to another board; preserve it and build a new board')
+        if receipt.get('pending'):
+            raise ValueError('an interrupted decision needs reconciliation; preserve its receipt and inspect task and ledger state before making a new board')
+    expected = receipt.get('inputs', meta['inputs'])
+    _inputs_current(expected)
+    if _authority(expected) != receipt.get('authority', meta.get('authority')):
+        raise ValueError('reviewed ledger or persistence model changed; rebuild the board')
+    plan, for_claude = [], []
+    for rid, decision in decisions.items():
+        choice, note = decision.get('choice'), decision.get('note', '').strip()
+        previous = receipt.get('completed', {}).get(rid)
+        if previous:
+            if previous['choice'] != choice or previous['note'] != note:
+                raise ValueError('this decision was already applied; rebuild from the current task before revising it')
             continue
-        prev = applied.get(rid)
-        if prev and prev.get("choice") == ch and prev.get("note", "") == note:
+        row = rows[rid]
+        target = row.get('apply') or {}
+        if not target.get('orgId') or (not choice and note) or (choice not in ('done', 'accept') and re.search(r'\b(done|finished|already did)\b', note, re.I)):
+            for_claude.append({'id': rid, 'choice': choice, 'note': note, 'title': row.get('title')})
             continue
-        has_task = bool((row.get("apply") or {}).get("orgId"))
-        # A note that contradicts the choice ("it's done" on a Drop) is read by
-        # Claude rather than applied blindly.
-        contradicts = ch not in ("done", "accept") and re.search(r"\b(done|finished|already did)\b", note, re.I)
-        if not has_task or (not ch and note) or contradicts:
-            for_claude.append({"id": rid, "choice": ch, "note": note, "title": row.get("title")})
+        if not choice:
             continue
-        if not ch:
-            continue
-        ops = _ops(row, ch, note, today, args.someday_parent)
-        if ops is None:
-            skipped.append((rid, f"no rule for '{ch}'"))
-            continue
-        plan.append((rid, ch, note, row, ops))
+        if target.get('file') not in meta['inputs']:
+            raise ValueError('task target is outside the reviewed input set')
+        ops = _ops(row, choice, note, today, someday_parent)
+        if not ops:
+            raise ValueError('choice has no supported application rule')
+        plan.append((rid, choice, note, ops))
+    return plan, for_claude, expected
 
-    counts = {}
-    for _, ch, *_ in plan:
-        counts[ch] = counts.get(ch, 0) + 1
-    print(json.dumps({"board": args.board, "to_apply": len(plan), "by_choice": counts,
-                      "for_claude": for_claude, "skipped": skipped,
-                      "dry_run": bool(args.dry_run)}, ensure_ascii=False, indent=1))
-    if args.dry_run:
-        for rid, ch, note, row, ops in plan[:args.show]:
-            print(f"  {rid:6} {ch:8} {row['title'][:70]}")
-        return
-    ok = failed = 0
-    for rid, ch, note, row, ops in plan:
-        err = None
+
+@serialized
+def _apply_row(log, receipt, row):
+    rid, choice, note, ops = row
+    _inputs_current(receipt['inputs'])
+    # The pending intent was durably written before entering this transaction.
+    # Org changes and completion receipt recover together. Append-only ledger
+    # effects are never falsely claimed to be rolled back: pending blocks replay.
+    if _authority(receipt['inputs']) != receipt['authority']:
+        raise ValueError('reviewed ledger or persistence model changed; rebuild the board')
+    watch_file(log)
+    from ledger.projection_state import reviewed_state
+    roots = {entry['space']: entry['root'] for entry in receipt['authority'].values() if 'root' in entry}
+    with reviewed_state(roots):
         for op in ops:
-            res = _adapter(op)
-            if res.get("error"):
-                err = res["error"]
-                break
-        if err:
-            failed += 1
-            print(f"  FAILED {rid} {ch}: {err}")
-            continue
-        ok += 1
-        applied[rid] = {"choice": ch, "note": note, "at": datetime.now().isoformat(timespec="seconds")}
-    log.write_text(json.dumps(applied, ensure_ascii=False, indent=1))
-    print(json.dumps({"applied": ok, "failed": failed, "log": str(log)}))
+            result = _adapter(op)
+            success_key = 'moved' if op[0] == 'move' else 'updated'
+            if not isinstance(result, dict) or result.get('error') or result.get(success_key) is not True:
+                raise ValueError('adapter did not confirm the requested mutation; reconciliation required')
+    from org_transaction import changed_files
+    inputs = dict(receipt['inputs'])
+    for name, sha in changed_files().items():
+        if name.endswith('.org'):
+            inputs[name] = sha
+    completed = dict(receipt['completed'])
+    completed[rid] = {'choice': choice, 'note': note, 'at': datetime.now().isoformat()}
+    updated = dict(receipt, pending=None, completed=completed, inputs=inputs, authority=_authority(inputs))
+    write_org_text(log, json.dumps(updated, ensure_ascii=False, indent=1) + '\n')
+    return updated
+
+
+def apply_cmd(args):
+    today = date.fromisoformat(args.today or date.today().isoformat()).isoformat()
+    data, rows = _board_rows(args.board)
+    saved = _read_json(args.decisions)
+    log = _private_path(Path(args.board).with_suffix('.applied.json'))
+    # A private lock outside the output paths avoids following board-side links.
+    from hook_state import state_path
+    lock = state_path('decision-board', str(log))
+    with file_lock(lock, timeout=30):
+        receipt = _read_json(log) if log.exists() else {}
+        if not isinstance(receipt, dict):
+            raise ValueError('invalid application receipt')
+        plan, for_claude, expected = _prepare(data, rows, saved, receipt, today, args.someday_parent)
+        print(json.dumps({'board': str(args.board), 'to_apply': len(plan),
+                          'for_claude': for_claude, 'dry_run': bool(args.dry_run)}, ensure_ascii=False))
+        if args.dry_run:
+            return
+        if not receipt:
+            receipt = {'version': 2, 'build': data['meta']['build'], 'inputs': expected, 'authority': data['meta']['authority'], 'completed': {}, 'pending': None}
+        for row in plan:
+            rid, choice, note, ops = row
+            receipt = dict(receipt, pending={'id': rid, 'choice': choice, 'note': note, 'operations': ops})
+            atomic_write_json(log, receipt)
+            receipt = _apply_row(log, receipt, row)
+        print(json.dumps({'applied': len(plan), 'failed': 0, 'log': str(log)}))
 
 
 def main():
@@ -545,7 +720,7 @@ def main():
     b.add_argument("--eyebrow")
     b.add_argument("--lede")
     b.add_argument("--as-of", dest="as_of")
-    b.add_argument("--out", help="default: .datacore/state/decision-boards/<today>-<slug>.html")
+    b.add_argument("--out", help="default: $DATACORE_STATE/decision-boards/<today>-<slug>.html (owner-only)")
     args = ap.parse_args()
     if args.cmd == "build":
         build(args)

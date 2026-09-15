@@ -7,6 +7,7 @@ cffi==2.1.1
 charset-normalizer==3.5.1
 click==8.5.0
 cryptography==50.0.0
+defusedxml==0.7.1
 h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
@@ -16,6 +17,8 @@ iniconfig==2.3.0
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 mcp==1.28.1
+markdown-it-py==4.2.0
+mdurl==0.1.2
 org-workspace==0.5.1
 packaging==26.3
 pdf2image==1.17.0
@@ -36,6 +39,7 @@ referencing==0.37.0
 reportlab==4.4.5
 requests==2.33.0
 rpds-py==2026.6.3
+ruamel.yaml==0.19.1
 ruff==0.15.5
 sse-starlette==3.4.11
 starlette==1.6.0
@@ -43,3 +47,5 @@ typing-inspection==0.4.4
 typing_extensions==4.16.0
 urllib3==2.7.0
 uvicorn==0.52.4
+youtube-transcript-api==1.2.4
+yt-dlp==2026.8.19

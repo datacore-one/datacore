@@ -56,20 +56,14 @@ def test_unrelated_work_is_withheld(repo: Path):
     assert not d.clean
 
 
-def test_undeclared_output_is_recorded_not_blocked(repo: Path):
-    """produced=None commits and RECORDS. Blocking it stopped a live batch.
-
-    Withholding everything here looked principled and broke production: every
-    caller in nightshift's run.py passes no file list, so eight tasks ran and
-    committed nothing — their outputs, ledger events and org updates all
-    withheld. The strict guarantee applies where a caller DECLARES outputs;
-    otherwise the gate is an audit trail.
-    """
+def test_undeclared_output_is_retained_without_publication_authority(repo: Path):
     (repo / "mystery.txt").write_text("x\n")
     d = commit_gate.decide(repo, None, task_id="t3")
-    assert d.allowed == ["mystery.txt"]
-    assert d.withheld == []
+    assert d.allowed == []
+    assert d.withheld == ["mystery.txt"]
     assert d.record and d.record.exists()
+    assert (repo / 'mystery.txt').read_text() == 'x\n'
+    assert 'mystery.txt' in git(repo, 'status', '--porcelain')
 
 
 def test_the_actual_failure_unrelated_file_is_not_committed(repo: Path):

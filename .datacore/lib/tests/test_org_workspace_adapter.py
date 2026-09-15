@@ -26,7 +26,7 @@ def run_adapter(*args):
     enshrined the defect where an error result exited 0 and a caller trusting
     the exit code believed a refused write had happened."""
     result = subprocess.run(
-        ["python3", str(ADAPTER)] + list(args),
+        [sys.executable, str(ADAPTER)] + list(args),
         capture_output=True, text=True,
     )
     body = json.loads(result.stdout)
@@ -263,6 +263,13 @@ class TestInboxProcessing:
 
 
 class TestV2LedgerWrite:
+    @pytest.fixture
+    def work_dir(self, tmp_path):
+        org = tmp_path / '9-fixture/org'
+        org.mkdir(parents=True)
+        shutil.copy(FIXTURES / 'inbox.org', org / 'inbox.org')
+        return org
+
     """DIP-0046 C4b: the adapter is the v2 write path for BOTH connectors."""
 
     def test_new_tasks_are_refused_outside_inbox(self, work_dir):
@@ -295,28 +302,25 @@ class TestV2LedgerWrite:
         said `genesis`, so the ledger could not say who created 89% of its own
         items, and a write could sit un-ingested for a day.
         """
-        (work_dir / ".datacore" / "events").mkdir(parents=True, exist_ok=True)
+        (work_dir.parent / ".datacore" / "events").mkdir(parents=True, exist_ok=True)
         monkeypatch.setenv("DATACORE_ACTOR", "testactor")
         result = run_adapter("add", "--file", str(work_dir / "inbox.org"),
                              "--heading", "Ledger-bound task")
         assert result.get("added") is True
-        # The emit must never fail the caller, so absence is tolerated; when it
-        # happens it must carry the REAL actor, not the import role.
-        if result.get("ledger_actor"):
-            assert result["ledger_actor"] != "genesis"
+        assert result['ledger_actor'] == 'testactor'
 
 
     def test_add_carries_the_drawer_into_the_ledger(self, work_dir, monkeypatch):
         """A Phase 1 space regenerates its org file from the ledger; a task
         created with SURFACE and DONE_WHEN must come back with them."""
-        (work_dir / ".datacore" / "events").mkdir(parents=True, exist_ok=True)
+        (work_dir.parent / ".datacore" / "events").mkdir(parents=True, exist_ok=True)
         monkeypatch.setenv("DATACORE_ACTOR", "testactor")
         result = run_adapter("add", "--file", str(work_dir / "inbox.org"),
                              "--heading", "Drawer-bound task", "--priority", "A",
                              "--property", "SURFACE=2-datacore", "--property", "DONE_WHEN=the file exists")
         assert result.get("added") is True and result.get("ledger_actor")
         import json
-        events = [json.loads(l) for f in (work_dir / ".datacore" / "events").glob("*.jsonl") for l in f.read_text().splitlines() if l.strip()]
+        events = [json.loads(line) for f in (work_dir.parent / ".datacore" / "events").glob("*.jsonl") for line in f.read_text().splitlines() if line.strip()]
         created = [e for e in events if e["type"] == "item.create" and e["payload"]["id"] == result["id"]]
         assert len(created) == 1
         org = created[0]["payload"]["org"]
@@ -439,7 +443,7 @@ class TestWritesSurviveAProjectionRebuild:
         # Regenerate the projection from the ledger — the thing that used to
         # erase these writes.
         proj = ADAPTER.parent / "ledger_project_org.py"
-        r = subprocess.run(["python3", str(proj), "--space", space.name,
+        r = subprocess.run([sys.executable, str(proj), "--space", space.name,
                             "--root", str(tmp_path)],
                            capture_output=True, text=True, timeout=180)
         assert r.returncode == 0, f"projection failed: {r.stdout}{r.stderr}"

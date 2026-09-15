@@ -11,7 +11,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from spaces import (  # noqa: E402
     MAX_DEPTH,
-    Space,
     discover_spaces,
     discovery_discrepancy,
     find_space,
@@ -37,6 +36,48 @@ def test_reads_marker(tmp_path):
     assert read_marker(tmp_path / "1-alpha") == {"name": "alpha", "type": "team"}
 
 
+def test_install_root_marker_participates_in_discovery_and_ownership(tmp_path):
+    make_space(tmp_path, '.', 'installation', 'meta')
+    child = make_space(tmp_path, 'group/client', 'client', 'client')
+    assert [s.path for s in discover_spaces(tmp_path)] == [tmp_path, child]
+    assert find_space(tmp_path / '0-inbox/report.md', tmp_path).name == 'installation'
+    assert find_space(child / 'org/inbox.org', tmp_path).name == 'client'
+    assert [s.path for s in discover_spaces(tmp_path, types={'client'})] == [child]
+
+
+def test_legacy_ledger_space_is_not_dropped_before_first_projection(tmp_path):
+    space = tmp_path / '1-legacy'
+    (space / '.datacore/events').mkdir(parents=True)
+    assert [s.path for s in discover_spaces(tmp_path)] == [space]
+    assert discover_spaces(tmp_path, types={'team'}) == []
+
+
+def test_legacy_report_space_is_not_dropped_before_first_followup(tmp_path):
+    space = tmp_path / '1-legacy'
+    (space / '0-inbox').mkdir(parents=True)
+    assert [s.path for s in discover_spaces(tmp_path)] == [space]
+
+
+def test_legacy_git_only_space_still_requires_preflight_before_migration(tmp_path):
+    space = tmp_path / '1-legacy'
+    (space / '.git').mkdir(parents=True)
+    assert [s.path for s in discover_spaces(tmp_path)] == [space]
+    assert discover_spaces(tmp_path, types={'team'}) == []
+
+
+@pytest.mark.parametrize('location', ['alias', 'owner/client'])
+def test_writer_discovery_refuses_space_aliases_at_any_depth(tmp_path, location):
+    root = tmp_path / 'Data'
+    root.mkdir()
+    foreign = make_space(tmp_path, 'foreign', 'foreign')
+    alias = root / location
+    alias.parent.mkdir(parents=True, exist_ok=True)
+    alias.symlink_to(foreign, target_is_directory=True)
+    assert discover_spaces(root) == []
+    with pytest.raises(ValueError, match='boundary'):
+        discover_spaces(root, reject_aliases=True)
+
+
 def test_directory_without_marker_is_not_a_space(tmp_path):
     (tmp_path / "plain").mkdir()
     assert read_marker(tmp_path / "plain") is None
@@ -60,7 +101,142 @@ def test_malformed_marker_is_skipped_not_raised(tmp_path):
     assert [s.name for s in discover_spaces(tmp_path, include_legacy=False)] == ["beta"]
 
 
+@pytest.mark.parametrize('content', [b'- unexpected-list\n', b'unexpected scalar\n', b'\xff\xfe\n'])
+def test_invalid_marker_shape_or_encoding_cannot_break_other_spaces(tmp_path, content):
+    bad = tmp_path / '1-invalid/.datacore/config.yaml'
+    bad.parent.mkdir(parents=True)
+    bad.write_bytes(content)
+    make_space(tmp_path, '2-valid', 'valid')
+    assert read_marker(bad.parent.parent) is None
+    assert [item.name for item in discover_spaces(tmp_path)] == ['valid']
+
+
+def test_marker_error_does_not_log_private_configuration_values(tmp_path, caplog):
+    marker = tmp_path / '1-invalid/.datacore/config.yaml'
+    marker.parent.mkdir(parents=True)
+    marker.write_text('space: [fixture-private-configuration-value\n')
+    assert read_marker(marker.parent.parent) is None
+    assert 'fixture-private-configuration-value' not in caplog.text
+
+
+@pytest.mark.parametrize('parent_link', [False, True])
+def test_marker_cannot_borrow_another_directories_identity(tmp_path, parent_link):
+    other = make_space(tmp_path, 'other', 'private-owner')
+    candidate = tmp_path / '1-candidate'
+    candidate.mkdir()
+    if parent_link:
+        (candidate / '.datacore').symlink_to(other / '.datacore', target_is_directory=True)
+    else:
+        (candidate / '.datacore').mkdir()
+        (candidate / '.datacore/config.yaml').symlink_to(other / '.datacore/config.yaml')
+    assert read_marker(candidate) is None
+    assert [space.path for space in discover_spaces(tmp_path)] == [other]
+
+
+@pytest.mark.parametrize('content', ['space: [unclosed\n', '- unexpected\n', 'space: invalid\n'])
+def test_invalid_declared_marker_cannot_fall_back_to_legacy_identity(tmp_path, content):
+    candidate = tmp_path / '1-candidate'
+    (candidate / 'org').mkdir(parents=True)
+    marker = candidate / '.datacore/config.yaml'
+    marker.parent.mkdir()
+    marker.write_text(content)
+    valid = make_space(tmp_path, '2-valid', 'valid')
+    assert [space.path for space in discover_spaces(tmp_path, include_legacy=True)] == [valid]
+
+
+def test_legacy_discovery_never_reintroduces_a_symlinked_space(tmp_path):
+    valid = make_space(tmp_path, '1-valid', 'valid')
+    (tmp_path / '2-alias').symlink_to(valid, target_is_directory=True)
+    assert [space.path for space in discover_spaces(tmp_path, include_legacy=True)] == [valid]
+
+
+def test_config_without_declared_space_remains_compatible_with_legacy_discovery(tmp_path):
+    candidate = tmp_path / '1-legacy'
+    (candidate / 'org').mkdir(parents=True)
+    marker = candidate / '.datacore/config.yaml'
+    marker.parent.mkdir()
+    marker.write_text('modules: [fixture]\n')
+    result = discover_spaces(tmp_path, include_legacy=True)
+    assert len(result) == 1 and result[0].path == candidate and not result[0].marked
+
+
+@pytest.mark.parametrize('content', [
+    'space: {name: first}\nspace: {name: second}\n',
+    'space: {name: first, name: second}\n',
+    'space: {name: [not, an, identity]}\n',
+])
+def test_ambiguous_identity_never_falls_back_to_another_name(tmp_path, content):
+    candidate = tmp_path / '1-candidate'
+    (candidate / 'org').mkdir(parents=True)
+    marker = candidate / '.datacore/config.yaml'
+    marker.parent.mkdir()
+    marker.write_text(content)
+    assert read_marker(candidate) is None
+    assert discover_spaces(tmp_path, include_legacy=True) == []
+
+
+def test_unambiguous_yaml_alias_remains_supported(tmp_path):
+    marker = tmp_path / 'named/.datacore/config.yaml'
+    marker.parent.mkdir(parents=True)
+    marker.write_text('defaults: &identity {name: fixture, type: team}\nspace: *identity\n')
+    assert read_marker(marker.parent.parent) == {'name': 'fixture', 'type': 'team'}
+
+
 # ── discovery ────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize('location', ['', 'nested/invalid'])
+@pytest.mark.parametrize('content', [b'space: [', b'space: [\xff', b'[invalid]',
+                                    b'space: {name: first, name: second}',
+                                    b'space: {name: true}'])
+def test_identity_sensitive_discovery_refuses_invalid_markers(tmp_path, location, content):
+    good = make_space(tmp_path, 'good', 'good')
+    marker = tmp_path / location / '.datacore/config.yaml'
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_bytes(content)
+    assert [space.path for space in discover_spaces(tmp_path)] == [good]
+    with pytest.raises(ValueError, match='discovery refused'):
+        discover_spaces(tmp_path, reject_invalid=True)
+    assert marker.read_bytes() == content
+
+
+@pytest.mark.parametrize('identity', ['{}', '{name: null}', '{name: ""}',
+                                     '{name: "datacore "}', '{name: " "}'])
+def test_sensitive_discovery_never_infers_an_incomplete_marked_identity(tmp_path, identity):
+    marker = tmp_path / '2-datacore/.datacore/config.yaml'
+    marker.parent.mkdir(parents=True)
+    content = 'space: ' + identity + '\n'
+    marker.write_text(content)
+    # Diagnostic discovery remains compatible with older, incomplete markers.
+    assert len(discover_spaces(tmp_path)) == 1
+    with pytest.raises(ValueError, match='identity invalid; discovery refused'):
+        discover_spaces(tmp_path, reject_invalid=True)
+    assert marker.read_text() == content
+
+
+def test_sensitive_discovery_preserves_unmarked_legacy_and_global_configuration(tmp_path):
+    (tmp_path / '.datacore').mkdir()
+    (tmp_path / '.datacore/config.yaml').write_text('nightshift: {require_manifest: true}\n')
+    legacy = tmp_path / '1-datacore'
+    (legacy / 'org').mkdir(parents=True)
+    found = discover_spaces(tmp_path, reject_invalid=True)
+    assert [(space.path, space.name, space.marked) for space in found] == [
+        (legacy, 'datacore', False)]
+
+
+def test_sensitive_discovery_refuses_incomplete_directory_reads(tmp_path, monkeypatch):
+    source = make_space(tmp_path, 'nested/authority', 'datacore')
+    original = Path.iterdir
+
+    def interrupted(path):
+        if path == source.parent:
+            raise OSError('fixture directory read failure')
+        return original(path)
+
+    monkeypatch.setattr(Path, 'iterdir', interrupted)
+    assert discover_spaces(tmp_path) == []
+    with pytest.raises(ValueError, match='discovery refused'):
+        discover_spaces(tmp_path, reject_invalid=True)
+
 
 def test_finds_marked_spaces(tmp_path):
     make_space(tmp_path, "1-alpha", "alpha")
@@ -157,6 +333,13 @@ def test_union_includes_unmarked_legacy_dirs(tmp_path):
     unmarked = next(s for s in discover_spaces(tmp_path, include_legacy=True) if s.name == "unmarked")
     assert unmarked.marked is False
     assert unmarked.type == "unknown"
+
+
+def test_default_discovery_cannot_assume_another_installation_migrated(tmp_path):
+    marked = make_space(tmp_path, '1-marked', 'marked')
+    legacy = make_legacy_space(tmp_path, '2-retained')
+    assert {space.path for space in discover_spaces(tmp_path)} == {marked, legacy}
+    assert {space.path for space in discover_spaces(tmp_path, include_legacy=False)} == {marked}
 
 
 def test_marker_wins_over_legacy_for_same_directory(tmp_path):
@@ -265,3 +448,23 @@ def test_same_space_may_carry_different_ordinals_per_install(tmp_path):
     assert name_a.name == name_b.name == "thing"
     assert (name_a.ordinal, name_b.ordinal) == (5, 9)
     assert a != b
+
+
+@pytest.mark.parametrize('alias_name', ['4-team', 'legacy/team', 'other-label'])
+def test_strict_discovery_keeps_one_canonical_space_with_redundant_alias(tmp_path, alias_name):
+    canonical = make_space(tmp_path, '3-team', 'team')
+    alias = tmp_path / alias_name
+    alias.parent.mkdir(parents=True, exist_ok=True)
+    alias.symlink_to(canonical, target_is_directory=True)
+    spaces = discover_spaces(tmp_path, reject_aliases=True, reject_invalid=True)
+    assert [(space.path, space.name) for space in spaces] == [(canonical, 'team')]
+    assert alias.is_symlink() and alias.resolve() == canonical
+    assert find_space(alias / 'org/inbox.org', tmp_path).path == canonical
+
+
+@pytest.mark.parametrize('target_name', ['2-projects/hidden', 'a/b/c/d/e/f/hidden'])
+def test_space_alias_cannot_expand_the_canonical_discovery_boundary(tmp_path, target_name):
+    target = make_space(tmp_path, target_name, 'hidden')
+    (tmp_path / '1-alias').symlink_to(target, target_is_directory=True)
+    with pytest.raises(ValueError, match='boundary'):
+        discover_spaces(tmp_path, reject_aliases=True, reject_invalid=True)

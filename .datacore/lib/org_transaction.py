@@ -11,13 +11,19 @@ import hashlib
 import json
 import os
 import re
+import uuid
 from pathlib import Path
 
-from file_utils import atomic_write_json, atomic_write_text, file_lock, fsync_directory
+from file_utils import atomic_write_json, atomic_write_text, file_lock, fsync_directory, private_state_directory
 from org_workspace import OrgWorkspace
 from org_workspace.workspace import CatastrophicShrinkError
 
 _current = ContextVar("org_transaction", default=None)
+
+
+def new_org_id():
+    """Mint an independent capture identity; never infer identity from its title."""
+    return str(uuid.uuid4())
 
 
 def watch_file(path):
@@ -41,9 +47,31 @@ def move_file(source, destination):
     transaction.move(Path(source).absolute(), Path(destination).absolute())
 
 
+def delete_file(path):
+    """Remove a watched file with the same recovery guarantees as a write."""
+    transaction = _current.get()
+    if transaction is None:
+        raise RuntimeError("file deletion requires a serialized transaction")
+    transaction.delete(Path(path).absolute())
+
+
+def changed_files():
+    """Return paths actually changed by this transaction and their final hashes.
+
+    Reads and no-op writes confer no output ownership. Callers may record a
+    publication intent inside this transaction, so it survives exactly when
+    the corresponding data changes survive. None identifies a removed source;
+    publication still requires an explicit preserved-move receipt for it.
+    """
+    transaction = _current.get()
+    if transaction is None:
+        raise RuntimeError('change receipts require a serialized transaction')
+    return {name: entry['current'] for name, entry in transaction.files.items()
+            if digest(entry['before']) != entry['current']}
+
+
 def journal_path():
-    state = Path(os.environ.get("DATACORE_STATE", Path.home() / ".datacore" / "state"))
-    return state / "org-transaction.json"
+    return private_state_directory() / "org-transaction.json"
 
 
 def read_text(path):
@@ -69,6 +97,7 @@ def recover(path):
     if not isinstance(document, dict) or document.get("version") != 1 or not isinstance(document.get("files"), dict):
         raise RecoveryRequired("invalid Org transaction journal; preserve it for recovery")
     files = document["files"]
+    owned = {}
     # Check EVERY file before restoring any; a later conflict must not leave
     # an otherwise untouched transaction half rolled back.
     for name, entry in files.items():
@@ -79,9 +108,15 @@ def recover(path):
                 or (entry["before"] is not None and not isinstance(entry["before"], str))
                 or digest(entry["before"]) not in entry["versions"]):
             raise RecoveryRequired("invalid Org transaction backup")
+        if len(entry['versions']) == 1:
+            # Historical journals included every watched input. No mutation
+            # was attempted for this entry: the transaction cannot restore it
+            # or require it to stay unchanged before rolling back its outputs.
+            continue
+        owned[name] = entry
         if target.is_symlink() or digest(read_text(target)) not in entry["versions"]:
             raise RecoveryRequired("Org file changed outside its transaction; journal retained for manual recovery")
-    for name, entry in files.items():
+    for name, entry in owned.items():
         target = Path(name)
         before = entry["before"]
         if before is None:
@@ -101,6 +136,11 @@ class Transaction:
         self.failed = False
         self.started = False
 
+    def persist(self):
+        """Journal intended mutations; a watched input is not rollback-owned."""
+        owned = {name: entry for name, entry in self.files.items() if len(entry['versions']) > 1}
+        atomic_write_json(self.path, {'version': 1, 'files': owned})
+
     def watch(self, path):
         path = Path(path).resolve()
         name = str(path)
@@ -117,7 +157,7 @@ class Transaction:
             entry["versions"].append(digest(content))
             # Durable journal BEFORE the file can change, including on a
             # write that replaces successfully but then fails directory fsync.
-            atomic_write_json(self.path, {"version": 1, "files": self.files})
+            self.persist()
             self.started = True
             atomic_write_text(path, content)
             entry["current"] = digest(content)
@@ -142,7 +182,7 @@ class Transaction:
         try:
             src["versions"].append(None)
             dst["versions"].append(digest(content))
-            atomic_write_json(self.path, {"version": 1, "files": self.files})
+            self.persist()
             self.started = True
             try:
                 rename_noreplace(source, destination)
@@ -152,9 +192,28 @@ class Transaction:
                 if not destination_was_watched:
                     del self.files[destination_key]
                     src["versions"].pop()
-                    atomic_write_json(self.path, {"version": 1, "files": self.files})
+                    self.persist()
                 raise
             src["current"], dst["current"] = None, digest(content)
+        except BaseException:
+            self.failed = True
+            raise
+
+    def delete(self, path):
+        if path.is_symlink():
+            raise RecoveryRequired("refusing symbolic-link deletion")
+        entry = self.watch(path)
+        if digest(read_text(path)) != entry["current"]:
+            raise RecoveryRequired("file changed before deletion")
+        if entry["current"] is None:
+            return
+        try:
+            entry["versions"].append(None)
+            self.persist()
+            self.started = True
+            path.unlink()
+            fsync_directory(path.parent)
+            entry["current"] = None
         except BaseException:
             self.failed = True
             raise
@@ -205,13 +264,23 @@ class SafeOrgWorkspace(OrgWorkspace):
         if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_@#%+.-]+", key):
             raise ValueError("invalid Org property name")
 
-    def create_node(self, file, heading, *args, **kwargs):
+    def create_node(self, file, heading, state=None, parent=None, level=None,
+                    tags=None, body=None, dedup=False, **kwargs):
         self._heading(heading)
-        # Keyword properties follow the dependency's create_node signature;
-        # structural arguments are not property keys.
-        for key in set(kwargs) - {"state", "parent", "level", "tags", "body", "dedup"}:
+        for key in kwargs:
             self._property_key(key)
-        return super().create_node(file, heading, *args, **kwargs)
+        # A heading and a second-resolution timestamp are not an identity:
+        # independent workspaces/hosts can create different captures with both.
+        # Preserve caller-supplied identities; ordinary creation uses DIP-0009's
+        # UUID protocol. Explicit heading-based dedup remains opt-in upstream.
+        if not dedup:
+            if "ID" not in kwargs:
+                kwargs["ID"] = new_org_id()
+            if self.find_by_id(kwargs["ID"]) is not None:
+                raise ValueError("duplicate Org IDs require explicit identity reconciliation")
+        return super().create_node(file, heading, state=state, parent=parent,
+                                   level=level, tags=tags, body=body, dedup=dedup,
+                                   **kwargs)
 
     def set_heading(self, node, value):
         self._heading(value)
@@ -225,6 +294,22 @@ class SafeOrgWorkspace(OrgWorkspace):
         transaction = _current.get()
         if transaction:
             transaction.watch(path)
+        # The dependency silently repairs duplicate IDs while loading. A
+        # later unrelated save would then rewrite identity and references.
+        # Explicit repair must happen before ordinary reads or mutations.
+        from org_workspace._vendor.orgparse import loads
+        source = Path(path).read_text(encoding='utf-8')
+        from org_literal import require_resolved_source
+        require_resolved_source(source)
+        identities = [node.get_property('ID') for node in loads(source)[1:]
+                      if node.get_property('ID')]
+        if len(identities) != len(set(identities)):
+            raise ValueError('duplicate Org IDs require explicit identity reconciliation')
+        # Loading a file again replaces its own index entries.
+        for identity in identities:
+            existing = self.find_by_id(identity)
+            if existing is not None and existing.path.resolve() != Path(path).resolve():
+                raise ValueError('duplicate Org IDs across files require explicit identity reconciliation')
         return super().load(path)
 
     def _safe_write(self, path, content):

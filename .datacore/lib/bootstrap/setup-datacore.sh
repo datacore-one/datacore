@@ -401,7 +401,7 @@ npm_global_install @plur-ai/cli@latest
 
 # Initialize PLUR (registers MCP server + base hooks)
 echo "Initializing PLUR..."
-npx @plur-ai/cli init 2>/dev/null || true
+plur init
 
 # Configure session enforcement hooks (guard, sentinel, reminder)
 echo "Configuring session enforcement hooks..."

@@ -41,6 +41,8 @@ DEFAULT_DENYLIST = os.path.join(
 # Checked only for paths with git status 'A' (newly tracked) that live under
 # a .datacore/ directory. Reject globs win over allow globs.
 DATACORE_NEW_FILE_REJECT = [
+    ".datacore/module-data/**",
+    ".datacore/module-data-backups/**",
     ".datacore/modules/*/data/**",
     ".datacore/state/**",
     ".datacore/env/**",
@@ -206,7 +208,12 @@ def main():
         eprint("pre-push-scan: no commits to scan — nothing to do")
         return 0
 
-    forbidden_paths = policy.get("forbidden_paths", []) or []
+    # These roots contain private live state and retained migration originals,
+    # including previously tracked files. A permissive legacy code allowlist
+    # must not turn either runtime store into publishable module source.
+    forbidden_paths = list(policy.get("forbidden_paths", []) or []) + [
+        "**/.datacore/module-data/**", "**/.datacore/module-data-backups/**",
+    ]
     warning_paths = (policy.get("warning_patterns", {}) or {}).get("paths", []) or []
     exemptions = policy.get("content_scan_exemptions", []) or []
     reject_globs = policy.get("datacore_new_file_reject", DATACORE_NEW_FILE_REJECT)

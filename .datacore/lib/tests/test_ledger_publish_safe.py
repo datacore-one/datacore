@@ -106,9 +106,11 @@ def test_private_committed_then_reverted_history_cannot_ride_with_ledger(tmp_pat
 
 def test_git_status_failure_cannot_look_clean(tmp_path, monkeypatch):
     root, space, origin = _fleet(tmp_path); monkeypatch.setattr(L, 'ROOT', root)
-    real = L._git
-    def fail(repo, *args, **kwargs):
-        if args[0] == 'status': return subprocess.CompletedProcess(args, 1, '', 'unreadable index')
-        return real(repo, *args, **kwargs)
-    monkeypatch.setattr(L, '_git', fail)
+    # Exercise the actual Git boundary, including the shared inventory module.
+    index = space / '.git/index'
+    corrupted = b'injected incomplete index'
+    index.write_bytes(corrupted)
+    before = _git(origin, 'rev-parse', 'main').stdout
     assert L.main([]) == 1
+    assert index.read_bytes() == corrupted
+    assert _git(origin, 'rev-parse', 'main').stdout == before

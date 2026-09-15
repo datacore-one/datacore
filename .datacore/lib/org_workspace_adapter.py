@@ -35,7 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tag_utils import sanitize_org_tags  # noqa: E402
-from org_transaction import SafeOrgWorkspace, serialized
+from org_transaction import SafeOrgWorkspace, new_org_id, serialized
 
 
 def _load_ws(*paths: str, state_config=None):
@@ -199,22 +199,30 @@ def _assignee_from_tags(file_path, tags):
 
 
 def _ledger_emit(file_path, event_type, payload):
+    from org_space import ledger_space_for_file
+    space = ledger_space_for_file(file_path)
+    if space is None:
+        return None
+    from ledger_project_org import phase, ORG
+    # Determine authority before the optional Phase-0 mirror error boundary.
+    # An unreadable/invalid marker cannot downgrade a Phase-1 write to optional.
+    authoritative = phase(space) == 1
     try:
-        import os as _os
-        space = None
-        for parent in Path(file_path).resolve().parents:
-            if (parent / ".datacore" / "events").is_dir():
-                space = parent
-                break
-        if space is None:
-            return None
         _sys.path.insert(0, str(Path(__file__).resolve().parent))
         from ledger.log import EventLog
         from actor_identity import this_actor
         actor = this_actor()
-        EventLog(space, actor).append(event_type, payload)
+        if authoritative and Path(file_path).resolve() == (space / ORG).resolve() and event_type in ('item.update', 'item.dismiss'):
+            from ledger.fold import fold
+            from ledger.log import read_events
+            from ledger.projection_state import sync_generated
+            sync_generated(space, fold(read_events(space)), actor)
+        else:
+            EventLog(space, actor).append(event_type, payload)
         return actor
-    except Exception:      # noqa: BLE001 — see the note above
+    except Exception:      # Phase 0 keeps authored Org as its durable source.
+        if authoritative:
+            raise  # Phase 1 must not acknowledge a failed authoritative write.
         return None
 
 def _observed(file_path, task_id, keys):
@@ -364,32 +372,13 @@ def cmd_add(args):
         # changes that set_property() left in memory.
         ws.save(file_path)
 
-    _create_payload = {
-        "id": node_id, "title": args.heading, "state": "TODO",
-        "tags": sorted(tags) if tags else None,
-        "scheduled": getattr(args, "scheduled", None) or None,
-        "space": file_path.parent.parent.name,
-        # Who asked, and how deep the chain is (stage 5). The hop count is
-        # inherited from the environment an executor sets for the agent it
-        # runs (DATACORE_HOPS = its own item's hops + 1), so a chain of
-        # agents creating work for each other is visible and bounded.
-        "requested_by": getattr(args, "requested_by", None) or _os.environ.get("DATACORE_REQUESTED_BY") or None,
-        "hops": int(_os.environ.get("DATACORE_HOPS") or 0),
-        # The drawer travels with the item. Without it a Phase 1 space (org
-        # generated from the ledger) regenerated every adapter-created task
-        # with an empty drawer: SURFACE, DONE_WHEN and JOB, the properties the
-        # AI gate and the job verifier key on, vanished on the next projection
-        # (0 of them in 2-datacore's file on 2026-09-05). Same shape genesis
-        # records, so the projector renders both identically.
-        "org": {
-            "priority": getattr(args, "priority", None) or None,
-            "body": (getattr(args, "body", None) or "").replace("\\n", "\n"),
-            "properties": {
-                **{k: str(v) for k, v in extra_props.items() if k not in ("ID", "CREATED")},
-                **{k: str(v) for k, v in multiline_props.items()},
-            },
-        },
-    }
+    from ledger.genesis import task_payload, valid_time
+    created_date, rung = valid_time(node)
+    _create_payload = task_payload(node, file_path.parent.parent.name, created_date, rung)
+    _create_payload.update(
+        requested_by=getattr(args, "requested_by", None) or _os.environ.get("DATACORE_REQUESTED_BY") or None,
+        hops=int(_os.environ.get("DATACORE_HOPS") or 0),
+    )
     _assignee = _assignee_from_tags(file_path, sorted(tags) if tags else None)
     if _assignee:
         _create_payload["assignee"] = _assignee
@@ -441,7 +430,7 @@ def cmd_complete(args):
     # every other reader consults -- stays wrong until the nightly sweep.
     emitted = _ledger_emit(file_path, "item.dismiss", {
         "id": node.id(),
-        "kind": "completed",
+        "kind": "done",
         "reason": "completed via org_workspace_adapter",
     })
     return {"completed": True, "heading": node.heading, "id": node.id(),
@@ -531,14 +520,18 @@ def cmd_archive_done(args):
 
     # Ensure archive file loaded if it exists
     archive_path = default_archive_path(file_path)
-    if not archive_path.exists():
+    archive_created = not archive_path.exists()
+    if archive_created:
         ws._safe_write(archive_path, "#+TITLE: Archive\n")
     ws.load(archive_path)
 
     archived = archive_done(ws, older_than_days=args.min_age)
     ws.save_all()
 
-    return {"dry_run": False, "archived_count": len(archived), "archived": archived}
+    written = ([str(file_path), str(archive_path)] if archived
+               else [str(archive_path)] if archive_created else [])
+    return {"dry_run": False, "archived_count": len(archived), "archived": archived,
+            "written_files": written}
 
 
 # ---------------------------------------------------------------------------
@@ -739,10 +732,9 @@ def cmd_ensure_ids(args):
     (read-copy-merge-assign protocol, dirty tracking). After saving, reloads
     so the ID index is updated for any subsequent in-process lookups.
 
-    Handles duplicate headings by using an incrementing disambiguator so that
-    tasks with identical text get unique IDs.
+    New captures use independent UUIDs, including identical headings created
+    in separate files or on separate hosts. Existing identities never change.
     """
-    from org_workspace.identifiers import generate_id
     ws = _load_ws(args.file)
     file_path = Path(args.file).resolve()
 
@@ -752,25 +744,15 @@ def cmd_ensure_ids(args):
         if node.id():
             seen_ids.add(node.id())
 
-    # Track how many times each heading has been seen (for disambiguation).
-    heading_counts: dict[str, int] = {}
-
     pending = []
     for node in ws.all_nodes():
         if not node.todo:
             continue
         if node.id():
             continue
-        # Count occurrences of this heading so far to build disambiguator.
-        count = heading_counts.get(node.heading, 0)
-        heading_counts[node.heading] = count + 1
-        disambiguator = str(count) if count > 0 else None
-        new_id = generate_id(node.heading, disambiguator=disambiguator)
-        # Fallback: keep incrementing until unique (handles hash collisions).
-        extra = count
+        new_id = new_org_id()
         while new_id in seen_ids:
-            extra += 1
-            new_id = generate_id(node.heading, disambiguator=str(extra))
+            new_id = new_org_id()
         seen_ids.add(new_id)
         pending.append((node, new_id))
 
@@ -783,7 +765,8 @@ def cmd_ensure_ids(args):
         ws.save(file_path)
         ws.reload(file_path)  # updates ID index so find_by_id() works immediately
 
-    return {"added_count": len(added), "nodes": added}
+    return {"added_count": len(added), "nodes": added,
+            "written_files": [str(file_path)] if added else []}
 
 
 # ---------------------------------------------------------------------------
@@ -1007,21 +990,22 @@ def cmd_update(args):
 
     ws.save(file_path)
 
-    # Same reason as cmd_complete: an org-only property edit is lost on the next
-    # projection. Carry the CURRENT state of the fields this command can touch,
-    # so a reader folding the ledger sees what the file says.
-    _props = {k: str(v) for k, v in (node.properties or {}).items()
-              if k not in ("ID", "CREATED")}
-    _payload = {
-        "id": node.id(),
-        "title": node.heading,
-        "org": {
-            "priority": getattr(node, "priority", None) or None,
-            "properties": _props,
-        },
-    }
-    if node.todo:
-        _payload["org"]["state"] = node.todo
+    from ledger.genesis import task_payload, valid_time
+    created_date, rung = valid_time(node)
+    current = task_payload(node, file_path.parent.parent.name, created_date, rung)
+    _props = current['org']['properties']
+    _payload = {'id': node.id()}
+    if getattr(args, 'new_heading', None):
+        _payload['title'] = current['title']
+    if args.state:
+        _payload['state'] = current['state']
+    if args.tags:
+        _payload['tags'] = current['tags']
+        _payload['effective_tags'] = current['effective_tags']
+    if args.scheduled:
+        _payload['scheduled'] = current['scheduled']
+    if getattr(args, 'property', None):
+        _payload['org'] = {'properties': _props}
     emitted = _ledger_emit(file_path, "item.update", _payload)
 
     _keys = set(_props) | {"STATE", "SCHEDULED", "DEADLINE"}

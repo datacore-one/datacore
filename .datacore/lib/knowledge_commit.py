@@ -28,11 +28,11 @@ in one working tree:
 When an agent checks out a feature branch to do code work, its knowledge writes
 follow it there — same working tree, same HEAD. That is the whole bug.
 
-So knowledge writes must be BRANCH-INDEPENDENT. Git can do this natively:
-hash-object / commit-tree / update-ref will land a commit on the default branch
-while HEAD stays on the feature branch, touching neither the index nor the
-working tree. No checkout. No worktree. Works across any number of repos, which
-is what "the system should deal flexibly with several repos" actually requires.
+Knowledge writes must be branch-independent. Cross-branch publication captures
+source bytes once, reserves the target branch with Git worktree ownership, and
+checks a detached commit with the configured hooks. Only that verified tree and
+parent may advance the reserved branch. The shared checkout and index stay
+untouched. Recovery workspaces are retained; their reclamation is separate.
 
 Deliberately deterministic. A journal entry's destination is not a judgment call
 and must not cost an LLM round-trip — there are hundreds of these. Memory is for
@@ -40,10 +40,18 @@ deciding when the solution is unclear; this is not one of those times.
 """
 
 import os
+import stat
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
+import uuid
+from pathlib import Path, PurePosixPath
+
+from git_inventory import require_resolved
+
+from worktree_lifecycle import (
+    allocate_publication_workspace, git_environment, publication_hooks, retire_worktree,
+)
 
 # Content that is worthless until it reaches the default branch. Everything here
 # is append-only and unreviewed by design — there is no PR for a journal entry.
@@ -70,15 +78,51 @@ CODE_PREFIXES = (
 
 
 class GitError(RuntimeError):
-    pass
+    non_fast_forward = False
 
 
-def _git(repo: Path, *args: str, env=None, check=True) -> str:
-    r = subprocess.run(['git', '--literal-pathspecs', *args], cwd=repo, capture_output=True,
-                       text=True, env=env)
+def _push_commit(repo: Path, branch: str, sha: str) -> None:
+    from git_publication import push_arguments
+    from publication_history import checked_destination
+    try:
+        args = push_arguments(sha, f'refs/heads/{branch}')
+    except ValueError:
+        raise GitError('Publication commit/ref is invalid; no push attempted') from None
+    origin, base_ref, base = checked_destination(repo, branch, sha)
+    ancestry = _run_git(repo, 'merge-base', '--is-ancestor', base, sha)
+    if ancestry.returncode:
+        error = GitError('Publication destination advanced; explicit integration required')
+        error.non_fast_forward = ancestry.returncode == 1
+        raise error
+    # A lease is safe only after verifying the candidate preserves this base.
+    # Bind transport to the URL we verified, even if a hook changes origin.
+    args = push_arguments(sha, f'refs/heads/{branch}', expected=base)
+    args[-2] = origin
+    _git(repo, *args)
+    _git(repo, 'update-ref', '-d', base_ref, base)
+
+
+def _run_git(repo: Path, *args: str, env=None, input_bytes=None):
+    from git_publication import durable_git_arguments
+    environment = git_environment()
+    if env is not None:
+        environment.update(env)
+    try:
+        return subprocess.run(durable_git_arguments(['git', '--literal-pathspecs', *args]), cwd=repo, capture_output=True,
+                              input=input_bytes, env=environment, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        raise GitError('Git publication failed or timed out; local work retained') from None
+
+
+def _git(repo: Path, *args: str, env=None, check=True, input_bytes=None) -> str:
+    r = _run_git(repo, *args, env=env, input_bytes=input_bytes)
     if check and r.returncode != 0:
-        raise GitError(f"git {' '.join(args)}: {(r.stderr or '').strip()}")
-    return (r.stdout or '').strip()
+        # Hook/transport output can include private file contents or URL credentials.
+        error = GitError('Git publication command failed; inspect local Git configuration and hooks')
+        error.non_fast_forward = 'push' in args and any(
+            marker in (r.stderr or b'') for marker in (b'non-fast-forward', b'fetch first', b'behind', b'stale info'))
+        raise error
+    return (r.stdout or b'').decode('utf-8', errors='replace').strip()
 
 
 def default_branch(repo: Path) -> str:
@@ -96,8 +140,14 @@ def current_branch(repo: Path) -> str:
 
 def is_knowledge(path: str) -> bool:
     """Does this path hold content that is useless anywhere but the default branch?"""
-    p = path.lstrip('./')
-    return p.startswith(KNOWLEDGE_PREFIXES)
+    if not isinstance(path, str) or not path or '\0' in path:
+        return False
+    parsed = PurePosixPath(path)
+    if parsed.is_absolute() or '..' in parsed.parts:
+        return False
+    # Normalize explicit ./ components without stripping a filename's leading
+    # dot. lstrip('./') misclassified every .datacore state path as code.
+    return parsed.as_posix().startswith(KNOWLEDGE_PREFIXES)
 
 
 def classify(paths) -> dict:
@@ -108,8 +158,199 @@ def classify(paths) -> dict:
     return {'knowledge': knowledge, 'code': code}
 
 
-def _blob_mode(repo: Path, rel: str) -> str:
-    return '100755' if os.access(repo / rel, os.X_OK) else '100644'
+def _parent_fd(repo: Path, rel: str, *, create=False) -> int:
+    """Walk relative directories without following links, anchored to this root."""
+    fd = os.open(repo, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in Path(rel).parts[:-1]:
+            if create:
+                try:
+                    os.mkdir(part, dir_fd=fd)
+                except FileExistsError:
+                    pass
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _capture(repo: Path, rel: str) -> tuple[bytes, str]:
+    """Read one regular file once; both validation and the commit use these bytes."""
+    parent = _parent_fd(repo, rel)
+    try:
+        fd = os.open(Path(rel).name, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=parent)
+        with os.fdopen(fd, 'rb') as source:
+            before = os.fstat(source.fileno())
+            if not stat.S_ISREG(before.st_mode):
+                raise GitError('publication source must be a regular file')
+            content = source.read()
+            after = os.fstat(source.fileno())
+            if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                    after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                raise GitError('publication source changed during capture; retry from current data')
+            return content, '100755' if before.st_mode & 0o111 else '100644'
+    finally:
+        os.close(parent)
+
+
+def _write_capture(worktree: Path, rel: str, content: bytes, mode: str) -> None:
+    parent = _parent_fd(worktree, rel, create=True)
+    name = '.publication-capture-' + uuid.uuid4().hex
+    try:
+        # Do not truncate an inode created by a checkout hook: it may be a
+        # hard link. Replace from an exclusively created private file instead.
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=parent)
+        with os.fdopen(fd, 'wb') as target:
+            target.write(content)
+            os.fchmod(target.fileno(), 0o755 if mode == '100755' else 0o644)
+        os.replace(name, Path(rel).name, src_dir_fd=parent, dst_dir_fd=parent)
+    finally:
+        os.close(parent)
+
+
+def _read_at(repo: Path, ref: str, rel: str) -> bytes | None:
+    mode = _git(repo, 'ls-tree', ref, '--', rel)
+    if not mode:
+        return None
+    if not mode.startswith(('100644 ', '100755 ')):
+        raise GitError('publication target is not a regular file')
+    result = _run_git(repo, 'show', f'{ref}:{rel}')
+    if result.returncode:
+        raise GitError('cannot read publication base')
+    return result.stdout
+
+
+def _capture_outputs(repo, base, paths, moves):
+    from publication_moves import validate_captures
+    removed = {move.source for move in moves}
+    captured = {rel: _capture(repo, rel) for rel in paths if rel not in removed}
+    validate_captures(repo, base, moves, captured)
+    return captured
+
+
+def _expected_tree(repo: Path, base: str, paths: list[str], moves=()) -> str:
+    """Capture the authorized tree without borrowing or changing the index.
+
+    Normal Git commit hooks still run. This independent tree is the value their
+    resulting commit must match before it can be acknowledged or published.
+    Git retains the captured blobs even if a later writer changes the source.
+    """
+    from publication_moves import verify_archive_blob
+    captured = _capture_outputs(repo, base, paths, moves)
+    archives = {move.destination: move for move in moves}
+    with tempfile.TemporaryDirectory(prefix='datacore-publication-index-') as directory:
+        environment = {'GIT_INDEX_FILE': str(Path(directory) / 'index')}
+        _git(repo, 'read-tree', base, env=environment)
+        for rel, (content, mode) in captured.items():
+            mode = _publication_mode(repo, base, rel, mode)
+            blob = _git(repo, 'hash-object', '-w', f'--path={rel}', '--stdin', input_bytes=content)
+            if rel in archives:
+                verify_archive_blob(archives[rel], _run_git(repo, 'cat-file', 'blob', blob).stdout)
+            _git(repo, 'update-index', '--add', '--cacheinfo', f'{mode},{blob},{rel}', env=environment)
+        for move in moves:
+            _git(repo, 'update-index', '--force-remove', '--', move.source, env=environment)
+        return _git(repo, 'write-tree', env=environment)
+
+
+def _publication_mode(repo: Path, base: str, rel: str, mode: str) -> str:
+    if _git(repo, 'config', '--bool', '--get', 'core.filemode', check=False) == 'false':
+        # Match git add on filesystems where executable bits are unreliable:
+        # keep a tracked mode, and introduce ordinary files without +x.
+        existing = _git(repo, 'ls-tree', base, '--', rel).split(' ', 1)[0]
+        return existing if existing in ('100644', '100755') else '100644'
+    return mode
+
+
+def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, push: bool,
+                       *, append_only: bool = False, publication=None, moves=()) -> str:
+    """Reserve the target checkout; validate a detached commit before advancing it."""
+    base = (publication.data['target_head'] if publication is not None else
+            _git(repo, 'rev-parse', '--verify', f'refs/heads/{branch}^{{commit}}'))
+    source = (publication.data['source_head'] if publication is not None else
+              _git(repo, 'rev-parse', '--verify', 'HEAD^{commit}'))
+    from publication_moves import checked_moves, verify_archive_blob
+    captured = _capture_outputs(repo, base, paths, moves)
+    archives = {move.destination: move for move in moves}
+    hooks = publication_hooks(repo)
+    parent = allocate_publication_workspace(repo)
+    reservation, candidate = parent / 'target', parent / 'candidate'
+    created = []
+    sha = ''
+    try:
+        # Git's own worktree ownership prevents a normal concurrent checkout of
+        # this branch. If another writer already has it, no ref is changed.
+        for path, target, detached in ((reservation, branch, False), (candidate, base, True)):
+            try:
+                _git(repo, '-c', f'core.hooksPath={hooks}', 'worktree', 'add',
+                     *(['--detach'] if detached else []), '--', str(path), target)
+            finally:
+                # A rejecting post-checkout hook can return failure after Git
+                # has registered the worktree. Keep and retire that data too.
+                if (path / '.git').exists():
+                    created.append(path)
+        if _git(reservation, 'rev-parse', 'HEAD') != base:
+            raise GitError('publication destination advanced during reservation')
+        if _git(candidate, 'status', '--porcelain', '--untracked-files=all'):
+            raise GitError('checkout hook changed publication workspace; all output retained')
+        for rel, (content, mode) in captured.items():
+            mode = _publication_mode(candidate, base, rel, mode)
+            # --path preserves the target tree's clean filters and encoding/EOL
+            # rules while still reading only the previously captured bytes.
+            blob = _git(candidate, 'hash-object', '-w', f'--path={rel}', '--stdin', input_bytes=content)
+            normalized = _run_git(candidate, 'cat-file', 'blob', blob)
+            if normalized.returncode:
+                raise GitError('cannot verify captured publication blob')
+            if rel in archives:
+                verify_archive_blob(archives[rel], normalized.stdout)
+            original, destination = _read_at(repo, source, rel), _read_at(repo, base, rel)
+            if (append_only and destination is not None and normalized.stdout != destination
+                    and (not normalized.stdout.startswith(destination)
+                         or (destination and not destination.endswith(b'\n')))):
+                raise GitError('append-only publication would replace existing bytes; both versions retained')
+            preserving_append = (destination is not None and (append_only or Path(rel).suffix in {'.md', '.org'})
+                                 and destination.endswith(b'\n') and normalized.stdout.startswith(destination))
+            if original != destination and normalized.stdout != destination and not preserving_append:
+                raise GitError(f'{rel}: destination has independent changes; reconcile both versions before publication')
+            _write_capture(candidate, rel, content, mode)
+            _git(candidate, 'update-index', '--add', '--cacheinfo', f'{mode},{blob},{rel}')
+        for move in moves:
+            if _read_at(candidate, base, move.source) is not None:
+                _git(candidate, 'rm', '--', move.source)
+        tree = _git(candidate, 'write-tree')
+        if publication is not None:
+            publication.expected(tree)
+        if tree != _git(repo, 'rev-parse', f'{base}^{{tree}}'):
+            _git(candidate, '-c', f'core.hooksPath={hooks}', 'commit', '-m', message)
+            sha = _git(candidate, 'rev-parse', 'HEAD')
+            if (_git(candidate, 'rev-parse', 'HEAD^{tree}') != tree
+                    or _git(candidate, 'show', '-s', '--format=%P', 'HEAD') != base
+                    or _git(candidate, 'diff', '--name-only')
+                    or _git(candidate, 'diff', '--cached', '--name-only')):
+                raise GitError('commit hook changed publication content or parents; candidate retained')
+            checked_moves(repo, moves)
+            _git(repo, 'update-ref', f'refs/heads/{branch}', sha, base)
+        if publication is not None:
+            if sha:
+                publication.verify_commit(sha)
+            else:
+                publication.verified = True
+    finally:
+        errors = []
+        for path in reversed(created):
+            try:
+                retire_worktree(repo, path)
+            except RuntimeError as exc:
+                errors.append(str(exc))
+        if errors:
+            raise GitError('publication workspace retirement failed; retained work requires inspection')
+    if push:
+        # A later local branch advance is not part of this publication.
+        _push_commit(repo, branch, sha or base)
+    return sha
 
 
 def _push_converging(repo: Path, branch: str, sha: str) -> None:
@@ -121,57 +362,132 @@ def _push_converging(repo: Path, branch: str, sha: str) -> None:
     'uncommitted' when it was committed and merely unpushed.
     """
     try:
-        _git(repo, 'push', 'origin', branch)
+        _push_commit(repo, branch, sha)
         return
     except GitError as e:
         msg = str(e)
-        if not any(s in msg for s in ('non-fast-forward', 'behind', 'fetch first')):
+        if not e.non_fast_forward:
             raise GitError(
                 f"{repo.name}: committed locally on {branch} ({sha[:10]}) but "
                 f"push failed — {msg}")
-    if _git(repo, 'status', '--porcelain', '--untracked-files=all'):
-        raise GitError('publication committed locally; preserve working/index changes before converging with origin')
+    if current_branch(repo) != branch or _git(repo, 'rev-parse', 'HEAD') != sha:
+        raise GitError('Publication source advanced; captured work retained for separate reconciliation')
     try:
-        _git(repo, 'pull', '--no-rebase', 'origin', branch)
-    except GitError as e:
+        from git_integration import integrate
+        from publication_history import require_verified
+        integrate(repo, sha, f'refs/heads/{branch}',
+                  authorize_source=lambda base, origin: require_verified(
+                      repo, branch, sha, base, origin=origin))
+    except (OSError, RuntimeError, subprocess.SubprocessError):
         raise GitError(
             f"{repo.name}: committed locally on {branch} ({sha[:10]}); remote "
-            f"moved and the converge-merge conflicted — needs a human "
-            f"(conflict files and index stages are retained). {e}")
-    _git(repo, 'push', 'origin', branch)
+            'integration was not acknowledged; source and private recovery state retained') from None
 
 
 def commit_to_branch(repo: Path, branch: str, paths, message: str,
-                     push: bool = True) -> str:
-    """Commit `paths` onto `branch` WITHOUT checking it out.
+                     push: bool = True, *, append_only: bool = False,
+                     expected_head: str | None = None, moves=()) -> str:
+    """Commit `paths` onto an explicit branch.
 
-    Builds the tree with plumbing against the branch tip, so HEAD, the index and
-    the working tree are all left exactly as they were. This is what lets an
-    agent mid-feature-branch still land its journal entry on main.
+    When HEAD is elsewhere, only private worktrees are checked out and the
+    shared HEAD/index/files stay unchanged. When HEAD is on the target, the
+    pathspec commit must match an independently captured tree and parent before
+    acknowledgment or publication. This helper does not establish
+    process isolation or grant execution ownership.
+
+    append_only requires an isolated destination and preserves its complete
+    newline-terminated byte prefix, including when source HEAD already contains
+    that version. It refuses truncation or replacement of published log entries.
+
+    expected_head binds a caller's prior target snapshot, including no-change
+    results. A concurrent commit cannot substitute a different publication base.
+
+    moves pairs an explicitly captured source version with its preserved archive.
+    Only those missing source paths may be deleted; newer source or archive
+    versions, reappearing files and lossy Git filters refuse publication.
 
     Returns the new commit sha, or '' if there was nothing to do.
     """
     repo = Path(repo).resolve()
+    try:
+        require_resolved(repo)
+    except RuntimeError:
+        raise GitError('Source inventory is unavailable or unresolved; no publication attempted') from None
+    _git(repo, 'check-ref-format', f'refs/heads/{branch}')
+    if expected_head is not None:
+        from git_publication import _oid
+        try:
+            _oid(expected_head)
+        except ValueError:
+            raise GitError('expected publication head must be an immutable object identity') from None
+    from publication_moves import checked_moves
+    try:
+        moves = checked_moves(repo, moves)
+        if append_only and moves:
+            raise ValueError('append-only publication cannot move files')
+    except (OSError, TypeError, ValueError) as exc:
+        raise GitError('invalid preserved move; no publication attempted') from exc
+    removed = {move.source for move in moves}
     checked = []
     for value in paths:
         path = Path(value)
         target = repo / path
-        if path.is_absolute() or target.is_symlink() or not target.resolve().is_relative_to(repo):
+        if (path.is_absolute() or '..' in path.parts or '.git' in path.parts
+                or target.is_symlink() or not target.resolve().is_relative_to(repo)):
             raise GitError('publication path escapes its repository')
-        if target.is_file():
-            checked.append(path.as_posix())
+        if not target.is_file():
+            raise GitError('publication source is missing or not a regular file; no deletion was requested')
+        checked.append(path.as_posix())
     paths = checked
+    if set(paths).intersection(removed):
+        raise GitError('a move source cannot also be an output file')
+    for move in moves:
+        paths.extend([move.source, move.destination])
+    paths = list(dict.fromkeys(paths))
     if not paths:
         return ''
 
+    from publication_state import reserve
+    try:
+        with reserve(repo, branch, paths) as reservation:
+            if expected_head is not None and reservation.data['target_head'] != expected_head:
+                raise GitError('publication target advanced since caller capture; work retained')
+            return _commit_selected(repo, branch, paths, message, push, append_only, reservation, moves)
+    except (OSError, RuntimeError, TypeError, ValueError, subprocess.SubprocessError) as exc:
+        if isinstance(exc, GitError):
+            raise
+        raise GitError('publication failed; retained state and local work require inspection') from None
+
+
+def _commit_selected(repo, branch, paths, message, push, append_only, reservation, moves=()):
+
     head = current_branch(repo)
+    source_branch = f'refs/heads/{head}' if head else ''
+    if (source_branch != reservation.data['source_branch']
+            or _git(repo, 'rev-parse', '--verify', 'HEAD^{commit}') != reservation.data['source_head']):
+        raise GitError('publication source advanced since reservation; work retained')
+    if append_only and head == branch:
+        raise GitError('append-only publication requires an isolated destination branch')
 
     # If we are already standing on the target, there is nothing clever to do —
     # and plumbing would be actively WRONG here: moving the ref under a checked
     # out branch without touching index/worktree makes the tree read as dirty in
     # reverse. Use the ordinary path.
     if head == branch:
-        for p in paths:
+        base = reservation.data['source_head']
+        tree = _expected_tree(repo, base, paths, moves)
+        reservation.expected(tree)
+        if current_branch(repo) != branch or _git(repo, 'rev-parse', 'HEAD') != base:
+            raise GitError('publication source changed during capture; retained work requires reconciliation')
+        if tree == _git(repo, 'rev-parse', f'{base}^{{tree}}'):
+            reservation.verified = True
+            if push:
+                _push_converging(repo, branch, base)
+            return ''
+        # An untracked source or an already-published deletion has no index
+        # entry to stage. Its paired destination is still explicitly verified.
+        selected = [p for p in paths if (repo / p).is_file() or _read_at(repo, base, p) is not None]
+        for p in selected:
             _git(repo, 'add', '--', p)
         # Commit with an explicit pathspec, not the whole index. A pathspec
         # commit runs against a temporary index holding only these paths, so
@@ -181,94 +497,26 @@ def commit_to_branch(repo: Path, branch: str, paths, message: str,
         # 2026-08-24 that blocked every batch-end commit for four days —
         # journal, org and inbox updates all bounced off a hook complaint
         # about files this code never touched.
-        r = subprocess.run(
-            ['git', '--literal-pathspecs', '-C', str(repo), 'commit', '-m', message, '--', *paths],
-            capture_output=True, text=True)
-        if r.returncode != 0:
-            out = (r.stdout or '') + (r.stderr or '')
-            if 'nothing to commit' in out or 'nothing added to commit' in out:
-                if push:
-                    _push_converging(repo, branch, _git(repo, 'rev-parse', 'HEAD'))
-                return ''
-            raise GitError(f"git commit: {out.strip()[:400]}")
-        sha = _git(repo, 'rev-parse', 'HEAD')
+        # Hook output is not a machine-readable success signal. A failing hook
+        # saying "nothing to commit" must still refuse publication.
+        _git(repo, 'commit', '-m', message, '--', *selected)
+        sha = _git(repo, 'rev-parse', '--verify', 'HEAD^{commit}')
+        if (current_branch(repo) != branch
+                or _git(repo, 'rev-parse', f'{sha}^{{tree}}') != tree
+                or _git(repo, 'show', '-s', '--format=%P', sha) != base):
+            raise GitError('commit content, parent or branch changed; local commits retained, publication refused')
+        reservation.verify_commit(sha)
         if push:
             _push_converging(repo, branch, sha)
         return sha
 
-    # HEAD is elsewhere. Land on `branch` via plumbing.
     try:
-        base = _git(repo, 'rev-parse', f'refs/heads/{branch}')
-    except GitError:
-        raise GitError(f"{repo.name}: no local branch '{branch}' to commit onto")
-
-    # A file from an older feature branch is not a replacement for a newer
-    # default-branch file. Refuse the ambiguous merge before writing any ref.
-    for rel in paths:
-        def read_at(ref):
-            mode = _git(repo, 'ls-tree', ref, '--', rel)
-            if not mode:
-                return None
-            if not mode.startswith(('100644 ', '100755 ')):
-                raise GitError('publication target is not a regular file')
-            result = subprocess.run(['git', 'show', f'{ref}:{rel}'], cwd=repo, capture_output=True)
-            if result.returncode:
-                raise GitError('cannot read publication base')
-            return result.stdout
-        source, destination = read_at('HEAD'), read_at(base)
-        content = (repo / rel).read_bytes()
-        preserving_append = (destination is not None and Path(rel).suffix in {'.md', '.org'}
-                             and destination.endswith(b'\n') and content.startswith(destination))
-        if source != destination and content != destination and not preserving_append:
-            raise GitError(f'{rel}: destination has independent changes; reconcile both versions before publication')
-
-    tmp_index = tempfile.NamedTemporaryFile(delete=False, suffix='.idx')
-    tmp_index.close()
-    env = {**os.environ, 'GIT_INDEX_FILE': tmp_index.name}
-
-    try:
-        # Start from the target branch's tree, NOT from our own index — our index
-        # reflects the feature branch and would drag its changes along.
-        _git(repo, 'read-tree', base, env=env)
-
-        for rel in paths:
-            blob = _git(repo, 'hash-object', '-w', '--', str(repo / rel), env=env)
-            _git(repo, 'update-index', '--add', '--cacheinfo',
-                 f"{_blob_mode(repo, rel)},{blob},{rel}", env=env)
-
-        tree = _git(repo, 'write-tree', env=env)
-
-        # No-op guard: if the tree is identical to the branch tip's, committing
-        # would create an empty commit on every wrap-up forever.
-        if tree == _git(repo, 'rev-parse', f'{base}^{{tree}}'):
-            # A previous attempt may have committed before its push failed.
-            # Unchanged local content does not acknowledge remote delivery.
-            if push:
-                _git(repo, 'push', 'origin', branch)
-            return ''
-
-        sha = _git(repo, 'commit-tree', tree, '-p', base, '-m', message, env=env)
-        _git(repo, 'update-ref', f'refs/heads/{branch}', sha, base,
-             env=env)  # old-value guard: refuses if branch moved under us
-    finally:
-        os.unlink(tmp_index.name)
-
-    # Retain working copies. A later edit may already differ from the committed
-    # blob; publishing on another branch never grants authority to delete it.
-
-    if push:
-        try:
-            _git(repo, 'push', 'origin', branch)
-        except GitError as e:
-            # Converging a branch that is not checked out means a checkout or a
-            # worktree — too much machinery for a wrap-up. Tell the truth
-            # instead: the knowledge IS committed and safe on the local branch.
-            raise GitError(
-                f"{repo.name}: knowledge committed locally on '{branch}' "
-                f"({sha[:10]}) but the push was rejected — converge {branch} "
-                f"with origin and push. {e}")
-
-    return sha
+        return _commit_off_branch(repo, branch, paths, message, push, append_only=append_only,
+                                  publication=reservation, moves=moves)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        if isinstance(exc, GitError):
+            raise
+        raise GitError('publication failed; source data and recovery workspaces retained') from None
 
 
 def commit_knowledge(repo: Path, paths, message: str, push: bool = True) -> dict:

@@ -1,41 +1,70 @@
 {
   "mcpServers": {
     "datacore": {
-      "command": "bash",
-      "args": ["-c", "set -a; [ -f .datacore/env/.env ] && source .datacore/env/.env; exec npx -y @datacore-one/mcp@latest"],
-      "comment": "Core Datacore tools: GTD, journal, knowledge, agents, commands. Run from ~/Data/"
+      "command": "/absolute/path/to/qualified/python",
+      "args": [
+        "-I",
+        "/absolute/path/to/datacore/.datacore/lib/mcp_stdio.py",
+        "--profile",
+        "/absolute/private/mcp/datacore/profile.json",
+        "--credentials",
+        "/absolute/private/mcp/datacore/secrets.json"
+      ]
     },
     "gamma": {
-      "command": "node",
+      "command": "/absolute/path/to/qualified/python",
       "args": [
-        "${HOME}/Data/.datacore/modules/slides/mcp-server/dist/index.js"
-      ],
-      "env": {
-        "GAMMA_API_KEY": "your-gamma-api-key-here"
-      }
+        "-I",
+        "/absolute/path/to/datacore/.datacore/lib/mcp_stdio.py",
+        "--profile",
+        "/absolute/private/mcp/gamma/profile.json",
+        "--credentials",
+        "/absolute/private/mcp/gamma/secrets.json"
+      ]
     },
     "perplexity": {
-      "command": "bash",
-      "args": ["-c", "set -a; [ -f .datacore/env/.env ] && source .datacore/env/.env; exec npx -y @perplexity-ai/mcp-server"],
-      "comment": "Requires PERPLEXITY_API_KEY in .datacore/env/.env"
+      "command": "/absolute/path/to/qualified/python",
+      "args": [
+        "-I",
+        "/absolute/path/to/datacore/.datacore/lib/mcp_stdio.py",
+        "--profile",
+        "/absolute/private/mcp/perplexity/profile.json",
+        "--credentials",
+        "/absolute/private/mcp/perplexity/secrets.json"
+      ]
     },
     "exa": {
-      "command": "bash",
-      "args": ["-c", "set -a; [ -f .datacore/env/.env ] && source .datacore/env/.env; exec npx -y exa-mcp-server"],
-      "comment": "Requires EXA_API_KEY in .datacore/env/.env. Local server unlocks all tools: company_research, code_context, deep_search, crawling, people_search"
+      "command": "/absolute/path/to/qualified/python",
+      "args": [
+        "-I",
+        "/absolute/path/to/datacore/.datacore/lib/mcp_stdio.py",
+        "--profile",
+        "/absolute/private/mcp/exa/profile.json",
+        "--credentials",
+        "/absolute/private/mcp/exa/secrets.json"
+      ]
     },
     "jina": {
-      "command": "bash",
-      "args": ["-c", "set -a; [ -f .datacore/env/.env ] && source .datacore/env/.env; exec npx -y jina-mcp-tools --transport stdio"],
-      "comment": "Requires JINA_API_KEY in .datacore/env/.env"
+      "command": "/absolute/path/to/qualified/python",
+      "args": [
+        "-I",
+        "/absolute/path/to/datacore/.datacore/lib/mcp_stdio.py",
+        "--profile",
+        "/absolute/private/mcp/jina/profile.json",
+        "--credentials",
+        "/absolute/private/mcp/jina/secrets.json"
+      ]
     },
     "gemini": {
-      "command": "bash",
-      "args": ["-c", "set -a; [ -f .datacore/env/.env ] && source .datacore/env/.env; exec npx -y @rlabs-inc/gemini-mcp"],
-      "env": {
-        "GEMINI_TOOL_PRESET": "research"
-      },
-      "comment": "Requires GOOGLE_API_KEY in .datacore/env/.env"
+      "command": "/absolute/path/to/qualified/python",
+      "args": [
+        "-I",
+        "/absolute/path/to/datacore/.datacore/lib/mcp_stdio.py",
+        "--profile",
+        "/absolute/private/mcp/gemini/profile.json",
+        "--credentials",
+        "/absolute/private/mcp/gemini/secrets.json"
+      ]
     }
   }
 }

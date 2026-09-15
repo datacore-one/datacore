@@ -37,7 +37,6 @@ reintroduce lost updates (DIP-0046 §10).
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import re
@@ -50,9 +49,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ledger.log import EventLog  # noqa: E402
+from file_utils import file_lock, private_state_directory  # noqa: E402
 
 PUSH_ATTEMPTS = 3
-LOCK_DIR = Path.home() / ".datacore" / "state" / "locks"
 
 
 @dataclass
@@ -100,19 +99,20 @@ def _git(repo: Path, *args: str, timeout: int = 120) -> tuple[int, str, str]:
 @contextmanager
 def _repo_lock(space: Path):
     """Exclusive, per-repo, SAME-MACHINE ONLY. See the module docstring."""
-    # Honor the same state-root override used by jobs/recurrence and tests.
-    lock_dir = Path(os.environ["DATACORE_STATE"]) / "locks" if os.environ.get("DATACORE_STATE") else LOCK_DIR
-    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_dir = private_state_directory('locks')
     lock = lock_dir / f"{space.name}.lock"
-    with open(lock, "w") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+    # Retain the existing lock name/inode for cooperating callers. Opening a
+    # lock never truncates it or follows an alias; contention has a deadline.
+    with file_lock(lock, lock_path=lock, timeout=120):
+        yield
 
 
 SHIPPED_REGISTRY = Path(__file__).resolve().parents[2] / ".datacore" / "registry" / "repositories.yaml"
+
+
+def _data_root() -> Path:
+    """Data/configuration location is independent of the installed code tree."""
+    return Path(os.environ.get('DATACORE_ROOT', str(Path.home() / 'Data')))
 
 
 def _registry(root: Path) -> dict:
@@ -127,10 +127,39 @@ def _registry(root: Path) -> dict:
     and raised FileNotFoundError twice a day on hermes (datacore-fleet-sync,
     from 18:10 UTC 2026-09-06) — a traceback where an outcome belonged."""
     import yaml
+
+    class UniqueKeysLoader(yaml.SafeLoader):
+        def construct_mapping(self, node, deep=False):
+            self.flatten_mapping(node)
+            seen = set()
+            for key_node, _ in node.value:
+                key = self.construct_object(key_node, deep=deep)
+                if not isinstance(key, str) or key in seen:
+                    raise ValueError('invalid or duplicate repository configuration key')
+                seen.add(key)
+            return super().construct_mapping(node, deep=deep)
+
     p = root / ".datacore" / "registry" / "repositories.yaml"
-    if not p.exists() and SHIPPED_REGISTRY.exists():
+    if not p.exists() and not p.is_symlink() and SHIPPED_REGISTRY.exists():
         p = SHIPPED_REGISTRY
-    return (yaml.safe_load(p.read_text()) or {}).get("repositories", {})
+    try:
+        with p.open('rb') as source:
+            raw = source.read(1_048_577)
+        if len(raw) > 1_048_576:
+            raise ValueError('repository configuration is too large')
+        document = yaml.load(raw.decode('utf-8'), Loader=UniqueKeysLoader)
+        if not isinstance(document, dict) or not isinstance(document.get('repositories'), dict):
+            raise ValueError('repository configuration requires a repositories mapping')
+        entries = document['repositories']
+        for key, entry in entries.items():
+            if (not isinstance(key, str) or not key or '\\' in key or '\0' in key
+                    or key != '<root>' and any(part in ('', '.', '..') for part in key.split('/'))
+                    or not isinstance(entry, dict)
+                    or entry.get('category') not in ('knowledge', 'agent-personal', 'code')):
+                raise ValueError('invalid repository path or category')
+        return entries
+    except (OSError, UnicodeError, yaml.YAMLError, TypeError, ValueError):
+        raise ValueError('repository registry is unavailable or invalid') from None
 
 
 def classify(space: Path, root: Path | None = None) -> Result:
@@ -141,8 +170,13 @@ def classify(space: Path, root: Path | None = None) -> Result:
     branch — which is the single mistake the two categories exist to prevent
     (DIP-0046 §1).
     """
-    root = root or Path(__file__).resolve().parents[2]
-    reg = _registry(root)
+    root = Path(root) if root is not None else _data_root()
+    try:
+        reg = _registry(root)
+        if not isinstance(reg, dict):
+            raise ValueError('invalid registry')
+    except (OSError, ValueError, TypeError, AttributeError):
+        return Result(False, 'repository registry is unavailable or invalid', {})
     key = "<root>" if space.resolve() == root.resolve() else space.name
     entry = reg.get(key)
 
@@ -158,12 +192,14 @@ def classify(space: Path, root: Path | None = None) -> Result:
         if rc == 0 and out.strip():
             import re as _re
             name = _re.sub(r"\.git$", "", out.strip().rstrip("/").split("/")[-1])
-            entry = next((v for v in reg.values() if v.get("repo") == name), None)
+            entry = next((v for v in reg.values() if isinstance(v, dict) and v.get("repo") == name), None)
 
     if not entry:
         return Result(False, "repository not in registry/repositories.yaml",
                       {"repo": key, "fix": "classify it as knowledge, code or agent-personal"})
-    return Result(True, entry.get("category", ""), {"entry": entry})
+    if not isinstance(entry, dict) or entry.get('category') not in ('knowledge', 'agent-personal', 'code'):
+        return Result(False, 'repository category is invalid; no synchronization permitted', {})
+    return Result(True, entry['category'], {"entry": entry})
 
 
 def default_branch(space: Path) -> str:
@@ -245,12 +281,17 @@ def foreign_writer_logs(space: Path) -> list[tuple[str, str, str]]:
     return out
 
 
-def converge(space: Path) -> Result:
-    """Receive others' facts: fetch, then MERGE. Never rebase, never reset."""
-    cat = classify(space)
+def converge(space: Path, *, root: Path | None = None) -> Result:
+    """Apply the registered category at every entry point, including direct calls."""
+    cat = classify(space, root)
     if not cat:
         return cat
+    if cat.reason not in ('knowledge', 'agent-personal', 'code'):
+        return Result(False, 'repository category does not permit synchronization', {})
     with _repo_lock(space):
+        if cat.reason == 'code':
+            outcome = _code_update(space)
+            return Result(outcome == 'clean', f'code repository: {outcome}', {'outcome': outcome})
         return _converge_locked(space)
 
 
@@ -458,8 +499,16 @@ def _push_with_retry(space: Path, db: str) -> Result:
     on another host. Bounded because an unbounded retry against a genuinely
     diverged remote is a spin, not a recovery.
     """
+    from git_publication import push_arguments
     for attempt in range(1, PUSH_ATTEMPTS + 1):
-        rc, _, err = _git(space, "push", "origin", f"HEAD:{db}")
+        rc, captured, _ = _git(space, 'rev-parse', '--verify', 'HEAD^{commit}')
+        if rc:
+            return Result(False, 'publication commit cannot be established')
+        try:
+            args = push_arguments(captured.strip(), f'refs/heads/{db}')
+        except ValueError:
+            return Result(False, 'publication commit/ref is invalid')
+        rc, _, err = _git(space, *args)
         if rc == 0:
             return Result(True, "pushed", {"attempts": attempt})
         low = err.lower()
@@ -469,13 +518,13 @@ def _push_with_retry(space: Path, db: str) -> Result:
                 return Result(False, "push rejected and converge failed",
                               {"attempt": attempt, "converge": c.reason})
             continue
-        return Result(False, "push failed", {"attempt": attempt, "stderr": err.strip()[:300]})
+        return Result(False, "push failed; inspect local remote configuration", {"attempt": attempt})
     return Result(False, f"push still rejected after {PUSH_ATTEMPTS} attempts",
                   {"hint": "remote is moving faster than we can converge"})
 
 
 def append(space: Path, actor: str, type: str, payload: dict,
-           *, push: bool = True) -> Result:
+           *, push: bool = True, root: Path | None = None) -> Result:
     """Publish one fact.
 
     Order matters and is the point: the event is appended, committed, and only
@@ -483,14 +532,16 @@ def append(space: Path, actor: str, type: str, payload: dict,
     learns that the fact exists only on this disk, which is precisely what
     `git push … || true` hid while printing "synced clean".
     """
-    cat = classify(space)
+    cat = classify(space, root)
     if not cat:
         return cat
+    if cat.reason not in ('knowledge', 'agent-personal'):
+        return Result(False, 'repository category does not permit direct fact publication', {})
     with _repo_lock(space):
         try:
             event = EventLog(space, actor).append(type, payload)
         except Exception as exc:  # noqa: BLE001 — a bad event type is the caller's bug
-            return Result(False, "append rejected", {"error": f"{type(exc).__name__}: {exc}"})
+            return Result(False, "append rejected", {"error": exc.__class__.__name__})
 
         rel = f".datacore/events/{actor}.jsonl"
         rc, _, err = _git(space, "add", "--", rel)
@@ -529,7 +580,7 @@ def gaps(space: Path) -> Result:
                   {"rows": rows})
 
 
-def sync_repo(repo: Path, quiet: bool = False) -> str:
+def sync_repo(repo: Path, quiet: bool = False, *, root: Path | None = None) -> str:
     """Converge one repo, reported in the operator's vocabulary.
 
     This was `space_sync.py`: first 142 lines reimplementing the algorithm
@@ -542,7 +593,7 @@ def sync_repo(repo: Path, quiet: bool = False) -> str:
     that earns its keep is offline vs blocked: offline clears itself when the
     laptop reopens, blocked never does.
     """
-    res = converge(Path(repo))
+    res = converge(Path(repo), root=root) if root is not None else converge(Path(repo))
     if res.ok:
         outcome = "clean"
     elif "not in registry" in res.reason:
@@ -616,7 +667,7 @@ def sync_outcomes(root: Path, only: str | None = None,
             if include_code:
                 out.append((name, cat, _code_update(path)))
             continue
-        out.append((name, cat, sync_repo(path, quiet=True)))
+        out.append((name, cat, sync_repo(path, quiet=True, root=root)))
     return out
 
 
@@ -662,7 +713,7 @@ if __name__ == "__main__":
     ap.add_argument("op", choices=["converge", "gaps", "classify", "sync", "status"])
     ap.add_argument("--space", type=Path, help="required for all ops except sync")
     ap.add_argument("--repo", help="sync: limit to one space by directory name")
-    ap.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
+    ap.add_argument("--root", type=Path, default=_data_root())
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--no-code", action="store_true",
                     help="sync: knowledge repos only, leave code repos alone")
@@ -677,7 +728,7 @@ if __name__ == "__main__":
     if a.space is None:
         ap.error(f"--space is required for {a.op}")
     fn = {"converge": converge, "gaps": gaps, "classify": classify}[a.op]
-    res = fn(a.space)
+    res = fn(a.space) if a.op == 'gaps' else fn(a.space, root=a.root)
     print(json.dumps({"ok": res.ok, "reason": res.reason, "context": res.context},
                      indent=2, default=str))
     raise SystemExit(0 if res.ok else 1)

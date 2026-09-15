@@ -170,7 +170,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx @plur-ai/cli hook-inject --event plan_mode",
+            "command": "python3 ~/Data/.datacore/lib/plur_cli.py --timeout 8 hook-inject --event plan_mode",
             "timeout": 10
           }
         ]
@@ -180,7 +180,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx @plur-ai/cli hook-inject --event skill",
+            "command": "python3 ~/Data/.datacore/lib/plur_cli.py --timeout 8 hook-inject --event skill",
             "timeout": 10
           }
         ]
@@ -190,7 +190,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx @plur-ai/cli hook-inject --event agent",
+            "command": "python3 ~/Data/.datacore/lib/plur_cli.py --timeout 8 hook-inject --event agent",
             "timeout": 10
           }
         ]
@@ -200,7 +200,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx @plur-ai/cli hook-observe >/dev/null",
+            "command": "python3 ~/Data/.datacore/lib/hooks/plur_observe.py >/dev/null",
             "timeout": 3
           }
         ]
@@ -222,7 +222,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx @plur-ai/cli hook-inject --event subagent",
+            "command": "python3 ~/Data/.datacore/lib/plur_cli.py --timeout 8 hook-inject --event subagent",
             "timeout": 10
           }
         ]
@@ -244,7 +244,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx @plur-ai/cli hook-inject --rehydrate",
+            "command": "python3 ~/Data/.datacore/lib/plur_cli.py --timeout 13 hook-inject --rehydrate",
             "timeout": 15
           }
         ]
@@ -276,7 +276,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx @plur-ai/cli hook-observe --post >/dev/null",
+            "command": "python3 ~/Data/.datacore/lib/hooks/plur_observe.py --post >/dev/null",
             "timeout": 3
           }
         ]
@@ -314,7 +314,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx @plur-ai/cli hook-learn-check",
+            "command": "python3 ~/Data/.datacore/lib/plur_cli.py --timeout 0.5 hook-learn-check",
             "timeout": 2
           }
         ]

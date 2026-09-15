@@ -2,9 +2,18 @@
 from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
+import pytest
 
 from executors.base import Executor
 from ledger.log import read_events
+
+
+@pytest.fixture
+def declared_executor(tmp_path, monkeypatch):
+    import actor_identity
+    registry = tmp_path / 'principals.yaml'
+    registry.write_text('principals:\n  fixture-executor: {writes_as: [worker]}\n')
+    monkeypatch.setattr(actor_identity, 'PRINCIPALS', registry)
 
 
 class DelayedExecutor(Executor):
@@ -44,7 +53,7 @@ def test_shared_executor_retains_each_runs_scope_and_accounting(tmp_path, monkey
         assert (':est' in events[0].payload['ref']) == (name == 'first')
 
 
-def test_claude_binds_guard_and_keeps_prompt_out_of_process_arguments(tmp_path, monkeypatch):
+def test_claude_binds_guard_and_keeps_prompt_out_of_process_arguments(tmp_path, monkeypatch, declared_executor):
     import json
     import subprocess
     import executors.claude_code as module
@@ -65,10 +74,10 @@ def test_claude_binds_guard_and_keeps_prompt_out_of_process_arguments(tmp_path, 
     settings = json.loads(captured['command'][captured['command'].index('--settings') + 1])
     assert settings['hooks']['PreToolUse'][0]['matcher'] == '*'
     assert captured['env']['DATACORE_POLICY_GRANTED'] == ''
-    assert captured['env']['DATACORE_POLICY_PRINCIPAL'] == 'worker'
+    assert captured['env']['DATACORE_POLICY_PRINCIPAL'] == 'fixture-executor'
 
 
-def test_openclaw_uses_isolated_workspace_and_preserves_unicode_output(tmp_path, monkeypatch):
+def test_openclaw_uses_isolated_workspace_and_preserves_unicode_output(tmp_path, monkeypatch, declared_executor):
     import json
     import subprocess
     import executors.openclaw as module
@@ -88,6 +97,23 @@ def test_openclaw_uses_isolated_workspace_and_preserves_unicode_output(tmp_path,
     assert captured['command'][captured['command'].index('--cwd') + 1] == str(tmp_path)
     assert '--state-dir' not in captured['command'] and '--agent' not in captured['command']
     assert captured['input'] == 'private content'
+    assert captured['env']['DATACORE_POLICY_PRINCIPAL'] == 'fixture-executor'
+
+
+@pytest.mark.parametrize('backend', ['claude_code', 'openclaw'])
+def test_executor_refuses_missing_principal_before_starting_provider(tmp_path, monkeypatch, backend):
+    import importlib
+    import actor_identity
+    module = importlib.import_module('executors.' + backend)
+    monkeypatch.setattr(actor_identity, 'PRINCIPALS', tmp_path / 'missing.yaml')
+    monkeypatch.setenv('DATACORE_ACTOR', 'worker')
+    monkeypatch.setenv('DATACORE_NO_SPEND', '1')
+    monkeypatch.setenv('DATACORE_POLICY_PRINCIPAL', 'forged')
+    monkeypatch.setattr(module.shutil, 'which', lambda name: '/fake/' + name)
+    monkeypatch.setattr(module, 'run_process', lambda *a, **k: pytest.fail('unregistered provider started'))
+    executor = module.ClaudeCodeExecutor() if backend == 'claude_code' else module.OpenClawExecutor()
+    result = executor.run('fixture task', cwd=tmp_path, actor='worker')
+    assert result.error and 'no declared principal' in result.error
 
 
 def test_hermes_dispatch_policy_errors_refuse_execution(monkeypatch):

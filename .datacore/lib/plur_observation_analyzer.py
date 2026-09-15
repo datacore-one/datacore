@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PLUR Observation Analyzer
 
-Processes raw observation logs (~/.plur/observations/*.jsonl) to identify
+Processes private version-2 observation metadata to identify
 patterns worth learning. Outputs engram candidates for human review.
 
 Usage:
@@ -13,47 +13,22 @@ Patterns detected:
 3. Correction signals (Edit after Edit on same file → possible mistake pattern)
 4. High-frequency tools by directory → workspace-specific conventions
 
-With --auto-learn, creates engrams directly via plur_learn MCP call.
-Without it, prints candidates for manual review.
+Prints metadata-derived candidates for human review under DIP-0019.
+The legacy --auto-learn flag is refused; observations do not authorize learning.
 """
 import argparse
 import json
-import os
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
-from pathlib import Path
 
-OBS_DIR = Path(os.path.expanduser("~/.plur/observations"))
+import observation_metadata
+
+OBS_DIR = observation_metadata.directory()
 
 
 def load_observations(days=7):
-    """Load observations from the last N days."""
-    observations = []
-    cutoff = datetime.now() - timedelta(days=days)
-
-    if not OBS_DIR.exists():
-        return observations
-
-    for f in sorted(OBS_DIR.glob("*.jsonl")):
-        try:
-            date = datetime.strptime(f.stem, "%Y-%m-%d")
-            if date < cutoff:
-                continue
-        except ValueError:
-            continue
-
-        with open(f) as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    observations.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-
-    return observations
+    """Only current metadata is eligible for automatic pattern analysis."""
+    return observation_metadata.load(OBS_DIR, days)
 
 
 def analyze_tool_frequency(observations):
@@ -63,13 +38,12 @@ def analyze_tool_frequency(observations):
 
     for obs in observations:
         tool = obs.get("tool", "")
-        cwd = obs.get("cwd", "")
+        workspace = obs.get("workspace", "")
         if tool:
             tool_counts[tool] += 1
-            # Extract space from cwd
-            if "/Data/" in cwd:
-                space = cwd.split("/Data/")[1].split("/")[0] if "/Data/" in cwd else "root"
-                tool_by_dir[space][tool] += 1
+            # Group by pseudonymous workspace identity
+            if workspace:
+                tool_by_dir[workspace][tool] += 1
 
     return tool_counts, tool_by_dir
 
@@ -93,8 +67,8 @@ def analyze_sequences(observations):
     # Group by session
     sessions = defaultdict(list)
     for obs in observations:
-        if obs.get("event") == "PreToolUse":
-            sessions[obs.get("session_id", "")].append(obs.get("tool", ""))
+        if obs.get("event") == "PreToolUse" and obs.get("session_id") and obs.get("workspace"):
+            sessions[(obs["session_id"], obs["workspace"])].append(obs.get("tool", ""))
 
     # Find common 3-tool sequences
     sequence_counts = Counter()
@@ -113,10 +87,9 @@ def analyze_cross_space_patterns(observations):
 
     for obs in observations:
         tool = obs.get("tool", "")
-        cwd = obs.get("cwd", "")
-        if tool and "/Data/" in cwd:
-            space = cwd.split("/Data/")[1].split("/")[0]
-            tool_spaces[tool].add(space)
+        workspace = obs.get("workspace", "")
+        if tool and workspace:
+            tool_spaces[tool].add(workspace)
 
     # Tools used in 3+ spaces are likely global patterns
     return {t: spaces for t, spaces in tool_spaces.items() if len(spaces) >= 3}
@@ -162,6 +135,8 @@ def main():
     parser.add_argument("--auto-learn", action="store_true", help="Create engrams automatically")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
+    if args.auto_learn:
+        parser.error("review concrete candidates through /daily-review or /learn before publication")
 
     observations = load_observations(args.days)
     if not observations:

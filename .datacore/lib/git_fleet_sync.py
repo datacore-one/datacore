@@ -56,6 +56,8 @@ import sys
 from pathlib import Path
 import yaml
 
+from git_inventory import changes as working_changes, tracked_paths
+
 # Filenames matching these are never committed.
 JUNK_SUFFIXES = ('.pyc', '.orig', '.rej', '.swp')
 JUNK_DIRS = ('__pycache__', '.pytest_cache', 'node_modules', '.venv',
@@ -352,19 +354,24 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
         else:
             result['pull'] = 'pulled'
 
-    porcelain = git_raw(repo, 'status', '--porcelain')
-    if not porcelain.strip():
+    try:
+        inventory = working_changes(repo)
+        tracked = tracked_paths(repo)
+    except RuntimeError:
+        result['status'] = 'INVENTORY FAILED — existing work retained; no publication attempted'
+        return result
+    if not inventory:
         result['status'] = 'clean' + (f" ({result.get('pull')})" if result.get('pull') else '')
         return result
 
-    tracked = set(git(repo, 'ls-files').splitlines())
-
     to_add = []
-    for line in porcelain.splitlines():
-        if not line.strip():
+    for change in inventory:
+        xy, path = change.status, change.path
+        if 'R' in xy:
+            # A rename includes a deletion; this sweep has no authority to
+            # infer that either side may replace the other on every host.
+            result['skipped'].append((path, 'RENAME — requires explicit review'))
             continue
-        xy = line[:2]
-        path = line[3:].strip().strip('"')
         # A "land trapped work" sweep must NEVER propagate a deletion. A tracked
         # file missing on one host is almost always a local defect — an incomplete
         # checkout, a crashed process, an agent that removed it — not work to
@@ -374,12 +381,12 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
         if 'D' in xy:
             result['skipped'].append((path, 'DELETION — not auto-committed (needs a human)'))
             continue
-        # Unmerged files (UU, AU, UA, DD, DU, UD) contain conflict markers or
+        # Unmerged files (UU, AU, UA, DD, DU, UD, AA) contain conflict markers or
         # represent an unresolved state — committing them corrupts the repo.
         # The MERGE_HEAD guard above catches the common case; this is a
         # belt-and-suspenders catch for any unmerged path that slips through
         # (e.g. `git add -u` already ran on some files before the guard fired).
-        if 'U' in xy:
+        if change.unmerged:
             result['skipped'].append((path, 'MERGE CONFLICT — unresolved; resolve before syncing'))
             continue
         reason = is_junk(repo, path, tracked)
@@ -409,7 +416,11 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
         return result
 
     for f in to_add:
-        subprocess.run(['git', 'add', '--', f], cwd=repo, capture_output=True)
+        staged = subprocess.run(['git', '--literal-pathspecs', 'add', '--', f],
+                                cwd=repo, capture_output=True)
+        if staged.returncode:
+            result['status'] = 'STAGING FAILED — existing work retained; no publication attempted'
+            return result
 
     msg = (
         f"sync: land agent work trapped on this machine ({len(to_add)} files)\n\n"
@@ -418,13 +429,24 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
         "invisible to every other agent.\n\n"
         f"Skipped as junk: {len(result['skipped'])} file(s).\n"
     )
-    c = subprocess.run(['git', 'commit', '-m', msg], cwd=repo,
+    c = subprocess.run(['git', '--literal-pathspecs', 'commit', '-m', msg, '--', *to_add], cwd=repo,
                        capture_output=True, text=True)
     if c.returncode != 0:
         result['status'] = f"COMMIT FAILED: {(c.stderr or '').strip()[:120]}"
         return result
 
-    p = subprocess.run(['git', 'push', 'origin', default], cwd=repo,
+    from git_publication import push_arguments
+    captured = subprocess.run(['git', 'rev-parse', '--verify', 'HEAD^{commit}'],
+                              cwd=repo, capture_output=True, text=True, timeout=30)
+    if captured.returncode:
+        result['status'] = 'committed; publication identity unavailable'
+        return result
+    try:
+        args = push_arguments(captured.stdout.strip(), f'refs/heads/{default}')
+    except ValueError:
+        result['status'] = 'committed; publication identity invalid'
+        return result
+    p = subprocess.run(['git', *args], cwd=repo,
                        capture_output=True, text=True)
     if p.returncode != 0:
         result['status'] = f"committed, PUSH FAILED: {(p.stderr or '').strip()[:120]}"

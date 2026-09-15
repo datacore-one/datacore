@@ -11,13 +11,15 @@ Events:
 Input: JSON on stdin (Claude Code hook input)
 Output: JSON on stdout with {additionalContext} or empty (exit 0)
 
-Uses PLUR CLI (npx @plur-ai/cli inject) for engram selection.
+Uses the installed PLUR CLI (`plur inject`) for engram selection.
 """
-import argparse, json, sys, os, subprocess
+import argparse, json, sys, os
 from pathlib import Path
 
 DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
-sys.path.insert(0, str(DATACORE_ROOT / ".datacore" / "lib"))
+# Helper code belongs to this installation; DATACORE_ROOT selects data.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import plur_cli
 import session_state
 from session_state import read_session, _debug
 
@@ -27,12 +29,12 @@ def plur_inject(task_desc, limit=15):
     if not task_desc or not task_desc.strip():
         return None
     try:
-        result = subprocess.run(
-            ['npx', '@plur-ai/cli', 'inject', task_desc, '--json'],
+        result = plur_cli.run(
+            'inject', task_desc, '--json',
             capture_output=True, text=True, timeout=15
         )
         if result.returncode != 0:
-            _debug(f"plur_inject failed: {result.stderr.strip()}")
+            _debug(f"plur_inject failed with exit {result.returncode}")
             return None
 
         data = json.loads(result.stdout)
@@ -48,7 +50,7 @@ def plur_inject(task_desc, limit=15):
         context = '\n'.join(parts)
         return (context, count) if context else None
     except Exception as e:
-        _debug(f"plur_inject error: {e}")
+        _debug(f"plur_inject error: {type(e).__name__}")
         return None
 
 

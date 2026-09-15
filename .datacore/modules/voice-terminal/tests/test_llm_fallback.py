@@ -140,15 +140,15 @@ def test_local_tts_failure_does_not_send_text_to_cloud_by_default(sb, monkeypatc
 
 def test_explicit_cloud_opt_in_allows_tts_fallback(sb, monkeypatch, tmp_path):
     monkeypatch.setattr(sb, '_SETTINGS', {'allow_cloud_tts': True})
-    module = types.ModuleType('gtts')
+    module = types.ModuleType('speech_transport')
     received = []
-    class TTS:
-        def __init__(self, text, **kwargs):
-            received.append(text)
-        def save(self, path):
-            Path(path).write_bytes(b'fake audio')
-    module.gTTS = TTS
-    monkeypatch.setitem(sys.modules, 'gtts', module)
+    def synthesize(text, path, *, allow_cloud):
+        assert allow_cloud is True
+        received.append(text)
+        Path(path).write_bytes(b'fake audio')
+        return Path(path)
+    module.synthesize_google = synthesize
+    monkeypatch.setitem(sys.modules, 'speech_transport', module)
     bootstrap = types.ModuleType('venv_bootstrap')
     bootstrap.activate = lambda: None
     monkeypatch.setitem(sys.modules, 'venv_bootstrap', bootstrap)

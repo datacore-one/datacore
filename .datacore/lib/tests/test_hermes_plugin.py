@@ -128,6 +128,106 @@ def test_memory_sync_does_nothing_without_an_identity(tmp_path, monkeypatch):
     assert not m.exists()
 
 
+def test_memory_sync_waits_for_provider_lock_and_preserves_its_write(tmp_path, as_tris):
+    import subprocess
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    memory = tmp_path / "MEMORY.md"
+    memory.write_text("Original memory\n")
+    code = (
+        "import fcntl, pathlib, sys; p=pathlib.Path(sys.argv[1]); "
+        "f=open(str(p)+'.lock','a+'); fcntl.flock(f,fcntl.LOCK_EX); "
+        "print('locked',flush=True); sys.stdin.readline(); "
+        "p.write_text(p.read_text()+'Concurrent provider memory\\n')"
+    )
+    child = subprocess.Popen([sys.executable, "-I", "-c", code, str(memory)],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    started = Event()
+    def sync():
+        started.set()
+        return hp.sync_memory_block(memory)
+    try:
+        assert child.stdout.readline().strip() == "locked"
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(sync)
+            assert started.wait(5)
+            # Acknowledgement while the provider still owns the lock is unsafe.
+            from concurrent.futures import TimeoutError
+            try:
+                with pytest.raises(TimeoutError):
+                    pending.result(timeout=0.15)
+            finally:
+                child.communicate("release\n", timeout=5)
+            assert pending.result(timeout=5) == "added"
+    finally:
+        if child.poll() is None:
+            child.communicate("release\n", timeout=5)
+    text = memory.read_text()
+    assert "Original memory" in text and "Concurrent provider memory" in text
+    assert text.count(hp.MARK_START) == 1
+
+
+def test_memory_sync_never_uses_a_preexisting_fixed_temp_path(tmp_path, as_tris):
+    memory = tmp_path / "MEMORY.md"
+    memory.write_text("Preserved memory\n")
+    other = tmp_path / "other"
+    other.write_text("Other valid data\n")
+    temporary = tmp_path / "MEMORY.md.tmp"
+    temporary.symlink_to(other)
+    assert hp.sync_memory_block(memory) == "added"
+    assert other.read_text() == "Other valid data\n"
+    assert temporary.is_symlink()
+    assert not memory.is_symlink()
+
+
+@pytest.mark.parametrize("source", [
+    hp.MARK_START + "\nUnclosed content\n",
+    hp.MARK_END + "\nUnopened content\n",
+    hp.MARK_END + "\nValid unrelated data\n" + hp.MARK_START,
+    hp.MARK_START + "\nFirst\n" + hp.MARK_START + "\nSecond\n" + hp.MARK_END,
+])
+def test_memory_sync_refuses_ambiguous_markers_without_erasing_content(tmp_path, as_tris, source):
+    memory = tmp_path / "MEMORY.md"
+    memory.write_text(source)
+    assert hp.sync_memory_block(memory).startswith("unreadable:")
+    assert memory.read_text() == source
+
+
+def test_memory_sync_preserves_configured_symlink(tmp_path, as_tris):
+    target = tmp_path / "actual-memory"
+    target.write_text("Managed memory\n")
+    memory = tmp_path / "MEMORY.md"
+    memory.symlink_to(target)
+    assert hp.sync_memory_block(memory) == "added"
+    assert memory.is_symlink()
+    assert "Managed memory" in target.read_text()
+    assert hp.MARK_START in target.read_text()
+
+
+def test_memory_sync_lock_failure_preserves_source(tmp_path, as_tris, monkeypatch):
+    import functools
+    import file_utils
+    memory = tmp_path / "MEMORY.md"
+    memory.write_bytes(b"Original bytes\n\n ")
+    original = memory.read_bytes()
+    with file_utils.file_lock(memory, lock_path=tmp_path / "MEMORY.md.lock"):
+        monkeypatch.setattr(file_utils, "file_lock", functools.partial(file_utils.file_lock, timeout=0))
+        assert hp.sync_memory_block(memory).startswith("unwritable:")
+    assert memory.read_bytes() == original
+
+
+def test_memory_sync_preserves_invalid_encoding_and_valid_trailing_bytes(tmp_path, as_tris):
+    memory = tmp_path / "MEMORY.md"
+    memory.write_bytes(b"Invalid UTF-8 \xff")
+    assert hp.sync_memory_block(memory).startswith("unreadable:")
+    assert memory.read_bytes() == b"Invalid UTF-8 \xff"
+    source = b"Valid authored Unicode \xe2\x82\xac\n\n \n"
+    memory.write_bytes(source)
+    assert hp.sync_memory_block(memory) == "added"
+    assert memory.read_bytes().startswith(source)
+
+
 # ── fleet policy reaches Hermes tool names ──────────────────────────────────
 
 def test_hermes_acting_tools_are_classified_like_claude_code_ones():
@@ -184,12 +284,24 @@ def test_registration_survives_a_runtime_that_rejects_the_tool(as_tris):
 
 # ── finding the fleet lib ───────────────────────────────────────────────────
 
+
+def standalone_library(path, monkeypatch):
+    """A copied plugin with a complete library and no preloaded core modules."""
+    for name in hp._CORE_FILES:
+        file = path / name
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text("")
+    monkeypatch.setattr(hp, "__file__", str(path.parent / "plugins/datacore/__init__.py"))
+    for name in list(hp.sys.modules):
+        if name.split(".", 1)[0] in hp._CORE_MODULES:
+            monkeypatch.delitem(hp.sys.modules, name)
+
 def test_lib_is_found_in_the_runner_clone_when_the_data_root_has_none(tmp_path, monkeypatch):
     """hermes keeps spaces in ~/Data and code in ~/.datacore/v2-runner —
     the layout that made the first deploy report INERT (2026-09-07)."""
     runner = tmp_path / ".datacore" / "v2-runner" / ".datacore" / "lib"
     runner.mkdir(parents=True)
-    (runner / "actor_identity.py").write_text("")
+    standalone_library(runner, monkeypatch)
     monkeypatch.setenv("DATACORE_ROOT", str(tmp_path / "Data"))
     monkeypatch.delenv("DATACORE_LIB", raising=False)
     monkeypatch.setattr(hp.Path, "home", staticmethod(lambda: tmp_path))
@@ -201,7 +313,7 @@ def test_lib_is_found_in_the_runner_clone_when_the_data_root_has_none(tmp_path, 
 def test_datacore_lib_env_wins_and_a_host_without_datacore_stays_inert(tmp_path, monkeypatch):
     override = tmp_path / "custom" / "lib"
     override.mkdir(parents=True)
-    (override / "actor_identity.py").write_text("")
+    standalone_library(override, monkeypatch)
     monkeypatch.setenv("DATACORE_LIB", str(override))
     monkeypatch.setenv("DATACORE_ROOT", str(tmp_path / "Data"))
     monkeypatch.setattr(hp.Path, "home", staticmethod(lambda: tmp_path / "empty"))
@@ -224,6 +336,7 @@ def test_the_ledger_tool_takes_no_actor_and_uses_our_own(as_tris, tmp_path, monk
     import types
     space = tmp_path / "2-plur" / ".datacore"
     space.mkdir(parents=True)
+    (space.parent / "org").mkdir()  # a discoverable legacy space, before marker migration
     monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
 
     seen = {}
@@ -244,6 +357,7 @@ def test_the_ledger_tool_takes_no_actor_and_uses_our_own(as_tris, tmp_path, monk
     out = hp.ledger_append_handler(space="2-plur", type="item.create",
                                    payload={"id": "org-1", "title": "x"},
                                    actor="winston")          # ignored: no such parameter
+    assert out.startswith("appended item.create"), out
     assert seen["actor"] == "tris"
     assert seen["type"] == "item.create" and seen["payload"]["id"] == "org-1"
     assert "appended item.create to 2-plur as tris" in out and "seq=7" in out
@@ -261,6 +375,67 @@ def test_the_ledger_tool_refuses_without_a_declared_principal(monkeypatch):
                                           "display": "", "role": "", "permission_mode": ""})
     out = hp.ledger_append_handler(space="2-plur", type="item.create", payload={"id": "x"})
     assert out.startswith("Refused: this host has no declared principal")
+
+
+@pytest.mark.parametrize("relative", ["research", "team/clients/example"])
+def test_ledger_tool_resolves_marked_spaces_without_local_ordinals(as_tris, tmp_path, monkeypatch, relative):
+    import types
+    space = tmp_path / relative
+    (space / ".datacore").mkdir(parents=True)
+    (space / ".datacore/config.yaml").write_text("space:\n  name: example\n  type: team\n")
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
+    seen = []
+    monkeypatch.setitem(sys.modules, "ledger.log", types.SimpleNamespace(
+        EventLog=lambda **kwargs: seen.append(kwargs)))
+    monkeypatch.setitem(sys.modules, "ledger.policy", types.SimpleNamespace(
+        guarded_append=lambda *args: types.SimpleNamespace(seq=1, hash="a" * 64)))
+    out = hp.ledger_append_handler(space=relative, type="item.create", payload={"id": "example"})
+    assert out.startswith("appended item.create"), out
+    assert seen == [{"space_dir": space, "actor": "tris"}]
+
+
+@pytest.mark.parametrize("target", ["metadata-only", "../outside", "research/../research", "alias", "research//", "research/."])
+def test_ledger_tool_refuses_undiscovered_paths_and_aliases(as_tris, tmp_path, monkeypatch, target):
+    import types
+    root = tmp_path / "data"
+    root.mkdir()
+    (root / "metadata-only/.datacore").mkdir(parents=True)
+    space = root / "research"
+    (space / ".datacore").mkdir(parents=True)
+    (space / ".datacore/config.yaml").write_text("space:\n  name: example\n  type: team\n")
+    (root / "alias").symlink_to(space, target_is_directory=True)
+    monkeypatch.setenv("DATACORE_ROOT", str(root))
+    seen = []
+    monkeypatch.setitem(sys.modules, "ledger.log", types.SimpleNamespace(
+        EventLog=lambda **kwargs: seen.append(kwargs)))
+    out = hp.ledger_append_handler(space=target, type="item.create", payload={"id": "example"})
+    assert out.startswith("Refused:"), out
+    assert seen == []
+
+
+def test_ledger_tool_preserves_malformed_space_metadata(as_tris, tmp_path, monkeypatch):
+    source = tmp_path / "2-example/.datacore/config.yaml"
+    source.parent.mkdir(parents=True)
+    raw = b"space: [broken\nprivate_fixture: do-not-disclose\n"
+    source.write_bytes(raw)
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
+    out = hp.ledger_append_handler(space="2-example", type="item.create", payload={"id": "example"})
+    assert out.startswith("Refused:") and "do-not-disclose" not in out
+    assert source.read_bytes() == raw and not (source.parent / "events").exists()
+
+
+def test_plugin_timeout_stops_owned_descendant_before_late_write(tmp_path):
+    import time
+    marker = tmp_path / "late-write"
+    ready = tmp_path / "ready"
+    child = ("import pathlib,time; pathlib.Path(" + repr(str(ready)) + ").write_text('ready'); "
+             "time.sleep(1); pathlib.Path(" + repr(str(marker)) + ").write_text('late')")
+    parent = "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c'," + repr(child) + "]); time.sleep(10)"
+    rc, output = hp._run([sys.executable, "-I", "-c", parent], timeout=0.5)
+    assert rc == 124 and "timed out" in output
+    assert ready.read_text() == "ready"
+    time.sleep(0.8)
+    assert not marker.exists()
 
 
 def test_agent_cannot_manufacture_an_authenticated_human_decision(as_tris, tmp_path, monkeypatch):
@@ -301,9 +476,9 @@ def test_all_four_tools_register(as_tris):
 
 
 
-@pytest.mark.parametrize('space', ['../outside', '/tmp/outside', '.', '..', 'one/two'])
+@pytest.mark.parametrize('space', ['../outside', '/tmp/outside', '.', '..', 'one/two', 'a\0b'])
 def test_ledger_tool_refuses_space_traversal(as_tris, space):
-    assert 'direct child' in hp.ledger_append_handler(space=space, type='item.create', payload={'id': 'x'})
+    assert hp.ledger_append_handler(space=space, type='item.create', payload={'id': 'x'}).startswith('Refused:')
 
 
 def test_ledger_tool_refuses_symlink_escape(as_tris, tmp_path, monkeypatch):

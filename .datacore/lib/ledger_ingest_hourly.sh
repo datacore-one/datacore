@@ -19,29 +19,9 @@
 # SERVER. Runs on winston (always-on Linux box) via cron:
 #   0 * * * * DATACORE_ROOT=/home/deploy/Data /home/deploy/Data/.datacore/lib/ledger_ingest_hourly.sh >> /home/deploy/.datacore/state/ledger-ingest-cron.log 2>&1
 set -u
-export DATACORE_ROOT="${DATACORE_ROOT:-$HOME/Data}"
-LIB="$DATACORE_ROOT/.datacore/lib"
-STATE="$HOME/.datacore/state"
-# RESOLVE PYTHON BY CAPABILITY, NOT BY PATH.
-#
-# Not plain `python3`: macOS ships 3.9, which cannot import the ledger at all
-# (PEP-604 unions at module level). Test candidates and take the first that
-# clears 3.10 — same rule the CLI and MCP already apply.
-PY=""
-for c in "${DATACORE_PYTHON:-}" python3.13 python3.12 python3.11 python3.10 \
-         /opt/homebrew/bin/python3 /usr/local/bin/python3 python3; do
-  [ -n "$c" ] || continue
-  command -v "$c" >/dev/null 2>&1 || continue
-  if "$c" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
-    PY="$c"; break
-  fi
-done
-if [ -z "$PY" ]; then
-  echo "FATAL: no python >= 3.10 found; the ledger cannot be loaded." >&2
-  exit 127
-fi
+source "$(dirname -- "${BASH_SOURCE[0]}")/runtime_shell.sh" || exit 2
+datacore_runtime_init || exit $?
 echo "python: $PY"
-mkdir -p "$STATE"
 
 echo "=== $(date '+%F %T') ledger ingest (hourly) ==="
 "$PY" "$LIB/ledger_ingest_org.py" > "$STATE/ledger-ingest.log" 2>&1

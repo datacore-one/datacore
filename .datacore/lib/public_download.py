@@ -1,6 +1,7 @@
 """Bounded HTTP downloads that cannot reach local or private addresses."""
 import http.client
 import ipaddress
+import math
 import socket
 import threading
 import time
@@ -33,18 +34,24 @@ def parse_public_url(url):
     return parsed
 
 
-def _fetch(url: str, *, max_bytes=MAX_BYTES, headers=None, metadata_only=False):
+def _fetch(url: str, *, max_bytes=MAX_BYTES, headers=None, metadata_only=False,
+           post_data=None, timeout=None):
     """Pin the validated DNS result for each redirect and verify HTTPS normally.
 
     No ambient proxy or credentials are used. Explicit headers are sent only
     to the initial HTTPS origin; redirects cannot forward them elsewhere.
     The original hostname remains the TLS SNI/certificate and Host identity.
     """
-    deadline = time.monotonic() + MAX_SECONDS
+    timeout = MAX_SECONDS if timeout is None else timeout
+    if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= MAX_SECONDS:
+        raise ValueError('request timeout must be positive and bounded')
+    deadline = time.monotonic() + timeout
     active_headers = dict(headers or {})
     origin = None
     for _ in range(4):
         parsed = parse_public_url(url)
+        if post_data is not None and parsed.scheme != 'https':
+            raise ValueError('sensitive POST requests require HTTPS')
         host = parsed.hostname.encode("idna").decode("ascii")
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
         current_origin = (parsed.scheme, host, port)
@@ -107,13 +114,19 @@ def _fetch(url: str, *, max_bytes=MAX_BYTES, headers=None, metadata_only=False):
             path = parsed.path or "/"
             if parsed.query:
                 path += "?" + parsed.query
-            connection.request("HEAD" if metadata_only else "GET", path, headers={"User-Agent": "Datacore/1.0", **active_headers, "Accept-Encoding": "identity"})
+            request_headers = {"User-Agent": "Datacore/1.0", **active_headers, "Accept-Encoding": "identity"}
+            if post_data is not None:
+                connection.request('POST', path, body=post_data, headers=request_headers)
+            else:
+                connection.request("HEAD" if metadata_only else "GET", path, headers=request_headers)
             response = connection.getresponse()
             if metadata_only and response.status == 405:
                 connection.close()
                 connection.request("GET", path, headers={"User-Agent": "Datacore/1.0", "Accept-Encoding": "identity"})
                 response = connection.getresponse()
             if response.status in {301, 302, 303, 307, 308}:
+                if post_data is not None:
+                    raise ValueError('sensitive POST redirects are refused')
                 location = response.getheader("Location")
                 if not location:
                     raise ValueError("redirect has no destination")
@@ -166,3 +179,16 @@ def download(url: str, *, max_bytes=MAX_BYTES, headers=None) -> bytes:
 def probe(url: str):
     """Fetch public response metadata without consuming a potentially large body."""
     return _fetch(url, metadata_only=True)
+
+
+def post(url: str, data: bytes, *, max_bytes=MAX_BYTES, headers=None,
+         timeout=None) -> bytes:
+    """Bounded HTTPS POST: verified origin, no redirects, proxies or retries.
+
+    Reuses the download socket deadline, including slow headers/body and
+    bounded DNS. A response is returned only when complete within the limit.
+    """
+    if not isinstance(data, bytes) or len(data) > MAX_BYTES:
+        raise ValueError('POST requires a bounded byte body')
+    return _fetch(url, max_bytes=max_bytes, headers=headers,
+                  post_data=data, timeout=timeout)

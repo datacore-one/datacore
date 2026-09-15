@@ -10,12 +10,18 @@ comparison to a synthetic state so the invariant is checked without a real
 space's contents being the fixture.
 """
 import pathlib
+import json
+import pytest
 import sys
 
 LIB = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LIB))
 from ledger.fold import ItemState, LedgerState                       # noqa: E402
 from ledger_checkpoint import _fingerprint, compare, round_trip      # noqa: E402
+
+@pytest.fixture(autouse=True)
+def declared_backup_writer(monkeypatch):
+    monkeypatch.setenv("DATACORE_ACTOR", "checkpoint-test")
 
 
 def _item(iid, title, *, level, tags=(), effective=None, parent=None,
@@ -117,6 +123,36 @@ def test_a_real_loss_is_still_reported():
     assert not ok and detail == "1 altered (e.g. a)", detail
 
 
+def test_source_file_tag_loss_is_detected_and_mixed_scopes_round_trip():
+    from copy import deepcopy
+    first = _item('a', 'First source', level=1)
+    second = _item('b', 'Second source', level=1)
+    first.payload['filetags'] = ['first']
+    second.payload['filetags'] = ['second']
+    state = _state(first, second)
+    damaged = deepcopy(state)
+    damaged.items['a'].payload['filetags'] = []
+    assert not compare(_fingerprint(state), _fingerprint(damaged))[0]
+    live, restored, _ = round_trip(state, '9-fixture')
+    assert compare(live, restored)[0]
+    assert live['a'][2] == ('first',)
+    assert live['b'][2] == ('second',)
+
+
+@pytest.mark.parametrize('field,value', [('body', 'valuable notes'), ('properties', {'CUSTOM': 'valuable'}),
+                                      ('priority', 'A'), ('created', '[2026-09-11 Fri 08:45]')])
+def test_view_diagnostic_detects_nonheading_data_loss(field, value):
+    from copy import deepcopy
+    item = _item('task', 'Preserve all fields', level=1)
+    item.payload['org'] = {field: value}
+    original = _state(item)
+    damaged = deepcopy(original)
+    damaged.items['task'].payload['org'].pop(field)
+    assert not compare(_fingerprint(original), _fingerprint(damaged))[0]
+    live, restored, _ = round_trip(original, '9-view')
+    assert compare(live, restored)[0]
+
+
 def test_an_agents_completion_round_trips_as_review(tmp_path):
     """completed is live and renders REVIEW (2026-09-06); the restore must
     count it and read it back as the same item, not as one it invented."""
@@ -134,3 +170,129 @@ def test_an_agents_completion_round_trips_as_review(tmp_path):
     ck.write(space)
     ok, detail = ck.verify(space)
     assert ok, detail
+
+
+def _checkpoint_space(tmp_path):
+    from ledger.log import EventLog
+    space = tmp_path / '9-backup'
+    log = EventLog(space, 'writer')
+    log.append('item.create', {'id': 'a', 'title': 'preserve me', 'state': 'TODO', 'level': 1,
+        'org': {'body': 'full body\n  indentation', 'priority': 'A', 'properties': {'CUSTOM': 'valuable'}},
+        'genesis': {'date': '2024-02-03', 'rung': 'created_property'}})
+    log.append('item.create', {'id': 'closed', 'title': 'completed history', 'private_metadata': {'keep': [1, 2]}})
+    log.append('item.dismiss', {'id': 'closed', 'kind': 'done'})
+    return space, log
+
+
+def test_checkpoint_restores_saved_full_history_without_live_logs(tmp_path):
+    import shutil
+    import ledger_checkpoint as checkpoint
+    from ledger.fold import fold
+    from ledger.log import read_events
+    space, _ = _checkpoint_space(tmp_path)
+    expected = fold(read_events(space)).state_root()
+    checkpoint.write(space)
+    saved = json.loads((checkpoint.checkpoint_paths(space)[1]).read_text())
+    shutil.rmtree(space / '.datacore/events')
+    restored = checkpoint._restore(saved, space.name)
+    assert restored.state_root() == expected
+    assert restored.items['closed'].payload['private_metadata'] == {'keep': [1, 2]}
+    assert restored.items['a'].payload['org']['body'] == 'full body\n  indentation'
+    assert restored.items['a'].payload['org']['properties'] == {'CUSTOM': 'valuable'}
+
+
+def test_verification_reads_saved_checkpoint_and_detects_corruption(tmp_path):
+    import ledger_checkpoint as checkpoint
+    space, log = _checkpoint_space(tmp_path)
+    path = checkpoint.write(space)
+    assert checkpoint.verify(space)[0]
+    log.append('item.update', {'id': 'a', 'title': 'new work after backup'})
+    ok, detail = checkpoint.verify(space)
+    assert ok and 'older restore point' in detail
+    path.write_text(path.read_text().replace('full body', 'corrupted body'))
+    assert not checkpoint.verify(space)[0]
+    assert 'corrupted body' in path.read_text(), 'verify must not rewrite the artifact it tests'
+
+
+def test_tampered_chain_is_not_treated_as_a_stale_checkpoint(tmp_path):
+    import ledger_checkpoint as checkpoint
+    space, _ = _checkpoint_space(tmp_path)
+    checkpoint.write(space)
+    path = checkpoint.checkpoint_paths(space)[1]
+    data = json.loads(path.read_text())
+    key = next(iter(data['chains']))
+    data['chains'][key] = data['chains'][key].replace('valuable', 'corrupt')
+    path.write_text(json.dumps(data))
+    assert not checkpoint.verify(space)[0]
+
+
+def test_failed_checkpoint_pair_write_preserves_previous_backup(tmp_path, monkeypatch):
+    import ledger_checkpoint as checkpoint
+    import org_transaction as tx
+    space, log = _checkpoint_space(tmp_path)
+    checkpoint.write(space)
+    paths = list(checkpoint.checkpoint_paths(space))
+    before = [path.read_bytes() for path in paths]
+    log.append('item.update', {'id': 'a', 'title': 'newer work'})
+    original = tx.atomic_write_text
+    def fail(path, content):
+        if path == paths[1] and content.encode() != before[1]:
+            raise OSError('simulated snapshot disk failure')
+        return original(path, content)
+    monkeypatch.setattr(tx, 'atomic_write_text', fail)
+    with pytest.raises(OSError):
+        checkpoint.write(space)
+    assert [path.read_bytes() for path in paths] == before
+    assert checkpoint.verify(space)[0]
+
+
+def test_snapshot_restore_rejects_path_traversal(tmp_path):
+    import ledger_checkpoint as checkpoint
+    space, _ = _checkpoint_space(tmp_path)
+    checkpoint.write(space)
+    doc = json.loads((checkpoint.checkpoint_paths(space)[1]).read_text())
+    doc['chains']['../../outside.jsonl'] = next(iter(doc['chains'].values()))
+    with pytest.raises(ValueError, match='invalid saved chain'):
+        checkpoint._restore(doc, space.name)
+
+
+def test_lost_live_history_cannot_replace_last_good_backup(tmp_path):
+    import ledger_checkpoint as checkpoint
+    space, log = _checkpoint_space(tmp_path)
+    checkpoint.write(space)
+    paths = list(checkpoint.checkpoint_paths(space))
+    saved = [path.read_bytes() for path in paths]
+    log.path.unlink()
+    with pytest.raises(ValueError, match='lost or replaced'):
+        checkpoint.write(space)
+    assert [path.read_bytes() for path in paths] == saved
+    assert checkpoint.verify(space)[0]
+
+
+def test_first_snapshot_upgrade_preserves_legacy_org_restore_point(tmp_path):
+    import ledger_checkpoint as checkpoint
+    space, _ = _checkpoint_space(tmp_path)
+    old = space / checkpoint.CHECKPOINT_REL
+    old.parent.mkdir(parents=True)
+    old.write_text('valuable legacy-only backup\n')
+    checkpoint.write(space)
+    archived = list(old.parent.glob('*/legacy-*.org'))
+    assert len(archived) == 1
+    assert archived[0].read_text() == 'valuable legacy-only backup\n'
+    assert checkpoint.verify(space)[0]
+
+
+def test_two_backup_writers_use_disjoint_paths(tmp_path, monkeypatch):
+    import ledger_checkpoint as checkpoint
+    space, log = _checkpoint_space(tmp_path)
+    monkeypatch.setenv('DATACORE_ACTOR', 'host-a')
+    first = checkpoint.write(space)
+    saved = first.read_bytes()
+    log.append('item.update', {'id': 'a', 'title': 'new data'})
+    monkeypatch.setenv('DATACORE_ACTOR', 'host-b')
+    second = checkpoint.write(space)
+    assert first != second and first.read_bytes() == saved
+    assert checkpoint.verify(space)[0]
+    monkeypatch.setenv('DATACORE_ACTOR', 'host-a')
+    ok, detail = checkpoint.verify(space)
+    assert ok and 'older restore point' in detail

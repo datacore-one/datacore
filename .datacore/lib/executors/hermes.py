@@ -17,6 +17,7 @@ suffix for this adapter.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import shutil
 import subprocess
 from process_run import run as run_process
@@ -88,10 +89,12 @@ class HermesExecutor(Executor):
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "executors", "hermes_oneshot.py"
         )
-        python = os.path.join(
-            os.path.expanduser("~/.hermes/hermes-agent/venv/bin"),
-            "python3"
-        )
+        python = os.environ.get("DATACORE_HERMES_PYTHON")
+        if python is None:
+            python = os.path.expanduser("~/.hermes/hermes-agent/venv/bin/python3")
+        elif (not python or "\0" in python or not Path(python).is_absolute()
+              or ".." in Path(python).parts):
+            raise RuntimeError("DATACORE_HERMES_PYTHON must identify an absolute installed interpreter")
 
         env = self._execution_env()
         env["PATH"] = _hermes_env(self._cwd)["PATH"]
@@ -117,14 +120,19 @@ class HermesExecutor(Executor):
         else:
             raise RuntimeError("Hermes policy wrapper or interpreter is unavailable; install the configured Hermes runtime")
 
+        text = result.stdout.strip()
         if result.returncode != 0:
-            raise RuntimeError(f"hermes exited {result.returncode}: {result.stderr.strip()}")
+            error = f"hermes exited {result.returncode}: {result.stderr.strip()}"
+            if not text:
+                raise RuntimeError(error)
+            # An incomplete invocation may still have consumed tokens and
+            # produced useful output. Preserve both without marking success.
+            self._in_band_error = error
 
         # Hermes reports no model: the wrapper prints the agent's reply and
         # nothing else. Left as None deliberately -- see ExecResult.model. A
         # value invented from config here would be indistinguishable in the
         # ledger from one the transport actually confirmed.
-        text = result.stdout.strip()
         cost_cents = estimate_cost_cents(prompt, text)
         self._cost_estimated = True
         return text, cost_cents

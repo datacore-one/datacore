@@ -250,52 +250,30 @@ def principal_rows(root: Path, now: float | None = None, hours: float = 26.0) ->
     ledger (job_verify -> metric.attest job.verify) within the window: how many
     contracts passed, how many failed, how long ago. A principal nobody has
     heard from is a row that says so, not a missing row."""
-    import glob, sys
-    now = now or time.time()
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from actor_identity import principals
+    from job_attestations import latest_jobs
+    from ledger.log import CorruptLogError
+    now = time.time() if now is None else now
+    registry = root / ".datacore" / "registry" / "principals.yaml"
+    ps = principals(registry)
+    error = False
     try:
-        from actor_identity import principals
-        ps = principals(root / ".datacore" / "registry" / "principals.yaml")
-    except Exception:  # noqa: BLE001
-        return []
-    latest: dict[str, dict] = {}
-    for f in glob.glob(str(root / "[0-9]-*" / ".datacore" / "events" / "*.jsonl")) + glob.glob(str(root / ".datacore" / "events" / "*.jsonl")):
-        writer = Path(f).stem
-        for line in Path(f).read_text(errors="replace").splitlines():
-            if '"job.verify"' not in line:
-                continue
-            try:
-                e = json.loads(line)
-            except ValueError:
-                continue
-            p = e.get("payload") or {}
-            if p.get("metric") != "job.verify":
-                continue
-            ms = str(e.get("hlc", "")).split(".")[0]
-            if not ms.isdigit():
-                continue
-            t = int(ms) / 1000
-            if now - t > hours * 3600:
-                continue
-            job = str(p.get("job") or "")
-            cur = latest.setdefault(writer, {})
-            if job not in cur or cur[job]["t"] < t:
-                cur[job] = {"t": t, "ok": bool(p.get("ok"))}
+        latest = latest_jobs(root, now, registry=registry)
+    except (OSError, CorruptLogError):
+        latest, error = {}, True
     rows = []
     for name, p in ps.items():
         if str(p.get("kind") or "") != "agent":
             continue
-        writers = {str(w) for w in (p.get("writes_as") or [])} | {name}
-        jobs: dict[str, dict] = {}
-        for w in writers:
-            for job, rec in latest.get(w, {}).items():
-                if job not in jobs or jobs[job]["t"] < rec["t"]:
-                    jobs[job] = rec
+        if error:
+            rows.append({"principal": name, "ok": None, "note": "verification evidence unreadable or invalid"})
+            continue
+        jobs = {job: rec for job, rec in latest.get(name, {}).items() if now - rec.timestamp <= hours * 3600}
         if not jobs:
             rows.append({"principal": name, "ok": None, "note": f"not heard from in {hours:.0f}h"})
             continue
-        failing = sorted(j for j, r in jobs.items() if not r["ok"])
-        age_h = (now - max(r["t"] for r in jobs.values())) / 3600
+        failing = sorted(j for j, r in jobs.items() if not r.ok)
+        age_h = (now - max(r.timestamp for r in jobs.values())) / 3600
         rows.append({"principal": name, "ok": not failing,
                      "note": f"{len(jobs) - len(failing)}/{len(jobs)} contracts verified {age_h:.0f}h ago" + (f"; failing: {', '.join(failing)[:80]}" if failing else "")})
     return rows

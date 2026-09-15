@@ -44,14 +44,14 @@ PACKAGES = [
     {
         "name": "plur-mcp",
         "npm_name": "@plur-ai/mcp",
-        "local_version_fn": None,  # runs via npx @latest — no local install to check
-        "install_hint": "runs via npx @latest, auto-updates on next session",
+        "local_version_fn": None,  # profile-specific metadata probe is not available here
+        "install_hint": "Reconcile the installed PLUR MCP runtime profile and verify it before switching",
     },
     {
         "name": "plur-cli",
         "npm_name": "@plur-ai/cli",
         "local_version_fn": "_local_version_plur_cli",
-        "install_hint": "npm cache clean --force && npx @plur-ai/cli --version",
+        "install_hint": "Reconcile the installed PLUR CLI runtime profile and verify it before switching",
     },
 ]
 
@@ -63,7 +63,7 @@ def _log(msg: str):
 
 def _validate_version(v: str | None) -> str | None:
     """Return version string only if it looks like a semver-ish number."""
-    if v and _VERSION_RE.match(v.strip()):
+    if isinstance(v, str) and v and _VERSION_RE.match(v.strip()):
         return v.strip()
     return None
 
@@ -82,21 +82,21 @@ def _local_version_datacore_mcp() -> str | None:
 
 
 def _local_version_plur_cli() -> str | None:
-    """Check plur-cli version via registry query, not execution.
-
-    We query npm view for the installed version in the npx cache.
-    This avoids running npx --yes which would execute arbitrary code.
-    """
+    """Read the selected installed CLI's package metadata without executing it."""
     try:
-        # Check npm cache for installed version
-        result = subprocess.run(
-            ["npm", "view", "@plur-ai/cli", "version"],
-            capture_output=True, text=True, timeout=8
-        )
-        if result.returncode == 0:
-            return _validate_version(result.stdout.strip())
-    except Exception as e:
-        _log(f"plur-cli local probe failed: {e}")
+        from plur_cli import command
+        executable = Path(command()[0]).resolve(strict=True)
+        # npm bin links resolve under the package's dist directory. Bound the
+        # search; never substitute the registry's latest version for local state.
+        for parent in list(executable.parents)[:6]:
+            package = parent / 'package.json'
+            if not package.is_file() or package.stat().st_size > 1024 * 1024:
+                continue
+            data = json.loads(package.read_text())
+            if isinstance(data, dict) and data.get('name') == '@plur-ai/cli':
+                return _validate_version(data.get('version'))
+    except (OSError, ValueError, RuntimeError) as error:
+        _log(f"plur-cli local probe failed: {type(error).__name__}")
     return None
 
 

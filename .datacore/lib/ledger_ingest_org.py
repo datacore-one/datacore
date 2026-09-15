@@ -43,6 +43,7 @@ from ledger.fold import fold  # noqa: E402
 from ledger.genesis import import_space, scan  # noqa: E402
 from ledger.log import EventLog, read_events  # noqa: E402
 from ledger_dismiss_orphans import confirm_and_dismiss  # noqa: E402
+from org_transaction import SafeOrgWorkspace, serialized  # noqa: E402
 
 ACTIVE = ("TODO", "NEXT", "WAITING", "DEFERRED", "QUEUED", "WORKING", "REVIEW", "FAILED")
 LIVE = ("created", "claimed", "granted")
@@ -111,10 +112,13 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
       FIELDS  scheduled/deadline/state changed -> item.update carrying only the
               keys that actually differ.
     """
-    from org_workspace import OrgWorkspace
     org_file = space / "org" / "next_actions.org"
     if not org_file.exists():
         return {"dismissed": 0, "updated": 0}
+    from ledger_project_org import phase
+    if phase(space) == 1:
+        from ledger.projection_state import sync_generated
+        return sync_generated(space, fold(read_events(space)), actor or _this_actor(), dry_run)
     # File-level tags, parsed the way genesis does. Items created through the
     # adapter/ingest never recorded `filetags`, while genesis-imported ones
     # do — checkpoint-verify then compares unlike data and reports the same
@@ -129,7 +133,7 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
                 break
     except OSError:
         pass
-    ws = OrgWorkspace(); ws.load(str(org_file))
+    ws = SafeOrgWorkspace(); ws.load(str(org_file))
     state = fold(read_events(space))
     log = None
     dismissed = updated = 0
@@ -372,18 +376,36 @@ def _dismiss_archived(space, ws, state, log, actor, dry_run) -> int:
 ORG_FILES = ("inbox.org", "next_actions.org")
 
 
-def ensure_ids(space: Path, adapter: Path) -> str:
-    """Give every heading a stable :ID:. Returns a short status string."""
+@serialized
+def ensure_ids(space: Path, adapter: Path | None = None) -> str:
+    """Prepare IDs with this runtime's adapter, preserving files on failure.
+
+    The optional historical argument may identify this adapter only. The data
+    checkout is storage, not a source of executable runtime dependencies.
+    """
+    from argparse import Namespace
+    import org_workspace_adapter
+    installed = (LIB / 'org_workspace_adapter.py').resolve()
+    if (adapter is not None and Path(adapter).resolve() != installed
+            or Path(org_workspace_adapter.__file__).resolve() != installed):
+        raise ValueError('ID preparation requires the matching installed core adapter')
+    files = [space / 'org' / name for name in ORG_FILES
+             if (space / 'org' / name).exists()]
+    # Validate the complete identity namespace before changing any file. A
+    # workspace per file hides collisions and lets ingestion conflate tasks.
+    ws = SafeOrgWorkspace()
+    for f in files:
+        ws.load(f)
     touched = []
-    for name in ORG_FILES:
-        f = space / "org" / name
-        if not f.exists():
-            continue
-        r = subprocess.run(
-            [sys.executable, str(adapter), "ensure-ids", "--file", str(f)],
-            capture_output=True, text=True, timeout=120,
-        )
-        touched.append(f"{name}:{'ok' if r.returncode == 0 else 'FAILED'}")
+    for f in files:
+        result = org_workspace_adapter.cmd_ensure_ids(Namespace(file=str(f)))
+        if not isinstance(result, dict) or result.get('error'):
+            raise RuntimeError('ID preparation was refused')
+        ws.load(str(f))
+        if any(node.path.resolve() == f.resolve() and node.todo and not node.id()
+               for node in ws.all_nodes()):
+            raise RuntimeError('ID preparation did not persist every task identity')
+        touched.append(f'{f.name}:ok')
     return " ".join(touched) or "no org files"
 
 
@@ -451,7 +473,6 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    adapter = args.root / ".datacore" / "lib" / "org_workspace_adapter.py"
     spaces = sorted(p for p in args.root.glob("[0-9]-*") if (p / "org").is_dir())
     # Sweeping nothing is not a successful sweep.
     if not spaces:
@@ -462,7 +483,8 @@ def main() -> int:
     failures = 0
     for space in spaces:
         try:
-            ids = "skipped (dry run)" if args.dry_run else ensure_ids(space, adapter)
+            if not args.dry_run:
+                ensure_ids(space)
             before = scan(space)
             new = len(before.importable)
             if new and not args.dry_run:

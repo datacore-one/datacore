@@ -1,6 +1,6 @@
 ---
 name: decision-board
-version: 1.0.0
+version: 1.1.0
 description: |
   Present decisions to the owner as a decision board: a local, PLUR-branded HTML
   page with one decision per row, a suggested answer on each, a note field, and a
@@ -31,10 +31,10 @@ The owner makes decisions on a page, not in chat. This skill covers only present
 
 ## Stays local
 
-- Write the page to `~/Data/.datacore/state/decision-boards/<YYYY-MM-DD>-<slug>.html`. That folder is gitignored, so the page never leaves this machine.
+- Write the page to `$DATACORE_STATE/decision-boards/<YYYY-MM-DD>-<slug>.html` (default `~/.datacore/state/decision-boards/`). The directory must be owner-only (0700), and artifacts are published atomically as 0600. This state is outside synchronized source repositories.
 - Open the page with `open <path>`.
 - Never publish it to claude.ai (Artifacts), a gist or any hosted URL, even privately. If a hosted page seems necessary, ask first.
-- Inline all CSS and JS. The only external request allowed is the Google Fonts stylesheet, and every font has a system fallback.
+- Inline all CSS and JS. Use local/system font fallbacks without external font requests. The generated page has a restrictive content policy. Reference links accept only explicit HTTP(S) URLs; executable or other URL schemes are rendered as text.
 
 ## Look: PLUR brand
 
@@ -66,21 +66,23 @@ The owner makes decisions on a page, not in chat. This skill covers only present
 ## Behaviour
 
 - **One decision per row.** Every row has a suggested answer, and 2–4 mutually exclusive options.
-- **Choices persist as the owner clicks.** They're kept in `localStorage`, keyed by the board's slug, so a reload loses nothing.
+- **Choices persist as the owner clicks.** They're kept in `localStorage`, keyed by the board's slug and content-derived build identity. Reload restores choices when browser storage is available.
 - **Save downloads `<slug>.decisions.json`.** Build it as a Blob and use an `<a download>` link.
-  - Format: `{"board": "<slug>", "savedAt": "<ISO>", "decisions": {"<id>": {"choice": "<value>", "note": "<text>"}}}`.
+  - Format: `{"board": "<slug>", "build": "<build identity>", "savedAt": "<ISO>", "decisions": {"<id>": {"choice": "<value>", "note": "<text>"}}}`. Both board and build are required when applying; choices must match the reviewed row options.
   - The status line then says where it went, for example "Saved to Downloads as <file>".
 - **Embed the board's data** as JSON in `<script type="application/json" id="data">`.
   - Escape `<`, U+2028 and U+2029.
   - Build the U+2028 and U+2029 patterns with `String.fromCharCode(8232)` and `String.fromCharCode(8233)`, never as raw characters.
   - No script may contain a literal `</script`.
-- **To revise a board,** regenerate the file from its data, with the saved choices pre-filled. Never edit or serialize the live DOM.
+- **To revise a board,** regenerate from current source data. Saved choices may prefill an identical build only; changed rows, choices, source files or ledger state require a new review. Never edit or serialize the live DOM.
 
 ## Reading choices back
 
 1. When the owner says they've saved, read `~/Downloads/<slug>.decisions.json`, or the path they give.
 2. Summarise what they chose, including their notes. Change nothing yet.
 3. Act only after they say "apply the decisions", and only on what they chose. Dry-run anything irreversible first.
+4. Use `gtd_decision_board.py apply` for task decisions. It checks source and ledger versions, serializes mutation, and records durable per-row completion. An interrupted row is retained as pending and blocks replay; preserve its receipt, inspect the task and ledger, reconcile conflicts, then create a new board. Never delete a pending receipt to force a retry.
+5. In generated next-actions files, benching retains the task as DEFERRED with an explicit future wake date. In authored files, Someday moves the full task to someday.org as a passive TODO. Planning delegation records a request for review and does not start a worker. See `.datacore/specs/decision-board-application.md`.
 
 ## Writing
 

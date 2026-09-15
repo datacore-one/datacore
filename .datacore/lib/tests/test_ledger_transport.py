@@ -29,6 +29,78 @@ sys.path.insert(0, str(LIB))
 from ledger_transport import _fetch_reason, converge, sync_repo  # noqa: E402
 
 
+def _registry_file(root, category='knowledge'):
+    registry = root / '.datacore/registry'
+    registry.mkdir(parents=True, exist_ok=True)
+    (registry / 'repositories.yaml').write_text('repositories:\n  9-fixture:\n    category: ' + category + '\n')
+
+
+def test_classification_uses_the_selected_data_root(tmp_path, monkeypatch):
+    import ledger_transport as lt
+    root = tmp_path / 'Data'
+    (root / '9-fixture').mkdir(parents=True)
+    _registry_file(root)
+    monkeypatch.setenv('DATACORE_ROOT', str(root))
+    result = lt.classify(root / '9-fixture')
+    assert result.ok and result.reason == 'knowledge'
+
+
+def test_explicit_cli_root_overrides_the_ambient_root(tmp_path):
+    import json
+    import os
+    root, other = tmp_path / 'Data', tmp_path / 'other'
+    (root / '9-fixture').mkdir(parents=True)
+    _registry_file(root)
+    _registry_file(other, 'code')
+    p = subprocess.run([sys.executable, str(LIB / 'ledger_transport.py'), 'classify', '--root', str(root), '--space', str(root / '9-fixture')],
+        env={**os.environ, 'DATACORE_ROOT': str(other)}, capture_output=True, text=True, timeout=10)
+    assert p.returncode == 0
+    assert json.loads(p.stdout)['reason'] == 'knowledge'
+
+
+@pytest.mark.parametrize('content', [
+    '[', 'repositories: []\n', 'repositories: {9-fixture: invalid}\n',
+    'repositories: {9-fixture: {category: typo}}\n',
+    'repositories: {../outside: {category: knowledge}}\n',
+    'repositories: {9-fixture: {category: code, category: knowledge}}\n',
+    'repositories: {}\nrepositories: {9-fixture: {category: knowledge}}\n',
+])
+def test_invalid_registry_is_refused_before_syncing_any_entry(tmp_path, monkeypatch, content):
+    import ledger_transport as lt
+    root = tmp_path / 'Data'
+    (root / '9-fixture/.git').mkdir(parents=True)
+    _registry_file(root)
+    (root / '.datacore/registry/repositories.yaml').write_text(content)
+    monkeypatch.setenv('DATACORE_ROOT', str(root))
+    result = lt.classify(root / '9-fixture')
+    assert not result.ok
+    monkeypatch.setattr(lt, '_code_update', lambda *a: pytest.fail('invalid registry reached code sync'))
+    monkeypatch.setattr(lt, 'sync_repo', lambda *a, **k: pytest.fail('invalid registry reached data sync'))
+    with pytest.raises(ValueError):
+        lt.sync_outcomes(root)
+
+
+def test_explicit_sync_root_reaches_each_knowledge_repo(tmp_path, monkeypatch):
+    import ledger_transport as lt
+    root, other = tmp_path / 'Data', tmp_path / 'other'
+    (root / '9-fixture/.git').mkdir(parents=True)
+    _registry_file(root)
+    _registry_file(other, 'code')
+    monkeypatch.setenv('DATACORE_ROOT', str(other))
+    observed = []
+    monkeypatch.setattr(lt, '_converge_locked', lambda space: observed.append(space) or lt.Result(True, 'ok', {}))
+    monkeypatch.setattr(lt, '_code_update', lambda *a: pytest.fail('ambient root changed the selected category'))
+    assert lt.sync_outcomes(root) == [('9-fixture', 'knowledge', 'clean')]
+    assert observed == [root / '9-fixture']
+
+
+def test_invalid_event_returns_failure_without_echoing_payload(repo_pair):
+    import ledger_transport as lt
+    result = lt.append(repo_pair, 'fixture', 'invalid-event-type', {'secret': 'synthetic-private-value'})
+    assert not result.ok
+    assert 'synthetic-private-value' not in repr(result)
+
+
 def git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", "-C", str(repo), *args],
                           capture_output=True, text=True)
@@ -38,7 +110,7 @@ def git(repo: Path, *args: str) -> subprocess.CompletedProcess:
 def repo_pair(tmp_path: Path, monkeypatch):
     """A clone with a real origin, registered so the transport will act on it."""
     origin = tmp_path / "origin.git"
-    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+    subprocess.run(["git", "init", "-q", "--bare", "--initial-branch=main", str(origin)], check=True)
     work = tmp_path / "work"
     subprocess.run(["git", "clone", "-q", str(origin), str(work)], check=True)
     git(work, "config", "user.email", "t@t")
@@ -57,8 +129,10 @@ def repo_pair(tmp_path: Path, monkeypatch):
     # The transport refuses repos absent from the registry (D3), so make the
     # fixture's classification succeed without touching the real registry.
     import ledger_transport as lt
+    # These tests exercise knowledge-repository autosave. Code repositories
+    # have separate negative tests and may never enter that publication path.
     monkeypatch.setattr(lt, "classify",
-                        lambda space, root=None: lt.Result(True, "code", {"entry": {}}))
+                        lambda space, root=None: lt.Result(True, "knowledge", {"entry": {'category': 'knowledge'}}))
     return work
 
 
@@ -482,6 +556,31 @@ def test_sync_outcomes_never_commits_a_code_repo(repo_pair: Path, tmp_path: Path
 
     assert git(repo_pair, "rev-parse", "HEAD").stdout.strip() == head
     assert (repo_pair / "wip.py").read_text() == "print('half done')\n"
+
+
+def test_direct_converge_cannot_autosave_or_publish_code(repo_pair, monkeypatch):
+    import ledger_transport as lt
+    monkeypatch.setattr(lt, 'classify', lambda *a, **k: lt.Result(True, 'code', {'entry': {'category': 'code'}}))
+    work = repo_pair / 'unreviewed.py'
+    work.write_text('unfinished code\n')
+    head = git(repo_pair, 'rev-parse', 'HEAD').stdout.strip()
+    remote = git(repo_pair, 'ls-remote', 'origin', 'refs/heads/main').stdout
+    result = lt.converge(repo_pair)
+    assert git(repo_pair, 'rev-parse', 'HEAD').stdout.strip() == head
+    assert git(repo_pair, 'ls-remote', 'origin', 'refs/heads/main').stdout == remote
+    assert work.read_text() == 'unfinished code\n'
+    assert not result.ok
+
+
+@pytest.mark.parametrize('category', ['code', '', 'unknown'])
+def test_fact_publication_refuses_code_or_unknown_categories(repo_pair, monkeypatch, category):
+    import ledger_transport as lt
+    monkeypatch.setattr(lt, 'classify', lambda *a, **k: lt.Result(True, category, {'entry': {'category': category}}))
+    head = git(repo_pair, 'rev-parse', 'HEAD').stdout.strip()
+    result = lt.append(repo_pair, 'fixture', 'item.create', {'id': 'one', 'title': 'Synthetic'})
+    assert not result.ok
+    assert not (repo_pair / '.datacore/events/fixture.jsonl').exists()
+    assert git(repo_pair, 'rev-parse', 'HEAD').stdout.strip() == head
 
 
 def test_sync_outcomes_fast_forwards_a_clean_code_repo(repo_pair: Path, tmp_path: Path, monkeypatch):

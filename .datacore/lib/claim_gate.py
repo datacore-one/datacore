@@ -148,39 +148,26 @@ def absent(principal: str, root: Path | None = None, now: float | None = None) -
     job.verify). No passing attestation from any of its writers within
     ABSENT_AFTER_HOURS means nobody has heard from it; an item addressed to it
     waits and says why, and is never quietly reassigned."""
-    import glob, time
+    import time
+    from job_attestations import latest_jobs
+    from ledger.log import CorruptLogError
     root = Path(root) if root else Path(__import__("os").environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
-    now = now or time.time()
+    now = time.time() if now is None else now
     name, entry, _ = _limits(principal)
     if name is None:
         return True, f"unregistered principal {principal!r}"
-    writers = {str(w) for w in (entry.get("writes_as") or [])} | {name}
-    latest_ok, latest_any = 0.0, 0.0
-    for f in glob.glob(str(root / "[0-9]-*" / ".datacore" / "events" / "*.jsonl")) + glob.glob(str(root / ".datacore" / "events" / "*.jsonl")):
-        if Path(f).stem not in writers:
-            continue
-        for line in Path(f).read_text(encoding="utf-8", errors="replace").splitlines():
-            if '"job.verify"' not in line:
-                continue
-            try:
-                e = json.loads(line)
-            except ValueError:
-                continue
-            p = e.get("payload") or {}
-            if p.get("metric") != "job.verify":
-                continue
-            ms = str(e.get("hlc", "")).split(".")[0]
-            if not ms.isdigit():
-                continue
-            t = int(ms) / 1000
-            latest_any = max(latest_any, t)
-            if p.get("ok"):
-                latest_ok = max(latest_ok, t)
-    if not latest_any:
-        return True, f"{name}: never heard from (no job.verify attestation on the record)"
-    age_h = (now - latest_ok) / 3600 if latest_ok else float("inf")
+    try:
+        jobs = latest_jobs(root, now).get(name, {})
+    except (OSError, CorruptLogError):
+        return True, f"{name}: verification evidence unreadable or invalid"
+    if not jobs:
+        return True, f"{name}: never heard from (no eligible job.verify attestation on the record)"
+    passing = [record.timestamp for record in jobs.values() if record.ok]
+    if not passing:
+        return True, f"{name}: verifications on the record, none currently passing"
+    age_h = (now - max(passing)) / 3600
     if age_h > ABSENT_AFTER_HOURS:
-        return True, f"{name}: last passing verification {age_h:.0f}h ago" if latest_ok else f"{name}: verifications on the record, none passing"
+        return True, f"{name}: last passing verification {age_h:.0f}h ago"
     return False, f"{name}: verified {age_h:.0f}h ago"
 
 

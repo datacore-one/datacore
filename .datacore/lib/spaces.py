@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from yaml_safety import UniqueStringKeyLoader
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ MARKER = Path(".datacore") / "config.yaml"
 
 #: Legacy pattern. Retained so a space that has not yet gained a marker keeps
 #: being discovered. Remove once discovery_discrepancy() is empty everywhere.
-LEGACY_GLOB = "[0-9]-*"
+LEGACY_GLOB = "[0-9]*-*"
 
 #: Directory name suffixes that match LEGACY_GLOB but are never spaces.
 #: ``-archive`` dirs are archival stores; ``.git`` suffix indicates a bare repo.
@@ -62,6 +63,10 @@ MAX_DEPTH = 5
 #: Never descended into. ``2-projects`` holds cloned repositories with their own
 #: dependency trees and is the single biggest cost in an unbounded walk.
 SKIP_DIRS = frozenset({
+    # Installed code, fixtures, dependencies and private module state are not
+    # data-space discovery roots. In particular, an external module-code Git
+    # symlink must not be mistaken for an external legacy space alias.
+    ".datacore",
     ".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache",
     ".pytest_cache", ".ruff_cache", "2-projects", "4-archive", ".obsidian",
     "dist", "build", ".next", "target",
@@ -94,40 +99,78 @@ def data_root() -> Path:
     return Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
 
 
-def read_marker(path: Path) -> dict | None:
+def _configuration(path: Path) -> dict | None:
+    marker = path / MARKER
+    if not marker.exists() and not marker.is_symlink():
+        return None
+    if not marker.is_file() or marker.resolve(strict=True) != path.resolve(strict=True) / MARKER:
+        raise ValueError('space configuration crosses its directory boundary')
+    loaded = yaml.load(marker.read_text(encoding='utf-8'), Loader=UniqueStringKeyLoader)
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, dict):
+        raise ValueError('space configuration is not a mapping')
+    if 'space' in loaded:
+        block = loaded['space']
+        if not isinstance(block, dict):
+            raise ValueError('space marker is not a mapping')
+        for key in ('name', 'type', 'owner'):
+            if key in block and block[key] is not None and not isinstance(block[key], str):
+                raise ValueError('space identity fields must be strings')
+    return loaded
+
+
+def read_marker(path: Path, *, strict: bool = False) -> dict | None:
     """The ``space:`` block from ``path``'s marker, or None if it is not a space.
 
-    A malformed or unreadable marker is not a space, and says so in the log
-    rather than raising — one bad file must not take out discovery for every
-    other space.
+    Diagnostic discovery logs and excludes malformed or unreadable markers.
+    Strict callers instead refuse discovery, so an unreadable identity cannot
+    silently remove existing work from an automated admission decision.
     """
-    marker = path / MARKER
-    if not marker.is_file():
-        return None
     try:
-        loaded = yaml.safe_load(marker.read_text(encoding="utf-8")) or {}
-    except (yaml.YAMLError, OSError) as exc:
-        log.warning("space marker unreadable, skipping: %s (%s)", marker, exc)
+        loaded = _configuration(path)
+    except (yaml.YAMLError, OSError, UnicodeError, ValueError):
+        if strict:
+            raise ValueError('space marker unreadable; discovery refused') from None
+        # YAML diagnostics include source lines, which may hold credentials or
+        # other private configuration. Report the file, never parser excerpts.
+        log.warning("space marker unreadable, skipping: %s", path / MARKER)
+        return None
+    if loaded is None:
         return None
     block = loaded.get("space")
     if not isinstance(block, dict):
         return None
+    if strict:
+        name = block.get('name')
+        if not isinstance(name, str) or not name or name.strip() != name:
+            raise ValueError('space identity invalid; discovery refused')
     return block
 
 
-def _walk(root: Path, depth: int = 1):
+def _walk(root: Path, depth: int = 1, *, reject_aliases: bool = False,
+          reject_invalid: bool = False, aliases: list[Path] | None = None):
     """Directories worth testing for a marker, breadth-first, depth-bounded."""
     if depth > MAX_DEPTH:
         return
     try:
         entries = sorted(p for p in root.iterdir() if p.is_dir())
     except (PermissionError, OSError):
+        if reject_invalid:
+            raise ValueError('space traversal incomplete; discovery refused') from None
         return
     for entry in entries:
-        if entry.name in SKIP_DIRS or entry.is_symlink():
+        if entry.name in SKIP_DIRS:
+            continue
+        if entry.is_symlink():
+            if reject_aliases and _looks_like_space(entry):
+                if aliases is None:
+                    raise ValueError('space alias crosses its directory boundary')
+                aliases.append(entry)
             continue
         yield entry
-        yield from _walk(entry, depth + 1)
+        yield from _walk(entry, depth + 1, reject_aliases=reject_aliases,
+                         reject_invalid=reject_invalid, aliases=aliases)
 
 
 def _looks_like_space(path: Path) -> bool:
@@ -140,6 +183,10 @@ def _looks_like_space(path: Path) -> bool:
        marker path, but included here for symmetry).
     2. ``org/`` subdirectory — every Datacore space has GTD org files.
     3. ``CLAUDE.base.md`` — every Datacore space has a layered context file.
+    4. ``.datacore/events/`` or ``0-inbox/`` — ledger/report spaces may not
+       have generated their first Org projection yet.
+    5. ``.git`` — existing Git-only spaces still need preflight/recovery before
+       their first data file or marker; migration cannot silently omit them.
 
     A bare ``.datacore/`` directory (e.g. one that contains only a
     ``knowledge.db`` and no subdirectories) does **not** qualify; that
@@ -148,6 +195,9 @@ def _looks_like_space(path: Path) -> bool:
     """
     return (
         (path / ".datacore" / "config.yaml").is_file()
+        or (path / '.git').exists()
+        or (path / '.datacore/events').is_dir()
+        or (path / '0-inbox').is_dir()
         or (path / "org").is_dir()
         or (path / "CLAUDE.base.md").is_file()
     )
@@ -167,10 +217,22 @@ def _legacy_dirs(root: Path) -> list[Path]:
        (e.g. a ``1-tracks/`` that leaked to the install root) whose names
        happen to match the glob.
     """
+    def valid_configuration(path):
+        try:
+            _configuration(path)
+        except (yaml.YAMLError, OSError, UnicodeError, ValueError):
+            return False
+        # Invalid explicit identity cannot regain admission through a heuristic.
+        # A valid older config without a space block remains migratable.
+        return True
+
     return sorted(
         p for p in root.glob(LEGACY_GLOB)
         if p.is_dir()
+        and p.name.partition("-")[0].isdigit()
+        and not p.is_symlink()
         and not any(p.name.endswith(suffix) for suffix in LEGACY_SKIP_SUFFIXES)
+        and valid_configuration(p)
         and _looks_like_space(p)
     )
 
@@ -195,7 +257,9 @@ def discover_spaces(
     root: Path | None = None,
     *,
     types: set[str] | None = None,
-    include_legacy: bool = False,
+    include_legacy: bool = True,
+    reject_aliases: bool = False,
+    reject_invalid: bool = False,
 ) -> list[Space]:
     """Every space under ``root``, marker-discovered (and optionally legacy).
 
@@ -204,9 +268,18 @@ def discover_spaces(
         types: keep only these ``space.type`` values. Legacy directories have
             no declared type, so a ``types`` filter necessarily excludes them.
         include_legacy: also return ``[0-9]-*/`` directories that carry no
-            marker.  Defaults to False now that discovery_discrepancy() is
-            empty for this install; set True only when investigating gaps
-            during migration to a new install.
+            marker. Defaults to True: completing migration in one installation
+            cannot establish that every supported installation has migrated.
+            Identity-sensitive callers may explicitly require marked spaces;
+            unknown legacy types never satisfy an explicit type filter.
+        reject_aliases: automated writers refuse space symlinks whose targets
+            are not independently discovered canonical spaces within the root.
+            A redundant compatibility link never adds a space or supplies an
+            identity. Code/dependency symlinks stay excluded without traversal.
+        reject_invalid: refuse incomplete traversal, malformed configuration
+            or incomplete marked identities instead of treating an
+            undiscoverable space as absent. Identity-sensitive admission and
+            automated writers must not expand work on that basis.
 
     Returns:
         Spaces sorted by path. Marker-discovered entries win over legacy ones
@@ -214,9 +287,15 @@ def discover_spaces(
     """
     root = root or data_root()
     found: dict[Path, Space] = {}
+    aliases: list[Path] = []
 
-    for candidate in _walk(root):
-        block = read_marker(candidate)
+    block = read_marker(root, strict=reject_invalid)
+    if block is not None:
+        found[root] = _from_marker(root, block)
+
+    for candidate in _walk(root, reject_aliases=reject_aliases, reject_invalid=reject_invalid,
+                           aliases=aliases):
+        block = read_marker(candidate, strict=reject_invalid)
         if block is not None:
             found[candidate] = _from_marker(candidate, block)
 
@@ -231,6 +310,20 @@ def discover_spaces(
                 owner=None,
                 marked=False,
             )
+
+    # Never follow aliases to discover work. Only an already validated space
+    # may have redundant legacy paths; aliases cannot reach outside the root,
+    # skipped directories, or the depth bound. Return canonical entries only.
+    if reject_aliases:
+        canonical_root = root.resolve(strict=True)
+        canonical = {path.resolve(strict=True) for path in found}
+        for alias in aliases:
+            try:
+                target = alias.resolve(strict=True)
+                if not target.is_relative_to(canonical_root) or target not in canonical:
+                    raise ValueError('unresolved alias')
+            except (OSError, RuntimeError, ValueError):
+                raise ValueError('space alias has no canonical space within discovery boundary') from None
 
     spaces = sorted(found.values(), key=lambda s: s.path)
     if types is not None:

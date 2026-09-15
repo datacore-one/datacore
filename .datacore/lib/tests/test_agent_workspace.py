@@ -56,6 +56,29 @@ def test_two_runs_do_not_see_each_others_edits(source: Path, tmp_path: Path):
     assert (source / "seed.txt").read_text() == "seed\n"
 
 
+def test_relative_hooks_cannot_silently_disappear_in_an_agent_checkout(source, tmp_path):
+    git(source, 'config', 'core.hooksPath', '.git/hooks')
+    with pytest.raises(IsolationError, match='absolute.*hooks|hooks.*absolute'):
+        create(source, 'relative-hook', root=tmp_path / 'wt')
+    assert not (tmp_path / 'wt/relative-hook').exists()
+
+
+@pytest.mark.parametrize('configuration', ['absolute', 'default'])
+def test_agent_commit_retains_rejecting_hooks(source, tmp_path, configuration):
+    if configuration == 'default':
+        git(source, 'config', '--unset', 'core.hooksPath')
+    hook = source / '.git/hooks/pre-commit'
+    hook.write_text('#!/bin/sh\nexit 1\n')
+    hook.chmod(0o700)
+    ws = create(source, 'hooked', root=tmp_path / 'wt')
+    before = git(ws.path, 'rev-parse', 'HEAD')
+    (ws.path / 'seed.txt').write_text('unapproved edit\n')
+    result = subprocess.run(['git', '-C', str(ws.path), 'commit', '-qam', 'blocked'], capture_output=True)
+    assert result.returncode != 0
+    assert git(ws.path, 'rev-parse', 'HEAD') == before
+    assert (ws.path / 'seed.txt').read_text() == 'unapproved edit\n'
+
+
 def test_collision_raises_and_yields_no_workspace(source: Path, tmp_path: Path):
     """A duplicate task id means two runs or a dead run — never a suffix."""
     create(source, "dup", root=tmp_path / "wt")
@@ -145,18 +168,83 @@ def test_cleanup_cannot_force_delete_unmerged_commits(source, tmp_path):
 
 
 @pytest.mark.parametrize('late_edit', [False, True])
-def test_failed_removal_never_falls_back_to_recursive_deletion(source, tmp_path, monkeypatch, late_edit):
-    import agent_workspace
+def test_retirement_failure_or_late_write_never_deletes_data(source, tmp_path, monkeypatch, late_edit):
+    import worktree_lifecycle
     ws = create(source, 'retained', root=tmp_path / 'wt')
-    original = agent_workspace._git
-    def interrupt_remove(repo, *args, **kwargs):
-        if args[:2] == ('worktree', 'remove'):
+    original = worktree_lifecycle._git
+    def interrupt_move(repo, *args):
+        if args[:2] == ('worktree', 'move'):
             if not late_edit:
-                return 1, '', 'removal failed'
+                return subprocess.CompletedProcess(args, 1, '', 'move failed')
             (ws.path / 'seed.txt').write_text('late writer data\n')
-        return original(repo, *args, **kwargs)
-    monkeypatch.setattr(agent_workspace, '_git', interrupt_remove)
-    with pytest.raises(IsolationError):
-        cleanup(ws)
-    assert ws.path.exists()
-    assert (ws.path / 'seed.txt').read_text() == ('late writer data\n' if late_edit else 'seed\n')
+        return original(repo, *args)
+    monkeypatch.setattr(worktree_lifecycle, '_git', interrupt_move)
+    if not late_edit:
+        with pytest.raises(IsolationError):
+            cleanup(ws)
+        assert (ws.path / 'seed.txt').read_text() == 'seed\n'
+    else:
+        assert 'retained workspace' in cleanup(ws)
+        files = list((tmp_path / 'wt').glob('retired-worktree-*/worktree/seed.txt'))
+        assert len(files) == 1 and files[0].read_text() == 'late writer data\n'
+
+
+def test_cleanup_cannot_erase_a_late_ignored_file(source, tmp_path, monkeypatch):
+    import worktree_lifecycle
+    ws = create(source, 'late-ignored', root=tmp_path / 'wt')
+    (source / '.git/info/exclude').write_text('late.bin\n')
+    original = worktree_lifecycle._git
+
+    def interleave(repo, *args):
+        if args[:2] == ('worktree', 'move'):
+            (ws.path / 'late.bin').write_bytes(b'important recovery bytes')
+        return original(repo, *args)
+
+    monkeypatch.setattr(worktree_lifecycle, '_git', interleave)
+    assert 'retained workspace' in cleanup(ws)
+    files = list((tmp_path / 'wt').glob('retired-worktree-*/worktree/late.bin'))
+    assert len(files) == 1 and files[0].read_bytes() == b'important recovery bytes'
+
+
+def test_retirement_keeps_open_writer_descriptors_valid(source, tmp_path):
+    from worktree_lifecycle import retire_worktree
+    ws = create(source, 'open-writer', root=tmp_path / 'wt')
+    with (ws.path / 'result.bin').open('wb') as output:
+        output.write(b'before ')
+        output.flush()
+        retired = retire_worktree(source, ws.path)
+        output.write(b'after retirement')
+    assert (retired.path / 'result.bin').read_bytes() == b'before after retirement'
+    assert git(retired.path, 'rev-parse', 'HEAD').strip() == retired.head
+    assert git(retired.path, 'symbolic-ref', '-q', 'HEAD') == ''
+
+
+def test_retirement_rejects_head_advance_without_deleting_either_generation(source, tmp_path, monkeypatch):
+    import worktree_lifecycle
+    ws = create(source, 'late-commit', root=tmp_path / 'wt')
+    original = worktree_lifecycle._git
+    def interleave(repo, *args):
+        if args[:2] == ('worktree', 'move'):
+            (ws.path / 'later.txt').write_text('later committed work\n')
+            git(ws.path, 'add', 'later.txt')
+            git(ws.path, 'commit', '-qm', 'concurrent generation')
+        return original(repo, *args)
+    monkeypatch.setattr(worktree_lifecycle, '_git', interleave)
+    with pytest.raises(RuntimeError, match='inspect'):
+        worktree_lifecycle.retire_worktree(source, ws.path)
+    files = list((tmp_path / 'wt').glob('retired-worktree-*/worktree/later.txt'))
+    assert len(files) == 1 and files[0].read_text() == 'later committed work\n'
+    assert git(source, 'show', 'agent/late-commit:later.txt') == 'later committed work\n'
+
+
+def test_retirement_allocation_failure_keeps_original_workspace(source, tmp_path, monkeypatch):
+    import worktree_lifecycle
+    ws = create(source, 'no-space', root=tmp_path / 'wt')
+    head = git(ws.path, 'rev-parse', 'HEAD')
+    def full_disk(**kwargs):
+        raise OSError('fixture disk full')
+    monkeypatch.setattr(worktree_lifecycle.tempfile, 'mkdtemp', full_disk)
+    with pytest.raises(RuntimeError, match='original workspace retained'):
+        worktree_lifecycle.retire_worktree(source, ws.path)
+    assert (ws.path / 'seed.txt').read_text() == 'seed\n'
+    assert git(ws.path, 'rev-parse', 'HEAD') == head

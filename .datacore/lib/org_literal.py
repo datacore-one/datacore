@@ -1,5 +1,26 @@
 """Render external prose as literal Org data, never as document structure."""
 import json
+import re
+
+
+def require_resolved_source(source: str) -> None:
+    """Refuse Git conflict syntax outside literal Org blocks.
+
+    Parsing both sides as ordinary tasks can grant authority to an unresolved
+    branch or rewrite it during an unrelated save. Keep examples untouched.
+    """
+    block = None
+    for line in source.splitlines():
+        if block is not None:
+            if re.fullmatch(r'\s*#\+end_' + re.escape(block) + r'\s*', line, re.I):
+                block = None
+            continue
+        begin = re.match(r'\s*#\+begin_([A-Za-z0-9_]+)(?:\s|$)', line, re.I)
+        if begin:
+            block = begin.group(1)
+            continue
+        if re.match(r'^(?:<{7,}|>{7,}|\|{7,})(?:\s|$)|^={7,}\s*$', line):
+            raise ValueError('unresolved Org conflict requires explicit reconciliation')
 
 
 def scalar(value: str) -> str:

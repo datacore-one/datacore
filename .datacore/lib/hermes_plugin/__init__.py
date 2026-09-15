@@ -18,9 +18,9 @@ WHAT IT DOES. Three things, all from the registry the fleet already keeps:
 
   authorship A pre_tool_call gate refuses a call that would write the ledger
              under a DIFFERENT declared principal's name. Only a
-             declared-against-declared mismatch is refused: an undeclared
-             writer, or a host whose own identity cannot be resolved, is left
-             alone — the guard exists for the one case the registry can decide.
+             declared-against-declared mismatch is refused by this diagnostic.
+             An unresolved local identity separately refuses all tool execution.
+             This textual diagnostic does not constrain arbitrary same-user code.
 
   policy     Every acting tool call goes through tool_policy.evaluate_hook —
              the same classifier, the same approvals_policy.yaml limits, the
@@ -66,32 +66,60 @@ def _root() -> Path:
     return Path(os.environ.get("DATACORE_ROOT") or (Path.home() / "Data"))
 
 
-def lib_candidates() -> list[Path]:
-    """Where the fleet lib can be, most specific first.
+# These modules carry identity, authorization and data-preservation decisions.
+# One interpreter must not combine them from different installed releases.
+_CORE_MODULES = frozenset({"actor_identity", "tool_policy", "yaml_safety",
+                           "file_utils", "process_run", "spaces", "ledger"})
+_CORE_FILES = tuple(name + ".py" for name in sorted(_CORE_MODULES - {"ledger"})) + ("ledger/__init__.py",)
 
-    A host does not always keep its code under its data root. hermes keeps
-    spaces in ~/Data and the code in the v2-runner clone, which is exactly
-    why `ledger_transport._registry` grew the same fallback on 2026-09-07
-    (datacore#139) after failing twice a day for a fortnight. The plugin
-    deployed there reported INERT for the same reason, five minutes after
-    that fix landed."""
-    out = []
-    override = os.environ.get("DATACORE_LIB")
-    if override:
-        out.append(Path(override))
-    out.append(_root() / ".datacore" / "lib")
-    out.append(Path.home() / ".datacore" / "v2-runner" / ".datacore" / "lib")
-    return out
+
+def lib_candidates() -> list[Path]:
+    """Bind bundled plugins to their code, independently of the selected data.
+
+    An explicit administrator binding is exclusive, including when invalid.
+    Legacy standalone copies may still discover a complete data/runner checkout;
+    managed deployments must supply DATACORE_LIB for those copies.
+    """
+    if "DATACORE_LIB" in os.environ:
+        override = os.environ["DATACORE_LIB"]
+        if not override or "\0" in override:
+            return []
+        path = Path(override)
+        if not path.is_absolute() or ".." in path.parts:
+            return []
+        return [path]
+    source = Path(__file__).resolve()
+    if source.parent.name == "hermes_plugin" and source.parent.parent.name == "lib":
+        # Return even an incomplete installation. A missing policy file must
+        # refuse execution, not select an older copy from writable data.
+        return [source.parent.parent]
+    return [_root() / ".datacore" / "lib",
+            Path.home() / ".datacore" / "v2-runner" / ".datacore" / "lib"]
 
 
 def _lib() -> bool:
-    """Put the fleet lib on the path. False when this host has no Datacore."""
-    for lib in lib_candidates():
-        if not (lib / "actor_identity.py").exists():
-            continue
-        if str(lib) not in sys.path:
-            sys.path.insert(0, str(lib))
-        return True
+    """Select one complete library; refuse already-loaded code from another."""
+    for candidate in lib_candidates():
+        try:
+            try:
+                lib = candidate.resolve(strict=True)
+            except FileNotFoundError:
+                continue
+            if not all((lib / name).is_file() and (lib / name).resolve().is_relative_to(lib)
+                       for name in _CORE_FILES):
+                continue
+            for name, module in list(sys.modules.items()):
+                if name.split(".", 1)[0] not in _CORE_MODULES:
+                    continue
+                origin = getattr(module, "__file__", None)
+                if not origin or not Path(origin).resolve().is_relative_to(lib):
+                    return False
+            # Merely finding the path somewhere in sys.path does not give it
+            # precedence over an earlier stale or caller-supplied library.
+            sys.path[:] = [str(lib), *(entry for entry in sys.path if entry != str(lib))]
+            return True
+        except (OSError, ValueError, RuntimeError):
+            return False
     return False
 
 
@@ -102,7 +130,7 @@ def identity(refresh: bool = False) -> dict:
     """{actor, principal, display, role, permission_mode, ok, why}.
 
     `ok` is False whenever the plugin cannot bind this host to a declared
-    principal — the guards stand down in that state and say so."""
+    principal; the pre-tool gate refuses execution in that state."""
     global _IDENTITY
     if _IDENTITY is not None and not refresh:
         return _IDENTITY
@@ -125,7 +153,7 @@ def identity(refresh: bool = False) -> dict:
             out["why"] = f"actor {actor!r} is not a declared principal"
         else:
             out["ok"] = True
-    except Exception as exc:  # noqa: BLE001 — identity is advisory, never fatal
+    except Exception as exc:  # noqa: BLE001 — unresolved identity fails the tool gate
         out["why"] = f"{type(exc).__name__}: {exc}"
     _IDENTITY = out
     return out
@@ -167,29 +195,40 @@ def sync_memory_block(path: Path | None = None, ident: dict | None = None) -> st
     block = identity_block(ident)
     if not block:
         return "skipped"
-    p = path or memory_file()
+    p = Path(path or memory_file())
+    if not _lib():
+        return "unwritable: Datacore file transaction library unavailable"
+    from file_utils import atomic_write_text, file_lock
+
     try:
-        text = p.read_text(encoding="utf-8") if p.exists() else ""
+        # Match Hermes MemoryStore._file_lock exactly. The default Datacore
+        # .MEMORY.md.lock name would not coordinate with provider writes.
+        with file_lock(p, lock_path=p.with_suffix(p.suffix + ".lock")):
+            try:
+                text = p.read_bytes().decode("utf-8")
+            except FileNotFoundError:
+                text = ""
+            except (OSError, UnicodeError) as exc:
+                return f"unreadable: {type(exc).__name__}"
+            starts, ends = text.count(MARK_START), text.count(MARK_END)
+            if starts or ends:
+                if starts != 1 or ends != 1 or text.index(MARK_START) >= text.index(MARK_END):
+                    return "unreadable: ambiguous identity markers; source preserved"
+                head, _, rest = text.partition(MARK_START)
+                _, _, tail = rest.partition(MARK_END)
+                new = head + block + tail
+                outcome = "unchanged" if new == text else "updated"
+            else:
+                # Preserve authored bytes, including trailing whitespace.
+                new = text + ("\n\n" if text else "") + block + "\n"
+                outcome = "added"
+            if outcome != "unchanged":
+                # Provider writes preserve configured symlinks. Publish via a
+                # unique flushed temporary sibling of that same target.
+                atomic_write_text(p.resolve(), new)
+            return outcome
     except OSError as exc:
-        return f"unreadable: {exc}"
-    if MARK_START in text and MARK_END in text:
-        head, _, rest = text.partition(MARK_START)
-        _, _, tail = rest.partition(MARK_END)
-        new = head + block + tail
-        outcome = "unchanged" if new == text else "updated"
-    else:
-        new = (text.rstrip("\n") + "\n\n" + block + "\n") if text.strip() else block + "\n"
-        outcome = "added"
-    if outcome == "unchanged":
-        return outcome
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_text(new, encoding="utf-8")
-        tmp.replace(p)
-    except OSError as exc:
-        return f"unwritable: {exc}"
-    return outcome
+        return f"unwritable: {type(exc).__name__}"
 
 
 def on_session_start(**_kw):
@@ -329,8 +368,11 @@ def _cos_questions() -> Path | None:
 def _run(argv: list[str], timeout: int = 45) -> tuple[int, str]:
     import subprocess
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        from process_run import run
+        r = run(argv, capture_output=True, text=True, timeout=timeout)
         return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
+    except ImportError:
+        return 127, "Canonical process runner is unavailable."
     except subprocess.TimeoutExpired:
         return 124, f"timed out after {timeout}s"
     except OSError as exc:
@@ -376,7 +418,7 @@ LEDGER_APPEND_SCHEMA = {
         "parameters": {
             "type": "object",
             "properties": {
-                "space": {"type": "string", "description": "Space directory, e.g. '2-plur' or '8-firm'."},
+                "space": {"type": "string", "description": "Discovered space directory relative to the data root, including nested spaces."},
                 "type": {"type": "string", "description": "Event type, e.g. item.create, item.update, item.complete."},
                 "payload": {"type": "object", "description": "Event payload. For item.create include id and title."},
             },
@@ -424,6 +466,7 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
         from ledger.events import EVENT_TYPES  # noqa: PLC0415
         from ledger.log import EventLog  # noqa: PLC0415
         from ledger.policy import guarded_append  # noqa: PLC0415
+        from spaces import discover_spaces  # noqa: PLC0415
     except Exception as exc:  # noqa: BLE001
         return f"Refused: the ledger library did not import ({type(exc).__name__})."
     etype = str(kw.get("type") or "").strip()
@@ -432,12 +475,23 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
                 f"Known: {', '.join(sorted(EVENT_TYPES))}.")
     if not isinstance(payload, dict) or not payload:
         return "Refused: payload must be a non-empty object."
-    root = _root().resolve()
-    if not isinstance(space, str) or not space or Path(space).name != space or space in {".", ".."}:
-        return "Refused: space must name one direct child of the configured data root."
-    space_dir = (root / space).resolve()
-    if space_dir.parent != root or not (space_dir / ".datacore").is_dir():
-        return f"Refused: {space!r} is not a space under {_root()}."
+    if (not isinstance(space, str) or not space or "\0" in space
+            or Path(space).is_absolute() or ".." in Path(space).parts
+            or str(Path(space)) != space or space == "."):
+        return "Refused: space must be a canonical relative space directory."
+    try:
+        root = _root().resolve(strict=True)
+        space_dir = root / space
+        # Resolve through the same discovery rules used by other automated
+        # writers. Metadata directories alone are not space identity; aliases
+        # must not provide another route to a canonical space's ledger.
+        known = discover_spaces(root, reject_aliases=True, reject_invalid=True)
+        if (space_dir.resolve(strict=True) != space_dir
+                or space_dir not in {entry.path for entry in known}
+                or not (space_dir / ".datacore").is_dir()):
+            return "Refused: directory is not a space under the configured data root."
+    except (OSError, RuntimeError, ValueError):
+        return "Refused: directory is not a space under the configured data root, or discovery is invalid."
     try:
         # No actor argument by design: it comes from the registry, never the model.
         ev = guarded_append(EventLog(space_dir=space_dir, actor=ident["actor"]), etype, payload)
@@ -467,4 +521,4 @@ def register(ctx) -> None:
     d = identity()
     logger.info("datacore plugin: %s",
                 f"{d['principal']} as {d['actor']} — guards in force" if d["ok"]
-                else f"inert ({d['why']})")
+                else f"identity unavailable; tools refused ({d['why']})")

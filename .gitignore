@@ -373,3 +373,7 @@ skills-lock.json
 
 # Datacore lib virtualenv (winston 2026-09-09: 709 venv files staged via git add -A, same failure mode as 2026-09-04)
 .datacore/venv/
+
+# Private per-space module state and retained migration originals.
+**/.datacore/module-data/
+**/.datacore/module-data-backups/

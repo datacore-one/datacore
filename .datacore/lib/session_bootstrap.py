@@ -14,7 +14,8 @@ from pathlib import Path
 
 # Get absolute paths using DATACORE_ROOT
 DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
-sys.path.insert(0, str(DATACORE_ROOT / ".datacore" / "lib"))
+# Helper code belongs to this installation; DATACORE_ROOT selects data.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from session_state import cleanup_stale_sessions, _debug
 
 def main():

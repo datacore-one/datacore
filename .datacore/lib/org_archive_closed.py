@@ -1,136 +1,145 @@
 #!/usr/bin/env python3
-"""org_archive_closed.py — move closed (DONE/CANCELLED) top-level subtrees out of an
-inbox.org into a dated archive file, text-level, so the org-workspace shrink guard
-is not tripped by removing hundreds of entries at once.
+"""Archive closed level-1/2 subtrees through recoverable Org transactions.
 
-Why text-level: org-workspace's move/save path refuses (CatastrophicShrinkError)
-or mis-serialises when a write removes more than 25% of a file, and an inbox that
-is 85% closed nightshift headings is exactly that case. This script uses
-org-workspace only to PARSE (line numbers, subtree ends, states) and then splices
-lines, following the precedent of 0-personal/org/inbox-archive-2026-07-14.org.
-
-Usage:
-    python3 .datacore/lib/org_archive_closed.py --file 0-personal/org/inbox.org [--dry-run]
-    python3 .datacore/lib/org_archive_closed.py --file X.org --archive X-archive-YYYY-MM-DD.org
-
-Rules: only top-level (level 1) headings whose state is DONE or CANCELLED and whose
-subtree contains no open task are moved; everything else stays byte-identical.
-Archived headings are demoted one level under "* Archived (processed <date>)".
+Only DONE/CANCELLED subtrees with no unfinished descendants move. Source and
+archive are published together with durable recovery; body bytes and unmoved
+lines remain unchanged. Inherited tags are made explicit on the archived root.
 """
 import argparse
-import sys
 from datetime import date
 from pathlib import Path
+import re
+import stat
+import sys
 
-sys.path.insert(0, str(Path(__file__).parent))
-from org_workspace import OrgWorkspace  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from org_workspace import OrgWorkspace
+from org_workspace._vendor.orgparse import loads
+from org_transaction import serialized, watch_file, write_org_text
 
-CLOSED = {"DONE", "CANCELLED"}
-OPEN = {"TODO", "NEXT", "WAITING", "REVIEW", "DEFERRED"}
+CLOSED = {'DONE', 'CANCELLED'}
 
 
-def closed_spans(path: Path):
-    ws = OrgWorkspace()
-    ws.load(str(path))
-    lines = path.read_text().splitlines(keepends=True)
+def _path(path, *, required=False):
+    path = Path(path).absolute()
+    for part in [path, *path.parents]:
+        if part.is_symlink():
+            raise ValueError('archive paths must not contain symbolic links')
+    try:
+        info = path.stat()
+    except FileNotFoundError:
+        if required:
+            raise
+    else:
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError('archive paths must be regular files with one link')
+    return path.resolve()
+
+
+def _parse(text, path):
+    workspace = OrgWorkspace()
+    return list(loads(text, filename=str(path), env=workspace._parse_env(path)))[1:]
+
+
+def _spans(text, path):
+    lines = text.splitlines(keepends=True)
+    nodes = _parse(text, path)
     spans = []
-    for view in _all_nodes(ws):
-        if view.level not in (1, 2) or view.todo not in CLOSED:
+    identities = [node.get_property('ID') for node in nodes if node.get_property('ID')]
+    if len(identities) != len(set(identities)):
+        raise ValueError('duplicate task identities require reconciliation before archival')
+    for index, node in enumerate(nodes):
+        start = node.linenumber - 1
+        if spans and start < spans[-1][1]:
             continue
-        if any((c.todo in OPEN) for c in _descendants(view)):
+        if node.level not in (1, 2) or node.todo not in CLOSED:
             continue
-        raw = view.node
-        start = raw.linenumber - 1
-        end = _find_end(lines, start, view.level)
-        spans.append((start, end, view.heading, view.level))
-    spans.sort()
-    # drop spans nested inside an earlier, larger span
-    out = []
-    for sp in spans:
-        if out and sp[0] < out[-1][1]:
+        end_index = next((i for i in range(index + 1, len(nodes)) if nodes[i].level <= node.level), len(nodes))
+        descendants = nodes[index + 1:end_index]
+        if any(child.todo and child.todo not in CLOSED for child in descendants):
             continue
-        out.append(sp)
-    return lines, out
+        end = nodes[end_index].linenumber - 1 if end_index < len(nodes) else len(lines)
+        spans.append((start, end, node, descendants))
+    return lines, spans
 
 
-def _all_nodes(ws):
-    seen = []
-    for state in list(OPEN | CLOSED) + [None]:
-        try:
-            seen.extend(ws.find_by_state(state))
-        except Exception:
-            pass
-    uniq = {}
-    for v in seen:
-        uniq[id(v.node)] = v
-    return list(uniq.values())
+def closed_spans(path):
+    """Read-only preview from one byte-preserving snapshot."""
+    path = _path(path, required=True)
+    lines, spans = _spans(path.read_bytes().decode('utf-8'), path)
+    return lines, [(start, end, node.heading, node.level) for start, end, node, _ in spans]
 
 
-def _descendants(view):
-    out = []
-    stack = list(view.children)
-    while stack:
-        c = stack.pop()
-        out.append(c)
-        stack.extend(c.children)
-    return out
+def _archived_lines(lines, start, end, node, descendants):
+    chunk = list(lines[start:end])
+    if node.level == 1:
+        # Shift only parser-recognized headings, never literal star-prefixed
+        # text inside a task's body or examples.
+        for heading in [node, *descendants]:
+            offset = heading.linenumber - 1 - start
+            chunk[offset] = '*' + chunk[offset]
+    inherited = set(node.tags) - set(node.shallow_tags)
+    if inherited:
+        first = chunk[0]
+        eol = '\r\n' if first.endswith('\r\n') else '\n' if first.endswith('\n') else ''
+        title = first[:-len(eol)] if eol else first
+        title = re.sub(r'\s+:[^\s:]+(?::[^\s:]+)*:\s*$', '', title)
+        chunk[0] = title + ' :' + ':'.join(sorted(node.tags)) + ':' + eol
+    return ''.join(chunk)
 
 
-def _find_end(lines, start, level=1):
-    """Subtree of a level-N heading ends at the next heading of level <= N."""
-    i = start + 1
-    while i < len(lines):
-        ln = lines[i]
-        if ln.startswith("*"):
-            stars = len(ln) - len(ln.lstrip("*"))
-            if stars <= level and ln[stars:stars + 1] == " ":
-                break
-        i += 1
-    return i
+@serialized
+def archive_closed(source, destination, *, dry_run=False):
+    source, destination = _path(source, required=True), _path(destination)
+    if source == destination:
+        raise ValueError('source and archive must be different files')
+    # A generated projection must be archived from its authoritative ledger.
+    from org_space import ledger_space_for_file
+    from ledger_project_org import phase, ORG
+    space = ledger_space_for_file(source)
+    if space is not None and source == (space / ORG).resolve() and phase(space) == 1:
+        raise ValueError('archive generated tasks through ledger_done_report')
+    before = watch_file(source)['before']
+    lines, spans = _spans(before, source)
+    if dry_run or not spans:
+        return {'archived': len(spans), 'dry_run': dry_run}
+    existing = watch_file(destination)['before'] or ''
+    archived_ids = [n.get_property('ID') for n in _parse(existing, destination) if n.get_property('ID')]
+    moved_nodes = [n for _, _, node, descendants in spans for n in [node, *descendants]]
+    moved_ids = {n.get_property('ID') for n in moved_nodes if n.get_property('ID')}
+    if len(archived_ids) != len(set(archived_ids)) or moved_ids.intersection(archived_ids):
+        raise ValueError('archive task identity already exists; reconcile before retry')
+    today = date.today().isoformat()
+    moved = ''.join(_archived_lines(lines, start, end, node, descendants)
+                    for start, end, node, descendants in spans)
+    keep, cursor = [], 0
+    for start, end, _, _ in spans:
+        keep.extend(lines[cursor:start]);cursor = end
+    keep.extend(lines[cursor:])
+    header = f'#+TITLE: Inbox Archive {today}\n\n' if not existing else ''
+    separator = '\n' if existing and not existing.endswith('\n') else ''
+    archived = existing + separator + header + f'* Archived (processed {today})\n' + moved
+    # Validate both final documents before either can change. Recheck link
+    # assumptions after parsing; the shared transaction rejects stale bytes.
+    _parse(archived, destination)
+    _parse(''.join(keep), source)
+    _path(source, required=True);_path(destination)
+    write_org_text(destination, archived)
+    write_org_text(source, ''.join(keep))
+    return {'archived': len(spans), 'dry_run': False}
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--file", required=True)
-    ap.add_argument("--archive")
-    ap.add_argument("--dry-run", action="store_true")
-    a = ap.parse_args()
-    src = Path(a.file)
-    today = date.today().isoformat()
-    dst = Path(a.archive) if a.archive else src.with_name(f"{src.stem}-archive-{today}.org")
-
-    lines, spans = closed_spans(src)
-    print(f"{src}: {len(spans)} closed subtrees (levels 1-2), {sum(e - s for s, e, _, _ in spans)} lines")
-    for s, e, h, lv in spans[:8]:
-        print(f"  L{s + 1}-{e} (L{lv}): {h[:80]}")
-    if len(spans) > 8:
-        print(f"  ... {len(spans) - 8} more")
-    if a.dry_run or not spans:
-        return
-
-    moved = []
-    for s, e, _, lv in spans:
-        for ln in lines[s:e]:
-            # level-1 subtrees are demoted one level so everything sits under "* Archived"
-            moved.append(("*" + ln) if (lv == 1 and ln.startswith("*")) else ln)
-    keep = []
-    cut = set()
-    for s, e, _, _ in spans:
-        cut.update(range(s, e))
-    for i, ln in enumerate(lines):
-        if i not in cut:
-            keep.append(ln)
-
-    header = "" if dst.exists() else f"#+TITLE: Inbox Archive {today}\n\n"
-    section = f"* Archived (processed {today})\n"
-    with dst.open("a") as f:
-        f.write(header + section + "".join(moved))
-    src.write_text("".join(keep))
-
-    check = OrgWorkspace()
-    check.load(str(src))
-    print(f"wrote {len(moved)} lines to {dst}; {src} re-parses OK ({len(keep)} lines kept)")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--file', required=True)
+    parser.add_argument('--archive')
+    parser.add_argument('--dry-run', action='store_true')
+    args = parser.parse_args()
+    source = Path(args.file)
+    destination = Path(args.archive) if args.archive else source.with_name(f'{source.stem}-archive-{date.today().isoformat()}.org')
+    result = archive_closed(source, destination, dry_run=args.dry_run)
+    print(f"{result['archived']} closed subtrees {'eligible for archival' if args.dry_run else 'archived'}")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

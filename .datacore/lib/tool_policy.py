@@ -89,7 +89,11 @@ def load_effects(path: Path | None = None) -> dict[str, dict]:
     An unreadable or malformed vocabulary cannot authorize tool use."""
     import yaml
     p = Path(path or DEFAULT_EFFECTS_FILE)
-    data = yaml.safe_load(p.read_text(encoding="utf-8"))
+    from yaml_safety import UniqueStringKeyLoader
+    try:
+        data = yaml.load(p.read_text(encoding="utf-8"), Loader=UniqueStringKeyLoader)
+    except (OSError, UnicodeError, ValueError, yaml.YAMLError):
+        raise ValueError('tool effects configuration is unreadable or ambiguous') from None
     if not isinstance(data, dict) or not isinstance(data.get("effects"), dict) or not data["effects"]:
         raise ValueError("tool effects must contain a nonempty effects mapping")
     out: dict[str, dict] = {}
@@ -162,7 +166,9 @@ def principal_for(actor: str | None = None) -> str:
     from actor_identity import principal_of, this_actor
     actor = (actor or this_actor()).strip().lower()
     name, _ = principal_of(actor)
-    return name or actor
+    if name is None:
+        raise ValueError('executor writer has no declared principal')
+    return name
 
 
 def decide(principal: str, tool_name: str, tool_input, granted=(),
@@ -224,10 +230,7 @@ def context_from_env(env=None) -> dict:
     env = os.environ if env is None else env
     principal = (env.get("DATACORE_POLICY_PRINCIPAL") or "").strip().lower()
     if not principal:
-        try:
-            principal = principal_for()
-        except Exception:  # noqa: BLE001
-            principal = "unknown"
+        principal = principal_for()
     granted = [g.strip() for g in (env.get("DATACORE_POLICY_GRANTED") or "").split(",") if g.strip()]
     space = env.get("DATACORE_POLICY_SPACE") or ""
     return {"principal": principal, "granted": granted,
@@ -250,8 +253,8 @@ def evaluate_hook(payload: dict, env=None, *, record: bool = True,
         return deny_output("invalid tool-policy request")
     tool_name = payload["tool_name"]
     tool_input = (payload or {}).get("tool_input") or {}
-    ctx = context_from_env(env)
     try:
+        ctx = context_from_env(env)
         effects = effects if effects is not None else load_effects()
         decision = decide(ctx["principal"], tool_name, tool_input, ctx["granted"], effects, policy_path)
     except Exception as e:  # noqa: BLE001 — unavailable policy cannot authorize work

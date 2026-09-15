@@ -30,7 +30,7 @@ def main() -> int:
     a = ap.parse_args()
 
     root = Path.home() / "Data"
-    sys.path.insert(0, str(root / ".datacore" / "lib"))
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     from org_transaction import SafeOrgWorkspace as OrgWorkspace  # noqa: PLC0415
     # ONE definition of "executable", imported rather than restated. Writing
     # the rule again here first flagged 93 tasks against the gate's 27: it

@@ -15,7 +15,7 @@ from ledger.log import read_events
 from ledger.projector import project
 import ledger_checkpoint as lc
 
-FIELDS = ['title', 'state', 'tags', 'scheduled', 'deadline']
+FIELDS = lc.VIEW_FIELDS
 
 for space_name in sys.argv[1:] or ['2-datacore']:
     space = ROOT / space_name

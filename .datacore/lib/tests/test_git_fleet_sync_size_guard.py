@@ -11,8 +11,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 LIB = Path(__file__).resolve().parents[1]
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
@@ -29,23 +27,26 @@ def _init_repo(path: Path) -> None:
     subprocess.run(['git', 'commit', '-q', '-m', 'init'], cwd=path, check=True)
 
 
-# ── structural: pin the guard to the source ─────────────────────────────────
+def test_execute_does_not_stage_or_commit_oversized_input(tmp_path):
+    _init_repo(tmp_path)
+    large = tmp_path / 'large.db'
+    with large.open('wb') as stream:
+        stream.truncate(50 * 1024 * 1024)
+    (tmp_path / 'small.txt').write_text('preserve and commit this\n')
+    fs.sync_repo(tmp_path, execute=True)
+    tracked = subprocess.run(['git', 'ls-files', '-z'], cwd=tmp_path, capture_output=True, check=True).stdout.split(b'\0')
+    assert b'large.db' not in tracked and b'small.txt' in tracked
+    assert large.stat().st_size == 50 * 1024 * 1024
 
-def test_source_has_size_guard():
-    src = (LIB / "git_fleet_sync.py").read_text()
-    assert "50" in src, "50 MB threshold missing from git_fleet_sync.py"
-    assert "oversized" in src, "oversized skip label missing from git_fleet_sync.py"
-    assert ".gitignore" in src or "gitignore" in src, "gitignore hint missing"
 
-
-def test_size_guard_precedes_git_add():
-    src = (LIB / "git_fleet_sync.py").read_text()
-    loop_start = src.index("for line in porcelain.splitlines():")
-    size_guard_pos = src.index("oversized", loop_start)
-    git_add_pos = src.index("git', 'add'", loop_start)
-    assert size_guard_pos < git_add_pos, (
-        "size guard must appear before 'git add' in the staging loop"
-    )
+def test_size_just_below_limit_remains_eligible(tmp_path):
+    _init_repo(tmp_path)
+    large = tmp_path / 'almost-large.bin'
+    with large.open('wb') as stream:
+        stream.truncate(50 * 1024 * 1024 - 1)
+    result = fs.sync_repo(tmp_path, execute=False)
+    assert 'almost-large.bin' in result['committed']
+    assert not any(path == 'almost-large.bin' for path, _ in result['skipped'])
 
 
 # ── functional ───────────────────────────────────────────────────────────────

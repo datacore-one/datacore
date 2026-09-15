@@ -80,6 +80,24 @@ def test_lock_timeout(tmp_path):
                 pytest.fail("entered contended lock")
 
 
+@pytest.mark.parametrize('kind', ['symlink', 'hardlink', 'fifo'])
+def test_lock_refuses_aliases_and_nonregular_files(tmp_path, kind):
+    target = tmp_path / 'state'
+    lock = tmp_path / '.state.lock'
+    outside = tmp_path / 'retained'
+    outside.write_text('preserve')
+    if kind == 'symlink':
+        lock.symlink_to(outside)
+    elif kind == 'hardlink':
+        os.link(outside, lock)
+    else:
+        os.mkfifo(lock)
+    with pytest.raises((ValueError, OSError)):
+        with files.file_lock(target, timeout=0):
+            pytest.fail('unsafe lock entered')
+    assert outside.read_text() == 'preserve'
+
+
 def test_short_writes_preserve_entire_unicode_content(tmp_path, monkeypatch):
     path = tmp_path / "data"
     real_write = os.write

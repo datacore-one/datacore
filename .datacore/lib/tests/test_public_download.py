@@ -109,3 +109,28 @@ def test_same_origin_redirect_retains_credentials_but_plaintext_never_sends_them
     assert connections[1].request.call_args.kwargs['headers']['Cookie'] == 'private'
     with pytest.raises(ValueError, match='HTTPS'):
         dl.download('http://image.example/a', headers={'Cookie': 'private'})
+
+
+@pytest.mark.parametrize('location', ['/same-origin', 'https://other.example/', 'http://image.example/'])
+def test_sensitive_post_never_follows_redirects(monkeypatch, location):
+    monkeypatch.setattr(dl, 'resolve', lambda *a, **k: resolved('8.8.8.8'))
+    connections = transport(monkeypatch, [response(307, {'Location': location}), response()])
+    with pytest.raises(ValueError, match='redirects'):
+        dl.post('https://image.example/rpc', b'private body')
+    assert len(connections) == 1
+    connections[0].request.assert_called_once()
+    assert connections[0].request.call_args.args == ('POST', '/rpc')
+    assert connections[0].request.call_args.kwargs['body'] == b'private body'
+
+
+def test_sensitive_post_refuses_plaintext_before_dns(monkeypatch):
+    monkeypatch.setattr(dl, 'resolve', Mock(side_effect=AssertionError('DNS must not run')))
+    with pytest.raises(ValueError, match='HTTPS'):
+        dl.post('http://image.example/rpc', b'private body')
+
+
+@pytest.mark.parametrize('timeout', [0, -1, True, float('nan'), float('inf'), 31])
+def test_post_deadline_cannot_be_disabled(monkeypatch, timeout):
+    monkeypatch.setattr(dl, 'resolve', Mock(side_effect=AssertionError('DNS must not run')))
+    with pytest.raises(ValueError, match='timeout'):
+        dl.post('https://image.example/rpc', b'private body', timeout=timeout)

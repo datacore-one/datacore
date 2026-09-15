@@ -506,13 +506,17 @@ class StructuralIntegrityChecker:
         MUST_NOT_TRACK = [
             '.datacore/knowledge.db',
             '.datacore/knowledge.db-journal',
+            '.datacore/knowledge.db-wal',
+            '.datacore/knowledge.db-shm',
         ]
 
         try:
             result = subprocess.run(
-                ['git', '-C', str(self.space_path), 'ls-files'] + MUST_NOT_TRACK,
+                ['git', '-C', str(self.space_path), 'ls-files', '--'] + MUST_NOT_TRACK,
                 capture_output=True, text=True, timeout=10
             )
+            if result.returncode:
+                raise OSError('repository index unavailable')
             tracked = [f.strip() for f in result.stdout.splitlines() if f.strip()]
             for f in tracked:
                 self.issues.append(Issue(
@@ -525,8 +529,12 @@ class StructuralIntegrityChecker:
                     ),
                     auto_fixable=False,
                 ))
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
+        except (subprocess.TimeoutExpired, OSError):
+            self.issues.append(Issue(
+                severity='error', check_type='tracked_derived_unverified', path=self.space_path,
+                message='Derived-file tracking could not be verified; check repository and Git availability.',
+                auto_fixable=False,
+            ))
 
     # -------------------------------------------------------------------------
     # Check: Git LFS

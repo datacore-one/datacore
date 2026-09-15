@@ -1,69 +1,71 @@
 #!/usr/bin/env python3
-"""Migrate heartbeat.json from a contested file to per-writer shards.
+"""Migrate heartbeat observations through the installed Ventures state writer.
 
-One-shot, idempotent, and reversible by deleting the shard directory. See
-state_writer.heartbeat_shard_path for why: three hosts write one path, and on
-2026-09-02 that conflict aborted 59 nightshift runs and stranded 85 commits.
-
-The existing heartbeat.json is attributed to the actor named in the file if it
-carries one, otherwise to `legacy`. Attributing it to THIS host would be a
-guess, and a wrong guess would make one host's shard carry another's fire time
-— which is the same class of silent wrongness being removed.
+The canonical writer preserves legacy observations before deriving a view.
+Invalid evidence holds migration; a dry run validates without publishing.
+Never delete source shards as a rollback: retain them for reconciliation.
 """
 from __future__ import annotations
 
-import json
-import pathlib
+import argparse
+import hashlib
+import importlib
+import importlib.util
+from pathlib import Path
 import sys
 
-ROOT = pathlib.Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / ".datacore" / "modules" / "ventures" / "lib"))
-
-import state_writer as sw  # noqa: E402
+LIB = Path(__file__).resolve().parent
+ROOT = LIB.parents[1]
 
 
-def main() -> int:
-    apply = "--apply" in sys.argv
-    spaces = sorted(d for d in ROOT.glob("[0-9]-*") if d.is_dir())
-    moved = skipped = 0
+def _state_writer():
+    """Load matching installed code, independently of the selected data root."""
+    library = LIB.parent / 'modules/ventures/lib'
+    if library.is_symlink() or not (library / 'heartbeat_state.py').is_file():
+        raise RuntimeError('a compatible installed Ventures state writer is required')
+    from file_utils import read_text_within
+    for filename in ('__init__.py', 'heartbeat_state.py'):
+        if read_text_within(LIB.parent, library / filename) is None:
+            raise RuntimeError('installed heartbeat writer is incomplete')
+    library = library.resolve(strict=True)
+    name = '_datacore_heartbeat_migration_' + hashlib.sha256(str(library).encode()).hexdigest()
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, library / '__init__.py',
+                                                      submodule_search_locations=[str(library)])
+        package = importlib.util.module_from_spec(spec)
+        sys.modules[name] = package
+        spec.loader.exec_module(package)
+    return importlib.import_module(name + '.heartbeat_state')
 
-    for space in spaces:
-        legacy = sw.heartbeat_state_path(space)
-        shard_dir = sw.heartbeat_shard_dir(space)
-        if not legacy.exists():
-            continue
-        if any(shard_dir.glob("*.json")):
-            print(f"  skip  {space.name}: already sharded")
-            skipped += 1
-            continue
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--data-dir', type=Path, default=ROOT)
+    parser.add_argument('--apply', action='store_true')
+    args = parser.parse_args(argv)
+    try:
+        from intent_sources import spaces
+        root = args.data_dir.resolve(strict=True)
+        entries = spaces(root)
+        writer = _state_writer()
+    except (OSError, ValueError, ImportError, RuntimeError) as exc:
+        print(f'heartbeat migration unavailable: {type(exc).__name__}', file=sys.stderr)
+        return 1
+    migrated = unchanged = failed = 0
+    for entry in entries:
         try:
-            payload = json.loads(legacy.read_text())
-        except (OSError, ValueError) as e:
-            print(f"  FAIL  {space.name}: unreadable ({e})")
-            continue
-
-        actor = payload.get("actor") or "legacy"
-        target = shard_dir / f"{actor}.json"
-        print(f"  move  {space.name}: heartbeat.json -> heartbeat/{actor}.json "
-              f"(last_fire {payload.get('last_fire')})")
-        if apply:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            payload["actor"] = actor
-            # Atomic, like every other writer of this artifact family. A crash
-            # mid-write must leave either no shard (legacy fallback still
-            # works) or a complete one -- never a half-written file that
-            # reduce_heartbeat silently skips while the migration looks done.
-            tmp = target.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
-            tmp.replace(target)
-            sw.materialize_heartbeat(space)
-        moved += 1
-
-    print("-" * 78)
-    print(f"{moved} space(s) to migrate, {skipped} already sharded"
-          + ("" if apply else "   [dry run — pass --apply]"))
-    return 0
+            result = writer.migrate_heartbeat(root / entry['path'], dry_run=not args.apply)
+            if result is None:
+                unchanged += 1
+            else:
+                migrated += 1
+        except (OSError, ValueError, RuntimeError) as exc:
+            failed += 1
+            print(f'heartbeat migration held: {type(exc).__name__}', file=sys.stderr)
+    print(f'{migrated} migration(s), {unchanged} unchanged, {failed} held'
+          + (' [dry run]' if not args.apply else ''))
+    return 1 if failed else 0
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     raise SystemExit(main())

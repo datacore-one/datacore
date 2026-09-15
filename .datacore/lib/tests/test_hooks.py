@@ -584,7 +584,7 @@ class TestLogOwnershipGuardAuthorship:
         env = {k: v for k, v in os.environ.items()
                if not k.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_"))}
         env["DATACORE_ACTOR"] = "miles"
-        return subprocess.run(["python3", str(guard), rng], cwd=tmp_path,
+        return subprocess.run([sys.executable, str(guard), rng], cwd=tmp_path,
                               capture_output=True, text=True, env=env)
 
     def test_foreign_authored_commit_in_range_is_allowed(self, tmp_path):
@@ -620,7 +620,8 @@ class TestLogOwnershipGuardAuthorship:
         mac during a test and the old actors() trusted it blindly, bypassing the
         registry and allowing a write to winston.jsonl (resolved in merge 221efd0).
         """
-        import socket, subprocess
+        import socket
+        import subprocess
         from pathlib import Path
 
         g = self._repo(tmp_path)
@@ -645,7 +646,7 @@ class TestLogOwnershipGuardAuthorship:
 
         guard = Path(__file__).resolve().parents[1] / "hooks" / "log_ownership_guard.py"
         env = {**os.environ, "DATACORE_ACTOR": "winston", "DATACORE_ROOT": str(tmp_path)}
-        r = subprocess.run(["python3", str(guard), "base-ref..HEAD"], cwd=tmp_path,
+        r = subprocess.run([sys.executable, str(guard), "base-ref..HEAD"], cwd=tmp_path,
                            capture_output=True, text=True, env=env)
         assert r.returncode == 1, (
             "registry-registered machine allowed DATACORE_ACTOR to override it:\n"

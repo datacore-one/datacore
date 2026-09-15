@@ -313,7 +313,29 @@ def test_phase1_refuses_on_a_dirty_phase0_diff(space, monkeypatch):
     assert any("not clean" in why for why in r.refused_because)
 
 
-def test_phase1_writes_when_every_precondition_holds(space, monkeypatch):
+@pytest.fixture
+def complete_space(tmp_path):
+    """Every source heading is admitted; unlike `space`, no unimported history."""
+    space = tmp_path / "9-test"
+    (space / "org").mkdir(parents=True)
+    (space / "org/next_actions.org").write_text(
+        "* TODO Kept\n:PROPERTIES:\n:ID: kept\n:END:\nBody retained.\n")
+    return space
+
+
+def test_phase1_refuses_incomplete_import_even_when_task_summary_is_clean(space, monkeypatch):
+    from ledger import phase1
+    before = (space / "org/next_actions.org").read_bytes()
+    import_space(space)
+    phase1.activate(space)
+    monkeypatch.setattr(phase1, "_is_gitignored", lambda *a, **k: True)
+    result = phase1.flip(space)
+    assert not result.written
+    assert (space / "org/next_actions.org").read_bytes() == before
+
+
+def test_phase1_writes_when_every_precondition_holds(complete_space, monkeypatch):
+    space = complete_space
     from ledger import phase1
     import_space(space)
     phase1.activate(space)
@@ -325,8 +347,9 @@ def test_phase1_writes_when_every_precondition_holds(space, monkeypatch):
     assert "#+SEQ_TODO:" in text
 
 
-def test_phase1_refuses_to_clobber_an_edit_made_after_it_wrote(space, monkeypatch):
+def test_phase1_refuses_to_clobber_an_edit_made_after_it_wrote(complete_space, monkeypatch):
     """The guard that makes Phase 1 survivable without a reconciler."""
+    space = complete_space
     from ledger import phase1
     import_space(space)
     phase1.activate(space)

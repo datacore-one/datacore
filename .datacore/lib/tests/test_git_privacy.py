@@ -106,6 +106,28 @@ def test_staged_private_layer_cannot_hide_behind_clean_working_copy(repo):
     assert validate_public_tree(repo, ':index')
 
 
+@pytest.mark.parametrize('relative', [
+    '.datacore/module-data/fixture/data/note.txt',
+    'named/nested/.datacore/module-data/fixture/state/run.json',
+    'named/.datacore/module-data-backups/original/private.bin',
+])
+def test_private_module_roots_remain_unpublishable_even_with_permissive_legacy_policy(repo, relative):
+    target = repo / relative
+    target.parent.mkdir(parents=True)
+    target.write_text('original private content')
+    commit(repo)
+    target.write_text('changed private content')
+    git(repo, 'add', '-A')
+    policy = repo / 'policy.yaml'
+    policy.write_text('datacore_new_file_allow: [".datacore/**"]\ndatacore_new_file_reject: []\n')
+    result = subprocess.run([sys.executable, str(LIB / 'pre_push_scan.py'), '--index',
+                             '--repo', 'example/public', '--denylist', str(policy)],
+                            cwd=repo, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 1
+    assert 'forbidden path' in result.stderr.lower()
+    assert 'changed private content' not in result.stderr
+
+
 def test_global_hook_scans_all_new_history_and_treats_policy_arguments_as_data(repo, tmp_path):
     import os
     import shutil

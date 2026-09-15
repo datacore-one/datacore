@@ -24,6 +24,10 @@ import pathlib
 import subprocess
 import sys
 
+from git_inventory import changes, require_resolved
+from git_publication import push_arguments
+from worktree_lifecycle import git_environment
+
 ROOT = pathlib.Path(os.environ.get("DATACORE_ROOT", pathlib.Path.home() / "Data"))
 
 MACHINE_WRITTEN = (
@@ -35,26 +39,32 @@ MACHINE_WRITTEN = (
 
 
 def _git(space: pathlib.Path, *args: str, timeout: int = 120) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "--literal-pathspecs", "-C", str(space), *args], capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(["git", "--literal-pathspecs", "-C", str(space), *args],
+                          capture_output=True, text=True, timeout=timeout, env=git_environment())
 
 
 def dirty_tracked(space: pathlib.Path) -> list[str]:
-    r = _git(space, 'status', '--porcelain', '-z', '--untracked-files=all', timeout=60)
-    if r.returncode:
-        raise RuntimeError('cannot establish repository status')
     paths = []
-    for entry in r.stdout.split('\0'):
-        if not entry:
-            continue
-        status, name = entry[:2], entry[3:]
-        if any(flag in status for flag in 'RCU') or (name.startswith(MACHINE_WRITTEN) and 'D' in status):
+    for entry in changes(space):
+        status, name = entry.status, entry.path
+        if entry.unmerged or any(flag in status for flag in 'RC') or (name.startswith(MACHINE_WRITTEN) and 'D' in status):
             raise RuntimeError('rename, conflict or machine-file deletion requires review')
         paths.append(name)
     return paths
 
 
-def _outgoing_is_machine_only(space):
-    commits = _git(space, 'rev-list', '@{u}..HEAD')
+def _outgoing_is_machine_only(space, source=None, upstream=None):
+    if source is None:
+        versions = _git(space, 'rev-parse', '--verify', 'HEAD^{commit}')
+        if versions.returncode:
+            return False
+        source = versions.stdout.strip()
+    if upstream is None:
+        remote = _git(space, 'rev-parse', '--verify', '@{u}^{commit}')
+        if remote.returncode:
+            return False
+        upstream = remote.stdout.strip()
+    commits = _git(space, 'rev-list', f'{upstream}..{source}')
     if commits.returncode:
         return False
     rows = commits.stdout.splitlines()
@@ -71,7 +81,7 @@ def _outgoing_is_machine_only(space):
             # not mistake those for new exposure, but inspect every outgoing
             # commit so an added-then-reverted private file cannot ride along.
             local = _git(space, 'ls-tree', '-z', commit, '--', name)
-            remote = _git(space, 'ls-tree', '-z', '@{u}', '--', name)
+            remote = _git(space, 'ls-tree', '-z', upstream, '--', name)
             if local.returncode or remote.returncode or local.stdout != remote.stdout:
                 return False
     return True
@@ -93,24 +103,29 @@ def publish(space: pathlib.Path, machine: list[str]) -> tuple[str, str]:
     Returns (status, detail): "ok", or "held" (committed locally, could not
     reach or reconcile with origin -- the next run pushes), or "FAIL".
     """
+    try:
+        require_resolved(space)
+    except RuntimeError:
+        return 'FAIL', 'repository inventory is unavailable or unresolved'
     if machine and not only_machine_written(machine):
         return 'FAIL', 'publication contains a non-machine path'
     for name in machine:
         path = space / name
-        if (pathlib.Path(name).is_absolute() or '..' in pathlib.Path(name).parts or path.is_symlink()
+        if (pathlib.Path(name).is_absolute() or '..' in pathlib.Path(name).parts
+                or path.is_symlink() or not path.is_file()
                 or not path.resolve().is_relative_to(space.resolve())
                 or not path.resolve().relative_to(space.resolve()).as_posix().startswith(MACHINE_WRITTEN)):
             return 'FAIL', 'publication path escapes its repository'
     if machine:
         r = _git(space, "add", "--", *machine)
         if r.returncode:
-            return "FAIL", f"add: {r.stderr.strip()[-160:]}"
+            return "FAIL", 'staging failed; local files and index retained'
         r = _git(space, "commit", "-q", "-m", f"ledger: publish {len(machine)} machine-written file(s)", "--", *machine)
         if r.returncode:
-            return "FAIL", f"commit: {(r.stderr or r.stdout).strip()[-160:]}"
+            return "FAIL", 'commit failed; inspect local hooks; source retained'
     r = _git(space, "fetch", "-q", timeout=300)
     if r.returncode:
-        return "held", f"fetch: {r.stderr.strip()[-120:]}"
+        return "held", 'fetch failed; inspect local remote configuration'
     up = _git(space, "rev-parse", "--abbrev-ref", "@{u}")
     if up.returncode:
         return "held", "no upstream branch"
@@ -124,11 +139,25 @@ def publish(space: pathlib.Path, machine: list[str]) -> tuple[str, str]:
         m = _git(space, "merge", "--no-edit", "@{u}")
         if m.returncode:
             return "held", 'merge with upstream failed; conflict files and index stages retained'
-    if not _outgoing_is_machine_only(space):
+    branch = _git(space, 'symbolic-ref', '--quiet', '--short', 'HEAD')
+    if branch.returncode:
+        return 'held', 'publication requires an attached branch'
+    remote = _git(space, 'config', '--get-all', f'branch.{branch.stdout.strip()}.remote')
+    destination = _git(space, 'config', '--get-all', f'branch.{branch.stdout.strip()}.merge')
+    source = _git(space, 'rev-parse', '--verify', 'HEAD^{commit}')
+    upstream = _git(space, 'rev-parse', '--verify', '@{u}^{commit}')
+    if (remote.returncode or destination.returncode or source.returncode or upstream.returncode
+            or remote.stdout.strip() != 'origin'):
+        return 'held', 'publication requires one explicit origin upstream'
+    if not _outgoing_is_machine_only(space, source.stdout.strip(), upstream.stdout.strip()):
         return 'held', 'merged outgoing history requires review'
-    r = _git(space, "push", "-q", timeout=300)
+    try:
+        args = push_arguments(source.stdout.strip(), destination.stdout.strip())
+    except ValueError:
+        return 'held', 'publication commit/ref is invalid'
+    r = _git(space, *args, timeout=300)
     if r.returncode:
-        return "held", f"push: {r.stderr.strip()[-160:]}"
+        return "held", 'push failed; local commit retained for retry'
     return "ok", ""
 
 

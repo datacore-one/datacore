@@ -11,12 +11,12 @@
   var BUILD = META.build || '';
   var STORE = 'decision-board:' + SLUG + (BUILD ? ':' + BUILD : '');
   var SECTIONS = DATA.sections || [];
-  var ROWS = [], BYID = {}, GROUPS = {};
+  var ROWS = [], BYID = Object.create(null), GROUPS = Object.create(null);
   var BULK = [['done', 'Done'], ['next', 'Do next'], ['defer', 'Defer'], ['someday', 'Someday'], ['drop', 'Drop'], ['accept', 'Accept'], ['delegate', 'Delegate']];
-  var BULKSET = {}; BULK.forEach(function (b) { BULKSET[b[0]] = b[1].toLowerCase(); });
+  var BULKSET = Object.create(null); BULK.forEach(function (b) { BULKSET[b[0]] = b[1].toLowerCase(); });
 
   SECTIONS.forEach(function (s, si) {
-    var map = {}, order = [];
+    var map = Object.create(null), order = [];
     (s.rows || []).forEach(function (r) {
       r.section = s.key; ROWS.push(r); BYID[r.id] = r;
       var k = r.area || '';
@@ -30,11 +30,11 @@
 
   function load() { try { return JSON.parse(localStorage.getItem(STORE) || 'null'); } catch (e) { return null; } }
   var kept = load() || {};
-  var dec = {};
+  var dec = Object.create(null);
   function seed(src) {
     Object.keys(src || {}).forEach(function (id) {
-      if (!BYID[id]) return;
-      dec[id] = { choice: src[id].choice || null, note: src[id].note || '' };
+      if (!BYID[id] || !src[id] || typeof src[id] !== 'object') return;
+      dec[id] = { choice: hasOption(BYID[id], src[id].choice) ? src[id].choice : null, note: typeof src[id].note === 'string' ? src[id].note : '' };
     });
   }
   seed(DATA.prefill);
@@ -42,7 +42,7 @@
   var savedAt = kept.savedAt || null;
   var savedSnap = kept.savedSnap || null;
 
-  var open = {};
+  var open = Object.create(null);
   SECTIONS.forEach(function (s) {
     var many = (s.rows || []).length > 12;
     s.groups.forEach(function (g) { open[g.id] = !many || g.rows.length <= 3; });
@@ -53,7 +53,7 @@
   function choiceOf(id) { return (dec[id] && dec[id].choice) || null; }
   function countDecided(rows) { return rows.filter(function (r) { return !!choiceOf(r.id); }).length; }
   function payload() {
-    var out = {};
+    var out = Object.create(null);
     ROWS.forEach(function (r) {
       var d = dec[r.id];
       if (d && (d.choice || d.note)) out[r.id] = { choice: d.choice || null, note: d.note || '' };
@@ -98,7 +98,12 @@
   function row(r) {
     var d = dec[r.id] || {};
     var meta = [r.id].concat(r.meta || []);
-    var links = (r.links || []).map(function (l) { return '<a class="ref" href="' + h(l.url) + '" target="_blank" rel="noopener">' + h(l.text) + '</a>'; }).join('');
+    var links = (r.links || []).map(function (l) {
+      var url;
+      try { url = new URL(l.url); } catch (e) { return h(l.text); }
+      if (url.protocol !== 'https:' && url.protocol !== 'http:') return h(l.text);
+      return '<a class="ref" href="' + h(url.href) + '" target="_blank" rel="noopener noreferrer">' + h(l.text) + '</a>';
+    }).join('');
     return '<li class="row" id="row-' + h(r.id) + '">' +
       '<div class="meta"><span class="rid">' + h(meta[0]) + '</span>' + meta.slice(1).map(function (m) { return '<span>' + h(m) + '</span>'; }).join('') + links + '</div>' +
       '<h3 class="title">' + h(r.title) + '</h3>' +
@@ -116,12 +121,12 @@
     }).join('') + '</ul></div>';
   }
   function sugSummary(rows) {
-    var c = {};
+    var c = Object.create(null);
     rows.forEach(function (r) { if (r.suggested) c[r.suggested] = (c[r.suggested] || 0) + 1; });
     return Object.keys(c).sort(function (a, b) { return c[b] - c[a]; }).map(function (k) { return c[k] + ' ' + (BULKSET[k] || k); }).join(' · ');
   }
   function bulkButtons(scope, id, rows) {
-    var have = {};
+    var have = Object.create(null);
     rows.forEach(function (r) { (r.options || []).forEach(function (o) { have[o.value] = 1; }); });
     var attrs = ' data-do="bulk" data-scope="' + scope + '" data-g="' + h(id) + '"';
     return '<div class="gbulk"><span class="label">Set all ' + rows.length + '</span>' +

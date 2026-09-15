@@ -38,6 +38,7 @@ from pathlib import Path
 from .fold import fold
 from .log import read_events
 from .projector import ProjectionConflict, project, write
+from org_transaction import serialized, watch_file, write_org_text
 
 #: Written by a human to opt a space in. Its presence is the ONLY thing that
 #: makes this module act; a clean diff never activates anything by itself.
@@ -107,9 +108,10 @@ def _last_sha(space_dir: Path) -> str | None:
 def _record_sha(space_dir: Path, sha: str) -> None:
     d = _state_dir(space_dir)
     d.mkdir(parents=True, exist_ok=True)
-    (d / "last-written.json").write_text(json.dumps({"sha": sha}, indent=2))
+    write_org_text(d / "last-written.json", json.dumps({"sha": sha}, indent=2))
 
 
+@serialized
 def flip(space_dir: Path, org_file: Path | None = None, force: bool = False) -> FlipResult:
     """Write the projection over the real org file, if this space opted in."""
     from .shadow import compare
@@ -119,6 +121,8 @@ def flip(space_dir: Path, org_file: Path | None = None, force: bool = False) -> 
                         refused_because=[])
     if not result.activated:
         return result
+    watch_file(org_file)
+    watch_file(_state_dir(space_dir) / "last-written.json")
 
     diff = compare(space_dir, org_file)
     if not diff.clean and not force:
@@ -137,7 +141,20 @@ def flip(space_dir: Path, org_file: Path | None = None, force: bool = False) -> 
 
     projection = project(fold(read_events(space_dir)), space=space_dir.name)
     try:
-        sha = write(projection, org_file, last_written_sha=_last_sha(space_dir))
+        expected = _last_sha(space_dir)
+        if expected is None and org_file.exists():
+            # A semantic summary omitting bodies is not permission to replace
+            # an authored file. Establish the first base only after full checks.
+            from .projection_state import guard_projection, ProjectionConflict as SourceConflict
+            try:
+                source = org_file.read_bytes()
+                guard_projection(space_dir, source.decode("utf-8"), projection.text)
+            except SourceConflict as exc:
+                result.refused_because.append(str(exc))
+                return result
+            import hashlib
+            expected = hashlib.sha256(source).hexdigest()
+        sha = write(projection, org_file, last_written_sha=expected)
     except ProjectionConflict as exc:
         result.refused_because.append(str(exc))
         return result

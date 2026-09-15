@@ -1,9 +1,34 @@
 # Datacore Privacy Policy & Data Classification
 
-**Version**: 1.1
+**Version**: 1.2 (proposed audit clarification)
 **Created**: 2025-11-29
-**Updated**: 2025-12-01
+**Updated**: 2026-09-14
 **Status**: Implemented
+
+**Amendment status:** The scope clarification below is proposed in the audit
+PR. The historical Implemented label refers to version 1.1; it does not certify
+this amendment's ratification or runtime isolation.
+
+## Scope and precedence
+
+This policy governs disclosure to a destination, not merely use of Git. The
+public Datacore framework repository must contain only public material. Private
+space repositories and backups may retain that space's authorized data and
+synchronize it only to explicitly authorized destinations with appropriate
+access controls, as specified by DIP-0011 and DIP-0046. A private destination
+must not receive another space's private data merely because both use Git.
+
+Credentials, signing private keys and live runtime databases are not ordinary
+space content: keep them in their declared protected stores and use the
+provider's consistent backup procedure. Never publish them in source or ordinary
+space synchronization. Preserve existing data while reconciling an unsafe
+publication; do not delete local content or rewrite shared history as cleanup.
+
+The public-repository examples and ignore patterns below are scoped to the
+public framework checkout. They must not be copied wholesale into private
+space repositories in a way that stops required task/journal synchronization.
+Owner authorization for a particular private destination is retained; this
+clarification does not require repeated approval for already authorized work.
 
 ## Related DIPs
 
@@ -24,8 +49,10 @@ Data that can be committed to public GitHub repo and shared freely.
 ### Level 2: TEAM (shareable within team spaces)
 Data that can be shared within a team context but not publicly.
 
-### Level 3: PRIVATE (never leaves local machine)
-Personal data that must never be committed or shared externally.
+### Level 3: PRIVATE (authorized private contexts only)
+Personal data must not enter public source, unrelated spaces or unauthorized
+external services. Authorized private storage, synchronization and backup retain
+this classification; they do not make the data public.
 
 ---
 
@@ -42,7 +69,7 @@ Personal data that must never be committed or shared externally.
 | `0-datacore/` | Public datacore space | Shareable knowledge |
 | `sync` | Sync script | Utility |
 
-### PRIVATE Files (Never Track)
+### PRIVATE Files (Exclude from Public Framework Tracking)
 
 | Location | Content Type | Risk |
 |----------|--------------|------|
@@ -101,7 +128,7 @@ Even without content, the database reveals:
 
 ### What Agents CAN Access
 
-- All local files (needed for task execution)
+- Only files and credentials assigned to the execution context and needed for the authorized task
 - Database queries (needed for knowledge work)
 - External URLs (for research)
 
@@ -176,7 +203,10 @@ Directories where structure is public but content is private:
 
 ## .gitignore Requirements
 
-Based on this policy, gitignore MUST exclude:
+In the public framework checkout, ignore patterns must exclude private content.
+These historical examples describe categories; use the repository-controlled
+publication checks as well, because ignore rules do not protect already tracked
+files. Private space repositories require their own destination-aware policy:
 
 ```gitignore
 # Configuration with personal data
@@ -215,7 +245,7 @@ CLAUDE.md
 ## Sharing Decision Tree
 
 ```
-Is this data going to repo?
+Is this data going to the public framework repo?
 ├── Does it contain personal identifiers? → EXCLUDE
 ├── Does it contain task/project details? → EXCLUDE
 ├── Does it reference team members by name? → EXCLUDE
@@ -223,7 +253,7 @@ Is this data going to repo?
 └── Is it curated public knowledge (0-datacore)? → INCLUDE
 
 Is an agent generating output?
-├── Is it for local use only? → Full context OK
+├── Is it for local use only? → Use only the context authorized for that audience
 ├── Is it for team space? → Remove personal details
 └── Is it for public sharing? → Generalize completely
 ```
@@ -234,7 +264,7 @@ Is an agent generating output?
 
 - [ ] Update `.gitignore` per requirements
 - [ ] Create `.template` versions of config files
-- [ ] Remove tracked files that should be private
+- [ ] Preserve and inventory incorrectly tracked private files; reconcile publication without deleting authored data
 - [ ] Add `.gitkeep` to preserve empty directories
 - [ ] Document in root `CLAUDE.md` reference to this policy
 - [ ] Add agent instructions referencing this policy
@@ -243,7 +273,7 @@ Is an agent generating output?
 
 ## Exceptions Process
 
-To add a private file to repo:
+To disclose private material to a new destination outside its existing authorization:
 1. Review against classification criteria
 2. Create sanitized version if needed
 3. Document exception in this file
@@ -254,4 +284,21 @@ To add a private file to repo:
 
 ---
 
-*This policy is enforced by gitignore patterns and agent instructions. Violations should be caught in PR review.*
+*Ignore patterns and agent instructions are supporting controls. Publication
+validation, destination authorization and separately verified filesystem,
+process and credential boundaries enforce the relevant invariants. No policy
+text or ignore rule alone establishes OS isolation.*
+
+
+## Audit change record
+
+| Field | Record |
+|---|---|
+| Previous requirement | Private data never leaves the local machine; all Org/journal files must never be tracked; agents may access all local files. |
+| Problem | Conflicts with implemented private task/journal synchronization and conflates local access, public disclosure and security-context authorization. |
+| Corrected requirement | Public source excludes private material; authorized private spaces may synchronize their own data; execution receives only its assigned context. |
+| Reason | Preserve both confidentiality and the intended durable private synchronization contract. |
+| Implementation impact | No new data transformation. Existing destination-aware publication, data-boundary and permission checks remain required. |
+| Compatibility impact | Do not remove existing private task/journal history or blanket-ignore authoritative content. No existing destination gains authorization from this amendment. |
+| Tests affected | Existing Git privacy, source-space review, publication preservation and isolated runtime negative checks; no assertion that text supplies an enforcement boundary. |
+| Runtime/deployment impact | Reconcile actual destinations, backup consistency and credential scopes separately; active isolation findings remain open. |

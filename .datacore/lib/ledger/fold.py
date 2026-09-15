@@ -92,6 +92,7 @@ class ItemState:
     #: fold stays non-mutating over its input.
     payload: dict = field(default_factory=dict)
     claimed_payload_hash: str | None = None
+    edit_conflicts: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -125,7 +126,11 @@ class LedgerState:
         h = hashlib.sha256()
         for iid in sorted(self.items):
             it = self.items[iid]
-            h.update(canonical_bytes({"key": iid, "item": asdict(it)}))
+            document = asdict(it)
+            # Keep historical state roots stable when no new conflict exists.
+            if not document['edit_conflicts']:
+                del document['edit_conflicts']
+            h.update(canonical_bytes({"key": iid, "item": document}))
         h.update(canonical_bytes({"spend": dict(sorted(self.spend.items()))}))
         h.update(canonical_bytes({"orphans": sorted(self.orphans)}))
         return h.hexdigest()
@@ -187,6 +192,9 @@ def _get_item_or_orphan(state: LedgerState, event: Event) -> ItemState | None:
     item = state.items.get(item_id)
     if item is None:
         _orphan(state, event)
+    elif item.edit_conflicts and event.type in ('item.claim', 'item.grant', 'item.complete', 'item.verify'):
+        _note(item, event, 'no-op (unresolved edit conflicts)')
+        return None
     return item
 
 
@@ -292,21 +300,29 @@ def _handle_update(state: LedgerState, event: Event) -> None:
     update must not resurrect what a human closed.
     """
     item = _get_item_or_orphan(state, event)
-    if item is None or _dismissed(state, event, item):
+    if item is None:
         return
-    fields = {k: v for k, v in (event.payload or {}).items() if k != "id"}
+    from .edits import update_payload, EditConflict
+    fields = {k: v for k, v in (event.payload or {}).items() if k not in {"id", "_merge"}}
+    if '_merge' in event.payload:
+        try:
+            updated = update_payload(item, event.payload)
+            for key in event.payload['_merge'].get('resolves', []):
+                item.edit_conflicts.pop(key, None)
+        except EditConflict as exc:
+            item.edit_conflicts[event.hash] = str(exc)
+            _note(item, event, 'conflict (preserved; explicit reconciliation required)')
+            return
+    elif _dismissed(state, event, item):
+        return
+    else:
+        updated = update_payload(item, event.payload)
     if not fields:
         _note(item, event, "no-op (no fields)")
         return
-    if "state" in fields:
-        item.payload["state"] = fields["state"]
-    for k, v in fields.items():
-        if k == "org" and isinstance(v, dict) and isinstance(item.payload.get("org"), dict):
-            item.payload["org"] = {**item.payload["org"], **v}
-        else:
-            item.payload[k] = v
+    item.payload = updated
     if "title" in fields:
-        item.title = fields["title"]
+        item.title = updated["title"]
     _note(item, event, f"applied ({', '.join(sorted(fields))})")
 
 
@@ -323,7 +339,21 @@ def _handle_verify(state: LedgerState, event: Event) -> None:
 
 def _handle_dismiss(state: LedgerState, event: Event) -> None:
     item = _get_item_or_orphan(state, event)
-    if item is None or _dismissed(state, event, item):
+    if item is None:
+        return
+    if '_merge' in event.payload:
+        from .edits import apply_condition, EditConflict
+        try:
+            if not event.payload['_merge'].get('terminal'):
+                raise EditConflict('dismissal requires a complete content precondition')
+            apply_condition(item, event.payload)
+            for key in event.payload['_merge'].get('resolves', []):
+                item.edit_conflicts.pop(key, None)
+        except (EditConflict, AttributeError) as exc:
+            item.edit_conflicts[event.hash] = str(exc)
+            _note(item, event, 'conflict (preserved; explicit reconciliation required)')
+            return
+    if _dismissed(state, event, item):
         return
     item.status = "dismissed"
     item.closed_at = event.hlc
@@ -379,6 +409,18 @@ def closure_kind(item) -> str:
     if any(d in reason for d in _DROPPED):
         return "dropped"
     return "done"
+
+
+def org_task_state(item):
+    """Effective GTD state; ownership completion still awaits review."""
+    payload = item.payload or {}
+    if payload.get('section'):
+        return None
+    if item.status in ('verified', 'dismissed'):
+        return 'DONE' if was_finished(item) else 'CANCELLED'
+    if item.status == 'completed':
+        return 'REVIEW'
+    return payload.get('state') or 'TODO'
 
 
 def was_finished(item) -> bool:

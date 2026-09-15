@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""What may an unattended run commit? (DIP-0046 E3)
+"""Output inventory for unattended publication.
+
+This is not the operator approval gate proposed in Draft DIP-0046 E3. An
+inventory records permitted paths, not approval or proof of publication.
 
 `git_commit_push` ran `git add -A`. An overnight task that edits one report
 therefore commits whatever else happens to be in the tree — a half-finished
@@ -30,9 +33,12 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
+import stat
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from git_inventory import dirty_paths
 
 PENDING = Path.home() / ".datacore" / "state" / "commit-decisions"
 
@@ -49,59 +55,21 @@ class Decision:
         return not self.withheld
 
 
-def dirty_paths(repo: Path) -> list[str]:
-    """Every path git reports as changed, staged or not, tracked or not."""
-    # -uall is load-bearing. Plain `--porcelain` COLLAPSES a new untracked
-    # directory to "0-inbox/" instead of listing the files in it, so a task
-    # whose output lands in a brand-new directory has a declared path that
-    # matches nothing and gets withheld — the gate refusing the task's own
-    # work. Verified: declaring 0-inbox/nightshift-exec-1.md against a
-    # collapsed "0-inbox/" withheld it.
-    # 300s, not 120: a quiet 0-personal answers in 0.18s, but transient lock/
-    # IO contention mid-batch blew 120s on 2026-08-30 and (before callers
-    # hardened) crashed the run. Callers treat TimeoutExpired as a soft
-    # failure — the timeout is a backstop, not a promise.
-    r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "-uall"],
-                       capture_output=True, text=True, timeout=300)
-    out = []
-    for line in (r.stdout or "").splitlines():
-        if len(line) < 4:
-            continue
-        p = line[3:]
-        # Renames read "old -> new"; the new name is what would be committed.
-        if " -> " in p:
-            p = p.split(" -> ", 1)[1]
-        out.append(p.strip().strip('"'))
-    return out
-
-
 def decide(repo: Path, produced: list[str] | None, *,
            task_id: str = "unknown", actor: str = "unknown",
            at: str = "") -> Decision:
     """Split the dirty tree into what this run made and what it merely found.
 
-    `produced=None` means the caller did not declare its outputs. That is
-    RECORDED, NOT BLOCKED, and the distinction cost a production batch:
-
-    Withholding everything in that case looked principled — "not knowing what
-    you made is the case this exists for" — but every real caller in
-    nightshift's run.py calls git_commit_push(repo, message) with no file list.
-    The result on 2026-08-12 was eight tasks executed and NOTHING committed:
-    their own output files, their ledger events and their org state updates all
-    withheld, with `committed: []` in every decision record. A gate that stops
-    the system doing its job is not a safety feature.
-
-    So the strict guarantee — anything you did not declare is withheld — applies
-    where a caller DECLARES its outputs. Where it does not, the gate degrades to
-    an audit trail: the commit proceeds and the record says exactly what went in
-    under that message, which is still strictly more than existed before.
+    `produced=None` cannot authorize any dirty path. Record the withheld work
+    for reconciliation. Publication callers must name their actual outputs;
+    missing producer plumbing is not authority to publish other writers' data.
     """
     dirty = dirty_paths(repo)
     if not dirty:
         return Decision()
 
     if produced is None:
-        dec = Decision(allowed=list(dirty), withheld=[])
+        dec = Decision(allowed=[], withheld=list(dirty))
         dec.record = _record(repo, dec, task_id=task_id, actor=actor, at=at)
         return dec
 
@@ -118,17 +86,47 @@ def _record(repo: Path, dec: Decision, *, task_id: str, actor: str, at: str) -> 
     """Persist the decision. An audit artifact, not a log line: it has to be
     countable by a detector and resolvable by a human, and a line in a rotating
     log is neither."""
-    PENDING.mkdir(parents=True, exist_ok=True)
+    PENDING.mkdir(parents=True, mode=0o700, exist_ok=True)
     safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in task_id)[:60]
     stamp = at or _now()
-    path = PENDING / f"{stamp}-{safe}.json"
-    path.write_text(json.dumps({
+    # Caller timestamps are metadata, never path components. Unique records
+    # preserve retries and simultaneous decisions for the same task.
+    safe_stamp = "".join(c if c.isalnum() or c in "-_" else "-" for c in stamp)[:32]
+    name = f"{safe_stamp}-{safe}-{uuid.uuid4().hex}.json"
+    temporary = f".{name}.pending"
+    content = json.dumps({
         "repo": str(repo), "task_id": task_id, "actor": actor, "at": stamp,
-        "committed": dec.allowed, "withheld": dec.withheld,
+        "schema_version": 2, "kind": "output-inventory",
+        "allowed": dec.allowed, "withheld": dec.withheld,
+        "publication_verified": False,
         "note": "Unattended run found changes it did not produce. Nothing was "
-                "discarded; review and commit or revert by hand.",
-    }, indent=2))
-    return path
+                "discarded. This inventory records no publication or operator "
+                "approval; review retained changes separately.",
+    }, indent=2).encode('utf-8')
+    directory = os.open(PENDING, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        metadata = os.fstat(directory)
+        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid():
+            raise RuntimeError('Decision storage must be an owner-controlled directory')
+        # Older installations created this private audit directory with umask
+        # defaults. Tightening the directory also protects existing records.
+        os.fchmod(directory, 0o700)
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=directory)
+        with os.fdopen(fd, 'wb') as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        # Linking publishes a complete file atomically and refuses any existing
+        # destination. On failure retain the temporary record for recovery.
+        os.link(temporary, name, src_dir_fd=directory, dst_dir_fd=directory,
+                follow_symlinks=False)
+        os.fsync(directory)
+        os.unlink(temporary, dir_fd=directory)
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    return PENDING / name
 
 
 def _now() -> str:

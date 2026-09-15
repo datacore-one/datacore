@@ -27,6 +27,135 @@ import ledger_ingest_org as ingest  # noqa: E402
 from ledger.fold import closure_kind, fold  # noqa: E402
 from ledger.log import EventLog, read_events  # noqa: E402
 
+
+def test_identity_preparation_distinguishes_same_heading_across_files(tmp_path, monkeypatch):
+    from datetime import datetime
+    import org_workspace.identifiers as identifiers
+    space = tmp_path / '0-fixture'
+    (space / 'org').mkdir(parents=True)
+    files = [space / 'org' / name for name in ingest.ORG_FILES]
+    for index, path in enumerate(files):
+        path.write_text(f'* NEXT Same heading\nDistinct capture {index}.\n')
+    original = identifiers.generate_id
+    monkeypatch.setattr(identifiers, 'generate_id', lambda heading, **kwargs:
+                        original(heading, timestamp=datetime(2026, 1, 1), **kwargs))
+    ingest.ensure_ids(space)
+    ws = ingest.SafeOrgWorkspace()
+    for path in files:
+        ws.load(path)
+    identities = [node.id() for node in ws.all_nodes() if node.todo]
+    assert len(identities) == len(set(identities)) == 2
+    prepared = [path.read_bytes() for path in files]
+    ingest.ensure_ids(space)
+    assert [path.read_bytes() for path in files] == prepared
+    for index, path in enumerate(files):
+        assert f'Distinct capture {index}.' in path.read_text()
+
+
+def test_existing_cross_file_identity_collision_refuses_without_rewriting(tmp_path):
+    space = tmp_path / '0-fixture'
+    (space / 'org').mkdir(parents=True)
+    files = [space / 'org' / name for name in ingest.ORG_FILES]
+    for index, path in enumerate(files):
+        path.write_text(f'* NEXT Capture {index}\n:PROPERTIES:\n:ID: shared\n:END:\nBody {index}.\n')
+    before = [path.read_bytes() for path in files]
+    with pytest.raises(ValueError, match='duplicate Org IDs'):
+        ingest.ensure_ids(space)
+    assert [path.read_bytes() for path in files] == before
+
+
+@pytest.mark.parametrize('reader', [ingest.scan, ingest.sync_state])
+def test_direct_ingest_reader_refuses_duplicate_identity(tmp_path, reader):
+    space = tmp_path / '0-fixture'
+    (space / 'org').mkdir(parents=True)
+    path = space / 'org/next_actions.org'
+    text = ('* NEXT One\n:PROPERTIES:\n:ID: shared\n:END:\nFirst body.\n'
+            '* NEXT Two\n:PROPERTIES:\n:ID: shared\n:END:\nSecond body.\n')
+    path.write_text(text)
+    with pytest.raises(ValueError, match='duplicate Org IDs'):
+        reader(space)
+    assert path.read_text() == text
+    assert list(read_events(space)) == []
+
+
+def test_id_preparation_failure_stops_ingestion(tmp_path, monkeypatch):
+    import subprocess
+    space = tmp_path / '0-fixture'
+    (space / 'org').mkdir(parents=True)
+    source = space / 'org/next_actions.org'
+    source.write_text('* NEXT Retain me\nNotes.\n')
+    before = source.read_bytes()
+    monkeypatch.setattr(ingest.subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 91, '', 'synthetic failure'))
+    with pytest.raises((RuntimeError, ValueError)):
+        ingest.ensure_ids(space, tmp_path / 'unavailable-adapter.py')
+    assert source.read_bytes() == before
+
+
+def test_ingest_uses_its_installed_core_not_a_stale_data_checkout(tmp_path, monkeypatch):
+    root = tmp_path / 'Data'
+    space = root / '0-fixture'
+    (space / 'org').mkdir(parents=True)
+    source = space / 'org/next_actions.org'
+    source.write_text('* NEXT Retain me\nNotes.\n')
+    lib = root / '.datacore/lib'
+    lib.mkdir(parents=True)
+    marker = tmp_path / 'stale-adapter-was-run'
+    (lib / 'org_workspace_adapter.py').write_text('from pathlib import Path\nPath(' + repr(str(marker)) + ').write_text("stale")\nraise SystemExit(91)\n')
+    monkeypatch.setattr(sys, 'argv', ['ledger_ingest_org.py', '--root', str(root)])
+    monkeypatch.setattr(ingest, '_this_actor', lambda: 'fixture')
+    monkeypatch.setattr(ingest, '_notify_daemon', lambda root: None)
+    assert ingest.main() == 0
+    assert not marker.exists(), 'ingest launched code from the data checkout'
+    assert ':ID:' in source.read_text()
+    assert 'Notes.' in source.read_text()
+
+
+def test_failed_second_id_file_rolls_back_first_file(tmp_path, monkeypatch):
+    import org_workspace_adapter
+    space = tmp_path / '0-fixture'
+    (space / 'org').mkdir(parents=True)
+    files = [space / 'org' / name for name in ingest.ORG_FILES]
+    for index, path in enumerate(files):
+        path.write_text(f'* NEXT Task {index}\nRetained notes.\n')
+    before = {path: path.read_bytes() for path in files}
+    original = org_workspace_adapter.cmd_ensure_ids
+    def fail_second(args):
+        if Path(args.file) == files[1]:
+            assert ':ID:' in files[0].read_text(), 'first write must occur before injected failure'
+            raise OSError('synthetic failed second write')
+        return original(args)
+    monkeypatch.setattr(org_workspace_adapter, 'cmd_ensure_ids', fail_second)
+    with pytest.raises(OSError):
+        ingest.ensure_ids(space)
+    assert {path: path.read_bytes() for path in files} == before
+
+
+def test_success_response_without_persisted_ids_is_not_accepted(tmp_path, monkeypatch):
+    import org_workspace_adapter
+    space = tmp_path / '0-fixture'
+    (space / 'org').mkdir(parents=True)
+    source = space / 'org/next_actions.org'
+    source.write_text('* NEXT Missing identity\nNotes.\n')
+    monkeypatch.setattr(org_workspace_adapter, 'cmd_ensure_ids', lambda args: {'added_count': 1})
+    with pytest.raises(RuntimeError, match='persist'):
+        ingest.ensure_ids(space)
+    assert ':ID:' not in source.read_text()
+
+
+def test_main_refuses_admission_when_id_preparation_fails(tmp_path, monkeypatch):
+    root = tmp_path / 'Data'
+    (root / '0-fixture/org').mkdir(parents=True)
+    monkeypatch.setattr(sys, 'argv', ['ledger_ingest_org.py', '--root', str(root)])
+    def fail(space):
+        raise OSError('synthetic unavailable store')
+    monkeypatch.setattr(ingest, 'ensure_ids', fail)
+    monkeypatch.setattr(ingest, '_notify_daemon', lambda root: None)
+    def forbidden(*args, **kwargs):
+        pytest.fail('failed identity preparation reached ingestion')
+    monkeypatch.setattr(ingest, 'scan', forbidden)
+    monkeypatch.setattr(ingest, 'import_space', forbidden)
+    assert ingest.main() == 1
+
 ORG = """\
 #+TITLE: Next Actions
 #+SEQ_TODO: TODO(t) NEXT(n!) WAITING(w!) REVIEW(r!) | DONE(d!) DEFERRED(f!) CANCELLED(c!)
