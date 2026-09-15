@@ -13,13 +13,41 @@ import hmac
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from runtime_context import Refused, _environment, _pairs  # noqa: E402
 
 MAX_BYTES = 65536
+ENV_NAME = re.compile(r'[A-Z][A-Z0-9_]{0,79}\Z')
+RESERVED = {'HOME', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'PWD',
+            'DATACORE_ROOT', 'DATACORE_STATE', 'CREDENTIALS_DIRECTORY',
+            'ENV', 'BASH_ENV', 'SSH_AUTH_SOCK', 'SSH_AGENT_PID', 'NODE_OPTIONS'}
+
+
+class Refused(ValueError):
+    """A runtime boundary or its configuration could not be established."""
+
+
+def _pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise Refused('duplicate configuration key')
+        result[key] = value
+    return result
+
+
+def _environment(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise Refused('environment must be a mapping')
+    for key, text in value.items():
+        if (not isinstance(key, str) or not ENV_NAME.fullmatch(key)
+                or key in RESERVED or key.startswith(('LD_', 'DYLD_', 'PYTHON'))
+                or not isinstance(text, str) or '\0' in text):
+            raise Refused('invalid or reserved environment entry')
+    return dict(value)
 
 
 def credential_digest(credentials: dict) -> str:
