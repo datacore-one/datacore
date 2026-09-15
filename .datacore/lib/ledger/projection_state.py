@@ -139,8 +139,21 @@ def sync_generated(space, state, actor, dry_run=False):
     expected = _reviewed.get()
     if expected is not None and expected.get(str(Path(space).resolve())) != state.state_root():
         raise ProjectionConflict('reviewed ledger state changed; rebuild the decision board')
-    current_text = (Path(space) / 'org/next_actions.org').read_text(encoding='utf-8')
+    target = Path(space) / 'org/next_actions.org'
+    current_text = target.read_text(encoding='utf-8')
     proposed = project(state, space=Path(space).name, as_of=time.time()).text
+    # Compare against what would actually be WRITTEN, not the intermediate.
+    # project() emits no in-buffer settings; ledger_project_org._with_org_header
+    # puts the authored `#+` lines back, and it is that text which lands on
+    # disk. Reconciling against the header-less intermediate meant a file
+    # carrying `#+FILETAGS: :gtd:` disagreed with the ledger on every item that
+    # inherited the tag -- 46 of 0-personal's differences were this alone, and
+    # reconciliation had no way to converge.
+    try:
+        from ledger_project_org import _with_org_header
+        proposed = _with_org_header(Path(space), target, proposed, remember=False)
+    except Exception:  # noqa: BLE001 - comparing the intermediate is the old behaviour
+        pass
     merged = reconcile(space, current_text, proposed)
     live = snapshot(proposed, Path(space).name)
     updates, dismissals = [], []
