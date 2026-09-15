@@ -483,9 +483,20 @@ def project(state: LedgerState, *, space: str | None = None,
                 item = replace(item, payload=payload)
             resolved.append((item, 1))
         else:
-            recorded = payload.get("level") or depth
+            # `level` is an org heading depth. Writers have also used the key
+            # for unrelated meanings -- 5-plur carries nine events from `tris`
+            # with level 'task'/'action' -- and comparing those against an int
+            # raised TypeError, which failed the whole space's projection and
+            # so the hourly ingest for every space after it. A payload field we
+            # cannot read as a depth is not a depth: fall back to the position
+            # the tree already gives us.
+            recorded = payload.get("level")
+            try:
+                recorded = int(recorded)
+            except (TypeError, ValueError):
+                recorded = depth
             # never deeper than its true position in the tree
-            resolved.append((item, min(recorded, depth)))
+            resolved.append((item, min(recorded or depth, depth)))
     items = resolved
 
     lines = [GENERATED_HEADER.rstrip("\n"), "", SEQ_TODO]
