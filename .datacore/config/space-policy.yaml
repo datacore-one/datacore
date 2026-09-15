@@ -1,0 +1,25 @@
+# Space-type policy — DIP-0015 / datacore#43
+#
+# Governs what AI agents may do inside a space, keyed on `space.type` from the
+# space marker (.datacore/config.yaml). Generic: no hostnames, no project names.
+#
+# Rules per category:
+#   network — Bash commands that contact a remote (git push/pull/fetch/clone…)
+#   write   — Edit or Write tool calls; Bash commands that write to space files
+#   read    — Read tool calls (typically unrestricted)
+#   default — fallback when no category-specific rule matches
+#
+# Actions:
+#   allow   — proceed silently
+#   ask     — allow but emit a warning to the agent (non-blocking)
+#   deny    — block the call with an explanatory message (fail closed)
+
+version: 1
+
+policies:
+  client:
+    network: deny   # no push / fetch / clone to any remote
+    write: ask      # writes require agent-visible confirmation
+    default: allow  # reads and other local ops are unrestricted
+  team:
+    default: allow

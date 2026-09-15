@@ -693,6 +693,7 @@ Each installed module with a `hooks.today` entry contributes content.
 | analytics | Spaces | Website metrics |
 | verity | Spaces | MCP server health |
 | comms | Horizon | Content calendar items |
+| gigs | Horizon | Concert matches from the listening library, near home |
 | metacognition | inline (after Observation) | Knowledge base pulse |
 | chief-of-staff | Spaces + Decisions Due | Autonomous-activity observations, sub-slot contributors |
 | gordon | inline | Daily fundraise-sprint contribution |
