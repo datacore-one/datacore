@@ -17,7 +17,7 @@ forever. Winston could propose; nobody could pick up.
 This is that consumer, and deliberately the smallest one that closes the loop:
 
     fold the log -> take unclaimed items -> classify a route -> item.claim
-    -> durable installation admission -> run it -> complete or leave for review
+    -> run it -> item.complete (or item.release on failure)
 
 Three properties are the point, and each is checkable in the log afterwards:
 
@@ -50,11 +50,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from briefing.actions import act  # noqa: E402
 from ledger.fold import fold  # noqa: E402
 from ledger.log import EventLog, read_events  # noqa: E402
-from ledger.policy import PolicyError
-from ledger_execution import admit
-from execution_admission import SiteError
+from ledger.policy import guarded_append, PolicyError, approval_payload_hash
 from executors import get_executor  # noqa: E402
 from ops_markers import AUTH_FAILURE_MARKERS  # noqa: E402
 
@@ -311,9 +310,20 @@ def main() -> int:
     pending = [i for i in claimable if not (i.payload or {}).get("org")]
     mirrored = len(claimable) - len(pending)
 
-    # Assignment selects a principal; it is not cross-host exclusion. Every
-    # executable delegation also binds a provisioned installation into its ID
-    # and consumes durable authority outside Data before model execution.
+    # ADDRESSED WORK GOES TO ITS ADDRESSEE. `item.claim` is an append, not a
+    # lock: every dispatcher folds its OWN copy of the log, so a claim written
+    # on one machine does not exist on another until it converges. Two
+    # dispatchers watching one space therefore both see `created` and both
+    # claim legitimately -- item 929eb69d6b was claimed AND completed by both
+    # winston and miles, two models, two costs, one task. The answers happened
+    # to agree, which is the hardest kind of duplication to notice.
+    #
+    # An `assignee` in the payload makes the race impossible instead of
+    # unlikely: a dispatcher simply declines what is addressed to someone else.
+    # This is cheaper and stricter than a claim-lease, which would still be
+    # racy across an eventually-consistent log. Items with no assignee stay
+    # open to whoever gets there first -- the existing behaviour, kept so
+    # nothing already in flight changes meaning.
     addressed = [i for i in pending
                  if (i.payload or {}).get("assignee") not in (None, "", args.actor)]
     pending = [i for i in pending if i not in addressed]
@@ -397,16 +407,14 @@ def main() -> int:
             continue
 
         try:
-            receipt = admit(space, item, args.actor, route, why)
-        except (PolicyError, SiteError) as exc:
+            guarded_append(EventLog(space, args.actor),
+                "item.claim", {"id": item.id, "owner": args.actor, "route": route, "reason": why,
+                               "payload_hash": approval_payload_hash(item.payload)})
+        except PolicyError as exc:
             print(f"REFUSED  {title[:70]}: {exc}")
             refused += 1
             continue
         ok, detail, meta = run_task(title, route, space, item.id, actor=args.actor)
-        if not receipt.valid():
-            print(f"REVIEW   [{route}] {title[:70]} -- execution ownership changed; outcome not committed")
-            failed += 1
-            continue
         if ok and check:
             # The ONLY thing that completes an item. An agent that declined
             # produces fluent, confident prose and exits 0; two attempts at
@@ -414,12 +422,8 @@ def main() -> int:
             # DONE, because the model rephrases ("I can't" / "I could not").
             # Prose is not evidence. A check that passes is.
             passed, sha = _isolated_check(space, check)
-            if not receipt.valid():
-                print(f"REVIEW   [{route}] {title[:70]} -- ownership changed during verification")
-                failed += 1
-                continue
             if passed:
-                receipt.record("item.complete", {
+                act(space, item.id, "complete", args.actor, detail={
                     "owner": args.actor,
                     "route": route,
                     "executor": meta.get("executor"),
@@ -438,9 +442,10 @@ def main() -> int:
                       f"{meta.get('duration_s', '?')}s)")
                 dispatched += 1
             else:
-                receipt.record("item.verify", {"id": item.id, "owner": args.actor,
-                                    "needs_review": True, "artifact_commit": sha,
-                                    "error": "artifact check or execution ownership verification failed"})
+                EventLog(space, args.actor).append(
+                    "item.release", {"id": item.id, "owner": args.actor,
+                                     "artifact_commit": sha,
+                                     "error": f"check failed: {check}"})
                 journal_lines.append(
                     f"FAILED `{item.id[:12]}` {title[:60]} — check did not pass: `{check}`")
                 print(f"FAILED   [{route}] {title[:70]}\n         -> check failed: {check}")
@@ -449,15 +454,16 @@ def main() -> int:
         if ok:
             # Ran, but nothing can attest it did the job. Leave it CLAIMED and
             # record the output for a human -- never complete on trust.
-            receipt.record("item.verify", {"id": item.id, "owner": args.actor,
+            EventLog(space, args.actor).append(
+                "item.verify", {"id": item.id, "owner": args.actor,
                                 "needs_review": True, "output": detail[:1000]})
             print(f"REVIEW   [{route}] {title[:70]}\n         -> ran, no check to prove it; left claimed")
             review += 1
         else:
-            # A failed response can follow real effects. Preserve the claim
-            # and consumed authority; a human must reconcile before new work.
-            receipt.record("item.verify", {"id": item.id, "owner": args.actor,
-                                "needs_review": True, "error": detail[:300]})
+            # Release, not complete: an item that failed must return to the
+            # pool rather than be recorded as finished work.
+            EventLog(space, args.actor).append(
+                "item.release", {"id": item.id, "owner": args.actor, "error": detail[:300]})
             journal_lines.append(
                 f"FAILED `{item.id[:12]}` {title[:60]} — {detail[:110]}")
             print(f"FAILED   [{route}] {title[:70]}\n         -> {detail[:150]}")
@@ -467,7 +473,7 @@ def main() -> int:
     # cares about, and fifteen separate headings would bury the journal.
     _journal(space, args.actor, journal_lines)
     print(f"\ndispatched {dispatched}, needs-review {review}, failed {failed}, refused {refused}")
-    return 1 if failed or refused else 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

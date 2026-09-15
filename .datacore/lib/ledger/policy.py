@@ -320,7 +320,7 @@ def _guarded_append_locked(
         if type == "item.update":
             if item.status != "created":
                 raise PolicyError("item content cannot change after execution has started")
-            for key in ("requested_by", "hops", "root", "execution_installation", "execution_space"):
+            for key in ("requested_by", "hops", "root"):
                 if key in payload and payload[key] != item.payload.get(key):
                     raise PolicyError(f"creation authority field {key} is immutable")
             from claim_gate import check_override
@@ -355,17 +355,6 @@ def _guarded_append_locked(
         ok, reason = check_claim(who, item.payload, policy=policy, space_dir=space_dir)
         if not ok:
             raise PolicyError(reason)
-
-    if type in {'item.complete', 'item.verify'}:
-        from .fold import fold
-        item = fold(read_events(space_dir)).items.get(payload.get('id'))
-        if item is not None and item.id.startswith('delegation-'):
-            from ledger_execution import validate_result
-            from execution_admission import SiteError
-            try:
-                validate_result(log, payload, item)
-            except SiteError:
-                raise PolicyError('execution result has no valid installation receipt') from None
 
     if type in {"item.grant", "approval.grant"} and policy is not None:
         # Stage 4: a grant is the approver's act. Any other writer minting a

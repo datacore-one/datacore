@@ -50,8 +50,6 @@ from ledger.events import Event
 from ledger.fold import fold
 from ledger.log import EventLog, read_events
 from ledger.policy import Policy, PolicyError, guarded_append
-from ledger_execution import delegation_id, execution_space
-from execution_admission import SiteError
 
 _ACTION_EVENT_TYPES = {
     "claim": "item.claim",
@@ -129,26 +127,11 @@ def materialize(
     normalization is purely a dedupe key, never what gets displayed/stored
     as the item's title.
 
-    An explicit `execution_installation` produces an execution-bound identity
-    from normalized text, canonical space and installation UUID. Otherwise the
-    record remains a planning item; unattended execution refuses it. The target
-    must be chosen upstream, before a content-bound approval is granted.
-
     `policy` is forwarded to `guarded_append` (which defaults to
     `load_policy()` itself when `None`).
     """
-    events = read_events(space_dir)
-    state = fold(events)
+    state = fold(read_events(space_dir))
     seen_ids: set[str] = set(state.items.keys())
-    known_text = {}
-    for event in events:
-        payload = event.payload
-        if event.type != 'item.create' or not isinstance(payload.get('title'), str):
-            continue
-        base = item_id(payload['title'])
-        identity = payload.get('id')
-        if isinstance(identity, str) and identity in seen_ids and (identity == base or identity.startswith('delegation-')):
-            known_text.setdefault(base, identity)
 
     log = EventLog(space_dir, actor)
     result = MaterializeResult()
@@ -156,34 +139,13 @@ def materialize(
     for item in items:
         text = item["text"]
         tid = item_id(text)
-        base_id = tid
-        if base_id in known_text:
-            result.skipped.append(known_text[base_id])
-            continue
-        execution = {}
-        if 'execution_installation' in item:
-            try:
-                scope = execution_space(space_dir)
-                installation = item['execution_installation']
-                bound_id = delegation_id(text, scope, installation)
-            except (SiteError, ValueError):
-                result.blocked.append((text, 'invalid delegation execution binding'))
-                continue
-            # Existing planning/dismissal records are preserved. Supplying a
-            # target never silently resurrects or upgrades an old delegation.
-            if tid in seen_ids:
-                result.skipped.append(tid)
-                continue
-            tid = bound_id
-            execution = {'execution_installation': installation, 'execution_space': scope}
 
         if tid in seen_ids:
             result.skipped.append(tid)
             continue
         seen_ids.add(tid)
-        known_text[base_id] = tid
 
-        payload = {"id": tid, "title": text, "effects": item.get("effects", []), **execution}
+        payload = {"id": tid, "title": text, "effects": item.get("effects", [])}
         approval_ref = item.get("approval_ref")
         if approval_ref:
             payload["approval_ref"] = approval_ref
@@ -196,8 +158,10 @@ def materialize(
         check = item.get("check")
         if check:
             payload["check"] = check
-        # Assignment is routing metadata. A provisioned installation and
-        # durable admission, bound above, supply execution exclusion.
+        # `assignee` routes the item to one actor's dispatcher and makes every
+        # other dispatcher decline it outright (see ledger_claim.py) instead of
+        # racing for the same unclaimed item. Forwarded the same way as
+        # approval_ref/check: present only when the caller supplied it.
         assignee = item.get("assignee")
         if assignee:
             payload["assignee"] = assignee
