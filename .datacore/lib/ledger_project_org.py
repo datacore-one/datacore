@@ -35,6 +35,8 @@ ORG = Path("org") / "next_actions.org"
 
 
 HEADER_COPY = Path(".datacore") / "ledger-org-header"
+#: Directives the projector renders itself; never carried from the file.
+_PROJECTOR_EMITS = ("#+SEQ_TODO:", "#+TODO:", "#+FILETAGS:")
 
 
 def _with_org_header(space: Path, target: Path, text: str, *, remember: bool = True) -> str:
@@ -49,11 +51,20 @@ def _with_org_header(space: Path, target: Path, text: str, *, remember: bool = T
     src = target if target.exists() else None
     if src is not None:
         for line in src.read_text(errors="replace").splitlines():
-            if line.startswith("#+SEQ_TODO:") or line.startswith("#+TODO:"):
-                # Projector emits the canonical SEQ_TODO; carrying these from the
-                # existing file duplicates them by 1 on every cycle (2026-09-08).
+            if line.startswith(_PROJECTOR_EMITS):
+                # The projector emits these itself, so carrying the existing
+                # file's copy forward duplicates them by 1 on EVERY cycle.
+                # SEQ_TODO was caught on 2026-09-08 and fixed by name;
+                # #+FILETAGS is emitted by projector.py when the items share a
+                # common filetag and was not on the list, so it kept growing:
+                # 196 copies in 9-practice, 24 in 0-personal. Naming them one
+                # at a time is what let the second one through, so this is a
+                # tuple and any new projector directive belongs in it.
                 continue
-            if line.startswith("#+"):
+            if line.startswith("#+") and line not in header:
+                # Defence in depth: never carry a duplicate forward, whatever
+                # produced it. Ten days of accumulation should not survive one
+                # projection.
                 header.append(line)
             elif line.strip() and not line.startswith("#"):
                 break
