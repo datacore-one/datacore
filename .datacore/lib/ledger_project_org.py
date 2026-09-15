@@ -83,7 +83,7 @@ def phase(space: Path) -> int:
 
 
 @serialized
-def project_space(space: Path, force: bool = False) -> str:
+def project_space(space: Path, force: bool = False, adopt_org: bool = False) -> str:
     if phase(space) != 1:
         return "phase 0, authored — not generated"
 
@@ -131,6 +131,17 @@ def project_space(space: Path, force: bool = False) -> str:
     target = space / ORG
     text = _with_org_header(space, target, text)
     target.parent.mkdir(parents=True, exist_ok=True)
+    if adopt_org and before is not None and not (space / STATE).exists():
+        # The deadlock this exists for: with no base, reconcile demands the org
+        # file already agree with the ledger, and the base is only written after
+        # a projection succeeds. A space that drifted before its first render
+        # can therefore never render again -- four of ten spaces here, and the
+        # hourly Phase-1 cycle failing since 2026-09-09. Adopting records where
+        # reconciliation starts. It writes the base only; the org file and the
+        # ledger are both left exactly as they are, so the next cycle performs a
+        # real three-way merge instead of refusing.
+        write_org_text(space / STATE, base_document(before))
+        return "adopted the current org file as the projection base; nothing was rewritten"
     try:
         guard_projection(space, before, text)
     except ProjectionConflict as exc:
@@ -150,6 +161,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--force", action="store_true",
                     help="bypass the legacy import scan; full source-preservation "
                          "checks still apply and cannot be overridden")
+    ap.add_argument("--adopt-org", action="store_true",
+                    help="establish the FIRST projection base from the org file as it "
+                         "stands. Only meaningful when a space has no base and its org "
+                         "and ledger disagree: that state otherwise has no exit, because "
+                         "the base is written only after a successful projection and "
+                         "projection is refused without one. Adopting records where "
+                         "reconciliation starts; it rewrites neither the org file nor "
+                         "the ledger.")
     a = ap.parse_args(argv)
     from spaces import discover_spaces
     root = a.root.resolve(strict=True)
@@ -166,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
     refused = 0
     results = []
     for s in spaces:
-        line = project_space(s, force=a.force)
+        line = project_space(s, force=a.force, adopt_org=a.adopt_org)
         if line.startswith("REFUSED"):
             refused += 1
         status = ('refused' if line.startswith('REFUSED') else
