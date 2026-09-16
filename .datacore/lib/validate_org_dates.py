@@ -118,6 +118,14 @@ ARCHIVE_MARKERS = (
     "_archive",
     "-archive-",
     "/orphan-snapshot-",
+    # A ledger checkpoint is the same thing by another name: a rendering of an
+    # append-only log, reproducing every stamp exactly as recorded. A typo made
+    # on 2026-08-11 and closed since is history, and the item is `dismissed`, so
+    # there is no `item.update` that could correct it even in principle. Without
+    # this the first checkpoint of 2-datacore could never be committed --
+    # converge failed on it, which fails the whole Phase-1 cycle -- and the only
+    # ways out would have been to rewrite history or to stop checkpointing.
+    "/.datacore/checkpoints/",
 )
 
 
