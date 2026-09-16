@@ -263,6 +263,7 @@ def _restore(document, name):
     checkpoint must be obtained from the deployment's trusted backup source.
     """
     from ledger.events import body_dict, compute_hash, from_line
+    from ledger.exceptions import is_recorded
     if (not isinstance(document, dict) or document.get('version') != 1
             or not isinstance(document.get('chains'), dict)
             or not isinstance(document.get('state_root'), str)
@@ -279,9 +280,17 @@ def _restore(document, name):
             previous = 'GENESIS'
             for sequence, line in enumerate(text.splitlines()):
                 event = from_line(line)
-                if (event.seq != sequence or event.prev != previous
-                        or event.hash != compute_hash(body_dict(event.seq, event.hlc, event.actor,
-                                                              event.type, event.payload, event.prev))):
+                computed = compute_hash(body_dict(event.seq, event.hlc, event.actor,
+                                                  event.type, event.payload, event.prev))
+                if event.seq != sequence or event.prev != previous:
+                    raise ValueError('saved event chain fails integrity verification')
+                if event.hash != computed and not is_recorded(
+                        name, filename, event.seq, event.hash, computed):
+                    # Refusing the whole space over one already-written event
+                    # left it with NO restore point, forever -- the opposite of
+                    # what this check is for. A reviewed exception pins both
+                    # hashes, so it excuses only that event exactly as written;
+                    # any edit to it, and every other mismatch, still fails here.
                     raise ValueError('saved event chain fails integrity verification')
                 previous = event.hash
             (folder / filename).write_text(text, encoding='utf-8')

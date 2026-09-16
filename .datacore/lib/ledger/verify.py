@@ -35,6 +35,12 @@ from .keys import verify as verify_sig
 GENESIS = "GENESIS"
 
 
+def _excepted(origin: tuple[str, str], seq: int, recorded: str, computed: str) -> bool:
+    """Is this exact mismatch recorded in the reviewed exception registry?"""
+    from .exceptions import is_recorded
+    return is_recorded(origin[0], origin[1], seq, recorded, computed)
+
+
 def verify_chain(path: Path, registry_path: Path | None = None, strict: bool = False) -> list[str]:
     """Verify one writer's event-log file: hash chain, seq, and signatures.
 
@@ -109,11 +115,19 @@ def verify_chain(path: Path, registry_path: Path | None = None, strict: bool = F
             continue
         parsed.append((line_no, event))
 
-    return errors + verify_events(parsed, registry_path=registry_path, strict=strict)
+    # <space>/.datacore/events/<log>.jsonl -- the identity a reviewed exception
+    # is pinned to. Absent (a bare path in a test tmpdir), no exception can match.
+    try:
+        origin = (path.parents[2].name, path.name)
+    except IndexError:
+        origin = None
+    return errors + verify_events(parsed, registry_path=registry_path, strict=strict,
+                                  origin=origin)
 
 
 def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = None,
-                  strict: bool = False) -> list[str]:
+                  strict: bool = False,
+                  origin: tuple[str, str] | None = None) -> list[str]:
     """Verify one already-read chain without rereading a mutable source file.
 
     Callers preserve chain order and supply record numbers. This shares the
@@ -130,8 +144,13 @@ def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = 
             continue
         body = body_dict(event.seq, event.hlc, event.actor, event.type, event.payload, event.prev)
 
-        if compute_hash(body) != event.hash:
-            errors.append(f"line {line_no}: hash mismatch")
+        computed = compute_hash(body)
+        if computed != event.hash:
+            # A reviewed exception pins BOTH hashes, so it can only ever excuse
+            # the exact event it names, as that event is written today. Edit the
+            # body and `computed` moves, nothing matches, and this reports again.
+            if not (origin and _excepted(origin, event.seq, event.hash, computed)):
+                errors.append(f"line {line_no}: hash mismatch")
 
         if event.prev != expected_prev:
             errors.append(

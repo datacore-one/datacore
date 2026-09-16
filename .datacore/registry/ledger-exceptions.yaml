@@ -1,0 +1,33 @@
+# Reviewed exceptions to ledger hash verification.
+#
+# An entry here does NOT loosen verification. It names ONE already-written event
+# and pins BOTH of its hashes -- the one stored in the file and the one its body
+# actually produces. The exception applies only while the event still hashes to
+# exactly that pair, so editing the body moves `computed`, no entry matches, and
+# the mismatch is reported as it always was. Every other mismatch, in every
+# other event, still fails.
+#
+# Adding an entry is a deliberate, evidenced act. The rule is: the event must be
+# provably the record AS WRITTEN (byte-identical to the commit that added it,
+# never edited since), and the reason it cannot simply be corrected must be
+# stated. If either is unclear, the answer is not an entry here.
+version: 1
+
+malformed_hash:
+  - space: 5-plur
+    log: tris.jsonl
+    seq: 5
+    recorded: 008175039b02ab6e34fe4e77a96613b4e31564f3a3948dd115cab1265f2a803c
+    computed: 4c7199c8dea7be83c6d6d02887a21b2bf860855da4ce2df2123595411e6be688
+    recorded_on: 2026-09-16
+    evidence: https://github.com/datacore-one/datacore/issues/201
+    reason: >-
+      Written 2026-09-11 with a hash that never matched its body. The line is
+      byte-identical to the commit that added it (33a564b6) and every commit
+      touching that file is a pure insertion, so this is the record as written,
+      not a later edit. It is the only such event in 64,846 scanned fleet-wide;
+      its seven siblings in the same file, written by the same path, all verify.
+      No reconstructable body produces the recorded hash -- 87 payload subsets,
+      every chain-position variant and four encodings were tried. Correcting the
+      hash would invalidate seq 6's prev and require re-sealing the tail, which
+      origin's copy would not share: a forked log.

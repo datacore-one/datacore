@@ -330,7 +330,7 @@ def _check_job(job: Job) -> list[str]:
             # input and emit wrong verdicts.  Return the sync errors only.
             return failures
         for artifact in job.artifacts:
-            failures.extend(run_check(artifact))
+            failures.extend(run_check(artifact, machine=job.machine))
     except Exception as exc:  # noqa: BLE001 -- deliberate: see docstring
         failures.append(f"unexpected exception checking job '{job.name}': {exc}")
     return failures

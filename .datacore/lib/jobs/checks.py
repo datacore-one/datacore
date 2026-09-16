@@ -151,7 +151,8 @@ def _read_text(path: str) -> tuple[str | None, str | None]:
     return raw.decode("utf-8", errors="replace"), None
 
 
-def run_check(artifact: Artifact, *, now: float | None = None) -> list[str]:
+def run_check(artifact: Artifact, *, now: float | None = None,
+              machine: str | None = None) -> list[str]:
     """Check whether `artifact`'s contract holds.
 
     Returns a list of error strings naming the expanded path and reason;
@@ -171,11 +172,22 @@ def run_check(artifact: Artifact, *, now: float | None = None) -> list[str]:
     errors: list[str] = []
 
     if artifact.max_age_hours is not None:
-        min_mtime = now - artifact.max_age_hours * 3600
-        if st.st_mtime < min_mtime:
-            age_hours = (now - st.st_mtime) / 3600
+        # AGE IN AWAKE TIME on a machine the roster does not promise is up.
+        # `max_age_hours` means "the job had this long to run and did not". On a
+        # laptop, wall-clock age mostly measures how long the lid was shut: the
+        # mac slept 117 of the 472 hours since boot (2026-09-16), so an hourly
+        # job went stale every night and the alert said only "the machine was
+        # off". Subtracting measured sleep restores the intended meaning -- a
+        # job that was late while the machine was actually running still fails.
+        from .awake import awake_age
+        age = awake_age(st.st_mtime, machine) if machine else now - st.st_mtime
+        if age > artifact.max_age_hours * 3600:
+            wall = (now - st.st_mtime) / 3600
+            detail = (f"stale (age {age / 3600:.2f}h awake of {wall:.2f}h wall"
+                      if machine and age < now - st.st_mtime
+                      else f"stale (age {age / 3600:.2f}h")
             errors.append(
-                f"{expanded}: stale (age {age_hours:.2f}h exceeds "
+                f"{expanded}: {detail} exceeds "
                 f"max_age_hours={artifact.max_age_hours})"
             )
 
