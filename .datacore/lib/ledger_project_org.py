@@ -35,8 +35,30 @@ ORG = Path("org") / "next_actions.org"
 
 
 HEADER_COPY = Path(".datacore") / "ledger-org-header"
-#: Directives the projector renders itself; never carried from the file.
+#: Directives the projector can render itself; never carried in duplicate.
 _PROJECTOR_EMITS = ("#+SEQ_TODO:", "#+TODO:", "#+FILETAGS:")
+
+
+def _emitted_directives(text: str) -> tuple[str, ...]:
+    """Which of `_PROJECTOR_EMITS` THIS projection actually contains.
+
+    Dropping all of them unconditionally is wrong: the projector emits
+    `#+FILETAGS:` only when every item carries the same filetag, so in a space
+    where it does not, the authored file tag is state the ledger has no copy
+    of. Dropping it there loses the tag from the written file -- and since org
+    applies a file tag to every heading, the reconciler then reads every item
+    as disagreeing with the ledger, which is the failure #198 fixed.
+
+    So dedupe against the projection in hand rather than against a name list.
+    """
+    found: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("*"):
+            break  # past the directive block; the rest is task data
+        for directive in _PROJECTOR_EMITS:
+            if line.startswith(directive) and directive not in found:
+                found.append(directive)
+    return tuple(found)
 
 
 def _with_org_header(space: Path, target: Path, text: str, *, remember: bool = True) -> str:
@@ -48,12 +70,13 @@ def _with_org_header(space: Path, target: Path, text: str, *, remember: bool = T
     saved at flip time, and the banner is replaced by one honest line.
     """
     header: list[str] = []
+    emits = _emitted_directives(text)
     src = target if target.exists() else None
     if src is not None:
         for line in src.read_text(errors="replace").splitlines():
-            if line.startswith(_PROJECTOR_EMITS):
-                # The projector emits these itself, so carrying the existing
-                # file's copy forward duplicates them by 1 on EVERY cycle.
+            if line.startswith(emits):
+                # The projector emitted this one itself, so carrying the
+                # existing file's copy forward duplicates it on EVERY cycle.
                 # SEQ_TODO was caught on 2026-09-08 and fixed by name;
                 # #+FILETAGS is emitted by projector.py when the items share a
                 # common filetag and was not on the list, so it kept growing:
@@ -75,7 +98,10 @@ def _with_org_header(space: Path, target: Path, text: str, *, remember: bool = T
         # on it within the first hour of Phase 1 (2026-09-05).
         write_org_text(copy, "\n".join(header) + "\n")
     elif not header and copy.exists():
-        header = copy.read_text().splitlines()
+        # The saved copy is subject to the same rule: a directive this
+        # projection emits must not come back through the flip-time snapshot.
+        header = [l for l in copy.read_text().splitlines()
+                  if not (emits and l.startswith(emits))]
     from ledger.projector import GENERATED_HEADER
     # Remove only our generated prefix. Comments in task bodies are data.
     body = text.removeprefix(GENERATED_HEADER).splitlines()
