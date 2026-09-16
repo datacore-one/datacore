@@ -214,3 +214,56 @@ def test_a_commented_out_cron_line_is_not_a_schedule():
     assert not grounded._schedule_seen("", "box_briefing.py", "   # 0 7 * * * ~/x/box_briefing.py\n")
     assert grounded._schedule_seen("", "box_briefing.py",
                                    "# old line\n0 7 * * * ~/x/box_briefing.py\n")
+
+
+# --- the `produced` binding ------------------------------------------------
+#
+# `orphan` asks whether the job's SCRIPT exists, which is weaker than it looks.
+# On 2026-09-16 nightshift-venture-heartbeat watched an append log that ticks
+# had stopped writing when a per-actor shard replaced it: script present, so
+# orphan passed, while the check had not been evidence of anything for weeks —
+# already red on healthy days, and so silent on the day the daemon died.
+#
+# These three tests exist because a binding that has never been SEEN to go red
+# is the same kind of claim it is meant to catch.
+
+def _manifest_with(tmp_path, monkeypatch, artifact):
+    import yaml as _yaml
+    doc = {"jobs": [{"name": "fixture-job", "machine": grounded.LOCAL,
+                     "schedule": "hourly", "cmd": "python3 " + str(ROOT / '.datacore/lib/jobs/grounded.py'),
+                     "artifacts": [artifact]}]}
+    path = tmp_path / "manifest.yaml"
+    path.write_text(_yaml.safe_dump(doc))
+    monkeypatch.setattr(grounded, "MANIFEST", path)
+    return [f for f in grounded.check() if f["binding"] == "produced"]
+
+
+def test_produced_fails_when_nothing_has_ever_written_the_artifact(tmp_path, monkeypatch):
+    found = _manifest_with(tmp_path, monkeypatch, {
+        "path": str(tmp_path / "never-written.log"), "check": "regex",
+        "arg": "x", "max_age_hours": 3})
+    assert [f["state"] for f in found] == ["FAIL"], found
+    assert "never been written" in found[0]["detail"]
+
+
+def test_produced_fails_when_the_artifact_is_far_beyond_any_late_run(tmp_path, monkeypatch):
+    import os, time
+    stale = tmp_path / "retired.log"
+    stale.write_text("written once, long ago\n")
+    ancient = time.time() - (3 * grounded.RETIRED_MULTIPLE + 10) * 3600
+    os.utime(stale, (ancient, ancient))
+    found = _manifest_with(tmp_path, monkeypatch, {
+        "path": str(stale), "check": "regex", "arg": "x", "max_age_hours": 3})
+    assert [f["state"] for f in found] == ["FAIL"], found
+    assert "retired" in found[0]["detail"]
+
+
+def test_produced_stays_quiet_for_a_job_that_is_merely_late(tmp_path, monkeypatch):
+    """A failing job must not read as a retired one — that is the whole point."""
+    import os, time
+    late = tmp_path / "late.log"
+    late.write_text("the job ran, just not recently enough\n")
+    hours_late = time.time() - 9 * 3600          # 3x over a 3h rule, not 20x
+    os.utime(late, (hours_late, hours_late))
+    assert _manifest_with(tmp_path, monkeypatch, {
+        "path": str(late), "check": "regex", "arg": "x", "max_age_hours": 3}) == []

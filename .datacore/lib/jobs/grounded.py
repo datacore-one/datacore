@@ -42,6 +42,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 
 import yaml
 
@@ -301,6 +302,27 @@ def _declared_timer_seen(schedule: str | None, timers: str) -> bool:
                for u in units)
 
 
+#: A late job is stale by hours; a retired producer leaves its artifact stale by
+#: weeks. Twenty times the declared cap sits well outside anything a slow or
+#: failed run explains, and well inside "nothing writes this any more".
+RETIRED_MULTIPLE = 20
+
+
+def _expand(declared: str) -> str:
+    """`checks.expand_path`, imported the way this module is actually run.
+
+    grounded.py is executed as a script as often as it is imported as part of
+    the package, so a relative import raises "no known parent package" for the
+    CLI path alone.
+    """
+    try:
+        from .checks import expand_path
+    except ImportError:  # executed as a script
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+        from jobs.checks import expand_path
+    return expand_path(declared)
+
+
 def check(live: bool = False, machine: str | None = None) -> list[dict]:
     doc = yaml.safe_load(MANIFEST.read_text())
     jobs = [j for j in doc["jobs"] if not machine or j["machine"] == machine]
@@ -351,6 +373,44 @@ def check(live: bool = False, machine: str | None = None) -> list[dict]:
                     "job": name, "binding": "orphan", "state": "FAIL",
                     "detail": f"{len(aged)} freshness check(s) with no producer "
                               f"— they can never pass"})
+
+        # --- produced binding: has anything EVER written this artifact? ----
+        #
+        # `orphan` above asks whether the job's SCRIPT exists. That is a weaker
+        # question than it looks, and the gap let a real one through: on
+        # 2026-09-16 `nightshift-venture-heartbeat` watched an append log that
+        # ticks had stopped writing when a per-actor shard replaced it. The
+        # script existed, so orphan passed, while the check itself had not been
+        # evidence of anything for weeks -- already red on healthy days, and
+        # therefore silent on the day the daemon actually died.
+        #
+        # The distinguishing signal is the SIZE of the staleness. A job that is
+        # merely failing leaves an artifact stale by hours; one whose producer
+        # was retired leaves it missing, or stale by weeks. Twenty times the
+        # declared cap is far outside anything a late run explains.
+        if mach == LOCAL:
+            for index, artifact in enumerate(aged):
+                declared = artifact.get("path")
+                if not declared:
+                    continue
+                resolved = pathlib.Path(_expand(declared))
+                if not resolved.exists():
+                    findings.append({
+                        "job": name, "binding": "produced", "state": "FAIL",
+                        "detail": f"artifact[{index}] has never been written: {declared}"})
+                    continue
+                age_h = (time.time() - resolved.stat().st_mtime) / 3600
+                cap = float(artifact["max_age_hours"])
+                if age_h > cap * RETIRED_MULTIPLE:
+                    findings.append({
+                        "job": name, "binding": "produced", "state": "FAIL",
+                        "detail": f"artifact[{index}] is {age_h:.0f}h old against a "
+                                  f"{cap:g}h rule — {RETIRED_MULTIPLE}x over, so its "
+                                  f"producer has plausibly been retired: {declared}"})
+        elif aged:
+            findings.append({
+                "job": name, "binding": "produced", "state": "n-a",
+                "detail": f"{len(aged)} artifact(s) on {mach} — cannot stat from here"})
 
         # --- vcs binding: is production code under version control? ---------
         # Independent of whether the script runs. Five box scripts run daily
