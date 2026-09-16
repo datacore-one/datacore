@@ -197,7 +197,21 @@ def _drawer(props: dict) -> list[str]:
     out = [":PROPERTIES:"]
     for key in sorted(props):
         value = props[key]
-        if value is None or value == "":
+        if value is None:
+            continue
+        if value == "":
+            # An empty value is a VALUE, not an absence. Org writes it as a
+            # bare `:KEY:` and the importer reads it back as "", so dropping it
+            # here made the round-trip lossy in one direction only -- and under
+            # a fail-closed guard that is not cosmetic. Measured 2026-09-17:
+            # nightshift's complete_task records `NIGHTSHIFT_OUTPUT` with an
+            # empty path when a run produced no artifact (requeue_rate_limited
+            # reads exactly that emptiness to tell a real execution from a
+            # rate-limited no-op). The ingest stored it, the projector could
+            # not re-emit it, so reconcile saw an authored change missing from
+            # every projection and refused forever: five items deadlocked
+            # 5-plur's whole Phase-1 cycle, which is fleet-wide fail-closed.
+            out.append(f":{key}:")
             continue
         if isinstance(value, str) and "\n" in value:
             out.append(f":{key}: |")

@@ -73,3 +73,31 @@ def test_an_empty_logbook_drawer_is_not_body_content():
     kept = '  :LOGBOOK:\n  CLOCK: [2026-09-16 Wed 10:00]--[2026-09-16 Wed 11:00]\n  :END:\ntext'
     assert strip_empty_logbook(kept) == kept
     assert strip_empty_logbook('no drawer here') == 'no drawer here'
+
+
+def test_an_empty_property_value_survives_the_round_trip():
+    """A bare `:KEY:` is a value the importer reads back as "".
+
+    Dropping it made project(ingest(x)) != x for exactly those items, and the
+    Phase-1 guard is fail-closed: reconcile reported an authored change no
+    projection could ever contain and refused the whole space. 2026-09-17:
+    five items with an empty NIGHTSHIFT_OUTPUT held 5-plur's cycle down.
+    """
+    from ledger.projector import _drawer
+    from ledger.projection_state import snapshot
+
+    rendered = _drawer({"ID": "org-rt-1", "EMPTY": "", "OTHER": "value"})
+    assert ":EMPTY:" in rendered
+    assert ":OTHER: value" in rendered
+    # None is an absence and stays one.
+    assert ":GONE:" not in _drawer({"ID": "x", "GONE": None})
+
+    text = (
+        "#+TITLE: T\n\n* Tasks\n  :PROPERTIES:\n  :ID: org-rt-parent\n  :END:\n"
+        "** TODO Example\n"
+        + "\n".join("   " + line for line in rendered)
+        + "\n   body\n"
+    )
+    props = snapshot(text, "space")["items"]["org-rt-1"]["org"]["properties"]
+    assert props["EMPTY"] == ""
+    assert props["OTHER"] == "value"
