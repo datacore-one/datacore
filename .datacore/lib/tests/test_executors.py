@@ -47,6 +47,16 @@ def hermetic_env(tmp_path, monkeypatch):
     monkeypatch.delenv("DATACORE_LEDGER_SIGN", raising=False)
     monkeypatch.delenv("DATACORE_NO_SPEND", raising=False)
     monkeypatch.delenv("DATACORE_EXECUTOR", raising=False)
+    # `_execution_env` binds every dispatch to a DECLARED principal (#187), so
+    # an actor the registry has never heard of now fails the whole adapter with
+    # "executor writer has no declared principal" -- which is what these tests
+    # were reporting, from `run()`'s catch-all, as an empty result text. Declare
+    # the disposable actor rather than weaken the check: the registry path is
+    # resolved at call time precisely so a test can point it somewhere private.
+    import actor_identity
+    registry = tmp_path / "principals.yaml"
+    registry.write_text("principals:\n  test-actor: {kind: agent}\n", encoding="utf-8")
+    monkeypatch.setattr(actor_identity, "PRINCIPALS", registry)
     return tmp_path
 
 
