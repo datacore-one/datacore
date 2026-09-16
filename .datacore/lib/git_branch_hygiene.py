@@ -44,7 +44,11 @@ def branches(repo: Path, trunk: str, remote: bool) -> list[str]:
     args = ['for-each-ref', '--format', fmt,
             'refs/remotes/origin' if remote else 'refs/heads']
     names = [b for b in git(repo, *args).splitlines() if b.strip()]
-    skip = {trunk, f'origin/{trunk}', 'origin/HEAD'}
+    # `%(refname:short)` renders refs/remotes/origin/HEAD as bare "origin", not
+    # "origin/HEAD" -- so the symbolic ref arrives looking like a branch called
+    # after the remote itself, and anything keyed on its name creates a ref that
+    # blocks every sibling. Skip both spellings.
+    skip = {trunk, f'origin/{trunk}', 'origin/HEAD', 'origin'}
     return [b for b in names if b not in skip]
 
 
@@ -72,7 +76,18 @@ def landed_earlier(repo: Path, branch: str, trunk: str, path: str) -> bool:
 
 
 def classify(repo: Path, branch: str, trunk: str) -> dict:
-    base = git(repo, 'merge-base', trunk, branch).strip()
+    try:
+        base = git(repo, 'merge-base', trunk, branch).strip()
+    except RuntimeError:
+        base = ''
+    if not base:
+        # No common ancestor at all: a branch pushed from an unrelated history,
+        # which happens when a space is re-initialised or a project is grafted
+        # in. There is no "does the trunk already have this" to answer, and it
+        # is certainly not safe to delete, so say so rather than crash -- one
+        # such branch used to abort the whole report for its repository.
+        return {'branch': branch, 'verdict': 'unrelated', 'ahead': 0,
+                'changed': 0, 'differing': []}
     tip = git(repo, 'rev-parse', branch).strip()
     if base == tip:
         return {'branch': branch, 'verdict': 'merged', 'differing': []}
@@ -108,14 +123,14 @@ def main(argv: list[str] | None = None) -> int:
     if a.json:
         print(json.dumps(rows, indent=2))
         return 0
-    for verdict in ('merged', 'superseded', 'built-on', 'outstanding'):
+    for verdict in ('merged', 'superseded', 'built-on', 'outstanding', 'unrelated'):
         group = [r for r in rows if r['verdict'] == verdict]
         if not group:
             continue
         print(f'== {verdict} ({len(group)})')
         for r in group:
             extra = ''
-            if verdict == 'outstanding':
+            if verdict in ('outstanding', 'unrelated'):
                 shown = ', '.join(r['differing'][:3])
                 more = f' +{len(r["differing"]) - 3}' if len(r['differing']) > 3 else ''
                 extra = f'  [{r["ahead"]} ahead] {shown}{more}'
