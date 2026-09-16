@@ -91,6 +91,37 @@ case "$HOST" in
     CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine hermes --manifest $LIB/jobs/manifest.yaml --alert log >> $STATE/job_verify.log 2>&1")
     ;;
 esac
+
+# ── slash commands the scheduled jobs invoke ────────────────────────────────
+# A cron script that runs `claude -p "/weekly-plan ..."` needs that command
+# PUBLISHED to Claude Code, which reads ~/.claude/commands/ and nothing else.
+# Module commands live in .datacore/modules/<m>/commands/ and are not there by
+# default: on winston that directory did not exist at all, so cos_weekly_plan.sh
+# logged `Unknown command: /weekly-plan` and did nothing. It had never produced
+# a weekly plan, and because the script reported success anyway, the contract
+# that would have caught it was reading a file nothing ever wrote.
+#
+# Published under the qualified name `<module>:<command>.md`, as on the
+# workstation -- 16 modules ship a `today-hook`, so bare names cannot be the
+# rule. A bare alias is added ONLY when that name is unique across every module
+# and no root command already claims it, because that is the name the scheduled
+# scripts actually type.
+if [ "$VERIFY_ONLY" = 0 ]; then
+  mkdir -p "$HOME/.claude/commands"
+  _mods="$HOME/Data/.datacore/modules"
+  for _f in "$_mods"/*/commands/*.md; do
+    [ -f "$_f" ] || continue
+    _m=$(basename "$(dirname "$(dirname "$_f")")"); _c=$(basename "$_f" .md)
+    ln -sfn "$_f" "$HOME/.claude/commands/$_m:$_c.md"
+    # unique across modules, and not shadowing a root command?
+    _n=$(ls "$_mods"/*/commands/"$_c".md 2>/dev/null | wc -l)
+    if [ "$_n" -eq 1 ] && [ ! -e "$HOME/Data/.datacore/commands/$_c.md" ]; then
+      ln -sfn "$_f" "$HOME/.claude/commands/$_c.md"
+    fi
+  done
+  log "published $(ls "$HOME/.claude/commands" 2>/dev/null | wc -l) slash command(s)"
+fi
+
 # ── known hosts the dispatch space needs (plur-claw fetches plur-space over ssh) ──
 # The runner user's known_hosts was empty after the move from root's home to its own
 # (DIP-0044 §3), so every fetch since 2026-08-13 failed "host key verification"
