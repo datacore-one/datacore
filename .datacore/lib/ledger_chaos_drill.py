@@ -467,11 +467,69 @@ class Drill:
                    not (space / ".git" / "MERGE_HEAD").exists()
                    and not (other / ".git" / "MERGE_HEAD").exists())
 
+    def ingest_closes_the_drift_it_reports(self) -> None:
+        """An ingest that reports drift it cannot close is an infinite loop.
+
+        Not hypothetical. 2026-09-17: five items in 5-plur carried an empty
+        NIGHTSHIFT_OUTPUT -- which nightshift writes when a run produced no
+        artifact, and which requeue_rate_limited reads to tell a real
+        execution from a rate-limited no-op. The importer read the bare
+        `:KEY:` back as ""; the projector dropped empty values. So the ingest
+        reported `updated= 5` every hour and closed nothing, the projection
+        REFUSED, and the space's Phase-1 cycle -- which is fail-closed -- had
+        been down for days. The refusal was right; the loop was the bug.
+        """
+        import re
+        from ledger.fold import fold
+        from ledger.log import read_events
+        from ledger.projection_state import (guard_projection, ProjectionConflict,
+                                              base_document, STATE, sync_generated)
+        from ledger.projector import project
+        space, _ = self.space("10-nonconvergence")
+        (space / ".datacore" / "ledger-phase").write_text("1\n")
+        (space / ".datacore" / "ledger-edit-protocol").write_text("1\n")
+        self.log(space, "drill").append("item.create", {"id": "n1", "title": "A task"})
+
+        target = space / "org" / "next_actions.org"
+        rendered = project(fold(read_events(space)), space=space.name, as_of=0).text
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(rendered)
+        (space / STATE).parent.mkdir(parents=True, exist_ok=True)
+        (space / STATE).write_text(base_document(rendered), encoding="utf-8")
+
+        # Author an empty property value -- legitimate org, and legitimate
+        # content here. Inserted before the drawer's own :END:, at its indent.
+        edited, n = re.subn(r"^([ \t]*):END:", r"\1:NOTE:\n\1:END:", rendered,
+                            count=1, flags=re.M)
+        self.check("the drill authored an empty property value", n == 1)
+        target.write_text(edited)
+
+        proposed = project(fold(read_events(space)), space=space.name, as_of=0).text
+        try:
+            guard_projection(space, edited, proposed)
+            drifted = False
+        except ProjectionConflict:
+            drifted = True
+        self.check("an un-ingested authored field is REFUSED", drifted)
+
+        sync_generated(space, fold(read_events(space)), "drill")
+
+        after = project(fold(read_events(space)), space=space.name, as_of=0).text
+        try:
+            guard_projection(space, target.read_text(), after)
+            closed, reason = True, ""
+        except ProjectionConflict as exc:
+            closed, reason = False, str(exc)
+        self.check("ONE ingest closes the drift it reported", closed, reason)
+        self.check("the ingested value survived the round trip",
+                   ":NOTE:" in after, "the projector dropped what the ingest stored")
+
     # -- driver ---------------------------------------------------------
     SCENARIOS = ("unreachable_remote", "rejected_push", "resurrected_writer_ref",
                  "concurrent_appenders", "kill_mid_transaction",
                  "truncated_writer_log", "edit_between_ingest_and_project",
-                 "torn_final_line", "simultaneous_hosts")
+                 "torn_final_line", "simultaneous_hosts",
+                 "ingest_closes_the_drift_it_reports")
 
     def run(self, only: list[str] | None = None) -> int:
         names = only or list(self.SCENARIOS)
