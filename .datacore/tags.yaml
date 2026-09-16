@@ -672,10 +672,6 @@ domains:
     description: "Continuation of previous work"
     org: ":continuation:"
 
-  nightshift:
-    description: "Nightshift AI execution"
-    org: ":nightshift:"
-
   inbox:
     description: "Inbox item"
     org: ":inbox:"
@@ -1016,10 +1012,6 @@ domains:
   domains:
     description: "Domain management"
     org: ":domains:"
-
-  gtd:
-    description: "GTD methodology"
-    org: ":gtd:"
 
   market:
     description: "Market analysis"
