@@ -47,7 +47,7 @@ def test_time_awake_still_counts():
     written = WOKE_AT                        # written at wake
     now = WOKE_AT + 5 * 3600                 # five awake hours later
     assert awake.asleep_seconds_since(written, now=now, log=NIGHT) == 0
-    assert awake.awake_age(written, "laptop-fixture", now=now,
+    assert awake.awake_age(written, "laptop-fixture", now=now, log=NIGHT,
                            roster=_roster("laptop")) == pytest.approx(5 * 3600)
 
 

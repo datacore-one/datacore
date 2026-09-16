@@ -113,10 +113,18 @@ def asleep_seconds_since(since: float, *, now: float | None = None,
 
 
 def awake_age(mtime: float, machine: str, *, now: float | None = None,
-              roster: Path | None = None) -> float:
-    """Artifact age in seconds, counting only time the machine could have run."""
+              roster: Path | None = None, log: str | None = None) -> float:
+    """Artifact age in seconds, counting only time the machine could have run.
+
+    `log` is passed through for the same reason `asleep_seconds_since` takes it:
+    without it this function reads the REAL `pmset` log, so a test pinning a
+    historical `now` silently measures whatever this machine happened to do in
+    that window. That is how `test_time_awake_still_counts` came to fail by
+    seven seconds -- the mac really had slept seven seconds inside the window
+    the fixture chose.
+    """
     now = time.time() if now is None else now
     age = now - mtime
     if age <= 0 or always_on(machine, roster):
         return age
-    return max(0.0, age - asleep_seconds_since(mtime, now=now))
+    return max(0.0, age - asleep_seconds_since(mtime, now=now, log=log))
