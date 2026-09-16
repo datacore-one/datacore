@@ -6,6 +6,7 @@
   "type": "module",
   "dependencies": {
     "js-yaml": "^4.3.2",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "@datacore-one/mcp": "file:../../2-datacore/2-projects/datacore-mcp"
   }
 }
