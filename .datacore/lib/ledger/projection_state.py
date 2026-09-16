@@ -75,8 +75,16 @@ def snapshot(text, space):
             if not identity:
                 raise ProjectionConflict('heading without ID; ingest before projecting')
             payload = task_payload(node, space, '1970-01-01', 'genesis_fallback')
-            # Verification must notice content a renderer would strip.
-            payload['org']['body'] = body_text(node).rstrip()
+            # Verification must notice content a renderer would strip -- with
+            # one exception, because it is not content: an EMPTY :LOGBOOK:
+            # drawer, which Emacs writes by itself on any TODO state change.
+            # Left in, it makes the authored file differ from the projection by
+            # two lines nobody typed, and the three-way merge has no way to
+            # resolve that: one closed task stopped 0-personal's ingest on every
+            # cycle (2026-09-16). A logbook with entries in it is data and is
+            # compared as before.
+            from .projector import strip_empty_logbook
+            payload['org']['body'] = strip_empty_logbook(body_text(node).rstrip())
             created = node.get_property('CREATED')
             if created:
                 created = re.sub(r'^\[(\d{4}-\d{2}-\d{2})(?: [A-Za-z]{3})?\]$', r'\1', str(created))

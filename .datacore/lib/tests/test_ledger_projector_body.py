@@ -39,3 +39,37 @@ def test_render_item_never_prints_a_drawer_from_the_body():
 def test_genesis_strips_the_body_at_ingest():
     import ledger.genesis as g
     assert g._strip_drawers is strip_drawers
+
+
+def test_planning_keywords_share_one_line_so_they_do_not_fall_into_the_body():
+    """Org recognises CLOSED/SCHEDULED/DEADLINE only on ONE line under the heading.
+
+    Rendered as two lines, everything after the first parses as body text. A
+    task that was scheduled and then closed therefore grew a phantom
+    "SCHEDULED: <...>" inside its body, which no authored file and no
+    projection base could agree with — and since reconcile merges three ways,
+    that one item took its whole space's ingest down with EditConflict on
+    org.body, every cycle, until someone looked (2026-09-16, 0-personal).
+    """
+    import re
+    item = ItemState(id="p1", title="Both", owner=None, status="dismissed",
+                     closed_at="1789567920000",
+                     payload={"scheduled": "2026-08-31", "deadline": "2026-09-02"})
+    lines = render_item(item, level=1)
+    planning = [l for l in lines if re.search(r'\b(CLOSED|SCHEDULED|DEADLINE):', l)]
+    assert len(planning) == 1, f"planning keywords split across lines: {planning}"
+    assert 'SCHEDULED:' in planning[0] and 'DEADLINE:' in planning[0], planning
+
+
+def test_an_empty_logbook_drawer_is_not_body_content():
+    """Emacs writes `:LOGBOOK:` / `:END:` by itself on a TODO state change.
+
+    Two lines nobody typed, present in the authored file and absent from the
+    ledger, are an unresolvable disagreement for a three-way merge. A logbook
+    with entries in it is data and must survive untouched.
+    """
+    from ledger.projector import strip_empty_logbook
+    assert strip_empty_logbook('  :LOGBOOK:\n  :END:\nreal text') == 'real text'
+    kept = '  :LOGBOOK:\n  CLOCK: [2026-09-16 Wed 10:00]--[2026-09-16 Wed 11:00]\n  :END:\ntext'
+    assert strip_empty_logbook(kept) == kept
+    assert strip_empty_logbook('no drawer here') == 'no drawer here'

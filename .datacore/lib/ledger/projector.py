@@ -283,6 +283,18 @@ def render_item(item, *, level: int | None = None) -> list[str]:
     keyword = f"{state} " if state else ""
     lines = [f"{stars} {keyword}{prio}{title}{tag_str}"]
 
+    # ORG PLANNING KEYWORDS SHARE ONE LINE, and it must be the line directly
+    # under the heading. CLOSED, SCHEDULED and DEADLINE were emitted as two
+    # separate lines whenever an item had both, and org only recognises the
+    # first: everything after it parses as BODY. So a task that was scheduled
+    # and then closed grew a phantom "SCHEDULED: <...>" line inside its body,
+    # which no authored file and no projection base could ever agree with —
+    # and since reconcile merges three ways, that single item took its whole
+    # space's ingest down with EditConflict on `org.body`, every cycle.
+    #
+    # Measured 2026-09-16: one task closed at 13:52 stopped 0-personal's
+    # ingest outright. Anything both scheduled and closed did it.
+    planning = []
     if item.status in CLOSED_STATUSES and getattr(item, "closed_at", None):
         # An org CLOSED: stamp, so a weekly report can find finished work by
         # date without re-folding the whole event log.
@@ -290,18 +302,17 @@ def render_item(item, *, level: int | None = None) -> list[str]:
             import datetime
             ms = float(str(item.closed_at).split(".")[0])
             when = datetime.datetime.fromtimestamp(ms / 1000.0, datetime.timezone.utc)
-            lines.append(f"  CLOSED: [{when:%Y-%m-%d} {_WEEKDAYS[when.weekday()]} {when:%H:%M}]")
+            planning.append(f"CLOSED: [{when:%Y-%m-%d} {_WEEKDAYS[when.weekday()]} {when:%H:%M}]")
         except (ValueError, TypeError, OverflowError, OSError):
             pass
 
     sched, dead = _org_stamp(payload.get("scheduled")), _org_stamp(payload.get("deadline"))
-    if sched or dead:
-        parts = []
-        if sched:
-            parts.append(f"SCHEDULED: {sched}")
-        if dead:
-            parts.append(f"DEADLINE: {dead}")
-        lines.append("  " + " ".join(parts))
+    if sched:
+        planning.append(f"SCHEDULED: {sched}")
+    if dead:
+        planning.append(f"DEADLINE: {dead}")
+    if planning:
+        lines.append("  " + " ".join(planning))
 
     props = dict(org.get("properties") or {})
     props["ID"] = item.id
@@ -317,7 +328,7 @@ def render_item(item, *, level: int | None = None) -> list[str]:
         props["CREATED"] = f"[{genesis['date']}]"
     lines.extend("  " + line for line in _drawer(props))
 
-    body = strip_drawers((org.get("body") or "").rstrip())
+    body = strip_empty_logbook(strip_drawers((org.get("body") or "").rstrip()))
     # Repair legacy planning lines, while preserving quoted/literal examples
     # and ordinary prose. A date-looking string is not necessarily metadata.
     body = ''.join(chunk if literal else re.sub(
@@ -349,6 +360,30 @@ def _body_chunks(body: str):
                 block, lines = None, []
     if lines:
         yield block is not None, ''.join(lines)
+
+
+#: An org LOGBOOK drawer with nothing in it. Emacs creates one the moment a TODO
+#: state changes with logging on, so it appears in an authored file by itself,
+#: without anyone typing anything.
+_EMPTY_LOGBOOK = re.compile(r"^[ \t]*:LOGBOOK:[ \t]*\n[ \t]*:END:[ \t]*\n?", re.M)
+
+
+def strip_empty_logbook(body: str) -> str:
+    """Drop `:LOGBOOK:` drawers that contain nothing.
+
+    A logbook with clock entries or state-change records is DATA and is left
+    exactly alone. An empty one is org bookkeeping: Emacs writes it on a state
+    change, so the generated file and the ledger disagree by two lines that
+    nobody authored and nothing can reconcile — and because the projection
+    merges three ways, that disagreement stops the whole space's ingest.
+
+    Measured 2026-09-16: one task closed in Emacs left an empty drawer and
+    0-personal's ingest failed on it every cycle.
+    """
+    if ":LOGBOOK:" not in body:
+        return body
+    return ''.join(chunk if literal else _EMPTY_LOGBOOK.sub('', chunk)
+                   for literal, chunk in _body_chunks(body + ('\n' if not body.endswith('\n') else ''))).rstrip('\n')
 
 
 def strip_drawers(body: str) -> str:
