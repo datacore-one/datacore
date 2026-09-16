@@ -18,3 +18,24 @@ reviewed:
     date: 2026-09-07
     what: "Same cause as e3c8068e, one day later: the Hermes cron job geo-research-tris (06:00 UTC) followed its skill file geo-cadence-operations/SKILL.md, which said to open EventLog(actor='winston', sign=False) for task creation; one item.create for a geo review landed in winston.jsonl, and the transport's autosave at 06:25 committed the file under Tris's name."
     action: "Reviewed 2026-09-07. Source fixed: the skill now uses this_actor() (tris) and leaves signing to identity.env; the transport no longer autosaves a writer log that belongs to another declared principal (it unstages it, commits the rest and stops, naming the file). Tris's memory store still carries the old instruction three times; the guard makes that harmless."
+  - commit: c4c3dbcc
+    space: 0-personal
+    writer: nightshift
+    committed_as: gregor                # the owner, whose writes_as is [mac] only
+    date: 2026-09-16
+    what: "Ledger recovery. Eleven events written by nightshift's own principal were stranded on park branches by the park/reset machinery (datacore#40) and had been declared unrecoverable after a search that never ran `git rev-list --all`. `ledger_restore_prefix.py` proved each recovered log was a prefix EXTENSION of the live one and that its hash chain verified, then wrote the file — but it does not commit, so the owner committed another principal's writer log. Three events here; the same action covers 6db2eb59 and 2e1837f9."
+    action: "Reviewed 2026-09-17. The content is nightshift's own and cryptographically its own: the restore is refused unless the recovered log extends the current one AND the chain verifies, and v2-verify reports 120/120 recent signatures verifying. The owner was the courier, not the author. Source fix shipped with this entry: ledger_restore_prefix.py now ends a successful --apply by naming the writer whose log it just rewrote and telling the operator to record the commit here, so the next restore cannot leave this contract failing unnoticed for days. Committing AS the principal is not available — principals.yaml stores email hashes, not addresses."
+  - commit: 6db2eb59
+    space: 5-plur
+    writer: nightshift
+    committed_as: gregor
+    date: 2026-09-16
+    what: "Same recovery as c4c3dbcc: eight nightshift events stranded on a park branch since 2026-09-08, re-landed on proof of prefix-extension and chain verification."
+    action: "Reviewed 2026-09-17 — see c4c3dbcc for the reasoning and the source fix."
+  - commit: 2e1837f9
+    space: 5-plur
+    writer: miles, nightshift-run-2026-09-11
+    committed_as: gregor
+    date: 2026-09-16
+    what: "Same recovery as c4c3dbcc, nine further events across two writer logs in one commit. Counts twice in the check, once per writer log."
+    action: "Reviewed 2026-09-17 — see c4c3dbcc for the reasoning and the source fix."

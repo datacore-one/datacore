@@ -113,6 +113,16 @@ def restore(space: Path, actor: str, rev: str, apply: bool) -> int:
         print('  post-write chain broken — ORIGINAL RESTORED, nothing changed')
         return 1
     print(f'  restored; chain verifies; previous log kept at {backup.name}')
+    # This tool does not commit, so whoever runs it commits ANOTHER principal's
+    # writer log under their own git identity -- which is exactly what DIP-0044's
+    # authorship check exists to catch, and it duly fails. Committing as the
+    # principal is not available: principals.yaml stores email hashes, not
+    # addresses. So say the follow-up out loud. Measured 2026-09-17: four such
+    # commits left `bridge-v2-verify` REGRESSED on winston, unnoticed, until a
+    # contract sweep found it a day later.
+    print(f'  NEXT: commit this, then record the commit in '
+          f'.datacore/config/authorship-reviewed.yaml as writer {actor!r} in '
+          f'{space.name} -- the DIP-0044 authorship check fails until you do.')
     return 0
 
 
