@@ -89,6 +89,23 @@ class OutboxConfig:
         return self._config.get("outbox", {}).get("archive_repos", {})
 
 
+#: Files that exist so a directory exists, or that the OS drops in on its own.
+#: They are never something a person put in the outbox to be archived.
+_PLACEHOLDERS = frozenset({".gitkeep", ".keep", ".DS_Store", "Thumbs.db"})
+
+
+def _is_placeholder(path: Path) -> bool:
+    """A `.gitkeep` is not content.
+
+    discover_spaces counted any entry, so a space whose outbox holds nothing
+    but the `.gitkeep` that keeps the directory in git was queued for
+    archiving, and scan_space then tried to archive the placeholder itself.
+    8-firm has no archive repo, so nightshift-outbox failed every night on
+    "Archive repo not found for 8-firm" with nothing to archive (2026-09-17).
+    """
+    return path.name in _PLACEHOLDERS
+
+
 class ArchiveScanner:
     """Scans outbox folders for content to archive."""
 
@@ -101,7 +118,8 @@ class ArchiveScanner:
         for item in self.data_root.iterdir():
             if item.is_dir() and not item.name.startswith("."):
                 outbox_archive = item / "4-outbox" / "archive"
-                if outbox_archive.exists() and any(outbox_archive.iterdir()):
+                if outbox_archive.exists() and any(
+                        not _is_placeholder(p) for p in outbox_archive.rglob("*") if p.is_file()):
                     spaces.append(item.name)
         return sorted(spaces)
 
@@ -114,7 +132,7 @@ class ArchiveScanner:
             return items
 
         for file_path in archive_path.rglob("*"):
-            if file_path.is_file():
+            if file_path.is_file() and not _is_placeholder(file_path):
                 # Skip companion files - they'll be handled with their source
                 if file_path.name.endswith(".companion.md"):
                     continue
