@@ -47,8 +47,9 @@ def prefix_resolution(ours, theirs, working):
         raise ForkError('divergent ledger histories require manual recovery')
     # A manually edited working copy must not disappear into an index-stage
     # resolution. Only the exact event set from both stages is eligible.
+    # The `|||||||` base marker is written under merge.conflictStyle diff3/zdiff3.
     lines = [line for line in working.splitlines()
-             if not re.match(r'^(<<<<<<< |>>>>>>> |=======$)', line)]
+             if not re.match(r'^(<<<<<<< |\|\|\|\|\|\|\| |>>>>>>> |=======$)', line)]
     actual = {to_line(from_line(line)) for line in lines}
     expected = {to_line(event) for event in left + right}
     if actual != expected:

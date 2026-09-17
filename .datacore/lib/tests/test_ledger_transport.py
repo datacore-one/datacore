@@ -612,3 +612,104 @@ def test_status_lines_touch_nothing(repo_pair: Path, tmp_path: Path, monkeypatch
     lines = lt.status_lines(tmp_path)
     assert len(lines) == 1 and lines[0].startswith("work:") and "dirty=1" in lines[0]
     assert git(repo_pair, "status", "--porcelain").stdout.strip()   # still dirty, untouched
+
+
+def _chain(*values: str, actor: str = "nightshift") -> str:
+    from ledger.events import Event, body_dict, compute_hash, to_line
+    rows, previous = [], "GENESIS"
+    for seq, value in enumerate(values):
+        body = body_dict(seq, f"{seq + 1000:013d}:000000:{actor}", actor, "item.create", {"id": value}, previous)
+        previous = compute_hash(body)
+        rows.append(to_line(Event(**body, hash=previous, sig="")))
+    return "\n".join(rows) + "\n"
+
+
+def _publish_writer_ref(repo_pair: Path, tmp_path: Path, log: str, text: str) -> None:
+    """Another checkout commits `text` as `log` on refs/heads/ledger/nightshift."""
+    origin, other = tmp_path / "origin.git", tmp_path / "ref-writer"
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
+    git(other, "config", "user.email", "n@n"); git(other, "config", "user.name", "nightshift")
+    git(other, "config", "core.hooksPath", str(other / ".git" / "hooks"))
+    (other / log).write_text(text)
+    git(other, "commit", "-qam", "ledger: nightshift claim")
+    git(other, "push", "-q", "origin", "HEAD:refs/heads/ledger/nightshift")
+
+
+@pytest.mark.parametrize("style", ["merge", "diff3", "zdiff3"])
+def test_a_writer_ref_that_is_a_prefix_of_main_is_not_a_conflict(repo_pair: Path, tmp_path: Path, style: str):
+    """Measured 2026-09-17 on nightshift, 5-plur: the claim path published
+    nightshift.jsonl at 556 events on ledger/nightshift while main carried the
+    same log at 561. Same writer, one history, one copy an exact prefix of the
+    other -- and converge reported "merge conflict on a ledger ref -- human
+    needed", which stopped the overnight run at its first step. Both sides
+    appended after a common base, so git calls it a conflict; it is not one."""
+    import ledger_transport as lt
+    log = ".datacore/events/nightshift.jsonl"
+    (repo_pair / log).parent.mkdir(parents=True)
+    (repo_pair / log).write_text(_chain("a", "b"))
+    git(repo_pair, "add", "-A"); git(repo_pair, "commit", "-qm", "base")
+    git(repo_pair, "push", "-q", "origin", "HEAD:refs/heads/main")
+    _publish_writer_ref(repo_pair, tmp_path, log, _chain("a", "b", "c", "d"))
+    (repo_pair / log).write_text(_chain("a", "b", "c", "d", "e", "f"))
+    git(repo_pair, "commit", "-qam", "main advances the same log")
+    git(repo_pair, "config", "merge.conflictStyle", style)
+
+    r = lt.converge(repo_pair)
+
+    assert r.ok, r
+    assert "origin/ledger/nightshift" in r.context.get("ledger_refs", [])
+    assert (repo_pair / log).read_text() == _chain("a", "b", "c", "d", "e", "f")
+    assert git(repo_pair, "rev-list", "--count", "HEAD..origin/ledger/nightshift").stdout.strip() == "0"
+    assert git(repo_pair, "status", "--porcelain").stdout.strip() == ""
+
+
+def test_a_forked_writer_log_on_a_ledger_ref_still_stops_for_a_human(repo_pair: Path, tmp_path: Path):
+    """The boundary: two different continuations of one writer's log are a
+    fork. Nothing may choose between them, and nothing may be left half-merged."""
+    import ledger_transport as lt
+    log = ".datacore/events/nightshift.jsonl"
+    (repo_pair / log).parent.mkdir(parents=True)
+    (repo_pair / log).write_text(_chain("a", "b"))
+    git(repo_pair, "add", "-A"); git(repo_pair, "commit", "-qm", "base")
+    git(repo_pair, "push", "-q", "origin", "HEAD:refs/heads/main")
+    _publish_writer_ref(repo_pair, tmp_path, log, _chain("a", "b", "theirs"))
+    (repo_pair / log).write_text(_chain("a", "b", "ours"))
+    git(repo_pair, "commit", "-qam", "ours")
+    head = git(repo_pair, "rev-parse", "HEAD").stdout
+
+    r = lt.converge(repo_pair)
+
+    assert not r.ok and "ledger ref" in r.reason
+    assert git(repo_pair, "rev-parse", "HEAD").stdout == head
+    assert (repo_pair / log).read_text() == _chain("a", "b", "ours")
+    assert not (repo_pair / ".git" / "MERGE_HEAD").exists()
+
+
+def test_a_prefix_log_beside_a_real_conflict_is_not_half_resolved(repo_pair: Path, tmp_path: Path):
+    """A resolvable ledger file does not license committing a merge that also
+    conflicts somewhere no lossless rule covers."""
+    import ledger_transport as lt
+    log = ".datacore/events/nightshift.jsonl"
+    (repo_pair / log).parent.mkdir(parents=True)
+    (repo_pair / log).write_text(_chain("a"))
+    (repo_pair / "notes.md").write_text("base\n")
+    git(repo_pair, "add", "-A"); git(repo_pair, "commit", "-qm", "base")
+    git(repo_pair, "push", "-q", "origin", "HEAD:refs/heads/main")
+    origin, other = tmp_path / "origin.git", tmp_path / "ref-writer"
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
+    git(other, "config", "user.email", "n@n"); git(other, "config", "user.name", "nightshift")
+    git(other, "config", "core.hooksPath", str(other / ".git" / "hooks"))
+    (other / log).write_text(_chain("a", "b"))
+    (other / "notes.md").write_text("theirs\n")
+    git(other, "commit", "-qam", "ref"); git(other, "push", "-q", "origin", "HEAD:refs/heads/ledger/nightshift")
+    (repo_pair / log).write_text(_chain("a", "b", "c"))
+    (repo_pair / "notes.md").write_text("ours\n")
+    git(repo_pair, "commit", "-qam", "ours")
+    head = git(repo_pair, "rev-parse", "HEAD").stdout
+
+    r = lt.converge(repo_pair)
+
+    assert not r.ok
+    assert git(repo_pair, "rev-parse", "HEAD").stdout == head
+    assert (repo_pair / "notes.md").read_text() == "ours\n"
+    assert not (repo_pair / ".git" / "MERGE_HEAD").exists()

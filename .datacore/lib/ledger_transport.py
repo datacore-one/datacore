@@ -96,6 +96,51 @@ def _git(repo: Path, *args: str, timeout: int = 120) -> tuple[int, str, str]:
         return 1, "", f"{type(exc).__name__}: {exc}"
 
 
+
+_WRITER_LOG = re.compile(r"\.datacore/events/[^/]+\.jsonl")
+
+
+def _merge(space: Path, ref: str) -> tuple[bool, str, list[str]]:
+    """Merge `ref`. (ok, detail, writer logs resolved as prefix extensions).
+
+    A per-writer log is append-only, so when both sides appended to it after a
+    common base and one copy is an exact prefix of the other, git reports a
+    conflict where there is a single history: the longer copy holds every event
+    of both. Measured 2026-09-17 on nightshift, 5-plur: ledger/nightshift held
+    nightshift.jsonl at 556 events, main at 561 with the same first 556, and
+    "merge conflict on a ledger ref -- human needed" stopped the overnight run
+    at its first step. A human could only have picked the longer file.
+
+    Only that case is resolved, by resolve_ledger_conflicts (chain-validated,
+    prefix-proven, working copy checked against both stages) -- and only when
+    EVERY conflicted path is a writer log it accepts. Anything else, a fork
+    included, aborts the whole merge exactly as before: nothing half-merged.
+    """
+    rc, mout, err = _git(space, "merge", "--no-edit", ref)
+    if rc == 0:
+        return True, "", []
+    # BOTH streams. git reports conflicts on STDOUT ("CONFLICT (content):
+    # Merge conflict in ...") and leaves stderr empty, so capturing only
+    # stderr yields a failure with a blank reason — the identical defect
+    # that hid a nine-day auth outage behind `claude -p failed: `.
+    detail = "\n".join(x for x in (mout.strip(), err.strip()) if x)
+    from resolve_ledger_conflicts import resolve_file, unmerged
+    try:
+        names = unmerged(space)
+        if names and all(_WRITER_LOG.fullmatch(n) for n in names):
+            for name in names:
+                resolve_file(space, name)
+            rc, aout, aerr = _git(space, "add", "--", *names)
+            if rc == 0 and not unmerged(space):
+                rc, cout, cerr = _git(space, "commit", "--no-edit", "-q")
+                if rc == 0:
+                    return True, detail, names
+                detail += "\n" + (cout + cerr).strip()
+    except (OSError, ValueError, TypeError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        detail += f"\nnot a prefix extension: {exc}"
+    _git(space, "merge", "--abort")
+    return False, detail, []
+
 @contextmanager
 def _repo_lock(space: Path):
     """Exclusive, per-repo, SAME-MACHINE ONLY. See the module docstring."""
@@ -452,14 +497,8 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
                           f"find the process writing under that name and stop it (DIP-0044)",
                           {"branch": db, "foreign": [p for p, _, _ in foreign]})
 
-    rc, mout, err = _git(space, "merge", "--no-edit", f"origin/{db}")
-    if rc != 0:
-        # BOTH streams. git reports conflicts on STDOUT ("CONFLICT (content):
-        # Merge conflict in ...") and leaves stderr empty, so capturing only
-        # stderr yields a failure with a blank reason — the identical defect
-        # that hid a nine-day auth outage behind `claude -p failed: `.
-        err = "\n".join(x for x in (mout.strip(), err.strip()) if x)
-        _git(space, "merge", "--abort")
+    ok, err, resolved = _merge(space, f"origin/{db}")
+    if not ok:
         # Never reset, never rescue-branch, never discard. A conflict here
         # is genuine disagreement about content and belongs to a human; the
         # autosave above guarantees their work is already committed.
@@ -473,20 +512,21 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
     # Data's last claims sat on ledger/data from 2026-08-11 and reached main
     # only by hand. Every converge now merges each origin/ledger/* ref into the
     # branch before publishing. Per-writer logs are disjoint files, so this is
-    # a union; a conflict here is a genuine one and stops, like any other.
+    # a union -- except where one writer's log reaches main by two paths (the
+    # claim path publishes to ledger/<actor> while main carries the same log
+    # further). That is one history, not a disagreement: see `_merge`.
     rc, refs_out, _ = _git(space, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/ledger/")
     merged_refs = []
     for ref in (refs_out.split() if rc == 0 else []):
         rc, ahead, _ = _git(space, "rev-list", "--count", f"HEAD..{ref}")
         if rc != 0 or ahead.strip() == "0":
             continue
-        rc, mout, err = _git(space, "merge", "--no-edit", ref)
-        if rc != 0:
-            err = "\n".join(x for x in (mout.strip(), err.strip()) if x)
-            _git(space, "merge", "--abort")
+        ok, err, prefixes = _merge(space, ref)
+        if not ok:
             return Result(False, "merge conflict on a ledger ref — human needed",
                           {"branch": db, "ref": ref, "autosaved": autosaved, "detail": err[:400]})
         merged_refs.append(ref)
+        resolved += prefixes
     # PUBLISH. Converge previously stopped here, which made it a one-way
     # operation: it pulled and never pushed. Every caller means both — `sync`,
     # `./sync pull`, and cos_sync on winston's 15-minute cron all report
@@ -497,13 +537,15 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
     # `publish=False` only for _push_with_retry, which calls this to resolve a
     # non-fast-forward and would otherwise recurse into pushing.
     if not publish:
-        return Result(True, "converged", {"branch": db, "autosaved": autosaved, "ledger_refs": merged_refs})
+        return Result(True, "converged", {"branch": db, "autosaved": autosaved, "ledger_refs": merged_refs,
+                                          "ledger_prefixes": resolved})
     pr = _push_with_retry(space, db)
     if not pr.ok:
         return Result(False, f"converged but not published: {pr.reason}",
                       {"branch": db, "autosaved": autosaved, **pr.context})
     return Result(True, "converged", {"branch": db, "autosaved": autosaved,
-                                      "pushed": pr.context.get("attempts", 1), "ledger_refs": merged_refs})
+                                      "pushed": pr.context.get("attempts", 1), "ledger_refs": merged_refs,
+                                      "ledger_prefixes": resolved})
 
 
 def _push_with_retry(space: Path, db: str) -> Result:
