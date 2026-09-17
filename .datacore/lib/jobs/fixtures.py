@@ -125,9 +125,14 @@ def _quote_remote(path: str) -> str:
     stay bare (it expands to the REMOTE home, which is the point) and only the
     remainder is quoted: ~/'Data/x y.log'. Bash concatenates the two.
     """
+    # A `*` must stay UNQUOTED too, or the remote shell never expands it:
+    # quote the pieces around each one instead. Without this every glob artifact
+    # (the market-phase report, agent-stream files) read as "could not read".
+    def quote(part: str) -> str:
+        return "*".join(shlex.quote(piece) if piece else "" for piece in part.split("*"))
     if path.startswith("~/"):
-        return "~/" + shlex.quote(path[2:])
-    return shlex.quote(path)
+        return "~/" + quote(path[2:])
+    return quote(path)
 
 
 def _rel(p: pathlib.Path) -> pathlib.Path:
@@ -152,6 +157,12 @@ def _read_artifact(path: str, machine: str) -> str | None:
     p = _expand(path)
     if machine == "mac":
         local = HOME / p[2:] if p.startswith("~/") else pathlib.Path(p)
+        if "*" in p:
+            # The verifier reads a glob's NEWEST match (checks.expand_path); so must this.
+            matches = sorted(local.parent.glob(local.name), key=lambda m: m.stat().st_mtime)
+            if not matches:
+                return None
+            local = matches[-1]
         try:
             t = local.read_text(errors="replace")
         except OSError:
@@ -172,8 +183,12 @@ def _read_artifact(path: str, machine: str) -> str | None:
              # which aborted the whole harvest -- so every artifact after it
              # silently kept a stale fixture, and the run reported nothing
              # wrong. Capture bytes and decode with replacement instead.
-             f"(head -c 12000 {_quote_remote(p)}; echo; echo '# ...elided...'; "
-             f"tail -c 8000 {_quote_remote(p)})"],
+             # A glob resolves to its newest match first, as the verifier does.
+             (f"f=$(ls -t -- {_quote_remote(p)} 2>/dev/null | head -n 1); [ -n \"$f\" ] || exit 1; "
+              f"(head -c 12000 \"$f\"; echo; echo '# ...elided...'; tail -c 8000 \"$f\")"
+              if "*" in p else
+              f"(head -c 12000 {_quote_remote(p)}; echo; echo '# ...elided...'; "
+              f"tail -c 8000 {_quote_remote(p)})")],
             capture_output=True, timeout=60)
     except (subprocess.SubprocessError, OSError):
         return None
