@@ -748,8 +748,17 @@ def mark_task_done(
     ts = today_org_ts()
 
     # 1. Change state keyword on heading line
+    #
+    # RE_HEADING's group 3 IS the separator after the keyword, so the
+    # replacement must not bring its own as well. It did -- " DONE " + the
+    # captured space -- so every task this closed became `* DONE  Title`.
+    # Org reads the second space as separator; the vendored orgparse keeps it in
+    # the title. In a Phase-1 space that is an authored rename of an item this
+    # very run just closed, which the ledger refuses: on 2026-09-17 one 06:50Z
+    # pass left 13 headings like that and failed the ingest of 0-personal and
+    # 5-plur on every cycle after.
     lines[task.heading_line] = RE_HEADING.sub(
-        lambda m: m.group(1) + " DONE " + m.group(3)[0],
+        lambda m: m.group(1) + " DONE" + m.group(3),
         lines[task.heading_line],
         count=1,
     )
