@@ -845,6 +845,22 @@ jobs:
         arg: '<!-- market-phase: complete -->'
         max_age_hours: 26
 
+  - name: nightshift-health-audit
+    machine: nightshift
+    schedule: "30 6 * * *"
+    cmd: "python3 ~/Data/.datacore/modules/nightshift/lib/health_audit.py"
+    on_fail: telegram
+    artifacts:
+      # The audit exits non-zero only on a CRITICAL finding, because warnings
+      # it cannot clear (two repos over 5GB) had the unit permanently failed --
+      # a red unit that means nothing. So the contract, not the exit status, is
+      # what says the audit ran (freshness) and found nothing critical (regex).
+      # Warnings stay readable in the same artifact.
+      - path: "~/.datacore/state/health-audit.json"
+        check: regex
+        arg: '"critical": 0'
+        max_age_hours: 26
+
   # ── mac ───────────────────────────────────────────────────────────────────
   # No mac crontab/launchd inventory was available beyond the two jobs named
   # in the brief (agent-stream rsync, lens sync). Both plists were confirmed
