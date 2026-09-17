@@ -609,7 +609,22 @@ jobs:
       # gets ignored." This copy was missed in that retirement.
       # {2,3} accepts either level so a future heading change cannot silently
       # re-break it.
-      - path: "~/Data/0-personal/notes/journals/{today}.md"
+      # GLOB, not {today}: this job runs at 04:00 and the file it asserts is
+      # the file it WRITES, so between midnight and 04:00 the contract demanded
+      # a journal that cannot exist yet and reported box-briefing FAILED. The
+      # scheduled verifier runs at 08:00 and never saw it; anyone running
+      # job_verify by hand in those four hours did. checks.py already documents
+      # this exact shape -- "a {today} path therefore fails every night between
+      # midnight and that first event ... a nightly false alarm is one people
+      # learn to ignore" -- and resolves a glob to its NEWEST match for it.
+      # Freshness is the liveness signal; the filename is not.
+      #
+      # Dated names only: `*.md` would also match tomorrow-priorities.md, which
+      # lives in this directory and carries no briefing block. The pattern must
+      # contain a literal `*` -- expand_path() only globs when it sees one, so
+      # a character class alone comes back as the literal pattern and reads as
+      # "does not exist".
+      - path: "~/Data/0-personal/notes/journals/20*-*-*.md"
         check: regex
         # ASSERT WHAT THE PRODUCER GUARANTEES, NOT A TITLE THE MODEL CHOSE.
         # "Your Agenda" was a section in nightshift's /today template. When
