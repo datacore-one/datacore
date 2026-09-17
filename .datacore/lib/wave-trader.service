@@ -23,6 +23,11 @@ Environment=PYTHONPATH=<HOME>/Data/.datacore/modules/trading/lib/gateio:<HOME>/D
 ExecStart=<HOME>/venvs/trading/bin/python3 -u wave_trader.py --watch --interval 60 --shadow --assets SOL ETH SUI DOGE BTC
 Restart=on-failure
 RestartSec=30
+# Watchdog: code pings systemd every poll cycle (~60s normally, up to ~210s
+# under full-API-timeout conditions). 600s gives comfortable headroom while
+# still catching an indefinite hang — the failure mode of the Sep-5 11h stall.
+# Must be > init_time(≤90s) + worst-case poll_all(≤150s) + sleep(60s) = 300s.
+WatchdogSec=600
 MemoryMax=512M
 StandardOutput=journal
 StandardError=journal
