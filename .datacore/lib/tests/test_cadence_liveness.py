@@ -44,3 +44,38 @@ def test_a_cadence_owned_by_an_external_agent_is_not_this_fleets_liveness(tmp_pa
     names = {(r[2], r[4]) for r in rows}
     assert ("cto", "release-check") in names, "our own never-run weekly cadence is overdue (7 days past a 3-day grace)"
     assert ("cio", "geo-sov-scan") not in names, "Tris's cadence is Tris's liveness"
+
+
+WEEKLY_RAN = """name: plur
+stage: growth
+roles:
+  cto:
+    cadences:
+      weekly: [sprint-rollover]
+"""
+
+
+def _ran_on(tmp_path, day):
+    space = tmp_path / "5-plur"
+    space.mkdir()
+    (space / "venture.yaml").write_text(WEEKLY_RAN)
+    log = space / ".datacore" / "state" / "venture" / "cadence-log.yaml"
+    log.parent.mkdir(parents=True)
+    log.write_text(f"cto.sprint-rollover:\n  last_run: '{day}'\n  result: ok\n")
+
+
+def test_a_weekly_cadence_is_not_overdue_on_the_day_it_falls_due(tmp_path):
+    """2026-09-17: last run 09-10, due 09-17, reported "7d overdue" at 07:40Z.
+
+    The engine's days_overdue is days since the last run. The grace is days
+    PAST DUE, so on the due date there is nothing to alert on yet.
+    """
+    _ran_on(tmp_path, "2026-09-10")
+    assert L.collect(tmp_path, grace=3, today=datetime.date(2026, 9, 17)) == []
+    assert L.collect(tmp_path, grace=3, today=datetime.date(2026, 9, 20)) == [], "3 past due is within grace"
+
+
+def test_a_weekly_cadence_past_its_grace_is_still_overdue(tmp_path):
+    _ran_on(tmp_path, "2026-09-10")
+    rows = L.collect(tmp_path, grace=3, today=datetime.date(2026, 9, 21))
+    assert [(r[0], r[4]) for r in rows] == [(4, "sprint-rollover")], "reported as days past due"

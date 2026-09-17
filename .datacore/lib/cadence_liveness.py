@@ -90,8 +90,8 @@ def sunset_reviews(root: Path, today: date | None = None) -> tuple[list[tuple[st
 def collect(root: Path, grace: int, today: date | None = None) -> list:
     """Overdue cadences across every space, via the engine that owns this."""
     import yaml
-    from cadence_engine import (cadence_log_path_for, find_overdue_cadences, own_cadences,
-                            load_cadence_log_safe)
+    from cadence_engine import (FREQUENCY_WINDOWS, cadence_log_path_for, cadence_observation,
+                            find_overdue_cadences, own_cadences, load_cadence_log_safe)
 
     today = today or date.today()
     rows = []
@@ -131,8 +131,21 @@ def collect(root: Path, grace: int, today: date | None = None) -> list:
             # box's contract is red by construction (2026-09-05: three of the
             # last three "overdue" were Tris's).
             for c in own_cadences(find_overdue_cadences(roles, log, today=today), roles):
-                if getattr(c, "days_overdue", 0) > grace:
-                    rows.append((c.days_overdue, space.name, c.role,
+                # PAST DUE, which is what DEFAULT_GRACE is documented to measure.
+                # The engine's days_overdue is days since the LAST RUN -- right
+                # for ordering today's work, wrong against a grace: a weekly
+                # cadence reads 7 on the very day it falls due, so this alerted
+                # before the cadence had any chance to run. On 2026-09-17 two
+                # weekly cadences last run 09-10 were reported "7d overdue" at
+                # 07:40Z on their due date, having read 0 the day before.
+                # A cadence that has NEVER run keeps the old measure: the
+                # engine reports it at exactly one window, and never having
+                # run is the broken case this check exists to catch.
+                window = FREQUENCY_WINDOWS.get(c.frequency)
+                ran = cadence_observation(roles, log, c.role, c.frequency, c.cadence_name) is not None
+                past_due = (c.days_overdue - window.days) if (ran and window) else c.days_overdue
+                if past_due > grace:
+                    rows.append((past_due, space.name, c.role,
                                  c.frequency, c.cadence_name))
         except Exception as exc:                # noqa: BLE001
             rows.append((-1, space.name, "?", "?", f"engine error: {exc}"))
