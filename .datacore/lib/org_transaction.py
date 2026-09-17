@@ -304,12 +304,21 @@ class SafeOrgWorkspace(OrgWorkspace):
         identities = [node.get_property('ID') for node in loads(source)[1:]
                       if node.get_property('ID')]
         if len(identities) != len(set(identities)):
-            raise ValueError('duplicate Org IDs require explicit identity reconciliation')
+            repeated = sorted({i for i in identities if identities.count(i) > 1})
+            raise ValueError('duplicate Org IDs require explicit identity reconciliation: '
+                             f'{", ".join(repeated[:3])} in {Path(path).name}')
         # Loading a file again replaces its own index entries.
         for identity in identities:
             existing = self.find_by_id(identity)
             if existing is not None and existing.path.resolve() != Path(path).resolve():
-                raise ValueError('duplicate Org IDs across files require explicit identity reconciliation')
+                # NAME IT. This message carried no id and no filenames, and the
+                # hourly Phase-1 cycle for a whole space stops on it -- so the
+                # 2026-09-17 occurrence (one routed task left behind in
+                # inbox.org) took twenty minutes of bisecting org files to
+                # identify, for a fact the raiser had in its hand.
+                raise ValueError('duplicate Org IDs across files require explicit identity '
+                                 f'reconciliation: {identity} in {Path(path).name} and '
+                                 f'{Path(existing.path).name}')
         return super().load(path)
 
     def _safe_write(self, path, content):
