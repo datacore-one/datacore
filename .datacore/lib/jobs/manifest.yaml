@@ -88,8 +88,13 @@ jobs:
       # cos_backup.sh's own tar output has a timestamp in the filename
       # (plur-state-<ts>.tar.gz) so it can't be a literal path -- the log
       # is the stable artifact.
+      # LAST LINE, not any line: this log is append-only, so a plain regex --
+      # or `nonempty` -- keeps passing on yesterday's success. On 2026-09-17
+      # the script was not executable, cron got "Permission denied", and this
+      # contract passed: the error line made the log fresh and non-empty.
       - path: "~/.datacore/cos/backup.log"
-        check: nonempty
+        check: last_line_regex
+        arg: 'backup ok:.*offsite=ok'
         max_age_hours: 26
     on_fail: telegram
 
@@ -678,8 +683,13 @@ jobs:
     on_fail: telegram
     artifacts:
       # cos-server-setup.sh:79 pins the exact crontab line + redirect target.
+      # The digest writes its verdict last (see cos_health_digest.sh), which is
+      # what distinguishes "it ran" from "its log still holds what it wrote
+      # yesterday" -- it failed to execute at all on 2026-09-17 and this
+      # contract passed.
       - path: "~/.datacore/cos/health.log"
-        check: nonempty
+        check: last_line_regex
+        arg: 'health digest complete: [0-9]+ issue'
         max_age_hours: 26
 
   - name: box-tomorrow

@@ -93,7 +93,7 @@ def known_machines(path: Path | None = None) -> frozenset[str] | None:
                 raise ManifestError("invalid manifest_machine alias")
             names.add(alias)
     return frozenset(names)
-CHECKS = frozenset({"exists", "nonempty", "json_has_keys", "regex", "min_bytes"})
+CHECKS = frozenset({"exists", "nonempty", "json_has_keys", "regex", "last_line_regex", "min_bytes"})
 ON_FAILS = frozenset({"log", "telegram"})
 
 # checks that must NOT carry an `arg`
@@ -317,9 +317,9 @@ def _build_artifact(raw: object, job_ref: str, index: int, errors: list[str]) ->
     elif check == "json_has_keys":
         if not isinstance(arg, list):
             errors.append(f"{ref}: check 'json_has_keys' requires a list 'arg' (got {arg!r})")
-    elif check == "regex":
+    elif check in ("regex", "last_line_regex"):
         if not isinstance(arg, str):
-            errors.append(f"{ref}: check 'regex' requires a string 'arg' (got {arg!r})")
+            errors.append(f"{ref}: check {check!r} requires a string 'arg' (got {arg!r})")
 
     if len(errors) != start:
         return None

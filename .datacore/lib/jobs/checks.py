@@ -250,6 +250,27 @@ def run_check(artifact: Artifact, *, now: float | None = None,
                         if missing:
                             errors.append(f"{expanded}: missing JSON keys: {missing}")
 
+    elif check == "last_line_regex":
+        # THE RUN'S OWN VERDICT, not any line the file ever held. An
+        # append-only status log keeps yesterday's success forever, so a plain
+        # `regex` there certifies a job that is broken today: winston's backup
+        # and health digest both failed with "Permission denied" this morning
+        # and both contracts passed, because the error line made the log
+        # non-empty and fresh, and the success line above it still matched.
+        text, read_error = _read_text(expanded)
+        if read_error is not None:
+            errors.append(f"{expanded}: {read_error}")
+        else:
+            last = next((l.strip() for l in reversed(text.splitlines()) if l.strip()), "")
+            try:
+                matched = re.search(artifact.arg, last)
+            except re.error as exc:
+                errors.append(f"{expanded}: invalid regex {artifact.arg!r} ({exc})")
+            else:
+                if not matched:
+                    said = f" -- last line: {last[:160]!r}" if last else " -- file is empty"
+                    errors.append(f"{expanded}: last line does not match {artifact.arg!r}{said}")
+
     elif check == "regex":
         text, read_error = _read_text(expanded)
         if read_error is not None:

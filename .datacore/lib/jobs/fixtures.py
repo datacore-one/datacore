@@ -202,7 +202,7 @@ def regex_checks() -> list[tuple[str, str, int, str, str]]:
     out = []
     for j in doc["jobs"]:
         for i, a in enumerate(j.get("artifacts", [])):
-            if a.get("check") == "regex":
+            if a.get("check") in ("regex", "last_line_regex"):
                 out.append((j["name"], j["machine"], i, a["path"], a["arg"]))
     return out
 

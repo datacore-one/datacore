@@ -1,0 +1,7 @@
+# fixture for box-health-digest artifact[0]
+# producer artifact: ~/.datacore/cos/health.log on box (winston)
+# harvested: 2026-09-17
+# regex under test: health digest complete: [0-9]+ issue
+# represents: SUCCESS
+# ---
+2026-09-17T19:22:01+00:00 health digest complete: 0 issue(s), 0 accepted

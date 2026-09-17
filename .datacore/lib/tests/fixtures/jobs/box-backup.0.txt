@@ -1,0 +1,7 @@
+# fixture for box-backup artifact[0]
+# producer artifact: ~/.datacore/cos/backup.log on box (winston)
+# harvested: 2026-09-17
+# regex under test: backup ok:.*offsite=ok
+# represents: SUCCESS
+# ---
+2026-09-17T19:20:37+00:00 backup ok: local=192M (~/backups/plur-state-20260917-192008.tar.gz) kept=14/14 offsite=ok remote_kept=30/30
