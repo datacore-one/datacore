@@ -829,6 +829,22 @@ jobs:
         arg: ["hits", "forbidden_count", "_timestamp"]
         max_age_hours: 26
 
+  - name: nightshift-market-phase
+    machine: nightshift
+    schedule: "30 5 * * *"
+    cmd: "~/Data/.datacore/modules/nightshift/nightshift run --command=/analyze-market-phase"
+    on_fail: telegram
+    artifacts:
+      # The adapter's single declared output (market_phase_orchestrator.py).
+      # The completion marker is written last, so a matching file is a whole
+      # report, not a partial one; the glob takes the newest day. Refused from
+      # 2026-09-16 until the adapter existed -- the failures reached no one,
+      # because nothing contracted this job.
+      - path: "~/Data/6-meridian/reports/market-phase/market-phase-*.md"
+        check: regex
+        arg: '<!-- market-phase: complete -->'
+        max_age_hours: 26
+
   # ── mac ───────────────────────────────────────────────────────────────────
   # No mac crontab/launchd inventory was available beyond the two jobs named
   # in the brief (agent-stream rsync, lens sync). Both plists were confirmed

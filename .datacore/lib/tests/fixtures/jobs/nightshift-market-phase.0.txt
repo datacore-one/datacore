@@ -1,0 +1,7 @@
+# fixture for nightshift-market-phase artifact[0]
+# producer artifact: ~/Data/6-meridian/reports/market-phase/market-phase-*.md on nightshift
+# harvested: 2026-09-17 (by hand: --harvest cannot expand this glob over ssh)
+# regex under test: <!-- market-phase: complete -->
+# represents: SUCCESS
+# ---
+<!-- market-phase: complete -->
