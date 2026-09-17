@@ -97,3 +97,45 @@ def test_writing_keys_preserves_whatever_follows_the_block(tmp_path, trailing):
     if trailing:
         assert "other_section:" in out and "keep: me" in out
         assert "# a later comment" in out
+
+
+def test_a_proven_key_is_the_only_key_for_its_actor(tmp_path, monkeypatch):
+    """The local registry holds whatever ensure_keypair generated on this host.
+
+    2026-09-17 on nightshift: a locally generated "winston" key shadowed the
+    proven one, genuine winston events failed verification there, and an event
+    signed with that local key -- whose private half is on nightshift's disk --
+    would have been accepted.
+    """
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+    from ledger import keys
+
+    def raw_pub(priv):
+        return priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
+
+    real = Ed25519PrivateKey.generate()      # the writer's own identity
+    local = Ed25519PrivateKey.generate()     # what ensure_keypair made on another host
+    data = b"canonical event bytes"
+
+    (tmp_path / ".datacore" / "registry").mkdir(parents=True)
+    (tmp_path / ".datacore" / "registry" / "principals.yaml").write_text(
+        f"verify_keys:\n  winston: {raw_pub(real)}\n")
+    registry = tmp_path / "keys-registry.yaml"
+    registry.write_text(f"actors:\n  winston: {raw_pub(local)}\n")
+    monkeypatch.setattr(keys, "DATACORE_ROOT", tmp_path)
+
+    assert keys.verify("winston", data, real.sign(data).hex(), registry_path=registry) is True
+    assert keys.verify("winston", data, local.sign(data).hex(), registry_path=registry) is False
+
+
+def test_an_uncollected_actor_still_verifies_from_the_local_registry(tmp_path, monkeypatch):
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+    from ledger import keys
+    own = Ed25519PrivateKey.generate()
+    (tmp_path / ".datacore" / "registry").mkdir(parents=True)
+    (tmp_path / ".datacore" / "registry" / "principals.yaml").write_text("verify_keys: {}\n")
+    registry = tmp_path / "keys-registry.yaml"
+    registry.write_text("actors:\n  newwriter: "
+                        + own.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex() + "\n")
+    monkeypatch.setattr(keys, "DATACORE_ROOT", tmp_path)
+    assert keys.verify("newwriter", b"x", own.sign(b"x").hex(), registry_path=registry) is True

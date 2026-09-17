@@ -31,3 +31,28 @@ def _hermetic_git_config(monkeypatch):
     """
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
     monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_ledger_keys(tmp_path_factory, monkeypatch):
+    """No test may read or write this installation's signing keys or proven keys.
+
+    `ledger.keys` resolves its key directory, its local registry and
+    principals.yaml from DATACORE_ROOT at import -- the REAL ~/Data. So a test
+    that signed with the default registry wrote its keys into the host's real
+    `.datacore/keys/`: nightshift's registry carries `actor1`, `fixture`,
+    `hosta`, `hostb`, `testactor`, `worker`, `writer` beside its genuine
+    writers. And every signature check read the host's real principals.yaml,
+    which is why a test signing as `miles` began failing the moment proven keys
+    were given precedence (2026-09-17): the real `miles` key outranked the
+    test's. A test that needs principals sets DATACORE_ROOT on the module
+    itself, as the ones that exercise distribution already do.
+    """
+    try:
+        from ledger import keys
+    except Exception:  # noqa: BLE001 -- suites that never import the ledger are unaffected
+        return
+    root = tmp_path_factory.mktemp("dc-keys-root")
+    monkeypatch.setattr(keys, "DATACORE_ROOT", root)
+    monkeypatch.setattr(keys, "DEFAULT_KEYS_DIR", root / ".datacore" / "keys")
+    monkeypatch.setattr(keys, "DEFAULT_REGISTRY_PATH", root / ".datacore" / "keys" / "registry.yaml")

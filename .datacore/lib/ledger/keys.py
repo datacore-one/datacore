@@ -140,8 +140,9 @@ def known_verify_key(actor: str, registry_path: Path | None = None) -> bool:
 
 
 def principals_verify_key(actor: str) -> str | None:
-    """The writer's public key as distributed in registry/principals.yaml
-    (`verify_keys`), for hosts that hold no local registry entry for it."""
+    """The writer's PROVEN public key from registry/principals.yaml (`verify_keys`,
+    written by ledger_keys_collect only for keys that verify that writer's real
+    signed events)."""
     p = DATACORE_ROOT / ".datacore" / "registry" / "principals.yaml"
     try:
         import yaml
@@ -164,10 +165,22 @@ def verify(
     signature that doesn't match.
     """
     registry_path = registry_path or DEFAULT_REGISTRY_PATH
-    registry = _load_registry(registry_path)
-    # The local registry knows the writers that signed on THIS host; every
-    # other writer's key is distributed through registry/principals.yaml.
-    verify_key_hex = registry["actors"].get(actor) or principals_verify_key(actor)
+    # A PROVEN key wins, and is the only key for its actor. principals.yaml
+    # `verify_keys` holds keys ledger_keys_collect accepted only because they
+    # verify that writer's real signed events. The local registry is not
+    # evidence of anything: `ensure_keypair` GENERATES a key for every actor a
+    # host ever opened an EventLog for, so nightshift holds its own "winston",
+    # "data" and "mac" keys that no such writer signs with.
+    #
+    # The local entry used to win. On 2026-09-17 that made nightshift report
+    # genuine winston and data events as failed signatures, and -- the other
+    # half of the same inversion -- it would have ACCEPTED an event signed with
+    # nightshift's locally generated "winston" private key, which sits on its
+    # disk. The local registry is now a fallback, for actors not yet collected.
+    verify_key_hex = principals_verify_key(actor)
+    if not verify_key_hex:
+        registry = _load_registry(registry_path)
+        verify_key_hex = registry["actors"].get(actor)
     if not verify_key_hex:
         return False
 
