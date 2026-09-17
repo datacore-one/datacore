@@ -116,9 +116,17 @@ repositories:
     repo: datacore-telegram
   .datacore/modules/trading:
     category: code
-    host: github
+    # The live repo is the private Gitea one: 374 commits, current to
+    # 2026-09-14, and it is what the checkout tracks. `datacore-trading` on
+    # GitHub is a 30-commit stub last pushed 2026-08-31 — this entry named it
+    # and so `remotes canonical` reported the working checkout as the drift.
+    #
+    # This landed once (92e9f2a), was reverted the same morning (cee02c1), and
+    # is re-applied on the owner's explicit instruction 2026-09-17. Recorded so
+    # the next reader does not re-litigate it from the revert alone.
+    host: gitea
     transport: git
-    repo: datacore-trading
+    repo: li2
   .datacore/modules/tutor:
     category: code
     host: github
