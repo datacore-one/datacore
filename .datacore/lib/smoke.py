@@ -45,7 +45,12 @@ def _load_hosts() -> tuple[str, str]:
             if "=" in line and not line.strip().startswith("#"):
                 k, _, v = line.partition("=")
                 env[k.strip()] = v.strip()
-    return env.get("SMOKE_BOX", ""), env.get("SMOKE_NIGHTSHIFT", "nightshift")
+    # The box defaults to its ssh ALIAS, like nightshift already does -- an alias
+    # is not topology (CLAUDE.md publishes both). With no default and no
+    # SMOKE_BOX in verify.env, BOX was "", every box check ran `ssh ""`, and
+    # mail_triage and audio_stamp reported "box unreachable" on every run for a
+    # box that was up (found 2026-09-17).
+    return env.get("SMOKE_BOX", "winston"), env.get("SMOKE_NIGHTSHIFT", "nightshift")
 
 
 BOX, NIGHTSHIFT = _load_hosts()
@@ -169,7 +174,9 @@ def check_failed_units() -> tuple[str, str]:
 
 
 def check_mail_triage() -> tuple[str, str]:
-    ok, out = ssh(BOX, "tail -1 /root/Data/.datacore/state/mail/audit.jsonl")
+    # Home-relative: the box runs as a normal user now, and /root is not readable
+    # to it -- the absolute /root paths could only ever fail.
+    ok, out = ssh(BOX, "tail -1 ~/Data/.datacore/state/mail/audit.jsonl")
     if not ok:
         return WARN, "box unreachable"
     try:
@@ -185,7 +192,7 @@ def check_mail_triage() -> tuple[str, str]:
 
 
 def check_audio_stamp() -> tuple[str, str]:
-    ok, out = ssh(BOX, "cat /root/.datacore/cos/audio-last-ok")
+    ok, out = ssh(BOX, "cat ~/.datacore/cos/audio-last-ok")
     if not ok:
         return WARN, "box unreachable"
     if out.startswith(date.today().isoformat()):
