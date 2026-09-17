@@ -114,13 +114,27 @@ class Reservation:
 
 @contextmanager
 def reserve(repo, branch, paths):
-    reservation = Reservation(repo, branch, paths)
-    reservation.create()
-    try:
-        # Capture preceded exclusive creation; recheck after ownership exists.
-        if not reservation.unchanged():
-            raise RuntimeError('Publication refs changed during reservation')
-        yield reservation
-    finally:
-        if reservation.verified or reservation.unchanged():
-            reservation.clear()
+    # HOLD THE TRANSPORT'S REPO LOCK FOR THE WHOLE PUBLICATION. The ledger
+    # transport's converge autosaves (commits) the working tree under that
+    # lock, and nothing here took it, so the two could interleave. On
+    # 2026-09-16 at 22:25:09 nightshift reserved a publication of 0-personal's
+    # journal and inbox; the hourly phase-1 cycle -- also at :25 -- autosaved
+    # and committed those same files seconds later. The branch had moved, so
+    # the reservation could neither verify nor clear, and its pending record
+    # blocked every later publication into 0-personal from that host: the
+    # nightly research notes were "retained locally" three nights running.
+    # The content had in fact landed, in the autosave. Serializing the two
+    # removes the race rather than cleaning up after it; neither path takes
+    # the other's lock inside its own, so there is no nesting to deadlock.
+    from ledger_transport import _repo_lock
+    with _repo_lock(Path(repo)):
+        reservation = Reservation(repo, branch, paths)
+        reservation.create()
+        try:
+            # Capture preceded exclusive creation; recheck after ownership exists.
+            if not reservation.unchanged():
+                raise RuntimeError('Publication refs changed during reservation')
+            yield reservation
+        finally:
+            if reservation.verified or reservation.unchanged():
+                reservation.clear()
