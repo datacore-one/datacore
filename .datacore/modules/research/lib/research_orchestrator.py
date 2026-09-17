@@ -1214,12 +1214,24 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
     # whichever host upgrades last. Trying both tolerates either binary, and
     # the fallback disappears on its own once no old binary remains.
     res = None
+    errors = []
     for argv in ([nlm, 'notebook', 'create', title], [nlm, 'create', title]):
         res = subprocess.run(argv, capture_output=True, text=True, timeout=30)
         if res.returncode == 0:
             break
+        errors.append((' '.join(argv[1:-1]), res.stderr))
     if res.returncode != 0:
-        log(f"  nlm create failed: {res.stderr[:200]}")
+        # REPORT EVERY ATTEMPT, the preferred spelling first. Logging only the
+        # last one printed the FALLBACK's "'create' is deprecated" three nights
+        # running, while the real failure -- the preferred `notebook create` --
+        # was "cached browser session is no longer usable" (2026-09-17). That
+        # message sent the diagnosis to the command syntax instead of the auth.
+        for spelling, err in errors:
+            log(f"  nlm {spelling} failed: {' '.join(err.split())[:220]}")
+        if any(re.search(r'session is no longer usable|authentication (expired|refresh failed)|'
+                         r'browser auth failed', err) for _, err in errors):
+            log("  nlm auth on this host has expired. The credential is copied browser cookies, "
+                "which Google rotates; refresh it on the Mac (nlm_auth_sync.py sync).")
         return None
 
     # Extract notebook ID from output

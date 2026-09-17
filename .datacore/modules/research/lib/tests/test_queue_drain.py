@@ -152,3 +152,26 @@ def test_research_publication_tracks_only_its_outputs_and_reports_failure(tmp_pa
     assert git('show', 'HEAD:notes/own.md') == b'own output'
     assert any('Publication failed' in message for message in messages)
     assert not any(message.startswith('Published ') for message in messages)
+
+
+def test_a_failed_notebook_create_reports_the_preferred_spelling_and_names_auth(monkeypatch, tmp_path):
+    """The log showed only the fallback's "'create' is deprecated" for three nights
+    while the preferred `notebook create` was failing on an expired session."""
+    lines = []
+    monkeypatch.setattr(R, "log", lambda msg: lines.append(msg))
+    fake_nlm = tmp_path / "nlm"
+    fake_nlm.write_text("#!/bin/sh\n")
+    monkeypatch.setenv("NLM_BIN", str(fake_nlm))
+
+    def fake_run(argv, **kwargs):
+        if argv[1:3] == ["notebook", "create"]:
+            return types.SimpleNamespace(returncode=1, stdout="",
+                stderr="nlm: cached browser session is no longer usable. Run `nlm auth login`")
+        return types.SimpleNamespace(returncode=1, stdout="",
+                                     stderr="nlm: 'create' is deprecated; use 'notebook create'")
+    monkeypatch.setattr(R.subprocess, "run", fake_run)
+
+    assert R.create_notebook_with_podcast([{"literature_note": "x"}]) is None
+    text = "\n".join(lines)
+    assert "notebook create failed: nlm: cached browser session is no longer usable" in text
+    assert "nlm auth on this host has expired" in text
