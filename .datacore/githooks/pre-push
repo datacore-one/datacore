@@ -47,6 +47,24 @@ REFS_INPUT=$(cat)
 
 OWNERSHIP="$DATA_DIR/.datacore/lib/hooks/log_ownership_guard.py"
 
+# ---- A Python that can actually run the policy ------------------------------
+# NOT bare `python3`. This hook runs under whatever launched the push, and cron
+# on macOS hands it PATH=/usr/bin:/bin, where python3 is the system 3.9 with no
+# PyYAML. The policy chain then could not run, the hook failed CLOSED, and every
+# push from a scheduled job on the Mac was blocked: ledger_publish_safe "held"
+# 1-datafund and 2-datacore every hour on 2026-09-17 -- while the same push from
+# a terminal, where python3 is a pyenv 3.11 with PyYAML, went straight through.
+# Failing closed was right; resolving the interpreter by PATH order was the bug.
+# Same probe order as runtime_shell.sh, with the one module this hook needs.
+HOOK_PY=""
+for _c in "${DATACORE_PYTHON:-}" python3.13 python3.12 python3.11 python3.10 \
+          /opt/homebrew/bin/python3 /usr/local/bin/python3 \
+          "$HOME/.pyenv/shims/python3" python3; do
+    [ -n "$_c" ] || continue
+    command -v "$_c" >/dev/null 2>&1 || continue
+    if "$_c" -c "import yaml" >/dev/null 2>&1; then HOOK_PY="$_c"; break; fi
+done
+
 # ---- Single-writer log ownership (DIP-0046 D5, GitHub side) ---------------
 # Runs for EVERY repo, before the not-protected early exit further down. Space
 # repos are not "protected public repos", so anything placed after that exit
@@ -56,7 +74,7 @@ OWNERSHIP="$DATA_DIR/.datacore/lib/hooks/log_ownership_guard.py"
 # Reads REFS_INPUT rather than calling `cat` again: stdin can be read ONCE, and
 # an earlier revision of this block consumed it here, leaving REFS_INPUT empty
 # so LFS chaining and the denylist scan silently scanned nothing.
-if [ -f "$OWNERSHIP" ] && command -v python3 >/dev/null 2>&1 && [ -n "$REFS_INPUT" ]; then
+if [ -f "$OWNERSHIP" ] && [ -n "$HOOK_PY" ] && [ -n "$REFS_INPUT" ]; then
     OWN_RANGES=$(printf '%s\n' "$REFS_INPUT" | while IFS=' ' read -r l_ref l_sha r_ref r_sha; do
         [ -z "$l_ref" ] && continue
         [ "$l_sha" = "0000000000000000000000000000000000000000" ] && continue
@@ -101,7 +119,7 @@ if [ -f "$OWNERSHIP" ] && command -v python3 >/dev/null 2>&1 && [ -n "$REFS_INPU
     done)
     if [ -n "$OWN_RANGES" ]; then
         # shellcheck disable=SC2086
-        python3 "$OWNERSHIP" $OWN_RANGES || exit 1
+        "$HOOK_PY" "$OWNERSHIP" $OWN_RANGES || exit 1
     fi
 fi
 
@@ -178,15 +196,15 @@ REPO=$(echo "$URL" | sed -E 's#^(git@github.com:|https://github.com/|ssh://git@g
 
 # ---- Determine whether this remote is protected ---------------------------
 PYTHON_OK=1
-command -v python3 >/dev/null 2>&1 || PYTHON_OK=0
+[ -n "$HOOK_PY" ] || PYTHON_OK=0
 if [ "$PYTHON_OK" = "1" ]; then
-    python3 -c "import yaml" >/dev/null 2>&1 || PYTHON_OK=0
+    "$HOOK_PY" -c "import yaml" >/dev/null 2>&1 || PYTHON_OK=0
 fi
 
 IS_PROTECTED=0
 if [ -f "$DENYLIST" ]; then
     if [ "$PYTHON_OK" = "1" ]; then
-        IS_PROTECTED=$(python3 - "$DENYLIST" "$REPO" <<'PY_POLICY'
+        IS_PROTECTED=$("$HOOK_PY" - "$DENYLIST" "$REPO" <<'PY_POLICY'
 import sys, yaml
 with open(sys.argv[1]) as f:
     d = yaml.safe_load(f)
@@ -228,7 +246,7 @@ echo "pre-push: $REPO is PROTECTED — running policy chain…" >&2
 # ---- Collect outgoing commit range per ref --------------------------------
 RANGE_TOOL="$DATA_DIR/.datacore/lib/git_privacy.py"
 [ -f "$RANGE_TOOL" ] || fail_closed "Git range validator missing"
-ALL_RANGE=$(printf '%s\n' "$REFS_INPUT" | python3 "$RANGE_TOOL" --outgoing "$REMOTE") \
+ALL_RANGE=$(printf '%s\n' "$REFS_INPUT" | "$HOOK_PY" "$RANGE_TOOL" --outgoing "$REMOTE") \
     || fail_closed "cannot establish outgoing commits; fetch the remote and retry"
 
 if [ -z "$ALL_RANGE" ]; then
@@ -240,7 +258,7 @@ fi
 # ---- Run the scanner (paths + content + new-file gate) --------------------
 # (run inside an if-condition so the ERR trap doesn't fire on an expected
 # nonzero exit — the scanner's exit code IS the verdict, not an error)
-if printf '%s' "$ALL_RANGE" | DATA_DIR="$DATA_DIR" python3 "$SCANNER" --repo "$REPO" --denylist "$DENYLIST" >&2; then
+if printf '%s' "$ALL_RANGE" | DATA_DIR="$DATA_DIR" "$HOOK_PY" "$SCANNER" --repo "$REPO" --denylist "$DENYLIST" >&2; then
     SCAN_EXIT=0
 else
     SCAN_EXIT=$?
