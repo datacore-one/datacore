@@ -191,10 +191,55 @@ def sync_generated(space, state, actor, dry_run=False):
         raise ProjectionConflict('removed heading needs explicit archive/deletion evidence')
     if not dry_run:
         log = EventLog(space, actor)
+        appended = []
         for kind, payload in [('item.update', p) for p in updates] + [('item.dismiss', p) for p in dismissals]:
             event = log.append(kind, payload)
+            appended.append((payload['id'], event.hash))
             if expected is not None:
                 item = fold(read_events(space)).items[payload['id']]
                 if event.hash in item.edit_conflicts:
                     raise ProjectionConflict('concurrent ledger edit refused the reviewed decision; reconcile its retained event')
+        if appended:
+            _advance_base(space, current_text, appended)
     return {'dismissed': len(dismissals), 'updated': len(updates)}
+
+
+def _advance_base(space, current_text, appended):
+    """After the file's changes are IN the ledger, the file is the common ancestor.
+
+    The base (last-rendered.json) used to move only when a projection wrote it.
+    So a property written twice between two projections -- which is what every
+    nightshift task does to NIGHTSHIFT_ATTEMPT, `pending:` at start and the
+    outcome at finish -- met a base still holding the value from BEFORE the
+    first write: base absent, file `unknown:`, ledger `pending:`. The merge read
+    the run's own first write as someone else's and refused the second:
+    "concurrent edit at items.<id>.org.properties.NIGHTSHIFT_ATTEMPT". Every task
+    of the 2026-09-17 06:00Z run failed that way, and task 1 of the 16:18Z run.
+
+    Advancing is sound only when the ledger ACCEPTED every change. If any event
+    was retained as an edit conflict, the file still holds a value the ledger
+    refused, and making it the base would let the next projection overwrite
+    that authored edit silently. Then the base stays where it was, and the
+    conflict surfaces as it always has.
+    """
+    from .fold import fold
+    from .log import read_events
+    if load_base(space) is None:
+        return  # no base yet: its first adoption is the projector's decision, not this one's
+    items = fold(read_events(space)).items
+    if any(event_hash in (items[identity].edit_conflicts or {}) for identity, event_hash in appended):
+        return
+    path = Path(space) / STATE
+    document = base_document(current_text)
+    import org_transaction
+    if org_transaction._current.get() is not None:
+        # Inside the caller's serialized transaction (update_task and
+        # sync_state both hold one): a later failure rolls the base back
+        # together with the Org write it describes.
+        org_transaction.write_org_text(path, document)
+        return
+    import os
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix='.last-rendered.')
+    with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+        stream.write(document)
+    os.replace(tmp, path)

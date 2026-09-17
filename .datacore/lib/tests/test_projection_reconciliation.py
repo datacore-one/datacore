@@ -137,3 +137,29 @@ def test_edited_created_provenance_is_not_silently_erased(tmp_path):
     authored = text.replace(':ID: one', ':ID: one\n  :CREATED: [2024-01-03 Wed 12:30]')
     with pytest.raises(ProjectionConflict):
         guard_projection(space, authored, text)
+
+
+def test_a_property_written_twice_between_projections_is_not_a_conflict_with_itself(tmp_path):
+    """Every nightshift task writes NIGHTSHIFT_ATTEMPT twice before the next
+    projection: `pending:` at start, the outcome at finish. The base did not
+    move after the first write, so the second met base=A:base, file=A:second,
+    ledger=A:first -- and was refused as a concurrent edit. 2026-09-17: every
+    task of the 06:00Z overnight run, and task 1 of the 16:18Z run."""
+    space, log, text = setup(tmp_path)
+    target = space / 'org/next_actions.org'
+    target.write_text(text.replace(':A: base', ':A: pending:first'))
+    assert sync_generated(space, fold(read_events(space)), 'writer')['updated'] == 1
+    target.write_text(target.read_text().replace(':A: pending:first', ':A: unknown:first'))
+    assert sync_generated(space, fold(read_events(space)), 'writer')['updated'] == 1
+    assert fold(read_events(space)).items['one'].payload['org']['properties']['A'] == 'unknown:first'
+
+
+def test_a_real_concurrent_edit_is_still_refused(tmp_path):
+    """Advancing the base must not turn a genuine conflict into a silent overwrite."""
+    space, log, text = setup(tmp_path)
+    target = space / 'org/next_actions.org'
+    target.write_text(text.replace(':A: base', ':A: mine'))
+    log.append('item.update', {'id': 'one', 'org': {'properties': {'A': 'theirs'}, 'body': 'original body', 'priority': None}})
+    with pytest.raises(ProjectionConflict):
+        sync_generated(space, fold(read_events(space)), 'writer')
+    assert ':A: base' in (space / STATE).read_text(), "a refused sync must not move the base"
