@@ -24,5 +24,16 @@ datacore_runtime_init || exit $?
 SOCK=$(launchctl getenv SSH_AUTH_SOCK 2>/dev/null || true)
 [ -n "$SOCK" ] && export SSH_AUTH_SOCK="$SOCK"
 
+# A laptop is not a server. launchd runs this coalesced job in the first wake
+# after its slot -- usually a lid-closed maintenance wake of a few seconds with
+# the network half up, where one lost ssh call reads as fleet drift. Skip those
+# and leave the previous log in place: the contract's freshness is measured in
+# awake time, so a skipped maintenance wake costs nothing, and a real wake runs
+# the probe for real. If the state cannot be read, it runs.
+if "$PY" -c "import sys; sys.path.insert(0, '$LIB'); from jobs.awake import in_dark_wake; raise SystemExit(0 if in_dark_wake() else 1)" 2>/dev/null; then
+  echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') skipped: maintenance wake (lid closed, nobody at it)" >> "$STATE/config-drift.skipped.log"
+  exit 0
+fi
+
 exec "$PY" "$LIB/detectors/config_drift.py" \
     > "$STATE/config-drift.log" 2>&1

@@ -844,10 +844,12 @@ def test_real_manifest_box_briefing_declares_require_synced_repos():
 
 
 def _synthetic_roster(tmp_path, monkeypatch):
-    import jobs.manifest
-    path=tmp_path/'infrastructure.yaml'
+    # Through $DATACORE_ROOT, the way the runner actually finds it -- patching a
+    # module constant here is what let the code-relative lookup look correct.
+    path = tmp_path / '.datacore' / 'registry' / 'infrastructure.yaml'
+    path.parent.mkdir(parents=True)
     path.write_text('servers:\n  mac: {}\n  nightshift: {}\n')
-    monkeypatch.setattr(jobs.manifest, '_ROSTER_PATH', path)
+    monkeypatch.setenv('DATACORE_ROOT', str(tmp_path))
 
 
 @pytest.mark.parametrize('content', ['[', '[]', 'servers: []', 'servers: {mac: invalid}'])

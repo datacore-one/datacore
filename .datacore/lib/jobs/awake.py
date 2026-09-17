@@ -29,11 +29,19 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-_ROSTER = Path(__file__).resolve().parents[1].parent / "registry" / "infrastructure.yaml"
 
 # "2026-09-16 08:46:13 +0200 Sleep    Entering Sleep state due to ..."
+#
+# NOT "Wake Requests". pmset writes one a second or two after nearly every
+# Sleep -- dasd scheduling its NEXT maintenance wake -- and a bare `Wake\b`
+# matches it, because the space after "Wake" is a word boundary. Every sleep was
+# therefore "ended" within seconds: measured 2026-09-17 over one night, this
+# parser counted 0.02h asleep where the log records 5.82h. WakeDetails and
+# WakeTime were never at risk (no boundary before a letter); Requests was the
+# one false wake, 227 of them against 228 Sleeps.
 _LOG_LINE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4})\s+(Sleep|Wake|DarkWake)\b")
+    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4})\s+(Sleep|Wake|DarkWake)"
+    r"(?![ \t]*Requests)\b")
 
 
 #: Roster kinds that are not promised to be up. The roster already says of the
@@ -48,16 +56,39 @@ def always_on(machine: str, roster: Path | None = None) -> bool:
     Defaulting to True keeps every existing contract behaving exactly as it did:
     a host only gets awake-time accounting by being declared to need it.
     """
+    from .manifest import roster_path  # the data tree's roster, not this checkout's
+    path = roster or roster_path()
     try:
         import yaml
-        data = yaml.safe_load((roster or _ROSTER).read_text(encoding="utf-8")) or {}
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         entry = (data.get("servers") or {}).get(machine) or {}
     except Exception:  # noqa: BLE001 -- an unreadable roster must not change behaviour
+        _say_once(path, machine)
         return True
     declared = entry.get("always_on")
     if declared is not None:
         return bool(declared)
     return str(entry.get("kind") or "").lower() not in _SLEEPS
+
+
+_WARNED: set[str] = set()
+
+
+def _say_once(path: Path, machine: str) -> None:
+    """Keep the safe default, but never take it SILENTLY.
+
+    Falling back to "always on" is right when the roster cannot be read. Doing
+    it without a word is how the 2026-09-16 sleep fix sat inert in the runner
+    for a day while every staleness alert blamed the job. job_verify_notify.sh
+    folds stderr into the alert it sends, so this line arrives inside the very
+    alert it explains. Darwin only: that is the one platform where treating a
+    machine as always-on changes an answer.
+    """
+    if sys.platform != "darwin" or str(path) in _WARNED:
+        return
+    _WARNED.add(str(path))
+    print(f"job_verify: no readable machine roster at {path}; treating {machine!r} "
+          f"as always-on, so sleep is NOT subtracted from artifact age", file=sys.stderr)
 
 
 def _sleep_log() -> str:
@@ -110,6 +141,36 @@ def asleep_seconds_since(since: float, *, now: float | None = None,
                 total += hi - lo
             asleep_at = None
     return min(total, now - since)
+
+
+def in_dark_wake(*, log: str | None = None) -> bool:
+    """Is this Mac in a maintenance wake rather than a real one, right now?
+
+    A lid-closed laptop wakes every few minutes for Power Nap and dasd
+    maintenance -- `DarkWake from Deep Idle [CDNP]`, no V: no video, nobody at
+    it -- for anywhere from 2 to 45 seconds, with the network half up. launchd
+    runs coalesced StartCalendarInterval jobs in exactly those windows. On
+    2026-09-17 config-drift fired at 08:57:23 into a 45-second maintenance wake,
+    on battery with the lid shut, lost one ssh call, and reported a healthy host
+    as drifted; the real wake came at 09:03:08, "due to UserActivity".
+
+    A full wake logs as `Wake`, including a promotion (`DarkWake to FullWake`),
+    so the most recent Sleep/Wake/DarkWake event says which kind this is. A
+    trailing `Sleep` means the machine is on its way down -- not a moment to
+    reach across the network either.
+
+    Anything that cannot be determined answers False: a job must never be
+    silently skipped because this could not read a log.
+    """
+    if sys.platform != "darwin":
+        return False
+    text = _sleep_log() if log is None else log
+    last = None
+    for line in text.splitlines():
+        m = _LOG_LINE.match(line.strip())
+        if m:
+            last = m.group(2)
+    return last in ("DarkWake", "Sleep")
 
 
 def awake_age(mtime: float, machine: str, *, now: float | None = None,

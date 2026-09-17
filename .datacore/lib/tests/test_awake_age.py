@@ -92,3 +92,73 @@ def test_a_server_never_discounts_sleep(monkeypatch):
     monkeypatch.setattr(awake, "_sleep_log", lambda: NIGHT)
     assert awake.awake_age(written, "box-fixture", now=now,
                            roster=_roster("server")) == pytest.approx(now - written)
+
+
+def test_the_runner_layout_finds_the_roster_in_the_data_tree(tmp_path):
+    """The bug was never in the arithmetic. It was in WHERE the roster is read.
+
+    The roster is gitignored, so it exists only in a host's data tree. Scheduled
+    jobs run from ~/.datacore/v2-runner, a checkout of tracked files only. The
+    reader looked next to its own code, found nothing there, and fell back to
+    "always on" -- so the sleep-aware fix that shipped 2026-09-16 passed every
+    test run from ~/Data and was inert in the one place the verifier runs.
+
+    This reproduces that layout for real: the jobs package copied into a
+    code-only tree with no roster, the roster only in a separate data tree, run
+    in a subprocess so nothing about THIS checkout can leak in.
+    """
+    import shutil
+    import subprocess
+
+    code = tmp_path / "v2-runner"
+    (code / ".datacore" / "lib").mkdir(parents=True)
+    shutil.copytree(LIB / "jobs", code / ".datacore" / "lib" / "jobs",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    assert not (code / ".datacore" / "registry" / "infrastructure.yaml").exists()
+
+    data = tmp_path / "Data"
+    (data / ".datacore" / "registry").mkdir(parents=True)
+    (data / ".datacore" / "registry" / "infrastructure.yaml").write_text(
+        "servers:\n  mac:\n    kind: workstation\n  winston:\n    kind: server\n")
+
+    probe = ("from jobs.awake import always_on; from jobs.manifest import known_machines;"
+             "print(always_on('mac'), always_on('winston'), sorted(known_machines() or []))")
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path / "home"),
+           "DATACORE_ROOT": str(data)}
+    out = subprocess.run([sys.executable, "-c", probe], cwd=code / ".datacore" / "lib",
+                         env=env, capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.split() == ["False", "True", "['mac',", "'winston']"], out.stdout
+
+
+def test_an_explicit_data_root_without_a_roster_does_not_fall_through(tmp_path, monkeypatch):
+    """$DATACORE_ROOT is authoritative. A test or a scratch tree that sets it must
+    never silently read the real machine's roster from ~/Data instead."""
+    from jobs.manifest import roster_path
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
+    assert roster_path() == tmp_path / ".datacore" / "registry" / "infrastructure.yaml"
+    assert awake.always_on("mac") is True
+
+
+# Real lines from this Mac, 2026-09-17, lid closed on battery. The shape that
+# matters: every Sleep is followed seconds later by a `Wake Requests` line, which
+# is dasd SCHEDULING a future wake, not a wake.
+CLAMSHELL_NIGHT = """\
+2026-09-17 02:52:28 +0200 Sleep               \tEntering Sleep state due to 'Clamshell Sleep':TCPKeepAlive=active
+2026-09-17 02:52:29 +0200 Wake Requests       \t[*process=dasd request=SleepService deltaSecs=976 wakeAt=2026-09-17 03:08:46]
+2026-09-17 03:08:46 +0200 DarkWake            \tDarkWake from Deep Idle [CDNP] : due to rtc/SleepService Using BATT (Charge:95%) 2 secs
+2026-09-17 03:08:47 +0200 WakeDetails         \tDriverReason:rtc
+2026-09-17 03:08:47 +0200 WakeTime            \tWakeTime: 1.2 sec
+2026-09-17 03:08:48 +0200 Sleep               \tEntering Sleep state due to 'Sleep Service Back to Sleep':TCPKeepAlive=active
+2026-09-17 03:08:51 +0200 Wake Requests       \t[*process=dasd request=SleepService deltaSecs=932 wakeAt=2026-09-17 03:24:23]
+2026-09-17 09:03:08 +0200 Wake                \tWake from Deep Idle [CDNP] : due to UserActivity Using AC
+"""
+
+
+def test_a_wake_request_is_not_a_wake():
+    since = 1789606348.0            # 2026-09-17 02:52:28 +0200 -- the Sleep itself
+    now = 1789628588.0              # 2026-09-17 09:03:08 +0200 -- the real Wake
+    asleep = awake.asleep_seconds_since(since, now=now, log=CLAMSHELL_NIGHT)
+    # Two real sleeps: 02:52:28 -> 03:08:46 and 03:08:48 -> 09:03:08. The
+    # two-second DarkWake between them is the only awake time in the window.
+    assert asleep == pytest.approx((now - since) - 2, abs=1)

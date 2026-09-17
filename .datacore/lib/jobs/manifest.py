@@ -35,12 +35,45 @@ import yaml
 # implementation did not have. Validate the SHAPE, not the membership.
 _MACHINE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
-_ROSTER_PATH = Path(__file__).resolve().parents[1].parent / "registry" / "infrastructure.yaml"
+_REL = Path(".datacore") / "registry" / "infrastructure.yaml"
+_CODE_ROOT = Path(__file__).resolve().parents[3]
+
+
+def roster_path() -> Path:
+    """Where THIS installation's machine roster is, not where this code is.
+
+    The roster is gitignored -- private network topology, deliberately never in
+    the repo -- so it exists only in each host's data tree. Scheduled jobs run
+    from ~/.datacore/v2-runner, a separate checkout that carries tracked files
+    only. Resolving the roster next to `__file__` therefore found nothing in the
+    one place the verifier actually runs, and both readers failed quietly to a
+    default: known_machines() to shape-only validation, and awake.always_on()
+    to "this machine never sleeps".
+
+    That second one is why a laptop's hourly artifacts kept going "stale" every
+    night after the sleep-aware fix shipped on 2026-09-16: it was verified from
+    ~/Data, where the ignored file exists, and was never once active in the
+    runner. Ten of the twelve roster readers already resolved from the data
+    root; these two were the outliers.
+
+    Order mirrors job_verify.py and actor_identity.py. An explicit
+    $DATACORE_ROOT is authoritative -- a test pointing it at a scratch tree must
+    not fall through to the real one. Unset, ~/Data (job_verify's own default),
+    then the code's own tree, where code and data coincide.
+    """
+    import os
+    root = os.environ.get("DATACORE_ROOT")
+    if root:
+        return Path(root) / _REL
+    for base in (Path.home() / "Data", _CODE_ROOT):
+        if (base / _REL).is_file():
+            return base / _REL
+    return Path.home() / "Data" / _REL
 
 
 def known_machines(path: Path | None = None) -> frozenset[str] | None:
     """Absent installation config permits shape-only validation; invalid does not."""
-    path = path or _ROSTER_PATH
+    path = path or roster_path()
     try:
         data = yaml.safe_load(path.read_text())
     except FileNotFoundError:

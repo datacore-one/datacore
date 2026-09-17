@@ -89,10 +89,27 @@ def check(label: str, host: str | None, user: str | None, _retry: bool = True) -
             return {"machine": label, "status": "unreachable", "detail": path[:120]}
         return {"machine": label, "status": "unset", "detail": "core.hooksPath not configured"}
 
-    rc, listing = run(host, user, f"ls {path} 2>/dev/null | tr '\\n' ' '")
+    # The exit status of THIS call matters as much as the first one's. It used
+    # to be discarded: `ls ... | tr` exits with tr's status, so a dropped ssh
+    # connection and a missing directory both produced an empty listing, and
+    # both were reported as "missing-dir". On 2026-09-17 one lost connection
+    # during a 45-second maintenance wake reported nightshift's hooks directory
+    # missing; it was there, tracked, and configured.
+    #
+    # Exit 3 is reserved for "the directory is not there". Any other failure is
+    # the transport, and gets the same one retry as the first probe.
+    rc, listing = run(host, user, f"test -d {path} || exit 3; ls {path} | tr '\\n' ' '")
+    if rc == 3:
+        return {"machine": label, "status": "missing-dir", "detail": path}
+    if rc != 0:
+        if _retry and host is not None:
+            import time
+            time.sleep(5)
+            return check(label, host, user, _retry=False)
+        return {"machine": label, "status": "unreachable", "detail": f"listing {path} failed"}
     have = set(listing.split())
     if not have:
-        return {"machine": label, "status": "missing-dir", "detail": path}
+        return {"machine": label, "status": "missing-dir", "detail": f"{path} (empty)"}
     absent = [h for h in REQUIRED if h not in have]
     if absent:
         return {"machine": label, "status": "missing-hooks",
