@@ -275,6 +275,15 @@ def run_check(artifact: Artifact, *, now: float | None = None,
                 errors.append(f"{expanded}: invalid regex {artifact.arg!r} ({exc})")
             else:
                 if not matched:
-                    errors.append(f"{expanded}: regex {artifact.arg!r} did not match")
+                    # Say what the file DOES say. A pattern alone tells the
+                    # reader what was expected, never what happened: a phase1
+                    # status reading "FAIL ... (runtime init failed: no usable
+                    # Python)" reached the alert as "regex '^OK phase1-cycle'
+                    # did not match". Last non-empty line, because every status
+                    # artifact here puts its verdict last; bounded so an
+                    # arbitrary file cannot flood an alert.
+                    last = next((l.strip() for l in reversed(text.splitlines()) if l.strip()), "")
+                    said = f" -- last line: {last[:160]!r}" if last else " -- file is empty"
+                    errors.append(f"{expanded}: regex {artifact.arg!r} did not match{said}")
 
     return errors

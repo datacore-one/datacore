@@ -524,12 +524,67 @@ class Drill:
         self.check("the ingested value survived the round trip",
                    ":NOTE:" in after, "the projector dropped what the ingest stored")
 
+    def a_closer_must_not_rename_what_it_closes(self) -> None:
+        """Closing a task through the real gh_reconcile, then ingesting twice.
+
+        Not hypothetical. 2026-09-17 06:50Z: gh_reconcile's substitution added
+        a separator on top of the one it captured, so every task it closed
+        became `* DONE  Title`. Its own sync_state dismissed the item; the NEXT
+        ingest then saw a leading space in the title -- an authored rename of a
+        terminal item -- and the ledger refused it. 0-personal and 5-plur
+        failed ingest on every cycle after. The second ingest is the one that
+        broke, so this runs it.
+        """
+        import gh_reconcile
+        from ledger.fold import fold
+        from ledger.log import read_events
+        from ledger.projection_state import base_document, STATE
+        from ledger.projector import project
+        from ledger_ingest_org import sync_state
+
+        space, _ = self.space("11-closer")
+        (space / ".datacore" / "ledger-phase").write_text("1\n")
+        (space / ".datacore" / "ledger-edit-protocol").write_text("1\n")
+        self.log(space, "drill").append("item.create", {
+            "id": "c1", "title": "Ship the release notes", "state": "NEXT"})
+
+        target = space / "org" / "next_actions.org"
+        rendered = project(fold(read_events(space)), space=space.name, as_of=0).text
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(rendered)
+        (space / STATE).parent.mkdir(parents=True, exist_ok=True)
+        (space / STATE).write_text(base_document(rendered), encoding="utf-8")
+
+        text = target.read_text()
+        tasks = [t for t in gh_reconcile.parse_org_tasks(text) if t.state == "NEXT"]
+        self.check("the drill found the open task to close", len(tasks) == 1)
+        if not tasks:
+            return
+        closed = gh_reconcile.mark_task_done(text.splitlines(), tasks[0], "merged", None)
+        target.write_text("\n".join(closed) + "\n")
+
+        first = second = None
+        try:
+            first = sync_state(space)
+            second = sync_state(space)
+            ok, why = True, ""
+        except Exception as exc:  # noqa: BLE001 -- the failure IS the finding
+            ok, why = False, f"{type(exc).__name__}: {exc}"
+        self.check("the closing ingest and the one after it both succeed", ok, why)
+
+        item = fold(read_events(space)).items.get("c1")
+        self.check("the item is closed in the ledger", item is not None and item.status == "dismissed",
+                   getattr(item, "status", "missing"))
+        title = (getattr(item, "payload", None) or {}).get("title")
+        self.check("closing did not change the title", title == "Ship the release notes", repr(title))
+
     # -- driver ---------------------------------------------------------
     SCENARIOS = ("unreachable_remote", "rejected_push", "resurrected_writer_ref",
                  "concurrent_appenders", "kill_mid_transaction",
                  "truncated_writer_log", "edit_between_ingest_and_project",
                  "torn_final_line", "simultaneous_hosts",
-                 "ingest_closes_the_drift_it_reports")
+                 "ingest_closes_the_drift_it_reports",
+                 "a_closer_must_not_rename_what_it_closes")
 
     def run(self, only: list[str] | None = None) -> int:
         names = only or list(self.SCENARIOS)

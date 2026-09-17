@@ -6,14 +6,30 @@
 # Order is the whole point: projecting before ingesting loses a hand edit.
 set -uo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/runtime_shell.sh" || exit 2
-datacore_runtime_init || exit $?
 finish() {
-  local result="$1"
+  local result="$1" why="${2:-}"
   local label=FAIL
   [ "$result" -eq 0 ] && label=OK
-  printf "%s phase1-cycle %s rc=%s\n" "$label" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$result" > "$STATE/phase1-cycle-status.txt" || return 2
+  printf "%s phase1-cycle %s rc=%s%s\n" "$label" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$result" "${why:+ ($why)}" > "$STATE/phase1-cycle-status.txt" || return 2
   return "$result"
 }
+# A runtime that cannot start must still WRITE its status. This used to exit
+# before `finish` existed, leaving yesterday's status in place, so the contract
+# could only ever report the artifact as "stale" -- never the cause. On
+# 2026-09-16 fourteen consecutive runs died on "no usable Python" while the mac
+# was awake and on battery, and all the alerts said was the file's age.
+# runtime_shell sets and creates $STATE before it probes for a Python, so the
+# status can be written even when no interpreter is found.
+datacore_runtime_init
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  # (Not `if ! datacore_runtime_init; then rc=$?` -- inside that branch $? is
+  # the status of `!` itself, so every failure would be written as OK.)
+  STATE="${STATE:-${DATACORE_STATE:-$HOME/.datacore/state}}"
+  mkdir -p -- "$STATE" 2>/dev/null
+  finish "$rc" "runtime init failed: no usable Python with PyYAML and org-workspace"
+  exit "$rc"
+fi
 cd "$DATACORE_ROOT" || exit 2
 echo "=== $(date -u '+%F %H:%MZ') phase-1 cycle ==="
 # Converge EVERY space first, Phase 1 or not: the marker that says a space is

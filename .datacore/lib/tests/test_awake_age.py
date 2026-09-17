@@ -191,3 +191,15 @@ def test_sleep_accounting_that_breaks_falls_back_to_wall_age(monkeypatch, tmp_pa
     monkeypatch.setattr(awake, "asleep_seconds_since", boom)
     assert awake.awake_age(1000.0, "mac", now=4600.0, roster=roster) == 3600.0
     assert "using wall-clock age" in capsys.readouterr().err
+
+
+def test_a_regex_failure_says_what_the_artifact_actually_said(tmp_path):
+    """The cause has to reach the alert, not just the pattern that missed."""
+    from jobs.checks import run_check
+    from jobs.manifest import Artifact
+    status = tmp_path / "phase1-cycle-status.txt"
+    status.write_text("FAIL phase1-cycle 2026-09-16T03:25:00Z rc=127 "
+                      "(runtime init failed: no usable Python with PyYAML and org-workspace)\n")
+    errors = run_check(Artifact(path=str(status), check="regex", arg="^OK phase1-cycle"))
+    assert len(errors) == 1
+    assert "did not match" in errors[0] and "no usable Python" in errors[0]
