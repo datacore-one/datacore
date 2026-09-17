@@ -257,6 +257,20 @@ def _principal_of(writer: str) -> str | None:
         return None
 
 
+def own_writer_log(path: str) -> bool:
+    """Is `path` a per-writer event log that belongs to THIS host's principal?
+
+    False whenever it cannot be decided -- no identity, an undeclared writer,
+    a path that is not a writer log -- so a caller that treats "not own" as
+    "someone else's work" fails closed. A foreign principal's log is never own.
+    """
+    m = _WRITER_LOG.search(str(path).strip())
+    if not m:
+        return False
+    own, _ = _own_principal()
+    return bool(own) and _principal_of(m.group(1)) == own
+
+
 def foreign_writer_logs(space: Path) -> list[tuple[str, str, str]]:
     """Staged writer logs that belong to a DIFFERENT declared principal than
     this host's: (path, writer, principal).
