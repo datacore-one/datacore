@@ -155,27 +155,40 @@ def asleep_seconds_since(since: float, *, now: float | None = None,
     return min(total, now - since)
 
 
-def in_dark_wake(*, log: str | None = None) -> bool:
-    """Is this Mac in a maintenance wake rather than a real one, right now?
+def in_dark_wake(*, log: str | None = None, systemstate: str | None = None) -> bool:
+    """Is this Mac in a dark wake -- running, but with no display and nobody at it?
 
     A lid-closed laptop wakes every few minutes for Power Nap and dasd
-    maintenance -- `DarkWake from Deep Idle [CDNP]`, no V: no video, nobody at
-    it -- for anywhere from 2 to 45 seconds, with the network half up. launchd
-    runs coalesced StartCalendarInterval jobs in exactly those windows. On
-    2026-09-17 config-drift fired at 08:57:23 into a 45-second maintenance wake,
-    on battery with the lid shut, lost one ssh call, and reported a healthy host
-    as drifted; the real wake came at 09:03:08, "due to UserActivity".
+    maintenance, for 2 to 45 seconds, with the network half up. launchd runs
+    coalesced StartCalendarInterval jobs in exactly those windows: on
+    2026-09-17 config-drift fired at 08:57:23 into a 45-second maintenance wake
+    and lost an ssh call.
 
-    A full wake logs as `Wake`, including a promotion (`DarkWake to FullWake`),
-    so the most recent Sleep/Wake/DarkWake event says which kind this is. A
-    trailing `Sleep` means the machine is on its way down -- not a moment to
-    reach across the network either.
+    Read the CURRENT state first: `pmset -g systemstate` lists the capabilities
+    the machine holds right now, and a full wake holds Graphics; a dark wake
+    holds only CPU and Network. Falling back to the power log's last event is a
+    guess -- the log can end on `Sleep` while a process holding an assertion
+    keeps the machine running in dark wake for hours, network fine.
 
     Anything that cannot be determined answers False: a job must never be
-    silently skipped because this could not read a log.
+    silently skipped because this could not read the machine's state.
     """
-    if sys.platform != "darwin":
+    import os
+    if sys.platform != "darwin" and systemstate is None and log is None:
         return False
+    forced = os.environ.get("DATACORE_WAKE_STATE")
+    if forced in ("full", "dark"):
+        return forced == "dark"
+    state = systemstate
+    if state is None:
+        try:
+            out = subprocess.run(["pmset", "-g", "systemstate"], capture_output=True, timeout=10)
+            state = out.stdout.decode("utf-8", errors="replace") if out.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            state = ""
+    for line in state.splitlines():
+        if line.startswith("Current System Capabilities"):
+            return "Graphics" not in line
     text = _sleep_log() if log is None else log
     last = None
     for line in text.splitlines():
