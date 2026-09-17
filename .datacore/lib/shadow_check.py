@@ -43,8 +43,22 @@ PHASE1_CLEAN_DAYS = int(os.environ.get("DATACORE_PHASE1_DAYS", "5"))
 
 def main() -> int:
     spaces, clean = {}, 0
+    flipped = []
     for space in sorted(ROOT.glob("[0-9]-*")):
         if not (space / "org" / "next_actions.org").exists():
+            continue
+        # A space already in Phase 1 has passed this gate. Its org file is now
+        # GENERATED from the ledger, so "does the projection match the org
+        # file" no longer measures readiness for anything -- yet it was still
+        # counted, and on 2026-09-17, with every space flipped, this reported
+        # "2/10 clean ... 5 more clean day(s) to Phase 1" and exited 1 daily.
+        # The Phase-1 cycle's own reconcile is what guards a flipped space.
+        try:
+            phase = (space / ".datacore" / "ledger-phase").read_text().strip()
+        except OSError:
+            phase = "0"
+        if phase == "1":
+            flipped.append(space.name)
             continue
         d = compare(space)
         spaces[space.name] = {
@@ -56,7 +70,8 @@ def main() -> int:
         clean += 1 if d.clean else 0
         print(f"  {d}")
 
-    all_clean = bool(spaces) and clean == len(spaces)
+    # No Phase-0 space left means the gate has nothing to hold back: clean.
+    all_clean = clean == len(spaces)
 
     prev = {}
     if STATUS.exists():
@@ -106,7 +121,9 @@ def main() -> int:
             _sys.path.insert(0, str(Path(__file__).resolve().parent))
             from ledger.fold import fold as _fold
             from ledger.log import read_events as _read
-            roots[name] = _fold(_read(Path(name))).state_root()[:16]
+            # ROOT / name, not a path relative to the working directory: under
+            # cron that is $HOME, every lookup failed, and every root was None.
+            roots[name] = _fold(_read(ROOT / name)).state_root()[:16]
         except Exception:      # a root is diagnostic, never load-bearing here
             roots[name] = None
 
@@ -118,13 +135,17 @@ def main() -> int:
         "total_spaces": len(spaces),
         "all_clean": all_clean,
         "consecutive_clean_days": streak,
+        "phase1_spaces": flipped,
         "state_roots": roots,
     }, indent=2))
 
+    if not spaces:
+        print(f"\n  every space is in Phase 1 ({len(flipped)}) -- the Phase 0 gate has nothing left to hold")
+        return 0
     gate = "READY for Phase 1" if streak >= PHASE1_CLEAN_DAYS else \
            f"{PHASE1_CLEAN_DAYS - streak} more clean day(s) to Phase 1"
-    print(f"\n  {clean}/{len(spaces)} clean | consecutive clean days: {streak}"
-          f" | {gate}")
+    print(f"\n  {clean}/{len(spaces)} Phase-0 space(s) clean | consecutive clean days: {streak}"
+          f" | {gate}" + (f" | already in Phase 1: {len(flipped)}" if flipped else ""))
     return 0 if all_clean else 1
 
 
