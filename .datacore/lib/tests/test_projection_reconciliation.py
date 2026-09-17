@@ -163,3 +163,33 @@ def test_a_real_concurrent_edit_is_still_refused(tmp_path):
     with pytest.raises(ProjectionConflict):
         sync_generated(space, fold(read_events(space)), 'writer')
     assert ':A: base' in (space / STATE).read_text(), "a refused sync must not move the base"
+
+
+def test_a_terminal_edit_beside_a_body_edit_is_not_refused_as_a_content_change(tmp_path):
+    """The dismissal's precondition is READ after the update, never predicted.
+
+    A dismissal pins the item's ENTIRE payload. `item.payload + changed` only
+    guesses what the update produces: `update_payload` MERGES the `org`
+    sub-dict, so every org key the update does not mention survives -- and the
+    item's own `org.state` never appears in an update, because a terminal
+    transition pops `state` out of it. The predicted base therefore lost a key
+    the merge kept, and the dismissal was refused with "item content changed
+    before dismissal" about a change the same call had just made. nightshift
+    2026-09-17 20:40Z: the retained conflict stopped 5-plur projecting at all,
+    which stopped its hourly cycle and every later run.
+    """
+    space, log, text = setup(tmp_path)
+    log.append('item.update', {'id': 'one', 'org': {'state': 'TODO'}})   # an org key no update carries
+    assert 'state' in fold(read_events(space)).items['one'].payload['org']
+    edited = project(fold(read_events(space)), space=space.name).text
+    (space / 'org/next_actions.org').write_text(
+        edited.replace('* TODO original title', '* DONE original title').replace('original body', 'finished body'))
+
+    result = sync_generated(space, fold(read_events(space)), 'writer')
+
+    assert result == {'updated': 1, 'dismissed': 1}
+    item = fold(read_events(space)).items['one']
+    assert item.edit_conflicts == {}, 'the space must still project'
+    assert item.status == 'dismissed'
+    assert item.payload['org']['body'] == 'finished body'
+    project(fold(read_events(space)), space=space.name)

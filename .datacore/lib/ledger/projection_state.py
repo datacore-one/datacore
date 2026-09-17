@@ -183,22 +183,36 @@ def sync_generated(space, state, actor, dry_run=False):
         if changed:
             updates.append(conditional_payload(item, changed))
         if terminal:
-            expected = deepcopy(item)
-            expected.payload.update(deepcopy(changed))
-            dismissals.append(conditional_payload(expected, {
-                'kind': kind, 'reason': 'authored terminal transition in generated Org'}, terminal=True))
+            # The dismissal's precondition is READ after the update lands, not
+            # predicted from it. A dismissal pins the item's ENTIRE payload, and
+            # `item.payload + changed` is only a guess at what the update will
+            # produce -- `update_payload` merges the `org` sub-dict key by key
+            # rather than replacing it, so the guess is wrong whenever an org
+            # field the update does not mention is already present. The refusal
+            # then reads "item content changed before dismissal" about a change
+            # this same call had just made: nightshift 2026-09-17 20:40Z, where
+            # the retained conflict stopped 5-plur projecting at all.
+            dismissals.append((identity, kind))
     if set(live['items']) - set(merged['items']):
         raise ProjectionConflict('removed heading needs explicit archive/deletion evidence')
     if not dry_run:
         log = EventLog(space, actor)
         appended = []
-        for kind, payload in [('item.update', p) for p in updates] + [('item.dismiss', p) for p in dismissals]:
+
+        def _emit(kind, payload):
             event = log.append(kind, payload)
             appended.append((payload['id'], event.hash))
             if expected is not None:
                 item = fold(read_events(space)).items[payload['id']]
                 if event.hash in item.edit_conflicts:
                     raise ProjectionConflict('concurrent ledger edit refused the reviewed decision; reconcile its retained event')
+
+        for payload in updates:
+            _emit('item.update', payload)
+        for identity, kind in dismissals:
+            current_item = fold(read_events(space)).items[identity]
+            _emit('item.dismiss', conditional_payload(current_item, {
+                'kind': kind, 'reason': 'authored terminal transition in generated Org'}, terminal=True))
         if appended:
             _advance_base(space, current_text, appended)
     return {'dismissed': len(dismissals), 'updated': len(updates)}
