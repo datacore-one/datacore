@@ -130,9 +130,20 @@ def refresh_local() -> bool:
     """Re-extract cookies from the local browser, then prove it worked."""
     print("  refreshing from browser cookies…")
     before = fingerprint(ENV)
-    code, out = _run([_nlm_bin() or "nlm", "auth"], AUTH_TIMEOUT)
+    # NAME THE PROFILE. `nlm auth` with no profile uses NLM_BROWSER_PROFILE from
+    # ~/.nlm/env, and nlm writes whatever profile it was last given back into
+    # that file. nlm v0.1.1 reads a bare word after `auth` as a profile name, so
+    # a single `nlm auth status` -- meant as a status query -- stored "status"
+    # as the browser profile. Every hourly refresh after that ran against a
+    # profile that does not exist: 42 refreshes on "Default", then 231 in a row
+    # on "status", each exiting 3, and winston and nightshift aged out, so the
+    # research podcast produced no notebook night after night (found
+    # 2026-09-17). Passing the profile explicitly also writes it back, so the
+    # first successful run repairs the stored value.
+    profile = os.environ.get("NLM_SYNC_BROWSER_PROFILE") or "Default"
+    code, out = _run([_nlm_bin() or "nlm", "auth", profile], AUTH_TIMEOUT)
     if code != 0:
-        print(f"  FAILED: nlm auth exited {code}")
+        print(f"  FAILED: nlm auth exited {code} (browser profile {profile!r})")
         # The usual cause is no browser profile holding notebook.google.com
         # cookies — i.e. sign in to NotebookLM in Chrome or Brave first.
         for line in out.strip().splitlines()[-4:]:
