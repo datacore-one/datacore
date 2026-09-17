@@ -91,13 +91,25 @@ def _say_once(path: Path, machine: str) -> None:
           f"as always-on, so sleep is NOT subtracted from artifact age", file=sys.stderr)
 
 
+_PMSET = ("pmset", "-g", "log")
+
+
 def _sleep_log() -> str:
+    """The power log as text. Never raises.
+
+    NOT decoded as strict UTF-8: pmset's log is not UTF-8. Assertion detail
+    lines carry raw bytes -- on 2026-09-17 a WindowServer tickle line held 0xd5
+    at byte 7,007,848 -- and `text=True` raised UnicodeDecodeError on it. The
+    Sleep/Wake/DarkWake lines this module reads are ASCII, so replacing an
+    undecodable byte elsewhere changes nothing it depends on.
+    """
     try:
-        out = subprocess.run(["pmset", "-g", "log"], capture_output=True, text=True,
-                             timeout=30)
+        out = subprocess.run(list(_PMSET), capture_output=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return ""
-    return out.stdout if out.returncode == 0 else ""
+    if out.returncode != 0:
+        return ""
+    return out.stdout.decode("utf-8", errors="replace")
 
 
 def asleep_seconds_since(since: float, *, now: float | None = None,
@@ -188,4 +200,15 @@ def awake_age(mtime: float, machine: str, *, now: float | None = None,
     age = now - mtime
     if age <= 0 or always_on(machine, roster):
         return age
-    return max(0.0, age - asleep_seconds_since(mtime, now=now, log=log))
+    try:
+        return max(0.0, age - asleep_seconds_since(mtime, now=now, log=log))
+    except Exception as exc:  # noqa: BLE001 -- see below
+        # Sleep accounting only ever EXCUSES age; it must never become a new
+        # way for a contract to fail. When it first ran for real (2026-09-17)
+        # an undecodable byte in the power log raised here, job_verify turned
+        # the exception into a failure for every job with a freshness bound,
+        # and twelve alerts went out at once. Measure wall age instead -- the
+        # behaviour before this module existed -- and say so.
+        print(f"job_verify: sleep accounting failed ({type(exc).__name__}: {exc}); "
+              f"using wall-clock age for {machine!r}", file=sys.stderr)
+        return age

@@ -162,3 +162,32 @@ def test_a_wake_request_is_not_a_wake():
     # Two real sleeps: 02:52:28 -> 03:08:46 and 03:08:48 -> 09:03:08. The
     # two-second DarkWake between them is the only awake time in the window.
     assert asleep == pytest.approx((now - since) - 2, abs=1)
+
+
+def test_a_power_log_that_is_not_utf8_is_still_read(monkeypatch, tmp_path):
+    """pmset's log carries raw bytes in assertion details. Reading it must not raise.
+
+    Real shape, 2026-09-17: byte 0xd5 inside a WindowServer line, ~7MB in. A
+    strict decode raised, and every freshness-checked job on the mac failed.
+    """
+    log = tmp_path / "pmset.log"
+    log.write_bytes(
+        b"2026-09-17 02:52:28 +0200 Sleep               \tEntering Sleep state\n"
+        b"   pid 409(WindowServer): UserIsActive named: \xd5 tickle\n"
+        b"2026-09-17 09:03:08 +0200 Wake                \tWake from Deep Idle\n")
+    monkeypatch.setattr(awake, "_PMSET", ("/bin/cat", str(log)))
+    text = awake._sleep_log()
+    assert len(text.splitlines()) == 3
+    asleep = awake.asleep_seconds_since(1789606348.0, now=1789628588.0)
+    assert asleep == pytest.approx(1789628588.0 - 1789606348.0, abs=1)
+
+
+def test_sleep_accounting_that_breaks_falls_back_to_wall_age(monkeypatch, tmp_path, capsys):
+    roster = tmp_path / "infrastructure.yaml"
+    roster.write_text("servers:\n  mac:\n    kind: workstation\n")
+
+    def boom(*_a, **_k):
+        raise UnicodeDecodeError("utf-8", b"\xd5", 0, 1, "invalid continuation byte")
+    monkeypatch.setattr(awake, "asleep_seconds_since", boom)
+    assert awake.awake_age(1000.0, "mac", now=4600.0, roster=roster) == 3600.0
+    assert "using wall-clock age" in capsys.readouterr().err
