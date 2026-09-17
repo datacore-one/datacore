@@ -126,8 +126,34 @@ def check_host(host: str) -> str:
     return "ok" if ok else "FAIL"
 
 
-def refresh_local() -> bool:
-    """Re-extract cookies from the local browser, then prove it worked."""
+BROWSERS = ("Google Chrome", "Brave Browser", "Chromium")
+
+
+def browser_holding_profile() -> str | None:
+    """The browser whose running instance owns the profile `nlm auth` reads.
+
+    `nlm auth` drives a headless browser against a profile directory the
+    running browser has locked, and fails with `net::ERR_ABORTED`. On a laptop
+    the browser is open most of the working day, so the hourly refresh reported
+    FAILED most of the working day -- about a credential that was still valid.
+    """
+    if not shutil.which("pgrep"):
+        return None
+    for name in BROWSERS:
+        try:
+            if subprocess.run(["pgrep", "-x", name], capture_output=True, timeout=10).returncode == 0:
+                return name
+        except (OSError, subprocess.SubprocessError):
+            return None
+    return None
+
+
+def refresh_local() -> str:
+    """Re-extract cookies from the local browser, then prove it worked.
+
+    Returns 'refreshed', 'deferred' (could not re-extract, but the credential
+    in hand still works) or 'failed' (no usable credential).
+    """
     print("  refreshing from browser cookies…")
     before = fingerprint(ENV)
     # NAME THE PROFILE. `nlm auth` with no profile uses NLM_BROWSER_PROFILE from
@@ -143,17 +169,23 @@ def refresh_local() -> bool:
     profile = os.environ.get("NLM_SYNC_BROWSER_PROFILE") or "Default"
     code, out = _run([_nlm_bin() or "nlm", "auth", profile], AUTH_TIMEOUT)
     if code != 0:
-        print(f"  FAILED: nlm auth exited {code} (browser profile {profile!r})")
+        holder = browser_holding_profile()
+        if holder and check_local():
+            print(f"  DEFERRED: {holder} is running and owns profile {profile!r}, so the "
+                  f"cookies cannot be re-extracted now — the credential in hand still works")
+            return "deferred"
+        print(f"  FAILED: nlm auth exited {code} (browser profile {profile!r})"
+              + (f"; {holder} is running and owns that profile" if holder else ""))
         # The usual cause is no browser profile holding notebook.google.com
         # cookies — i.e. sign in to NotebookLM in Chrome or Brave first.
         for line in out.strip().splitlines()[-4:]:
             print(f"    {line[:110]}")
-        return False
+        return "failed"
     if not check_local():
         print("  FAILED: nlm auth reported success but the credential does not work")
-        return False
+        return "failed"
     print(f"  refreshed    {before} -> {fingerprint(ENV)}")
-    return True
+    return "refreshed"
 
 
 def push(host: str) -> str:
@@ -195,7 +227,7 @@ def main() -> int:
     if not ENV.exists():
         print(f"  no credential at {ENV} — run `nlm auth` once by hand first")
         return 2
-    if not refresh_local():
+    if refresh_local() == "failed":
         # Without a good local credential there is nothing worth pushing;
         # copying a dead one would overwrite whatever still works remotely.
         print("\n  ABORTED: not pushing an unverified credential to any host")
