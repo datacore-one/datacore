@@ -763,9 +763,21 @@ def hook_commands(settings: Path) -> list[tuple[str, str]]:
 
 def check_hooks(rep: Report) -> None:
     """Every hook command in the global and project settings files runs a
-    file that exists on this host."""
+    file that exists on this host.
+
+    A PATH WE CANNOT STAT IS "COULD NOT TELL", NOT A CRASH. plur-claw carries a
+    hook pointing into `/root/.openclaw/workspace/Data` from when the agent ran
+    as root; `Path.exists()` raises PermissionError there rather than returning
+    False, and the exception escaped this function and took the whole harness
+    down -- so the other 32 checks never ran and `v2_verify` on that host
+    reported nothing at all, for any question. This file's own docstring is
+    about exactly that: three outcomes, and "could not tell" is a real one.
+    Unreadable hooks are counted and named, and they do not fail the check --
+    a path this user may not look at is not evidence that the file is missing.
+    """
     seen_files = 0
     missing: list[str] = []
+    unreadable: list[str] = []
     for settings in HOOK_SETTINGS:
         cmds = hook_commands(settings)
         if not cmds:
@@ -774,13 +786,23 @@ def check_hooks(rep: Report) -> None:
         short = str(settings).replace(str(Path.home()), "~")
         for event, cmd in cmds:
             p = hook_script_path(cmd)
-            if p is not None and not p.exists():
+            if p is None:
+                continue
+            try:
+                present = p.exists()
+            except OSError:
+                unreadable.append(f"{short}: {event} -> {p.name}")
+                continue
+            if not present:
                 missing.append(f"{short}: {event} -> {p.name}")
     if not seen_files:
         rep.add("0036", "hook commands resolve", None, "no settings file with hooks", skipped=True)
         return
+    note = f"{seen_files} settings file(s)"
+    if unreadable:
+        note += f"; {len(unreadable)} not readable by this user ({unreadable[0]})"
     rep.add("0036", "hook commands resolve", not missing,
-            f"{seen_files} settings file(s)" if not missing else "; ".join(missing[:3]))
+            note if not missing else "; ".join(missing[:3]))
 
 
 def check_transport(rep: Report) -> None:
