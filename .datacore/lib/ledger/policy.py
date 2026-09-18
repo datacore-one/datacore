@@ -388,8 +388,25 @@ def _guarded_append_locked(
         from claim_gate import check_create
         # Active only once the installation declares principals in the policy
         # file; a bare Policy() (older callers, unit tests) keeps the old gate.
-        if type == "item.create" and getattr(policy, "principals", None) is not None:
-            _ok, _why = check_create(getattr(log, "actor", None) or "", payload, policy=policy,
+        #
+        # NO POLICY SUPPLIED IS NOT A BARE POLICY. That distinction was missing
+        # and it cost the whole stage: `policy=None` is the easiest thing for a
+        # caller to write, and it skipped the delegation allowlist, the hops
+        # limit, the daily creation cap and the unregistered-writer refusal, in
+        # silence. `check_claim` has always resolved its own policy when given
+        # none; this did not, so the two halves of the same gate disagreed about
+        # what "unspecified" means.
+        #
+        # Found 2026-09-18 by the fleet delegation exercise, on its first run:
+        # `data` created an item assigned to `winston` and the gate allowed it,
+        # although approvals_policy.yaml gives data `may_delegate_to: [miles]`.
+        # A caller who knows the system still wrote the ungated form.
+        #
+        # An explicitly-constructed bare Policy() still opts out, which is what
+        # the older callers and unit tests above actually rely on.
+        create_policy = policy if policy is not None else load_policy()
+        if type == "item.create" and getattr(create_policy, "principals", None) is not None:
+            _ok, _why = check_create(getattr(log, "actor", None) or "", payload, policy=create_policy,
                                      space_dir=space_dir or getattr(log, "space_dir", None))
             if not _ok:
                 raise PolicyError(f"item.create refused for {getattr(log, 'actor', '?')}: {_why}")

@@ -163,6 +163,7 @@ class DelegationDrill(Drill):
         "a_principal_may_not_perform_a_never_effect",
         "a_delegation_chain_has_a_depth_limit",
         "an_unregistered_writer_may_not_create",
+        "the_allowlist_is_enforced_by_the_gate_itself",
     )
 
     # -- fixtures -------------------------------------------------------
@@ -176,6 +177,24 @@ class DelegationDrill(Drill):
         and a fixture that ignores MORE would hide one it does.
         """
         space, _ = self.space(name)
+        # A REAL POLICY FILE, because without one `load_policy()` returns the
+        # default whose `principals` is None and the entire stage-4 gate --
+        # delegation allowlist, hops limit, daily cap, unregistered writer --
+        # stays dormant. A drill running against a policy-less fleet would have
+        # reported every control green while testing none of them, which is
+        # precisely how the 2026-09-18 allowlist hole survived: it was only
+        # found by an exercise that ran against the installation's own policy.
+        cfg = self.root / ".datacore" / "config"
+        cfg.mkdir(parents=True, exist_ok=True)
+        (cfg / "approvals_policy.yaml").write_text(
+            "version: 1\napprover: human\ncosign_effects: [email.send, payment, prod.deploy]\n"
+            "principals:\n"
+            "  winston: {may_delegate_to: [miles, tris]}\n"
+            "  miles: {may_delegate_to: [tris]}\n"
+            "  tris: {may_delegate_to: [miles]}\n"
+            "  gregor: {}\n")
+        import ledger.policy as _p
+        _p.DEFAULT_POLICY_PATH = cfg / "approvals_policy.yaml"
         # `dir/*`, not `dir/` -- the form production uses, for the reason its
         # own comment gives: git cannot re-include a file under an excluded
         # directory.
@@ -526,6 +545,39 @@ class DelegationDrill(Drill):
         self.check("an unregistered writer is refused", not ok, why)
         self.check("and the refusal names the registry",
                    "principals.yaml" in why, why)
+
+    def the_allowlist_is_enforced_by_the_gate_itself(self) -> None:
+        """Through `guarded_append`, with no policy argument -- the ungated form.
+
+        Every other allowlist assertion here calls `check_create` directly,
+        which is why they all passed while the gate in front of it was doing
+        nothing. `guarded_append(log, "item.create", payload)` -- the shortest
+        thing a caller can write -- resolved `policy=None` to "no stage 4 at
+        all", so the delegation allowlist, the hops limit, the daily cap and
+        the unregistered-writer refusal were skipped in silence.
+
+        Found on 2026-09-18 by the fleet exercise on its first run: `data`
+        created an item assigned to `winston`, which `approvals_policy.yaml`
+        forbids, and the gate allowed it.
+        """
+        space = self.delegation_space("16-gate")
+        from ledger.log import EventLog
+        from ledger.policy import guarded_append, PolicyError
+
+        refused = ""
+        try:
+            guarded_append(EventLog(space, "miles", sign=False), "item.create",
+                           {"id": "gate-1", "title": "write Z into z.txt", "assignee": "winston"})
+        except PolicyError as exc:
+            refused = str(exc)
+        self.check("an unlisted delegation is refused with no policy argument",
+                   "may not delegate" in refused, refused or "created!")
+
+        # And one the policy does allow still goes through.
+        guarded_append(EventLog(space, "miles", sign=False), "item.create",
+                       {"id": "gate-2", "title": "write Z into z.txt", "assignee": "tris"})
+        self.check("a permitted delegation is still admitted",
+                   self.item(space, "gate-2") is not None)
 
     def run(self, only: list[str] | None = None) -> int:
         names = only or list(self.SCENARIOS)
