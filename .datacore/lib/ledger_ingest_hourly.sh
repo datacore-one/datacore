@@ -24,8 +24,20 @@ datacore_runtime_init || exit $?
 echo "python: $PY"
 
 echo "=== $(date '+%F %T') ledger ingest (hourly) ==="
-"$PY" "$LIB/ledger_ingest_org.py" > "$STATE/ledger-ingest.log" 2>&1
+# WRITE BESIDE IT, THEN RENAME. `> log` truncates at the START of a run that
+# then takes minutes to scan ten spaces, so the log is EMPTY for that whole
+# window -- every hour, on the hour. box-ledger-ingest reads exactly that file,
+# winston's verifier runs on the hour too, and on 2026-09-18 at 10:00 it read
+# the empty file and paged: "regex '0 space(s) failed' did not match -- file is
+# empty". The ingest had done nothing wrong.
+#
+# A rename within the same directory is atomic, so a reader sees either the
+# previous complete log or the new one, never a half-written one.
+out="$STATE/ledger-ingest.log"
+tmp="$(mktemp "$out.XXXXXX")" || exit 2
+"$PY" "$LIB/ledger_ingest_org.py" > "$tmp" 2>&1
 ingest_rc=$?
+mv -f "$tmp" "$out" || exit 2
 echo "ingest rc=$ingest_rc"
 
 exit $ingest_rc
