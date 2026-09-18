@@ -1218,6 +1218,54 @@ def audio_failure_reason(detail: str) -> Optional[str]:
     return None
 
 
+
+#: Where the audio step's availability is remembered between runs.
+AUDIO_STATE = Path.home() / ".datacore" / "state" / "nlm-audio-availability.json"
+
+#: The sentence cos_research.sh alerts on. Emitted ONLY when the state changes.
+AUDIO_BLOCKED_MARK = "PODCAST AUDIO BLOCKED UPSTREAM"
+AUDIO_RECOVERED_MARK = "PODCAST AUDIO WORKS AGAIN"
+
+
+def record_audio_availability(ok: bool, reason: Optional[str], *, today: Optional[str] = None,
+                              path: Optional[Path] = None) -> Optional[str]:
+    """Remember whether the audio step works, and speak only when that CHANGES.
+
+    A capability that is broken upstream, with the diagnosis already written
+    down and nothing the reader can do, does not become more actionable by
+    being said again tomorrow -- it becomes less. But going silent about it is
+    how a dead feature stays dead unnoticed, so silence has to end by itself:
+    the step still runs every night, and the FIRST run that succeeds says so.
+
+    Returns the line to log and alert on, or None while nothing has changed.
+    """
+    state_path = path or AUDIO_STATE
+    day = today or datetime.now().strftime("%Y-%m-%d")
+    try:
+        previous = json.loads(state_path.read_text(encoding="utf-8"))
+        was_blocked = bool(previous.get("blocked"))
+        since = previous.get("blocked_since") or day
+    except (OSError, ValueError):
+        previous, was_blocked, since = {}, False, day
+
+    record = {"blocked": not ok, "last_checked": day,
+              "blocked_since": (since if not ok else None),
+              "reason": (reason or "")[:400] if not ok else ""}
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    except OSError:
+        pass        # the report matters more than remembering it
+
+    if not ok and not was_blocked:
+        return (f"{AUDIO_BLOCKED_MARK} since {since}. The notebook and its sources are still "
+                f"created and usable; only the audio overview fails. This will not be repeated "
+                f"daily -- the next run that succeeds reports it.")
+    if ok and was_blocked:
+        return f"{AUDIO_RECOVERED_MARK} (blocked since {since}) — nothing to do, it is producing audio."
+    return None
+
+
 def create_notebook_with_podcast(processed: List[Dict[str, Any]],
                                   daily_brief_path: Optional[Path] = None) -> Optional[str]:
     """Create a NotebookLM notebook, add literature notes + daily-news brief as sources,
@@ -1355,8 +1403,14 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
         reason = audio_failure_reason(detail)
         if reason:
             log("  " + reason)
+        transition = record_audio_availability(False, reason)
+        if transition:
+            log(transition)
         return None
 
+    transition = record_audio_availability(True, None)
+    if transition:
+        log(transition)
     log("  Audio overview queued")
     return notebook_id
 
