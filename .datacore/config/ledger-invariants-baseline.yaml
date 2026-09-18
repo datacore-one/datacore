@@ -1,0 +1,28 @@
+# Findings the owner has seen and accepted, so a nightly audit stays quiet about
+# them and loud about everything else. This is an allowlist, not a mute button:
+# each entry matches one invariant, in one space, on the START of its detail, so
+# a second bad event in the same log is still a NEW finding and still fails.
+#
+# Adding to this list is a decision. Removing from it is the fix.
+version: 1
+accepted:
+  - invariant: hashes
+    space: 5-plur
+    detail_startswith: "tris seq 5"
+    accepted_on: 2026-09-19
+    why: >
+      One event in 67,610 whose payload no longer matches its recorded hash.
+      Its tags include ':ASSIGNEE:data', which suggests a tool rewrote the
+      payload in place without re-hashing. The event is published fleet-wide,
+      so repairing it means rewriting ledger history that other hosts already
+      hold — the owner's call, not an agent's. Tracked, not forgotten.
+
+  - invariant: declared
+    space: 2-datacore
+    detail_startswith: "ceo: belongs to no declared principal"
+    accepted_on: 2026-09-19
+    why: >
+      `ceo` has 24 events and a key in principals.yaml's verify_keys, but no
+      entry under `principals:`. Either it is a real principal that should be
+      declared, or a retired identity whose key should be withdrawn. Declaring
+      who may act is an authority decision and belongs to the owner.

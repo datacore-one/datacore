@@ -1130,4 +1130,60 @@ jobs:
         check: exists
         max_age_hours: 170
 
+  # ── the 2026-09-19 audit trio ────────────────────────────────────────────
+  # Every defect that mattered on 2026-09-18 was found by RUNNING something,
+  # not by the 3363 unit tests that passed all day beside them. These assert
+  # what those tests could not: that real work finishes end to end, that the
+  # record is sound, and that this host can find what it needs.
+
+  - name: mac-delegation-canary
+    machine: mac
+    schedule: 15 6 * * *
+    cmd: python3 ~/Data/.datacore/lib/delegation_canary.py --run --space ~/Data/8-firm --assignee miles > ~/.datacore/state/delegation-canary.log 2>&1
+    exit_ok: [0, 1]
+    on_fail: telegram
+    artifacts:
+      - path: ~/.datacore/state/delegation-canary.json
+        check: regex
+        arg: '"verdict": "(dispatched|completed|blocked)"'
+        max_age_hours: 26
+
+  # Split from the run deliberately: the verdict is a different question asked
+  # hours later, and a canary that graded itself the instant it was seeded
+  # would only ever report that it had been seeded.
+  - name: mac-delegation-canary-verdict
+    machine: mac
+    schedule: 45 8 * * *
+    cmd: python3 ~/Data/.datacore/lib/delegation_canary.py --check --space ~/Data/8-firm > ~/.datacore/state/delegation-canary-check.log 2>&1
+    exit_ok: [0, 1]
+    on_fail: telegram
+    artifacts:
+      - path: ~/.datacore/state/delegation-canary-check.log
+        check: no_crash
+        max_age_hours: 26
+
+  - name: mac-ledger-invariants
+    machine: mac
+    schedule: 40 5 * * *
+    cmd: python3 ~/Data/.datacore/lib/ledger_invariants.py > ~/.datacore/state/ledger-invariants.log 2>&1
+    exit_ok: [0, 1]
+    on_fail: telegram
+    artifacts:
+      - path: ~/.datacore/state/ledger-invariants.log
+        check: last_line_regex
+        arg: 'ledger-invariants: SOUND'
+        max_age_hours: 26
+
+  - name: mac-config-resolution
+    machine: mac
+    schedule: 50 5 * * *
+    cmd: python3 ~/Data/.datacore/lib/config_resolution_probe.py > ~/.datacore/state/config-resolution.log 2>&1
+    exit_ok: [0, 1]
+    on_fail: telegram
+    artifacts:
+      - path: ~/.datacore/state/config-resolution.log
+        check: last_line_regex
+        arg: 'config-resolution: OK'
+        max_age_hours: 26
+
 unverified_jobs_see_comment_above: true

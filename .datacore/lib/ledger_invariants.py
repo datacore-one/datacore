@@ -145,6 +145,34 @@ def sweep(root: Path, quick: bool = False) -> list[Finding]:
     return findings
 
 
+def _baseline(path: Path) -> list[dict]:
+    """Findings the owner has seen and accepted.
+
+    A NEW audit that is red on its first day teaches everyone to ignore it, and
+    the two findings live here on 2026-09-19 are both owner decisions -- one
+    needs a principal declared, the other would mean rewriting published ledger
+    history. Neither is mine to make, and neither should page anyone nightly.
+
+    This is an allowlist, not a mute button: entries match on invariant, space
+    and the START of the detail, so a SECOND bad event in the same log is still
+    a new finding. Each entry carries the date it was accepted and why, so the
+    list can be read later and argued with.
+    """
+    try:
+        import yaml
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        return [e for e in (data.get("accepted") or []) if isinstance(e, dict)]
+    except (OSError, ValueError, Exception):  # noqa: BLE001 -- no baseline is not an error
+        return []
+
+
+def _accepted(finding, accepted: list[dict]) -> bool:
+    return any(e.get("invariant") == finding.invariant
+               and e.get("space") == finding.space
+               and finding.detail.startswith(str(e.get("detail_startswith", "")))
+               for e in accepted)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -152,6 +180,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quick", action="store_true",
                     help="skip the per-event hash recomputation and the publish check")
+    ap.add_argument("--baseline", type=Path, default=LIB.parent / "config" / "ledger-invariants-baseline.yaml",
+                    help="findings already accepted by the owner; anything NEW still fails")
     a = ap.parse_args(argv)
 
     spaces = _spaces(a.root)
@@ -166,18 +196,25 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ledger-invariants: sweep failed: {type(exc).__name__}: {exc}")
         return 2
 
-    broken = [f for f in findings if not f.unknown]
+    accepted = _baseline(a.baseline)
+    broken, known = [], []
+    for f in findings:
+        if f.unknown:
+            continue
+        (known if _accepted(f, accepted) else broken).append(f)
     unknown = [f for f in findings if f.unknown]
     if a.json:
         print(json.dumps({"ok": not broken, "spaces": len(spaces),
                           "broken": [vars(f) for f in broken],
+                          "accepted": [vars(f) for f in known],
                           "unknown": [vars(f) for f in unknown]}, indent=2))
     else:
         for f in findings:
-            print(f"  {f}")
+            mark = "known" if (not f.unknown and _accepted(f, accepted)) else None
+            print(f"  {f}" + (f"   [{mark}, accepted by the owner]" if mark else ""))
         verdict = "SOUND" if not broken else "BROKEN"
         print(f"ledger-invariants: {verdict} — {len(spaces)} space(s), "
-              f"{len(broken)} broken, {len(unknown)} could-not-tell")
+              f"{len(broken)} new, {len(known)} accepted, {len(unknown)} could-not-tell")
     return 1 if broken else 0
 
 

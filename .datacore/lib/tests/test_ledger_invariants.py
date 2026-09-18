@@ -130,3 +130,61 @@ def test_events_stranded_past_the_grace_window_do_page(fleet, monkeypatch):
 
     monkeypatch.setattr("ledger_transport.gaps", lambda space: _R())
     assert "published" in _names(inv.sweep(root))
+
+
+# --- The accepted-findings baseline ---------------------------------------
+# A new audit that is red on its first day teaches everyone to ignore it. The
+# two findings live on 2026-09-19 are both owner decisions -- one needs a
+# principal declared, the other would mean rewriting published ledger history.
+# Neither should page anyone nightly; neither should be forgotten either.
+
+def _baseline_file(tmp_path, entries):
+    import yaml
+    path = tmp_path / "baseline.yaml"
+    path.write_text(yaml.safe_dump({"version": 1, "accepted": entries}))
+    return path
+
+
+def test_an_accepted_finding_does_not_fail_the_sweep(fleet, tmp_path, capsys):
+    root, space = fleet
+    EventLog(space, "stranger", sign=False).append("item.create", {"id": "s1", "title": "t"})
+    baseline = _baseline_file(tmp_path, [
+        {"invariant": "declared", "space": "1-work",
+         "detail_startswith": "stranger: belongs to no declared principal"}])
+
+    assert inv.main(["--root", str(root), "--baseline", str(baseline), "--quick"]) == 0
+    assert "accepted by the owner" in capsys.readouterr().out
+
+
+def test_a_different_finding_in_the_same_space_still_fails(fleet, tmp_path):
+    """An allowlist, not a mute button: a SECOND bad writer is new."""
+    root, space = fleet
+    EventLog(space, "stranger", sign=False).append("item.create", {"id": "s1", "title": "t"})
+    EventLog(space, "interloper", sign=False).append("item.create", {"id": "s2", "title": "t"})
+    baseline = _baseline_file(tmp_path, [
+        {"invariant": "declared", "space": "1-work",
+         "detail_startswith": "stranger: belongs to no declared principal"}])
+
+    assert inv.main(["--root", str(root), "--baseline", str(baseline), "--quick"]) == 1
+
+
+def test_a_missing_baseline_accepts_nothing(fleet, tmp_path):
+    root, space = fleet
+    EventLog(space, "stranger", sign=False).append("item.create", {"id": "s1", "title": "t"})
+
+    assert inv.main(["--root", str(root), "--baseline", str(tmp_path / "absent.yaml"),
+                     "--quick"]) == 1
+
+
+def test_the_shipped_baseline_is_readable_and_reasoned(tmp_path):
+    """Every entry must say when it was accepted and why, or it is a mute
+    button that nobody can argue with later."""
+    import yaml
+    shipped = Path(inv.LIB).parent / "config" / "ledger-invariants-baseline.yaml"
+    if not shipped.exists():
+        pytest.skip("no baseline shipped in this checkout")
+    data = yaml.safe_load(shipped.read_text())
+    for entry in data.get("accepted") or []:
+        assert entry.get("accepted_on"), entry
+        assert entry.get("why"), entry
+        assert entry.get("invariant") and entry.get("space"), entry
