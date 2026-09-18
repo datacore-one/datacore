@@ -23,12 +23,37 @@ fi
 ACTOR="$("$PY" "$RUNNER/.datacore/lib/actor_identity.py" 2>/dev/null | cut -d' ' -f1)"
 [ -n "$ACTOR" ] || { echo "$(date -Is) dispatch rc=2 no declared actor (DIP-0044)"; exit 2; }
 cd "$S" || { echo "$(date -Is) dispatch rc=2 space missing: $S"; exit 2; }
-git pull --no-rebase -q 2>&1 | tail -2
+# RECEIVE THROUGH THE TRANSPORT, not `git pull`. converge is where the rules
+# live: it refuses to autosave over a half-finished merge, never stages a
+# submodule pointer, folds every origin/ledger/* ref back into the branch, and
+# tells offline apart from a rejected key. A bare pull here had none of that,
+# and this tick is the one that runs unattended on a satellite host.
+"$PY" "$RUNNER/.datacore/lib/ledger_transport.py" converge --space "$S" >/dev/null 2>&1 \
+  || echo "$(date -Is) dispatch converge-in: could not receive; claiming against the copy on disk"
 "$PY" "$RUNNER/.datacore/lib/ledger_claim.py" --space "$S" --actor "$ACTOR" --limit "$LIMIT" --execute
 rc=$?
-git add .datacore/events/ 2>/dev/null
+# STAGE THIS ACTOR'S OWN LOGS AND NOTHING ELSE. `git add .datacore/events/`
+# staged every writer's file, so a log this host merely received -- Tris's,
+# Winston's -- was committed and pushed under this actor's ref. That is the
+# exact failure DIP-0044 authorship exists to prevent, and it happened twice on
+# hermes in September before the transport grew `foreign_writer_logs`. This
+# path bypassed that guard by never going through the transport at all. The
+# glob also takes `<actor>-run-YYYY-MM-DD.jsonl`, which is the same writer on a
+# run branch, and nothing else.
+#
+# Staged in two calls, not one. An unmatched glob stays literal, and `git add`
+# fails the WHOLE invocation on a pathspec that matches nothing -- so on the
+# ordinary tick, where no run-scoped log exists, one combined call staged
+# nothing at all and the tick published none of its own work either.
+git add ".datacore/events/$ACTOR.jsonl" 2>/dev/null
+for run_log in ".datacore/events/$ACTOR-run-"*.jsonl; do
+  [ -f "$run_log" ] && git add "$run_log" 2>/dev/null
+done
 if ! git diff --cached --quiet 2>/dev/null; then
   git commit -q -m "ledger: $ACTOR claim/completion" 2>/dev/null
+  # Published on this writer's OWN ref: only this writer pushes there, so the
+  # push cannot race. converge merges origin/ledger/* back into the branch on
+  # every host, which is how these claims reach main.
   git push -q origin "HEAD:refs/heads/ledger/$ACTOR" 2>&1 | tail -1
 fi
 echo "$(date -Is) dispatch rc=$rc actor=$ACTOR space=$(basename "$S")"
