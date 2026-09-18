@@ -34,21 +34,61 @@ DEFAULT_MAX_CREATES_PER_DAY = 50
 ABSENT_AFTER_HOURS = 26  # a principal whose contracts have not been verified for this long is absent
 
 
+class RegistryUnreadable(ValueError):
+    """The principal registry exists but cannot be trusted.
+
+    Distinct from "no registry at all", which is an unconfigured installation
+    and a different answer -- see `_registry_is_configured`. Raised as its own
+    type so the gates can turn it into a refusal the caller can print, instead
+    of a bare ValueError escaping into a dispatcher mid-run.
+    """
+
+
 def _limits(actor: str, policy=None) -> tuple[str | None, dict, dict]:
     """(principal name, principal registry entry, policy limits) for a writer."""
-    name, entry = principal_of(actor)
+    try:
+        name, entry = principal_of(actor)
+    except ValueError as exc:
+        raise RegistryUnreadable(str(exc)) from None
     lims = {}
     if policy is not None and getattr(policy, "principals", None):
         lims = dict(policy.principals.get(name or actor) or {})
     return name, entry, lims
 
 
+def _registry_is_configured() -> bool:
+    """Has this installation declared ANY principal at all?
+
+    A FRESH INSTALL HAS NOT, and that is different from "this writer is not
+    allowed". `registry/principals.yaml` is a gitignored private overlay, so a
+    vanilla datacore checkout ships without one -- and once `load_policy()`
+    learned to fall back to the policy shipped beside the code, stage 4 started
+    running everywhere, found no principals, and refused EVERY item.create as
+    "unregistered writer". A new installation could not create a single task.
+    Found 2026-09-19, about two hours after I introduced it.
+
+    Zero principals means identity is unconfigured and the stage cannot answer;
+    one or more means it can, and a writer missing from that roster is a real
+    refusal. Same distinction this codebase draws everywhere else: could-not-
+    tell is not the same answer as no.
+    """
+    try:
+        return bool(_principals())
+    except Exception:  # noqa: BLE001 -- an invalid registry is NOT "unconfigured"
+        return True
+
+
 def check_claim(actor: str, payload: dict | None, policy=None, space_dir: Path | None = None) -> tuple[bool, str]:
     if policy is None:
         from ledger.policy import load_policy
         policy = load_policy()
-    name, entry, lims = _limits(actor, policy)
+    try:
+        name, entry, lims = _limits(actor, policy)
+    except RegistryUnreadable as exc:
+        return False, f"principal registry is unreadable ({exc}); fix it before claiming"
     if name is None:
+        if not _registry_is_configured():
+            return True, "no principal registry; identity gate inactive on this installation"
         return False, f"unregistered writer {actor!r} — declare it in registry/principals.yaml"
     effects = set((payload or {}).get("effects") or [])
     never = set(lims.get("never_effects") or [])
@@ -79,9 +119,14 @@ def creates_today(space_dir: Path | None, actor: str, today: dt.date | None = No
 
 def check_create(actor: str, payload: dict | None, policy=None, space_dir: Path | None = None,
                  today: dt.date | None = None) -> tuple[bool, str]:
-    name, entry, lims = _limits(actor, policy)
+    try:
+        name, entry, lims = _limits(actor, policy)
+    except RegistryUnreadable as exc:
+        return False, f"principal registry is unreadable ({exc}); fix it before creating"
     payload = payload or {}
     if name is None:
+        if not _registry_is_configured():
+            return True, "no principal registry; identity gate inactive on this installation"
         return False, f"unregistered writer {actor!r} — declare it in registry/principals.yaml"
     human = str(entry.get("kind") or "") == "human"
     max_hops = lims.get("max_hops", DEFAULT_MAX_HOPS)
