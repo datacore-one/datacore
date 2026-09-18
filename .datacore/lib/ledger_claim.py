@@ -217,6 +217,27 @@ def _journal(space: Path, actor: str, lines: list[str]) -> None:
         pass
 
 
+#: Failure text that means "this host could not run ANYTHING", as opposed to
+#: "this task did not work". The distinction decides whether an item counts
+#: down towards being dead-lettered, so it is kept narrow and literal: every
+#: marker below is produced by the executor layer itself, never by a task.
+INFRASTRUCTURE_MARKERS = (
+    "binary not found",
+    "not installed",
+    "timed out after",
+    "unknown executor",
+    "auth rejected",
+    "returned no output",
+    "returned an invalid result",
+    "execution failed (exit",
+)
+
+
+def _infrastructure_failure(detail: str) -> bool:
+    low = (detail or "").lower()
+    return any(marker in low for marker in INFRASTRUCTURE_MARKERS)
+
+
 def _commit_result(space: Path, item_id: str) -> tuple[bool, str]:
     """Record whatever this execution produced, so the check has something to read.
 
@@ -477,8 +498,12 @@ def main() -> int:
     attempts: dict[str, int] = {}
     for ev in events:
         if ev.type == "item.release":
-            iid = (ev.payload or {}).get("id")
-            if iid:
+            payload = ev.payload or {}
+            iid = payload.get("id")
+            # An infrastructure release is not an attempt at the TASK. Counting
+            # it dismissed good items because a host's runtime was down rather
+            # than because the work was unsatisfiable -- see the release path.
+            if iid and payload.get("kind") != "infrastructure":
                 attempts[iid] = attempts.get(iid, 0) + 1
 
     exhausted = [i for i in pending if attempts.get(i.id, 0) >= MAX_ATTEMPTS]
@@ -624,8 +649,20 @@ def main() -> int:
         else:
             # Release, not complete: an item that failed must return to the
             # pool rather than be recorded as finished work.
+            #
+            # AND SAY WHOSE FAULT IT WAS. `item.release` is what the dead-letter
+            # counter counts, and after MAX_ATTEMPTS the item is dismissed for
+            # good. That is right for a task nobody can satisfy and wrong for a
+            # host whose agent runtime is down: plur-claw's openclaw stopped
+            # answering on 2026-09-18, and every item addressed to `data` would
+            # have been dismissed within three ticks -- deleting good work
+            # because one machine was sick. An infrastructure release is marked
+            # so the counter can skip it; the item stays available for the host
+            # when it recovers.
+            infra = _infrastructure_failure(detail)
             EventLog(space, args.actor).append(
-                "item.release", {"id": item.id, "owner": args.actor, "error": detail[:300]})
+                "item.release", {"id": item.id, "owner": args.actor, "error": detail[:300],
+                                 **({"kind": "infrastructure"} if infra else {})})
             journal_lines.append(
                 f"FAILED `{item.id[:12]}` {title[:60]} — {detail[:110]}")
             print(f"FAILED   [{route}] {title[:70]}\n         -> {detail[:150]}")

@@ -201,6 +201,7 @@ class DelegationDrill(Drill):
         "the_allowlist_is_enforced_by_the_gate_itself",
         "an_agent_that_does_not_commit_still_completes",
         "work_a_hook_refuses_says_what_refused_it",
+        "a_sick_host_does_not_dead_letter_good_work",
         "an_unassigned_item_claimed_by_several_keeps_one_owner",
         "two_completions_of_one_item_leave_one_result",
         "a_wrong_answer_that_is_committed_still_fails",
@@ -840,6 +841,45 @@ class DelegationDrill(Drill):
         self.check("the space still has what the check tried to delete",
                    (space / "precious.txt").exists())
         self.check("and the tree is unharmed", self._tree_clean(space))
+
+    def a_sick_host_does_not_dead_letter_good_work(self) -> None:
+        """A dead runtime must not delete the work addressed to it.
+
+        `item.release` is what the dead-letter counter counts, and after
+        MAX_ATTEMPTS the item is dismissed for good. That is right for a task
+        nobody can satisfy and wrong for a host whose agent runtime is down:
+        plur-claw's openclaw stopped answering on 2026-09-18, and every item
+        addressed to `data` would have been dismissed within three ticks --
+        deleting good work because one machine was sick.
+        """
+        space = self.delegation_space("27-sick")
+        from ledger.log import EventLog
+        from ledger_claim import MAX_ATTEMPTS
+        iid = self.delegate(space, by="winston", to="miles",
+                            title="write K into k.txt", check="test -f k.txt")
+        log = EventLog(space, "miles", sign=False)
+        for _ in range(MAX_ATTEMPTS + 2):
+            log.append("item.claim", {"id": iid, "owner": "miles"})
+            log.append("item.release", {"id": iid, "owner": "miles",
+                                        "kind": "infrastructure",
+                                        "error": "openclaw: binary not found on PATH"})
+
+        out = self.dispatch(space, "miles", execute=False)
+
+        self.check("it is still offered, not dead-lettered",
+                   self.item(space, iid).status == "created", self.item(space, iid).status)
+        self.check("and no deadletter was written", "DEADLETTER" not in out, out[:200])
+
+        # A task that genuinely cannot be satisfied still gives up.
+        other = self.delegate(space, by="winston", to="miles",
+                              title="write J into j.txt", check="test -f j.txt")
+        for _ in range(MAX_ATTEMPTS):
+            log.append("item.claim", {"id": other, "owner": "miles"})
+            log.append("item.release", {"id": other, "owner": "miles", "error": "the task is wrong"})
+        self.dispatch(space, "miles")
+        self.check("an unsatisfiable task is still dead-lettered",
+                   self.item(space, other).status == "dismissed",
+                   self.item(space, other).status)
 
     def run(self, only: list[str] | None = None) -> int:
         names = only or list(self.SCENARIOS)
