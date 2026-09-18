@@ -479,6 +479,16 @@ commands:
     - diagnostic
     - create-module
 module_commands:
+  uk-ltd:
+    name: UK Statutory Filings
+    description: Companies House, HMRC and ICO deadlines, drafts, and filing evidence
+    version: 0.1.0
+    status: active
+    trigger: statutory|companies house|corporation tax|confirmation statement|dormant|ICO registration
+    source: .datacore/modules/uk-ltd/commands/uk-ltd.md
+    module: uk-ltd
+    related:
+    - today
   start-trading:
     name: Morning Trading Routine
     description: Morning check-in with emotional state, metrics, and framework review

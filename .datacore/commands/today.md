@@ -696,6 +696,7 @@ Each installed module with a `hooks.today` entry contributes content.
 | gigs | Horizon | Concert matches from the listening library, near home |
 | metacognition | inline (after Observation) | Knowledge base pulse |
 | chief-of-staff | Spaces + Decisions Due | Autonomous-activity observations, sub-slot contributors |
+| uk-ltd | Decisions Due | UK statutory filings close enough to matter — silent when none are |
 | gordon | inline | Daily fundraise-sprint contribution |
 | lens | inline | Behavioural observation and personalisation signals |
 | tutor | inline | Turns the day's work into retained understanding |
