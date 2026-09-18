@@ -38,6 +38,12 @@ from pathlib import Path
 
 REQUIRED = ("pre-commit", "pre-push")
 
+#: This runner could not complete the call at all. Distinct from any exit status
+#: the remote command itself can return, so a lost connection can never be read
+#: as an answer. ssh reports its own connection failures as 255.
+TRANSPORT = -1
+SSH_FAILED = (TRANSPORT, 255)
+
 # (label, ssh host or None for local, user to run as or None)
 MACHINES = [
     ("mac", None, None),
@@ -59,7 +65,10 @@ def run(host: str | None, user: str | None, cmd: str) -> tuple[int, str]:
         r = subprocess.run(full, capture_output=True, text=True, timeout=45)
         return r.returncode, (r.stdout or "").strip()
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return 1, f"{type(exc).__name__}: {exc}"
+        # NOT 1. Exit 1 is a real answer from `git config --get`: the key is not
+        # set. Returning 1 for a timeout made "the call never completed" and
+        # "the machine says it is unconfigured" the same number.
+        return TRANSPORT, f"{type(exc).__name__}: {exc}"
 
 
 def check(label: str, host: str | None, user: str | None, _retry: bool = True) -> dict:
@@ -77,9 +86,23 @@ def check(label: str, host: str | None, user: str | None, _retry: bool = True) -
     a machine that is genuinely gone fails both attempts and still reports.
     """
     rc, path = run(host, user, "git config --global --get core.hooksPath")
+    if rc in SSH_FAILED or (rc != 0 and not path and rc != 1):
+        # THE TRANSPORT FAILED, and that is never a verdict about configuration.
+        if _retry and host is not None:
+            import time
+            time.sleep(5)
+            return check(label, host, user, _retry=False)
+        return {"machine": label, "status": "unreachable", "detail": path[:120]}
     if rc != 0 or not path:
-        # Distinguish "reachable and unset" from "unreachable". The second is an
-        # ERROR: we cannot vouch for a machine that did not answer.
+        # `git config --get` exits 1 with no output when the key is unset --
+        # that IS the machine answering. Confirm the host is up before believing
+        # it, because a shell that mangles exit codes would otherwise turn a
+        # dropped call into a finding. On 2026-09-18 at 14:54Z a laptop wake
+        # produced exactly that: three hosts unreachable and plur-claw reported
+        # "core.hooksPath not configured", which the next manual run showed
+        # configured correctly. The mixed result also defeated the wake guard in
+        # config_drift_run.sh, which holds back a run only when EVERY finding is
+        # unreachable, so the false finding paged.
         rc2, _ = run(host, user, "true")
         if rc2 != 0:
             if _retry and host is not None:
@@ -102,6 +125,8 @@ def check(label: str, host: str | None, user: str | None, _retry: bool = True) -
     if rc == 3:
         return {"machine": label, "status": "missing-dir", "detail": path}
     if rc != 0:
+        # Same rule as the first probe: exit 3 above is the only answer this
+        # command gives about the directory; everything else is the transport.
         if _retry and host is not None:
             import time
             time.sleep(5)
