@@ -46,7 +46,9 @@ echo "=== $(date -u '+%F %H:%MZ') phase-1 cycle ==="
 # -- is a different sentence from the same classifier and still fails the cycle,
 # because nothing about it improves on its own.
 offline_only() {
-  grep -q '"reason": "fetch failed (offline?)"' "$1" 2>/dev/null
+  # The reason may be prefixed -- a push reports `push fetch failed (offline?)`,
+  # since the same classifier names both halves of the transport.
+  grep -q '"reason": "[^"]*fetch failed (offline?)"' "$1" 2>/dev/null
 }
 rc=0
 offline=0

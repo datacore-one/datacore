@@ -713,3 +713,58 @@ def test_a_prefix_log_beside_a_real_conflict_is_not_half_resolved(repo_pair: Pat
     assert git(repo_pair, "rev-parse", "HEAD").stdout == head
     assert (repo_pair / "notes.md").read_text() == "ours\n"
     assert not (repo_pair / ".git" / "MERGE_HEAD").exists()
+
+
+# ── the push half of the transport gets the same classification ─────────────
+
+SHA = "a" * 40
+
+
+def _push_failing(monkeypatch, stderr: str):
+    """rev-parse answers; the push fails with `stderr`."""
+    import ledger_transport as lt
+
+    def fake_git(space, *args, **kw):
+        if args[:1] == ("rev-parse",):
+            return 0, SHA, ""
+        return 1, "", stderr
+    monkeypatch.setattr(lt, "_git", fake_git)
+    return lt
+
+
+@pytest.mark.parametrize("stderr,expected", [
+    ("ssh: connect to host git.example port 22: Operation timed out", "offline"),
+    ("fatal: unable to access 'https://example/': Could not resolve host: example", "offline"),
+    ("git@example: Permission denied (publickey).", "auth denied"),
+    ("Host key verification failed.", "host key"),
+    ("ERROR: Repository not found.", "repo missing"),
+])
+def test_a_failed_push_is_named_the_way_a_failed_fetch_is(monkeypatch, stderr, expected, tmp_path):
+    """The module exists to separate 'wait, you are on a train' from 'your key
+    stopped working', and it drew that line on the FETCH only. Every other push
+    failure came back as one untyped sentence, so a laptop that slept between
+    the fetch and the push wrote FAIL into the cycle's status -- the exact false
+    alarm the fetch-side classification was written to end."""
+    lt = _push_failing(monkeypatch, stderr)
+    result = lt._push_with_retry(tmp_path, "main")
+    assert not result.ok
+    assert expected in result.reason, result.reason
+    assert result.reason.startswith("push "), "it says which half of the transport failed"
+
+
+def test_an_offline_push_reads_as_offline_to_the_sweep(monkeypatch, tmp_path):
+    """sync_repo turns the reason into the word the fleet sweep acts on."""
+    import ledger_transport as lt
+    monkeypatch.setattr(lt, "classify", lambda space, root=None: lt.Result(True, "knowledge", {}))
+    monkeypatch.setattr(lt, "converge", lambda space, root=None: lt.Result(
+        False, "converged but not published: push fetch failed (offline?)", {}))
+    assert lt.sync_repo(tmp_path, quiet=True) == "offline"
+
+
+def test_a_denied_push_is_blocked_not_offline(monkeypatch, tmp_path):
+    import ledger_transport as lt
+    monkeypatch.setattr(lt, "classify", lambda space, root=None: lt.Result(True, "knowledge", {}))
+    monkeypatch.setattr(lt, "converge", lambda space, root=None: lt.Result(
+        False, "converged but not published: push auth denied (key rejected — check the key, "
+               "or a VPN/exit node)", {}))
+    assert lt.sync_repo(tmp_path, quiet=True) == "blocked"

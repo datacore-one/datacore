@@ -574,7 +574,16 @@ def _push_with_retry(space: Path, db: str) -> Result:
                 return Result(False, "push rejected and converge failed",
                               {"attempt": attempt, "converge": c.reason})
             continue
-        return Result(False, "push failed; inspect local remote configuration", {"attempt": attempt})
+        # CLASSIFY THE PUSH TOO. This module exists to draw one distinction --
+        # offline says wait, you are on a train; denied says your key stopped
+        # working and four spaces will not sync on their own -- and it was drawn
+        # on the FETCH only. Every other push failure came back as one untyped
+        # sentence, so a laptop that slept between the fetch and the push wrote
+        # FAIL into the cycle's status, which is the false alarm the fetch-side
+        # classification was written to end. The classifier reads the same
+        # stderr and already answers correctly for both cases.
+        return Result(False, f"push {_fetch_reason(err)}",
+                      {"attempt": attempt, "stderr": err.strip()[:200]})
     return Result(False, f"push still rejected after {PUSH_ATTEMPTS} attempts",
                   {"hint": "remote is moving faster than we can converge"})
 
