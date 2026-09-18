@@ -74,11 +74,29 @@ for d in "$DATACORE_ROOT"/[0-9]-*; do
 done
 if [ "${#PHASE1[@]}" -eq 0 ]; then echo "no space in Phase 1; nothing to do"; finish 0; exit $?; fi
 "$PY" "$LIB/ledger_ingest_org.py" --root "$DATACORE_ROOT" > "$STATE/phase1-ingest.log" 2>&1
-rc=$?
-echo "ingest rc=$rc"
-# Existing IDs do not prove that edited bodies/properties reached the ledger.
-# On any ingest failure preserve every source file and stop before projection.
-if [ "$rc" -ne 0 ]; then finish "$rc"; exit $?; fi
+irc=$?
+echo "ingest rc=$irc"
+# ONE SPACE'S FAULT IS ONE SPACE'S FAULT. Existing IDs do not prove that edited
+# bodies and properties reached the ledger, so a space whose ingest failed must
+# NOT be projected over. But the sweep already isolates per space -- it catches
+# each space's exception and names it -- and stopping the whole run here threw
+# away the healthy spaces' projections with it: on 2026-09-18 one duplicate
+# :ID: in 5-plur left nightshift projecting NOTHING, for nine spaces, from
+# 10:25Z until it was repaired by hand.
+#
+# So skip the spaces the sweep named and project the rest. The cycle still ends
+# FAIL, because a space really is stuck and that has to stay visible.
+SKIP=" $(sed -n 's/^\([0-9][^ ]*\)  *FAILED:.*/\1/p' "$STATE/phase1-ingest.log" | tr '\n' ' ')"
+# `rc` stays the CONVERGE verdict -- the next gate uses it to refuse projecting
+# over a half-merged tree. The ingest verdict is carried separately and folded
+# into the cycle's status at the end, so a stuck space fails the cycle without
+# silencing the projection of every healthy one.
+if [ "$irc" -ne 0 ] && [ "$SKIP" = " " ]; then
+  # Failed without naming a space: the sweep itself did not run, so nothing is
+  # known to be safe to project.
+  finish "$irc"; exit $?
+fi
+[ "$irc" -ne 0 ] && echo "ingest failed for:$SKIP- projecting the rest"
 for s in "${PHASE1[@]}"; do
   log="$STATE/phase1-converge-$(basename "$s").log"
   if ! "$PY" "$LIB/ledger_transport.py" converge --space "$s" > "$log" 2>&1; then
@@ -96,11 +114,17 @@ if [ "$rc" -ne 0 ]; then finish "$rc"; exit $?; fi
 # projector's, so this printed `project rc=0` unconditionally -- a projection
 # crash, and every REFUSED line, exited 0 and alerted nobody. PIPESTATUS[0] is
 # the projector's own status, and it now feeds the script's exit code.
-"$PY" "$LIB/ledger_project_org.py" --all 2>&1 | grep -v "authored"
-prc=${PIPESTATUS[0]}
+prc=0
+for s in "${PHASE1[@]}"; do
+  name=$(basename "$s")
+  case "$SKIP" in *" $name "*) echo "project $name: skipped, its ingest failed"; continue;; esac
+  "$PY" "$LIB/ledger_project_org.py" --space "$name" 2>&1 | grep -v "authored"
+  [ "${PIPESTATUS[0]}" -eq 0 ] || prc=${PIPESTATUS[0]}
+done
 echo "project rc=$prc"
 [ "$offline" -gt 0 ] && echo "offline space(s) this cycle: $offline"
 [ "$prc" -eq 0 ] || rc=$prc
+[ "$irc" -eq 0 ] || rc=$irc
 
 finish "$rc"
 exit $?

@@ -100,3 +100,70 @@ print('stage succeeded')
     assert (proc.returncode == 0) is ok
     if ok:
         assert 'offline' in proc.stdout, 'an offline cycle still says so out loud'
+
+
+def test_one_space_failing_ingest_does_not_stop_the_others_projecting(tmp_path):
+    """2026-09-18: one duplicate :ID: in 5-plur left nightshift projecting
+    NOTHING, for nine spaces, from 10:25Z until a human repaired it. The sweep
+    already isolates per space and names the one that failed; the cycle threw
+    the healthy spaces' projections away with it."""
+    scripts = tmp_path / 'scripts'
+    scripts.mkdir()
+    root = tmp_path / 'data'
+    for name in ('9-good', '8-bad'):
+        space = root / name
+        (space / '.datacore/events').mkdir(parents=True)
+        (space / '.git').mkdir()
+        (space / '.datacore/ledger-phase').write_text('1\n')
+    state = tmp_path / 'state'
+    shutil.copyfile(LIB / 'ledger_phase1_cycle.sh', scripts / 'cycle.sh')
+    shutil.copyfile(LIB / 'runtime_shell.sh', scripts / 'runtime_shell.sh')
+    (scripts / 'ledger_transport.py').write_text("print('converged')\n")
+    # The sweep names the space it could not ingest, and exits non-zero.
+    (scripts / 'ledger_ingest_org.py').write_text(
+        "print('8-bad         FAILED: ValueError: duplicate Org IDs across files')\n"
+        "print('9-good        new=0 closed=0 updated=0 known=3')\n"
+        "print('imported 0 task(s) across 2 space(s); 1 space(s) failed')\n"
+        "raise SystemExit(1)\n")
+    (scripts / 'ledger_project_org.py').write_text(
+        "import os, sys\n"
+        "open(os.environ['AUDIT_TRACE'], 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+        "print('projected')\n")
+    trace = tmp_path / 'projected'
+    env = dict(os.environ, DATACORE_ROOT=str(root), DATACORE_STATE=str(state),
+               DATACORE_PYTHON=sys.executable, AUDIT_TRACE=str(trace))
+    proc = subprocess.run(['bash', str(scripts / 'cycle.sh')], env=env,
+                          capture_output=True, text=True, timeout=60)
+
+    projected = trace.read_text() if trace.exists() else ''
+    assert '9-good' in projected, f'the healthy space must still project: {proc.stdout}{proc.stderr}'
+    assert '8-bad' not in projected, 'a space whose ingest failed must NOT be projected over'
+    assert (state / 'phase1-cycle-status.txt').read_text().startswith('FAIL'), \
+        'the cycle still fails: a space really is stuck and that has to stay visible'
+
+
+def test_an_ingest_that_names_no_space_still_stops_everything(tmp_path):
+    """Failing without naming a space means the sweep itself did not run, so
+    nothing is known to be safe to project."""
+    scripts = tmp_path / 'scripts'
+    scripts.mkdir()
+    root = tmp_path / 'data'
+    space = root / '9-only'
+    (space / '.datacore/events').mkdir(parents=True)
+    (space / '.git').mkdir()
+    (space / '.datacore/ledger-phase').write_text('1\n')
+    state = tmp_path / 'state'
+    shutil.copyfile(LIB / 'ledger_phase1_cycle.sh', scripts / 'cycle.sh')
+    shutil.copyfile(LIB / 'runtime_shell.sh', scripts / 'runtime_shell.sh')
+    (scripts / 'ledger_transport.py').write_text("print('converged')\n")
+    (scripts / 'ledger_ingest_org.py').write_text("raise SystemExit(2)\n")
+    trace = tmp_path / 'projected'
+    (scripts / 'ledger_project_org.py').write_text(
+        "import os, sys\nopen(os.environ['AUDIT_TRACE'], 'a').write('ran\\n')\n")
+    env = dict(os.environ, DATACORE_ROOT=str(root), DATACORE_STATE=str(state),
+               DATACORE_PYTHON=sys.executable, AUDIT_TRACE=str(trace))
+    proc = subprocess.run(['bash', str(scripts / 'cycle.sh')], env=env,
+                          capture_output=True, text=True, timeout=60)
+
+    assert not trace.exists(), 'nothing may be projected when the sweep did not run'
+    assert proc.returncode != 0
