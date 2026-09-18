@@ -578,13 +578,195 @@ class Drill:
         title = (getattr(item, "payload", None) or {}).get("title")
         self.check("closing did not change the title", title == "Ship the release notes", repr(title))
 
+    def a_capture_to_inbox_must_not_brick_the_cycle(self) -> None:
+        """An id captured into inbox.org, projected into next_actions.org.
+
+        LIVE on 2026-09-18. `org_workspace_adapter.cmd_add` emits an
+        `item.create` for every heading it writes, INCLUDING headings it writes
+        into `org/inbox.org` (nightshift's follow-up capture,
+        router._capture_task). `projected_items` filters on space and status
+        and NOT on which file the item came from, so the Phase-1 projection
+        renders that inbox item into the generated `org/next_actions.org` under
+        the same `:ID:`. The next ingest calls `ensure_ids`, which loads both
+        files into ONE SafeOrgWorkspace "to validate the complete identity
+        namespace", and that refuses:
+
+            ValueError: duplicate Org IDs across files require explicit
+            identity reconciliation: 161af9a4-... in next_actions.org and
+            inbox.org
+
+        Ingest then returns non-zero, and `ledger_phase1_cycle.sh` stops
+        BEFORE projecting -- so one space's capture stops the projection of
+        every Phase-1 space on the host. Nightshift's 10:25Z cycle printed
+        `ingest rc=1` and nothing else, for nine spaces, and the same refusal
+        reproduced on the mac's live 5-plur an hour later.
+
+        The demand is not that ingest merges the two. It is that CAPTURING A
+        TASK cannot stop the hourly cycle.
+        """
+        from ledger.fold import fold
+        from ledger.log import read_events
+        from ledger.projector import project
+        from ledger_ingest_org import ensure_ids, sync_state
+        space, _ = self.space("12-inbox-capture")
+        (space / ".datacore" / "ledger-phase").write_text("1\n")
+        tid = "11111111-2222-5333-8444-555555555555"
+
+        # What cmd_add does on inbox.org: write the heading, emit item.create.
+        (space / "org" / "inbox.org").write_text(
+            "* Inbox\n** TODO Captured follow-up\n   :PROPERTIES:\n"
+            f"   :ID: {tid}\n   :ORIGIN: followup\n   :END:\n")
+        self.log(space, "drill").append(
+            "item.create", {"id": tid, "title": "Captured follow-up",
+                            "org": {"heading": "Captured follow-up", "level": 2}})
+
+        # What the Phase-1 projector then writes over next_actions.org.
+        rendered = project(fold(read_events(space)), space=space.name, as_of=0).text
+        (space / "org" / "next_actions.org").write_text(rendered)
+        self.check("the projection reproduces the captured id", tid in rendered,
+                   "the scenario never built the collision it is about")
+
+        try:
+            ensure_ids(space)
+            sync_state(space)
+            ok, why = True, ""
+        except Exception as exc:  # noqa: BLE001 -- the refusal IS the finding
+            ok, why = False, f"{type(exc).__name__}: {exc}"
+        self.check("capturing a task to inbox does not refuse the next ingest", ok, why)
+
+    def a_plain_heading_must_not_brick_the_cycle(self) -> None:
+        """A heading with no TODO keyword, in a Phase-1 file.
+
+        `ensure_ids` only guarantees an id for headings that carry a TODO
+        keyword (`node.todo and not node.id()`), and the installed adapter's
+        `ensure-ids` assigns ids to exactly those. `sync_generated` demands an
+        id on EVERY heading and raises `ProjectionConflict('heading without
+        ID; ingest before projecting')` otherwise -- advice that cannot be
+        followed, because ingest is what is failing. The cycle then exits 1
+        before projecting, on every host, every hour, with no way out but
+        editing a gitignored generated file by hand.
+        """
+        from ledger_ingest_org import ensure_ids, sync_state
+        from ledger.genesis import import_space
+        from ledger.fold import fold
+        from ledger.log import read_events
+        from ledger.projection_state import sync_generated
+        space, _ = self.space("13-plain-heading")
+        (space / ".datacore" / "ledger-phase").write_text("1\n")
+        (space / "org" / "next_actions.org").write_text(
+            "* Someday\n* TODO a real task\n")
+        # THE CYCLE'S OWN ORDER, all four steps. Calling ensure_ids and
+        # sync_state alone leaves the ledger empty, and the projection then
+        # refuses for a reason the cycle never meets ("no projection base and
+        # Org/ledger differ") -- a drill that cannot pass even once the defect
+        # is fixed reports a failure nobody can clear.
+        try:
+            ensure_ids(space)
+            import_space(space, actor="drill")
+            sync_state(space)
+            sync_generated(space, fold(read_events(space)), "drill")
+            ok, why = True, ""
+        except Exception as exc:  # noqa: BLE001
+            ok, why = False, f"{type(exc).__name__}: {exc}"
+        self.check("a plain heading does not refuse the ingest", ok, why)
+        self.check("and the projection renders it back as a plain heading",
+                   "* Someday" in (space / "org" / "next_actions.org").read_text(),
+                   (space / "org" / "next_actions.org").read_text()[:200])
+
+    def an_offline_push_is_a_condition(self) -> None:
+        """Fetch succeeds, push cannot reach the remote. A laptop, mid-cycle.
+
+        `_fetch_reason` is the whole point of this module -- "offline says
+        wait, you are on a train; denied says your key stopped working" -- and
+        it is applied to the FETCH only. `_push_with_retry` returns one
+        untyped string, "push failed; inspect local remote configuration", for
+        every push error that is not a non-fast-forward. So a lid closed
+        between fetch and push and a rejected key are the same sentence, and
+        `sync_repo` classifies both as `conflict`, which is in HUMAN_NEEDED.
+        The hourly cycle's `offline_only` grep does not match it either, so the
+        laptop writes FAIL and alerts about a machine that is merely asleep --
+        exactly the 2026-09-18 02:53Z alert the fetch-side fix was written for.
+        """
+        import ledger_transport as t
+        space, origin = self.space("14-offline-push", remote=True)
+        self.log(space, "drill").append("item.create", {"id": "p1", "title": "written before the lid closed"})
+        # Fetch stays local and healthy; only the push leaves the machine.
+        self.git(space, "remote", "set-url", "--push", "origin",
+                 f"ssh://git@{BLACKHOLE}:22/drill.git")
+
+        started = time.monotonic()
+        result = t.converge(space, root=self.root)
+        elapsed = time.monotonic() - started
+        self.check("converge reports that it could not publish", not result.ok, result.reason)
+        self.check("it gives up within 30s", elapsed < UNREACHABLE_BUDGET_S, f"{elapsed:.1f}s")
+        self.check("an unreachable push reads as OFFLINE, not as a bare failure",
+                   "offline" in result.reason.lower(), result.reason)
+        self.check("sync_repo calls it offline, not conflict",
+                   t.sync_repo(space, quiet=True, root=self.root) == "offline",
+                   t.sync_repo(space, quiet=True, root=self.root))
+
+        # And the distinction must survive: a REFUSED push is still blocked.
+        #
+        # The refusal has to come from a remote that ANSWERS. This first read
+        # `ssh://nobody@127.0.0.1:1/denied.git`, where ssh reports "connect to
+        # host 127.0.0.1 port 1: Connection refused" -- a second unreachable
+        # remote, not a denied one, so the drill was asserting that the
+        # classifier must misread it. A remote that accepts the connection and
+        # then rejects the write is what an expired key or a protected branch
+        # actually looks like, and it is the only version of this the operator
+        # has to act on differently.
+        self.git(space, "remote", "set-url", "--push", "origin", str(origin))
+        hook = origin / "hooks" / "pre-receive"
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        denied = t.converge(space, root=self.root)
+        self.check("a refused push does NOT read as offline",
+                   not denied.ok and "offline" not in denied.reason.lower(), denied.reason)
+
+        local = self.events(space, "drill")
+        self.check("the unpublished event is still here",
+                   len(local) == 1 and local[0]["payload"]["id"] == "p1")
+
+    def gaps_names_what_is_unpublished(self) -> None:
+        """`gaps()` is the stated safety net for "appended but NOT published".
+
+        `append`'s own docstring: "seq-gap will keep reporting it until it is,
+        which is the safety net." It does not. `gaps()` counts only `gap` and
+        discards `pending`, so for the first 90 minutes -- the whole window in
+        which an operator asks "is my work anywhere but this disk?" -- it
+        answers `ok=True, "all published"` while three events sit on one disk.
+        The detector knows (`pending: 3` is right there in the rows); the
+        Result that callers branch on throws it away.
+        """
+        import ledger_transport as t
+        space, _ = self.space("15-gaps", remote=True)
+        # One event must reach the remote first: a log the remote has never
+        # seen is the LOUDEST gap and takes a different path entirely. The
+        # condition being tested is the ordinary one -- a published log that
+        # this machine has since moved past.
+        self.log(space, "drill").append("item.create", {"id": "g0", "title": "published"})
+        t.converge(space, root=self.root)
+        for n in range(1, 4):
+            self.log(space, "drill").append("item.create", {"id": f"g{n}", "title": "unpublished"})
+        res = t.gaps(space)
+        rows = res.context.get("rows", [])
+        pending = sum(r.get("pending") or 0 for r in rows)
+        self.check("the detector sees the unpublished events", pending == 3, str(rows))
+        self.check("gaps() does not report them as published",
+                   not res.ok or "all published" not in res.reason,
+                   f"{res.ok} {res.reason!r} with pending={pending}")
+
     # -- driver ---------------------------------------------------------
     SCENARIOS = ("unreachable_remote", "rejected_push", "resurrected_writer_ref",
                  "concurrent_appenders", "kill_mid_transaction",
                  "truncated_writer_log", "edit_between_ingest_and_project",
                  "torn_final_line", "simultaneous_hosts",
                  "ingest_closes_the_drift_it_reports",
-                 "a_closer_must_not_rename_what_it_closes")
+                 "a_closer_must_not_rename_what_it_closes",
+                 "a_capture_to_inbox_must_not_brick_the_cycle",
+                 "a_plain_heading_must_not_brick_the_cycle",
+                 "an_offline_push_is_a_condition",
+                 "gaps_names_what_is_unpublished")
 
     def run(self, only: list[str] | None = None) -> int:
         names = only or list(self.SCENARIOS)
