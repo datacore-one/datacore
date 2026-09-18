@@ -92,6 +92,15 @@ class ItemState:
     #: fold stays non-mutating over its input.
     payload: dict = field(default_factory=dict)
     claimed_payload_hash: str | None = None
+    #: Who granted execution, and when. `item.grant` is declared in events.py
+    #: as the DIP-0034 amendment -- "a claim is a PROPOSAL; execution in an
+    #: arbitrated pool requires the arbiter's grant" -- and policy.py enforces
+    #: that only the approver may mint one. The fold had no handler for it, so a
+    #: grant changed nothing, appeared in no item's history, and did not move
+    #: the state root: a control that is declared, guarded, and absent. Recorded
+    #: here so a consumer can require it; nothing is retroactively required.
+    granted_by: str | None = None
+    granted_at: str | None = None
     edit_conflicts: dict[str, str] = field(default_factory=dict)
 
 
@@ -130,6 +139,12 @@ class LedgerState:
             # Keep historical state roots stable when no new conflict exists.
             if not document['edit_conflicts']:
                 del document['edit_conflicts']
+            # Same rule for the grant fields: an item nobody granted hashes
+            # exactly as it did before they existed, so adding the handler does
+            # not invalidate every checkpoint ever written.
+            if document.get('granted_by') is None:
+                document.pop('granted_by', None)
+                document.pop('granted_at', None)
             h.update(canonical_bytes({"key": iid, "item": document}))
         h.update(canonical_bytes({"spend": dict(sorted(self.spend.items()))}))
         h.update(canonical_bytes({"orphans": sorted(self.orphans)}))
@@ -248,6 +263,32 @@ def _handle_claim(state: LedgerState, event: Event) -> None:
     item.claimed_payload_hash = event.payload.get("payload_hash")
     item.status = "claimed"
     _note(item, event, "applied")
+
+
+def _handle_grant(state: LedgerState, event: Event) -> None:
+    """Record the arbiter's grant of execution on a claimed item.
+
+    policy.py already refuses a grant from anyone but the approver, so reaching
+    the fold means it was minted by the right principal. What was missing is the
+    other half: the fold kept no trace, so `item.grant` was a control that could
+    be demanded, refused, audited at the gate -- and then vanished.
+
+    A grant does NOT claim, complete or reassign. It says one thing: this owner
+    may execute this item. Granting something nobody has claimed, or something
+    already closed, is a no-op that names why, exactly like the other handlers.
+    """
+    item = _get_item_or_orphan(state, event)
+    if item is None or _dismissed(state, event, item):
+        return
+    if item.status not in ("claimed",):
+        _note(item, event, f"no-op (grant illegal from status={item.status})")
+        return
+    if item.granted_by is not None:
+        _note(item, event, f"no-op (already granted by {item.granted_by!r})")
+        return
+    item.granted_by = event.actor
+    item.granted_at = event.hlc
+    _note(item, event, f"applied (execution granted to {item.owner!r})")
 
 
 def _handle_release(state: LedgerState, event: Event) -> None:
@@ -466,6 +507,7 @@ def _handle_spend(state: LedgerState, event: Event) -> None:
 _HANDLERS = {
     "item.create": _handle_create,
     "item.claim": _handle_claim,
+    "item.grant": _handle_grant,
     "item.release": _handle_release,
     "item.complete": _handle_complete,
     "item.update": _handle_update,
