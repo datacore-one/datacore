@@ -71,7 +71,15 @@ def _task(to: str) -> tuple[str, str]:
     produced, so it asserts the OUTCOME. `test -s` would pass on a touched
     file; this does not.
     """
-    out = f"drill/{to}-linecount.txt"
+    # 4-outbox, not a top-level drill/. DIP-0015's structure hook refuses any
+    # root directory outside its allowed set, so an agent told to produce
+    # `drill/x.txt` CANNOT commit it -- and the failure then surfaces as "commit
+    # task changes before artifact verification", which names the agent rather
+    # than the hook that actually refused. A delegated task whose artifact lands
+    # outside the permitted tree can never pass its check, however well the
+    # agent does the work. Measured 2026-09-18: the answer was right (216) and
+    # the item still failed.
+    out = f"4-outbox/delegation-drill/{to}-linecount.txt"
     title = f"count the lines of {SOURCE} and write only that number into {out}"
     check = (f'test -f {out} && test "$(wc -l < {SOURCE} | tr -d " ")" '
              f'= "$(tr -d "[:space:]" < {out})"')

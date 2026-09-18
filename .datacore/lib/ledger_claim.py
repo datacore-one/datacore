@@ -217,8 +217,16 @@ def _journal(space: Path, actor: str, lines: list[str]) -> None:
         pass
 
 
-def _artifact_tree_clean(space):
-    """Only ledger append records may differ from the checked commit."""
+def _artifact_tree_clean(space, offenders: list | None = None):
+    """Only ledger append records may differ from the checked commit.
+
+    `offenders`, when given, is filled with the paths that made this False, so
+    the caller can NAME them. It said only "commit task changes", which points
+    at the agent -- and on 2026-09-18 the real cause was a DIP-0015 structure
+    hook refusing a top-level `drill/` directory, so the agent's commit could
+    never have succeeded and no amount of retrying would have helped. A refusal
+    that describes the wrong cause costs more than one that says nothing.
+    """
     root = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=space, capture_output=True, text=True)
     if root.returncode:
         return False
@@ -234,8 +242,13 @@ def _artifact_tree_clean(space):
         if result.returncode:
             return False
         paths.extend(os.fsdecode(name) for name in result.stdout.split(b"\0") if name)
-    return all(name.startswith(event_prefix) and "/" not in name[len(event_prefix):]
-               and (name.endswith(".jsonl") or name.endswith(".lock")) for name in paths)
+    def permitted(name: str) -> bool:
+        return (name.startswith(event_prefix) and "/" not in name[len(event_prefix):]
+                and (name.endswith(".jsonl") or name.endswith(".lock")))
+    bad = [name for name in paths if not permitted(name)]
+    if offenders is not None:
+        offenders.extend(bad)
+    return not bad
 
 
 def _isolated_check(space: Path, check: str) -> tuple[bool, str]:
@@ -271,8 +284,11 @@ def _isolated_check(space: Path, check: str) -> tuple[bool, str]:
     same green.
     """
     import tempfile
-    if not _artifact_tree_clean(space):
-        print("         -> check FAILED CLOSED: commit task changes before artifact verification; existing index and files preserved")
+    dirty: list[str] = []
+    if not _artifact_tree_clean(space, dirty):
+        print("         -> check FAILED CLOSED: commit task changes before artifact verification; "
+              "existing index and files preserved"
+              + (f" (uncommitted: {', '.join(sorted(dirty)[:4])})" if dirty else ""))
         return False, ""
     rc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=space,
                         capture_output=True, text=True)
