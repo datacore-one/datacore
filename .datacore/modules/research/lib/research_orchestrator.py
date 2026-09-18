@@ -1152,9 +1152,10 @@ def main():
                 # user is told. A podcast step that produced nothing and said
                 # nothing is indistinguishable from one that was never asked
                 # for — which is how this broke for six days unnoticed.
-                log("PODCAST STEP PRODUCED NO NOTEBOOK — see the nlm errors above. "
-                    "Likely causes: expired nlm auth (refresh on the Mac and "
-                    "re-sync), or a stale nlm binary.")
+                log("PODCAST STEP PRODUCED NO PODCAST — see the nlm errors above. "
+                    "If a notebook was created and only the audio failed, the line above "
+                    "says so and names which of the two faults it is: a rejected RPC is the "
+                    "client being out of date, an unusable session is the credential.")
         except Exception as e:
             log(f"NotebookLM step failed (non-fatal): {e}")
 
@@ -1181,6 +1182,27 @@ def main():
 
 
 # ---- NotebookLM podcast (best-effort) ----
+
+#: What the audio step's own error says about WHOSE fault it is. Reaching the RPC
+#: and being told the arguments are invalid is not an expired session -- the
+#: session had to work to get that answer. Measured 2026-09-18:
+#: "CreateAudioOverview: execute rpc: One or more arguments are invalid"
+#: (exit-class=bad-args) failed identically on winston and on the Mac with
+#: native, freshly refreshed auth, because the client's audio RPC is older than
+#: NotebookLM's API. Three weeks of alerts had been sending the owner to refresh
+#: a credential that was never the problem.
+def audio_failure_reason(detail: str) -> Optional[str]:
+    text = (detail or '').lower()
+    if 'bad-args' in text or 'arguments are invalid' in text:
+        return ("This is the nlm CLI's audio RPC, not the credential: the session reached "
+                "NotebookLM and NotebookLM rejected the call. Upgrade nlm on this host; "
+                "refreshing auth cannot change this answer.")
+    if re.search(r'session is no longer usable|authentication (expired|refresh failed)|'
+                 r'browser auth failed|not logged in', text):
+        return ("The session is unusable: refresh it on the Mac (nlm_auth_sync.py sync), "
+                "which pushes a verified credential to this host.")
+    return None
+
 
 def create_notebook_with_podcast(processed: List[Dict[str, Any]],
                                   daily_brief_path: Optional[Path] = None) -> Optional[str]:
@@ -1305,8 +1327,20 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
         # Loud, and reflected in the return value: a notebook with no audio is
         # not a podcast, and a caller that cannot distinguish the two will keep
         # reporting success to the user while nothing is produced.
-        log(f"  AUDIO QUEUE FAILED: {(audio_res.stderr or audio_res.stdout)[:300]}")
+        detail = (audio_res.stderr or audio_res.stdout)
+        log(f"  AUDIO QUEUE FAILED: {' '.join(detail.split())[:300]}")
         log(f"  Notebook {notebook_id} exists with {sources_added} source(s) but has NO audio.")
+        # NAME THE FAULT THE OPERATOR ACTUALLY HAS. Reaching the RPC and being
+        # told the arguments are invalid is not an expired session -- the
+        # session had to work to get that answer. Measured 2026-09-18:
+        # "CreateAudioOverview: execute rpc: One or more arguments are invalid"
+        # (exit-class=bad-args) failed identically on winston AND on the Mac
+        # with native, freshly refreshed auth, because the client's audio RPC
+        # is older than NotebookLM's API. Three weeks of alerts had been
+        # sending the owner to refresh a credential that was never the problem.
+        reason = audio_failure_reason(detail)
+        if reason:
+            log("  " + reason)
         return None
 
     log("  Audio overview queued")
