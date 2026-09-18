@@ -14,6 +14,21 @@ RUNNER="${DATACORE_RUNNER:-$HOME/.datacore/v2-runner}"
 S="${DISPATCH_SPACE:-${DATACORE_ATTEST_SPACE:-$HOME/spaces/5-plur}}"
 LIMIT="${DISPATCH_LIMIT:-2}"
 PY="${DATACORE_PYTHON:-python3}"
+# THE REGISTRY IS NOT IN THE RUNNER CHECKOUT AND NEVER WILL BE.
+# `registry/principals.yaml` is gitignored on purpose -- it is the private
+# overlay -- so a satellite running from ~/.datacore/v2-runner finds no
+# principals at all unless it is told where the data root is. Without this,
+# `actor_identity.REGISTRY_DIR` falls back to the runner directory, every
+# writer resolves to no principal, and `claim_gate` refuses each one as
+# "unregistered writer 'data' -- declare it in registry/principals.yaml"
+# about a writer that IS declared, two directories away.
+#
+# Latent rather than loud: the spaces this tick watches held only
+# org-mirrored tasks, so the claim path was never reached and the log shows
+# zero such refusals. The 2026-09-18 delegation exercise put the first real
+# delegation in front of it and every claim was refused. hermes's other crons
+# already pass DATACORE_ROOT for exactly this reason; this one did not.
+export DATACORE_ROOT="${DATACORE_ROOT:-$HOME/Data}"
 # The host's declarations travel with the tick: executor, agent name, attest space.
 if [ -f "$HOME/.datacore/identity.env" ]; then
   while IFS='=' read -r k v; do

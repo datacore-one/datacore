@@ -197,6 +197,22 @@ def _journal(space: Path, actor: str, lines: list[str]) -> None:
         body += [f"- {ln}" for ln in lines]
         with path.open("a", encoding="utf-8") as fh:
             fh.write("\n".join(body) + "\n")
+        # AND COMMIT IT, because this function writes into the very tree
+        # `_artifact_tree_clean` insists is clean. An uncommitted journal is a
+        # dirty path that is neither a ledger append nor the agent's artifact,
+        # so the NEXT run in this space fails every check closed -- "commit task
+        # changes before artifact verification" -- about a file the dispatcher
+        # itself left there. Until an hourly converge autosaved it, a space
+        # could not complete a delegated item twice in a row.
+        #
+        # Only this file is staged. `git add -A` here would sweep up whatever
+        # the agent left behind and commit it as though it had been verified,
+        # which is the opposite of what the check exists for.
+        subprocess.run(["git", "-C", str(space), "add", "--", str(path)],
+                       capture_output=True, timeout=60)
+        subprocess.run(["git", "-C", str(space), "commit", "-q", "-m",
+                        f"journal: {actor} ledger claim run", "--", str(path)],
+                       capture_output=True, timeout=60)
     except Exception:  # noqa: BLE001 -- a journal failure must not fail the work
         pass
 

@@ -120,3 +120,56 @@ def test_it_is_refused_on_every_host_not_raced_for(tmp_path, capsys):
 def test_addressing_it_makes_it_dispatchable_again(tmp_path, capsys):
     space = _space(tmp_path, assignee="miles")
     assert "would claim" in _plan(space, "miles", capsys)
+
+
+# --- The dispatcher's own journal ------------------------------------------
+
+def test_the_run_journal_does_not_dirty_the_tree_it_verifies(tmp_path):
+    """`_journal` writes into the tree `_artifact_tree_clean` insists is clean.
+
+    Left uncommitted, it is a path that is neither a ledger append nor the
+    agent's artifact, so the NEXT run in that space failed every check closed
+    -- "commit task changes before artifact verification" -- about a file the
+    dispatcher itself had put there. Until an hourly converge autosaved it, a
+    space could not complete a delegated item twice in a row.
+    """
+    import subprocess
+    import ledger_claim
+    space = tmp_path / "space"
+    (space / "journal").mkdir(parents=True)
+    for args in (["init", "-q", "-b", "main"], ["config", "user.email", "d@example.invalid"],
+                 ["config", "user.name", "d"], ["config", "core.hooksPath", "/dev/null"]):
+        subprocess.run(["git", "-C", str(space), *args], check=True, capture_output=True)
+    (space / "seed.txt").write_text("seed\n")
+    subprocess.run(["git", "-C", str(space), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(space), "commit", "-qm", "seed"], check=True, capture_output=True)
+    assert ledger_claim._artifact_tree_clean(space)
+
+    ledger_claim._journal(space, "miles", ["did a thing"])
+
+    assert ledger_claim._artifact_tree_clean(space), \
+        subprocess.run(["git", "-C", str(space), "status", "--short"],
+                       capture_output=True, text=True).stdout
+
+
+def test_it_commits_only_the_journal(tmp_path):
+    """`git add -A` here would sweep up whatever the agent left and commit it
+    as though it had been verified, which is the opposite of the point."""
+    import subprocess
+    import ledger_claim
+    space = tmp_path / "space"
+    (space / "journal").mkdir(parents=True)
+    for args in (["init", "-q", "-b", "main"], ["config", "user.email", "d@example.invalid"],
+                 ["config", "user.name", "d"], ["config", "core.hooksPath", "/dev/null"]):
+        subprocess.run(["git", "-C", str(space), *args], check=True, capture_output=True)
+    (space / "seed.txt").write_text("seed\n")
+    subprocess.run(["git", "-C", str(space), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(space), "commit", "-qm", "seed"], check=True, capture_output=True)
+    (space / "agent-leftover.txt").write_text("not verified\n")
+
+    ledger_claim._journal(space, "miles", ["did a thing"])
+
+    tracked = subprocess.run(["git", "-C", str(space), "ls-files"],
+                             capture_output=True, text=True).stdout.split()
+    assert "agent-leftover.txt" not in tracked, tracked
+    assert any(t.startswith("journal/") for t in tracked), tracked
