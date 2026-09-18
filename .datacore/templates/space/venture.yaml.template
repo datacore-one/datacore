@@ -32,16 +32,27 @@ budget:
   # Constraint: ai_tokens + real_spend must be <= ceiling
 
 roles:
-  # Each role maps to a registered Datacore agent.
-  # Cadence: daily | weekly | monthly
-  - id: researcher
-    agent: forge-researcher   # agent name from .datacore/registry/agents.yaml
-    cadence: weekly
-    enabled: true
-  - id: product_manager
-    agent: forge-pm
-    cadence: daily
-    enabled: false  # set to true when venture reaches validation stage
+  # A DICT of role name -> spec. NOT a list: venture_loader requires
+  # dict[str, RoleConfig] and a list-shaped block fails validation, so the file
+  # never loads and the venture stays invisible to the heartbeat.
+  # Cadence frequency must be one of: daily | weekly | monthly | quarterly.
+  # Each cadence name must match a template in .datacore/templates/cadences/
+  # or it will never fire. List them with:
+  #   python3 .datacore/modules/ventures/lib/venture_init.py --list-cadences
+  ceo:
+    description: "Direction, and the decisions this venture cannot make without a human."
+    cadences:
+      weekly: [hypothesis-review]
+      monthly: [budget-review]
+    budget_authority: 15.0
+
+# Prefer generating this file rather than editing it by hand — it is validated
+# before it lands, and verified again after:
+#   python3 .datacore/modules/ventures/lib/venture_init.py --space [N]-[name] \
+#       --name "My Venture" --belief "..." --metric "..." --dry-run
+#
+# Then check the whole setup:
+#   python3 .datacore/modules/ventures/lib/venture_doctor.py --space [N]-[name]
 
 # GitHub integration (optional)
 # github:
