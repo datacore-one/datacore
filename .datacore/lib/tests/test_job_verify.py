@@ -749,3 +749,40 @@ def test_a_recurring_failure_is_counted_per_artifact_and_files_one_task(tmp_path
     assert _run_main(argv) == 0
     assert closed == ["org-task-1"], "the pass closes the task the streak filed"
     assert "task_id" not in R._load()["mac-id-churn"]
+
+
+# --- Where the manifest lives ---------------------------------------------
+# It belongs to the installation, not to the data root. They coincide on mac,
+# winston and nightshift; they do not on hermes or plur-claw, which run from
+# ~/.datacore/v2-runner while their spaces live elsewhere. The default named a
+# file that was not there, so every unattended run on those hosts died with
+# "cannot read manifest" -- and plur-claw, having no cron to work around it
+# with an explicit --manifest, was not verified at all.
+
+def test_the_data_root_manifest_still_wins_when_it_is_there(tmp_path, monkeypatch):
+    import job_verify
+    root_manifest = tmp_path / ".datacore" / "lib" / "jobs" / "manifest.yaml"
+    root_manifest.parent.mkdir(parents=True)
+    root_manifest.write_text("jobs: []\n")
+    monkeypatch.setattr(job_verify, "DATACORE_ROOT", tmp_path)
+
+    assert job_verify._default_manifest_path() == root_manifest
+
+
+def test_it_falls_back_to_the_manifest_beside_the_code(tmp_path, monkeypatch):
+    import job_verify
+    monkeypatch.setattr(job_verify, "DATACORE_ROOT", tmp_path)   # nothing under it
+
+    resolved = job_verify._default_manifest_path()
+
+    assert resolved == Path(job_verify.__file__).resolve().parent / "jobs" / "manifest.yaml"
+    assert resolved.exists(), "the installed manifest must be the fallback"
+
+
+def test_a_root_with_neither_still_names_the_root_path(tmp_path, monkeypatch):
+    """So the error message points at what the operator configured."""
+    import job_verify
+    monkeypatch.setattr(job_verify, "DATACORE_ROOT", tmp_path)
+    monkeypatch.setattr(job_verify, "__file__", str(tmp_path / "absent" / "job_verify.py"))
+
+    assert job_verify._default_manifest_path() == tmp_path / ".datacore" / "lib" / "jobs" / "manifest.yaml"

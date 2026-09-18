@@ -99,7 +99,27 @@ def _default_actor() -> str:
 
 
 def _default_manifest_path() -> Path:
-    return DATACORE_ROOT / ".datacore" / "lib" / "jobs" / "manifest.yaml"
+    """The manifest belongs to the INSTALLATION, not to the data root.
+
+    `$DATACORE_ROOT` stays first, because a test pointing it at a scratch tree
+    must not fall through to the real manifest, and on mac, winston and
+    nightshift the install and the data root are the same `~/Data` -- so this
+    changes nothing there.
+
+    They are NOT the same on the satellites: hermes and plur-claw run from
+    `~/.datacore/v2-runner` while their spaces live elsewhere, so the default
+    named a file that does not exist and every unattended run died with
+    "cannot read manifest". hermes's cron works around it with an explicit
+    `--manifest`; plur-claw has no such cron, so nothing there was verified at
+    all, and `v2_verify`'s job-contract check failed on both for the same
+    reason. The manifest that ships beside this file is the one belonging to
+    the code actually running.
+    """
+    from_root = DATACORE_ROOT / ".datacore" / "lib" / "jobs" / "manifest.yaml"
+    if from_root.exists():
+        return from_root
+    beside = Path(__file__).resolve().parent / "jobs" / "manifest.yaml"
+    return beside if beside.exists() else from_root
 
 
 def _send_telegram(message: str) -> bool:
