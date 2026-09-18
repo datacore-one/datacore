@@ -78,3 +78,84 @@ def test_a_hook_that_is_there_passes(monkeypatch, tmp_path):
 
     assert rep.rows[-1]["ok"] is True
     assert "not readable" not in rep.rows[-1]["detail"]
+
+
+# --- Is the code running here the current code? ----------------------------
+# Nothing asked. hermes's runner sat 312 commits behind origin and
+# nightshift's 5, both on a DETACHED HEAD where `git pull` prints its usage
+# and changes nothing: the deploy step succeeded, said nothing, deployed
+# nothing, and nightshift's hourly cycle went on running the old code while
+# every other check here passed.
+
+def _git_stub(monkeypatch, answers):
+    def fake_run(args, timeout=180):
+        key = " ".join(a for a in args if not a.startswith("/"))
+        for pattern, (rc, out) in answers.items():
+            if pattern in key:
+                return rc, out
+        return 1, ""
+    monkeypatch.setattr(v2_verify, "run", fake_run)
+
+
+def test_a_detached_checkout_is_a_failure_not_a_pass(monkeypatch):
+    _git_stub(monkeypatch, {
+        "rev-parse --show-toplevel": (0, "/opt/runner\n"),
+        "rev-parse --abbrev-ref HEAD": (0, "HEAD\n"),
+        "rev-parse --short HEAD": (0, "0135df3\n"),
+    })
+    rep = _Report()
+    v2_verify.check_install_current(rep)
+
+    row = rep.rows[-1]
+    assert row["ok"] is False
+    assert "detached" in row["detail"] and "0135df3" in row["detail"]
+    assert "does nothing" in row["detail"], "it must say why pulling did not help"
+
+
+def test_being_behind_origin_is_a_failure(monkeypatch):
+    _git_stub(monkeypatch, {
+        "rev-parse --show-toplevel": (0, "/opt/runner\n"),
+        "rev-parse --abbrev-ref HEAD": (0, "main\n"),
+        "@{upstream}": (0, "origin/main\n"),
+        "rev-list --left-right --count": (0, "312\t0\n"),
+    })
+    rep = _Report()
+    v2_verify.check_install_current(rep)
+
+    assert rep.rows[-1]["ok"] is False
+    assert "312 behind" in rep.rows[-1]["detail"]
+
+
+def test_ahead_of_origin_is_not_stale(monkeypatch):
+    # Local commits not yet published are a different question, with its own
+    # check ("no stranded commits"). This one asks only whether we are behind.
+    _git_stub(monkeypatch, {
+        "rev-parse --show-toplevel": (0, "/opt/runner\n"),
+        "rev-parse --abbrev-ref HEAD": (0, "main\n"),
+        "@{upstream}": (0, "origin/main\n"),
+        "rev-list --left-right --count": (0, "0\t3\n"),
+    })
+    rep = _Report()
+    v2_verify.check_install_current(rep)
+
+    assert rep.rows[-1]["ok"] is True
+
+
+def test_no_upstream_is_could_not_tell_not_broken(monkeypatch):
+    _git_stub(monkeypatch, {
+        "rev-parse --show-toplevel": (0, "/opt/runner\n"),
+        "rev-parse --abbrev-ref HEAD": (0, "main\n"),
+    })
+    rep = _Report()
+    v2_verify.check_install_current(rep)
+
+    assert rep.rows[-1]["ok"] is None
+    assert "tracks nothing" in rep.rows[-1]["detail"]
+
+
+def test_not_a_checkout_at_all_is_could_not_tell(monkeypatch):
+    _git_stub(monkeypatch, {})
+    rep = _Report()
+    v2_verify.check_install_current(rep)
+
+    assert rep.rows[-1]["ok"] is None

@@ -805,6 +805,53 @@ def check_hooks(rep: Report) -> None:
             note if not missing else "; ".join(missing[:3]))
 
 
+def check_install_current(rep: Report) -> None:
+    """The code running on this host can be updated by pulling, and has been.
+
+    Nothing asked this, and two hosts had drifted silently. hermes's runner was
+    312 commits behind origin and nightshift's was 5 -- both sitting on a
+    DETACHED HEAD, where `git pull` prints its usage text and changes nothing.
+    So the operator's deploy step succeeded, said nothing, and deployed
+    nothing; nightshift's hourly cycle went on running the old code, and every
+    other check here passed while doing it, because they all verify the STATE
+    of this installation and none of them verify that it is the current one.
+
+    Deliberately does not fetch. A check that reaches the network on a timer
+    turns a closed laptop lid into a red dashboard, and this file is explicit
+    that "could not tell" is its own outcome: with no origin ref to compare
+    against, that is the honest answer, not a failure.
+    """
+    def git(*args) -> tuple[int, str]:
+        rc, out = run(["git", "-C", str(LIB), *args], 30)
+        return rc, out.strip()
+
+    rc, top = git("rev-parse", "--show-toplevel")
+    if rc != 0:
+        rep.add("0046", "install is current", None, "not a git checkout")
+        return
+    rc, branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    if rc != 0:
+        rep.add("0046", "install is current", None, "cannot read HEAD")
+        return
+    if branch == "HEAD":
+        rc, sha = git("rev-parse", "--short", "HEAD")
+        rep.add("0046", "install is current", False,
+                f"detached at {sha or '?'} — `git pull` does nothing here; "
+                f"check out a branch or name the commit explicitly")
+        return
+    rc, upstream = git("rev-parse", "--abbrev-ref", f"{branch}@{{upstream}}")
+    if rc != 0:
+        rep.add("0046", "install is current", None, f"{branch} tracks nothing")
+        return
+    rc, counts = git("rev-list", "--left-right", "--count", f"{upstream}...HEAD")
+    if rc != 0 or len(counts.split()) != 2:
+        rep.add("0046", "install is current", None, f"cannot compare with {upstream}")
+        return
+    behind, ahead = counts.split()
+    detail = f"{branch} vs {upstream}: {behind} behind, {ahead} ahead"
+    rep.add("0046", "install is current", int(behind) == 0, detail)
+
+
 def check_transport(rep: Report) -> None:
     t = LIB / "ledger_transport.py"
     if not t.exists():
@@ -1275,6 +1322,7 @@ def main() -> int:
     if not a.quick:
         check_projection(rep)
     check_identity(rep)
+    check_install_current(rep)
     check_transport(rep)
     check_stores(rep)
     check_topology(rep)
