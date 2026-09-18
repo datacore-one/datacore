@@ -41,3 +41,23 @@ def test_check_timeout_is_a_failure_and_removes_disposable_worktree(tmp_path,mon
     passed,sha=ledger_claim._isolated_check(tmp_path,'sleep 999')
     assert not passed and sha == git('rev-parse','HEAD').strip()
     assert len([line for line in git('worktree','list','--porcelain').splitlines() if line.startswith('worktree ')]) == 1
+
+
+def test_a_failing_check_reports_its_own_error_without_crashing(tmp_path):
+    """The check's stderr is the diagnosis, and reading it must not raise.
+
+    `run_process(..., capture_output=True)` returns BYTES here; the first
+    version concatenated them as str and raised TypeError mid-dispatch, which
+    left the item claimed with no completion -- the one state this module works
+    hardest to avoid. A diagnostic that can crash the run is worse than none.
+    """
+    git = repository(tmp_path)
+    passed, sha = ledger_claim._isolated_check(tmp_path, 'cat no-such-file-here')
+    assert passed is False
+    assert sha, "a failing check still reports the head it checked"
+
+
+def test_a_passing_check_needs_no_diagnosis(tmp_path):
+    git = repository(tmp_path)
+    passed, sha = ledger_claim._isolated_check(tmp_path, 'grep -qx verified proof.txt')
+    assert passed is True

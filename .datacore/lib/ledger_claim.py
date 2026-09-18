@@ -372,7 +372,17 @@ def _isolated_check(space: Path, check: str) -> tuple[bool, str]:
                                capture_output=True, timeout=120)
             ok = proc.returncode == 0
             if not ok:
-                why = ((proc.stderr or "") + (proc.stdout or "")).strip().splitlines()
+                # Decoded defensively: without `text=True` these are BYTES, and
+                # the first version of this concatenated them as str and raised
+                # TypeError mid-dispatch -- leaving the item claimed with no
+                # completion, which is the one state this file works hardest to
+                # avoid. A diagnostic that can crash the run is worse than no
+                # diagnostic.
+                def _text(v):
+                    if isinstance(v, bytes):
+                        return v.decode("utf-8", "replace")
+                    return v or ""
+                why = (_text(proc.stderr) + _text(proc.stdout)).strip().splitlines()
                 if why:
                     print(f"         -> the check said: {why[-1][:180]}")
             current = subprocess.run(["git", "rev-parse", "HEAD"], cwd=space, capture_output=True, text=True)
