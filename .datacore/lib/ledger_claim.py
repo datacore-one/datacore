@@ -361,8 +361,20 @@ def _isolated_check(space: Path, check: str) -> tuple[bool, str]:
                   f"({(add.stderr or '').strip()[:90]})")
             return False, head
         try:
-            ok = run_process(check, shell=True, cwd=str(wt),
-                             capture_output=True, timeout=120).returncode == 0
+            # THE CHECK'S OWN STDERR IS THE DIAGNOSIS, and it was thrown away.
+            # A check runs against the COMMITTED tree, so every input it reads
+            # must be committed too -- and in a Phase 1 space `next_actions.org`
+            # is generated and gitignored, so a check that reads it fails with
+            # "No such file or directory" no matter what the agent does.
+            # Reported as "check failed" alone, that is indistinguishable from
+            # a wrong answer, and it cost a full live round to tell apart.
+            proc = run_process(check, shell=True, cwd=str(wt),
+                               capture_output=True, timeout=120)
+            ok = proc.returncode == 0
+            if not ok:
+                why = ((proc.stderr or "") + (proc.stdout or "")).strip().splitlines()
+                if why:
+                    print(f"         -> the check said: {why[-1][:180]}")
             current = subprocess.run(["git", "rev-parse", "HEAD"], cwd=space, capture_output=True, text=True)
             return ok and current.returncode == 0 and current.stdout.strip() == head and _artifact_tree_clean(space), head
         except subprocess.TimeoutExpired:

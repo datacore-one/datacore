@@ -64,30 +64,46 @@ MARK = "delegation-fleet-exercise"
 SOURCE = "org/next_actions.org"
 
 
+def _input_path(to: str) -> str:
+    return f"4-outbox/delegation-drill/input-{to}.txt"
+
+
 def _task(to: str) -> tuple[str, str]:
     """(title, check) for one self-contained unit of work.
 
-    The check recomputes the answer from the same committed tree the agent
-    produced, so it asserts the OUTCOME. `test -s` would pass on a touched
-    file; this does not.
+    EVERY INPUT THE CHECK READS MUST BE COMMITTED. The check runs against an
+    isolated worktree of the agent's own commit, so a file that is not in git
+    is not there at all. The first version of this counted
+    `org/next_actions.org` -- which a Phase 1 space GENERATES and gitignores --
+    so the check failed with "No such file or directory" however well the agent
+    worked, and reported only "check failed". `seed` therefore writes and
+    commits its own input, and the task counts that.
+
+    The check recomputes the answer from the same committed tree, so it asserts
+    the OUTCOME. `test -s` would pass on a touched file; this does not, and
+    neither does the wrong number.
     """
-    # 4-outbox, not a top-level drill/. DIP-0015's structure hook refuses any
-    # root directory outside its allowed set, so an agent told to produce
-    # `drill/x.txt` CANNOT commit it -- and the failure then surfaces as "commit
-    # task changes before artifact verification", which names the agent rather
-    # than the hook that actually refused. A delegated task whose artifact lands
-    # outside the permitted tree can never pass its check, however well the
-    # agent does the work. Measured 2026-09-18: the answer was right (216) and
-    # the item still failed.
+    src = _input_path(to)
     out = f"4-outbox/delegation-drill/{to}-linecount.txt"
-    title = f"count the lines of {SOURCE} and write only that number into {out}"
-    check = (f'test -f {out} && test "$(wc -l < {SOURCE} | tr -d " ")" '
+    title = f"count the lines of {src} and write only that number into {out}"
+    check = (f'test -f {out} && test "$(wc -l < {src} | tr -d " ")" '
              f'= "$(tr -d "[:space:]" < {out})"')
     return title, check
 
 
 def _item_id(frm: str, to: str, day: str) -> str:
     return f"{MARK}-{day}-{frm}-to-{to}"
+
+
+def _write_input(space: Path, to: str) -> None:
+    """Commit the file the task will count, so the check can see it."""
+    import subprocess
+    rel = _input_path(to)
+    path = space / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f"line {n}\n" for n in range(1, 24)))
+    for args in (["add", "--", rel], ["commit", "-q", "-m", f"exercise input for {to}", "--", rel]):
+        subprocess.run(["git", "-C", str(space), *args], capture_output=True, timeout=60)
 
 
 def cmd_seed(args) -> int:
@@ -104,6 +120,7 @@ def cmd_seed(args) -> int:
 
     made = []
     for to in targets:
+        _write_input(space, to)
         title, check = _task(to)
         iid = _item_id(actor, to, args.day)
         payload = {"id": iid, "title": title, "assignee": to, "check": check,

@@ -45,7 +45,18 @@ class OpenClawExecutor(Executor):
             self._model = envelope["model"]
         text = envelope["final"]
         if result.returncode != 0 or envelope.get("ok") is not True or envelope.get("status") != "ok":
-            self._in_band_error = f"openclaw execution failed (exit {result.returncode})"
+            # SAY WHAT OPENCLAW SAID. This reported the exit code alone, and an
+            # exit code is not a diagnosis: three delegated items failed on
+            # plur-claw on 2026-09-18 with "openclaw execution failed (exit 2)"
+            # and finding out why meant running the binary by hand. The
+            # envelope's own `error`/`status`, and the last line of stderr,
+            # are what an operator needs and they were being discarded.
+            detail = envelope.get("error") or envelope.get("status")
+            tail = (result.stderr or "").strip().splitlines()
+            self._in_band_error = (
+                f"openclaw execution failed (exit {result.returncode})"
+                + (f": {str(detail)[:200]}" if detail else "")
+                + (f" [stderr: {tail[-1][:160]}]" if tail else ""))
         elif not text.strip():
             self._in_band_error = "openclaw produced no final output"
         cost = envelope.get("costUsd")
