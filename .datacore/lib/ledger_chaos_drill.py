@@ -30,6 +30,7 @@ blocked every Org transaction on the machine.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -785,26 +786,21 @@ class Drill:
         return 1 if self.failures else 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--only", nargs="+", metavar="NAME", help="run just these scenarios")
-    ap.add_argument("--keep", action="store_true", help="leave the scratch fleet in place")
-    ap.add_argument("--list", action="store_true", help="print scenario names and exit")
-    a = ap.parse_args(argv)
-    if a.list:
-        for name in Drill.SCENARIOS:
-            print(name)
-        return 0
-    unknown = set(a.only or ()) - set(Drill.SCENARIOS)
-    if unknown:
-        raise SystemExit(f"unknown scenario(s): {', '.join(sorted(unknown))}")
+@contextlib.contextmanager
+def scratch_fleet(prefix: str = "chaos-drill-", keep: bool = False):
+    """A throwaway root with every path that could reach the real install redirected.
 
+    Shared with `delegation_drill.py` rather than copied into it. Each line
+    below is here because something went wrong without it, which makes a second
+    hand-written copy the likeliest place for one of them to be quietly
+    dropped -- and the failure mode of dropping one is a drill writing into the
+    operator's live state directory.
+    """
     # RESOLVED. `private_state_directory` refuses an aliased path, and on macOS
     # tempfile hands back /var/folders/... which is a symlink to /private/var.
     # Unresolved, every scenario that takes the transport's repo lock dies on
     # "runtime state must have an absolute unaliased path".
-    base = Path(tempfile.mkdtemp(prefix="chaos-drill-")).resolve()
+    base = Path(tempfile.mkdtemp(prefix=prefix)).resolve()
     root = base / "fleet"
     root.mkdir()
     # Nothing here may reach the real installation: its own state directory, and
@@ -824,14 +820,32 @@ def main(argv: list[str] | None = None) -> int:
     os.environ.pop("DATACORE_LEDGER_SIGN", None)
     os.environ["DATACORE_ACTOR"] = "drill"
     print(f"scratch fleet at {root}")
-    drill = Drill(root, keep=a.keep)
     try:
-        return drill.run(a.only)
+        yield root
     finally:
-        if a.keep:
+        if keep:
             print(f"  scratch fleet kept at {base}")
         else:
             shutil.rmtree(base, ignore_errors=True)
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--only", nargs="+", metavar="NAME", help="run just these scenarios")
+    ap.add_argument("--keep", action="store_true", help="leave the scratch fleet in place")
+    ap.add_argument("--list", action="store_true", help="print scenario names and exit")
+    a = ap.parse_args(argv)
+    if a.list:
+        for name in Drill.SCENARIOS:
+            print(name)
+        return 0
+    unknown = set(a.only or ()) - set(Drill.SCENARIOS)
+    if unknown:
+        raise SystemExit(f"unknown scenario(s): {', '.join(sorted(unknown))}")
+
+    with scratch_fleet(keep=a.keep) as root:
+        return Drill(root, keep=a.keep).run(a.only)
 
 
 if __name__ == "__main__":
