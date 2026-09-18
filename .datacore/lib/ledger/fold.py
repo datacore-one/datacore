@@ -142,7 +142,15 @@ class LedgerState:
             # Same rule for the grant fields: an item nobody granted hashes
             # exactly as it did before they existed, so adding the handler does
             # not invalidate every checkpoint ever written.
-            if document.get('granted_by') is None:
+            #
+            # BOTH must be unset, not just `granted_by`. Keying the drop on one
+            # field took the OTHER out of the hash with it, so a state carrying
+            # `granted_at` and no grantor sealed identically to one carrying
+            # neither -- the seal's whole invariant is that no field can change
+            # without changing the root. `_handle_grant` writes the pair
+            # together, so nothing that exists today is affected; a fold that
+            # ever sets one alone is exactly the case a seal must catch.
+            if document.get('granted_by') is None and document.get('granted_at') is None:
                 document.pop('granted_by', None)
                 document.pop('granted_at', None)
             h.update(canonical_bytes({"key": iid, "item": document}))
