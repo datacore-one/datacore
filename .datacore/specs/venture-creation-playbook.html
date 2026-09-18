@@ -1,0 +1,1034 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Creating a venture in Datacore</title>
+<style>
+:root { color-scheme: light;
+  --ink:#2d3142; --slate:#4f5d75; --faint:#8d99ae; --accent:#eb6c36;
+  --bg:#f5f5f5; --card:#ffffff; --rule:#d8d8dc; --wash:#ecedf0; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); line-height:1.62;
+  font-family: ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  font-size:15px; }
+.shell { display:grid; grid-template-columns: 250px minmax(0,1fr); gap:44px;
+  max-width:1220px; margin:0 auto; padding:34px 22px 90px; }
+nav { position:sticky; top:26px; align-self:start; max-height:calc(100vh - 60px);
+  overflow-y:auto; font-size:12.6px; line-height:1.5; }
+nav .navtitle { font-size:10.5px; letter-spacing:.09em; text-transform:uppercase;
+  color:var(--faint); margin-bottom:11px; }
+nav a { display:block; color:var(--slate); text-decoration:none;
+  padding:3px 0 3px 10px; border-left:2px solid var(--rule); }
+nav a:hover { color:var(--accent); border-left-color:var(--accent); }
+nav a.part { border-left:none; padding-left:0; margin-top:15px; color:var(--ink);
+  font-weight:650; font-size:11px; letter-spacing:.07em; text-transform:uppercase; }
+main { min-width:0; }
+h1 { font-family:"Iowan Old Style",Palatino,Georgia,serif; font-size:33px;
+  line-height:1.2; margin:0 0 6px; font-weight:600; }
+h2 { font-family:"Iowan Old Style",Palatino,Georgia,serif; font-size:23px;
+  margin:46px 0 12px; padding-top:20px; border-top:1px solid var(--rule);
+  font-weight:600; scroll-margin-top:22px; }
+h3 { font-size:15.5px; margin:28px 0 8px; font-weight:650; }
+p, li { max-width:74ch; }
+a { color:var(--accent); }
+code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.6px;
+  background:var(--wash); padding:1px 4px; border-radius:3px; }
+pre { background:var(--card); border:1px solid var(--rule); border-left:3px solid var(--slate);
+  border-radius:5px; padding:13px 15px; overflow-x:auto; }
+pre code { background:none; padding:0; font-size:12.2px; line-height:1.55; }
+table { border-collapse:collapse; margin:16px 0; font-size:13.4px; width:100%; }
+th { text-align:left; border-bottom:1.5px solid var(--ink); padding:7px 11px 7px 0;
+  font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--slate); }
+td { border-bottom:1px solid var(--rule); padding:7px 11px 7px 0; vertical-align:top; }
+tr:hover td { background:var(--card); }
+blockquote { margin:18px 0; padding:2px 0 2px 16px; border-left:3px solid var(--accent);
+  color:var(--slate); }
+hr { border:none; border-top:1px solid var(--rule); margin:38px 0; }
+strong { font-weight:650; }
+em { color:var(--slate); }
+.lede { font-size:14px; color:var(--slate); max-width:74ch; }
+.partrule { margin:64px 0 0; padding:26px 0 0; border-top:2px solid var(--ink); }
+.partrule h1 { font-size:27px; }
+footer { grid-column:1/-1; margin-top:54px; padding-top:15px; border-top:1px solid var(--rule);
+  font-size:11.6px; color:var(--faint); }
+@media (max-width:900px) { .shell { grid-template-columns:1fr; gap:0; }
+  nav { position:static; max-height:none; margin-bottom:30px; } }
+@media print { nav { display:none; } .shell { grid-template-columns:1fr; } }
+</style></head>
+<body><div class="shell">
+<nav><div class="navtitle">Contents</div><a class="part" href="#part-0">Creating a venture in Datacore — the whole path</a><a href="#the-nine-stages">The nine stages</a><a href="#stage-0-decide-it-is-a-venture">Stage 0 — Decide it is a venture</a><a href="#stage-1-the-space-and-the-constitution">Stage 1 — The space and the constitution</a><a href="#stage-2-the-intent-graph">Stage 2 — The intent graph</a><a href="#stage-3-the-hypothesis-board">Stage 3 — The hypothesis board</a><a href="#stage-4-brand-and-positioning">Stage 4 — Brand and positioning</a><a href="#stage-5-the-roadmap">Stage 5 — The roadmap</a><a href="#stage-6-roles-and-cadences-the-workflow-layer">Stage 6 — Roles and cadences: the workflow layer</a><a href="#stage-7-sprints-and-execution">Stage 7 — Sprints and execution</a><a href="#stage-8-make-it-visible">Stage 8 — Make it visible</a><a href="#stage-9-stage-transitions">Stage 9 — Stage transitions</a><a href="#the-minimum-that-is-actually-a-venture">The minimum that is actually a venture</a><a href="#checklist">Checklist</a><a href="#known-gaps-in-the-framework-itself">Known gaps in the framework itself</a><a class="part" href="#part-1">What a conversational venture wizard still needs</a><a href="#the-shape-of-the-wizard">The shape of the wizard</a><a href="#blockers-the-wizard-cannot-run-without-these">Blockers — the wizard cannot run without these</a><a href="#needed-for-the-stages-beyond-the-minimum">Needed for the stages beyond the minimum</a><a href="#fix-while-passing">Fix while passing</a><a href="#build-order">Build order</a></nav>
+<main><section id="part-0" class=""><h1>Creating a venture in Datacore — the whole path</h1>
+<p>Written 2026-09-18 by reading the code and the seven ventures that already run,
+not from the design docs. Where a file and its documentation disagreed, the file
+won and the disagreement is noted.</p>
+<p>A <strong>venture</strong> in Datacore is a numbered space at <code>~/Data/[N]-&lt;slug&gt;/</code> that owns
+a <code>venture.yaml</code>. That file is what makes the heartbeat wake it, the <code>/today</code>
+briefing report it, and the MCP tools list it. Everything else in this document
+is a layer on top of that one file.</p>
+<p>Read this as a sequence, but read <strong>The minimum that is actually a venture</strong>
+(near the end) first. Most of what follows should not exist on day one.</p>
+<hr />
+<h2 id="the-nine-stages">The nine stages</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Stage</th>
+<th>Produces</th>
+<th>Gate to the next</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>Decide it is a venture</td>
+<td>design doc</td>
+<td>it needs its own clock</td>
+</tr>
+<tr>
+<td>1</td>
+<td>Space + constitution</td>
+<td><code>venture.yaml</code></td>
+<td><code>load_venture</code> passes</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Intent graph</td>
+<td><code>org/intents.org</code></td>
+<td>goals carry <code>:SUCCESS:</code></td>
+</tr>
+<tr>
+<td>3</td>
+<td>Hypothesis board</td>
+<td><code>hypotheses.yaml</code></td>
+<td>one hypothesis is <code>active</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td>Brand and positioning</td>
+<td><code>1-tracks/comms/</code></td>
+<td>voice is written down</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Roadmap</td>
+<td><code>roadmap.yaml</code></td>
+<td><code>roadmap_validate</code> passes</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Roles and cadences</td>
+<td>role files, <code>cadences:</code></td>
+<td>one cadence completes</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Sprints and execution</td>
+<td><code>sprints/&lt;id&gt;/sprint.yaml</code></td>
+<td><code>sprint_sync --apply</code> runs</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Visibility</td>
+<td><code>/today</code> section, ledger</td>
+<td>the owner sees it without asking</td>
+</tr>
+<tr>
+<td>9</td>
+<td>Stage transitions</td>
+<td><code>stage:</code> moves</td>
+<td>evidence, not enthusiasm</td>
+</tr>
+</tbody>
+</table>
+<p>Stages 2 and 5 are ordered that way on purpose: a roadmap item must name an
+intent it serves, and <code>roadmap_validate.py</code> treats an unresolvable <code>serves:</code> as
+an error, not a warning. Build the graph first or the roadmap cannot be checked.</p>
+<hr />
+<h2 id="stage-0-decide-it-is-a-venture">Stage 0 — Decide it is a venture</h2>
+<p>Not every idea earns a space. A venture is warranted when the work has <strong>its own
+clock</strong> — its own cadences, its own budget, its own definition of done that no
+existing space is accountable for. Otherwise it is a track or a project inside a
+space that already exists.</p>
+<p>Run the diagnostic before scaffolding anything:</p>
+<pre><code>/office-hours          # ventures module — six forcing questions, Startup or Builder mode
+</code></pre>
+<p>It produces <code>design-docs/&lt;topic&gt;-design-&lt;YYYYMMDD&gt;.md</code> and, deliberately, <strong>no
+code and no PR</strong>. If the six questions do not survive contact, stop here; the
+cheapest venture is the one not created.</p>
+<p>If the idea is strategically large, follow with <code>/ceo-review</code> (four scope modes:
+EXPANSION, SELECTIVE EXPANSION, HOLD, REDUCTION) before committing. Capture the
+reason you decided yes — the create tool takes it as <code>triggering_decision</code> and
+files it as the venture's first decision record. A venture whose founding
+rationale is not written down cannot be honestly archived later.</p>
+<hr />
+<h2 id="stage-1-the-space-and-the-constitution">Stage 1 — The space and the constitution</h2>
+<h3>Path A — the app (preferred)</h3>
+<pre><code>ventures_create_venture(name, stage, template, mission, triggering_decision)
+</code></pre>
+<p>The daemon (<code>datacore-app/daemon/datacored/adapters/spaces.py</code>) does the work:
+slugifies the name, takes the <strong>next free numeric prefix</strong> (never reuses a gap,
+so history stays stable), builds the whole tree in a temp dir, validates that
+<code>venture.yaml</code> parses and <code>load_venture</code> passes, and only then does an atomic
+rename into place. On collision it refuses.</p>
+<p>Templates seed roles and tracks, nothing more:</p>
+<table>
+<thead>
+<tr>
+<th>Template</th>
+<th>Roles</th>
+<th>Tracks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>blank</code></td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>hedge_fund</code></td>
+<td>cio, trader</td>
+<td>research, ops</td>
+</tr>
+<tr>
+<td><code>saas</code></td>
+<td>founder, engineer</td>
+<td>product, dev</td>
+</tr>
+<tr>
+<td><code>content</code></td>
+<td>operator</td>
+<td>comms</td>
+</tr>
+</tbody>
+</table>
+<p>What lands: <code>venture.yaml</code>, <code>_index.md</code>, <code>.gitignore</code>, the six standard subdirs
+(<code>0-inbox</code>, <code>1-tracks</code>, <code>2-projects</code>, <code>3-knowledge</code>, <code>4-archive</code>, <code>journal</code>),
+four org files (<code>inbox.org</code>, <code>next_actions.org</code>, <code>projects.org</code>, <code>someday.org</code>,
+each with the canonical <code>#+SEQ_TODO</code> line per DIP-0009 v2), <code>.datacore/config.yaml</code>,
+and the layered <code>CLAUDE.base.md</code> / <code>CLAUDE.space.md</code> pair per DIP-0002.</p>
+<p>Note what does <strong>not</strong> land: no <code>roadmap.yaml</code>, no <code>intents.org</code>, no
+<code>hypotheses.yaml</code>, no roles directory contents. Stages 2–7 are yours.</p>
+<h3>Path B — by hand</h3>
+<p>Copy the shape of a venture that already validates. Do <strong>not</strong> copy
+<code>.datacore/templates/space/venture.yaml.template</code> verbatim: it writes <code>roles:</code>
+as a <strong>list</strong> of <code>{id, agent, cadence}</code> entries, and <code>VentureConfig</code> requires a
+<strong>dict</strong> of role name → <code>RoleConfig</code>. The template is stale; the loader is the
+contract.</p>
+<h3>The schema that actually applies</h3>
+<p><code>.datacore/modules/ventures/lib/venture_loader.py</code>, Pydantic v2:</p>
+<pre><code class="language-yaml">name: my-venture              # required, non-empty
+description: &quot;One sentence.&quot;
+stage: discovery              # proposed|discovery|validation|growth|maturity|archived
+space: &quot;9-my-venture&quot;
+autonomy: 1                   # 0=off 1=suggest 2=draft 3=act
+thesis: |                     # what you believe, what would disprove it
+north_star: signed_clients    # the one number (see the warning below)
+target_customer: &quot;...&quot;
+budget:
+  ceiling: 100.0              # ai_tokens + real_spend MUST be &lt;= ceiling
+  ai_tokens: 80.0
+  real_spend: 20.0
+  approval_threshold: 25.0
+  ledger: .datacore/state/venture/budget-ledger.yaml
+heartbeat:
+  triggers: [cadences]        # subset of cadences|hypotheses|inbox|github; [] disables
+roles:                        # dict, not list
+  ceo:
+    description: &quot;...&quot;
+    cadences: {weekly: [strategy-review]}
+    budget_authority: 30
+hypotheses_file: hypotheses.yaml
+modules:
+  required: [ventures]
+  optional: [comms, github, crm]
+tracks: [ops, product]        # strings, or {name: [subtracks]}
+github: {org: my-org, repos: [{name: core, role: core}]}
+nightshift: {enabled: true, max_parallel_agents: 2, timeout_minutes: 60}
+tags: [...]
+</code></pre>
+<p>Enforcement that will bite you:</p>
+<ul>
+<li><strong>Sub-blocks forbid extras.</strong> <code>budget</code>, <code>github.repos[]</code>, <code>nightshift</code> reject
+  unknown keys — a typo is an error, not a silent drop. Top-level and <code>roles.*</code>
+  allow extras so real files can carry documentation fields.
+  (A <code>description:</code> on a repo entry was an error until 2026-09-16 and took the
+  whole heartbeat down. The omission was in the schema, not the file.)</li>
+<li><strong>Budget invariant.</strong> <code>ai_tokens + real_spend &lt;= ceiling</code>, checked at load.</li>
+<li><strong>Cadence frequencies</strong> must be one of <code>daily</code>, <code>weekly</code>, <code>monthly</code>,
+  <code>quarterly</code>. Nothing else exists. Names must be unique within a frequency.</li>
+<li><strong>Stage transitions</strong> are a state machine, not a free field:</li>
+</ul>
+<p><code>proposed   → discovery | archived
+  discovery  → validation | archived
+  validation → growth | discovery | archived
+  growth     → maturity | validation | archived
+  maturity   → growth | archived
+  archived   → discovery              (restore only)</code></p>
+<p><strong>On <code>north_star</code>:</strong> one metric per venture is a trap when the venture has more
+than one motion. PLUR carried <code>1000 enterprise installs by 2026-10-26</code> across a
+sales cycle <em>and</em> an ecosystem — two different physics, one number that could
+not be true of both. It was replaced on 2026-09-01 by three goals with three
+clocks in <code>roadmap.yaml</code>, and <code>venture.yaml</code> still records the superseded metric.
+If your venture has two motions, expect to carry the goals in the roadmap and
+keep <code>north_star</code> only for the tooling that reads it.</p>
+<p>Validate before moving on:</p>
+<pre><code class="language-bash">python3 -c &quot;import sys; sys.path.insert(0,'.datacore/modules/ventures/lib'); \
+from venture_loader import load_venture; print(load_venture('9-my-venture/venture.yaml').name)&quot;
+</code></pre>
+<hr />
+<h2 id="stage-2-the-intent-graph">Stage 2 — The intent graph</h2>
+<p><code>org/intents.org</code> answers <em>why does this matter</em>. Seed it from what the space
+already declares rather than authoring from a blank page:</p>
+<pre><code class="language-bash">python3 .datacore/lib/intent_graph_scaffold.py --space 9-my-venture --dry-run
+python3 .datacore/lib/intent_graph_scaffold.py --space 9-my-venture
+</code></pre>
+<p>The scaffold turns <code>thesis</code> into the vision node, <code>north_star</code> into a level-1
+intent, and each role plus its cadences into branches. Every derived node is
+tagged <code>DRAFT</code> and <strong>carries no <code>:SUCCESS:</code></strong> — deliberately. An invented metric
+reads as real and is worse than a visible blank.</p>
+<p>Your job is the part it refused to do: write the success criteria, then drop the
+<code>DRAFT</code> tags. Structure:</p>
+<pre><code>Vision → Intents → Strategic goals (with :SUCCESS:) → Initiatives → Projects
+</code></pre>
+<p>Heading depth is the parent edge. A <code>:SERVES:</code> property adds cross-branch
+parents and <strong>may point into another space</strong> (<code>5-plur:knowledge-exchange</code>) —
+that is how ventures that serve each other stay visible as one graph under the
+personal view. Multi-parent nodes are high-leverage by design and get worked
+first. IDs are namespaced by space, so two ventures can both have a <code>growth</code>
+node without colliding.</p>
+<p>Then check it against reality rather than against itself:</p>
+<pre><code class="language-bash">python3 .datacore/lib/intent_outline.py --space 9-my-venture   # readable form for markup
+python3 .datacore/lib/intent_tasks.py                          # task coverage
+python3 .datacore/lib/intent_merge.py                          # top-down vs bottom-up
+</code></pre>
+<p><code>intent_tasks.py</code> places real tasks on the graph by declaration first
+(<code>:INTENT:</code> property), then focus-area tag from <code>tags.yaml</code>, then keyword
+overlap as a last resort. <strong>Tasks that fit nowhere are the finding, not an
+error to suppress</strong>: either the work serves nothing stated, or the graph is
+missing a branch.</p>
+<p><code>intent_merge.py</code> is the one that catches what neither view catches alone. It
+classifies every node as <code>confirmed</code>, <code>orphan</code> (work with no intent above it),
+<code>dormant</code> (intent with no work beneath it), or <strong><code>reversed</code></strong> — intent still
+stated, but the record says it was killed. The token strategy sat in the
+Datacore graph with 19 tasks under it for two months after the fundraising plan
+recorded "Token killed". Note its rule: <strong>configuration is not evidence.</strong>
+<code>venture.yaml</code> cadences say what someone declared should recur; they say nothing
+about anything having happened.</p>
+<hr />
+<h2 id="stage-3-the-hypothesis-board">Stage 3 — The hypothesis board</h2>
+<p>At <code>discovery</code> and <code>validation</code> stage this is the real work; the roadmap is
+premature until something here is validated.</p>
+<p><code>hypotheses.yaml</code> at the space root (path configurable via <code>hypotheses_file</code>):</p>
+<pre><code class="language-yaml">venture: my-venture
+board:
+  backlog: []
+  active:
+    - id: mv-H001
+      statement: &quot;Caregiver niche converts at 3%+ on Etsy organic&quot;
+      metric: &quot;3% conversion over 200 visitors within 30 days of publish&quot;
+      budget: 30
+      status: active
+      experiments: 0
+      current_result: &quot;...&quot;
+      last_reviewed: &quot;2026-09-18&quot;
+  validated: []
+  invalidated: []
+</code></pre>
+<p>The four canonical lanes are <code>backlog</code>, <code>active</code>, <code>validated</code>, <code>invalidated</code>.
+Statuses map onto them: <code>proposed</code>/<code>backlog</code> → backlog; <code>active</code>/<code>in_progress</code>/
+<code>running</code>/<code>testing</code> → active; <code>validated</code>/<code>verified</code> → validated;
+<code>invalidated</code>/<code>falsified</code> → invalidated. <strong>A status outside that mapping becomes
+its own lane</strong> when you update it — useful for <code>cold</code> or <code>infeasible</code>, but know
+that you are creating a lane, not annotating a row.</p>
+<p>A hypothesis needs a <code>metric</code> with a threshold, a window, and a budget, or it
+cannot be settled. Forge's H001 sat <code>ASSETS_READY</code> for months and its
+measurement window closed without the experiment ever running — the record now
+says, correctly, "hypothesis not disproven, only untested." Write the requeue
+date when you park one.</p>
+<p>Wire a <code>hypothesis-review</code> cadence (template exists) so cold hypotheses surface
+instead of ageing quietly.</p>
+<hr />
+<h2 id="stage-4-brand-and-positioning">Stage 4 — Brand and positioning</h2>
+<p>Owned by the <strong>comms</strong> module. Add it to <code>modules.required</code> before you start.</p>
+<p>The positioning agent uses StoryBrand (Donald Miller) and Tribal Marketing (Seth
+Godin), and its core rule is that <strong>the customer is the hero and the brand is
+the guide</strong>:</p>
+<pre><code>:AI:comms:brand:        # tag a task to trigger brand-positioning-agent
+</code></pre>
+<p>Note a gap: <code>brand-positioning</code> is declared under <code>provides.commands</code> in
+<code>.datacore/modules/comms/module.yaml</code>, but <code>commands/brand-positioning.md</code> does
+not exist. The agent works; the slash command does not. Use the tag, or add the
+command file.</p>
+<p>It wants a brief — name, tagline, what it does, the mechanism, differentiators,
+primary audience — and produces BrandScript, Tribe Profile (smallest viable
+audience plus sneezers), voice guidelines, and a Purple Cow angle.</p>
+<p>Where the outputs live in a space (per <code>SCAFFOLDING.base.md</code>, DIP-0003):</p>
+<table>
+<thead>
+<tr>
+<th>Artefact</th>
+<th>Path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Positioning docs</td>
+<td><code>1-tracks/comms/positioning/</code></td>
+</tr>
+<tr>
+<td>Brand guidelines</td>
+<td><code>1-tracks/comms/brand/guidelines.md</code></td>
+</tr>
+<tr>
+<td>Voice and tone</td>
+<td><code>1-tracks/comms/brand/voice.md</code> (or <code>voice.yaml</code>)</td>
+</tr>
+<tr>
+<td>Key messages</td>
+<td><code>1-tracks/comms/messaging.md</code></td>
+</tr>
+<tr>
+<td>Purpose / vision / mission / values</td>
+<td><code>3-knowledge/pages/_core/</code></td>
+</tr>
+<tr>
+<td>Positioning / north star</td>
+<td><code>3-knowledge/pages/_core/</code></td>
+</tr>
+<tr>
+<td>Glossary</td>
+<td><code>3-knowledge/reference/glossary.md</code></td>
+</tr>
+</tbody>
+</table>
+<p>Two worked examples in the tree: <code>3-fds/1-tracks/comms/positioning/</code> is the
+minimum honest version (brandscript, tribe profile, <code>voice.yaml</code>).
+<code>5-plur/1-tracks/comms/brand/</code> is the full build — <code>tokens.json</code> + <code>tokens.css</code>
+as the source, with <code>build_guide.py</code>, <code>build_assets.py</code>, <code>build_merch.py</code>,
+<code>build_motion_css.py</code> generating the guide, the assets and the PDF. Start at the
+first; the second is what a growth-stage venture grows into.</p>
+<p>Run <code>/scaffolding-audit</code> to see which identity documents are still missing.
+Status values are <code>missing | stub | draft | reviewed | published</code> — a stub
+generated by an agent is not a position.</p>
+<hr />
+<h2 id="stage-5-the-roadmap">Stage 5 — The roadmap</h2>
+<p>Only once something is validated. Use the skill — it encodes the PLUR rebuild
+(five drifted documents to one validated source of 93 epics and 750 tasks):</p>
+<pre><code>/roadmap-build
+</code></pre>
+<p>Its one claim: <strong>a roadmap is good when it is CHECKABLE, not when it is well
+written.</strong> Every structural finding in that rebuild came from a script. The
+prose was fine throughout. The prose is always fine.</p>
+<p><code>&lt;space&gt;/roadmap.yaml</code> is the single source; every human-readable roadmap is
+<strong>generated</strong> from it. The rules the validator enforces:</p>
+<ul>
+<li>Outcome-level only, 30–50 items. Not a backlog — tasks and issues stay where
+  they are and link upward.</li>
+<li>Every item <strong>must</strong> <code>serves:</code> at least one <code>INTENT_ID</code> from <code>org/intents.org</code>.
+  An unresolvable reference is an error. An item serving nothing is a deletion
+  candidate.</li>
+<li><code>gate:</code> states a condition, never a date. <code>horizon: gated</code> is not scheduled
+  and must not be picked up by sprint planning.</li>
+<li><code>blocked_on: standing_block</code> is never selected by sprint planning.</li>
+<li><code>shipped: false</code> is required on anything a public claim could rest on; a
+  customer-facing view must refuse to emit it.</li>
+<li><code>outcome:</code> is what changes in the world, not what gets built.</li>
+<li>Unknown keys are an error. Silent acceptance is how parallel tracking systems
+  grow.</li>
+</ul>
+<p>An item, in full:</p>
+<pre><code class="language-yaml">- id: R-001
+  milestone: M2                  # or `continuous` — work that runs alongside the ladder
+  track: enterprise
+  lane: prod
+  title: First customer deployment reaches steady state
+  done_when:
+    condition: &gt;-
+      Runs unattended for 14 consecutive days with no human intervention
+    evidence: metric              # metric | test | artifact
+    verify: &gt;-
+      gh issue list --repo org/repo --label incident --search &quot;created:&gt;14d ago&quot; returns none
+  outcome: The first signed customer is running unattended and is referenceable
+  serves: [enterprise-beachhead]  # INTENT_IDs
+  drive: status
+  horizon: now                    # now | next | later | gated
+  status: in_progress
+  blocked_on: null                # null | human | standing_block | &lt;id&gt;
+  delegable: false
+  owner: gregor
+  shipped: false
+</code></pre>
+<p>Three standing checks, all re-runnable:</p>
+<pre><code class="language-bash">python3 .datacore/lib/roadmap_validate.py --space 9-my-venture
+python3 .datacore/lib/roadmap_validate.py --space 9-my-venture --coverage
+python3 .datacore/lib/roadmap_render.py   --space 9-my-venture --html out.html
+python3 .datacore/lib/roadmap_drift.py    --space 9-my-venture --strict   # CI
+</code></pre>
+<p><code>roadmap_drift.py</code> reconciles claims against what the repos actually say —
+epics pointing at issues closed as NOT PLANNED, <code>now</code> epics no task points at,
+notes asserting a state older than 45 days, stray roadmap files declaring no
+canonical source. One afternoon of it found five epics whose state the roadmap
+had wrong.</p>
+<p><strong>Caveat for a new venture:</strong> <code>agent_readiness.py</code> hardcodes
+<code>ROADMAP = 5-plur/roadmap.yaml</code> (it scans all spaces only for <em>which</em> have a
+roadmap). The validate/render/drift trio take <code>--space</code> or <code>ROADMAP_SPACE</code>;
+agent-readiness does not. Parameterise it or run its five checks by hand.</p>
+<hr />
+<h2 id="stage-6-roles-and-cadences-the-workflow-layer">Stage 6 — Roles and cadences: the workflow layer</h2>
+<p>This is where a venture stops being documents and starts running.</p>
+<h3>Roles</h3>
+<p>Base archetypes live in <code>.datacore/templates/roles/*.base.md</code> — <code>ceo</code>, <code>cto</code>,
+<code>cmo</code>, <code>cfo</code>, <code>cio</code>, <code>bizdev</code>, <code>operator</code>, <code>researcher</code>, <code>scout</code>, <code>dev</code> and its
+variants (<code>dev.backend</code>, <code>dev.qa</code>, <code>dev.contracts</code>). The venture overlay goes at
+<code>&lt;space&gt;/.datacore/roles/&lt;role&gt;.md</code>, and <code>role_loader.py</code> merges base + overlay
+so an agent gets the shared archetype <strong>and</strong> the venture-specific focus.</p>
+<p>A role entry in <code>venture.yaml</code> carries <code>description</code>, <code>cadences</code>,
+<code>budget_authority</code>, and optionally <code>agent:</code> (a named agent instance — PLUR's
+<code>cmo</code> is Data, its <code>cio</code> is Tris) and <code>autonomy_override:</code>. Extras round-trip,
+so <code>decisions</code>, <code>receives</code>, <code>boundary</code>, <code>metrics</code> are all legitimate to add.
+Write the <strong>hard boundaries</strong> in the description. PLUR's bizdev role reads:
+"qualifies prospects, it never contacts them" — that sentence is load-bearing.</p>
+<h3>Cadences</h3>
+<p>A cadence is a markdown file at <code>.datacore/templates/cadences/&lt;name&gt;.md</code>:</p>
+<pre><code class="language-markdown">---
+cadence: hypothesis-review
+role: ceo
+frequency: weekly          # daily | weekly | monthly | quarterly
+duration: 15min
+tools: [plur_recall_hybrid, datacore.search]
+---
+
+## Objective
+One sentence: what this cadence achieves.
+
+## Steps
+1. First concrete action
+
+## Output
+What to produce.
+
+## Success Criteria
+How to know it was done well.
+</code></pre>
+<p>Twenty-eight templates already exist (plus <code>_example.md</code>) — <code>budget-review</code>, <code>strategy-review</code>,
+<code>hypothesis-review</code>, <code>competitor-scan</code>, <code>github-issue-triage</code>, <code>pr-review</code>,
+<code>release-check</code>, <code>security-review</code>, <code>sprint-rollover</code>, <code>sprint-claim</code>,
+<code>content-calendar</code>, <code>positioning-review</code>, <code>partnership-check</code> and more. <strong>Look
+before you write one.</strong></p>
+<p>Reference it from the role in <code>venture.yaml</code>, and it is live:</p>
+<pre><code class="language-yaml">roles:
+  ceo:
+    cadences: {weekly: [hypothesis-review], monthly: [budget-review]}
+</code></pre>
+<p>One inconsistency to know about: <code>sprint-claim.md</code> declares
+<code>frequency: hourly</code> in its frontmatter, which is <strong>not</strong> one of the four engine
+frequencies. PLUR wires it under <code>cto.cadences.daily</code>. The frontmatter documents
+the intended rhythm; the venture.yaml entry is what fires.</p>
+<h3>How they fire</h3>
+<p><code>cadence_engine.py</code> reads the roles dict, compares against
+<code>&lt;space&gt;/.datacore/state/venture/cadence-log.yaml</code>, and returns what is overdue
+within <code>FREQUENCY_WINDOWS</code> (1/7/30/90 days). <code>venture_heartbeat.py</code> ticks every
+30 minutes:</p>
+<pre><code class="language-bash">python3 .datacore/modules/ventures/lib/venture_heartbeat.py --once --venture=my-venture
+</code></pre>
+<p>Two modes, switched by environment and <strong>not</strong> migratable after the fact:</p>
+<table>
+<thead>
+<tr>
+<th><code>DATACORE_CADENCE_PROPOSALS</code></th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code> (default)</td>
+<td>Generator keeps <code>:AI:</code> tags, writes to <code>org/next_actions.org</code>; heartbeat executes via the Claude CLI directly.</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Cadences enter <code>org/inbox.org</code> <strong>without</strong> an AI dispatch tag or fabricated approval; the heartbeat captures work instead of launching the model.</td>
+</tr>
+</tbody>
+</table>
+<p>Safety rules that hold in both modes, and are worth internalising because they
+are the difference between a cadence log and a fiction:</p>
+<ul>
+<li><strong>A successful process or model string is not completion.</strong> Actual task or
+  artifact evidence is required before the cadence record advances
+  (<code>cadence_completion.py</code>). A legacy inline heartbeat can run, but its text
+  alone does not advance history.</li>
+<li>Machine-generated tasks keep their true <code>ORIGIN</code> and never manufacture
+  <code>APPROVED_BY</code>. Restoring an AI tag does not forge human authorization.</li>
+</ul>
+<p>Use <code>heartbeat.triggers</code> to control what wakes the venture at all. PLUR set
+<code>triggers: [cadences]</code> on 2026-09-04 — new GitHub issues, inbox size and
+hypotheses deliberately do <strong>not</strong> wake it.</p>
+<p><strong>Start with one cadence.</strong> PLUR cleared every cadence on its CEO, CTO and CMO
+roles on 2026-09-04 and rebuilt them one at a time; only the CIO's were live
+during the rebuild. A venture that declares twelve cadences on day one produces
+twelve overdue flags on day two and teaches you to ignore the section.</p>
+<hr />
+<h2 id="stage-7-sprints-and-execution">Stage 7 — Sprints and execution</h2>
+<p>Cadences keep a venture alive. Sprints are how a <em>project inside</em> it ships.</p>
+<h3>The sprint object</h3>
+<pre><code>&lt;project&gt;/sprints/
+  sprint.schema.json
+  &lt;sprint-id&gt;/
+    sprint.yaml        # backlog, claims, hitl_log — the operational source
+    canvas.md          # strategic frame for THIS sprint
+    retro.md           # written at close
+</code></pre>
+<p>Fourteen required root keys, all of them: <code>sprint_id</code>, <code>project</code>, <code>status</code>,
+<code>cadence</code>, <code>dates</code>, <code>goal</code>, <code>okr_links</code>, <code>facilitator</code>, <code>miles_routing</code>,
+<code>backlog</code>, <code>stretch</code>, <code>hitl_log</code>, <code>claims</code>, <code>done_when</code>. Status vocabulary is
+<code>planning | active | review | retro | closed</code> — <code>archived</code> is deliberately
+absent, which is why <code>sprints/_archive/</code> is excluded from validation.
+<code>dates.retro</code> and <code>carryover</code> become required at <code>status: closed</code>, and carryover
+must be an explicit list, not prose.</p>
+<p>Validate exactly what CI validates:</p>
+<pre><code class="language-bash">python scripts/validate_sprint.py $(git ls-files 'sprints/*/sprint.yaml' 'sprints/*.yaml' \
+  | grep -v '^sprints/_archive/')
+</code></pre>
+<h3>The loop</h3>
+<ol>
+<li><strong><code>sprint-rollover</code></strong> (weekly cadence, <code>cto</code>) — when a new ISO week starts
+   with no sprint on the books, carries over unfinished items, drafts the next
+   sprint in <code>planning</code>, and queues a <code>sprint_go</code> decision. <strong>It never activates
+   a sprint.</strong> Idempotent: exits silently if a <code>planning</code> or <code>active</code> sprint
+   already exists for the week.</li>
+<li><strong><code>/sprint-start</code></strong> — the kickoff ceremony. Reads <code>CANVAS.md</code>, walks the
+   backlog, takes last adjustments, then flips <code>status: planning → active</code> and
+   commits. (Activation can also fall to the decision pipeline's <code>default_at</code>
+   SLA if GO never arrives — PLUR's W27 activated that way.)</li>
+<li><strong><code>sprint_sync.py</code></strong> — projects the active sprint into the agent queue.</li>
+<li><strong><code>sprint-claim</code></strong> (daily cadence) — an agent claims one ready item and ships it.</li>
+<li><strong><code>/retro</code></strong> — retrospective, HITL log fully classified, engrams captured.</li>
+</ol>
+<h3>The three levels — the most expensive thing to get wrong</h3>
+<pre><code>1. A task in next_actions.org             — exists
+2. ...tagged :AI:                         — is a CANDIDATE
+3. ...AND referenced from nightshift.org  — RUNS
+</code></pre>
+<p><code>build_queue</code> keeps only entries whose file is <code>nightshift.org</code>. On 2026-09-04
+the fleet had 261 tasks at level 2 and the runner executed 2. The system printed
+the warning on every run and it read as noise.</p>
+<p><code>sprint_sync.py</code> writes all three levels, and the direction is one-way:</p>
+<pre><code>in sprint + claimed by an agent  →  tagged :AI:, entry in the queue
+not in sprint                    →  :AI: removed, queue entry removed
+                                    (the task itself always stays)
+</code></pre>
+<p><strong><code>:AI:</code> is a projection of an active sprint, never a hand-applied label</strong> —
+<code>sprint_sync --apply</code> strips any tag it did not put there. Removing the tag does
+not delete or deprioritise: it says "not this sprint", which is what a sprint
+means.</p>
+<pre><code class="language-bash">python3 .datacore/lib/sprint_sync.py --space 9-my-venture --active          # dry run
+python3 .datacore/lib/sprint_sync.py --space 9-my-venture --active --apply
+</code></pre>
+<p>It <strong>refuses</strong> sprint items claimed by an agent that lack <code>roadmap</code>,
+<code>milestone</code>, <code>surface</code> and <code>acceptance</code>. That refusal is the feature: an
+underspecified item is caught while a human is still looking at the sprint,
+instead of at 02:00 by an agent that cannot act on it.</p>
+<h3>Where the record lives</h3>
+<p>Three records per task, and only one of them can prove anything:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>where</th>
+<th>attested</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>org-mode</td>
+<td><code>&lt;space&gt;/org/*.org</code></td>
+<td>no — working state, <code>NIGHTSHIFT_*</code> telemetry, CLOCK</td>
+</tr>
+<tr>
+<td>ledger</td>
+<td><code>&lt;space&gt;/.datacore/events/&lt;actor&gt;.jsonl</code></td>
+<td><strong>yes</strong> — sha256 chain, signed, sealed</td>
+</tr>
+<tr>
+<td>agent stream</td>
+<td><code>~/.datacore/cos/agent-stream/events-&lt;date&gt;.jsonl</code></td>
+<td>no — exec id, duration, tokens</td>
+</tr>
+</tbody>
+</table>
+<p>For org-routed work the ledger is a birth-and-death register: <code>item.create</code>,
+<code>item.update</code>, <code>item.dismiss</code>. It never sees the task claimed, executed or
+evaluated. "Who did this task, when, and at what cost" is answerable from
+evidence, but not from the attested chain. Know that before you rely on it.</p>
+<hr />
+<h2 id="stage-8-make-it-visible">Stage 8 — Make it visible</h2>
+<p>A venture nobody sees is a venture that quietly stops.</p>
+<ul>
+<li><strong><code>/today</code></strong> — the ventures <code>today-hook</code> (priority 80, section "Venture
+  Portfolio") reports per-venture cadence status, budget and hypothesis health
+  for every space with a <code>venture.yaml</code>, and generates org tasks for overdue
+  cadences.</li>
+<li><strong><code>venture-monitor</code></strong> agent, trigger <code>:AI:venture:monitor:</code> — the daily
+  heartbeat narrative.</li>
+<li><strong>MCP read tools</strong> (open-source surface, read-only through the Python
+  evidence readers): <code>datacore_ventures_list_ventures</code>,
+  <code>datacore_ventures_read_venture</code>, <code>datacore_ventures_list_hypotheses</code>,
+  <code>datacore_ventures_venture_status</code>.</li>
+<li><strong>App mutation tools</strong> (<code>ventures_create_venture</code>, <code>ventures_update_venture</code>,
+  <code>ventures_add_hypothesis</code>, <code>ventures_archive_venture</code>, …) route through the
+  daemon with safety gates, checkpoints, locking and event emission. The split
+  is deliberate — reads are free, writes are gated.</li>
+<li><strong>Budget</strong> — <code>budget_tracker.py</code> keeps a plaintext monthly ledger at
+  <code>.datacore/state/venture/budget-ledger.yaml</code>. A budget check describes a
+  snapshot; it does not authorise a payment or reserve funds.</li>
+</ul>
+<hr />
+<h2 id="stage-9-stage-transitions">Stage 9 — Stage transitions</h2>
+<p>Move <code>stage:</code> on evidence, along the allowed edges only:</p>
+<table>
+<thead>
+<tr>
+<th>To</th>
+<th>What should be true</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>discovery</code></td>
+<td>space exists, thesis written, first hypothesis on the board</td>
+</tr>
+<tr>
+<td><code>validation</code></td>
+<td>a hypothesis is <code>active</code> with a metric, window and budget</td>
+</tr>
+<tr>
+<td><code>growth</code></td>
+<td>at least one hypothesis <code>validated</code>; roadmap exists and validates</td>
+</tr>
+<tr>
+<td><code>maturity</code></td>
+<td>cadences complete with evidence without prompting; drift check clean</td>
+</tr>
+<tr>
+<td><code>archived</code></td>
+<td>reversible — <code>archive_venture</code> stops cadences; <code>restore_venture</code> returns it to <code>discovery</code></td>
+</tr>
+</tbody>
+</table>
+<p>Archiving is destructive enough that the tool description says to always confirm
+with the user first. It is not deletion, and the venture keeps its number.</p>
+<hr />
+<h2 id="the-minimum-that-is-actually-a-venture">The minimum that is actually a venture</h2>
+<p>The nine stages describe the full shape. <strong>Day one is three things:</strong></p>
+<ol>
+<li><code>venture.yaml</code> that loads — name, description, stage, one role, a budget.</li>
+<li><code>hypotheses.yaml</code> with one hypothesis carrying a metric, a window, a budget.</li>
+<li>One cadence on that role that reviews it.</li>
+</ol>
+<p>That is a venture. It wakes on the heartbeat, appears in <code>/today</code>, and has one
+falsifiable claim under test. Everything else — intent graph, brand system,
+roadmap, sprint train — earns its place when there is something to point it at.</p>
+<p>The evidence in this tree is one-directional on this point: the failures are
+structures built before there was work to put in them. Sprints 2 through 6 of
+PLUR Enterprise have no retro written. Forge's hypothesis board has four
+hypotheses proposed in April that went cold in July without a single experiment.
+PLUR cleared every cadence on three roles and rebuilt them one at a time. None
+of those were failures of the framework; they were the cost of installing more
+of it than the venture was ready to carry.</p>
+<hr />
+<h2 id="checklist">Checklist</h2>
+<pre><code>[ ] 0  /office-hours design doc exists; triggering decision captured
+[ ] 1  venture.yaml loads; budget invariant holds; stage is honest
+[ ] 2  org/intents.org seeded, DRAFT tags dropped, goals carry :SUCCESS:
+[ ] 2  intent_tasks.py run — unplaced tasks reviewed, not suppressed
+[ ] 3  hypotheses.yaml has one active hypothesis with metric + window + budget
+[ ] 4  positioning + voice written; /scaffolding-audit gaps reviewed
+[ ] 5  roadmap.yaml validates; every item serves a resolvable INTENT_ID
+[ ] 5  roadmap_drift.py --strict wired into CI
+[ ] 6  one role, one cadence, one completed run with real evidence
+[ ] 6  heartbeat.triggers set deliberately
+[ ] 7  sprint.yaml validates against sprint.schema.json
+[ ] 7  sprint_sync.py --apply runs; nightshift.org exists in the space
+[ ] 8  venture appears in /today; budget ledger initialised
+</code></pre>
+<hr />
+<h2 id="known-gaps-in-the-framework-itself">Known gaps in the framework itself</h2>
+<p>Found while writing this. Each is a real defect, not a caveat:</p>
+<ol>
+<li><code>.datacore/templates/space/venture.yaml.template</code> writes <code>roles:</code> as a list;
+   <code>VentureConfig</code> requires a dict. The template cannot produce a loadable file.</li>
+<li><code>comms/module.yaml</code> declares a <code>brand-positioning</code> command; the file
+   <code>commands/brand-positioning.md</code> does not exist.</li>
+<li><code>agent_readiness.py</code> hardcodes <code>5-plur/roadmap.yaml</code>. A second venture with a
+   roadmap cannot be checked with it.</li>
+<li><code>sprint-claim.md</code> declares <code>frequency: hourly</code>, which the cadence engine does
+   not support.</li>
+<li>The ventures module <code>CLAUDE.base.md</code> lists <code>cadence-log.yaml</code> and
+   <code>budget-ledger.yaml</code> at the space root; both now live under
+   <code>.datacore/state/venture/</code>.</li>
+</ol>
+<hr />
+<p><em>Sources: <code>.datacore/modules/ventures/</code> (loader, cadence engine, heartbeat,
+commands), <code>.datacore/lib/intent_*.py</code>, <code>.datacore/lib/roadmap_*.py</code>,
+<code>.datacore/lib/sprint_sync.py</code>, <code>.datacore/specs/task-lifecycle-and-ledger-coverage.md</code>,
+<code>~/.claude/skills/roadmap-build/SKILL.md</code>, <code>datacore-app/daemon/datacored/adapters/spaces.py</code>,
+and the seven ventures that already run.</em></p></section><section id="part-1" class="partrule"><h1>What a conversational venture wizard still needs</h1>
+<p>Companion to <code>venture-creation-playbook.md</code>. That document describes the nine
+stages as they are performed today — largely by hand, with a different tool per
+stage and several stages having no tool at all. This one lists the code that has
+to exist before <code>/create-venture</code> can walk someone through all nine in
+conversation, inside Claude Code, without the datacore-app daemon running.</p>
+<p>Scope is <strong>creating a venture</strong>. Nothing here is about auditing or repairing the
+ones that already exist.</p>
+<hr />
+<h2 id="the-shape-of-the-wizard">The shape of the wizard</h2>
+<p>Follow <code>/create-module</code> — a thin conversational command that gathers intent and
+delegates to an agent. Three new files, none of them large:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.datacore/commands/create-venture.md</code></td>
+<td>The conversational surface. Intent → stage selection → hand off.</td>
+</tr>
+<tr>
+<td><code>.datacore/modules/ventures/agents/venture-creator.md</code></td>
+<td>Does the work, one stage at a time, with the user answering between stages.</td>
+</tr>
+<tr>
+<td><code>.datacore/state/venture/&lt;slug&gt;/setup.yaml</code></td>
+<td>Resume state — which stages are done, what was answered.</td>
+</tr>
+</tbody>
+</table>
+<p>Two properties the command must have, because venture setup is not a single
+sitting:</p>
+<ol>
+<li><strong>Resumable.</strong> Nine stages will not finish in one conversation. Re-running
+   <code>/create-venture</code> on an existing slug must pick up where it stopped, not
+   start over and not overwrite.</li>
+<li><strong>Stage-skippable.</strong> A <code>discovery</code>-stage venture should be told to stop after
+   stage 3. The playbook's "minimum that is actually a venture" is the default
+   path; stages 4–7 are offered, not assumed.</li>
+</ol>
+<p>Everything below is what those three files would need underneath them, and do
+not have.</p>
+<hr />
+<h2 id="blockers-the-wizard-cannot-run-without-these">Blockers — the wizard cannot run without these</h2>
+<h3>1. A local venture scaffolder</h3>
+<p><strong>Missing:</strong> <code>.datacore/lib/venture_scaffold.py</code></p>
+<p><code>scaffold_space()</code> already does exactly the right thing — next free numeric
+prefix that never reuses a gap, whole tree built in a temp dir, <code>load_venture</code>
+validated before anything lands, atomic rename, collision refusal. It is the
+best piece of code in this whole path.</p>
+<p>It lives at <code>datacore-app/daemon/datacored/adapters/spaces.py</code> and imports
+<code>..states</code>, so it is reachable only through a running daemon. A wizard in Claude
+Code cannot call it.</p>
+<p><strong>This is a lift, not a rewrite.</strong> Move the scaffolder and <code>TEMPLATE_REGISTRY</code>
+into the ventures module (it is the ventures module's job), expose a CLI, and
+have the daemon adapter import it. One implementation, two callers.</p>
+<pre><code class="language-bash">python3 .datacore/lib/venture_scaffold.py --name &quot;The Practice&quot; \
+    --stage discovery --template blank --dry-run
+</code></pre>
+<p><code>--dry-run</code> already exists in the daemon version and returns the planned file
+list. That is precisely what the wizard shows the user before writing.</p>
+<h3>2. A setup doctor</h3>
+<p><strong>Missing:</strong> <code>.datacore/lib/venture_doctor.py</code></p>
+<p>The single highest-value item on this list. It answers, for one venture, which
+of the nine stages are complete — and it is three things at once:</p>
+<ul>
+<li>the wizard's <strong>progress display</strong> between stages,</li>
+<li>the wizard's <strong>resume mechanism</strong> (recompute rather than trust <code>setup.yaml</code>),</li>
+<li>the <strong>exit test</strong> for each stage, so "done" is machine-judged rather than
+  declared.</li>
+</ul>
+<p><code>venture_status.py</code> does not do this. It reports cadence, budget and hypothesis
+health for ventures that already load — runtime health, not setup completeness,
+and it cannot run at all before stage 1 finishes.</p>
+<pre><code>$ python3 .datacore/lib/venture_doctor.py --space 9-practice
+  1  constitution   FAIL  no venture.yaml
+  2  intent graph   n/a   (blocked by 1)
+  ...
+</code></pre>
+<p>Every check must be mechanical. A stage that needs a human to judge whether it
+is done is a stage the wizard will stall on.</p>
+<h3>3. A cadence catalogue</h3>
+<p><strong>Missing:</strong> <code>.datacore/lib/cadence_catalog.py</code></p>
+<p>There are 28 cadence templates and no way to ask a question of them. The only
+reader, <code>load_cadence_template()</code>, takes a name, strips the frontmatter and
+returns the body — or <code>None</code>. So the declared <code>role</code> and <code>frequency</code> are
+unreadable, and a wizard cannot offer "here are the cadences that suit a CEO."</p>
+<p>Two functions:</p>
+<ul>
+<li><code>list(role=None, frequency=None)</code> — parse frontmatter across the templates dir.</li>
+<li><code>resolve(name)</code> — does this name have a template, yes or no.</li>
+</ul>
+<p>The second closes a real hole. <code>RoleConfig.supported_cadences</code> validates the
+frequency key and rejects duplicates, but <strong>never checks that a cadence name
+resolves to a template</strong>. A typo passes validation, lands in <code>venture.yaml</code>, and
+then quietly never fires. Wire <code>resolve()</code> into the validator and the typo dies
+at write time.</p>
+<h3>4. A write path for the intent graph</h3>
+<p><strong>Missing:</strong> <code>.datacore/lib/intent_node.py</code></p>
+<p><code>intent_graph_scaffold.py</code> seeds <code>intents.org</code> from <code>venture.yaml</code> and
+deliberately leaves every goal without <code>:SUCCESS:</code> — an invented metric reads as
+real and is worse than a blank. Correct, and it means the wizard's job at stage
+2 is to <em>elicit</em> those criteria and write them in.</p>
+<p>There is no API for that. The options today are hand-editing org text, which the
+house rule forbids, or <code>--force</code>, which rewrites the whole file and discards the
+answers already given.</p>
+<pre><code class="language-bash">python3 .datacore/lib/intent_node.py --space 9-practice \
+    --id north-star-sessions --set SUCCESS &quot;...&quot; --clear-tag DRAFT
+</code></pre>
+<p>Build it on org-workspace (<code>set_property</code>, <code>NodeView</code>), which already handles
+properties, multiline values and IDs. This is glue, not a parser.</p>
+<hr />
+<h2 id="needed-for-the-stages-beyond-the-minimum">Needed for the stages beyond the minimum</h2>
+<h3>5. Roadmap init and schema</h3>
+<p><strong>Missing:</strong> <code>.datacore/lib/roadmap_init.py</code> and <code>.datacore/schemas/roadmap.schema.json</code></p>
+<p><code>roadmap_validate.py</code>, <code>roadmap_render.py</code> and <code>roadmap_drift.py</code> all take
+<code>--space</code> and all assume a <code>roadmap.yaml</code> already exists. Nothing creates the
+first one, and the rules it must satisfy live only inside the validator's Python.</p>
+<p><code>roadmap_init.py --space &lt;s&gt;</code> should write a minimal file that passes its own
+validator on the first run: <code>goals</code> seeded from the venture's north star,
+<code>north_star</code> block, <code>items: []</code>, and the header comment carrying the rules
+(outcome-level only; every item <code>serves</code> a resolvable INTENT_ID; <code>gate</code> is a
+condition never a date; <code>shipped: false</code> required on public claims).</p>
+<p><code>.datacore/schemas/</code> does not exist yet. It should — see item 7.</p>
+<h3>6. <code>agent_readiness.py</code> takes a <code>--space</code></h3>
+<p><strong>Missing:</strong> parameterisation. One line of real change.</p>
+<p>It hardcodes <code>ROADMAP = REPO / "5-plur" / "roadmap.yaml"</code> while its three sibling
+tools all accept <code>--space</code>/<code>ROADMAP_SPACE</code>. A second venture with a roadmap
+cannot be checked with it, so the wizard cannot tell the user whether the
+roadmap it just helped write is agent-executable.</p>
+<h3>7. Sprint schema and validator, promoted out of one project</h3>
+<p><strong>Missing:</strong> <code>.datacore/schemas/sprint.schema.json</code>, <code>.datacore/lib/sprint_validate.py</code>,
+<code>.datacore/lib/sprint_init.py</code></p>
+<p><code>sprint.schema.json</code> and <code>validate_sprint.py</code> exist only inside
+<code>5-plur/2-projects/enterprise/</code>. The fourteen required root keys, the
+<code>planning|active|review|retro|closed</code> vocabulary, the rule that <code>dates.retro</code>
+and <code>carryover</code> become required at <code>closed</code> — all of it is correct and all of it
+is trapped in one project's <code>scripts/</code>.</p>
+<p>A second venture starting its first sprint has nothing to validate against.
+Promote the schema and validator; add <code>sprint_init.py</code> to write sprint 1 from
+the roadmap items at <code>horizon: now</code>.</p>
+<h3>8. A brand brief scaffolder, and the missing comms command</h3>
+<p><strong>Missing:</strong> <code>.datacore/modules/comms/commands/brand-positioning.md</code></p>
+<p><code>comms/module.yaml</code> declares this command under <code>provides.commands</code>. The file
+does not exist. The agent works via the <code>:AI:comms:brand:</code> tag, but the wizard
+cannot invoke a command that was never written.</p>
+<p><strong>Also missing:</strong> something that turns the agent's answers into files at the
+paths <code>SCAFFOLDING.base.md</code> specifies — <code>1-tracks/comms/positioning/</code>,
+<code>1-tracks/comms/brand/voice.md</code>, <code>3-knowledge/pages/_core/</code>. Today the agent
+produces prose and a human decides where it lands, which is why two ventures
+that both did stage 4 have it in two different shapes.</p>
+<h3>9. A role overlay scaffolder</h3>
+<p><strong>Missing:</strong> <code>.datacore/lib/role_overlay.py</code> (or a flag on the scaffolder)</p>
+<p><code>role_loader.py</code> merges <code>.datacore/templates/roles/&lt;role&gt;.base.md</code> with
+<code>&lt;space&gt;/.datacore/roles/&lt;role&gt;.md</code>. The base archetypes exist for all twelve
+roles; nothing writes the overlay. The wizard should ask the two questions that
+matter — what this role owns here, and what it must never do — and write the
+stub. PLUR's bizdev boundary ("qualifies prospects, it never contacts them") is
+the example of why the second question is not optional.</p>
+<hr />
+<h2 id="fix-while-passing">Fix while passing</h2>
+<h3>10. The stale space template</h3>
+<p><code>.datacore/templates/space/venture.yaml.template</code> writes <code>roles:</code> as a list;
+<code>VentureConfig</code> requires a dict. The template cannot produce a loadable file.
+Once item 1 exists the template is the fallback path, so it has to be correct —
+or deleted, and the scaffolder made the only way in.</p>
+<h3>11. <code>sprint-claim.md</code> declares an unsupported frequency</h3>
+<p>Its frontmatter says <code>frequency: hourly</code>; the engine supports only <code>daily</code>,
+<code>weekly</code>, <code>monthly</code>, <code>quarterly</code>. Item 3's <code>resolve()</code> should check the
+frontmatter frequency against <code>FREQUENCY_WINDOWS</code> and fail this one loudly.</p>
+<h3>12. Ventures <code>CLAUDE.base.md</code> points at moved files</h3>
+<p>It lists <code>cadence-log.yaml</code> and <code>budget-ledger.yaml</code> at the space root; both now
+live under <code>.datacore/state/venture/</code>. The wizard's own context would inherit
+the wrong paths.</p>
+<hr />
+<h2 id="build-order">Build order</h2>
+<p>Dependencies, not priorities. Nothing in the second row is worth building before
+the first row works.</p>
+<pre><code>1 venture_scaffold  ──┬── 2 venture_doctor ──── /create-venture + venture-creator
+                      │                            (minimum-venture path works here)
+3 cadence_catalog  ───┤
+4 intent_node      ───┘
+
+5 roadmap_init ── 6 agent_readiness --space ── 7 sprint schema + init
+8 brand command + scaffolder      9 role_overlay
+10, 11, 12 — fix in the same commit as whatever touches them
+</code></pre>
+<p>Items 1–4 plus the three wizard files get the <strong>minimum that is actually a
+venture</strong> — constitution, one hypothesis, one cadence — fully conversational.
+That is the milestone worth shipping first; 5–9 extend the same wizard to the
+stages a venture only reaches later, and every one of them is optional at
+<code>discovery</code> stage.</p>
+<h3>Rough sizes</h3>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>New code</th>
+<th>Character of the work</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 venture_scaffold</td>
+<td>~50 lines + a move</td>
+<td>lift out of the daemon, add CLI</td>
+</tr>
+<tr>
+<td>2 venture_doctor</td>
+<td>~200 lines</td>
+<td>new, nine mechanical checks</td>
+</tr>
+<tr>
+<td>3 cadence_catalog</td>
+<td>~80 lines</td>
+<td>new, frontmatter parse + validator wiring</td>
+</tr>
+<tr>
+<td>4 intent_node</td>
+<td>~120 lines</td>
+<td>glue over org-workspace</td>
+</tr>
+<tr>
+<td>5 roadmap_init</td>
+<td>~120 lines</td>
+<td>new, plus extracting rules into a schema</td>
+</tr>
+<tr>
+<td>6 agent_readiness</td>
+<td>~10 lines</td>
+<td>parameterisation</td>
+</tr>
+<tr>
+<td>7 sprint schema/init</td>
+<td>~100 lines + a move</td>
+<td>promote, then init from roadmap</td>
+</tr>
+<tr>
+<td>8 brand</td>
+<td>~150 lines</td>
+<td>one command file + a writer</td>
+</tr>
+<tr>
+<td>9 role_overlay</td>
+<td>~60 lines</td>
+<td>new, two questions and a template merge</td>
+</tr>
+</tbody>
+</table>
+<p>Only items 2, 3, 4 and 5 are genuinely new logic. Three of the nine are moving
+code out of a place that traps it — the daemon, one project's <code>scripts/</code>, one
+validator's hardcoded path — which is the cheapest kind of work on this list and
+the reason the wizard is closer than it looks.</p></section></main>
+<footer>Generated from .datacore/specs/venture-creation-playbook.md, .datacore/specs/venture-wizard-gaps.md by <code>.datacore/lib/spec_render.py</code>. Edit the markdown and regenerate — do not edit this file.</footer>
+</div></body></html>

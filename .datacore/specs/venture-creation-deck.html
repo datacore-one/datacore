@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Starting a new venture — Datacore</title>
+<style>
+:root { color-scheme: light;
+  --ink:#2d3142; --slate:#4f5d75; --faint:#8d99ae; --accent:#eb6c36;
+  --bg:#f5f5f5; --card:#ffffff; --rule:#d8d8dc; --wash:#ecedf0; }
+* { box-sizing:border-box; }
+html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+  font-family: ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+#deck { height:100%; display:flex; align-items:center; justify-content:center; }
+.slide { display:none; width:min(1120px,94vw); aspect-ratio:16/9; background:var(--card);
+  border:1px solid var(--rule); border-radius:10px; padding:2.6em 3.1em;
+  box-shadow:0 2px 20px rgba(45,49,66,.07); overflow:hidden;
+  flex-direction:column; justify-content:flex-start;
+  /* Every size below is em-relative, so the auto-fit pass can shrink a dense
+     slide by changing this one value instead of clipping its content. */
+  font-size:20px; }
+.slide.on { display:flex; }
+.kicker { font-size:.6em; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--accent); font-weight:650; margin-bottom:.7em; }
+.slide h1 { font-family:"Iowan Old Style",Palatino,Georgia,serif; font-weight:600;
+  font-size:2em; line-height:1.15; margin:0 0 .5em; letter-spacing:-.01em; }
+.slide.title h1 { font-size:2.7em; margin-top:auto; }
+.slide.title .sub { font-size:1.05em; color:var(--slate); max-width:40ch; margin-bottom:auto; }
+.slide h2 { font-size:.95em; margin:1.1em 0 .4em; font-weight:650; color:var(--slate); }
+.slide p, .slide li { font-size:1em; line-height:1.52; max-width:62ch; }
+.slide li { margin-bottom:.45em; }
+.slide ul, .slide ol { padding-left:1.2em; margin:.5em 0; }
+.slide li::marker { color:var(--faint); }
+blockquote { margin:1em 0 0; padding:.8em 1em; background:var(--wash);
+  border-left:4px solid var(--accent); border-radius:0 6px 6px 0; }
+blockquote p { font-size:.93em; color:var(--ink); margin:0; max-width:64ch; }
+blockquote strong { color:var(--accent); }
+table { border-collapse:collapse; margin:.8em 0; width:100%; font-size:.83em; }
+th { text-align:left; padding:.45em .8em .45em 0; border-bottom:1.5px solid var(--ink);
+  font-size:.7em; letter-spacing:.07em; text-transform:uppercase; color:var(--slate); }
+td { padding:.45em .8em .45em 0; border-bottom:1px solid var(--rule); vertical-align:top; }
+code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.8em;
+  background:var(--wash); padding:1px 5px; border-radius:3px; }
+strong { font-weight:650; }
+em { color:var(--slate); font-style:normal; }
+hr { border:none; border-top:1px solid var(--rule); margin:.9em 0; }
+#bar { position:fixed; left:0; top:0; height:3px; background:var(--accent);
+  transition:width .18s ease; }
+#hud { position:fixed; right:18px; bottom:14px; font-size:12px; color:var(--faint);
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; user-select:none; }
+#hud b { color:var(--slate); font-weight:650; }
+@media print {
+  @page { size:297mm 167mm; margin:0; }
+  html,body { height:auto; background:#fff; }
+  #deck { display:block; height:auto; }
+  #bar,#hud { display:none; }
+  .slide { display:flex !important; width:100%; aspect-ratio:auto; height:167mm;
+    border:none; border-radius:0; box-shadow:none; page-break-after:always; }
+}
+</style></head>
+<body>
+<div id="bar"></div>
+<div id="deck"><section class="slide title"><div class="kicker">Datacore</div><h1>Starting a new venture</h1>
+<p class="sub">What you decide, what the system builds, and how a venture reaches you once it is running.</p></section><section class="slide"><div class="kicker">Day one</div><h1>Your chief of staff starts on your laptop</h1>
+<p>Nothing to provision. You install Datacore, and on the first morning you ask for your briefing.</p>
+<p>He is called Winston. He reads the night's work, the standing commitments and the open questions, and gives you three things:</p>
+<ul>
+<li><strong>What moved</strong> — a short narrative, not a dashboard</li>
+<li><strong>The Ask</strong> — the decisions that genuinely need you today</li>
+<li><strong>What he handled</strong> — the things he dealt with so you did not have to</li>
+</ul>
+<p>The same command produces this on a laptop and on a dedicated server. Nothing has to be set up twice, and nothing is a toy version.</p>
+<blockquote>
+<p><strong>The rule underneath:</strong> he acts <strong>only</strong> through an approvals queue. Nothing with a consequence happens without your decision, and every decision is recorded.</p>
+</blockquote></section><section class="slide"><div class="kicker">The surface</div><h1>What "The Ask" looks like</h1>
+<p>Not a list of pending items. Each one is prepared so you can answer in a single line, without opening anything:</p>
+<ul>
+<li>What is blocked, and since when</li>
+<li>The options, with what each one costs</li>
+<li>A recommended default</li>
+<li><strong>What happens if you say nothing</strong></li>
+</ul>
+<p>Then two buttons: <strong>Approve</strong> or <strong>Dismiss</strong>. The next run reads your answer — an approved question gets acted on, a dismissed one is never asked again.</p>
+<blockquote>
+<p>One real decision: a sprint went live because the deadline on its "shall we start?" question passed without an answer. That was the stated default. Saying nothing is also a decision, and it is written down as one.</p>
+</blockquote></section><section class="slide"><div class="kicker">The word</div><h1>What "a venture" means here</h1>
+<p>A venture is any effort serious enough to have <strong>its own clock</strong>.</p>
+<ul>
+<li>Its own monthly budget ceiling — split between AI spend and real money</li>
+<li>Its own standing commitments, chased whether or not anyone remembers</li>
+<li>Its own definition of going well, and someone accountable for it</li>
+</ul>
+<p>Datafund, the trading fund, the product company, the health practice — each is a venture. A landing page is not.</p>
+<blockquote>
+<p><strong>In plain words:</strong> a venture gets its own folder, its own budget and its own heartbeat. A project just gets a to-do list.</p>
+</blockquote></section><section class="slide"><div class="kicker">The mechanism</div><h1>One file makes it real</h1>
+<p>Every venture has a short document at its root stating what it is. It is not a description — it is <strong>read by the machine every thirty minutes</strong>.</p>
+<table>
+<thead>
+<tr>
+<th>It says</th>
+<th>For example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>What it is, and the belief underneath</td>
+<td>one sentence, then three</td>
+</tr>
+<tr>
+<td>How grown up it is</td>
+<td>idea · testing · growing · established</td>
+</tr>
+<tr>
+<td>What it may spend this month</td>
+<td>€150 ceiling — €120 AI, €30 real money</td>
+</tr>
+<tr>
+<td>Who does what</td>
+<td>chief executive, technology, marketing, business development</td>
+</tr>
+<tr>
+<td>How much rope the agents get</td>
+<td>suggest only · draft for approval · act</td>
+</tr>
+<tr>
+<td>What must happen, and how often</td>
+<td>daily, weekly, monthly, quarterly</td>
+</tr>
+</tbody>
+</table>
+<p>Until this file exists, the venture is invisible: no heartbeat, no briefing, no budget.</p></section><section class="slide"><div class="kicker">The map</div><h1>Nine steps</h1>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Step</th>
+<th>The question it answers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>Decide</td>
+<td>Is this really a venture?</td>
+</tr>
+<tr>
+<td>1</td>
+<td>Constitution</td>
+<td>What is it, who runs it, what may it spend?</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Intent graph</td>
+<td>Why does any of this matter?</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Hypotheses</td>
+<td>What do we believe, and how would we know?</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Brand</td>
+<td>Who is it for, and how does it sound?</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Roadmap</td>
+<td>What changes in the world, and in what order?</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Roles &amp; rhythms</td>
+<td>What happens every week without being asked?</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Sprints</td>
+<td>What are we doing right now?</td>
+</tr>
+<tr>
+<td>8</td>
+<td>The briefing</td>
+<td>How does it reach me?</td>
+</tr>
+<tr>
+<td>9</td>
+<td>Growing up</td>
+<td>When has it earned the next stage?</td>
+</tr>
+</tbody>
+</table>
+<p>Steps 0–3 and 6 are the real beginning. The rest is earned.</p></section><section class="slide"><div class="kicker">Step 0</div><h1>Is this really a venture?</h1>
+<p>Six questions first, of the kind an investor asks rather than a friend:</p>
+<ul>
+<li>Who exactly wants this, and what do they do today instead?</li>
+<li>What is the narrowest version we could ship?</li>
+<li>What would have to be true for this to be big?</li>
+</ul>
+<p>The output is a written argument. <strong>No folder, no files, no code.</strong> If the idea does not survive, nothing is created.</p>
+<blockquote>
+<p><strong>The cheapest venture is the one you decide not to start.</strong> This step exists to produce that outcome more often.</p>
+</blockquote></section><section class="slide"><div class="kicker">Step 1</div><h1>The constitution</h1>
+<p>You answer the six questions from slide five, and the folder is created in one operation — either all of it lands or none of it does.</p>
+<p>What comes with it: the inbox, the task lists, the knowledge base, the journal, the budget ledger.</p>
+<p>Two choices people underestimate:</p>
+<ul>
+<li><strong>The spending ceiling.</strong> It is enforced, not aspirational. Agents check it before acting.</li>
+<li><strong>The autonomy level.</strong> <em>Suggest</em> means you see everything first. <em>Act</em> means you see it afterwards. Most ventures start at suggest and never need to move.</li>
+</ul></section><section class="slide"><div class="kicker">Step 2 · the one people ask about</div><h1>The intent graph</h1>
+<p>A family tree for your reasons.</p>
+<ul>
+<li>At the top: <strong>why this venture exists at all</strong></li>
+<li>Beneath it: the handful of goals that would make that true</li>
+<li>Beneath those: the initiatives, and then the actual week-to-week work</li>
+</ul>
+<p>The system drafts this tree from your constitution — but it leaves every success measure <strong>deliberately blank</strong>, because an invented number reads as real and that is worse than an obvious gap. Filling them in is the one part nobody can do for you.</p>
+<blockquote>
+<p><strong>In plain words:</strong> every piece of work can be traced upward to a reason, and every reason downward to work. Anything that fails either test becomes visible.</p>
+</blockquote></section><section class="slide"><div class="kicker">Step 2 continued</div><h1>Three questions it makes answerable</h1>
+<p>Once the tree exists, a machine can check what previously took an argument:</p>
+<ul>
+<li><strong>Orphan</strong> — this work is happening and serves nothing we ever stated</li>
+<li><strong>Dormant</strong> — we say this matters and nobody has touched it in months</li>
+<li><strong>Reversed</strong> — we still say this matters, but the record shows we killed it</li>
+</ul>
+<p>The third is why it is worth the hour. One strategy stayed on the tree with <strong>nineteen live tasks under it for two months</strong> after the decision to abandon it had been taken and written down. Nobody was being careless. Nothing connected the decision to the work.</p></section><section class="slide"><div class="kicker">Step 3</div><h1>What do we believe?</h1>
+<p>At the start a venture is not a plan. It is a short list of <strong>beliefs that could turn out to be wrong</strong>, each written so it can be settled:</p>
+<blockquote>
+<p><strong>"3% of visitors buy, measured over 200 visitors, within 30 days of launch, for under €30 of spend."</strong></p>
+</blockquote>
+<p>Four parts, all required: the belief, the number, the window, the budget.</p>
+<p>A belief missing any of them cannot be settled and will sit there for a year. One did exactly that — proposed in spring, still untested by summer, its measurement window closed. The record now reads: <em>not disproven, only untested.</em></p></section><section class="slide"><div class="kicker">Step 4</div><h1>Brand and positioning</h1>
+<p>Two documents, and one rule.</p>
+<ul>
+<li><strong>Who it is for</strong> — the smallest group who would genuinely miss it, and the few among them who would tell others</li>
+<li><strong>How it sounds</strong> — the voice, so everything written afterwards sounds like one organisation</li>
+</ul>
+<p>The rule: <strong>the customer is the hero and the venture is the guide.</strong> Not the other way round.</p>
+<p>This is not decoration. Everything the marketing agents write later is checked against these two documents before it goes out.</p></section><section class="slide"><div class="kicker">Step 5</div><h1>The roadmap</h1>
+<p>Not a task list. Thirty to fifty <strong>outcomes</strong> — things that change in the world. Each one states what "done" means as something a stranger could verify:</p>
+<blockquote>
+<p><em>"Runs unattended for fourteen consecutive days with no incidents, and the customer has agreed in writing to be named."</em></p>
+</blockquote>
+<p>Three rules keep it honest:</p>
+<ul>
+<li>Every item points at a reason on the intent graph. One that serves nothing is a deletion candidate.</li>
+<li>Anything waiting states <strong>the condition</strong>, never a date.</li>
+<li>Nothing a public claim could rest on may be marked shipped until it is.</li>
+</ul>
+<blockquote>
+<p>A roadmap is good when it can be <strong>checked</strong>, not when it reads well. The prose is always fine.</p>
+</blockquote></section><section class="slide"><div class="kicker">Step 6</div><h1>Roles and rhythms</h1>
+<p>A <strong>cadence</strong> is a standing commitment — something that happens every day, week, month or quarter whether or not anyone remembers.</p>
+<p>Reviewing the beliefs. Checking the budget against the ceiling. Scanning competitors. Triaging the inbox. Reviewing code.</p>
+<p><strong>Twenty-eight are already written.</strong> You pick from them; you do not write them. Twelve role descriptions likewise — chief executive, technology, marketing, finance, business development and the rest.</p>
+<p>Every thirty minutes the system checks what is overdue and tells Winston.</p>
+<blockquote>
+<p><strong>Start with one.</strong> A venture declaring twelve rhythms on day one produces twelve red flags on day two, and teaches you to ignore the section. One venture here cleared all of them and rebuilt them one at a time.</p>
+</blockquote></section><section class="slide"><div class="kicker">Step 7</div><h1>Sprints — how work actually happens</h1>
+<p>Rhythms keep a venture alive. A sprint is one week of chosen work.</p>
+<p>A task passes through three states, and <strong>only the third one runs</strong>:</p>
+<ol>
+<li><strong>Written down</strong> — it exists</li>
+<li><strong>Chosen for this week</strong> — it is in the sprint</li>
+<li><strong>Handed to an agent</strong> — it is in the queue</li>
+</ol>
+<p>At one point across this system <strong>261 tasks sat at level two and two were running.</strong> The warning was printed on every single run and read as noise.</p>
+<p>The system also <strong>refuses</strong> work an agent cannot act on — anything that does not say where the work happens or what finishing looks like. Better to be stopped while you are looking at it than at two in the morning by an agent that cannot proceed.</p></section><section class="slide"><div class="kicker">Step 8</div><h1>How it reaches you</h1>
+<p>This is the part that makes the other eight worth doing.</p>
+<p>Winston reads every venture's overdue rhythms, spend and open beliefs, and folds them into one briefing. Not one per venture — <strong>one, for all of them.</strong></p>
+<ul>
+<li>Anything a run could not decide becomes an Ask, with a recommendation and a default</li>
+<li>Your answers feed the next run: an approved question gets acted on, a dismissed one is never asked again</li>
+<li>If a venture goes quiet, that is itself reported — silence is never read as all-clear</li>
+</ul>
+<p>You did not configure any of this per venture. It followed from the constitution you wrote in step one.</p></section><section class="slide"><div class="kicker">Step 9</div><h1>Growing up</h1>
+<p>A venture moves through stages, and each is earned with evidence rather than enthusiasm:</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>What is true</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Idea</td>
+<td>It exists on paper</td>
+</tr>
+<tr>
+<td>Discovery</td>
+<td>A belief is written down and under test</td>
+</tr>
+<tr>
+<td>Validation</td>
+<td>Money and effort are committed to settling it</td>
+</tr>
+<tr>
+<td>Growth</td>
+<td>Something was proven, and there is a roadmap</td>
+</tr>
+<tr>
+<td>Established</td>
+<td>It runs without being pushed</td>
+</tr>
+</tbody>
+</table>
+<p>It can also be archived — rhythms stop, nothing is deleted, and it can be brought back.</p></section><section class="slide"><div class="kicker">The counterweight</div><h1>Start with three things</h1>
+<p>The nine steps are the full shape. <strong>Day one is three:</strong></p>
+<ol>
+<li>The constitution — one page</li>
+<li>One belief, with a number, a window and a budget</li>
+<li>One weekly rhythm that reviews it</li>
+</ol>
+<p>That is a real venture. It wakes up, it reaches your briefing, and it has one claim under test.</p>
+<blockquote>
+<p>Every failure here so far has been the same failure: <strong>structure built before there was work to put in it.</strong> Five sprints with no review written. Four beliefs proposed in spring, cold by summer, never once tested.</p>
+</blockquote></section><section class="slide"><div class="kicker">Reference</div><h1>Words you will hear</h1>
+<table>
+<thead>
+<tr>
+<th>Word</th>
+<th>What it means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Winston</strong></td>
+<td>The chief of staff — the briefing, the asks, the approvals</td>
+</tr>
+<tr>
+<td><strong>The Ask</strong></td>
+<td>Decisions needing your verdict, each answerable in one line</td>
+</tr>
+<tr>
+<td><strong>Constitution</strong></td>
+<td>The one file defining a venture, read every half hour</td>
+</tr>
+<tr>
+<td><strong>Intent graph</strong></td>
+<td>The family tree of reasons — why, above what, above the work</td>
+</tr>
+<tr>
+<td><strong>Hypothesis</strong></td>
+<td>A belief with a number, a window and a budget</td>
+</tr>
+<tr>
+<td><strong>Cadence</strong></td>
+<td>A standing commitment, chased when it is late</td>
+</tr>
+<tr>
+<td><strong>Sprint</strong></td>
+<td>One week of chosen work</td>
+</tr>
+<tr>
+<td><strong>Nightshift</strong></td>
+<td>Work handed to agents to run overnight</td>
+</tr>
+<tr>
+<td><strong>Approvals queue</strong></td>
+<td>The only route by which anything consequential happens</td>
+</tr>
+</tbody>
+</table></section><section class="slide"><div class="kicker">The point of all of it</div><h1>A day with a venture running</h1>
+<p><strong>07:00 — the briefing.</strong> Your sleep data lands, Winston composes and sends. One narrative across every venture, The Ask at the top.</p>
+<p><strong>07:10 — you decide.</strong> Three or four questions, each with a recommendation and a default. Approve, dismiss, or say nothing and let the default stand. Two minutes.</p>
+<p><strong>Through the day.</strong> Rhythms fire on their own — research, competitor scans, code review, drafts. You review, you do not produce. What an agent cannot decide becomes tomorrow's Ask.</p>
+<table>
+<thead>
+<tr>
+<th>Then</th>
+<th>What happens</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Evening</td>
+<td>The day's output, and what it wants to ask tomorrow</td>
+</tr>
+<tr>
+<td>Monday</td>
+<td>A sprint drafted from what the roadmap says matters now. You say go</td>
+</tr>
+<tr>
+<td>Monthly</td>
+<td>Spend against ceiling, which beliefs moved, which went cold</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>The whole design in one sentence:</strong> you keep the judgement, and hand over the remembering.</p>
+</blockquote></section><section class="slide"><div class="kicker">Last thing</div><h1>Where Winston lives</h1>
+<p>He starts on your laptop and he is complete there: same briefing, same asks, same record.</p>
+<p>Later — usually within a few weeks — you give him his own machine. Not because anything is missing, but because of one thing a laptop cannot do:</p>
+<blockquote>
+<p><strong>A closed laptop at six in the morning produces no briefing.</strong></p>
+</blockquote>
+<p>Moving him is what buys the rest: the briefing arriving before you are awake, spoken aloud, questions you answer from your phone, and a separate check that notices if any of it fails to appear.</p>
+<p>That last one is not theoretical. The chief of staff once stopped running for <strong>forty-one days</strong> and nobody noticed, because nothing was watching for his silence.</p>
+<blockquote>
+<p>This is a decision about the installation, not about any one venture. You make it once, and every venture after it inherits the result.</p>
+</blockquote></section></div>
+<div id="hud"><b id="cur">1</b> / 21 &nbsp;·&nbsp; ← → &nbsp;·&nbsp; p to print</div>
+<script>
+var s=[].slice.call(document.querySelectorAll('.slide')),i=0;
+function fit(el){var px=20;el.style.fontSize=px+'px';
+  while(el.scrollHeight>el.clientHeight+1&&px>12){px-=0.5;el.style.fontSize=px+'px';}}
+window.addEventListener('resize',function(){fit(s[i]);});
+/* Cmd+P must work as well as the p key: show and fit every slide first. */
+window.addEventListener('beforeprint',function(){s.forEach(function(e){e.classList.add('on');fit(e);});});
+window.addEventListener('afterprint',function(){s.forEach(function(e,k){e.classList.toggle('on',k===i);});});
+function go(n){i=Math.max(0,Math.min(s.length-1,n));
+  s.forEach(function(e,k){e.classList.toggle('on',k===i)});
+  fit(s[i]);
+  document.getElementById('bar').style.width=((i+1)/s.length*100)+'%';
+  document.getElementById('cur').textContent=i+1;
+  if(location.hash!=='#'+(i+1))history.replaceState(null,'','#'+(i+1));}
+document.addEventListener('keydown',function(e){
+  var k=e.key;
+  if(k==='ArrowRight'||k==='ArrowDown'||k===' '||k==='j'||k==='PageDown')
+    {e.preventDefault();go(i+1);}
+  else if(k==='ArrowLeft'||k==='ArrowUp'||k==='k'||k==='PageUp'){e.preventDefault();go(i-1);}
+  else if(k==='Home'){go(0);} else if(k==='End'){go(s.length-1);}
+  else if(k==='p'){s.forEach(function(e){e.classList.add('on');fit(e);});
+    window.print();s.forEach(function(e,k2){e.classList.toggle('on',k2===i);});}});
+document.getElementById('deck').addEventListener('click',function(e){
+  go(e.clientX < window.innerWidth/2 ? i-1 : i+1);});
+go(parseInt((location.hash||'#1').slice(1),10)-1||0);
+</script>
+</body></html>
