@@ -321,9 +321,7 @@ def main() -> int:
     # An `assignee` in the payload makes the race impossible instead of
     # unlikely: a dispatcher simply declines what is addressed to someone else.
     # This is cheaper and stricter than a claim-lease, which would still be
-    # racy across an eventually-consistent log. Items with no assignee stay
-    # open to whoever gets there first -- the existing behaviour, kept so
-    # nothing already in flight changes meaning.
+    # racy across an eventually-consistent log.
     #
     # WHO COUNTS AS THE ADDRESSEE is `actor_identity.addressed_to`, the same
     # function the policy gate asks, because this filter used to compare the
@@ -333,6 +331,23 @@ def main() -> int:
     addressed = [i for i in pending
                  if not addressed_to(args.actor, (i.payload or {}).get("assignee"))]
     pending = [i for i in pending if i not in addressed]
+
+    # AND AN ITEM ADDRESSED TO NOBODY IS NOT DISPATCHED AT ALL. This used to
+    # stay open to whoever got there first, kept because changing it would
+    # change the meaning of work already in flight -- but first-come is the
+    # race above, not a mitigation of it, and the 2026-09-18 drill reproduced
+    # it: both hosts claim, both run the model, the loser's `item.complete`
+    # folds to "no-op (already claimed)" and its answer is discarded. Two
+    # costs, one result, no error anywhere.
+    #
+    # Refused rather than auto-addressed: choosing who does the work is the
+    # delegator's call, and a dispatcher that picked for itself would be
+    # answering the question the assignee field exists to ask. Counted and
+    # named in the summary so an unaddressed item is a visible queue instead
+    # of the silent skip this filter would otherwise be. Measured before the
+    # change: no space had one.
+    unaddressed = [i for i in pending if not (i.payload or {}).get("assignee")]
+    pending = [i for i in pending if i not in unaddressed]
 
     # GIVE UP AFTER MAX_ATTEMPTS. `item.release` returns an item to `created`,
     # which is claimable, so a 15-minute timer re-claims it forever: item
@@ -378,6 +393,10 @@ def main() -> int:
     mirror_note = f" ({mirrored} org-mirrored task(s) skipped -- not delegations)" if mirrored else ""
     if addressed:
         mirror_note += f"; {len(addressed)} addressed to another agent"
+    if unaddressed:
+        mirror_note += (f"; {len(unaddressed)} addressed to NOBODY -- not dispatched, "
+                        f"give each an assignee: "
+                        + ", ".join((i.payload or {}).get("title", i.id)[:40] for i in unaddressed[:3]))
     if not pending:
         print(f"nothing to dispatch: no delegated items awaiting claim{mirror_note}")
         return 0

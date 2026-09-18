@@ -64,12 +64,6 @@ def test_another_principals_item_is_still_declined(tmp_path, capsys):
     assert "1 addressed to another agent" in out
 
 
-def test_an_unaddressed_item_stays_open_to_whoever_gets_there_first(tmp_path, capsys):
-    space = _space(tmp_path, assignee=None)
-    for who in ("winston", "miles"):
-        assert "would claim" in _plan(space, who, capsys)
-
-
 def test_the_gate_agrees_with_the_dispatcher_that_offered_it(tmp_path):
     # The dispatcher offering an item the gate then refuses is the failure this
     # pair exists to prevent: work is selected, claimed, then rejected at write.
@@ -101,3 +95,28 @@ def test_winston_may_address_work_to_the_executor_that_runs_it(tmp_path):
     assert ok, why      # winston's own second log is not a delegation at all
     ok, why = check_create("winston", {"title": "t", "assignee": "nightshfit"}, policy=_P())
     assert not ok and "may not delegate" in why      # a typo is still a stranger
+
+
+# --- Addressed to nobody --------------------------------------------------
+
+def test_an_item_addressed_to_nobody_is_not_dispatched(tmp_path, capsys):
+    # First-come is the race, not a mitigation of it: both hosts claim, both
+    # run the model, and the loser's completion folds to a no-op.
+    space = _space(tmp_path, assignee=None)
+
+    out = _plan(space, "winston", capsys)
+
+    assert "would claim" not in out
+    assert "addressed to NOBODY" in out
+    assert "Reconcile the ledger" in out, "the operator must be told which item"
+
+
+def test_it_is_refused_on_every_host_not_raced_for(tmp_path, capsys):
+    space = _space(tmp_path, assignee=None)
+    for who in ("winston", "miles"):
+        assert "would claim" not in _plan(space, who, capsys)
+
+
+def test_addressing_it_makes_it_dispatchable_again(tmp_path, capsys):
+    space = _space(tmp_path, assignee="miles")
+    assert "would claim" in _plan(space, "miles", capsys)
