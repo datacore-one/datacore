@@ -1199,6 +1199,13 @@ def audio_failure_reason(detail: str) -> Optional[str]:
         # releases and its last push was 2026-08-04, while the installed binary
         # was built 2026-08-30 -- it already carries everything upstream has.
         # NotebookLM moved its API underneath a client nobody has updated since.
+        #
+        # ISOLATED, not inferred. On an EMPTY notebook the same client answers
+        # "project has no sources - add sources before creating audio overview",
+        # so its audio path and this credential both work; on a fresh notebook
+        # holding one clean 146-byte text source, the server rejects the call
+        # exactly as it does for the research notebook. So it is neither our
+        # arguments (every documented flag was supplied) nor the sources.
         return ("This is the nlm client's audio RPC, not the credential: the session reached "
                 "NotebookLM and NotebookLM rejected the call, so refreshing auth cannot change "
                 "this answer. Nor can upgrading: this binary is already at upstream HEAD "
