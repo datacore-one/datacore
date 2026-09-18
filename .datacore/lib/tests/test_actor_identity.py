@@ -72,3 +72,51 @@ def test_bundled_registry_template_has_unambiguous_identity():
     for name, entry in ps.items():
         for writer in [name, *entry.get('writes_as', [])]:
             assert AI.principal_of(writer, registry)[0] == name
+
+
+# --- Who counts as the addressee -----------------------------------------
+# One function, because the dispatcher used to answer this with a string
+# compare while the gate resolved principals -- and a principal here has more
+# than one writer name.
+
+def _roster(tmp_path):
+    p = tmp_path / "principals.yaml"
+    p.write_text("principals:\n"
+                 "  miles: {writes_as: [miles, nightshift]}\n"
+                 "  winston: {writes_as: [winston, bridge]}\n")
+    return p
+
+
+def test_an_executors_own_writer_name_is_not_someone_else(tmp_path):
+    # nightshift's host writes as `miles`; its executor log is `nightshift`.
+    # Both are the same principal, so work addressed to either is its own.
+    r = _roster(tmp_path)
+    assert AI.addressed_to("miles", "nightshift", r)
+    assert AI.addressed_to("nightshift", "miles", r)
+    assert AI.addressed_to("winston", "bridge", r)
+
+
+def test_another_principals_work_is_still_declined(tmp_path):
+    r = _roster(tmp_path)
+    assert not AI.addressed_to("winston", "miles", r)
+    assert not AI.addressed_to("miles", "bridge", r)
+
+
+def test_unaddressed_work_is_open_to_whoever_gets_there_first(tmp_path):
+    r = _roster(tmp_path)
+    for nobody in (None, ""):
+        assert AI.addressed_to("winston", nobody, r)
+
+
+def test_two_unregistered_names_are_not_the_same_principal(tmp_path):
+    # Both resolve to no principal. Sharing "None" must not make a stranger
+    # the addressee of another stranger's work.
+    r = _roster(tmp_path)
+    assert not AI.addressed_to("someone", "somebody", r)
+    assert AI.addressed_to("someone", "someone", r)
+
+
+def test_a_writer_name_matches_whatever_its_case(tmp_path):
+    # principal_of lowercases; a payload written by hand may not.
+    r = _roster(tmp_path)
+    assert AI.addressed_to("miles", "Nightshift", r)

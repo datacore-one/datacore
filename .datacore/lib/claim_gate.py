@@ -27,7 +27,7 @@ import datetime as dt
 import json
 from pathlib import Path
 
-from actor_identity import principal_of, principals as _principals
+from actor_identity import addressed_to, principal_of, principals as _principals
 
 DEFAULT_MAX_HOPS = 3
 DEFAULT_MAX_CREATES_PER_DAY = 50
@@ -95,12 +95,21 @@ def check_create(actor: str, payload: dict | None, policy=None, space_dir: Path 
     requester_name, _, _ = _limits(str(requester), policy)
     if requester_name != name:
         return False, "requested_by must identify the acting principal"
-    if assignee and assignee != requester:
+    # DELEGATION IS BETWEEN PRINCIPALS, NOT BETWEEN LOG NAMES. `may_delegate_to`
+    # lists principals (`miles`, `tris`, `data`) while an assignee may name any
+    # writer that principal owns -- `nightshift` is miles' executor log, `bridge`
+    # is winston's. Compared as strings, winston could not address an item to
+    # `nightshift` at all, and addressing one to its own `bridge` log read as
+    # delegating to a stranger. Both sides resolve first; an unregistered name
+    # stays itself, so a typo is still refused by the allowlist.
+    if assignee and not addressed_to(str(requester), str(assignee)):
         rname = name
         allowed = lims.get("may_delegate_to")
-        if allowed is not None and assignee not in allowed:
-            return False, f"{rname or requester} may not delegate to {assignee} (may_delegate_to: {', '.join(allowed) or 'nobody'})"
-    if assignee and assignee != actor:
+        if allowed is not None:
+            to = principal_of(str(assignee))[0] or assignee
+            if to not in {principal_of(str(a))[0] or a for a in allowed}:
+                return False, f"{rname or requester} may not delegate to {assignee} (may_delegate_to: {', '.join(allowed) or 'nobody'})"
+    if assignee and not addressed_to(actor, str(assignee)):
         is_absent, note = absent(str(assignee), root=(Path(space_dir).parent if space_dir else None))
         if is_absent:
             payload["assignee_absent"] = note  # recorded, never worked around

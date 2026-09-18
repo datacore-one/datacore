@@ -348,9 +348,8 @@ def _guarded_append_locked(
         who = log.actor
         assignee = (item.payload or {}).get("assignee")
         if assignee:
-            from actor_identity import principal_of
-            actor_principal = principal_of(who)[0]
-            if who != assignee and (actor_principal is None or principal_of(assignee)[0] != actor_principal):
+            from actor_identity import addressed_to
+            if not addressed_to(who, assignee):
                 raise PolicyError("item is assigned to another principal")
         ok, reason = check_claim(who, item.payload, policy=policy, space_dir=space_dir)
         if not ok:

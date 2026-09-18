@@ -1,0 +1,103 @@
+"""An item addressed to an executor's own log is that executor's to take.
+
+`ledger_claim.main()` decides who may be offered an item. It compared the
+payload's `assignee` to the actor as a STRING, while `ledger/policy.py` -- the
+gate that same claim is written through -- resolved both names to principals.
+The two answers diverge exactly where a principal has more than one writer
+name, which is the ordinary case in this installation: `miles` writes as
+`miles` and, on the overnight executor, as `nightshift`.
+
+So an item addressed to `nightshift` was declined by nightshift's own
+dispatcher (running as `miles`), and by every other host as well. A decline
+writes no event: the item stays `created` with nothing to alert on, and the
+gate that would have allowed the claim is never reached. These tests pin the
+dispatcher and the gate to the same answer.
+"""
+from __future__ import annotations
+
+import pytest
+
+import ledger_claim
+from ledger.log import EventLog
+from ledger.policy import PolicyError, guarded_append
+
+
+@pytest.fixture(autouse=True)
+def _roster(tmp_path_factory, monkeypatch):
+    p = tmp_path_factory.mktemp("reg") / "principals.yaml"
+    p.write_text("principals:\n"
+                 "  miles: {kind: agent, writes_as: [miles, nightshift]}\n"
+                 "  winston: {kind: agent, writes_as: [winston, bridge]}\n")
+    import actor_identity
+    monkeypatch.setattr(actor_identity, "PRINCIPALS", p)
+
+
+def _space(tmp_path, assignee, actor="winston"):
+    space = tmp_path / "space"
+    guarded_append(EventLog(space, actor, sign=False), "item.create",
+                   {"id": "item-1", "title": "Reconcile the ledger", "assignee": assignee})
+    return space
+
+
+def _plan(space, actor, capsys):
+    import sys
+    argv = sys.argv
+    sys.argv = ["ledger_claim.py", "--space", str(space), "--actor", actor]
+    try:
+        assert ledger_claim.main() == 0
+    finally:
+        sys.argv = argv
+    return capsys.readouterr().out
+
+
+def test_an_executors_own_log_name_reaches_its_own_dispatcher(tmp_path, capsys):
+    space = _space(tmp_path, assignee="nightshift")
+    out = _plan(space, "miles", capsys)
+    assert "would claim" in out, out
+    assert "addressed to another agent" not in out
+
+
+def test_another_principals_item_is_still_declined(tmp_path, capsys):
+    space = _space(tmp_path, assignee="nightshift")
+    out = _plan(space, "winston", capsys)
+    assert "nothing to dispatch" in out
+    assert "1 addressed to another agent" in out
+
+
+def test_an_unaddressed_item_stays_open_to_whoever_gets_there_first(tmp_path, capsys):
+    space = _space(tmp_path, assignee=None)
+    for who in ("winston", "miles"):
+        assert "would claim" in _plan(space, who, capsys)
+
+
+def test_the_gate_agrees_with_the_dispatcher_that_offered_it(tmp_path):
+    # The dispatcher offering an item the gate then refuses is the failure this
+    # pair exists to prevent: work is selected, claimed, then rejected at write.
+    # Each half is asked about its own fresh item, because a claim that lands
+    # changes the item's status and the next refusal would name that instead.
+    accepted = _space(tmp_path / "a", assignee="nightshift")
+    guarded_append(EventLog(accepted, "miles", sign=False), "item.claim",
+                   {"id": "item-1", "owner": "miles"})
+
+    refused = _space(tmp_path / "b", assignee="nightshift")
+    with pytest.raises(PolicyError, match="assigned to another principal"):
+        guarded_append(EventLog(refused, "winston", sign=False), "item.claim",
+                       {"id": "item-1", "owner": "winston"})
+
+
+def test_winston_may_address_work_to_the_executor_that_runs_it(tmp_path):
+    # `may_delegate_to` lists principals; `nightshift` is a writer name miles
+    # owns. Matched as strings, the creation itself was refused -- so the
+    # dispatcher never got the chance to decline it, and the delegation path
+    # this whole pair guards could not be used at all.
+    from claim_gate import check_create
+
+    class _P:
+        principals = {"winston": {"may_delegate_to": ["miles", "tris", "data"]}}
+
+    ok, why = check_create("winston", {"title": "t", "assignee": "nightshift"}, policy=_P())
+    assert ok, why
+    ok, why = check_create("winston", {"title": "t", "assignee": "bridge"}, policy=_P())
+    assert ok, why      # winston's own second log is not a delegation at all
+    ok, why = check_create("winston", {"title": "t", "assignee": "nightshfit"}, policy=_P())
+    assert not ok and "may not delegate" in why      # a typo is still a stranger

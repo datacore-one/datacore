@@ -207,6 +207,36 @@ def allowed_emails(actor: str, path: Path | None = None) -> set[str]:
     return hashes
 
 
+def addressed_to(actor: str, assignee: str | None, path: Path | None = None) -> bool:
+    """May `actor` take work addressed to `assignee`?
+
+    ONE RULE, THREE CALLERS. `ledger/policy.py` (the gate), `ledger_claim.py`
+    (the dispatcher) and nightshift's `ledger_hooks.assigned_elsewhere` each
+    asked this question, and the dispatcher asked it differently: it compared
+    the assignee to the actor as a STRING. The two answers diverge exactly
+    where a principal has more than one writer name, which is the normal case
+    here -- `miles` writes as `miles` and as `nightshift`, `winston` as
+    `winston` and as `bridge`, and principals.yaml says so. An item addressed
+    to `nightshift` was therefore declined by nightshift's own dispatcher
+    (running as `miles`) and by every other host too, and a decline writes no
+    event: the item sits `created` forever with nothing to alert on. The gate
+    would have allowed that same claim. A dispatcher stricter than the gate it
+    dispatches into is a silent dead end.
+
+    An empty assignee is open to whoever gets there first -- the behaviour from
+    before addressing existed, kept so nothing already in flight changes
+    meaning. Otherwise it is the same writer, or the same principal behind two
+    writer names. Two writers that resolve to NO principal are not the same
+    principal: an unregistered name must not inherit another's work.
+    """
+    if not assignee:
+        return True
+    if actor == assignee:
+        return True
+    mine = principal_of(actor, path)[0]
+    return mine is not None and principal_of(assignee, path)[0] == mine
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 2 and sys.argv[1] == "hash":

@@ -324,8 +324,14 @@ def main() -> int:
     # racy across an eventually-consistent log. Items with no assignee stay
     # open to whoever gets there first -- the existing behaviour, kept so
     # nothing already in flight changes meaning.
+    #
+    # WHO COUNTS AS THE ADDRESSEE is `actor_identity.addressed_to`, the same
+    # function the policy gate asks, because this filter used to compare the
+    # two names as strings and a principal here has more than one writer name.
+    # See that function for what the string compare cost.
+    from actor_identity import addressed_to
     addressed = [i for i in pending
-                 if (i.payload or {}).get("assignee") not in (None, "", args.actor)]
+                 if not addressed_to(args.actor, (i.payload or {}).get("assignee"))]
     pending = [i for i in pending if i not in addressed]
 
     # GIVE UP AFTER MAX_ATTEMPTS. `item.release` returns an item to `created`,
