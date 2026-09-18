@@ -120,3 +120,36 @@ def test_a_writer_name_matches_whatever_its_case(tmp_path):
     # principal_of lowercases; a payload written by hand may not.
     r = _roster(tmp_path)
     assert AI.addressed_to("miles", "Nightshift", r)
+
+
+# --- Where the registry is ------------------------------------------------
+# principals.yaml is a gitignored private overlay, so it never ships with a
+# code checkout. The satellites run from ~/.datacore/v2-runner, a different
+# tree from their data root, and resolved against the code alone every writer
+# there belonged to no principal -- one defect that presented as three hosts'
+# worth of "unregistered writer" about writers declared two directories away.
+
+def test_an_explicit_data_root_wins(tmp_path):
+    reg = tmp_path / "declared" / ".datacore" / "registry"
+    reg.mkdir(parents=True)
+    (reg / "principals.yaml").write_text("principals:\n  a: {writes_as: [a]}\n")
+    assert AI._registry_dir(root=str(tmp_path / "declared"), home=tmp_path,
+                            code_root=tmp_path / "nocode") == reg
+
+
+def test_it_falls_back_to_the_documented_data_root(tmp_path):
+    """The satellite case: code in one tree, registry in another."""
+    home = tmp_path / "home"
+    reg = home / "Data" / ".datacore" / "registry"
+    reg.mkdir(parents=True)
+    (reg / "principals.yaml").write_text("principals:\n  a: {writes_as: [a]}\n")
+    assert AI._registry_dir(root=str(tmp_path / "empty-runner"), home=home,
+                            code_root=tmp_path / "nocode") == reg
+
+
+def test_with_no_registry_anywhere_it_keeps_the_old_answer(tmp_path):
+    """A fresh install has none, and must still be usable -- the error message
+    should name the root the operator configured, not a surprise third path."""
+    assert (AI._registry_dir(root=str(tmp_path / "fresh"), home=tmp_path / "nohome",
+                             code_root=tmp_path / "nocode")
+            == tmp_path / "fresh" / ".datacore" / "registry")

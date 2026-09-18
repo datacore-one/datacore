@@ -34,7 +34,42 @@ import sys
 from pathlib import Path
 
 LIB = Path(__file__).resolve().parent
-REGISTRY_DIR = Path(os.environ.get("DATACORE_ROOT", str(LIB.parent.parent))) / ".datacore" / "registry"
+
+
+def _registry_dir(*, root: str | None = None, home: Path | None = None,
+                  code_root: Path | None = None) -> Path:
+    """Where this installation's identity registry actually is.
+
+    `principals.yaml` is a gitignored PRIVATE OVERLAY, so it never ships with a
+    code checkout -- and the satellites run from `~/.datacore/v2-runner`, which
+    is a different tree from their data root. Resolved against the code alone,
+    every writer on those hosts belonged to no principal: plur-claw refused
+    every claim as "unregistered writer 'data'" about a writer declared two
+    directories away, and a config probe on 2026-09-19 found the same on
+    nightshift and hermes. It is one defect, not three hosts' worth.
+
+    Candidates in order, first one that HAS the file:
+      1. $DATACORE_ROOT -- an explicit answer always wins.
+      2. beside the code, for a single-tree install where they coincide.
+      3. ~/Data, the documented default data root.
+    Falling through to the first candidate keeps the old behaviour (and the
+    old error message) when nothing has a registry at all, which is a fresh
+    install and must stay usable -- see claim_gate._registry_is_configured.
+    """
+    candidates = []
+    declared = root if root is not None else os.environ.get("DATACORE_ROOT")
+    if declared:
+        candidates.append(Path(declared))
+    candidates.append(code_root if code_root is not None else LIB.parent.parent)
+    candidates.append((home or Path.home()) / "Data")
+    for candidate in candidates:
+        registry = candidate / ".datacore" / "registry"
+        if (registry / "principals.yaml").exists():
+            return registry
+    return candidates[0] / ".datacore" / "registry"
+
+
+REGISTRY_DIR = _registry_dir()
 INFRA = REGISTRY_DIR / "infrastructure.yaml"
 PRINCIPALS = REGISTRY_DIR / "principals.yaml"
 IDENTITY_FILE = Path(os.environ.get("DATACORE_IDENTITY_FILE", str(Path.home() / ".datacore" / "identity.env")))
