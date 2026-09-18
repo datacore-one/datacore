@@ -1194,9 +1194,16 @@ def main():
 def audio_failure_reason(detail: str) -> Optional[str]:
     text = (detail or '').lower()
     if 'bad-args' in text or 'arguments are invalid' in text:
-        return ("This is the nlm CLI's audio RPC, not the credential: the session reached "
-                "NotebookLM and NotebookLM rejected the call. Upgrade nlm on this host; "
-                "refreshing auth cannot change this answer.")
+        # AND UPGRADING WILL NOT HELP EITHER, which is the second wrong answer
+        # this line used to give. Checked 2026-09-18: github.com/tmc/nlm has no
+        # releases and its last push was 2026-08-04, while the installed binary
+        # was built 2026-08-30 -- it already carries everything upstream has.
+        # NotebookLM moved its API underneath a client nobody has updated since.
+        return ("This is the nlm client's audio RPC, not the credential: the session reached "
+                "NotebookLM and NotebookLM rejected the call, so refreshing auth cannot change "
+                "this answer. Nor can upgrading: this binary is already at upstream HEAD "
+                "(github.com/tmc/nlm, no releases, last push 2026-08-04). The notebook and its "
+                "sources are created and usable; only the audio overview needs an upstream fix.")
     if re.search(r'session is no longer usable|authentication (expired|refresh failed)|'
                  r'browser auth failed|not logged in', text):
         return ("The session is unusable: refresh it on the Mac (nlm_auth_sync.py sync), "

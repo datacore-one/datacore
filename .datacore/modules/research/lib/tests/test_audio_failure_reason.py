@@ -25,8 +25,11 @@ def test_a_rejected_rpc_is_the_client_not_the_credential():
     reason = audio_failure_reason(
         "nlm: create audio overview: CreateAudioOverview: execute rpc: One or more "
         "arguments are invalid.\nnlm: exit-class=bad-args (exit 2)")
-    assert reason and 'Upgrade nlm' in reason
-    assert 'refreshing auth cannot change this answer' in reason
+    assert reason and 'refreshing auth cannot change' in reason
+    # And it must not send them to upgrade either: checked 2026-09-18, the
+    # installed binary is already past upstream's last push.
+    assert 'upstream HEAD' in reason and 'Nor can upgrading' in reason
+    assert 'sources are created and usable' in reason
 
 
 def test_an_unusable_session_still_sends_the_owner_to_the_mac():
