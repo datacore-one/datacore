@@ -393,20 +393,71 @@ def ensure_ids(space: Path, adapter: Path | None = None) -> str:
              if (space / 'org' / name).exists()]
     # Validate the complete identity namespace before changing any file. A
     # workspace per file hides collisions and lets ingestion conflate tasks.
+    # One pair is NOT a collision -- see _projected_duplicates.
+    projected = _projected_duplicates(space, files)
     ws = SafeOrgWorkspace()
     for f in files:
-        ws.load(f)
+        # When the generated file reproduces ids the authored one still holds,
+        # the two cannot share an index this run. Each file is still validated
+        # against ITSELF, which is what catches a real duplicate.
+        (SafeOrgWorkspace() if projected else ws).load(f)
     touched = []
     for f in files:
         result = org_workspace_adapter.cmd_ensure_ids(Namespace(file=str(f)))
         if not isinstance(result, dict) or result.get('error'):
             raise RuntimeError('ID preparation was refused')
-        ws.load(str(f))
+        check = SafeOrgWorkspace() if projected else ws
+        check.load(str(f))
         if any(node.path.resolve() == f.resolve() and node.todo and not node.id()
-               for node in ws.all_nodes()):
+               for node in check.all_nodes()):
             raise RuntimeError('ID preparation did not persist every task identity')
         touched.append(f'{f.name}:ok')
-    return " ".join(touched) or "no org files"
+    return " ".join(touched) + (f' ({len(projected)} projected)' if projected else '') or "no org files"
+
+
+def _projected_duplicates(space: Path, files: list[Path]) -> set[str]:
+    """Ids the GENERATED file reproduces from the ledger while inbox.org still holds them.
+
+    A capture written into org/inbox.org is admitted to the ledger by the
+    adapter (cmd_add emits item.create for every heading it writes), and in a
+    Phase 1 space the projector then renders that item into the GENERATED
+    org/next_actions.org under the same :ID:. Two files, one id, by
+    construction -- and the namespace check refused the whole space for it,
+    which stopped the hourly cycle for EVERY space on the host: nightshift on
+    2026-09-18 from 10:25Z, and 0-personal the morning before.
+
+    That refusal is right for two AUTHORED files, where one id in two places
+    means two tasks claiming to be the same work. It is wrong for an id the
+    ledger itself put in the generated file, which is why the pair is allowed
+    only when all three hold: the space is Phase 1, the id is in the ledger,
+    and one of the two files is the generated one. Anything else still refuses.
+    """
+    import re
+    if len(files) < 2 or (space / '.datacore' / 'ledger-phase').exists() is False:
+        return set()
+    try:
+        if (space / '.datacore' / 'ledger-phase').read_text().strip() != '1':
+            return set()
+    except OSError:
+        return set()
+    generated = space / 'org' / ORG_FILES[1]
+    if generated not in files:
+        return set()
+    seen: dict[str, set[str]] = {}
+    for f in files:
+        try:
+            ids = re.findall(r'^\s*:ID:\s*(\S+)\s*$', f.read_text(encoding='utf-8', errors='replace'), re.M)
+        except OSError:
+            return set()
+        for identity in ids:
+            seen.setdefault(identity, set()).add(f.name)
+    shared = {i for i, names in seen.items() if len(names) > 1 and generated.name in names}
+    if not shared:
+        return set()
+    from ledger.fold import fold
+    from ledger.log import read_events
+    known = set(fold(read_events(space)).items)
+    return {i for i in shared if i in known}
 
 
 def _default_root() -> Path:
