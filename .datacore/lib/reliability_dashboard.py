@@ -222,6 +222,68 @@ def jobs() -> dict:
     }
 
 
+def ledger() -> dict:
+    """The record itself: per space, how many writers and events, and does it verify.
+
+    The six conditions say whether the fleet DID its work; they say nothing about
+    the thing the work is kept in. A ledger that stopped accepting events, or a
+    space whose chain broke, would leave every condition green.
+    """
+    spaces, total_events, total_writers, failed = [], 0, 0, []
+    for space in sorted(ROOT.glob("[0-9]-*")):
+        events_dir = space / ".datacore" / "events"
+        if not events_dir.is_dir():
+            continue
+        logs = sorted(events_dir.glob("*.jsonl"))
+        count = 0
+        for log in logs:
+            try:
+                with log.open("rb") as handle:
+                    count += sum(1 for _ in handle)
+            except OSError:
+                pass
+        try:
+            phase = (space / ".datacore" / "ledger-phase").read_text().strip()
+        except OSError:
+            phase = "0"
+        ok, out = _run([sys.executable, str(LIB / "ledger_cli.py"), "verify", "--space", str(space)],
+                       timeout=120)
+        verified = ok and "OK" in out
+        if not verified:
+            failed.append(space.name)
+        spaces.append({"space": space.name, "writers": len(logs), "events": count,
+                       "phase1": phase == "1", "verified": verified})
+        total_events += count
+        total_writers += len(logs)
+    return {"spaces": spaces, "events": total_events, "writers": total_writers,
+            "generated_org": sum(1 for s in spaces if s["phase1"]), "failed": failed}
+
+
+def queue() -> dict:
+    """What the autonomous runner would pick up, and what is waiting on a person.
+
+    Counts only. Task titles carry client and commercial detail, and this page is
+    meant to be shareable -- a number says whether the queue is moving without
+    publishing what is in it.
+    """
+    try:
+        sys.path.insert(0, str(ROOT / ".datacore" / "modules" / "nightshift" / "lib"))
+        from nightshift_parser import find_ai_tasks
+        from task_attempt import blocked
+    except Exception as exc:  # noqa: BLE001
+        return {"unobservable": f"{type(exc).__name__}: {exc}"}
+    try:
+        tasks = find_ai_tasks(ROOT, states=["TODO", "NEXT", "WAITING", "REVIEW"],
+                              require_executable=False)
+    except Exception as exc:  # noqa: BLE001
+        return {"unobservable": f"{type(exc).__name__}: {exc}"}
+    queued = [t for t in tasks if "nightshift.org" in str(t.file_path)]
+    fenced = [t for t in tasks if blocked(t)]
+    review = [t for t in tasks if (t.state or "") == "REVIEW"]
+    return {"queued": len(queued), "fenced": len(fenced), "review": len(review),
+            "tagged": len(tasks)}
+
+
 def fleet(skip: bool) -> dict:
     if skip:
         return {"unobservable": "skipped (--no-fleet)"}
@@ -245,6 +307,8 @@ def collect(skip_fleet: bool = False, owner_host: str | None = OWNER_HOST) -> di
         "principals": principals(),
         "cadences": cadences(),
         "jobs": jobs(),
+        "ledger": ledger(),
+        "queue": queue(),
         "fleet": fleet(skip_fleet),
     }
 
@@ -421,6 +485,49 @@ def render(d: dict, redact: bool = False) -> str:
             f"<span class='fig-l'>with no review date set</span></div>"
             f"</div>")
 
+    # ledger
+    lg = d.get("ledger") or {}
+    if "unobservable" in lg or not lg.get("spaces"):
+        led_block = "<p class='note'>No ledger spaces found under this root.</p>"
+    else:
+        rows = "".join(
+            f"<tr><td>{html.escape(x['space'])}</td>"
+            f"<td class='num'>{x['writers']}</td>"
+            f"<td class='num'>{x['events']:,}</td>"
+            f"<td>{'generated' if x['phase1'] else 'authored'}</td>"
+            f"<td>{_chip('ok', 'verified') if x['verified'] else _chip('fail', 'CHAIN FAILS')}</td></tr>"
+            for x in lg["spaces"])
+        led_block = (
+            f"<div class='figs'>"
+            f"<div class='fig'><span class='fig-n'>{lg['events']:,}</span>"
+            f"<span class='fig-l'>events on record</span></div>"
+            f"<div class='fig'><span class='fig-n'>{lg['writers']}</span>"
+            f"<span class='fig-l'>writer logs, one per host per space</span></div>"
+            f"<div class='fig'><span class='fig-n {'bad' if lg['failed'] else 'good'}'>"
+            f"{len(lg['failed'])}</span><span class='fig-l'>whose chain does not verify</span></div>"
+            f"<div class='fig'><span class='fig-n'>{lg['generated_org']}/{len(lg['spaces'])}</span>"
+            f"<span class='fig-l'>spaces generating Org from the ledger</span></div>"
+            f"</div>"
+            "<div class='tbl'><table><thead><tr><th>Space</th><th>Writers</th><th>Events</th>"
+            f"<th>next_actions.org</th><th>Chain</th></tr></thead><tbody>{rows}</tbody></table></div>")
+
+    # queue
+    q = d.get("queue") or {}
+    if "unobservable" in q:
+        q_block = f"<p class='note'>Unobservable: {html.escape(q['unobservable'])}</p>"
+    else:
+        q_block = (
+            f"<div class='figs'>"
+            f"<div class='fig'><span class='fig-n'>{q.get('queued', '—')}</span>"
+            f"<span class='fig-l'>committed to a run</span></div>"
+            f"<div class='fig'><span class='fig-n {'warn' if q.get('fenced') else 'good'}'>"
+            f"{q.get('fenced', '—')}</span><span class='fig-l'>fenced, waiting on a person</span></div>"
+            f"<div class='fig'><span class='fig-n'>{q.get('review', '—')}</span>"
+            f"<span class='fig-l'>delivered, awaiting review</span></div>"
+            f"<div class='fig'><span class='fig-n'>{q.get('tagged', '—')}</span>"
+            f"<span class='fig-l'>delegable tasks in total</span></div>"
+            f"</div>")
+
     # fleet
     f = d["fleet"]
     if "unobservable" in f:
@@ -461,6 +568,7 @@ def render(d: dict, redact: bool = False) -> str:
         job_total=j.get("total", "—"), job_verified=j.get("verified", "—"),
         job_alerting=j.get("alerting", "—"),
         job_block=job_block, cad_block=cad_block, fleet_block=fleet_block,
+        led_block=led_block, q_block=q_block,
     )
 
 
@@ -635,6 +743,22 @@ footer{{border-top:2px solid var(--ink);padding-block:20px 46px;margin-top:34px;
   <p class="lede">Recurring duties declared in configuration or prose. A cadence with no
   review date is one nobody has decided to keep.</p>
   {cad_block}
+</section>
+
+<section>
+  <h2>The record it keeps</h2>
+  <p class="lede">The six conditions say whether the fleet did its work; they say nothing
+  about the thing that work is kept in. A ledger is append-only and hash-chained, so a
+  broken chain is detectable &mdash; and would otherwise leave every condition green.</p>
+  {led_block}
+</section>
+
+<section>
+  <h2>The queue</h2>
+  <p class="lede">What the autonomous runner would pick up tonight, and what is waiting on
+  a person. Counts only: a number says whether the queue is moving without publishing
+  what is in it.</p>
+  {q_block}
 </section>
 
 <section>
