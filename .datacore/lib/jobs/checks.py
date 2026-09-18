@@ -138,16 +138,40 @@ def check_repo_sync(repo_path: str) -> list[str]:
     return []
 
 
+#: How long a producer may hold its artifact empty before we believe the file.
+#: One re-read, seconds later, because the window is a truncate-then-write, not
+#: a long operation.
+EMPTY_RETRY_SECONDS = 3.0
+
+
 def _read_text(path: str) -> tuple[str | None, str | None]:
     """Read `path` as utf-8 (replacing undecodable bytes). Never raises.
 
     Returns (text, None) on success, or (None, error_reason) on failure.
+
+    AN EMPTY FILE IS RE-READ ONCE. A producer that redirects into its artifact
+    (`cmd > log`) truncates it at the START of a run and fills it minutes later,
+    so the artifact is legitimately empty for that window -- and on the hour,
+    when the producers and the verifier both run, that window is exactly when we
+    look. Measured 2026-09-18 10:00Z: box-ledger-ingest paged with "regex '0
+    space(s) failed' did not match -- file is empty" about an ingest that was
+    working, and a seq-gap alert the day before was the same thing.
+
+    Only EMPTINESS is retried. A file with the wrong contents is wrong now and
+    will be wrong in three seconds; nothing here waits for content to improve.
     """
     try:
         with open(path, "rb") as f:
             raw = f.read()
     except (OSError, ValueError) as exc:
         return None, f"cannot read file ({exc})"
+    if not raw.strip():
+        time.sleep(EMPTY_RETRY_SECONDS)
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except (OSError, ValueError) as exc:
+            return None, f"cannot read file ({exc})"
     return raw.decode("utf-8", errors="replace"), None
 
 
