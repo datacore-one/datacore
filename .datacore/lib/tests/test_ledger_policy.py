@@ -9,6 +9,7 @@ and pass-through for non-cosign events).
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
@@ -569,3 +570,47 @@ def test_approval_grant_appendable_via_plain_event_log(tmp_path):
 
     events = read_events(tmp_path / "space")
     assert events[0].hash == event.hash
+
+
+# --- Where the policy lives -----------------------------------------------
+# It belongs to the installation, not the data root, and on a satellite those
+# are different trees. plur-claw keeps its identity registry in ~/Data (private
+# overlay, absent from the code checkout) and this policy in the runner
+# checkout (tracked, absent from ~/Data), so no single DATACORE_ROOT gave a
+# working configuration: one way the allowlist was silently inactive, the other
+# every writer was unregistered.
+
+def test_the_data_root_policy_wins_when_it_is_there(tmp_path, monkeypatch):
+    import ledger.policy as lp
+    mine = tmp_path / "approvals_policy.yaml"
+    mine.write_text("version: 1\napprover: gregor\ncosign_effects: [payment]\n")
+    monkeypatch.setattr(lp, "DEFAULT_POLICY_PATH", mine)
+
+    assert lp.load_policy().approver == "gregor"
+
+
+def test_it_falls_back_to_the_policy_shipped_beside_the_code(tmp_path, monkeypatch):
+    """Falling back to NO policy is not the safe default -- it is the
+    permissive one: `principals` is then None and the whole stage-4 gate,
+    delegation allowlist included, switches off rather than refusing."""
+    import ledger.policy as lp
+    monkeypatch.setattr(lp, "DEFAULT_POLICY_PATH", tmp_path / "absent.yaml")
+
+    policy = lp.load_policy()
+
+    shipped = Path(lp.__file__).resolve().parents[1].parent / "config" / "approvals_policy.yaml"
+    if shipped.exists():
+        assert policy.principals is not None, "the shipped policy declares principals"
+    else:                                    # a checkout without the config tree
+        assert policy.approver == lp.DEFAULT_APPROVER
+
+
+def test_an_explicit_path_is_never_second_guessed(tmp_path):
+    """A caller naming a file that is not there gets the default, not a
+    different installation's policy silently substituted."""
+    import ledger.policy as lp
+
+    policy = lp.load_policy(tmp_path / "nope.yaml")
+
+    assert policy.approver == lp.DEFAULT_APPROVER
+    assert getattr(policy, "principals", None) is None

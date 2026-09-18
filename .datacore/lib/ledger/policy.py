@@ -145,6 +145,28 @@ def load_policy(path: Path | None = None) -> Policy:
     top-level keys are ignored (forward compatibility).
     """
     path = Path(path) if path is not None else DEFAULT_POLICY_PATH
+    if path is DEFAULT_POLICY_PATH and not path.exists() and not path.is_symlink():
+        # THE POLICY BELONGS TO THE INSTALLATION, NOT TO THE DATA ROOT, and on a
+        # satellite those are different trees. plur-claw keeps its identity
+        # registry in ~/Data (gitignored private overlay, absent from the code
+        # checkout) and this policy in ~/.datacore/v2-runner (tracked, absent
+        # from ~/Data). No single DATACORE_ROOT gives a working configuration
+        # there: point it at the data root and the allowlist is silently
+        # inactive; point it at the runner and every writer is unregistered.
+        #
+        # Measured 2026-09-18: `data` was permitted to delegate to `winston`
+        # twice, although approvals_policy.yaml gives data `may_delegate_to:
+        # [miles]`, because `load_policy()` found no file and returned the
+        # default whose `principals` is None -- which switches the whole stage-4
+        # gate off rather than refusing anything.
+        #
+        # Same resolution as `job_verify._default_manifest_path`: the data root
+        # first, so an operator's own policy always wins, then the one shipped
+        # beside this code, which is the tracked canonical file. Falling back to
+        # NO policy is not the safe default -- it is the permissive one.
+        beside = Path(__file__).resolve().parents[1].parent / "config" / "approvals_policy.yaml"
+        if beside.exists():
+            path = beside
     if not path.exists() and not path.is_symlink():
         return Policy(approver=DEFAULT_APPROVER, cosign_effects=DEFAULT_COSIGN_EFFECTS)
 
