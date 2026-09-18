@@ -330,6 +330,17 @@ def scan(space_dir: Path, org_file: Path | None = None) -> ScanResult:
     for node in ws.all_nodes():
         state = node.todo
         if not state:
+            # A STATE-LESS HEADING IS STILL ADMITTED, and not only when a new
+            # task hangs under it. The ancestor walk below collects sections
+            # for tasks being imported THIS run, so a plain heading added above
+            # already-imported tasks -- or with no tasks under it at all -- was
+            # never admitted. The projection then refuses forever: the heading
+            # has an id, so `snapshot()` is satisfied, and the three-way merge
+            # rejects it one step later as "new heading is not admitted to the
+            # ledger; ingest first". Same permanent stop, one layer down.
+            node_id = node.get_property("ID")
+            if node_id and node_id not in known and node_id not in sections:
+                sections[node_id] = _section_payload(node, space)
             continue
         if state not in ACTIVE_STATES:
             result.out_of_scope[state] = result.out_of_scope.get(state, 0) + 1

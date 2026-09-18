@@ -408,9 +408,13 @@ def ensure_ids(space: Path, adapter: Path | None = None) -> str:
             raise RuntimeError('ID preparation was refused')
         check = SafeOrgWorkspace() if projected else ws
         check.load(str(f))
-        if any(node.path.resolve() == f.resolve() and node.todo and not node.id()
+        # EVERY heading, not every task. The projection's `snapshot()` refuses a
+        # file with any un-identified heading, so a plain `* Someday` that this
+        # check waved through bricked the space's cycle with an error naming a
+        # remedy that could not work (see cmd_ensure_ids).
+        if any(node.path.resolve() == f.resolve() and not node.id()
                for node in check.all_nodes()):
-            raise RuntimeError('ID preparation did not persist every task identity')
+            raise RuntimeError('ID preparation did not persist every heading identity')
         touched.append(f'{f.name}:ok')
     return " ".join(touched) + (f' ({len(projected)} projected)' if projected else '') or "no org files"
 

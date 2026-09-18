@@ -726,7 +726,7 @@ def cmd_duplicates(args):
 # ---------------------------------------------------------------------------
 
 def cmd_ensure_ids(args):
-    """Add :ID: properties to tasks that lack them.
+    """Add :ID: properties to EVERY heading that lacks one, task or not.
 
     Uses workspace.set_property() so mutations go through the official API
     (read-copy-merge-assign protocol, dirty tracking). After saving, reloads
@@ -734,6 +734,18 @@ def cmd_ensure_ids(args):
 
     New captures use independent UUIDs, including identical headings created
     in separate files or on separate hosts. Existing identities never change.
+
+    PLAIN HEADINGS COUNT. This skipped anything without a todo state, while
+    `genesis._section_payload` documents the opposite as its premise --
+    "`ensure-ids` gives EVERY heading an id, including plain section headings
+    like `* Operations`" -- and the ledger projection requires it: `snapshot()`
+    refuses a file with any heading that has no ID, with the message "ingest
+    before projecting". Ingest could never clear it, because ingest is what
+    skipped the heading. So one `* Someday` typed into a Phase-1 inbox.org
+    stopped that space's hourly cycle permanently, and the error named the
+    remedy that could not work. Every heading gets an identity; the import
+    admits state-less ones as sections, which is what the projector already
+    renders them back as.
     """
     ws = _load_ws(args.file)
     file_path = Path(args.file).resolve()
@@ -746,8 +758,6 @@ def cmd_ensure_ids(args):
 
     pending = []
     for node in ws.all_nodes():
-        if not node.todo:
-            continue
         if node.id():
             continue
         new_id = new_org_id()
