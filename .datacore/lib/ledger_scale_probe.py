@@ -27,6 +27,14 @@ the probe when a gated create at 5x exceeds it. The default is deliberately
 loose -- this is a cliff detector, not a benchmark, and a noisy performance
 alarm gets muted faster than any other kind.
 
+WHAT THIS DOES NOT MEASURE, stated so a flat curve is not over-read. It grows
+ONE space and measures the append-only axis: cost against events per log, which
+is the one that only ever rises. The live installation's other axis is BREADTH
+-- ten spaces and 68 writer logs -- and `absence` in particular is dominated by
+that, which is why it fell from 39s to milliseconds when `latest_jobs` stopped
+verifying chains that carry no attestation. A flat line here means depth is
+safe; it says nothing about adding a tenth agent.
+
     ledger_scale_probe.py [--multipliers 1 2 5] [--max-create-seconds N] [--json]
 """
 from __future__ import annotations
