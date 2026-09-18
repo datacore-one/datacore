@@ -39,10 +39,12 @@ def _space(tmp_path, assignee, actor="winston"):
     return space
 
 
-def _plan(space, actor, capsys):
+def _plan(space, actor, capsys, execute=False):
     import sys
     argv = sys.argv
     sys.argv = ["ledger_claim.py", "--space", str(space), "--actor", actor]
+    if execute:
+        sys.argv.append("--execute")
     try:
         assert ledger_claim.main() == 0
     finally:
@@ -173,3 +175,30 @@ def test_it_commits_only_the_journal(tmp_path):
                              capture_output=True, text=True).stdout.split()
     assert "agent-leftover.txt" not in tracked, tracked
     assert any(t.startswith("journal/") for t in tracked), tracked
+
+
+def test_one_items_leftover_does_not_burn_a_model_call_on_the_next(tmp_path, capsys):
+    """`_artifact_tree_clean` looks at the whole space, not at one item's
+    artifact. So an item whose agent left work uncommitted fails every item
+    dispatched after it, each spending a full model call for a result that
+    cannot be verified. Observed on nightshift 2026-09-18: two items, the
+    second failed on the first one's leftover, both answers correct."""
+    import subprocess
+    space = tmp_path / "space"
+    for n in (1, 2):
+        guarded_append(EventLog(space, "winston", sign=False), "item.create",
+                       {"id": f"item-{n}", "title": f"task {n}", "assignee": "miles",
+                        "check": "true"})
+    for args in (["init", "-q", "-b", "main"], ["config", "user.email", "d@example.invalid"],
+                 ["config", "user.name", "d"], ["config", "core.hooksPath", "/dev/null"]):
+        subprocess.run(["git", "-C", str(space), *args], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(space), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(space), "commit", "-qm", "seed"], check=True, capture_output=True)
+    # What an agent that did the work but could not commit leaves behind.
+    (space / "left-behind.txt").write_text("uncommitted\n")
+
+    out = _plan(space, "miles", capsys, execute=True)
+
+    assert "STOPPING" in out, out
+    assert "left-behind.txt" in out, out
+    assert "commit or discard it" in out

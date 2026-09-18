@@ -456,6 +456,30 @@ def main() -> int:
             print(f"would claim [{route}] {title[:70]}  ({why}; {gate})")
             continue
 
+        # A DIRTY TREE FAILS EVERY CHECK IN THIS RUN, SO STOP AT THE FIRST ONE.
+        # `_artifact_tree_clean` looks at the whole space, not at one item's
+        # artifact. So an item whose agent left work uncommitted does not just
+        # fail itself -- it fails every item dispatched after it, each one
+        # spending a full model call to produce a result that cannot be
+        # verified. Observed 2026-09-18 on nightshift: two items, the second
+        # failed on the first one's leftover, and both answers were correct.
+        #
+        # Reported as a stop with the offending paths rather than pressed on,
+        # because the condition cannot clear itself mid-run and the cost of
+        # continuing is real money for guaranteed failures.
+        if check:
+            dirty: list[str] = []
+            if not _artifact_tree_clean(space, dirty):
+                # An EMPTY list means the tree could not be read at all (not a
+                # git repo, git unavailable) rather than that nothing is dirty.
+                # Saying "-> " and nothing sends the reader looking for a file.
+                where = (", ".join(sorted(dirty)[:5]) if dirty
+                         else "the working tree could not be read (is this a git repository?)")
+                print(f"STOPPING: the working tree carries uncommitted work, so every check "
+                      f"in this run would fail closed\n         -> {where}"
+                      f"\n         -> commit or discard it, then dispatch again")
+                break
+
         # Claim BEFORE working, so an interrupted run is visible as claimed.
         from claim_gate import check_claim
         _ok, _why = check_claim(args.actor, item.payload or {}, space_dir=space)
