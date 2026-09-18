@@ -108,9 +108,19 @@ def _install_local_executor():
                     break
             cwd = Path(self._cwd) if self._cwd else Path.cwd()
 
+            m = re.match(r"write (\S+) into (\S+) without committing$", title)
+            if m:
+                # The agent that does the work and leaves it in the worktree.
+                # Both live runtimes behaved exactly this way on 2026-09-18.
+                token, name = m.groups()
+                (cwd / name).parent.mkdir(parents=True, exist_ok=True)
+                (cwd / name).write_text(token + "\n")
+                return f"wrote {token} into {name}", 0
+
             m = re.match(r"write (\S+) into (\S+)$", title)
             if m:
                 token, name = m.groups()
+                (cwd / name).parent.mkdir(parents=True, exist_ok=True)
                 (cwd / name).write_text(token + "\n")
                 self._commit(cwd, name)
                 return f"wrote {token} into {name}", 0
@@ -122,6 +132,31 @@ def _install_local_executor():
                 (cwd / out).write_text(f"{n}\n")
                 self._commit(cwd, out)
                 return f"counted {n} lines", 0
+
+            m = re.match(r"write (\S+) into (\S+) and touch (\S+)$", title)
+            if m:
+                # An agent that also leaves unrelated files behind.
+                token, name, extra = m.groups()
+                (cwd / name).write_text(token + "\n")
+                (cwd / extra).write_text("not part of the task\n")
+                return f"wrote {token}, also touched {extra}", 0
+
+            m = re.match(r"write the wrong thing into (\S+)$", title)
+            if m:
+                # Does something, commits it, and it is not what was asked.
+                name = m.group(1)
+                (cwd / name).write_text("WRONG\n")
+                self._commit(cwd, name)
+                return f"wrote {name}", 0
+
+            if title == "escape the space":
+                # Path traversal: an artifact written outside the working dir.
+                target = cwd.parent / "escaped.txt"
+                try:
+                    target.write_text("escaped\n")
+                except OSError as exc:
+                    return f"could not escape: {exc}", 0
+                return f"wrote {target}", 0
 
             if title == "claim it is done":
                 return ("Done. I have completed the task and committed the "
@@ -164,6 +199,16 @@ class DelegationDrill(Drill):
         "a_delegation_chain_has_a_depth_limit",
         "an_unregistered_writer_may_not_create",
         "the_allowlist_is_enforced_by_the_gate_itself",
+        "an_agent_that_does_not_commit_still_completes",
+        "work_a_hook_refuses_says_what_refused_it",
+        "an_unassigned_item_claimed_by_several_keeps_one_owner",
+        "two_completions_of_one_item_leave_one_result",
+        "a_wrong_answer_that_is_committed_still_fails",
+        "unrelated_files_do_not_become_the_result",
+        "an_artifact_written_outside_the_space_does_not_count",
+        "a_crash_after_claiming_leaves_it_recoverable",
+        "an_item_dismissed_mid_flight_cannot_complete",
+        "a_check_cannot_touch_the_space_it_verifies",
     )
 
     # -- fixtures -------------------------------------------------------
@@ -238,6 +283,10 @@ class DelegationDrill(Drill):
         finally:
             sys.argv = argv
         return buf.getvalue()
+
+    def _tree_clean(self, space) -> bool:
+        import ledger_claim
+        return ledger_claim._artifact_tree_clean(space)
 
     def item(self, space, iid: str):
         from ledger.fold import fold
@@ -578,6 +627,219 @@ class DelegationDrill(Drill):
                        {"id": "gate-2", "title": "write Z into z.txt", "assignee": "tris"})
         self.check("a permitted delegation is still admitted",
                    self.item(space, "gate-2") is not None)
+
+    def an_agent_that_does_not_commit_still_completes(self) -> None:
+        """The agent does the work and leaves it in the worktree. It completes.
+
+        Completion used to depend on the agent remembering to commit. Measured
+        2026-09-18 across two hosts and two runtimes: the agents computed the
+        right answer every time and committed it none of the time, so every
+        delegated item failed a check its work had actually satisfied.
+
+        The guarantee is untouched -- the check still runs, in an isolated
+        worktree of the committed result, and it still decides. Only the
+        evidence is now guaranteed to exist.
+        """
+        space = self.delegation_space("17-nocommit")
+        iid = self.delegate(space, by="winston", to="miles",
+                            title="write VERIFIED into proof.txt without committing",
+                            check="grep -qx VERIFIED proof.txt")
+
+        out = self.dispatch(space, "miles")
+
+        it = self.item(space, iid)
+        self.check("the item completes anyway",
+                   it.status in ("completed", "verified"), f"{it.status}; {out[:200]}")
+        rc, log = self.git(space, "log", "--format=%s", "-5")
+        self.check("and the result is a real commit, not a dirty tree",
+                   any(iid in line for line in log.splitlines()), log.strip()[:120])
+        self.check("the tree is left clean for the next item",
+                   self._tree_clean(space))
+
+    def work_a_hook_refuses_says_what_refused_it(self) -> None:
+        """A pre-commit hook rejecting the artifact must name itself.
+
+        A DIP-0015 structure hook refused a top-level `drill/` directory on
+        2026-09-18, so the artifact could not be committed, the check failed
+        closed, and the message said "commit task changes" -- which blames the
+        agent for something no agent could have done.
+        """
+        space = self.delegation_space("18-hook")
+        hooks = space / ".git" / "hooks"
+        hooks.mkdir(parents=True, exist_ok=True)
+        (hooks / "pre-commit").write_text(
+            "#!/bin/sh\necho 'structure: forbidden/ is not an allowed root dir' >&2\nexit 1\n")
+        (hooks / "pre-commit").chmod(0o755)
+        iid = self.delegate(space, by="winston", to="miles",
+                            title="write X into forbidden/x.txt without committing",
+                            check="test -f forbidden/x.txt")
+
+        out = self.dispatch(space, "miles")
+
+        self.check("the item does not complete", self.item(space, iid).status != "completed",
+                   self.item(space, iid).status)
+        self.check("and the refusal names the hook, not the agent",
+                   "commit refused" in out and "not an allowed root dir" in out, out[-300:])
+
+    def an_unassigned_item_claimed_by_several_keeps_one_owner(self) -> None:
+        """Nobody is addressed, three dispatchers reach for it at once.
+
+        The dispatcher declines to offer unaddressed work at all now, so this
+        goes straight at the ledger the way a pre-fix host would have. What is
+        asserted is the property the fold must hold whatever anyone appends:
+        exactly one owner, and the losers refused by name rather than dropped.
+        """
+        space = self.delegation_space("19-scramble")
+        from ledger.log import EventLog
+        from ledger.policy import guarded_append, PolicyError
+        iid = self.delegate(space, by="winston", to=None,
+                            title="write S into s.txt", check="test -f s.txt")
+
+        outcomes = {}
+        for who in ("miles", "tris", "winston"):
+            try:
+                guarded_append(EventLog(space, who, sign=False), "item.claim",
+                               {"id": iid, "owner": who})
+                outcomes[who] = "claimed"
+            except PolicyError as exc:
+                outcomes[who] = str(exc)
+
+        it = self.item(space, iid)
+        winners = [w for w, o in outcomes.items() if o == "claimed"]
+        self.check("exactly one dispatcher wins", len(winners) == 1, str(outcomes))
+        self.check("and the ledger agrees who it was",
+                   it.owner == winners[0], f"{it.owner} vs {winners}")
+        self.check("the losers are told, not silently dropped",
+                   all("available" in o or "missing" in o
+                       for w, o in outcomes.items() if w != winners[0]), str(outcomes))
+
+    def two_completions_of_one_item_leave_one_result(self) -> None:
+        """Two hosts both finish it. The second completion must not overwrite.
+
+        This is the 929eb69d6b shape at the far end of the loop: two models,
+        two costs, one task. Whatever reaches the log, the fold has to settle
+        on one result and say that it ignored the other.
+        """
+        space = self.delegation_space("20-double")
+        from ledger.log import EventLog
+        iid = self.delegate(space, by="winston", to="miles",
+                            title="write D into d.txt", check="test -f d.txt")
+        EventLog(space, "miles", sign=False).append("item.claim", {"id": iid, "owner": "miles"})
+        EventLog(space, "miles", sign=False).append(
+            "item.complete", {"id": iid, "owner": "miles", "detail": "first"})
+        EventLog(space, "tris", sign=False).append(
+            "item.complete", {"id": iid, "owner": "tris", "detail": "second"})
+
+        it = self.item(space, iid)
+        self.check("one owner survives", it.owner == "miles", str(it.owner))
+        self.check("the item is terminal exactly once",
+                   it.status in ("completed", "verified"), it.status)
+
+    def a_wrong_answer_that_is_committed_still_fails(self) -> None:
+        """Committing is not passing. The check is what decides."""
+        space = self.delegation_space("21-wrong")
+        iid = self.delegate(space, by="winston", to="miles",
+                            title="write the wrong thing into answer.txt",
+                            check="grep -qx RIGHT answer.txt")
+
+        self.dispatch(space, "miles")
+
+        it = self.item(space, iid)
+        self.check("a committed wrong answer does not complete",
+                   it.status not in ("completed", "verified"), it.status)
+        self.check("and the wrong answer is still on the record to inspect",
+                   (space / "answer.txt").read_text().strip() == "WRONG")
+
+    def unrelated_files_do_not_become_the_result(self) -> None:
+        """An agent that also touches something else must not fail the item.
+
+        The dispatcher records whatever the execution produced, and the check
+        decides. A stray file is not evidence either way -- but it must not
+        leave the tree dirty for the next item, which is what made a whole
+        run's remaining work fail before.
+        """
+        space = self.delegation_space("22-stray")
+        iid = self.delegate(space, by="winston", to="miles",
+                            title="write OK into ok.txt and touch stray.txt",
+                            check="grep -qx OK ok.txt")
+
+        self.dispatch(space, "miles")
+
+        self.check("the item completes on its own evidence",
+                   self.item(space, iid).status in ("completed", "verified"),
+                   self.item(space, iid).status)
+        self.check("and the tree is clean for whoever comes next",
+                   self._tree_clean(space))
+
+    def an_artifact_written_outside_the_space_does_not_count(self) -> None:
+        """Work that lands outside the space cannot be evidence for it."""
+        space = self.delegation_space("23-escape")
+        iid = self.delegate(space, by="winston", to="miles", title="escape the space",
+                            check="test -f escaped.txt")
+
+        self.dispatch(space, "miles")
+
+        self.check("the item does not complete",
+                   self.item(space, iid).status not in ("completed", "verified"),
+                   self.item(space, iid).status)
+        self.check("and the space is unchanged", self._tree_clean(space))
+
+    def a_crash_after_claiming_leaves_it_recoverable(self) -> None:
+        """The claim is recorded BEFORE the work, so a crash is visible.
+
+        Work that happened with no trace that anyone started it is the thing
+        this ordering exists to prevent.
+        """
+        space = self.delegation_space("24-crash")
+        from ledger.log import EventLog
+        iid = self.delegate(space, by="winston", to="miles",
+                            title="write C into c.txt", check="test -f c.txt")
+        EventLog(space, "miles", sign=False).append("item.claim", {"id": iid, "owner": "miles"})
+
+        it = self.item(space, iid)
+        self.check("it is visibly claimed, not lost", it.status == "claimed", it.status)
+        self.check("and it names who was working on it", it.owner == "miles", str(it.owner))
+
+        out = self.dispatch(space, "tris")
+        self.check("another host does not steal a claimed item",
+                   "would claim" not in out and self.item(space, iid).owner == "miles",
+                   out[:160])
+
+    def an_item_dismissed_mid_flight_cannot_complete(self) -> None:
+        """Closed while the agent was working: the answer arrives too late."""
+        space = self.delegation_space("25-dismissed")
+        from ledger.log import EventLog
+        iid = self.delegate(space, by="winston", to="miles",
+                            title="write M into m.txt", check="test -f m.txt")
+        log = EventLog(space, "miles", sign=False)
+        log.append("item.claim", {"id": iid, "owner": "miles"})
+        EventLog(space, "winston", sign=False).append(
+            "item.dismiss", {"id": iid, "owner": "winston", "kind": "dropped",
+                             "reason": "no longer wanted"})
+        log.append("item.complete", {"id": iid, "owner": "miles", "detail": "too late"})
+
+        it = self.item(space, iid)
+        self.check("a dismissed item stays dismissed", it.status == "dismissed", it.status)
+
+    def a_check_cannot_touch_the_space_it_verifies(self) -> None:
+        """The check runs on a throwaway worktree, so it cannot edit the space.
+
+        A check is a shell command out of a payload. If it ran in the space it
+        would be an arbitrary write dressed as a verification.
+        """
+        space = self.delegation_space("26-sandbox")
+        (space / "precious.txt").write_text("keep me\n")
+        self.git(space, "add", "precious.txt")
+        self.git(space, "commit", "-qm", "precious")
+        iid = self.delegate(space, by="winston", to="miles",
+                            title="write P into p.txt",
+                            check="rm -f precious.txt && test -f p.txt")
+
+        self.dispatch(space, "miles")
+
+        self.check("the space still has what the check tried to delete",
+                   (space / "precious.txt").exists())
+        self.check("and the tree is unharmed", self._tree_clean(space))
 
     def run(self, only: list[str] | None = None) -> int:
         names = only or list(self.SCENARIOS)

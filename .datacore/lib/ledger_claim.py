@@ -217,6 +217,62 @@ def _journal(space: Path, actor: str, lines: list[str]) -> None:
         pass
 
 
+def _commit_result(space: Path, item_id: str) -> tuple[bool, str]:
+    """Record whatever this execution produced, so the check has something to read.
+
+    COMPLETION USED TO DEPEND ON THE AGENT REMEMBERING TO COMMIT. The prompt
+    asks it to; `_isolated_check` requires it, because a pass must mean
+    something durable anyone can verify later from the sha. Measured 2026-09-18
+    across two hosts and two runtimes: the agents computed the right answer
+    (216, exactly correct) every time and committed it none of the time, so
+    every delegated item failed a check its work had actually satisfied. A
+    mechanical step that decides whether correct work counts is not something
+    to leave to model compliance.
+
+    This does not weaken the guarantee, because COMMITTING IS NOT VERIFYING.
+    The check still runs afterwards, in an isolated worktree, and it still
+    decides. What changes is only that the evidence exists to be checked.
+
+    Attribution is what makes it safe: the dispatcher refuses to start an item
+    at all unless the tree is clean apart from ledger appends, so anything dirty
+    at this point was produced by THIS execution. That is why the sweep can be
+    broad without being reckless -- there is nothing else here to sweep up.
+
+    Ledger logs are left alone. They are appends, `_artifact_tree_clean`
+    already excludes them, and the transport publishes them on its own terms.
+    """
+    rc, staged, _ = _git_out(space, "status", "--porcelain")
+    if rc != 0:
+        return False, "the working tree could not be read"
+    paths = []
+    for line in staged.splitlines():
+        name = line[3:].strip().strip('"')
+        if not name or "/.datacore/events/" in f"/{name}" or name.startswith(".datacore/events/"):
+            continue
+        paths.append(name)
+    if not paths:
+        return True, ""                       # the agent committed, or produced nothing
+    rc, _, err = _git_out(space, "add", "--", *paths)
+    if rc != 0:
+        return False, f"git add refused: {err.strip()[:200]}"
+    rc, _, err = _git_out(space, "commit", "-q", "-m",
+                          f"result: {item_id}", "--", *paths)
+    if rc != 0:
+        # A pre-commit hook refusing (DIP-0015 structure, a boundary scan) is
+        # the interesting case and the one that reads as a mystery otherwise:
+        # the artifact stays uncommitted, the check fails closed, and the
+        # message blames the agent. Say what actually refused.
+        _git_out(space, "reset", "-q", "HEAD", "--", *paths)
+        return False, f"commit refused: {err.strip()[-300:]}"
+    return True, ""
+
+
+def _git_out(space: Path, *args: str) -> tuple[int, str, str]:
+    p = subprocess.run(["git", "-C", str(space), *args],
+                       capture_output=True, text=True, timeout=120)
+    return p.returncode, p.stdout or "", p.stderr or ""
+
+
 def _artifact_tree_clean(space, offenders: list | None = None):
     """Only ledger append records may differ from the checked commit.
 
@@ -497,6 +553,9 @@ def main() -> int:
             continue
         ok, detail, meta = run_task(title, route, space, item.id, actor=args.actor)
         if ok and check:
+            committed, why_not = _commit_result(space, item.id)
+            if not committed and why_not:
+                print(f"         -> could not record the result: {why_not}")
             # The ONLY thing that completes an item. An agent that declined
             # produces fluent, confident prose and exits 0; two attempts at
             # sniffing that prose for refusal markers both passed a failure as
