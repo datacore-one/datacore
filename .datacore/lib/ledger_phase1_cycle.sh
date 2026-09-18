@@ -38,10 +38,30 @@ echo "=== $(date -u '+%F %H:%MZ') phase-1 cycle ==="
 # were flipped on the mac; the box's cycle regenerated five and left four
 # stale until the next fleet sync. Only directories that carry an event log
 # are spaces; archives and stray checkouts under the root are not.
+# OFFLINE IS A CONDITION, NOT A FAILURE -- which is what ledger_transport says
+# in as many words, and this caller was not listening. The mac is a laptop: its
+# 02:53Z cycle on 2026-09-18 met a sleeping network ("fetch failed (offline?)",
+# ssh timeouts to the Gitea host), wrote FAIL, and alerted about a machine that
+# was simply asleep. A fetch that is REFUSED -- auth denied, remote repo missing
+# -- is a different sentence from the same classifier and still fails the cycle,
+# because nothing about it improves on its own.
+offline_only() {
+  grep -q '"reason": "fetch failed (offline?)"' "$1" 2>/dev/null
+}
 rc=0
+offline=0
 for d in "$DATACORE_ROOT"/[0-9]-*; do
   [ -d "$d/.datacore/events" ] && [ -d "$d/.git" ] || continue
-  "$PY" "$LIB/ledger_transport.py" converge --space "$d" > "$STATE/phase1-converge-$(basename "$d").log" 2>&1 || { echo "converge $(basename "$d"): failed; see its log"; rc=1; }
+  log="$STATE/phase1-converge-$(basename "$d").log"
+  if ! "$PY" "$LIB/ledger_transport.py" converge --space "$d" > "$log" 2>&1; then
+    if offline_only "$log"; then
+      echo "converge $(basename "$d"): offline; this host will receive it when the network returns"
+      offline=$((offline + 1))
+    else
+      echo "converge $(basename "$d"): failed; see its log"
+      rc=1
+    fi
+  fi
 done
 # A failed receive may leave a merge in progress. Never ingest or replace
 # files from that intermediate state.
@@ -60,7 +80,16 @@ echo "ingest rc=$rc"
 # On any ingest failure preserve every source file and stop before projection.
 if [ "$rc" -ne 0 ]; then finish "$rc"; exit $?; fi
 for s in "${PHASE1[@]}"; do
-  "$PY" "$LIB/ledger_transport.py" converge --space "$s" > "$STATE/phase1-converge-$(basename "$s").log" 2>&1 || { echo "converge $(basename "$s"): failed; see its log"; rc=1; }
+  log="$STATE/phase1-converge-$(basename "$s").log"
+  if ! "$PY" "$LIB/ledger_transport.py" converge --space "$s" > "$log" 2>&1; then
+    if offline_only "$log"; then
+      echo "converge $(basename "$s"): offline; this host will receive it when the network returns"
+      offline=$((offline + 1))
+    else
+      echo "converge $(basename "$s"): failed; see its log"
+      rc=1
+    fi
+  fi
 done
 if [ "$rc" -ne 0 ]; then finish "$rc"; exit $?; fi
 # `... | grep -v authored ; echo "rc=$?"` read GREP's status, not the
@@ -70,6 +99,7 @@ if [ "$rc" -ne 0 ]; then finish "$rc"; exit $?; fi
 "$PY" "$LIB/ledger_project_org.py" --all 2>&1 | grep -v "authored"
 prc=${PIPESTATUS[0]}
 echo "project rc=$prc"
+[ "$offline" -gt 0 ] && echo "offline space(s) this cycle: $offline"
 [ "$prc" -eq 0 ] || rc=$prc
 
 finish "$rc"

@@ -58,3 +58,45 @@ print('stage succeeded')
     for stage, args in calls:
         if stage == 'transport':
             assert args[-1] == str(space), 'paths containing spaces remain one argument'
+
+
+@pytest.mark.parametrize('reason,ok', [
+    ('fetch failed (offline?)', True),
+    ('auth denied (key rejected — check the key, or a VPN/exit node)', False),
+    ('remote repo missing', False),
+])
+def test_an_asleep_laptop_is_not_a_failed_cycle(tmp_path, reason, ok):
+    """The mac is a laptop. Its 02:53Z cycle on 2026-09-18 met a sleeping
+    network -- two fetches timed out against the Gitea host -- wrote FAIL, and
+    alerted about a machine that was asleep. ledger_transport already says
+    offline is a condition and denied is a fault; this caller now reads it."""
+    scripts = tmp_path / 'scripts'
+    scripts.mkdir()
+    root = tmp_path / 'data'
+    space = root / '9-test'
+    (space / '.datacore/events').mkdir(parents=True)
+    (space / '.git').mkdir()
+    (space / '.datacore/ledger-phase').write_text('1\n')
+    state = tmp_path / 'state'
+    shutil.copyfile(LIB / 'ledger_phase1_cycle.sh', scripts / 'cycle.sh')
+    shutil.copyfile(LIB / 'runtime_shell.sh', scripts / 'runtime_shell.sh')
+    stub = '''import json, os, sys
+from pathlib import Path
+name = Path(sys.argv[0]).stem
+if name == 'ledger_transport':
+    print(json.dumps({"ok": False, "reason": os.environ['AUDIT_REASON'], "context": {}}))
+    sys.exit(1)
+print('stage succeeded')
+'''
+    for name in ['ledger_transport', 'ledger_ingest_org', 'ledger_project_org']:
+        (scripts / f'{name}.py').write_text(stub)
+    env = dict(os.environ, DATACORE_ROOT=str(root), DATACORE_STATE=str(state),
+               DATACORE_PYTHON=sys.executable, AUDIT_REASON=reason)
+    proc = subprocess.run(['bash', str(scripts / 'cycle.sh')], env=env,
+                          capture_output=True, text=True, timeout=30)
+
+    status = (state / 'phase1-cycle-status.txt').read_text()
+    assert status.startswith('OK' if ok else 'FAIL'), proc.stdout + proc.stderr
+    assert (proc.returncode == 0) is ok
+    if ok:
+        assert 'offline' in proc.stdout, 'an offline cycle still says so out loud'
