@@ -104,6 +104,25 @@ def detect(space: Path, ref: str = "origin/main") -> ForkReport:
         rep.reason = "no event logs"
         return rep
 
+    # THE SPACE MUST BE ITS OWN REPOSITORY. `git -C <dir>` answers from
+    # whatever repo ENCLOSES <dir>, so a space that is merely a subdirectory of
+    # another checkout resolves `origin/main:.datacore/events/<writer>.jsonl`
+    # to the ENCLOSING repo's log of that name -- a different writer's whole
+    # history. Every shared (actor, seq) then differs and the space is reported
+    # FORKED, which is the most alarming thing this detector can say.
+    #
+    # Observed on plur-claw 2026-09-18: `~/Data/0-personal` has no `.git` of its
+    # own, so all 8 of its `data` events were compared against the OpenClaw
+    # workspace repo's `data.jsonl` and reported as 8 collisions. Nothing was
+    # forked. A comparison that cannot be made is `reason`, not a verdict.
+    rc, top = _git(space, "rev-parse", "--show-toplevel")
+    if rc != 0:
+        rep.reason = "not a git repository"
+        return rep
+    if Path(top.strip()).resolve() != space.resolve():
+        rep.reason = f"not its own repository (inside {Path(top.strip()).name})"
+        return rep
+
     rc, _ = _git(space, "rev-parse", "--verify", ref)
     if rc != 0:
         # No remote ref to compare against — an offline clone or a fresh repo.
