@@ -768,3 +768,39 @@ def test_a_denied_push_is_blocked_not_offline(monkeypatch, tmp_path):
         False, "converged but not published: push auth denied (key rejected — check the key, "
                "or a VPN/exit node)", {}))
     assert lt.sync_repo(tmp_path, quiet=True) == "blocked"
+
+
+# ── gaps() answers "is my work anywhere but this disk?" ─────────────────────
+
+
+def _rows(monkeypatch, rows):
+    import ledger_transport as lt
+    import sys as _sys
+    from pathlib import Path as _P
+    _sys.path.insert(0, str(_P(lt.__file__).resolve().parent / "detectors"))
+    import seq_gap
+    monkeypatch.setattr(seq_gap, "scan_space", lambda space: rows)
+    return lt
+
+
+def test_events_that_exist_only_here_are_not_called_published(monkeypatch, tmp_path):
+    """append()'s own safety net says "seq-gap will keep reporting it until it
+    is [published]". It did not: gaps() counted only `gap`, the alerting number
+    that waits out a 90-minute grace, so three events sitting on one disk came
+    back as "all published"."""
+    lt = _rows(monkeypatch, [{"actor": "mac", "local_seq": 4, "remote_seq": 1, "gap": 0, "pending": 3}])
+    result = lt.gaps(tmp_path)
+    assert not result.ok
+    assert "3 event(s) not yet published" in result.reason and "grace" in result.reason
+
+
+def test_a_log_past_the_grace_still_reports_as_unpublished(monkeypatch, tmp_path):
+    lt = _rows(monkeypatch, [{"actor": "mac", "local_seq": 4, "remote_seq": 1, "gap": 3, "pending": 3}])
+    result = lt.gaps(tmp_path)
+    assert not result.ok and result.reason == "1 log(s) unpublished"
+
+
+def test_everything_published_still_says_so(monkeypatch, tmp_path):
+    lt = _rows(monkeypatch, [{"actor": "mac", "local_seq": 4, "remote_seq": 4, "gap": 0, "pending": 0}])
+    result = lt.gaps(tmp_path)
+    assert result.ok and result.reason == "all published"

@@ -640,9 +640,22 @@ def gaps(space: Path) -> Result:
     from seq_gap import scan_space  # noqa: E402
     rows = scan_space(space)
     ungapped = [r for r in rows if r.get("gap")]
-    return Result(not ungapped,
-                  "all published" if not ungapped else f"{len(ungapped)} log(s) unpublished",
-                  {"rows": rows})
+    # PENDING IS NOT PUBLISHED. The detector computes both: `gap` is what has
+    # been unpublished long enough to alert on (a 90-minute grace, so the :05
+    # and :10 sweeps do not flap), and `pending` is what is on this disk and
+    # nowhere else RIGHT NOW. This function answered the second question with
+    # the first one's number, so `append()`'s own safety net -- "seq-gap will
+    # keep reporting it until it is [published]" -- said "all published" with
+    # three events sitting locally. Found by a fleet stress test, 2026-09-18.
+    pending = [r for r in rows if r.get("pending") and not r.get("gap")]
+    if ungapped:
+        reason = f"{len(ungapped)} log(s) unpublished"
+    elif pending:
+        reason = (f"{sum(r['pending'] for r in pending)} event(s) not yet published "
+                  f"in {len(pending)} log(s), inside the grace window")
+    else:
+        reason = "all published"
+    return Result(not ungapped and not pending, reason, {"rows": rows})
 
 
 def sync_repo(repo: Path, quiet: bool = False, *, root: Path | None = None) -> str:
