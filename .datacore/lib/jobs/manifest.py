@@ -93,11 +93,12 @@ def known_machines(path: Path | None = None) -> frozenset[str] | None:
                 raise ManifestError("invalid manifest_machine alias")
             names.add(alias)
     return frozenset(names)
-CHECKS = frozenset({"exists", "nonempty", "json_has_keys", "regex", "last_line_regex", "min_bytes"})
+CHECKS = frozenset({"exists", "nonempty", "json_has_keys", "regex", "last_line_regex",
+                    "min_bytes", "no_crash"})
 ON_FAILS = frozenset({"log", "telegram"})
 
 # checks that must NOT carry an `arg`
-_NO_ARG_CHECKS = frozenset({"exists", "nonempty"})
+_NO_ARG_CHECKS = frozenset({"exists", "nonempty", "no_crash"})
 
 
 class ManifestError(ValueError):

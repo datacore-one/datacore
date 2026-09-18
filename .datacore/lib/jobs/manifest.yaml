@@ -105,7 +105,7 @@ jobs:
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/cos/news.log"
-        check: nonempty
+        check: no_crash
         max_age_hours: 26
 
   - name: box-email-triage
@@ -115,12 +115,12 @@ jobs:
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/cos/email-triage.log"
-        check: nonempty
+        check: no_crash
         max_age_hours: 26
       # triage-email.sh's own AUDIT_LOG -- one JSONL line appended per run,
       # per account. Direct script evidence, independent of the cron redirect.
       - path: "~/Data/.datacore/state/mail/audit.jsonl"
-        check: nonempty
+        check: no_crash
         max_age_hours: 26
 
   # RETIRED 2026-09-08: box-github-triage. Two hosts ran one script, and
@@ -509,7 +509,7 @@ jobs:
       # turns adding a tenth space into a false alarm, and the fix for a false
       # alarm is usually to stop believing the alarm.
       - path: "~/.datacore/state/shadow-status.json"
-        check: nonempty
+        check: no_crash
         max_age_hours: 26
 
   # The commit gate deliberately never blocks — nightshift runs ~20 tasks with
@@ -589,7 +589,7 @@ jobs:
         arg: ["headline", "_meta"]
         max_age_hours: 26
       - path: "~/.datacore/cos/morning.log"
-        check: nonempty
+        check: no_crash
         max_age_hours: 26
       # A heading is not a briefing. This must match a section that only a
       # populated briefing produces -- "Your Agenda" is written from
@@ -647,7 +647,7 @@ jobs:
       # cos_verify_morning.py:check_audio -- AUDIO_STAMP, written by
       # winston_audio.sh only after Telegram accepts the voice message.
       - path: "~/.datacore/cos/audio-last-ok"
-        check: nonempty
+        check: no_crash
         max_age_hours: 26
     # cos_morning.sh:6 exports CLAUDE_CODE_OAUTH_TOKEN explicitly from
     # /etc/datacored.env -- cos_verify_morning.py's check_credentials exists
@@ -663,7 +663,7 @@ jobs:
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/cos/inbox.log"
-        check: nonempty
+        check: no_crash
         max_age_hours: 26
 
   - name: box-research
@@ -673,7 +673,7 @@ jobs:
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/cos/research.log"
-        check: nonempty
+        check: no_crash
         max_age_hours: 26
 
   - name: box-health-digest
@@ -699,7 +699,7 @@ jobs:
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/cos/tomorrow.log"
-        check: nonempty
+        check: no_crash
         max_age_hours: 26
 
   - name: box-cos-sync
@@ -710,7 +710,7 @@ jobs:
       # log_max_age dict in cos_verify_morning.py:check_ops gives sync.log
       # exactly 1h -- the tightest bucket, matching the 15-min cadence.
       - path: "~/.datacore/cos/sync.log"
-        check: nonempty
+        check: no_crash
         max_age_hours: 1
     on_fail: telegram
 
@@ -730,7 +730,7 @@ jobs:
       # every run (nightshift lib/manifest.py, 2026-09-06). The dated name failed
       # the 08:00 verification whenever a run that started at 06:03 was still going.
       - path: "~/Data/.datacore/state/nightshift/manifest-latest.yaml"
-        check: nonempty
+        check: no_crash
         max_age_hours: 26
 
   # ── the unattended principals (product description, stage 2): a contract
@@ -787,7 +787,7 @@ jobs:
       # every 15 minutes while datacore-telegram.service is active and
       # leaves it alone when it is not, so age is the signal.
       - path: "~/.datacore/state/miles-bot.alive"
-        check: nonempty
+        check: no_crash
         max_age_hours: 1
 
   - name: nightshift-github-triage
@@ -807,7 +807,7 @@ jobs:
     on_fail: telegram
     artifacts:
       - path: "~/Data/.datacore/modules/github/data/scan_cache.json"
-        check: nonempty
+        check: no_crash
         max_age_hours: 26
 
   - name: nightshift-inbox-process
@@ -821,7 +821,7 @@ jobs:
       # the unit file's own Description is the evidence: "classify inbox.org
       # -> research_learning.org + next_actions.org".
       - path: "~/Data/0-personal/org/research_learning.org"
-        check: nonempty
+        check: no_crash
         max_age_hours: 26
 
 
@@ -900,7 +900,7 @@ jobs:
       # 2026-08-10 by observing a 2.9h-stale log while the destination was 2min
       # fresh. Check the destination the sync exists to produce instead.
       - path: "~/.datacore/cos/agent-stream/events-*.jsonl"
-        check: nonempty
+        check: no_crash
         max_age_hours: 26  # written only when agents act; a quiet evening is not a failure (2026-09-03)
 
   - name: mac-lens-sync
@@ -971,7 +971,7 @@ jobs:
       # STATE_FILE (line 81); a report it could not send is logged but not
       # stamped, so age here means "Tris has not been heard from".
       - path: "~/.hermes/state/heartbeat-last-report"
-        check: nonempty
+        check: no_crash
         max_age_hours: 2
 
   - name: hermes-creds-sync
@@ -981,7 +981,7 @@ jobs:
     on_fail: telegram
     artifacts:
       - path: "/tmp/creds-sync.log"
-        check: nonempty
+        check: no_crash
         max_age_hours: 3
 
   - name: hermes-nightshift-deadman
@@ -991,7 +991,7 @@ jobs:
     on_fail: telegram
     artifacts:
       - path: "/var/log/nightshift-deadman.log"
-        check: nonempty
+        check: no_crash
         max_age_hours: 2
 
 
@@ -1008,7 +1008,7 @@ jobs:
       # heartbeat ran -- unlike the daily log, which a single early run would
       # leave fresh-looking for the rest of the day.
       - path: "~/.openclaw/state-heartbeat-last-report"
-        check: nonempty
+        check: no_crash
         max_age_hours: 2
 
   - name: plur-claw-agent-stream-tail
@@ -1022,7 +1022,7 @@ jobs:
       # cause is here. Checking both ends means the failure is attributed to
       # the side that actually broke.
       - path: "~/.datacore/agent-stream-tail/state.json"
-        check: nonempty
+        check: no_crash
         max_age_hours: 2
 
 
@@ -1066,7 +1066,7 @@ jobs:
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/shadow-status.json"
-        check: nonempty
+        check: no_crash
         max_age_hours: 26
 
 

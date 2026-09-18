@@ -50,6 +50,24 @@ from datetime import datetime
 from jobs.manifest import Artifact
 
 
+#: Unambiguous evidence that a PROGRAM died, as opposed to prose that mentions
+#: failure. Kept narrow on purpose: `box-news` summarises news articles and
+#: `box-briefing` is an LLM's writing, so a bare "error" or "failed" would
+#: false-FAIL a perfectly good run -- and a contract that cries wolf is how a
+#: real alert stops being read.
+CRASH_MARKERS = (
+    "Traceback (most recent call last)",
+    "command not found",
+    "No such file or directory",
+    "Permission denied",
+    "fatal:",
+    "Killed",
+    "Segmentation fault",
+    "ModuleNotFoundError",
+    "SyntaxError:",
+)
+
+
 def expand_path(path: str, *, now: float | None = None) -> str:
     """Expand `{today}` (local date of `now`) then `~` in `path`."""
     if now is None:
@@ -223,6 +241,37 @@ def run_check(artifact: Artifact, *, now: float | None = None,
     elif check == "nonempty":
         if st.st_size == 0:
             errors.append(f"{expanded}: empty file (nonempty check failed)")
+
+    elif check == "no_crash":
+        # WHAT "nonempty" SHOULD HAVE MEANT. 23 of this manifest's 58 artifact
+        # checks asserted only that a file existed and had bytes in it -- which
+        # a script satisfies by crashing, as long as it crashes noisily into its
+        # own log. `last_line_regex` already exists because this system learned
+        # the lesson once ("an append-only status log keeps yesterday's success
+        # forever"); it was never applied to the free-form logs.
+        #
+        # A positive success regex is the stronger assertion and is used
+        # wherever a job emits a reliable success line. For a log that is prose
+        # or an LLM's output, guessing at one is how a contract false-FAILS on
+        # a good run, so this asserts the other side: no evidence of a PROGRAM
+        # having died. The markers are deliberately shaped like interpreter and
+        # shell failures rather than the word "error", because `box-news`
+        # summarises the news and prose legitimately contains "error".
+        text, read_error = _read_text(expanded)
+        if read_error is not None:
+            errors.append(f"{expanded}: {read_error}")
+        elif not text.strip():
+            errors.append(f"{expanded}: empty file (no_crash check failed)")
+        else:
+            # Only the tail: these logs are append-only and a failure from six
+            # weeks ago is not this run's verdict.
+            tail = "\n".join(text.splitlines()[-40:])
+            hit = next((m for m in CRASH_MARKERS if m.lower() in tail.lower()), None)
+            if hit:
+                line = next((l.strip() for l in reversed(tail.splitlines())
+                             if hit.lower() in l.lower()), "")
+                errors.append(f"{expanded}: the run left {hit!r} in its output "
+                              f"(no_crash check failed) -- {line[:120]}")
 
     elif check == "min_bytes":
         # For artifacts a daemon RECREATES when lost. `exists` cannot detect
