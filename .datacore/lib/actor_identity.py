@@ -125,8 +125,25 @@ def actor_source() -> str:
     return resolve()[1]
 
 
+#: (path, stat signature) -> parsed registry. `principal_of` is called once per
+#: EVENT in several hot paths (`creates_today`, `latest_jobs`, the authorship
+#: check), and each call re-read and re-parsed this YAML: 5ms a call, so a
+#: fold over a real space spent minutes doing nothing but parsing the same
+#: four hundred bytes. Keyed on the file's size and mtime rather than held
+#: forever, because a test repoints `PRINCIPALS` mid-process and an operator
+#: edits the registry while a long job runs -- both must be seen.
+_PRINCIPALS_CACHE: dict = {}
+
+
 def principals(path: Path | None = None) -> dict:
     path = path or PRINCIPALS  # resolved at call time so a test can point it elsewhere
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+    if key is not None and key in _PRINCIPALS_CACHE:
+        return _PRINCIPALS_CACHE[key]
     try:
         import yaml
         from yaml_safety import UniqueStringKeyLoader
@@ -146,6 +163,11 @@ def principals(path: Path | None = None) -> dict:
                 if writer in owners and owners[writer] != name:
                     raise ValueError('writer belongs to multiple principals')
                 owners[writer] = name
+        # Cached only after every validation above has passed, so a registry
+        # that is invalid or ambiguous raises again on the next call rather
+        # than being remembered as good.
+        if key is not None:
+            _PRINCIPALS_CACHE[key] = entries
         return entries
     except FileNotFoundError:
         if Path(path).is_symlink():

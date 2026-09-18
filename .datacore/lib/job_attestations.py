@@ -36,7 +36,25 @@ def latest_jobs(root: Path, now: float, *, registry: Path | None = None) -> dict
         chains: dict[str, list] = {}
         for event in events:
             chains.setdefault(event.log, []).append(event)
-        for chain in chains.values():
+        # ONLY CHAINS THAT CARRY EVIDENCE ARE VERIFIED. An attestation is only
+        # trustworthy if its own chain verifies -- that is the guarantee, and it
+        # is kept exactly. A chain carrying NO attestation contributes nothing
+        # to this answer, so its integrity is a different question with a
+        # different owner (`v2_verify`'s hash-chain check, which does report it).
+        #
+        # Verifying all of them made this a full-fleet integrity scan run inline
+        # on every item.create that names an assignee, and it had both costs a
+        # reader would care about. It was SLOW: 39s of a 47s create on a 68-log
+        # installation, once per created item, growing for ever. And it was
+        # FRAGILE in a way that pointed at the wrong thing: one event in
+        # 5-plur/tris.jsonl whose payload no longer matched its hash made this
+        # raise, `absent()` caught that and reported EVERY principal absent, and
+        # every delegated item was stamped `assignee_absent` -- an alarm that is
+        # always on for a reason unrelated to whether anyone had been heard
+        # from. Measured 2026-09-18: 10 of 68 logs carry any attestation.
+        for log_name, chain in chains.items():
+            if not any(event.type == 'metric.attest' for event in chain):
+                continue
             # read_events sorts by HLC. Recover physical chain order by seq;
             # malformed types and missing/duplicate links are not evidence.
             if any(type(event.seq) is not int for event in chain):
