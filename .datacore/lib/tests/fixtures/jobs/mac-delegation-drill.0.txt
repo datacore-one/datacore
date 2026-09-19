@@ -1,0 +1,7 @@
+# fixture for mac-delegation-drill artifact[0]
+# producer artifact: ~/.datacore/state/delegation-drill.log on mac
+# harvested: 2026-09-19
+# regex under test: delegation drill: 27 scenario\(s\), every control held
+# represents: SUCCESS
+# ---
+delegation drill: 27 scenario(s), every control held

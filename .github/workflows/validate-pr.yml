@@ -88,118 +88,18 @@ jobs:
           DATACORE_ROOT: ${{ github.workspace }}
           DATACORE_STATE: ${{ runner.temp }}/datacore-audit-state
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        # These were ~100 filenames listed one per line. A test file not on the
+        # list was run by nothing, and nothing said so: 111 of the 212 files in
+        # lib/tests had never been gated, and the failures that accumulated in
+        # them -- a stale assertion asking for an undeclared writer to become its
+        # own policy principal among them -- stayed invisible for months.
+        # Naming the directories means a new test file is gated the moment it
+        # lands. Keeping the list in sync by hand was the defect, not the fix.
         run: |
-          python -m pytest -q \
-            .datacore/lib/tests/test_persistence_adversarial.py \
-            .datacore/lib/tests/test_file_utils.py \
-            .datacore/lib/tests/test_markdown_sections.py \
-            .datacore/lib/tests/test_journal_store.py \
-            .datacore/lib/tests/test_org_transactions.py \
-            .datacore/lib/tests/test_archive_preservation.py \
-            .datacore/lib/tests/test_closed_archive_safety.py \
-            .datacore/lib/tests/test_decision_board_safety.py \
-            .datacore/lib/tests/test_git_fleet_sync_size_guard.py \
-            .datacore/lib/tests/test_tracked_derived_safety.py \
-            .datacore/lib/tests/test_ledger_health.py \
-            .datacore/lib/tests/test_space_catalog.py \
-            .datacore/lib/tests/test_module_data_migrate.py \
-            .datacore/lib/tests/test_module_context.py \
-            .datacore/lib/tests/test_heartbeat_migration_entry.py \
-            .datacore/lib/tests/test_agent_self_report_integrity.py \
-            .datacore/lib/tests/test_workflow_state_preservation.py \
-            .datacore/lib/tests/test_hygiene_output_contract.py \
-            .datacore/lib/tests/test_writeback_preservation.py \
-            .datacore/lib/tests/test_conflict_preservation.py \
-            .datacore/lib/tests/test_credential_preservation.py \
-            .datacore/lib/tests/test_env_configuration.py \
-            .datacore/lib/tests/test_ledger_ingest_org.py \
-            .datacore/lib/tests/test_ledger_transport.py \
-            .datacore/lib/tests/test_transport_lock_safety.py \
-            .datacore/lib/tests/test_transport_foreign_writer.py \
-            .datacore/lib/tests/test_git_privacy.py \
-            .datacore/lib/tests/test_git_preservation.py \
-            .datacore/lib/tests/test_publication_moves.py \
-            .datacore/lib/tests/test_publication_status_paths.py \
-            .datacore/lib/tests/test_publication_ref_scope.py \
-            .datacore/lib/tests/test_unmerged_publication.py \
-            .datacore/lib/tests/test_identity_verification.py \
-            .datacore/lib/tests/test_ledger_publish_safe.py \
-            .datacore/tests/test_knowledge_commit.py \
-            .datacore/lib/tests/test_knowledge_path_classification.py \
-            .datacore/tests/test_agent_wrap_up.py \
-            .datacore/modules/research/lib/tests/test_queue_drain.py \
-            .datacore/lib/tests/test_http_receivers.py \
-            .datacore/lib/tests/test_http_boundary_siblings.py \
-            .datacore/lib/tests/test_hook_privacy_state.py \
-            .datacore/lib/tests/test_observation_privacy.py \
-            .datacore/lib/tests/test_plur_hook_boundaries.py \
-            .datacore/lib/tests/test_plur_cli_selection.py \
-            .datacore/lib/tests/test_public_download.py \
-            .datacore/lib/tests/test_download_deadlines.py \
-            .datacore/lib/tests/test_public_post_tls.py \
-            .datacore/lib/tests/test_speech_transport.py \
-            .datacore/lib/tests/test_execution_controls.py \
-            .datacore/lib/tests/test_policy_preservation.py \
-            .datacore/modules/voice-terminal/tests/test_llm_fallback.py \
-            .datacore/lib/tests/test_command_receipt.py \
-            .datacore/lib/tests/test_receipt_preservation.py \
-            .datacore/lib/tests/test_ocr_limits.py \
-            .datacore/lib/tests/test_native_ocr_preservation.py \
-            .datacore/lib/tests/test_agent_stream_store.py \
-            .datacore/lib/tests/test_stream_tail_preservation.py \
-            .datacore/lib/tests/test_ledger_keys.py \
-            .datacore/lib/tests/test_policy_adversarial.py \
-            .datacore/lib/tests/test_ledger_policy.py \
-            .datacore/lib/tests/test_actor_identity.py \
-            .datacore/lib/tests/test_seal_preservation.py \
-            .datacore/lib/tests/test_executor_isolation.py \
-            .datacore/lib/tests/test_mcp_stdio.py \
-            .datacore/lib/tests/test_hermes_runtime.py \
-            .datacore/lib/tests/test_node_runtime.py \
-            .datacore/lib/tests/test_process_lifecycle.py \
-            .datacore/lib/tests/test_hermes_plugin.py \
-            .datacore/lib/tests/test_hermes_dispatch.py \
-            .datacore/lib/tests/test_hermes_source_binding.py \
-            .datacore/lib/tests/test_python_source_binding.py \
-            .datacore/lib/tests/test_intent_review_privacy.py \
-            .datacore/lib/tests/test_priority_score.py \
-            .datacore/lib/tests/test_intent_input_integrity.py \
-            .datacore/lib/tests/test_intent_evidence.py \
-            .datacore/lib/tests/test_bounded_read_integrity.py \
-            .datacore/lib/tests/test_bounded_write_integrity.py \
-            .datacore/lib/tests/test_delegation_receipt.py \
-            .datacore/lib/tests/test_delegation_requirements.py \
-            .datacore/lib/tests/test_private_state_boundary.py \
-            .datacore/lib/tests/test_jobs_manifest.py \
-            .datacore/lib/tests/test_jobs_run_contract.py \
-            .datacore/tests/test_principal_email_hashes.py \
-            .datacore/lib/tests/test_artifact_verification.py \
-            .datacore/lib/tests/test_agent_workspace.py \
-            .datacore/lib/tests/test_catalog_identity.py \
-            .datacore/lib/tests/test_sync_safety.py \
-            .datacore/lib/tests/test_calendar_safety.py \
-            .datacore/lib/tests/test_classification_preservation.py \
-            .datacore/lib/tests/test_text_model.py \
-            .datacore/lib/tests/test_host_deps.py \
-            .datacore/lib/tests/test_attestation_consumers.py \
-            .datacore/lib/tests/test_cron_install.py \
-            .datacore/lib/tests/test_phase1_cycle_safety.py \
-            .datacore/lib/tests/test_scheduled_runtime_boundaries.py \
-            .datacore/lib/tests/test_projection_reconciliation.py \
-            .datacore/lib/tests/test_projection_replay.py \
-            .datacore/lib/tests/test_ledger_done_archive.py \
-            .datacore/lib/tests/test_replicated_edits.py \
-            .datacore/lib/tests/test_ledger_migration.py \
-            .datacore/lib/tests/test_ledger_phase1_tools.py \
-            .datacore/lib/tests/test_ledger_checkpoint.py \
-            .datacore/lib/tests/test_org_workspace_adapter.py \
-            .datacore/lib/tests/test_org_ledger_roundtrip.py \
-            .datacore/lib/tests/test_org_space.py
-          python -m pytest -q \
-            .datacore/lib/tests/test_hooks.py \
-            .datacore/tests/test_org_parser.py \
-            .datacore/tests/test_spaces.py \
-            .datacore/tests/test_youtube_transcript.py
+          python -m pytest -q --continue-on-collection-errors \
+            .datacore/lib/tests \
+            .datacore/lib/sync/tests \
+            .datacore/tests
           ruff check --select F821,F822,F823,E9 .datacore
 
   runtime-profile:

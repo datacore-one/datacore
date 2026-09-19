@@ -1,0 +1,21 @@
+# Test failures the owner has seen and accepted, so the nightly suite run stays
+# quiet about them and loud about everything else.
+#
+# Same rule as ledger-invariants-baseline.yaml: an entry matches ONE test id, so
+# a second failure in the same file is still a NEW finding and still fails the
+# run. Adding to this list is a decision. Removing from it is the fix.
+version: 1
+accepted:
+  - test: "test_jobs_grounded.py::test_runner_manifest_matches_canonical"
+    accepted_on: 2026-09-19
+    why: >
+      Not a defect — a correct report that an edit has not shipped yet. The
+      detectors run from ~/.datacore/v2-runner, a separate checkout that
+      refreshes by `git pull`, so a change to lib/jobs/manifest.yaml is not live
+      until it is committed and pushed. This test exists to say exactly that,
+      and it is saying it about the mac-delegation-drill contract added on
+      2026-09-19.
+
+      REMOVE THIS ENTRY once that commit lands. If it is still here after the
+      push, the runner refresh itself is broken and the test has stopped being
+      about an uncommitted edit — which is the case it was written for.

@@ -1,0 +1,124 @@
+# Test directories that no CI job runs, each with the reason and the date the
+# reason was last looked at.
+#
+# WHY THIS FILE EXISTS. CI used to name ~100 test FILES one per line in
+# validate-pr.yml. Adding a test file gated nothing until somebody also edited
+# that YAML, and nothing anywhere said otherwise -- so 421 of 531 test files ran
+# in no automated gate, and the failures that collected in them were invisible
+# until 2026-09-19: a stale assertion asking an undeclared writer to become its
+# own policy principal, a manifest schema that had moved on without its tests,
+# sixteen X-poster tests refused by a live kill switch, four more making real
+# HTTP calls because they mocked an attribute that had been renamed.
+#
+# CI now names DIRECTORIES, so a new test file under one of them is gated the day
+# it lands. This file covers the rest. test_ci_gate_coverage.py fails when a test
+# directory is neither gated nor listed here, which turns "nobody runs this" from
+# something you have to go looking for into something a PR tells you.
+#
+# Listing a directory here is a decision to accept the risk, not a way to silence
+# the check. Each entry says what is not being protected.
+version: 1
+
+suites:
+  # ---- Suites whose dependencies the CI runner does not install --------------
+  # requirements-audit.txt covers the core. These need scientific or
+  # service-specific stacks that would slow every PR to install, for code that
+  # does not gate a merge.
+  - path: .datacore/modules/trading/lib/gateio
+    reason: >
+      2586 tests needing numpy/pandas/scipy. Trading code is run by hand against
+      a live exchange, never by CI, and a broken import here cannot reach any
+      other module.
+    reviewed: 2026-09-19
+    state: green
+  - path: .datacore/modules/ventures/lib/tests
+    reason: Passing locally (421). Not yet costed against CI install time.
+    reviewed: 2026-09-19
+    state: green
+  - path: .datacore/modules/lens/tests
+    reason: Passing locally (188). Not yet costed against CI install time.
+    reviewed: 2026-09-19
+    state: green
+  - path: .datacore/modules/forge/lib/tests
+    reason: Passing locally (55). Not yet costed against CI install time.
+    reviewed: 2026-09-19
+    state: green
+  - path: .datacore/modules/gigs/tests
+    reason: Passing locally (52). Needs a Spotify library fixture.
+    reviewed: 2026-09-19
+    state: green
+  - path: .datacore/modules/comms/tests
+    reason: >
+      Passing locally (59) since the kill-switch fixture landed. Slow (~56s)
+      because link verification reaches the network for the cases that are
+      deliberately unmocked.
+    reviewed: 2026-09-19
+    state: green
+  - path: .datacore/modules/chief-of-staff/tests
+    reason: Passing locally (426) after the today-registry rewrite.
+    reviewed: 2026-09-19
+    state: green
+  - path: .datacore/modules/nightshift/tests
+    reason: Passing locally (599) since tests/conftest.py fixed the import path.
+    reviewed: 2026-09-19
+    state: green
+  - path: .datacore/modules/nightshift/lib/tests
+    reason: Passing locally (156).
+    reviewed: 2026-09-19
+    state: green
+  - path: .datacore/modules/research/lib/tests
+    reason: Passing locally (21).
+    reviewed: 2026-09-19
+    state: green
+  - path: .datacore/modules/mail
+    reason: Passing locally (12). Gmail adapter; no credentials on a runner.
+    reviewed: 2026-09-19
+    state: green
+  - path: .datacore/modules/uk-ltd/tests
+    reason: Passing locally (30).
+    reviewed: 2026-09-19
+    state: green
+  - path: .datacore/modules/datacortex
+    reason: Passing locally (14). Needs an embedding model to exercise fully.
+    reviewed: 2026-09-19
+    state: green
+  - path: .datacore/modules/telegram/tests
+    reason: Passing locally (4).
+    reviewed: 2026-09-19
+    state: green
+  - path: .datacore/modules/voice-terminal/tests
+    reason: Passing locally (9). Owns a separate .venv.
+    reviewed: 2026-09-19
+    state: green
+  - path: .datacore/modules/chief-of-staff/server/lib
+    reason: >
+      Three scripts, none of them pytest. test_cos_route.py and
+      test_oura_gate_no_reading.py are real tests with a main() and an exit
+      code, run as `python3 test_x.py`; pytest collects the filenames and finds
+      no test functions, so it reports "no tests ran" and the directory looks
+      empty rather than unrun. test_cos_route passes. test_oura_gate is
+      deliberately aimed at the DEPLOYED gate under ~/Data/.datacore/lib, which
+      exists on the box that runs the 04:00 cron and not on this laptop, so it
+      correctly reports "no gate here" on mac. ws_chat_probe.py is a manual
+      websocket check, not a test.
+      To gate these, give them pytest entry points; until then nothing runs them.
+    reviewed: 2026-09-19
+    state: standalone-scripts
+  - path: .datacore/dips/scripts
+    reason: DIP tooling (3 tests); a failure blocks no runtime path.
+    reviewed: 2026-09-19
+    state: green
+
+  # ---- Loose files outside any tests/ directory ------------------------------
+  - path: .datacore/lib
+    reason: >
+      Four test files sit directly in lib/ rather than lib/tests/ --
+      test_journal_scanner, test_knowledge_lint, test_model_routing,
+      test_pr_review. They should move into lib/tests, which CI gates; until
+      they do, they are gated by nothing.
+    reviewed: 2026-09-19
+    state: misplaced
+  - path: .datacore/lib/hooks
+    reason: One test beside the hook it covers; same misplacement as lib/.
+    reviewed: 2026-09-19
+    state: misplaced

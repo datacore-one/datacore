@@ -1174,6 +1174,59 @@ jobs:
         arg: 'ledger-invariants: SOUND'
         max_age_hours: 26
 
+  - name: mac-drills
+    machine: mac
+    schedule: 45 4 * * *
+    cmd: ~/Data/.datacore/lib/audit_trio_run.sh drills
+    exit_ok: [0, 1]
+    on_fail: telegram
+    artifacts:
+      - path: ~/.datacore/state/drills.log
+        check: last_line_regex
+        arg: 'drills: 3/3 held'
+        max_age_hours: 26
+
+  - name: mac-suite-audit
+    machine: mac
+    schedule: 30 3 * * *
+    cmd: ~/Data/.datacore/lib/audit_trio_run.sh suites
+    exit_ok: [0, 1]
+    on_fail: telegram
+    artifacts:
+      - path: ~/.datacore/state/suite-audit.log
+        check: last_line_regex
+        # EVERY count on the line, not one of them. A regex on "0 unexplained"
+        # alone passes a run that errored; one on "not green" alone passes a run
+        # that collected nothing. mac-seq-gap matched a single count for weeks
+        # while the other climbed beside it (2026-09-08).
+        #
+        # `accepted` is deliberately left free: entries come and go from
+        # suite-audit-baseline.yaml, and pinning the number here would mean a
+        # second file to update every time one is retired.
+        arg: '0 unexplained, \d+ accepted, 0 error across \d+ suite\(s\); 0 suite\(s\) not green'
+        max_age_hours: 26
+
+  - name: mac-delegation-drill
+    machine: mac
+    schedule: 30 5 * * *
+    cmd: ~/Data/.datacore/lib/audit_trio_run.sh drill
+    # The drill exits 1 when a control fails, and that IS the signal -- the
+    # artifact check below is what decides pass or fail, so both codes are ok
+    # here for the same reason they are on the two jobs beneath it.
+    exit_ok: [0, 1]
+    on_fail: telegram
+    artifacts:
+      - path: ~/.datacore/state/delegation-drill.log
+        check: last_line_regex
+        # THE COUNT IS PINNED, not \d+. "every control held" is true of a run
+        # that held three controls as much as one that held twenty-seven, so a
+        # regex accepting any number passes a drill whose scenarios silently
+        # stopped being collected -- the same shape as gating on "all tests
+        # pass" while the tests quietly disappear. Changing 27 is a deliberate
+        # edit here, which is the point.
+        arg: 'delegation drill: 27 scenario\(s\), every control held'
+        max_age_hours: 26
+
   - name: mac-config-resolution
     machine: mac
     schedule: 50 5 * * *

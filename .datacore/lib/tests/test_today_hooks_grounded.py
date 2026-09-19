@@ -12,6 +12,7 @@ looking at, and the other copies keep their own version of the truth.
 from __future__ import annotations
 
 import pathlib
+import sys
 import re
 
 import yaml
@@ -24,19 +25,33 @@ MODULES = ROOT / ".datacore" / "modules"
 def _declared_hooks() -> dict[str, str]:
     """module name -> slot, for every module declaring hooks.today.
 
-    `hooks.today` has three shapes — a path string, a dict with file/slot, or
-    a block of inline instructions — and assuming the first raises
-    "OSError: File name too long" on the third. The /today file records that
-    lesson; this honours it.
+    `hooks.today` has FOUR shapes, not the three this function used to know: a
+    path string, an inline block of instructions, a dict, and — since
+    chief-of-staff began claiming three briefing sections — a LIST of dicts.
+    The list arrived without this copy of the parser hearing about it, and it
+    took the `else` branch, so every module using it was reported as slot
+    "inline". That is the bug this file's own docstring is about, reappearing in
+    the test written to catch it.
+
+    So the shapes are read by `today_registry`, the module /today actually uses.
+    `slot` is not one of its fields — it is the older axis, inline vs post, that
+    only five manifests still set — so it is read here directly and the shape
+    handling is not duplicated.
     """
-    out = {}
-    for my in sorted(MODULES.glob("*/module.yaml")):
-        m = yaml.safe_load(my.read_text()) or {}
-        h = (m.get("hooks") or {}).get("today")
-        if not h:
-            continue
-        slot = h.get("slot", "inline") if isinstance(h, dict) else "inline"
-        out[m.get("name") or my.parent.name] = slot
+    LIB = pathlib.Path(__file__).resolve().parents[1]
+    if str(LIB) not in sys.path:
+        sys.path.insert(0, str(LIB))
+    import today_registry
+
+    out: dict[str, str] = {}
+    for reg in today_registry.load(MODULES):
+        raw = yaml.safe_load((MODULES / reg.module / "module.yaml").read_text()) or {}
+        h = (raw.get("hooks") or {}).get("today")
+        entries = h if isinstance(h, list) else [h]
+        slots = {e.get("slot") for e in entries if isinstance(e, dict) and e.get("slot")}
+        # A module claiming several sections declares at most one slot; absent
+        # means inline, which is what /today assumes for an unmarked hook.
+        out[reg.module] = next(iter(slots), "inline")
     return out
 
 

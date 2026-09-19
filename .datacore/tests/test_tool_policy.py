@@ -199,7 +199,29 @@ def test_principal_for_maps_a_writer_to_its_principal(tmp_path, monkeypatch):
     monkeypatch.setattr(ai, "PRINCIPALS", reg)
     assert tp.principal_for("nightshift") == "miles"
     assert tp.principal_for("miles") == "miles"
-    assert tp.principal_for("stranger") == "stranger"
+
+
+def test_principal_for_refuses_an_undeclared_writer(tmp_path, monkeypatch):
+    """An unknown writer must not become its own principal.
+
+    This test used to assert `principal_for("stranger") == "stranger"`, and it
+    was the last thing in the tree still asking for that. Returning the actor
+    unchanged made the writer name its own policy principal, so a writer absent
+    from principals.yaml got whatever `limits_for` returns for an unknown name
+    -- no `never`, no `cosign` -- which is the widest grant in the system,
+    handed out precisely to the identity nobody had declared.
+
+    The suite this lives in is not run by CI, so the stale assertion sat green
+    in nobody's run while the code was made to fail closed. Left there it reads
+    as a regression and invites the refusal to be removed again.
+    """
+    import actor_identity as ai
+    reg = tmp_path / "principals.yaml"
+    reg.write_text(yaml.safe_dump({"principals": {
+        "miles": {"kind": "agent", "writes_as": ["miles", "nightshift"]}}}))
+    monkeypatch.setattr(ai, "PRINCIPALS", reg)
+    with pytest.raises(ValueError, match="no declared principal"):
+        tp.principal_for("stranger")
 
 
 @pytest.mark.parametrize('payload', [None, [], 'text', {}, {'tool_name': None}])

@@ -16,7 +16,10 @@ import shlex
 import time
 from pathlib import Path
 
-_WRAPPER = Path(__file__).with_name("plur_inject_wrapper.py")
+# Named from lib/hooks/, not from beside this file. The test used to live in
+# lib/hooks/ and found its subject with with_name(); it moved into lib/tests/ so
+# that CI, which gates directories, actually runs it.
+_WRAPPER = Path(__file__).resolve().parents[1] / "hooks" / "plur_inject_wrapper.py"
 
 
 def _load():

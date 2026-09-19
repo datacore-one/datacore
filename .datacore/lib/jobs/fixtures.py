@@ -226,6 +226,15 @@ SUCCESS_RULES: dict[str, list[tuple[str, str]]] = {
         (r"^\d+ cadence\(s\) overdue$", "0 cadence(s) overdue")],
     "mac-pending-decisions.0": [
         (r"(commit-decisions: \d+ pending, )\d+( older than)", r"\g<1>0\g<2>")],
+    # mac-suite-audit is self-referential and cannot be harvested green: its
+    # artifact is produced by a run of the whole suite, which includes the test
+    # asserting this very fixture matches. Missing fixture -> that test fails ->
+    # the artifact reports the failure -> still nothing green to harvest. The
+    # rule breaks the circle the same way every other entry here does: the
+    # producer's own format, with the counts set to what a healthy run prints.
+    "mac-suite-audit.0": [
+        (r"(\d+ passed, )\d+( unexplained, \d+ accepted, )\d+( error across \d+ suite\(s\); )\d+( suite\(s\) not green)",
+         r"\g<1>0\g<2>0\g<3>0\g<4>")],
     # box-projection-drift.0 and mac-shadow-diff.0 were reclassified to
     # `check: nonempty` on 2026-09-03 (a migration gate is not a fault); their
     # rules went with them. test_every_success_rule_names_a_live_regex_check

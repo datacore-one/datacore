@@ -56,3 +56,29 @@ def _isolated_ledger_keys(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(keys, "DATACORE_ROOT", root)
     monkeypatch.setattr(keys, "DEFAULT_KEYS_DIR", root / ".datacore" / "keys")
     monkeypatch.setattr(keys, "DEFAULT_REGISTRY_PATH", root / ".datacore" / "keys" / "registry.yaml")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_attestations(tmp_path_factory, monkeypatch):
+    """No test may attest into a real space's ledger.
+
+    `attests()` records AFTER the wrapped call returns, and a test that mocks
+    the transport makes it return. So an egress test writes a genuine
+    `artifact.attest` event into whatever root `ledger_attest._roots()` finds --
+    the real ~/Data -- claiming a post, a reply or a message that never left the
+    machine. attest() never raises and returns None on failure, so nothing in
+    the test fails and nothing in the output says it happened.
+
+    Found on 2026-09-19 with 48 x.post/x.reply attestations sitting unpublished
+    in 1-datafund. Attestations are the evidence record for DIP-0047 egress:
+    false entries there are worse than missing ones, because the whole point is
+    that the record can be trusted about what actually went out.
+
+    A test that means to assert an attestation points _roots at its own tree.
+    """
+    try:
+        import ledger_attest
+    except Exception:  # noqa: BLE001 -- suites that never attest are unaffected
+        return
+    root = tmp_path_factory.mktemp("dc-attest-root")
+    monkeypatch.setattr(ledger_attest, "_roots", lambda: [root])

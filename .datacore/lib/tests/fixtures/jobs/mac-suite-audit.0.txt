@@ -1,0 +1,12 @@
+# fixture for mac-suite-audit artifact[0]
+# producer artifact: ~/.datacore/state/suite-audit.log on mac
+# harvested: 2026-09-19
+# regex under test: 0 unexplained, \d+ accepted, 0 error across \d+ suite\(s\); 0 suite\(s\) not green
+# represents: SUCCESS (derived)
+# The live artifact was UNHEALTHY when harvested, so a success sample
+# could not be captured. This is the producer's own observed output with
+# the failing count rewritten to its success value. The format is the
+# producer's; only the number changed. It proves the regex CAN match this
+# producer -- it says nothing about current health.
+# ---
+8497 passed, 0 unexplained, 1 accepted, 0 error across 20 suite(s); 0 suite(s) not green, 0 collected nothing
