@@ -326,9 +326,16 @@ def save_to_database(file_data, space=None):
         return str(val)
 
     cursor.execute("""
-        INSERT OR REPLACE INTO files
+        INSERT INTO files
         (id, path, space, type, title, content, summary, word_count, maturity, is_stub, author, created_at, updated_at, processed_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            path=excluded.path, space=excluded.space, type=excluded.type,
+            title=excluded.title, content=excluded.content, summary=excluded.summary,
+            word_count=excluded.word_count, maturity=excluded.maturity,
+            is_stub=excluded.is_stub, author=excluded.author,
+            created_at=excluded.created_at, updated_at=excluded.updated_at,
+            processed_at=excluded.processed_at
     """, (
         file_data['id'],
         file_data['path'],
