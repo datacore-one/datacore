@@ -1,6 +1,6 @@
 # fixture for box-briefing artifact[2]
-# producer artifact: ~/Data/0-personal/notes/journals/{today}.md on box
-# harvested: 2026-09-08
+# producer artifact: ~/Data/0-personal/notes/journals/20*-*-*.md on box
+# harvested: 2026-09-19
 # regex under test: ^##\s+Daily Briefing
 # represents: SUCCESS
 # ---

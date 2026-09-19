@@ -1,2 +1,16 @@
-2026-09-06T05:45Z agent-outcomes: 3 (agent, version, model) row(s) over 90 days
-  research       v1.0.0  claude-opus-5           n=  12 score=0.78 proposals=  1 last=2026-09-05 spaces=2-datacore,5-plur
+# fixture for box-agent-outcomes artifact[0]
+# producer artifact: ~/.datacore/cos/agent-outcomes.log on box
+# harvested: 2026-09-19
+# regex under test: agent-outcomes:
+# represents: SUCCESS
+# ---
+2026-09-06T08:10Z agent-outcomes: 9 (agent, version, model) row(s) over 90 days
+2026-09-08T11:28Z agent-outcomes: 9 (agent, version, model) row(s) over 90 days
+2026-09-08T12:24Z agent-outcomes: 9 (agent, version, model) row(s) over 90 days
+2026-09-08T18:18Z agent-outcomes: 9 (agent, version, model) row(s) over 90 days
+2026-09-13T05:45Z agent-outcomes: 20 (agent, version, model) row(s) over 90 days
+2026-09-06T08:10Z agent-outcomes: 9 (agent, version, model) row(s) over 90 days
+2026-09-08T11:28Z agent-outcomes: 9 (agent, version, model) row(s) over 90 days
+2026-09-08T12:24Z agent-outcomes: 9 (agent, version, model) row(s) over 90 days
+2026-09-08T18:18Z agent-outcomes: 9 (agent, version, model) row(s) over 90 days
+2026-09-13T05:45Z agent-outcomes: 20 (agent, version, model) row(s) over 90 days

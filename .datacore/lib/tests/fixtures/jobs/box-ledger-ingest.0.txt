@@ -1,6 +1,6 @@
 # fixture for box-ledger-ingest artifact[0]
 # producer artifact: ~/.datacore/state/ledger-ingest.log on box
-# harvested: 2026-09-03
+# harvested: 2026-09-19
 # regex under test: 0 space\(s\) failed
 # represents: SUCCESS
 # ---

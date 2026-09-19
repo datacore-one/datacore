@@ -1,0 +1,7 @@
+# fixture for mac-ledger-invariants artifact[0]
+# producer artifact: ~/.datacore/state/ledger-invariants.log on mac
+# harvested: 2026-09-19
+# regex under test: ledger-invariants: SOUND
+# represents: SUCCESS
+# ---
+ledger-invariants: SOUND — 10 space(s), 0 new, 2 accepted, 0 could-not-tell

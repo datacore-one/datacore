@@ -1,0 +1,7 @@
+# fixture for mac-delegation-canary artifact[0]
+# producer artifact: ~/.datacore/state/delegation-canary.json on mac
+# harvested: 2026-09-19
+# regex under test: "verdict": "(dispatched|completed|blocked)"
+# represents: SUCCESS
+# ---
+  "verdict": "dispatched",

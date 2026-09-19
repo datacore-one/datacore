@@ -1,6 +1,6 @@
 # fixture for box-merge-runs artifact[1]
 # producer artifact: ~/.datacore/cos/merge_runs_status.json on box
-# harvested: 2026-09-03
+# harvested: 2026-09-19
 # regex under test: "stale_branches": \[\]
 # represents: SUCCESS
 # ---

@@ -1,8 +1,8 @@
 # fixture for bridge-v2-verify artifact[0]
 # producer artifact: ~/.datacore/state/v2-verify.log on box
-# harvested: 2026-09-03
+# harvested: 2026-09-19
 # regex under test: 0 FAIL
 # represents: SUCCESS
 # ---
-  26 check(s): 21 ok, 0 FAIL, 5 could-not-run
-  26 check(s): 21 ok, 0 FAIL, 5 could-not-run
+  40 check(s): 34 ok, 0 FAIL, 5 could-not-run, 1 not applicable here
+  40 check(s): 34 ok, 0 FAIL, 5 could-not-run, 1 not applicable here

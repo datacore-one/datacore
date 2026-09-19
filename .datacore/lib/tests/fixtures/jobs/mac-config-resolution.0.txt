@@ -1,0 +1,7 @@
+# fixture for mac-config-resolution artifact[0]
+# producer artifact: ~/.datacore/state/config-resolution.log on mac
+# harvested: 2026-09-19
+# regex under test: config-resolution: OK
+# represents: SUCCESS
+# ---
+config-resolution: OK — 6/6 resolved

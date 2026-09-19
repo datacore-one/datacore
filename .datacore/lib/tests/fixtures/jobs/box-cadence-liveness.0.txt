@@ -1,8 +1,10 @@
 # fixture for box-cadence-liveness artifact[0]
 # producer artifact: ~/.datacore/state/cadence-liveness.log on box
-# harvested: 2026-09-08
+# harvested: 2026-09-19
 # regex under test: ^0 cadence\(s\) overdue; sunset review: 0 past due, [0-9]+ without a review date$
 # represents: SUCCESS
 # ---
+0 cadence(s) overdue; sunset review: 0 past due, 77 without a review date
+0 cadence(s) overdue; sunset review: 0 past due, 77 without a review date
 0 cadence(s) overdue; sunset review: 0 past due, 77 without a review date
 0 cadence(s) overdue; sunset review: 0 past due, 77 without a review date

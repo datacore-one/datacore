@@ -1,1 +1,19 @@
-2026-09-05 FAIL streak=0 level=3 R1=FAIL R2=FAIL R3=FAIL R4=ok R5=FAIL R6=ok | R1: recurring: box-cadence-liveness; R2: 2 unit alert(s) burst-suppressed; failed without a sent alert: v2-verify.service; R3: 5 hand intervention(s) logged; R5: 26/82 probe hits from 100.101.159.42 today
+# fixture for box-reliability-scoreboard artifact[0]
+# producer artifact: ~/.datacore/state/reliability-scoreboard.log on box
+# harvested: 2026-09-19
+# regex under test: level=
+# represents: SUCCESS
+# ---
+2026-09-05 FAIL streak=0 level=3 R1=FAIL R2=FAIL R3=FAIL R4=ok R5=FAIL R6=ok | R1: recurring: box-cadence-liveness; R2: 2 unit alert(s) burst-suppressed; R3: 5 hand intervention(s) logged; R5: 36/92 probe hits from 100.101.159.42 today
+2026-09-06 FAIL streak=0 level=3 R1=ok R2=ok R3=FAIL R4=ok R5=ok R6=FAIL | R3: 1 hand intervention(s) logged; R6: 4 FAIL line(s)
+2026-09-07 PASS streak=1 level=3 R1=ok R2=ok R3=ok R4=ok R5=ok R6=ok
+2026-09-08 FAIL streak=0 level=3 R1=ok R2=ok R3=ok R4=ok R5=ok R6=FAIL | R6: 1 FAIL line(s)
+2026-09-09 PASS streak=1 level=3 R1=ok R2=ok R3=ok R4=ok R5=ok R6=ok
+2026-09-10 FAIL streak=0 level=3 R1=ok R2=ok R3=ok R4=ok R5=ok R6=FAIL | R6: 1 FAIL line(s)
+2026-09-11 FAIL streak=0 level=3 R1=ok R2=ok R3=ok R4=ok R5=ok R6=FAIL | R6: 1 FAIL line(s)
+2026-09-12 FAIL streak=0 level=3 R1=FAIL R2=FAIL R3=ok R4=ok R5=ok R6=FAIL | R1: recurring: box-cadence-liveness, box-deploy-drift, box-ledger-ingest, box-today-registration, bridge-v2-verify; R2: failed without a sent alert: dc-shell-audit-4bed1a2604f5-verify.service; R6: 1 FAIL line(s)
+2026-09-13 FAIL streak=0 level=3 R1=FAIL R2=ok R3=ok R4=FAIL R5=ok R6=FAIL | R1: recurring: box-cadence-liveness, box-deploy-drift, box-ledger-ingest, box-today-registration, bridge-v2-verify; R4: fleet sync: last run exit-code (2h ago); R6: 1 FAIL line(s)
+2026-09-14 FAIL streak=0 level=3 R1=FAIL R2=FAIL R3=ok R4=FAIL R5=ok R6=FAIL | R1: recurring: box-cadence-liveness, box-deploy-drift, box-ledger-ingest, bridge-v2-verify; R2: failed without a sent alert: <email>; R4: fleet sync: last run exit-code (2h ago); R6: 1 FAIL line(s)
+2026-09-15 FAIL streak=0 level=3 R1=FAIL R2=ok R3=ok R4=ok R5=ok R6=FAIL | R1: recurring: box-cadence-liveness, box-deploy-drift, box-ledger-ingest, bridge-v2-verify; R6: 1 FAIL line(s)
+2026-09-16 FAIL streak=0 level=3 R1=ok R2=ok R3=ok R4=ok R5=ok R6=FAIL | R6: 1 FAIL line(s)
+2026-09-17 FAIL streak=0 level=3 R1=ok R2=ok R3=ok R4=ok R5=ok R6=FAIL | R6: 1 FAIL lin

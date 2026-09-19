@@ -1,7 +1,20 @@
 # fixture for box-backup artifact[0]
-# producer artifact: ~/.datacore/cos/backup.log on box (winston)
-# harvested: 2026-09-17
+# producer artifact: ~/.datacore/cos/backup.log on box
+# harvested: 2026-09-19
 # regex under test: backup ok:.*offsite=ok
 # represents: SUCCESS
 # ---
-2026-09-17T19:20:37+00:00 backup ok: local=192M (~/backups/plur-state-20260917-192008.tar.gz) kept=14/14 offsite=ok remote_kept=30/30
+2026-09-05T15:56:45+00:00 backup ok: local=184M ($HOME/backups/plur-state-20260905-155619.tar.gz) kept=17/100 offsite=ok remote_kept=17/30
+2026-09-06T02:30:28+00:00 backup ok: local=184M ($HOME/backups/plur-state-20260906-023001.tar.gz) kept=14/14 offsite=ok remote_kept=18/30
+2026-09-07T02:30:28+00:00 backup ok: local=184M ($HOME/backups/plur-state-20260907-023001.tar.gz) kept=14/14 offsite=ok remote_kept=19/30
+2026-09-08T02:30:28+00:00 backup ok: local=186M ($HOME/backups/plur-state-20260908-023001.tar.gz) kept=14/14 offsite=ok remote_kept=20/30
+2026-09-09T02:30:29+00:00 backup ok: local=187M ($HOME/backups/plur-state-20260909-023001.tar.gz) kept=14/14 offsite=ok remote_kept=24/30
+2026-09-10T02:30:29+00:00 backup ok: local=187M ($HOME/backups/plur-state-20260910-023001.tar.gz) kept=14/14 offsite=ok remote_kept=25/30
+2026-09-11T02:30:29+00:00 backup ok: local=187M ($HOME/backups/plur-state-20260911-023001.tar.gz) kept=14/14 offsite=ok remote_kept=26/30
+2026-09-12T02:30:29+00:00 backup ok: local=188M ($HOME/backups/plur-state-20260912-023001.tar.gz) kept=14/14 offsite=ok remote_kept=27/30
+2026-09-13T02:30:29+00:00 backup ok: local=189M ($HOME/backups/plur-state-20260913-023001.tar.gz) kept=14/14 offsite=ok remote_kept=28/30
+2026-09-14T02:30:31+00:00 backup ok: local=189M ($HOME/backups/plur-state-20260914-023001.tar.gz) kept=14/14 offsite=ok remote_kept=29/30
+2026-09-15T02:30:29+00:00 backup ok: local=189M ($HOME/backups/plur-state-20260915-023001.tar.gz) kept=14/14 offsite=ok remote_kept=30/30
+2026-09-16T02:30:29+00:00 backup ok: local=191M ($HOME/backups/plur-state-20260916-023002.tar.gz) kept=14/14 offsite=ok remote_kept=30/30
+2026-09-17T19:20:37+00:00 backup ok: local=192M ($HOME/backups/plur-state-20260917-192008.tar.gz) kept=14/14 offsite=ok remote_kept=30/30
+2026-09-18T02:30:30+00:00 backup ok: local=193M ($HOME/backups/plur-state-20260918-023001.tar.gz) kept=14/1
