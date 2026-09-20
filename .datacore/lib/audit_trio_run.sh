@@ -105,7 +105,18 @@ case "${1:-}" in
     # A nightly run here covers all of them today, on the machine that has them.
     # Per-repo workflows are still the durable answer and would make this
     # redundant, which is the point.
-    "$PY" "$LIB/suite_audit.py" --jobs 3 > "$STATE/suite-audit.log" 2>&1
+    # WRITTEN ATOMICALLY. This run takes about ten minutes and job_verify reads
+    # the artifact hourly, so redirecting straight into the final path meant the
+    # verifier could read it mid-write. It did, on 2026-09-20: the last line was
+    # "20 suite(s), each in its own pytest process" -- the header -- and the
+    # contract failed and paged, for a run that was proceeding normally and
+    # finished green. A partial artifact is not a result; nothing should be able
+    # to read one.
+    tmp="$STATE/suite-audit.log.partial"
+    "$PY" "$LIB/suite_audit.py" --jobs 3 > "$tmp" 2>&1
+    rc=$?
+    mv -f "$tmp" "$STATE/suite-audit.log"
+    ( exit $rc )
     ;;
   *)
     echo "usage: audit_trio_run.sh {invariants|config|canary-run|canary-check|drill|drills|suites}" >&2

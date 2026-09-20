@@ -221,8 +221,52 @@ def scan_space(space: Path, *, fetch: bool = False, grace_min: float = 90.0,
             if ages and max(ages) < grace_min:
                 pending, gap = gap, 0
         rows.append({"space": space.name, "actor": actor, "local_seq": local,
-                     "remote_seq": remote, "gap": gap, "pending": pending, "error": None})
+                     "remote_seq": remote, "gap": gap, "pending": pending,
+                     "why": _why_unpublished(space) if gap else None, "error": None})
     return rows
+
+
+def _why_unpublished(space: Path) -> str:
+    """Why this space is not publishing -- not merely that it is not.
+
+    A gap is a symptom. The cause is almost always upstream of the ledger:
+    ledger_publish_safe deliberately HOLDS rather than push when the outgoing
+    history contains commits a human wrote, because pushing someone's unreviewed
+    work automatically is not a thing an agent should do. That gate is right.
+
+    What was missing is that it holds SILENTLY. On 2026-09-20 a single human
+    commit in 2-datacore -- four days old -- had blocked every ledger publish
+    behind it, and the only signal anywhere was this detector counting a number.
+    The alert said "3 with unpublished events" for two days running and named
+    nothing that could be acted on, so it was read as noise and recurred.
+
+    Naming the cause is the whole fix: "blocked by 1 unpushed human commit" is a
+    sentence someone can act on; "3 with unpublished events" is not.
+    """
+    def git(*args: str) -> str:
+        try:
+            p = subprocess.run(["git", "-C", str(space), *args],
+                               capture_output=True, text=True, timeout=30)
+            return p.stdout.strip() if p.returncode == 0 else ""
+        except Exception:  # noqa: BLE001 -- a cause we cannot read is not a crash
+            return ""
+
+    if not (space / ".git").exists():
+        return "space is not a git repository"
+    ahead = git("rev-list", "--count", "@{u}..HEAD")
+    behind = git("rev-list", "--count", "HEAD..@{u}")
+    if not ahead:
+        return "no upstream configured"
+    human = [ln for ln in git("log", "--format=%s", "@{u}..HEAD").splitlines()
+             if not ln.startswith(("ledger:", "nightshift:", "chore(ledger)"))]
+    if human:
+        return (f"blocked: {len(human)} unpushed commit(s) a human wrote — the publisher "
+                f"holds rather than push unreviewed work. First: {human[-1][:60]!r}")
+    if behind and behind != "0":
+        return f"diverged: {ahead} ahead, {behind} behind — publisher merges then pushes"
+    if ahead and ahead != "0":
+        return f"{ahead} commit(s) committed locally but not pushed"
+    return "committed and pushed; remote ref may be stale — re-fetch"
 
 
 def _default_root() -> Path:
@@ -276,6 +320,8 @@ def main() -> int:
             elif r["gap"]:
                 print(f"  GAP   {r['space']}/{r['actor']}: local seq {r['local_seq']}, "
                       f"remote {r['remote_seq']} — {r['gap']} unpublished")
+                if r.get("why"):
+                    print(f"        why: {r['why']}")
             else:
                 print(f"  ok    {r['space']}/{r['actor']}: seq {r['local_seq']} published")
         # Report positively: a count nobody can mistake for "the detector ran and
