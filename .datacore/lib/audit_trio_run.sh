@@ -92,6 +92,16 @@ case "${1:-}" in
     fi
     ( exit $rc )   # make the case branch's status the drills' verdict, since `rc=$?` below reads it
     ;;
+  escalations)
+    # The one place the operator is told about a delegated repair.
+    #
+    # A recurring job failure is handed to miles and the Telegram is withheld,
+    # so something has to notice when that path does NOT work -- otherwise
+    # delegation becomes a way of losing failures quietly, which is strictly
+    # worse than the daily message it replaced. This reports only repairs that
+    # were given up on or closed without verifying; one in flight is not news.
+    "$PY" "$LIB/jobs/autofix.py" --escalations > "$STATE/autofix-escalations.log" 2>&1
+    ;;
   suites)
     # Every test suite, each in its own pytest process.
     #

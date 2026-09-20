@@ -1,0 +1,194 @@
+"""A repair must not be completable by weakening the thing that judges it.
+
+job_verify now delegates a recurring failure to an agent instead of waking the
+operator, and the item it writes says "make this job verify". That instruction
+has a cheap wrong answer: loosen the regex, widen exit_ok, raise max_age_hours,
+or delete the job. All four turn the check green.
+
+This is not hypothetical and it is not subtle. Measured 2026-09-20: with
+mac-seq-gap's regex changed from "0 with unpublished events, 0 error" to
+"unpublished events", `job_verify --machine mac` reported OK 19 jobs 19
+artifacts while the fleet had an unpublished-events gap. The verifier cannot
+catch this, by construction -- it is doing what the contract says, and the
+contract is what moved.
+
+So the boundary is checked separately, and these tests are what keep it real.
+Failure mode 3 of the loop-design gate in CLAUDE.md, stated as tests.
+"""
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+import yaml
+
+LIB = Path(__file__).resolve().parents[1]
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+if str(LIB / "jobs") not in sys.path:
+    sys.path.insert(0, str(LIB / "jobs"))
+
+import fix_check  # noqa: E402
+
+FIX_CHECK = LIB / "jobs" / "fix_check.py"
+
+
+@pytest.fixture
+def manifest(tmp_path) -> Path:
+    p = tmp_path / "manifest.yaml"
+    p.write_text(yaml.safe_dump({"jobs": [{
+        "name": "fixture-job", "machine": "mac", "schedule": "0 * * * *",
+        "cmd": "true", "exit_ok": [0], "on_fail": "log",
+        "artifacts": [{"path": "~/x.log", "check": "regex", "arg": "^OK exactly$"}],
+    }]}))
+    return p
+
+
+def _run(job: str, sha: str, manifest: Path):
+    return subprocess.run(
+        [sys.executable, str(FIX_CHECK), "--job", job, "--machine", "mac",
+         "--contract-sha", sha, "--manifest", str(manifest)],
+        capture_output=True, text=True, timeout=300)
+
+
+def test_a_loosened_regex_is_refused(manifest):
+    """The exact 2026-09-20 attack: make the check pass by making it weaker."""
+    before = fix_check.contract_sha("fixture-job", manifest)
+    data = yaml.safe_load(manifest.read_text())
+    data["jobs"][0]["artifacts"][0]["arg"] = "OK"       # matches far more
+    manifest.write_text(yaml.safe_dump(data))
+
+    proc = _run("fixture-job", before, manifest)
+    assert proc.returncode == 1
+    assert "contract for fixture-job changed" in proc.stderr
+
+
+def test_a_widened_exit_ok_is_refused(manifest):
+    before = fix_check.contract_sha("fixture-job", manifest)
+    data = yaml.safe_load(manifest.read_text())
+    data["jobs"][0]["exit_ok"] = [0, 1, 2]
+    manifest.write_text(yaml.safe_dump(data))
+    assert _run("fixture-job", before, manifest).returncode == 1
+
+
+def test_a_raised_max_age_is_refused(manifest):
+    """Staleness is a contract term: a job that may be 30 days old asserts
+    nothing about whether it still runs."""
+    before = fix_check.contract_sha("fixture-job", manifest)
+    data = yaml.safe_load(manifest.read_text())
+    data["jobs"][0]["artifacts"][0]["max_age_hours"] = 720
+    manifest.write_text(yaml.safe_dump(data))
+    assert _run("fixture-job", before, manifest).returncode == 1
+
+
+def test_deleting_the_job_is_refused(manifest):
+    """The cheapest wrong answer of all, and it must not read as success."""
+    before = fix_check.contract_sha("fixture-job", manifest)
+    manifest.write_text(yaml.safe_dump({"jobs": []}))
+
+    proc = _run("fixture-job", before, manifest)
+    assert proc.returncode == 1
+    assert "no longer in the manifest" in proc.stderr
+    assert "Deleting the check is not repairing the producer" in proc.stderr
+
+
+def test_reformatting_the_manifest_is_not_a_violation(manifest):
+    """The boundary guards VALUES, not bytes.
+
+    Hashing the file text would fail on a comment, a reordered key or a
+    different quote style, and a boundary that cries wolf gets removed. The
+    hash is taken from the parsed entry re-serialised canonically.
+    """
+    before = fix_check.contract_sha("fixture-job", manifest)
+    data = yaml.safe_load(manifest.read_text())
+    manifest.write_text("# a comment nobody should be punished for\n"
+                        + yaml.safe_dump(data, default_flow_style=True))
+    assert fix_check.contract_sha("fixture-job", manifest) == before
+
+
+def test_an_unrelated_job_changing_is_not_a_violation(manifest):
+    """One repair must not be blocked by an unrelated edit elsewhere."""
+    before = fix_check.contract_sha("fixture-job", manifest)
+    data = yaml.safe_load(manifest.read_text())
+    data["jobs"].append({"name": "other-job", "machine": "box", "cmd": "true",
+                         "artifacts": [{"path": "~/y.log", "check": "exists"}]})
+    manifest.write_text(yaml.safe_dump(data))
+    assert fix_check.contract_sha("fixture-job", manifest) == before
+
+
+def _repair(monkeypatch, *, kind, closed_at, job="drill-job"):
+    import autofix
+    monkeypatch.setattr(autofix, "repairs", lambda root: [{
+        "id": "autofix-x", "status": "dismissed", "closed_kind": kind,
+        "closed_reason": "gave up after 3 failed attempts", "job": job,
+        "assignee": "miles", "owner": "miles", "closed_at": closed_at,
+    }])
+    return autofix
+
+
+def test_a_dead_letter_escalates_while_it_is_recent(monkeypatch):
+    now = 1_800_000_000_000.0
+    autofix = _repair(monkeypatch, kind="dropped", closed_at=f"{int(now - 3600_000)}.0000.mac")
+    assert autofix.escalations(Path("/x"), now_ms=now) == [
+        "drill-job: miles gave up — gave up after 3 failed attempts"]
+
+
+def test_an_old_dead_letter_stops_escalating(monkeypatch):
+    """Otherwise one permanent daily alert becomes one permanent hourly alert.
+
+    A dismissal cannot be undone, so without a window this reports the same
+    dead-letter forever. It is safe to age out because the JOB is the record of
+    the problem: if it still fails, a fresh repair is filed with today's date
+    and escalates on its own.
+    """
+    now = 1_800_000_000_000.0
+    old = f"{int(now - 30 * 24 * 3600_000)}.0000.mac"
+    autofix = _repair(monkeypatch, kind="dropped", closed_at=old)
+    assert autofix.escalations(Path("/x"), now_ms=now) == []
+
+
+def test_a_repair_that_finished_never_escalates(monkeypatch):
+    now = 1_800_000_000_000.0
+    autofix = _repair(monkeypatch, kind="done", closed_at=f"{int(now)}.0000.mac")
+    assert autofix.escalations(Path("/x"), now_ms=now) == []
+
+
+def test_an_undateable_dead_letter_is_reported_not_aged_out(monkeypatch):
+    """Cannot-tell is not a pass. An unreadable timestamp must not become a
+    way for an escalation to vanish quietly."""
+    now = 1_800_000_000_000.0
+    autofix = _repair(monkeypatch, kind="dropped", closed_at="not-an-hlc")
+    assert len(autofix.escalations(Path("/x"), now_ms=now)) == 1
+
+
+def test_the_delegated_item_tells_the_agent_the_boundary():
+    """The instruction has to SAY it, not only enforce it after the fact.
+
+    An agent that learns the rule by being refused has already spent one of its
+    three attempts finding out what it was not allowed to do. Every way of
+    cheating that fix_check rejects must also be named in the text the agent
+    reads first, or the two drift apart and the refusal becomes a surprise.
+    """
+    import types
+
+    import autofix
+
+    job = types.SimpleNamespace(name="fixture-job", machine="mac",
+                                cmd="run-me.sh", schedule="0 * * * *")
+    body = autofix.repair_body(
+        job, ["~/x.log: regex did not match"],
+        {"consecutive": 3, "first_failed": "2026-09-20"})
+
+    assert "FIX THE PRODUCER, NOT THE CHECK." in body
+    for cheat in ("regex", "exit_ok", "max_age_hours", "removing"):
+        assert cheat in body, f"the boundary text never mentions {cheat}"
+    # It must also say what to do when the contract really is the wrong one,
+    # otherwise the only path left is to cheat or to fail three times.
+    assert "human" in body
+
+    # And the failure detail has to survive into the item, or the agent starts
+    # by rediscovering what the verifier already knew.
+    assert "regex did not match" in body
+    assert "run-me.sh" in body

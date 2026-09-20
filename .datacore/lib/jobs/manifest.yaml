@@ -1174,6 +1174,22 @@ jobs:
         arg: 'ledger-invariants: SOUND'
         max_age_hours: 26
 
+  # THE ESCALATION PATH FOR DELEGATED REPAIRS, and the reason withholding the
+  # other alerts is safe. job_verify now hands a recurring failure to miles and
+  # says nothing to the operator; if that were the whole change, a repair that
+  # was given up on would disappear. This is what makes it not disappear.
+  - name: mac-autofix-escalation
+    machine: mac
+    schedule: 25 * * * *
+    cmd: ~/Data/.datacore/lib/audit_trio_run.sh escalations
+    exit_ok: [0, 1]
+    on_fail: telegram
+    artifacts:
+      - path: ~/.datacore/state/autofix-escalations.log
+        check: last_line_regex
+        arg: 'autofix: 0 repair\(s\) need a person'
+        max_age_hours: 3
+
   - name: mac-drills
     machine: mac
     schedule: 45 4 * * *

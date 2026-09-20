@@ -543,7 +543,18 @@ def main() -> int:
     for item in pending[:args.limit]:
         title = (item.payload or {}).get("title") or item.id
         effects = (item.payload or {}).get("effects") or []
-        route, why = classify_route(title)
+        # A CREATOR THAT KNOWS THE ROUTE MAY SAY SO. The heuristics infer a
+        # route from a title, which is the right default when nobody knows
+        # better -- but job_verify knows exactly what a repair item is, and
+        # inferring "research" from "Repair mac-seq-gap: failing on mac" sent a
+        # code fix to an agent framed as a literature reviewer. An explicit
+        # route is honoured only when it names a framing that exists; an
+        # unknown one falls back rather than dispatching with no framing at all.
+        declared = (item.payload or {}).get("route")
+        if declared in ROUTE_FRAMING:
+            route, why = declared, "route declared by the item's creator"
+        else:
+            route, why = classify_route(title)
 
         if effects:
             # Gated at creation against a grant; that is not consent to run it

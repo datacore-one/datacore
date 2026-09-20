@@ -222,6 +222,27 @@ TASK_FILE = os.environ.get("JOB_VERIFY_TASK_FILE") or str(
     DATACORE_ROOT / "2-datacore" / "org" / "next_actions.org")
 
 
+def _delegate_repair(job, failures: list[str], rec: dict) -> tuple[str, str]:
+    """Hand a recurring failure to an agent. Never raises; a delegation that
+    cannot happen is reported as one, and the operator is told instead."""
+    try:
+        from jobs.autofix import delegate
+    except ImportError:  # pragma: no cover - path layouts differ per host
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "autofix", Path(__file__).parent / "jobs" / "autofix.py")
+        _mod = _ilu.module_from_spec(_spec)
+        try:
+            _spec.loader.exec_module(_mod)
+        except Exception as exc:  # noqa: BLE001
+            return "refused", f"autofix unavailable: {type(exc).__name__}: {exc}"
+        delegate = _mod.delegate
+    try:
+        return delegate(job, failures, rec, root=DATACORE_ROOT)
+    except Exception as exc:  # noqa: BLE001 -- verification must not break on this
+        return "refused", f"{type(exc).__name__}: {exc}"
+
+
 def _file_task(job, rec: dict, failures: list[str]) -> str | None:
     """A recurring failure is a defect with no owner; give it one.
 
@@ -311,6 +332,18 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> 
             if tid:
                 _rec.note_task(job_name, tid)
                 print(f"recurring: filed task {tid} for {job_name}", file=sys.stderr)
+            # DELEGATE THE REPAIR BEFORE WAKING ANYONE. A recurring failure is a
+            # defect with an owner now: miles gets the job, the failure text and
+            # a check that decides for itself whether the repair worked. The
+            # operator hears about it when that path is exhausted -- dead-letter,
+            # refusal, or no progress -- not when it starts.
+            state, detail = _delegate_repair(job, failures, _record)
+            if state == "delegated":
+                print(f"recurring: delegated repair of {job_name} ({detail})", file=sys.stderr)
+                # Nobody needs waking for work that has just been picked up.
+                return
+            print(f"recurring: could NOT delegate {job_name} ({detail}); "
+                  f"escalating to the operator", file=sys.stderr)
         message = _rec.describe(job_name, _record, len(failures))
         if not _rec.should_alert(_record):
             print(f"alert suppressed: {job_name} is recurring "
