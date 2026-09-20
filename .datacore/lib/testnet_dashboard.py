@@ -57,6 +57,29 @@ AGENTS = [
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
 _VERSION = re.compile(r"\b\d+\.\d+\.\d+\b")
 
+#: Terms deliberately published, each with the reason it is safe.
+#:
+#: These exist because the denylist is built from this installation's registries
+#: and the Firm's agents ARE principals -- so the names the owner chose to
+#: publish collide with the names the guard exists to keep in. That collision is
+#: real and the guard was right to stop: "Miles" is a principal.
+#:
+#: Masked out of the page BEFORE the denylist runs, rather than dropped from the
+#: denylist. Dropping "hermes" to let `@TrisHermes_bot` through would also let a
+#: genuine mention of the hermes host through anywhere else on the page. Masking
+#: the approved literal removes exactly the approved string and leaves every
+#: other occurrence exposed to the check.
+PUBLISHED = {
+    "Datacore": "the product, and the domain this page is served from",
+    "The Firm": "the subject of the page",
+    "Mr Data": "agent persona, published under its own bot handle",
+    "@plurclaw_bot": "public Telegram bot handle",
+    "Tris": "agent persona, published under its own bot handle",
+    "@TrisHermes_bot": "public Telegram bot handle",
+    "Miles": "agent persona, published under its own bot handle",
+    "@datacore_1_bot": "public Telegram bot handle",
+}
+
 
 # ── the projection ───────────────────────────────────────────────────────────
 
@@ -106,9 +129,13 @@ def project(d: dict) -> dict:
         # ("execution host") tells a reader the shape of the estate; the number
         # of machines carries the operational point without the map.
         "machines": len(jobs.get("by_machine") or {}) or None,
+        # The collector calls these `verified` and `alerting`. Naming them
+        # something else here read as "-- / 59" on the page: a projection that
+        # invents field names produces a dash, not an error, and a dash looks
+        # like missing data rather than a bug.
         "jobs_total": jobs.get("total"),
-        "jobs_with_artifact": jobs.get("with_artifact"),
-        "jobs_with_route": jobs.get("with_route"),
+        "jobs_with_artifact": jobs.get("verified"),
+        "jobs_with_route": jobs.get("alerting"),
         "firm_events": (firm_row or {}).get("events"),
         "firm_writers": (firm_row or {}).get("writers"),
         "firm_generated": (firm_row or {}).get("generated"),
@@ -116,9 +143,9 @@ def project(d: dict) -> dict:
         "chains_failing": len(ledger.get("failed") or []),
         "events_total": ledger.get("events"),
         "queue": {
-            "committed": queue.get("committed"),
+            "committed": queue.get("queued"),
             "fenced": queue.get("fenced"),
-            "delivered": queue.get("delivered"),
+            "delivered": queue.get("review"),
         },
     }
 
@@ -168,9 +195,23 @@ def forbidden_terms() -> list[str]:
 
 
 def audit(page: str) -> list[str]:
-    """Every forbidden term that survived into the page. Empty means clean."""
+    """Every forbidden term that survived into the page. Empty means clean.
+
+    Approved terms are masked first, so `@TrisHermes_bot` cannot shelter the
+    hermes host and `datacore.one` cannot shelter the 2-datacore space, while
+    either of those words appearing anywhere else is still caught.
+    """
+    # LONGEST FIRST, and this is not a tidiness preference. Masking "Tris"
+    # before "@TrisHermes_bot" rewrites the handle to "@\x00Hermes_bot", the
+    # longer approved term then matches nothing, and "hermes" -- a real host
+    # name -- survives into the scan. The guard reported a leak that was not in
+    # the page, which is the same class of wrong as missing one that is.
+    masked = page
+    for term in sorted(PUBLISHED, key=len, reverse=True):
+        masked = re.sub(re.escape(term), "\x00", masked, flags=re.IGNORECASE)
+
     hits = []
-    low = page.lower()
+    low = masked.lower()
     for term in forbidden_terms():
         if term.lower() in low:
             hits.append(term)
