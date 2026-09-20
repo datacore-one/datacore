@@ -153,6 +153,24 @@ def collect(root: Path, grace: int, today: date | None = None) -> list:
     return rows
 
 
+def _unrunnable(root: Path, spaces: set[str]) -> dict[str, str]:
+    """For each space with overdue cadences, whether anything could run them.
+
+    A cadence fires when a heartbeat ticks the space it belongs to, and a
+    heartbeat can only tick a space the host has. When the executor does not
+    carry the space, its cadences are not late -- they are unrunnable, and the
+    distinction is the whole difference between "wait" and "decide".
+    """
+    out: dict[str, str] = {}
+    for name in spaces:
+        beats = sorted((root / name / ".datacore" / "state" / "heartbeat").glob("*.json"))
+        if not beats:
+            out[name] = ("no heartbeat shard in this space — the host that ticks "
+                         "cadences does not carry it, so these cannot run until "
+                         "the space is placed there or the cadences are retired")
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=os.environ.get("DATACORE_ROOT")
@@ -168,6 +186,15 @@ def main() -> int:
              f"(grace {a.grace_days}d) ==="]
     for days, space, role, freq, name in rows:
         lines.append(f"  {days:5}d  {space:<12} {role}.{freq}.{name}")
+    # WHY, PER SPACE, ONCE. Eight cadences in one space going overdue on the
+    # same day is one cause, not eight, and the count alone never said which.
+    # 6-meridian's eight sat overdue from 2026-09-15 and alerted daily: the
+    # space is simply not cloned on the host that ticks cadences, so nothing
+    # could ever have run them and no amount of waiting would change it. An
+    # alert that cannot be acted on gets read as noise, and then the next one
+    # does too.
+    for space_name, why in sorted(_unrunnable(root, {r[1] for r in rows}).items()):
+        lines.append(f"  note: {space_name} — {why}")
     # LAST LINE IS THE CONTRACT. Anchored so a report listing overdue
     # cadences can never pass by containing a 0 somewhere in a name.
     _past, _undated = sunset_reviews(root, today)
