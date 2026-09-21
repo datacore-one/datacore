@@ -158,6 +158,9 @@ def repairs(root: Path) -> list[dict]:
             "assignee": payload.get("assignee", ""),
             "owner": item.owner,
             "closed_at": item.closed_at,
+            # Each history line begins with the HLC of its event, so the first
+            # one dates the item's creation.
+            "opened_at": (item.history[0].split(" ", 1)[0] if item.history else None),
         })
     return out
 
@@ -186,11 +189,24 @@ def escalations(root: Path, *, window_h: float = ESCALATE_H * 2,
     acked = _acked()
     out = []
     for r in repairs(root):
+        if r["id"] in acked:
+            continue
+        if r["status"] in ("created", "claimed"):
+            # THE THIRD CONDITION, which this module's docstring promised from
+            # the start and the first version never implemented. A repair
+            # nobody claims is not dismissed, so it matched nothing above and
+            # would have sat in `created` forever: the failure withheld from
+            # the operator, handed to nobody, and reported by nothing. That is
+            # delegation as a way of losing failures, the exact outcome the
+            # escalation job exists to prevent.
+            age = _age_h(r.get("opened_at"), now)
+            if age is not None and age > ESCALATE_H:
+                out.append(f"{r['job']}: repair {r['status']} for {age:.0f}h and not "
+                           f"finished — nobody is completing it")
+            continue
         if r["status"] != "dismissed":
             continue
         if r["closed_kind"] in ("done", "housekeeping"):
-            continue
-        if r["id"] in acked:
             continue
         age_h = _age_h(r["closed_at"], now)
         if age_h is not None and age_h > window_h:

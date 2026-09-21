@@ -192,3 +192,33 @@ def test_the_delegated_item_tells_the_agent_the_boundary():
     # by rediscovering what the verifier already knew.
     assert "regex did not match" in body
     assert "run-me.sh" in body
+
+
+def _open_repair(monkeypatch, *, status, opened_h_ago, now):
+    import autofix
+    monkeypatch.setattr(autofix, "_acked", lambda: set())
+    monkeypatch.setattr(autofix, "repairs", lambda root: [{
+        "id": "autofix-y", "status": status, "closed_kind": None, "closed_reason": None,
+        "job": "stuck-job", "assignee": "miles", "owner": None, "closed_at": None,
+        "opened_at": f"{int(now - opened_h_ago * 3600_000)}.0000.mac",
+    }])
+    return autofix
+
+
+def test_a_repair_nobody_finishes_reaches_the_operator(monkeypatch):
+    """The condition the docstring promised and the first version lacked.
+
+    An unclaimed repair is not dismissed, so it matched no escalation rule and
+    would have sat in `created` forever: withheld from the operator, handed to
+    nobody, reported by nothing.
+    """
+    now = 1_800_000_000_000.0
+    autofix = _open_repair(monkeypatch, status="created", opened_h_ago=30, now=now)
+    rows = autofix.escalations(Path("/x"), now_ms=now)
+    assert len(rows) == 1 and "stuck-job" in rows[0] and "not finished" in rows[0]
+
+
+def test_a_repair_in_flight_is_not_news(monkeypatch):
+    now = 1_800_000_000_000.0
+    autofix = _open_repair(monkeypatch, status="claimed", opened_h_ago=2, now=now)
+    assert autofix.escalations(Path("/x"), now_ms=now) == []
