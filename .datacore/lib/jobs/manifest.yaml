@@ -190,7 +190,7 @@ jobs:
   - name: mac-seq-gap
     machine: mac
     schedule: "10 * * * *"
-    cmd: "python3 ~/Data/.datacore/lib/detectors/seq_gap.py --fetch > ~/.datacore/state/seq-gap.log 2>&1"
+    cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/seq-gap.log -- python3 ~/Data/.datacore/lib/detectors/seq_gap.py --fetch"
     # detector contract: 0 clean, 1 findings, 2 could not run. Under the
     # execution envelope (jobs/run.py, pilot 2026-09-03) 1 is a successful run.
     exit_ok: [0, 1]
@@ -209,7 +209,7 @@ jobs:
   - name: mac-actor-presence
     machine: mac
     schedule: "25 * * * *"
-    cmd: "python3 ~/Data/.datacore/lib/detectors/actor_presence.py > ~/.datacore/state/actor-presence.log 2>&1"
+    cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/actor-presence.log -- python3 ~/Data/.datacore/lib/detectors/actor_presence.py"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/actor-presence.log"
@@ -225,7 +225,7 @@ jobs:
   - name: mac-id-churn
     machine: mac
     schedule: "40 * * * *"
-    cmd: "python3 ~/Data/.datacore/lib/detectors/id_churn.py > ~/.datacore/state/id-churn.log 2>&1"
+    cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/id-churn.log -- python3 ~/Data/.datacore/lib/detectors/id_churn.py"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/id-churn.log"
@@ -521,7 +521,7 @@ jobs:
   - name: mac-pending-decisions
     machine: mac
     schedule: "20 8 * * *"
-    cmd: "python3 ~/Data/.datacore/lib/detectors/pending_decisions.py > ~/.datacore/state/pending-decisions.log 2>&1"
+    cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/pending-decisions.log -- python3 ~/Data/.datacore/lib/detectors/pending_decisions.py"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/pending-decisions.log"
@@ -532,7 +532,7 @@ jobs:
   - name: box-ledger-verify
     machine: box
     schedule: "20 7 * * *"
-    cmd: "python3 ~/Data/.datacore/lib/ledger_cli.py verify --space ~/Data > ~/.datacore/state/ledger-verify.log 2>&1"
+    cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/ledger-verify.log -- python3 ~/Data/.datacore/lib/ledger_cli.py verify --space ~/Data"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/ledger-verify.log"
@@ -560,7 +560,7 @@ jobs:
   - name: mac-registry-gc
     machine: mac
     schedule: "35 7 * * *"
-    cmd: "python3 ~/Data/.datacore/lib/registry_gc.py --registry ~/Data/.datacore/registry/agents.yaml --check > ~/.datacore/state/registry-gc.log 2>&1"
+    cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/registry-gc.log -- python3 ~/Data/.datacore/lib/registry_gc.py --registry ~/Data/.datacore/registry/agents.yaml --check"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/registry-gc.log"
@@ -1139,7 +1139,7 @@ jobs:
   - name: mac-delegation-canary
     machine: mac
     schedule: 15 6 * * *
-    cmd: python3 ~/Data/.datacore/lib/delegation_canary.py --run --space ~/Data/8-firm --assignee miles > ~/.datacore/state/delegation-canary.log 2>&1
+    cmd: ~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/delegation-canary.log -- python3 ~/Data/.datacore/lib/delegation_canary.py --run --space ~/Data/8-firm --assignee miles
     exit_ok: [0, 1]
     on_fail: telegram
     artifacts:
@@ -1154,7 +1154,7 @@ jobs:
   - name: mac-delegation-canary-verdict
     machine: mac
     schedule: 45 8 * * *
-    cmd: python3 ~/Data/.datacore/lib/delegation_canary.py --check --space ~/Data/8-firm > ~/.datacore/state/delegation-canary-check.log 2>&1
+    cmd: ~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/delegation-canary-check.log -- python3 ~/Data/.datacore/lib/delegation_canary.py --check --space ~/Data/8-firm
     exit_ok: [0, 1]
     on_fail: telegram
     artifacts:
@@ -1165,7 +1165,7 @@ jobs:
   - name: mac-ledger-invariants
     machine: mac
     schedule: 40 5 * * *
-    cmd: python3 ~/Data/.datacore/lib/ledger_invariants.py > ~/.datacore/state/ledger-invariants.log 2>&1
+    cmd: ~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/ledger-invariants.log -- python3 ~/Data/.datacore/lib/ledger_invariants.py
     exit_ok: [0, 1]
     on_fail: telegram
     artifacts:
@@ -1246,7 +1246,7 @@ jobs:
   - name: mac-config-resolution
     machine: mac
     schedule: 50 5 * * *
-    cmd: python3 ~/Data/.datacore/lib/config_resolution_probe.py > ~/.datacore/state/config-resolution.log 2>&1
+    cmd: ~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/config-resolution.log -- python3 ~/Data/.datacore/lib/config_resolution_probe.py
     exit_ok: [0, 1]
     on_fail: telegram
     artifacts:
