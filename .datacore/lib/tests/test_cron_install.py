@@ -143,3 +143,33 @@ def test_real_host_installer_reconciles_and_verifies_fake_crontab(tmp_path):
     assert checked.returncode == 0, checked.stdout + checked.stderr
     again = subprocess.run(command, env=env, capture_output=True, text=True)
     assert again.returncode == 0 and store.read_text() == contents
+
+
+def test_jobs_sharing_a_wrapper_are_told_apart_by_what_they_write():
+    """atomic_out.sh wraps many producers and audit_trio_run.sh has many modes.
+
+    The installer identifies a job by its executable, so five detectors each
+    writing their own artifact through one wrapper were a single "ambiguous
+    invocation" and all five were refused. The discriminator is the first
+    argument: the artifact path, or the mode.
+    """
+    import cron_install as ci
+    a = ci.invocation("25 * * * * /h/.datacore/lib/atomic_out.sh /s/a.log -- python3 /h/x.py")
+    b = ci.invocation("40 * * * * /h/.datacore/lib/atomic_out.sh /s/b.log -- python3 /h/y.py")
+    assert a != b and a[1] == "/s/a.log"
+    c = ci.invocation("30 3 * * * /h/.datacore/lib/audit_trio_run.sh drill")
+    d = ci.invocation("45 2 * * * /h/.datacore/lib/audit_trio_run.sh drills")
+    assert c != d
+
+    planned = ci.reconcile("", {"job-a": "25 * * * * /h/.datacore/lib/atomic_out.sh /s/a.log -- python3 /h/x.py",
+                                "job-b": "40 * * * * /h/.datacore/lib/atomic_out.sh /s/b.log -- python3 /h/y.py"})
+    assert planned.count("# datacore-job:") == 2
+
+
+def test_the_same_artifact_twice_is_still_ambiguous():
+    """The discriminator must not make genuinely duplicate jobs installable."""
+    import cron_install as ci
+    import pytest
+    with pytest.raises(ValueError):
+        ci.reconcile("", {"job-a": "25 * * * * /h/.datacore/lib/atomic_out.sh /s/a.log -- python3 /h/x.py",
+                          "job-b": "40 * * * * /h/.datacore/lib/atomic_out.sh /s/a.log -- python3 /h/y.py"})

@@ -62,6 +62,13 @@ def invocation(line: str, *, reject_compound: bool = False) -> tuple[str, ...] |
     # These commands have independently scheduled jobs sharing an executable.
     if program == 'unit_alive.sh':
         return (identity, args[0] if args else '')
+    # atomic_out.sh wraps a producer and is identified by the ARTIFACT it writes;
+    # audit_trio_run.sh dispatches on a mode. Without these, five detectors that
+    # each write their own artifact were one "ambiguous invocation" and the
+    # installer correctly refused all five (2026-09-21) -- it identifies a job by
+    # its executable, which is right until several jobs share a wrapper.
+    if program in ('atomic_out.sh', 'audit_trio_run.sh'):
+        return (identity, args[0] if args else '')
     if program == 'job_verify.py':
         return (identity, args[args.index('--machine') + 1] if '--machine' in args and args.index('--machine') + 1 < len(args) else '')
     return (identity,)
