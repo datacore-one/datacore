@@ -334,3 +334,30 @@ def test_generated_divergence_is_not_reviewable_as_current(tmp_path, monkeypatch
     before = output.read_bytes()
     with pytest.raises(ValueError, match='differ'): board.build(build_args(source, output))
     assert output.read_bytes() == before
+
+
+def test_a_current_file_with_a_header_and_old_closed_work_is_reviewable(tmp_path, monkeypatch):
+    """Every real Phase-1 file has both, and the builder refused every one.
+
+    The check compared the file with a bare `project(state)` -- a complete
+    replay, no authored header -- while the projector writes a one-day
+    retention window under the file's own #+ lines. Measured 2026-09-21: False
+    for all four spaces tried, with nothing out of date. The fixture above never
+    caught it because it was written with the same bare call.
+    """
+    import time as _time
+    from ledger_project_org import project_space
+    space, log, source, output, _ = generated_fixture(tmp_path, monkeypatch)
+    # an authored header, as org-mode users keep
+    source.write_text('#+TITLE: Drill\n#+TAGS: deep(d) quick(q)\n' + source.read_text())
+    # work closed well outside the retention day
+    old_ms = int((_time.time() - 5 * 86400) * 1000)
+    log.append('item.create', {'id': 'two', 'title': 'finished last week', 'state': 'TODO',
+                               'space': space.name, 'level': 1, 'tags': [],
+                               'org': {'body': '', 'properties': {}, 'priority': None}})
+    log.append('item.update', {'id': 'two', 'state': 'DONE', 'closed_at': old_ms})
+    assert project_space(space).startswith('generated')
+    text = source.read_text()
+    assert text.startswith('#+TITLE: Drill')
+    board.build(build_args(source, output))          # used to raise 'differ'
+    assert output.exists()

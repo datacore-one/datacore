@@ -61,6 +61,34 @@ def _emitted_directives(text: str) -> tuple[str, ...]:
     return tuple(found)
 
 
+def rendered(space: Path, *, as_of: float, state=None, remember: bool = False) -> str:
+    """The exact text a projection of `space` writes -- the ONE definition.
+
+    Two things separate this from `project(state).text`, and a verifier that
+    forgets either one refuses a file that is perfectly current:
+
+      * the RETENTION WINDOW. The action list keeps closed work for one day, so
+        the writer passes an instant. `project()` with no instant is a complete
+        replay -- every task ever closed -- which no file on disk has equalled
+        since its first closed task aged out.
+      * the AUTHORED HEADER (#+TITLE, #+TAGS, ...) carried over from the file.
+
+    The decision-board builder checked "is this generated file current?" against
+    the bare complete replay. It was False for every Phase-1 space in the
+    installation (measured 2026-09-21 on four of them), while this rendering
+    matched each file exactly. The board refused 0-personal's review with
+    "generated Org and ledger differ; reconcile" and there was nothing to
+    reconcile. Its own tests passed because their fixture was built with the
+    same bare call and held neither a header nor an old closed task.
+
+    `remember` is the header's flip-time side effect; only the writer sets it.
+    """
+    if state is None:
+        state = fold(read_events(space))
+    text = project(state, space=space.name, as_of=as_of).text
+    return _with_org_header(space, space / ORG, text, remember=remember)
+
+
 def _with_org_header(space: Path, target: Path, text: str, *, remember: bool = True) -> str:
     """Keep the authored file's `#+TITLE/#+CATEGORY/#+STARTUP/#+TAGS/...` lines.
 
@@ -164,9 +192,8 @@ def project_space(space: Path, force: bool = False, adopt_org: bool = False) -> 
         return (f"REFUSED — {len(pending)} heading(s) in {ORG} are not in the "
                 f"ledger; ingest first, then project ({titles})")
 
-    text = project(fold(read_events(space)), space=space.name, as_of=time.time()).text
+    text = rendered(space, as_of=time.time(), remember=True)
     target = space / ORG
-    text = _with_org_header(space, target, text)
     target.parent.mkdir(parents=True, exist_ok=True)
     if adopt_org and before is not None and not (space / STATE).exists():
         # The deadlock this exists for: with no base, reconcile demands the org

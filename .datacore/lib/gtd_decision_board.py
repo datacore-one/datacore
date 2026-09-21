@@ -40,6 +40,7 @@ import os
 import stat
 import re
 import sys
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -281,10 +282,9 @@ def _inputs_current(inputs):
 
 def _authority(inputs, *, require_projection=False):
     """Record each source's persistence model; generated input must be current."""
-    from ledger_project_org import phase, ORG
+    from ledger_project_org import phase, rendered, ORG
     from ledger.log import read_events
     from ledger.fold import fold
-    from ledger.projector import project
     from ledger.projection_state import snapshot
     from org_space import ledger_space_for_file
     result = {}
@@ -299,8 +299,18 @@ def _authority(inputs, *, require_projection=False):
             state = fold(read_events(space))
             if require_projection and any(item.edit_conflicts for item in state.items.values()):
                 raise ValueError('unresolved ledger conflicts must be reconciled before review')
-            if require_projection and snapshot(path.read_text(), space.name) != snapshot(project(state, space=space.name).text, space.name):
-                raise ValueError('generated Org and ledger differ; reconcile before building a review')
+            if require_projection:
+                # Compare against what the projector WRITES, not a bare replay
+                # (see ledger_project_org.rendered). Two instants, because the
+                # retention window rolls: a task that aged out since the file
+                # was last rewritten is in the file and not in a render at
+                # "now". The file's own mtime is when it last changed, and it
+                # is current as of then. Anything else is a real difference.
+                on_disk = snapshot(path.read_text(), space.name)
+                instants = (time.time(), path.stat().st_mtime)
+                if not any(snapshot(rendered(space, as_of=at, state=state), space.name) == on_disk
+                           for at in instants):
+                    raise ValueError('generated Org and ledger differ; reconcile before building a review')
             current['root'] = state.state_root()
         result[name] = current
     return result
