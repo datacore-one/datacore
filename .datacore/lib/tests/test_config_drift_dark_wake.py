@@ -16,7 +16,11 @@ import pytest
 
 LIB = Path(__file__).resolve().parents[1]
 
-UNREACHABLE = "  UNREACHABLE hermes  x\n\nconfig-drift: 5 machine(s), 1 with drift, 1 unreachable\n"
+# The detector counts drift and could-not-tell SEPARATELY since 2026-09-21: a
+# host it failed to reach is 0 drift, 1 unreachable. It used to report the same
+# machine as both, so the summary contradicted its own body ("UNREACHABLE
+# winston" above "2 with drift") and the contract believed the summary.
+UNREACHABLE = "  UNREACHABLE hermes  x\n\nconfig-drift: 5 machine(s), 0 with drift, 1 unreachable\n"
 DRIFT = "  MISSING-HOOKS hermes  x\n\nconfig-drift: 5 machine(s), 1 with drift, 0 unreachable\n"
 CLEAN = "  ok  hermes  x\n\nconfig-drift: 5 machine(s), 0 with drift, 0 unreachable\n"
 
@@ -46,9 +50,30 @@ def test_dark_wake_with_only_unreachable_keeps_the_previous_log(tmp_path):
     assert "kept previous log" in (tmp_path / "state" / "config-drift.skipped.log").read_text()
 
 
-def test_full_wake_unreachable_is_reported(tmp_path):
+def test_full_wake_unreachable_also_keeps_the_previous_log(tmp_path):
+    """Unreachable is could-not-tell, on any kind of wake, and this job does not
+    own reachability.
+
+    This used to assert the opposite: awake and unable to reach a host meant
+    the finding was real and worth writing. On a server that reasoning holds.
+    On a laptop it does not -- 2026-09-20 21:28, properly awake, no route to
+    two hosts (a train, a captive portal, tailscale not yet up), both answering
+    on the first try next morning. The contract paged for a fleet that was fine.
+
+    And reachability already has an owner: box-fleet-probe, which runs from the
+    always-on box that is always on the network, and which says "nightshift is
+    DOWN" when a host is genuinely down. Two jobs alarming on one condition is
+    how one of them becomes noise. This one reports DRIFT among the hosts it
+    could reach; a run that reached nobody learned nothing and must not
+    overwrite the last run that did.
+
+    Nothing is hidden: the artifact keeps its old mtime, freshness is judged in
+    AWAKE time, and a fleet this machine cannot check for 26 waking hours goes
+    stale and fails on exactly those grounds.
+    """
     proc, log = _run(tmp_path, UNREACHABLE, 1, "full")
-    assert proc.returncode == 1 and "1 unreachable" in log
+    assert proc.returncode == 0, proc.stderr
+    assert log == "PREVIOUS GOOD LOG\n"
 
 
 def test_real_drift_is_written_even_in_a_dark_wake(tmp_path):

@@ -41,9 +41,25 @@ rc=$?
 summary="$(tail -n 1 "$TMP")"
 drift="$(printf '%s' "$summary" | sed -nE 's/.* ([0-9]+) with drift, ([0-9]+) unreachable.*/\1/p')"
 unreach="$(printf '%s' "$summary" | sed -nE 's/.* ([0-9]+) with drift, ([0-9]+) unreachable.*/\2/p')"
-if [ "$rc" -ne 0 ] && [ -n "$drift" ] && [ "$drift" = "$unreach" ] && [ "${unreach:-0}" -gt 0 ] \
-   && "$PY" -c "import sys; sys.path.insert(0, '$LIB'); from jobs.awake import in_dark_wake; raise SystemExit(0 if in_dark_wake() else 1)" 2>/dev/null; then
-  echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') kept previous log: dark wake, only unreachable ($summary)" >> "$STATE/config-drift.skipped.log"
+# NOTHING SEEN IS NOT THE SAME AS NOTHING WRONG, and it is not an incident either.
+#
+# The hold used to require a dark wake. On 2026-09-20 at 21:28 the laptop was
+# properly awake and simply had no route to winston or nightshift -- a train, a
+# captive network, tailscale not yet up -- so the hold did not apply, two
+# reachable-in-every-other-respect machines were written down as drift, and the
+# contract paged. Both hosts answered on the first try the next morning.
+#
+# So the hold is now about what was LEARNED, not about which kind of wake it
+# was: zero drift found and every finding merely unreachable means this run
+# learned nothing, and a run that learned nothing must not overwrite the last
+# one that did. Real drift is always written, awake or dark, network or not.
+#
+# This cannot hide a sustained problem, and that is what makes it safe: the
+# artifact keeps its old mtime, max_age_hours is judged in AWAKE time
+# (jobs/awake.py), and a fleet this machine genuinely cannot check for 26 waking
+# hours goes stale and fails the contract on exactly those grounds.
+if [ "$rc" -ne 0 ] && [ "${drift:-0}" = "0" ] && [ "${unreach:-0}" -gt 0 ] && [ -s "$OUT" ]; then
+  echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') kept previous log: nothing learned, only unreachable ($summary)" >> "$STATE/config-drift.skipped.log"
   rm -f "$TMP"
   exit 0
 fi

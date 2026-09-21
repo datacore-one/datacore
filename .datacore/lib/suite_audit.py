@@ -44,6 +44,22 @@ def is_source(path: Path) -> bool:
     return not any(x in s for x in NOT_SOURCE)
 
 
+#: Suites that measure elapsed time and must not share the CPU.
+#:
+#: Not a workaround for flaky tests -- a statement about what these tests
+#: measure. modules/lens/tests has test_thread_safety_under_contention and
+#: test_disable_mid_run_cuts_quickly, which assert that something happens
+#: QUICKLY and that threads interleave correctly. Run beside two other heavy
+#: suites they failed as `assert 0 == 5`; run alone they passed 188/188, four
+#: times over. Elapsed time on a contended machine is not the quantity they
+#: mean, so parallelising them does not make them faster, it makes them wrong.
+#:
+#: They run after the parallel batch, one at a time. The cost is about a minute
+#: on a nightly job; the alternative was a red suite every morning for a
+#: property that was never actually broken.
+SERIAL_SUITES = ("modules/lens/tests",)
+
+
 def discover_suites() -> list[Path]:
     """A suite is a directory that owns test files and is run from its own root.
 
@@ -237,8 +253,18 @@ def main() -> int:
     if args.coverage:
         cov_dir = Path(tempfile.mkdtemp(prefix="suite-audit-cov-"))
 
+    def is_serial(s: Path) -> bool:
+        rel = s.relative_to(DATACORE).as_posix()
+        return any(rel == x or rel.startswith(x + "/") for x in SERIAL_SUITES)
+
+    parallel = [s for s in suites if not is_serial(s)]
+    serial = [s for s in suites if is_serial(s)]
+
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        results = list(pool.map(lambda s: run_suite(s, args.python, cov_dir), suites))
+        results = list(pool.map(lambda s: run_suite(s, args.python, cov_dir), parallel))
+    # After the pool has drained, so the machine is actually idle for them.
+    for s in serial:
+        results.append(run_suite(s, args.python, cov_dir))
 
     results.sort(key=lambda r: (r.ok, r.suite))
     if args.json:

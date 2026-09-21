@@ -327,23 +327,37 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> 
             print(f"alert withheld: {job_name} failed on the same artifact already counted "
                   f"({_record.get('consecutive')}x); nothing new to report", file=sys.stderr)
             return
+        # DELEGATE ON THE FIRST FAILURE, NOT THE THIRD.
+        #
+        # This waited for DIP-0031's recurring threshold, so failures one and
+        # two still went to Telegram -- which is every alert the operator
+        # actually received on 2026-09-20 and 09-21, each reading "(1
+        # failure(s))". Delegation that begins after the third failure is not
+        # "Winston handles it and tells me if he cannot"; it is the old
+        # behaviour with a delay.
+        #
+        # Churn is bounded by the item id, which is one per job per day:
+        # repeated failures of the same job reuse it instead of filing a
+        # second. The recurring threshold still governs the ORG TASK and the
+        # escalation wording, which is what DIP-0031 is about -- it was never
+        # about who gets woken first.
+        if job is not None:
+            state, detail = _delegate_repair(job, failures, _record)
+            if state == "delegated":
+                print(f"delegated repair of {job_name} ({detail}); "
+                      f"operator not alerted", file=sys.stderr)
+                if _record.get("recurring") and not _record.get("task_id"):
+                    tid = _file_task(job, _record, failures)
+                    if tid:
+                        _rec.note_task(job_name, tid)
+                return
+            print(f"could NOT delegate {job_name} ({detail}); "
+                  f"escalating to the operator", file=sys.stderr)
         if _record.get("recurring") and job is not None and not _record.get("task_id"):
             tid = _file_task(job, _record, failures)
             if tid:
                 _rec.note_task(job_name, tid)
                 print(f"recurring: filed task {tid} for {job_name}", file=sys.stderr)
-            # DELEGATE THE REPAIR BEFORE WAKING ANYONE. A recurring failure is a
-            # defect with an owner now: miles gets the job, the failure text and
-            # a check that decides for itself whether the repair worked. The
-            # operator hears about it when that path is exhausted -- dead-letter,
-            # refusal, or no progress -- not when it starts.
-            state, detail = _delegate_repair(job, failures, _record)
-            if state == "delegated":
-                print(f"recurring: delegated repair of {job_name} ({detail})", file=sys.stderr)
-                # Nobody needs waking for work that has just been picked up.
-                return
-            print(f"recurring: could NOT delegate {job_name} ({detail}); "
-                  f"escalating to the operator", file=sys.stderr)
         message = _rec.describe(job_name, _record, len(failures))
         if not _rec.should_alert(_record):
             print(f"alert suppressed: {job_name} is recurring "

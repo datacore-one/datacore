@@ -148,8 +148,21 @@ def main() -> int:
     args = ap.parse_args()
 
     rows = [check(*m) for m in MACHINES]
-    bad = [r for r in rows if r["status"] not in ("ok",)]
     unreachable = [r for r in rows if r["status"] == "unreachable"]
+    # DRIFT IS WHAT WE SAW, NOT WHAT WE COULD NOT SEE. `bad` counted every
+    # non-ok row, so two hosts a laptop could not reach were reported as "2
+    # with drift, 2 unreachable" -- the same two machines counted as a
+    # configuration fault and as a network condition at once. The log said
+    # UNREACHABLE on both lines and the summary said drift, so the summary
+    # disagreed with the body it was summarising, and the contract believed
+    # the summary.
+    #
+    # They stay separate all the way to the exit code: unreachable already
+    # returns 2 ("could not tell"), drift returns 1. Nothing here decides
+    # whether a laptop off the network is worth waking someone for -- that is
+    # the runner's judgement and the freshness bound's, and both need to be
+    # told which of the two happened.
+    bad = [r for r in rows if r["status"] not in ("ok", "unreachable")]
 
     if args.json:
         print(json.dumps({"rows": rows, "drift": len(bad)}, indent=2))

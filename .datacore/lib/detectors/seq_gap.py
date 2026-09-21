@@ -119,8 +119,41 @@ def head_seq(text: str) -> int | None:
 
 
 
-def unpublished_ages_min(text: str, remote_seq: int | None, now_ms: float) -> list[float]:
-    """Ages in minutes of the local events the remote has not got yet."""
+def _awake_minutes(since_ms: float, now_ms: float, sleep_log: str | None = None) -> float:
+    """Minutes the publisher could actually have run in, not minutes elapsed.
+
+    THE GRACE IS A BUDGET FOR THE PUBLISHER, AND A SLEEPING LAPTOP SPENDS NONE
+    OF IT. The publish job runs hourly; the grace says "an event younger than
+    90 minutes has not had its chance yet". Measured on the wall clock that
+    reasoning breaks the moment the lid shuts: an event written at 23:00 is
+    "ten hours old" at 09:00, so it is reported as a gap, but the machine was
+    asleep for nine and a half of those hours and the publisher was never
+    scheduled. Opening the laptop and running it by hand cleared the alert
+    until the next night, which is exactly why this was "fixed" repeatedly and
+    stayed broken.
+
+    jobs/awake.py already solved this for max_age_hours (its docstring counts
+    117 asleep hours out of 472). Same accounting, same reason, one more
+    caller. Sleep accounting only ever EXCUSES age -- if it cannot be read, the
+    wall-clock age is used, because a missing power log must not become a new
+    way to hide a real gap.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from jobs.awake import awake_age
+        from actor_identity import this_actor
+        return awake_age(since_ms / 1000.0, this_actor(), now=now_ms / 1000.0,
+                         log=sleep_log) / 60.0
+    except Exception:  # noqa: BLE001 -- unreadable sleep history is not a gap-hider
+        return (now_ms - since_ms) / 60000.0
+
+
+def unpublished_ages_min(text: str, remote_seq: int | None, now_ms: float,
+                         sleep_log: str | None = None) -> list[float]:
+    """Ages in minutes of the local events the remote has not got yet.
+
+    Counted in the machine's AWAKE time -- see _awake_minutes.
+    """
     ages = []
     for line in text.splitlines():
         line = line.strip()
@@ -137,12 +170,20 @@ def unpublished_ages_min(text: str, remote_seq: int | None, now_ms: float) -> li
             ms = float(str(e.get("hlc", "0")).split(".")[0])
         except ValueError:
             continue
-        ages.append(max(0.0, (now_ms - ms) / 60000.0))
+        ages.append(max(0.0, _awake_minutes(ms, now_ms, sleep_log)))
     return ages
 
 def scan_space(space: Path, *, fetch: bool = False, grace_min: float = 90.0,
-               now_ms: float | None = None) -> list[dict]:
-    """One row per actor log in this space."""
+               now_ms: float | None = None, sleep_log: str | None = None) -> list[dict]:
+    """One row per actor log in this space.
+
+    `sleep_log` is pmset output, injected by tests. Without it the grace is
+    measured against THIS machine's real sleep history, so a test pinning a
+    historical `now_ms` silently measures whatever the laptop happened to do in
+    that window -- which is how two correct tests here began failing the moment
+    sleep accounting arrived. Passing "" means "never slept", which is what an
+    always-on host looks like and what those tests mean.
+    """
     events_dir = space / ".datacore" / "events"
     if not events_dir.is_dir():
         return []
@@ -217,7 +258,8 @@ def scan_space(space: Path, *, fetch: bool = False, grace_min: float = 90.0,
         pending = 0
         if gap and remote is not None:
             ages = unpublished_ages_min(log.read_text(errors="replace"), remote,
-                                        now_ms if now_ms is not None else time.time() * 1000.0)
+                                        now_ms if now_ms is not None else time.time() * 1000.0,
+                                        sleep_log)
             if ages and max(ages) < grace_min:
                 pending, gap = gap, 0
         rows.append({"space": space.name, "actor": actor, "local_seq": local,
