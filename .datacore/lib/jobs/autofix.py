@@ -40,7 +40,15 @@ LIB = Path(__file__).resolve().parent.parent
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from fix_check import contract_sha  # noqa: E402
+# `jobs.fix_check`, never bare `fix_check`. The bare form resolved only when
+# lib/jobs itself was on sys.path -- which the test file arranged and nothing in
+# production does. job_verify imports `jobs.autofix` with lib on the path, so
+# on every host the first real delegation died with ModuleNotFoundError and
+# fell through to "could NOT delegate ... escalating to the operator": the
+# first-failure alerts the owner kept receiving on 2026-09-20/21 WERE the
+# delegation path, failing at import. Found 2026-09-22; not one delegation
+# from job_verify had ever succeeded anywhere.
+from jobs.fix_check import contract_sha  # noqa: E402
 
 #: Hours an open repair may sit before the operator is told it is not moving.
 ESCALATE_H = 24
