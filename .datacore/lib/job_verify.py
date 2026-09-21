@@ -352,7 +352,12 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> 
     # once. A counter polluted by its own observer is worse than no counter.
     # Scheduled runs emit, so production counting is unaffected.
     if _NO_EMIT:
+        # ...AND MUST NOT PAGE ANYONE. A dry run used to fall through to the
+        # Telegram send below: `--no-emit` on a host with `on_fail: telegram`
+        # delivered a real alert about a verification nobody scheduled. Found
+        # 2026-09-21 only because the send happened to fail from an ssh shell.
         message = f"job.verify FAILED: {job_name} ({len(failures)} failure(s))"
+        mode = "log"
     else:
         sig = _artifact_signature(job) if job is not None else None
         _record = _rec.record(job_name, failed=True, artifact_sig=sig)

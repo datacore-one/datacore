@@ -103,3 +103,13 @@ def test_the_incident_replayed_reaches_recurring(tmp_path, rec):
         counts.append((r["consecutive"], r["same_artifact"]))
     assert counts == [(1, False), (1, True), (2, False), (3, False)]
     assert r["recurring"] is True
+
+
+def test_a_dry_run_never_pages_the_operator(monkeypatch):
+    """`--no-emit` is how a person checks a host by hand. It used to fall through
+    to the Telegram send, so looking at a failing job alerted about it."""
+    sent = []
+    monkeypatch.setattr(jv, "_send_telegram", lambda m: sent.append(m) or True)
+    monkeypatch.setattr(jv, "_NO_EMIT", True)
+    jv._dispatch_alert("telegram", "nightshift-overnight", ["stale"], job=None)
+    assert sent == []
