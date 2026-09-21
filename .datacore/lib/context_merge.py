@@ -20,6 +20,7 @@ See DIP-0002 for full specification.
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -372,6 +373,53 @@ def merge_context(
     return "".join(content_parts).strip() + "\n", warnings
 
 
+def _ensure_composed_ignored(output_file: Path) -> None:
+    """Keep a composed output out of version control, permanently.
+
+    Composed .md files are generated from their layers, never authored
+    (DIP-0002). The root .gitignore named them one at a time -- CLAUDE.md,
+    0-personal/CLAUDE.md -- so every component added after that rule was
+    written fell straight through into untracked. Twelve role templates
+    later the repo was permanently dirty and ledger_transport's converge,
+    which refuses on a dirty repo, could never run.
+
+    A list beside the invariant drifts; this registers each composed file in
+    a .gitignore next to it at the moment it is written, so the rule cannot
+    fall behind the set of files it covers. Anything already tracked on
+    purpose, or already ignored further up the tree, is left alone.
+    """
+    directory = output_file.parent
+    name = output_file.name
+
+    def _git(*args) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ("git", "-C", str(directory)) + args,
+            capture_output=True, text=True,
+        )
+
+    try:
+        if _git("rev-parse", "--git-dir").returncode != 0:
+            return  # not a working tree; nothing to ignore it from
+        if _git("ls-files", "--error-unmatch", name).returncode == 0:
+            return  # tracked deliberately
+        if _git("check-ignore", "-q", name).returncode == 0:
+            return  # already covered upstream
+    except (OSError, subprocess.SubprocessError):
+        return  # no git available -- composing must still succeed
+
+    ignore_file = directory / ".gitignore"
+    lines = ignore_file.read_text().splitlines() if ignore_file.exists() else []
+    if any(line.strip() == name for line in lines):
+        return
+    if not lines:
+        lines = [
+            "# Composed context output (DIP-0002) -- generated, never authored.",
+            "# Maintained by context_merge.py. Edit the .base.md layer instead.",
+        ]
+    lines.append(name)
+    ignore_file.write_text("\n".join(lines) + "\n")
+
+
 def rebuild_context(
     component_path: Path,
     name: str = "CLAUDE",
@@ -419,6 +467,7 @@ def rebuild_context(
 
     # Write output
     output_file.write_text(merged_content)
+    _ensure_composed_ignored(output_file)
 
     return len(warnings) == 0, warnings
 
