@@ -705,6 +705,9 @@ class CredentialManager:
         """
         ca = self._access()
         index = self._load_index()
+        if index is None:
+            self._print_bootstrap()
+            return 1
         creds = [c for c in index.credentials
                  if not cred_id or c.id == cred_id]
         if not creds:
