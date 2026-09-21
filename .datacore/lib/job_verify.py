@@ -72,6 +72,7 @@ import os
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -203,16 +204,48 @@ def _note_pass(job_name: str) -> None:
         _rec.note_task(job_name, None)
 
 
-def _artifact_signature(job) -> str:
-    """path + mtime of every artifact: the same signature is the same failure."""
+def _artifact_signature(job, *, now: float | None = None) -> str:
+    """path + mtime of every artifact: the same signature is the same failure.
+
+    EXCEPT WHEN THE UNCHANGED ARTIFACT *IS* THE FAILURE. The dedup below exists
+    so a verifier that looks every 30 minutes does not count one bad artifact
+    48 times. But for a producer that has stopped producing, the artifact not
+    changing is not "the same failure seen again" -- it is the failure getting
+    worse. Measured 2026-09-21: nightshift's overnight run died on 09-18 and
+    its manifest aged 29h -> 35h -> 59h while this signature stayed constant,
+    so the verifier logged "alert withheld ... (1x); nothing new to report" for
+    two and a half days. One alert, then silence, and a streak pinned at 1 so it
+    could never become recurring either. The quieter the producer, the quieter
+    the alarm.
+
+    So a stale artifact's signature carries how many whole `max_age_hours`
+    periods it has now missed, and a missing one carries the day. Each further
+    missed period is a new failure: counted, delegated, and escalated like any
+    other. Within one period it is still one failure, which is what the dedup
+    was for.
+    """
     parts = []
+    now = time.time() if now is None else now
     today = _dt.date.today().isoformat()
     for a in getattr(job, "artifacts", []) or []:
         raw = os.path.expanduser(str(a.path).replace("{today}", today))
         try:
-            parts.append(f"{raw}@{int(os.stat(raw).st_mtime)}")
+            mtime = os.stat(raw).st_mtime
         except OSError:
-            parts.append(f"{raw}@missing")
+            parts.append(f"{raw}@missing:{today}")
+            continue
+        part = f"{raw}@{int(mtime)}"
+        max_age = getattr(a, "max_age_hours", None)
+        if max_age:
+            try:
+                from jobs.awake import awake_age
+                age = awake_age(mtime, job.machine, now=now) if getattr(job, "machine", None) else now - mtime
+            except Exception:  # noqa: BLE001 - a signature must never raise
+                age = now - mtime
+            missed = int(age // (float(max_age) * 3600))
+            if missed >= 1:
+                part += f"+missed{missed}"
+        parts.append(part)
     return "|".join(parts)
 
 

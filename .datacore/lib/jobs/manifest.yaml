@@ -1254,6 +1254,30 @@ jobs:
         arg: 'drills: 1/1 held'
         max_age_hours: 26
 
+  - name: nightshift-preflight
+    # THE GATE THE NIGHT DEPENDS ON, ASKED BEFORE THE NIGHT. The overnight run
+    # opens with a git preflight; until 2026-09-21 any finding in any space
+    # refused the whole run, and one stray file in 5-plur cost every space five
+    # runs (09-18 -> 09-21). The run now fences the space and carries on, which
+    # bounds the damage -- but a fenced space still gets no work, and the only
+    # place that was said was a run-time alert nobody could act on in time.
+    #
+    # So the same function the run calls (`run.py: preflight`) is contracted
+    # every three hours. A finding fails this contract; a failed contract is
+    # delegated for repair on the first failure; the operator hears only if the
+    # repair does not land. `--preflight` defers, leaving the record alone, while
+    # a run holds the lock -- the run records its own -- so the bound is wide
+    # enough to cover one long night.
+    machine: nightshift
+    schedule: "45 */3 * * *"
+    cmd: "~/Data/.datacore/modules/nightshift/nightshift run --preflight"
+    on_fail: telegram
+    artifacts:
+      - path: ~/.datacore/state/nightshift-preflight.log
+        check: last_line_regex
+        arg: 'preflight: 0 space\(s\) would sit out, 0 finding\(s\) would refuse the run'
+        max_age_hours: 13
+
   - name: nightshift-drills
     # The two drills that are pure ledger code in scratch trees -- chaos (15
     # injected faults) and phase-1 flip-and-reversal. Split from mac-drills on
