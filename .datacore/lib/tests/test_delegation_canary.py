@@ -107,3 +107,44 @@ def test_a_canary_that_could_not_publish_is_blocked_not_failed(tmp_path):
     canary.RESULT.write_text(json.dumps({"verdict": "blocked", "at": time.time() - 99 * 3600,
                                          "detail": "offline"}))
     assert canary.cmd_check(_args(space)) == 0
+
+
+def test_a_second_run_does_not_bury_an_unjudged_canary(tmp_path):
+    """The defect: --run overwrote RESULT daily, so --check only ever saw a
+    canary a couple of hours old and said "still in flight" forever.
+
+    It ran that way from 2026-09-19, aimed at a space no dispatcher for miles
+    sweeps, reporting a healthy delegation loop that had never once closed. A
+    canary nobody completes has to reach a failed verdict no matter which of the
+    two jobs happens to fire first.
+    """
+    space = _space(tmp_path)
+    assert canary.cmd_run(_args(space)) == 0
+    first = json.loads(canary.RESULT.read_text())["item"]
+
+    # A second run while the first is still open must not replace it.
+    assert canary.cmd_run(_args(space)) == 0
+    assert json.loads(canary.RESULT.read_text())["item"] == first
+
+
+def test_an_abandoned_canary_fails_at_the_next_run_and_stays_failed(tmp_path):
+    space = _space(tmp_path)
+    assert canary.cmd_run(_args(space)) == 0
+    state = json.loads(canary.RESULT.read_text())
+    state["at"] = time.time() - 30 * 3600            # seeded thirty hours ago
+    canary.RESULT.write_text(json.dumps(state))
+
+    assert canary.cmd_run(_args(space, age=20.0)) == 1
+    after = json.loads(canary.RESULT.read_text())
+    assert after["verdict"] == "failed"
+    assert after["item"] == state["item"], "the failure must name the canary that failed"
+
+
+def test_the_run_after_a_failure_starts_fresh(tmp_path):
+    """A failure stays on disk for one full cycle of the contract that reads
+    it, and then the loop is tried again -- otherwise one bad day is permanent."""
+    space = _space(tmp_path)
+    canary.RESULT.write_text(json.dumps({"verdict": "failed", "at": time.time() - 90000,
+                                         "item": "canary-old"}))
+    assert canary.cmd_run(_args(space)) == 0
+    assert json.loads(canary.RESULT.read_text())["verdict"] == "dispatched"

@@ -58,9 +58,9 @@ def _pinned_number(job: dict) -> int:
 def test_delegation_drill_scenario_count_matches_its_contract():
     drill = _load("delegation_drill")
     actual = len(drill.DelegationDrill.SCENARIOS)
-    pinned = _pinned_number(_job("mac-delegation-drill"))
+    pinned = _pinned_number(_job("nightshift-delegation-drill"))
     assert actual == pinned, (
-        f"delegation_drill has {actual} scenarios; mac-delegation-drill pins {pinned}. "
+        f"delegation_drill has {actual} scenarios; nightshift-delegation-drill pins {pinned}. "
         f"Update the `arg:` regex in {MANIFEST.relative_to(LIB.parent.parent)}."
     )
 

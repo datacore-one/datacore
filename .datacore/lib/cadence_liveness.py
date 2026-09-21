@@ -154,20 +154,47 @@ def collect(root: Path, grace: int, today: date | None = None) -> list:
 
 
 def _unrunnable(root: Path, spaces: set[str]) -> dict[str, str]:
-    """For each space with overdue cadences, whether anything could run them.
+    """For each space with overdue cadences, WHY nothing is running them.
 
-    A cadence fires when a heartbeat ticks the space it belongs to, and a
-    heartbeat can only tick a space the host has. When the executor does not
-    carry the space, its cadences are not late -- they are unrunnable, and the
-    distinction is the whole difference between "wait" and "decide".
+    Eight cadences in one space going overdue on one day is one cause, and the
+    count never said which. 6-meridian's sat overdue from 2026-09-15 and
+    alerted daily for a week. The first explanation written here was wrong --
+    it said the executing host did not carry the space, from an `ls` that a
+    `head -12` had truncated. The space was there all along.
+
+    The heartbeat had been stating the real reason every thirty minutes, in a
+    journal nobody reads: "venture skipped: 6-meridian: Invalid venture
+    configuration: roles". On 2026-09-15 the loader began rejecting unsupported
+    cadence frequencies (ventures 51892ee), and that venture had declared
+    `every_15min` and `every_4h` since April. The rejection is per VENTURE, so
+    two unsupported keys stopped eight valid daily cadences as well.
+
+    So this asks the loader itself, and reports field paths -- never values,
+    which is the loader's own rule for diagnostics.
     """
     out: dict[str, str] = {}
+    try:
+        lib = Path(__file__).resolve().parent.parent / "modules" / "ventures" / "lib"
+        if str(lib) not in sys.path:
+            sys.path.insert(0, str(lib))
+        import yaml
+        from pydantic import ValidationError
+        from venture_loader import VentureConfig
+    except Exception:  # noqa: BLE001 -- no loader here means no diagnosis, not a crash
+        return out
     for name in spaces:
-        beats = sorted((root / name / ".datacore" / "state" / "heartbeat").glob("*.json"))
-        if not beats:
-            out[name] = ("no heartbeat shard in this space — the host that ticks "
-                         "cadences does not carry it, so these cannot run until "
-                         "the space is placed there or the cadences are retired")
+        cfg = root / name / "venture.yaml"
+        if not cfg.exists():
+            continue
+        try:
+            VentureConfig.model_validate(yaml.safe_load(cfg.read_text()) or {})
+        except ValidationError as exc:
+            where = sorted({".".join(str(x) for x in e["loc"]) + ": " + e["msg"].replace("Value error, ", "")
+                            for e in exc.errors(include_input=False, include_url=False)})
+            out[name] = ("venture.yaml is REJECTED by the loader, so the heartbeat skips the "
+                         "whole venture and none of its cadences can run — " + "; ".join(where[:4]))
+        except Exception as exc:  # noqa: BLE001
+            out[name] = f"venture.yaml could not be read ({type(exc).__name__})"
     return out
 
 

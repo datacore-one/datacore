@@ -25,11 +25,11 @@ case "${1:-}" in
     "$PY" "$LIB/config_resolution_probe.py" > "$STATE/config-resolution.log" 2>&1
     ;;
   canary-run)
-    "$PY" "$LIB/delegation_canary.py" --run --space "$HOME/Data/8-firm" \
+    "$PY" "$LIB/delegation_canary.py" --run --space "$HOME/Data/2-datacore" \
       --assignee miles > "$STATE/delegation-canary.log" 2>&1
     ;;
   canary-check)
-    "$PY" "$LIB/delegation_canary.py" --check --space "$HOME/Data/8-firm" \
+    "$PY" "$LIB/delegation_canary.py" --check --space "$HOME/Data/2-datacore" \
       > "$STATE/delegation-canary-check.log" 2>&1
     ;;
   drill)
@@ -63,8 +63,20 @@ case "${1:-}" in
     # because a drill that stopped collecting scenarios still exits 0 and still
     # says every control held -- true of three controls as much as fifteen.
     # "All of them passed" is not a claim until you know how many there were.
-    one=$(mktemp -t datacore-drill)
-    for spec in "ledger_chaos_drill:15 scenario" "phase1_drill:" "laptop_night_drill:8/8"; do
+    one=$(mktemp -t datacore-drill.XXXXXX)
+    # WHICH DRILLS RUN WHERE. laptop_night_drill models a macOS machine's night
+    # -- pmset sleep records, dark wakes, launchd catching up -- and on Linux it
+    # fails 4/8, correctly: there is no sleep to account for and awake.py
+    # declines to pretend otherwise. So it runs on the machine it is about. The
+    # other two are pure ledger code in scratch trees and belong on a resident,
+    # where a clock-based contract is an honest thing to have (2026-09-21).
+    if [ "$(uname -s)" = "Darwin" ]; then
+      specs=("laptop_night_drill:8/8")
+    else
+      specs=("ledger_chaos_drill:15 scenario" "phase1_drill:")
+    fi
+    total=${#specs[@]}
+    for spec in "${specs[@]}"; do
       d="${spec%%:*}"; want="${spec#*:}"
       echo "===== $d =====" >> "$out"
       # Each drill's output goes to its own file first, so a count check reads
@@ -86,7 +98,7 @@ case "${1:-}" in
     done
     rm -f "$one"
     if [ "$rc" = "0" ]; then
-      echo "drills: 3/3 held" >> "$out"
+      echo "drills: $total/$total held" >> "$out"
     else
       echo "drills: FAILURES — see above" >> "$out"
     fi

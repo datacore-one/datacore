@@ -57,7 +57,7 @@ MARK = "delegation-canary"
 #: Generous on purpose. The point is "the loop is alive", not "the loop is
 #: fast": a real agent turn took 37-41s on 2026-09-18, and a busy host or a
 #: model retry must not page anyone.
-DEFAULT_BUDGET_HOURS = 26
+DEFAULT_BUDGET_HOURS = 20
 
 
 def _task(target: str, day: str) -> tuple[str, str, str]:
@@ -96,6 +96,45 @@ def cmd_run(args) -> int:
 
     space = args.space.resolve()
     actor = this_actor()
+
+    # RESOLVE THE PREVIOUS CANARY BEFORE SEEDING ANOTHER.
+    #
+    # This used to seed unconditionally, and RESULT holds one verdict. With
+    # --run at 06:15 and --check at 08:45, every check found a canary two and a
+    # half hours old and said "still in flight" -- so a canary nobody ever
+    # completed was replaced by the next one before it could be judged, every
+    # day, and the check could not fail on any path. It ran like that from
+    # 2026-09-19, pointed at a space (8-firm) that no dispatcher for miles
+    # sweeps, reporting a healthy delegation loop that had never once closed.
+    #
+    # Now the verdict does not depend on how the two jobs are ordered: an open
+    # canary is judged here first. Finished -> recorded, and a new one is
+    # seeded. Still inside its budget -> left alone, nothing new is seeded on
+    # top of it. Past its budget -> recorded as FAILED and NOT replaced, so the
+    # failure stays on disk for a full cycle of the contract that reads it; the
+    # run after that starts fresh.
+    try:
+        prev = json.loads(RESULT.read_text())
+    except (OSError, ValueError):
+        prev = {}
+    if prev.get("verdict") == "dispatched" and prev.get("item"):
+        from ledger.fold import fold
+        from ledger.log import read_events
+        item = fold(read_events(space)).items.get(prev["item"])
+        status = getattr(item, "status", None)
+        age_h = (time.time() - float(prev.get("at", 0))) / 3600
+        if status in ("completed", "verified"):
+            _write("completed", item=prev["item"], owner=getattr(item, "owner", None),
+                   detail=f"the loop closed in under {age_h:.1f}h")
+        elif age_h <= args.max_age_hours:
+            print(f"canary: previous still in flight ({status}) after {age_h:.1f}h of "
+                  f"{args.max_age_hours}h; not seeding another on top of it")
+            return 0
+        else:
+            _write("failed", item=prev["item"], detail=(
+                f"still {status} after {age_h:.1f}h; delegation did not close end to end"))
+            return 1
+
     day = time.strftime("%Y-%m-%dT%H%M", time.gmtime())
     iid = f"{MARK}-{day}"
     title, check, src = _task(args.assignee, day)

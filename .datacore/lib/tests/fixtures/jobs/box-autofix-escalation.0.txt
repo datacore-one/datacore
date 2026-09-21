@@ -1,4 +1,4 @@
-# fixture for mac-autofix-escalation artifact[0]
+# fixture for box-autofix-escalation artifact[0]
 # producer artifact: ~/.datacore/state/autofix-escalations.log on mac
 # harvested: 2026-09-20
 # regex under test: autofix: 0 repair\(s\) need a person

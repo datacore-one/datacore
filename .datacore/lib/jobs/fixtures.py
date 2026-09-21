@@ -218,9 +218,9 @@ SUCCESS_RULES: dict[str, list[tuple[str, str]]] = {
     "mac-seq-gap.0": [
         (r"(seq-gap: \d+ log\(s\), )\d+( with unpublished events, )\d+( error)",
          r"\g<1>0\g<2>0\g<3>")],
-    "mac-actor-presence.0": [
+    "nightshift-actor-presence.0": [
         (r"(actor-presence: \d+ rostered actor\(s\), )\d+( failing)", r"\g<1>0\g<2>")],
-    "mac-id-churn.0": [
+    "nightshift-id-churn.0": [
         (r"(id-churn: \d+ space\(s\), )\d+( with findings)", r"\g<1>0\g<2>")],
     "box-cadence-liveness.0": [
         (r"^\d+ cadence\(s\) overdue$", "0 cadence(s) overdue")],
