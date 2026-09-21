@@ -188,6 +188,8 @@ jobs:
   # pushed, which is the cross-machine blindness the critic flagged: a missing
   # push would look identical to a slow one, the exact defect this detects.
   - name: mac-seq-gap
+    scope: local
+    why_local: "measures THIS machine's unpublished work; becomes the join record (design-visitor-nodes C)"
     machine: mac
     schedule: "10 * * * *"
     cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/seq-gap.log -- python3 ~/Data/.datacore/lib/detectors/seq_gap.py --fetch"
@@ -247,6 +249,9 @@ jobs:
   # nothing said so. git clone never copies hooks, which is why per-repo
   # .git/hooks cannot be the mechanism and a global hooksPath is.
   - name: mac-config-drift
+    scope: pinned
+    why_pinned: "polls four hosts over ssh, and only the operator's machine holds that trust -- nightshift has the aliases and reached 2 of 5"
+    unpin_when: "each host attests its own config and nobody polls"
     machine: mac
     # launchd, not cron. This SSHes to four machines, and under cron on a
     # laptop it failed two ways that look identical in the log: a run scheduled
@@ -310,6 +315,8 @@ jobs:
   # cron is disabled pending a rename and is deliberately absent here: a
   # contract for a job that must not run would fail forever.
   - name: mac-phase1-cycle
+    scope: local
+    why_local: "regenerates the working copy a person reads on this machine"
     machine: mac
     schedule: "cron 25 * * * * on mac"
     cmd: "~/Data/.datacore/lib/ledger_phase1_cycle.sh"   # mac
@@ -400,6 +407,8 @@ jobs:
         max_age_hours: 26
 
   - name: mac-today-registration
+    scope: local
+    why_local: "validates the module set installed HERE, for interactive /today"
     machine: mac
     schedule: "cron 25 * * * * on mac"
     cmd: "python3 ~/Data/.datacore/lib/today_registry.py --validate"
@@ -527,6 +536,8 @@ jobs:
   # the same ones in a fortnight mean the backlog has become a wastebasket, and
   # the gate is then discarding work while appearing to protect it.
   - name: mac-pending-decisions
+    scope: local
+    why_local: "decisions waiting in this machine's working tree"
     machine: mac
     schedule: "20 8 * * *"
     cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/pending-decisions.log -- python3 ~/Data/.datacore/lib/detectors/pending_decisions.py"
@@ -566,6 +577,9 @@ jobs:
       # Moved to `mac` rather than scheduled on `box`, which is why it had
       # alerted every morning about a job nobody could safely run.
   - name: mac-registry-gc
+    scope: pinned
+    why_pinned: "compares the registry with INSTALLED modules, and only this machine is a complete replica -- nightshift reports 52 orphans for modules it simply lacks"
+    unpin_when: "a resident carries every module, or the check runs in per-module CI"
     machine: mac
     schedule: "35 7 * * *"
     cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/registry-gc.log -- python3 ~/Data/.datacore/lib/registry_gc.py --registry ~/Data/.datacore/registry/agents.yaml --check"
@@ -888,6 +902,8 @@ jobs:
   # are documented rather than expressed as 5-field cron.
 
   - name: mac-agent-stream-rsync
+    scope: local
+    why_local: "ships this machine's own agent stream"
     machine: mac
     schedule: "every 30s (launchd StartInterval, com.datacore.agent-stream-rsync.plist)"
     cmd: "~/Data/.datacore/lib/agent_stream_rsync.sh"
@@ -912,6 +928,8 @@ jobs:
         max_age_hours: 26  # written only when agents act; a quiet evening is not a failure (2026-09-03)
 
   - name: mac-lens-sync
+    scope: local
+    why_local: "this machine's observation daemon"
     machine: mac
     schedule: "continuous (launchd KeepAlive daemon, RunAtLoad, com.datacore.lens.plist)"
     cmd: "cd ~/Data/.datacore/modules/lens && python3 -m lib.runner --serve"
@@ -947,6 +965,8 @@ jobs:
         # alternative is an alarm nobody reads.
 
   - name: mac-artifact-pull
+    scope: local
+    why_local: "pulls briefing artifacts onto this machine"
     machine: mac
     schedule: "every 30 min (launchd StartInterval 1800, com.datacore.artifact-pull.plist)"  # INSTALLED 2026-08-10. Before that this field claimed "*/30 * * * *" while no crontab entry and no plist existed — a declared schedule with no scheduler behind it. The plist now exists and RunAtLoad-fired successfully; it exits 1 while answers.yaml and facts.json have no producer on the box (declared CHANGELOG gap), which is honest failure rather than silence — the contract below checks app-briefing.json, which does have a producer and does sync
     cmd: "python3 ~/Data/.datacore/lib/artifact_sync.py --role client"
@@ -1068,6 +1088,8 @@ jobs:
         max_age_hours: 1
 
   - name: mac-shadow-diff
+    scope: local
+    why_local: "diffs this working copy's org files against the projection (retirement candidate: every space is already Phase 1, which is the flip this gated)"
     machine: mac
     schedule: "0 7 * * *"
     cmd: "python3 ~/.datacore/v2-runner/.datacore/lib/shadow_check.py"
@@ -1215,6 +1237,8 @@ jobs:
         max_age_hours: 3
 
   - name: mac-drills
+    scope: local
+    why_local: "laptop_night_drill models a macOS night and fails 4/8 on Linux, correctly"
     machine: mac
     schedule: 45 4 * * *
     cmd: ~/Data/.datacore/lib/audit_trio_run.sh drills
@@ -1244,6 +1268,9 @@ jobs:
         max_age_hours: 26
 
   - name: mac-suite-audit
+    scope: pinned
+    why_pinned: "module test suites exist only where modules are cloned; moving it would shrink what it covers without saying so"
+    unpin_when: "each module repo has its own CI workflow"
     machine: mac
     schedule: 30 3 * * *
     cmd: ~/Data/.datacore/lib/audit_trio_run.sh suites
@@ -1289,6 +1316,8 @@ jobs:
         max_age_hours: 26
 
   - name: mac-config-resolution
+    scope: local
+    why_local: "probes THIS host's config resolution; every host runs its own"
     machine: mac
     schedule: 50 5 * * *
     cmd: ~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/config-resolution.log -- python3 ~/Data/.datacore/lib/config_resolution_probe.py

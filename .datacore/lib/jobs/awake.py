@@ -71,6 +71,28 @@ def always_on(machine: str, roster: Path | None = None) -> bool:
     return str(entry.get("kind") or "").lower() not in _SLEEPS
 
 
+def node_class(machine: str, roster: Path | None = None) -> str:
+    """"resident" or "visitor" -- whether this node's PRESENCE is promised.
+
+    The roster has said "A WORKSTATION IS NOT A DEGRADED SERVER" for weeks and
+    nothing enforced it, so the laptop accumulated twenty job contracts, most of
+    them network duties with clock deadlines, and spent a month alerting about
+    its own lid. This is that sentence as a type.
+
+    The axis is not human-versus-agent: agents write from the laptop all day.
+    It is whether the node can be relied on to be there. A resident can carry a
+    duty with a deadline. A visitor joins, contributes and leaves -- a closed
+    lid is a LEAVE, not a failure (the distinction SWIM, Cassandra and Consul
+    all draw between `left` and `failed`) -- so it may carry only what is about
+    itself, and nothing on it may be judged by the wall clock.
+
+    Derived from `always_on`, so an unknown machine is a resident: a host only
+    becomes a visitor by being declared one, which keeps every existing
+    contract behaving exactly as it did.
+    """
+    return "resident" if always_on(machine, roster) else "visitor"
+
+
 _WARNED: set[str] = set()
 
 
