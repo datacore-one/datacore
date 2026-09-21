@@ -167,3 +167,39 @@ def test_an_ingest_that_names_no_space_still_stops_everything(tmp_path):
 
     assert not trace.exists(), 'nothing may be projected when the sweep did not run'
     assert proc.returncode != 0
+
+
+def _bare_cycle(tmp_path):
+    """The cycle script with a stub interpreter that records that it ran."""
+    scripts = tmp_path / 'scripts'; scripts.mkdir()
+    root = tmp_path / 'data'; (root).mkdir()
+    state = tmp_path / 'state'; state.mkdir()
+    shutil.copyfile(LIB / 'ledger_phase1_cycle.sh', scripts / 'cycle.sh')
+    shutil.copyfile(LIB / 'runtime_shell.sh', scripts / 'runtime_shell.sh')
+    env = dict(os.environ, DATACORE_ROOT=str(root), DATACORE_STATE=str(state),
+               DATACORE_PYTHON=sys.executable)
+    return scripts / 'cycle.sh', state, env
+
+
+def test_a_second_cycle_leaves_a_running_one_alone(tmp_path):
+    """Two callers run this on a laptop now -- the hourly schedule and the join
+    that fires on wake -- and ingest has no lock of its own. Losing the race is
+    not a failure: the other cycle is doing this work."""
+    script, state, env = _bare_cycle(tmp_path)
+    lock = state / 'phase1-cycle.lock'; lock.mkdir()
+    (lock / 'pid').write_text(str(os.getpid()))          # a process that IS alive
+    proc = subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0
+    assert 'another phase-1 cycle is running' in proc.stdout
+    assert lock.exists(), 'a live owner\'s lock must not be taken from it'
+
+
+def test_a_lock_left_by_a_killed_cycle_does_not_block_the_next(tmp_path):
+    """A lock whose process is gone is broken, not honoured -- otherwise one
+    kill -9 stops every cycle on the machine until somebody notices."""
+    script, state, env = _bare_cycle(tmp_path)
+    lock = state / 'phase1-cycle.lock'; lock.mkdir()
+    (lock / 'pid').write_text('999999')                  # nobody
+    proc = subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True, timeout=60)
+    assert 'breaking a stale cycle lock' in proc.stdout
+    assert not lock.exists(), 'the lock must be released when the cycle ends'

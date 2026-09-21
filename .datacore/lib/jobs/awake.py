@@ -177,6 +177,30 @@ def asleep_seconds_since(since: float, *, now: float | None = None,
     return min(total, now - since)
 
 
+def last_full_wake(*, log: str | None = None) -> float | None:
+    """When this machine last came fully awake, as a unix time. None if unknown.
+
+    A FULL wake, not a DarkWake. macOS dark-wakes every few minutes with the lid
+    shut to do maintenance, usually with the network half up; treating those as
+    arrivals would have the visitor join run dozens of times a night against a
+    network that is not there. A person opening the lid is the arrival.
+    """
+    import datetime as _dt
+    text = _sleep_log() if log is None else log
+    latest = None
+    for line in text.splitlines():
+        m = _LOG_LINE.match(line)
+        if not m or m.group(2) != "Wake":
+            continue
+        try:
+            when = _dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S %z").timestamp()
+        except ValueError:
+            continue
+        if latest is None or when > latest:
+            latest = when
+    return latest
+
+
 def in_dark_wake(*, log: str | None = None, systemstate: str | None = None) -> bool:
     """Is this Mac in a dark wake -- running, but with no display and nobody at it?
 

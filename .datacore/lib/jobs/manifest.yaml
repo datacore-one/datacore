@@ -187,27 +187,31 @@ jobs:
   # against a stale remote-tracking ref and cannot see work a THIRD machine
   # pushed, which is the cross-machine blindness the critic flagged: a missing
   # push would look identical to a slow one, the exact defect this detects.
-  - name: mac-seq-gap
+  # RETIRED 2026-09-21: mac-seq-gap, replaced by mac-join (DIP-0046 §15).
+  #
+  # The drain metric is not gone -- it is taken INSIDE the join, before the sync
+  # that would otherwise erase what it measures, and recorded as ahead_by. What
+  # is gone is an hourly wall-clock contract on a machine that sleeps: it alerted
+  # for a month about events "ten hours old" that the publisher had been given
+  # ten minutes to push, was cleared by hand each morning, and came back each
+  # night. detectors/seq_gap.py is unchanged and is what the join calls.
+  - name: mac-join
     scope: local
-    why_local: "measures THIS machine's unpublished work; becomes the join record (design-visitor-nodes C)"
+    why_local: "this machine's own arrival record: what it was holding, what it had missed, whether it converged"
     machine: mac
-    schedule: "10 * * * *"
-    cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/seq-gap.log -- python3 ~/Data/.datacore/lib/detectors/seq_gap.py --fetch"
-    # detector contract: 0 clean, 1 findings, 2 could not run. Under the
-    # execution envelope (jobs/run.py, pilot 2026-09-03) 1 is a successful run.
-    exit_ok: [0, 1]
+    schedule: "launchd io.datacore.join, every 5 min while awake; joins on a full wake, on retry, and every 4 waking hours"
+    cmd: "python3 ~/Data/.datacore/lib/visitor_join.py --tick"
     on_fail: telegram
     artifacts:
-      - path: "~/.datacore/state/seq-gap.log"
+      # THE VISITOR'S ONE ALARM. Only a join that CONVERGED rewrites this file,
+      # so its age -- judged in awake time, like every freshness bound on this
+      # machine -- is "how long has the laptop been present without converging".
+      # A failed join on a train writes nothing over the last good record. Eight
+      # waking hours is two missed refreshes: human input at risk.
+      - path: "~/.datacore/state/join.json"
         check: regex
-        # BOTH counts, not just the first. This regex was "0 with unpublished
-        # events" alone, which passes a run reporting "0 with unpublished
-        # events, 9 error(s)" — nine logs the detector could not verify at all
-        # because their remote was down. A contract that ignores the error count
-        # certifies exactly what was never checked.
-        arg: "0 with unpublished events, 0 error"
-        max_age_hours: 26
-
+        arg: '"converged": true'
+        max_age_hours: 8
   - name: nightshift-actor-presence
     # MOVED OFF THE LAPTOP 2026-09-21. This is a network duty with a clock-based
     # contract, and the mac is a visitor: it sleeps, changes networks and may be

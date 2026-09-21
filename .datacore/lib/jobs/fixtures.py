@@ -215,9 +215,6 @@ SUCCESS_RULES: dict[str, list[tuple[str, str]]] = {
     "mac-config-drift.0": [
         (r"(config-drift: \d+ machine\(s\), )\d+( with drift, )\d+( unreachable)",
          r"\g<1>0\g<2>0\g<3>")],
-    "mac-seq-gap.0": [
-        (r"(seq-gap: \d+ log\(s\), )\d+( with unpublished events, )\d+( error)",
-         r"\g<1>0\g<2>0\g<3>")],
     "nightshift-actor-presence.0": [
         (r"(actor-presence: \d+ rostered actor\(s\), )\d+( failing)", r"\g<1>0\g<2>")],
     "nightshift-id-churn.0": [

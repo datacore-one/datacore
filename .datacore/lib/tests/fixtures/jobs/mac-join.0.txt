@@ -1,0 +1,7 @@
+# fixture for mac-join artifact[0]
+# producer artifact: ~/.datacore/state/join.json on mac
+# harvested: 2026-09-21
+# regex under test: "converged": true
+# represents: SUCCESS
+# ---
+  "converged": true,

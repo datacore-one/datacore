@@ -31,6 +31,32 @@ if [ "$rc" -ne 0 ]; then
   exit "$rc"
 fi
 cd "$DATACORE_ROOT" || exit 2
+
+# ONE CYCLE AT A TIME. Two callers now run this on a laptop: the hourly schedule
+# and the visitor join that fires on wake (visitor_join.py, 2026-09-21), and a
+# person can always run it by hand while cron does. Converge takes its own
+# transport lock, but ingest and project do not, and two ingests reading the
+# same org edit is the kind of overlap that stays invisible until the day it
+# writes a fact twice.
+#
+# mkdir is atomic on every POSIX filesystem and flock(1) does not exist on
+# macOS. The lock names its owner so a cycle that was KILLED does not block the
+# next one forever: a lock whose process is gone is broken, not honoured.
+# Losing the race is not a failure -- the other cycle is doing this work -- so
+# the status file is left exactly as that cycle will write it.
+LOCK="$STATE/phase1-cycle.lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  owner="$(cat "$LOCK/pid" 2>/dev/null || true)"
+  if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
+    echo "another phase-1 cycle is running (pid $owner); leaving it to finish"
+    exit 0
+  fi
+  echo "breaking a stale cycle lock (pid ${owner:-unknown} is gone)"
+  rm -rf "$LOCK"
+  mkdir "$LOCK" 2>/dev/null || { echo "could not take the cycle lock"; exit 0; }
+fi
+echo $$ > "$LOCK/pid"
+trap 'rm -rf "$LOCK"' EXIT
 echo "=== $(date -u '+%F %H:%MZ') phase-1 cycle ==="
 # Converge EVERY space first, Phase 1 or not: the marker that says a space is
 # in Phase 1 arrives by pull, and a cycle that pulls only spaces it already
