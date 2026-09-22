@@ -193,6 +193,41 @@ def _read_text(path: str) -> tuple[str | None, str | None]:
     return raw.decode("utf-8", errors="replace"), None
 
 
+def join_record_path() -> str:
+    """Where this machine's visitor join record is (visitor_join.RECORD)."""
+    state = os.environ.get("DATACORE_STATE") or os.path.join(
+        os.path.expanduser("~"), ".datacore", "state")
+    return os.path.join(state, "join.json")
+
+
+def _since_error(expanded: str, mtime: float, since: str) -> str | None:
+    """A visitor's duty is judged in SESSION time: did it run for this session?
+
+    `since: join` -- written at or after the last converged join began.
+    `since: arrival` -- written at or after the join that began this session.
+    join.json is rewritten only after a join's duties have run, so a verifier
+    reading it mid-join still sees the previous record and every duty artifact
+    already newer than it: there is no window in which a running duty reads as
+    late. No record at all means no session has ever converged, and the join's
+    own contract is the one alarm for that; here it is simply unprovable.
+    """
+    record = join_record_path()
+    try:
+        with open(record) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return f"{expanded}: since={since} is unprovable -- no join record at {record} ({exc})"
+    key = "joined_at" if since == "join" else "arrived_at"
+    mark = data.get(key)
+    if not isinstance(mark, (int, float)):
+        return f"{expanded}: since={since} is unprovable -- {record} has no {key}"
+    if mtime < float(mark):
+        when = datetime.fromtimestamp(float(mark)).strftime("%Y-%m-%d %H:%M")
+        return (f"{expanded}: not written since the last {since} ({when}) -- "
+                f"this session's duty has not run")
+    return None
+
+
 def run_check(artifact: Artifact, *, now: float | None = None,
               machine: str | None = None) -> list[str]:
     """Check whether `artifact`'s contract holds.
@@ -232,6 +267,11 @@ def run_check(artifact: Artifact, *, now: float | None = None,
                 f"{expanded}: {detail} exceeds "
                 f"max_age_hours={artifact.max_age_hours})"
             )
+
+    if getattr(artifact, "since", None):
+        late = _since_error(expanded, st.st_mtime, artifact.since)
+        if late:
+            errors.append(late)
 
     check = artifact.check
 

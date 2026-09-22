@@ -136,3 +136,15 @@ def test_registry_entry_has_the_fields_discovery_needs(section, name, entry):
     remembering its name, which is DIP-0016's stated reason to exist."""
     assert entry.get("source"), f"{name} declares no source file"
     assert entry.get("description"), f"{name} has no description"
+
+
+def test_the_registry_has_no_duplicate_keys():
+    """YAML keeps the LAST of two identical keys without a word, so a second
+    `podcast-creator:` silently replaces the first and every test above reads
+    the survivor as the whole truth. This was the one assertion of the mac's
+    daily registry-gc contract; it lives here since 2026-09-22 so it gates the
+    commit that introduces a duplicate instead of a poll the morning after."""
+    import sys
+    sys.path.insert(0, str(ROOT / ".datacore" / "lib"))
+    from registry_gc import _scan_duplicate_keys
+    assert _scan_duplicate_keys(REGISTRY.read_text()) == []

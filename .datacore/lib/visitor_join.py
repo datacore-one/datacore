@@ -34,6 +34,17 @@ visitor is silence.
 
 A closed lid is a LEAVE, not a failure. Nothing here runs in a dark wake.
 
+A VISITOR'S DUTIES HANG OFF THE JOIN (2026-09-22). A visitor carries no clock:
+nothing on it runs "at 07:35". What it does carry -- validating its module set,
+pulling the morning's briefing, probing its own config -- happens because a
+person arrived, so after a converged join this runs every manifest job for this
+machine whose `trigger` is `join`, and on the first join of a session those
+whose trigger is `arrival` too, each through the execution envelope (jobs/run.py).
+The record is written AFTER them, with `joined_at` taken before the cycle, so
+every duty artifact of this join is newer than the record that names it and a
+verifier reading mid-join still sees the previous record: a `since: join`
+contract cannot read a running duty as late.
+
     visitor_join.py --tick      what launchd calls every few minutes
     visitor_join.py --now       join regardless of whether one is due
     visitor_join.py --status    print the last record
@@ -55,6 +66,7 @@ if str(LIB) not in sys.path:
 ROOT = Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
 STATE = Path(os.environ.get("DATACORE_STATE", str(Path.home() / ".datacore" / "state")))
 RECORD = STATE / "join.json"
+MANIFEST = LIB / "jobs" / "manifest.yaml"
 ATTEMPT = STATE / "join-attempt.json"
 LOG = STATE / "join.log"
 
@@ -64,6 +76,9 @@ REFRESH_AWAKE_H = 4.0
 #: Never attempt more often than this. A lid flapping on a bad network must not
 #: turn into a git operation across ten repositories every few minutes.
 MIN_SPACING_S = 600
+#: One duty may not hold the join past this. The longest, the suite audit, takes
+#: about ten minutes; run.py's own default timeout is an hour.
+DUTY_TIMEOUT_S = 3900
 
 
 def _load(path: Path) -> dict:
@@ -124,8 +139,56 @@ def converge() -> tuple[int, str]:
     return proc.returncode, tail[0][:200]
 
 
-def join(*, now: float | None = None) -> dict:
+def duties(triggers: set[str], *, machine: str | None = None,
+           manifest: Path | None = None) -> list[str]:
+    """This machine's jobs fired by `triggers`, `join` ones before `arrival` ones
+    (the suite audit is the long one; nothing short should wait behind it)."""
+    import yaml
+    if machine is None:
+        from actor_identity import this_actor
+        machine = this_actor()
+    jobs = (yaml.safe_load((manifest or MANIFEST).read_text()) or {}).get("jobs") or []
+    mine = [j for j in jobs if j.get("machine") == machine and j.get("trigger") in triggers]
+    order = {"join": 0, "arrival": 1}
+    return [j["name"] for j in sorted(mine, key=lambda j: order.get(j["trigger"], 9))]
+
+
+def run_duties(*, arrival: bool) -> dict:
+    """Run each duty through the envelope; record how it went, never raise.
+    A duty's verdict is its own contract's business -- a red duty does not make
+    the join unconverged, and the join's alarm stays about convergence only."""
+    out: dict[str, dict] = {}
+    for name in duties({"join", "arrival"} if arrival else {"join"}):
+        started = time.time()
+        try:
+            proc = subprocess.run(
+                [sys.executable, str(LIB / "jobs" / "run.py"), "--manifest", str(MANIFEST), name],
+                capture_output=True, text=True, timeout=DUTY_TIMEOUT_S,
+                env={**os.environ, "DATACORE_ROOT": str(ROOT)}, cwd=str(ROOT))
+            rc, tail = proc.returncode, ((proc.stdout + proc.stderr).strip().splitlines() or [""])[-1]
+        except (OSError, subprocess.SubprocessError) as exc:
+            rc, tail = 2, f"{type(exc).__name__}: {exc}"
+        out[name] = {"rc": rc, "seconds": round(time.time() - started, 1), "last": tail[:160]}
+    return out
+
+
+def is_arrival(prev: dict, *, log: str | None = None) -> bool:
+    """Does this join begin a session? Yes if no session is on record, or the
+    machine has fully woken since the last converged join. Decided from the
+    record, not from why this tick was due: a join after a failed one on a
+    train is still the session's first."""
+    from jobs import awake
+    last = float(prev.get("joined_at") or 0)
+    if not last or not prev.get("arrived_at"):
+        return True
+    wake = awake.last_full_wake(log=log)
+    return bool(wake and wake > last)
+
+
+def join(*, now: float | None = None, log: str | None = None) -> dict:
     now = time.time() if now is None else now
+    prev = _load(RECORD)
+    arrival = is_arrival(prev, log=log)
     before = measure(fetch=True)
     rc, detail = converge()
     after = measure(fetch=False)
@@ -145,6 +208,8 @@ def join(*, now: float | None = None) -> dict:
         "cycle": detail,
         "blocked": after["blocked"],
         "errors": after["errors"],
+        "arrival": arrival,
+        "arrived_at": now if arrival else prev.get("arrived_at", now),
     }
     _write_atomic(ATTEMPT, {"at": now, "ok": converged})
     LOG.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -153,6 +218,8 @@ def join(*, now: float | None = None) -> dict:
                  f"behind_by={before['behind']} still_gap={after['gap']} rc={rc}"
                  + (f" blocked={after['blocked'][0]}" if after["blocked"] else "") + "\n")
     if converged:
+        # Duties first, record last -- see the module docstring.
+        record["duties"] = run_duties(arrival=arrival)
         # ONLY a successful join replaces the record. A run that learned nothing
         # -- no network, a held publisher -- must not overwrite the last one that
         # did; the record's age is the alarm, and rewriting it on failure would
@@ -209,8 +276,10 @@ def main() -> int:
     rec = join()
     print(f"join: converged={rec['converged']} ahead_by={rec['ahead_by']} "
           f"behind_by={rec['behind_by']} still_unpublished_past_grace="
-          f"{rec['still_unpublished_past_grace']}"
+          f"{rec['still_unpublished_past_grace']} arrival={rec['arrival']}"
           + (f"\n  blocked: {rec['blocked'][0]}" if rec["blocked"] else ""))
+    for name, d in (rec.get("duties") or {}).items():
+        print(f"  duty {name}: rc={d['rc']} {d['seconds']}s  {d['last']}")
     # Not converging is a condition, not a crash: the contract on join.json's age
     # is what decides whether it has gone on long enough to matter.
     return 0

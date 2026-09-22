@@ -1,7 +1,0 @@
-# fixture for mac-drills artifact[0]
-# producer artifact: ~/.datacore/state/drills.log on mac
-# harvested: 2026-09-19
-# regex under test: drills: 1/1 held
-# represents: SUCCESS
-# ---
-drills: 1/1 held

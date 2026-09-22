@@ -367,11 +367,17 @@ def test_manifest_loads_and_mac_artifact_pull_job_present():
     job = by_name["mac-artifact-pull"]
 
     assert job.machine == "mac"
-    assert job.cmd == "python3 ~/Data/.datacore/lib/artifact_sync.py --role client"
+    # A visitor duty since 2026-09-22: fired by the join, its output written
+    # atomically to a session record the contract judges with `since: join`.
+    assert job.trigger == "join"
+    assert job.cmd.endswith("-- python3 ~/Data/.datacore/lib/artifact_sync.py --role client")
     assert job.on_fail == "log"
-    assert len(job.artifacts) == 1
+    assert len(job.artifacts) == 2
 
-    artifact = job.artifacts[0]
+    record = job.artifacts[0]
+    assert record.path == "~/.datacore/state/artifact-pull.log" and record.since == "join"
+
+    artifact = job.artifacts[1]
     assert "app-briefing.json" in artifact.path
     # NOT `{today}`: a daily artifact cannot exist between midnight and the hour
     # its job runs, so a date-templated path failed this contract every night

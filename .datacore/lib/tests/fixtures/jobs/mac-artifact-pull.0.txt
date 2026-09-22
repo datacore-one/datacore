@@ -1,0 +1,7 @@
+# fixture for mac-artifact-pull artifact[0]
+# producer artifact: ~/.datacore/state/artifact-pull.log on mac
+# harvested: 2026-09-22
+# regex under test: ^ok: 
+# represents: SUCCESS
+# ---
+ok: ~/.datacore/cos/briefings/2026-09-22/app-briefing.json -> $HOME/.datacore/cos/briefings/2026-09-22/app-briefing.json

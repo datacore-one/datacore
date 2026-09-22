@@ -97,6 +97,19 @@ CHECKS = frozenset({"exists", "nonempty", "json_has_keys", "regex", "last_line_r
                     "min_bytes", "no_crash"})
 ON_FAILS = frozenset({"log", "telegram"})
 
+#: What makes a VISITOR's duty happen (DIP-0046 §14/§15). A visitor carries no
+#: clock: its duties run because a person opened the lid, so they are named by
+#: the session event that fires them, never by an hour.
+#:   wake      the join tick itself (visitor_join.py --tick notices a full wake)
+#:   join      after every converged join -- on arrival and every few waking hours
+#:   arrival   after the first converged join of a session only
+#:   awake     a daemon or stream that runs only while the machine is awake
+TRIGGERS = frozenset({"wake", "join", "arrival", "awake"})
+#: An artifact judged in session time: it must have been written at or after
+#: the last converged join (`join`) or the join that began this session
+#: (`arrival`), as recorded in the visitor's join.json.
+SINCE = frozenset({"join", "arrival"})
+
 # checks that must NOT carry an `arg`
 _NO_ARG_CHECKS = frozenset({"exists", "nonempty", "no_crash"})
 
@@ -115,6 +128,7 @@ class Artifact:
     check: str = "exists"
     max_age_hours: float | None = None
     arg: object = None
+    since: str | None = None
 
 
 @dataclass
@@ -133,6 +147,8 @@ class Job:
     #: is circular: on 2026-09-22 box-autofix-escalation was delegated to
     #: Miles, dead-lettered after three attempts, and then listed itself.
     delegate: bool = True
+    #: A visitor's session trigger (TRIGGERS); None on a resident.
+    trigger: str | None = None
 
 
 def load_manifest(path: Path, *, roster_path: Path | None = None) -> list[Job]:
@@ -260,6 +276,11 @@ def _build_job(raw: object, index: int, errors: list[str], seen_names: set[str],
     if not isinstance(delegate, bool):
         errors.append(f"{ref}: field 'delegate' must be true or false (got {delegate!r})")
 
+    trigger = raw.get("trigger")
+    if trigger is not None and trigger not in TRIGGERS:
+        errors.append(f"{ref}: unknown trigger {trigger!r} "
+                      f"(expected one of: {', '.join(sorted(TRIGGERS))})")
+
     if len(errors) != start:
         return None
 
@@ -273,6 +294,7 @@ def _build_job(raw: object, index: int, errors: list[str], seen_names: set[str],
         on_fail=on_fail,
         require_synced_repos=list(require_synced_repos),
         delegate=delegate,
+        trigger=trigger,
     )
 
 
@@ -333,7 +355,11 @@ def _build_artifact(raw: object, job_ref: str, index: int, errors: list[str]) ->
         if not isinstance(arg, str):
             errors.append(f"{ref}: check {check!r} requires a string 'arg' (got {arg!r})")
 
+    since = raw.get("since")
+    if since is not None and since not in SINCE:
+        errors.append(f"{ref}: unknown since {since!r} (expected one of: {', '.join(sorted(SINCE))})")
+
     if len(errors) != start:
         return None
 
-    return Artifact(path=path, check=check, max_age_hours=max_age_hours, arg=arg)
+    return Artifact(path=path, check=check, max_age_hours=max_age_hours, arg=arg, since=since)

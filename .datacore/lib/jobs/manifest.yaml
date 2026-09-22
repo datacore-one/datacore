@@ -199,7 +199,13 @@ jobs:
     scope: local
     why_local: "this machine's own arrival record: what it was holding, what it had missed, whether it converged"
     machine: mac
-    schedule: "launchd io.datacore.join, every 5 min while awake; joins on a full wake, on retry, and every 4 waking hours"
+    # THE TRIGGER EVERY OTHER VISITOR DUTY HANGS OFF (DIP-0046 §15). The tick
+    # only looks; a join happens on a full wake, on retry after one that did not
+    # converge, and every 4 waking hours while present. After a converged join
+    # it runs this machine's `trigger: join` duties, and on the first join of a
+    # session its `trigger: arrival` duties, then writes the record.
+    trigger: wake
+    schedule: "session: launchd io.datacore.join ticks every 5 min while awake (RunAtLoad); joins on a full wake, on retry, and every 4 waking hours"
     cmd: "python3 ~/Data/.datacore/lib/visitor_join.py --tick"
     on_fail: telegram
     artifacts:
@@ -257,20 +263,24 @@ jobs:
     why_pinned: "polls four hosts over ssh, and only the operator's machine holds that trust -- nightshift has the aliases and reached 2 of 5"
     unpin_when: "each host attests its own config and nobody polls"
     machine: mac
-    # launchd, not cron. This SSHes to four machines, and under cron on a
-    # laptop it failed two ways that look identical in the log: a run scheduled
-    # during sleep never happened, and a run landing mid-wake had no agent
-    # socket so hermes read as unreachable — red contract, false alert, and the
-    # next manual run passing. launchd fires missed runs on wake and the socket
-    # is resolved at run time rather than baked into a crontab line.
-    schedule: "launchd io.datacore.config-drift @ 08:50, 14:50, 20:50 (fires on wake)"
+    # On join, not at 08:50/14:50/20:50. The launchd calendar existed because
+    # cron on a laptop dropped runs during sleep and ran mid-wake without an
+    # agent socket; a converged join is by definition awake, networked and
+    # past the wake, and config_drift_run.sh still resolves the socket itself.
+    trigger: join
+    schedule: "on join: visitor_join.py runs it after every converged join"
     cmd: "~/Data/.datacore/lib/config_drift_run.sh"
     on_fail: telegram
     artifacts:
+      # since: arrival, not join. When the only finding is "unreachable",
+      # config_drift_run.sh keeps the previous log -- nothing was learned -- so
+      # one flaky host at one join leaves the log untouched. What this contract
+      # asserts is that the fleet's config was actually compared, every host
+      # answering and none drifted, at least once this session.
       - path: "~/.datacore/state/config-drift.log"
         check: regex
         arg: "0 with drift, 0 unreachable"
-        max_age_hours: 26
+        since: arrival
 
   # ORDER IS LOAD-BEARING: ingest at :40, drift check at :50.
   #
@@ -318,25 +328,13 @@ jobs:
   # items INTO THE SHARED LEDGER. 25 such dismissals are on record. Hermes's
   # cron is disabled pending a rename and is deliberately absent here: a
   # contract for a job that must not run would fail forever.
-  - name: mac-phase1-cycle
-    scope: local
-    why_local: "regenerates the working copy a person reads on this machine"
-    machine: mac
-    schedule: "cron 25 * * * * on mac"
-    cmd: "~/Data/.datacore/lib/ledger_phase1_cycle.sh"   # mac
-    on_fail: telegram
-    artifacts:
-      - path: "~/.datacore/state/phase1-cycle-status.txt"
-        check: regex
-        # `^OK ` and nothing looser. The script writes FAIL with the rc when any
-        # converge, ingest or projection step fails, and a REFUSED projection is
-        # a failure: refusing means the org file holds work the ledger has never
-        # seen, which is the one state this loop must never paper over.
-        arg: "^OK phase1-cycle"
-        # Hourly job. 3h tolerates a missed run and a slow one; a laptop asleep
-        # for longer than that has genuinely stopped ingesting, and saying so is
-        # the point.
-        max_age_hours: 3
+  # mac-phase1-cycle DELETED 2026-09-22 (visitor conversion). On a visitor the
+  # join IS the phase-1 cycle: visitor_join.converge() runs
+  # ledger_phase1_cycle.sh, and a join counts as converged only when that cycle
+  # exits 0 with nothing left unpublished. A second contract on the same cycle,
+  # fired hourly by launchd, judged the same work twice on a clock -- and was
+  # this machine's largest source of red (201 of 654 in September). Its
+  # evidence is mac-join's record now; the hourly agent is gone.
 
   - name: box-phase1-cycle
     machine: box
@@ -414,8 +412,11 @@ jobs:
     scope: local
     why_local: "validates the module set installed HERE, for interactive /today"
     machine: mac
-    schedule: "cron 25 * * * * on mac"
-    cmd: "python3 ~/Data/.datacore/lib/today_registry.py --validate"
+    # On join: a converged join is when the module set can have changed under
+    # /today (it just merged), and it comes before the person runs /today.
+    trigger: join
+    schedule: "on join: visitor_join.py runs it after every converged join"
+    cmd: "cd ~/Data && ~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/today-registration.log -- python3 ~/Data/.datacore/lib/today_registry.py --validate"
     exit_ok: true
     on_fail: telegram
     artifacts:
@@ -425,7 +426,7 @@ jobs:
         # reached by a host that lost its module manifests — it reports that it
         # cannot verify anything instead.
         arg: "0 problem\\(s\\)"
-        max_age_hours: 3
+        since: join
 
   - name: box-cadence-liveness
     machine: box
@@ -543,14 +544,15 @@ jobs:
     scope: local
     why_local: "decisions waiting in this machine's working tree"
     machine: mac
-    schedule: "20 8 * * *"
+    trigger: join
+    schedule: "on join: visitor_join.py runs it after every converged join"
     cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/pending-decisions.log -- python3 ~/Data/.datacore/lib/detectors/pending_decisions.py"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/pending-decisions.log"
         check: regex
         arg: "0 older than"
-        max_age_hours: 26
+        since: join
 
   - name: box-ledger-verify
     machine: box
@@ -580,19 +582,13 @@ jobs:
       # --check reports 125 active, 0 orphaned, 0 bak, 0 duplicates — clean.
       # Moved to `mac` rather than scheduled on `box`, which is why it had
       # alerted every morning about a job nobody could safely run.
-  - name: mac-registry-gc
-    scope: pinned
-    why_pinned: "compares the registry with INSTALLED modules, and only this machine is a complete replica -- nightshift reports 52 orphans for modules it simply lacks"
-    unpin_when: "a resident carries every module, or the check runs in per-module CI"
-    machine: mac
-    schedule: "35 7 * * *"
-    cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/registry-gc.log -- python3 ~/Data/.datacore/lib/registry_gc.py --registry ~/Data/.datacore/registry/agents.yaml --check"
-    on_fail: telegram
-    artifacts:
-      - path: "~/.datacore/state/registry-gc.log"
-        check: regex
-        arg: "duplicate keys \\(0\\)"
-        max_age_hours: 26
+  # mac-registry-gc DELETED 2026-09-22 (visitor conversion; pinned debt 3 -> 2).
+  # Its contract asserted one thing, "duplicate keys (0)". The rest of what the
+  # tool reports -- sources that do not resolve, agent files nobody registered --
+  # was already bound by tests/test_registry_grounded.py, and the duplicate-key
+  # check is now a test there too. The registry is gated where it is edited
+  # (every commit, and the suite audit, which runs lib/tests on the one complete
+  # replica) instead of polled once a day on a clock.
 
   - name: box-briefing
     machine: box
@@ -912,7 +908,10 @@ jobs:
     scope: local
     why_local: "ships this machine's own agent stream"
     machine: mac
-    schedule: "every 30s (launchd StartInterval, com.datacore.agent-stream-rsync.plist)"
+    # A stream, not a duty with a deadline: launchd re-runs it every 30s, and
+    # only while the machine is awake. Its bound is in awake hours.
+    trigger: awake
+    schedule: "while awake: launchd StartInterval 30s stream (com.datacore.agent-stream-rsync.plist)"
     cmd: "~/Data/.datacore/lib/agent_stream_rsync.sh"
     on_fail: telegram
     artifacts:
@@ -938,6 +937,7 @@ jobs:
     scope: local
     why_local: "this machine's observation daemon"
     machine: mac
+    trigger: awake
     schedule: "continuous (launchd KeepAlive daemon, RunAtLoad, com.datacore.lens.plist)"
     cmd: "cd ~/Data/.datacore/modules/lens && python3 -m lib.runner --serve"
     on_fail: telegram
@@ -975,16 +975,27 @@ jobs:
     scope: local
     why_local: "pulls briefing artifacts onto this machine"
     machine: mac
-    schedule: "every 30 min (launchd StartInterval 1800, com.datacore.artifact-pull.plist)"  # INSTALLED 2026-08-10. Before that this field claimed "*/30 * * * *" while no crontab entry and no plist existed — a declared schedule with no scheduler behind it. The plist now exists and RunAtLoad-fired successfully; it exits 1 while answers.yaml and facts.json have no producer on the box (declared CHANGELOG gap), which is honest failure rather than silence — the contract below checks app-briefing.json, which does have a producer and does sync
-    cmd: "python3 ~/Data/.datacore/lib/artifact_sync.py --role client"
+    # On join, not every 30 minutes. The box writes one briefing a morning; the
+    # time the mac needs it is when a person arrives.
+    trigger: join
+    schedule: "on join: visitor_join.py runs it after every converged join"
+    cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/artifact-pull.log -- python3 ~/Data/.datacore/lib/artifact_sync.py --role client"
     artifacts:
+      # The pull's own record, in session time: it ran for this join and its
+      # last pair came back ok. rsync -a keeps the box's mtime on the briefing,
+      # so the briefing's age cannot say whether the pull ran -- only whether
+      # the box produced one.
+      - path: "~/.datacore/state/artifact-pull.log"
+        check: last_line_regex
+        arg: "^ok: "
+        since: join
       # .datacore/lib/artifact_sync.py (Task 6.1): rsync-over-ssh pull of the
       # box's CoS briefing artifacts. This is the local (mac-side) copy of
       # the same app-briefing.json checked by box-briefing above -- same
       # check/keys/freshness contract, since a stale or malformed pulled
       # copy is exactly as bad as a stale generated one for anything
-      # reading it on this machine.
-      - path: "~/.datacore/cos/briefings/*/app-briefing.json"  # TODO(verify-on-mac): confirm sync cadence + freshness threshold once the launchd plist replaces this placeholder cron schedule
+      # reading it on this machine. Age in awake hours.
+      - path: "~/.datacore/cos/briefings/*/app-briefing.json"
         check: json_has_keys
         arg: ["headline"]
         max_age_hours: 26
@@ -1094,17 +1105,10 @@ jobs:
         arg: "dispatch rc="
         max_age_hours: 1
 
-  - name: mac-shadow-diff
-    scope: local
-    why_local: "diffs this working copy's org files against the projection (retirement candidate: every space is already Phase 1, which is the flip this gated)"
-    machine: mac
-    schedule: "0 7 * * *"
-    cmd: "python3 ~/.datacore/v2-runner/.datacore/lib/shadow_check.py"
-    on_fail: telegram
-    artifacts:
-      - path: "~/.datacore/state/shadow-status.json"
-        check: no_crash
-        max_age_hours: 26
+  # mac-shadow-diff DELETED 2026-09-22 (visitor conversion). It gated the Phase 1
+  # flip and all ten spaces have flipped: shadow-status.json on that date read
+  # "total_spaces": 0, "all_clean": true -- a check of nothing, green by
+  # construction. A contract that cannot fail is removed, not kept.
 
 
 # ── UNVERIFIED JOBS ───────────────────────────────────────────────────────
@@ -1265,19 +1269,11 @@ jobs:
         arg: 'autofix: 0 repair\(s\) need a person'
         max_age_hours: 3
 
-  - name: mac-drills
-    scope: local
-    why_local: "laptop_night_drill models a macOS night and fails 4/8 on Linux, correctly"
-    machine: mac
-    schedule: 45 4 * * *
-    cmd: ~/Data/.datacore/lib/audit_trio_run.sh drills
-    exit_ok: [0, 1]
-    on_fail: telegram
-    artifacts:
-      - path: ~/.datacore/state/drills.log
-        check: last_line_regex
-        arg: 'drills: 1/1 held'
-        max_age_hours: 26
+  # mac-drills DELETED 2026-09-22 (visitor conversion). Its one drill,
+  # laptop_night_drill, is a test: synthetic power logs through the runner's
+  # job_verify. It runs as tests/test_laptop_night_drill.py in lib/tests, which
+  # the suite audit runs on this machine and which skips off macOS -- a failing
+  # drill still turns mac-suite-audit red, without a clock of its own.
 
   - name: nightshift-preflight
     # THE GATE THE NIGHT DEPENDS ON, ASKED BEFORE THE NIGHT. The overnight run
@@ -1325,7 +1321,10 @@ jobs:
     why_pinned: "module test suites exist only where modules are cloned; moving it would shrink what it covers without saying so"
     unpin_when: "each module repo has its own CI workflow"
     machine: mac
-    schedule: 30 3 * * *
+    # Once a session, not at 03:30. About ten minutes of CPU, so it runs after
+    # the join that begins a session rather than after every join.
+    trigger: arrival
+    schedule: "on arrival: visitor_join.py runs it after the first converged join of a session"
     cmd: ~/Data/.datacore/lib/audit_trio_run.sh suites
     exit_ok: [0, 1]
     on_fail: telegram
@@ -1345,7 +1344,7 @@ jobs:
         # and the regex without it read that as green. A suite that ran no test
         # is not a green suite.
         arg: '0 unexplained, \d+ accepted, 0 error across \d+ suite\(s\); 0 suite\(s\) not green, 0 collected nothing$'
-        max_age_hours: 26
+        since: arrival
 
   - name: nightshift-delegation-drill
     # Never delegated: this job IS the delegation machinery, and handing its
@@ -1379,7 +1378,8 @@ jobs:
     scope: local
     why_local: "probes THIS host's config resolution; every host runs its own"
     machine: mac
-    schedule: 50 5 * * *
+    trigger: join
+    schedule: "on join: visitor_join.py runs it after every converged join"
     cmd: ~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/config-resolution.log -- python3 ~/Data/.datacore/lib/config_resolution_probe.py
     exit_ok: [0, 1]
     on_fail: telegram
@@ -1387,6 +1387,6 @@ jobs:
       - path: ~/.datacore/state/config-resolution.log
         check: last_line_regex
         arg: 'config-resolution: OK'
-        max_age_hours: 26
+        since: join
 
 unverified_jobs_see_comment_above: true

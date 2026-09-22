@@ -98,6 +98,16 @@ def _stub(monkeypatch, *, before, after, rc=0):
     calls = iter([before, after])
     monkeypatch.setattr(vj, "measure", lambda **kw: next(calls))
     monkeypatch.setattr(vj, "converge", lambda: (rc, "stub"))
+    ran: list[bool] = []
+
+    def duties(*, arrival):
+        # What the record says at the moment duties run: they must see the
+        # PREVIOUS record, never this join's.
+        ran.append(arrival)
+        return {"seen": {"rc": 0, "seconds": 0.0,
+                         "last": vj.RECORD.read_text() if vj.RECORD.exists() else ""}}
+    monkeypatch.setattr(vj, "run_duties", duties)
+    return ran
 
 
 CLEAN = {"ahead": 0, "behind": 0, "gap": 0, "blocked": [], "errors": []}
@@ -131,3 +141,58 @@ def test_a_cycle_that_failed_is_not_convergence(monkeypatch):
     _stub(monkeypatch, before=CLEAN, after=CLEAN, rc=1)
     assert vj.join(now=NOW)["converged"] is False
     assert not vj.RECORD.exists()
+
+
+# ── duties hang off the join ───────────────────────────────────────────────
+
+def test_duties_run_after_convergence_and_before_the_record(monkeypatch):
+    """Record last, with joined_at taken before the cycle: every duty artifact
+    of this join is newer than the record naming it, and a verifier reading
+    mid-join still sees the previous record -- so `since: join` cannot read a
+    running duty as late."""
+    ran = _stub(monkeypatch, before=CLEAN, after=CLEAN)
+    rec = vj.join(now=NOW, log="")
+    assert ran == [True]
+    assert rec["duties"]["seen"]["last"] == ""          # no record existed yet
+    on_disk = json.loads(vj.RECORD.read_text())
+    assert on_disk["joined_at"] == NOW and "seen" in on_disk["duties"]
+
+
+def test_no_duty_runs_on_a_join_that_did_not_converge(monkeypatch):
+    """Not converging is the one alarm; its duties would run on a stale tree."""
+    ran = _stub(monkeypatch, before=CLEAN, after=CLEAN, rc=1)
+    vj.join(now=NOW, log="")
+    assert ran == []
+
+
+def test_a_refresh_join_is_not_an_arrival(monkeypatch):
+    vj.RECORD.write_text(json.dumps({"joined_at": NOW - 5 * 3600, "arrived_at": NOW - 9 * 3600}))
+    ran = _stub(monkeypatch, before=CLEAN, after=CLEAN)
+    log = f"{_stamp(NOW - 10 * 3600)} Wake                Wake from Deep Idle\n"
+    rec = vj.join(now=NOW, log=log)
+    assert ran == [False]
+    assert rec["arrival"] is False and rec["arrived_at"] == NOW - 9 * 3600
+
+
+def test_waking_since_the_last_converged_join_is_an_arrival(monkeypatch):
+    """Decided from the record, not from why the tick was due: the first join
+    to converge after a wake begins the session, even if one failed first."""
+    vj.RECORD.write_text(json.dumps({"joined_at": NOW - 5 * 3600, "arrived_at": NOW - 9 * 3600}))
+    vj.ATTEMPT.write_text(json.dumps({"at": NOW - 900, "ok": False}))
+    ran = _stub(monkeypatch, before=CLEAN, after=CLEAN)
+    log = f"{_stamp(NOW - 3600)} Wake                Wake from Deep Idle\n"
+    rec = vj.join(now=NOW, log=log)
+    assert ran == [True] and rec["arrived_at"] == NOW
+
+
+def test_duties_come_from_the_manifest_join_first(tmp_path):
+    import yaml
+    m = tmp_path / "manifest.yaml"
+    m.write_text(yaml.safe_dump({"jobs": [
+        {"name": "suite", "machine": "lap", "trigger": "arrival"},
+        {"name": "pull", "machine": "lap", "trigger": "join"},
+        {"name": "stream", "machine": "lap", "trigger": "awake"},
+        {"name": "elsewhere", "machine": "srv", "trigger": "join"},
+    ]}))
+    assert vj.duties({"join"}, machine="lap", manifest=m) == ["pull"]
+    assert vj.duties({"join", "arrival"}, machine="lap", manifest=m) == ["pull", "suite"]
