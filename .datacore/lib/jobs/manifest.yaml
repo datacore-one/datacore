@@ -1315,7 +1315,11 @@ jobs:
         # `accepted` is deliberately left free: entries come and go from
         # suite-audit-baseline.yaml, and pinning the number here would mean a
         # second file to update every time one is retired.
-        arg: '0 unexplained, \d+ accepted, 0 error across \d+ suite\(s\); 0 suite\(s\) not green'
+        # `0 collected nothing` is pinned: on 2026-09-22 a run under the wrong
+        # interpreter reported "0 passed, 0 unexplained ... 21 collected nothing"
+        # and the regex without it read that as green. A suite that ran no test
+        # is not a green suite.
+        arg: '0 unexplained, \d+ accepted, 0 error across \d+ suite\(s\); 0 suite\(s\) not green, 0 collected nothing$'
         max_age_hours: 26
 
   - name: nightshift-delegation-drill

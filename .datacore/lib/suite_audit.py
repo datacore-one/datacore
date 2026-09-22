@@ -229,6 +229,16 @@ def gate_report() -> int:
     return 1 if stale else 0
 
 
+def verdict(unexplained, empty) -> int:
+    """Non-zero when any suite is not green OR any suite collected nothing.
+
+    "Collected nothing" used to be reported and then ignored by the exit code:
+    a run under an interpreter without pytest exited 0 with every suite empty
+    (2026-09-22). Zero tests is not zero failures.
+    """
+    return 1 if (unexplained or empty) else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--gate", action="store_true", help="report which test files no automated gate runs")
@@ -310,7 +320,7 @@ def main() -> int:
 
     if cov_dir is not None:
         report_untouched(cov_dir, args.python)
-    return 1 if unexplained else 0
+    return verdict(unexplained, empty)
 
 
 def report_untouched(cov_dir: Path, python: str) -> None:
