@@ -17,6 +17,8 @@ every consumer downstream trusts it.
 from __future__ import annotations
 
 import argparse
+import ast
+import re
 import sys
 from pathlib import Path
 
@@ -58,6 +60,14 @@ def check(mod: Path) -> list[str]:
                 continue
             if (mod / subdir / f"{name}.md").exists():
                 continue
+            # Two layouts are in use. health/agents/dashboard-curator/ is a
+            # DIRECTORY holding agent.yaml + prompt.md; every other health agent
+            # is a flat .md. Both are real agents, so the check accepts either
+            # rather than reporting a working agent as missing.
+            as_dir = mod / subdir / name
+            if as_dir.is_dir() and any((as_dir / f).exists()
+                                       for f in ('agent.yaml', 'prompt.md', 'index.md')):
+                continue
             if (core / subdir / f"{name}.md").exists():
                 continue                       # implemented at core level
             findings.append(f"{mod.name}: declares {kind[:-1]} '{name}' but {subdir}/{name}.md is missing")
@@ -82,10 +92,53 @@ def check(mod: Path) -> list[str]:
     # module with Python libs and no requirements file is the undeclared-dep
     # failure that has bitten this system repeatedly.
     if (mod / "lib").is_dir() and not (mod / "requirements.txt").exists():
-        py = list((mod / "lib").rglob("*.py"))
-        if py:
-            findings.append(f"{mod.name}: has {len(py)} Python file(s) under lib/ and no requirements.txt")
+        third_party = _third_party_imports(mod / "lib")
+        if third_party:
+            findings.append(
+                f"{mod.name}: imports {', '.join(sorted(third_party)[:6])} "
+                f"and has no requirements.txt")
     return findings
+
+
+# Counting .py files flagged 20 modules, most of them stdlib-only — `meetings`
+# imports nothing outside the standard library and needs no requirements file.
+# A check that reports mostly noise gets ignored, which is the failure it exists
+# to prevent, so it asks the question that matters: does this module import
+# something that will not be there?
+# Counting .py files flagged 20 modules, most stdlib-only — `meetings` imports
+# nothing outside the standard library and needs no requirements file. A regex
+# over import lines was no better: it matched prose inside docstrings and
+# credited `trading` with importing "THIS", "anywhere" and "a".
+#
+# So parse it. A check that reports mostly noise gets ignored, which is the
+# failure it exists to prevent.
+_LOCAL_OK = {"lib", "tests", "adapters"}
+
+
+def _third_party_imports(lib: Path) -> set[str]:
+    stdlib = getattr(sys, "stdlib_module_names", set())
+    local = {p.stem for p in lib.rglob("*.py")} | {p.name for p in lib.iterdir() if p.is_dir()}
+    found: set[str] = set()
+    for f in lib.rglob("*.py"):
+        try:
+            tree = ast.parse(f.read_text(errors="ignore"))
+        except (OSError, SyntaxError):
+            continue                      # unparseable is not an import claim
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:            # relative import: always local
+                    continue
+                names = [(node.module or "").split(".")[0]]
+            else:
+                continue
+            for name in names:
+                if (not name or name in stdlib or name in local
+                        or name in _LOCAL_OK or name.startswith("_")):
+                    continue
+                found.add(name)
+    return found
 
 
 def main() -> int:
