@@ -45,8 +45,11 @@ settings:
   enabled:
     description: "Enable research module"
     default: true
+  notebooklm_path:
+    description: "Path to the notebooklm CLI (notebooklm-py). null = detect from PATH"
+    default: null
   nlm_path:
-    description: "Path to nlm CLI binary (null = detect from PATH)"
+    description: "DEPRECATED: the legacy nlm Go CLI. Its audio RPC stopped working ~2026-09; kept only so an unmigrated host still creates notebooks and uploads sources."
     default: null
   podcast_output_dir:
     description: "Directory for generated podcasts"

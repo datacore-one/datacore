@@ -85,28 +85,51 @@ THEMES = {
 }
 
 # Venture attribution -- what this changes, if anything. Separate from theme:
-# a sovereignty item can be a Datafund item, a PLUR item, or neither.
+# a sovereignty item can be a Acme item, a PLUR item, or neither.
 VENTURES = {
-    "plur":     ["plur", "engram", "claude-mem", "cmem", "mcp", "clawhub", "openclaw",
-                 "agent memory", "skills.sh", "omnigent", "hermes"],
-    "datafund": ["datafund", "verity", "data as an asset", "data marketplace", "kraken",
-                 "x402", "tokenized", "monetization", "monetisation", "santorio"],
-    "fds":      ["fds", "fair data", "fairdrop", "swarm", "sovereign", "data sovereignty",
-                 "fairdrive", "bee", "bzz"],
-    "datacore": ["datacore", "second brain", "org-mode", "gtd", "obsidian", "zettel"],
-    "meridian": ["meridian", "trading", "hmm", "wyckoff", "quant", "backtest"],
+    # EXAMPLE routing config. These are placeholders — replace them with your own
+    # ventures in `<space>/.datacore/research-routing.yaml`, which this module reads
+    # at startup and which overrides everything below.
+    #
+    # A module ships code, never its author's data: the venture names and keyword
+    # signatures that used to live here described one person's portfolio and were
+    # both disclosive and useless to anyone else.
+    "product":  ["product", "roadmap", "feature", "release"],
+    "platform": ["platform", "infrastructure", "api", "sdk"],
+    "research": ["research", "paper", "benchmark", "evaluation"],
 }
 
 # A repo can only be named when the text names it. No inference.
 REPO_HINTS = {
-    "plur-ai/plur":        ["plur-ai/plur", "plur core", "@plur-ai/core", "@plur-ai/mcp"],
-    "plur-ai/enterprise":  ["plur-ai/enterprise", "scim", "sso"],
-    "plur-ai/plur-bench":  ["plur-bench", "benchmark"],
-    "plur-ai/website":     ["plur-ai/website"],
-    "datafund/verity":     ["datafund/verity", "verity"],
-    "fairDataSociety/Fairdrop":        ["fairdrop"],
-    "fairDataSociety/fairdrive-theapp": ["fairdrive"],
+    # EXAMPLE. Same story as VENTURES — override in research-routing.yaml.
+    "example-org/example-repo": ["example-repo", "example core"],
 }
+
+# ── Owner routing overrides ──────────────────────────────────────────────────
+# The dicts above are examples. Real venture names, their keyword signatures and
+# repo hints are the installing user's business configuration, not this module's
+# code, so they load from outside it and win when present.
+def _load_routing_overrides() -> None:
+    """Merge <space>/.datacore/research-routing.yaml over the example config."""
+    import os
+    from pathlib import Path
+    try:
+        import yaml
+    except ImportError:
+        return
+    root = Path(os.environ.get('DATACORE_ROOT', Path.home() / 'Data'))
+    for candidate in root.glob('[0-9]-*/.datacore/research-routing.yaml'):
+        try:
+            cfg = yaml.safe_load(candidate.read_text()) or {}
+        except Exception:
+            continue                      # a bad override must not break routing
+        if isinstance(cfg.get('ventures'), dict):
+            VENTURES.update(cfg['ventures'])
+        if isinstance(cfg.get('repo_hints'), dict):
+            REPO_HINTS.update(cfg['repo_hints'])
+
+
+_load_routing_overrides()
 
 # Captures that are not research. A queue you cannot empty is not a queue.
 DISCARD = ["google search", "supplement", "testosterone", "- google docs",

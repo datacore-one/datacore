@@ -4,6 +4,19 @@
 
 Automated research processing with NotebookLM podcast generation, literature notes, atomic zettels, and industry landscape building.
 
+
+## Install
+
+This module is **part of Datacore core** — it ships with the main repository and
+needs no separate install. (The rule: a module that declares a `repository:`
+field in `module.yaml` is an independent clone; one that does not is core.)
+
+Its Python dependencies are not installed automatically:
+
+```bash
+python3 -m pip install -r ~/Data/.datacore/modules/research/requirements.txt
+```
+
 ## Installation
 
 ```bash
@@ -72,7 +85,7 @@ daily-research-processor (orchestrator)
 | Podcasts | `0-personal/content/podcasts/` |
 | Literature Notes | `0-personal/notes/2-knowledge/literature/` |
 | Zettels | `0-personal/notes/2-knowledge/zettel/` |
-| Industry Landscape | `1-datafund/1-tracks/research/Industry landscape.md` |
+| Industry Landscape | `1-acme/1-tracks/research/Industry landscape.md` |
 
 ## Configuration
 

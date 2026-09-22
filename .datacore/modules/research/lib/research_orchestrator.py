@@ -19,6 +19,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -35,7 +36,7 @@ from claude_agent_sdk.types import ResultMessage as _SdkResultMessage
 
 DATA_DIR = Path(os.environ.get('DATA_DIR', Path.home() / 'Data'))
 PERSONAL = DATA_DIR / '0-personal'
-DATAFUND = DATA_DIR / '1-datafund'
+ACME = DATA_DIR / '1-acme'
 
 
 def _module_settings() -> dict:
@@ -67,7 +68,7 @@ DAILY_NEWS_ORG = PERSONAL / 'org' / 'daily_news.org'
 LITERATURE_DIR = _setting_path('literature_output_dir', PERSONAL / 'notes' / '2-knowledge' / 'literature')
 ZETTEL_DIR = _setting_path('zettel_output_dir', PERSONAL / 'notes' / '2-knowledge' / 'zettel')
 COMPANIES_DIR = PERSONAL / '3-knowledge' / 'reference' / 'companies'
-PEOPLE_DIR_DF = DATAFUND / '3-knowledge' / 'reference' / 'people'
+PEOPLE_DIR_DF = ACME / '3-knowledge' / 'reference' / 'people'
 PEOPLE_DIR_PERSONAL = PERSONAL / '3-knowledge' / 'reference' / 'people'
 LANDSCAPE_FILE = _setting_path('industry_landscape_file', PERSONAL / '3-knowledge' / 'reference' / 'Industry landscape.md')
 REPORTS_DIR = _setting_path('reports_output_dir', PERSONAL / 'content' / 'reports')
@@ -519,12 +520,12 @@ def write_companies(companies: List[Dict[str, str]], source_url: str) -> List[Pa
 
     Skips entities already tracked in either:
       - 0-personal/3-knowledge/reference/companies/
-      - 1-datafund/3-knowledge/reference/companies/
+      - 1-acme/3-knowledge/reference/companies/
     """
     if not companies:
         return []
 
-    df_companies = DATAFUND / '3-knowledge' / 'reference' / 'companies'
+    df_companies = ACME / '3-knowledge' / 'reference' / 'companies'
     existing = set()
     for d in (COMPANIES_DIR, df_companies):
         if d.exists():
@@ -1220,6 +1221,39 @@ def audio_failure_reason(detail: str) -> Optional[str]:
 
 
 #: Where the audio step's availability is remembered between runs.
+# ── Gemini Notebook client resolution ────────────────────────────────────────
+# Two clients can drive Gemini Notebook (renamed from NotebookLM in July 2026),
+# and only one of them still works.
+#
+#   notebooklm-py  Python, actively maintained, audio generation VERIFIED
+#                  working 2026-09-22 against the same account and notebook
+#                  where nlm failed.
+#   nlm            Go CLI, github.com/tmc/nlm, last push 2026-07-31. Its audio
+#                  AND video creation RPCs now return "One or more arguments
+#                  are invalid" for every argument combination, while its
+#                  notebook and source operations still succeed. Upstream has
+#                  not followed Google's change.
+#
+# So notebooklm-py is preferred and nlm is a fallback kept only so a host that
+# has not been migrated still creates the notebook and uploads the sources —
+# the audio will not generate there, and the caller says so rather than
+# reporting a silent skip.
+def _resolve_notebook_client() -> tuple[str, str]:
+    """Return (path, kind) where kind is 'notebooklm-py' or 'nlm'; ('', '') if neither."""
+    explicit = os.environ.get('NOTEBOOKLM_BIN') or _SETTINGS.get('notebooklm_path') or ''
+    if explicit and Path(explicit).exists():
+        return explicit, 'notebooklm-py'
+    found = shutil.which('notebooklm')
+    if found:
+        return found, 'notebooklm-py'
+
+    legacy = os.environ.get('NLM_BIN') or _SETTINGS.get('nlm_path') or ''
+    if legacy and Path(legacy).exists():
+        return legacy, 'nlm'
+    found = shutil.which('nlm')
+    return (found, 'nlm') if found else ('', '')
+
+
 AUDIO_STATE = Path.home() / ".datacore" / "state" / "nlm-audio-availability.json"
 
 #: The sentence cos_research.sh alerts on. Emitted ONLY when the state changes.
@@ -1275,14 +1309,14 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
     is queued asynchronously — user must manually download via browser (CLI is
     blocked by Google CDN cookie requirement).
     """
-    nlm = os.environ.get('NLM_BIN') or _SETTINGS.get('nlm_path') or ''
-    if not nlm or not Path(nlm).exists():
-        # Fallback to PATH lookup
-        nlm_path = subprocess.run(['which', 'nlm'], capture_output=True, text=True).stdout.strip()
-        if not nlm_path:
-            log("  nlm binary not found — skipping podcast")
-            return None
-        nlm = nlm_path
+    client, kind = _resolve_notebook_client()
+    if not client:
+        log("  no Gemini Notebook client found — skipping podcast")
+        log("  install one:  uv tool install 'notebooklm-py[browser]'")
+        return None
+    if kind == 'nlm':
+        log("  WARNING: falling back to the nlm CLI, whose audio RPC has been")
+        log("  rejecting every request since ~2026-09. Expect no audio.")
 
     # Create notebook
     title = f"Datacore Research {TODAY}"
@@ -1299,8 +1333,13 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
     # the fallback disappears on its own once no old binary remains.
     res = None
     errors = []
-    for argv in ([nlm, 'notebook', 'create', title], [nlm, 'create', title]):
-        res = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+    # Each client has ONE spelling. The old two-spelling dance existed because a
+    # single binary changed its own CLI between versions; it is not a client
+    # difference and does not generalise.
+    attempts = ([[client, 'create', title]] if kind == 'notebooklm-py'
+                else [[client, 'notebook', 'create', title], [client, 'create', title]])
+    for argv in attempts:
+        res = subprocess.run(argv, capture_output=True, text=True, timeout=60)
         if res.returncode == 0:
             break
         errors.append((' '.join(argv[1:-1]), res.stderr))
@@ -1342,7 +1381,11 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
             # Same two-spelling tolerance as notebook creation: the devel
             # build spells it `source add`, older builds `add`.
             add_res = None
-            for argv in ([nlm, 'source', 'add', notebook_id, src], [nlm, 'add', notebook_id, src]):
+            src_attempts = ([[client, 'source', 'add', '--notebook', notebook_id, src]]
+                            if kind == 'notebooklm-py'
+                            else [[client, 'source', 'add', notebook_id, src],
+                                  [client, 'add', notebook_id, src]])
+            for argv in src_attempts:
                 add_res = subprocess.run(argv, capture_output=True, text=True, timeout=60)
                 if add_res.returncode == 0:
                     break
@@ -1380,8 +1423,14 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
     # empty string can only ever fail. A real brief also makes a better podcast.
     instructions = ("A concise two-host briefing on today's research for a founder: "
                     "what each source found, why it matters, and the one decision it implies.")
-    for argv in ([nlm, 'audio', 'create', '--audio-type', 'deep-dive', notebook_id, instructions],
-                 [nlm, 'create-audio', notebook_id, instructions]):
+    # AUDIO ONLY. Video is deliberately not generated: it is slower, larger and
+    # nobody asked for it. notebooklm-py supports it if that changes.
+    audio_attempts = ([[client, 'generate', 'audio', '--notebook', notebook_id, instructions]]
+                      if kind == 'notebooklm-py'
+                      else [[client, 'audio', 'create', '--audio-type', 'deep-dive',
+                             notebook_id, instructions],
+                            [client, 'create-audio', notebook_id, instructions]])
+    for argv in audio_attempts:
         audio_res = subprocess.run(argv, capture_output=True, text=True, timeout=60)
         if audio_res.returncode == 0:
             break

@@ -70,7 +70,7 @@ def test_entity_drafts_stay_personal_and_frontmatter_cannot_be_injected(tmp_path
     (shared / '3-knowledge/reference/companies').mkdir(parents=True)
     shared_people = shared / 'people'
     shared_people.mkdir()
-    monkeypatch.setattr(R, 'DATAFUND', shared)
+    monkeypatch.setattr(R, 'ACME', shared)
     monkeypatch.setattr(R, 'COMPANIES_DIR', personal / 'companies')
     monkeypatch.setattr(R, 'PEOPLE_DIR_PERSONAL', personal / 'people')
     monkeypatch.setattr(R, 'PEOPLE_DIR_DF', shared_people)

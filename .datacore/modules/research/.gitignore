@@ -7,3 +7,14 @@ CLAUDE.local.md
 
 # Local config
 *.local.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# Runtime state — a module ships code, never the user's data
+state/
+data/
+output/

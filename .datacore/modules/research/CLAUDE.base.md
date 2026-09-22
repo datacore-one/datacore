@@ -27,7 +27,7 @@ This module processes `research_learning.org` daily during nightshift to:
 | `gtd-research-processor` | Sonnet | URL analyzer - creates literature notes and zettels |
 | `action-item-extractor` | Haiku | Extracts actionable tasks from research outputs |
 | `research-post-processor` | Haiku | Updates org files, journal, and industry landscape |
-| `nlm-podcast-creator` | Sonnet | NotebookLM integration - creates podcasts from sources |
+| `podcast-creator` | Sonnet | Gemini Notebook integration - creates podcasts from sources |
 
 ## Workflow
 
@@ -49,7 +49,7 @@ daily-research-processor (orchestrator)
         │         │
         │         └──► contacts/ (entities)
         │
-        ├──► nlm-podcast-creator
+        ├──► podcast-creator
         │         │
         │         └──► Podcasts (daily + topical)
         │
@@ -68,7 +68,7 @@ daily-research-processor (orchestrator)
 | Research Reports | `0-personal/content/reports/` |
 | Literature Notes | `0-personal/notes/2-knowledge/literature/` |
 | Zettels | `0-personal/notes/2-knowledge/zettel/` |
-| Industry Landscape | `1-datafund/1-tracks/research/Industry landscape.md` |
+| Industry Landscape | `1-acme/1-tracks/research/Industry landscape.md` |
 
 ## Configuration
 
@@ -110,17 +110,34 @@ research:
     min_confidence: 0.8
 ```
 
-## nlm CLI
+## Gemini Notebook CLI
 
-The module uses `nlm` CLI for NotebookLM integration:
+The module drives Gemini Notebook (renamed from NotebookLM, July 2026) through
+[`notebooklm-py`](https://github.com/teng-lin/notebooklm-py):
 
 ```bash
-nlm list                    # List notebooks
-nlm create "Title"          # Create notebook
-nlm add [id] [url]          # Add source
-nlm create-audio [id] "..."  # Generate podcast
-nlm audio download [id] file # Download audio
+notebooklm create "Title"                                   # create a notebook
+notebooklm source add --notebook <id> <url-or-path>         # add a source
+notebooklm generate audio --notebook <id> "instructions"    # queue an audio overview
+notebooklm artifact list --notebook <id>                    # check status
+notebooklm auth check --test --json                         # expect "status": "ok"
 ```
+
+Install it in its own environment — a system `pip` is blocked by PEP 668 on
+modern macOS and Debian:
+
+```bash
+uv tool install 'notebooklm-py[browser]'    # or: pipx install 'notebooklm-py[browser]'
+```
+
+**The legacy `nlm` Go CLI is a fallback only.** Since roughly September 2026 its
+audio *and* video creation RPCs return "One or more arguments are invalid" for
+every argument combination, on freshly refreshed auth, while its notebook and
+source calls still succeed — upstream last pushed 2026-07-31 and has not
+followed Google's API change. On a host with only `nlm`, the notebook and its
+sources are still created, no audio is produced, and the run says so.
+
+Video generation is intentionally not wired up.
 
 ## Pipeline Entrypoint (canonical since 2026-07-14)
 
@@ -144,10 +161,10 @@ python3 .datacore/modules/research/lib/research_orchestrator.py [--limit N] [--d
   - Old-style verbs (`create`, `add`, `create-audio`) still work as deprecated
     aliases on v0.1.1, which all hosts now run. `notebook create` / `source add`
     / `audio create` are the current spellings.
-- Config: module.yaml settings (`nlm_path`, `podcast_output_dir`,
+- Config: module.yaml settings (`notebooklm_path`, `nlm_path`, `podcast_output_dir`,
   `reports_output_dir`, `literature_output_dir`, `zettel_output_dir`,
-  `research_org_file`) are wired with fail-safe fallbacks; `NLM_BIN` env
-  overrides `nlm_path`
+  `research_org_file`) are wired with fail-safe fallbacks; `NOTEBOOKLM_BIN` env
+  overrides `notebooklm_path`; `NLM_BIN` overrides the legacy `nlm_path`
 
 ### Agent usage (Winston / Miles / any agent)
 
@@ -177,7 +194,7 @@ above. Results feed the morning briefing.
 
 ## Focus Areas in research_learning.org
 
-- Verity, Datacore, Datafund (core work)
+- Verity, Datacore, Acme (core work)
 - Trading, Health & Longevity, Personal Development
 - Family, Science, GTD & Productivity, Communication
 - Business & Strategy, Technology & Innovation, Personal
