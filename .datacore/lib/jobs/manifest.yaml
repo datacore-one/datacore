@@ -1171,6 +1171,9 @@ jobs:
   # record is sound, and that this host can find what it needs.
 
   - name: box-delegation-canary
+    # Never delegated: this job IS the delegation machinery, and handing its
+    # own failure to the agent it checks is circular (it happened, 2026-09-22).
+    delegate: false
     # MOVED OFF THE LAPTOP 2026-09-21. This is a network duty with a clock-based
     # contract, and the mac is a visitor: it sleeps, changes networks and may be
     # shut for days, so every deadline it carried turned into an alert about the
@@ -1222,6 +1225,9 @@ jobs:
   # says nothing to the operator; if that were the whole change, a repair that
   # was given up on would disappear. This is what makes it not disappear.
   - name: box-autofix-escalation
+    # Never delegated: this job IS the delegation machinery, and handing its
+    # own failure to the agent it checks is circular (it happened, 2026-09-22).
+    delegate: false
     # MOVED OFF THE LAPTOP 2026-09-21. This is a network duty with a clock-based
     # contract, and the mac is a visitor: it sleeps, changes networks and may be
     # shut for days, so every deadline it carried turned into an alert about the
@@ -1323,6 +1329,9 @@ jobs:
         max_age_hours: 26
 
   - name: nightshift-delegation-drill
+    # Never delegated: this job IS the delegation machinery, and handing its
+    # own failure to the agent it checks is circular (it happened, 2026-09-22).
+    delegate: false
     # MOVED OFF THE LAPTOP 2026-09-21. This is a network duty with a clock-based
     # contract, and the mac is a visitor: it sleeps, changes networks and may be
     # shut for days, so every deadline it carried turned into an alert about the

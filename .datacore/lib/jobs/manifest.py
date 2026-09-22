@@ -127,6 +127,12 @@ class Job:
     required_env: list[str] = field(default_factory=list)
     on_fail: str = "log"
     require_synced_repos: list[str] = field(default_factory=list)
+    #: False: a failure of this job is never handed to an agent; the operator
+    #: hears directly. For the jobs that ARE the delegation machinery -- the
+    #: escalation report, the canary, the drill -- delegating their own repair
+    #: is circular: on 2026-09-22 box-autofix-escalation was delegated to
+    #: Miles, dead-lettered after three attempts, and then listed itself.
+    delegate: bool = True
 
 
 def load_manifest(path: Path, *, roster_path: Path | None = None) -> list[Job]:
@@ -250,6 +256,10 @@ def _build_job(raw: object, index: int, errors: list[str], seen_names: set[str],
             f"(got {require_synced_repos!r})"
         )
 
+    delegate = raw.get("delegate", True)
+    if not isinstance(delegate, bool):
+        errors.append(f"{ref}: field 'delegate' must be true or false (got {delegate!r})")
+
     if len(errors) != start:
         return None
 
@@ -262,6 +272,7 @@ def _build_job(raw: object, index: int, errors: list[str], seen_names: set[str],
         required_env=list(required_env),
         on_fail=on_fail,
         require_synced_repos=list(require_synced_repos),
+        delegate=delegate,
     )
 
 

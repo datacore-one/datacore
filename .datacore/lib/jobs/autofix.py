@@ -61,15 +61,50 @@ def _space(root: Path) -> Path:
     return root / "2-datacore"
 
 
+ROSTER = LIB.parent / "registry" / "infrastructure.yaml"
+
+
+def host_of(actor: str, roster: Path | None = None) -> str | None:
+    """The machine whose ledger_actors include `actor`, per the roster; None if unknown."""
+    import yaml
+
+    try:
+        doc = yaml.safe_load((roster or ROSTER).read_text()) or {}
+    except Exception:  # noqa: BLE001 -- an unreadable roster is "unknown", not a crash
+        return None
+    for host, entry in (doc.get("servers") or {}).items():
+        if isinstance(entry, dict) and actor in (entry.get("ledger_actors") or []):
+            return host
+    return None
+
+
 def delegate(job, failures: list[str], rec: dict, *, root: Path,
-             assignee: str = "miles", dry: bool = False) -> tuple[str, str]:
+             assignee: str = "miles", dry: bool = False,
+             roster: Path | None = None) -> tuple[str, str]:
     """Hand one failing job to `assignee`. Returns (state, detail).
 
     state: delegated | refused | exists
+
+    REFUSED, BEFORE ANYTHING IS WRITTEN, when the repair cannot be checked
+    where it would run. The done-condition is fix_check on `job.machine`'s
+    artifacts, and it runs where the assignee's dispatcher runs. Miles runs on
+    nightshift, so a box or mac job handed to him can only ever dead-letter
+    after three attempts -- which is exactly what every delegation of a box
+    or mac job did on 2026-09-21/22, and why the escalation report grew five
+    entries, one of them the escalation job itself. "Fixes are not possible"
+    is decidable up front here; saying so is what lets the operator be told
+    now rather than after three failed attempts and a 48-hour window.
     """
     from actor_identity import this_actor
     from ledger.log import EventLog
     from ledger.policy import guarded_append, PolicyError
+
+    if not getattr(job, "delegate", True):
+        return "refused", f"{job.name} opts out of delegation (delegate: false); a person owns it"
+    host = host_of(assignee, roster)
+    if host and host != job.machine:
+        return "refused", (f"{assignee} runs on {host} and cannot verify a {job.machine} job "
+                           f"from there; a person owns it")
 
     manifest = LIB / "jobs" / "manifest.yaml"
     sha = contract_sha(job.name, manifest)

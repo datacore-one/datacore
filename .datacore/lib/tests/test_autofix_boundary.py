@@ -222,3 +222,45 @@ def test_a_repair_in_flight_is_not_news(monkeypatch):
     now = 1_800_000_000_000.0
     autofix = _open_repair(monkeypatch, status="claimed", opened_h_ago=2, now=now)
     assert autofix.escalations(Path("/x"), now_ms=now) == []
+
+
+# ── refused up front: what the repairer cannot check, and what opts out ────────
+
+def _job(name="box-x", machine="box", delegate=True):
+    import types
+    return types.SimpleNamespace(name=name, machine=machine, delegate=delegate, cmd="x", schedule="x")
+
+
+def _roster(tmp_path):
+    p = tmp_path / "infrastructure.yaml"
+    p.write_text("servers:\n  winston: {ledger_actors: [winston]}\n  nightshift: {ledger_actors: [nightshift, miles]}\n")
+    return p
+
+
+def test_a_job_the_repairer_cannot_verify_is_refused_before_anything_is_written(tmp_path):
+    """Miles runs on nightshift. A box job handed to him can only dead-letter."""
+    import autofix
+    state, why = autofix.delegate(_job("box-x", "box"), ["f"], {}, root=tmp_path, roster=_roster(tmp_path))
+    assert state == "refused" and "runs on nightshift" in why and "box job" in why
+    assert not (tmp_path / "2-datacore").exists(), "a refusal must write nothing"
+
+
+def test_a_job_that_opts_out_is_refused(tmp_path):
+    import autofix
+    state, why = autofix.delegate(_job("box-autofix-escalation", "box", delegate=False), ["f"], {},
+                                  root=tmp_path, roster=_roster(tmp_path))
+    assert state == "refused" and "opts out" in why
+
+
+def test_a_job_on_the_repairers_own_host_is_still_delegated(tmp_path):
+    import autofix
+    state, why = autofix.delegate(_job("nightshift-x", "nightshift"), ["f"], {}, root=tmp_path,
+                                  roster=_roster(tmp_path), dry=True)
+    assert state == "refused" and "not in the manifest" in why, "reached the manifest check: host and opt-out passed"
+
+
+def test_the_delegation_machinery_opts_out_in_the_real_manifest():
+    import yaml
+    jobs = {j["name"]: j for j in yaml.safe_load((LIB / "jobs" / "manifest.yaml").read_text())["jobs"]}
+    for name in ("box-autofix-escalation", "box-delegation-canary", "nightshift-delegation-drill"):
+        assert jobs[name].get("delegate") is False, f"{name} would be handed to the agent it checks"

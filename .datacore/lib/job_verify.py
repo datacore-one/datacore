@@ -249,6 +249,21 @@ def _artifact_signature(job, *, now: float | None = None) -> str:
     return "|".join(parts)
 
 
+def _artifact_tail(job, n: int = 8) -> str:
+    """The last `n` lines of each artifact, for an alert that must carry them."""
+    out = []
+    today = _dt.date.today().isoformat()
+    for a in getattr(job, "artifacts", []) or []:
+        raw = os.path.expanduser(str(a.path).replace("{today}", today))
+        try:
+            lines = Path(raw).read_text(errors="replace").rstrip().splitlines()[-n:]
+        except OSError:
+            continue
+        if lines:
+            out.append("\n".join(lines))
+    return ("\n\n" + "\n\n".join(out)) if out else ""
+
+
 #: Where a recurring failure becomes a task. 2-datacore is the system space; the
 #: machine goes on the task as SURFACE so the owner knows where to look.
 TASK_FILE = os.environ.get("JOB_VERIFY_TASK_FILE") or str(
@@ -397,6 +412,12 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> 
                 _rec.note_task(job_name, tid)
                 print(f"recurring: filed task {tid} for {job_name}", file=sys.stderr)
         message = _rec.describe(job_name, _record, len(failures))
+        if job is not None and not getattr(job, "delegate", True):
+            # A job that opts out of delegation is one whose failure IS the
+            # message to a person -- the escalation report above all. Its
+            # contract fails on one summary line; the lines above it are the
+            # list the person needs. Carry them.
+            message += _artifact_tail(job)
         if not _rec.should_alert(_record):
             print(f"alert suppressed: {job_name} is recurring "
                   f"({_record.get('consecutive')}x) and was already escalated today", file=sys.stderr)
