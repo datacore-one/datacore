@@ -37,7 +37,7 @@ scheduled briefing, triage, research and sync. Both run first-party
 |------|--------|------|----------|-------|--------|
 | **Winston** | app + box | Chief of Staff | Claude Code (`claude -p`) | Mac app + chief-of-staff (Hetzner) | Briefings, delegation, triage, user engagement |
 | **Mr Data** | @plurclaw_bot | Comms | OpenClaw (GPT-5.4) | plur-claw (Hetzner) | Outward communication |
-| **Tris** | @TrisHermes_bot | Chief Intelligence Officer | Hermes Agent (Kimi 2.6) | hermes (DO) | Research, cross-domain analysis, pattern detection |
+| **Tris** (she/her) | @TrisHermes_bot | Chief Intelligence Officer | Hermes Agent (Kimi 2.6) | hermes (DO) | Research, cross-domain analysis, pattern detection |
 | **Miles** | @datacore_1_bot | Chief of Operations | Claude Code (Opus) | nightshift (DO) | Code, deployment, infrastructure, product creation |
 
 ## Adjacent systems
