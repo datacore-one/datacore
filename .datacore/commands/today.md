@@ -661,7 +661,7 @@ happens. Read the prompt and follow it.
    - End with "Your full report is on your desk" or variant.
 2. Generate audio and send:
    ```bash
-   python3 .datacore/modules/voice-terminal/lib/speak_brief.py {date} --telegram
+   "${DATACORE_PYTHON:-python3}" .datacore/modules/voice-terminal/lib/speak_brief.py {date} --telegram
    ```
 
 ---

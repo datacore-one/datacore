@@ -42,7 +42,7 @@ hooks:
 
       2. Generate audio and send to Telegram:
          ```bash
-         python3 .datacore/modules/voice-terminal/lib/speak_brief.py {date} --telegram
+         "${DATACORE_PYTHON:-python3}" .datacore/modules/voice-terminal/lib/speak_brief.py {date} --telegram
          ```
 
 settings:

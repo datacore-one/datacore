@@ -23,6 +23,35 @@ import subprocess
 import tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "lib"))
+def _declared_interpreter(env=None, executable=None):
+    """The interpreter this process should be running under, or None.
+
+    Callers invoke this file as a bare `python3`, and on the mac that name
+    began resolving to a Homebrew 3.14 with no speech engine (2026-09-21):
+    the morning voice step failed under it and had to be re-run by hand
+    under pyenv 3.11 two days running. The host already declares the right
+    interpreter in DATACORE_PYTHON (the health MCP tools honour it); this is
+    the same rule applied here. Pure, so it can be tested; the caller execs.
+    """
+    env = os.environ if env is None else env
+    executable = sys.executable if executable is None else executable
+    declared = env.get("DATACORE_PYTHON", "")
+    if not declared or not os.path.isabs(declared) or env.get("SPEAK_BRIEF_REEXEC") == "1":
+        return None
+    if os.path.realpath(declared) == os.path.realpath(executable):
+        return None
+    return declared
+
+
+def _reexec_if_declared():
+    target = _declared_interpreter()
+    if target and os.path.exists(target):
+        os.execve(target, [target, *sys.argv], {**os.environ, "SPEAK_BRIEF_REEXEC": "1"})
+
+
+_reexec_if_declared()
+
+
 from secret_http import urlopen as secret_urlopen
 from env_utils import parse_env_value
 from datetime import date, timedelta
