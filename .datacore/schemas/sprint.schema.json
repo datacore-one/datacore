@@ -1,0 +1,132 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Sprint",
+  "description": "PLUR Enterprise sprint.yaml schema. Status vocabulary: planning → active → review → retro → closed.",
+  "type": "object",
+  "required": [
+    "sprint_id", "project", "status", "cadence", "dates",
+    "goal", "okr_links", "facilitator", "miles_routing",
+    "backlog", "stretch", "hitl_log", "claims", "done_when"
+  ],
+  "$comment": "additionalProperties is intentionally true: sprint files accumulate ad-hoc operational keys (topic notes, hitl_log metadata, per-sprint tracking fields) that cannot be enumerated in advance. The primary requirement from #1042 — detecting absent required keys — is met by the required array above. Switching to false would require maintaining an exhaustive allowlist that drifts faster than the schema.",
+  "additionalProperties": true,
+  "properties": {
+    "sprint_id": {
+      "type": "string",
+      "description": "Unique sprint identifier, e.g. 2026-W36-sprint9"
+    },
+    "project": {
+      "type": "string",
+      "description": "Datacore project path, e.g. 5-plur/2-projects/enterprise"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["planning", "active", "review", "retro", "closed"],
+      "description": "Lifecycle state"
+    },
+    "cadence": {
+      "type": "string",
+      "description": "Sprint duration, e.g. 1w"
+    },
+    "dates": {
+      "type": "object",
+      "required": ["start", "end"],
+      "additionalProperties": true,
+      "properties": {
+        "start": {
+          "type": "string",
+          "description": "Sprint window start date (ISO 8601)"
+        },
+        "end": {
+          "type": "string",
+          "description": "Sprint window end date (ISO 8601)"
+        },
+        "planning": {
+          "type": ["string", "null"],
+          "description": "Date planning was completed (ISO 8601). Null until GO is called."
+        },
+        "retro": {
+          "type": ["string", "null"],
+          "description": "Date retro was held (ISO 8601). Required (non-null) when status=closed."
+        }
+      }
+    },
+    "goal": {
+      "type": "string",
+      "description": "Sprint goal statement"
+    },
+    "okr_links": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "OKR references this sprint advances"
+    },
+    "facilitator": {
+      "type": "object",
+      "required": ["operational", "strategic"],
+      "additionalProperties": true,
+      "properties": {
+        "operational": {"type": "string"},
+        "strategic": {"type": "string"}
+      }
+    },
+    "miles_routing": {
+      "type": "object",
+      "required": ["primary_repo", "overflow_repo", "sprint_tag_filter"],
+      "additionalProperties": true,
+      "properties": {
+        "primary_repo": {"type": "string"},
+        "overflow_repo": {"type": "string"},
+        "sprint_tag_filter": {"type": "string"}
+      }
+    },
+    "backlog": {
+      "type": "array",
+      "description": "Committed sprint items"
+    },
+    "stretch": {
+      "type": "array",
+      "description": "Items to pick up if capacity allows"
+    },
+    "hitl_log": {
+      "type": "array",
+      "description": "Human-in-the-loop decisions and approvals"
+    },
+    "claims": {
+      "type": "array",
+      "description": "Agent task claims for this sprint"
+    },
+    "done_when": {
+      "description": "Completion criteria (string or structured object)",
+      "oneOf": [
+        {"type": "string"},
+        {"type": "object"}
+      ]
+    },
+    "carryover": {
+      "type": "array",
+      "description": "Items explicitly carried forward. Required when status=closed. Empty array is valid — states explicitly that nothing carried."
+    }
+  },
+  "if": {
+    "properties": {"status": {"const": "closed"}},
+    "required": ["status"]
+  },
+  "then": {
+    "required": ["carryover"],
+    "properties": {
+      "carryover": {
+        "type": "array"
+      },
+      "dates": {
+        "required": ["start", "end", "retro"],
+        "properties": {
+          "retro": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Retro date must be a non-empty string when status=closed"
+          }
+        }
+      }
+    }
+  }
+}

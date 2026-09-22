@@ -17,14 +17,19 @@ finding is a defect in the ROADMAP or the TASK POOL, never in the agent.
 
     python3 .datacore/lib/agent_readiness.py [--strict]
 """
-import argparse, json, re, subprocess, sys
+import argparse, json, os, re, subprocess, sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
 import yaml
 
 REPO = Path(__file__).resolve().parents[2]
-ROADMAP = REPO / "5-plur" / "roadmap.yaml"
+# Space-parameterised, like roadmap_validate / roadmap_render / roadmap_drift,
+# which all took --space while this one alone hardcoded 5-plur. A second venture
+# with a roadmap could not be checked at all, so the tool could not answer the
+# question it exists for: is THIS roadmap agent-executable?
+SPACE = os.environ.get("ROADMAP_SPACE", "5-plur")
+ROADMAP = REPO / SPACE / "roadmap.yaml"
 ADAPTER = REPO / ".datacore/lib/org_workspace_adapter.py"
 # EVERY space, not just 5-plur. nightshift's find_ai_tasks walks the whole data
 # directory — it does not know what a roadmap is — so a queue measured in one
@@ -114,8 +119,14 @@ def tasks():
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--space", default=SPACE,
+                    help="space whose roadmap.yaml to check (or ROADMAP_SPACE)")
     ap.add_argument("--strict", action="store_true")
     args = ap.parse_args()
+    global ROADMAP
+    ROADMAP = REPO / args.space / "roadmap.yaml"
+    if not ROADMAP.exists():
+        sys.exit(f"no roadmap at {ROADMAP} — roadmap_init.py can create one")
 
     r = yaml.safe_load(ROADMAP.read_text())
     items = {i["id"]: i for i in r["items"]}

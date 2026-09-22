@@ -60,6 +60,12 @@ DATACORE_NEW_FILE_ALLOW = [
     ".datacore/specs/**",
     ".datacore/templates/**",
     ".datacore/registry/**",
+    # Machine-readable contracts — JSON Schema for sprint.yaml and friends.
+    # Same class as specs/ (which holds the prose) and registry/ (which holds
+    # the data): declarative, public-safe, no credentials or user content.
+    # Added 2026-09-22, when promoting sprint.schema.json out of the single
+    # project it was trapped in so a second venture could validate against it.
+    ".datacore/schemas/**",
     ".datacore/docs/**",
     ".datacore/datacore-docs/**",
     ".datacore/workflows/**",
