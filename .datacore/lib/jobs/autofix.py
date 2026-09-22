@@ -63,6 +63,14 @@ def _space(root: Path) -> Path:
 
 ROSTER = LIB.parent / "registry" / "infrastructure.yaml"
 
+#: Where an agent may MERGE its own repair. The owner's boundary, stated
+#: 2026-09-22 ("this is only for datacore"): the core repository, nothing else
+#: -- not a module's repository, not anything under another organisation --
+#: whatever push rights the account happens to hold. A repair whose producer
+#: lives elsewhere is refused up front and a person owns it. Widening this is
+#: an owner's decision, made here.
+MERGE_REPOS = frozenset({"datacore-one/datacore"})
+
 
 def _servers(roster: Path | None) -> dict:
     import yaml
@@ -174,6 +182,10 @@ def delegate(job, failures: list[str], rec: dict, *, root: Path,
         repo = repo_for(job, root)
         if not repo:
             return "refused", f"cannot name the repository {job.name}'s producer lives in"
+        if repo not in MERGE_REPOS:
+            return "refused", (f"{job.name}'s producer lives in {repo}; an agent may merge only into "
+                               f"{', '.join(sorted(MERGE_REPOS))} (owner's boundary, 2026-09-22); "
+                               f"a person owns it")
         check = (f"python3 .datacore/lib/jobs/fix_check.py --stage merged --job {job.name} "
                  f"--machine {job.machine} --contract-sha {sha} --item {iid} --repo {repo}")
         follower = actor_of(job.machine, roster)
