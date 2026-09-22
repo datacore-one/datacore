@@ -417,7 +417,10 @@ jobs:
     trigger: join
     schedule: "on join: visitor_join.py runs it after every converged join"
     cmd: "cd ~/Data && ~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/today-registration.log -- python3 ~/Data/.datacore/lib/today_registry.py --validate"
-    exit_ok: true
+    # A list, not `true`: run.py builds a set from it, and `true` crashed the
+    # envelope the first time this ran through it (the join, 2026-09-22). The
+    # validator exits 1 for "ran, found problems"; the regex below judges that.
+    exit_ok: [0, 1]
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/today-registration.log"
@@ -547,6 +550,9 @@ jobs:
     trigger: join
     schedule: "on join: visitor_join.py runs it after every converged join"
     cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/pending-decisions.log -- python3 ~/Data/.datacore/lib/detectors/pending_decisions.py"
+    # Exit 1 is "ran, found stale decisions" -- a finding, which the regex
+    # below reports; only exit 2 is the detector failing to run.
+    exit_ok: [0, 1]
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/pending-decisions.log"

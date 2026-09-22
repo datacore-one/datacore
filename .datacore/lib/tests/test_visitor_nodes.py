@@ -267,3 +267,15 @@ def test_the_rule_refuses_a_network_duty_on_a_visitor(tmp_path, monkeypatch):
     monkeypatch.setattr(awake, "always_on", lambda m, r=None: m != "lap")
     with pytest.raises(AssertionError, match="lap-fleet-poll"):
         test_every_job_on_a_visitor_says_why_it_is_there()
+
+
+def test_a_join_duty_can_actually_run_through_the_envelope():
+    """The join runs its duties through jobs/run.py, which builds a set from
+    `exit_ok`. mac-today-registration carried `exit_ok: true` for weeks under
+    cron, where nothing read it; the first join to run it crashed the envelope
+    with "'bool' object is not iterable"."""
+    for j in _visitor_jobs():
+        if j.get("trigger") in ("join", "arrival") and "exit_ok" in j:
+            ok = j["exit_ok"]
+            assert isinstance(ok, list) and all(type(c) is int for c in ok), \
+                f"{j['name']}: exit_ok must be a list of exit codes, got {ok!r}"
