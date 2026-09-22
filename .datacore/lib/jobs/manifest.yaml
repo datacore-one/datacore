@@ -778,12 +778,15 @@ jobs:
       # carried no more information than it had the day before.
       #
       # What a tick actually writes is one shard per venture it touched, each
-      # carrying last_fire. The glob resolves to the NEWEST of them, which is
-      # the liveness signal wanted: it does not matter which venture ticked, only
-      # that this host's heartbeat actor ticked something recently.
-      - path: "~/Data/[0-9]-*/.datacore/state/heartbeat/miles.json"
-        check: regex
-        arg: "last_fire"
+      # carrying last_fire. The glob resolves to the NEWEST of them -- liveness,
+      # and nothing more: 6-meridian failed every tick from 2026-09-15 to 09-22
+      # behind that check. THE OUTCOME, NOT THE PULSE (2026-09-22): each tick
+      # now appends one line naming active, idle and FAILED ventures, and why
+      # (a spent plan window is named with its reset time). `0 failed` is the
+      # contract.
+      - path: ~/.datacore/state/venture-heartbeat.log
+        check: last_line_regex
+        arg: '\] \d+ ventures active, \d+ idle, 0 failed$'
         max_age_hours: 3
 
   - name: nightshift-delegation-gate
