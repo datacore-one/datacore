@@ -418,7 +418,26 @@ def finalize_session_scope(dry_run: bool, allow_journal_shrink: bool = False) ->
         }
         if not staged:
             entry["ok"] = None
-            entry["note"] = f"nothing of this session's is dirty here ({len(others)} other file(s) untouched)"
+            # DO NOT ASSERT ATTRIBUTION FROM AN EMPTY SET. When the session's
+            # file list is empty — which happens whenever its edits went through
+            # Bash rather than Edit/Write — every dirty file looks like somebody
+            # else's, and "nothing of this session's is dirty here" is emitted
+            # with total confidence while being exactly wrong. Observed
+            # 2026-09-21: this session's own journal and inbox were reported as
+            # left_for_other_sessions, minutes after it wrote them.
+            #
+            # A phrasing that reads as correct is worse than silence, because a
+            # reader has no reason to doubt it.
+            if not mine and others:
+                entry["note"] = (
+                    f"cannot determine which of {len(others)} dirty file(s) belong to "
+                    "this session — its file list is empty. Commit by hand after "
+                    "checking `git diff --numstat`."
+                )
+                entry["attribution"] = "unknown"
+            else:
+                entry["note"] = (f"nothing of this session's is dirty here "
+                                 f"({len(others)} other file(s) untouched)")
             results.append(entry)
             continue
 

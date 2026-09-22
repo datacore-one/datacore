@@ -56,6 +56,7 @@ import argparse
 import gzip
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -185,6 +186,8 @@ def summarize(transcript: Path, subagents: list[Path]) -> dict:
                     fp = inp.get("file_path")
                     if fp:
                         files.add(fp)
+                elif name == "Bash":
+                    files |= _bash_write_targets(str(inp.get("command") or ""))
 
     sub_tokens = Counter()
     sub_turns = 0
@@ -250,6 +253,63 @@ def summarize(transcript: Path, subagents: list[Path]) -> dict:
 # --------------------------------------------------------------------------
 # archiving
 # --------------------------------------------------------------------------
+
+# Paths a Bash command writes to. Claude Code's auto mode tells the model to
+# prefer Bash over Edit/Write ("make file changes with sed, heredocs, or short
+# scripts"), so a session's entire file output can arrive through this tool and
+# contribute nothing to files_modified. Measured 2026-09-18: 208 Bash calls,
+# zero Edit/Write, files_modified == [] — and `wrap_up_mechanics finalize`, which
+# scopes its commit to that list, committed nothing while reporting success.
+#
+# Heuristic by necessity: a shell command's effects cannot be known without
+# running it. It is deliberately conservative — a missed path leaves the old
+# behaviour, a wrong one would commit something the session did not touch.
+_BASH_WRITE = [
+    re.compile(r'>>?\s*([^\s|&;<>()"\']+)'),                 # > file, >> file
+    re.compile(r'\btee\s+(?:-a\s+)?([^\s|&;<>()"\']+)'),
+    re.compile(r'\bsed\s+-i(?:\s+\S*)?\s+(?:[^\s]+\s+)?([^\s|&;<>()"\']+)'),
+    re.compile(r'\bcp\s+\S+\s+([^\s|&;<>()"\']+)'),
+    re.compile(r'\bmv\s+\S+\s+([^\s|&;<>()"\']+)'),
+    re.compile(r'write_text\(|\bopen\(\s*[\'"]([^\'"]+)[\'"]\s*,\s*[\'"][wa]'),
+]
+
+
+def _bash_write_targets(command: str) -> set[str]:
+    """Best-effort: which paths does this shell command write to?"""
+    out: set[str] = set()
+    if not command or len(command) > 20000:
+        return out
+    for rx in _BASH_WRITE:
+        for m in rx.finditer(command):
+            for g in m.groups():
+                if not g:
+                    continue
+                g = g.strip().strip('"\'')
+                if not _looks_like_path(g):
+                    continue
+                out.add(g)
+    return out
+
+
+# A heredoc body contains `>` in prose and code, so the redirect pattern matches
+# markdown and shell fragments as eagerly as filenames. The first run of this
+# extraction returned 159 "paths" including `#`, `**A` and `!c.ok`. Committing
+# those would be worse than committing nothing, so a candidate has to look like
+# a path before it counts.
+_PATH_OK = re.compile(r'^~?/?[\w.@+-]+(?:/[\w.@+-]+)*$')  # absolute, ~, or relative
+
+
+def _looks_like_path(s: str) -> bool:
+    if not s or len(s) > 400:
+        return False
+    if s.startswith(('/dev/', '&', '$', '(', '#', '*', '!', '|', '=')) or s == '-':
+        return False
+    if not _PATH_OK.match(s):
+        return False
+    # A bare word is a shell token far more often than a file. Require either a
+    # directory separator or a real-looking extension.
+    return '/' in s or bool(re.search(r'\.[A-Za-z0-9]{1,6}$', s))
+
 
 def _gzip_copy(src: Path, dst: Path) -> int:
     dst.parent.mkdir(parents=True, exist_ok=True)
