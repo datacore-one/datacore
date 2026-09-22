@@ -95,11 +95,23 @@ _deliver() {
   printf 'RELAY FAILED: could not deliver via %s\n' "$RELAY_HOST" >> "$LOG"; return 1
 }
 
+# RELAY WHAT job_verify DECIDED, NOT WHATEVER IT PRINTED. This used to relay
+# the whole output on any non-zero exit, so "alert withheld", "delegated ...;
+# operator not alerted" and "alert suppressed" all reached the phone anyway --
+# one mac-suite-audit failure, eleven times between 03:35 and 07:07 on
+# 2026-09-22, every copy marked withheld. The filter keeps the blocks whose
+# decision line is `alert:` (the operator is the reader) and anything that is
+# not job_verify's own vocabulary (the verifier itself failing).
 if [ "$RC" -ne 0 ] && [ -n "$OUT" ]; then
+  RELAY="$(printf '%s\n' "$OUT" | "$PY_BIN" "$RUNNER/.datacore/lib/job_verify_alert_filter.py")"
+  if [ -z "$RELAY" ]; then
+    printf 'relay: nothing operator-facing in this run (withheld / delegated / suppressed only)\n' >> "$LOG"
+  else
   # Relay to the host that holds the credentials. Failure to relay is itself
   # reported into the log rather than swallowed -- a broken alert path must not
   # be quiet about being broken.
-  _deliver "$(printf 'job_verify FAILED on %s:\n%s' "$(hostname -s)" "$OUT")"
+  _deliver "$(printf 'job_verify FAILED on %s:\n%s' "$(hostname -s)" "$RELAY")"
+  fi
 fi
 
 exit "$RC"

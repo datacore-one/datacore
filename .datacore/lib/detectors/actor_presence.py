@@ -262,7 +262,7 @@ def main() -> int:
     for r in rows:
         if r["status"] in ("ok", "stalled"):
             new_state[r["actor"]] = {"spaces": r["spaces"]}
-    STATE.parent.mkdir(parents=True, exist_ok=True)
+    STATE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     STATE.write_text(json.dumps({"actors": new_state}, indent=2))
 
     return 1 if bad else 0

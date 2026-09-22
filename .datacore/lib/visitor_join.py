@@ -75,7 +75,7 @@ def _load(path: Path) -> dict:
 
 def _write_atomic(path: Path, payload: dict) -> None:
     """A reader sees the previous complete record or the new one, never half."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}")
     tmp.write_text(json.dumps(payload, indent=2) + "\n")
     os.replace(tmp, path)
@@ -147,7 +147,7 @@ def join(*, now: float | None = None) -> dict:
         "errors": after["errors"],
     }
     _write_atomic(ATTEMPT, {"at": now, "ok": converged})
-    LOG.parent.mkdir(parents=True, exist_ok=True)
+    LOG.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with LOG.open("a") as fh:
         fh.write(f"{record['iso']} converged={converged} ahead_by={before['ahead']} "
                  f"behind_by={before['behind']} still_gap={after['gap']} rc={rc}"

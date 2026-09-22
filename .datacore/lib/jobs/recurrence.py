@@ -91,7 +91,7 @@ def _load() -> dict:
 def _save(d: dict) -> None:
     try:
         state = _path()
-        state.parent.mkdir(parents=True, exist_ok=True)
+        state.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         tmp = state.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(d, indent=1, sort_keys=True))
         tmp.replace(state)
@@ -127,7 +127,7 @@ def record(job_name: str, failed: bool, *, today: str | None = None,
 @contextlib.contextmanager
 def _locked():
     state = _path()
-    state.parent.mkdir(parents=True, exist_ok=True)
+    state.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     lock = state.with_suffix(".lock")
     with open(lock, "a+") as fh:
         try:

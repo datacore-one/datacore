@@ -150,7 +150,7 @@ def main() -> int:
     if args.acknowledge:
         base = {r["space"]: r["orphaned_ledger_ids"] for r in findings if r["orphaned_ledger_ids"]}
         base["_acknowledged"] = datetime.date.today().isoformat()
-        baseline_path.parent.mkdir(parents=True, exist_ok=True)
+        baseline_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         tmp = baseline_path.with_suffix(".json.tmp"); tmp.write_text(json.dumps(base, indent=1)); tmp.replace(baseline_path)
         print(f"acknowledged orphaned ledger ids as baseline: {base}")
         return 0

@@ -252,7 +252,7 @@ def ack(item_id: str) -> None:
     """
     current = _acked()
     current.add(item_id)
-    ACK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ACK_FILE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     ACK_FILE.write_text(json.dumps(
         {"acked": sorted(current), "updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
         indent=2))

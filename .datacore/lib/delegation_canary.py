@@ -81,7 +81,7 @@ def _task(target: str, day: str) -> tuple[str, str, str]:
 
 
 def _write(verdict: str, **fields) -> None:
-    RESULT.parent.mkdir(parents=True, exist_ok=True)
+    RESULT.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     RESULT.write_text(json.dumps({"verdict": verdict, "at": time.time(),
                                   "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                                   **fields}, indent=2) + "\n")
@@ -140,7 +140,7 @@ def cmd_run(args) -> int:
     title, check, src = _task(args.assignee, day)
 
     path = space / src
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.write_text("".join(f"line {n}\n" for n in range(1, 18)))
     for cmd in (["add", "--", src], ["commit", "-q", "-m", f"{MARK}: input {day}", "--", src]):
         r = subprocess.run(["git", "-C", str(space), *cmd], capture_output=True, text=True, timeout=60)

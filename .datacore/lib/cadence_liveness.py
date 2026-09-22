@@ -208,7 +208,7 @@ def main() -> int:
     root = Path(a.root).expanduser()
     today = date.today()
     rows = collect(root, a.grace_days)
-    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     lines = [f"=== {today.isoformat()} cadence liveness "
              f"(grace {a.grace_days}d) ==="]
     for days, space, role, freq, name in rows:
