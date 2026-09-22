@@ -338,3 +338,40 @@ def test_an_agent_may_merge_only_into_the_core_repository(tmp_path, monkeypatch)
         state, why = autofix.delegate(_job("box-x", "box"), ["f"], {}, root=tmp_path, roster=_roster(tmp_path))
         assert state == "refused" and repo in why and "owner's boundary" in why, repo
     assert not (tmp_path / "2-datacore").exists()
+
+
+# ── an escalation clears when its job recovers ────────────────────────────────
+
+def _one_drop(monkeypatch, closed_ms):
+    import autofix
+    monkeypatch.setattr(autofix, "repairs", lambda root: [{
+        "id": "autofix-box-x-20260922", "status": "dismissed", "closed_kind": "dropped",
+        "closed_at": f"{closed_ms}.0000.miles", "closed_reason": "gave up after 3 failed attempts",
+        "job": "box-x", "assignee": "miles", "opened_at": None}])
+    monkeypatch.setattr(autofix, "_acked", lambda: set())
+
+
+def _verify_event(root, job, ok, ms):
+    import json
+    ev = root / "2-datacore" / ".datacore" / "events"; ev.mkdir(parents=True, exist_ok=True)
+    with (ev / "winston.jsonl").open("a") as fh:
+        fh.write(json.dumps({"actor": "winston", "hlc": f"{ms}.0000.winston",
+                             "payload": {"metric": "job.verify", "job": job, "ok": ok, "failures": []}}) + "\n")
+
+
+def test_a_dead_letter_whose_job_has_since_passed_is_history(tmp_path, monkeypatch):
+    import autofix
+    now = 1_790_000_000_000
+    _one_drop(monkeypatch, closed_ms=now - 3_600_000)
+    _verify_event(tmp_path, "box-x", ok=True, ms=now - 600_000)          # passed after the drop
+    assert autofix.escalations(tmp_path, now_ms=now) == []
+
+
+def test_a_pass_before_the_drop_does_not_count(tmp_path, monkeypatch):
+    import autofix
+    now = 1_790_000_000_000
+    _one_drop(monkeypatch, closed_ms=now - 3_600_000)
+    _verify_event(tmp_path, "box-x", ok=True, ms=now - 7_200_000)        # passed, then dropped
+    _verify_event(tmp_path, "box-x", ok=False, ms=now - 300_000)
+    out = autofix.escalations(tmp_path, now_ms=now)
+    assert len(out) == 1 and "gave up" in out[0]

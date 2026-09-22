@@ -362,6 +362,13 @@ def escalations(root: Path, *, window_h: float = ESCALATE_H * 2,
         age_h = _age_h(r["closed_at"], now)
         if age_h is not None and age_h > window_h:
             continue
+        if recovered_since(root, r["job"], r["closed_at"]):
+            # The docstring above promised "if it recovered, there is nothing
+            # to say" and nothing checked. A dead-letter kept the report red
+            # for 48 hours after its job had passed (2026-09-22). The JOB is
+            # the record of the problem; when the ledger shows it verified
+            # after the drop, the drop is history.
+            continue
         if r["closed_kind"] == "dropped":
             out.append(f"{r['job']}: {r['assignee']} gave up — "
                        f"{r['closed_reason'] or 'dead-lettered'}")
@@ -399,6 +406,38 @@ def ack(item_id: str) -> None:
     ACK_FILE.write_text(json.dumps(
         {"acked": sorted(current), "updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
         indent=2))
+
+
+def recovered_since(root: Path, job: str, closed_hlc: str | None) -> bool:
+    """Has `job` passed verification, on any host, since the repair was closed?
+
+    Read from the system space's ledger, where every host's job_verify writes
+    its result: the box sees nightshift's and the mac's passes without asking
+    them. An unreadable close time is "not recovered" -- a thing that cannot
+    be dated must not disappear.
+    """
+    try:
+        closed_ms = float(str(closed_hlc).split(".")[0])
+    except (ValueError, TypeError):
+        return False
+    events = _space(root) / ".datacore" / "events"
+    for f in events.glob("*.jsonl") if events.is_dir() else []:
+        try:
+            for line in f.read_text(errors="replace").splitlines():
+                if '"job.verify"' not in line or job not in line:
+                    continue
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                p = e.get("payload") or {}
+                if p.get("metric") != "job.verify" or p.get("job") != job or not p.get("ok"):
+                    continue
+                if float(str(e.get("hlc", "0")).split(".")[0]) > closed_ms:
+                    return True
+        except OSError:
+            continue
+    return False
 
 
 def _age_h(hlc: str | None, now_ms: float) -> float | None:
