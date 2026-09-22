@@ -415,6 +415,34 @@ def _isolated_check(space: Path, check: str) -> tuple[bool, str]:
                            cwd=space, capture_output=True)
 
 
+REQUIRED_THEN = ("id", "title", "assignee", "check")
+
+
+def chain_follow_up(space: Path, actor: str, payload: dict) -> tuple[bool, str]:
+    """Create the follow-up an item carries in `then`, once it has completed.
+
+    A two-stage repair (autofix, 2026-09-22): the repairer merges a fix from
+    its own host, and the failing host's principal pulls and verifies there.
+    The second item is written by the loop that completed the first, under
+    the completing actor, addressed to the follower -- so the hand-off is in
+    the ledger, not in an agent's prose, and the same claim rules apply to it.
+    """
+    then = payload.get("then")
+    if not isinstance(then, dict):
+        return False, ""
+    missing = [k for k in REQUIRED_THEN if not then.get(k)]
+    if missing:
+        return False, f"follow-up not created: `then` lacks {', '.join(missing)}"
+    try:
+        guarded_append(EventLog(space, actor), "item.create",
+                       {**then, "requested_by": actor, "after": payload.get("id")})
+    except PolicyError as exc:
+        return False, f"follow-up refused by the gate: {exc}"
+    except Exception as exc:  # noqa: BLE001
+        return False, f"follow-up not created: {type(exc).__name__}: {exc}"
+    return True, f"CHAINED  {then['id']} -> {then['assignee']}"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--space", required=True, type=Path)
@@ -639,6 +667,9 @@ def main() -> int:
                       f"@ {sha[:10]} ({meta.get('cost_cents', '?')}c, "
                       f"{meta.get('duration_s', '?')}s)")
                 dispatched += 1
+                chained, note = chain_follow_up(space, args.actor, item.payload or {})
+                if note:
+                    print(f"         -> {note}")
             else:
                 EventLog(space, args.actor).append(
                     "item.release", {"id": item.id, "owner": args.actor,

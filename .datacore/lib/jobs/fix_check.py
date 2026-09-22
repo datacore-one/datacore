@@ -59,6 +59,36 @@ def contract_sha(job_name: str, manifest: Path) -> str | None:
     return None
 
 
+MANIFEST_PATHS = ("jobs/manifest.yaml",)
+
+
+def merged_pr(item_id: str, repo: str, *, gh=("gh",)) -> tuple[dict | None, list[str]]:
+    """The merged pull request that names `item_id`, and the files it touched.
+
+    Stage "merged" is how a repair is judged when the repairer cannot verify on
+    the failing machine: Miles runs on nightshift, fixes the producer in the
+    repository, and merges. What proves the stage is a MERGED pull request
+    whose title or body carries the item id -- not a branch, not a claim in
+    prose. The files matter for the boundary: a merge that touched the jobs
+    manifest may have repaired the check instead of the producer, and only a
+    person may decide that.
+    """
+    q = subprocess.run([*gh, "pr", "list", "--repo", repo, "--state", "merged", "--search", item_id,
+                        "--json", "number,title,body,mergedAt,url", "--limit", "10"],
+                       capture_output=True, text=True, timeout=60)
+    if q.returncode != 0:
+        raise RuntimeError(f"gh pr list failed: {(q.stderr or q.stdout).strip()[:200]}")
+    prs = [p for p in json.loads(q.stdout or "[]")
+           if p.get("mergedAt") and item_id in (p.get("title", "") + p.get("body", ""))]
+    if not prs:
+        return None, []
+    pr = sorted(prs, key=lambda p: p["mergedAt"])[-1]
+    v = subprocess.run([*gh, "pr", "view", str(pr["number"]), "--repo", repo, "--json", "files"],
+                       capture_output=True, text=True, timeout=60)
+    files = [x.get("path", "") for x in (json.loads(v.stdout or "{}").get("files") or [])] if v.returncode == 0 else []
+    return pr, files
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--job", required=True)
@@ -66,7 +96,33 @@ def main() -> int:
     ap.add_argument("--contract-sha", required=True,
                     help="the job's contract hash at the moment the repair was delegated")
     ap.add_argument("--manifest", default=str(LIB / "jobs" / "manifest.yaml"))
+    ap.add_argument("--stage", choices=("verify", "merged"), default="verify",
+                    help="verify: the job passes on --machine (default); merged: a merged PR "
+                         "naming --item exists in --repo and did not touch the jobs manifest")
+    ap.add_argument("--item", help="stage merged: the repair item id the PR must name")
+    ap.add_argument("--repo", help="stage merged: OWNER/REPO the producer lives in")
     a = ap.parse_args()
+
+    if a.stage == "merged":
+        if not (a.item and a.repo):
+            print("REFUSED: --stage merged needs --item and --repo", file=sys.stderr)
+            return 2
+        try:
+            pr, files = merged_pr(a.item, a.repo)
+        except (RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            print(f"not yet: could not ask GitHub ({exc})", file=sys.stderr)
+            return 1
+        if pr is None:
+            print(f"not yet: no merged pull request in {a.repo} names {a.item}", file=sys.stderr)
+            return 1
+        touched = [p for p in files if any(p.endswith(m) for m in MANIFEST_PATHS)]
+        if touched:
+            print(f"REFUSED: {pr['url']} touched the jobs manifest ({', '.join(touched)}). A repair "
+                  f"fixes the producer, not the check that caught it; changing a contract needs a "
+                  f"human.", file=sys.stderr)
+            return 1
+        print(f"merged: {pr['url']} names {a.item} and left the jobs manifest alone")
+        return 0
 
     manifest = Path(a.manifest)
     now = contract_sha(a.job, manifest)

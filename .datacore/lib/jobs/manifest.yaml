@@ -1224,6 +1224,22 @@ jobs:
   # other alerts is safe. job_verify now hands a recurring failure to miles and
   # says nothing to the operator; if that were the whole change, a repair that
   # was given up on would disappear. This is what makes it not disappear.
+  - name: box-ledger-claim
+    # Winston's own claim loop (2026-09-22): the second leg of a two-stage
+    # repair. Miles fixes a box job's producer from nightshift and merges; the
+    # follow-up item is addressed to winston, and this loop pulls the box and
+    # runs the job's own verification there. Never delegated: it IS the
+    # machinery.
+    machine: box
+    schedule: "5,20,35,50 * * * *"
+    cmd: ~/Data/.datacore/lib/ledger_claim_run.sh ~/Data/2-datacore winston 2
+    on_fail: telegram
+    delegate: false
+    artifacts:
+      - path: ~/.datacore/state/ledger-claim.log
+        check: no_crash
+        max_age_hours: 2
+
   - name: box-autofix-escalation
     # Never delegated: this job IS the delegation machinery, and handing its
     # own failure to the agent it checks is circular (it happened, 2026-09-22).

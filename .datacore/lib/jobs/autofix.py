@@ -64,18 +64,64 @@ def _space(root: Path) -> Path:
 ROSTER = LIB.parent / "registry" / "infrastructure.yaml"
 
 
-def host_of(actor: str, roster: Path | None = None) -> str | None:
-    """The machine whose ledger_actors include `actor`, per the roster; None if unknown."""
+def _servers(roster: Path | None) -> dict:
     import yaml
 
     try:
         doc = yaml.safe_load((roster or ROSTER).read_text()) or {}
     except Exception:  # noqa: BLE001 -- an unreadable roster is "unknown", not a crash
-        return None
-    for host, entry in (doc.get("servers") or {}).items():
+        return {}
+    return doc.get("servers") or {}
+
+
+def _machine_name(host: str, entry: dict) -> str:
+    """The name the jobs manifest uses for a roster host (`manifest_machine`,
+    e.g. winston -> box), else the host's own name."""
+    return (entry.get("manifest_machine") if isinstance(entry, dict) else None) or host
+
+
+def _entry_for_machine(machine: str, roster: Path | None) -> dict:
+    for host, entry in _servers(roster).items():
+        if isinstance(entry, dict) and machine in (host, entry.get("manifest_machine")):
+            return entry
+    return {}
+
+
+def host_of(actor: str, roster: Path | None = None) -> str | None:
+    """The MANIFEST machine name of the host whose ledger_actors include
+    `actor` -- comparable to job.machine -- or None if unknown."""
+    for host, entry in _servers(roster).items():
         if isinstance(entry, dict) and actor in (entry.get("ledger_actors") or []):
-            return host
+            return _machine_name(host, entry)
     return None
+
+
+def actor_of(machine: str, roster: Path | None = None) -> str | None:
+    """The principal that acts for a manifest machine (roster `access.actor`), or None."""
+    entry = _entry_for_machine(machine, roster)
+    actor = ((entry.get("access") or {}).get("actor")) or ((entry.get("ledger_actors") or [None])[0])
+    return actor or None
+
+
+def repo_for(job, root: Path) -> str | None:
+    """OWNER/REPO of the repository the job's producer lives in, from its cmd.
+
+    `.datacore/modules/<m>/...` is that module's own repository; anything else
+    under `.datacore/` is the core. Read from the checkout's origin, because
+    module remotes are not uniform (one module lives under a personal account).
+    """
+    import re
+
+    cmd = str(getattr(job, "cmd", "") or "")
+    m = re.search(r"\.datacore/modules/([A-Za-z0-9_-]+)/", cmd)
+    path = root / ".datacore" / "modules" / m.group(1) if m else root
+    try:
+        url = subprocess.run(["git", "-C", str(path), "remote", "get-url", "origin"],
+                             capture_output=True, text=True, timeout=20).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m2 = re.search(r"github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?$", url)
+    return m2.group(1) if m2 else None
 
 
 def delegate(job, failures: list[str], rec: dict, *, root: Path,
@@ -101,10 +147,6 @@ def delegate(job, failures: list[str], rec: dict, *, root: Path,
 
     if not getattr(job, "delegate", True):
         return "refused", f"{job.name} opts out of delegation (delegate: false); a person owns it"
-    host = host_of(assignee, roster)
-    if host and host != job.machine:
-        return "refused", (f"{assignee} runs on {host} and cannot verify a {job.machine} job "
-                           f"from there; a person owns it")
 
     manifest = LIB / "jobs" / "manifest.yaml"
     sha = contract_sha(job.name, manifest)
@@ -114,27 +156,59 @@ def delegate(job, failures: list[str], rec: dict, *, root: Path,
     space = _space(root)
     actor = this_actor()
     iid = f"{MARK}-{job.name}-{time.strftime('%Y%m%d', time.gmtime())}"
-
     title = f"Repair {job.name}: failing on {job.machine} since {rec.get('first_failed')}"
-    check = (f"python3 .datacore/lib/jobs/fix_check.py --job {job.name} "
-             f"--machine {job.machine} --contract-sha {sha}")
+    verify = (f"python3 .datacore/lib/jobs/fix_check.py --job {job.name} "
+              f"--machine {job.machine} --contract-sha {sha}")
 
-    body = repair_body(job, failures, rec)
+    # ONE STAGE OR TWO. The repairer can judge its own work only where the
+    # artifacts are. On its own host: fix, then the ordinary verification is
+    # the check. Anywhere else (decided 2026-09-22): the repairer fixes the
+    # producer in its repository and MERGES -- it holds merge rights for that
+    # -- and the check is the merged pull request. Then, on a resident, the
+    # host's own principal pulls and runs the verification as a follow-up item
+    # created when the first completes; on a visitor (the mac) nothing follows,
+    # because the join protocol pulls on wake and the contract passes by itself.
+    host = host_of(assignee, roster)
+    then = None
+    if host and host != job.machine:
+        repo = repo_for(job, root)
+        if not repo:
+            return "refused", f"cannot name the repository {job.name}'s producer lives in"
+        check = (f"python3 .datacore/lib/jobs/fix_check.py --stage merged --job {job.name} "
+                 f"--machine {job.machine} --contract-sha {sha} --item {iid} --repo {repo}")
+        follower = actor_of(job.machine, roster)
+        if follower and follower != assignee and not _is_visitor(job.machine, roster):
+            then = {"id": f"{iid}-verify", "assignee": follower, "route": "dev",
+                    "title": f"Pull and verify {job.name} on {job.machine} after {iid}",
+                    "check": verify, "autofix": True, "job": job.name, "machine": job.machine,
+                    "contract_sha": sha, "stage": "verify",
+                    "body": (f"{assignee} merged a repair for {job.name} ({iid}). Bring this "
+                             f"host up to date: `git -C ~/Data pull --ff-only` (and the module "
+                             f"repository under .datacore/modules if the job lives there), then "
+                             f"stop. The check runs the job's own verification; do not touch "
+                             f"the contract.")}
+        body = repair_body(job, failures, rec, stage="merged", repo=repo, item_id=iid,
+                           follower=follower if then else None)
+    else:
+        check = verify
+        body = repair_body(job, failures, rec)
 
     if dry:
-        return "delegated", f"would delegate {iid} to {assignee}"
+        return "delegated", f"would delegate {iid} to {assignee}" + (f" then {then['assignee']}" if then else "")
 
+    payload = {"id": iid, "title": title, "assignee": assignee,
+               "check": check, "body": body, "requested_by": actor,
+               "autofix": True, "job": job.name, "machine": job.machine,
+               "contract_sha": sha, "stage": "merged" if then or check != verify else "verify",
+               # Repairing a producer is engineering, not research. The
+               # title heuristics cannot know that and inferred the
+               # default route, which framed the executing agent as a
+               # literature reviewer and handed it a broken cron job.
+               "route": "dev"}
+    if then:
+        payload["then"] = then
     try:
-        guarded_append(EventLog(space, actor), "item.create",
-                       {"id": iid, "title": title, "assignee": assignee,
-                        "check": check, "body": body, "requested_by": actor,
-                        "autofix": True, "job": job.name, "machine": job.machine,
-                        "contract_sha": sha,
-                        # Repairing a producer is engineering, not research. The
-                        # title heuristics cannot know that and inferred the
-                        # default route, which framed the executing agent as a
-                        # literature reviewer and handed it a broken cron job.
-                        "route": "dev"})
+        guarded_append(EventLog(space, actor), "item.create", payload)
     except PolicyError as exc:
         return "refused", f"the gate refused the repair item: {exc}"
     except Exception as exc:  # noqa: BLE001 -- delegation must not break verification
@@ -142,7 +216,16 @@ def delegate(job, failures: list[str], rec: dict, *, root: Path,
     return "delegated", f"{iid} -> {assignee}"
 
 
-def repair_body(job, failures: list[str], rec: dict) -> str:
+def _is_visitor(machine: str, roster: Path | None = None) -> bool:
+    """A host whose presence is not promised: kind workstation, not always_on."""
+    entry = _entry_for_machine(machine, roster)
+    if not entry:
+        return False
+    return entry.get("kind") == "workstation" and not entry.get("always_on", False)
+
+
+def repair_body(job, failures: list[str], rec: dict, *, stage: str = "verify",
+                repo: str | None = None, item_id: str = "", follower: str | None = None) -> str:
     """What the repairing agent is actually told.
 
     Separate and pure so the boundary wording is testable. An agent that learns
@@ -165,6 +248,19 @@ def repair_body(job, failures: list[str], rec: dict) -> str:
         "the job all make verification pass and leave the fleet worse. If the",
         "contract is genuinely wrong, say so and stop -- that is a human's call,",
         "because the contract is what decides whether this job is healthy.",
+        *([] if stage != "merged" else [
+            "",
+            f"THIS JOB RUNS ON {job.machine}, NOT HERE. You cannot verify it from this host,",
+            f"so the done-condition is a MERGED pull request in {repo} whose title or body",
+            f"contains `{item_id}`. Fix the producer there, open the PR with that id in the",
+            "title, and merge it -- you hold merge rights for this. The check refuses a PR",
+            "that touched the jobs manifest.",
+            (f"When it is merged, {follower} pulls on {job.machine} and runs the job's own "
+             "verification as a follow-up item; you do not need to do that part.")
+            if follower else
+            (f"{job.machine} pulls on its own schedule and the contract will pass by itself; "
+             "nothing follows for you."),
+        ]),
     ])
 
 

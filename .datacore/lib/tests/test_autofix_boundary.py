@@ -233,15 +233,19 @@ def _job(name="box-x", machine="box", delegate=True):
 
 def _roster(tmp_path):
     p = tmp_path / "infrastructure.yaml"
-    p.write_text("servers:\n  winston: {ledger_actors: [winston]}\n  nightshift: {ledger_actors: [nightshift, miles]}\n")
+    p.write_text("servers:\n  winston: {manifest_machine: box, ledger_actors: [winston]}\n  nightshift: {ledger_actors: [nightshift, miles]}\n")
     return p
 
 
-def test_a_job_the_repairer_cannot_verify_is_refused_before_anything_is_written(tmp_path):
-    """Miles runs on nightshift. A box job handed to him can only dead-letter."""
+def test_a_job_whose_repository_cannot_be_named_is_refused_before_anything_is_written(tmp_path, monkeypatch):
+    """Two stages need a repository to merge into. Without one there is no
+    done-condition, and a delegation with no done-condition is what dead-lettered
+    every box and mac repair on 2026-09-21/22."""
     import autofix
+    monkeypatch.setattr(autofix, "contract_sha", lambda name, manifest: "abc")
+    monkeypatch.setattr(autofix, "repo_for", lambda job, root: None)
     state, why = autofix.delegate(_job("box-x", "box"), ["f"], {}, root=tmp_path, roster=_roster(tmp_path))
-    assert state == "refused" and "runs on nightshift" in why and "box job" in why
+    assert state == "refused" and "cannot name the repository" in why
     assert not (tmp_path / "2-datacore").exists(), "a refusal must write nothing"
 
 
@@ -264,3 +268,59 @@ def test_the_delegation_machinery_opts_out_in_the_real_manifest():
     jobs = {j["name"]: j for j in yaml.safe_load((LIB / "jobs" / "manifest.yaml").read_text())["jobs"]}
     for name in ("box-autofix-escalation", "box-delegation-canary", "nightshift-delegation-drill"):
         assert jobs[name].get("delegate") is False, f"{name} would be handed to the agent it checks"
+
+
+# ── two stages when the repairer is elsewhere ─────────────────────────────────
+
+def _capture_delegation(monkeypatch, tmp_path, job):
+    """Run delegate() against fakes for the ledger, the actor, the repo and the manifest."""
+    import autofix
+    import ledger.policy
+    import actor_identity
+    captured = {}
+    monkeypatch.setattr(ledger.policy, "guarded_append", lambda log, kind, payload: captured.update(payload))
+    monkeypatch.setattr(actor_identity, "this_actor", lambda: "winston")
+    monkeypatch.setattr(autofix, "contract_sha", lambda name, manifest: "abc")
+    monkeypatch.setattr(autofix, "repo_for", lambda job, root: "datacore-one/datacore")
+    roster = tmp_path / "infrastructure.yaml"
+    roster.write_text("servers:\n"
+                      "  winston: {manifest_machine: box, kind: server, ledger_actors: [winston], access: {actor: winston}}\n"
+                      "  nightshift: {kind: server, ledger_actors: [nightshift, miles], access: {actor: miles}}\n"
+                      "  mac: {kind: workstation, ledger_actors: [mac], access: {actor: mac}}\n")
+    from jobs import awake
+    monkeypatch.setattr(awake, "always_on", lambda m, r=None: m != "mac")
+    (tmp_path / "2-datacore" / ".datacore" / "events").mkdir(parents=True)
+    state, why = autofix.delegate(job, ["f"], {"first_failed": "2026-09-22"}, root=tmp_path, roster=roster)
+    return state, why, captured
+
+
+def test_a_box_job_is_a_merge_for_miles_then_a_verify_for_winston(tmp_path, monkeypatch):
+    state, why, p = _capture_delegation(monkeypatch, tmp_path, _job("box-x", "box"))
+    assert state == "delegated", why
+    assert "--stage merged" in p["check"] and "--repo datacore-one/datacore" in p["check"] and f"--item {p['id']}" in p["check"]
+    assert p["stage"] == "merged" and "MERGED pull request" in p["body"] and "merge rights" in p["body"]
+    then = p["then"]
+    assert then["assignee"] == "winston" and then["id"] == p["id"] + "-verify"
+    assert then["check"].startswith("python3 .datacore/lib/jobs/fix_check.py --job box-x --machine box")
+    assert "--stage" not in then["check"], "the follow-up is the ordinary verification on the box"
+
+
+def test_a_mac_job_is_a_merge_with_no_follow_up(tmp_path, monkeypatch):
+    """A visitor pulls on wake; its contract passes by itself."""
+    state, why, p = _capture_delegation(monkeypatch, tmp_path, _job("mac-x", "mac"))
+    assert state == "delegated" and "--stage merged" in p["check"] and "then" not in p
+    assert "pulls on its own schedule" in p["body"]
+
+
+def test_a_nightshift_job_is_still_one_stage(tmp_path, monkeypatch):
+    state, why, p = _capture_delegation(monkeypatch, tmp_path, _job("nightshift-x", "nightshift"))
+    assert state == "delegated" and "--stage" not in p["check"] and "then" not in p and p["stage"] == "verify"
+
+
+def test_roster_names_resolve_the_manifests_machine_names(tmp_path):
+    """The manifest says `box`; the roster says `winston` with manifest_machine: box."""
+    import autofix
+    r = _roster(tmp_path)
+    assert autofix.host_of("miles", r) == "nightshift"
+    assert autofix.host_of("winston", r) == "box"
+    assert autofix.actor_of("box", r) == "winston"
