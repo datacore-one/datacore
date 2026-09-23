@@ -142,57 +142,49 @@ def git(*args: str) -> tuple[int, str]:
     return r.returncode, (r.stdout or "")
 
 
-def local_identity() -> str:
-    """This machine's git author email — the only reliable "who wrote it".
-
-    Actor names are not usable here: Winston commits as "Winston (CoS)", Miles
-    as "Miles", and the registry knows neither string. The email is what git
-    stamps on every commit and what each box configures once.
-    """
-    rc, out = git("config", "user.email")
-    return out.strip().lower() if rc == 0 else ""
+class UnlistableRange(Exception):
+    """`git rev-list` could not list a pushed range, so it cannot be checked."""
 
 
 def changed(rng: str) -> list[str]:
-    """Files touched by commits THIS MACHINE AUTHORED in this range.
+    """Files written by the commits of this range that NO remote has yet.
 
-    `--no-merges` is load-bearing. A converge fetches other actors' logs and
-    merges them; the merge commit then shows those logs as "changed" relative
-    to its first parent, so a plain `git diff <range>` reported this machine as
-    writing genesis.jsonl and blocked every ordinary sync.
+    Decision S3 (2026-09-23): the guard judges every commit in the pushed range
+    that no remote-tracking ref contains, whatever its author email says. Until
+    then it judged only commits whose author email was this machine's, and an
+    author email is whatever `git -c user.email=…` says: a commit written here
+    under another actor's email passed (DatacoreSpec/Guards.lean
+    `author_filter_is_forgeable`, now `unpushed_writes_are_judged`).
 
-    But --no-merges alone is NOT enough, and the assumption it rested on —
-    "commits from origin are already on origin and so are not in the range" —
-    is false once the fleet stopped rebasing. A merge carries other actors'
-    commits into your history AS THEMSELVES, so a push range legitimately
-    contains foreign-authored commits that have not reached this remote yet.
-    Rebase used to hide that by replaying everything under the pusher.
+    "Not on any remote" is what keeps honest merge-based sync (DIP-0046)
+    working. A converge fetches other actors' commits before merging them, so
+    they sit on a remote-tracking ref and are excluded: they are carried, not
+    written. On 2026-08-13 two Winston-authored commits in Miles's push range
+    blocked his wrap-up; those commits came from origin, so they are excluded
+    here too. A commit that reached this repo by any path other than a fetch
+    (a local branch, a patch, a forged email) is judged as this machine's.
 
-    On 2026-08-13 that blocked Miles's entire nightshift wrap-up: two commits
-    authored by Winston, touching winston.jsonl, sat in Miles's push range, and
-    the guard reported Miles as having written another actor's log. The events
-    were Winston's, correctly attributed, doing exactly what merge-based sync
-    is supposed to do.
+    Per-commit, never `git diff <range>`: a merge's diff against its first
+    parent lists the logs it carried in. Merges ARE inspected, but only for
+    what the merge itself wrote. `git show --cc --name-only` on a merge is a
+    combined diff: it lists a path only when the result differs from EVERY
+    parent. A clean union merge lists nothing; a merge that edits another
+    actor's log while resolving it (an "evil merge") lists that log
+    (2026-09-23, `ownership_sees_merge_writes`).
 
-    So filter by AUTHOR. What this machine is accountable for is what it wrote,
-    not what it is carrying. Anything else is someone else's commit in transit,
-    and blaming the courier both blocks honest work and — worse — trains
-    everyone to reach for SKIP_PRE_PUSH, which disables the check for the real
-    case it exists to catch.
+    Decision S4 (2026-09-23): a range `git rev-list` cannot list raises
+    UnlistableRange, and main() refuses the push. An unevaluable range is not
+    a clean one (`unlistable_range_refuses`).
     """
-    me = local_identity()
-    rc, out = git("rev-list", "--no-merges", rng)
+    rc, out = git("rev-list", rng, "--not", "--remotes")
     if rc != 0:
-        return []
+        raise UnlistableRange(rng)
     files: list[str] = []
     for sha in out.split():
-        if me:
-            rc_a, author = git("show", "-s", "--format=%ae", sha)
-            if rc_a == 0 and author.strip().lower() != me:
-                continue          # someone else's commit, merely passing through
-        rc2, names = git("show", "--name-only", "--format=", sha)
-        if rc2 == 0:
-            files.extend(l for l in names.splitlines() if l.strip())
+        rc2, names = git("show", "--cc", "--name-only", "--format=", sha)  # --cc pins the combined diff whatever log.diffMerges says
+        if rc2 != 0:
+            raise UnlistableRange(f"{rng} (git show {sha[:12]} failed)")
+        files.extend(l for l in names.splitlines() if l.strip())
     return files
 
 
@@ -224,7 +216,16 @@ def main(argv: list[str]) -> int:
 
     foreign: set[str] = set()
     for rng in argv:
-        for f in changed(rng):
+        try:
+            files = changed(rng)
+        except UnlistableRange as exc:
+            print(f"\ndatacore/pre-push REFUSED: the ownership guard could not list {exc.args[0]!r}\n"
+                  "(git rev-list failed), so this range was NOT checked, and an unchecked\n"
+                  "range is not pushed. Fetch, check the refs exist, and push again.\n"
+                  "If you are deliberately pushing anyway:\n"
+                  "  SKIP_PRE_PUSH=1 git push ...   (or --no-verify)\n", file=sys.stderr)
+            return 1
+        for f in files:
             m = ACTOR_LOG.match(f)
             if not m:
                 continue

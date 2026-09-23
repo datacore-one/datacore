@@ -120,6 +120,15 @@ def _with_org_header(space: Path, target: Path, text: str, *, remember: bool = T
             elif line.strip() and not line.startswith("#"):
                 break
     copy = space / HEADER_COPY
+    if header and remember:
+        # WATCH BEFORE THE EXISTENCE CHECK (owner decision G7, 2026-09-23).
+        # `write_org_text` on a path the transaction has never seen reads it at
+        # write time and compares the file with itself, so a writer that
+        # created the copy after `exists()` would be silently overwritten.
+        # Watching first records "absent"; such a writer then makes the write
+        # refuse as a stale overwrite. `project_space` already watches it; this
+        # makes the function safe for any serialized caller.
+        watch_file(copy)
     if header and not copy.exists() and remember:
         # WRITE ONCE. The copy is tracked; rewriting it on every cycle made
         # every host a writer of the same file and the transport conflicted

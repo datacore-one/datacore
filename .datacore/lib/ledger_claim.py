@@ -433,9 +433,15 @@ def chain_follow_up(space: Path, actor: str, payload: dict) -> tuple[bool, str]:
     missing = [k for k in REQUIRED_THEN if not then.get(k)]
     if missing:
         return False, f"follow-up not created: `then` lacks {', '.join(missing)}"
+    # One hop deeper than the item that carried it, whatever `then` says: the
+    # delegation limit in claim_gate is only as sound as this count, and a
+    # `then` written by the parent's creator is not the chain's own record.
+    # (Lean: DatacoreSpec.LedgerPolicy.Hops.follow_up_passes_floor.)
+    from claim_gate import recorded_hops
     try:
         guarded_append(EventLog(space, actor), "item.create",
-                       {**then, "requested_by": actor, "after": payload.get("id")})
+                       {**then, "requested_by": actor, "after": payload.get("id"),
+                        "hops": recorded_hops(payload) + 1})
     except PolicyError as exc:
         return False, f"follow-up refused by the gate: {exc}"
     except Exception as exc:  # noqa: BLE001
@@ -446,12 +452,23 @@ def chain_follow_up(space: Path, actor: str, payload: dict) -> tuple[bool, str]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--space", required=True, type=Path)
-    from actor_identity import this_actor
-    ap.add_argument("--actor", default=this_actor())
+    ap.add_argument("--actor", default=None,
+                    help="writer name (default: this machine's declared actor, resolved strictly)")
     ap.add_argument("--limit", type=int, default=3)
     ap.add_argument("--execute", action="store_true",
                     help="actually claim and run; without it, plan only and write nothing")
     args = ap.parse_args()
+    # IDENTITY AT STARTUP (owner follow-up Q2): an undeclared host is refused
+    # here, naming identity.env and the registry, rather than dispatching as a
+    # guessed hostname (the default used to be evaluated non-strictly even
+    # when --actor was passed). An explicit --actor is not resolved at all.
+    if not args.actor:
+        from actor_identity import UndeclaredActor, this_actor
+        try:
+            args.actor = this_actor(strict=True)
+        except UndeclaredActor as exc:
+            print(f"REFUSED: {exc}", file=sys.stderr)
+            return 2
 
     space = args.space.resolve()
     events = read_events(space)
@@ -482,14 +499,27 @@ def main() -> int:
     # This is cheaper and stricter than a claim-lease, which would still be
     # racy across an eventually-consistent log.
     #
-    # WHO COUNTS AS THE ADDRESSEE is `actor_identity.addressed_to`, the same
-    # function the policy gate asks, because this filter used to compare the
-    # two names as strings and a principal here has more than one writer name.
-    # See that function for what the string compare cost.
-    from actor_identity import addressed_to
+    # WHO COUNTS AS THE ADDRESSEE is the EXACT writer named (owner decision L4,
+    # 2026-09-23): `actor_identity.dispatchable_by`. It used to be
+    # `addressed_to`, the gate's rule, which accepts any writer of the
+    # assignee's principal -- and the policy lock is per host, so `miles` on
+    # one host and `nightshift` on another both claimed one item on their own
+    # copies of the log and both ran it (Lean: Dispatch.cross_host_race). An
+    # assignee naming only a principal is dispatched only when that principal
+    # has exactly one writer. Everything this skips is COUNTED AND NAMED below,
+    # never silently declined: an item addressed to a sibling writer of this
+    # principal waits for that writer's dispatcher, and an ambiguous principal
+    # waits for its delegator to name one writer.
+    from actor_identity import dispatch_ambiguity, dispatchable_by, principal_of
+    ambiguous = [i for i in pending if dispatch_ambiguity((i.payload or {}).get("assignee"))]
+    pending = [i for i in pending if i not in ambiguous]
     addressed = [i for i in pending
-                 if not addressed_to(args.actor, (i.payload or {}).get("assignee"))]
+                 if not dispatchable_by(args.actor, (i.payload or {}).get("assignee"))]
     pending = [i for i in pending if i not in addressed]
+    mine = principal_of(args.actor)[0]
+    siblings = [i for i in addressed if mine is not None
+                and principal_of(str((i.payload or {}).get("assignee")))[0] == mine]
+    addressed = [i for i in addressed if i not in siblings]
 
     # AND AN ITEM ADDRESSED TO NOBODY IS NOT DISPATCHED AT ALL. This used to
     # stay open to whoever got there first, kept because changing it would
@@ -523,9 +553,18 @@ def main() -> int:
     # Exhausted items are DISMISSED, once, with the reason. Dismissal takes
     # them out of `created`, so they stop being claimable and become visible as
     # a decision in the log rather than disappearing behind a filter.
+    #
+    # AN ATTEMPT IS A RELEASE THE FOLD APPLIED. Counting every `item.release`
+    # line let any writer dismiss real work for good: three releases by a
+    # stranger fold to "no-op (not owner)", yet counted as three failures.
+    # Only the owner's release of its own claim returns an item to the pool.
+    # (Lean: DatacoreSpec.LedgerPolicy.Dispatch.deadletter_counts_applied.)
+    applied_releases = {line.rsplit(" item.release: ", 1)[0]
+                        for i in state.items.values() for line in i.history
+                        if line.endswith(" item.release: applied")}
     attempts: dict[str, int] = {}
     for ev in events:
-        if ev.type == "item.release":
+        if ev.type == "item.release" and f"{ev.hlc} {ev.actor}" in applied_releases:
             payload = ev.payload or {}
             iid = payload.get("id")
             # An infrastructure release is not an attempt at the TASK. Counting
@@ -545,10 +584,15 @@ def main() -> int:
         if not args.execute:
             print(f"would deadletter  {title}  ({n} failed attempts)")
             continue
-        EventLog(space, args.actor).append(
-            "item.dismiss",
-            {"id": item.id, "owner": args.actor, "kind": "dropped",
-             "reason": f"gave up after {n} failed attempts"})
+        # Through the gate like every other dismissal, so stage-5 arbitration
+        # (who may close whose item) applies here too.
+        try:
+            guarded_append(EventLog(space, args.actor), "item.dismiss",
+                           {"id": item.id, "owner": args.actor, "kind": "dropped",
+                            "reason": f"gave up after {n} failed attempts"})
+        except PolicyError as exc:
+            print(f"DEADLETTER REFUSED  {title}\n         -> {exc}")
+            continue
         print(f"DEADLETTER  {title}\n         -> {n} failed attempts; dismissed")
     pending = [i for i in pending if attempts.get(i.id, 0) < MAX_ATTEMPTS]
     pending.sort(key=lambda i: i.id)
@@ -556,6 +600,16 @@ def main() -> int:
     mirror_note = f" ({mirrored} org-mirrored task(s) skipped -- not delegations)" if mirrored else ""
     if addressed:
         mirror_note += f"; {len(addressed)} addressed to another agent"
+    for i in siblings:
+        who = (i.payload or {}).get("assignee")
+        mirror_note += (f"; 1 addressed to {who}, a sibling writer of {mine} -- "
+                        f"only {who}'s dispatcher takes it: "
+                        + (i.payload or {}).get("title", i.id)[:40])
+    if ambiguous:
+        mirror_note += (f"; {len(ambiguous)} AMBIGUOUS -- not dispatched, "
+                        + dispatch_ambiguity((ambiguous[0].payload or {}).get("assignee"))
+                        + ": " + ", ".join((i.payload or {}).get("title", i.id)[:40]
+                                           for i in ambiguous[:3]))
     if unaddressed:
         mirror_note += (f"; {len(unaddressed)} addressed to NOBODY -- not dispatched, "
                         f"give each an assignee: "

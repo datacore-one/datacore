@@ -24,9 +24,6 @@ from .conflict import (
     ConflictStrategy,
     ConflictField,
     Conflict,
-    ConflictResolution,
-    ConflictDetector,
-    ConflictResolver,
     ConflictQueue,
     load_conflict_config,
 )
@@ -42,14 +39,12 @@ __all__ = [
     "TaskState",
     "Priority",
     "ChangeType",
-    # Conflict resolution (Phase 2)
+    # Conflict queue (Phase 2). The detector/resolver were removed 2026-09-23
+    # (decision P7); see sync/conflict.py.
     "ConflictType",
     "ConflictStrategy",
     "ConflictField",
     "Conflict",
-    "ConflictResolution",
-    "ConflictDetector",
-    "ConflictResolver",
     "ConflictQueue",
     "load_conflict_config",
 ]

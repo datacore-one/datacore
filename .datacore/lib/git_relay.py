@@ -137,6 +137,99 @@ def ledger_forks(repo: Path) -> list[str]:
     return bad
 
 
+def publication_forks(repo: Path, commit: str, ref: str) -> list[str]:
+    """Would making `commit` the new tip of `ref` fork or rewind a ledger log?
+
+    NEVER PUSH A FORK is a property of what a push PUBLISHES, so this reads the
+    commit's tree, not the working tree, and compares it with `ref` (the
+    remote-tracking ref the push will advance) using fork.py's own predicate:
+    an `(actor, seq)` on both sides with different hashes is a fork. Two more
+    ways a push can break every other machine's copy are named too:
+
+      rewind   an event `ref` holds is missing from the commit -- a truncated
+               or deleted log, which a fork check ignores ("one side ahead")
+      chain    the commit's copy fails verify_chain where `ref`'s copy did not
+
+    Why the chain check alone (`ledger_forks`) is not enough: a three-way merge
+    takes one side's copy WHOLE when the other side never touched the file. A
+    host that rewound its log and re-appended arrives as a perfectly valid
+    chain -- it is only a fork relative to origin, which no single copy can
+    see (fork.py's module docstring). GitFleet.lean `merge_rewrite_is_not_union`.
+
+    [] means safe to publish. A missing `ref` compares nothing (a first push).
+    """
+    import tempfile
+    from ledger import fork
+    from ledger.verify import verify_chain
+
+    repo = Path(repo)
+    prefix = '.datacore/events/'
+
+    def names(rev: str) -> set[str] | None:
+        rc, out = fork._git(repo, 'ls-tree', '-r', '--name-only', rev, '--', prefix)
+        if rc:
+            return None
+        return {n for n in out.splitlines()
+                if n.startswith(prefix) and n.endswith('.jsonl') and '/' not in n[len(prefix):]}
+
+    def blob(rev: str, rel: str) -> str | None:
+        rc, out = fork._git(repo, 'show', f'{rev}:{rel}')
+        return out if rc == 0 else None
+
+    def chain_ok(rel: str, text: str) -> bool:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / Path(rel).name
+            path.write_text(text)
+            return not verify_chain(path)
+
+    ours_names = names(commit)
+    if ours_names is None:
+        return ['ledger logs of the publication commit could not be listed']
+    rc, _ = fork._git(repo, 'rev-parse', '--verify', '-q', f'{ref}^{{commit}}')
+    theirs_names = (names(ref) or set()) if rc == 0 else set()
+
+    bad = []
+    for rel in sorted(ours_names | theirs_names):
+        name = rel[len(prefix):]
+        ours_text = blob(commit, rel) if rel in ours_names else ''
+        theirs_text = blob(ref, rel) if rel in theirs_names else None
+        if ours_text is None:
+            bad.append(f'{name}: publication copy unreadable')
+            continue
+        if ours_text == theirs_text:
+            continue                       # nothing this push would change
+        ours = fork._index(ours_text)
+        if theirs_text is not None:
+            theirs = fork._index(theirs_text)
+            collisions = [k for k in ours.keys() & theirs.keys() if ours[k] != theirs[k]]
+            lost = theirs.keys() - ours.keys()
+            if collisions:
+                bad.append(f'{name}: {len(collisions)} (actor, seq) differ from {ref} — a fork')
+            if lost:
+                bad.append(f'{name}: {len(lost)} event(s) on {ref} missing — a rewind')
+        if ours_text and not chain_ok(rel, ours_text) and (
+                theirs_text is None or chain_ok(rel, theirs_text)):
+            bad.append(f'{name}: chain fails verification')
+    return bad
+
+
+def _park(repo: Path, host: str, branch: str, pre: str) -> str:
+    """Take a refused merge OFF the branch, keeping it as evidence.
+
+    Returning "REFUSED" while the forked merge commit stays on the branch only
+    moves the push to the next pusher: git_fleet_sync publishes HEAD, and
+    HEAD is the merge (replayed: tests/test_git_fleet_formal.py). The working
+    tree was verified clean before the merge, so resetting to `pre` loses
+    nothing; the merge stays reachable under refs/relay-refused/.
+    """
+    ref = f'refs/relay-refused/{host}/{branch}'
+    _run(['git', '-C', str(repo), 'update-ref', ref, 'HEAD'])
+    reset = _run(['git', '-C', str(repo), 'reset', '-q', '--hard', pre])
+    if reset.returncode != 0:
+        return f'branch could NOT be restored to {pre[:10]} — do not push; evidence at {ref}'
+    return f'branch restored to {pre[:10]}; refused merge kept at {ref}'
+
+
 def _normalise_remote(url: str) -> str:
     """github.com/org/name from any of the URL forms git accepts."""
     u = (url or '').strip().removesuffix('.git')
@@ -204,22 +297,27 @@ def relay(host: str, root: str, repo: str, data_dir: Path,
         if dry_run:
             return f"{repo}: would relay {ahead} commit(s) from {host}"
 
+        pre = _run(['git', '-C', str(local), 'rev-parse', '--verify', 'HEAD']
+                   ).stdout.strip()
+        if not pre:
+            return f"{repo}: REFUSED — local HEAD unreadable; nothing merged"
         merge = _run(['git', '-C', str(local), 'merge', '--no-edit',
                       f'{remote_name}/{branch}'], timeout=300)
         if merge.returncode != 0:
             return (f"{repo}: merge from {host} failed; conflict/index evidence "
                     f"retained for review; nothing pushed")
 
-        # NEVER PUSH A FORK. The merge above can only have combined two
-        # per-writer logs, and if it produced two events sharing an
-        # (actor,seq) then pushing would hand that fork to every machine.
-        # Abort and leave the merge for a human — the host's work is still
-        # safe where it was.
-        forks = ledger_forks(local)
+        # NEVER PUSH A FORK. A merge is a union only when each side merely
+        # APPENDED to each log; a side that rewrote a log is taken whole by a
+        # clean three-way merge. So check the chains AND compare with origin
+        # (fork.py's predicate), and on refusal take the merge off the branch:
+        # a refusal that leaves it there is published by the next pusher.
+        # The host's work is still safe where it was.
+        forks = ledger_forks(local) + publication_forks(local, 'HEAD', f'origin/{branch}')
         if forks:
             return (f"{repo}: REFUSED — merging {host} would fork the ledger "
-                    f"({'; '.join(forks)[:160]}). Local history retained; nothing "
-                    f"pushed. Resolve by hand.")
+                    f"({'; '.join(forks)[:160]}); nothing pushed; "
+                    f"{_park(local, host, branch, pre)}. Resolve by hand.")
 
         # Converge with origin before pushing. The relaying machine is not
         # necessarily up to date itself, and a rejected push would leave the
@@ -231,8 +329,11 @@ def relay(host: str, root: str, repo: str, data_dir: Path,
             return (f"{repo}: origin convergence failed; local commits and "
                     f"conflict/index evidence retained; nothing pushed")
 
-        if ledger_forks(local):
-            return f'{repo}: REFUSED — origin convergence failed ledger integrity; local evidence retained'
+        forks = ledger_forks(local) + publication_forks(local, 'HEAD', f'origin/{branch}')
+        if forks:
+            return (f'{repo}: REFUSED — origin convergence failed ledger integrity '
+                    f"({'; '.join(forks)[:160]}); nothing pushed; "
+                    f'{_park(local, host, branch, pre)}')
 
         push = _run(['git', '-C', str(local), 'push', 'origin', branch],
                     timeout=300)

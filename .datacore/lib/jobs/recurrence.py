@@ -88,15 +88,32 @@ def _load() -> dict:
         return {}
 
 
-def _save(d: dict) -> None:
+def _save(d: dict) -> bool:
+    """Write the state; True when it reached disk. Never raises.
+
+    A failed save must not stop verification, but it must not be silent
+    either: `record` turns False into a WARNING (decision N7).
+    """
     try:
         state = _path()
         state.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         tmp = state.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(d, indent=1, sort_keys=True))
         tmp.replace(state)
+        return True
     except OSError:
-        pass
+        return False
+
+
+def _warn(rec: dict, message: str) -> None:
+    """Loud, never fatal: stderr AND the job's record (decision N7, 2026-09-23).
+
+    `describe` puts the record's warning into the alert line, so a failure
+    report carries it too. Verification of the remaining jobs continues.
+    """
+    line = f"WARNING: recurrence: {message}"
+    print(line, file=sys.stderr)
+    rec["warning"] = f"{rec['warning']} | {line}" if rec.get("warning") else line
 
 
 def record(job_name: str, failed: bool, *, today: str | None = None,
@@ -113,15 +130,33 @@ def record(job_name: str, failed: bool, *, today: str | None = None,
     # overwritten by a concurrent fail's increment. A counter that can be off
     # by one is fine; a reset that can be lost is not -- it is how a recovered
     # job stays "recurring".
-    try:
-        with _locked():
-            return _record_unlocked(job_name, failed, today, artifact_sig)
-    except OSError as exc:
-        # A home where mkdir or flock fails (read-only, NFS without locks)
-        # must not take down verification of every remaining job. Degrade to
-        # the unserialised update -- an off-by-one counter, not an aborted run.
-        print(f"recurrence: lock unavailable ({exc}); recording without it", file=sys.stderr)
+    #
+    # When the lock or the save fails, verification CONTINUES but says so
+    # loudly (owner decision N7, 2026-09-23): a WARNING on stderr and in the
+    # returned record, naming the reset that may be lost. It used to degrade
+    # silently, and a lost reset is exactly how a recovered job reads
+    # "recurring" on its next single failure
+    # (DatacoreSpec/NightshiftGates.lean, Recurrence).
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(_locked())
+        except OSError as exc:
+            return _record_without_lock(job_name, failed, today, artifact_sig, exc)
         return _record_unlocked(job_name, failed, today, artifact_sig)
+
+
+def _record_without_lock(job_name: str, failed: bool, today: str,
+                         artifact_sig: str | None, exc: OSError) -> dict:
+    """A home where mkdir or flock fails (read-only, NFS without locks) must
+    not take down verification of every remaining job. Degrade to the
+    unserialised update -- and warn, because a concurrent verifier can now
+    overwrite this record."""
+    rec = _record_unlocked(job_name, failed, today, artifact_sig)
+    what = ("this pass's reset to 0" if not failed
+            else f"this failure's count ({rec['consecutive']})")
+    _warn(rec, f"lock unavailable for {job_name} ({exc}); recorded without "
+               f"it, so a concurrent verifier can overwrite {what}")
+    return rec
 
 
 @contextlib.contextmanager
@@ -159,11 +194,22 @@ def _record_unlocked(job_name: str, failed: bool, today: str,
             if artifact_sig:
                 rec["artifact_sig"] = artifact_sig
     else:
+        before = int(rec.get("consecutive") or 0)
         rec = {"consecutive": 0, "first_failed": None, "last_passed": today,
                "task_id": rec.get("task_id")}
     rec["recurring"] = rec["consecutive"] >= RECURRING_AFTER
     state[job_name] = rec
-    _save(state)
+    if not _save(dict(state)):
+        out = dict(rec)
+        if failed:
+            _warn(out, f"could not save the failure count for {job_name} "
+                       f"(now {rec['consecutive']}); the streak on disk is stale")
+        else:
+            _warn(out, f"could not save the reset for {job_name}: the streak of "
+                       f"{before} consecutive failure(s) is still on disk, so its "
+                       f"next single failure will read {before + 1}"
+                       + (" and escalate as recurring" if before + 1 >= RECURRING_AFTER else ""))
+        return out
     return rec
 
 
@@ -245,14 +291,15 @@ def describe(job_name: str, rec: dict, n_failures: int) -> str:
     the whole defect was that it did not.
     """
     n = int(rec.get("consecutive") or 0)
+    warn = f" {rec['warning']}" if rec.get("warning") else ""
     if not rec.get("recurring"):
-        return f"job.verify FAILED: {job_name} ({n_failures} failure(s))"
+        return f"job.verify FAILED: {job_name} ({n_failures} failure(s)){warn}"
     since = rec.get("first_failed") or "unknown"
     return (
         f"job.verify RECURRING: {job_name} has failed {n} consecutive runs "
         f"since {since} ({n_failures} failure(s) this run). "
         f"Per DIP-0031 this is a recurring failure and needs a decision, not "
-        f"another alert: fix the producer, or delete the check."
+        f"another alert: fix the producer, or delete the check.{warn}"
     )
 
 

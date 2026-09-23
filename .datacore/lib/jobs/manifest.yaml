@@ -1206,7 +1206,9 @@ jobs:
     artifacts:
       - path: ~/.datacore/state/delegation-canary.json
         check: regex
-        arg: '"verdict": "(dispatched|completed|blocked)"'
+        # `blocked` retired by decision N5 (2026-09-23): a commit failure now
+        # writes `failed`, so no run leaves `blocked` behind.
+        arg: '"verdict": "(dispatched|completed)"'
         max_age_hours: 26
 
   # RETIRED 2026-09-21: mac-delegation-canary-verdict. It asked "did the last

@@ -10,8 +10,26 @@ False-positive policy
 ---------------------
 Only transitions to DONE when state is provably terminal:
   - pull request : merged_at is NOT None  (merged — not merely closed without merge)
-  - issue        : state == "closed"
+  - issue        : state == "closed" and state_reason is "completed" (or absent,
+                   for issues closed before GitHub recorded a reason)
 Open, draft, CHANGES_REQUESTED → no change. Never a false DONE.
+
+Every ref must be proven: a ref whose lookup fails is unknown, and an unknown
+ref blocks the close exactly as an open one does.  An issue closed "not
+planned" or as a duplicate is terminal but not done: DIP-0009 rules "will not
+do" is CANCELLED (the ledger dismisses it as `dropped`, never counted as
+finished), so a task whose refs are all not-planned or duplicate becomes
+CANCELLED, with :CANCEL_REASON: naming the issue.  Done and dropped refs
+together prove neither and are left for a human.
+
+The NIGHTSHIFT_OUTPUT archive check (an archived output closes a Review task
+DONE) applies only to a task none of whose refs is open or unknown: in
+practice, one with no GitHub ref at all.  The model is
+DatacoreSpec/Reconcile.lean.
+
+Writes go through org_transaction's serialized writer, and only if the file
+still holds the text the decisions were made on: an edit made while the
+lookups ran is never overwritten (the next run decides again).
 
 Reference extraction
 --------------------
@@ -52,6 +70,9 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from org_transaction import RecoveryRequired, serialized, watch_file, write_org_text  # noqa: E402
 
 log = logging.getLogger("gh_reconcile")
 
@@ -632,6 +653,94 @@ def check_github_ref(ref: GithubRef) -> Optional[Dict]:
     return result
 
 
+#: Issue close reasons and the org state they prove (DIP-0009). A duplicate
+#: is CANCELLED here (decision P6, 2026-09-23): the work is tracked elsewhere,
+#: so this task will not be done as written, and the ledger dismisses it as
+#: `dropped` rather than counting it finished. The reason names the issue.
+_ISSUE_CLOSE_AS = {"completed": "DONE", None: "DONE", "not_planned": "CANCELLED",
+                   "duplicate": "CANCELLED"}
+
+
+def _issue_result(ref: GithubRef, data: Dict) -> Dict:
+    closed = data.get("state") == "closed"
+    why = data.get("state_reason")
+    close_as = _ISSUE_CLOSE_AS.get(why) if closed else None
+    if close_as is None:
+        reason = (f"Issue {ref.full_repo}#{ref.num} closed as {why}, not provably done"
+                  if closed else f"Issue {ref.full_repo}#{ref.num} still open")
+    elif why == "duplicate":
+        # Decision Q9: name the canonical issue when GitHub recorded one;
+        # otherwise (no event, failed lookup) the duplicate itself (P6).
+        canonical = canonical_of_duplicate(ref)
+        reason = f"Issue {ref.full_repo}#{ref.num} closed as a duplicate"
+        if canonical:
+            reason += f" of {canonical}"
+    elif close_as == "CANCELLED":
+        reason = f"Issue {ref.full_repo}#{ref.num} closed as not planned"
+    else:
+        reason = f"Issue {ref.full_repo}#{ref.num} closed"
+    return {
+        "terminal": close_as is not None,
+        "close_as": close_as,
+        "kind": "issue",
+        "closed_at": data.get("closed_at"),
+        "reason": reason,
+    }
+
+
+#: owner/repo/num -> "owner/repo#n" of the canonical issue, or None.
+_duplicate_cache: Dict[str, Optional[str]] = {}
+
+_DUPLICATE_QUERY = (
+    "query($owner:String!,$repo:String!,$num:Int!){repository(owner:$owner,name:$repo){"
+    "issue(number:$num){timelineItems(last:1,itemTypes:[MARKED_AS_DUPLICATE_EVENT,"
+    "UNMARKED_AS_DUPLICATE_EVENT]){nodes{__typename ... on MarkedAsDuplicateEvent{"
+    "canonical{... on Issue{number repository{nameWithOwner}} "
+    "... on PullRequest{number repository{nameWithOwner}}}}}}}}}"
+)
+_DUPLICATE_JQ = (
+    "[.data.repository.issue.timelineItems.nodes[]?"
+    " | select(.__typename == \"MarkedAsDuplicateEvent\") | .canonical"
+    " | select(. != null) | {repo: .repository.nameWithOwner, number: .number}][0]"
+)
+
+
+def canonical_of_duplicate(ref: GithubRef) -> Optional[str]:
+    """The issue `ref` was closed as a duplicate of, as "owner/repo#n".
+
+    Decision Q9 (2026-09-23). Read from GitHub's MarkedAsDuplicate timeline
+    event through `gh api graphql` -- the same CLI and auth as every other
+    lookup here -- one call per duplicate, cached like `check_github_ref`.
+    None when there is no such event (or the last one was undone by an
+    UnmarkedAsDuplicate event) or the call fails; the caller then names the
+    duplicate itself. It only words :CANCEL_REASON:; it never changes a verdict.
+    """
+    key = f"{ref.owner}/{ref.repo}/{ref.num}"
+    if key in _duplicate_cache:
+        return _duplicate_cache[key]
+    found: Optional[str] = None
+    try:
+        r = subprocess.run(
+            ["gh", "api", "graphql",
+             "-f", f"query={_DUPLICATE_QUERY}",
+             "-f", f"owner={ref.owner}", "-f", f"repo={ref.repo}",
+             "-F", f"num={ref.num}",
+             "--jq", _DUPLICATE_JQ],
+            capture_output=True, text=True, timeout=30,
+        )
+        if r.returncode != 0:
+            log.debug(f"gh api graphql duplicate-of {ref.full_repo}#{ref.num} failed: "
+                      f"{(r.stderr or '').strip()[:120]}")
+        else:
+            data = json.loads(r.stdout or "null")
+            if isinstance(data, dict) and data.get("repo") and data.get("number"):
+                found = f"{data['repo']}#{int(data['number'])}"
+    except Exception as e:  # noqa: BLE001 -- the fallback names the duplicate
+        log.debug(f"duplicate-of lookup for {ref.full_repo}#{ref.num}: {type(e).__name__}")
+    _duplicate_cache[key] = found
+    return found
+
+
 def _check_github_ref_uncached(ref: GithubRef) -> Optional[Dict]:
     try:
         if ref.kind == "pr":
@@ -648,6 +757,7 @@ def _check_github_ref_uncached(ref: GithubRef) -> Optional[Dict]:
             merged = data.get("merged_at") is not None or data.get("merged") is True
             return {
                 "terminal": merged,
+                "close_as": "DONE" if merged else None,
                 "kind": "pr",
                 "closed_at": data.get("merged_at"),
                 "reason": (
@@ -662,7 +772,7 @@ def _check_github_ref_uncached(ref: GithubRef) -> Optional[Dict]:
             r = subprocess.run(
                 ["gh", "api",
                  f"repos/{ref.owner}/{ref.repo}/issues/{ref.num}",
-                 "--jq", "{state: .state, closed_at: .closed_at, pull_request: .pull_request}"],
+                 "--jq", "{state: .state, closed_at: .closed_at, state_reason: .state_reason, pull_request: .pull_request}"],
                 capture_output=True, text=True, timeout=30
             )
             if r.returncode != 0:
@@ -674,23 +784,13 @@ def _check_github_ref_uncached(ref: GithubRef) -> Optional[Dict]:
                 return _check_github_ref_uncached(
                     GithubRef(ref.owner, ref.repo, ref.num, "pr")
                 )
-            closed = data.get("state") == "closed"
-            return {
-                "terminal": closed,
-                "kind": "issue",
-                "closed_at": data.get("closed_at"),
-                "reason": (
-                    f"Issue {ref.full_repo}#{ref.num} closed"
-                    if closed
-                    else f"Issue {ref.full_repo}#{ref.num} still open"
-                ),
-            }
+            return _issue_result(ref, data)
 
         else:  # "unknown" — try issues endpoint first (works for both PRs and issues)
             r = subprocess.run(
                 ["gh", "api",
                  f"repos/{ref.owner}/{ref.repo}/issues/{ref.num}",
-                 "--jq", "{state: .state, closed_at: .closed_at, pull_request: .pull_request}"],
+                 "--jq", "{state: .state, closed_at: .closed_at, state_reason: .state_reason, pull_request: .pull_request}"],
                 capture_output=True, text=True, timeout=30
             )
             if r.returncode != 0:
@@ -701,17 +801,7 @@ def _check_github_ref_uncached(ref: GithubRef) -> Optional[Dict]:
                 return _check_github_ref_uncached(
                     GithubRef(ref.owner, ref.repo, ref.num, "pr")
                 )
-            closed = data.get("state") == "closed"
-            return {
-                "terminal": closed,
-                "kind": "issue",
-                "closed_at": data.get("closed_at"),
-                "reason": (
-                    f"Issue {ref.full_repo}#{ref.num} closed"
-                    if closed
-                    else f"Issue {ref.full_repo}#{ref.num} still open"
-                ),
-            }
+            return _issue_result(ref, data)
 
     except subprocess.TimeoutExpired:
         log.warning(f"Timeout checking {ref.full_repo}#{ref.num}")
@@ -738,9 +828,11 @@ def mark_task_done(
     task: OrgTask,
     reason: str,
     _closed_at: Optional[str],
+    state: str = "DONE",
 ) -> List[str]:
     """
-    Return a new lines list with the task marked DONE and reconcile metadata added.
+    Return a new lines list with the task marked `state` (DONE or CANCELLED)
+    and reconcile metadata added.
     Safe to call in descending heading_line order (bottom-up) — modifications
     to lower tasks don't affect line indexes of higher ones.
     """
@@ -758,7 +850,7 @@ def mark_task_done(
     # pass left 13 headings like that and failed the ingest of 0-personal and
     # 5-plur on every cycle after.
     lines[task.heading_line] = RE_HEADING.sub(
-        lambda m: m.group(1) + " DONE" + m.group(3),
+        lambda m: m.group(1) + " " + state + m.group(3),
         lines[task.heading_line],
         count=1,
     )
@@ -772,6 +864,8 @@ def mark_task_done(
     reason_line = reason.replace("\n", " ").strip()
     if len(reason_line) > 160:
         reason_line = reason_line[:157] + "..."
+    if state == "CANCELLED" and "CANCEL_REASON" not in task.props:
+        new_props.append(f"  :CANCEL_REASON: {reason_line}")
     new_props.append(f"  :RESULT: Auto-closed by gh-reconcile: {reason_line}.")
     new_props.append(f"  :NIGHTSHIFT_RECONCILED: {ts}")
 
@@ -814,7 +908,8 @@ def reconcile_file(
 
     data_dir + output_index enable the NIGHTSHIFT_OUTPUT archive check:
     if the task's output file was moved to the nightshift archive the task
-    is marked DONE even with no GitHub ref.
+    is marked DONE -- only when none of its GitHub refs is open or unknown
+    (decision P5).
     """
     content = org_file.read_text(encoding="utf-8")
     lines = content.split("\n")
@@ -826,7 +921,7 @@ def reconcile_file(
 
     log.debug(f"    {org_file.name}: {len(open_tasks)} open task(s) to inspect")
 
-    to_close: List[Tuple[OrgTask, str, Optional[str]]] = []
+    to_close: List[Tuple[OrgTask, str, Optional[str], str]] = []
 
     for task in open_tasks:
         # ── Path A: GitHub ref check ──────────────────────────────────────────
@@ -836,33 +931,55 @@ def reconcile_file(
 
             terminal_refs: List[Tuple[GithubRef, Dict]] = []
             open_refs: List[Tuple[GithubRef, Dict]] = []
+            unknown_refs: List[GithubRef] = []
 
             for ref in refs:
                 result = check_github_ref(ref)
                 if result is None:
-                    continue
-                if result["terminal"]:
+                    # A failed lookup proves nothing: the ref may be open.
+                    unknown_refs.append(ref)
+                elif result["terminal"]:
                     terminal_refs.append((ref, result))
                 else:
                     open_refs.append((ref, result))
 
-            if terminal_refs and not open_refs:
-                reason = "; ".join(r["reason"] for _, r in terminal_refs)
-                closed_at = terminal_refs[0][1].get("closed_at")
-                log.info(f"      CLOSE: '{task.title[:70]}' — {reason}")
-                to_close.append((task, reason, closed_at))
-                continue  # No need to check archive path
-
-            if terminal_refs and open_refs:
+            if terminal_refs and (open_refs or unknown_refs):
                 log.info(
                     f"      Skipping '{task.title[:60]}' — terminal refs found but "
-                    f"also {len(open_refs)} open ref(s)"
+                    f"also {len(open_refs)} open and {len(unknown_refs)} "
+                    f"unverifiable ref(s)"
                 )
                 continue
 
+            if terminal_refs:
+                close_as = {r.get("close_as") or "DONE" for _, r in terminal_refs}
+                if len(close_as) != 1:
+                    log.info(
+                        f"      Skipping '{task.title[:60]}' — refs are part done, "
+                        f"part not planned or duplicate; left for a human"
+                    )
+                    continue
+                state = close_as.pop()
+                reason = "; ".join(r["reason"] for _, r in terminal_refs)
+                closed_at = terminal_refs[0][1].get("closed_at")
+                log.info(f"      CLOSE {state}: '{task.title[:70]}' — {reason}")
+                to_close.append((task, reason, closed_at, state))
+                continue  # No need to check archive path
+
+            # Every ref is open or unknown here (a terminal one would have
+            # closed or skipped above). An archived output does not outrank
+            # them (decision P5, 2026-09-23): a Review task whose PR is still
+            # open stays open until the PR lands.
+            log.debug(
+                f"      Skipping '{task.title[:60]}' — {len(open_refs)} open and "
+                f"{len(unknown_refs)} unverifiable ref(s); archive check not used"
+            )
+            continue
+
         # ── Path B: NIGHTSHIFT_OUTPUT archive check ───────────────────────────
-        # Close Review: tasks whose output file has been processed and archived.
-        # Only runs when data_dir is provided (not available in verify-patterns mode).
+        # Close Review: tasks whose output file has been processed and archived,
+        # and that track no GitHub ref. Only runs when data_dir is provided (not
+        # available in verify-patterns mode).
         if data_dir is None:
             continue
         ns_path = task.props.get("NIGHTSHIFT_OUTPUT", "").strip()
@@ -874,7 +991,7 @@ def reconcile_file(
                 f"      CLOSE (archived output): '{task.title[:70]}' — "
                 f"{archive_result['reason']}"
             )
-            to_close.append((task, archive_result["reason"], None))
+            to_close.append((task, archive_result["reason"], None, "DONE"))
 
     if not to_close:
         return 0
@@ -884,18 +1001,41 @@ def reconcile_file(
         return len(to_close)
 
     # Apply modifications bottom-up to preserve line numbers
-    for task, reason, closed_at in sorted(
+    for task, reason, closed_at, state in sorted(
         to_close, key=lambda x: x[0].heading_line, reverse=True
     ):
-        lines = mark_task_done(lines, task, reason, closed_at)
+        lines = mark_task_done(lines, task, reason, closed_at, state)
 
     try:
-        org_file.write_text("\n".join(lines), encoding="utf-8")
+        if not _write_if_unchanged(org_file, content, "\n".join(lines)):
+            log.warning(
+                f"    {org_file.name} changed while GitHub was consulted — "
+                f"not overwriting; the next run decides again"
+            )
+            return 0
+    except RecoveryRequired as exc:
+        log.warning(f"    {org_file.name} changed during the write — not overwritten ({exc})")
+        return 0
     except PermissionError:
         log.warning(f"    Permission denied writing {org_file} — skipping (file may be root-owned)")
         return 0
     log.info(f"    Wrote {org_file.name} ({len(to_close)} task(s) closed)")
     return len(to_close)
+
+
+@serialized
+def _write_if_unchanged(org_file: Path, expected: str, new_text: str) -> bool:
+    """Compare-and-swap under the house Org writer's lock.
+
+    `expected` is the text every closure decision was computed from. If the
+    file no longer holds it, someone edited it while the lookups ran: writing
+    would erase that edit, so nothing is written. write_org_text re-checks the
+    digest before its atomic replace and raises RecoveryRequired on a change.
+    """
+    if watch_file(org_file)["before"] != expected:
+        return False
+    write_org_text(org_file, new_text)
+    return True
 
 
 def reconcile_all(data_dir: Path, dry_run: bool) -> int:

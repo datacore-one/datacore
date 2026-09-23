@@ -14,8 +14,15 @@ that reads it and holds it to account.
 
 Two failures, deliberately distinguished:
 
-  MISSING   a rostered actor has no log, or a log with no readable events.
+  MISSING   a rostered actor has no log, or a log with no readable events —
+            ANYWHERE it was previously observed. Per space: a log wiped from
+            one space is missing even while another space still holds a copy.
   STALLED   the log exists but its `seq` went BACKWARDS since the last run.
+
+Neither heals by being looked at again. A failing run keeps the prior baseline,
+so the next run with the same damage reports the same failure; only a log that
+is back at or past its baseline, or an explicit `--acknowledge`, clears it (DatacoreSpec/Detectors.lean,
+`ap_ok_sound`, `ap_failing_is_sticky`).
 
 Backwards is the interesting one. An append-only log whose head seq decreases has
 been truncated or restored from an older copy — silent data loss that leaves a
@@ -27,9 +34,17 @@ State lives in ~/.datacore/state/actor-presence.json. A first run establishes th
 baseline and cannot report STALLED, which is stated rather than hidden: a
 detector that cannot fire on its first run should say so.
 
-Exit 0 all present, 1 on any missing/stalled, 2 on error.
+Clearing a failure on purpose (owner decision D4, 2026-09-23): an actor that
+was retired, or a log that was truncated knowingly, is accepted with
+`--acknowledge ACTOR`. Its current state becomes the baseline, and the state
+file records who acknowledged it, when, from which verdict, and the baseline it
+replaced. Acknowledged-then-unchanged reads ok; nothing else clears a failure
+(DatacoreSpec/Detectors.lean, `ap_ack_then_unchanged_ok`).
 
-    actor_presence.py [--root DIR] [--json]
+Exit 0 all present, 1 on any missing/stalled, 2 on error (or a refused
+acknowledge).
+
+    actor_presence.py [--root DIR] [--json] [--acknowledge ACTOR]
 """
 from __future__ import annotations
 
@@ -150,6 +165,88 @@ def silence_verdict(stamps: list[int], now_ms: int) -> tuple[str, float, float]:
     return ("silent" if silent > threshold else "ok"), silent, threshold
 
 
+def classify(here: dict[str, int | None],
+             prev: dict[str, int | None] | None,
+             acknowledged: bool = False) -> tuple[str, list[str]]:
+    """(status, lost_spaces) for one actor, before the SILENT check.
+
+    `here` is space -> head seq now (None: a log with no readable events);
+    `prev` is the baseline's space -> seq, or None if the actor was never
+    observed. Pure, so the model in Detectors.lean is this function.
+
+    ok is returned only when every space in the baseline still holds a readable
+    log whose seq has not gone backwards. The three ways that used to read ok
+    while that was false (2026-09-23):
+      * a log with no readable events was recorded as `{space: None}` and the
+        comparison skipped it;
+      * a space whose log was deleted was never visited, because the loop ran
+        over the spaces present NOW;
+      * see `next_baseline` for STALLED healing itself.
+
+    `acknowledged` is True only for a baseline written by `--acknowledge`
+    (owner decision D4). It matters in one case: a retired actor whose logs are
+    all gone was acknowledged with an EMPTY baseline, and an empty baseline
+    requires nothing, so nothing is lost: ok. Without the flag an observed actor
+    with no readable log stays MISSING, as before.
+    """
+    readable = {s: q for s, q in here.items() if q is not None}
+    base = {s: q for s, q in (prev or {}).items() if q is not None}
+    if not readable and not base and acknowledged and prev is not None:
+        return "ok", []
+    if not readable:
+        # An actor may legitimately have written nothing ANYWHERE yet, so only
+        # a PREVIOUSLY-OBSERVED actor going absent is a failure.
+        return ("missing" if prev is not None else "no-log-yet"), sorted(base)
+    lost = sorted(s for s in base if s not in readable)
+    if lost:
+        return "missing", lost
+    if any(readable[s] < q for s, q in base.items()):
+        return "stalled", []
+    return "ok", []
+
+
+def next_baseline(prev: dict | None, status: str, here: dict[str, int | None]) -> dict | None:
+    """The baseline entry after this run.
+
+    Only a HEALTHY observation moves it. A missing actor already kept its
+    baseline (a dropped one made the next run say "no-log-yet" and exit 0);
+    STALLED used to overwrite it with the truncated seq, so the next run
+    compared the truncated log against itself and reported ok — the same
+    self-healing, one status over.
+    """
+    if status in ("ok", "silent"):
+        entry = {"spaces": {s: q for s, q in here.items() if q is not None}}
+        if prev and prev.get("acknowledged"):
+            entry["acknowledged"] = prev["acknowledged"]     # the audit record stays
+        return entry
+    return prev
+
+
+def acknowledge(prev: dict | None, status: str, here: dict[str, int | None],
+                by: str, at: str) -> dict:
+    """The baseline entry after `--acknowledge`: the actor's CURRENT readable
+    state becomes what it is held to, with who accepted it, when, from which
+    failure, and the baseline it replaced (owner decision D4, 2026-09-23).
+
+    This is the only way a MISSING or STALLED verdict clears without the log
+    recovering. It is deliberate and recorded, never automatic: `next_baseline`
+    still refuses to move the baseline on a failure (`ap_failing_is_sticky`).
+    """
+    return {"spaces": {s: q for s, q in here.items() if q is not None},
+            "acknowledged": {"by": by, "at": at, "status": status,
+                             "previous": dict((prev or {}).get("spaces") or {})}}
+
+
+def _acknowledger() -> str:
+    import getpass
+    import socket
+    try:
+        user = getpass.getuser()
+    except Exception:  # noqa: BLE001 — no login name is still an answer
+        user = "unknown"
+    return f"{user}@{socket.gethostname()}"
+
+
 def _default_root() -> Path:
     """Root from DATACORE_ROOT, then ~/Data — NEVER from this file's location.
 
@@ -161,10 +258,37 @@ def _default_root() -> Path:
     return Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
 
 
+def _acknowledge_one(actor: str, rows: list[dict], prev: dict) -> int:
+    """`--acknowledge ACTOR`: rewrite that actor's baseline entry and nothing
+    else. Refuses (exit 2, state untouched) unless the actor is rostered and
+    currently MISSING or STALLED: SILENT is not a baseline verdict, and a
+    healthy actor's baseline already moves by itself."""
+    row = next((r for r in rows if r["actor"] == actor), None)
+    if row is None:
+        print(f"  ERROR {actor} is not rostered — nothing to acknowledge")
+        return 2
+    if row["status"] not in ("missing", "stalled"):
+        print(f"  ERROR {actor} is {row['status']}, not MISSING or STALLED — "
+              "nothing to acknowledge")
+        return 2
+    at = datetime.now().astimezone().isoformat(timespec="seconds")
+    new_state = dict(prev)
+    new_state[actor] = acknowledge(prev.get(actor), row["status"], row["spaces"],
+                                   _acknowledger(), at)
+    STATE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    STATE.write_text(json.dumps({"actors": new_state}, indent=2))
+    where = ", ".join(f"{s}:{q}" for s, q in sorted(new_state[actor]["spaces"].items())) or "no log"
+    print(f"  acknowledged {actor} ({row['status'].upper()}) at {at}; baseline now: {where}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", type=Path, default=_default_root())
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--acknowledge", metavar="ACTOR",
+                    help="accept a MISSING/STALLED actor's current state as its new "
+                         "baseline (recorded with who and when), e.g. a retired actor")
     args = ap.parse_args()
 
     try:
@@ -189,30 +313,23 @@ def main() -> int:
     for machine, actors in sorted(expected.items()):
         for actor in actors:
             here = seen.get(actor)
-            if not here or not here["spaces"]:
-                # An actor may legitimately have written nothing ANYWHERE yet, so
-                # only a PREVIOUSLY-OBSERVED actor going absent is a failure. The
-                # baseline must therefore record observations, never expectations
-                # — an earlier version stored every rostered actor including the
-                # ones that had never written, so on the next run all of them
-                # looked like they had vanished: 5 MISSING instead of 1.
-                status = "missing" if actor in prev else "no-log-yet"
-            else:
-                status = "ok"
-                for space, seq in here["spaces"].items():
-                    was = (prev.get(actor, {}).get("spaces", {}) or {}).get(space)
-                    if was is not None and seq is not None and seq < was:
-                        status = "stalled"
-                        break
-                # SILENT is checked only for actors that are otherwise fine: a
-                # stalled log is a louder finding and must not be masked by it.
-                if status == "ok":
-                    verdict, silent_h, thr = silence_verdict(history.get(actor, []), now_ms)
-                    if verdict == "silent":
-                        status = "silent"
-                    sil[actor] = (verdict, silent_h, thr)
+            # The baseline records observations, never expectations — an earlier
+            # version stored every rostered actor including the ones that had
+            # never written, so on the next run all of them looked like they had
+            # vanished: 5 MISSING instead of 1.
+            was = (((prev.get(actor) or {}).get("spaces") or {})
+                   if actor in prev else None)
+            acked = bool((prev.get(actor) or {}).get("acknowledged"))
+            status, lost = classify((here or {}).get("spaces", {}), was, acked)
+            # SILENT is checked only for actors that are otherwise fine: a
+            # stalled log is a louder finding and must not be masked by it.
+            if status == "ok":
+                verdict, silent_h, thr = silence_verdict(history.get(actor, []), now_ms)
+                if verdict == "silent":
+                    status = "silent"
+                sil[actor] = (verdict, silent_h, thr)
             rows.append({"machine": machine, "actor": actor, "status": status,
-                         "spaces": (here or {}).get("spaces", {})})
+                         "spaces": (here or {}).get("spaces", {}), "lost": lost})
 
     # SILENT counts as failing: an actor that has stopped doing work is the
     # condition this exists to surface, and miles sat 32h quiet with nothing
@@ -227,6 +344,9 @@ def main() -> int:
               "refusing to report clean")
         return 2
 
+    if args.acknowledge:
+        return _acknowledge_one(args.acknowledge, rows, prev)
+
     if args.json:
         print(json.dumps({"rows": rows, "failures": len(bad),
                           "first_run": first_run}, indent=2))
@@ -237,7 +357,9 @@ def main() -> int:
                    "missing": "MISSING", "stalled": "STALLED"}[r["status"]]
             v = sil.get(r["actor"])
             note = ""
-            if v and v[0] == "silent":
+            if r.get("lost"):
+                note = f"  [no readable log in {', '.join(r['lost'])}, seen there before]"
+            elif v and v[0] == "silent":
                 note = f"  [silent {v[1]:.1f}h > {v[2]:.1f}h threshold]"
             elif v and v[0] == "unknown":
                 note = f"  [cadence unknown: <{MIN_SAMPLES} gaps]"
@@ -258,10 +380,12 @@ def main() -> int:
     # run see an unknown actor, report "no-log-yet", and exit 0 — the detector
     # silently healing the very deletion it just caught. Observed on the first
     # fault injection: red, then green on re-run with the log still gone.
+    # STALLED keeps it too (see next_baseline).
     new_state = {a: v for a, v in prev.items()}
     for r in rows:
-        if r["status"] in ("ok", "stalled"):
-            new_state[r["actor"]] = {"spaces": r["spaces"]}
+        nb = next_baseline(prev.get(r["actor"]), r["status"], r["spaces"])
+        if nb is not None:
+            new_state[r["actor"]] = nb
     STATE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     STATE.write_text(json.dumps({"actors": new_state}, indent=2))
 

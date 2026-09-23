@@ -59,6 +59,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument('--actor', default=None)
     ap.add_argument('--apply', action='store_true')
     a = ap.parse_args(argv)
+    # Identity at startup, strictly (owner follow-up Q2); --actor wins.
+    if not a.actor:
+        from actor_identity import UndeclaredActor, this_actor
+        try:
+            a.actor = this_actor(strict=True)
+        except UndeclaredActor as exc:
+            print(f'REFUSED: {exc}', file=sys.stderr)
+            return 2
 
     space = a.space.resolve()
     if bool(a.item) == bool(a.all):
@@ -115,8 +123,10 @@ def _reconcile(space: Path, identity: str, actor: str | None, apply: bool) -> in
         print('  dry run — pass --apply to record the reconciliation')
         return 0
 
-    from actor_identity import this_actor
-    log = EventLog(space, actor or this_actor())
+    if not actor:
+        from actor_identity import this_actor
+        actor = this_actor(strict=True)
+    log = EventLog(space, actor)
     event = log.append(kind, payload)
     after = fold(read_events(space)).items[identity]
     if after.edit_conflicts:

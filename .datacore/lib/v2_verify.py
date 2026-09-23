@@ -985,7 +985,10 @@ def check_egress(rep: Report) -> None:
         # 3.14, because six modules' dependencies are not installed there — a
         # real gap in whichever interpreter the jobs actually use.
         broken = "0 broken" not in detail
-        unknown = "0 unverifiable" not in detail
+        # Exit 3 / "0 in force" = nothing was verified (decision S5): a run
+        # with no rows has not shown that anything is wired, so it is n-a.
+        nothing = r.returncode == 3 or re.search(r"(?<!\d)0 in force", detail) is not None
+        unknown = nothing or "0 unverifiable" not in detail
         rep.add("app", "egress wired at runtime",
                 False if broken else (None if unknown else True), detail)
     except Exception as exc:  # noqa: BLE001

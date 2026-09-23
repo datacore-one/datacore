@@ -62,6 +62,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument('--actor', default=None)
     ap.add_argument('--apply', action='store_true')
     a = ap.parse_args(argv)
+    # Identity at startup, strictly (owner follow-up Q2); --actor wins.
+    if not a.actor:
+        from actor_identity import UndeclaredActor, this_actor
+        try:
+            a.actor = this_actor(strict=True)
+        except UndeclaredActor as exc:
+            print(f'REFUSED: {exc}', file=sys.stderr)
+            return 2
 
     space = a.space.resolve()
     path = a.field.split('.')
@@ -83,8 +91,7 @@ def main(argv: list[str] | None = None) -> int:
         print('  dry run -- pass --apply to record the authored value')
         return 0
 
-    from actor_identity import this_actor
-    log = EventLog(space, a.actor or this_actor())
+    log = EventLog(space, a.actor)
     payload = conditional_payload(item, {top: want[top]})
     event = log.append('item.update', payload)
     after = fold(read_events(space)).items[a.item]

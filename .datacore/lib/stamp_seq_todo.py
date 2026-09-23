@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import org_transaction  # noqa: E402
 from spaces import discover_spaces  # noqa: E402
 
 # DIP-0009 v2.0 canon (2026-08-29) — must match projector.SEQ_TODO and
@@ -32,6 +33,20 @@ SCOPE = {"inbox.org", "next_actions.org", "someday.org", "nightshift.org",
 
 
 def stamp(path: Path, dry_run: bool) -> str:
+    """Stamp one file; returns "ok" or the action taken (or that would be).
+
+    A real run reads and rewrites the file under the org lock (decision Q12,
+    2026-09-23): `watch_file` before the read, `write_org_text` for the write,
+    so a concurrent adapter commit is neither lost nor overwritten. One short
+    transaction per file; a dry run takes no lock."""
+    if dry_run:
+        return _stamp(path, True)
+    return org_transaction.serialized(_stamp)(path, False)
+
+
+def _stamp(path: Path, dry_run: bool) -> str:
+    if not dry_run:
+        org_transaction.watch_file(path)
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
 
@@ -57,7 +72,7 @@ def stamp(path: Path, dry_run: bool) -> str:
             lines.insert(insert_at, CANONICAL + "\n")
 
     if not dry_run:
-        path.write_text("".join(lines), encoding="utf-8")
+        org_transaction.write_org_text(path, "".join(lines))
     return action
 
 

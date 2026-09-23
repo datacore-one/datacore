@@ -31,8 +31,10 @@ Two callers, one decision:
   * the Miles bot — an SDK PreToolUse hook that calls `evaluate_hook` in-process
 
 Context reaches the hook through the environment the executor sets:
-  DATACORE_POLICY_PRINCIPAL  whose limits apply (default: this host's actor's
-                             principal from registry/principals.yaml)
+  DATACORE_POLICY_PRINCIPAL  whose limits apply (default: this host's DECLARED
+                             actor's principal from registry/principals.yaml;
+                             an undeclared host is denied, never guessed from
+                             its hostname -- decision Q2)
   DATACORE_POLICY_SPACE      the task's space; the refusal is recorded there
                              (default: <root>/2-datacore)
   DATACORE_POLICY_TASK       the task id, carried on the record
@@ -111,25 +113,45 @@ def load_effects(path: Path | None = None) -> dict[str, dict]:
     return out
 
 
-def call_text(tool_input) -> str:
-    """The matchable text of a call: its command/url/path fields, else its JSON."""
+#: Fields that are prose ABOUT a call, not part of it, per tool. Claude Code's
+#: Bash tool carries a human-readable `description` beside its `command`; a
+#: description that quotes an effect pattern ("before the api.stripe.com/v1/
+#: charges work") paused an innocent `git status` (decision Q4, 2026-09-23).
+_PROSE_FIELDS = {"Bash": frozenset({"description"})}
+
+
+def call_text(tool_input, tool_name: str | None = None) -> str:
+    """The matchable text of a call: its command/url/path fields first, then
+    the JSON of the whole input, always -- less the tool's prose fields.
+
+    Decision S1 (2026-09-23): until then the JSON was used only when no text
+    key was present, so `{"url": "https://example.org", "body":
+    "api.stripe.com/v1/charges"}` was matched on its url alone, although
+    tool_effects.yaml says an MCP input is matched "as its JSON"
+    (DatacoreSpec/Guards.lean `call_text_covers_every_field`).
+
+    Decision Q4 (2026-09-23): for `tool_name == "Bash"` the `description`
+    field is left out of the JSON; every other field stays, and every field of
+    every other tool stays (`call_text_bash_description_unmatched`). A caller
+    that does not name the tool gets the whole JSON (fail closed)."""
     if isinstance(tool_input, str):
         return tool_input
     if not isinstance(tool_input, dict):
         return ""
-    parts = [str(tool_input[k]) for k in _TEXT_KEYS if isinstance(tool_input.get(k), str)]
-    if not parts:
-        try:
-            return json.dumps(tool_input, ensure_ascii=False, sort_keys=True)
-        except (TypeError, ValueError):
-            return str(tool_input)
+    prose = _PROSE_FIELDS.get(tool_name or "", frozenset())
+    matched = {k: v for k, v in tool_input.items() if k not in prose} if prose else tool_input
+    parts = [str(matched[k]) for k in _TEXT_KEYS if isinstance(matched.get(k), str)]
+    try:
+        parts.append(json.dumps(matched, ensure_ascii=False, sort_keys=True))
+    except (TypeError, ValueError):
+        parts.append(str(matched))
     return "\n".join(parts)
 
 
 def classify(tool_name: str, tool_input, effects: dict[str, dict] | None = None) -> set[str]:
     """The effects a call would cause, by the vocabulary in tool_effects.yaml."""
     effects = effects if effects is not None else load_effects()
-    text = call_text(tool_input)
+    text = call_text(tool_input, tool_name)
     hit: set[str] = set()
     for name, spec in effects.items():
         tools = spec.get("tools") or []
@@ -146,7 +168,11 @@ def classify(tool_name: str, tool_input, effects: dict[str, dict] | None = None)
 # ── principals ──────────────────────────────────────────────────────────────
 def limits_for(principal: str, policy_path: Path | None = None) -> tuple[set[str], set[str]]:
     """(never_effects, cosign_effects) for a principal from approvals_policy.yaml.
-    An unlisted principal gets the global cosign set and no never-effects."""
+    An unlisted principal is refused (ValueError), which evaluate_hook turns
+    into a deny: it does not get the global cosign set with no never-effects.
+    (This docstring said it did until 2026-09-23; the code was always the
+    safer of the two, and test_unlisted_principal_cannot_bypass_declared_limits
+    pins it.)"""
     from ledger.policy import load_policy
     path = Path(policy_path or DEFAULT_POLICY_FILE)
     if not path.is_file():
@@ -163,8 +189,11 @@ def limits_for(principal: str, policy_path: Path | None = None) -> tuple[set[str
 def principal_for(actor: str | None = None) -> str:
     """The principal whose limits bind this executor: the writer's own entry,
     or the principal that lists it under writes_as (nightshift -> miles)."""
+    # With no actor given, this host's actor is resolved STRICTLY (decision
+    # Q2, 2026-09-23): an undeclared host raises actor_identity.UndeclaredActor,
+    # which evaluate_hook turns into a deny, instead of a hostname guess.
     from actor_identity import principal_of, this_actor
-    actor = (actor or this_actor()).strip().lower()
+    actor = (actor or this_actor(strict=True)).strip().lower()
     name, _ = principal_of(actor)
     if name is None:
         raise ValueError('executor writer has no declared principal')
@@ -206,7 +235,9 @@ def record_refusal(decision: Decision, *, principal: str, tool_name: str,
         if not (space / ".datacore" / "events").is_dir():
             print(f"[tool-policy] no ledger at {space}; refusal not recorded", file=sys.stderr)
             return False
-        log = EventLog(space, (actor or this_actor()).strip().lower())
+        # Strict (decision Q2): an undeclared host records nothing rather
+        # than open a log under its hostname; the refusal itself still stands.
+        log = EventLog(space, (actor or this_actor(strict=True)).strip().lower())
         log.append("metric.attest", {
             "metric": REFUSAL_METRIC,
             "principal": principal,
@@ -265,7 +296,7 @@ def evaluate_hook(payload: dict, env=None, *, record: bool = True,
     if record:
         record_refusal(decision, principal=ctx["principal"], tool_name=tool_name,
                        space_dir=ctx["space"], task_id=ctx["task"],
-                       detail=call_text(tool_input)[:200])
+                       detail=call_text(tool_input, tool_name)[:200])
     return deny_output(decision.reason)
 
 

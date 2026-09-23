@@ -639,8 +639,48 @@ class CredentialManager:
         import credential_access as ca  # noqa: PLC0415
         return ca
 
+    @staticmethod
+    def _cred_lock(key: str):
+        """The broker's per-credential lock, keyed on the INDEX ID.
+
+        Keyed on the caller's raw argument until 2026-09-23, so `creds get
+        oura-pat` and `creds get OURA_PERSONAL_ACCESS_TOKEN` took different
+        locks for the same credential and could refresh a single-use chain
+        concurrently -- the race this lock exists to prevent. Callers pass the
+        resolved entry's id; every name for one credential shares one lock.
+        """
+        import contextlib  # noqa: PLC0415
+        import fcntl  # noqa: PLC0415
+
+        @contextlib.contextmanager
+        def held():
+            lockdir = Path.home() / ".datacore" / "locks"
+            lockdir.mkdir(parents=True, exist_ok=True)
+            fh = open(lockdir / f"cred-{key.replace('/', '_')}.lock", "w")
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX)
+                yield
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+                fh.close()
+        return held()
+
+    @staticmethod
+    def _full_entry(c: "Credential") -> dict:
+        """The index row as written, for the verifier.
+
+        `Credential.extra` drops every KNOWN_FIELD, among them `provider` and
+        `id`. doctor passed `extra` alone, so `_entry_verifier` never saw
+        provider=gitea/gitlab, fell through to the generic probe, and reported
+        ANY 2xx from the api_base root as ok -- while `get` reported n-a for
+        the same value. Both now verify against the same full row.
+        """
+        extra = c.extra if isinstance(c.extra, dict) else {}
+        return {**extra, "id": c.id, "name": c.name, "type": c.type,
+                "provider": c.provider, "status": c.status}
+
     def cmd_get(self, cred_id: str, consumer: str = "cli",
-                no_verify: bool = False) -> int:
+                no_verify: bool = False, strict: bool = False) -> int:
         """Serve a currently-valid credential value. THE BROKER.
 
         Holds an exclusive lock for the credential id for the whole operation.
@@ -652,27 +692,39 @@ class CredentialManager:
 
         It prints the VALUE on stdout (that is the point of a broker) and
         everything else on stderr, so `X=$(creds get id)` is safe.
-        """
-        import fcntl  # noqa: PLC0415
-        ca = self._access()
 
-        lockdir = Path.home() / ".datacore" / "locks"
-        lockdir.mkdir(parents=True, exist_ok=True)
-        lock = lockdir / f"cred-{cred_id.replace('/', '_')}.lock"
-        fh = open(lock, "w")
+        Verdicts: FAIL is never served (exit 1). n-a ("could not tell") is
+        served with exit 0 and ONE stderr line starting with NA_NOTICE_PREFIX
+        (decision C1, 2026-09-23; see GET_EPILOG), because many credentials have
+        no free probe by decision (NO_PROBE) and refusing them all would break
+        every consumer at once. `--strict` refuses n-a too (exit 3): a caller
+        that needs "the provider confirmed this value" asks for it.
+
+        The verdict is the SAME function doctor applies: the variable actually
+        served (not the entry's primary) and the full index row (so disabled,
+        api_base and provider-specific verifiers apply here as they do there).
+        """
+        ca = self._access()
         try:
-            fcntl.flock(fh, fcntl.LOCK_EX)
+            entry = ca._entry(cred_id)
+        except (ca.CredentialNotIndexed, ca.CredentialUnresolvable) as exc:
+            print(f"{exc}", file=sys.stderr)
+            return 1
+
+        with self._cred_lock(str(entry.get("id") or cred_id)):
             try:
                 value = ca.get_value(cred_id, consumer=consumer)
             except (ca.CredentialNotIndexed, ca.CredentialUnresolvable) as exc:
                 print(f"{exc}", file=sys.stderr)
                 return 1
 
-            entry = ca._entry(cred_id)
-            var = entry.get("var_name") or (entry.get("vars") or [cred_id])[0]
+            # The variable whose value is being served. Verifying the entry's
+            # primary instead sent a secondary var's value (GH_TOKEN) to the
+            # primary's provider (api.openai.com) and judged it by that.
+            var = ca._var_for(entry, cred_id)
 
             if not no_verify:
-                state, detail = ca.verify_value(var, value)
+                state, detail = ca.verify_value(var, value, entry=entry)
                 if state == "FAIL":
                     # Refusing to serve a value proven dead is the difference
                     # between this and reading the file yourself. A dead value
@@ -686,14 +738,21 @@ class CredentialManager:
                         print(f"  rotating: owner={owner} mint_host={mint} — "
                               f"renew there, not here.", file=sys.stderr)
                     return 1
-                if state == "n-a":
-                    print(f"{cred_id}: served WITHOUT verification ({detail})",
-                          file=sys.stderr)
+                if state != "ok":
+                    if strict:
+                        print(f"creds get: {cred_id}: NOT served, exit 3 — "
+                              f"could not verify ({detail}); --strict refuses n-a",
+                              file=sys.stderr)
+                        return 3
+                    # Decision C1 (2026-09-23): n-a stays served with exit 0.
+                    # This line is the ONLY signal that the value is
+                    # unverified, so it has one fixed prefix that no other
+                    # outcome prints (FAIL, --strict and --no-verify differ).
+                    print(f"{NA_NOTICE_PREFIX} {cred_id}: served UNVERIFIED on "
+                          f"stdout, exit 0 — {detail}. Use --strict to refuse "
+                          f"n-a (exit 3).", file=sys.stderr)
             print(value)
             return 0
-        finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
-            fh.close()
 
     def cmd_doctor(self, cred_id: str = None) -> int:
         """Liveness for every indexed credential. ok / FAIL / n-a.
@@ -705,6 +764,9 @@ class CredentialManager:
         """
         ca = self._access()
         index = self._load_index()
+        if index is None:
+            print(f"no credential index at {self.index_path}")
+            return 2
         creds = [c for c in index.credentials
                  if not cred_id or c.id == cred_id]
         if not creds:
@@ -731,8 +793,7 @@ class CredentialManager:
                     rows.append(("FAIL", c.id, f"unreadable: {str(exc)[:70]}"))
                     fail += 1
                 continue
-            state, detail = ca.verify_value(
-                var, value, entry=c.extra if isinstance(c.extra, dict) else {})
+            state, detail = ca.verify_value(var, value, entry=self._full_entry(c))
             if state == "FAIL":
                 warn = ca.replication_warning(
                     {**(c.extra if isinstance(c.extra, dict) else {}), "id": c.id})
@@ -750,7 +811,33 @@ class CredentialManager:
             print(f"  {state:5} {cid:32} {detail[:70]}")
         print(f"\n  ok {ok}   FAIL {fail}   n-a {na}"
               f"   ({na} could not be determined — not counted as passing)")
+        self._warn_duplicate_keys(ca, creds if cred_id else None)
         return 1 if fail else 0
+
+    @staticmethod
+    def _warn_duplicate_keys(ca, only=None) -> None:
+        """Decision C2 (2026-09-23): a key assigned twice in ONE store is read
+        last-wins by every parser, so the earlier line is dead text that the
+        next edit may land on. Warn with KEY NAMES only -- never a value, and
+        never a change to the exit code. With `--id`, only that credential's
+        variables are listed."""
+        wanted = None
+        if only is not None:
+            wanted = set()
+            for c in only:
+                extra = c.extra if isinstance(c.extra, dict) else {}
+                wanted.update(v for v in [extra.get("var_name"), *(extra.get("vars") or [])] if v)
+        rows = []
+        for path, keys in ca.within_store_duplicates():
+            keys = [k for k in keys if wanted is None or k in wanted]
+            if keys:
+                rows.append((path, keys))
+        if not rows:
+            return
+        print("\n  WARNING: keys duplicated within one store (the LAST line wins; "
+              "delete the earlier ones):")
+        for path, keys in rows:
+            print(f"    {path}: {', '.join(keys)}")
 
 
     def cmd_adopt_token(self, cred_id: str = "claude-code-oauth") -> int:
@@ -819,27 +906,30 @@ class CredentialManager:
                   f"single-use refresh chain.", file=sys.stderr)
             return 1
 
-        store = ca._store_for(entry)
-        if not store.startswith("json:"):
-            print(f"{cred_id} declares storage {store!r}; adopt-token only "
-                  f"handles a json: store", file=sys.stderr)
-            return 1
-        path = Path(store.split(":", 1)[1]).expanduser()
+        # Same lock as `get`, keyed on the same id: a token must not be
+        # swapped underneath a broker call that is serving or verifying it.
+        with self._cred_lock(str(entry.get("id") or cred_id)):
+            store = ca._store_for(entry)
+            if not store.startswith("json:"):
+                print(f"{cred_id} declares storage {store!r}; adopt-token only "
+                      f"handles a json: store", file=sys.stderr)
+                return 1
+            path = Path(store.split(":", 1)[1]).expanduser()
 
-        # A rejected or unverifiable replacement must not displace the
-        # currently usable store. Probe only the candidate value.
-        state, detail = ca.verify_value("CLAUDE_CODE_OAUTH_TOKEN", token)
-        if state != "ok":
-            print(f"  candidate token not verified ({state}); store unchanged", file=sys.stderr)
-            return 1
-        from credential_store import adopt_oauth_token
-        try:
-            old = adopt_oauth_token(path, token)
-        except (OSError, ValueError) as exc:
-            print(f"  credential update failed ({type(exc).__name__}); preserve the store and backups", file=sys.stderr)
-            return 1
-        print(f"  wrote {ca.fingerprint(old)} -> {ca.fingerprint(token)}  {path}", file=sys.stderr)
-        return 0
+            # A rejected or unverifiable replacement must not displace the
+            # currently usable store. Probe only the candidate value.
+            state, detail = ca.verify_value("CLAUDE_CODE_OAUTH_TOKEN", token)
+            if state != "ok":
+                print(f"  candidate token not verified ({state}); store unchanged", file=sys.stderr)
+                return 1
+            from credential_store import adopt_oauth_token
+            try:
+                old = adopt_oauth_token(path, token)
+            except (OSError, ValueError) as exc:
+                print(f"  credential update failed ({type(exc).__name__}); preserve the store and backups", file=sys.stderr)
+                return 1
+            print(f"  wrote {ca.fingerprint(old)} -> {ca.fingerprint(token)}  {path}", file=sys.stderr)
+            return 0
 
     def cmd_sync(self, instance: str = None) -> int:
         """Run sync.sh from the secrets repo."""
@@ -1072,6 +1162,26 @@ class CredentialManager:
         print(f"See DIP-0018 for schema documentation.")
 
 
+# Decision C1 (2026-09-23): n-a is served (exit 0) by default and flagged on
+# stderr. The prefix is fixed so a caller or a log search can tell "served but
+# unverified" from every other outcome; nothing else `creds get` prints uses it.
+NA_NOTICE_PREFIX = "creds get: n-a:"
+
+GET_EPILOG = f"""\
+outcomes (stdout carries the value only when it is served):
+  ok         served, exit 0, stderr silent
+  n-a        served, exit 0, and exactly one stderr line:
+               {NA_NOTICE_PREFIX} <id>: served UNVERIFIED on stdout, exit 0 — <why>. ...
+             n-a means "could not tell": no free probe by design (NO_PROBE),
+             disabled by decision, or the provider was unreachable. It is
+             never a pass. Callers that need a confirmed value use --strict.
+  n-a        with --strict: NOT served, exit 3
+  FAIL       the provider says the value is dead: NOT served, exit 1
+  not found  not indexed or unresolvable: exit 1
+  --no-verify  served, exit 0, no check made and no n-a line
+"""
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Credential Manager — query and audit the credential index (DIP-0018)")
@@ -1120,10 +1230,16 @@ def main():
     add_p.add_argument("--description", help="Description")
 
     # sync
-    get_p = subparsers.add_parser("get", help="Serve a verified credential value (broker)")
+    get_p = subparsers.add_parser(
+        "get", help="Serve a verified credential value (broker)",
+        description="Serve a credential value on stdout. Every diagnostic goes "
+                    "to stderr, so X=$(creds get ID) captures the value only.",
+        epilog=GET_EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
     get_p.add_argument("credential")
     get_p.add_argument("--consumer", default="cli", help="who is asking — recorded in the ledger")
     get_p.add_argument("--no-verify", action="store_true", help="skip the liveness call")
+    get_p.add_argument("--strict", action="store_true",
+                       help="refuse an unverifiable (n-a) value too; exit 3")
 
     adopt_p = subparsers.add_parser("adopt-token",
         help="Install a freshly minted token from stdin into its declared store")
@@ -1163,7 +1279,7 @@ def main():
             description=args.description)
     elif args.command == "get":
         return mgr.cmd_get(args.credential, consumer=args.consumer,
-                           no_verify=args.no_verify)
+                           no_verify=args.no_verify, strict=args.strict)
     elif args.command == "adopt-token":
         return mgr.cmd_adopt_token(args.adopt_id)
     elif args.command == "doctor":

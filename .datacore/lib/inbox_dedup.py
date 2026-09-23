@@ -32,7 +32,8 @@ Usage
 `--tag` restricts removal to entries carrying that org tag, for when you want to
 clean one batch rather than the whole inbox. Default is a dry run: nothing is
 written unless `--apply` is passed. With `--apply` the original is copied to
-`<inbox>.bak` before rewriting.
+`<inbox>.bak` before rewriting, and the read and the rewrite happen under the
+org transaction lock (`org_transaction.serialized`, decision Q12).
 """
 
 from __future__ import annotations
@@ -42,6 +43,9 @@ import re
 import shutil
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import org_transaction  # noqa: E402
 
 HEADING_RE = re.compile(r"^(\*+)\s+(TODO|NEXT|WAITING|DONE|SOMEDAY|CANCELLED)?\s*(.*?)$")
 PRIORITY_RE = re.compile(r"^\[#[A-C]\]\s*")
@@ -147,6 +151,18 @@ def main() -> int:
     if missing:
         print(f"warning: destination not found, skipping: {', '.join(missing)}", file=sys.stderr)
 
+    if args.apply:
+        return org_transaction.serialized(_run)(inbox, dests, space, args)
+    return _run(inbox, dests, space, args)
+
+
+def _run(inbox: Path, dests: list[Path], space: Path, args) -> int:
+    """Report, and with --apply rewrite, under the org lock (decision Q12,
+    2026-09-23): the inbox is watched before it is read and rewritten with
+    `write_org_text`, so a capture that commits concurrently is neither lost
+    nor overwritten by this tool's stale copy. A dry run takes no lock."""
+    if args.apply:
+        org_transaction.watch_file(inbox)
     kept, removed = dedup(inbox, dests, args.tag)
 
     scope = f" tagged :{args.tag}:" if args.tag else ""
@@ -168,7 +184,7 @@ def main() -> int:
 
     backup = inbox.with_suffix(inbox.suffix + ".bak")
     shutil.copy2(inbox, backup)
-    inbox.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    org_transaction.write_org_text(inbox, "\n".join(kept) + "\n")
     print(f"\nremoved {len(removed)} entries. backup: {backup}")
     return 0
 

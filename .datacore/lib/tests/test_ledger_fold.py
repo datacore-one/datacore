@@ -25,7 +25,7 @@ def test_lifecycle_create_claim_complete_verify():
         _ev(0, "1.0.mac", "mac", "item.create", {"id": "t1", "title": "Ship it"}),
         _ev(1, "2.0.mac", "mac", "item.claim", {"id": "t1"}),
         _ev(2, "3.0.mac", "mac", "item.complete", {"id": "t1"}),
-        _ev(3, "4.0.mac", "mac", "item.verify", {"id": "t1"}),
+        _ev(3, "4.0.pi", "pi", "item.verify", {"id": "t1"}),  # verifier != completer
     ]
 
     state = fold(events)
@@ -159,7 +159,7 @@ def test_release_from_verified_by_owner_is_noop():
         _ev(0, "1.0.mac", "mac", "item.create", {"id": "t1", "title": "Done"}),
         _ev(1, "2.0.mac", "mac", "item.claim", {"id": "t1"}),
         _ev(2, "3.0.mac", "mac", "item.complete", {"id": "t1"}),
-        _ev(3, "4.0.mac", "mac", "item.verify", {"id": "t1"}),
+        _ev(3, "4.0.pi", "pi", "item.verify", {"id": "t1"}),
         _ev(4, "5.0.mac", "mac", "item.release", {"id": "t1"}),
     ]
 

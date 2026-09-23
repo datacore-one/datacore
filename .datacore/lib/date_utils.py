@@ -31,8 +31,14 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
-DATE_DOW_RE = re.compile(r"(\d{4}-\d{2}-\d{2})\s+(Mon|Tue|Wed|Thu|Fri|Sat|Sun)")
+# A stamp is "date, blanks, 3-letter day name" where the name ENDS the token.
+# Without the lookahead, "2026-09-24 Monitor" was "fixed" to "Thuitor" and the
+# PreToolUse hook blocked writes of it; with \s instead of [ \t], a date ending
+# one line and "Sat ..." starting the next were joined into one line.
+# Same rule as org_date_hook.DATE_PATTERN; proved in DatacoreSpec/Dates.lean.
+DATE_DOW_RE = re.compile(r"(\d{4}-\d{2}-\d{2})[ \t]+(Mon|Tue|Wed|Thu|Fri|Sat|Sun)(?![A-Za-z])")
 DOWS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+DAY_WORDS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
 
 def _parse_iso(s: str) -> date:
@@ -80,11 +86,33 @@ def org_stamp(d: str | date, inactive: bool = False) -> str:
     return f"[{stamp}]" if inactive else f"<{stamp}>"
 
 
+def _day_word(word: str) -> Optional[int]:
+    """Weekday index (Mon=0) for a day word, or None if it is not one."""
+    if len(word) < 3:
+        return None
+    for i, full in enumerate(DAY_WORDS):
+        if full.startswith(word):
+            return i
+    return None
+
+
+def add_months(d: date, n: int) -> date:
+    """Same day n calendar months later (n may be negative), clamped to month end."""
+    idx = d.year * 12 + (d.month - 1) + n
+    y, m = divmod(idx, 12)
+    m += 1
+    nxt = date(y + (m == 12), m % 12 + 1, 1)
+    last = (nxt - timedelta(days=1)).day
+    return date(y, m, min(d.day, last))
+
+
 def parse_relative(expr: str, base: Optional[date] = None) -> date:
     """Resolve simple relative expressions against base (default: today).
 
     Supported: today, tomorrow, yesterday,
                next/last {mon..sun|week|month},
+               (week = 7 days; month = same day of the adjacent calendar
+                month, clamped to its last day: Jan 31 -> Feb 28),
                in N days, N days ago,
                YYYY-MM-DD (passthrough).
     """
@@ -108,19 +136,23 @@ def parse_relative(expr: str, base: Optional[date] = None) -> date:
     if m:
         return base - timedelta(days=int(m.group(1)))
 
-    m = re.match(r"(next|last)\s+(mon|tue|wed|thu|fri|sat|sun)", s)
+    m = re.fullmatch(r"(next|last)\s+([a-z]+)", s)
     if m:
         direction = 1 if m.group(1) == "next" else -1
-        target = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].index(m.group(2))
-        delta = (target - base.weekday()) % 7
-        if delta == 0:
-            delta = 7
-        return base + timedelta(days=delta * direction if direction > 0 else -((7 - delta) % 7 or 7))
-
-    if s == "next week":
-        return base + timedelta(days=7)
-    if s == "last week":
-        return base - timedelta(days=7)
+        word = m.group(2)
+        if word == "week":
+            return base + timedelta(days=7 * direction)
+        if word == "month":
+            return add_months(base, direction)
+        # A day word is a prefix of a full day name, at least 3 letters:
+        # "mon", "tues", "thursday". "month" and "mongoose" are not.
+        target = _day_word(word)
+        if target is not None:
+            if direction > 0:
+                delta = (target - base.weekday()) % 7 or 7
+            else:
+                delta = -((base.weekday() - target) % 7 or 7)
+            return base + timedelta(days=delta)
 
     raise ValueError(f"cannot parse relative date: {expr!r}")
 

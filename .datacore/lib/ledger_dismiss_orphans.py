@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import socket
@@ -180,7 +181,16 @@ def confirm_and_dismiss(space: Path, now: float, execute: bool = False,
     except (OSError, ValueError):
         prev = {}
     prev_ids = set(prev.get("orphans") or [])
-    prev_at = float(prev.get("at") or 0)
+    try:
+        prev_at = float(prev.get("at") or 0)
+    except (TypeError, ValueError):
+        prev_at = 0.0
+    # `json` reads -Infinity/NaN. A watch file saying `"at": -Infinity` would
+    # make `now - prev_at` infinite and let ONE real scan confirm a deletion --
+    # the two-sweep rule stands on `at` being the time of a real observation.
+    # Found by the Lean model (DatacoreSpec/LedgerSeal.lean, orphans_*).
+    if not math.isfinite(prev_at):
+        prev_at = 0.0
 
     r = orphans(space)
     if r.get("skipped"):

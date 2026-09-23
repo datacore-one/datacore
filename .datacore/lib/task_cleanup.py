@@ -14,6 +14,11 @@ Three buckets, dry-run by default:
             (canonical order: next_actions > inbox > nightshift > archive)
             gets a fresh ID; if it is an open exact-heading duplicate it is
             also CANCELLED as a routing copy.
+            Never touches an id that appears in a GENERATED next_actions.org
+            (a Phase 1 space, DIP-0046): the ledger put it there, and the
+            inbox.org / generated next_actions.org pair shares ids by design
+            (owner decision G4, 2026-09-23). Reassigning either side makes
+            the projection refuse the space.
 
   digests   Perishable digest tasks: nightshift daily digests (all but the
             newest closed as superseded) and stale "Daily News Digest"
@@ -34,7 +39,7 @@ from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from org_transaction import SafeOrgWorkspace as OrgWorkspace  # noqa: E402
+from org_transaction import SafeOrgWorkspace as OrgWorkspace, new_org_id  # noqa: E402
 from task_audit import normalize, parse_date, OPEN_STATES  # noqa: E402
 
 CLOSABLE = {'TODO', 'NEXT', 'WAITING', 'REVIEW'}
@@ -54,10 +59,27 @@ def canon_rank(path):
         return 50
 
 
+def _generated(f):
+    """True when `f` is a Phase 1 space's generated org/next_actions.org.
+
+    An unreadable or invalid phase marker counts as generated: when the
+    source-of-truth mode cannot be established, the id is left alone.
+    """
+    path = Path(f)
+    if path.name != 'next_actions.org' or path.parent.name != 'org':
+        return False
+    from ledger_project_org import phase
+    try:
+        return phase(path.parent.parent) == 1
+    except (OSError, ValueError):
+        return True
+
+
 def scan():
     """One read pass over every org file → task dicts (audit-compatible)."""
     tasks = []
     for f in sorted(glob.glob('[0-9]-*/org/*.org')):
+        generated = _generated(f)
         try:
             ws = OrgWorkspace()
             ws.load(f)
@@ -76,6 +98,7 @@ def scan():
             tasks.append({
                 'file': f, 'space': f.split('/')[0],
                 'archive': 'archive' in Path(f).name,
+                'generated': generated,
                 'state': state, 'heading': heading,
                 'norm': normalize(heading),
                 'id': props.get('ID'),
@@ -110,7 +133,22 @@ def plan_zombies(tasks):
     return actions
 
 
+def _fresh_id(taken):
+    """A DIP-0009 UUID no scanned file holds and this run has not minted.
+
+    `<id>-copy<N>` was a function of (id, position), so a rerun that met a new
+    copy of the same id minted the same string again, and the second copy made
+    its file unloadable (SafeOrgWorkspace refuses duplicate ids).
+    """
+    while True:
+        candidate = new_org_id()
+        if candidate not in taken:
+            taken.add(candidate)
+            return candidate
+
+
 def plan_dup_ids(tasks):
+    taken = {t['id'] for t in tasks if t['id']}
     by_id = defaultdict(list)
     for t in tasks:
         if t['id']:
@@ -120,9 +158,11 @@ def plan_dup_ids(tasks):
         files = {c['file'] for c in copies}
         if len(files) < 2:
             continue
+        if any(c.get('generated') for c in copies):
+            continue  # G4: the ledger owns this id; the projection needs it
         copies.sort(key=lambda c: canon_rank(c['file']))
         canonical, rest = copies[0], copies[1:]
-        for i, c in enumerate(rest):
+        for c in rest:
             if c['file'] == canonical['file']:
                 continue
             # never touch 6-meridian while its merge is held
@@ -131,7 +171,7 @@ def plan_dup_ids(tasks):
                     canonical, c = c, canonical  # edit the other side instead
                 else:
                     continue
-            new_id = f'{tid}-copy{i + 1}'
+            new_id = _fresh_id(taken)
             act = {'kind': 'reassign-id', 'file': c['file'], 'id': tid,
                    'new_id': new_id, 'heading': c['heading'][:70],
                    'canonical': canonical['file']}
@@ -164,6 +204,11 @@ def plan_digests(tasks):
     return actions
 
 
+def _has_repeater(node):
+    sched = getattr(node, 'scheduled', None)
+    return bool(sched) and getattr(sched, '_repeater', None) is not None
+
+
 from org_transaction import serialized
 
 @serialized
@@ -187,13 +232,18 @@ def apply_actions(actions):
                 continue
             try:
                 if a['kind'] == 'close':
+                    if _has_repeater(node):
+                        # CANCELLED/DONE on a repeater only advances its date;
+                        # the task stays open and CLOSED_REASON would be a lie.
+                        errors.append((f, f"{a['id']}: repeating task not closed"))
+                        continue
                     ws.transition(node, a['state'])
                     ws.set_property(node, 'CLOSED_REASON', a['reason'])
                 elif a['kind'] == 'reassign-id':
                     ws.set_property(node, 'ID', a['new_id'])
                     ws.set_property(node, 'ID_REASSIGNED',
                                     f"was {a['id']} (dup of {a['canonical']}) {STAMP}")
-                    if a.get('also_close'):
+                    if a.get('also_close') and not _has_repeater(node):
                         ws.transition(node, 'CANCELLED')
                         ws.set_property(node, 'CLOSED_REASON',
                                         f"routing copy of {a['canonical']} — task-audit cleanup {STAMP}")

@@ -13,9 +13,17 @@ just applies events strictly in list order, and the first one to satisfy a
 transition's precondition wins; every later one that no longer satisfies it
 is recorded as a no-op in that item's history.
 
-`item.dismiss` is terminal: once an item's status is "dismissed", every
-later event addressed to that item id -- including the `owner.set` admin
-override -- is a history no-op. Nothing can revive a dismissed item.
+`item.dismiss` is terminal: once an item's status is "dismissed", its
+status, owner, grant, closing stamp and content never change again --
+every later event addressed to it, including the `owner.set` admin
+override, is a no-op for those. Nothing can revive a dismissed item.
+
+The one exception is `edit_conflicts`, deliberately. A conditional edit that
+races a dismissal is refused and RECORDED as a conflict (the projector then
+refuses the space until it is reconciled), and a conditional `item.dismiss`
+carrying `resolves` is the route out (ledger_resolve_conflict.py). Both are
+logged as what they are, never as a no-op. Proved in
+specs/datacore-lean (Item.dismissed_frozen, Item.dismissed_conflict_rule).
 
 `item.release` means "un-claim", never "un-complete": it is legal ONLY
 when status is "claimed". A release attempt against a completed, verified,
@@ -224,10 +232,14 @@ def _get_item_or_orphan(state: LedgerState, event: Event) -> ItemState | None:
 def _dismissed(state: LedgerState, event: Event, item: ItemState) -> bool:
     """If `item` is already terminal, note the no-op and report True.
 
-    Called first by every handler except `item.create` (a duplicate create
+    Called by every handler except `item.create` (a duplicate create
     against a dismissed item is still just a no-op, but the "item already
     exists" framing there covers it) so that no later event -- including
-    the `owner.set` admin override -- can revive or alter a dismissed item.
+    the `owner.set` admin override -- can revive a dismissed item or alter
+    its status, owner, grant or content. Conditional `item.update` and
+    `item.dismiss` handle their `_merge` precondition first, so they can
+    still record or reconcile an edit conflict on a dismissed item; see the
+    module docstring.
     """
     if item.status == "dismissed":
         _note(item, event, "no-op (item dismissed)")
@@ -319,6 +331,11 @@ def _handle_release(state: LedgerState, event: Event) -> None:
         return
     item.owner = None
     item.status = "created"
+    # A grant authorises THIS claim's owner. Kept across a release it made the
+    # next claimant read as granted, and refused that claimant a real grant as
+    # "already granted". (Lean: Item.grant_belongs_to_claim.)
+    item.granted_by = None
+    item.granted_at = None
     _note(item, event, "applied")
 
 
@@ -353,11 +370,13 @@ def _handle_update(state: LedgerState, event: Event) -> None:
         return
     from .edits import update_payload, EditConflict
     fields = {k: v for k, v in (event.payload or {}).items() if k not in {"id", "_merge"}}
+    reconciled: list[str] = []
     if '_merge' in event.payload:
         try:
             updated = update_payload(item, event.payload)
             for key in event.payload['_merge'].get('resolves', []):
-                item.edit_conflicts.pop(key, None)
+                if item.edit_conflicts.pop(key, None) is not None:
+                    reconciled.append(key)
         except EditConflict as exc:
             item.edit_conflicts[event.hash] = str(exc)
             _note(item, event, 'conflict (preserved; explicit reconciliation required)')
@@ -367,7 +386,13 @@ def _handle_update(state: LedgerState, event: Event) -> None:
     else:
         updated = update_payload(item, event.payload)
     if not fields:
-        _note(item, event, "no-op (no fields)")
+        # A field-less conditional update can still reconcile conflicts; that
+        # is a state change and is logged as one, never as a no-op.
+        # (Lean: Item.noop_means_unchanged.)
+        if reconciled:
+            _note(item, event, f"applied (reconciled {len(reconciled)} conflict(s))")
+        else:
+            _note(item, event, "no-op (no fields)")
         return
     item.payload = updated
     if "title" in fields:
@@ -382,6 +407,13 @@ def _handle_verify(state: LedgerState, event: Event) -> None:
     if item.status != "completed":
         _note(item, event, f"no-op (illegal transition from status={item.status})")
         return
+    # Separation of duties: the owner completed it (`_handle_complete`
+    # requires owner == actor), so the owner verifying is the judge being the
+    # defendant. Nothing in the fold or in policy.guarded_append stopped it.
+    # (Lean: Item.verify_needs_second_actor.)
+    if event.actor == item.owner:
+        _note(item, event, "no-op (completer cannot verify own work)")
+        return
     item.status = "verified"
     _note(item, event, "applied")
 
@@ -390,6 +422,7 @@ def _handle_dismiss(state: LedgerState, event: Event) -> None:
     item = _get_item_or_orphan(state, event)
     if item is None:
         return
+    reconciled: list[str] = []
     if '_merge' in event.payload:
         from .edits import apply_condition, EditConflict
         try:
@@ -397,12 +430,21 @@ def _handle_dismiss(state: LedgerState, event: Event) -> None:
                 raise EditConflict('dismissal requires a complete content precondition')
             apply_condition(item, event.payload)
             for key in event.payload['_merge'].get('resolves', []):
-                item.edit_conflicts.pop(key, None)
+                if item.edit_conflicts.pop(key, None) is not None:
+                    reconciled.append(key)
         except (EditConflict, AttributeError) as exc:
             item.edit_conflicts[event.hash] = str(exc)
             _note(item, event, 'conflict (preserved; explicit reconciliation required)')
             return
-    if _dismissed(state, event, item):
+    if item.status == "dismissed":
+        # Reconciling a dismissed item is the route out of a conflict retained
+        # after dismissal (ledger_resolve_conflict.py). It changes state, so it
+        # must not be logged as a no-op -- it used to be, while it deleted
+        # conflicts. (Lean: Item.dismissed_frozen / dismissed_conflicts_logged.)
+        if reconciled:
+            _note(item, event, f"applied (reconciled {len(reconciled)} conflict(s); item stays dismissed)")
+        else:
+            _note(item, event, "no-op (item dismissed)")
         return
     item.status = "dismissed"
     item.closed_at = event.hlc
@@ -481,7 +523,13 @@ def _handle_owner_set(state: LedgerState, event: Event) -> None:
     item = _get_item_or_orphan(state, event)
     if item is None or _dismissed(state, event, item):
         return
-    item.owner = event.payload.get("owner")
+    new_owner = event.payload.get("owner")
+    # Reassignment voids the grant for the same reason release does; a
+    # no-change override leaves it alone.
+    if new_owner != item.owner:
+        item.granted_by = None
+        item.granted_at = None
+    item.owner = new_owner
     _note(item, event, "applied (owner override)")
 
 

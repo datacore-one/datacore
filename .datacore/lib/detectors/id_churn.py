@@ -26,9 +26,15 @@ It also reports IDs the ledger knows that org has lost, which is the damage
 signature itself, so a churn that happens anyway is visible immediately rather
 than at the next projection diff.
 
+Baseline (`--acknowledge`): the orphaned ids present now are recorded, and
+later runs report every orphaned id NOT in that set, however few (owner
+decision D2, 2026-09-23: the old 25 % noise floor is gone). A baseline file
+from before then holds a COUNT per space; it keeps the old behaviour, floor
+included, and says so, until `--acknowledge` is re-run on that host.
+
 Exit 0 clean, 1 on duplicates or correspondence loss, 2 on error.
 
-    id_churn.py [--root DIR] [--json]
+    id_churn.py [--root DIR] [--json] [--acknowledge]
 """
 from __future__ import annotations
 
@@ -37,6 +43,7 @@ import os
 import datetime
 import json
 import re
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -44,7 +51,20 @@ ID_RE = re.compile(r":ID:\s*(\S+)")
 ORG_FILES = ("next_actions.org", "inbox.org")
 
 
-def scan_space(space: Path) -> dict | None:
+NOISE_FLOOR = 0.25
+
+
+def scan_space(space: Path, noise_floor: bool = False) -> dict | None:
+    """Duplicates and orphaned ledger ids for one space, or None when clean.
+
+    `noise_floor` restores the pre-2026-09-23 rule that orphans under 25 % of
+    the open ledger ids are ordinary lifecycle and not reported. Owner decision
+    D2 dropped it: with a set baseline, ANY id newly churned since the
+    acknowledged set is a finding (DatacoreSpec/Detectors.lean,
+    `ic_report_complete`; `ic_floor_hides_new_churn` is the counterexample the
+    floor allowed). Only a legacy COUNT baseline still applies it, so those
+    hosts keep their old behaviour until `--acknowledge` is re-run.
+    """
     dupes: dict[str, int] = {}
     org_ids: set[str] = set()
     for name in ORG_FILES:
@@ -58,6 +78,7 @@ def scan_space(space: Path) -> dict | None:
                 dupes[i] = dupes.get(i, 0) + n - 1
 
     orphaned = 0
+    orphan_ids: set[str] = set()
     if org_ids:
         # FOLD, don't scan raw creates. Reading item.create alone counts items
         # that were later completed or dismissed — which SHOULD be absent from
@@ -75,15 +96,18 @@ def scan_space(space: Path) -> dict | None:
                    if it.status in ("created", "claimed", "granted")}
         except Exception:      # noqa: BLE001 — a fold failure is not churn
             return None
-        # Ledger ids with no org task. A handful is normal drift (a task was
-        # completed and archived); a large fraction is the churn signature.
-        orphaned = len(led - org_ids)
-        if led and orphaned / len(led) < 0.25:
-            orphaned = 0        # below the noise floor: ordinary lifecycle
+        # Ledger ids with no org task. The fold above already drops completed
+        # and dismissed items, so what is left is an open item org has lost.
+        orphan_ids = led - org_ids
+        orphaned = len(orphan_ids)
+        if noise_floor and led and orphaned / len(led) < NOISE_FLOOR:
+            orphaned = 0        # legacy count baseline only: below the old floor
+            orphan_ids = set()
     if not dupes and not orphaned:
         return None
     return {"space": space.name, "duplicates": sum(dupes.values()),
-            "examples": sorted(dupes)[:3], "orphaned_ledger_ids": orphaned}
+            "examples": sorted(dupes)[:3], "orphaned_ledger_ids": orphaned,
+            "orphaned_ids": sorted(orphan_ids)}
 
 
 def _default_root() -> Path:
@@ -105,18 +129,44 @@ def _load_baseline(path: Path) -> dict:
         return {}
 
 
+def is_legacy_baseline(baseline: dict) -> bool:
+    """True for a baseline written before 2026-09-23: a COUNT per space. Such a
+    file keeps the old behaviour, noise floor included (decision D2)."""
+    return any(not k.startswith("_") and not isinstance(v, list)
+               for k, v in baseline.items())
+
+
 def apply_baseline(findings: list, baseline: dict) -> list:
-    """Drop orphaned counts at or below the acknowledged baseline; keep
-    duplicates always (they are the trigger, never acknowledged)."""
+    """Drop orphaned ids that were acknowledged; keep duplicates always (they
+    are the trigger, never acknowledged).
+
+    GROWTH IS A SET, NOT A COUNT. The baseline used to be a number per space,
+    and growth was `orphaned - acknowledged`. Two acknowledged ids repaired and
+    two NEW ids churned left the count where it was, so fresh churn read as
+    "growth 0" — exactly the new damage the baseline was introduced to keep
+    visible (DatacoreSpec/Detectors.lean, `ic_count_masks_churn`). A baseline
+    written by `--acknowledge` now lists the ids, and growth is the orphaned
+    ids not in that list. A legacy numeric baseline still reads, count-based,
+    and says so: re-run `--acknowledge` to get the set.
+    """
     out = []
     for r in findings:
-        ack = int(baseline.get(r["space"], 0) or 0)
+        raw = baseline.get(r["space"], 0)
         orphaned = int(r.get("orphaned_ledger_ids") or 0)
-        growth = max(0, orphaned - ack)
-        if ack and orphaned:
-            print(f"  ack        {r['space']}: {min(orphaned, ack)} orphaned ledger ids acknowledged "
-                  f"({baseline.get('_acknowledged', '?')}); growth {growth}")
-        r = dict(r, orphaned_ledger_ids=growth)
+        if isinstance(raw, list):
+            acked = {str(i) for i in raw}
+            new = sorted(set(r.get("orphaned_ids") or []) - acked)
+            growth, how = len(new), "by id"
+            r = dict(r, orphaned_ledger_ids=growth, orphaned_ids=new)
+            ack_n = orphaned - growth
+        else:
+            ack = int(raw or 0)
+            growth, how = max(0, orphaned - ack), "by COUNT (legacy baseline; re-run --acknowledge)"
+            r = dict(r, orphaned_ledger_ids=growth)
+            ack_n = min(orphaned, ack)
+        if raw and orphaned:
+            print(f"  ack        {r['space']}: {ack_n} orphaned ledger ids acknowledged "
+                  f"({baseline.get('_acknowledged', '?')}); growth {growth} {how}")
         if r["duplicates"] or r["orphaned_ledger_ids"]:
             out.append(r)
     return out
@@ -127,8 +177,8 @@ def main() -> int:
     ap.add_argument("--root", type=Path, default=_default_root())
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--acknowledge", action="store_true",
-                    help="record today\'s orphaned-id counts as the known baseline; "
-                         "later runs report only GROWTH above it")
+                    help="record today's orphaned ids as the known baseline; "
+                         "later runs report every id churned since (no noise floor)")
     args = ap.parse_args()
 
     spaces = sorted(args.root.glob("[0-9]-*"))
@@ -139,22 +189,31 @@ def main() -> int:
     if not spaces:
         print(f"ERROR: no spaces under {args.root} — refusing to report clean")
         return 2
-    findings = [r for r in (scan_space(s) for s in spaces if (s / "org").is_dir()) if r]
+    baseline_path = Path.home() / ".datacore" / "state" / "id-churn.baseline.json"
+    baseline = {} if args.acknowledge else _load_baseline(baseline_path)
+    legacy = is_legacy_baseline(baseline)
+    findings = [r for r in (scan_space(s, noise_floor=legacy) for s in spaces
+                            if (s / "org").is_dir()) if r]
     # Acknowledged damage. On 2026-08-11 dedup regenerated 1,204 ids; the
     # ledger still references the old ones (360 in 0-personal, 271 in
     # 2-datacore on 2026-09-03). That is not repairable by this detector and
     # alerting on it every hour hid every NEW churn behind it. --acknowledge
-    # records the counts; from then on only growth above them is a finding,
-    # and the acknowledged amount is printed so it is never invisible.
-    baseline_path = Path.home() / ".datacore" / "state" / "id-churn.baseline.json"
+    # records the orphaned ids (unfloored); from then on every id outside that
+    # set is a finding, and the acknowledged amount is printed so it is never
+    # invisible.
     if args.acknowledge:
-        base = {r["space"]: r["orphaned_ledger_ids"] for r in findings if r["orphaned_ledger_ids"]}
+        base = {r["space"]: r.get("orphaned_ids") or [] for r in findings if r["orphaned_ledger_ids"]}
         base["_acknowledged"] = datetime.date.today().isoformat()
         baseline_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         tmp = baseline_path.with_suffix(".json.tmp"); tmp.write_text(json.dumps(base, indent=1)); tmp.replace(baseline_path)
-        print(f"acknowledged orphaned ledger ids as baseline: {base}")
+        print("acknowledged orphaned ledger ids as baseline: "
+              + ", ".join(f"{k}={len(v)}" for k, v in base.items() if isinstance(v, list)))
         return 0
-    findings = apply_baseline(findings, _load_baseline(baseline_path))
+    if legacy:
+        print(f"  note       legacy COUNT baseline ({baseline.get('_acknowledged', '?')}): "
+              f"churn under {int(NOISE_FLOOR * 100)}% of open ledger ids is not reported; "
+              f"re-run --acknowledge to record ids", file=sys.stderr)
+    findings = apply_baseline(findings, baseline)
 
     if args.json:
         print(json.dumps({"findings": findings, "spaces": len(spaces)}, indent=2))

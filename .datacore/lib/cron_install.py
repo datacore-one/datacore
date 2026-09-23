@@ -85,7 +85,12 @@ def reconcile(current: str, entries: dict[str, str], retire: tuple[str, ...] = (
             raise ValueError('ambiguous managed cron invocations')
         desired[signature] = key
     kept = []
-    for line in current.splitlines(keepends=True):
+    # A crontab LINE ends at '\n' and nowhere else. str.splitlines also splits
+    # at \x0b \x0c \x1c-\x1e \x85 \u2028 \u2029, so one unmanaged cron line
+    # holding such a byte was judged as two, and a fragment that looked like a
+    # managed job was dropped from the middle of it (GitFleet.lean
+    # `reconcile_preserves_unmanaged`).
+    for line in re.findall(r'[^\n]*\n|[^\n]+\Z', current):
         stripped = line.strip()
         if stripped.startswith('#'):
             kept.append(line)

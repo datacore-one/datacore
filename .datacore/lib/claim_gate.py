@@ -18,6 +18,14 @@ add. Two gates (product description, stages 4 and 5):
 
 Limits come from `approvals_policy.yaml` (`principals:`), with documented
 defaults: agents get max_hops 3 and 50 creates a day; humans are unbounded.
+
+`max_creates_per_day` IS PER PRINCIPAL PER SPACE (owner decision L6,
+2026-09-23). `creates_today` counts the `item.create` events of every writer
+the principal owns (all aliases, all run-branch logs), today in UTC, in the ONE
+space being written to. Each space has its own log and its own count, so a
+principal may create up to `max_creates_per_day` items in each space: the
+installation-wide ceiling is the cap times the number of spaces. That is the
+intended scope, not an oversight.
 A refusal is a one-line reason the caller prints; nothing is dropped
 silently.
 """
@@ -106,7 +114,11 @@ def _event_date(event):
 
 
 def creates_today(space_dir: Path | None, actor: str, today: dt.date | None = None) -> int:
-    """Count a principal's creates across aliases and all branch-scoped logs."""
+    """Count a principal's creates across aliases and all branch-scoped logs, in THIS space.
+
+    Per principal per space by design (decision L6): other spaces' logs are not
+    read, so `max_creates_per_day` applies to each space separately.
+    """
     if not space_dir:
         return 0
     from ledger.log import read_events
@@ -115,6 +127,30 @@ def creates_today(space_dir: Path | None, actor: str, today: dt.date | None = No
     return sum(1 for event in read_events(space_dir)
                if principal_of(event.actor)[0] == principal and event.type == "item.create"
                and _event_date(event) == today)
+
+
+def recorded_hops(payload: dict | None) -> int:
+    """The delegation depth an item's payload records; 0 when absent or malformed."""
+    hops = (payload or {}).get("hops", 0)
+    return hops if type(hops) is int and hops >= 0 else 0
+
+
+def parent_hops(space_dir: Path | None, after) -> int | None:
+    """Recorded depth of the item a follow-up names in `after`; None if no such item.
+
+    DEPTH IS DERIVED FROM THE CHAIN, NOT TAKEN ON THE CALLER'S WORD. `hops` used
+    to be whatever the creator wrote, and the one writer of chained items
+    (`ledger_claim.chain_follow_up`) never wrote it, so every link of an
+    A -> B -> A follow-up chain read as depth 0 and max_hops never bound.
+    (Lean: DatacoreSpec.LedgerPolicy.Hops.old_chain_unbounded.)
+    """
+    if not space_dir or not isinstance(after, str) or not after:
+        return None
+    from ledger.log import read_events
+    for event in read_events(Path(space_dir)):
+        if event.type == "item.create" and (event.payload or {}).get("id") == after:
+            return recorded_hops(event.payload)
+    return None
 
 
 def check_create(actor: str, payload: dict | None, policy=None, space_dir: Path | None = None,
@@ -133,6 +169,17 @@ def check_create(actor: str, payload: dict | None, policy=None, space_dir: Path 
     hops = payload.get("hops", 0)
     if isinstance(hops, bool) or not isinstance(hops, int) or hops < 0:
         return False, f"hops must be a nonnegative integer (got {hops!r})"
+    if not human and payload.get("after") is not None:
+        # A follow-up is one hop deeper than the item it follows, so it may not
+        # declare less. Humans are exempt, as they are from max_hops: a human
+        # re-issuing work is the human in the loop, and restarts the count.
+        floor = parent_hops(space_dir, payload.get("after"))
+        if floor is None:
+            if space_dir:
+                return False, f"after names {payload.get('after')!r}, which is no item in this space"
+        elif hops < floor + 1:
+            return False, (f"a follow-up of an item {floor} hops deep must declare hops at least "
+                           f"{floor + 1} (got {hops})")
     if not human and hops > max_hops:
         return False, f"delegation chain is {hops} hops deep; {name} may go {max_hops}"
     assignee = payload.get("assignee")

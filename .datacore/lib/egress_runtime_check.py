@@ -22,6 +22,13 @@ An unimportable module is an unknown, and the whole point of the three-state
 convention is that unknowns do not read as fine.
 
     egress_runtime_check.py [--module NAME] [--functional]
+
+Exit codes (decision S5, 2026-09-23):
+    0  at least one function verified in force, none broken
+    1  a function is broken, or --functional failed
+    3  nothing could be checked: every row is n-a (or there were no rows).
+       Until then this exited 0, so `$?` read an all-unknown run as a pass
+       (DatacoreSpec/Guards.lean `runtime_exit_zero_means_something_verified`).
 """
 from __future__ import annotations
 
@@ -250,7 +257,12 @@ def main() -> int:
         print(f"  {'ok  ' if good else 'FAIL'} functional: {detail}")
         if not good:
             return 1
-    return 1 if bad else 0
+    if bad:
+        return 1
+    if ok == 0:
+        print("  nothing could be checked: every row is n-a (exit 3)")
+        return 3
+    return 0
 
 
 if __name__ == "__main__":

@@ -104,8 +104,17 @@ def migrate_ledger(space: Path, execute: bool) -> dict:
 
 
 def _actor() -> str:
-    import socket
-    return socket.gethostname().split('.')[0]
+    """The DECLARED writer (DIP-0044), never the hostname.
+
+    `socket.gethostname()` is not an identity: two hosts that share a short
+    hostname (two cloud VMs both called `ubuntu`) would both append to
+    `ubuntu.jsonl` from seq 0 -- two events per (actor, seq), a ledger fork the
+    moment they merge -- and a host whose declared actor differs from its
+    hostname would file its events under a writer the registry does not know.
+    actor_identity is the one resolver every other writer uses.
+    """
+    from actor_identity import this_actor
+    return this_actor()
 
 
 def migrate_file(fp: Path, execute: bool) -> dict:
@@ -203,6 +212,15 @@ def main() -> int:
             if c.returncode != 0:
                 print(f"{space}: COMMIT REJECTED — "
                       f"{(c.stdout or c.stderr).strip()[:200]}")
+                continue
+            # NEVER PUSH A FORK: the same check git_relay and git_fleet_sync
+            # apply to what a push publishes (HEAD, not just this commit).
+            from git_relay import publication_forks
+            branch = _git(space_dir, 'branch', '--show-current').stdout.strip() or 'main'
+            forks = publication_forks(space_dir, 'HEAD', f'origin/{branch}')
+            if forks:
+                print(f"{space}: committed, push REFUSED — ledger fork: "
+                      f"{'; '.join(forks)[:160]}")
                 continue
             p = _git(space_dir, 'push', '-q')
             print(f"{space}: committed"

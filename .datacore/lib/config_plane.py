@@ -84,7 +84,8 @@ class ConfigError(ValueError):
 
     The message lists every malformed line found in the file (not just
     the first), each naming its 1-indexed line number and the reason
-    (`no '=' found` or `invalid key '<key>'`).
+    (`no '=' found` or `invalid key`). It never contains the line's
+    text: a malformed line in an env file is often a bare secret.
     """
 
 
@@ -138,15 +139,19 @@ def load(path: Path | None = None) -> dict[str, str]:
             stripped = stripped[len("export ") :]
 
         if "=" not in stripped:
-            errors.append(f"line {lineno}: no '=' found: {raw_line!r}")
+            # Never echo the line: a value pasted without its `KEY=` is
+            # exactly what lands here, and this message reaches logs.
+            errors.append(f"line {lineno}: no '=' found")
             continue
 
         key, _, value = stripped.partition("=")
 
         if not _KEY_RE.match(key):
-            errors.append(f"line {lineno}: invalid key {key!r}")
+            errors.append(f"line {lineno}: invalid key")
             continue
 
+        # A duplicate key takes the LAST value (decision C2, 2026-09-23),
+        # the rule every env parser in the installation shares.
         result[key] = _strip_quotes(value)
 
     if errors:

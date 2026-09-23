@@ -20,9 +20,11 @@ written:
     ROADMAP                            which outcome it serves        (SELECT)
                                        — only in a space that HAS a roadmap
 
-It mirrors nightshift_parser._is_executable rather than exceeding it. A gate
-stricter than the executor rejects work the executor would run happily, which
-teaches people to reach for --no-verify, after which it guards nothing.
+It is EQUAL to nightshift_parser._is_executable: both call
+delegation_requirements.execution_gaps, ROADMAP clause included (owner decision
+N8, 2026-09-23). A gate stricter than the executor rejects work the executor
+would run happily, which teaches people to reach for --no-verify, after which
+it guards nothing; a gate weaker than it admits work that is never run.
 
 Normally nothing hits this gate, because sprint_sync.py writes the tag from
 sprint.yaml and fills all three from fields the sprint already carries. It
@@ -38,9 +40,9 @@ from pathlib import Path
 
 QUEUED = ("TODO", "NEXT")
 
-# Mirror nightshift_parser._is_executable exactly. A gate STRICTER than the
-# executor rejects work the executor would happily run, which teaches people to
-# pass --no-verify and then guards nothing at all.
+# Equal to nightshift_parser._is_executable: one predicate, two callers. A gate
+# STRICTER than the executor rejects work the executor would happily run, which
+# teaches people to pass --no-verify and then guards nothing at all.
 #
 # ACCEPTANCE_CRITERIA is DONE_WHEN's older spelling and several well-specified
 # tasks predate the rename; both are accepted.
@@ -49,25 +51,31 @@ DONE_KEYS = ("DONE_WHEN", "ACCEPTANCE_CRITERIA")
 # ROADMAP is required only in a space that HAS a roadmap. 0-personal and
 # 6-meridian have none, and demanding an epic link there is a complaint about a
 # file that does not exist — the same scoping error agent_readiness made.
+# The executor computes the same set, from the same function, for its data dir.
 REPO = Path(__file__).resolve().parents[2]
-HAS_ROADMAP = {p.parent.name for p in REPO.glob("[0-9]-*/roadmap.yaml")}
+from delegation_requirements import execution_gaps, roadmap_spaces, space_of  # noqa: E402
+
+HAS_ROADMAP = roadmap_spaces(REPO)
 
 
 def _space_of(path: Path) -> str:
-    try:
-        return path.resolve().relative_to(REPO).parts[0]
-    except Exception:
-        return "?"
+    return space_of(path, REPO)
 
 
-def _missing(props: dict, space: str) -> list[str]:
+def _missing(props: dict, space: str, *, roadmap_spaces=None) -> list[str]:
+    # Every clause comes from the executor's own predicate, not a copy of it.
+    # The copy drifted: it compared "unassigned" case-sensitively where the
+    # executor lower-cases, so SURFACE "Unassigned" passed this gate and was
+    # then never run (DatacoreSpec/NightshiftGates.lean, AiGate). ROADMAP is in
+    # the shared function too since decision N8.
+    spaces = HAS_ROADMAP if roadmap_spaces is None else roadmap_spaces
+    gaps = execution_gaps(props, roadmap_required=space in spaces)
     out = []
-    surface = str(props.get("SURFACE") or "").strip()
-    if not surface or surface == "unassigned":
+    if "SURFACE" in gaps:
         out.append("no SURFACE — the agent cannot tell which repo to work in")
-    if not any(str(props.get(k) or "").strip() for k in DONE_KEYS):
+    if "DONE_WHEN" in gaps:
         out.append("no DONE_WHEN — the agent cannot tell when it has finished")
-    if space in HAS_ROADMAP and not str(props.get("ROADMAP") or "").strip():
+    if "ROADMAP" in gaps:
         out.append("no ROADMAP — the agent cannot tell which outcome this serves")
     return out
 
@@ -89,7 +97,11 @@ def main(argv: list[str]) -> int:
         # shallow_tags, not tags: nightshift reads the heading line and does
         # not inherit tags from ancestors, so an inherited :AI: is not queued
         # and must not be gated as though it were. See agent_readiness.tasks().
-        if node.todo not in QUEUED or "AI" not in (node.shallow_tags or []):
+        # Any tag STARTING with "AI", as find_ai_tasks selects -- not only the
+        # exact tag "AI". A heading tagged :AIresearch: is queued by the
+        # executor, so it must be gated here too.
+        if node.todo not in QUEUED or not any(
+                str(t).startswith("AI") for t in (node.shallow_tags or [])):
             continue
         props = node.properties or {}
         # A queue REFERENCE deliberately carries no spec — SOURCE_ID points at

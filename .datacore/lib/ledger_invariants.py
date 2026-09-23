@@ -28,7 +28,12 @@ checklist is not.
     ledger_invariants.py [--root DIR] [--json] [--quick]
 
 Exit 0 when every invariant holds, 1 when one does not, 2 if the sweep itself
-could not run. A space it cannot read is reported as unknown, never as sound.
+could not run OR could not tell. A space it cannot read is reported as unknown,
+never as sound: when the only findings left after the baseline are
+could-not-tell, the verdict line reads `ledger-invariants: UNKNOWN` and the exit
+code is 2 (owner decision L2, 2026-09-23). Before that such a run printed SOUND
+and exited 0, which the nightly contract's `last_line_regex` accepted.
+A new (unaccepted) finding still wins: BROKEN, exit 1.
 """
 from __future__ import annotations
 
@@ -166,11 +171,39 @@ def _baseline(path: Path) -> list[dict]:
         return []
 
 
+def _prefix_matches(detail: str, prefix: object) -> bool:
+    """`detail` starts with `prefix` AT A TOKEN BOUNDARY, and `prefix` is not empty.
+
+    Two ways the plain `startswith` turned the allowlist into a mute button
+    (both replayed 2026-09-23, DatacoreSpec/LedgerSeal.lean):
+      * an entry with no `detail_startswith` compared against "" and accepted
+        EVERY finding of that invariant in that space;
+      * "tris seq 5" also accepted "tris seq 50", "tris seq 51", ... -- a second
+        bad event in the same log, the exact case the docstring says stays new.
+    """
+    if not isinstance(prefix, str) or not prefix.strip():
+        return False
+    if not detail.startswith(prefix):
+        return False
+    rest = detail[len(prefix):]
+    return not rest or not (prefix[-1:].isalnum() and (rest[0].isalnum() or rest[0] == "_"))
+
+
 def _accepted(finding, accepted: list[dict]) -> bool:
     return any(e.get("invariant") == finding.invariant
                and e.get("space") == finding.space
-               and finding.detail.startswith(str(e.get("detail_startswith", "")))
+               and _prefix_matches(finding.detail, e.get("detail_startswith"))
                for e in accepted)
+
+
+def verdict(broken: list, unknown: list) -> tuple[str, int]:
+    """(verdict word, exit code). SOUND only when nothing is broken AND nothing
+    is could-not-tell (Lean: DatacoreSpec/LedgerSeal.lean `exit_zero_iff_all_sound`)."""
+    if broken:
+        return "BROKEN", 1
+    if unknown:
+        return "UNKNOWN", 2
+    return "SOUND", 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -203,8 +236,9 @@ def main(argv: list[str] | None = None) -> int:
             continue
         (known if _accepted(f, accepted) else broken).append(f)
     unknown = [f for f in findings if f.unknown]
+    word, code = verdict(broken, unknown)
     if a.json:
-        print(json.dumps({"ok": not broken, "spaces": len(spaces),
+        print(json.dumps({"ok": code == 0, "verdict": word, "spaces": len(spaces),
                           "broken": [vars(f) for f in broken],
                           "accepted": [vars(f) for f in known],
                           "unknown": [vars(f) for f in unknown]}, indent=2))
@@ -212,10 +246,9 @@ def main(argv: list[str] | None = None) -> int:
         for f in findings:
             mark = "known" if (not f.unknown and _accepted(f, accepted)) else None
             print(f"  {f}" + (f"   [{mark}, accepted by the owner]" if mark else ""))
-        verdict = "SOUND" if not broken else "BROKEN"
-        print(f"ledger-invariants: {verdict} — {len(spaces)} space(s), "
+        print(f"ledger-invariants: {word} — {len(spaces)} space(s), "
               f"{len(broken)} new, {len(known)} accepted, {len(unknown)} could-not-tell")
-    return 1 if broken else 0
+    return code
 
 
 if __name__ == "__main__":

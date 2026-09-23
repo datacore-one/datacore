@@ -198,6 +198,82 @@ def _assignee_from_tags(file_path, tags):
     return None
 
 
+# DIP-0009 v2.0 ruling 5: DONE and CANCELLED both dismiss (CANCELLED as
+# `dropped`); DEFERRED is closed-but-wakeable and never dismisses.
+_DISMISS_KIND = {"DONE": "done", "CANCELLED": "dropped"}
+
+
+#: DIP-0009 v2.0 "Valid transitions" table, plus DEFERRED→CANCELLED (owner
+#: decision G2, 2026-09-23: dropping a benched task need not wake it first).
+#: org-workspace's `can_transition` is looser (any non-terminal state to any
+#: other state), and callers rely on some of that looseness
+#: (`gtd_decision_board` sends REVIEW→TODO, `delegation_gate` REVIEW→DEFERRED).
+#: Decision G1 is WARN ONLY: a move outside this table is reported and then
+#: performed exactly as before. Model: DatacoreSpec/GtdState.lean section 5.
+DIP0009_V2_TRANSITIONS = {
+    "TODO": frozenset({"NEXT", "WAITING", "REVIEW", "DONE", "DEFERRED", "CANCELLED"}),
+    "NEXT": frozenset({"TODO", "WAITING", "REVIEW", "DONE", "DEFERRED", "CANCELLED"}),
+    "WAITING": frozenset({"TODO", "NEXT", "REVIEW", "DONE", "DEFERRED", "CANCELLED"}),
+    "REVIEW": frozenset({"DONE", "NEXT", "DEFERRED", "CANCELLED"}),
+    "DEFERRED": frozenset({"TODO", "CANCELLED"}),
+}
+
+
+def dip0009_allows(from_state, to_state) -> bool:
+    """True iff `from_state → to_state` is in the adapter's DIP-0009 relation."""
+    return to_state in DIP0009_V2_TRANSITIONS.get(from_state or "", frozenset())
+
+
+def _transition_warning(node, to_state):
+    """A warning string when the requested move is outside DIP-0009, else None.
+
+    A request for the state the task already holds is not a move (org-workspace
+    treats it as a no-op), so it never warns. The warning goes to stderr, where
+    the adapter's diagnostics go, and is returned for the JSON `warnings` list.
+    Nothing is refused: decision G1 is warn only.
+    """
+    from_state = node.todo
+    if from_state == to_state or dip0009_allows(from_state, to_state):
+        return None
+    msg = (f"transition {from_state}→{to_state} is not in the DIP-0009 v2.0 table "
+           f"(task {node.id() or node.heading!r}); performing it anyway")
+    print(f"org_workspace_adapter: WARNING: {msg}", file=_sys.stderr)
+    return msg
+
+
+def _generated_target(file_path) -> bool:
+    """True when `_ledger_emit` reconciles by diff (`sync_generated`), not by append.
+
+    In a Phase 1 space the generated next_actions.org is a projection, and an
+    update/dismiss to it is published as the three-way diff between file, base
+    and ledger. That diff already derives the right events from what the file
+    now SAYS (a repeater that reopened as TODO yields no dismissal). Every other
+    file is appended to directly, so the caller must choose the events itself.
+    """
+    from org_space import ledger_space_for_file
+    space = ledger_space_for_file(file_path)
+    if space is None:
+        return False
+    from ledger_project_org import phase, ORG
+    return phase(space) == 1 and Path(file_path).resolve() == (space / ORG).resolve()
+
+
+def _ledger_emit_close(file_path, node, reason):
+    """Dismiss the ledger item iff the org task ACTUALLY closed.
+
+    `ws.transition(node, "DONE")` on a task with a SCHEDULED repeater does not
+    close it: org-workspace advances the date and reopens it as TODO. Deciding
+    from the requested state instead of the resulting one dismissed live
+    recurring tasks, and dismissal is terminal (DIP-0034). Returns the actor,
+    or None when nothing was appended.
+    """
+    kind = _DISMISS_KIND.get(node.todo or "")
+    if kind is None or not node.id() or _generated_target(file_path):
+        return None
+    return _ledger_emit(file_path, "item.dismiss",
+                        {"id": node.id(), "kind": kind, "reason": reason})
+
+
 def _ledger_emit(file_path, event_type, payload):
     from org_space import ledger_space_for_file
     space = ledger_space_for_file(file_path)
@@ -211,7 +287,11 @@ def _ledger_emit(file_path, event_type, payload):
         _sys.path.insert(0, str(Path(__file__).resolve().parent))
         from ledger.log import EventLog
         from actor_identity import this_actor
-        actor = this_actor()
+        # STRICT (owner follow-up Q2): an undeclared host raises UndeclaredActor
+        # here, before any event is planned -- in Phase 1 that propagates (the
+        # write is refused and the caller rolls Org back); in Phase 0 the
+        # mirror stays optional, as for any other ledger failure.
+        actor = this_actor(strict=True)
         if authoritative and Path(file_path).resolve() == (space / ORG).resolve() and event_type in ('item.update', 'item.dismiss'):
             from ledger.fold import fold
             from ledger.log import read_events
@@ -418,8 +498,12 @@ def cmd_complete(args):
         return {"error": f"Task already in terminal state: {node.todo}", "heading": node.heading}
 
     file_path = Path(args.file).resolve()
+    warnings = [w for w in [_transition_warning(node, "DONE")] if w]
     ws.transition(node, "DONE")
     ws.save(file_path)
+    # A repeater reopened as TODO with SCHEDULED advanced: that is a new cycle,
+    # not a closure, so the ledger hears an update, never a dismissal.
+    repeated = node.todo != "DONE"
 
     # THE LEDGER HEARS ABOUT COMPLETIONS TOO. `cmd_add` has emitted
     # `item.create` since DIP-0046 C4b; complete and update emitted nothing, so
@@ -428,14 +512,27 @@ def cmd_complete(args):
     # from the ledger, so the edit survives until the next cycle and then
     # silently reverts. For inbox.org it survives, but the ledger -- the record
     # every other reader consults -- stays wrong until the nightly sweep.
-    emitted = _ledger_emit(file_path, "item.dismiss", {
-        "id": node.id(),
-        "kind": "done",
-        "reason": "completed via org_workspace_adapter",
-    })
-    return {"completed": True, "heading": node.heading, "id": node.id(),
-            "ledger_actor": emitted,
-            "observed": _observed(file_path, node.id(), {"STATE"})}
+    #
+    # A heading without an :ID: has no ledger identity to address; appending
+    # `{"id": null}` only filed an orphan event (ID-less habits, 0-personal).
+    emitted = None
+    if node.id() and _generated_target(file_path):
+        emitted = _ledger_emit(file_path, "item.dismiss", {"id": node.id()})  # diff decides
+    elif node.id() and not repeated:
+        emitted = _ledger_emit_close(file_path, node, "completed via org_workspace_adapter")
+    elif node.id():
+        from ledger.genesis import task_payload, valid_time
+        created_date, rung = valid_time(node)
+        current = task_payload(node, file_path.parent.parent.name, created_date, rung)
+        emitted = _ledger_emit(file_path, "item.update", {
+            "id": node.id(), "state": current["state"], "scheduled": current["scheduled"],
+            "org": {"properties": current["org"]["properties"]}})
+    out = {"completed": True, "repeated": repeated, "heading": node.heading, "id": node.id(),
+           "ledger_actor": emitted,
+           "observed": _observed(file_path, node.id(), {"STATE"})}
+    if warnings:
+        out["warnings"] = warnings
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -957,9 +1054,13 @@ def cmd_update(args):
         return {"error": f"Task not found: '{args.id or args.title}'"}
 
     changes = []
+    warnings = []
 
-    # State transition
+    # State transition (G1: a move outside DIP-0009 v2.0 warns, then proceeds)
     if args.state:
+        warning = _transition_warning(node, args.state)
+        if warning:
+            warnings.append(warning)
         ws.transition(node, args.state)
         changes.append(f"state→{args.state}")
 
@@ -1009,6 +1110,11 @@ def cmd_update(args):
         _payload['title'] = current['title']
     if args.state:
         _payload['state'] = current['state']
+        if node.todo != args.state:
+            # A repeater reopened instead of closing: the date and LAST_REPEAT
+            # moved, and the ledger must hear that too.
+            _payload['scheduled'] = current['scheduled']
+            _payload['org'] = {'properties': _props}
     if args.tags:
         _payload['tags'] = current['tags']
         _payload['effective_tags'] = current['effective_tags']
@@ -1017,9 +1123,13 @@ def cmd_update(args):
     if getattr(args, 'property', None):
         _payload['org'] = {'properties': _props}
     emitted = _ledger_emit(file_path, "item.update", _payload)
+    if args.state:
+        # DIP-0009 v2.0 ruling 5. An `item.update` carrying state DONE left the
+        # ledger item live forever (the drift the ruling was made to end).
+        emitted = _ledger_emit_close(file_path, node, f"closed as {node.todo} via org_workspace_adapter") or emitted
 
     _keys = set(_props) | {"STATE", "SCHEDULED", "DEADLINE"}
-    return {
+    out = {
         "updated": True,
         "id": node.id(),
         "heading": node.heading,
@@ -1027,6 +1137,9 @@ def cmd_update(args):
         "ledger_actor": emitted,
         "observed": _observed(file_path, node.id(), _keys),
     }
+    if warnings:
+        out["warnings"] = warnings
+    return out
 
 
 # ---------------------------------------------------------------------------

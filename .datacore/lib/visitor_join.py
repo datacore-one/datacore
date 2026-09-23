@@ -52,6 +52,8 @@ contract cannot read a running duty as late.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import json
 import os
 import subprocess
@@ -185,7 +187,43 @@ def is_arrival(prev: dict, *, log: str | None = None) -> bool:
     return bool(wake and wake > last)
 
 
+def _lock_path() -> Path:
+    # Beside the attempt marker, resolved at call time (tests repoint ATTEMPT).
+    return ATTEMPT.with_name("join.lock")
+
+
+@contextlib.contextmanager
+def _exclusive():
+    """Hold the join lock, or yield False if another join holds it.
+
+    ONE JOIN AT A TIME. The attempt marker is written after converge (up to
+    1500 s) and the duties run after it (up to 3900 s each), so MIN_SPACING_S
+    spaces joins that have ENDED; a tick that fires mid-join saw the previous
+    attempt, or none, and started a second join over the first -- two phase-1
+    cycles and every duty twice (GitFleet.lean `join_mutual_exclusion`).
+    """
+    path = _lock_path()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with open(path, "a") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
 def join(*, now: float | None = None, log: str | None = None) -> dict:
+    with _exclusive() as mine:
+        if not mine:
+            return {"busy": True, "converged": False}
+        return _join(now=now, log=log)
+
+
+def _join(*, now: float | None = None, log: str | None = None) -> dict:
     now = time.time() if now is None else now
     prev = _load(RECORD)
     arrival = is_arrival(prev, log=log)
@@ -235,6 +273,9 @@ def due(*, now: float | None = None, log: str | None = None) -> tuple[bool, str]
     now = time.time() if now is None else now
     if awake.in_dark_wake(log=log):
         return False, "dark wake: the lid is shut, nobody has arrived"
+    with _exclusive() as free:
+        if not free:
+            return False, "a join is already running"
     attempt = _load(ATTEMPT)
     if attempt and now - float(attempt.get("at", 0)) < MIN_SPACING_S:
         return False, "attempted within the last ten minutes"
@@ -274,6 +315,9 @@ def main() -> int:
         return 0
 
     rec = join()
+    if rec.get("busy"):
+        print("join: another join is running — not starting a second")
+        return 0
     print(f"join: converged={rec['converged']} ahead_by={rec['ahead_by']} "
           f"behind_by={rec['behind_by']} still_unpublished_past_grace="
           f"{rec['still_unpublished_past_grace']} arrival={rec['arrival']}"

@@ -20,8 +20,11 @@ clean one-line stderr message with a nonzero exit code -- never a
 traceback. Genuinely unexpected exceptions are allowed to propagate with a
 traceback; that is not this script's job to hide.
 
-Actor resolution (append only): `--actor`, else `$DATACORE_ACTOR`, else
-`socket.gethostname()`.
+Actor resolution (append/approve only): `--actor`, else this machine's
+declared actor via `actor_identity.this_actor(strict=True)` ($DATACORE_ACTOR,
+~/.datacore/identity.env, the infrastructure registry), resolved at startup.
+An undeclared host is refused with exit 2 before anything is opened; the
+hostname is never a guess (owner decisions L10, follow-up Q2).
 """
 
 from __future__ import annotations
@@ -50,7 +53,11 @@ def _default_actor() -> str:
         _spec = _ilu.spec_from_file_location("actor_identity", _pl.Path(__file__).resolve().parent / "actor_identity.py")
         _m = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_m)
         this_actor = _m.this_actor
-    return this_actor()
+    return this_actor(strict=True)
+
+
+#: Subcommands that append, and so need a writer identity.
+WRITERS = ("append", "approve")
 
 
 def _json_dict(raw: str) -> dict:
@@ -155,7 +162,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--space", required=True, help="Space directory root")
     p.add_argument("--type", required=True, dest="type", help="Event type")
     p.add_argument("--payload", required=True, type=_json_dict, help="Event payload (JSON object)")
-    p.add_argument("--actor", default=None, help="Actor id (default: $DATACORE_ACTOR or hostname)")
+    p.add_argument("--actor", default=None, help="Actor id (default: this machine's declared actor)")
 
     p = sub.add_parser("approve", help="Approve the exact proposed item.create payload")
     p.add_argument("--space", required=True)
@@ -189,6 +196,14 @@ COMMANDS = {
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    if args.command in WRITERS and not args.actor:
+        try:
+            args.actor = _default_actor()
+        except RuntimeError as exc:
+            if type(exc).__name__ != "UndeclaredActor":
+                raise
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(2)
     COMMANDS[args.command](args)
 
 

@@ -14,7 +14,14 @@ another file. Here both copies are in the same file and neither has been routed.
 
 IT REFUSES TO GUESS. A duplicate is removed only when its ENTIRE subtree —
 heading, body, properties, logbook, children — is byte-identical to the copy
-being kept. Same-heading entries whose bodies differ are reported and left
+being kept, EXCEPT for the per-write identifier lines (:ID:, :DISPATCH_ID:,
+see GENERATED_PROPS). That exception is deliberate and is the whole point on
+the incident below, but it means a dropped copy can carry an :ID: the event
+ledger already knows as a separate item. The report names every dropped id
+that the kept copy does not carry, and under --apply each such id that the
+space's ledger created is dismissed there as `kind=housekeeping`, with a
+reason naming the kept id (decision G9, 2026-09-23; see
+`ledger_dismiss_housekeeping`). Same-heading entries whose bodies differ are reported and left
 alone: one of them may carry notes the other does not, and there is no way to
 tell which from the text. Deleting the wrong one loses work silently, and this
 runs against a capture point the owner treats as sacred.
@@ -35,6 +42,8 @@ import re
 import shutil
 import sys
 from pathlib import Path
+
+import org_transaction
 
 HEADING = re.compile(r"^(\*+)\s+(.*)$")
 
@@ -112,8 +121,77 @@ def identity(text: list[str]) -> list[str]:
     return [l for l in text if not _GEN_RE.match(l)]
 
 
+_ID_VALUE = re.compile(r"^\s*:(?:%s):\s+(\S+)" % "|".join(GENERATED_PROPS))
+
+
+def _ids(text: list[str]) -> list[str]:
+    """The per-write identifiers a subtree carries, in order."""
+    return [m.group(1) for l in text if (m := _ID_VALUE.match(l))]
+
+
+def ledger_dismiss_housekeeping(path: Path, dropped_id: str, kept_id: str,
+                                tool: str) -> str:
+    """Dismiss `dropped_id` in the ledger of `path`'s space; return a status.
+
+    Used when a repair tool removes an :ID: from an org file in favour of
+    `kept_id` (G9 here, G10 in org_resolve_id_conflicts). It appends
+    `item.dismiss` with `kind=housekeeping` through the adapter's own emit
+    helper, `org_workspace_adapter._ledger_emit`, so it follows the same Phase
+    0/1 rules as every adapter write. It does nothing, and says why, when:
+
+    * the file is not in a space with a ledger (`.datacore/events`);
+    * the ledger never created the id (a dismiss would be an orphan event);
+    * the item is already dismissed (dismissal is terminal);
+    * the file is a Phase 1 generated projection: there `_ledger_emit`
+      reconciles by diff, and a removed heading is refused as a projection
+      conflict. `dedup` refuses to rewrite such a file for that reason.
+    """
+    from org_space import ledger_space_for_file
+    space = ledger_space_for_file(path)
+    if space is None:
+        return "no ledger in this space"
+    from ledger.fold import fold
+    from ledger.log import read_events
+    item = fold(read_events(space)).items.get(dropped_id)
+    if item is None:
+        return "not in the ledger"
+    if item.status == "dismissed":
+        return "already dismissed in the ledger"
+    from org_workspace_adapter import _generated_target, _ledger_emit
+    if _generated_target(path):
+        return "NOT dismissed: generated projection, reconcile in the ledger"
+    actor = _ledger_emit(path, "item.dismiss", {
+        "id": dropped_id, "kind": "housekeeping",
+        "reason": f"duplicate of {kept_id}; id dropped by {tool}"})
+    return f"dismissed (housekeeping) as {actor}" if actor else "NOT dismissed: ledger append failed"
+
+
+def _is_generated(path: Path) -> bool:
+    try:
+        from org_workspace_adapter import _generated_target
+        return _generated_target(path)
+    except Exception:  # noqa: BLE001 -- an unreadable marker is not "generated"
+        return False
+
+
 def dedup(path: Path, apply: bool) -> tuple[int, int, int]:
-    """Returns (removed_blocks, removed_lines, skipped_groups)."""
+    """Returns (removed_blocks, removed_lines, skipped_groups).
+
+    UNDER THE ORG LOCK WHEN APPLYING (owner decision Q12, 2026-09-23). With
+    `apply`, the read, the decision and the write happen inside one
+    `org_transaction.serialized` call: the file is watched before it is read
+    and rewritten with `write_org_text` (atomic, journalled), so an adapter
+    commit can neither land between the read and the write nor be overwritten
+    by a stale copy. A dry run takes no lock.
+    """
+    if apply:
+        return org_transaction.serialized(_dedup)(path, True)
+    return _dedup(path, False)
+
+
+def _dedup(path: Path, apply: bool) -> tuple[int, int, int]:
+    if apply:
+        org_transaction.watch_file(path)
     lines = path.read_text(encoding="utf-8").splitlines()
     preamble, blocks = split_blocks(lines)
 
@@ -126,19 +204,27 @@ def dedup(path: Path, apply: bool) -> tuple[int, int, int]:
         i = nxt
 
     seen: dict[str, list[str]] = {}  # key -> identity() of the kept copy
+    kept_ids: dict[str, list[str]] = {}  # key -> generated ids of the kept copy
     kept: list[list[str]] = []
     removed = removed_lines = skipped = 0
     reports: list[str] = []
+    lost_ids: list[tuple[str, str]] = []  # (dropped id, kept id) for the ledger
 
     for key, text in subtrees:
         if key not in seen:
             seen[key] = identity(text)
+            kept_ids[key] = _ids(text)
             kept.append(text)
             continue
         if identity(text) == seen[key]:
             removed += 1
             removed_lines += len(text)
-            reports.append(f"    drop  {text[0].strip()[:72]}")
+            lost = [i for i in _ids(text) if i not in kept_ids[key]]
+            kept_id = kept_ids[key][0] if kept_ids[key] else "an unidentified copy"
+            lost_ids.extend((i, kept_id) for i in lost)
+            reports.append(f"    drop  {text[0].strip()[:72]}"
+                           + (f"  (drops id(s) {', '.join(lost)}; kept copy has "
+                              f"{', '.join(kept_ids[key]) or 'none'})" if lost else ""))
             continue
         # Same heading, different content — the one case where deleting either
         # copy could destroy notes. Report and keep both.
@@ -153,12 +239,21 @@ def dedup(path: Path, apply: bool) -> tuple[int, int, int]:
     for r in reports:
         print(r)
 
+    if apply and removed and lost_ids and _is_generated(path):
+        print("    REFUSED: this file is generated from the ledger (Phase 1); "
+              "dismiss the duplicate item in the ledger instead")
+        return 0, 0, skipped
+
     if apply and removed:
         backup = path.with_suffix(path.suffix + ".bak-dedup")
         shutil.copy2(path, backup)
         out = preamble + [l for t in kept for l in t]
-        path.write_text("\n".join(out) + "\n", encoding="utf-8")
+        org_transaction.write_org_text(path, "\n".join(out) + "\n")
         print(f"    wrote {len(out)} lines (was {len(lines)}); backup {backup.name}")
+        for dropped_id, kept_id in lost_ids:
+            status = ledger_dismiss_housekeeping(path, dropped_id, kept_id,
+                                                 "org_dedup_within_file")
+            print(f"    ledger {dropped_id}: {status}")
     return removed, removed_lines, skipped
 
 

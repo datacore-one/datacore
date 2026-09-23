@@ -7,6 +7,13 @@ from ledger.log import EventLog, read_events
 from ledger.seal import build_seal_payload, verify_seal, settled_events
 
 
+@pytest.fixture(autouse=True)
+def _sealer_is_the_sequencer(monkeypatch):
+    # Readers accept only the designated sequencer's seals (decision L1,
+    # 2026-09-23); these tests seal as `sealer`, so it is the sequencer here.
+    monkeypatch.setenv('DATACORE_SEQUENCER', 'sealer')
+
+
 def test_every_item_field_changes_the_state_root():
     item=ItemState(id='a',title='task',owner='worker',status='claimed')
     state=LedgerState(items={'a':item}); before=state.state_root()
@@ -60,7 +67,8 @@ def test_sealer_cannot_certify_a_history_with_a_missing_prefix(tmp_path):
         build_seal_payload(incomplete)
 
 
-def test_same_writer_can_emit_work_after_sealing_and_old_seals_are_not_folded(tmp_path):
+def test_same_writer_can_emit_work_after_sealing_and_old_seals_are_not_folded(tmp_path, monkeypatch):
+    monkeypatch.setenv('DATACORE_SEQUENCER', 'worker')
     log=EventLog(tmp_path,'worker')
     log.append('item.create',{'id':'item','title':'task'})
     log.append('ledger.seal',build_seal_payload(read_events(tmp_path)))

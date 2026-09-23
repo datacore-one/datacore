@@ -58,8 +58,9 @@ def blob(repo: Path, rev: str, path: str) -> str | None:
     return r.stdout.strip() if r.returncode == 0 else None
 
 
-def landed_earlier(repo: Path, branch: str, trunk: str, path: str) -> bool:
-    """Did the trunk ever HOLD the branch's version of this file?
+def landed_earlier(repo: Path, branch: str, trunk: str, path: str,
+                   base: str | None = None) -> bool:
+    """Did the trunk HOLD the branch's version of this file after the fork?
 
     The blob test alone is one-sided in a way that matters here: a change that
     landed and was then built on further leaves the trunk's blob different from
@@ -67,11 +68,17 @@ def landed_earlier(repo: Path, branch: str, trunk: str, path: str) -> bool:
     in the trunk's history for that path. `projection-base-bootstrap` was the
     case that forced this: its whole change is in main, and main then grew the
     header dedupe on top of the same file.
+
+    ONLY AFTER THE FORK POINT (`base..trunk`). Searching the whole history let
+    a branch that REVERTS a file to content the trunk held before the fork
+    find that old blob and read as landed-then-built-on -- a delete proposal
+    for a revert the trunk never took (GitFleet.lean `hygiene_revert`).
     """
     want = blob(repo, branch, path)
     if want is None:
         return False
-    revs = git(repo, 'rev-list', trunk, '--', path).split()
+    span = f'{base}..{trunk}' if base else trunk
+    revs = git(repo, 'rev-list', span, '--', path).split()
     return any(blob(repo, rev, path) == want for rev in revs)
 
 
@@ -96,7 +103,7 @@ def classify(repo: Path, branch: str, trunk: str) -> dict:
     ahead = len(git(repo, 'rev-list', f'{trunk}..{branch}').splitlines())
     verdict = 'superseded'
     if differing:
-        stale = [p for p in differing if not landed_earlier(repo, branch, trunk, p)]
+        stale = [p for p in differing if not landed_earlier(repo, branch, trunk, p, base)]
         verdict = 'built-on' if not stale else 'outstanding'
         differing = stale or differing
     return {

@@ -99,12 +99,17 @@ def test_a_host_that_has_never_run_one_is_not_a_failure(tmp_path):
     assert json.loads(canary.RESULT.read_text())["verdict"] == "unknown"
 
 
-def test_a_canary_that_could_not_publish_is_blocked_not_failed(tmp_path):
-    """An unreachable remote is a condition. Paging for a closed laptop is how
-    an alert stops being read."""
+def test_a_blocked_canary_ages_into_failed(tmp_path):
+    """Decision N5 (2026-09-23) reverses what this test used to pin ("blocked
+    99 h old still passes"). A short condition does not page; one that
+    outlasts BLOCKED_MAX_AGE_HOURS (48 h) is a broken loop."""
     space = _space(tmp_path)
     canary.RESULT.parent.mkdir(parents=True, exist_ok=True)
     canary.RESULT.write_text(json.dumps({"verdict": "blocked", "at": time.time() - 99 * 3600,
+                                         "detail": "offline"}))
+    assert canary.cmd_check(_args(space)) == 1
+    assert json.loads(canary.RESULT.read_text())["verdict"] == "failed"
+    canary.RESULT.write_text(json.dumps({"verdict": "blocked", "at": time.time() - 2 * 3600,
                                          "detail": "offline"}))
     assert canary.cmd_check(_args(space)) == 0
 

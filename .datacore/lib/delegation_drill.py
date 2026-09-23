@@ -332,23 +332,30 @@ class DelegationDrill(Drill):
                    "addressed to another agent" in out, out[:200])
 
     def an_executor_alias_is_the_same_principal(self) -> None:
-        """Addressed to `nightshift`; claimed by `miles`, whose log that is.
+        """Addressed to `nightshift`: only the writer named may run it.
 
-        The string compare this replaced declined the item on every host,
-        including the one it was meant for, and a decline writes no event: it
-        sat `created` for ever with nothing to alert on.
+        Decision L4 (2026-09-23): dispatch needs the EXACT writer. `miles`
+        and `nightshift` are writers of one principal on two hosts; when both
+        could claim, both ran the work. So `miles` now declines an item
+        addressed to its sibling -- and says so, because a decline writes no
+        event and a silent one would sit `created` for ever.
         """
         space = self.delegation_space("3-alias")
         iid = self.delegate(space, by="winston", to="nightshift",
                             title="write NS into ns.txt", check="grep -qx NS ns.txt")
 
-        self.dispatch(space, "miles")
+        out = self.dispatch(space, "miles")
+        self.check("miles declines work addressed to its sibling writer",
+                   self.item(space, iid).status == "created", self.item(space, iid).status)
+        self.check("and names the sibling rather than skipping in silence",
+                   "a sibling writer of miles" in out, out[:200])
 
-        self.check("miles completes work addressed to its own executor log",
+        self.dispatch(space, "nightshift")
+        self.check("nightshift completes work addressed to it",
                    self.item(space, iid).status in ("completed", "verified"),
                    self.item(space, iid).status)
 
-        # And the other direction is still refused.
+        # And a different principal is still refused.
         other = self.delegate(space, by="winston", to="nightshift",
                               title="write X into x.txt", check="test -f x.txt")
         self.dispatch(space, "tris")

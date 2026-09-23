@@ -208,6 +208,16 @@ def main():
     except OSError as e:
         eprint(f"pre-push-scan: FATAL: cannot read denylist {args.denylist}: {e}")
         return 2
+    except Exception as e:  # noqa: BLE001 — yaml.YAMLError and friends
+        # A malformed policy is a scanner error (2), not a violation (1). It
+        # used to escape as a traceback, exit 1, and be reported by the hook
+        # as "policy violations … see ✗ lines above" with no ✗ lines.
+        eprint(f"pre-push-scan: FATAL: denylist {args.denylist} is not valid YAML "
+               f"({type(e).__name__}) — failing CLOSED")
+        return 2
+    if not isinstance(policy, dict):
+        eprint(f"pre-push-scan: FATAL: denylist {args.denylist} is not a mapping — failing CLOSED")
+        return 2
 
     commits = [":index"] if args.index else [c.strip() for c in sys.stdin.read().split() if c.strip()]
     if not commits:
@@ -331,6 +341,11 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (OSError, ValueError) as exc:
-        eprint(f"pre-push-scan: FATAL: validation could not complete: {exc}")
+    except Exception as exc:  # noqa: BLE001 — every internal failure is exit 2
+        # The docstring's contract is 0 clean / 1 violation / 2 scanner error.
+        # Only (OSError, ValueError) used to map to 2; anything else (a
+        # malformed policy value, a TypeError in a glob) exited 1 and read as
+        # a violation. Both block the push; only 2 says why.
+        eprint(f"pre-push-scan: FATAL: validation could not complete: "
+               f"{type(exc).__name__}: {exc}")
         sys.exit(2)

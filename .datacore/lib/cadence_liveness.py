@@ -101,9 +101,17 @@ def collect(root: Path, grace: int, today: date | None = None) -> list:
             vy = space / ".datacore" / "venture.yaml"
         if not vy.is_file():
             continue
+        # AN UNREADABLE VENTURE IS NOT AN ON-TIME ONE. Skipping it silently
+        # made one bad YAML line turn a venture with overdue cadences into
+        # "0 cadence(s) overdue" -- a green contract that checked nothing
+        # (DatacoreSpec/NightshiftGates.lean, Cadence). It counts as a row,
+        # like the engine error below; the type name only, never the content.
         try:
             data = yaml.safe_load(vy.read_text()) or {}
-        except Exception:                       # noqa: BLE001
+            if not isinstance(data, dict):
+                raise ValueError("not a mapping")
+        except Exception as exc:                # noqa: BLE001
+            rows.append((-1, space.name, "?", "?", f"venture.yaml unreadable: {type(exc).__name__}"))
             continue
         # An archived venture is OFF (2026-09-04: forge, megaphone, fds,
         # datafund parked until PLUR runs well). Its cadence catalogue is not
@@ -120,7 +128,8 @@ def collect(root: Path, grace: int, today: date | None = None) -> list:
         # of this file and sent eight spaces to `<space>.broken-*.bak`.
         try:
             log = load_cadence_log_safe(cadence_log_path_for(space))
-        except Exception:                       # noqa: BLE001
+        except Exception as exc:                # noqa: BLE001
+            rows.append((-1, space.name, "?", "?", f"cadence log unreadable: {type(exc).__name__}"))
             continue
         try:
             # A cadence owned by an external agent (5-plur's cio is Tris on

@@ -45,7 +45,14 @@ def append_events(path: Path, rows: list[dict]) -> int:
         total = len(previous.encode('utf-8'))
 
         def remember(text):
-            for line in text.splitlines():
+            # Records are framed by "\n" alone. json.dumps(ensure_ascii=False)
+            # writes U+2028, U+2029 and U+0085 raw inside strings, and
+            # str.splitlines() splits on them, so it cut a valid record in two
+            # and every later append to the whole stream raised.
+            lines = text.split("\n")
+            if lines and lines[-1] == "":
+                lines.pop()
+            for line in lines:
                 row = json.loads(line)
                 if not isinstance(row, dict) or not isinstance(row.get('id'), str) or not row['id']:
                     raise ValueError('invalid existing agent event')
@@ -74,7 +81,12 @@ def append_events(path: Path, rows: list[dict]) -> int:
                 raise EventConflict("event ID already names different content")
             key = row.get("dedup_key")
             if isinstance(key, str) and key and key in seen_keys:
-                continue          # the caller asked for this to dedup; first wins
+                # The caller asked for this to dedup; first wins. The id is
+                # still reserved for this content, or a later row of the same
+                # batch could reuse it for other content and the retry of an
+                # accepted batch would raise EventConflict.
+                known.setdefault(row["id"], content)
+                continue
             if isinstance(key, str) and key:
                 seen_keys.add(key)
             if row["id"] not in known:

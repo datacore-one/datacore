@@ -337,8 +337,14 @@ def _guarded_append_locked(
                     or not all(isinstance(key, str) for key in resolution['resolves'])
                     or not set(item.edit_conflicts).issubset(resolution.get('resolves', []))):
                 raise PolicyError('unresolved replicated edits require explicit reconciliation')
-        previously_approved = any(e.type == "item.create" and e.payload.get("id") == item.id
-                                  and e.payload.get("approval_ref") for e in events)
+        # APPROVED ONCE, APPROVED FOR GOOD -- however the approval arrived. An
+        # approval can be attached by a guarded update as well as at creation;
+        # looking at creates alone let create(no effects) -> granted update
+        # (payment) -> unguarded update (effects: []) claim with no valid grant.
+        # (Lean: DatacoreSpec.LedgerPolicy.Approval.claim_keeps_approval.)
+        previously_approved = bool(item.payload.get("approval_ref")) or any(
+            e.type in {"item.create", "item.update"} and (e.payload or {}).get("id") == item.id
+            and (e.payload or {}).get("approval_ref") for e in events)
         if type == "item.update":
             if item.status != "created":
                 raise PolicyError("item content cannot change after execution has started")

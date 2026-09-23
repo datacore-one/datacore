@@ -11,6 +11,14 @@ root from the named watermarks on any machine, so a wrong seal is detectable by
 every reader rather than authoritative. `emit` refuses to run as a non-sequencer
 by default so the role stays a decision rather than an accident of which box
 happened to run a cron job.
+
+AND ONLY THE SEQUENCER'S SEALS ARE READ (decision L1, 2026-09-23). The sequencer
+is `ledger.seal.sequencer()` -- `$DATACORE_SEQUENCER`, default winston -- the
+same function every reader asks. `emit --force` from another machine still
+appends a seal, but readers ignore it (it is reported by `status`, never
+fatal). A forced seal therefore settles nothing unless DATACORE_SEQUENCER names
+this machine on the READERS too; moving the role means changing that setting
+fleet-wide, not forcing a seal.
 """
 from __future__ import annotations
 
@@ -24,9 +32,9 @@ LIB = Path(__file__).resolve().parent
 sys.path.insert(0, str(LIB))
 
 from ledger.log import EventLog, read_events  # noqa: E402
-from ledger.seal import build_seal_payload, latest_seal, verify_seal  # noqa: E402
-
-SEQUENCER = os.environ.get("DATACORE_SEQUENCER", "winston")
+from ledger.seal import (  # noqa: E402
+    _seal_events, build_seal_payload, latest_seal, regressions, sequencer, verify_seal,
+)
 
 
 def _actor() -> str:
@@ -37,7 +45,7 @@ def _actor() -> str:
         _spec = _ilu.spec_from_file_location("actor_identity", _pl.Path(__file__).resolve().parent / "actor_identity.py")
         _m = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_m)
         this_actor = _m.this_actor
-    return this_actor()
+    return this_actor(strict=True)
 
 
 def _root() -> Path:
@@ -51,11 +59,15 @@ def _spaces(root: Path) -> list[Path]:
 
 def cmd_emit(space: Path, force: bool) -> int:
     actor = _actor()
-    if actor != SEQUENCER and not force:
+    seq = sequencer()
+    if actor != seq and not force:
         print(f"refusing: this machine is '{actor}', the sequencer is "
-              f"'{SEQUENCER}'. Finality is a designated role — run this on the "
+              f"'{seq}'. Finality is a designated role — run this on the "
               f"sequencer, or pass --force with a reason you can defend.")
         return 2
+    if actor != seq:
+        print(f"  warning: '{actor}' is not the sequencer '{seq}'; readers ignore "
+              f"this seal unless DATACORE_SEQUENCER={actor} where they run.")
 
     events = read_events(space)
     if not events:
@@ -63,6 +75,17 @@ def cmd_emit(space: Path, force: bool) -> int:
         return 0
 
     payload = build_seal_payload(events)
+    # Never emit a seal that un-settles what an earlier seal settled: this
+    # checkout is behind (lagging sync, rewound log), and every reader would
+    # rightly report the new seal as a SEAL REGRESSION. Converge first.
+    for e in _seal_events(events):
+        p = e.payload or {}
+        if p.get("version") == 2 and isinstance(p.get("watermarks"), dict):
+            lost = regressions(p["watermarks"], payload["watermarks"])
+            if lost:
+                print(f"refusing: {space.name} is behind an earlier seal "
+                      f"({lost[0]}); converge, then seal.")
+                return 2
     prev = latest_seal(events)
     if prev and prev.version == 2 and prev.event_set_hash == payload["event_set_hash"]:
         # Nothing has happened since the last seal. Emitting anyway would grow
@@ -91,8 +114,18 @@ def main() -> int:
     ap.add_argument("--root", type=Path, default=_root())
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--force", action="store_true",
-                    help="seal from a non-sequencer machine")
+                    help="seal from a non-sequencer machine (readers ignore it; decision L1)")
     a = ap.parse_args()
+    if a.op == "emit":
+        # Identity at startup (owner follow-up Q2): a seal names its sealer,
+        # and an undeclared host must not seal as a guessed hostname.
+        try:
+            _actor()
+        except RuntimeError as exc:
+            if type(exc).__name__ != "UndeclaredActor":
+                raise
+            print(f"refusing: {exc}", file=sys.stderr)
+            return 2
 
     targets = [a.space] if a.space else _spaces(a.root)
     if not targets:

@@ -220,9 +220,18 @@ def r5_reachable(state: Path, day: str, now: float | None = None) -> tuple[bool,
     now = now or dt.datetime.now().timestamp()
     elapsed_min = max(0.0, (now - dt.datetime.fromisoformat(day).timestamp()) / 60)
     expected = int(elapsed_min // PROBE_MINUTES)
-    if expected < 4:
-        return True, f"{hits} probe hit(s) so far; too early to judge"
-    ok = hits >= expected - max(1, expected // 200)
+    # NOTHING DUE IS NOT A PASS. This returned True below four expected probes
+    # whatever the hits, and "too early to judge" is an answer, not a pass.
+    if expected == 0:
+        return False, f"{hits} probe hit(s); no probe due yet — cannot judge"
+    # >= 99.5%, as the SLO page and this file's header say. The tolerance was
+    # `max(1, expected // 200)`, which always forgave one miss: 3/4 (75%) and
+    # 95/96 (98.96%) both passed. expected // 200 is the 0.5% allowance itself,
+    # rounded down, so hits >= expected - expected // 200 implies
+    # hits / expected >= 0.995 (DatacoreSpec/Detectors.lean, `r5_ok_sound`).
+    # A healthy prober on a fixed 15-minute cadence always lands at least
+    # floor(elapsed / 15) hits, so no extra slack is needed for phase.
+    ok = hits >= expected - expected // 200
     return ok, f"{hits}/{expected} probe hits from {PROBER_IP} today"
 
 
@@ -287,6 +296,52 @@ def level(streak: int) -> int:
     return 5 if streak >= 30 else 4 if streak >= 7 else 3
 
 
+_DAY_LINE = re.compile(r"^(\d{4}-\d{2}-\d{2}) (PASS|FAIL) streak=(\d+) level=(\d+)")
+
+
+def _chain(prev: str | None, line: str) -> str:
+    """`line` with streak/level recomputed from the line for the day before."""
+    m = _DAY_LINE.match(line)
+    if not m:
+        return line
+    day, verdict = m.group(1), m.group(2)
+    streak = 0
+    if verdict == "PASS":
+        base = 0
+        p = _DAY_LINE.match(prev or "")
+        if p and p.group(2) == "PASS" and \
+                p.group(1) == (dt.date.fromisoformat(day) - dt.timedelta(days=1)).isoformat():
+            base = int(p.group(3))
+        streak = base + 1
+    return (f"{day} {verdict} streak={streak} level={level(streak)}" + line[m.end():])
+
+
+def write_day_lines(existing: list[str], new: str) -> list[str]:
+    """The log after writing `new`: one line per day, IN DATE ORDER, and every
+    day after `new` re-chained.
+
+    The streak is chained from yesterday's line, so the log's order and its
+    later lines both matter. A `--date` backfill used to be appended at the
+    end: the next run read it as "the last line", found it was not yesterday,
+    and reset the streak; `tail -1` in cos-server-setup read it as today. And a
+    backfilled FAIL left every later day carrying the streak it had before, so
+    a level-5 streak survived a failing day (DatacoreSpec/Detectors.lean,
+    `rechain_step`). A normal run writes the newest day, re-chains nothing and
+    leaves history byte-identical.
+    """
+    m = _DAY_LINE.match(new)
+    day = m.group(1) if m else new.split(" ", 1)[0]
+    kept = [l for l in existing if not l.startswith(day + " ")]
+    dated = sorted((l for l in kept if _DAY_LINE.match(l)), key=lambda l: l[:10])
+    other = [l for l in kept if not _DAY_LINE.match(l)]
+    before = [l for l in dated if l[:10] < day]
+    after = [l for l in dated if l[:10] > day]
+    out = before + [new]
+    for l in after:
+        out.append(_chain(out[-1], l))
+    return other + out
+
+
 def compute(day: str, state: Path, cos: Path, now: float | None = None) -> dict:
     now = now or dt.datetime.now().timestamp()
     checks = {
@@ -295,14 +350,15 @@ def compute(day: str, state: Path, cos: Path, now: float | None = None) -> dict:
     }
     passed = all(ok for ok, _ in checks.values())
     log = state / "reliability-scoreboard.log"
-    prev = [l for l in _lines(log) if re.match(r"^\d{4}-\d{2}-\d{2} ", l) and not l.startswith(day)]
+    # YESTERDAY BY DATE, not the file's last line: a backfilled day sits
+    # wherever it was written, and the last line is not necessarily yesterday.
+    yesterday = (dt.date.fromisoformat(day) - dt.timedelta(days=1)).isoformat()
+    y = [l for l in _lines(log) if l.startswith(yesterday + " ") and _DAY_LINE.match(l)]
     streak = 0
-    if prev:
-        m = re.search(r" streak=(\d+) ", prev[-1])
-        last_day = prev[-1].split(" ", 1)[0]
-        yesterday = (dt.date.fromisoformat(day) - dt.timedelta(days=1)).isoformat()
-        if m and last_day == yesterday and " PASS " in prev[-1]:
-            streak = int(m.group(1))
+    if y:
+        m = _DAY_LINE.match(y[-1])
+        if m.group(2) == "PASS":
+            streak = int(m.group(3))
     streak = streak + 1 if passed else 0
     return {"day": day, "pass": passed, "streak": streak, "level": level(streak),
             "checks": {k: {"ok": ok, "note": note} for k, (ok, note) in checks.items()}}
@@ -331,8 +387,7 @@ def main() -> int:
     if not a.no_write:
         state.mkdir(parents=True, exist_ok=True)
         log = state / "reliability-scoreboard.log"
-        kept = [l for l in _lines(log) if not l.startswith(a.date + " ")]
-        log.write_text("\n".join(kept + [out]) + "\n")
+        log.write_text("\n".join(write_day_lines(_lines(log), out)) + "\n")
     print(json.dumps(r, indent=2) if a.json else out)
     return 0 if r["pass"] else 1
 

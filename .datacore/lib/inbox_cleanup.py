@@ -16,11 +16,19 @@ This tool restores the invariant:
   1. a "* Inbox" section exists (created after the preamble when missing);
   2. every open entry (TODO/NEXT/WAITING/REVIEW) that sits under a closed
      top-level task moves into the Inbox section;
-  3. every closed entry (DONE/CANCELLED/DEFERRED) leaves the file for
+  3. every finished entry (DONE/CANCELLED) leaves the file for
      org/inbox-archive-<today>.org under "* Archived (processed <today>)",
      in the convention of the earlier archive files: top-level entries are
      demoted one level so the archive heading is their parent, deeper
      entries move as they are.
+
+DEFERRED STAYS. DIP-0009 makes DEFERRED "closed but wakeable": the nightly
+sweep wakes it back to TODO from its SCHEDULED date or intent lane. Nothing
+sweeps the dated archive files, so a DEFERRED entry archived here could never
+wake. It is treated like an open entry: it stays, and a DEFERRED descendant
+of a finished task is rescued into the Inbox with the open ones (the same
+rule org_archive_closed.py applies: only DONE/CANCELLED subtrees with no
+unfinished descendant move).
 
 org-workspace's archive_done cannot do this: it treats level 1 as
 structural and only archives level 3 and deeper, which in a flat inbox is
@@ -41,7 +49,10 @@ from pathlib import Path
 from org_transaction import serialized, watch_file, write_org_text
 
 OPEN = ("TODO", "NEXT", "WAITING", "REVIEW")
-CLOSED = ("DONE", "CANCELLED", "DEFERRED")
+#: Archivable. DEFERRED is closed-but-wakeable (DIP-0009) and must stay live.
+CLOSED = ("DONE", "CANCELLED")
+#: Entries that must never leave the live file.
+LIVE = OPEN + ("DEFERRED",)
 HEAD = re.compile(r"^(\*+) (?:\[NEEDS_REVIEW\] )?(TODO|NEXT|WAITING|REVIEW|DONE|CANCELLED|DEFERRED)?\b\s*(.*)$")
 INBOX = re.compile(r"^\* +inbox\s*$", re.IGNORECASE)
 
@@ -86,7 +97,7 @@ def detach_open_descendants(block):
     i = 1
     while i < len(block):
         match = re.match(r"^(\*+) ", block[i])
-        if match and state_of(block[i]) in OPEN:
+        if match and state_of(block[i]) in LIVE:
             level = len(match.group(1))
             end = i + 1
             while end < len(block):
@@ -146,6 +157,11 @@ def clean(text: str, today: str):
     while len(inbox) > 1 and inbox[-1].strip() == "":
         inbox.pop()
     inbox += [l for s in moved for l in s]
+    # Trim again after the arrivals: a subtree cut from the end of the file
+    # carries the file's trailing blank, and keeping it made a second run
+    # rewrite whitespace -- the tool must be idempotent.
+    while len(inbox) > 1 and inbox[-1].strip() == "":
+        inbox.pop()
     new_tops[inbox_idx] = inbox + [""]
     out = "\n".join(pre + [l for b in new_tops for l in b]).rstrip("\n") + "\n"
     arch = None

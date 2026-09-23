@@ -152,6 +152,23 @@ python3 .datacore/modules/research/lib/research_orchestrator.py [--limit N] [--d
   [#A] first, capped at --limit; URL-less reading digests never consume slots)
 - Fetch chain: subscription cookies → Jina → direct → Wayback
 - Writes literature notes, zettels, CRM entities, landscape rows; marks items DONE
+- **Failures park items.** Every failed fetch counts toward `:FETCH_ATTEMPTS:` and
+  every failed analysis toward `:ANALYSIS_ATTEMPTS:`; at 3 the item becomes
+  WAITING with a `:RESULT:` saying what a human must do, then set it TODO again.
+  Analysis failures ALWAYS count, including when every analysis in a run failed
+  (owner decision D8, 2026-09-23). The consequence is deliberate: a model or API
+  **outage lasting 3 nightly runs parks the top `--limit` items** as "analysis
+  failed after 3 attempts", and they stay WAITING until reset by hand. After an
+  outage, look for WAITING items whose `:RESULT:` says "analysis failed" and set
+  them back to TODO (their `:ANALYSIS_ATTEMPTS:` can be deleted). What this buys:
+  the queue always drains, whatever the network and the model do
+  (`DatacoreSpec/Research.lean`, `drain`).
+- **Where the bookkeeping lives** (owner decision D9, 2026-09-23): the three
+  properties above are written INSIDE the item's `:PROPERTIES:` drawer, where
+  org-workspace `get_property` sees them. Older items have them directly under
+  the heading; readers accept both (the drawer wins), and touching an item moves
+  its lines in. `lib/migrate_research_props.py FILE` moves all of them (dry run by
+  default; `--apply` rewrites under the org transaction lock).
 - Podcast: creates a NotebookLM notebook via `nlm`, adds sources, queues the
   audio overview. Two `nlm` constraints, both of which have silently broken
   this pipeline before:

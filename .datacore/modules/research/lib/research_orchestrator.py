@@ -83,6 +83,63 @@ def log(msg: str):
 
 # ---- Parse research queue ----
 
+_HEADING_LINE_RE = re.compile(r'^\*+\s')
+
+
+def _is_heading(line: str) -> bool:
+    """An org heading starts in column 0 with stars and a space. An indented
+    `*bold*` or `* list` line in a body is not one."""
+    return bool(_HEADING_LINE_RE.match(line))
+
+
+def _section_end(lines: List[str], hi: int) -> int:
+    """Index of the next heading after `hi` (or len(lines)): the end of the
+    item's own text. Every search inside an item stops here."""
+    for j in range(hi + 1, len(lines)):
+        if _is_heading(lines[j]):
+            return j
+    return len(lines)
+
+
+def _locate_item(lines: List[str], item: Dict[str, Any]) -> Optional[int]:
+    """Index of the item's heading line, or None when it cannot be named
+    unambiguously.
+
+    Locating by heading TEXT marked the wrong item whenever two captures shared
+    a title, and `str.replace` also matched a heading that merely started with
+    this one's text. So: by `:ID:` when the item has one; otherwise by an exact
+    heading line that occurs once; otherwise by the heading ordinal recorded at
+    parse time, which this pipeline's own edits never shift (they only insert
+    body lines and rewrite headings in place), accepted only if the heading
+    there is still exactly this item's.
+    """
+    item_id = item.get('id')
+    if item_id:
+        owners = []
+        for j, l in enumerate(lines):
+            s = l.strip()
+            if s.startswith(':ID:') and s.split(':ID:', 1)[1].strip() == item_id:
+                h = next((h for h in range(j, -1, -1) if _is_heading(lines[h])), None)
+                if h is not None:
+                    owners.append(h)
+        # A duplicated ID (org-workspace repairs these on load, but a hand
+        # edit can reintroduce one) must not resolve to a closed copy.
+        todo = [h for h in owners if ' TODO ' in lines[h]]
+        return (todo or owners or [None])[0]
+    heading = item.get('heading_line')
+    if not heading:
+        return None
+    matches = [j for j, l in enumerate(lines) if l == heading]
+    if len(matches) == 1:
+        return matches[0]
+    k = item.get('heading_index')
+    if len(matches) > 1 and isinstance(k, int) and k >= 0:
+        heads = [j for j, l in enumerate(lines) if _is_heading(l)]
+        if k < len(heads) and heads[k] in matches:
+            return heads[k]
+    return None
+
+
 def parse_research_items(limit: int = 10) -> List[Dict[str, str]]:
     """Parse TODO items from research_learning.org."""
     if not RESEARCH_ORG.exists():
@@ -102,8 +159,11 @@ def parse_research_items(limit: int = 10) -> List[Dict[str, str]]:
     # Collect ALL url-bearing TODOs, then sort and cut — limiting during
     # collection made "priority A first" meaningless (file order won, so
     # [#A] items appended late in the file waited weeks behind [#B] reads).
+    heading_index = -1
     while i < len(lines):
         line = lines[i]
+        if _is_heading(line):
+            heading_index += 1
         match = HEADING_RE.match(line)
         if match:
             level = len(match.group(1))
@@ -122,6 +182,7 @@ def parse_research_items(limit: int = 10) -> List[Dict[str, str]]:
 
             purpose = ''
             effort = ''
+            item_id = ''
             line_number = i + 1  # 1-indexed
 
             # Look ahead for Link: line and properties (incl. :SOURCE: / :EXTERNAL_URL:)
@@ -149,7 +210,9 @@ def parse_research_items(limit: int = 10) -> List[Dict[str, str]]:
                     purpose = l.split('Purpose:', 1)[1].strip()
                 elif ':EFFORT:' in l:
                     effort = l.split(':EFFORT:', 1)[1].strip()
-                elif l.startswith('*'):
+                elif l.startswith(':ID:') and not item_id:
+                    item_id = l.split(':ID:', 1)[1].strip()
+                elif _is_heading(lines[j]):
                     break
                 j += 1
 
@@ -166,6 +229,8 @@ def parse_research_items(limit: int = 10) -> List[Dict[str, str]]:
                     'tags': tags,
                     'line_number': line_number,
                     'heading_line': line,
+                    'heading_index': heading_index,
+                    'id': item_id,
                 })
 
         i += 1
@@ -283,6 +348,11 @@ from public_download import download as download_public, parse_public_url, publi
 from file_utils import locked_read_modify_write_text as _locked_text
 from org_literal import scalar as org_scalar, prose as org_prose
 from org_transaction import SafeOrgWorkspace as _SafeOrgWorkspace, serialized, watch_file, write_org_text as _write_org_text
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from migrate_research_props import (  # noqa: E402  — D9: bookkeeping lives in the drawer
+    get_item_prop as _get_item_prop, set_item_prop as _set_item_prop,
+    migrate_item as _migrate_item,
+)
 from contextvars import ContextVar
 from functools import wraps
 from publication_manifest import PublicationManifest
@@ -682,105 +752,138 @@ def write_zettels(zettels: List[Dict[str, str]]) -> List[Path]:
 
 
 MAX_FETCH_ATTEMPTS = 3
+MAX_ANALYSIS_ATTEMPTS = 3
+
+_FAILURE_KINDS = {
+    'fetch': ('FETCH_ATTEMPTS', MAX_FETCH_ATTEMPTS,
+              'unfetchable after {n} attempts (paywall/403, no archive) '
+              '-- provide the text, a PDF, or an archive link, then set TODO again',
+              'failed fetches -- needs a readable source'),
+    'analysis': ('ANALYSIS_ATTEMPTS', MAX_ANALYSIS_ATTEMPTS,
+                 'analysis failed after {n} attempts (model returned no usable result) '
+                 '-- check the source is an article, then set TODO again',
+                 'failed analyses -- needs a human look'),
+}
 
 
 @serialized
-def note_fetch_failure(item: Dict[str, str]) -> Optional[int]:
-    """Count a failed fetch on the item; after MAX_FETCH_ATTEMPTS park it.
+def note_failure(item: Dict[str, str], kind: str) -> Optional[int]:
+    """Count a failed fetch or analysis on the item; at the limit park it.
 
     Three paywalled links sat at the head of the queue for weeks (2026-09-03:
     Bloomberg, BizJournals, NYT -- no cookies, no Wayback snapshot). Every
     run retried them, processed nothing, and the podcast step -- which needs
     at least one processed item -- never ran. An item that cannot be fetched
     is not a TODO for a machine; it is a request to a human for a readable
-    source. So: increment :FETCH_ATTEMPTS:, and at the limit set the heading
+    source. So: increment the counter, and at the limit set the heading
     to WAITING with a :RESULT: that says exactly what is needed. The queue
     drains; the summary names what is parked.
+
+    Analysis failures count too (2026-09-23, DatacoreSpec/Research.lean,
+    `drain`): an item that fetched but whose analysis always failed was
+    retried every run, and up to `limit` such [#A] items held every slot
+    forever. With both counters bounded, every URL-bearing TODO leaves TODO
+    within (MAX_FETCH_ATTEMPTS + MAX_ANALYSIS_ATTEMPTS + 1) runs of reaching
+    the head of the queue, whatever the network and the model do.
+
+    They count even when EVERY analysis in the run failed (owner decision D8,
+    2026-09-23). So a model/API outage lasting MAX_ANALYSIS_ATTEMPTS nightly
+    runs parks the top `limit` items, which a human then sets back to TODO;
+    that is the price of the unconditional drain guarantee. See CLAUDE.base.md.
+
+    Returns the new count, or None if the item cannot be located.
     """
+    prop, limit, result, why = _FAILURE_KINDS[kind]
+    # Where these live (owner decision D9, 2026-09-23): inside the item's
+    # :PROPERTIES: drawer, which org-workspace can read. Old items keep them
+    # under the heading until migrate_research_props.py runs; the read below
+    # accepts both, and touching an item moves all of its bookkeeping in.
     watch_file(RESEARCH_ORG)
     try:
         content = RESEARCH_ORG.read_text(encoding='utf-8')
     except OSError:
         return None
-    heading = item.get('heading_line')
-    if not heading or heading not in content:
-        return None
     lines = content.split('\n')
-    hi = lines.index(heading)
-    # find an existing :FETCH_ATTEMPTS: within the item's body (before the next heading)
-    attempts = 0; ai = None
-    for j in range(hi + 1, len(lines)):
-        if lines[j].lstrip().startswith('*'):
-            break
-        if lines[j].strip().startswith(':FETCH_ATTEMPTS:'):
-            try:
-                attempts = int(lines[j].split(':FETCH_ATTEMPTS:', 1)[1].strip() or 0)
-            except ValueError:
-                attempts = 0
-            ai = j
-            break
+    hi = _locate_item(lines, item)
+    if hi is None:
+        log(f"  could not locate the item to record a {kind} failure: {item.get('title') or item.get('heading_line')}")
+        return None
+    heading = lines[hi]
+    _migrate_item(lines, hi)
+    raw, _where = _get_item_prop(lines, hi, prop)
+    try:
+        attempts = int(raw or 0)
+    except ValueError:
+        attempts = 0
     attempts += 1
-    indent = '    '
-    if ai is not None:
-        lines[ai] = f"{indent}:FETCH_ATTEMPTS: {attempts}"
-    else:
-        # place right after the heading (and after a CLOSED/SCHEDULED planning line if present)
-        insert_at = hi + 1
-        if insert_at < len(lines) and lines[insert_at].strip().startswith(('CLOSED:', 'SCHEDULED:', 'DEADLINE:')):
-            insert_at += 1
-        lines.insert(insert_at, f"{indent}:FETCH_ATTEMPTS: {attempts}")
-    if attempts >= MAX_FETCH_ATTEMPTS and ' TODO ' in heading:
-        parked = heading.replace(' TODO ', ' WAITING ', 1)
-        lines[hi] = parked
-        lines.insert(hi + 1, f"{indent}:RESULT: unfetchable after {attempts} attempts (paywall/403, no archive) "
-                             f"-- provide the text, a PDF, or an archive link, then set TODO again")
-        log(f"  PARKED as WAITING after {attempts} failed fetches -- needs a readable source")
+    _set_item_prop(lines, hi, prop, str(attempts))
+    if attempts >= limit and ' TODO ' in heading:
+        lines[hi] = heading.replace(' TODO ', ' WAITING ', 1)
+        _set_item_prop(lines, hi, 'RESULT', result.format(n=attempts))
+        log(f"  PARKED as WAITING after {attempts} {why}")
     write_org_text(RESEARCH_ORG, '\n'.join(lines))
     return attempts
 
 
+def note_fetch_failure(item: Dict[str, str]) -> Optional[int]:
+    return note_failure(item, 'fetch')
+
+
+def note_analysis_failure(item: Dict[str, str]) -> Optional[int]:
+    return note_failure(item, 'analysis')
+
+
 @serialized
-def mark_done(item: Dict[str, str], output_path: str, zettel_names: List[str]):
-    """Mark a research item as DONE in the org file."""
+def mark_done(item: Dict[str, str], output_path: str, zettel_names: List[str]) -> bool:
+    """Mark a research item as DONE in the org file.
+
+    Returns False, writing nothing, when the item cannot be located (it was
+    removed, or its heading and ID both changed). That used to be a silent,
+    unchanged rewrite; the item stayed TODO and was processed again next run.
+    """
     watch_file(RESEARCH_ORG)
     content = RESEARCH_ORG.read_text(encoding='utf-8')
-    old_heading = item['heading_line']
-    new_heading = old_heading.replace(' TODO ', ' DONE ')
-
-    # Add CLOSED timestamp and properties
-    closed_line = f"    CLOSED: [{date.today().strftime('%Y-%m-%d %a')}]"
-    output_prop = f":OUTPUT: [[{output_path}]]" if output_path else ""
-    zettel_prop = f":ZETTELS: {', '.join(f'[[{z}]]' for z in zettel_names)}" if zettel_names else ""
-
-    # Replace heading
-    content = content.replace(old_heading, new_heading, 1)
-
-    # Insert CLOSED after the heading
     lines = content.split('\n')
-    for i, line in enumerate(lines):
-        if line == new_heading:
-            # Insert closed timestamp after heading
-            insert_at = i + 1
-            # Skip past existing CLOSED line if any
-            if insert_at < len(lines) and 'CLOSED:' in lines[insert_at]:
-                lines[insert_at] = closed_line
-            else:
-                lines.insert(insert_at, closed_line)
+    hi = _locate_item(lines, item)
+    if hi is None or ' TODO ' not in lines[hi]:
+        log(f"  WARNING: {item.get('title') or item.get('heading_line')!r} was processed but is "
+            f"not marked DONE -- its TODO heading is no longer in {RESEARCH_ORG.name}")
+        return False
+    lines[hi] = lines[hi].replace(' TODO ', ' DONE ', 1)
 
-            # Find :END: in properties to add output/zettel props
-            for j in range(insert_at, min(insert_at + 15, len(lines))):
-                if ':END:' in lines[j]:
-                    insert_props = []
-                    if output_prop:
-                        insert_props.append(f"    {output_prop}")
-                    if zettel_prop:
-                        insert_props.append(f"    {zettel_prop}")
-                    for k, prop in enumerate(insert_props):
-                        lines.insert(j + k, prop)
-                    break
-            break
+    closed_line = f"    CLOSED: [{date.today().strftime('%Y-%m-%d %a')}]"
+    insert_props = []
+    if output_path:
+        insert_props.append(f"    :OUTPUT: [[{output_path}]]")
+    if zettel_names:
+        insert_props.append(f"    :ZETTELS: {', '.join(f'[[{z}]]' for z in zettel_names)}")
+
+    insert_at = hi + 1
+    if insert_at < len(lines) and 'CLOSED:' in lines[insert_at]:
+        lines[insert_at] = closed_line
+    else:
+        lines.insert(insert_at, closed_line)
+
+    if insert_props:
+        # The item's own :PROPERTIES: drawer, searched only inside its own
+        # section. The old 15-line window ran past the next heading and put
+        # this item's :OUTPUT: into the next item's drawer.
+        end = _section_end(lines, hi)
+        drawer_end = None
+        for j in range(insert_at + 1, end):
+            if lines[j].strip() == ':PROPERTIES:':
+                for k in range(j + 1, end):
+                    if lines[k].strip() == ':END:':
+                        drawer_end = k
+                        break
+                break
+        if drawer_end is not None:
+            lines[drawer_end:drawer_end] = insert_props
+        else:
+            lines[insert_at + 1:insert_at + 1] = ["    :PROPERTIES:", *insert_props, "    :END:"]
 
     write_org_text(RESEARCH_ORG, '\n'.join(lines))
+    return True
 
 
 # ---- Main Pipeline ----
@@ -1050,6 +1153,7 @@ def main():
     # Step 2: Process each item
     processed = []
     failed = []
+    parked = []
 
     for i, item in enumerate(items_with_urls, 1):
         log(f"\n[{i}/{len(items_with_urls)}] {item['title']}")
@@ -1060,7 +1164,8 @@ def main():
         if not content:
             log(f"  SKIP: Could not fetch URL")
             failed.append(item)
-            note_fetch_failure(item)
+            if (note_fetch_failure(item) or 0) >= MAX_FETCH_ATTEMPTS:
+                parked.append(item)
             continue
 
         log(f"  Fetched {len(content)} chars")
@@ -1071,6 +1176,8 @@ def main():
         if not result:
             log(f"  SKIP: Claude analysis failed")
             failed.append(item)
+            if (note_analysis_failure(item) or 0) >= MAX_ANALYSIS_ATTEMPTS:
+                parked.append(item)
             continue
 
         # Write outputs
@@ -1119,14 +1226,23 @@ def main():
     # Step 3: Write journal entry
     log(f"\nProcessed: {len(processed)}, Failed: {len(failed)}")
 
-    if processed:
+    retrying = [f for f in failed if not any(f is p for p in parked)]
+    if parked:
+        log(f"Parked as WAITING (needs a human): {', '.join(p['title'] for p in parked)}")
+
+    if processed or parked:
         journal_path = JOURNAL_DIR / f'{TODAY}.md'
         section = f"\n\n## Research Processing\n\n"
-        section += f"Processed {len(processed)} research items:\n\n"
+        if processed:
+            section += f"Processed {len(processed)} research items:\n\n"
         for p in processed:
             section += f"- **{p['title']}**: {p['summary']} ({p['zettels']} zettels)\n"
-        if failed:
-            section += f"\nFailed to process: {len(failed)} items (kept as TODO for retry)\n"
+        if retrying:
+            section += f"\nFailed to process: {len(retrying)} items (kept as TODO for retry)\n"
+        if parked:
+            section += f"\nParked as WAITING, needs a readable source or a human look ({len(parked)}):\n"
+            for p in parked:
+                section += f"- {p['title']}\n"
 
         locked_read_modify_write_text(journal_path, lambda existing:
             (existing if existing is not None else f"---\ndate: {TODAY}\ntype: daily\n---\n") + section)
@@ -1176,6 +1292,7 @@ def main():
     log(f"{'='*50}")
     log(f"Processed: {len(processed)}")
     log(f"Failed: {len(failed)}")
+    log(f"Parked: {len(parked)}")
     log(f"Literature notes: {len([p for p in processed if p.get('literature_note')])}")
     log(f"Total zettels: {sum(p.get('zettels', 0) for p in processed)}")
     if notebook_id:

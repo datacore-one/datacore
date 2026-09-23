@@ -54,10 +54,17 @@ def _hermes(monkeypatch):
 
 
 def _dirty_log(space: Path, writer: str) -> Path:
+    """One VALID event (seq 0, chained from GENESIS). A one-line stub used to
+    do here, but decision L9 (2026-09-23) gates every transport push on chain
+    verification, and a stub that does not verify is correctly refused."""
+    from ledger.events import Event, body_dict, compute_hash
     p = space / ".datacore" / "events" / f"{writer}.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
+    body = body_dict(0, f"{1:013d}.0000.{writer}", writer, "item.create",
+                     {"id": f"fixture-{writer}"}, "GENESIS")
+    from ledger.events import to_line
     with p.open("a") as fh:
-        fh.write('{"actor":"%s","type":"item.create"}\n' % writer)
+        fh.write(to_line(Event(**body, hash=compute_hash(body), sig="")) + "\n")
     return p
 
 

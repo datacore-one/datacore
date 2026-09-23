@@ -29,6 +29,24 @@ by definition — see review_gate(), and af1e8d9 for what happens without it.
 
 Dry-run by default. Pass --execute to actually commit and push.
 
+Before any push, two refusals (the work stays committed locally, and the run
+exits 1 so the timer shows red -- decision Q7 keeps that exit status):
+  * a ledger fork in what HEAD would publish (git_relay.publication_forks);
+  * any commit in origin/<default>..HEAD that deletes a tracked file (decision
+    P2, 2026-09-23). The sweep's own commit never deletes, but the push
+    publishes the whole range; the commits and paths are printed for a human.
+    origin/<default> is fetched first, with or without --pull (decision Q8),
+    so the range is judged against origin as it is now; a fetch that fails is
+    itself a refusal, named in the status and the summary.
+
+With --execute, each repo's in-progress check, pull (fetch + merge, decision
+Q6), inventory, commit, deletion-check fetch and push run in ONE critical
+section under ledger_transport._repo_lock (decision P1), the lock the
+transport and publications already take, so no two writers change one
+repository at once. If the lock stays busy the repo is reported BUSY, nothing
+is pulled, and it is left for the next run. The dry run takes no lock and
+never pulls.
+
 Sync is bidirectional: --pull also rebases each default-branch repo onto origin
 first, so an agent ends the run BOTH visible to the others and on their latest
 state. Pushing alone is not enough — Tris's tris-space was 195 commits behind
@@ -231,6 +249,32 @@ def is_junk(repo: Path, path: str, tracked: set) -> str:
     return ''
 
 
+def in_progress(repo: Path) -> str:
+    """'merge' | 'rebase' | 'cherry-pick' | 'revert' | '' for this checkout.
+
+    ASK GIT WHERE ITS STATE LIVES. `repo/.git/MERGE_HEAD` assumes `.git` is a
+    directory; in a linked worktree or a submodule `.git` is a FILE pointing
+    elsewhere, so that path never exists and the guard never fired. The pull
+    below then failed with "You have not concluded your merge" and its
+    failure path ran `git merge --abort`, discarding a human's hand
+    resolution (replayed: tests/test_git_fleet_formal.py). An unanswerable
+    question is reported as in progress: this sweep must not guess.
+    """
+    for marker, name in (('MERGE_HEAD', 'merge'), ('rebase-merge', 'rebase'),
+                         ('rebase-apply', 'rebase'), ('CHERRY_PICK_HEAD', 'cherry-pick'),
+                         ('REVERT_HEAD', 'revert')):
+        r = subprocess.run(['git', 'rev-parse', '--git-path', marker], cwd=repo,
+                           capture_output=True, text=True)
+        if r.returncode != 0 or not r.stdout.strip():
+            return 'unknown git state'
+        path = Path(r.stdout.strip())
+        if not path.is_absolute():
+            path = repo / path
+        if path.exists():
+            return name
+    return ''
+
+
 def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -> dict:
     branch = git(repo, 'branch', '--show-current')
     default = default_branch(repo)
@@ -260,100 +304,185 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
         result['status'] = f'SKIP — {gated}'
         return result
 
-    # Never commit or stage during an in-progress merge or rebase.
-    # A sweep that fires mid-conflict stages marker-laden files and pushes
-    # them to shared remotes — observed 2026-06-09 (issue #28): a background
-    # sync committed literal <<<<<<</<=======/>>>>>>> markers to two files on
-    # origin/main of a shared repo while a hand-resolution was in progress.
-    if (repo / '.git' / 'MERGE_HEAD').exists() or \
-       (repo / '.git' / 'rebase-merge').is_dir() or \
-       (repo / '.git' / 'rebase-apply').is_dir():
-        result['status'] = 'SKIP — merge/rebase in progress; resolve first'
+    if not execute:
+        # The dry run takes no lock and never pulls.
+        busy = in_progress(repo)
+        if busy:
+            result['status'] = f'SKIP — {busy} in progress; resolve first'
+            return result
+        return _land(repo, result, execute, default)
+    # ONE WRITER PER REPOSITORY (decisions P1 and Q6). ledger_transport's
+    # converge and publish, and publication_state.reserve, all stage and
+    # commit in these same checkouts under _repo_lock; this sweep did not take
+    # it, which is the race behind the 2026-09-16 stranded publication record,
+    # left open from this side. Same lock, same key (the resolved
+    # git-common-dir), held ONCE per repository from the in-progress check
+    # through the pull (fetch + merge, Q6), the inventory, the commit, the
+    # deletion check's fetch (Q8) and the push: a merge is as much a write to
+    # the index and the branch as a commit is, and another writer's commit
+    # between our pull and our inventory is what the one section excludes.
+    # None of those holders nests it and this does not either (a same-thread
+    # re-entry is a no-op), so there is no cycle to deadlock on:
+    # DatacoreSpec/Publication.lean §5 (`lock_mutual_exclusion`,
+    # `lock_no_deadlock`, `holder_stable`).
+    from ledger_transport import _repo_lock
+    entered = False
+    try:
+        with _repo_lock(repo):
+            entered = True
+            # Never commit or stage during an in-progress merge or rebase.
+            # A sweep that fires mid-conflict stages marker-laden files and pushes
+            # them to shared remotes — observed 2026-06-09 (issue #28): a background
+            # sync committed literal <<<<<<</<=======/>>>>>>> markers to two files on
+            # origin/main of a shared repo while a hand-resolution was in progress.
+            busy = in_progress(repo)
+            if busy:
+                result['status'] = f'SKIP — {busy} in progress; resolve first'
+                return result
+            if pull:
+                _pull(repo, result, default)
+            return _land(repo, result, execute, default)
+    except TimeoutError:
+        if entered:
+            raise
+        result['status'] = ("BUSY — another writer holds this repository's lock; "
+                            "nothing pulled, work left as it was, next run retries")
         return result
 
-    # Sync is bidirectional. Pushing agent work out is only half of it — an agent
-    # that never pulls drifts onto a stale snapshot of shared knowledge and stops
-    # seeing anyone else's. Tris's tris-space was 195 commits behind when this was
-    # written, so he was "sharing" a months-old view of the world.
-    if pull and execute:
-        subprocess.run(['git', 'fetch', '-q', 'origin'], cwd=repo, capture_output=True)
-        # MERGE, NEVER REBASE (DIP-0046). Rebase rewrites this box's local
-        # commits to sit on top of origin, which gives them new hashes. If the
-        # subsequent push then fails — offline, gated, rejected — those commits
-        # exist under an identity nothing else has seen, and the next run's
-        # watchdog treats them as junk to reset past. That is how 23 commits in
-        # 2-datacore and 27 in 3-fds were stranded on 2026-08-12.
-        #
-        # A merge cannot do this: local commits keep their hashes and stay
-        # reachable no matter how many times the push fails afterwards. And for
-        # the per-writer event logs this exists to move, a merge is a union of
-        # disjoint files — there is nothing for it to conflict over.
-        r = subprocess.run(['git', 'pull', '--no-rebase', 'origin', default],
-                           cwd=repo, capture_output=True, text=True)
-        if r.returncode != 0:
-            # Never leave a half-applied merge behind for the next run to trip on.
-            subprocess.run(['git', 'merge', '--abort'], cwd=repo, capture_output=True)
-            # Keep the 'PULL CONFLICT' prefix — the summary filters on it — but
-            # carry the actual error: on 2026-08-28 a transient failure (not a
-            # conflict) wore this label through three runs on plur-claw, and the
-            # discarded stderr was the only thing that could have said so.
-            out = (r.stderr or '') + (r.stdout or '')
-            detail = out.strip().splitlines()
-            tail = detail[-1][:120] if detail else ''
-            # A PULL that fails for want of ACCESS is not a conflict, and
-            # calling it one sends someone hunting a merge that does not
-            # exist. On 2026-08-30 three repos (DHF, website, extract-cli)
-            # were reported as 'pull conflicts' when this host's key simply
-            # is not authorised for them — a credential job, not a merge job.
-            # `error: 403` / `error: 401` are the forms git's HTTP transport
-            # actually emits ("The requested URL returned error: 403"); the
-            # literal '403 Forbidden' never appears there. Six module repos on
-            # winston were therefore reported as PULL CONFLICT on 2026-08-31 —
-            # sending someone to resolve a merge that does not exist — for
-            # exactly the credential reason this branch was written to catch.
-            if any(s in out for s in (
-                    'Permission denied', 'could not read Username',
-                    'Authentication failed', 'access rights',
-                    'Repository not found', '403 Forbidden',
-                    'error: 403', 'error: 401')):
-                # Distinguish "stale" from "work at risk". A host that cannot
-                # reach a remote it has nothing to send is merely behind; a
-                # host holding unpushed commits it cannot push has work
-                # nobody else can see. Only the second is a failure — a check
-                # that is permanently red is one you learn to ignore, which is
-                # the same lesson the watchdog learned the hard way.
-                # `@{u}` CANNOT ANSWER THIS FROM HERE. A host that cannot fetch
-                # can never update its remote-tracking ref, so the count is
-                # frozen at whatever it was when access last worked — and it
-                # over-reports forever once another machine lands the work.
-                # Measured 2026-08-31: winston reported 5 module repos holding
-                # unpushed commits; checked from the Mac, which can reach
-                # GitHub, ALL FIVE HEADs were already ancestors of origin. The
-                # run failed on all of them, so its check could never go green.
-                #
-                # This is the same defect git_relay.py was rewritten to remove
-                # ("it kept reporting 166 commits as trapped after every one of
-                # them had been relayed"). The answer there was to ask the
-                # machine that CAN see the remote — which is git_relay's job,
-                # not this one's. So report the access gap and defer the
-                # at-risk question rather than guessing it from a stale ref.
-                unpushed = git_raw(repo, 'rev-list', '--count', '@{u}..HEAD') or '0'
-                n = unpushed.strip() if unpushed.strip().isdigit() else '?'
-                result['pull'] = (
-                    f'NO ACCESS — this host cannot reach the remote '
-                    f'(local ref says {n} unpushed, UNVERIFIABLE from here — '
-                    f'run git_relay.py --check from the operator machine) '
-                    f'[{tail}]')
-                result['access_at_risk'] = False
-            elif 'refusing to merge unrelated histories' in out:
-                result['pull'] = ('UNRELATED HISTORY — local checkout shares no '
-                                  'ancestor with origin; re-clone or align '
-                                  'deliberately')
-            else:
-                result['pull'] = f'PULL CONFLICT — needs a human [{tail}]'
-        else:
-            result['pull'] = 'pulled'
 
+def _pull(repo: Path, result: dict, default: str) -> None:
+    """Fetch and merge origin/<default>. Runs under _repo_lock (decision Q6).
+
+    Sync is bidirectional. Pushing agent work out is only half of it — an agent
+    that never pulls drifts onto a stale snapshot of shared knowledge and stops
+    seeing anyone else's. Tris's tris-space was 195 commits behind when this was
+    written, so he was "sharing" a months-old view of the world.
+    """
+    subprocess.run(['git', 'fetch', '-q', 'origin'], cwd=repo, capture_output=True)
+    # MERGE, NEVER REBASE (DIP-0046). Rebase rewrites this box's local
+    # commits to sit on top of origin, which gives them new hashes. If the
+    # subsequent push then fails — offline, gated, rejected — those commits
+    # exist under an identity nothing else has seen, and the next run's
+    # watchdog treats them as junk to reset past. That is how 23 commits in
+    # 2-datacore and 27 in 3-fds were stranded on 2026-08-12.
+    #
+    # A merge cannot do this: local commits keep their hashes and stay
+    # reachable no matter how many times the push fails afterwards. And for
+    # the per-writer event logs this exists to move, a merge is a union of
+    # disjoint files — there is nothing for it to conflict over.
+    r = subprocess.run(['git', 'pull', '--no-rebase', 'origin', default],
+                       cwd=repo, capture_output=True, text=True)
+    if r.returncode != 0:
+        # Never leave a half-applied merge behind for the next run to trip on.
+        subprocess.run(['git', 'merge', '--abort'], cwd=repo, capture_output=True)
+        # Keep the 'PULL CONFLICT' prefix — the summary filters on it — but
+        # carry the actual error: on 2026-08-28 a transient failure (not a
+        # conflict) wore this label through three runs on plur-claw, and the
+        # discarded stderr was the only thing that could have said so.
+        out = (r.stderr or '') + (r.stdout or '')
+        detail = out.strip().splitlines()
+        tail = detail[-1][:120] if detail else ''
+        # A PULL that fails for want of ACCESS is not a conflict, and
+        # calling it one sends someone hunting a merge that does not
+        # exist. On 2026-08-30 three repos (DHF, website, extract-cli)
+        # were reported as 'pull conflicts' when this host's key simply
+        # is not authorised for them — a credential job, not a merge job.
+        # `error: 403` / `error: 401` are the forms git's HTTP transport
+        # actually emits ("The requested URL returned error: 403"); the
+        # literal '403 Forbidden' never appears there. Six module repos on
+        # winston were therefore reported as PULL CONFLICT on 2026-08-31 —
+        # sending someone to resolve a merge that does not exist — for
+        # exactly the credential reason this branch was written to catch.
+        if any(s in out for s in (
+                'Permission denied', 'could not read Username',
+                'Authentication failed', 'access rights',
+                'Repository not found', '403 Forbidden',
+                'error: 403', 'error: 401')):
+            # Distinguish "stale" from "work at risk". A host that cannot
+            # reach a remote it has nothing to send is merely behind; a
+            # host holding unpushed commits it cannot push has work
+            # nobody else can see. Only the second is a failure — a check
+            # that is permanently red is one you learn to ignore, which is
+            # the same lesson the watchdog learned the hard way.
+            # `@{u}` CANNOT ANSWER THIS FROM HERE. A host that cannot fetch
+            # can never update its remote-tracking ref, so the count is
+            # frozen at whatever it was when access last worked — and it
+            # over-reports forever once another machine lands the work.
+            # Measured 2026-08-31: winston reported 5 module repos holding
+            # unpushed commits; checked from the Mac, which can reach
+            # GitHub, ALL FIVE HEADs were already ancestors of origin. The
+            # run failed on all of them, so its check could never go green.
+            #
+            # This is the same defect git_relay.py was rewritten to remove
+            # ("it kept reporting 166 commits as trapped after every one of
+            # them had been relayed"). The answer there was to ask the
+            # machine that CAN see the remote — which is git_relay's job,
+            # not this one's. So report the access gap and defer the
+            # at-risk question rather than guessing it from a stale ref.
+            unpushed = git_raw(repo, 'rev-list', '--count', '@{u}..HEAD') or '0'
+            n = unpushed.strip() if unpushed.strip().isdigit() else '?'
+            result['pull'] = (
+                f'NO ACCESS — this host cannot reach the remote '
+                f'(local ref says {n} unpushed, UNVERIFIABLE from here — '
+                f'run git_relay.py --check from the operator machine) '
+                f'[{tail}]')
+            result['access_at_risk'] = False
+        elif 'refusing to merge unrelated histories' in out:
+            result['pull'] = ('UNRELATED HISTORY — local checkout shares no '
+                              'ancestor with origin; re-clone or align '
+                              'deliberately')
+        else:
+            result['pull'] = f'PULL CONFLICT — needs a human [{tail}]'
+    else:
+        result['pull'] = 'pulled'
+
+
+
+def fetch_default(repo: Path, default: str):
+    """Refresh origin/<default> from origin. None on success, else why not.
+
+    Named refspec, so the remote-tracking ref moves even on a git whose
+    `git fetch origin <branch>` would only write FETCH_HEAD. Runs under
+    _repo_lock (it writes a ref). Decision Q8, 2026-09-23.
+    """
+    try:
+        r = subprocess.run(['git', 'fetch', '-q', 'origin',
+                            f'+refs/heads/{default}:refs/remotes/origin/{default}'],
+                           cwd=repo, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return 'git fetch timed out'
+    if r.returncode:
+        lines = ((r.stderr or '') + (r.stdout or '')).strip().splitlines()
+        return (lines[-1][:120] if lines else f'git fetch exited {r.returncode}')
+    return None
+
+
+def range_deletions(repo: Path, ref: str, commit: str):
+    """Commits in `ref..commit` that delete a tracked file: [(sha, [paths])].
+
+    None when git cannot list the range (no such ref, ...): unknown, so the
+    caller refuses. `--cc` shows a merge's own deletions only (a path the
+    result lacks though a parent had it and the merge did not simply take the
+    other parent's side), so a deletion made on origin and merged in here is
+    not counted: origin already has it. `--no-renames` counts a rename as the
+    deletion it contains, as the sweep itself does.
+    """
+    r = subprocess.run(['git', '-c', 'core.quotepath=off', 'log', '--no-renames',
+                        '--diff-filter=D', '--name-only', '--cc', '--format=%x01%H',
+                        f'{ref}..{commit}'], cwd=repo, capture_output=True, text=True)
+    if r.returncode:
+        return None
+    found = []
+    for line in r.stdout.splitlines():
+        if line.startswith('\x01'):
+            found.append((line[1:], []))
+        elif line.strip() and found:
+            found[-1][1].append(line)
+    return [(sha, paths) for sha, paths in found if paths]
+
+
+def _land(repo: Path, result: dict, execute: bool, default: str) -> dict:
+    """Inventory, stage, commit, gate and push. Runs under _repo_lock when executing."""
     try:
         inventory = working_changes(repo)
         tracked = tracked_paths(repo)
@@ -445,6 +574,46 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
         args = push_arguments(captured.stdout.strip(), f'refs/heads/{default}')
     except ValueError:
         result['status'] = 'committed; publication identity invalid'
+        return result
+    # NEVER PUSH A FORK — the same rule git_relay enforces, applied to what
+    # this push publishes: the whole of HEAD, not just this sweep's files.
+    # A log rewound and re-appended on this disk, or a forked merge left on
+    # the branch by anything else, is a valid-looking chain that replaces
+    # (actor, seq) events every other machine already holds.
+    from git_relay import publication_forks
+    forks = publication_forks(repo, captured.stdout.strip(), f'origin/{default}')
+    if forks:
+        result['ledger_fork'] = forks
+        result['status'] = ('committed, PUSH REFUSED — ledger fork: '
+                            + '; '.join(forks)[:160])
+        return result
+    # NEVER PUBLISH A DELETION (decision P2). The sweep's own commit never
+    # deletes (GitFleet.lean `sweep_never_deletes`), but the push publishes
+    # the whole of origin/<default>..HEAD, and an earlier local commit that
+    # removed tracked files would go out with it -- the caa7d58 shape. Name
+    # the commits and paths; the work stays committed here for a human.
+    #
+    # FETCH FIRST (decision Q8), with or without --pull: the range is judged
+    # against origin as it is NOW, not a remote-tracking ref this host last
+    # moved days ago. A stale ref put origin's own deletions (already
+    # published, merged here some other way) into the range, a false refusal.
+    # A fetch that fails leaves nothing to judge against: refuse, and say so.
+    fetch_error = fetch_default(repo, default)
+    if fetch_error is not None:
+        result['deletions'] = [('?', [f'cannot fetch origin/{default} to check the range '
+                                      f'for deletions: {fetch_error}'])]
+        result['status'] = (f'committed, PUSH REFUSED — cannot fetch origin/{default} '
+                            f'to check the range for deletions: {fetch_error}')[:200]
+        return result
+    deletions = range_deletions(repo, f'origin/{default}', captured.stdout.strip())
+    if deletions is None:
+        result['deletions'] = [('?', [f'cannot list origin/{default}..HEAD'])]
+    elif deletions:
+        result['deletions'] = deletions
+    if result.get('deletions'):
+        named = '; '.join(f"{sha[:12]}: {', '.join(paths)}" for sha, paths in result['deletions'])
+        result['status'] = ('committed, PUSH REFUSED — the range deletes tracked files: '
+                            + named)[:200]
         return result
     p = subprocess.run(['git', *args], cwd=repo,
                        capture_output=True, text=True)
@@ -576,6 +745,30 @@ def main() -> int:
     # ignore the signal. That habit is exactly what let a stale-input verifier
     # report four confident wrong failures a day for five days before anyone
     # looked. A check that is always red is not a check.
+    forked = [r for r in results if r.get('ledger_fork')]
+    if forked:
+        print(f"\nFAIL: {len(forked)} repo(s) hold a ledger fork this sweep refused "
+              f"to publish (work committed locally, not pushed):")
+        for r in forked:
+            print(f"  {r['name']}: {'; '.join(r['ledger_fork'])[:200]}")
+
+    deleting = [r for r in results if r.get('deletions')]
+    if deleting:
+        # Decision Q7: a deletion refusal fails the run (exit 1). A failed
+        # Q8 fetch is one too: its range could not be checked, so it is listed
+        # here with sha '?' and the fetch error in place of a path.
+        print(f"\nFAIL: {len(deleting)} repo(s) would publish deletions of tracked files, "
+              f"or their range could not be checked; push refused (work committed "
+              f"locally, not pushed). A human decides:")
+        for r in deleting:
+            print(f"  {r['name']}:")
+            for sha, paths in r['deletions']:
+                print(f"    {sha}")
+                for path in paths:
+                    print(f"      - {path}")
+    if forked or deleting:
+        return 1
+
     if conflicts:
         print(
             f"\nFAIL: {len(conflicts)} repo(s) have pull conflicts and are not "

@@ -16,12 +16,17 @@ Usage:
     python3 -c "from org_date_validator import correct_day; print(correct_day(2026, 3, 14))"
 """
 
+from __future__ import annotations
+
 import re
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
-DATE_PATTERN = re.compile(r'(\d{4}-\d{2}-\d{2})\s+(Mon|Tue|Wed|Thu|Fri|Sat|Sun)')
+# Same stamp rule as date_utils.DATE_DOW_RE and org_date_hook: the name must
+# END the token and sit on the same line. Without that, `fix` rewrote
+# "2026-09-24 Monitor" to "Thuitor" and "Monday" to "Thuday".
+DATE_PATTERN = re.compile(r'(\d{4}-\d{2}-\d{2})[ \t]+(Mon|Tue|Wed|Thu|Fri|Sat|Sun)(?![A-Za-z])')
 
 def correct_day(year: int, month: int, day: int) -> str:
     """Return the correct 3-letter day abbreviation for a date."""
@@ -34,7 +39,16 @@ def org_date(year: int, month: int, day: int) -> str:
     return dt.strftime('%Y-%m-%d %a')
 
 
-def validate_file(filepath: Path, fix: bool = False) -> tuple[list, list]:
+def suspect_year(today: date | None = None) -> int:
+    """The year a mis-anchored date lands in: the one before the current year.
+
+    Written in 2026 as a literal 2025, which silently stopped meaning
+    "last year" on 1 January 2027.
+    """
+    return (today or date.today()).year - 1
+
+
+def validate_file(filepath: Path, fix: bool = False, today: date | None = None) -> tuple[list, list]:
     """Validate dates in an org file.
 
     Returns (day_mismatches, year_suspects) where each is a list of
@@ -45,6 +59,7 @@ def validate_file(filepath: Path, fix: bool = False) -> tuple[list, list]:
 
     content = filepath.read_text()
     lines = content.splitlines()
+    suspect = suspect_year(today)
     day_mismatches = []
     year_suspects = []
 
@@ -65,7 +80,7 @@ def validate_file(filepath: Path, fix: bool = False) -> tuple[list, list]:
                 if actual_day != day_name:
                     day_mismatches.append((i, date_str, day_name, actual_day, heading))
 
-                if dt.year == 2025 and ('SCHEDULED' in line or 'DEADLINE' in line):
+                if dt.year == suspect and ('SCHEDULED' in line or 'DEADLINE' in line):
                     year_suspects.append((i, date_str, heading))
 
             except ValueError:
@@ -107,14 +122,14 @@ def scan_all_org_files(data_root: Path = None, fix: bool = False):
                 if heading:
                     print(f'    {heading}')
             for line, date, heading in year_issues:
-                print(f'  {rel}:{line}  {date} (2025 — suspect)')
+                print(f'  {rel}:{line}  {date} ({date[:4]} — suspect)')
                 if heading:
                     print(f'    {heading}')
             total_day += len(day_issues)
             total_year += len(year_issues)
 
     action = 'Fixed' if fix else 'Found'
-    print(f'\n{action}: {total_day} day mismatches, {total_year} suspect 2025 dates')
+    print(f'\n{action}: {total_day} day mismatches, {total_year} suspect {suspect_year()} dates')
     return total_day, total_year
 
 

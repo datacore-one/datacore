@@ -5,6 +5,16 @@ Provides reusable functions for:
 - Creating org-mode tasks from external sources
 - Checking nightshift status
 - Assessing task complexity
+
+The two helpers that patch a task after the adapter created it
+(`_set_task_properties`, `_append_task_body`) write inside
+`org_transaction.serialized`: they take the org transaction lock, re-read the
+file under it (`watch_file`), and write atomically through `write_org_text`
+(decision G8, 2026-09-23). Before that they used a plain unlocked
+`write_text`, so an adapter commit landing between their read and write was
+lost. Each helper is its own transaction: `create_triage_task` runs the
+adapter as a subprocess that takes the same lock, so the lock must not be held
+across that call.
 """
 
 from __future__ import annotations
@@ -14,6 +24,14 @@ import subprocess
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
+
+import org_transaction
+
+
+def _read_locked(org_file: Path) -> str | None:
+    """Watch and read `org_file` inside the current org transaction."""
+    org_transaction.watch_file(org_file)
+    return org_transaction.read_text(Path(org_file).resolve())
 
 
 def create_triage_task(
@@ -112,15 +130,20 @@ def _find_task_by_id(org_file: Path, task_id: str) -> bool:
     return bool(pattern.search(org_file.read_text()))
 
 
+@org_transaction.serialized
 def _set_task_properties(org_file: Path, node_id: str, properties: dict[str, str]):
     """Set additional properties on a task identified by its node ID.
 
     Finds the :PROPERTIES: block and inserts new properties before :END:.
+    Runs under the org transaction lock and writes atomically (G8).
     """
     if not org_file.exists():
         return
 
-    lines = org_file.read_text().splitlines()
+    content = _read_locked(org_file)
+    if content is None:
+        return
+    lines = content.splitlines()
     new_lines = []
     in_target_props = False
     found_id = False
@@ -141,14 +164,18 @@ def _set_task_properties(org_file: Path, node_id: str, properties: dict[str, str
         new_lines.append(line)
 
     if found_id:
-        org_file.write_text("\n".join(new_lines) + "\n")
+        org_transaction.write_org_text(org_file, "\n".join(new_lines) + "\n")
 
 
 #: States whose tasks are finished. Appending fresh triage context to one of
 #: these is always wrong — the work is done and the entry is a record.
-_CLOSED_STATES = ("DONE", "CANCELLED", "CANCELED")
+#: DEFERRED is benched rather than finished, but it is skipped too (decision
+#: G11, 2026-09-23): fresh triage context goes to an open task, never to one
+#: the owner parked.
+_CLOSED_STATES = ("DONE", "CANCELLED", "CANCELED", "DEFERRED")
 
 
+@org_transaction.serialized
 def _append_task_body(org_file: Path, heading: str, body: str):
     """Append body text after a task's properties block.
 
@@ -158,42 +185,52 @@ def _append_task_body(org_file: Path, heading: str, body: str):
       — which is an old task from a previous cycle whenever the heading repeats;
     * it appended unconditionally, so re-running produced N copies.
 
-    Now: closed tasks are never appended to, and a body already present is not
+    Now: closed (and DEFERRED) tasks are never appended to, and a body already present is not
     written twice. Both make the function idempotent, which is what the caller
     already assumed it was.
+
+    Both are scoped to the TARGET task's own section (its heading up to the
+    next heading), found 2026-09-23 by the Lean model: the insertion point was
+    "the first `:END:` after the heading" with no boundary, so a target without
+    a drawer put the body into the NEXT task's drawer; and the "already
+    recorded" test searched the whole file, so a first line another task
+    already carried (e.g. "Source: github") suppressed the write here.
+
+    Runs under the org transaction lock and writes atomically (G8).
     """
     if not org_file.exists():
         return
 
-    content = org_file.read_text()
+    content = _read_locked(org_file)
+    if content is None:
+        return
     lines = content.splitlines()
-    new_lines = []
-    found_heading = False
-    inserted = False
     body_lines = body.strip().splitlines()
     first_body_line = body_lines[0].strip() if body_lines else ""
+    if not body_lines:
+        return
 
-    for line in lines:
-        new_lines.append(line)
-
-        if not inserted and not found_heading and heading in line and line.strip().startswith("**"):
-            # Never append triage context to a finished task.
-            after_stars = line.strip().lstrip("*").strip()
-            if any(after_stars.startswith(s) for s in _CLOSED_STATES):
-                continue
-            found_heading = True
-
-        if found_heading and not inserted and line.strip() == ":END:":
-            # Already recorded — do not write a second copy.
-            if first_body_line and first_body_line in content:
-                inserted = True
-                continue
-            for body_line in body_lines:
-                new_lines.append(f"   {body_line}")
-            inserted = True
-
-    if inserted and len(new_lines) != len(lines):
-        org_file.write_text("\n".join(new_lines) + "\n")
+    is_heading = re.compile(r"^\*+\s")
+    for h, line in enumerate(lines):
+        if not (heading in line and line.strip().startswith("**")):
+            continue
+        # Never append triage context to a finished task.
+        after_stars = line.strip().lstrip("*").strip()
+        if any(after_stars.startswith(s) for s in _CLOSED_STATES):
+            continue
+        section_end = next((k for k in range(h + 1, len(lines))
+                            if is_heading.match(lines[k])), len(lines))
+        section = lines[h + 1:section_end]
+        end = next((k for k, l in enumerate(section) if l.strip() == ":END:"), None)
+        if end is None:
+            continue  # no drawer of its own: try the next matching heading
+        # Already recorded in THIS task -- do not write a second copy.
+        if any(first_body_line in l for l in section):
+            return
+        at = h + 1 + end + 1
+        new_lines = lines[:at] + [f"   {b}" for b in body_lines] + lines[at:]
+        org_transaction.write_org_text(org_file, "\n".join(new_lines) + "\n")
+        return
 
 
 def check_nightshift_ran(data_dir: Path, check_date: date | None = None) -> bool:

@@ -487,8 +487,11 @@ def test_converge_folds_a_writers_own_ref_into_main(repo_pair: Path, tmp_path: P
     subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
     git(other, "config", "user.email", "d@d"); git(other, "config", "user.name", "data")
     git(other, "config", "core.hooksPath", str(other / ".git" / "hooks"))
-    ev = other / ".datacore" / "events"; ev.mkdir(parents=True)
-    (ev / "data.jsonl").write_text('{"actor":"data","type":"item.claim","payload":{"id":"x"}}\n')
+    # A real chain: since L9 the converge's push refuses to publish a log
+    # that fails verify_chain, which the old one-line stub did.
+    from ledger.log import EventLog
+    EventLog(other, "data", sign=False).append("item.claim", {"id": "x"})
+    (other / ".gitignore").write_text(".datacore/state/\n")
     git(other, "add", "-A"); git(other, "commit", "-qm", "ledger: data claim")
     git(other, "push", "-q", "origin", "HEAD:refs/heads/ledger/data")
     r = lt.converge(repo_pair)
@@ -729,6 +732,8 @@ def _push_failing(monkeypatch, stderr: str):
             return 0, SHA, ""
         return 1, "", stderr
     monkeypatch.setattr(lt, "_git", fake_git)
+    # The L9 fork gate reads real git; this fake repo has no ledger to fork.
+    monkeypatch.setattr(lt, "_publication_forks", lambda space, commit, db: [])
     return lt
 
 

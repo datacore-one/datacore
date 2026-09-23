@@ -196,6 +196,10 @@ def _note_pass(job_name: str) -> None:
     if _NO_EMIT:
         return
     rec = _rec.record(job_name, failed=False)
+    # Decision N7 (2026-09-23): a reset that could not be locked or saved is
+    # warned loudly -- in the verifier's own report, not only on stderr.
+    if isinstance(rec, dict) and rec.get("warning"):
+        print(f"WARNING {job_name}: {rec['warning']}")
     tid = rec.get("task_id") if isinstance(rec, dict) else None
     if tid:
         # The pass is the DONE_WHEN of the task the streak filed.

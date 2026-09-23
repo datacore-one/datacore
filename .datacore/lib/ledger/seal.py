@@ -27,10 +27,23 @@ belong to one principal and write disjoint files; there is no byzantine
 participant to tolerate. The sequencer is a designated role (Winston), and a
 wrong seal is DETECTABLE by every reader rather than authoritative — which is
 the property that makes designating a single sequencer safe here.
+
+ONLY THE SEQUENCER'S SEALS COUNT (owner decision L1, 2026-09-23). Readers —
+`latest_seal`, `verify_seal`, `settled_events`, `settled` — consider only
+`ledger.seal` events whose actor is the designated sequencer, `sequencer()`:
+`$DATACORE_SEQUENCER`, default `winston`, the one setting `ledger_seal.py emit`
+already used to decide who may seal. A seal by any other writer (a `--force`
+seal from another box, a stray or hostile writer) is IGNORED: it neither
+advances nor regresses settlement, and it is reported in `verify_seal`'s
+detail rather than failing the ledger. Before this, the latest seal from ANY
+writer was authoritative if it verified, so one writer could move settlement
+by sealing. (Lean: DatacoreSpec/LedgerSeal.lean, `latest_is_sequencer`,
+`foreign_seal_inert`.)
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,6 +68,43 @@ class Seal:
         return wm is not None and event.seq <= wm
 
 
+DEFAULT_SEQUENCER = "winston"
+
+
+def sequencer() -> str:
+    """The designated sequencer, read at call time: `$DATACORE_SEQUENCER` or winston.
+
+    One definition for the writer (`ledger_seal.py emit`) and every reader, so
+    the role that may seal and the role whose seals are believed cannot drift.
+    """
+    return os.environ.get("DATACORE_SEQUENCER") or DEFAULT_SEQUENCER
+
+
+def _seal_events(events: list[Event]) -> list[Event]:
+    """The sequencer's seals. Every other writer's `ledger.seal` is inert."""
+    seq = sequencer()
+    return [e for e in events if e.type == "ledger.seal" and e.actor == seq]
+
+
+def ignored_seals(events: list[Event]) -> dict[str, int]:
+    """Seals by writers other than the sequencer, counted per writer (reported, never fatal)."""
+    seq = sequencer()
+    out: dict[str, int] = {}
+    for e in events:
+        if e.type == "ledger.seal" and e.actor != seq:
+            out[e.actor] = out.get(e.actor, 0) + 1
+    return out
+
+
+def _ignored_note(events: list[Event]) -> str:
+    ign = ignored_seals(events)
+    if not ign:
+        return ""
+    who = ", ".join(sorted(ign))
+    return (f"; ignored {sum(ign.values())} seal(s) by {who} "
+            f"(not the sequencer {sequencer()})")
+
+
 def watermarks(events: list[Event], *, per_log=True) -> dict[str, int]:
     """Highest seq seen per actor — the frontier this machine can attest to."""
     out: dict[str, int] = {}
@@ -66,14 +116,17 @@ def watermarks(events: list[Event], *, per_log=True) -> dict[str, int]:
 
 
 def latest_seal(events: list[Event]) -> Seal | None:
-    """The most recent seal, by HLC.
+    """The sequencer's most recent seal, by HLC. `None` if the sequencer has not sealed.
+
+    Seals by any other writer are ignored (decision L1): see the module
+    docstring and `ignored_seals`.
 
     Ties are impossible in practice (one sequencer) but resolved by HLC anyway
     rather than by list order, because list order depends on merge arrival and
     would make `settled()` machine-dependent — the exact property a seal exists
     to remove.
     """
-    seals = [e for e in events if e.type == "ledger.seal"]
+    seals = _seal_events(events)
     if not seals:
         return None
     newest = max(seals, key=lambda e: e.hlc)
@@ -172,9 +225,26 @@ def verify_seal(events: list[Event]) -> tuple[bool | None, str]:
     except (ValueError, TypeError, AttributeError):
         return False, "invalid or unsupported seal"
     if seal is None:
-        return None, "no seal yet"
+        return None, "no seal yet" + _ignored_note(events)
     if seal.version != 2:
-        return None, "legacy seal has an ambiguous actor frontier; re-seal with version 2"
+        return None, ("legacy seal has an ambiguous actor frontier; re-seal with version 2"
+                      + _ignored_note(events))
+
+    # FINALITY DOES NOT RUN BACKWARDS. The latest seal was chosen by HLC from
+    # any writer (only the sequencer's since decision L1), so a later seal
+    # naming LOWER watermarks -- a sequencer that sealed from a lagging or
+    # rewound checkout, or (before L1) a `--force` seal from another box --
+    # used to verify cleanly while events an earlier seal had
+    # settled silently left settled state. "A point everyone can name as
+    # settled" is worthless if the next seal can un-settle it, so a regression
+    # against any earlier version-2 seal is a wrong seal, and wrong seals are
+    # what every reader must detect. Found by the Lean model
+    # (DatacoreSpec/LedgerSeal.lean, seal_*), replayed 2026-09-23.
+    regressed = seal_regressions(events, seal)
+    if regressed:
+        return False, ("SEAL REGRESSION: the latest seal un-settles events an "
+                       "earlier seal settled, e.g. " + regressed[0]
+                       + " — finality must only move forward")
 
     # A seal naming an actor this machine has never seen cannot be verified
     # here — it is not wrong, we are behind. Say so rather than failing.
@@ -214,9 +284,43 @@ def verify_seal(events: list[Event]) -> tuple[bool | None, str]:
             note += f"; NOT COVERED: {', '.join(uncovered)}"
         if behind_actors:
             note += f"; lags newer events from {', '.join(behind_actors)}"
+        note += _ignored_note(events)
         return True, f"seal by {seal.sequencer} verifies over ~{n} event(s){note}"
     return False, (f"SEAL MISMATCH: sequencer {seal.sequencer} claims "
                    f"{seal.state_root[:12]}, recomputed {recomputed[:12]}")
+
+
+def regressions(earlier: dict[str, int], later: dict[str, int]) -> list[str]:
+    """Logs whose watermark `later` lowers or drops relative to `earlier`.
+
+    Empty exactly when `later` dominates `earlier` key by key, which is what
+    makes the later seal's settled set a superset of the earlier one's.
+    """
+    return [f"{k}: {v} -> {later[k] if k in later else 'absent'}"
+            for k, v in sorted(earlier.items(), key=lambda kv: str(kv[0]))
+            if type(v) is int and later.get(k, -1) < v]
+
+
+def seal_regressions(events: list[Event], seal: Seal) -> list[str]:
+    """How `seal` regresses against every EARLIER version-2 sequencer seal in `events`.
+
+    Only version-2 predecessors are compared: a version-1 frontier is keyed by
+    actor, not log, and is already reported as ambiguous. A predecessor whose
+    frontier does not parse never settled anything and is skipped. Seals by
+    other writers never settled anything either (decision L1) and are skipped.
+    """
+    out: list[str] = []
+    for e in _seal_events(events):
+        if not (e.hlc < seal.hlc):
+            continue
+        p = e.payload or {}
+        wm = p.get("watermarks")
+        if p.get("version") != 2 or not isinstance(wm, dict):
+            continue
+        if any(not isinstance(k, str) or type(v) is not int for k, v in wm.items()):
+            continue
+        out += regressions(wm, seal.watermarks)
+    return out
 
 
 def build_seal_payload(events: list[Event]) -> dict:

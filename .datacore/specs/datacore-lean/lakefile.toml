@@ -1,0 +1,9 @@
+name = "datacore-spec"
+version = "0.1.0"
+defaultTargets = ["LedgerSpec", "DatacoreSpec"]
+
+[[lean_lib]]
+name = "LedgerSpec"
+
+[[lean_lib]]
+name = "DatacoreSpec"

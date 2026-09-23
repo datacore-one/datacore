@@ -5,14 +5,22 @@ forever" mechanical rather than a convention someone has to remember.
 
 Every briefing item is reduced to a stable `item_id` -- a hash of its
 NORMALIZED text (lowercase, whitespace runs collapsed to one space,
-stripped). Two runs of the briefing pipeline that describe the same
-underlying thing, even if the exact wording drifts slightly between runs,
-therefore land on the SAME id. `materialize` folds the space's ledger
-once up front and skips any item whose id is already present in
-`state.items` -- with ANY status, including "dismissed". That single rule
-is the entire resurrection guard: once a human dismisses an item, its id
-is permanently "known" to the fold, so no future `materialize` call ever
-re-appends its `item.create`, no matter how the briefing rephrases it.
+stripped). Two runs that produce the same text up to letter case and
+whitespace therefore land on the SAME id. Any other rewording -- one word
+added, dropped or changed, punctuation, a synonym -- is different text and
+a different id: a hash cannot tell that two wordings mean the same thing.
+`materialize` folds the space's ledger once up front and skips any item
+whose id is already present in `state.items` -- with ANY status,
+including "dismissed". So once a human dismisses an item, no future
+`materialize` call re-appends an `item.create` for that id, for any text
+that normalizes to the same string. A reworded item is a new item.
+
+The fold backs this up independently: an `item.create` for an id that
+already exists (dismissed or not) is a recorded no-op, so even a create
+that slips past the snapshot check cannot revive a dismissed item. What
+the snapshot check alone cannot stop is two CONCURRENT calls both seeing
+the id absent and both appending a create; `materialize` therefore holds
+a per-space lock across its fold and its appends (see MATERIALIZE_LOCK).
 
 `materialize` never lets a single item's `PolicyError` (a side-effect
 item -- one whose `effects` intersect the policy's `cosign_effects` --
@@ -50,6 +58,14 @@ from ledger.events import Event
 from ledger.fold import fold
 from ledger.log import EventLog, read_events
 from ledger.policy import Policy, PolicyError, guarded_append
+from file_utils import file_lock
+
+#: Serializes `materialize` calls on one space (this host). Separate from the
+#: policy lock that `guarded_append` takes per append: file_lock is not
+#: reentrant, so the two must be different files. Lock order is always this
+#: one, then the policy lock.
+MATERIALIZE_LOCK = ("state", "briefing-materialize")
+MATERIALIZE_LOCK_TIMEOUT = 60.0
 
 _ACTION_EVENT_TYPES = {
     "claim": "item.claim",
@@ -64,10 +80,9 @@ def item_id(text: str) -> str:
 
     Normalize = lowercase, collapse any run of whitespace to a single
     space, strip leading/trailing whitespace. `"  Buy   Milk\\n"` and
-    `"buy milk"` therefore produce the same id -- that equivalence IS the
-    never-resurface guarantee `materialize` relies on: the same
-    underlying item, reworded slightly across briefing runs, is still
-    recognized as "already handled".
+    `"buy milk"` therefore produce the same id. That is the whole
+    equivalence: `"Buy the milk"` is a different id. The never-resurface
+    guarantee covers exactly the texts that normalize alike.
     """
     normalized = " ".join(text.lower().split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
@@ -129,7 +144,18 @@ def materialize(
 
     `policy` is forwarded to `guarded_append` (which defaults to
     `load_policy()` itself when `None`).
+
+    The fold and every append run under one per-space lock, so two
+    concurrent calls cannot both see an id as absent and both create it.
+    Like the policy lock, it serializes cooperating processes on this host
+    only; another host is reconciled by the fold's create-is-a-no-op rule.
     """
+    lock_target = Path(space_dir).resolve() / ".datacore" / MATERIALIZE_LOCK[0] / MATERIALIZE_LOCK[1]
+    with file_lock(lock_target, timeout=MATERIALIZE_LOCK_TIMEOUT):
+        return _materialize_locked(items, space_dir, actor, policy)
+
+
+def _materialize_locked(items, space_dir, actor, policy) -> MaterializeResult:
     state = fold(read_events(space_dir))
     seen_ids: set[str] = set(state.items.keys())
 

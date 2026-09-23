@@ -18,7 +18,7 @@ import tempfile
 import time
 
 from .genesis import body_text, task_payload
-from .edits import EditConflict, merge_values, conditional_payload
+from .edits import EditConflict, merge_values, conditional_payload, require_edit_protocol, strict_equal
 from .projector import GENERATED_HEADER, project
 
 STATE = Path('.datacore/state/projection/last-rendered.json')
@@ -116,17 +116,43 @@ def base_document(text):
 _changes = merge_values
 
 
+def edit_strict(space):
+    """True iff the space runs ledger-edit-protocol 2 (owner follow-up Q3).
+
+    Under protocol 2 every comparison here that decides WHETHER a field
+    changed is type-strict -- canonical JSON bytes, the same test
+    `edits.merge_values(strict=True)` applies -- so an authored edit from 1 to
+    True is proposed rather than read as "unchanged" and lost before it ever
+    reaches `conditional_payload`. Under 1, or with no/an unknown protocol
+    file, Python `==` is kept and nothing changes.
+    """
+    try:
+        return require_edit_protocol(space) == 2
+    except EditConflict:
+        return False
+
+
+def _same(a, b, strict):
+    return strict_equal(a, b) if strict else a == b
+
+
+def changed_fields(fields, existing, *, strict=False):
+    """The entries of `fields` whose value differs from `existing`'s."""
+    return {key: value for key, value in fields.items() if not _same(value, existing.get(key), strict)}
+
+
 def reconcile(space, current_text, proposed_text):
+    strict = edit_strict(space)
     current, remote = snapshot(current_text, Path(space).name), snapshot(proposed_text, Path(space).name)
     base = load_base(space)
     if base is None:
         # Existing local fields must agree before a derived cache can establish
         # its first base. Extra remote items are safe additions.
         for identity, fields in current['items'].items():
-            if remote['items'].get(identity) != fields:
+            if not _same(remote['items'].get(identity), fields, strict):
                 raise ProjectionConflict('no projection base and Org/ledger differ; reconciliation required')
         return remote
-    return _changes(base, current, remote)
+    return _changes(base, current, remote, strict=strict)
 
 
 def guard_projection(space, current_text, proposed_text):
@@ -136,7 +162,7 @@ def guard_projection(space, current_text, proposed_text):
         raise ProjectionConflict('projection would remove authored preamble content')
     merged = reconcile(space, current_text, proposed_text)
     proposed = snapshot(proposed_text, Path(space).name)
-    if merged != proposed:
+    if not _same(merged, proposed, edit_strict(space)):
         raise ProjectionConflict('authored changes are not represented in the ledger; ingest first')
 
 
@@ -164,12 +190,13 @@ def sync_generated(space, state, actor, dry_run=False):
         pass
     merged = reconcile(space, current_text, proposed)
     live = snapshot(proposed, Path(space).name)
+    strict = edit_strict(space)
     updates, dismissals = [], []
     for identity, fields in merged['items'].items():
         if identity not in live['items']:
             raise ProjectionConflict('new heading is not admitted to the ledger; ingest first')
         existing = live['items'][identity]
-        changed = {key: value for key, value in fields.items() if value != existing.get(key)}
+        changed = changed_fields(fields, existing, strict=strict)
         if not changed:
             continue
         if 'created' in changed:
@@ -181,7 +208,7 @@ def sync_generated(space, state, actor, dry_run=False):
         if terminal:
             kind = 'done' if changed.pop('state') == 'DONE' else 'dropped'
         if changed:
-            updates.append(conditional_payload(item, changed))
+            updates.append(conditional_payload(item, changed, version=2 if strict else 1))
         if terminal:
             # The dismissal's precondition is READ after the update lands, not
             # predicted from it. A dismissal pins the item's ENTIRE payload, and
@@ -212,7 +239,8 @@ def sync_generated(space, state, actor, dry_run=False):
         for identity, kind in dismissals:
             current_item = fold(read_events(space)).items[identity]
             _emit('item.dismiss', conditional_payload(current_item, {
-                'kind': kind, 'reason': 'authored terminal transition in generated Org'}, terminal=True))
+                'kind': kind, 'reason': 'authored terminal transition in generated Org'}, terminal=True,
+                version=2 if strict else 1))
         if appended:
             _advance_base(space, current_text, appended)
     return {'dismissed': len(dismissals), 'updated': len(updates)}

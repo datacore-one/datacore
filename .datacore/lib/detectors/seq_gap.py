@@ -101,21 +101,34 @@ def _offline(err: str) -> bool:
 def head_seq(text: str) -> int | None:
     """Highest `seq` in a JSONL log, or None if the log has no readable events.
 
-    Scans from the end and stops at the first parseable line, so a torn final
-    line — the exact hazard atomic publish (DIP-0046 §10) exists to remove —
-    degrades to "the last complete event" instead of crashing the detector.
+    THE HIGHEST, NOT THE LAST. This used to scan from the end and stop at the
+    first parseable line. On a log whose last complete line is not its highest
+    seq (a re-appended older event, a union merge), that understated the local
+    head, and `max(0, local - remote)` then reported unpublished events as
+    published: local 0..6 then a stray 3, remote at 4, read "ok" with seqs 5
+    and 6 on this disk only (DatacoreSpec/Detectors.lean, `sg_head_is_max`).
+
+    Torn or corrupt lines are skipped, so a torn final line — the hazard atomic
+    publish (DIP-0046 §10) exists to remove — degrades to the complete events
+    instead of crashing the detector.
     """
-    for line in reversed(text.splitlines()):
+    best: int | None = None
+    for line in text.splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            seq = json.loads(line).get("seq")
+            ev = json.loads(line)
         except ValueError:
-            continue          # torn or corrupt line: fall back to the one before
-        if isinstance(seq, int):
-            return seq
-    return None
+            continue          # torn or corrupt line: skip it
+        seq = ev.get("seq") if isinstance(ev, dict) else None
+        if isinstance(seq, int) and not isinstance(seq, bool) and (best is None or seq > best):
+            best = seq
+    return best
+
+
+def _has_lines(text: str) -> bool:
+    return any(line.strip() for line in text.splitlines())
 
 
 
@@ -216,7 +229,20 @@ def scan_space(space: Path, *, fetch: bool = False, grace_min: float = 90.0,
     for log in sorted(events_dir.glob("*.jsonl")):
         actor = log.stem
         rel = log.relative_to(space).as_posix()
-        local = head_seq(log.read_text(errors="replace"))
+        text = log.read_text(errors="replace")
+        local = head_seq(text)
+
+        # A LOCAL LOG WITH CONTENT BUT NO READABLE EVENT CANNOT BE COUNTED. It
+        # used to fall through as local=None and print "ok ... published" with
+        # exit 0 whatever the remote held. What is unpublished is unknown, and
+        # "I could not verify" is its own answer. (An EMPTY log has written
+        # nothing, so 0 unpublished is the true answer there; a log that lost
+        # its events is actor_presence's MISSING, not a publication gap.)
+        if local is None and _has_lines(text):
+            rows.append({"space": space.name, "actor": actor, "local_seq": None,
+                         "remote_seq": None, "gap": None,
+                         "error": "local log has no readable events — cannot count what is unpublished"})
+            continue
 
         if stale:
             why = ("remote unreachable — comparison would use a stale ref, "
@@ -244,7 +270,7 @@ def scan_space(space: Path, *, fetch: bool = False, grace_min: float = 90.0,
             remote = head_seq(out)
 
         if local is None:
-            gap = 0 if remote is None else None
+            gap = 0                              # empty log: nothing written here
         elif remote is None:
             gap = local + 1                      # nothing published at all
         else:
@@ -364,6 +390,8 @@ def main() -> int:
                       f"remote {r['remote_seq']} — {r['gap']} unpublished")
                 if r.get("why"):
                     print(f"        why: {r['why']}")
+            elif r["local_seq"] is None:
+                print(f"  ok    {r['space']}/{r['actor']}: no local events, nothing to publish")
             else:
                 print(f"  ok    {r['space']}/{r['actor']}: seq {r['local_seq']} published")
         # Report positively: a count nobody can mistake for "the detector ran and

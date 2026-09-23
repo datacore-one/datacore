@@ -55,7 +55,12 @@ def test_classify_by_the_shipped_vocabulary(tool, inp, expected):
 
 
 def test_call_text_prefers_command_fields_then_json():
-    assert tp.call_text({"command": "ls", "description": "list"}) == "ls"
+    # Decision S1 (2026-09-23): the text-key fields come first, and the JSON of
+    # the whole input is always appended, so a field outside _TEXT_KEYS is matched.
+    text = tp.call_text({"command": "ls", "description": "list"})
+    first, _, rest = text.partition("\n")
+    assert first == "ls"
+    assert json.loads(rest) == {"command": "ls", "description": "list"}
     assert json.loads(tp.call_text({"a": 1, "b": [2]})) == {"a": 1, "b": [2]}
     assert tp.call_text("raw") == "raw"
     assert tp.call_text(None) == ""

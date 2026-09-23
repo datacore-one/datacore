@@ -11,6 +11,11 @@ Merges context files across permission levels:
 
 Output: Composed .md file (gitignored, read at runtime)
 
+Write guards (the composed file is refused, not written, when):
+- a PRIVATE layer exists and git would, or might, track the output;
+- a SPACE or TEAM layer exists, git would track the output, and the repo has a
+  public remote or its visibility cannot be told (owner decision D6).
+
 Registry injection: <!-- REGISTRY:xxx --> markers in templates are replaced
 with auto-generated tables from YAML registries (agents.yaml, commands.yaml,
 sources.yaml, module.yaml files, infrastructure.yaml).
@@ -19,7 +24,9 @@ See DIP-0002 for full specification.
 """
 
 import argparse
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -29,7 +36,9 @@ try:
 except ImportError:
     yaml = None
 
-# Layer order (later layers extend/override earlier)
+# Layer order. Later layers EXTEND earlier ones by concatenation; nothing is
+# overridden textually (DIP-0002, "Resolved Questions" 1: same-named sections
+# both appear, and precedence is left to the reader of the composed file).
 LAYERS = [
     ("base", "PUBLIC"),    # Generic template - validated for private content
     ("space", "SPACE"),    # Space-specific - tracked in space repo
@@ -37,8 +46,33 @@ LAYERS = [
     ("local", "PRIVATE"),  # Personal - always gitignored, never validated
 ]
 
-# Layers that should be validated for private content (only PUBLIC for now)
+# Layers that should be validated for private content (only PUBLIC for now).
+# DIP-0002 lets SPACE carry team contacts, so SPACE is not held to the PUBLIC
+# patterns. A hit is a warning here; the blocking gate is the commit hook and
+# CI (git_privacy.py), which is where DIP-0002 puts it: the composed output is
+# gitignored, so writing it publishes nothing.
 VALIDATED_LAYERS = ("PUBLIC",)
+
+# Layers whose content must never land in a file git would track. The composed
+# output of such a layer is written only where `git check-ignore` confirms the
+# output path is ignored (and therefore untracked), or outside any work tree.
+UNTRACKED_ONLY_LEVELS = ("PRIVATE",)
+
+# Layers whose content must not land in a file git would track in a repository
+# with a PUBLIC remote (owner decision D6, 2026-09-23). SPACE may hold team
+# contacts (DIP-0002), which is fine in a private space repo and a leak in a
+# public one. "Public" is decided the way the pre-push hook decides it: a
+# remote whose GitHub org/name is listed under `protected_repos` in
+# public-repo-denylist.yaml. When that cannot be established (no readable
+# policy, git failing), the write is refused.
+NOT_PUBLIC_LEVELS = ("SPACE", "TEAM")
+
+# Same file and same default as pre_push_scan.DEFAULT_DENYLIST and
+# githooks/pre-push. Tests (and callers) may point it elsewhere.
+PUBLIC_REPO_DENYLIST: Optional[Path] = None
+
+# githooks/pre-push: sed -E 's#^(git@github.com:|https://github.com/|ssh://git@github.com/)##; s#\.git$##'
+_GITHUB_PREFIX = re.compile(r"^(git@github\.com:|https://github\.com/|ssh://git@github\.com/)")
 
 # Patterns that should never appear in PUBLIC layers
 PRIVATE_PATTERNS = [
@@ -417,10 +451,147 @@ def rebuild_context(
         print(merged_content[:500] + "..." if len(merged_content) > 500 else merged_content)
         return len(warnings) == 0, warnings
 
+    # Private content never reaches a tracked file. DIP-0002 says the composed
+    # file is "always gitignored"; that is a property of the repository, not of
+    # this script, so check it rather than assume it.
+    levels = dict(LAYERS)
+    private_layers = [f for f in existing_layers
+                      if levels.get(f.name[len(name) + 1:-len(".md")]) in UNTRACKED_ONLY_LEVELS]
+    if private_layers:
+        refusal = output_untracked_refusal(output_file)
+        if refusal:
+            return False, warnings + [refusal]
+    refusal = shared_layer_refusal(output_file, existing_layers, name)
+    if refusal:
+        return False, warnings + [refusal]
+
     # Write output
     output_file.write_text(merged_content)
 
     return len(warnings) == 0, warnings
+
+
+def output_untracked_refusal(output_file: Path) -> str | None:
+    """None when `output_file` may hold PRIVATE content, else the reason not to.
+
+    Allowed: git reports the path ignored (`check-ignore` exit 0; a tracked
+    path is never reported ignored), or the directory is in no work tree.
+    Everything else, including git being unavailable, refuses: fail closed.
+    """
+    directory = output_file.parent
+    try:
+        inside = subprocess.run(
+            ["git", "-C", str(directory), "rev-parse", "--is-inside-work-tree"],
+            capture_output=True, text=True)
+        if inside.returncode != 0 or inside.stdout.strip() != "true":
+            if "not a git repository" in inside.stderr:
+                return None
+            if inside.returncode == 0:      # e.g. inside .git: not a work tree
+                return None
+            return (f"REFUSED: {output_file} not written: cannot tell whether git "
+                    f"would track it (git rev-parse failed)")
+        ignored = subprocess.run(
+            ["git", "-C", str(directory), "check-ignore", "-q", "--", output_file.name],
+            capture_output=True, text=True)
+    except OSError as exc:
+        return (f"REFUSED: {output_file} not written: git unavailable ({exc}); "
+                f"it would contain the PRIVATE layer")
+    if ignored.returncode == 0:
+        return None
+    if ignored.returncode == 1:
+        return (f"REFUSED: {output_file} not written: it would contain the PRIVATE "
+                f"layer and git does not ignore it (add it to .gitignore, and "
+                f"`git rm --cached` it if tracked)")
+    return (f"REFUSED: {output_file} not written: git check-ignore failed "
+            f"(exit {ignored.returncode})")
+
+
+def remote_slug(url: str) -> str:
+    """The pre-push hook's repo identifier for a remote URL (org/name for a
+    GitHub URL; any other URL unchanged, which no GitHub slug list matches)."""
+    return re.sub(r"\.git$", "", _GITHUB_PREFIX.sub("", url.strip()))
+
+
+def _denylist_path() -> Path:
+    if PUBLIC_REPO_DENYLIST is not None:
+        return Path(PUBLIC_REPO_DENYLIST)
+    return Path(os.environ.get("DATA_DIR", os.path.expanduser("~/Data"))) / \
+        ".datacore" / "config" / "public-repo-denylist.yaml"
+
+
+def public_remotes(directory: Path) -> tuple[list[str] | None, str | None]:
+    """(public remote slugs, None), or (None, why it cannot be told).
+
+    A remote is public when its slug is in `protected_repos`, exactly the
+    pre-push hook's test. No remote at all is not public: nothing can be
+    pushed. Any remote that is public makes the repository public, whatever
+    the others are (an `upstream` counts as much as `origin`).
+    """
+    path = _denylist_path()
+    try:
+        import yaml as _yaml
+        policy = _yaml.safe_load(path.read_text())
+    except Exception as exc:  # noqa: BLE001 — missing, unreadable, invalid, no PyYAML
+        return None, f"public-repo policy {path} unreadable ({type(exc).__name__})"
+    protected = policy.get("protected_repos") if isinstance(policy, dict) else None
+    if not isinstance(protected, list):
+        return None, f"public-repo policy {path} has no protected_repos list"
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(directory), "config", "--get-regexp", r"^remote\..*\.url$"],
+            capture_output=True, text=True)
+    except OSError as exc:
+        return None, f"git unavailable ({exc})"
+    if out.returncode not in (0, 1):          # 1: no remote configured
+        return None, f"git config failed (exit {out.returncode})"
+    urls = [line.split(None, 1)[1] for line in out.stdout.splitlines() if " " in line]
+    return sorted({remote_slug(u) for u in urls} & {str(p) for p in protected}), None
+
+
+def shared_layer_refusal(output_file: Path, existing_layers: list[Path],
+                         name: str = "CLAUDE") -> str | None:
+    """None when the composed file may be written as far as SPACE/TEAM content
+    goes, else the reason it may not (owner decision D6).
+
+    Refused: a SPACE or TEAM layer exists, git would track the output (it is in
+    a work tree and not ignored), and the repository has a public remote, or
+    whether it has one cannot be told. Everything unknown fails closed.
+    """
+    levels = dict(LAYERS)
+    shared = [f.name for f in existing_layers
+              if levels.get(f.name[len(name) + 1:-len(".md")]) in NOT_PUBLIC_LEVELS]
+    if not shared:
+        return None
+    directory = output_file.parent
+    try:
+        inside = subprocess.run(
+            ["git", "-C", str(directory), "rev-parse", "--is-inside-work-tree"],
+            capture_output=True, text=True)
+        if inside.returncode != 0 or inside.stdout.strip() != "true":
+            if "not a git repository" in inside.stderr or inside.returncode == 0:
+                return None                    # no work tree: nothing is tracked
+            return (f"REFUSED: {output_file} not written: cannot tell whether git "
+                    f"would track it (git rev-parse failed) and it holds {', '.join(shared)}")
+        ignored = subprocess.run(
+            ["git", "-C", str(directory), "check-ignore", "-q", "--", output_file.name],
+            capture_output=True, text=True)
+    except OSError as exc:
+        return (f"REFUSED: {output_file} not written: git unavailable ({exc}); "
+                f"it would hold {', '.join(shared)}")
+    if ignored.returncode == 0:
+        return None
+    if ignored.returncode != 1:
+        return (f"REFUSED: {output_file} not written: git check-ignore failed "
+                f"(exit {ignored.returncode}) and it holds {', '.join(shared)}")
+    public, why = public_remotes(directory)
+    if why:
+        return (f"REFUSED: {output_file} not written: cannot tell whether this repo is "
+                f"public ({why}); git would track it and it holds {', '.join(shared)}")
+    if public:
+        return (f"REFUSED: {output_file} not written: git would track it, the repo has a "
+                f"public remote ({', '.join(public)}), and it holds {', '.join(shared)} "
+                f"(add {output_file.name} to .gitignore, and `git rm --cached` it if tracked)")
+    return None
 
 
 def validate_layers(component_path: Path, name: str = "CLAUDE") -> list[str]:

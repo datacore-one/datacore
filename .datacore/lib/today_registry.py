@@ -70,6 +70,9 @@ class Registration:
     timeout: int = DEFAULT_TIMEOUT
     #: Inline prose instead of a prompt file — the legacy `trading` shape.
     inline: str | None = None
+    #: The stage as written, when it is not one of STAGES. `stage` still falls
+    #: back to gather so the plan can run; the validator reports this.
+    stage_declared: str | None = None
 
     @property
     def registered(self) -> bool:
@@ -102,6 +105,7 @@ def _parse(module: str, raw, module_dir: Path) -> Registration:
         model=raw.get("model"),
         refresh=bool(raw.get("refresh", False)),
         timeout=int(raw.get("timeout") or DEFAULT_TIMEOUT),
+        stage_declared=None if stage in STAGES else stage,
     )
 
 
@@ -246,12 +250,39 @@ def validate(regs: list[Registration] | None = None,
             if r.registered and r.agent and not agents_exist(r.agent):
                 problems.append(f"{r.module}: agent {r.agent!r} is not in the registry")
 
+    # 4b. The stage is one the runner knows. An unknown one ("narate") used to
+    #     be coerced to gather in silence, so a narrate-stage section ran first,
+    #     against a briefing that did not exist yet, and the gate said nothing.
+    for r in regs:
+        if r.registered and r.stage_declared is not None:
+            problems.append(
+                f"{r.module}: {r.section!r} declares stage {r.stage_declared!r}, "
+                f"not one of {' | '.join(STAGES)} — it would silently run in "
+                f"{DEFAULT_STAGE}")
+
     # 5. depends_on names real sections, and forms no cycle.
     dep = {r.section: list(r.depends_on) for r in regs if r.registered}
     for section, deps in dep.items():
         for d in deps:
             if d not in wanted:
                 problems.append(f"{section!r} depends on {d!r}, which is not a section")
+
+    # 5b. ...and never on a LATER stage. `plan` runs stage by stage and orders
+    #     only WITHIN a stage, treating a dependency outside the stage as
+    #     already satisfied. That holds for an earlier stage (observation, in
+    #     narrate, depends on the_ask in compose) and is false for a later one:
+    #     a gather section depending on a compose section ran first, and this
+    #     gate returned [] (DatacoreSpec/Detectors.lean, `tr_valid_plan_respects_deps`).
+    rank = {s: i for i, s in enumerate(STAGES)}
+    stage_of = {r.section: r.stage for r in regs if r.registered}
+    for r in regs:
+        if not r.registered:
+            continue
+        for d in r.depends_on:
+            if d in stage_of and rank[stage_of[d]] > rank[r.stage]:
+                problems.append(
+                    f"{r.section!r} ({r.stage}) depends on {d!r}, which runs in a "
+                    f"later stage ({stage_of[d]}) — it would run before its input exists")
 
     colour: dict[str, int] = {}
 

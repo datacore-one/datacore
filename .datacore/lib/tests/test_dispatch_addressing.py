@@ -10,8 +10,13 @@ name, which is the ordinary case in this installation: `miles` writes as
 So an item addressed to `nightshift` was declined by nightshift's own
 dispatcher (running as `miles`), and by every other host as well. A decline
 writes no event: the item stays `created` with nothing to alert on, and the
-gate that would have allowed the claim is never reached. These tests pin the
+gate that would have allowed the claim is never reached. These tests pinned the
 dispatcher and the gate to the same answer.
+
+Decision L4 (2026-09-23) made the dispatcher deliberately stricter: it offers
+addressed work only to the EXACT writer named (`actor_identity.dispatchable_by`),
+because two writers of one principal on two hosts both claimed and both ran one
+item. What it skips it names in its summary, so the decline is no longer silent.
 """
 from __future__ import annotations
 
@@ -54,9 +59,21 @@ def _plan(space, actor, capsys, execute=False):
 
 def test_an_executors_own_log_name_reaches_its_own_dispatcher(tmp_path, capsys):
     space = _space(tmp_path, assignee="nightshift")
-    out = _plan(space, "miles", capsys)
+    out = _plan(space, "nightshift", capsys)
     assert "would claim" in out, out
     assert "addressed to another agent" not in out
+
+
+def test_a_sibling_writer_skips_it_and_says_so(tmp_path, capsys):
+    # Decision L4 (2026-09-23): dispatch needs the EXACT writer named, because
+    # two writers of one principal on two hosts both claimed and both ran one
+    # item. This used to be claimed by `miles`. It is still not a SILENT
+    # decline -- the failure the module docstring describes -- it is named.
+    space = _space(tmp_path, assignee="nightshift")
+    out = _plan(space, "miles", capsys)
+    assert "would claim" not in out, out
+    assert "addressed to nightshift, a sibling writer of miles" in out
+    assert "Reconcile the ledger" in out
 
 
 def test_another_principals_item_is_still_declined(tmp_path, capsys):

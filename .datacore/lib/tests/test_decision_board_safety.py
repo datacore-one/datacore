@@ -259,7 +259,7 @@ def generated_fixture(tmp_path, monkeypatch):
     from ledger.projector import project
     from ledger.projection_state import STATE, base_document
     import actor_identity
-    monkeypatch.setattr(actor_identity, 'this_actor', lambda: 'writer')
+    monkeypatch.setattr(actor_identity, 'this_actor', lambda **_: 'writer')
     space = tmp_path / '9-drill'
     (space / 'org').mkdir(parents=True)
     (space / '.datacore').mkdir()

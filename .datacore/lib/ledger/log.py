@@ -111,6 +111,25 @@ def _identity_file_value(key: str) -> str | None:
         pass
     return None
 
+def _require_finite(value) -> None:
+    """Raise ValueError if `value` holds a NaN or an infinite float anywhere."""
+    import json
+    try:
+        json.dumps(value, allow_nan=False)
+    except ValueError:
+        raise ValueError("event payload contains NaN or Infinity, which is not JSON; "
+                         "refused before stamping (encode it as null or a string)") from None
+
+
+def _require_declared(actor: str) -> None:
+    """Refuse the hostname fallback on an undeclared host (DIP-0044, L10)."""
+    import actor_identity
+    if actor == actor_identity.short_hostname():
+        # Raises UndeclaredActor, naming identity.env and the registry, when
+        # nothing declares this machine's actor; returns when something does.
+        actor_identity.this_actor(strict=True)
+
+
 class EventLog:
     """Append-only event log for one actor within one space.
 
@@ -200,13 +219,47 @@ class EventLog:
 
     def append(self, type: str, payload: dict) -> Event:
         """Append a new event of `type` with `payload`, chained to this
-        writer's last event. Raises `ValueError` for an unknown event type.
+        writer's last event.
+
+        Refuses, before stamping and without writing anything:
+          * an unknown event type (`ValueError`);
+          * a payload holding NaN or +-Infinity (`ValueError`, decision L8);
+          * this host's short hostname as the actor when the host declares no
+            actor (`actor_identity.UndeclaredActor`, decision L10);
+          * a conditional edit (`_merge`) the space's
+            `.datacore/ledger-edit-protocol` does not enable (`EditConflict`).
+            Where it says `2`, the edit is written as type-strict version 2
+            (decision L7; see `ledger.edits`). The caller's dict is not mutated.
         """
         if type not in EVENT_TYPES:
             raise ValueError(f"unknown event type: {type!r} (expected one of {sorted(EVENT_TYPES)})")
+        # NO NaN, NO INFINITY (owner decision L8). json writes them as the
+        # non-JSON tokens NaN/Infinity, and NaN != NaN breaks every equality
+        # the fold relies on: merge_values(NaN, NaN, x) raised "concurrent
+        # edit", so an item with a NaN field could never be dismissed cleanly.
+        # Refused here, before stamping, so nothing is written; events already
+        # on disk are untouched and hash exactly as before.
+        _require_finite(payload)
+        # WHO IS WRITING (owner decision L10). An actor equal to this host's
+        # short hostname, on a host that declares no actor, is the
+        # `this_actor()` fallback: a guess, and two undeclared hosts that share
+        # a hostname would append to one log and fork it. Refuse, naming how
+        # to declare one. A name the caller chose (a registry writer, --actor)
+        # is not a guess and is unaffected.
+        _require_declared(self.actor)
         if type in ('item.update', 'item.dismiss') and isinstance(payload, dict) and '_merge' in payload:
-            from .edits import require_edit_protocol
-            require_edit_protocol(self.space_dir)
+            from .edits import EditConflict, condition_version, require_edit_protocol
+            enabled = require_edit_protocol(self.space_dir)
+            # The space's protocol decides the version NEW edits carry (L7):
+            # `2` stamps the type-strict version on every conditional edit,
+            # `1` keeps version 1 and refuses a version-2 edit, which readers
+            # of this space are not yet declared able to fold.
+            version = condition_version(payload['_merge'])
+            if version == 2 and enabled < 2:
+                raise EditConflict('type-strict conditional edits require ledger-edit-protocol=2 '
+                                   'after all active readers are upgraded')
+            if version == 1 and enabled == 2:
+                payload = {**payload, '_merge': {**payload['_merge'], 'version': 2}}
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # "a+b": creates the file if absent, allows both read (for the tail)

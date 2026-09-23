@@ -71,11 +71,19 @@ class HookExecutor:
     - Manages hook state persistence
     """
 
-    def __init__(self, debug: bool = False):
+    def __init__(self, debug: bool = False, write_root: Optional[Path] = None):
+        """`write_root` redirects every file this executor WRITES (hook state,
+        learning candidates, embed queue, journal) under another root, and
+        skips the execution log. The registry and context files are still
+        read from DATACORE_ROOT. The CLI self-test passes a temp dir, so a
+        demo run never touches the real hook_state.yaml (decision S6)."""
         self.debug = debug
+        self.demo = write_root is not None
+        self.write_root = Path(write_root) if write_root is not None else DATACORE_ROOT
         self.registry = self._load_registry()
         self._state_store = YamlStateStore(
             ".datacore/state/hook_state.yaml",
+            data_root=self.write_root if self.demo else None,   # None: state_store's own root, as before
             default={
                 "retry_counts": {},
                 "last_executions": {},
@@ -635,6 +643,9 @@ class HookExecutor:
             metrics["outputs"] = result.get("outputs", {})
 
         # Append to execution log
+        if self.demo:
+            self._log("    demo run: execution log not written")
+            return HookResult(success=True, data=metrics)
         try:
             from execution_logger import log_execution
             log_execution(
@@ -756,7 +767,7 @@ class HookExecutor:
                 for category, items in learnings.items()
                 for item in items
             ]
-            candidates_path = DATACORE_ROOT / ".datacore" / "state" / "learning_candidates.yaml"
+            candidates_path = self.write_root / ".datacore" / "state" / "learning_candidates.yaml"
             self._append_to_yaml_list(candidates_path, new_entries)
 
             self._log(f"    Extracted {total} learning candidates ({len(learnings['patterns'])} patterns, "
@@ -811,7 +822,7 @@ class HookExecutor:
             embedding = embed_text(text_to_embed)
 
             # Store embedding metadata in state for later indexing
-            embed_log_path = DATACORE_ROOT / ".datacore" / "state" / "embed_queue.yaml"
+            embed_log_path = self.write_root / ".datacore" / "state" / "embed_queue.yaml"
 
             self._append_to_yaml_list(embed_log_path, [{
                 "doc_id": doc_id,
@@ -838,9 +849,9 @@ class HookExecutor:
         # Get today's journal path
         today = datetime.now().strftime("%Y-%m-%d")
         space = config.get("space", "0-personal")
-        journal_dir = DATACORE_ROOT / space / "notes" / "journals"
+        journal_dir = self.write_root / space / "notes" / "journals"
         if not journal_dir.exists():
-            journal_dir = DATACORE_ROOT / space / "journal"
+            journal_dir = self.write_root / space / "journal"
         journal_path = journal_dir / f"{today}.md"
 
         if not journal_path.exists():
@@ -873,6 +884,10 @@ class HookExecutor:
         """
         Execute validation hooks before marking complete.
 
+        An unknown hook type FAILS validation (decision S6, 2026-09-23). It
+        was skipped until then, so a misspelt validator list passed every
+        output unchecked (DatacoreSpec/Guards.lean `validate_passes_only_known`).
+
         Returns:
             Tuple of (passed, message)
         """
@@ -891,8 +906,10 @@ class HookExecutor:
             elif hook_type == "quality-gate":
                 hook_result = self._hook_quality_gate(result, config)
             else:
-                self._log(f"    Unknown hook type: {hook_type}")
-                continue
+                msg = (f"Unknown validate hook type: {hook_type!r} "
+                       "(known: output-exists, quality-gate)")
+                self._log(f"  FAILED: {msg}")
+                return (False, msg)
 
             if not hook_result.success:
                 self._log(f"  FAILED: {hook_result.message}")
@@ -943,9 +960,18 @@ class HookExecutor:
     # Error Hooks
     # =========================================================================
 
-    def execute_error_hooks(self, agent_id: str, error: Exception) -> Dict[str, Any]:
+    def execute_error_hooks(self, agent_id: str, error: Exception,
+                            task_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Execute error hooks.
+
+        `task_id` scopes the retry budget. `_hook_retry_schedule` always read
+        `instructions["task_id"]`, but nothing ever put it there, so every
+        error of an agent shared ONE persisted counter under "default": after
+        `max_retries` transient errors in its lifetime, the agent never
+        retried again (2026-09-23, DatacoreSpec/Guards.lean
+        `retry_budget_is_per_task`). Callers that pass no task id keep that
+        shared counter.
 
         Returns:
             Dict with retry/escalation instructions
@@ -957,7 +983,8 @@ class HookExecutor:
             "retry": False,
             "retry_delay": 0,
             "escalate": False,
-            "error_type": "unknown"
+            "error_type": "unknown",
+            "task_id": task_id or "default",
         }
 
         for hook in hooks:
@@ -1038,6 +1065,13 @@ class HookExecutor:
             "queue": config.get("queue", "nightshift")
         })
 
+    def reset_retries(self, agent_id: str, task_id: Optional[str] = None) -> None:
+        """Forget a task's retry count once it has succeeded, so a later,
+        unrelated failure of the same task starts with a full budget."""
+        agent_retries = self.state.setdefault("retry_counts", {}).get(agent_id)
+        if isinstance(agent_retries, dict) and agent_retries.pop(task_id or "default", None) is not None:
+            self._save_state()
+
     def _hook_escalate(self, agent_id: str, instructions: Dict, config: Dict) -> HookResult:
         """Escalate to human queue."""
         after_retries = config.get("after_retries", 3)
@@ -1067,27 +1101,31 @@ class HookExecutor:
 # Convenience Functions
 # =============================================================================
 
-def inject_context(agent_id: str, task_context: str = "", debug: bool = False) -> Tuple[bool, str]:
+def inject_context(agent_id: str, task_context: str = "", debug: bool = False,
+                   write_root: Optional[Path] = None) -> Tuple[bool, str]:
     """
     Convenience function to inject context for an agent.
 
     Returns:
         Tuple of (should_continue, injected_context)
     """
-    executor = HookExecutor(debug=debug)
+    executor = HookExecutor(debug=debug, write_root=write_root)
     return executor.execute_pre_hooks(agent_id, task_context)
 
 
-def log_completion(agent_id: str, result: Dict[str, Any], debug: bool = False) -> None:
+def log_completion(agent_id: str, result: Dict[str, Any], debug: bool = False,
+                   write_root: Optional[Path] = None) -> None:
     """Convenience function to run post-execution hooks."""
-    executor = HookExecutor(debug=debug)
+    executor = HookExecutor(debug=debug, write_root=write_root)
     executor.execute_post_hooks(agent_id, result)
 
 
-def handle_error(agent_id: str, error: Exception, debug: bool = False) -> Dict[str, Any]:
+def handle_error(agent_id: str, error: Exception, debug: bool = False,
+                 task_id: Optional[str] = None,
+                 write_root: Optional[Path] = None) -> Dict[str, Any]:
     """Convenience function to handle agent errors."""
-    executor = HookExecutor(debug=debug)
-    return executor.execute_error_hooks(agent_id, error)
+    executor = HookExecutor(debug=debug, write_root=write_root)
+    return executor.execute_error_hooks(agent_id, error, task_id=task_id)
 
 
 # =============================================================================
@@ -1100,35 +1138,42 @@ if __name__ == "__main__":
         print("\nTests hook execution for an agent")
         sys.exit(1)
 
+    import tempfile
+
     agent_id = sys.argv[1]
     debug = "--debug" in sys.argv
 
-    print(f"Testing hooks for agent: {agent_id}")
-    print("=" * 60)
+    # Decision S6: the self-test's mock state goes to a temp dir, never the
+    # real hook_state.yaml (it used to leave a mock rate_limit error there).
+    with tempfile.TemporaryDirectory(prefix="hooks-selftest-") as demo_root:
+        print(f"Testing hooks for agent: {agent_id}")
+        print(f"Demo state under {demo_root} (discarded); the real hook state is not touched")
+        print("=" * 60)
 
-    # Test pre-hooks
-    print("\n[PRE-HOOKS]")
-    should_continue, context = inject_context(agent_id, "Test task", debug=debug)
-    print(f"Should continue: {should_continue}")
-    print(f"Context length: {len(context)} chars")
-    if context and debug:
-        print(f"Context preview:\n{context[:500]}...")
+        # Test pre-hooks
+        print("\n[PRE-HOOKS]")
+        should_continue, context = inject_context(agent_id, "Test task", debug=debug,
+                                                  write_root=demo_root)
+        print(f"Should continue: {should_continue}")
+        print(f"Context length: {len(context)} chars")
+        if context and debug:
+            print(f"Context preview:\n{context[:500]}...")
 
-    # Test post-hooks (with mock result)
-    print("\n[POST-HOOKS]")
-    mock_result = {
-        "status": "success",
-        "outputs": {"files_created": []},
-        "tokens_in": 1000,
-        "tokens_out": 500
-    }
-    log_completion(agent_id, mock_result, debug=debug)
+        # Test post-hooks (with mock result)
+        print("\n[POST-HOOKS]")
+        mock_result = {
+            "status": "success",
+            "outputs": {"files_created": []},
+            "tokens_in": 1000,
+            "tokens_out": 500
+        }
+        log_completion(agent_id, mock_result, debug=debug, write_root=demo_root)
 
-    # Test error hooks (with mock error)
-    print("\n[ERROR-HOOKS]")
-    mock_error = Exception("rate_limit exceeded")
-    instructions = handle_error(agent_id, mock_error, debug=debug)
-    print(f"Instructions: {instructions}")
+        # Test error hooks (with mock error)
+        print("\n[ERROR-HOOKS]")
+        mock_error = Exception("rate_limit exceeded")
+        instructions = handle_error(agent_id, mock_error, debug=debug, write_root=demo_root)
+        print(f"Instructions: {instructions}")
 
     print("\n" + "=" * 60)
     print("Hook test complete")

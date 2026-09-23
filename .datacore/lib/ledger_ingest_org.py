@@ -80,7 +80,9 @@ def _this_actor() -> str:
 
     A per-writer log is only disjoint if exactly one writer writes it. A
     default actor silently breaks that for every machine except the one the
-    default names.
+    default names -- and so does the hostname, which is why this resolves
+    STRICTLY (owner follow-up Q2): an undeclared host raises `UndeclaredActor`
+    naming identity.env and the registry. `main()` calls it once at startup.
     """
     try:
         from actor_identity import this_actor
@@ -89,7 +91,7 @@ def _this_actor() -> str:
         _spec = _ilu.spec_from_file_location("actor_identity", _pl.Path(__file__).resolve().parent / "actor_identity.py")
         _m = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_m)
         this_actor = _m.this_actor
-    return this_actor()
+    return this_actor(strict=True)
 
 def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> dict:
     """Reconcile an already-imported task with what org says about it NOW.
@@ -351,14 +353,46 @@ def _dismiss_archived(space, ws, state, log, actor, dry_run) -> int:
     org_dir = space / "org"
     live_ids: set[str] = set()
     archived_ids: set[str] = set()
+
+    def _ids(f: Path) -> set[str]:
+        return set(re.findall(r":ID:\s*(\S+)", f.read_text(errors="replace")))
+
+    # ARCHIVE EVIDENCE: the archive files beside the authored ones, as
+    # org-archive-subtree writes them. An unreadable archive only withholds
+    # evidence, which declines to close things -- the cautious direction.
     for f in sorted(org_dir.glob("*.org")):
-        try:
-            ids = set(re.findall(r":ID:\s*(\S+)", f.read_text(errors="replace")))
-        except OSError:
-            # Unreadable file: treat its ids as LIVE, never as archived. The
-            # cautious direction is the one that declines to close things.
+        if not f.is_file() or "archive" not in f.name.lower():
             continue
-        (archived_ids if "archive" in f.name.lower() else live_ids).update(ids)
+        try:
+            archived_ids |= _ids(f)
+        except OSError:
+            continue
+
+    # LIVENESS: every authored org file under org/, nested ones included
+    # ("an id still present in ANY live org file is left alone").
+    #
+    # An unreadable live file used to be `continue`d, which put its ids in
+    # NEITHER set -- so an id it held that also sat in an archive was
+    # dismissed, and dismiss is terminal (DIP-0034). "Treat its ids as live"
+    # cannot be done id by id when the ids cannot be read, so it is done for
+    # the whole pass: any live file or directory we cannot read means no
+    # archived-dismissal this run. Found by the Lean model
+    # (DatacoreSpec/LedgerSeal.lean, ingest_*), replayed 2026-09-23.
+    unreadable: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(
+            org_dir, onerror=lambda exc: unreadable.append(str(exc))):
+        dirnames.sort()
+        for name in sorted(filenames):
+            if not name.endswith(".org") or "archive" in name.lower():
+                continue
+            if "archive" in Path(dirpath).relative_to(org_dir).as_posix().lower():
+                continue
+            try:
+                live_ids |= _ids(Path(dirpath) / name)
+            except OSError as exc:
+                unreadable.append(f"{name}: {exc}")
+    if unreadable:
+        return 0
 
     closed = 0
     for nid in sorted(archived_ids - live_ids):
@@ -527,6 +561,17 @@ def main() -> int:
     ap.add_argument("--root", type=Path, default=_default_root())
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+    # IDENTITY AT STARTUP (owner follow-up Q2): every admission and every
+    # reconciliation below appends as this host's declared actor. Resolve it
+    # once, strictly, before touching any space -- an undeclared host is
+    # refused here instead of sweeping every space and failing at each append.
+    try:
+        actor = _this_actor()
+    except RuntimeError as exc:
+        if type(exc).__name__ != "UndeclaredActor":
+            raise
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return 2
 
     spaces = sorted(p for p in args.root.glob("[0-9]-*") if (p / "org").is_dir())
     # Sweeping nothing is not a successful sweep.
@@ -559,9 +604,9 @@ def main() -> int:
                 # not bad luck, a shared writer. Per-host actors cannot
                 # collide, so the class ends here rather than being detected
                 # again by resolve_ledger_conflicts' ForkError guard.
-                import_space(space, actor=_this_actor())
+                import_space(space, actor=actor)
             total_new += new
-            sy = sync_state(space, dry_run=args.dry_run)
+            sy = sync_state(space, actor=actor, dry_run=args.dry_run)
             # ORPHANS ARE A LEDGER FAILURE, so the sweep closes them rather
             # than letting them accumulate for a human to find. Confirmation
             # needs TWO sweeps an hour apart (see confirm_and_dismiss): one

@@ -41,6 +41,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -141,15 +142,61 @@ def _merge(space: Path, ref: str) -> tuple[bool, str, list[str]]:
     _git(space, "merge", "--abort")
     return False, detail, []
 
+_REPO_LOCK_TIMEOUT = 120
+
+
+def _lock_name(space: Path) -> str:
+    """One name per REPOSITORY, not per path: the resolved git-common-dir.
+
+    The publication record lives in the git-common-dir, which every linked
+    worktree shares, so a lock keyed by the path's basename let a publication
+    reserved from `worktree-7` interleave with the autosave in `0-personal`
+    (DatacoreSpec/Publication.lean, `basename_key_not_exclusive`). For the main
+    checkout this is still its basename, so existing lock names/inodes and
+    cooperating older processes are unchanged. A path git cannot resolve keeps
+    the old name.
+    """
+    env = {k: v for k, v in os.environ.items()
+           if k not in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE')}
+    try:
+        r = subprocess.run(['git', '-C', str(space), 'rev-parse', '--path-format=absolute',
+                            '--git-common-dir'], capture_output=True, text=True, timeout=30, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return space.name
+    if r.returncode or not r.stdout.strip():
+        return space.name
+    common = Path(r.stdout.strip()).resolve()
+    return common.parent.name if common.name == '.git' else common.name
+
+
+_HELD = threading.local()
+
+
 @contextmanager
 def _repo_lock(space: Path):
-    """Exclusive, per-repo, SAME-MACHINE ONLY. See the module docstring."""
+    """Exclusive, per-repo, SAME-MACHINE ONLY. See the module docstring.
+
+    Re-entrant for the thread that already holds it: with one key per
+    repository, a nested acquisition from another checkout of the same
+    repository (formerly a different key) would otherwise wait out its own
+    deadline. Other threads and processes still block (flock is per open file).
+    """
     lock_dir = private_state_directory('locks')
-    lock = lock_dir / f"{space.name}.lock"
+    lock = lock_dir / f"{_lock_name(Path(space))}.lock"
+    held = getattr(_HELD, 'names', None)
+    if held is None:
+        held = _HELD.names = set()
+    if lock in held:
+        yield
+        return
     # Retain the existing lock name/inode for cooperating callers. Opening a
     # lock never truncates it or follows an alias; contention has a deadline.
-    with file_lock(lock, lock_path=lock, timeout=120):
-        yield
+    with file_lock(lock, lock_path=lock, timeout=_REPO_LOCK_TIMEOUT):
+        held.add(lock)
+        try:
+            yield
+        finally:
+            held.discard(lock)
 
 
 SHIPPED_REGISTRY = Path(__file__).resolve().parents[2] / ".datacore" / "registry" / "repositories.yaml"
@@ -548,6 +595,22 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
                                       "ledger_prefixes": resolved})
 
 
+def _publication_forks(space: Path, commit: str, db: str) -> list[str]:
+    """git_relay.publication_forks against origin/<db>; [] means safe to push."""
+    from git_relay import publication_forks
+    return publication_forks(space, commit, f'origin/{db}')
+
+
+def _fork_refusal(space: Path, db: str, forks: list[str]) -> str:
+    """The refusal, naming what is wrong and the way out. Nothing was pushed."""
+    return (f"push REFUSED — ledger fork against origin/{db}: {'; '.join(forks)[:240]}. "
+            f"The commit stays local and origin is unchanged. Recover: inspect with "
+            f"`python3 .datacore/lib/git_relay.py --forks`; restore the log to origin's "
+            f"history with `python3 .datacore/lib/ledger_restore_prefix.py --space "
+            f"{Path(space).name} --actor <writer> --find` (a genuinely divergent chain "
+            f"needs a human), then converge again")
+
+
 def _push_with_retry(space: Path, db: str) -> Result:
     """Push, converging and retrying on non-fast-forward.
 
@@ -564,6 +627,18 @@ def _push_with_retry(space: Path, db: str) -> Result:
             args = push_arguments(captured.strip(), f'refs/heads/{db}')
         except ValueError:
             return Result(False, 'publication commit/ref is invalid')
+        # NEVER PUSH A FORK (owner decision L9). A CLEAN merge of origin/<db>
+        # or of an origin/ledger/* ref takes one side's log whole when the
+        # other side never touched it, so a host that rewound its log and
+        # re-appended arrives as a valid chain that replaces events origin
+        # already holds (GitFleet.lean `merge_rewrite_is_not_union`). Check
+        # what this push PUBLISHES against what origin holds, with the same
+        # gate the relay, the fleet sweep and the rollout use. Re-checked on
+        # every attempt: a retry pushes a new merge.
+        forks = _publication_forks(space, captured.strip(), db)
+        if forks:
+            return Result(False, _fork_refusal(space, db, forks),
+                          {"attempt": attempt, "ledger_fork": forks})
         rc, _, err = _git(space, *args)
         if rc == 0:
             return Result(True, "pushed", {"attempts": attempt})

@@ -30,6 +30,7 @@ The proof required before any write, both conditions, no exceptions:
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -74,16 +75,43 @@ def find(space: Path, actor: str, since: str) -> list[tuple[str, int]]:
 
 
 def restore(space: Path, actor: str, rev: str, apply: bool) -> int:
+    """Check PREFIX and CHAIN, then (with `apply`) write -- all under the log's lock.
+
+    THE LOCK IS THE ONE `EventLog.append` TAKES: `fcntl.flock(LOCK_EX)` on the
+    log file itself. Without it, an append landing between reading `current`
+    and writing `recovered` was silently overwritten: the prefix test had
+    passed against the OLD bytes, the post-write chain check passes because
+    `recovered` is a valid chain on its own, and the lost event's seq is
+    reused by the recovered event at that position -- a silent fork, while
+    this machine's sequence witness still vouches for the lost one. Found by
+    the Lean model (DatacoreSpec/LedgerSeal.lean, restore_*) and replayed
+    2026-09-23. Under the lock the read, both proofs and the write see ONE
+    file state; an append that lands first makes the prefix test fail, and one
+    that comes later waits and chains onto the restored tail.
+    """
+    import fcntl
     from ledger.events import from_line
     from ledger.seal import _chain_issue
     rel = log_path(space, actor)
     path = space / rel
-    current = path.read_text(encoding='utf-8')
     recovered = git(space, 'show', f'{rev}:{rel}')
 
     if not recovered:
         print(f'REFUSED — {rev} has no {rel}')
         return 1
+    with open(path, 'r+b') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            return _restore_locked(f, space, actor, path, recovered, apply,
+                                   from_line, _chain_issue)
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def _restore_locked(f, space, actor, path, recovered, apply, from_line, _chain_issue) -> int:
+    f.seek(0)
+    raw = f.read()
+    current = raw.decode('utf-8')
     if not recovered.startswith(current):
         print('REFUSED — the recovered log is NOT a prefix extension of the current one.\n'
               '          That is a forked chain, not a restore, and belongs to a human.')
@@ -105,11 +133,21 @@ def restore(space: Path, actor: str, rev: str, apply: bool) -> int:
         return 0
 
     backup = path.with_name(path.name + '.pre-restore')
-    shutil.copy2(path, backup)
-    path.write_text(recovered, encoding='utf-8')
-    after = [from_line(l) for l in path.read_text(encoding='utf-8').splitlines() if l.strip()]
+    backup.write_bytes(raw)
+    shutil.copystat(path, backup)
+
+    def _put(data: bytes) -> None:
+        f.seek(0)
+        f.truncate()
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+
+    _put(recovered.encode('utf-8'))
+    f.seek(0)
+    after = [from_line(l) for l in f.read().decode('utf-8').splitlines() if l.strip()]
     if _chain_issue(after):
-        shutil.copy2(backup, path)
+        _put(raw)
         print('  post-write chain broken — ORIGINAL RESTORED, nothing changed')
         return 1
     print(f'  restored; chain verifies; previous log kept at {backup.name}')

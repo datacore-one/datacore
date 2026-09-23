@@ -164,7 +164,12 @@ def resolve(name: str) -> tuple[Path, str]:
     # only one made the other host report a working credential as unreadable.
     store = _store_for(c)
     if store:
-        return Path(store), f"storage={store} (declared, not assembled by sync)"
+        # A plain path store is expanded here, as the json: branch of
+        # get_value already did: `storage: ~/x.env` was read literally as a
+        # relative `~` directory and reported a present value unresolvable.
+        where = Path(store) if store.startswith(("keychain:", "json:")) \
+            else Path(store).expanduser()
+        return where, f"storage={store} (declared, not assembled by sync)"
 
     # ONE DESTINATION, WHATEVER THE SCOPE. `secrets/scripts/sync.sh` assembles
     # global + every permitted space + projects into a single output file:
@@ -282,20 +287,32 @@ def in_scope(entry: dict) -> bool | None:
 
 
 def _read_var(path: Path, var: str) -> str | None:
+    """The value of `var` in an env file: the LAST assignment wins.
+
+    Decision C2 (2026-09-23): every env parser in the installation --
+    this one, `_vars_in`, `env_utils.parse_env_file`, `config_plane.load` --
+    takes the last value for a duplicate key, as shell `source` and systemd
+    `EnvironmentFile` do. This one used to return the FIRST, so the broker
+    could serve a value no sourced shell ever saw. `creds doctor` lists
+    duplicated keys (`duplicate_keys`) so the ambiguity is visible, not
+    silently resolved. Proof that the parsers agree:
+    DatacoreSpec.Credentials.all_parsers_agree.
+    """
     try:
         text = path.read_text()
     except OSError:
         return None
+    found = None
     for line in text.splitlines():
         line = line.strip()
         if line.startswith("export "):
             line = line[7:]
         if line.startswith(var + "="):
-            v = line.split("=", 1)[1].strip()
-            from env_utils import parse_env_value
-            v = parse_env_value(v)
-            return v
-    return None
+            found = line.split("=", 1)[1].strip()
+    if found is None:
+        return None
+    from env_utils import parse_env_value
+    return parse_env_value(found)
 
 
 def _read_keychain(service: str) -> str | None:
@@ -474,7 +491,48 @@ def _store_paths() -> list[Path]:
     return sorted({p for p in out if p.is_file()})
 
 
+def _env_keys(path: Path) -> list[str]:
+    """Every key assigned in an env file, in file order, repeats kept.
+    Key names only -- values are never returned."""
+    try:
+        text = path.read_text()
+    except OSError:
+        return []
+    keys = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[7:]
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        keys.append(line.partition("=")[0].strip())
+    return keys
+
+
+def duplicate_keys(path: Path) -> list[str]:
+    """Keys assigned more than once inside ONE env file (sorted, names only).
+
+    Every parser takes the last of them (decision C2), so the earlier lines
+    are dead text -- and the next edit may land on the wrong one. `creds
+    doctor` warns with this list; it never prints a value.
+    """
+    from collections import Counter
+    return sorted(k for k, n in Counter(_env_keys(path)).items() if n > 1)
+
+
+def within_store_duplicates() -> list[tuple[Path, list[str]]]:
+    """(store, duplicated keys) for every Datacore-owned store that has any."""
+    out = []
+    for path in sorted(_expand(KNOWN_STORES())):
+        keys = duplicate_keys(path)
+        if keys:
+            out.append((path, keys))
+    return out
+
+
 def _vars_in(path: Path) -> dict[str, str]:
+    """Every assignment in an env file; a duplicate key takes the LAST value
+    (decision C2 -- the same rule as `_read_var` and every other parser)."""
     vals: dict[str, str] = {}
     try:
         text = path.read_text()

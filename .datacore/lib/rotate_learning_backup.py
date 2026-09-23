@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import sys
 from datetime import datetime
@@ -51,6 +52,22 @@ def _subdir(filepath: Path) -> str:
     return "_other"
 
 
+def _own_backups(backup_dir: Path, stem: str, suffix: str) -> list[Path]:
+    """Backups of exactly `<stem><suffix>`, oldest first.
+
+    Accepts both stamp shapes: `YYYYMMDD-HHMMSS` (before 2026-09-23) and
+    `YYYYMMDD-HHMMSS-ffffff`. Ordered by the parsed stamp, because the two
+    shapes do not sort correctly as strings ('-' < '.').
+    """
+    shape = re.compile(re.escape(stem) + r"-(\d{8})-(\d{6})(?:-(\d{6}))?" + re.escape(suffix))
+    found = []
+    for p in backup_dir.iterdir():
+        m = shape.fullmatch(p.name)
+        if m:
+            found.append(((m.group(1), m.group(2), m.group(3) or "000000"), p))
+    return [p for _, p in sorted(found)]
+
+
 def rotate(filepath: Path) -> Path | None:
     """Back up filepath before a write.
 
@@ -65,17 +82,23 @@ def rotate(filepath: Path) -> Path | None:
     backup_dir = BACKUP_ROOT / subdir
     backup_dir.mkdir(parents=True, exist_ok=True)
 
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    # Microseconds: with whole seconds, two rotations in one second wrote the
+    # same name and the second copy replaced the first version's backup.
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     stem = filepath.stem
     suffix = filepath.suffix or ".md"
     backup_path = backup_dir / f"{stem}-{stamp}{suffix}"
 
     shutil.copy2(str(filepath), str(backup_path))
 
-    # Purge: keep only the KEEP most recent backups for this stem
-    pattern = f"{stem}-*{suffix}"
-    existing = sorted(backup_dir.glob(pattern))
-    for old in existing[:-KEEP]:
+    # Purge: keep only the KEEP most recent backups of THIS file.
+    #
+    # Match the exact backup-name shape, not a glob. `engrams-*.yaml` also
+    # matched `engrams-candidates-<date>-<stamp>.yaml`, and those sort after
+    # `engrams-2026...` ('c' > '2'), so every backup of engrams.yaml was
+    # deleted by the same call that wrote it. Found by the 2026-09-23 core
+    # survey (specs/datacore-lean/survey/research-agents-rest.md #1).
+    for old in _own_backups(backup_dir, stem, suffix)[:-KEEP]:
         old.unlink(missing_ok=True)
 
     return backup_path

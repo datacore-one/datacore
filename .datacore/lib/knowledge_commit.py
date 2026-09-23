@@ -81,6 +81,10 @@ class GitError(RuntimeError):
     non_fast_forward = False
 
 
+class LedgerForkRefused(GitError):
+    """The push would fork or rewind a ledger log; nothing was pushed (L9)."""
+
+
 def _push_commit(repo: Path, branch: str, sha: str) -> None:
     from git_publication import push_arguments
     from publication_history import checked_destination
@@ -94,12 +98,35 @@ def _push_commit(repo: Path, branch: str, sha: str) -> None:
         error = GitError('Publication destination advanced; explicit integration required')
         error.non_fast_forward = ancestry.returncode == 1
         raise error
+    # NEVER PUSH A FORK (owner decision L9). The lease proves `sha` fast-forwards
+    # the branch, not that its ledger logs extend origin's: `sha`'s ancestry
+    # carries every unpushed local commit, including a rewound-and-re-appended
+    # log. Check what the push publishes against origin/<branch> (the decided
+    # ref) and against the destination just fetched, which may be newer.
+    _refuse_ledger_fork(repo, branch, sha, (f'origin/{branch}', base))
     # A lease is safe only after verifying the candidate preserves this base.
     # Bind transport to the URL we verified, even if a hook changes origin.
     args = push_arguments(sha, f'refs/heads/{branch}', expected=base)
     args[-2] = origin
     _git(repo, *args)
     _git(repo, 'update-ref', '-d', base_ref, base)
+
+
+def _refuse_ledger_fork(repo: Path, branch: str, sha: str, refs) -> None:
+    """Raise GitError, naming the recovery, if pushing `sha` forks a ledger log."""
+    from git_relay import publication_forks
+    found = []
+    for ref in dict.fromkeys(refs):
+        found = publication_forks(repo, sha, ref)
+        if found:
+            break
+    if found:
+        raise LedgerForkRefused(
+            f"push REFUSED — ledger fork against origin/{branch}: {'; '.join(found)[:240]}. "
+            "The commit stays local and origin is unchanged. Recover: inspect with "
+            "`python3 .datacore/lib/git_relay.py --forks`; restore the log to origin's history "
+            f"with `python3 .datacore/lib/ledger_restore_prefix.py --space {repo.name} "
+            "--actor <writer> --find` (a genuinely divergent chain needs a human)")
 
 
 def _run_git(repo: Path, *args: str, env=None, input_bytes=None):
@@ -372,12 +399,23 @@ def _push_converging(repo: Path, branch: str, sha: str) -> None:
                 f"push failed — {msg}")
     if current_branch(repo) != branch or _git(repo, 'rev-parse', 'HEAD') != sha:
         raise GitError('Publication source advanced; captured work retained for separate reconciliation')
+    def authorize(base, origin):
+        from publication_history import require_verified
+        require_verified(repo, branch, sha, base, origin=origin)
+        # The integration pushes merge(base, sha), whose tree is exactly
+        # `merge-tree base sha` (integrate() refuses any other). Gate THAT
+        # tree, as _push_commit gates `sha` (L9). A conflicted merge-tree is
+        # refused by integrate() itself; nothing is published to check.
+        merged = _run_git(repo, 'merge-tree', '--write-tree', base, sha)
+        if merged.returncode == 0:
+            tree = (merged.stdout or b'').decode().split()[0]
+            _refuse_ledger_fork(repo, branch, tree, (base,))
+
     try:
         from git_integration import integrate
-        from publication_history import require_verified
-        integrate(repo, sha, f'refs/heads/{branch}',
-                  authorize_source=lambda base, origin: require_verified(
-                      repo, branch, sha, base, origin=origin))
+        integrate(repo, sha, f'refs/heads/{branch}', authorize_source=authorize)
+    except LedgerForkRefused:
+        raise
     except (OSError, RuntimeError, subprocess.SubprocessError):
         raise GitError(
             f"{repo.name}: committed locally on {branch} ({sha[:10]}); remote "
