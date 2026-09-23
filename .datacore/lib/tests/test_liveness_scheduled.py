@@ -82,3 +82,17 @@ def test_unsigned_records_do_not_count(tmp_path):
     sp = _space(tmp_path)
     _events(sp, [(3 * DAY, REG)], sig="")
     assert _state(sp) is None
+
+
+def test_an_artifact_in_another_space_is_verified_there(tmp_path):
+    sp = _space(tmp_path)
+    other = tmp_path / "0-personal"; (other / "drafts").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(other)], check=True)
+    sha = _commit(other, "drafts/j.md", "## Daily Briefing\n")
+    end = {"metric": "cadence.run", "slug": SLUG, "phase": "end", "result": "ok",
+           "artifact": "drafts/j.md", "sha256": sha, "artifact_space": "personal"}
+    _events(sp, [(3 * DAY, REG), (3600_000, end)])
+    assert _state(sp)[0] == "green"
+    _events(sp, [(3 * DAY, REG), (3600_000, {**end, "artifact_space": "nowhere"})])
+    assert _state(sp)[0] == "red", "an unresolvable space verifies nothing"
+    assert L.space_named(tmp_path, "personal") == other and L.space_named(tmp_path, "plur") == sp and L.space_named(tmp_path, "firm") is None

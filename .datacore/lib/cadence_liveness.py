@@ -123,6 +123,15 @@ def _attests(space: Path, actor: str, metric: str) -> list[tuple[datetime, dict]
     return out
 
 
+def space_named(root: Path, name: str) -> Path | None:
+    """The folder of a space named without its host-specific number ('personal' ->
+    0-personal), or None unless exactly one folder answers to the name."""
+    import re
+    hits = [p for p in Path(root).iterdir() if p.is_dir() and not p.is_symlink()
+            and (p.name == name or re.sub(r"^\d+-", "", p.name) == name)]
+    return hits[0] if len(hits) == 1 else None
+
+
 def _artifact_in_git(space: Path, rel: str, sha: str) -> bool:
     """The artifact a run recorded exists in git with exactly that content."""
     import hashlib
@@ -170,8 +179,10 @@ def scheduled_state(space: Path, venture: str, owner: str, role: str, freq: str,
     now = datetime.now(timezone.utc)
     ends = [(t, p) for t, p in _attests(space, owner, "cadence.run")
             if p.get("slug") == sl and p.get("phase") == "end"]
-    good = [t for t, p in ends if p.get("result") == "ok" and p.get("artifact")
-            and _artifact_in_git(space, p["artifact"], p.get("sha256", ""))]
+    def where(p):  # a duty whose output lives in another space names it (Winston's briefing)
+        return space_named(space.parent, p["artifact_space"]) if p.get("artifact_space") else space
+    good = [t for t, p in ends if p.get("result") == "ok" and p.get("artifact") and where(p)
+            and _artifact_in_git(where(p), p["artifact"], p.get("sha256", ""))]
     last_ok = max(good) if good else None
     anchor = last_ok or since_reg
     if now - anchor <= limit:
