@@ -90,10 +90,17 @@ class OpenClawGatewayExecutor(OpenClawExecutor):
         workspace = str(Path(self._cwd or os.getcwd()).resolve())
         message = (f"Work only in `{workspace}`: `cd` there before anything else; every relative path "
                    f"below is relative to it.\n\n{prompt}")
-        command = [binary, "agent", "--agent", "main", "--session-key", f"agent:main:dispatch-{uuid.uuid4().hex[:12]}",
-                   "--message-file", "-", "--json", "--timeout", str(timeout_s)]
-        result = run_process(command, input=message, capture_output=True, text=True,
-                             timeout=timeout_s + 30, check=False, cwd=workspace, env=self._execution_env())
+        import tempfile
+        # `openclaw agent` reads --message-file from a path only (stdin is an
+        # `agent exec` feature): a private file, removed after the turn.
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", prefix="dispatch-") as fh:
+            fh.write(message)
+            fh.flush()
+            command = [binary, "agent", "--agent", "main", "--session-key",
+                       f"agent:main:dispatch-{uuid.uuid4().hex[:12]}",
+                       "--message-file", fh.name, "--json", "--timeout", str(timeout_s)]
+            result = run_process(command, capture_output=True, text=True, timeout=timeout_s + 30,
+                                 check=False, cwd=workspace, env=self._execution_env())
         try:
             envelope = json.loads(result.stdout)
         except (ValueError, TypeError):

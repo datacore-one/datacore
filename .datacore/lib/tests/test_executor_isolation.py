@@ -141,7 +141,8 @@ def test_openclaw_gateway_runs_a_fresh_session_in_the_dispatched_workspace(tmp_p
     monkeypatch.setattr(module.shutil, 'which', lambda name: '/fake/openclaw')
     calls = []
     def run(command, **kwargs):
-        calls.append(dict(command=command, **kwargs))
+        path = command[command.index('--message-file') + 1]
+        calls.append(dict(command=command, sent=open(path, encoding='utf-8').read(), **kwargs))
         env = {'runId': 'r', 'status': 'ok', 'summary': 'completed',
                'result': {'payloads': [{'text': 'done ◇'}], 'meta': {'agentMeta': {'model': 'gpt-6-astra'}}}}
         return subprocess.CompletedProcess(command, 0, json.dumps(env), '')
@@ -151,7 +152,8 @@ def test_openclaw_gateway_runs_a_fresh_session_in_the_dispatched_workspace(tmp_p
     cmd = calls[0]['command']
     assert cmd[1:4] == ['agent', '--agent', 'main'] and 'exec' not in cmd
     assert cmd[cmd.index('--session-key') + 1].startswith('agent:main:dispatch-')
-    assert str(tmp_path) in calls[0]['input'] and calls[0]['input'].endswith('the task')
+    sent = calls[0]['sent']
+    assert str(tmp_path) in sent and sent.endswith('the task') and 'input' not in calls[0]
     module.OpenClawGatewayExecutor().run('again', cwd=tmp_path)
     assert calls[1]['command'][cmd.index('--session-key') + 1] != cmd[cmd.index('--session-key') + 1], "one session per run"
 
