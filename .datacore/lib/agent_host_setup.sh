@@ -30,9 +30,16 @@ fail=0
 qgrep() { grep "$@" >/dev/null; }
 
 # ── identity (DIP-0044) ──────────────────────────────────────────────────────
-ACTOR="$(python3 - "$HOST" "$LIB/../registry/infrastructure.yaml" <<'PY'
+# The registry is a PRIVATE OVERLAY: it lives in the data root (~/Data), not in
+# the runner checkout this script runs from. actor_identity already resolves
+# where it really is (6e3e0e4); reuse that rather than a second lookup, which
+# is how this line came to read a file that is never in the runner.
+ACTOR="$(python3 - "$HOST" "$LIB" <<'PY'
 import sys, yaml
-host, reg = sys.argv[1], sys.argv[2]
+host, lib = sys.argv[1], sys.argv[2]
+sys.path.insert(0, lib)
+from actor_identity import REGISTRY_DIR
+reg = REGISTRY_DIR / "infrastructure.yaml"
 d = yaml.safe_load(open(reg)) or {}
 print(((d.get("servers") or {}).get(host) or {}).get("access", {}).get("actor", ""))
 PY
