@@ -229,9 +229,18 @@ def write(space: Path) -> Path:
     saved = watch_file(snapshot_path)['before']
     previous_org = watch_file(dest)['before']
     legacy_org = watch_file(space / CHECKPOINT_REL)['before']
+    superseded = None
     if saved is not None:
         previous = json.loads(saved)
-        _restore(previous, space.name)
+        try:
+            _restore(previous, space.name)
+        except StateRootMismatch:
+            # Its chains verified; only the root it recorded is stale -- the fold
+            # rules changed since (the 2026-09-23 formal-verification fixes made
+            # 0-personal's 05:35 checkpoint unreplaceable forever). The history
+            # it holds is still checked below to be a prefix of the live chains;
+            # it is kept beside the new one, never discarded.
+            superseded = saved
         if previous_org is None or hashlib.sha256(previous_org.encode()).hexdigest() != previous['org_sha256']:
             raise ValueError('previous checkpoint was changed; preserve and reconcile it before replacement')
         # Append-only history cannot shrink. A lost/rewound live log must not
@@ -251,9 +260,19 @@ def write(space: Path) -> Path:
             write_org_text(archive, previous_org)
     # Test the saved representation before replacing the previous checkpoint.
     _restore(document, space.name)
+    if superseded is not None:
+        old_root = json.loads(superseded)['state_root']
+        archive = snapshot_path.with_name(f'superseded-{old_root[:16]}.json')
+        if watch_file(archive)['before'] not in (None, superseded):
+            raise ValueError('superseded checkpoint archive conflicts')
+        write_org_text(archive, superseded)
     write_org_text(dest, text)
     write_org_text(snapshot_path, json.dumps(document, sort_keys=True) + '\n')
     return dest
+
+
+class StateRootMismatch(ValueError):
+    """The saved chains verify, but fold to a different root than was recorded."""
 
 
 def _restore(document, name):
@@ -296,7 +315,7 @@ def _restore(document, name):
             (folder / filename).write_text(text, encoding='utf-8')
         restored = fold(read_events(scratch))
         if restored.state_root() != document['state_root']:
-            raise ValueError('restored state differs from saved state root')
+            raise StateRootMismatch('restored state differs from saved state root')
         return restored
 
 

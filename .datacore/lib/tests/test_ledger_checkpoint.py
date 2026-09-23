@@ -296,3 +296,31 @@ def test_two_backup_writers_use_disjoint_paths(tmp_path, monkeypatch):
     monkeypatch.setenv('DATACORE_ACTOR', 'host-a')
     ok, detail = checkpoint.verify(space)
     assert ok and 'older restore point' in detail
+
+
+def test_a_checkpoint_made_stale_by_new_fold_rules_is_superseded_not_lost(tmp_path):
+    """0-personal, 2026-09-23: the formal-verification fixes changed how some
+    events fold, so the 05:35 checkpoint's chains no longer reached the root it
+    recorded, and every later write refused to replace it -- no restore point
+    could ever be written again. A stale root is superseded (and kept); a
+    tampered chain or lost history still refuses."""
+    import ledger_checkpoint as checkpoint
+    space, log = _checkpoint_space(tmp_path)
+    checkpoint.write(space)
+    path = checkpoint.checkpoint_paths(space)[1]
+    data = json.loads(path.read_text())
+    data['state_root'] = '0' * 64          # what older fold code would have recorded
+    path.write_text(json.dumps(data, sort_keys=True) + '\n')
+    assert not checkpoint.verify(space)[0]
+    log.append('item.update', {'id': 'a', 'title': 'work after the old checkpoint'})
+    checkpoint.write(space)
+    assert checkpoint.verify(space)[0]
+    kept = path.with_name('superseded-' + '0' * 16 + '.json')
+    assert json.loads(kept.read_text())['state_root'] == '0' * 64, 'the old restore point is kept'
+
+    data = json.loads(path.read_text())
+    key = next(iter(data['chains']))
+    data['chains'][key] = data['chains'][key].replace('valuable', 'corrupt')
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError):
+        checkpoint.write(space)
