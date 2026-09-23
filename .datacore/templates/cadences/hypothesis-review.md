@@ -4,6 +4,11 @@ role: ceo
 frequency: monthly
 duration: 45min
 tools: [Read, Write, Edit, plur_recall_hybrid, datacore.search]
+# DIP-0050: judged by this run's record, written during the run.
+evidence:
+  path: "reports/hypothesis-review-{date}.md"
+  require: ["^# Hypothesis Review", "^## "]
+  min_bytes: 2000
 ---
 
 ## Objective
@@ -71,7 +76,6 @@ reframe) on every cycle.
 - Pending-decision entries for the datacore-app surface
 - Hypothesis memo in the venture journal
 - Follow-up tasks in `org/inbox.org` for redesigns / reframes / promotions
-- Cadence-log entry summarizing what fired
 
 ## Success Criteria
 
@@ -83,3 +87,7 @@ reframe) on every cycle.
 - Genre-performance delta is quantified, not narrated.
 - Pending-decisions for in-SLA falsifications are surfaced to the human, not
   buried.
+
+## Run record
+
+Write `reports/hypothesis-review-YYYY-MM-DD.md`, headed `# Hypothesis Review — YYYY-MM-DD`: one `##` section per active hypothesis with its verdict and evidence; the memo captured with `datacore.capture` can link to it. The runner commits it and records the run; do not log the run anywhere else.

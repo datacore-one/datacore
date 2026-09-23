@@ -4,6 +4,11 @@ role: cto
 frequency: weekly
 duration: 30min
 tools: [Bash, Read, Write, Edit]
+# DIP-0050: judged by this run's record, written during the run.
+evidence:
+  path: "1-tracks/ops/cadence-reports/sprint-rollover-{date}.md"
+  require: ["^# Sprint Rollover", "^## Sprint"]
+  min_bytes: 200
 ---
 
 > Runs every Monday (weekly cadence). Idempotent: if a sprint file with status
@@ -166,7 +171,6 @@ resolved by the decision pipeline, not by this cadence).
 - New `sprints/<year>-W<week>-sprint.yaml` with `status: planning` and
   carryover backlog (or a clean skip when a live sprint already exists)
 - One `sprint_go` entry appended to heartbeat.json `decisions_pending`
-- Cadence log entry in `5-plur/.datacore/state/cadence-log.yaml`
 
 ## Success criteria
 
@@ -189,3 +193,7 @@ One of:
 - Never type day-of-week names from memory — verify via date_utils.
 - Don't touch `sprints/_archive/` and don't re-draft a week that already has
   a `closed`/`retro` sprint AND a successor in planning|active.
+
+## Run record
+
+Write `1-tracks/ops/cadence-reports/sprint-rollover-YYYY-MM-DD.md`, headed `# Sprint Rollover — YYYY-MM-DD`, then `## Sprint`: the sprint file written for the ISO week, or "already planned" naming the existing file (the idempotent exit is a result, not a skip). The runner commits it and records the run; do not log the run anywhere else.

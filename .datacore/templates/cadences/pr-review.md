@@ -3,7 +3,12 @@ cadence: pr-review
 role: cto
 frequency: daily
 duration: 15min
-tools: [Bash, Read]
+tools: [Bash, Read, Write]
+# DIP-0050: judged by this run's record, written during the run.
+evidence:
+  path: "1-tracks/ops/cadence-reports/pr-review-{date}.md"
+  require: ["^# PR Review", "^## Open pull requests"]
+  min_bytes: 200
 ---
 
 ## Objective
@@ -120,3 +125,7 @@ Review all open pull requests across venture repos — assess code quality, chec
 - No generic self-addressed nag comments posted (agent-authored PRs are never nagged at themselves)
 - No security issues in reviewed diffs go uncommented
 - Zero merges executed by the agent — merge is human-only
+
+## Run record
+
+Write `1-tracks/ops/cadence-reports/pr-review-YYYY-MM-DD.md`, headed `# PR Review — YYYY-MM-DD`, then `## Open pull requests`: one line per PR you looked at (URL, what you did: reviewed, commented, merged, skipped and why), or "none open". The runner commits it and records the run; do not log the run anywhere else.

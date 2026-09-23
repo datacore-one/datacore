@@ -4,6 +4,11 @@ role: cto
 frequency: hourly
 duration: 60min
 tools: [Bash, Read, Edit, Write]
+# DIP-0050: judged by this run's record, written during the run.
+evidence:
+  path: "1-tracks/ops/cadence-reports/sprint-claim-{date}.md"
+  require: ["^# Sprint Claim", "^## Claimed"]
+  min_bytes: 200
 ---
 
 > Note on frequency: `hourly` matches Miles's actual heartbeat rhythm (~30 min between cycles per the heartbeat-* logs). At hourly, Miles can ship several PRs per active day. Relax to `every-2h` or `daily` if PR review queue overruns. Sprint 1 cap is unbounded so even bursty hourly claims work.
@@ -131,7 +136,6 @@ Per `~/Data/docs/superpowers/specs/2026-05-07-plur-enterprise-sprint-execution-d
 ## Output
 
 - One backlog item claimed and PR opened (or status updated for ongoing work)
-- Cadence log entry in `5-plur/.datacore/state/cadence-log.yaml`
 - Heartbeat journal entry in `5-plur/journal/heartbeat-YYYY-MM-DD.log`
 
 ## Success criteria
@@ -147,3 +151,7 @@ Per cycle, one of:
 - Silent abandonment breaks coordination. If blocked, mark `WAITING` with `:BLOCKER:`, post to Telegram.
 - Personal craft engrams → `scope: agent:miles`. Cross-cutting findings → `global`.
 - HITL gates pause work, log touchpoint, post to Telegram. Don't bypass.
+
+## Run record
+
+Write `1-tracks/ops/cadence-reports/sprint-claim-YYYY-MM-DD.md`, headed `# Sprint Claim — YYYY-MM-DD`, then `## Claimed`: the item claimed and the PR URL opened for it, or "nothing claimable" with the reason (sprint empty, all claimed, blocked on a HITL gate). The runner commits it and records the run; do not log the run anywhere else.
