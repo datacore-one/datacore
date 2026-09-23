@@ -255,8 +255,8 @@ def test_dedup_without_a_ledger_emits_nothing(tmp_path):
     assert not (space / ".datacore").exists()
 
 
-CONFLICT = ("* TODO x\n:PROPERTIES:\n<<<<<<< HEAD\n:ID: id-1\n=======\n:ID: id-2\n"
-            ">>>>>>> upstream\n:END:\n")
+CONFLICT = ("* TODO x\n:PROPERTIES:\n" + "<" * 7 + " HEAD\n:ID: id-1\n" + "=" * 7 + "\n:ID: id-2\n"
+            "" + ">" * 7 + " upstream\n:END:\n")
 
 
 def test_resolve_dismisses_the_discarded_created_id(ledger_space):

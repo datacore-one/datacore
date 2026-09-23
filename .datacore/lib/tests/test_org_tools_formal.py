@@ -251,7 +251,7 @@ def _conflicted_repo(tmp_path, mode):
         _git(repo, "merge", "upstream")
     else:
         _git(repo, "rebase", "upstream")
-    assert "<<<<<<<" in f.read_text()
+    assert "<" * 7 in f.read_text()
     return f
 
 
@@ -268,8 +268,8 @@ def test_resolve_id_conflicts_keeps_the_upstream_id(tmp_path, mode):
 
 def test_resolve_id_conflicts_refuses_when_it_cannot_tell_the_sides(tmp_path):
     f = tmp_path / "inbox.org"
-    f.write_text("* TODO task\n:PROPERTIES:\n<<<<<<< HEAD\n:ID: A\n=======\n:ID: B\n"
-                 ">>>>>>> other\n:END:\n")
+    f.write_text("* TODO task\n:PROPERTIES:\n" + "<" * 7 + " HEAD\n:ID: A\n" + "=" * 7 + "\n:ID: B\n"
+                 "" + ">" * 7 + " other\n:END:\n")
     before = f.read_text()
     ok, _ = org_resolve_id_conflicts.resolve(f, apply=True)
     assert not ok and f.read_text() == before

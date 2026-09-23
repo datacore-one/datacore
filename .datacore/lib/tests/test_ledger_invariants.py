@@ -62,7 +62,7 @@ def test_a_conflict_marker_is_caught(fleet):
     root, space = fleet
     log = space / ".datacore/events/worker.jsonl"
     lines = log.read_text().splitlines()
-    lines.insert(2, "<<<<<<< HEAD")
+    lines.insert(2, "" + "<" * 7 + " HEAD")
     log.write_text("\n".join(lines) + "\n")
 
     assert "parseable" in _names(inv.sweep(root))

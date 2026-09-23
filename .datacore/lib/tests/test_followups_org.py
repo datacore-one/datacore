@@ -193,8 +193,8 @@ def test_dedup_within_file_dry_run_takes_no_lock(tmp_path):
     assert f.read_text() == DUP
 
 
-CONFLICT = ("* TODO a\n:PROPERTIES:\n<<<<<<< HEAD\n:ID: local\n=======\n"
-            ":ID: upstream\n>>>>>>> theirs\n:END:\n")
+CONFLICT = ("* TODO a\n:PROPERTIES:\n" + "<" * 7 + " HEAD\n:ID: local\n" + "=" * 7 + "\n"
+            ":ID: upstream\n" + ">" * 7 + " theirs\n:END:\n")
 
 
 def test_resolve_id_conflicts_does_not_lose_a_racing_adapter_commit(tmp_path, race, spy_writes):
@@ -205,7 +205,7 @@ def test_resolve_id_conflicts_does_not_lose_a_racing_adapter_commit(tmp_path, ra
     race["finish"]()
     out = f.read_text()
     assert ok, msg
-    assert ":ID: upstream" in out and "<<<<<<<" not in out
+    assert ":ID: upstream" in out and "<" * 7 not in out
     assert ADDED in out
     assert spy_writes[0] == f.resolve()
 
