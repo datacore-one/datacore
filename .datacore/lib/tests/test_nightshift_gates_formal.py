@@ -19,7 +19,7 @@ import ai_task_gate  # noqa: E402
 import workflow_executor as wf  # noqa: E402
 from delegation_requirements import execution_gaps  # noqa: E402
 
-VENTURE = "name: plur\nstage: growth\nroles:\n  cto:\n    cadences:\n      weekly: [release-check]\n"
+VENTURE = "name: plur\nstage: growth\ndefaults:\n  agent: miles\nroles:\n  cto:\n    cadences:\n      weekly: [release-check]\n"
 
 
 # ---- cadence_liveness: "0 cadence(s) overdue" must mean every venture was read

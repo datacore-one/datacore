@@ -87,14 +87,47 @@ def sunset_reviews(root: Path, today: date | None = None) -> tuple[list[tuple[st
     return past, undated
 
 
-def collect(root: Path, grace: int, today: date | None = None) -> list:
-    """Overdue cadences across every space, via the engine that owns this."""
+#: Principals whose cadences already have an executor in this fleet: the
+#: venture heartbeat runs as Miles. Every other owner's cadences are
+#: `pending-rollout` until its host registers them (DIP-0050 P2b). Judging them
+#: `late` before anything could run them is the "red by construction" this
+#: file refused on 2026-09-05 -- now they are listed, not hidden.
+EXECUTING = {"miles"}
+
+
+def _members(space: Path) -> set[str] | None:
+    """Actors that may write to this space (DIP-0046 §11), or None if undeclared."""
     import yaml
-    from cadence_engine import (FREQUENCY_WINDOWS, cadence_log_path_for, cadence_observation,
-                            find_overdue_cadences, own_cadences, load_cadence_log_safe)
+    try:
+        doc = yaml.safe_load((space / ".datacore" / "members.yaml").read_text()) or {}
+    except (OSError, ValueError):
+        return None
+    from cadence_engine import OWNER_ALIASES
+    return {OWNER_ALIASES.get(str(m).lower(), str(m).lower()) for m in doc.get("members") or []}
+
+
+def collect(root: Path, grace: int, today: date | None = None) -> list:
+    """Red rows only: what the contract counts (see collect_states)."""
+    return collect_states(root, grace, today)[0]
+
+
+def collect_states(root: Path, grace: int, today: date | None = None) -> tuple[list, list]:
+    """(red rows, grey rows) for every assigned cadence (DIP-0050 P1).
+
+    Rows are (days, venture, role, frequency, cadence); an error row has days -1.
+    Red: late (past due beyond grace), not-held (the owner is not a member of
+    the space), and any venture whose ownership or history cannot be read.
+    Grey, listed but never counted: reminder (a human owns it) and
+    pending-rollout (an owner with no executor in this fleet yet).
+    Keyed by `venture.yaml: name`, never by a machine's folder number.
+    """
+    import yaml
+    from cadence_engine import (FREQUENCY_WINDOWS, HUMAN_OWNER, cadence_log_path_for,
+                                cadence_observation, find_overdue_cadences, all_assignments,
+                                load_cadence_log_safe)
 
     today = today or date.today()
-    rows = []
+    rows, grey = [], []
     for space in sorted(root.glob("[0-9]-*")):
         vy = space / "venture.yaml"
         if not vy.is_file():
@@ -122,6 +155,25 @@ def collect(root: Path, grace: int, today: date | None = None) -> list:
         roles = data.get("roles") or {}
         if not roles:
             continue
+        venture = str(data.get("name") or space.name)
+        try:
+            owners = all_assignments(roles, data.get("defaults"))
+        except Exception as exc:                # noqa: BLE001 -- OwnershipError, malformed roles
+            rows.append((-1, venture, "?", "?", f"ownership: {exc}"))
+            continue
+        members = _members(space)
+        judged = set()
+        for (role, freq, name), owner in sorted(owners.items()):
+            if owner == HUMAN_OWNER:
+                grey.append((0, venture, role, freq, f"{name} [reminder: {owner}]"))
+            elif members is not None and owner not in members:
+                rows.append((-1, venture, role, freq, f"{name} [not-held: {owner} is not a member of this space]"))
+            elif owner not in EXECUTING:
+                grey.append((0, venture, role, freq, f"{name} [pending-rollout: {owner}]"))
+            else:
+                judged.add((role, freq, name))
+        if not judged:
+            continue
         # cadence_log_path_for FIRST. load_cadence_log_safe quarantines by
         # renaming the path it is handed, so passing the space directory
         # renames the space — which is exactly what happened on the first run
@@ -129,17 +181,15 @@ def collect(root: Path, grace: int, today: date | None = None) -> list:
         try:
             log = load_cadence_log_safe(cadence_log_path_for(space))
         except Exception as exc:                # noqa: BLE001
-            rows.append((-1, space.name, "?", "?", f"cadence log unreadable: {type(exc).__name__}"))
+            rows.append((-1, venture, "?", "?", f"cadence log unreadable: {type(exc).__name__}"))
             continue
         try:
-            # A cadence owned by an external agent (5-plur's cio is Tris on
-            # hermes) runs where that agent runs and records nothing in this
-            # fleet's shards, so this check can only ever call it overdue. The
-            # heartbeat already excludes those roles from its own work
-            # (own_cadences); the liveness must apply the same rule, or the
-            # box's contract is red by construction (2026-09-05: three of the
-            # last three "overdue" were Tris's).
-            for c in own_cadences(find_overdue_cadences(roles, log, today=today), roles):
+            # Only cadences an executor in this fleet runs are judged late;
+            # the rest were sorted into grey states above (2026-09-05: three of
+            # the last three "overdue" were Tris's, which nothing here runs).
+            for c in find_overdue_cadences(roles, log, today=today):
+                if (c.role, c.frequency, c.cadence_name) not in judged:
+                    continue
                 # PAST DUE, which is what DEFAULT_GRACE is documented to measure.
                 # The engine's days_overdue is days since the LAST RUN -- right
                 # for ordering today's work, wrong against a grace: a weekly
@@ -154,12 +204,12 @@ def collect(root: Path, grace: int, today: date | None = None) -> list:
                 ran = cadence_observation(roles, log, c.role, c.frequency, c.cadence_name) is not None
                 past_due = (c.days_overdue - window.days) if (ran and window) else c.days_overdue
                 if past_due > grace:
-                    rows.append((past_due, space.name, c.role,
+                    rows.append((past_due, venture, c.role,
                                  c.frequency, c.cadence_name))
         except Exception as exc:                # noqa: BLE001
-            rows.append((-1, space.name, "?", "?", f"engine error: {exc}"))
+            rows.append((-1, venture, "?", "?", f"engine error: {exc}"))
     rows.sort(reverse=True)
-    return rows
+    return rows, grey
 
 
 def _unrunnable(root: Path, spaces: set[str]) -> dict[str, str]:
@@ -191,9 +241,14 @@ def _unrunnable(root: Path, spaces: set[str]) -> dict[str, str]:
         from venture_loader import VentureConfig
     except Exception:  # noqa: BLE001 -- no loader here means no diagnosis, not a crash
         return out
-    for name in spaces:
-        cfg = root / name / "venture.yaml"
-        if not cfg.exists():
+    # `spaces` holds venture names (rows are keyed by name); find each file by
+    # the name it declares, not by a machine's folder number.
+    for cfg in sorted(root.glob("[0-9]*-*/venture.yaml")):
+        try:
+            name = str((yaml.safe_load(cfg.read_text()) or {}).get("name") or cfg.parent.name)
+        except Exception:  # noqa: BLE001 -- the unreadable case is already its own row
+            name = cfg.parent.name
+        if name not in spaces:
             continue
         try:
             VentureConfig.model_validate(yaml.safe_load(cfg.read_text()) or {})
@@ -216,12 +271,16 @@ def main() -> int:
 
     root = Path(a.root).expanduser()
     today = date.today()
-    rows = collect(root, a.grace_days)
+    rows, grey = collect_states(root, a.grace_days)
     OUT.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     lines = [f"=== {today.isoformat()} cadence liveness "
              f"(grace {a.grace_days}d) ==="]
-    for days, space, role, freq, name in rows:
-        lines.append(f"  {days:5}d  {space:<12} {role}.{freq}.{name}")
+    for days, venture, role, freq, name in rows:
+        lines.append(f"  {days:5}d  {venture:<12} {role}.{freq}.{name}")
+    # GREY: assigned, visible, not counted (DIP-0050 P1). A cadence nobody runs
+    # yet is listed with its owner instead of vanishing, as Tris's did.
+    for _d, venture, role, freq, name in grey:
+        lines.append(f"  grey   {venture:<12} {role}.{freq}.{name}")
     # WHY, PER SPACE, ONCE. Eight cadences in one space going overdue on the
     # same day is one cause, not eight, and the count alone never said which.
     # 6-meridian's eight sat overdue from 2026-09-15 and alerted daily: the
