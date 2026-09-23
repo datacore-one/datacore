@@ -6,6 +6,8 @@ in `findings/`. What is left:
 
 ## Status after the follow-up board (2026-09-23, evening)
 
+**Security:** hermes's runner remote URL embeds a GitHub OAuth token for tris-on-hermes; it was printed in a session transcript and should be rotated, and the remote switched to a credential helper.
+
 Owner choices: `followups-2026-09-23.json`. Applied and pushed:
 datacore `2865806`, datacore-nightshift `887f3b7`, datacore-space `4fd68980`,
 0-personal `42e817985`, datacore-dips `69c9c16`, org-workspace `711f2fc`
@@ -14,11 +16,11 @@ datacore `2865806`, datacore-nightshift `887f3b7`, datacore-space `4fd68980`,
 | Item | Status |
 |---|---|
 | Env overlap check on every host (C5) | Done: no key in both files on any of the 5 machines |
-| Code rollout (C4) | winston and nightshift pulled (fast-forward); nightshift services restarted, both active. **hermes and plur-claw track their own forks** (tris-on-hermes/datacore, data-on-claw/data-space) and still run the older creds.py; they need the owner's usual manual update. Locks are per-machine, so a staggered rollout is safe. |
+| Code rollout (C4) | Done on every host. Satellites run core from `~/.datacore/v2-runner` (all at b03bf96; hermes/plur-claw were 13/50 commits behind, with nothing refreshing them). winston/nightshift `~/Data` pulled; nightshift services restarted. hermes/plur-claw `~/Data/.datacore/lib` copies updated with no deletions (backup `~/.datacore/state/backups/data-lib-pre-2026-09-23.tgz`), keeping hermes's adapted org_parser/date_utils/context_merge + slash_router and plur-claw's DATACORE_ROOT hook patch (merged); committed ebccc74 / b58cf3e. State roots unchanged on every satellite space. |
 | Declared actor per host (L10) | winston=winston, nightshift=miles, hermes=tris, plur-claw=data, all declared in identity.env |
 | Dispatcher actor (L4) | nightshift runs `ledger-claim.service` as miles, so items addressed to miles are still taken |
-| id_churn --acknowledge (D1) | Done on mac, winston, nightshift. hermes and plur-claw wait for the rollout |
-| Edit protocol 2 (L7) | **Blocked** until hermes and plur-claw run the new code |
+| id_churn --acknowledge (D1) | Done on all five. Satellites carried large hidden orphan sets now acknowledged (hermes 1-datacore 431, 2-plur 751; plur-claw 1-datacore-space 429, 2-plur-space 751). Found and fixed: acknowledging one root erased another root's baseline (b03bf96). Open finding: plur-claw 5-plur has 4 duplicate ids. |
+| Edit protocol 2 (L7) | **Unblocked** (every folding host runs b03bf96); waiting for the owner's go. |
 | Research queue migration (D9) | Done: 31 properties moved; a re-run moves nothing |
 | DIP edits (D5, G2, P7) | Done. DIP-0010 also had 8 wrong example weekdays, now fixed |
 | SCAFFOLDING exposure (X1) | Untracked and ignored in 2-datacore |
