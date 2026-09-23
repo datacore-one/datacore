@@ -68,6 +68,9 @@ if str(LIB) not in sys.path:
 ROOT = Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
 STATE = Path(os.environ.get("DATACORE_STATE", str(Path.home() / ".datacore" / "state")))
 RECORD = STATE / "join.json"
+#: Each duty's last outcome, kept apart from join.json on purpose: that file's
+#: age is the one alarm, so a retry must never rewrite it.
+DUTIES = STATE / "join-duties.json"
 MANIFEST = LIB / "jobs" / "manifest.yaml"
 ATTEMPT = STATE / "join-attempt.json"
 LOG = STATE / "join.log"
@@ -81,6 +84,11 @@ MIN_SPACING_S = 600
 #: One duty may not hold the join past this. The longest, the suite audit, takes
 #: about ten minutes; run.py's own default timeout is an hour.
 DUTY_TIMEOUT_S = 3900
+#: A duty that failed at a join is retried on a later tick rather than waiting
+#: up to four waking hours for the next join (2026-09-23: one rsync warning at
+#: 09:24 left mac-artifact-pull red until 11:36). Per trigger, because an
+#: arrival duty is the ten-to-fifteen-minute suite audit.
+RETRY_S = {"join": 900, "arrival": 7200}
 
 
 def _load(path: Path) -> dict:
@@ -155,22 +163,57 @@ def duties(triggers: set[str], *, machine: str | None = None,
     return [j["name"] for j in sorted(mine, key=lambda j: order.get(j["trigger"], 9))]
 
 
+def run_duty(name: str) -> dict:
+    """One duty through the envelope (jobs/run.py, which judges it with
+    job_verify's own checks). Never raises."""
+    started = time.time()
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(LIB / "jobs" / "run.py"), "--manifest", str(MANIFEST), name],
+            capture_output=True, text=True, timeout=DUTY_TIMEOUT_S,
+            env={**os.environ, "DATACORE_ROOT": str(ROOT)}, cwd=str(ROOT))
+        rc, tail = proc.returncode, ((proc.stdout + proc.stderr).strip().splitlines() or [""])[-1]
+    except (OSError, subprocess.SubprocessError) as exc:
+        rc, tail = 2, f"{type(exc).__name__}: {exc}"
+    return {"rc": rc, "at": started, "seconds": round(time.time() - started, 1), "last": tail[:160]}
+
+
+def _remember(results: dict) -> None:
+    state = _load(DUTIES)
+    state.update(results)
+    _write_atomic(DUTIES, state)
+
+
 def run_duties(*, arrival: bool) -> dict:
-    """Run each duty through the envelope; record how it went, never raise.
-    A duty's verdict is its own contract's business -- a red duty does not make
-    the join unconverged, and the join's alarm stays about convergence only."""
-    out: dict[str, dict] = {}
-    for name in duties({"join", "arrival"} if arrival else {"join"}):
-        started = time.time()
-        try:
-            proc = subprocess.run(
-                [sys.executable, str(LIB / "jobs" / "run.py"), "--manifest", str(MANIFEST), name],
-                capture_output=True, text=True, timeout=DUTY_TIMEOUT_S,
-                env={**os.environ, "DATACORE_ROOT": str(ROOT)}, cwd=str(ROOT))
-            rc, tail = proc.returncode, ((proc.stdout + proc.stderr).strip().splitlines() or [""])[-1]
-        except (OSError, subprocess.SubprocessError) as exc:
-            rc, tail = 2, f"{type(exc).__name__}: {exc}"
-        out[name] = {"rc": rc, "seconds": round(time.time() - started, 1), "last": tail[:160]}
+    """Run each duty; record how it went, never raise. A duty's verdict is its
+    own contract's business -- a red duty does not make the join unconverged,
+    and the join's alarm stays about convergence only."""
+    out = {name: run_duty(name) for name in duties({"join", "arrival"} if arrival else {"join"})}
+    _remember(out)
+    return out
+
+
+def retry_failed(*, now: float | None = None) -> dict:
+    """Re-run the duties whose last run failed, once each is RETRY_S past its
+    last attempt. Only between joins, only while a person is at the machine,
+    and never beside a running join. join.json is not touched."""
+    from jobs import awake
+    now = time.time() if now is None else now
+    if not _load(RECORD).get("joined_at") or awake.in_dark_wake():
+        return {}
+    trigger = {name: "join" for name in duties({"join"})}
+    trigger.update({name: "arrival" for name in duties({"arrival"})})
+    last = _load(DUTIES)
+    todo = [n for n, t in trigger.items()
+            if isinstance(last.get(n), dict) and last[n].get("rc") != 0
+            and now - float(last[n].get("at") or 0) >= RETRY_S[t]]
+    if not todo:
+        return {}
+    with _exclusive() as mine:
+        if not mine:
+            return {}
+        out = {name: run_duty(name) for name in todo}
+    _remember(out)
     return out
 
 
@@ -308,6 +351,8 @@ def main() -> int:
         ok, why = due()
         if not ok:
             print(f"join: not due — {why}")
+            for name, d in retry_failed().items():
+                print(f"  retried duty {name}: rc={d['rc']} {d['seconds']}s  {d['last']}")
             return 0
         print(f"join: due — {why}")
     elif not a.now:

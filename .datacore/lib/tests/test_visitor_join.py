@@ -196,3 +196,61 @@ def test_duties_come_from_the_manifest_join_first(tmp_path):
     ]}))
     assert vj.duties({"join"}, machine="lap", manifest=m) == ["pull"]
     assert vj.duties({"join", "arrival"}, machine="lap", manifest=m) == ["pull", "suite"]
+
+
+# ── a failed duty is retried between joins ─────────────────────────────────
+
+@pytest.fixture
+def _retry(tmp_path, monkeypatch):
+    monkeypatch.setattr(vj, "DUTIES", tmp_path / "join-duties.json")
+    monkeypatch.setattr(vj, "duties", lambda triggers, **kw: [
+        n for n, t in (("pull", "join"), ("suite", "arrival")) if t in triggers])
+    ran: list[str] = []
+
+    def run_duty(name):
+        ran.append(name)
+        return {"rc": 0, "at": NOW, "seconds": 0.0, "last": "OK"}
+    monkeypatch.setattr(vj, "run_duty", run_duty)
+    vj.RECORD.write_text(json.dumps({"joined_at": NOW - 3600, "converged": True}))
+    return ran
+
+
+def _last(**by_name):
+    vj.DUTIES.write_text(json.dumps({n: {"rc": rc, "at": at} for n, (rc, at) in by_name.items()}))
+
+
+def test_a_failed_join_duty_is_retried_after_fifteen_minutes(_retry):
+    """One rsync warning at the 09:24 join left mac-artifact-pull red until the
+    next join at 11:36. A tick between joins retries it instead."""
+    _last(pull=(1, NOW - 901), suite=(0, NOW - 901))
+    assert set(vj.retry_failed(now=NOW)) == {"pull"} and _retry == ["pull"]
+    assert json.loads(vj.DUTIES.read_text())["pull"]["rc"] == 0
+
+
+def test_a_retry_waits_its_spacing(_retry):
+    _last(pull=(1, NOW - 600))
+    assert vj.retry_failed(now=NOW) == {} and _retry == []
+
+
+def test_the_suite_audit_is_retried_only_every_two_hours(_retry):
+    """An arrival duty is the ten-to-fifteen-minute suite audit; red because a
+    test fails, rerunning it every tick would only burn the battery."""
+    _last(suite=(1, NOW - 3600))
+    assert vj.retry_failed(now=NOW) == {}
+    _last(suite=(1, NOW - 7201))
+    assert set(vj.retry_failed(now=NOW)) == {"suite"}
+
+
+def test_a_retry_never_rewrites_the_join_record(_retry):
+    """join.json's age is the one alarm; a retry resetting it would make a
+    laptop that cannot converge look freshly joined."""
+    before = vj.RECORD.read_text()
+    _last(pull=(1, NOW - 901))
+    vj.retry_failed(now=NOW)
+    assert vj.RECORD.read_text() == before
+
+
+def test_no_retry_while_the_lid_is_shut(_retry, monkeypatch):
+    monkeypatch.setattr(awake, "in_dark_wake", lambda **kw: True)
+    _last(pull=(1, NOW - 901))
+    assert vj.retry_failed(now=NOW) == {}

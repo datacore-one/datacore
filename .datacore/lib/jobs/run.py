@@ -142,7 +142,8 @@ def _artifact_path(raw: str) -> pathlib.Path:
     return pathlib.Path(matches[0]) if matches else path
 
 
-def _check_artifact(spec: dict, before: float | None) -> tuple[bool, str]:
+def _check_artifact(spec: dict, before: float | None,
+                    machine: str | None = None) -> tuple[bool, str]:
     """Did this artifact end the run in an acceptable state?
 
     Acceptable means: it exists, AND either it advanced during this run or it
@@ -165,16 +166,20 @@ def _check_artifact(spec: dict, before: float | None) -> tuple[bool, str]:
         return False, (f"artifact neither advanced nor fresh: {p.name} is "
                        f"{age_h:.1f}h old (max {max_age}h) and was not written")
 
-    check = spec.get("check")
-    if check == "nonempty" and p.stat().st_size == 0:
-        return False, f"artifact is empty: {p.name}"
-    if check == "regex":
-        try:
-            body = p.read_text(errors="replace")
-        except OSError as e:
-            return False, f"unreadable: {p.name} ({e})"
-        if not re.search(spec["arg"], body, re.M):
-            return False, f"{p.name} does not match {spec['arg']!r}"
+    # THE VERDICT IS job_verify'S, NOT A SECOND COPY OF IT. This used to
+    # re-implement `nonempty` and `regex` and let every other check through, so
+    # a duty could print "satisfied its contract" while job_verify failed it:
+    # mac-suite-audit did exactly that on 2026-09-22 and 09-23 (`last_line_regex`
+    # was simply not read here), and `since:` did not exist here at all. One
+    # implementation, jobs.checks.run_check, now decides for both.
+    from jobs.checks import run_check
+    from jobs.manifest import Artifact
+    errors = run_check(Artifact(path=spec["path"], check=spec.get("check", "exists"),
+                                max_age_hours=spec.get("max_age_hours"), arg=spec.get("arg"),
+                                since=spec.get("since")),
+                       machine=machine)
+    if errors:
+        return False, errors[0]
     return True, f"{p.name} ok" + ("" if advanced else " (unchanged but fresh)")
 
 
@@ -251,7 +256,7 @@ def run(job: dict, dry: bool = False) -> int:
 
     failures = []
     for a in artifacts:
-        ok, detail = _check_artifact(a, before[a["path"]])
+        ok, detail = _check_artifact(a, before[a["path"]], job.get("machine"))
         print(f"  {'ok  ' if ok else 'FAIL'} {detail}")
         if not ok:
             failures.append(detail)
