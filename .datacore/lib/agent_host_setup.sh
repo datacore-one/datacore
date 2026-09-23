@@ -2,7 +2,7 @@
 # Declare an agent host, or verify it: identity, the crons the job contracts
 # assume, the artifacts they read. Idempotent; run it again after every change.
 #
-#   agent_host_setup.sh --host nightshift|hermes|plur-claw          apply, then verify
+#   agent_host_setup.sh --host box|nightshift|hermes|plur-claw      apply, then verify
 #   agent_host_setup.sh --host NAME --verify                        check, change nothing
 #
 # Why this exists: the box has had an installer with a verify step since
@@ -15,13 +15,20 @@ set -uo pipefail
 HOST=""; VERIFY_ONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --host) HOST="${2:?--host needs nightshift|hermes|plur-claw}"; shift ;;
+    --host) HOST="${2:?--host needs box|nightshift|hermes|plur-claw}"; shift ;;
     --verify) VERIFY_ONLY=1 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac; shift
 done
 [ -n "$HOST" ] || { echo "--host is required" >&2; exit 2; }
-RUNNER="${DATACORE_RUNNER:-$HOME/.datacore/v2-runner}"
+# The code tree each host runs. Satellites run from a separate runner checkout;
+# the box (winston) has none and runs straight from ~/Data, so for it the
+# "runner" is ~/Data itself -- the same refresh and drift check then apply.
+if [ "$HOST" = box ]; then
+  RUNNER="${DATACORE_RUNNER:-$HOME/Data}"
+else
+  RUNNER="${DATACORE_RUNNER:-$HOME/.datacore/v2-runner}"
+fi
 LIB="$RUNNER/.datacore/lib"
 STATE="${DATACORE_STATE:-$HOME/.datacore/state}"
 ID_FILE="$HOME/.datacore/identity.env"
