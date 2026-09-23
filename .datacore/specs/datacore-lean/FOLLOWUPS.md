@@ -4,7 +4,30 @@ The owner's choices on `DECISIONS.md` are in `decisions-2026-09-23.json`. The
 local code changes are applied; per-area evidence is under "Decision … applied"
 in `findings/`. What is left:
 
-## A. Actions waiting for the owner's go-ahead (they leave this machine)
+## Status after the follow-up board (2026-09-23, evening)
+
+Owner choices: `followups-2026-09-23.json`. Applied and pushed:
+datacore `2865806`, datacore-nightshift `887f3b7`, datacore-space `4fd68980`,
+0-personal `42e817985`, datacore-dips `69c9c16`, org-workspace `711f2fc`
+(tag v0.6.0, published to PyPI).
+
+| Item | Status |
+|---|---|
+| Env overlap check on every host (C5) | Done: no key in both files on any of the 5 machines |
+| Code rollout (C4) | winston and nightshift pulled (fast-forward); nightshift services restarted, both active. **hermes and plur-claw track their own forks** (tris-on-hermes/datacore, data-on-claw/data-space) and still run the older creds.py; they need the owner's usual manual update. Locks are per-machine, so a staggered rollout is safe. |
+| Declared actor per host (L10) | winston=winston, nightshift=miles, hermes=tris, plur-claw=data, all declared in identity.env |
+| Dispatcher actor (L4) | nightshift runs `ledger-claim.service` as miles, so items addressed to miles are still taken |
+| id_churn --acknowledge (D1) | Done on mac, winston, nightshift. hermes and plur-claw wait for the rollout |
+| Edit protocol 2 (L7) | **Blocked** until hermes and plur-claw run the new code |
+| Research queue migration (D9) | Done: 31 properties moved; a re-run moves nothing |
+| DIP edits (D5, G2, P7) | Done. DIP-0010 also had 8 wrong example weekdays, now fixed |
+| SCAFFOLDING exposure (X1) | Untracked and ignored in 2-datacore |
+| org-workspace 0.6.0 (G5) | Rebased onto the published 0.5.4 history first (the local clone was stale); 288 tests, coverage 80.24%; released |
+| chief-of-staff | **Not committed**: the repo is on the owner's feature branch `feat/briefing-agents-the-ask-system-pulse`. Pending there: cos_generate.py (strict actor, Q2) and two test files |
+
+New open questions from this round are in `findings/*.md` under "Decision … applied".
+
+## A. Actions waiting (original list) for the owner's go-ahead (they leave this machine)
 
 | # | Action | Blocked on |
 |---|---|---|
