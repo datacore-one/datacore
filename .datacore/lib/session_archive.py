@@ -205,12 +205,27 @@ def summarize(transcript: Path, subagents: list[Path]) -> dict:
             # next_actions.org and a learning file, all written by spawned
             # agents. Session-scoped push reads this set, so a gap here means
             # real work silently never leaves the machine.
+            #
+            # Bash counts here for the same reason it counts on the main thread.
+            # It did not, until 2026-09-23: this branch read `file_path` only,
+            # so an agent that wrote through the shell contributed nothing --
+            # and `journal-entry-writer` writes every space journal with
+            # `cat >> <path> <<EOF`. The space journals were therefore absent
+            # from `files_modified` on every wrap-up, which is precisely the
+            # "real work silently never leaves the machine" the note above
+            # warns about, happening in the code underneath it. 285f4f2 closed
+            # this for the main thread and left the subagent half open.
             for blk in (rec.get("message") or {}).get("content") or []:
-                if (isinstance(blk, dict) and blk.get("type") == "tool_use"
-                        and blk.get("name") in ("Edit", "Write", "NotebookEdit")):
-                    fp = (blk.get("input") or {}).get("file_path")
+                if not (isinstance(blk, dict) and blk.get("type") == "tool_use"):
+                    continue
+                name = blk.get("name")
+                inp = blk.get("input") or {}
+                if name in ("Edit", "Write", "NotebookEdit"):
+                    fp = inp.get("file_path")
                     if fp:
                         files.add(fp)
+                elif name == "Bash":
+                    files |= _bash_write_targets(str(inp.get("command") or ""))
 
     # Which spaces the session touched, from the paths it wrote. Used by the
     # sweep to route patterns to the right space without asking an LLM.
