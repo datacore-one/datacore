@@ -6,6 +6,7 @@ verify.yaml) by `/verify`, so the repository's CI can run it without depending
 on the dev module. Keep it standard-library only apart from PyYAML.
 
     python3 formal_check.py [--project DIR] [--base REF] [--no-build] [--strict-drift]
+                            [--if-touched]
 
 Checks, in order:
   1. build   `lake build` succeeds in the project.
@@ -17,6 +18,9 @@ Checks, in order:
   4. drift   with --base, a source file a model covers changed since REF while
              the model did not. The proof then describes code that may no longer
              exist. A warning, or a failure with --strict-drift.
+
+With --if-touched (needs --base), nothing runs unless the project or a covered
+file changed since REF — how the local pre-push gate keeps unrelated pushes free.
 
 Exit codes: 0 all checks pass, 1 a check failed, 2 configuration error.
 
@@ -158,6 +162,17 @@ def changed_files(root: Path, base: str) -> set[str] | None:
     return {l.strip() for l in r.stdout.splitlines() if l.strip()}
 
 
+def touched(project: Path, cfg: dict, base: str) -> bool | None:
+    """Did anything verified change since `base`? None when git cannot tell."""
+    root = repo_root(project)
+    changed = changed_files(root, base)
+    if changed is None:
+        return None
+    rel = str(project.resolve().relative_to(root.resolve()))
+    covered = {c for e in cfg.get("models") or [] for c in e.get("covers") or []}
+    return any(c == rel or c.startswith(rel + "/") or c in covered for c in changed)
+
+
 def check_drift(project: Path, cfg: dict, base: str | None) -> tuple[bool, str, list[str]]:
     root = repo_root(project)
     rel_project = project.resolve().relative_to(root.resolve())
@@ -190,6 +205,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--base", help="git ref to diff against for the drift check")
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--strict-drift", action="store_true", help="drift fails the check")
+    ap.add_argument("--if-touched", action="store_true",
+                    help="with --base: skip unless the project or a covered file changed")
     args = ap.parse_args(argv)
     project = Path(args.project).resolve()
     try:
@@ -197,6 +214,15 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit as exc:
         print(exc, file=sys.stderr)
         return 2
+    if args.if_touched:
+        if not args.base:
+            print("config error: --if-touched needs --base", file=sys.stderr)
+            return 2
+        hit = touched(project, cfg, args.base)
+        if hit is False:
+            print(f"skip    nothing verified changed since {args.base[:12]}")
+            return 0
+        # None (git cannot tell) runs everything: unknown is never a pass.
     libraries = cfg["libraries"]
     allowed = cfg.get("allowed_axioms") or DEFAULT_AXIOMS
     failed = False

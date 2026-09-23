@@ -160,6 +160,60 @@ if [ "${SKIP_LOCAL_CI:-0}" != "1" ] && [ -n "$REPO_ROOT" ] && [ -n "$REFS_INPUT"
     echo "pre-push: ✓ local CI passed" >&2
 fi
 
+# ---- Formal verification gate (any repo with a vendored checker) -----------
+# A repo is verified when it tracks a Lean project: a verify.yaml with the
+# vendored formal_check.py beside it (dev module, /verify). Runs locally, not
+# on GitHub: Lean is installed here, and the proofs are checked before the
+# code leaves the machine. --if-touched makes the checker a no-op unless the
+# push changes the project or a file a model covers, so ledger and journal
+# pushes pay nothing. Hosts without Lean skip with a note rather than block:
+# a missing prover is not a failed proof, and must never hold a ledger push.
+#
+# Checks the working tree against the outgoing range, so push from the branch
+# you have checked out. Bypass: SKIP_FORMAL=1 git push …
+if [ "${SKIP_FORMAL:-0}" != "1" ] && [ -n "$REPO_ROOT" ] && [ -n "$REFS_INPUT" ] && [ -n "$HOOK_PY" ]; then
+    FORMAL_PROJECTS=$(cd "$REPO_ROOT" && git ls-files -- '*verify.yaml' | while read -r v; do
+        d=$(dirname "$v"); [ -f "$d/formal_check.py" ] && echo "$d"; done || true)
+    if [ -n "$FORMAL_PROJECTS" ]; then
+        FORMAL_BASE=$(printf '%s\n' "$REFS_INPUT" | while IFS=' ' read -r l_ref l_sha r_ref r_sha; do
+            [ -z "$l_ref" ] && continue
+            [ "$l_sha" = "0000000000000000000000000000000000000000" ] && continue
+            if [ "$r_sha" != "0000000000000000000000000000000000000000" ] && \
+               git rev-parse --quiet --verify "${r_sha}^{commit}" >/dev/null 2>&1; then
+                echo "$r_sha"; break
+            fi
+            for candidate in "refs/remotes/${REMOTE}/${r_ref#refs/heads/}" "refs/remotes/${REMOTE}/main" "refs/remotes/${REMOTE}/master"; do
+                if git rev-parse --quiet --verify "$candidate" >/dev/null 2>&1; then
+                    git merge-base "$l_sha" "$candidate" 2>/dev/null && break
+                fi
+            done
+            break
+        done || true)
+        if [ ! -x "$HOME/.elan/bin/lake" ] && ! command -v lake >/dev/null 2>&1; then
+            echo "pre-push: formal gate skipped — Lean (lake) not installed on this host" >&2
+        else
+            for proj in $FORMAL_PROJECTS; do
+                if [ -n "$FORMAL_BASE" ]; then
+                    set -- --base "$FORMAL_BASE" --if-touched
+                else
+                    set --   # base unknown: check everything, never assume nothing changed
+                fi
+                echo "pre-push: formal gate: $proj — SKIP_FORMAL=1 to bypass" >&2
+                if ! ( cd "$REPO_ROOT" && "$HOOK_PY" "$proj/formal_check.py" --project "$proj" "$@" </dev/null >&2 ); then
+                    echo "" >&2
+                    echo "═══════════════════════════════════════════════════════════════" >&2
+                    echo "PUSH BLOCKED: formal verification failed in $REPO_ROOT/$proj" >&2
+                    echo "═══════════════════════════════════════════════════════════════" >&2
+                    echo "Fix the model or the code (see FAIL lines above), or bypass" >&2
+                    echo "deliberately:  SKIP_FORMAL=1 git push ..." >&2
+                    echo "═══════════════════════════════════════════════════════════════" >&2
+                    exit 1
+                fi
+            done
+        fi
+    fi
+fi
+
 lfs_chain() {
     # DELIBERATELY A NO-OP: this installation does not use git-lfs. Large files
     # are gitignored instead (see each space's .gitignore, e.g. `*.db`).
