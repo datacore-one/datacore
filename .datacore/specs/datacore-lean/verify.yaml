@@ -1,0 +1,49 @@
+# Which source files each Lean model describes. Read by formal_check.py
+# (vendored from the dev module's /verify): when a covered file changes and its
+# model does not, the model may describe code that no longer exists.
+# Paths: `model` relative to this directory, `covers` relative to the repo root.
+# The nightshift module is its own repository, so only its files that live in
+# this repository are listed; its lifecycle model is checked in that repo.
+libraries: [LedgerSpec, DatacoreSpec]
+allowed_axioms: [propext, Classical.choice, Quot.sound]
+models:
+  - model: LedgerSpec/Hlc.lean
+    covers: [.datacore/lib/ledger/hlc.py, .datacore/lib/ledger/log.py]
+  - model: LedgerSpec/Item.lean
+    covers: [.datacore/lib/ledger/fold.py, .datacore/lib/ledger/edits.py]
+  - model: LedgerSpec/Converge.lean
+    covers: [.datacore/lib/ledger/log.py, .datacore/lib/ledger/fold.py]
+  - model: LedgerSpec/Chain.lean
+    covers: [.datacore/lib/ledger/verify.py, .datacore/lib/ledger/fork.py, .datacore/lib/resolve_ledger_conflicts.py]
+  - model: DatacoreSpec/GtdState.lean
+    covers: [.datacore/lib/org_workspace_adapter.py, .datacore/lib/dedup_tasks.py, .datacore/lib/task_cleanup.py]
+  - model: DatacoreSpec/OrgTransaction.lean
+    covers: [.datacore/lib/org_transaction.py]
+  - model: DatacoreSpec/OrgTools.lean
+    covers: [.datacore/lib/org_union_merge.py, .datacore/lib/org_dedup_within_file.py, .datacore/lib/org_resolve_id_conflicts.py, .datacore/lib/inbox_cleanup.py, .datacore/lib/triage_utils.py, .datacore/lib/dedup.py, .datacore/lib/org_archive_closed.py]
+  - model: DatacoreSpec/Dates.lean
+    covers: [.datacore/lib/date_utils.py, .datacore/lib/org_date_hook.py, .datacore/lib/org_date_validator.py, .datacore/lib/validate_org_dates.py, .datacore/lib/decay_and_review.py]
+  - model: DatacoreSpec/NightshiftGates.lean
+    covers: [.datacore/lib/delegation_canary.py, .datacore/lib/cadence_liveness.py, .datacore/lib/jobs/recurrence.py, .datacore/lib/jobs/awake.py, .datacore/lib/ai_task_gate.py, .datacore/lib/workflow_executor.py, .datacore/lib/delegation_requirements.py]
+  - model: DatacoreSpec/NightshiftLifecycle.lean
+    covers: []
+  - model: DatacoreSpec/LedgerPolicy.lean
+    covers: [.datacore/lib/claim_gate.py, .datacore/lib/ledger/policy.py, .datacore/lib/ledger/edits.py, .datacore/lib/ledger_claim.py, .datacore/lib/ledger/projection_state.py]
+  - model: DatacoreSpec/LedgerSeal.lean
+    covers: [.datacore/lib/ledger/seal.py, .datacore/lib/ledger_seal.py, .datacore/lib/ledger_ingest_org.py, .datacore/lib/ledger_restore_prefix.py, .datacore/lib/ledger_dismiss_orphans.py, .datacore/lib/ledger_checkpoint.py, .datacore/lib/ledger/exceptions.py, .datacore/lib/ledger_invariants.py]
+  - model: DatacoreSpec/Credentials.lean
+    covers: [.datacore/lib/creds.py, .datacore/lib/credential_access.py, .datacore/lib/env_utils.py, .datacore/lib/config_plane.py, .datacore/lib/model_routing.py]
+  - model: DatacoreSpec/Guards.lean
+    covers: [.datacore/lib/hooks/restricted_hosts_guard.py, .datacore/lib/hooks/injection_integrity_guard.py, .datacore/lib/hooks/log_ownership_guard.py, .datacore/lib/tool_policy.py, .datacore/lib/egress_runtime_check.py, .datacore/lib/egress_scan.py, .datacore/lib/hooks.py, .datacore/lib/pre_push_scan.py, .datacore/lib/commit_gate.py]
+  - model: DatacoreSpec/Publication.lean
+    covers: [.datacore/lib/publication_workspace_gc.py, .datacore/lib/publication_state.py, .datacore/lib/writeback_store.py, .datacore/lib/worktree_lifecycle.py, .datacore/lib/ledger_transport.py]
+  - model: DatacoreSpec/GitFleet.lean
+    covers: [.datacore/lib/git_relay.py, .datacore/lib/git_fleet_sync.py, .datacore/lib/state_loop_rollout.py, .datacore/lib/git_branch_hygiene.py, .datacore/lib/cron_install.py, .datacore/lib/visitor_join.py, .datacore/lib/actor_identity.py]
+  - model: DatacoreSpec/Reconcile.lean
+    covers: [.datacore/lib/gh_reconcile.py, .datacore/lib/sync/conflict.py]
+  - model: DatacoreSpec/Detectors.lean
+    covers: [.datacore/lib/detectors/actor_presence.py, .datacore/lib/detectors/seq_gap.py, .datacore/lib/detectors/id_churn.py, .datacore/lib/reliability_scoreboard.py, .datacore/lib/today_registry.py]
+  - model: DatacoreSpec/Knowledge.lean
+    covers: [.datacore/lib/context_merge.py, .datacore/lib/prune_learning_buffer.py, .datacore/lib/briefing/actions.py, .datacore/lib/agent_stream_store.py, .datacore/lib/rotate_learning_backup.py]
+  - model: DatacoreSpec/Research.lean
+    covers: [.datacore/modules/research/lib/research_orchestrator.py, .datacore/modules/research/lib/research_router.py, .datacore/modules/research/lib/migrate_research_props.py]
