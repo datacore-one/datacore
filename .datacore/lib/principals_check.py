@@ -60,6 +60,10 @@ def check(root: Path = ROOT) -> list[dict]:
             missing.append("health: no contract")
         if kind == "agent" and not p.get("permission_mode"):
             missing.append("decision_rights: no permission mode")
+        if "owns" in p:
+            # DIP-0050: who does what lives in venture.yaml only. A second copy
+            # here disagreed with it for weeks and was read by nothing.
+            missing.append("owns: roles and cadences belong in venture.yaml, not here")
         rows.append({"principal": name, "kind": kind, "charter": charter_ok, "contracts": len(contracts),
                      "budget": p.get("budget_monthly_usd"), "memory_scope": p.get("memory_scope"), "missing": missing})
     return rows
