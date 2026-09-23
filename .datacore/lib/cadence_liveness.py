@@ -34,7 +34,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 LIB = Path(__file__).resolve().parent
@@ -106,6 +106,85 @@ def _members(space: Path) -> set[str] | None:
     return {OWNER_ALIASES.get(str(m).lower(), str(m).lower()) for m in doc.get("members") or []}
 
 
+def _attests(space: Path, actor: str, metric: str) -> list[tuple[datetime, dict]]:
+    """(time, payload) of an actor's signed metric.attest events of one metric, oldest first."""
+    from ledger.events import from_line
+    p = space / ".datacore" / "events" / f"{actor}.jsonl"
+    out = []
+    if not p.exists():
+        return out
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            e = from_line(line.strip())
+        except Exception:  # noqa: BLE001 -- a torn line is not a record
+            continue
+        if e.type == "metric.attest" and e.sig and (e.payload or {}).get("metric") == metric:
+            out.append((datetime.fromtimestamp(float(str(e.hlc).split(".")[0]) / 1000, timezone.utc), e.payload))
+    return out
+
+
+def _artifact_in_git(space: Path, rel: str, sha: str) -> bool:
+    """The artifact a run recorded exists in git with exactly that content."""
+    import hashlib
+    import subprocess
+    f = space / rel
+    if f.is_file() and hashlib.sha256(f.read_bytes()).hexdigest() == sha:
+        tracked = subprocess.run(["git", "-C", str(space), "ls-files", "--error-unmatch", rel],
+                                 capture_output=True).returncode == 0
+        dirty = subprocess.run(["git", "-C", str(space), "diff", "--quiet", "HEAD", "--", rel],
+                               capture_output=True).returncode != 0
+        if tracked and not dirty:
+            return True
+    commits = subprocess.run(["git", "-C", str(space), "log", "-n", "30", "--format=%H", "--", rel],
+                             capture_output=True, text=True).stdout.split()
+    for c in commits:
+        blob = subprocess.run(["git", "-C", str(space), "show", f"{c}:{rel}"], capture_output=True).stdout
+        if hashlib.sha256(blob).hexdigest() == sha:
+            return True
+    return False
+
+
+def scheduled_state(space: Path, venture: str, owner: str, role: str, freq: str, name: str,
+                    today: date) -> tuple | None:
+    """A cadence its owner's own scheduler runs (DIP-0050 P2): None while unregistered.
+
+    ("red", days, why) | ("amber", 0, why) | ("green", 0, why). Judged only from the
+    owner's SIGNED records: a registration naming the slug, and run records whose
+    artifact is in git at the recorded sha256. The agent's word counts for nothing.
+    """
+    from cadence_engine import FREQUENCY_WINDOWS
+    from cadence_schedule import slug as _slug
+    regs = _attests(space, owner, "cadence.registration")
+    if not regs:
+        return None
+    sl = _slug(venture, role, name)
+    registered_at, latest = regs[-1]
+    if sl not in (latest.get("slugs") or {}):
+        first = next((t for t, p in regs if p.get("slugs")), registered_at)
+        if (datetime.now(timezone.utc) - first) < timedelta(hours=2):
+            return ("amber", 0, f"not-registered yet: {owner} (within 2h)")
+        return ("red", -1, f"not-registered: {owner}'s scheduler does not hold {sl}")
+    since_reg = next((t for t, p in regs if sl in (p.get("slugs") or {})), registered_at)
+    window = FREQUENCY_WINDOWS.get(freq, timedelta(days=1))
+    limit = window + window / 4
+    now = datetime.now(timezone.utc)
+    ends = [(t, p) for t, p in _attests(space, owner, "cadence.run")
+            if p.get("slug") == sl and p.get("phase") == "end"]
+    good = [t for t, p in ends if p.get("result") == "ok" and p.get("artifact")
+            and _artifact_in_git(space, p["artifact"], p.get("sha256", ""))]
+    last_ok = max(good) if good else None
+    anchor = last_ok or since_reg
+    if now - anchor <= limit:
+        return ("green", 0, f"ok: {owner}")
+    last = ends[-1][1] if ends else {}
+    days = (now - anchor - window).days
+    if last.get("result") in ("blocked", "quota") and ends and (now - ends[-1][0]) <= limit:
+        return ("amber", 0, f"{last['result']}: {last.get('reason', '')[:80]}")
+    if last.get("result") == "tripped":
+        return ("red", days, f"tripped: {owner}")
+    return ("red", days, f"late: {owner} ({'never ran' if not ends else 'last ' + str(last.get('result'))})")
+
+
 def collect(root: Path, grace: int, today: date | None = None) -> list:
     """Red rows only: what the contract counts (see collect_states)."""
     return collect_states(root, grace, today)[0]
@@ -169,7 +248,13 @@ def collect_states(root: Path, grace: int, today: date | None = None) -> tuple[l
             elif members is not None and owner not in members:
                 rows.append((-1, venture, role, freq, f"{name} [not-held: {owner} is not a member of this space]"))
             elif owner not in EXECUTING:
-                grey.append((0, venture, role, freq, f"{name} [pending-rollout: {owner}]"))
+                st = scheduled_state(space, venture, owner, role, freq, name, today)
+                if st is None:
+                    grey.append((0, venture, role, freq, f"{name} [pending-rollout: {owner}]"))
+                elif st[0] == "red":
+                    rows.append((st[1], venture, role, freq, f"{name} [{st[2]}]"))
+                elif st[0] == "amber":
+                    grey.append((0, venture, role, freq, f"{name} [{st[2]}]"))
             else:
                 judged.add((role, freq, name))
         if not judged:
