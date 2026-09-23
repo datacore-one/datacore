@@ -1660,3 +1660,14 @@ module_commands:
     status: active
     source: .datacore/modules/datacore-campaigns/commands/engagement.md
     module: datacore-campaigns
+
+  # Appended 2026-09-09 by command_registry_audit.py --fix.
+  # These files existed and were unreachable through the registry;
+  # an agent following the documented lookup path could not find them.
+  brand-positioning:
+    name: brand-positioning
+    description: Create BrandScript, Tribe Profile, and voice guidelines for a venture
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/comms/commands/brand-positioning.md
+    module: comms

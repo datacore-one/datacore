@@ -393,7 +393,9 @@ jobs:
     machine: box
     schedule: "cron 20 3 * * * on winston"
     cmd: "python3 ~/Data/.datacore/lib/today_registry.py --validate"
-    exit_ok: true
+    # A list, not `true`: jobs/run.py builds a set from it and crashes on a bool
+    # (found on the mac's twin, 2026-09-22). Exit 1 is "ran, found problems".
+    exit_ok: [0, 1]
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/today-registration.log"
