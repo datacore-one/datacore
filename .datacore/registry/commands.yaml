@@ -999,6 +999,47 @@ module_commands:
     - deploy
     status: demoted
     trigger: deploy status|CI status
+  verify:
+    name: Verify
+    description: Formally verify a repository's state machines and guarantees in Lean, fix what the proofs find, keep the proofs alive in CI
+    version: 1.0.0
+    source: .datacore/modules/dev/commands/verify.md
+    module: dev
+    invokes:
+    - create-module
+    reads:
+      required: []
+      contextual:
+      - .datacore/modules/dev/CLAUDE.base.md
+      - .datacore/modules/dev/briefs/survey.md
+      - .datacore/modules/dev/briefs/model.md
+      - .datacore/modules/dev/briefs/apply.md
+    writes:
+    - specs/formal/
+    references:
+      dips:
+      - DIP-0022
+    related:
+    - verify-check
+    status: active
+    trigger: formally verify|verify in lean|prove the state machine|formal verification
+  verify-check:
+    name: Verify Check
+    description: Do a repository's proofs still hold? Lean build, proof gaps, axiom audit, model drift
+    version: 1.0.0
+    source: .datacore/modules/dev/skills/verify-check/SKILL.md
+    module: dev
+    invokes: []
+    reads:
+      required:
+      - specs/formal/verify.yaml
+    writes: []
+    references:
+      dips: []
+    related:
+    - verify
+    status: active
+    trigger: check proofs|verify check|are the proofs current
   campaign-plan:
     name: Quarterly Campaign Planning
     description: Create quarterly campaign strategy with themes, objectives, and content pillars

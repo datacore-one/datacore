@@ -22,11 +22,12 @@ Exit codes: 0 all checks pass, 1 a check failed, 2 configuration error.
 
 verify.yaml (in the project directory):
 
-    libraries: [LedgerSpec, DatacoreSpec]      # lean_lib names = namespaces checked
+    libraries: [CoreSpec]                      # lean_lib names = namespaces checked
     allowed_axioms: [propext, Classical.choice, Quot.sound]   # optional
+    strict_drift: false                        # optional: drift fails the check
     models:
-      - model: LedgerSpec/Item.lean            # relative to the project dir
-        covers: [.datacore/lib/ledger/fold.py] # relative to the repository root
+      - model: CoreSpec/Scheduler.lean         # relative to the project dir
+        covers: [src/scheduler.py]             # relative to the repository root
 """
 from __future__ import annotations
 
@@ -210,8 +211,9 @@ def main(argv: list[str] | None = None) -> int:
     report("gaps", *check_gaps(project, libraries))
     report("axioms", *check_axioms(project, libraries, allowed))
     ok, detail, drift = check_drift(project, cfg, args.base)
+    strict = args.strict_drift or bool(cfg.get("strict_drift"))
     if drift:
-        ok = ok and not args.strict_drift
+        ok = ok and not strict
         for d in drift:
             print(f"     drift   {d}")
     report("drift", ok, detail)
