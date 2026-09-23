@@ -5,7 +5,7 @@ cadence: x-post
 evidence:
   path: "1-tracks/comms/x/x-post-{date}.md"
   require: ["^# X post", "https://(x|twitter)\\.com/[A-Za-z0-9_]+/status/[0-9]+"]
-  min_bytes: 200
+  min_bytes: 100   # heading + post + URL; 2026-09-23 a real 184-byte record failed a 200 floor
 role: cmo
 frequency: daily
 duration: 10min
