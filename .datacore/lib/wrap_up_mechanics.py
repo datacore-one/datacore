@@ -320,9 +320,28 @@ def session_files() -> tuple[list[str], str | None]:
     if not hits:
         return [], "session not archived — run preflight first"
     try:
-        return json.loads(hits[0].read_text()).get("files_modified", []), None
+        raw = json.loads(hits[0].read_text()).get("files_modified", [])
     except (OSError, ValueError) as e:
         return [], f"unreadable meta: {e}"
+    return [_anchor(f) for f in raw], None
+
+
+def _anchor(f: str) -> str:
+    """Promote a relative write-target to the absolute path it names.
+
+    A session that edits through `cd ~/Data && sed -i ... .datacore/lib/x.py`
+    archives the target as written — relative. Every consumer here buckets by
+    absolute prefix, so such an entry matches no repo and lands in
+    `unversioned`: reported as "no push will ever carry this" about a file
+    sitting tracked and dirty in the root repo, which is precisely backwards.
+    Only promote when the path resolves to something that exists; a relative
+    entry that does not is left alone, so nothing that used to be reported
+    stops being reported.
+    """
+    if os.path.isabs(f):
+        return f
+    cand = DATACORE_ROOT / f
+    return str(cand) if cand.exists() else f
 
 
 def _default_branch_ok(repo: Path) -> tuple[bool, str]:
