@@ -166,3 +166,21 @@ def test_ledger_path_is_appended_not_prepended(declared):
     added = [p for p in sys.path if p not in before]
     for p in added:
         assert sys.path.index(p) > 0
+
+
+def test_spaces_live_only_under_data(tmp_path, monkeypatch):
+    # Owner rule (2026-09-23): spaces live under ~/Data only. A leftover
+    # ~/spaces clone on plur-claw forked a writer log on 2026-09-06; discovery
+    # must never select one again, even if such a directory reappears.
+    home = tmp_path / "home"
+    for root in ("Data", "spaces"):
+        (home / root / "5-plur" / ".datacore" / "events").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    monkeypatch.delenv("DATACORE_ROOT", raising=False)
+    import importlib, ledger_attest, job_verify
+    importlib.reload(ledger_attest)
+    assert [p.name for p in ledger_attest._roots()] == ["Data"]
+    monkeypatch.setattr(job_verify, "DATACORE_ROOT", home / "Data")
+    (home / "Data" / "5-plur" / ".git").mkdir()
+    (home / "spaces" / "5-plur" / ".git").mkdir()
+    assert job_verify._attest_space().parent.name == "Data"

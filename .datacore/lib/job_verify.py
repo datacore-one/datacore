@@ -555,9 +555,10 @@ def _run_doctor(machine: str, manifest_path: Path) -> None:
 def _attest_space() -> Path:
     """First space checkout that converges: 2-datacore where present, else any
     `[0-9]-*` repository with an event log under the root, then under ~/Data
-    (hermes keeps a 5-plur clone at ~/Data/2-plur), then ~/spaces."""
+    (hermes keeps a 5-plur clone at ~/Data/2-plur). Spaces live under ~/Data
+    only; a ~/spaces clone is never selected (see ledger_attest._roots)."""
     home = Path.home()
-    roots = [DATACORE_ROOT, home / "Data", home / "spaces"]
+    roots = [DATACORE_ROOT, home / "Data"]
     for r in roots:
         c = r / "2-datacore"
         if (c / ".datacore" / "events").is_dir() and (c / ".git").exists():

@@ -169,12 +169,11 @@ def _actor() -> str:
 def _roots() -> list[Path]:
     """Where spaces might live on THIS machine.
 
-    Not every box keeps them under ~/Data. plur-claw holds its spaces in
-    ~/spaces and uses ~/Data for the OpenClaw workspace, so a DATACORE_ROOT-only
-    lookup found no ledger and attest silently returned None — meaning Data,
-    the agent most likely to publish, was the one machine whose posts would not
-    have been recorded. Found by being asked "will the system know?" rather than
-    by any check, which is why the possible shapes are enumerated here.
+    Spaces live under ~/Data only (owner rule, 2026-09-23). plur-claw once
+    kept a second clone at ~/spaces/5-plur alongside ~/Data/2-plur-space; the
+    two copies forked one writer log on 2026-09-06, and the leftover clone was
+    retired on 2026-09-23. Discovery must never select such a copy again, so
+    ~/spaces is not a candidate even if the directory reappears.
     """
     home = Path.home()
     env = os.environ.get("DATACORE_ROOT")
@@ -186,7 +185,7 @@ def _roots() -> list[Path]:
         # caught immediately.
         cands = [Path(env)]
     else:
-        cands = [home / "Data", home / "spaces"]
+        cands = [home / "Data"]
     # Dedup on the RESOLVED path: ~/Data is a symlink into the OpenClaw
     # workspace on plur-claw, so two entries can name one directory while
     # comparing unequal. Comparing the literal paths deduped nothing that could
