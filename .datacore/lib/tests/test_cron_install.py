@@ -116,7 +116,12 @@ def test_real_host_installer_reconciles_and_verifies_fake_crontab(tmp_path):
     lib.mkdir(parents=True); registry.mkdir()
     registry.joinpath('infrastructure.yaml').write_text('servers:\n  hermes:\n    access: {actor: fixture}\n')
     home.joinpath('.datacore/identity.env').write_text('DATACORE_ACTOR=fixture\nDATACORE_LEDGER_SIGN=1\n')
-    lib.joinpath('actor_identity.py').write_text('print("fixture identity.env")\n')
+    # Like the real module: importable (the installer reads REGISTRY_DIR, which
+    # resolves where the private registry lives) and a resolver when run.
+    lib.joinpath('actor_identity.py').write_text(
+        'from pathlib import Path\n'
+        f'REGISTRY_DIR = Path({str(registry)!r})\n'
+        'if __name__ == "__main__":\n    print("fixture identity.env")\n')
     lib.joinpath('ledger_phase1_cycle.sh').write_text('#!/bin/sh\nexit 0\n')
     lib.joinpath('ledger_phase1_cycle.sh').chmod(0o755)
     shutil.copyfile(Path(C.__file__), lib / 'cron_install.py')
