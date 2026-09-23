@@ -88,6 +88,32 @@ def _net_env() -> dict:
     return env
 
 
+def _repair_weekdays(space: Path) -> list[str]:
+    """Fix wrong day names in staged .org/.md files; return the paths repaired.
+
+    Uses validate_org_dates -- the pre-commit hook's own validator -- so the
+    two can never disagree about what is wrong, and its `_fix_file`, which
+    rewrites under the org lock. Files it cannot read are left to the hook.
+    """
+    try:
+        import validate_org_dates as dates
+    except ImportError:
+        return []
+    rc, out, _ = _git(space, "diff", "--cached", "--name-only", "--diff-filter=ACM")
+    repaired = []
+    for rel in (out or "").splitlines() if rc == 0 else []:
+        if not rel.endswith((".org", ".md")) or dates.is_archived(rel):
+            continue
+        path = space / rel
+        if not path.is_file():
+            continue
+        result = dates._fix_file(path)
+        if result and result[1]:
+            _git(space, "add", "--", rel)
+            repaired.append(rel)
+    return repaired
+
+
 def _git(repo: Path, *args: str, timeout: int = 120) -> tuple[int, str, str]:
     try:
         r = subprocess.run(["git", *args], cwd=repo, capture_output=True,
@@ -512,6 +538,19 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         foreign = foreign_writer_logs(space)
         for path, _writer, _principal in foreign:
             _git(space, "restore", "--staged", "--", path)
+
+        # A WRONG WEEKDAY IS REPAIRED, NOT A REASON TO STOP THE FLEET. The
+        # weekday in `[2026-09-23 Tue]` is derived from the date, so a wrong one
+        # is a formatting error the date tool corrects deterministically. On
+        # 2026-09-23 an agent wrote "Tue" for a Wednesday in 6-meridian's inbox;
+        # the pre-commit hook refused this autosave (correctly), and that
+        # refusal failed the whole phase-1 cycle -- and the agent kept writing
+        # new wrong stamps while it was being fixed by hand. The hook stays the
+        # guard for everything it cannot repair; this runs the same validator's
+        # fixer on the same staged files first and says what it changed.
+        repaired = _repair_weekdays(space)
+        if repaired:
+            print(f"  autosave {space.name}: repaired weekday names in {', '.join(repaired)}")
 
         rc_staged, _, _ = _git(space, "diff", "--cached", "--quiet")
         if rc_staged == 0:                      # 0 = no staged changes remain
