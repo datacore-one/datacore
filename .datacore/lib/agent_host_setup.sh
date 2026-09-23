@@ -92,6 +92,15 @@ case "$HOST" in
     ;;
 esac
 
+# Every host keeps its runner current. Nothing did on the satellites: on
+# 2026-09-23 hermes's runner was 13 commits behind origin and plur-claw's 50,
+# so fixes that "reached the fleet" were not running there. The mac refreshes
+# its runner from sync_state_from_nightshift.sh; this is the same step for the
+# hosts this installer owns. --ff-only: the runner is read-only by design, so a
+# pull that cannot fast-forward is a problem to report, not to merge.
+CRON_KEYS+=(runner-refresh)
+CRON_LINES+=("17 * * * * git -C $RUNNER pull -q --ff-only origin main >> $STATE/runner-refresh.log 2>&1")
+
 # ── slash commands the scheduled jobs invoke ────────────────────────────────
 # A cron script that runs `claude -p "/weekly-plan ..."` needs that command
 # PUBLISHED to Claude Code, which reads ~/.claude/commands/ and nothing else.
@@ -165,6 +174,11 @@ grep -qsE '^(export )?DATACORE_LEDGER_SIGN=1' "$ID_FILE" && log "OK  events sign
 res="$(python3 "$LIB/actor_identity.py" 2>/dev/null)"; [ "${res%% *}" = "$ACTOR" ] && log "OK  resolver agrees: $res" || { log "FAIL resolver says '$res', registry says $ACTOR"; fail=1; }
 python3 "$LIB/cron_install.py" --verify "${CRON_ARGS[@]}" || fail=1
 [ -x "$LIB/ledger_phase1_cycle.sh" ] && log "OK  runner lib present at $LIB" || { log "FAIL runner lib missing: $LIB"; fail=1; }
+# Current, not merely present: compare with origin/main as of the last fetch
+# (the runner-refresh cron fetches hourly). Behind is a warning, not a failure:
+# it clears on the next refresh, and failing here would block a re-run.
+_behind=$(git -C "$RUNNER" rev-list --count HEAD..origin/main 2>/dev/null || echo "?")
+if [ "$_behind" = "0" ]; then log "OK  runner current with origin/main"; else log "WARN runner is $_behind commit(s) behind origin/main (runner-refresh cron pulls hourly)"; fi
 case "$HOST" in
   nightshift)
     systemctl show -p Environment --value nightshift-overnight.service 2>/dev/null | tr ' ' '\n' | qgrep -x "DATACORE_ACTOR=nightshift" && log "OK  overnight executor declares its own writer (nightshift)" || { log "FAIL overnight unit does not declare DATACORE_ACTOR=nightshift"; fail=1; }
