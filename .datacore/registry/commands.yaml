@@ -999,11 +999,11 @@ module_commands:
     - deploy
     status: demoted
     trigger: deploy status|CI status
-  verify:
-    name: Verify
-    description: Formally verify a repository's state machines and guarantees in Lean, fix what the proofs find, keep the proofs alive in CI
+  formal-verify:
+    name: Formal Verify
+    description: Formally verify a repository's state machines and guarantees in Lean, fix what the proofs find, keep the proofs alive with a local pre-push gate (not the built-in /verify, which observes a running app)
     version: 1.0.0
-    source: .datacore/modules/dev/commands/verify.md
+    source: .datacore/modules/dev/commands/formal-verify.md
     module: dev
     invokes:
     - create-module
@@ -1020,14 +1020,14 @@ module_commands:
       dips:
       - DIP-0022
     related:
-    - verify-check
+    - formal-check
     status: active
     trigger: formally verify|verify in lean|prove the state machine|formal verification
-  verify-check:
-    name: Verify Check
+  formal-check:
+    name: Formal Check
     description: Do a repository's proofs still hold? Lean build, proof gaps, axiom audit, model drift
     version: 1.0.0
-    source: .datacore/modules/dev/skills/verify-check/SKILL.md
+    source: .datacore/modules/dev/skills/formal-check/SKILL.md
     module: dev
     invokes: []
     reads:
@@ -1037,7 +1037,7 @@ module_commands:
     references:
       dips: []
     related:
-    - verify
+    - formal-verify
     status: active
     trigger: check proofs|verify check|are the proofs current
   campaign-plan:

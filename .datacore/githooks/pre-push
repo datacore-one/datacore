@@ -162,7 +162,7 @@ fi
 
 # ---- Formal verification gate (any repo with a vendored checker) -----------
 # A repo is verified when it tracks a Lean project: a verify.yaml with the
-# vendored formal_check.py beside it (dev module, /verify). Runs locally, not
+# vendored formal_check.py beside it (dev module, /formal-verify). Runs locally, not
 # on GitHub: Lean is installed here, and the proofs are checked before the
 # code leaves the machine. --if-touched makes the checker a no-op unless the
 # push changes the project or a file a model covers, so ledger and journal

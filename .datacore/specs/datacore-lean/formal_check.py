@@ -2,7 +2,7 @@
 """Check a repository's formal models: build, gaps, axioms, drift.
 
 This file is VENDORED into each verified repository's Lean project (next to its
-verify.yaml) by `/verify`, so the repository's CI can run it without depending
+verify.yaml) by `/formal-verify`, so the repository's CI can run it without depending
 on the dev module. Keep it standard-library only apart from PyYAML.
 
     python3 formal_check.py [--project DIR] [--base REF] [--no-build] [--strict-drift]
