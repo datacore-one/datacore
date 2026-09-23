@@ -324,8 +324,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/plur_cli.py --timeout 0.5 hook-learn-check",
-            "timeout": 2
+            "command": "python3 ~/Data/.datacore/lib/plur_cli.py --timeout 2 hook-learn-check",
+            "timeout": 3
           }
         ]
       }
