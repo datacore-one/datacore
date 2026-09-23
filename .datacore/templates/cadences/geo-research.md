@@ -1,5 +1,11 @@
 ---
 cadence: geo-research
+# DIP-0050: how cadence_run judges a run -- a draft written during the run,
+# substantial, with a title and cited sources. Refreshing an older draft counts.
+evidence:
+  path: "1-tracks/geo/drafts/*.md"
+  require: ["^# ", "(https?://|\\b[a-z0-9-]+\\.(com|ai|io|org|dev|net|co)/)"]   # a cited source, URL or bare domain/path
+  min_bytes: 1500
 role: cio
 frequency: daily
 duration: 30min
@@ -26,4 +32,4 @@ that earn LLM citations. Quality over volume — at most 2 drafts per run.
 5. **Hand off:** create a Data review task in `org/next_actions.org` tagged `:AI:geo:` with
    `:ASSIGNEE: data`, properties {QUERY, DRAFT_PATH, SURFACE (suggested), STAGE: review}, and a
    BOOTSTRAP telling Data to review against the rubric and route (owned vs third-party).
-6. **Push:** commit the draft + the Data task; `git push`. Log the run to `cadence-log.yaml`.
+6. **Push:** commit the draft + the Data task; `git push`. Do not log the run anywhere: the runner records it.
