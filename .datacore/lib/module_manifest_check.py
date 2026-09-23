@@ -115,9 +115,62 @@ def check(mod: Path) -> list[str]:
 _LOCAL_OK = {"lib", "tests", "adapters"}
 
 
+def _shared_lib_modules() -> set[str]:
+    """Modules importable from .datacore/lib, which every module puts on sys.path.
+
+    `env_utils`, `triage_utils`, `agent_emit` and friends are siblings, not
+    packages. Reporting them as undeclared dependencies would send someone to
+    pip for something that is already in the repo — and would put a nonexistent
+    package name into a requirements.txt, which is worse than having none.
+    """
+    shared = Path(__file__).resolve().parent
+    return ({p.stem for p in shared.glob("*.py")}
+            | {p.name for p in shared.iterdir() if p.is_dir() and (p / "__init__.py").exists()})
+
+
+_VENDOR = {".venv", "venv", ".git", "node_modules", "site-packages",
+           "__pycache__", ".pytest_cache", "dist", "build", ".tox"}
+
+
+def _own_names(root: Path) -> set[str]:
+    """Module names the module itself defines, skipping vendored trees."""
+    names: set[str] = set()
+    stack = [root]
+    while stack:
+        d = stack.pop()
+        try:
+            entries = list(d.iterdir())
+        except OSError:
+            continue
+        for e in entries:
+            if e.is_dir():
+                if e.name in _VENDOR:
+                    continue
+                names.add(e.name)
+                stack.append(e)
+            elif e.suffix == ".py":
+                names.add(e.stem)
+    return names
+
+
 def _third_party_imports(lib: Path) -> set[str]:
     stdlib = getattr(sys, "stdlib_module_names", set())
-    local = {p.stem for p in lib.rglob("*.py")} | {p.name for p in lib.iterdir() if p.is_dir()}
+    local = ({p.stem for p in lib.rglob("*.py")}
+             | {p.name for p in lib.iterdir() if p.is_dir()}
+             | _shared_lib_modules()
+             # Sibling modules reach each other by package name.
+             | {m.name.replace("-", "_") for m in lib.parent.parent.iterdir() if m.is_dir()}
+             # A module's own top-level packages: mail/processors/ is imported
+             # as `processors`, and it is not on PyPI.
+             # Anything the module itself contains, at any depth. trading keeps
+             # bzz_whale and data several levels down; they are its own files,
+             # not packages anyone can install.
+             #
+             # NOT into vendor trees. voice-terminal has a .venv beside its lib,
+             # so an unfiltered walk reached site-packages and declared numpy,
+             # sounddevice and openwakeword "local" — silently hiding the exact
+             # dependencies this check exists to find.
+             | _own_names(lib.parent))
     found: set[str] = set()
     for f in lib.rglob("*.py"):
         try:
