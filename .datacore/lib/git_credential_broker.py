@@ -11,9 +11,10 @@ and every token sat in a file outside the broker. Now git asks the broker at the
 moment it needs one: the value comes from the host's own store, is handed to git
 on stdout, and is written nowhere.
 
-It answers only `get`, and only for https://github.com/datacore-one/...; for
-anything else it says nothing, so git falls through to whatever else is
-configured. `store` and `erase` are ignored: the broker, not git, owns the value.
+It answers only `get`, and only for https://github.com; which repositories it
+serves is decided by git config, one `credential.https://github.com/<owner>/<repo>.git.helper`
+context per repository (git_credentials_migrate.py writes them), so each token
+answers only for the repositories it was minted for. `store` and `erase` are ignored: the broker, not git, owns the value.
 The token it names is READ-ONLY by design -- a push with it is refused by GitHub.
 """
 from __future__ import annotations
@@ -23,7 +24,6 @@ import sys
 from pathlib import Path
 
 LIB = Path(__file__).resolve().parent
-OWNER = "datacore-one/"
 
 
 def main(argv: list[str]) -> int:
@@ -31,8 +31,6 @@ def main(argv: list[str]) -> int:
         return 0
     req = dict(line.split("=", 1) for line in sys.stdin.read().splitlines() if "=" in line)
     if req.get("protocol") != "https" or req.get("host") != "github.com":
-        return 0
-    if req.get("path") and not req["path"].startswith(OWNER):
         return 0
     r = subprocess.run([sys.executable, str(LIB / "creds.py"), "get", argv[1], "--consumer", "git"],
                        capture_output=True, text=True, timeout=60)
