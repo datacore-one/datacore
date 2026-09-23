@@ -172,6 +172,27 @@ def apply_baseline(findings: list, baseline: dict) -> list:
     return out
 
 
+def acknowledged_baseline(existing, findings, *, scanned, today):
+    """The baseline after acknowledging the spaces scanned in THIS run.
+
+    One baseline file serves the whole machine, and a machine can hold spaces
+    under more than one root (plur-claw: ~/Data and ~/spaces), each scanned by
+    its own run. So acknowledging replaces only the scanned spaces' entries and
+    keeps every other space's acknowledged ids. It used to rebuild the file
+    from empty, and acknowledging the second root erased the first (found
+    2026-09-23 on plur-claw). Legacy COUNT entries (ints) are dropped: an id
+    baseline replaces them.
+    """
+    scanned = set(scanned)
+    base = {k: v for k, v in (existing or {}).items()
+            if isinstance(v, list) and k not in scanned}
+    for r in findings:
+        if r.get("orphaned_ledger_ids"):
+            base[r["space"]] = r.get("orphaned_ids") or []
+    base["_acknowledged"] = today
+    return base
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", type=Path, default=_default_root())
@@ -202,8 +223,9 @@ def main() -> int:
     # set is a finding, and the acknowledged amount is printed so it is never
     # invisible.
     if args.acknowledge:
-        base = {r["space"]: r.get("orphaned_ids") or [] for r in findings if r["orphaned_ledger_ids"]}
-        base["_acknowledged"] = datetime.date.today().isoformat()
+        base = acknowledged_baseline(_load_baseline(baseline_path), findings,
+                                     scanned=[s.name for s in spaces],
+                                     today=datetime.date.today().isoformat())
         baseline_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         tmp = baseline_path.with_suffix(".json.tmp"); tmp.write_text(json.dumps(base, indent=1)); tmp.replace(baseline_path)
         print("acknowledged orphaned ledger ids as baseline: "
