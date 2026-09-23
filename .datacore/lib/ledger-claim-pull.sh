@@ -11,7 +11,16 @@
 # tick prints one dated line so a job contract can see it ran.
 set -uo pipefail
 RUNNER="${DATACORE_RUNNER:-$HOME/.datacore/v2-runner}"
-S="${DISPATCH_SPACE:-${DATACORE_ATTEST_SPACE:-$HOME/spaces/5-plur}}"
+# NO DEFAULT SPACE. The old default was $HOME/spaces/5-plur, a second clone of
+# plur-space on plur-claw; a cron line without DISPATCH_SPACE kept dispatching
+# there every 15 minutes beside the real one in ~/Data/2-plur-space -- two
+# dispatchers for one writer, the shape that forked its log on 2026-09-06.
+# Spaces live under ~/Data only (2026-09-23): the caller must say which one.
+S="${DISPATCH_SPACE:-${DATACORE_ATTEST_SPACE:-}}"
+if [ -z "$S" ]; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%S+00:00) dispatch REFUSED: no DISPATCH_SPACE or DATACORE_ATTEST_SPACE declared" >&2
+  exit 2
+fi
 LIMIT="${DISPATCH_LIMIT:-2}"
 PY="${DATACORE_PYTHON:-python3}"
 # THE REGISTRY IS NOT IN THE RUNNER CHECKOUT AND NEVER WILL BE.
