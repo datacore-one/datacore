@@ -97,8 +97,17 @@ class ClaudeCodeExecutor(Executor):
 
         from tool_policy import settings_json
         env = {**self._execution_env(), "DATACORE_HEADLESS": "1"}
+        # The principal's declared mode (DIP-0050): cadence_run sets it from
+        # principals.yaml `permission_mode`. acceptEdits refuses every Bash call
+        # in a non-interactive run (the policy guard only ever denies), so a
+        # principal declared `bypass` -- Miles, whose cadences run scripts --
+        # gets bypassPermissions, with the same guard hook still refusing its
+        # never-effects. Anything else stays acceptEdits.
+        mode = os.environ.get("DATACORE_CLAUDE_PERMISSION_MODE", "acceptEdits")
+        if mode not in ("acceptEdits", "bypassPermissions"):
+            raise RuntimeError(f"unsupported DATACORE_CLAUDE_PERMISSION_MODE {mode!r}")
         result = run_process(
-            [binary, "-p", "--permission-mode", "acceptEdits",
+            [binary, "-p", "--permission-mode", mode,
              "--settings", settings_json(), "--output-format", "json"],
             capture_output=True,
             text=True,
