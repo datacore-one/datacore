@@ -71,7 +71,7 @@ def test_registered_executors_includes_every_adapter():
     openrouter joined on 2026-08-27. It was the one provider in live use
     (comms module draft_evaluator) that the registry could not account for,
     making its spend invisible to shadow accounting."""
-    assert set(registered_executors()) == {"claude-code", "hermes", "api", "openclaw", "openrouter"}
+    assert set(registered_executors()) == {"claude-code", "hermes", "api", "openclaw", "openclaw-gateway", "openrouter"}
 
 
 def test_get_executor_unknown_name_raises_value_error_listing_known():

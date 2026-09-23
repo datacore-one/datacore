@@ -130,3 +130,33 @@ def test_hermes_dispatch_policy_errors_refuse_execution(monkeypatch):
     monkeypatch.setattr(hermes_plugin, 'pre_tool_call', broken)
     wrapper.install_policy_guard()
     assert 'refused' in plugins.get_pre_tool_call_block_message('terminal', {})
+
+
+def test_openclaw_gateway_runs_a_fresh_session_in_the_dispatched_workspace(tmp_path, monkeypatch, declared_executor):
+    import json
+    import subprocess
+    import executors.openclaw as module
+    monkeypatch.setenv('DATACORE_NO_SPEND', '1')
+    monkeypatch.setenv('DATACORE_ACTOR', 'worker')
+    monkeypatch.setattr(module.shutil, 'which', lambda name: '/fake/openclaw')
+    calls = []
+    def run(command, **kwargs):
+        calls.append(dict(command=command, **kwargs))
+        env = {'runId': 'r', 'status': 'ok', 'summary': 'completed',
+               'result': {'payloads': [{'text': 'done ◇'}], 'meta': {'agentMeta': {'model': 'gpt-6-astra'}}}}
+        return subprocess.CompletedProcess(command, 0, json.dumps(env), '')
+    monkeypatch.setattr(module, 'run_process', run)
+    result = module.OpenClawGatewayExecutor().run('the task', cwd=tmp_path)
+    assert result.error is None and result.text == 'done ◇' and result.model == 'gpt-6-astra'
+    cmd = calls[0]['command']
+    assert cmd[1:4] == ['agent', '--agent', 'main'] and 'exec' not in cmd
+    assert cmd[cmd.index('--session-key') + 1].startswith('agent:main:dispatch-')
+    assert str(tmp_path) in calls[0]['input'] and calls[0]['input'].endswith('the task')
+    module.OpenClawGatewayExecutor().run('again', cwd=tmp_path)
+    assert calls[1]['command'][cmd.index('--session-key') + 1] != cmd[cmd.index('--session-key') + 1], "one session per run"
+
+    def failing(command, **kwargs):
+        return subprocess.CompletedProcess(command, 1, json.dumps({'status': 'error', 'summary': 'gateway unavailable'}), '')
+    monkeypatch.setattr(module, 'run_process', failing)
+    bad = module.OpenClawGatewayExecutor().run('x', cwd=tmp_path)
+    assert bad.error and 'gateway unavailable' in bad.error
