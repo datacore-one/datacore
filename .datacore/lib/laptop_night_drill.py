@@ -65,7 +65,9 @@ def scenario(name, *, artifact_age_h, max_h, events, content="OK phase1-cycle x 
     (d / "power.log").write_bytes(power_log(events(mt), noise))
     (bin_ / "pmset").write_text(f"#!/bin/sh\ncat '{d / 'power.log'}'\n"); (bin_ / "pmset").chmod(0o755)
     env = {"HOME": str(Path.home()), "PATH": f"{bin_}:/usr/bin:/bin", "DATACORE_V2": "1",
-           "DATACORE_ROOT": str(d / "root"), "DATACORE_STATE": str(d / "jvstate")}
+           "DATACORE_ROOT": str(d / "root"), "DATACORE_STATE": str(d / "jvstate"),
+           # Read the fake pmset above, never the real machine's ASL history.
+           "DATACORE_POWER_ASL_DIR": ""}
     r = subprocess.run([PY, str(RUNNER / "job_verify.py"), "--machine", "mac", "--manifest",
                         str(d / "manifest.yaml"), "--no-emit", "--alert", "log"],
                        env=env, capture_output=True, text=True, timeout=120, cwd="/tmp")

@@ -114,10 +114,110 @@ def _say_once(path: Path, machine: str) -> None:
 
 
 _PMSET = ("pmset", "-g", "log")
+#: `pmset -g log` is slow and gets slower: it renders every assertion line the
+#: power log holds, and on 2026-09-23 that was 16.8 MB and 63 seconds -- past
+#: the old 30 s timeout, so _sleep_log() returned "" and every caller quietly
+#: lost the machine's sleep: no wake was ever an arrival, and every awake-time
+#: age became wall time again. The same records are in powerd's per-day ASL
+#: files, world-readable; one `syslog -f` per file takes well under a second,
+#: and a past day's file never changes, so it is parsed once and cached.
+#: DATACORE_POWER_ASL_DIR="" turns this off (laptop_night_drill feeds a fake
+#: pmset and must not read the real machine's history).
+_ASL_DIR = "/var/log/powermanagement"
+_POWER_KINDS = ("Sleep", "Wake", "DarkWake")
+_MEMO: tuple[float, str] | None = None
+_MEMO_S = 60.0
+
+
+def _asl_dir() -> Path | None:
+    import os
+    raw = os.environ.get("DATACORE_POWER_ASL_DIR", _ASL_DIR)
+    return Path(raw) if raw and Path(raw).is_dir() else None
+
+
+def _asl_events(path: Path) -> list[list] | None:
+    """(unix time, Sleep|Wake|DarkWake) for one day file, or None if unreadable."""
+    try:
+        out = subprocess.run(["syslog", "-T", "sec", "-F", "$Time $(com.apple.iokit.domain)",
+                              "-f", str(path)], capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    events = []
+    for line in out.stdout.decode("utf-8", errors="replace").splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1] in _POWER_KINDS:
+            events.append([int(parts[0]), parts[1]])
+    return events
+
+
+def _asl_log(d: Path) -> str | None:
+    """The Sleep/Wake/DarkWake records, rendered in pmset's own line format so
+    every parser below reads them unchanged. None if any day file cannot be
+    read -- a partial history would under-count sleep, silently."""
+    import json
+    import os
+    cache_path = Path(os.environ.get("DATACORE_STATE") or Path.home() / ".datacore" / "state") \
+        / "power-events.json"
+    try:
+        cache = json.loads(cache_path.read_text())
+        if not isinstance(cache, dict):
+            cache = {}
+    except (OSError, ValueError):
+        cache = {}
+    files = sorted(d.glob("*.asl"))
+    if not files:
+        return None
+    changed, events, fresh = False, [], {}
+    for f in files:
+        try:
+            st = f.stat()
+        except OSError:
+            return None
+        sig = [int(st.st_mtime), st.st_size]
+        entry = cache.get(f.name)
+        if not isinstance(entry, dict) or entry.get("sig") != sig:
+            got = _asl_events(f)
+            if got is None:
+                return None
+            entry, changed = {"sig": sig, "events": got}, True
+        fresh[f.name] = entry
+        events.extend(entry["events"])
+    if changed or set(fresh) != set(cache):
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = cache_path.with_name(f".{cache_path.name}.{os.getpid()}")
+            tmp.write_text(json.dumps(fresh))
+            os.replace(tmp, cache_path)
+        except OSError:
+            pass
+    events.sort()
+    return "".join(
+        f"{datetime.fromtimestamp(t).astimezone().strftime('%Y-%m-%d %H:%M:%S %z')} "
+        f"{kind:<20}\tasl\n" for t, kind in events)
 
 
 def _sleep_log() -> str:
-    """The power log as text. Never raises.
+    """The power log's Sleep/Wake records as pmset-format text. Never raises.
+
+    From powerd's ASL day files when they can be read (fast), else from
+    `pmset -g log`. Memoised for a minute: job_verify asks once per artifact.
+    """
+    global _MEMO
+    now = time.time()
+    if _MEMO and now - _MEMO[0] < _MEMO_S:
+        return _MEMO[1]
+    d = _asl_dir()
+    text = _asl_log(d) if d else None
+    if text is None:
+        text = _pmset_log()
+    _MEMO = (now, text)
+    return text
+
+
+def _pmset_log() -> str:
+    """The power log as text, from pmset. Never raises.
 
     NOT decoded as strict UTF-8: pmset's log is not UTF-8. Assertion detail
     lines carry raw bytes -- on 2026-09-17 a WindowServer tickle line held 0xd5
@@ -126,7 +226,7 @@ def _sleep_log() -> str:
     undecodable byte elsewhere changes nothing it depends on.
     """
     try:
-        out = subprocess.run(list(_PMSET), capture_output=True, timeout=30)
+        out = subprocess.run(list(_PMSET), capture_output=True, timeout=180)
     except (OSError, subprocess.SubprocessError):
         return ""
     if out.returncode != 0:
