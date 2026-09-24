@@ -379,3 +379,6 @@ skills-lock.json
 # Private per-space module state and retained migration originals.
 **/.datacore/module-data/
 **/.datacore/module-data-backups/
+
+# Cursor adapter output (machine-local paths) — written by .datacore/adapters/cursor/install.py
+.cursor/
