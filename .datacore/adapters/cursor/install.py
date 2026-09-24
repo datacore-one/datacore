@@ -136,6 +136,29 @@ def install(root: Path, tools: Tools, dry_run: bool = False) -> dict[Path, dict]
     return planned
 
 
+# --- Cursor's per-project MCP approval ---------------------------------------
+
+def cursor_project_dir(root: Path, home: Path | None = None) -> Path:
+    """Where Cursor keeps per-project state: ~/.cursor/projects/<path with / as ->."""
+    return (home or Path.home()) / ".cursor" / "projects" / str(root).strip("/").replace("/", "-")
+
+
+def approved_servers(root: Path, home: Path | None = None) -> set[str] | None:
+    """Project MCP servers Cursor has been told to load, or None if it has no record.
+
+    Cursor skips a project's .cursor/mcp.json servers until the user approves
+    them once (entries are `<name>-<hash>`). That is a consent step, so this
+    only reads it; approving is the user's to do in Cursor.
+    """
+    path = cursor_project_dir(root, home) / "mcp-approvals.json"
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    keys = data if isinstance(data, list) else list(data) if isinstance(data, dict) else []
+    return {str(k).rsplit("-", 1)[0] for k in keys}
+
+
 # --- doctor ---------------------------------------------------------------
 
 def _tools_list(command: str, env: dict, cwd: Path) -> list[str]:
@@ -195,6 +218,16 @@ def doctor(root: Path) -> int:
             capture_output=True, text=True, timeout=30)
         results.append(("ok" if probe.returncode == 0 and not probe.stdout.strip() else "FAIL",
                         "guard bridge", "benign call passes silently" if not probe.stdout.strip() else probe.stdout.strip()[:120]))
+    approved = approved_servers(root)
+    for name in ("datacore", "plur"):
+        if name not in (mcp.get("mcpServers") or {}):
+            continue
+        if approved is not None and name in approved:
+            results.append(("ok", f"approved:{name}", "Cursor will load it"))
+        else:
+            results.append(("FAIL", f"approved:{name}",
+                            "Cursor skips it until approved once: in the Cursor app open this folder, "
+                            "Settings > MCP > enable it; in the terminal run `cursor-agent` here and approve"))
     agents = root / "AGENTS.md"
     results.append(("ok" if agents.exists() else "FAIL", "AGENTS.md",
                     "present" if agents.exists() else "missing: run context_merge.py rebuild --path <root> --emit"))

@@ -77,3 +77,16 @@ def test_install_writes_both_files(tmp_path):
     ci.install(tmp_path, TOOLS)
     assert json.loads((tmp_path / ".cursor" / "mcp.json").read_text())["mcpServers"]["datacore"]
     assert json.loads((tmp_path / ".cursor" / "hooks.json").read_text())["hooks"]["preToolUse"]
+
+
+def test_approval_state_is_read_from_cursors_project_record(tmp_path):
+    # Cursor loads a project's MCP servers only once approved, recorded per
+    # project as <name>-<hash> keys; unapproved servers are silently skipped.
+    home = tmp_path / "home"
+    root = Path("/srv/data")
+    assert ci.cursor_project_dir(root, home) == home / ".cursor" / "projects" / "srv-data"
+    assert ci.approved_servers(root, home) is None            # no record at all
+    rec = ci.cursor_project_dir(root, home)
+    rec.mkdir(parents=True)
+    (rec / "mcp-approvals.json").write_text(json.dumps(["datacore-ab12", "other-9f"]))
+    assert ci.approved_servers(root, home) == {"datacore", "other"}
