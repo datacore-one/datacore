@@ -36,6 +36,24 @@ try:
 except ImportError:
     yaml = None
 
+# Harnesses other than Claude Code read their instructions from AGENTS.md
+# (Codex, Cursor, Antigravity, OpenCode, OpenClaw) or GEMINI.md (Gemini CLI).
+# They are written from the same layers, under the same refusals.
+DEFAULT_EMIT = ("AGENTS", "GEMINI")
+GENERATED_HEADER = "<!-- AUTO-GENERATED: Do not edit directly -->"
+_EMIT_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+
+
+def emit_targets_from_env() -> list[str]:
+    """Extra context filenames requested via DATACORE_CONTEXT_EMIT (comma list).
+
+    Names are basenames only. Anything that could be a path is dropped, because
+    this value comes from the environment and decides where private content lands.
+    """
+    raw = os.environ.get("DATACORE_CONTEXT_EMIT", "")
+    return [n.strip() for n in raw.split(",") if _EMIT_NAME.match(n.strip())]
+
+
 # Layer order. Later layers EXTEND earlier ones by concatenation; nothing is
 # overridden textually (DIP-0002, "Resolved Questions" 1: same-named sections
 # both appear, and precedence is left to the reader of the composed file).
@@ -374,7 +392,7 @@ def merge_context(
 
     # Header
     if include_markers:
-        content_parts.append(f"<!-- AUTO-GENERATED: Do not edit directly -->\n")
+        content_parts.append(f"{GENERATED_HEADER}\n")
         content_parts.append(f"<!-- Source: {name}.base.md + .space.md + .local.md -->\n")
         content_parts.append(f"<!-- Regenerate: datacore context rebuild -->\n\n")
 
@@ -410,10 +428,15 @@ def rebuild_context(
     component_path: Path,
     name: str = "CLAUDE",
     dry_run: bool = False,
-    include_markers: bool = True
+    include_markers: bool = True,
+    emit: Optional[list[str]] = None,
 ) -> tuple[bool, list[str]]:
     """
     Rebuild a composed context file from its layers.
+
+    `emit` names extra outputs (e.g. ["AGENTS", "GEMINI"]) written with the
+    same merged content. Every output passes every refusal before any is
+    written.
 
     Args:
         component_path: Directory containing the layered files
@@ -454,21 +477,69 @@ def rebuild_context(
     # Private content never reaches a tracked file. DIP-0002 says the composed
     # file is "always gitignored"; that is a property of the repository, not of
     # this script, so check it rather than assume it.
+    outputs = [output_file]
+    notices: list[str] = []   # reported, but not a failure
+    previous = output_file.read_text() if output_file.exists() else None
+    for extra in (emit or []):
+        twin = component_path / f"{extra}.md"
+        if extra == name:
+            continue
+        if twin.exists():
+            existing = twin.read_text()
+            # A twin this script wrote carries its header, or (under
+            # --no-markers) equals the CLAUDE.md written alongside it. Anything
+            # else is someone's own file -- 2-datacore/AGENTS.md is an OpenClaw
+            # workspace file -- and a rebuild must not replace it.
+            if GENERATED_HEADER not in existing and existing != previous:
+                notices.append(f"not overwriting {twin}: it was not written by context_merge")
+                continue
+        tracked_reason = _twin_would_be_tracked(twin)
+        if tracked_reason:
+            notices.append(f"not writing {twin}: {tracked_reason}")
+            continue
+        outputs.append(twin)
     levels = dict(LAYERS)
     private_layers = [f for f in existing_layers
                       if levels.get(f.name[len(name) + 1:-len(".md")]) in UNTRACKED_ONLY_LEVELS]
-    if private_layers:
-        refusal = output_untracked_refusal(output_file)
+    # Every output gets every check before any is written: a second filename
+    # must not become a way around the refusal the first one would get.
+    for out in outputs:
+        if private_layers:
+            refusal = output_untracked_refusal(out)
+            if refusal:
+                return False, warnings + [refusal]
+        refusal = shared_layer_refusal(out, existing_layers, name)
         if refusal:
             return False, warnings + [refusal]
-    refusal = shared_layer_refusal(output_file, existing_layers, name)
-    if refusal:
-        return False, warnings + [refusal]
 
-    # Write output
-    output_file.write_text(merged_content)
+    # Write outputs
+    for out in outputs:
+        out.write_text(merged_content)
 
-    return len(warnings) == 0, warnings
+    return len(warnings) == 0, warnings + notices
+
+
+def _twin_would_be_tracked(twin: Path) -> str | None:
+    """Why a harness twin (AGENTS.md, GEMINI.md) must not be written here, or None.
+
+    CLAUDE.md is gitignored in every Datacore repo; its twins are new names that
+    most .gitignore files do not list yet. A twin git would track could be swept
+    into a commit by a sync, so it is written only where git ignores it (or
+    outside any work tree).
+    """
+    directory = twin.parent
+    try:
+        inside = subprocess.run(["git", "-C", str(directory), "rev-parse", "--is-inside-work-tree"],
+                                capture_output=True, text=True)
+        if inside.returncode != 0 or inside.stdout.strip() != "true":
+            return None
+        ignored = subprocess.run(["git", "-C", str(directory), "check-ignore", "-q", "--", twin.name],
+                                 capture_output=True, text=True)
+    except OSError as exc:
+        return f"git unavailable ({exc})"
+    if ignored.returncode == 0:
+        return None
+    return f"git would track it; add {twin.name} to .gitignore next to CLAUDE.md"
 
 
 def output_untracked_refusal(output_file: Path) -> str | None:
@@ -625,7 +696,8 @@ def find_all_contexts(root_path: Path) -> list[tuple[Path, str]]:
     return contexts
 
 
-def rebuild_all(root_path: Path, dry_run: bool = False) -> tuple[int, int, list[str]]:
+def rebuild_all(root_path: Path, dry_run: bool = False,
+                emit: Optional[list[str]] = None) -> tuple[int, int, list[str]]:
     """
     Rebuild all context files under a root path.
 
@@ -638,7 +710,10 @@ def rebuild_all(root_path: Path, dry_run: bool = False) -> tuple[int, int, list[
     all_warnings = []
 
     for component_path, name in contexts:
-        success, warnings = rebuild_context(component_path, name, dry_run=dry_run)
+        # Only the agent instructions have harness twins; SCAFFOLDING and
+        # other layered files keep a single output.
+        success, warnings = rebuild_context(component_path, name, dry_run=dry_run,
+                                            emit=emit if name == "CLAUDE" else None)
 
         if success:
             success_count += 1
@@ -680,6 +755,11 @@ def main():
         "--no-markers", action="store_true",
         help="Don't include layer boundary markers"
     )
+    rebuild_parser.add_argument(
+        "--emit", nargs="?", const=",".join(DEFAULT_EMIT), default=None,
+        help="Also write these context names from the CLAUDE layers "
+             "(comma list; bare --emit means AGENTS,GEMINI; else $DATACORE_CONTEXT_EMIT)"
+    )
 
     # validate command
     validate_parser = subparsers.add_parser("validate", help="Validate layers for private content")
@@ -707,20 +787,26 @@ def main():
     args = parser.parse_args()
 
     if args.command == "rebuild":
+        emit = ([n.strip() for n in args.emit.split(",") if _EMIT_NAME.match(n.strip())]
+                if args.emit else emit_targets_from_env())
         if args.all:
-            success, failure, warnings = rebuild_all(args.path, dry_run=args.dry_run)
+            success, failure, warnings = rebuild_all(args.path, dry_run=args.dry_run, emit=emit)
             print(f"\nRebuilt: {success} OK, {failure} with warnings")
         else:
             success, warnings = rebuild_context(
                 args.path, args.name,
                 dry_run=args.dry_run,
-                include_markers=not args.no_markers
+                include_markers=not args.no_markers,
+                emit=emit if args.name == "CLAUDE" else None,
             )
 
         for w in warnings:
             print(f"  {w}", file=sys.stderr)
 
-        sys.exit(0 if not warnings else 1)
+        # The verdict, not the volume of output: a skipped hand-written twin is
+        # reported above but is not a failed rebuild.
+        ok = (failure == 0) if args.all else success
+        sys.exit(0 if ok else 1)
 
     elif args.command == "validate":
         warnings = validate_layers(args.path, args.name)
