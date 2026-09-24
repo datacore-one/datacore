@@ -26,6 +26,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 LIB = Path(__file__).resolve().parents[2]   # .datacore/lib
@@ -81,6 +82,24 @@ def run_guards(kind: str, claude_payload: dict) -> str | None:
     return None
 
 
+STATE = LIB.parent / "state"
+
+
+def audit(payload: dict, kind: str | None, decision: str) -> None:
+    """One line per event: which event, what kind, what was decided. Never the
+    command or file content. This is how one tells that Cursor actually called
+    the guard, which a silent allow otherwise cannot show."""
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        with open(STATE / "cursor-hook.log", "a") as f:
+            f.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                "event": payload.get("hook_event_name"),
+                                "tool": payload.get("tool_name"), "kind": kind,
+                                "decision": decision}) + "\n")
+    except OSError:
+        pass
+
+
 def deny(reason: str) -> None:
     print(json.dumps({
         "permission": "deny",
@@ -99,17 +118,23 @@ def main() -> int:
     try:
         found = normalize(payload)
     except ValueError as exc:
+        audit(payload, "shell", "deny")
         deny(f"Could not evaluate this shell command ({exc}); Datacore's host guard refuses what it cannot check.")
         return 0
     if found is None:
+        audit(payload, None, "ignore")
         return 0
     kind, claude_payload = found
     try:
         reason = run_guards(kind, claude_payload)
     except Exception as exc:  # noqa: BLE001 — see module docstring on failure behaviour
         if kind == "shell":
+            audit(payload, kind, "deny")
             deny(f"Datacore's host guard could not run ({exc}); refusing rather than allowing unchecked.")
+        else:
+            audit(payload, kind, "error-allow")
         return 0
+    audit(payload, kind, "deny" if reason else "allow")
     if reason:
         deny(reason)
     return 0

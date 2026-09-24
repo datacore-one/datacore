@@ -77,3 +77,13 @@ def test_malformed_input_never_blocks_or_crashes(hook):
 def test_unreadable_shell_event_is_refused(hook):
     rc, out = hook({"hook_event_name": "beforeShellExecution", "command": None})
     assert rc == 0 and out["permission"] == "deny"
+
+
+def test_every_event_is_audited_without_its_content(hook, tmp_path):
+    hook({"hook_event_name": "beforeShellExecution", "command": "ls -la /secret-dir", "cwd": "/tmp"})
+    hook({"hook_event_name": "preToolUse", "tool_name": "Shell", "tool_input": {"command": "ssh root@203.0.113.7"}})
+    log = tmp_path / ".datacore" / "state" / "cursor-hook.log"
+    entries = [json.loads(line) for line in log.read_text().splitlines()]
+    assert [(e["event"], e["kind"], e["decision"]) for e in entries] == [
+        ("beforeShellExecution", "shell", "allow"), ("preToolUse", "shell", "deny")]
+    assert "secret-dir" not in log.read_text()
