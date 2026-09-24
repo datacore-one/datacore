@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Apply Datacore focus mode context to project CLAUDE.md files.
+"""Apply Datacore focus mode context to each project's agent instruction files.
 
-Scans all projects in [space]/2-projects/ and either:
-- Appends the Datacore section to existing CLAUDE.md
-- Creates a minimal CLAUDE.md with the Datacore section
+Scans all projects in [space]/2-projects/ and, for CLAUDE.md (Claude Code) and
+AGENTS.md (Codex, Cursor, Antigravity, OpenCode, OpenClaw), either:
+- Appends the Datacore section to the existing file
+- Creates a minimal file with the Datacore section
 
 Usage:
     python3 .datacore/lib/apply_focus_context.py --dry-run    # show what would change
@@ -29,6 +30,9 @@ This project lives inside a Datacore space. Session lifecycle commands are avail
 - `/standup` — generate/post standup from recent team journals
 - `/today` — daily briefing (incremental if already generated)
 
+In a harness without these slash commands, call the `datacore_command_run` MCP
+tool with the command name (e.g. `wrap-up`) and follow the steps it returns.
+
 | Key | Value |
 |-----|-------|
 | Space | `{space_dir}` |
@@ -38,7 +42,19 @@ This project lives inside a Datacore space. Session lifecycle commands are avail
 When `/wrap-up` runs, use the team journal schema: `## @contributor` narrative sections + `## Session Metadata` YAML block.
 """
 
-MINIMAL_TEMPLATE = """# CLAUDE.md
+# Every harness reads one of these. Same section in each, so a project gets
+# Datacore context whichever agent opens it.
+CONTEXT_FILES = ("CLAUDE.md", "AGENTS.md")
+
+# An AGENTS.md created beside a real CLAUDE.md points at it rather than
+# stubbing a second, empty project description.
+POINTER_TEMPLATE = """# AGENTS.md
+
+Project guidance for this repository is in `CLAUDE.md` — read it before working.
+
+{section}"""
+
+MINIMAL_TEMPLATE = """# {file_name}
 
 ## {project_name}
 
@@ -75,14 +91,19 @@ def find_projects(root: Path, space_filter: str | None = None) -> list[dict]:
             if project_dir.name.startswith("."):
                 continue
 
-            claude_md = project_dir / "CLAUDE.md"
+            files = {}
+            for name in CONTEXT_FILES:
+                path = project_dir / name
+                files[name] = {
+                    "path": path,
+                    "exists": path.exists(),
+                    "has_section": path.exists() and MARKER in path.read_text(),
+                }
             projects.append({
                 "space_dir": space_dir.name,
                 "project_dir": project_dir,
                 "project_name": project_dir.name,
-                "claude_md": claude_md,
-                "has_claude_md": claude_md.exists(),
-                "has_section": claude_md.exists() and MARKER in claude_md.read_text(),
+                "files": files,
             })
     return projects
 
@@ -92,28 +113,29 @@ def generate_section(space_dir: str) -> str:
 
 
 def apply_to_project(project: dict, dry_run: bool) -> str:
-    """Apply focus context to a single project. Returns status string."""
-    claude_md = project["claude_md"]
+    """Apply focus context to one project's instruction files. Returns a status string."""
     section = generate_section(project["space_dir"])
-
-    if project["has_section"]:
-        return "SKIP (already has Datacore section)"
-
-    if project["has_claude_md"]:
-        if dry_run:
-            return "WOULD APPEND Datacore section"
-        content = claude_md.read_text()
-        claude_md.write_text(content.rstrip() + "\n\n" + section + "\n")
-        return "APPENDED Datacore section"
-    else:
-        if dry_run:
-            return "WOULD CREATE minimal CLAUDE.md"
-        content = MINIMAL_TEMPLATE.format(
-            project_name=project["project_name"],
-            section=section,
-        ).lstrip()
-        claude_md.write_text(content)
-        return "CREATED minimal CLAUDE.md"
+    claude_exists = project["files"]["CLAUDE.md"]["exists"]
+    statuses = []
+    for name, f in project["files"].items():
+        if f["has_section"]:
+            statuses.append(f"{name}: skip")
+            continue
+        if f["exists"]:
+            if not dry_run:
+                f["path"].write_text(f["path"].read_text().rstrip() + "\n\n" + section + "\n")
+            statuses.append(f"{name}: {'would append' if dry_run else 'appended'}")
+            continue
+        if name == "AGENTS.md" and claude_exists:
+            content = POINTER_TEMPLATE.format(section=section)
+        else:
+            content = MINIMAL_TEMPLATE.format(
+                file_name=name, project_name=project["project_name"], section=section,
+            ).lstrip()
+        if not dry_run:
+            f["path"].write_text(content)
+        statuses.append(f"{name}: {'would create' if dry_run else 'created'}")
+    return ", ".join(statuses)
 
 
 def main():
@@ -140,11 +162,11 @@ def main():
 
     # Summary
     total = len(projects)
-    has_section = sum(1 for p in projects if p["has_section"])
-    needs_append = sum(1 for p in projects if p["has_claude_md"] and not p["has_section"])
-    needs_create = sum(1 for p in projects if not p["has_claude_md"])
-
-    print(f"\n  Total: {total} | Already done: {has_section} | Append: {needs_append} | Create: {needs_create}")
+    files = [f for p in projects for f in p["files"].values()]
+    done = sum(1 for f in files if f["has_section"])
+    append = sum(1 for f in files if f["exists"] and not f["has_section"])
+    create = sum(1 for f in files if not f["exists"])
+    print(f"\n  Projects: {total} | Files already done: {done} | Append: {append} | Create: {create}")
 
 
 if __name__ == "__main__":
