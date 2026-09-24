@@ -2,6 +2,7 @@
 cadence: geo-sov-scan
 role: cio
 frequency: weekly
+timeout_minutes: 120   # a multi-model scan; the 30-min default killed it on 2026-09-24
 duration: 30min
 tools: [Read, Write, Bash]
 # DIP-0050: judged by a new scan summary written during the run.
