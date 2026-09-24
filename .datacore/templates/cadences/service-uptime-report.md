@@ -5,7 +5,7 @@ frequency: weekly
 # DIP-0050: judged by this run's report, in the shape the duty has used since
 # May (see the previous reports at the same path).
 evidence:
-  path: "reports/service-uptime-report-{date}.md"
+  path: "1-tracks/ops/reports/service-uptime-report-{date}*.md"
   require: ["^# Service Uptime Report", "^## "]
   min_bytes: 2000
 ---

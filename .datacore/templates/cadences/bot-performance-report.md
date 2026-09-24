@@ -5,7 +5,7 @@ frequency: daily
 # DIP-0050: judged by this run's report, in the shape the duty has used since
 # May (see the previous reports at the same path).
 evidence:
-  path: "reports/bot-performance-report-{date}.md"
+  path: "1-tracks/ops/reports/bot-performance-report-{date}*.md"
   require: ["^# Bot Performance Report", "^## "]
   min_bytes: 2000
 ---

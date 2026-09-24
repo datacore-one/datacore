@@ -5,7 +5,7 @@ frequency: daily
 # DIP-0050: judged by this run's report, in the shape the duty has used since
 # May (see the previous reports at the same path).
 evidence:
-  path: "reports/position-health-check-{date}.md"
+  path: "1-tracks/ops/reports/position-health-check-{date}*.md"
   require: ["^# Position Health Check", "^## "]
   min_bytes: 2000
 ---

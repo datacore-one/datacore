@@ -5,7 +5,7 @@ frequency: daily
 # DIP-0050: judged by this run's report, in the shape the duty has used since
 # May (see the previous reports at the same path).
 evidence:
-  path: "reports/audit-trail-append-{date}.md"
+  path: "1-tracks/ops/reports/audit-trail-append-{date}*.md"
   require: ["^# Audit Trail Append", "^## "]
   min_bytes: 3000
 ---

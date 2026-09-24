@@ -5,7 +5,7 @@ frequency: monthly
 # DIP-0050: judged by this run's report, in the shape the duty has used since
 # May (see the previous reports at the same path).
 evidence:
-  path: "reports/nav-calculation-{date}.md"
+  path: "1-tracks/ops/reports/nav-calculation-{date}*.md"
   require: ["^# NAV Calculation", "^## "]
   min_bytes: 2000
 ---

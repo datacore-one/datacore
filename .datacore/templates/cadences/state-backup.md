@@ -5,7 +5,7 @@ frequency: daily
 # DIP-0050: judged by this run's report, in the shape the duty has used since
 # May (see the previous reports at the same path).
 evidence:
-  path: "reports/state-backup-{date}.md"
+  path: "1-tracks/ops/reports/state-backup-{date}*.md"
   require: ["^# State Backup", "^## "]
   min_bytes: 2000
 ---
