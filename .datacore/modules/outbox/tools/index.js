@@ -2,11 +2,19 @@
 // Scans outbox directories and provides archive search.
 // Plain JS (ESM) for direct dynamic import by the MCP server.
 
-import { z } from '@datacore-one/mcp/runtime'
+import { z, findPython } from '@datacore-one/mcp/runtime'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import * as fs from 'fs'
 import * as path from 'path'
+import { fileURLToPath } from 'url'
+
+// <root>/.datacore/modules/<name>/tools/index.js -> <root>
+const DATA_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..')
+// The MCP server's own interpreter selection: DATACORE_PYTHON, then .datacore/venv,
+// then the first Python that can import yaml. A bare 'python3' ran whatever was
+// first on PATH, which on a Homebrew Mac cannot import the venv's packages.
+const pythonBin = () => findPython(DATA_ROOT) ?? 'python3'
 
 const execFileAsync = promisify(execFile)
 
@@ -88,7 +96,7 @@ export const tools = [
       }
 
       try {
-        const { stdout } = await execFileAsync('python3', [
+        const { stdout } = await execFileAsync(pythonBin(), [
           scriptPath, '--query', args.query,
           '--limit', String(args.limit || 10),
           '--json',
@@ -134,7 +142,7 @@ result = handler.dispose(${pathsJson}, reason='${reason}', confirm=${confirm})
 print(json.dumps(result))
 `
       try {
-        const { stdout } = await execFileAsync('python3', ['-c', code], {
+        const { stdout } = await execFileAsync(pythonBin(), ['-c', code], {
           cwd: path.join(ctx.storage.basePath, '.datacore', 'modules', 'outbox', 'lib'),
           timeout: 15000,
         })

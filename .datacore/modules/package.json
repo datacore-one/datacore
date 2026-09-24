@@ -5,8 +5,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@datacore-one/mcp": "^2.2.1",
     "js-yaml": "^4.3.2",
-    "zod": "^3.25.76",
-    "@datacore-one/mcp": "file:../../2-datacore/2-projects/datacore-mcp"
+    "zod": "^3.25.76"
   }
 }
