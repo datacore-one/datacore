@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Wire Datacore into Cursor for one installation.
 
-    python3 .datacore/lib/adapters/cursor/install.py            # install into <root>/.cursor/
-    python3 .datacore/lib/adapters/cursor/install.py --dry-run  # show what would be written
-    python3 .datacore/lib/adapters/cursor/install.py doctor     # live checks, ok / FAIL / n-a
+    python3 .datacore/adapters/cursor/install.py            # install into <root>/.cursor/
+    python3 .datacore/adapters/cursor/install.py --dry-run  # show what would be written
+    python3 .datacore/adapters/cursor/install.py doctor     # live checks, ok / FAIL / n-a
 
 What it writes, all under <root>/.cursor/ (gitignored: every value is a local path):
 
@@ -53,7 +53,7 @@ class Tools:
 
 
 def default_root() -> Path:
-    return Path(os.environ.get("DATACORE_PATH") or HERE.parents[3]).resolve()   # <root>/.datacore/lib/adapters/cursor
+    return Path(os.environ.get("DATACORE_PATH") or HERE.parents[2]).resolve()   # <root>/.datacore/adapters/cursor
 
 
 def resolve_tools(root: Path) -> Tools:
@@ -95,7 +95,7 @@ def merge_hooks(existing: dict, root: Path, tools: Tools) -> dict:
     cfg = dict(existing)
     hooks = {event: [h for h in (entries or []) if isinstance(h, dict) and not _ours(h)]
              for event, entries in (cfg.get("hooks") or {}).items()}
-    bridge = f"{tools.python} {root / '.datacore' / 'lib' / 'adapters' / 'cursor' / 'hook.py'}"
+    bridge = f"{tools.python} {root / '.datacore' / 'adapters' / 'cursor' / 'hook.py'}"
     additions: dict[str, list[dict]] = {
         "preToolUse": [{"command": bridge, "timeout": 25, "failClosed": False}],
         "beforeShellExecution": [{"command": bridge, "timeout": 25, "failClosed": False}],
@@ -224,7 +224,7 @@ def main() -> int:
     if not (root / "AGENTS.md").exists():
         print("note: AGENTS.md missing; run: python3 .datacore/lib/context_merge.py rebuild --path "
               f"{root} --emit", file=sys.stderr)
-    print("next: open this folder in Cursor, then run: python3 .datacore/lib/adapters/cursor/install.py doctor")
+    print("next: open this folder in Cursor, then run: python3 .datacore/adapters/cursor/install.py doctor")
     return 0
 
 

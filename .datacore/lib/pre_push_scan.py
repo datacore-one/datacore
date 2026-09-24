@@ -76,6 +76,12 @@ DATACORE_NEW_FILE_ALLOW = [
     # could not live in lib/. Added 2026-09-03 after the audit branch was
     # refused on this one file for two days.
     ".datacore/bin/**",
+    # Harness adapters: code that wires Datacore into another agent harness
+    # (adapters/cursor/: installer, hook bridge, live check). Same class as
+    # lib/ -- scripts only; every value they write (paths, keys) goes to the
+    # harness's own gitignored config, never into the repo. Added 2026-09-24
+    # with the Cursor adapter, which was refused here and parked in lib/.
+    ".datacore/adapters/**",
     ".datacore/config/**",
     ".datacore/tests/**",
     ".datacore/skills/**",
@@ -133,6 +139,25 @@ def glob_match(path, pat):
         if fnmatch.fnmatch(path, base):
             return True
     return False
+
+
+def allowlist_summary(allow_globs):
+    """The allowed .datacore/ categories, as a refused author should read them.
+
+    Generated from the list being enforced, so the message cannot drift from
+    the rule: the hand-kept version had lost schemas/, datacore-docs/ and
+    4-archive/ by the time adapters/ was added.
+    """
+    parts = []
+    for glob in allow_globs:
+        rel = glob[len(".datacore/"):] if glob.startswith(".datacore/") else glob
+        if rel.endswith("/**"):
+            rel = rel[:-2]
+        elif rel == "*":
+            rel = "*(top-level files)"
+        if rel not in parts:
+            parts.append(rel)
+    return " ".join(parts)
 
 
 def match_any(path, patterns):
@@ -305,9 +330,7 @@ def main():
         if not any(single_level_match(rel, a) for a in allow_globs):
             blocks.append(
                 f"new file: {p}  (not in .datacore new-file allowlist — "
-                "allowed: agents/ commands/ lib/ bin/ dips/ specs/ templates/ "
-                "registry/ docs/ workflows/ hooks/ githooks/ config/ tests/ "
-                "skills/ cos/*.example modules/*/{agents,commands,lib,...})")
+                f"allowed: {allowlist_summary(allow_globs)})")
 
     # --- 3. Content scan of complete changed blobs -----------------------------------
     seen = set()

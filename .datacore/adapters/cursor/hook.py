@@ -29,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 
-LIB = Path(__file__).resolve().parents[2]   # .datacore/lib
+LIB = Path(__file__).resolve().parents[2] / "lib"   # <root>/.datacore/lib
 GUARDS = {
     "write": [LIB / "hooks" / "org_date_prewrite.py"],
     "shell": [LIB / "hooks" / "restricted_hosts_guard.py"],

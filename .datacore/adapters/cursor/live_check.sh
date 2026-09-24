@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # End-to-end check of the Cursor adapter through the real Cursor agent CLI.
 # Needs: `cursor-agent login` done once, and install.py run for this root.
-# Usage: bash .datacore/lib/adapters/cursor/live_check.sh [root]
+# Usage: bash .datacore/adapters/cursor/live_check.sh [root]
 set -uo pipefail
-ROOT=${1:-$(cd "$(dirname "$0")/../../../.." && pwd)}
+ROOT=${1:-$(cd "$(dirname "$0")/../../.." && pwd)}
 AGENT=$(command -v cursor-agent || command -v agent) || { echo "FAIL  cursor-agent not installed"; exit 1; }
 LOG="$ROOT/.datacore/state/cursor-hook.log"
 cd "$ROOT"

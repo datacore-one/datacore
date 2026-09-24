@@ -18,16 +18,16 @@ from pathlib import Path
 import pytest
 
 LIB = Path(__file__).resolve().parents[1]
-HOOK = LIB / "adapters" / "cursor" / "hook.py"
+HOOK = LIB.parent / "adapters" / "cursor" / "hook.py"
 WRONG_DAY = "* TODO x\nSCHEDULED: <2026-09-24 " + "Mon>\n"   # 2026-09-24 is a Thursday
 
 
 @pytest.fixture
 def hook(tmp_path):
     dc = tmp_path / ".datacore"
-    (dc / "lib" / "adapters" / "cursor").mkdir(parents=True)
+    (dc / "adapters" / "cursor").mkdir(parents=True)
     (dc / "lib" / "hooks").mkdir(parents=True)
-    shutil.copy(HOOK, dc / "lib" / "adapters" / "cursor" / "hook.py")
+    shutil.copy(HOOK, dc / "adapters" / "cursor" / "hook.py")
     for name in ("org_date_prewrite.py", "restricted_hosts_guard.py"):
         shutil.copy(LIB / "hooks" / name, dc / "lib" / "hooks" / name)
     shutil.copy(LIB / "date_utils.py", dc / "lib" / "date_utils.py")
@@ -36,7 +36,7 @@ def hook(tmp_path):
 
     def run(payload):
         data = payload if isinstance(payload, str) else json.dumps(payload)
-        r = subprocess.run([sys.executable, str(dc / "lib" / "adapters" / "cursor" / "hook.py")],
+        r = subprocess.run([sys.executable, str(dc / "adapters" / "cursor" / "hook.py")],
                            input=data, capture_output=True, text=True, timeout=60)
         out = r.stdout.strip()
         return r.returncode, (json.loads(out) if out else None)

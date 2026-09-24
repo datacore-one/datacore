@@ -3,8 +3,8 @@
 This adapter makes Datacore work in Cursor, in both the editor and the `cursor-agent` CLI, for one installation.
 
 ```bash
-python3 .datacore/lib/adapters/cursor/install.py            # writes <root>/.cursor/mcp.json and hooks.json
-python3 .datacore/lib/adapters/cursor/install.py doctor     # live checks: ok / FAIL / n-a
+python3 .datacore/adapters/cursor/install.py            # writes <root>/.cursor/mcp.json and hooks.json
+python3 .datacore/adapters/cursor/install.py doctor     # live checks: ok / FAIL / n-a
 ```
 
 | Layer | How Cursor gets it |

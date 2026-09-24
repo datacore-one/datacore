@@ -44,3 +44,20 @@ def test_glob_match_prefix_and_suffix_semantics():
     assert S.glob_match("docs/enterprise/deal.md", "docs/enterprise/**")
     assert S.glob_match("a/b/id_ed25519", "**/id_ed25519")
     assert not S.glob_match("docs/public/x.md", "docs/enterprise/**")
+
+
+def test_harness_adapters_are_admitted_like_lib():
+    allow = S.DATACORE_NEW_FILE_ALLOW
+    assert any(S.single_level_match(".datacore/adapters/cursor/hook.py", a) for a in allow)
+    # the categorical rejects still win inside it
+    assert S.match_any(".datacore/state/adapters/x.json", S.DATACORE_NEW_FILE_REJECT)
+
+
+def test_refusal_message_is_generated_from_the_policy_it_enforces():
+    # The message was a hand-kept list that had drifted from the policy
+    # (no schemas/, datacore-docs/, 4-archive/), so a refused author was told
+    # a different rule than the one applied.
+    summary = S.allowlist_summary(S.DATACORE_NEW_FILE_ALLOW)
+    for category in ("adapters/", "schemas/", "lib/", "modules/*/tools/", "cos/*.example"):
+        assert category in summary, category
+    assert S.allowlist_summary([".datacore/lib/**"]) == "lib/"
