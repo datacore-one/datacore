@@ -221,7 +221,7 @@ Detection: `python3 .datacore/lib/focus_mode.py detect`
 ### Bash
 
 - **Never multi-line Bash.** Chain with `&&`.
-- Use dedicated tools: `Glob` not `find`, `Read` not `cat`, `Grep` not `grep`.
+- Prefer your harness's dedicated file tools (read, search, glob) over shell equivalents when it has them.
 
 > Detailed conventions are in engram memory (DIP pack, 747 engrams). Call `plur_recall_hybrid` for specifics.
 
