@@ -5,6 +5,7 @@ frequency: weekly
 # DIP-0050: judged by the plan page written during the run, in the owner's space.
 # The fragment under ~/.datacore/cos is for the briefing; the page is what git holds.
 script: .datacore/lib/cos_weekly_plan.sh
+timeout_minutes: 120
 evidence:
   space: personal
   path: "notes/pages/weekly-plan-*.md"

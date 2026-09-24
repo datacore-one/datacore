@@ -6,6 +6,7 @@ frequency: daily
 # judges the page it writes into the owner's journal (another space, named
 # without its host number). The box keeps the script at .datacore/lib.
 script: .datacore/lib/cos_morning.sh
+timeout_minutes: 240   # waits up to 3h for the health reading; the 30-min default killed it on 2026-09-24
 evidence:
   space: personal
   path: "notes/journals/{date}.md"
