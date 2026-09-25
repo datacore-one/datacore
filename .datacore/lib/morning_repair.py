@@ -163,9 +163,20 @@ def _alert_group(text: str) -> None:
                    capture_output=True, timeout=120)
 
 
+def pull_latest() -> str:
+    """Step 0: bring this host up to date. Many morning failures are already fixed
+    upstream and only wait for a pull (2026-09-25: the egress declarations landed at
+    07:00, the box still ran yesterday's module). It is the host's own fleet sync."""
+    rc, out = _run([sys.executable, str(LIB / "git_fleet_sync.py"), str(ROOT), "--execute", "--pull"],
+                   timeout=1200)
+    return f"fleet sync rc {rc}"
+
+
 def sweep() -> int:
     day = datetime.now(timezone.utc).date().isoformat()
     STATE.mkdir(parents=True, exist_ok=True)
+    pulled = pull_latest()
+    print(f"morning_repair: {pulled}")
     found, delegated = findings(), 0
     for f in found:
         f["tried"] = remediate(f)

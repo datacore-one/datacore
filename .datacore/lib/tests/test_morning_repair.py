@@ -30,6 +30,7 @@ def test_mail_triage_is_judged_by_todays_clean_run(tmp_path, monkeypatch):
 
 def test_sweep_remediates_then_delegates_only_what_is_still_failing(tmp_path, monkeypatch):
     monkeypatch.setattr(M, "STATE", tmp_path / "state")
+    monkeypatch.setattr(M, "pull_latest", lambda: "fleet sync rc 0")
     a = {"id": "unit-x", "kind": "unit", "unit": "x.service", "title": "unit x failed"}
     b = {"id": "v2-egress", "kind": "v2", "title": "v2-verify: egress"}
     calls = {"n": 0}
@@ -50,6 +51,7 @@ def test_sweep_remediates_then_delegates_only_what_is_still_failing(tmp_path, mo
 
 def test_the_budget_caps_delegations(tmp_path, monkeypatch):
     monkeypatch.setattr(M, "STATE", tmp_path / "state")
+    monkeypatch.setattr(M, "pull_latest", lambda: "fleet sync rc 0")
     many = [{"id": f"v2-{i}", "kind": "v2", "title": f"t{i}"} for i in range(M.MAX_ITEMS + 3)]
     monkeypatch.setattr(M, "findings", lambda run_v2=True: [dict(f) for f in many])
     monkeypatch.setattr(M, "remediate", lambda f: "")
