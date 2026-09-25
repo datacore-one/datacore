@@ -441,8 +441,12 @@ def _claude_json(prompt: str, timeout: int, label: str) -> Optional[Dict[str, An
         async for msg in _sdk_query(prompt=prompt, options=options):
             if isinstance(msg, _SdkResultMessage):
                 if msg.is_error:
-                    errs = '; '.join(msg.errors or ['<no detail>'])
-                    log(f"  {label}: SDK returned error: {errs[:200]}")
+                    # The subtype names the cause (error_max_budget_usd, error_max_turns,
+                    # error_during_execution); `errors` is often empty, and "<no detail>"
+                    # alone failed the same items every morning with nothing to act on.
+                    errs = '; '.join(msg.errors or []) or (getattr(msg, 'result', None) or '')
+                    log(f"  {label}: SDK returned error: subtype={getattr(msg, 'subtype', '?')} "
+                        f"cost=${getattr(msg, 'total_cost_usd', 0) or 0:.2f} {errs[:200] or '<no detail>'}")
                     return None
                 return msg.result
         return None
