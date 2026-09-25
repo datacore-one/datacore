@@ -73,7 +73,7 @@ _deliver() {
     # shellcheck disable=SC1090
     set -a; . "${JOB_VERIFY_ENV_FILE}"; set +a
     local tok="${TELEGRAM_BOT_TOKEN:-${WINSTON_BOT_TOKEN:-}}"
-    local chat="${TELEGRAM_CHAT_ID:-${WINSTON_CHAT_ID:-}}"
+    local chat="${ALERT_CHAT_ID:-${TELEGRAM_CHAT_ID:-${WINSTON_CHAT_ID:-}}}"  # The Firm group first (2026-09-25)
     if [ -n "$tok" ] && [ -n "$chat" ]; then
       curl -s -m 15 -X POST "https://api.telegram.org/bot${tok}/sendMessage" \
         -d "chat_id=${chat}" --data-urlencode "text=${msg}" >/dev/null && return 0
@@ -90,7 +90,7 @@ _deliver() {
   # (cos_env.py: cos.env -> .env -> local.env, later wins); WINSTON_BOT_TOKEN
   # lives only in local.env, so sourcing cos.env here would find nothing.
   printf '%s\n' "$msg" | ssh -o ConnectTimeout=15 -o BatchMode=yes "$RELAY_HOST" \
-    'python3 ~/Data/.datacore/modules/chief-of-staff/server/lib/winston_send.py' \
+    'python3 ~/Data/.datacore/modules/chief-of-staff/server/lib/winston_send.py --alert' \
     >>"$LOG" 2>&1 && return 0
   printf 'RELAY FAILED: could not deliver via %s\n' "$RELAY_HOST" >> "$LOG"; return 1
 }
