@@ -1,4 +1,5 @@
 """Liveness judges a principal's own-scheduler cadences from its signed records only (DIP-0050 P2)."""
+import pytest
 import hashlib, importlib.util, json, pathlib, subprocess, sys, time
 from datetime import date
 ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -33,6 +34,13 @@ def _events(sp, records, sig="s"):
 
 
 REG = {"metric": "cadence.registration", "slugs": {SLUG: "46 5 * * *"}}
+
+
+@pytest.fixture(autouse=True)
+def _placeholder_signatures(monkeypatch, request):
+    """The fixtures sign with the placeholder "s"; real verification is tested below."""
+    if "real_signatures" not in request.keywords:
+        monkeypatch.setattr(L, "_sig_ok", lambda e: e.sig == "s")
 
 
 def _state(sp):
@@ -96,3 +104,13 @@ def test_an_artifact_in_another_space_is_verified_there(tmp_path):
     _events(sp, [(3 * DAY, REG), (3600_000, {**end, "artifact_space": "nowhere"})])
     assert _state(sp)[0] == "red", "an unresolvable space verifies nothing"
     assert L.space_named(tmp_path, "personal") == other and L.space_named(tmp_path, "plur") == sp and L.space_named(tmp_path, "firm") is None
+
+
+@pytest.mark.real_signatures
+def test_a_copied_hash_is_not_a_signature(tmp_path):
+    """2026-09-25: an agent wrote sig = the event's own hash. The real verifier refuses it."""
+    sp = _space(tmp_path); sha = _commit(sp, "drafts/a.md", "# draft\n")
+    run = {"metric": "cadence.run", "slug": SLUG, "phase": "end", "result": "ok",
+           "artifact": "drafts/a.md", "sha256": sha}
+    _events(sp, [(3 * DAY, REG), (3600_000, run)], sig="dabfeaef2c304d17b650")
+    assert _state(sp) is None, "neither the registration nor the run is signed, so nothing counts"

@@ -106,6 +106,22 @@ def _members(space: Path) -> set[str] | None:
     return {OWNER_ALIASES.get(str(m).lower(), str(m).lower()) for m in doc.get("members") or []}
 
 
+def _sig_ok(e) -> bool:
+    """A real signature by the actor's registered key -- not merely a non-empty field.
+
+    On 2026-09-25 an agent hand-wrote two cadence.run "ok" records in 6-meridian
+    with `sig` set to a copy of the event's own hash. Presence was all this judge
+    checked; only the missing artifact sha kept them from counting.
+    """
+    from ledger.events import body_dict, canonical_bytes
+    from ledger.keys import verify as verify_sig
+    try:
+        body = body_dict(e.seq, e.hlc, e.actor, e.type, e.payload, e.prev)
+        return bool(e.sig) and verify_sig(e.actor, canonical_bytes(body), e.sig)
+    except Exception:  # noqa: BLE001 -- an unverifiable record is not a signed one
+        return False
+
+
 def _attests(space: Path, actor: str, metric: str) -> list[tuple[datetime, dict]]:
     """(time, payload) of an actor's signed metric.attest events of one metric, oldest first."""
     from ledger.events import from_line
@@ -118,7 +134,7 @@ def _attests(space: Path, actor: str, metric: str) -> list[tuple[datetime, dict]
             e = from_line(line.strip())
         except Exception:  # noqa: BLE001 -- a torn line is not a record
             continue
-        if e.type == "metric.attest" and e.sig and (e.payload or {}).get("metric") == metric:
+        if e.type == "metric.attest" and (e.payload or {}).get("metric") == metric and _sig_ok(e):
             out.append((datetime.fromtimestamp(float(str(e.hlc).split(".")[0]) / 1000, timezone.utc), e.payload))
     return out
 
