@@ -281,6 +281,20 @@ gh pr list --author @me --json title,url,state 2>/dev/null
 gh api notifications --jq '.[] | select(.unread)' 2>/dev/null
 ```
 
+Then check sprint files against their PRs, for every space that has sprints:
+
+```bash
+python3 .datacore/lib/sprint_files.py health --space 5-plur
+```
+
+**Never quote a sprint item's `state` as fact without this.** On 2026-09-25 the
+briefing named enterprise W23 B1/B2 as open go-live blockers "in review"; their
+PRs had merged 108 days earlier. `sprint_files` reads each repo's integration
+branch (not whatever is checked out), and names expired-but-active sprints,
+in-flight items in closed sprints, and in-flight items whose PR merged. An item
+it calls stale is finished work: say the sprint file is behind, not that the
+work is blocked.
+
 ---
 
 ## Step 8: Collect Nightshift Results

@@ -5,6 +5,8 @@ Reads the active sprint.yaml and outputs a standup-ready JSON block:
   - sprint metadata (id, day_of_sprint, sprint_length, status)
   - shipped: items with state=done (all, not just overnight — caller can filter)
   - in_flight: items with state in {claimed, in-progress, review}
+  - stale: in-flight items whose PR has already merged — the sprint file is
+    behind, the work is not; never report these as in flight
   - blocked: items with state=blocked
   - hitl_pending: hitl_log entries with classification != "decided"
   - progress: counts by state
@@ -13,8 +15,13 @@ Usage:
     python3 .datacore/lib/sprint_standup_inputs.py \\
         --sprint ~/Data/5-plur/2-projects/enterprise/sprints/2026-W20-sprint1.yaml
 
-    python3 .datacore/lib/sprint_standup_inputs.py \\
-        --sprint-dir ~/Data/5-plur/2-projects/enterprise/sprints  # picks latest
+    python3 .datacore/lib/sprint_standup_inputs.py --space 5-plur   # the running sprint
+
+With no --sprint, the sprint comes from sprint_files.discover(): read from the
+repo's integration branch (not whatever branch is checked out), both file
+layouts, and only a sprint that is `active` AND inside its dates. The old
+default globbed flat `2026-W*-sprint*.yaml` files by name, so it took W27 — a
+July sprint and the only flat file — to be "the latest" (2026-09-25).
 
 Output is JSON to stdout. Integrate into the standup-generator agent's
 Phase 0 input collection step.
@@ -28,6 +35,9 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import sprint_files  # noqa: E402
 
 
 def _parse_date(value: str | None) -> date | None:
@@ -74,7 +84,9 @@ def _day_of_sprint(start: str | None, end: str | None, today: date) -> tuple[int
     return (day, total)
 
 
-def extract(sprint: dict[str, Any], today: date | None = None) -> dict[str, Any]:
+def extract(sprint: dict[str, Any], today: date | None = None,
+            pr_lookup=None) -> dict[str, Any]:
+    """`pr_lookup(repo, n) -> {'state': ...}`; None skips the merged-PR check."""
     today = today or date.today()
     sprint_id = sprint.get("sprint_id", "unknown")
     status = sprint.get("status", "unknown")
@@ -93,6 +105,7 @@ def extract(sprint: dict[str, Any], today: date | None = None) -> dict[str, Any]
 
     shipped: list[dict] = []
     in_flight: list[dict] = []
+    stale: list[dict] = []
     blocked: list[dict] = []
     ready_count = 0
     counts: dict[str, int] = {}
@@ -118,7 +131,11 @@ def extract(sprint: dict[str, Any], today: date | None = None) -> dict[str, Any]
             shipped.append(entry)
         elif state in ("claimed", "in-progress", "review"):
             entry["state"] = state
-            in_flight.append(entry)
+            pr_item = dict(item, pr=item.get("pr") or claim.get("pr"))
+            if pr_lookup is not None and sprint_files.pr_is_merged(pr_item, pr_lookup):
+                stale.append(entry)
+            else:
+                in_flight.append(entry)
         elif state == "blocked":
             blocked.append(entry)
         elif state == "ready":
@@ -142,6 +159,7 @@ def extract(sprint: dict[str, Any], today: date | None = None) -> dict[str, Any]
         "goal": (sprint.get("goal") or "").strip(),
         "shipped": shipped,
         "in_flight": in_flight,
+        "stale": stale,
         "blocked": blocked,
         "hitl_pending": hitl_pending,
         "ready_remaining": ready_count,
@@ -155,6 +173,19 @@ def extract(sprint: dict[str, Any], today: date | None = None) -> dict[str, Any]
             "total": sum(counts.values()),
         },
     }
+
+
+def _running_sprint(space: str, today: date) -> tuple[dict | None, str]:
+    """(sprint data, source) for the running sprint, or (None, reason)."""
+    disc = sprint_files.discover(space)
+    running, expired = sprint_files.active(disc, today)
+    if running:
+        sf = max(running, key=lambda s: str((s.data.get("dates") or {}).get("start")))
+        return sf.data, sf.where
+    reason = f"no running sprint in {space}"
+    if expired:
+        reason += "; still marked active past their end date: " + ", ".join(s.sprint_id for s in expired)
+    return None, reason
 
 
 def _resolve_sprint_path(args: argparse.Namespace) -> Path | None:
@@ -171,13 +202,7 @@ def _resolve_sprint_path(args: argparse.Namespace) -> Path | None:
             print(f"no sprint files found in {d}", file=sys.stderr)
             return None
         return p
-    # Default: look in the enterprise sprints dir relative to this file
-    default_dir = Path(__file__).resolve().parents[3] / "5-plur" / "2-projects" / "enterprise" / "sprints"
-    p = _latest_sprint(default_dir)
-    if not p:
-        print(f"no sprint files found in {default_dir}", file=sys.stderr)
-        return None
-    return p
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -189,17 +214,28 @@ def main(argv: list[str] | None = None) -> int:
     g = parser.add_mutually_exclusive_group()
     g.add_argument("--sprint", help="Path to sprint YAML file")
     g.add_argument("--sprint-dir", help="Directory containing sprint files (picks latest)")
+    parser.add_argument("--space", default="5-plur",
+                        help="Space to discover the running sprint in (default when no path is given)")
     parser.add_argument("--date", help="Override today's date (YYYY-MM-DD)")
+    parser.add_argument("--no-pr-check", action="store_true",
+                        help="Skip the merged-PR check (offline)")
     args = parser.parse_args(argv)
 
-    sprint_path = _resolve_sprint_path(args)
-    if not sprint_path:
-        return 1
-
     today = date.fromisoformat(args.date) if args.date else date.today()
-    sprint = _load_yaml(sprint_path)
-    result = extract(sprint, today)
-    result["_source"] = str(sprint_path)
+    if args.sprint or args.sprint_dir:
+        sprint_path = _resolve_sprint_path(args)
+        if not sprint_path:
+            return 1
+        sprint, source = _load_yaml(sprint_path), str(sprint_path)
+    else:
+        sprint, source = _running_sprint(args.space, today)
+        if sprint is None:
+            print(source, file=sys.stderr)
+            return 1
+
+    lookup = None if args.no_pr_check else sprint_files.gh_pr_state
+    result = extract(sprint, today, pr_lookup=lookup)
+    result["_source"] = source
 
     json.dump(result, sys.stdout, indent=2, default=str)
     sys.stdout.write("\n")

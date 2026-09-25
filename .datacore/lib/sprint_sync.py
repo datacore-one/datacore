@@ -223,38 +223,32 @@ def _age_days(props: dict) -> float | None:
     return (datetime.now(timezone.utc) - newest).total_seconds() / 86400
 
 
-def discover(space: str) -> list[Path]:
-    """Every sprint.yaml under the space, ONE per sprint_id.
+def discover(space: str) -> list:
+    """Every sprint in the space, one per sprint_id — see sprint_files.discover.
 
-    Worktrees duplicate the whole tree, so `2-projects/*/sprints/*` finds the
-    same sprint once per checkout — `enterprise` and `enterprise-wt-ci-gate`
-    both matched, and every sprint appeared twice. Projecting a sprint twice is
-    harmless only by luck; deduplicate on the directory name, which is the
-    sprint id, and prefer the non-worktree path.
+    Discovery used to live here with its own glob, which saw only
+    `sprints/<id>/sprint.yaml`: the flat `sprints/2026-W27-sprint.yaml` was
+    invisible, so the 2026-09-04 retroactive close skipped it. It also read the
+    working tree, so a checkout on a feature branch hid every sprint change
+    merged to development. Both are fixed once, in sprint_files, for every
+    reader (#1577 follow-up, 2026-09-25).
     """
-    found = sorted((REPO / space).glob("2-projects/*/sprints/*/sprint.yaml"))
-    # Track-level sprints too. Work that is not in one code repo — ops, hub
-    # submissions, bizdev, statutory — has no 2-projects/ home, and filing it
-    # under a code repo's sprints/ would be a lie about where it lives.
-    # It goes under `1-tracks/<track>/sprints/` rather than a bare `sprints/`
-    # at the space root: DIP-0015 fixes the allowed root directories and the
-    # structure hook refuses a new one, correctly.
-    found += sorted((REPO / space).glob("1-tracks/*/sprints/*/sprint.yaml"))
-    best: dict[str, Path] = {}
-    for p in found:
-        key = p.parent.name
-        prev = best.get(key)
-        if prev is None or ("-wt-" in str(prev) and "-wt-" not in str(p)):
-            best[key] = p
-    return sorted(best.values())
+    import sprint_files
+
+    disc = sprint_files.discover(space)
+    for w in disc.warnings:
+        print(f"warning: {w}")
+    return disc
 
 
-def pick(space: str, want: str | None, active: bool) -> list[Path]:
-    found = discover(space)
+def pick(space: str, want: str | None, active: bool) -> list:
+    import sprint_files
+
+    disc = discover(space)
     if want:
-        hit = [p for p in found if want in str(p)]
+        hit = [s for s in disc.sprints if want in s.sprint_id or want in s.where]
         if not hit:
-            sys.exit(f"no sprint matching {want!r} under {space}/2-projects/*/sprints/")
+            sys.exit(f"no sprint matching {want!r} under {space}/")
         return hit
     if active:
         # `status: active` alone is not enough. Ten sprints from W23 to W31
@@ -262,32 +256,16 @@ def pick(space: str, want: str | None, active: bool) -> list[Path]:
         # and --active --apply would have projected every one of them into
         # tonight's queue. A sprint whose end date has passed is over whatever
         # its status field says; the field is a claim, the date is a fact.
-        from datetime import date
-
-        today = date.today()
-        out, expired = [], []
-        for p in found:
-            d = yaml.safe_load(p.read_text()) or {}
-            if d.get("status") != "active":
-                continue
-            end = (d.get("dates") or {}).get("end")
-            if isinstance(end, str):
-                try:
-                    end = date.fromisoformat(end)
-                except ValueError:
-                    end = None
-            if end and end < today:
-                expired.append((p.parent.name, end))
-                continue
-            out.append(p)
+        running, expired = sprint_files.active(disc)
         if expired:
             print(f"IGNORING {len(expired)} sprint(s) still marked active whose "
-                  f"end date has passed — close them:")
-            for name, end in sorted(expired, key=lambda x: str(x[1])):
-                print(f"   {name} ended {end} ({(today - end).days} days ago)")
+                  f"end date has passed — close them (the briefing reports these "
+                  f"via sprint_files.py health):")
+            for sf in expired:
+                print(f"   {sf.sprint_id} ended {sprint_files._end_date(sf)}")
             print()
-        return out
-    return found
+        return running
+    return disc.sprints
 
 
 def items_of(sprint: dict, include_stretch: bool) -> list[dict]:
@@ -342,6 +320,7 @@ def main() -> int:
         return 0
 
     from org_transaction import SafeOrgWorkspace as OrgWorkspace
+    import sprint_files
 
     org_dir = REPO / args.space / "org"
     org_files = [p for p in (org_dir / "next_actions.org", org_dir / "inbox.org",
@@ -357,13 +336,21 @@ def main() -> int:
     seen_sprints: set[str] = set()
 
     for sp in paths:
-        sprint = yaml.safe_load(sp.read_text()) or {}
-        sid = sprint.get("sprint_id") or sp.parent.name
+        sprint = sp.data
+        sid = sp.sprint_id
         seen_sprints.add(sid)
         mine, probs = agent_items(sprint, args.stretch)
         problems += [f"{sid}: {p}" for p in probs]
 
         for it in mine:
+            # An item that says someone is on it but whose PR has merged is
+            # finished work with a stale sprint file. Projecting it would queue
+            # an agent to redo it; name it instead (2026-09-25: W23 B1/B2).
+            if it.get("state") in sprint_files.IN_FLIGHT and sprint_files.pr_is_merged(it):
+                problems.append(
+                    f"{sid}: {it['id']} says {it['state']!r} but its PR ({it.get('pr')}) "
+                    f"has merged — not projected; mark the item done in the sprint file")
+                continue
             # ADOPT vs CREATE. `org: <task-id>` means the task ALREADY EXISTS —
             # someone wrote it, with its own ROADMAP/SURFACE/DONE_WHEN — and the
             # sprint is claiming it, not re-describing it. Without this the only
@@ -516,7 +503,7 @@ def main() -> int:
 
     mode = "APPLIED" if args.apply else "DRY RUN — nothing written"
     print(f"sprint_sync — {mode}")
-    print(f"sprints: {', '.join(p.parent.name for p in paths)}\n")
+    print(f"sprints: {', '.join(p.sprint_id for p in paths)}\n")
     print(f"queued (created)   {len(created)}")
     for tid, title in created[:12]:
         print(f"   + {title[:70]}")
