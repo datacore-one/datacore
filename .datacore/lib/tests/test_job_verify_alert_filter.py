@@ -56,3 +56,11 @@ def test_a_verifier_that_could_not_run_is_always_relayed():
     """Not a block, not a decision: the verifier itself is broken. That must reach a person."""
     assert "ManifestError" in operator_facing("ManifestError: jobs/manifest.yaml: duplicate job name 'x'\n")
     assert operator_facing("Traceback (most recent call last):\n  File x\nKeyError: 'y'\n").count("\n") == 2
+
+
+def test_a_recovery_alone_is_not_an_operator_alert():
+    from job_verify_alert_filter import operator_facing
+    out = ("recovered: task 0a96 closed for mac-artifact-pull\n"
+           "job 'mac-suite-audit' FAILED:\n  - suite-audit.log: last line does not match\n"
+           "alert withheld: mac-suite-audit failed on the same artifact already counted (21x)\n")
+    assert operator_facing(out).strip() == ""

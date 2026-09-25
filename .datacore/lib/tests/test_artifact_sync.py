@@ -389,3 +389,15 @@ def test_manifest_loads_and_mac_artifact_pull_job_present():
     assert artifact.check == "json_has_keys"
     assert artifact.arg == ["headline"]
     assert artifact.max_age_hours == 26
+
+
+def test_an_unpublished_briefing_is_nothing_to_pull_not_a_failure(monkeypatch):
+    import subprocess
+    missing = subprocess.CompletedProcess([], 23, "", 'rsync: [sender] link_stat "/x" failed: No such file or directory (2)\n'
+                                               "rsync(1): warning: receiver has empty file list: exiting\n")
+    monkeypatch.setattr(artifact_sync.subprocess, "run", lambda *a, **k: missing)
+    results = run_sync("client", env={"COS_SERVER_SSH": "fake@host"}, today="2026-09-25")
+    assert results and all(r.startswith("ok: nothing published yet") for r in results)
+    other = subprocess.CompletedProcess([], 23, "", "rsync: permission denied (13)\n")
+    monkeypatch.setattr(artifact_sync.subprocess, "run", lambda *a, **k: other)
+    assert run_sync("client", env={"COS_SERVER_SSH": "fake@host"}, today="2026-09-25")[0].startswith("error:")

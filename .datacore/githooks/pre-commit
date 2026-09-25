@@ -40,6 +40,25 @@ case "$repo_root" in
     esac
     exec "$data_root/.datacore/hooks/space-pre-commit" "$@"
     ;;
+  "$data_root"/.datacore/modules/*)
+    # DIP-0047 at commit time: a module that declares its egress may not grow an
+    # undeclared network call. Until 2026-09-25 only the box's 06:00 v2-verify
+    # caught one -- twice in three days, both from same-day trading commits.
+    mod=${repo_root#"$data_root"/.datacore/modules/}
+    mod=${mod%%/*}
+    if grep -q "^egress:" "$data_root/.datacore/modules/$mod/module.yaml" 2>/dev/null; then
+      if ! python3 "$data_root/.datacore/lib/egress_scan.py" --enforce --module "$mod" >/tmp/egress-precommit.$$ 2>&1; then
+        grep -A6 "UNDECLARED" /tmp/egress-precommit.$$ >&2
+        printf '\nDeclare it under egress: (it acts) or exempt: (read-only) in %s/module.yaml.\n' "$mod" >&2
+        rm -f /tmp/egress-precommit.$$
+        exit 1
+      fi
+      rm -f /tmp/egress-precommit.$$
+    fi
+    SAFETY_ONLY=1
+    export SAFETY_ONLY
+    exec "$data_root/.datacore/hooks/space-pre-commit" "$@"
+    ;;
   *)
     SAFETY_ONLY=1
     export SAFETY_ONLY

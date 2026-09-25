@@ -31,7 +31,10 @@ _BLOCK_START = "job '"
 _QUIET = ("alert withheld:", "delegated repair of", "alert suppressed:")
 _LOUD = ("alert:",)
 #: Lines inside or beside a block that carry no decision.
-_NOISE = ("recurrence: forgot ", "recurring: filed task ", "could NOT delegate ", "sent ")
+#: "recovered: task ... closed" is bookkeeping -- the repair task of a failure the
+#: operator was never told about. Relayed alone it arrived as "job_verify FAILED
+#: on mac" (2026-09-25) for a job that had just come right.
+_NOISE = ("recurrence: forgot ", "recurring: filed task ", "could NOT delegate ", "sent ", "recovered: task ")
 
 
 def operator_facing(text: str) -> str:
