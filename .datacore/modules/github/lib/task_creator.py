@@ -2,7 +2,7 @@
 """Create org-mode tasks from GitHub scan results.
 
 Reads scan output from github_scanner, determines which items are actionable,
-creates tasks in the appropriate space's next_actions.org with :AI:github: tags.
+captures tasks into the appropriate space's inbox.org with :AI:github: tags.
 
 Usage:
     python3 task_creator.py --scan-file data/scan_cache.json --data-dir ~/Data --repos-file data/repos.json
@@ -33,10 +33,14 @@ def _space_for_repo(repo_full_name: str, org_to_spaces: dict[str, list[str]]) ->
 
 
 def _org_file_for_space(data_dir: Path, space: str) -> Path:
-    """Get the next_actions.org path for a space."""
+    """The space's inbox.org: new tasks enter through the GTD capture point.
+
+    The adapter refuses new tasks anywhere else (single capture point), which
+    failed every GitHub-triage task silently until 2026-09-25.
+    """
     if space == "root":
-        return data_dir / "0-personal" / "org" / "next_actions.org"
-    return data_dir / space / "org" / "next_actions.org"
+        return data_dir / "0-personal" / "org" / "inbox.org"
+    return data_dir / space / "org" / "inbox.org"
 
 
 def _make_task_id(repo: str, number: int) -> str:
