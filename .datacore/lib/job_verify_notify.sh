@@ -70,8 +70,12 @@ RC=$?
 _deliver() {
   local msg="$1"
   if [ -n "${JOB_VERIFY_ENV_FILE:-}" ] && [ -r "${JOB_VERIFY_ENV_FILE}" ]; then
+    # The shared env carries ALERT_CHAT_ID (The Firm group). Host env files
+    # such as nightshift.env do not, and without it an error fell through to
+    # TELEGRAM_CHAT_ID: the agent's 1:1 chat (2026-09-25).
     # shellcheck disable=SC1090
-    set -a; . "${JOB_VERIFY_ENV_FILE}"; set +a
+    set -a; [ -r "${DATACORE_ROOT:-$HOME/Data}/.datacore/env/.env" ] && . "${DATACORE_ROOT:-$HOME/Data}/.datacore/env/.env"
+    . "${JOB_VERIFY_ENV_FILE}"; set +a
     local tok="${TELEGRAM_BOT_TOKEN:-${WINSTON_BOT_TOKEN:-}}"
     local chat="${ALERT_CHAT_ID:-${TELEGRAM_CHAT_ID:-${WINSTON_CHAT_ID:-}}}"  # The Firm group first (2026-09-25)
     if [ -n "$tok" ] && [ -n "$chat" ]; then

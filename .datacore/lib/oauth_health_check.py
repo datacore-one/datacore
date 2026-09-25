@@ -73,7 +73,7 @@ def try_refresh(token_data: dict, token_path: Path):
 def send_telegram(text: str):
     """Send notification via Telegram if configured."""
     bot = os.environ.get('TELEGRAM_BOT_TOKEN')
-    chat = os.environ.get('TELEGRAM_CHAT_ID')
+    chat = os.environ.get('ALERT_CHAT_ID') or os.environ.get('TELEGRAM_CHAT_ID')  # errors go to The Firm group
     if not bot or not chat:
         return
     try:

@@ -136,7 +136,7 @@ def _send_telegram(message: str) -> bool:
         return False
     try:
         result = subprocess.run(
-            [sys.executable, str(WINSTON_SEND)], input=message, capture_output=True, text=True
+            [sys.executable, str(WINSTON_SEND), "--alert"], input=message, capture_output=True, text=True
         )
     except OSError:
         return False

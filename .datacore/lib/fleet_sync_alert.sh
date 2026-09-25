@@ -11,7 +11,7 @@
 set -uo pipefail
 
 TOKEN="${TELEGRAM_BOT_TOKEN:-}"
-CHAT="${TELEGRAM_CHAT_ID:-}"
+CHAT="${ALERT_CHAT_ID:-${TELEGRAM_CHAT_ID:-}}"  # errors go to The Firm group
 
 if [[ -z "$TOKEN" || -z "$CHAT" ]]; then
     echo "fleet_sync_alert: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set — alert not sent" >&2
