@@ -2,7 +2,10 @@
 cadence: geo-sov-scan
 role: cio
 frequency: weekly
-timeout_minutes: 120   # a multi-model scan; the 30-min default killed it on 2026-09-24
+timeout_minutes: 140   # ~250 queries, ~100 min; below Hermes's 150-min cap (the sync guard checks)
+# A script, not an agent turn: 250 queries outlast Hermes's per-turn iteration limit
+# (blocked at 165/250 on 2026-09-25). The runner is in the space; the wrapper commits the summary.
+script: 1-tracks/geo/run_sov_scan.sh
 duration: 30min
 tools: [Read, Write, Bash]
 # DIP-0050: judged by a new scan summary written during the run.
@@ -17,7 +20,7 @@ evidence:
 Measure what the major LLMs say about PLUR, and who they name instead, once a week.
 The scan's content backlog is the input to geo-research.
 
-## Steps
+## Steps (what the runner does; no agent is asked)
 
 1. **Sync:** `git pull` in plur-space.
 2. **Scan:** from `1-tracks/geo/`, run `python3 geo_visibility.py --mode grounded`
