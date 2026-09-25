@@ -27,14 +27,22 @@ def _run(tmp_path, bindir, *extra):
 
 
 def test_a_merged_pr_naming_the_item_passes(tmp_path):
-    gh = _fake_gh(tmp_path, [{"number": 7, "title": "fix box-x (autofix-box-x-20260922)", "body": "",
+    gh = _fake_gh(tmp_path, [{"number": 7, "title": "fix box-x (autofix-box-x-20260922)", "body": "", "state": "MERGED",
                               "mergedAt": "2026-09-22T10:00:00Z", "url": "https://x/pull/7"}], ["lib/producer.py"])
     r = _run(tmp_path, gh, "--item", "autofix-box-x-20260922", "--repo", "o/r")
-    assert r.returncode == 0 and "merged: https://x/pull/7" in r.stdout
+    assert r.returncode == 0 and "https://x/pull/7" in r.stdout
 
 
-def test_an_open_or_unrelated_pr_is_not_yet(tmp_path):
-    gh = _fake_gh(tmp_path, [{"number": 7, "title": "fix box-x (autofix-box-x-20260922)", "body": "", "mergedAt": None, "url": "u"},
+def test_an_open_pr_naming_the_item_passes_because_the_owner_merges(tmp_path):
+    """Owner, 2026-09-25: an agent opens the pull request and stops."""
+    gh = _fake_gh(tmp_path, [{"number": 9, "title": "fix box-x (autofix-box-x-20260922)", "body": "", "state": "OPEN",
+                              "mergedAt": None, "url": "https://x/pull/9"}], ["lib/producer.py"])
+    r = _run(tmp_path, gh, "--item", "autofix-box-x-20260922", "--repo", "o/r")
+    assert r.returncode == 0 and "ready for the owner" in r.stdout
+
+
+def test_a_closed_or_unrelated_pr_is_not_yet(tmp_path):
+    gh = _fake_gh(tmp_path, [{"number": 7, "title": "fix box-x (autofix-box-x-20260922)", "body": "", "state": "CLOSED", "mergedAt": None, "url": "u"},
                              {"number": 8, "title": "unrelated", "body": "", "mergedAt": "2026-09-22T10:00:00Z", "url": "u8"}], [])
     r = _run(tmp_path, gh, "--item", "autofix-box-x-20260922", "--repo", "o/r")
     assert r.returncode == 1 and "not yet" in r.stderr
@@ -42,7 +50,7 @@ def test_an_open_or_unrelated_pr_is_not_yet(tmp_path):
 
 def test_a_merge_that_touched_the_manifest_is_refused(tmp_path):
     """The boundary, at the stage where the artifacts are out of reach."""
-    gh = _fake_gh(tmp_path, [{"number": 7, "title": "autofix-box-x-20260922", "body": "", "mergedAt": "2026-09-22T10:00:00Z", "url": "u"}],
+    gh = _fake_gh(tmp_path, [{"number": 7, "title": "autofix-box-x-20260922", "body": "", "state": "OPEN", "mergedAt": None, "url": "u"}],
                   ["lib/producer.py", ".datacore/lib/jobs/manifest.yaml"])
     r = _run(tmp_path, gh, "--item", "autofix-box-x-20260922", "--repo", "o/r")
     assert r.returncode == 1 and "REFUSED" in r.stderr and "manifest" in r.stderr

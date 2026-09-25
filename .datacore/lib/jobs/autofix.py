@@ -189,7 +189,9 @@ def delegate(job, failures: list[str], rec: dict, *, root: Path,
         check = (f"python3 .datacore/lib/jobs/fix_check.py --stage merged --job {job.name} "
                  f"--machine {job.machine} --contract-sha {sha} --item {iid} --repo {repo}")
         follower = actor_of(job.machine, roster)
-        if follower and follower != assignee and not _is_visitor(job.machine, roster):
+        # No pull-and-verify follow-up: nothing is merged until the owner merges, and the
+        # morning repair re-check verifies the host after that (owner, 2026-09-25).
+        if False and follower and follower != assignee and not _is_visitor(job.machine, roster):
             then = {"id": f"{iid}-verify", "assignee": follower, "route": "dev",
                     "title": f"Pull and verify {job.name} on {job.machine} after {iid}",
                     "check": verify, "autofix": True, "job": job.name, "machine": job.machine,
@@ -265,8 +267,8 @@ def repair_body(job, failures: list[str], rec: dict, *, stage: str = "verify",
             f"THIS JOB RUNS ON {job.machine}, NOT HERE. You cannot verify it from this host,",
             f"so the done-condition is a MERGED pull request in {repo} whose title or body",
             f"contains `{item_id}`. Fix the producer there, open the PR with that id in the",
-            "title, and merge it -- you hold merge rights for this. The check refuses a PR",
-            "that touched the jobs manifest.",
+            "title, and STOP -- do not merge; the owner merges (owner, 2026-09-25). The check",
+            "accepts the open PR and refuses one that touched the jobs manifest.",
             (f"When it is merged, {follower} pulls on {job.machine} and runs the job's own "
              "verification as a follow-up item; you do not need to do that part.")
             if follower else

@@ -73,16 +73,18 @@ def merged_pr(item_id: str, repo: str, *, gh=("gh",)) -> tuple[dict | None, list
     manifest may have repaired the check instead of the producer, and only a
     person may decide that.
     """
-    q = subprocess.run([*gh, "pr", "list", "--repo", repo, "--state", "merged", "--search", item_id,
-                        "--json", "number,title,body,mergedAt,url", "--limit", "10"],
+    # OPEN counts (owner, 2026-09-25): an agent opens the pull request and stops; the
+    # owner merges. Before that decision the stage required a merge by the agent.
+    q = subprocess.run([*gh, "pr", "list", "--repo", repo, "--state", "all", "--search", item_id,
+                        "--json", "number,title,body,mergedAt,url,state", "--limit", "10"],
                        capture_output=True, text=True, timeout=60)
     if q.returncode != 0:
         raise RuntimeError(f"gh pr list failed: {(q.stderr or q.stdout).strip()[:200]}")
     prs = [p for p in json.loads(q.stdout or "[]")
-           if p.get("mergedAt") and item_id in (p.get("title", "") + p.get("body", ""))]
+           if p.get("state") in ("OPEN", "MERGED") and item_id in (p.get("title", "") + p.get("body", ""))]
     if not prs:
         return None, []
-    pr = sorted(prs, key=lambda p: p["mergedAt"])[-1]
+    pr = sorted(prs, key=lambda p: p["number"])[-1]
     v = subprocess.run([*gh, "pr", "view", str(pr["number"]), "--repo", repo, "--json", "files"],
                        capture_output=True, text=True, timeout=60)
     files = [x.get("path", "") for x in (json.loads(v.stdout or "{}").get("files") or [])] if v.returncode == 0 else []
@@ -113,7 +115,7 @@ def main() -> int:
             print(f"not yet: could not ask GitHub ({exc})", file=sys.stderr)
             return 1
         if pr is None:
-            print(f"not yet: no merged pull request in {a.repo} names {a.item}", file=sys.stderr)
+            print(f"not yet: no pull request in {a.repo} names {a.item}", file=sys.stderr)
             return 1
         touched = [p for p in files if any(p.endswith(m) for m in MANIFEST_PATHS)]
         if touched:
@@ -121,7 +123,7 @@ def main() -> int:
                   f"fixes the producer, not the check that caught it; changing a contract needs a "
                   f"human.", file=sys.stderr)
             return 1
-        print(f"merged: {pr['url']} names {a.item} and left the jobs manifest alone")
+        print(f"pull request ready for the owner: {pr['url']} names {a.item} and left the jobs manifest alone")
         return 0
 
     manifest = Path(a.manifest)

@@ -294,15 +294,14 @@ def _capture_delegation(monkeypatch, tmp_path, job):
     return state, why, captured
 
 
-def test_a_box_job_is_a_merge_for_miles_then_a_verify_for_winston(tmp_path, monkeypatch):
+def test_a_box_job_is_a_pull_request_for_miles_and_the_owner_merges(tmp_path, monkeypatch):
+    """Owner, 2026-09-25: code changes are PRs, never merged by an agent; no follow-up
+    item, because nothing lands until the owner merges and the morning re-check verifies."""
     state, why, p = _capture_delegation(monkeypatch, tmp_path, _job("box-x", "box"))
     assert state == "delegated", why
     assert "--stage merged" in p["check"] and "--repo datacore-one/datacore" in p["check"] and f"--item {p['id']}" in p["check"]
-    assert p["stage"] == "merged" and "MERGED pull request" in p["body"] and "merge rights" in p["body"]
-    then = p["then"]
-    assert then["assignee"] == "winston" and then["id"] == p["id"] + "-verify"
-    assert then["check"].startswith("python3 .datacore/lib/jobs/fix_check.py --job box-x --machine box")
-    assert "--stage" not in then["check"], "the follow-up is the ordinary verification on the box"
+    assert "do not merge" in p["body"] and "merge rights" not in p["body"]
+    assert "then" not in p
 
 
 def test_a_mac_job_is_a_merge_with_no_follow_up(tmp_path, monkeypatch):
