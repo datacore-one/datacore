@@ -117,8 +117,34 @@ def mail_triage(today: date | None = None) -> list[dict]:
                       "triage-email.sh >> ~/.datacore/cos/email-triage.log 2>&1"}]
 
 
+ESCALATIONS_LOG = Path.home() / ".datacore" / "state" / "autofix-escalations.log"
+
+
+def escalations() -> list[dict]:
+    """Repairs Miles gave up on: the autofix pipeline's own "needs a person" list.
+
+    The spec named this source and the first version left it out, so 13 stuck
+    repairs (six failing jobs) stayed in a log whose alerts were suppressed as
+    repeats (found 2026-09-25). They are findings too, each with no safe remediation.
+    """
+    try:
+        lines = ESCALATIONS_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    last = max((i for i, l in enumerate(lines) if l.startswith("autofix: ")), default=None)
+    if last is None:
+        return []
+    jobs: dict[str, str] = {}
+    for l in lines[last + 1:]:
+        m = re.match(r"\s+([a-z0-9-]+):\s*(.+)$", l)
+        if m:
+            jobs.setdefault(m.group(1), m.group(2).strip())
+    return [{"id": f"escalation-{job}", "kind": "escalation", "title": f"job {job}: repair gave up",
+             "evidence": why[:300]} for job, why in sorted(jobs.items())]
+
+
 def findings(run_v2: bool = True) -> list[dict]:
-    return v2_checklist(run_v2) + failed_units() + red_cadences() + mail_triage()
+    return v2_checklist(run_v2) + failed_units() + red_cadences() + mail_triage() + escalations()
 
 
 # ---- remediation, delegation, reporting ------------------------------------------------
@@ -184,7 +210,9 @@ def sweep() -> int:
     still = {f["id"] for f in findings(run_v2=any(f["kind"] == "v2" for f in found))}
     for f in found:
         f["cleared_by_sweep"] = f["id"] not in still
-        if f["id"] in still:
+        if f["id"] in still and f["kind"] == "escalation":
+            f["item"] = ""          # miles already gave up; handing it back is a loop, not a repair
+        elif f["id"] in still:
             if delegated < MAX_ITEMS:
                 f["item"] = delegate(f, day)
                 delegated += bool(f["item"])
@@ -222,7 +250,8 @@ def recheck() -> int:
         "repaired": [{"title": f["title"], "how": f.get("tried") or f.get("item") or "cleared"} for f in repaired],
         "still_failing": [{"title": f["title"], "evidence": f.get("evidence_now") or f.get("evidence", ""),
                            "item": f.get("item", ""), "needs": "review the pull request" if f.get("item") else
-                           "a person: nothing could be delegated"} for f in failing],
+                           ("a person: Miles gave up after three attempts" if f.get("kind") == "escalation"
+                            else "a person: nothing could be delegated")} for f in failing],
     }, indent=1))
     if failing:
         _alert_group("Morning repair, 03:30 UTC -- still failing after repair:\n" +

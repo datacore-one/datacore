@@ -91,3 +91,28 @@ def test_a_sweep_that_did_not_run_is_the_first_thing_reported(tmp_path, monkeypa
     day = M.datetime.now(M.timezone.utc).date().isoformat()
     frag = json.loads((tmp_path / "frag" / day / "repairs.json").read_text())
     assert frag["still_failing"][0]["title"] == "the 02:00 sweep did not run"
+
+
+def test_repairs_that_gave_up_are_findings_once_per_job(tmp_path, monkeypatch):
+    log = tmp_path / "esc.log"
+    log.write_text("autofix: 3 repair(s) need a person\n  old-job: miles gave up\n"
+                   "autofix: 13 repair(s) need a person\n"
+                   "  nightshift-overnight: miles gave up — gave up after 3 failed attempts\n"
+                   "  nightshift-overnight: miles gave up — gave up after 3 failed attempts\n"
+                   "  box-deploy-drift: miles gave up — gave up after 3 failed attempts\n")
+    monkeypatch.setattr(M, "ESCALATIONS_LOG", log)
+    found = M.escalations()
+    assert [f["id"] for f in found] == ["escalation-box-deploy-drift", "escalation-nightshift-overnight"]
+    assert all(f["kind"] == "escalation" for f in found)
+
+
+def test_an_escalation_is_not_handed_back_to_miles(tmp_path, monkeypatch):
+    monkeypatch.setattr(M, "STATE", tmp_path / "state")
+    monkeypatch.setattr(M, "pull_latest", lambda: "fleet sync rc 0")
+    esc = {"id": "escalation-x", "kind": "escalation", "title": "job x: repair gave up"}
+    monkeypatch.setattr(M, "findings", lambda run_v2=True: [dict(esc)])
+    monkeypatch.setattr(M, "remediate", lambda f: "")
+    delegated = []
+    monkeypatch.setattr(M, "delegate", lambda f, day: delegated.append(f["id"]) or "x")
+    M.sweep()
+    assert delegated == []
