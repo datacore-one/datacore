@@ -65,9 +65,12 @@ def create_triage_task(
     # We use TRIAGE_ID instead of ID because org_workspace manages :ID: internally
     task_id = properties.get("TRIAGE_ID", "")
     if task_id:
-        existing = _find_task_by_id(org_file, task_id)
-        if existing:
-            return {"success": True, "id": task_id, "heading": heading, "skipped": True}
+        # New tasks are captured into inbox.org and the inbox processor moves them on,
+        # so "already triaged" means found in EITHER file -- or the item is re-captured daily.
+        org_file = Path(org_file)
+        for f in dict.fromkeys([org_file, org_file.parent / "inbox.org", org_file.parent / "next_actions.org"]):
+            if f.exists() and _find_task_by_id(f, task_id):
+                return {"success": True, "id": task_id, "heading": heading, "skipped": True}
 
     # Build tag string for org-mode format
     tag_str = ":".join(tags)
@@ -87,7 +90,10 @@ def create_triage_task(
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         if result.returncode != 0:
-            return {"success": False, "error": result.stderr.strip()}
+            # The adapter reports refusals as JSON on stdout; stderr alone made the
+            # error empty ("Failed to create task for datacore-mcp#19: ", 2026-09-25).
+            why = result.stderr.strip() or result.stdout.strip() or f"adapter exit {result.returncode}"
+            return {"success": False, "error": why[:300]}
 
         import json
         output = json.loads(result.stdout)
