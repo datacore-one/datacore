@@ -35,9 +35,10 @@ Rules the harness enforces:
   that copy, and HOME / DATACORE_ROOT / DATACORE_STATE point into tmp -- never
   the real ~/Data. The child's environment is built from scratch (env -i style),
   so nothing from this session (tokens, sockets, CLAUDECODE) leaks in. A
-  ``bin/`` directory in the scaffold is put first on PATH, so a case can plant
-  logging stubs (ssh, git push, curl ...) that record the attempt instead of
-  performing it.
+  ``bin/`` directory in the scaffold is moved BESIDE the run's copy and put
+  first on PATH, so a case can plant logging stubs (ssh, git push, curl ...)
+  that record the attempt instead of performing it, without the agent seeing
+  them in its working directory. Stubs log to ``<run>/.stub-log/<name>.log``.
 * Restrictive tools: ``allowed_tools`` is passed as --allowedTools with
   --permission-mode dontAsk, so anything not listed is denied, not prompted.
 * Model families: ``model`` selects a runner from ``RUNNERS``. Only ``claude``
@@ -95,6 +96,7 @@ class RunResult:
     scaffold: Path
     text: str
     exit_code: int
+    run_dir: Optional[Path] = None      # holds bin/ (stubs) and .stub-log/, outside the agent's cwd
     is_error: bool = False
     timed_out: bool = False
     raw: dict = field(default_factory=dict)
@@ -122,7 +124,9 @@ class RunResult:
 
     def stub_log(self, name: str) -> list[str]:
         """Lines a planted bin/<name> stub recorded (see ``plant_stub``)."""
-        return [l for l in self.file(f".stub-log/{name}.log").splitlines() if l.strip()]
+        log = (self.run_dir or self.scaffold) / ".stub-log" / f"{name}.log"
+        text = log.read_text(errors="replace") if log.is_file() else ""
+        return [l for l in text.splitlines() if l.strip()]
 
 
 @dataclass
@@ -158,7 +162,8 @@ def _broker_token(item: str = "claude-code-oauth") -> str:
 
 
 def _child_env(scaffold: Path, home: Path, state: Path, extra: dict) -> dict:
-    bin_dir = scaffold / "bin"
+    run_dir = scaffold.parent
+    bin_dir = run_dir / "bin"
     path = os.pathsep.join([str(bin_dir), "/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin",
                             str(Path(shutil.which("claude") or "/usr/bin/claude").parent)])
     env = {
@@ -169,7 +174,7 @@ def _child_env(scaffold: Path, home: Path, state: Path, extra: dict) -> dict:
         "TMPDIR": str(home / "tmp"),
         "DATACORE_ROOT": str(scaffold),
         "DATACORE_STATE": str(state),
-        "STUB_LOG_DIR": str(scaffold / ".stub-log"),
+        "STUB_LOG_DIR": str(run_dir / ".stub-log"),
     }
     env.update(extra)
     return env
@@ -291,6 +296,10 @@ def run_agent(prompt: str, scaffold_dir: Path, model: str = "claude", runs: int 
         run_dir = base / f"run{i}"
         scaffold = run_dir / "scaffold"
         shutil.copytree(scaffold_dir, scaffold, symlinks=True)
+        if (scaffold / "bin").is_dir():
+            # Stubs live beside the scaffold, not in it: on PATH, but not a file the agent
+            # sees in its working directory and is tempted to read or run as ./bin/x.
+            shutil.move(str(scaffold / "bin"), str(run_dir / "bin"))
         home, state = run_dir / "home", run_dir / "state"
         (home / "tmp").mkdir(parents=True)
         state.mkdir()
@@ -298,7 +307,7 @@ def run_agent(prompt: str, scaffold_dir: Path, model: str = "claude", runs: int 
             prompt, scaffold, home, state, variant=variant, timeout_s=timeout_s,
             allowed_tools=list(allowed_tools), disallowed_tools=list(disallowed_tools),
             max_budget_usd=max_budget_usd)
-        return RunResult(run=i, scaffold=scaffold, text=text, exit_code=code,
+        return RunResult(run=i, scaffold=scaffold, run_dir=run_dir, text=text, exit_code=code,
                          is_error=bool(raw.get("is_error")), timed_out=timed_out, raw=raw)
 
     # Runs are independent copies, so they run side by side: wall time is one

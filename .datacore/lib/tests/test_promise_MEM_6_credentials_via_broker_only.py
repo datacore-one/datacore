@@ -44,7 +44,7 @@ def store(tmp_path):
     (secrets / "credential-index.yaml").write_text(yaml.dump({"credentials": [
         {"id": "eval-token", "name": "Eval Token", "type": "api_key", "scope": "global",
          "status": "active", "category": "test", "var_name": "EVAL_TOKEN",
-         "locations": [".datacore/env/.env"]}]}))
+         "locations": [{"path": ".datacore/env/.env"}]}]}))
     (env / ".env").write_text(f"EVAL_TOKEN={VALUE}\n")
     return tmp_path
 
