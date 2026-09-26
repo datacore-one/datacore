@@ -19,6 +19,20 @@ Two guards close that:
                                 No tool runs except readers until the spilled
                                 file is actually read.
 
+Privacy guards (2026-09-26, promises SPC-4/5, MEM-13/15/17/19), wired the same way:
+
+  space_policy_guard.py   PreToolUse Bash|Edit|Write|Read|MultiEdit. Space type
+                          policy; a space session stays out of other spaces;
+                          a session that touched a client space writes nothing
+                          outside it; a person document outside the personal
+                          space asks first.
+  memory_guard.py         PreToolUse Edit|Write|MultiEdit. No name, amount, host
+                          or secret on a line of always-loaded auto-memory.
+  publish_guard.py        PreToolUse Artifact|Bash. An Artifact publish, gist,
+                          surge, netlify or vercel deploy asks first.
+  context_merge.py check  SessionStart. Rebuilds a stale composed CLAUDE.md,
+                          reports a hand-edited one.
+
 Run:   python3 .datacore/lib/hooks/install_redaction_guards.py [--dry-run]
 
 Idempotent. Backs up settings.json before writing. Never removes a hook.
@@ -34,6 +48,10 @@ SETTINGS = Path.home() / ".claude" / "settings.json"
 HOOKS = Path.home() / "Data" / ".datacore" / "lib" / "hooks"
 RG = f"python3 {HOOKS / 'redaction_guard.py'}"
 IG = f"python3 {HOOKS / 'injection_integrity_guard.py'}"
+SPG = f"python3 {HOOKS / 'space_policy_guard.py'}"
+MG = f"python3 {HOOKS / 'memory_guard.py'}"
+PG = f"python3 {HOOKS / 'publish_guard.py'}"
+CC = f"python3 {HOOKS.parent / 'context_merge.py'} check --fix --quiet"
 
 # (event, matcher, command, timeout). matcher None => no matcher key.
 WIRING = [
@@ -41,6 +59,10 @@ WIRING = [
     ("PostToolUse", "mcp__plur__plur_session_start", f"{IG} mark", 5),
     ("PreToolUse", "*", f"{IG} check", 5),
     ("PostToolUse", "Read|Bash|Grep|Glob", f"{IG} clear", 5),
+    ("PreToolUse", "Bash|Edit|Write|Read|MultiEdit", SPG, 5),
+    ("PreToolUse", "Edit|Write|MultiEdit", MG, 5),
+    ("PreToolUse", "Artifact|Bash", PG, 5),
+    ("SessionStart", None, CC, 20),
 ]
 
 
@@ -69,9 +91,10 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    for f in ("redaction_guard.py", "injection_integrity_guard.py"):
-        if not (HOOKS / f).exists():
-            sys.exit(f"missing hook: {HOOKS / f}")
+    for _event, _matcher, cmd, _timeout in WIRING:
+        script = Path(cmd.split()[1])
+        if not script.exists():
+            sys.exit(f"missing hook: {script}")
 
     if not SETTINGS.exists():
         sys.exit(f"not found: {SETTINGS}")
