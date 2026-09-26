@@ -85,6 +85,13 @@ from ledger.log import EventLog
 ESTIMATE_CENTS_PER_MILLION_TOKENS = 300
 ESTIMATE_CHARS_PER_TOKEN = 4
 
+# Access the owner retired (owner decision 2026-09-26, AGT-3): no agent's child
+# process receives these, whatever its parent carries. `dict(os.environ)` used
+# to pass the fleet .env's ANTHROPIC_API_KEY on, so `claude -p` billed the
+# retired key instead of the configured subscription. Same set as
+# chief-of-staff's cos_env.METERED_KEYS.
+RETIRED_KEYS = frozenset({"ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN"})
+
 
 def estimate_cost_cents(prompt: str, text: str) -> int:
     """Rough cost estimate for adapters with no real usage/cost fields to
@@ -207,9 +214,10 @@ class Executor:
         self._model: str | None = None
 
     def _execution_env(self) -> dict:
-        """Bind subprocess context to this dispatch, never ambient grants."""
+        """Bind subprocess context to this dispatch, never ambient grants --
+        and never the retired metered keys (RETIRED_KEYS, AGT-3)."""
         from tool_policy import principal_for
-        env = dict(os.environ)
+        env = {k: v for k, v in os.environ.items() if k not in RETIRED_KEYS}
         env.update(DATACORE_ACTOR=self._actor,
                    DATACORE_POLICY_PRINCIPAL=principal_for(self._actor),
                    DATACORE_POLICY_TASK=self._item or "",
