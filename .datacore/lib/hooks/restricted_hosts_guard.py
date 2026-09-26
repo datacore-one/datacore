@@ -90,6 +90,9 @@ GIT_NETWORK_SUBCOMMANDS = frozenset({
 })
 
 URL_RE = re.compile(r"\b[a-z][a-z0-9+.-]*://([^/\s'\"]+)", re.IGNORECASE)
+
+# Non-shell tools that fetch a URL from this machine (Claude Code, Hermes).
+URL_TOOLS = frozenset({"WebFetch", "web_extract"})
 SCP_RE = re.compile(r"(?:^|[\s'\"])(?:[\w.-]+@)([\w.-]+):", re.IGNORECASE)
 
 
@@ -449,11 +452,19 @@ def main() -> int:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
         return 0
-    if not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
+    if not isinstance(payload, dict):
         return 0
-
+    tool_name = payload.get("tool_name")
     tool_input = payload.get("tool_input")
-    command = str(tool_input.get("command", "")) if isinstance(tool_input, dict) else ""
+    if tool_name == "Bash":
+        command = str(tool_input.get("command", "")) if isinstance(tool_input, dict) else ""
+    elif tool_name in URL_TOOLS:
+        # A tool that opens a connection from this machine reaches a host just
+        # as ssh does (MEM-01). Until 2026-09-26 only Bash was inspected, so
+        # WebFetch http://<restricted>/ was never seen. Its URL is the target.
+        command = str(tool_input.get("url", "")) if isinstance(tool_input, dict) else ""
+    else:
+        return 0
     if not command:
         return 0
     cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None

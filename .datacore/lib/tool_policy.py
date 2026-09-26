@@ -17,7 +17,9 @@ credential isolation. config/tool_effects.yaml maps calls to effects:
 
     never-effect hit      -> refused  (no grant can allow it)
     cosign effect, no     -> paused   (the model is told to leave a proposal;
-      grant on this task               a human grants, the next run acts)
+      grant on this task               a human grants, the next run acts; a
+                                       per-transaction effect needs the grant
+                                       of that exact call, see _grant_covers)
     anything else         -> allowed
 
 Every refusal is recorded on the ledger as `metric.attest` with
@@ -105,10 +107,17 @@ def load_effects(path: Path | None = None) -> dict[str, dict]:
         for key in ("tools", "tool_patterns", "patterns"):
             if key in spec and (not isinstance(spec[key], list) or any(not isinstance(v, str) for v in spec[key])):
                 raise ValueError(f"{key} must be a list of strings")
+        if "approved" in spec and (not isinstance(spec["approved"], list)
+                                   or any(not isinstance(v, str) for v in spec["approved"])):
+            raise ValueError("approved must be a list of strings")
+        if "per_transaction" in spec and not isinstance(spec["per_transaction"], bool):
+            raise ValueError("per_transaction must be true or false")
         out[str(name)] = {
             "tools": [str(t) for t in (spec.get("tools") or [])],
             "tool_patterns": [re.compile(str(r), re.I) for r in (spec.get("tool_patterns") or [])],
             "patterns": [re.compile(str(r), re.I) for r in (spec.get("patterns") or [])],
+            "per_transaction": bool(spec.get("per_transaction", False)),
+            "approved": [re.compile(str(r), re.I) for r in (spec.get("approved") or [])],
         }
     return out
 
@@ -200,10 +209,35 @@ def principal_for(actor: str | None = None) -> str:
     return name
 
 
+def fingerprint(tool_name: str, tool_input) -> str:
+    """The identity of ONE transaction: 16 hex of sha256 over the call's
+    matchable text. A grant written `<effect>@<fingerprint>` covers exactly
+    this call -- the same destination, the same amount -- and nothing else."""
+    return hashlib.sha256(call_text(tool_input, tool_name).encode()).hexdigest()[:16]
+
+
+def _grant_covers(effect: str, spec: dict, granted: set[str], tool_name: str, tool_input) -> bool:
+    """Whether the task's grants cover this call's `effect`.
+
+    An ordinary effect is covered by its name. A `per_transaction` effect
+    (payment: MEM-04, "no confirmation step is skipped unless I approved that
+    exact transaction") is not covered by its bare name alone: the bare grant
+    reaches only a destination on the effect's `approved` list, and anything
+    else needs the grant `<effect>@<fingerprint>` of this exact call. Until
+    2026-09-26 one granted payment let every payment of the task through."""
+    if not spec.get("per_transaction"):
+        return effect in granted
+    if f"{effect}@{fingerprint(tool_name, tool_input)}" in granted:
+        return True
+    text = call_text(tool_input, tool_name)
+    return effect in granted and any(r.search(text) for r in spec.get("approved") or [])
+
+
 def decide(principal: str, tool_name: str, tool_input, granted=(),
            effects: dict[str, dict] | None = None,
            policy_path: Path | None = None) -> Decision:
     never, cosign = limits_for(principal, policy_path)
+    effects = effects if effects is not None else load_effects()
     hit = classify(tool_name, tool_input, effects)
     if not hit:
         return Decision(True, hit, "no policy effect", "allow")
@@ -213,7 +247,9 @@ def decide(principal: str, tool_name: str, tool_input, granted=(),
         return Decision(False, hit, f"{principal} may never cause {what} "
                                     f"(approvals_policy.yaml never_effects); the call is refused "
                                     f"and recorded — do not retry it another way", "never")
-    needs = (hit & cosign) - {str(g).strip() for g in granted if str(g).strip()}
+    grants = {str(g).strip() for g in granted if str(g).strip()}
+    needs = {e for e in hit & cosign
+             if not _grant_covers(e, effects.get(e) or {}, grants, tool_name, tool_input)}
     if needs:
         what = ", ".join(sorted(needs))
         return Decision(False, hit, f"{what} needs a co-signed grant before it runs and this task "
@@ -312,12 +348,31 @@ def hook_main() -> int:
     return 0
 
 
+#: The file guards an unattended run carries beside the policy guard (MEM-08):
+#: what an interactive session gets from ~/.claude/settings.json, a `claude -p`
+#: run with its own `--settings` did not get at all, so "never reach the
+#: client's networks" and "never write a wrong weekday" were instructions only.
+SAFETY_GUARDS = (
+    ("restricted_hosts_guard.py", "Bash|WebFetch"),
+    ("org_date_prewrite.py", "Edit|Write|MultiEdit"),
+)
+
+
 def settings_json(guard: Path | None = None, timeout: int = 8) -> str:
     """The `--settings` JSON that wires the guard as a PreToolUse hook on
-    every tool, for `claude -p` runs that load no other settings."""
-    cmd = f"python3 {shlex.quote(str(guard or GUARD))}"
-    return json.dumps({"hooks": {"PreToolUse": [
-        {"matcher": "*", "hooks": [{"type": "command", "command": cmd, "timeout": timeout}]}]}})
+    every tool, for `claude -p` runs that load no other settings, followed by
+    each SAFETY_GUARDS file found beside it on the tools it covers."""
+    guard = Path(guard or GUARD)
+    hooks = [{"matcher": "*", "hooks": [{"type": "command",
+                                         "command": f"python3 {shlex.quote(str(guard))}",
+                                         "timeout": timeout}]}]
+    for name, matcher in SAFETY_GUARDS:
+        path = guard.parent / name
+        if path.is_file():
+            hooks.append({"matcher": matcher, "hooks": [{"type": "command",
+                                                         "command": f"python3 {shlex.quote(str(path))}",
+                                                         "timeout": timeout}]})
+    return json.dumps({"hooks": {"PreToolUse": hooks}})
 
 
 if __name__ == "__main__":

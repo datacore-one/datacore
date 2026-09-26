@@ -13,6 +13,14 @@
 #   tool_patterns  regexes on the tool name (MCP tools carry the verb there)
 #   patterns       regexes (case-insensitive) on the call's text: a Bash
 #                  command, a URL, a file path, or the JSON of an MCP input
+#                  (the JSON always follows, keys sorted; a pattern anchored on
+#                  '"file_path": "' or '"command": "' reads that one field, so
+#                  a file whose CONTENT quotes a command is not that command)
+#   per_transaction  (payment) a bare grant of the effect covers only a call
+#                  matching one of `approved`; any other call needs the grant
+#                  `<effect>@<fingerprint>` of that exact call (tool_policy
+#                  .fingerprint) -- MEM-04, "approved that exact transaction"
+#   approved       regexes naming approved destinations (per_transaction)
 #
 # Public file — generic providers and verbs only, never a customer host.
 # Missing an effect here fails OPEN for that call: the outer controls (egress
@@ -20,10 +28,13 @@
 # that is too broad fails CLOSED on a legitimate call, which the refusal on
 # the ledger makes visible the next morning; loosen it here, not in code.
 version: 1
-# Only tools that can ACT are classified. Read, Grep, Glob, Edit and Write
-# cannot send, pay or deploy by themselves — reading deploy.sh is not a
-# deployment — so they are never an effect; the outer file-level guards
-# (org_guard, restricted paths) own those.
+# Only tools that can ACT are classified for sending, paying and deploying.
+# Read, Grep, Glob, Edit and Write cannot send, pay or deploy by themselves —
+# reading deploy.sh is not a deployment. Four effects are about files, and
+# name the file tools themselves: secret.search (Read/Grep of a secret store),
+# guard.disable (Edit/Write of a guard or of the settings wiring it),
+# ledger.forge (a hand-written line in an event log). 2026-09-26: until then
+# an agent could read ~/.hermes/.env or stub out its own guard unrefused.
 # Every tool that can reach the world, across the runtimes the fleet runs:
 # Claude Code / the SDK (Bash, WebFetch, mcp__*) and Hermes (terminal,
 # execute_code, write_file, patch, web_extract, browser_*, computer_use,
@@ -34,6 +45,8 @@ acting_tools: &acting
   ["Bash", "WebFetch", "mcp__*",
    "terminal", "execute_code", "write_file", "patch", "web_extract",
    "browser_*", "computer_use", "delegate_task", "cronjob"]
+# The file tools of both runtimes (Claude Code; Hermes read_file/search_files).
+file_writers: &writers ["Edit", "Write", "MultiEdit", "NotebookEdit", "write_file", "patch"]
 effects:
   email.send:
     tools: *acting
@@ -50,6 +63,11 @@ effects:
       - '\bgmail_send\b'
   payment:
     tools: *acting
+    # MEM-04: one approval is one transaction. `approved` is the owner's list
+    # of destinations a bare `payment` grant may reach (empty: none, so every
+    # payment needs the grant of its own fingerprint). Owner-maintained.
+    per_transaction: true
+    approved: []
     tool_patterns:
       - '(create_)?(charge|payment|payout|transfer)'
       - 'place_?order'
@@ -62,6 +80,12 @@ effects:
       - '/(spot|futures|delivery|options)/[^\s]*orders\b'
       - 'hyperliquid[^\s]*/exchange\b'
       - '\b(eth|usdc|usdt|btc|bzz|icp)\b[^\n]{0,40}\b(send|transfer)\b'
+      # Any on-chain send, whatever the token: foundry `cast send`, a
+      # `--value`, an ERC-20 transfer call (AGT-7, MEM-04).
+      - '\bcast\s+send\b'
+      - '\bcast\s+[^\n]*--value\b'
+      - '\btransfer(From)?\(address,\s*uint256\)'
+      - '\b(send|transfer)\b[^\n]{0,40}\b(eth|usdc|usdt|btc|bzz|icp|sol|xdai)\b'
       - '\bdfx\s+(ledger\s+transfer|canister\s+call\s+\S+\s+(transfer|icrc1_transfer))'
   prod.deploy:
     tools: *acting
@@ -77,3 +101,135 @@ effects:
       - '\bdeploy\.sh\b'
       - '\bagent_update\.py\b[^\n]*--apply'
       - '\bdistribute\.sh\b'
+  # ── agents never; they wait for the owner (AGT-7, MEM-03..11, AGT-5, AGT-10) ──
+  trading:
+    tools: *acting
+    tool_patterns:
+      - '(cancel|amend)_?orders?|swap|withdraw'   # place_order is payment already
+    patterns:
+      # a trading-module script that acts: buys, sells, swaps, trims, withdraws,
+      # starts or stops a bot -- or any trading script run with --live/--side
+      - 'modules/trading/\S*\b(sell|buy|swap|withdraw|kill_switch|trim|ladder_trader|accumulator|hyperliquid_executor|bzz_coordinator|portfolio_manager|single_writer)\w*\.(py|sh)\b'
+      - 'modules/trading/\S*\b(stop|start|restart)_\w*bots?\w*\.(py|sh)\b'
+      - 'modules/trading/\S+\.(py|sh)\b[^\n]*\s--(live|side|execute|confirm)\b'
+      - 'api\.gateio\.ws/[^\s"]*/(orders|price_orders|withdrawals)'
+  credential.rotate:
+    tools: *acting
+    patterns:
+      - '\bgh\s+secret\s+(set|delete|remove)\b'
+      - '\b(create|delete|update)-access-key\b'
+      - '\bgcloud\s+iam\s+service-accounts\s+keys\s+(create|delete)\b'
+      - '\bssh-keygen\b[^\n]*\s-f\s'
+      - '\bcreds(\.py)?\s+(set|rotate|remove|delete)\b'
+      - '\bdistribute\.sh\b'
+      - '\bsecurity\s+(add|delete)-(generic|internet)-password\b'
+  gov.submit:
+    tools: *acting
+    patterns:
+      # filing endpoints and filing CLIs; reading a public gov page is not one
+      - 'xmlgw\.companieshouse\.gov\.uk'
+      - 'api\.company-information\.service\.gov\.uk/[^\s"]*/(filings?|transactions)\b'
+      - '(test-)?api\.service\.hmrc\.gov\.uk'
+      - '\bedavki\.durs\.si'
+      - '\bajpes\.si/[^\s"]*(oddaj|submit|vloga)'
+      - '\bchfile\s+submit\b'
+      - '\buk_ltd\.py\b[^\n]*\s--submit\b'
+      # a browser click on a submit control of a government site
+      - '"selector":\s*"[^"]*(submit|file|send|confirm)[^"]*"[^\n]*\.(gov\.uk|gov\.si|durs\.si|ajpes\.si)\b'
+  code.merge:
+    tools: *acting
+    tool_patterns:
+      - 'merge_pull_request|merge_pr\b'
+    patterns:
+      - '\bgh\s+pr\s+merge\b'
+      - '/pulls/\d+/merge\b'
+  secret.search:
+    tools: ["Bash", "Read", "Grep", "read_file", "search_files", "terminal", "execute_code", "mcp__*"]
+    patterns:
+      # reading a secret store: an env file, the secrets tree, a key file
+      - '"(file_path|path)":\s*"(?:[^"\\]|\\.)*(^|/|\w)\.env(\.(?!example|sample|template|dist)\w+)?"'
+      - '"(file_path|path)":\s*"(?:[^"\\]|\\.)*/(\.datacore/secrets|\.ssh)(/|")'
+      - '"(file_path|path)":\s*"(?:[^"\\]|\\.)*\.(pem|p12|key)"'
+      # grepping a whole home, a Data root or env files for secret names
+      - '(?s)^(?=.*"pattern":\s*"[^"]*(API_KEY|TOKEN|SECRET|PASSW|PRIVATE_KEY|CREDENTIAL))(?=.*("path":\s*"(~|/Users/[^/"]+|/home/[^/"]+|/root|/srv/[^/"]+)(/Data)?/?"|"glob":\s*"[^"]*env|"path":\s*"[^"]*(\.env|/secrets)))'
+      # a shell reader over an env file, locally or through ssh
+      - '"command":\s*"(?:[^"\\]|\\.)*\b(cat|less|more|head|tail|grep|egrep|rg|ag|awk|sed|strings|source|xxd|bat|cp|scp|base64)\b(?:[^"\\]|\\.)*(\w|/|\*)\.env\b(?![.-]?(example|sample|template))'
+      - '"command":\s*"(?:[^"\\]|\\.)*\b(grep|egrep|rg|ag)\b(?:[^"\\]|\\.)*(API_KEY|_TOKEN|\bTOKEN\b|SECRET|PASSW|PRIVATE_KEY)(?:[^"\\]|\\.)*\s(~|\$HOME|/Users/\w+|/home/\w+)(/Data)?/?(\s|\\"|$)'
+      # the keychain and other password stores
+      - '\bsecurity\s+(find-(generic|internet)-password|dump-keychain)\b'
+      - '\bsecret-tool\s+lookup\b'
+      - '\bpass\s+show\b'
+      - '\bop\s+(read|item\s+get)\b'
+  guard.disable:
+    tools: ["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "terminal", "execute_code", "write_file", "patch"]
+    patterns:
+      # a git guard bypassed
+      - '"command":\s*"(?:[^"\\]|\\.)*\bSKIP_PRE_PUSH='
+      - '"command":\s*"(?:[^"\\]|\\.)*--no-verify\b'
+      - '"command":\s*"(?:[^"\\]|\\.)*\bcore\.hooksPath\b'
+      - '"command":\s*"(?:[^"\\]|\\.)*\bgit\s+commit\b(?:[^"\\]|\\.)*\s-n\b'
+      # the harness settings that wire the guards, the guards, the policy
+      - '"(file_path|path)":\s*"(?:[^"\\]|\\.)*/\.claude/settings(\.local)?\.json"'
+      - '"(file_path|path)":\s*"(?:[^"\\]|\\.)*/\.datacore/(lib/hooks|githooks)/'
+      - '"(file_path|path)":\s*"(?:[^"\\]|\\.)*/\.datacore/(config/(tool_effects|approvals_policy)\.yaml|lib/tool_policy\.py)"'
+      - '"command":\s*"(?:[^"\\]|\\.)*(>|\btee\b|\bsed\s+-i|\bmv\b|\bcp\b|\brm\b|\bchmod\b)(?:[^"\\]|\\.)*(\.claude/settings(\.local)?\.json|\.datacore/(lib/hooks|githooks)/|tool_effects\.yaml|approvals_policy\.yaml)'
+  ledger.forge:
+    tools: ["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "terminal", "execute_code", "write_file", "patch"]
+    patterns:
+      # only the ledger library writes an event log (AGT-10): no hand edit,
+      # no shell redirect, in anyone's name
+      - '"(file_path|path)":\s*"(?:[^"\\]|\\.)*\.datacore/events/[^"/]+\.jsonl"'
+      - '"command":\s*"(?:[^"\\]|\\.)*(>>?|\btee\b(\s+-a)?|\bsed\s+-i\b|\btruncate\b)(?:[^"\\]|\\.)*\.datacore/events/[\w.-]+\.jsonl'
+  calendar.respond:
+    tools: *acting
+    tool_patterns:
+      - 'respond_to_event|rsvp'
+    patterns:
+      - '"responseStatus"'
+      - '"sendUpdates":\s*"(all|externalOnly)"'
+      - '\bgcalcli\s+(respond|agenda\b[^\n]*--respond)\b'
+  data.egress:
+    tools: *acting
+    patterns:
+      # Data leaving to a destination no list approves (MEM-04). The approved
+      # destinations are the fleet's own hosts; add one here, not in code.
+      - '\bcurl\b[^\n]*(--upload-file|\s-T\s)'
+      - '\b(transfer\.sh|file\.io|0x0\.st|bashupload|termbin|paste\.rs|pastebin\.com)\b'
+      - '\baws\s+s3\s+(cp|sync|mv)\b[^\n]*\ss3://'
+      - '\bgsutil\s+(-m\s+)?(cp|rsync|mv)\b[^\n]*\sgs://'
+      - '\brclone\s+(copy|copyto|sync|move|moveto)\b'
+      - '\b(scp|rsync)\b[^\n;&|]*\s(?:[\w.-]+@)?(?!(?:winston|nightshift|hermes|plur-claw|box|localhost)\b)[\w.-]+:(?!//)'
+  history.rewrite:
+    tools: *acting
+    patterns:
+      # a force push rewrites whatever it lands on (MEM-10)
+      - '\bgit\b[^\n;&|]*\bpush\b[^\n;&|]*\s(-f|--force|--force-with-lease(=\S*)?|--mirror|--delete|-d)(\s|$)'
+      - '\bgit\b[^\n;&|]*\bpush\b[^\n;&|]*\s\+[\w/.:-]+'
+  # ── agents wait for a grant: a trial item first, then the owner's go (MEM-02) ──
+  push.shared:
+    tools: *acting
+    patterns:
+      # a push to a shared branch, or into another branch by refspec; an
+      # agent pushes the branch it made (nightshift/..., autofix...)
+      - '\bgit\b[^\n;&|]*\bpush\b[^\n;&|]*\s(\+?(HEAD:)?(refs/heads/)?(main|master|develop|production|release))(\s|$)'
+      - '\bgit\b[^\n;&|]*\bpush\b[^\n;&|]*\s[^\s:]*:(?!(refs/heads/)?(nightshift|autofix|agent)[/-])\S+'
+  data.delete:
+    tools: *acting
+    patterns:
+      # recursive delete of anything but a temp or build directory
+      - '\brm\s+(?:-\w+\s+)*-\w*[rR]\w*(?:\s+-\w+)*\s+(?!(/tmp/|/private/tmp/|/var/folders/|\\?"?\$\{?TMPDIR|\./?)?(node_modules|dist|build|__pycache__|\.pytest_cache|\.venv|target|\.cache|\.next)(/|\s|$))(?!/tmp/|/private/tmp/|/var/folders/|\\?"?\$\{?TMPDIR)'
+      - '\bfind\b[^\n]*\s-delete\b'
+      - '\bfind\b[^\n]*-exec\s+rm\b'
+      - '\bgit\b[^\n;&|]*\bbranch\s+(-D|--delete\s+--force|-d\s+-f)\b'
+      - '\bgit\b[^\n;&|]*\breset\s+--hard\b'
+      - '\bgit\b[^\n;&|]*\bclean\s+-\w*f'
+      - '\bgh\s+(issue|repo|release)\s+delete\b'
+  bulk.change:
+    tools: *acting
+    patterns:
+      # closing, cancelling or renaming many things in one step
+      - '\b(for|while|xargs)\b[^\n]*\bgh\s+(issue|pr)\s+(close|edit|lock)\b'
+      - '\bfind\b[^\n]*-exec\s+(rename|mv)\b'
+      - '\brename\s+(-\w+\s+)*[''"]?s/'
+      - '\bxargs\b[^\n]*\b(mv|rename)\b'
+      - '\bfor\b[^\n]*;\s*do\b[^\n]*\b(git\s+)?mv\b'

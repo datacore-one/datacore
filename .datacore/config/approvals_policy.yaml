@@ -30,10 +30,31 @@ cosign_effects:
   - email.send
   - payment
   - prod.deploy
+  # MEM-02: irreversible steps wait for the owner's go, after a one-item
+  # trial. A grant can release them; for agents the list below may not.
+  - data.delete
+  - bulk.change
+  - push.shared
 known_effects:
   - email.send
   - payment
   - prod.deploy
+  - data.delete
+  - bulk.change
+  - push.shared
+  # never-effects of every agent (tool_effects.yaml; owner decisions
+  # 2026-09-26: agents never spend money, touch trading, rotate credentials,
+  # delete data, submit to authorities or merge on their own)
+  - trading
+  - credential.rotate
+  - gov.submit
+  - code.merge
+  - secret.search
+  - guard.disable
+  - ledger.forge
+  - calendar.respond
+  - data.egress
+  - history.rewrite
 
 # Per-principal limits (product description, stage 4; DIP-0044 §7). Defaults
 # when a principal is absent: agents get max_hops 3 and 50 creates a day,
@@ -42,19 +63,31 @@ known_effects:
 # principal's writer names, today UTC, in the space being written to): each
 # space allows the full cap, so the fleet-wide ceiling is cap x spaces.
 # Owner decision L6, 2026-09-23.
+#
+# AGENT_NEVER is what no agent may cause, whatever a task's grants say: money,
+# trading, credentials, filings, merges (each space/project names its human
+# merge gate, the owner by default -- AGT-5), secret searches, switching a
+# guard off, writing another's log, answering an invite, data to an
+# unapproved destination, rewriting shared history.
 principals:
   gregor: {}
   winston:
-    never_effects: [payment]
+    never_effects: &AGENT_NEVER [payment, trading, credential.rotate, gov.submit, code.merge,
+                                 secret.search, guard.disable, ledger.forge, calendar.respond,
+                                 data.egress, history.rewrite]
     may_delegate_to: [miles, tris, data]
   miles:
-    never_effects: [payment]
+    never_effects: *AGENT_NEVER
     may_delegate_to: [tris, data]
   tris:
-    never_effects: [payment, prod.deploy]
+    never_effects: [payment, prod.deploy, trading, credential.rotate, gov.submit, code.merge,
+                    secret.search, guard.disable, ledger.forge, calendar.respond,
+                    data.egress, history.rewrite]
     may_delegate_to: [miles]
   data:
-    never_effects: [payment, prod.deploy]
+    never_effects: [payment, prod.deploy, trading, credential.rotate, gov.submit, code.merge,
+                    secret.search, guard.disable, ledger.forge, calendar.respond,
+                    data.egress, history.rewrite]
     may_delegate_to: [miles]
 
 # Arbitration across principals (product description, stage 5). Earlier
