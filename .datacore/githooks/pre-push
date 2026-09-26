@@ -120,6 +120,7 @@ if [ -f "$OWNERSHIP" ] && [ -n "$HOOK_PY" ] && [ -n "$REFS_INPUT" ]; then
     if [ -n "$OWN_RANGES" ]; then
         # shellcheck disable=SC2086
         "$HOOK_PY" "$OWNERSHIP" $OWN_RANGES || exit 1
+        "$HOOK_PY" "$DATA_DIR/.datacore/lib/hooks/ledger_write_gate.py" --ranges $OWN_RANGES || exit 1  # LED-3: only EventLog-written ledger lines
     fi
 fi
 

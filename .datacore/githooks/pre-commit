@@ -23,6 +23,7 @@ hook_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 data_root=$(dirname "$(dirname "$hook_dir")")
 
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+command -v python3 >/dev/null 2>&1 && { python3 "$data_root/.datacore/lib/hooks/ledger_write_gate.py" --repo "$repo_root" --staged || exit 1; }  # LED-3: only EventLog-written ledger lines
 
 case "$repo_root" in
   "$data_root")
