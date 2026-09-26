@@ -70,6 +70,12 @@ EVENT_TYPES = frozenset(
         # Claim-grant handshake (DIP-0034 amendment): a claim is a PROPOSAL;
         # execution in an arbitrated pool requires the arbiter's grant.
         "item.grant",
+        # CANCELLING A BAD EVENT (LED-4/LED-5, owner decision 2026-09-26). The
+        # ledger is append-only, so a bad event is never removed: an authorised
+        # actor who is not its writer appends a void naming it exactly
+        # ({log, seq, hash, reason}); verify accepts the voided event and fold
+        # ignores it. See ledger.voids.
+        "ledger.void",
     }
 )
 

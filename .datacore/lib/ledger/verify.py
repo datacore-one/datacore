@@ -127,17 +127,28 @@ def verify_chain(path: Path, registry_path: Path | None = None, strict: bool = F
         origin = (path.parents[2].name, path.name)
     except IndexError:
         origin = None
+    # In-ledger voids (ledger.voids): any log of the same space may hold the
+    # authorised `ledger.void` that cancels an event of this one.
+    from .voids import for_events_dir
     return errors + verify_events(parsed, registry_path=registry_path, strict=strict,
-                                  origin=origin)
+                                  origin=origin, voids=for_events_dir(path.parent),
+                                  log=path.stem)
 
 
 def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = None,
                   strict: bool = False,
-                  origin: tuple[str, str] | None = None) -> list[str]:
+                  origin: tuple[str, str] | None = None,
+                  voids=None, log: str | None = None) -> list[str]:
     """Verify one already-read chain without rereading a mutable source file.
 
     Callers preserve chain order and supply record numbers. This shares the
     diagnostic integrity rules with readers that need a consistent snapshot.
+
+    `voids` (a `ledger.voids.Voids` for the chain's space) and `log` (this
+    chain's file stem): an event cancelled by an effective in-ledger void is
+    accepted despite a failed hash or signature check -- its chain position
+    (prev, seq) is still checked -- and a `ledger.void` in this chain that has
+    no effect is reported.
     """
     errors: list[str] = []
     expected_prev = GENESIS
@@ -151,7 +162,12 @@ def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = 
         body = body_dict(event.seq, event.hlc, event.actor, event.type, event.payload, event.prev)
 
         computed = compute_hash(body)
-        if computed != event.hash:
+        voided = bool(voids is not None and log is not None and voids.applies(log, event, computed))
+        if voids is not None and log is not None and event.type == "ledger.void":
+            why = voids.refusal_for(log, event.seq)
+            if why:
+                errors.append(f"line {line_no}: {why}")
+        if computed != event.hash and not voided:
             # A reviewed exception pins BOTH hashes, so it can only ever excuse
             # the exact event it names, as that event is written today. Edit the
             # body and `computed` moves, nothing matches, and this reports again.
@@ -170,7 +186,8 @@ def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = 
             )
 
         if event.sig != "":
-            if (not verify_sig(event.actor, canonical_bytes(body), event.sig, registry_path=registry_path)
+            if (not voided
+                    and not verify_sig(event.actor, canonical_bytes(body), event.sig, registry_path=registry_path)
                     and not (origin and _sig_excepted(origin, event.seq, event.hash, computed, event.sig))):
                 errors.append(
                     f"line {line_no}: signature verification failed for actor {event.actor!r} "

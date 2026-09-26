@@ -176,6 +176,16 @@ def fold(events: list[Event]) -> LedgerState:
     """
     state = LedgerState()
 
+    # Events cancelled by an authorised in-ledger `ledger.void` do not exist for
+    # the fold (LED-4). Resolving who may void reads the principal registry
+    # (cached on its stat), the one input besides `events`; a space with no
+    # void pays nothing.
+    from .voids import VOID_TYPE, from_events
+    if any(e.type == VOID_TYPE for e in events):
+        voids = from_events(events)
+        if len(voids):
+            events = [e for e in events if not voids.applies(getattr(e, "log", e.actor), e)]
+
     for event in events:
         handler = _HANDLERS.get(event.type)
         if handler is not None:

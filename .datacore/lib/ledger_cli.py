@@ -10,6 +10,7 @@ Usage:
     python3 ledger_cli.py verify --space <dir> [--strict]
     python3 ledger_cli.py items --space <dir> [--status <s>] [--owner <o>]
     python3 ledger_cli.py balances --space <dir>
+    python3 ledger_cli.py void --space <dir> --log <writer>.jsonl --seq <n> --reason '<why>' [--actor <a>]
 
 Stdout/stderr discipline: every command's DATA (the appended event's
 hash/hlc, the "OK ..." summary, item JSON lines, the balances object) goes
@@ -57,7 +58,7 @@ def _default_actor() -> str:
 
 
 #: Subcommands that append, and so need a writer identity.
-WRITERS = ("append", "approve")
+WRITERS = ("append", "approve", "void")
 
 
 def _json_dict(raw: str) -> dict:
@@ -111,6 +112,43 @@ def cmd_approve(args):
     event = guarded_append(EventLog(Path(args.space), actor), "approval.grant",
         {"item": item_id, "payload_hash": approval_payload_hash(args.payload)}, policy=policy)
     print(json.dumps({"approval_ref": event.hash, "payload_hash": event.payload["payload_hash"]}))
+
+
+def cmd_void(args: argparse.Namespace) -> None:
+    """Cancel one bad event with an in-ledger `ledger.void` (LED-4/LED-5).
+
+    Names the event exactly as stored (log, seq, stored hash) and pins the hash
+    its body produces, so a later edit of the voided event revokes the void.
+    Written through EventLog as the current actor; whether it takes effect is
+    decided at read time (ledger.voids): only an authorised voider who is not
+    the event's writer cancels anything.
+    """
+    from ledger.voids import body_hash, log_stem, refusal
+    space = _require_space(args.space)
+    actor = args.actor or _default_actor()
+    stem = log_stem(args.log)
+    path = space / ".datacore" / "events" / f"{stem}.jsonl"
+    target = None
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip() and json.loads(line).get("seq") == args.seq:
+                from ledger.events import from_line
+                target = from_line(line.strip())
+                break
+    except (OSError, ValueError, TypeError) as exc:
+        print(f"error: cannot read {path}: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if target is None:
+        print(f"error: no event seq {args.seq} in {path}", file=sys.stderr)
+        sys.exit(1)
+    why = refusal(actor, stem)
+    if why:
+        print(f"error: {why}; a void by this actor would have no effect", file=sys.stderr)
+        sys.exit(1)
+    event = EventLog(space, actor).append("ledger.void", {
+        "log": f"{stem}.jsonl", "seq": target.seq, "hash": target.hash,
+        "body_sha256": body_hash(target), "reason": args.reason})
+    print(json.dumps({"hash": event.hash, "hlc": event.hlc, "voids": f"{stem}.jsonl#{target.seq}"}))
 
 
 def cmd_verify(args: argparse.Namespace) -> None:
@@ -179,6 +217,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--space", required=True, help="Space directory root")
     p.add_argument("--strict", action="store_true", help="Flag unsigned events as errors")
 
+    p = sub.add_parser("void", help="Cancel one bad event with an in-ledger void record")
+    p.add_argument("--space", required=True, help="Space directory root")
+    p.add_argument("--log", required=True, help="The voided event's log file (e.g. miles.jsonl)")
+    p.add_argument("--seq", required=True, type=int, help="The voided event's seq")
+    p.add_argument("--reason", required=True, help="Why it is void (recorded in the ledger)")
+    p.add_argument("--actor", default=None, help="Actor id (default: this machine's declared actor)")
+
     p = sub.add_parser("items", help="Fold events and list items")
     p.add_argument("--space", required=True, help="Space directory root")
     p.add_argument("--status", default=None, help="Filter by item status")
@@ -194,6 +239,7 @@ COMMANDS = {
     "append": cmd_append,
     "approve": cmd_approve,
     "verify": cmd_verify,
+    "void": cmd_void,
     "items": cmd_items,
     "balances": cmd_balances,
 }
