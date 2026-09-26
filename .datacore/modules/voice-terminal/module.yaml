@@ -40,10 +40,10 @@ hooks:
          - End with "Your full report is on your desk" or a natural variant.
          - No markdown. No bullets. No emoji. Pure spoken text.
 
-      2. Generate audio and send to Telegram:
-         ```bash
-         "${DATACORE_PYTHON:-python3}" .datacore/modules/voice-terminal/lib/speak_brief.py {date} --telegram
-         ```
+      2. Do NOT send audio from here. Winston's morning pipeline is the only
+         sender of the audio briefing (owner, 2026-09-26: "keep only Winston's";
+         two producers sent it twice). The spoken text above is kept in the
+         journal for reading and for local playback on request.
 
 settings:
   wake_word: "hey_datacore"
@@ -55,7 +55,7 @@ settings:
   tts_speed: 1.12   # 1.0 read as plodding at ~145 wpm; 1.12 lands ~162 wpm (Gregor, 2026-08-31)
   language: "en"
   brain: "local"  # local (Mac) or network (Blackpi IP)
-  telegram_delivery: true
+  telegram_delivery: false   # only Winston sends audio (owner, 2026-09-26)
 
 dependencies:
   - core
