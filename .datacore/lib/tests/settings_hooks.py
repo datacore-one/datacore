@@ -57,10 +57,12 @@ RANK = {"allow": 0, "ask": 1, "deny": 2}
 
 
 def probe(event: str, payload: dict, tool: str = "", settings: Path = SETTINGS,
-          timeout: int = 20) -> Outcome:
+          timeout: int = 20, state_dir=None) -> Outcome:
+    """``state_dir``: reuse one throwaway HOME/state across several probes, so a hook that
+    remembers earlier calls in the same session sees them (a sequence, not one call)."""
     res = Outcome()
     with tempfile.TemporaryDirectory(prefix="hook-probe-") as tmp:
-        tmp = os.path.realpath(tmp)          # DATACORE_STATE must be an unaliased path
+        tmp = os.path.realpath(state_dir or tmp)   # DATACORE_STATE must be an unaliased path
         env = {**os.environ, "HOME": tmp, "TMPDIR": tmp, "DATACORE_STATE": tmp,
                "CLAUDE_HOOK_EVENT_NAME": event}
         body = {"hook_event_name": event, "session_id": "promise-eval-probe",
