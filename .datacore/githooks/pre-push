@@ -285,6 +285,35 @@ else
     esac
 fi
 
+# A fork of a protected repo is public too, and it is where a user's pushes go:
+# `datacore init` forks datacore-one/datacore and keeps it as the `upstream`
+# remote. Checking only the push target's name skipped the scan for every fork,
+# so it ran for nobody but the operator. Any remote of THIS repo that is a
+# protected repo makes the push protected, scanned under the protected policy.
+if [ "$IS_PROTECTED" != "1" ]; then
+    for _u in $(git remote 2>/dev/null); do
+        _slug=$(git remote get-url "$_u" 2>/dev/null | sed -E 's#^(git@github.com:|https://github.com/|ssh://git@github.com/)##; s#\.git$##')
+        [ -n "$_slug" ] && [ "$_slug" != "$REPO" ] || continue
+        _is=0
+        if [ -f "$DENYLIST" ] && [ "$PYTHON_OK" = "1" ]; then
+            _is=$("$HOOK_PY" - "$DENYLIST" "$_slug" <<'PY_FORK'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+print('1' if sys.argv[2] in d.get('protected_repos', []) else '0')
+PY_FORK
+            ) || _is=1
+        else
+            case " $FALLBACK_PROTECTED " in *" $_slug "*) _is=1 ;; esac
+        fi
+        if [ "$_is" = "1" ]; then
+            echo "pre-push: $REPO is a fork of $_slug — treating as PROTECTED" >&2
+            REPO="$_slug"
+            IS_PROTECTED=1
+            break
+        fi
+    done
+fi
+
 if [ "$IS_PROTECTED" != "1" ]; then
     echo "pre-push: $REPO not a protected public repo — policy check skipped" >&2
     lfs_chain
