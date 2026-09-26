@@ -40,3 +40,26 @@ def execution_gaps(properties, *, roadmap_required=False):
     if roadmap_required and not stated('ROADMAP'):
         missing.append('ROADMAP')
     return missing
+
+
+#: Subjects no agent is ever given, whatever the task's spec says (MEM-05:
+#: "Cap table, equity and co-founder negotiation tasks are never given to an
+#: AI agent or queued for overnight work"; ENG-2026-0709-013). The rule lived
+#: only in memory until 2026-09-26, so a fully specified :AI: task about the
+#: cap table was selected like any other.
+import re as _re
+
+HUMAN_ONLY_SUBJECTS = _re.compile(
+    r"\bcap[\s-]?tables?\b|\bequity\b|\bco-?founders?\b|\bvesting\b"
+    r"|\boption[\s-]pool\b|\bshareholders?'?\s+agreement\b",
+    _re.IGNORECASE)
+
+
+def human_only_reason(*texts):
+    """Why this task may never go to an agent, or '' -- from its title/body."""
+    for text in texts:
+        m = HUMAN_ONLY_SUBJECTS.search(text or "")
+        if m:
+            return (f"human-only subject ({m.group(0).lower()}): cap table, equity and "
+                    f"co-founder negotiation are never given to an agent")
+    return ""

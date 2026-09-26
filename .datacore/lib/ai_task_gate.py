@@ -20,6 +20,9 @@ written:
     ROADMAP                            which outcome it serves        (SELECT)
                                        — only in a space that HAS a roadmap
 
+and never a human-only subject (cap table, equity, co-founder negotiation:
+MEM-05), whatever the task carries.
+
 It is EQUAL to nightshift_parser._is_executable: both call
 delegation_requirements.execution_gaps, ROADMAP clause included (owner decision
 N8, 2026-09-23). A gate stricter than the executor rejects work the executor
@@ -53,7 +56,7 @@ DONE_KEYS = ("DONE_WHEN", "ACCEPTANCE_CRITERIA")
 # file that does not exist — the same scoping error agent_readiness made.
 # The executor computes the same set, from the same function, for its data dir.
 REPO = Path(__file__).resolve().parents[2]
-from delegation_requirements import execution_gaps, roadmap_spaces, space_of  # noqa: E402
+from delegation_requirements import execution_gaps, human_only_reason, roadmap_spaces, space_of  # noqa: E402
 
 HAS_ROADMAP = roadmap_spaces(REPO)
 
@@ -119,6 +122,12 @@ def main(argv: list[str]) -> int:
         # time, and REFUSES when the pointer dangles). Demanding the spec on
         # both ends would force the duplication the reference design exists to
         # prevent. The source task is gated on its own terms.
+        # A human-only subject is refused whatever else the task carries --
+        # a queue reference included (MEM-05).
+        human_only = human_only_reason(node.heading, getattr(node, "body", "") or "")
+        if human_only:
+            bad.append((node.heading, [human_only + " -- drop the :AI: tag"], props.get("ID")))
+            continue
         if str(props.get("SOURCE_ID") or "").strip():
             continue
         missing = _missing(props, _space_of(Path(str(node.path))))
