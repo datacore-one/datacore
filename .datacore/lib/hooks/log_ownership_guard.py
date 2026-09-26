@@ -39,7 +39,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-ACTOR_LOG = re.compile(r"^(?:.*/)?\.datacore/events/([A-Za-z0-9_-]+)\.jsonl$")
+# A writer's ledger log and, since telemetry got its own log per space (owner
+# decision 3, 2026-09-26), its telemetry log: both are that writer's alone
+# (AGT-10). Watching events/ only let a forged metric.attest through.
+ACTOR_LOG = re.compile(r"^(?:.*/)?\.datacore/(?:events|telemetry)/([A-Za-z0-9_-]+)\.jsonl$")
 
 # `genesis` is a ROLE, not a machine: it is the import actor, and
 # `ledger_ingest_org.py` appends to it from whichever machine runs the sweep.

@@ -178,8 +178,8 @@ effects:
     patterns:
       # only the ledger library writes an event log (AGT-10): no hand edit,
       # no shell redirect, in anyone's name
-      - '"(file_path|path)":\s*"(?:[^"\\]|\\.)*\.datacore/events/[^"/]+\.jsonl"'
-      - '"command":\s*"(?:[^"\\]|\\.)*(>>?|\btee\b(\s+-a)?|\bsed\s+-i\b|\btruncate\b)(?:[^"\\]|\\.)*\.datacore/events/[\w.-]+\.jsonl'
+      - '"(file_path|path)":\s*"(?:[^"\\]|\\.)*\.datacore/(events|telemetry)/[^"/]+\.jsonl"'
+      - '"command":\s*"(?:[^"\\]|\\.)*(>>?|\btee\b(\s+-a)?|\bsed\s+-i\b|\btruncate\b)(?:[^"\\]|\\.)*\.datacore/(events|telemetry)/[\w.-]+\.jsonl'
   calendar.respond:
     tools: *acting
     tool_patterns:
