@@ -494,6 +494,15 @@ class EventLog:
                 try:
                     hwm_path.parent.mkdir(parents=True, exist_ok=True)
                     atomic_write_text(hwm_path, str(seq))
+                    # WITNESS THE HASH, NOT ONLY THE SEQ (LED-2). A seq mark
+                    # catches a cut tail; it cannot see an old event edited
+                    # and every later hash recomputed (audit A#2), because
+                    # that forged chain is exactly as long. The hash this
+                    # machine wrote at `seq` can: `check_not_rewound` compares
+                    # it with the log's event at that seq. "<seq> <hash>", so
+                    # a crash between the two writes leaves a witness that is
+                    # still true about its own seq.
+                    atomic_write_text(hwm_path.with_suffix(".hash"), f"{seq} {event_hash}")
                 except OSError as exc:
                     # The event is already durable. Report degraded rewind
                     # detection without pretending the event itself failed.

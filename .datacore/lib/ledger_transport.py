@@ -447,6 +447,58 @@ def _fetch_reason(err: str) -> str:
     return "fetch failed (offline?)"
 
 
+def _incoming_rewrites(space: Path, ref: str) -> list[str]:
+    """Would merging `ref` change or remove history this machine already holds?
+
+    A three-way merge takes the incoming copy of a log WHOLE when this side
+    never touched it since the merge base. So an origin commit that edited
+    event 0 and re-chained the rest (audit A#2), truncated a log or deleted it,
+    arrives as a clean fast-forward and silently replaces the held history
+    (LED-2). Every log `ref` changed since the merge base must extend its
+    base copy byte for byte -- the append-only rule the write gate applies to
+    a push (hooks/ledger_write_gate.check_change), applied here to what we
+    receive. [] means the incoming side only appended.
+    """
+    rc, base, _ = _git(space, "merge-base", "HEAD", ref)
+    if rc != 0 or not base.strip():
+        return []                           # nothing held in common yet
+    base = base.strip()
+    hooks = str(Path(__file__).resolve().parent / "hooks")
+    if hooks not in sys.path:
+        sys.path.insert(0, hooks)
+    from ledger_write_gate import PATHSPEC, check_change
+    rc, out, err = _git(space, "diff", "--no-renames", "--name-only", base, ref, "--", PATHSPEC)
+    if rc != 0:
+        return [f"incoming ledger changes could not be listed: {err.strip()[:120]}"]
+
+    def blob(rev: str, rel: str) -> bytes | None:
+        try:
+            r = subprocess.run(["git", "show", f"{rev}:{rel}"], cwd=space,
+                               capture_output=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return r.stdout if r.returncode == 0 else None
+
+    bad = []
+    for rel in (x.strip() for x in out.splitlines()):
+        if not rel.endswith(".jsonl"):
+            continue
+        old = blob(base, rel)
+        if not old:
+            continue                        # a new log: nothing held to lose
+        bad += [e for e in check_change(rel, old, blob(ref, rel)) if "append-only" in e]
+    return bad
+
+
+def _rewrite_refusal(db: str, ref: str, rewrites: list[str], autosaved: bool) -> Result:
+    return Result(False,
+                  f"refused: {ref} rewrites ledger history this machine holds — "
+                  f"{'; '.join(rewrites)[:240]}. Nothing was merged; history is never "
+                  f"rewritten (a bad record is voided in-ledger). A human must find who "
+                  f"published it",
+                  {"branch": db, "ref": ref, "autosaved": autosaved, "ledger_rewrite": rewrites})
+
+
 def _converge_locked(space: Path, *, publish: bool = True) -> Result:
     """converge() with the repo lock ALREADY HELD.
 
@@ -583,6 +635,9 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
                           f"find the process writing under that name and stop it (DIP-0044)",
                           {"branch": db, "foreign": [p for p, _, _ in foreign]})
 
+    rewrites = _incoming_rewrites(space, f"origin/{db}")
+    if rewrites:
+        return _rewrite_refusal(db, f"origin/{db}", rewrites, autosaved)
     ok, err, resolved = _merge(space, f"origin/{db}")
     if not ok:
         # Never reset, never rescue-branch, never discard. A conflict here
@@ -607,6 +662,9 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         rc, ahead, _ = _git(space, "rev-list", "--count", f"HEAD..{ref}")
         if rc != 0 or ahead.strip() == "0":
             continue
+        rewrites = _incoming_rewrites(space, ref)
+        if rewrites:
+            return _rewrite_refusal(db, ref, rewrites, autosaved)
         ok, err, prefixes = _merge(space, ref)
         if not ok:
             return Result(False, "merge conflict on a ledger ref — human needed",

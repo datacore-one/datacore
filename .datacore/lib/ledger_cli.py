@@ -155,9 +155,15 @@ def cmd_verify(args: argparse.Namespace) -> None:
     space = _require_space(args.space)
     events_dir = space / ".datacore" / "events"
     files = sorted(events_dir.glob("*.jsonl")) if events_dir.exists() else []
+    # A log this machine wrote and that is now gone is lost history (LED-2):
+    # its witness names it, so it is checked even though no file is left.
+    witnesses = space / ".datacore" / "state" / "seq-hwm"
+    held = {p.stem for p in files}
+    missing = sorted(events_dir / f"{w.stem}.jsonl" for w in witnesses.glob("*.seq")
+                     if w.stem not in held) if witnesses.is_dir() else []
 
     had_errors = False
-    for path in files:
+    for path in files + missing:
         for error in verify_chain(path, strict=args.strict):
             print(f"{path.name}: {error}", file=sys.stderr)
             had_errors = True

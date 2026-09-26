@@ -224,6 +224,14 @@ def check_not_rewound(path: Path) -> list[str]:
     Silent when no watermark exists: a log this machine never wrote (another
     actor's, freshly cloned) has no local witness, and absence of evidence must
     not be reported as evidence of tampering.
+
+    Two more ways to lose history that a seq mark alone misses (LED-2):
+      * REWRITTEN -- an old event edited and every later hash recomputed (audit
+        A#2) leaves a chain of the same length that verifies clean. The writer
+        also witnesses the hash it wrote at that seq (`<log>.hash`,
+        "<seq> <hash>"); a different hash at that seq in the log is a rewrite.
+      * MISSING -- the whole log deleted. `path` may name a log that no longer
+        exists; with a witness for it, that is reported, never skipped.
     """
     actor = path.stem
     hwm_path = path.parent.parent / "state" / "seq-hwm" / f"{actor}.seq"
@@ -236,16 +244,34 @@ def check_not_rewound(path: Path) -> list[str]:
     except (OSError, ValueError):
         return ["sequence witness is unreadable or invalid; rewind status cannot be verified"]
 
+    witnessed: tuple[int, str] | None = None
+    hash_path = hwm_path.with_suffix(".hash")
+    try:
+        w_seq, w_hash = hash_path.read_text().split()
+        witnessed = (int(w_seq), w_hash)
+    except FileNotFoundError:
+        pass                                # written before the hash witness existed
+    except (OSError, ValueError):
+        return ["hash witness is unreadable or invalid; rewrite status cannot be verified"]
+
+    if not path.exists():
+        return [f"MISSING: this machine wrote up to seq {hwm} to {path.name} but the "
+                f"log is gone (witness: {hwm_path})"]
+
     tail = -1
+    hashes: dict[int, str] = {}
     try:
         for line in path.read_text(errors="replace").splitlines():
             line = line.strip()
             if not line:
                 continue
             try:
-                tail = max(tail, int(json.loads(line).get("seq", -1)))
-            except (ValueError, TypeError):
+                ev = json.loads(line)
+                seq = int(ev.get("seq", -1))
+            except (ValueError, TypeError, AttributeError):
                 continue
+            tail = max(tail, seq)
+            hashes.setdefault(seq, str(ev.get("hash", "")))
     except OSError:
         return ["log is unreadable; rewind status cannot be verified"]
 
@@ -253,4 +279,8 @@ def check_not_rewound(path: Path) -> list[str]:
         return [f"TRUNCATED: log ends at seq {tail} but this machine wrote up to "
                 f"seq {hwm} — {hwm - tail} event(s) missing from the tail "
                 f"(witness: {hwm_path})"]
+    if witnessed and witnessed[0] in hashes and hashes[witnessed[0]] != witnessed[1]:
+        return [f"REWRITTEN: the event at seq {witnessed[0]} is not the one this machine "
+                f"wrote (hash {hashes[witnessed[0]][:12]}…, witnessed {witnessed[1][:12]}…) "
+                f"— earlier history was edited and re-chained (witness: {hash_path})"]
     return []
