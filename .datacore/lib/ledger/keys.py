@@ -48,6 +48,50 @@ def _lock_path(actor: str, keys_dir: Path) -> Path:
     return keys_dir / f".{actor}.lock"
 
 
+#: (kind, path) -> ((mtime_ns, size, ino), value). Verification reads the same
+#: two small YAML files for every SIGNED event, and parsing them dominated
+#: verify: 705 parses, 15 of 15.7 s on 6-meridian's miles.jsonl, 54.6 s for
+#: 2-datacore against 3.1 s cached (ledger audit A-core #1, promise LED-6).
+#: Keyed on the file's stat signature, never held forever: an operator edits
+#: principals.yaml while a long job runs, and a rotated key must be seen.
+_FILE_CACHE: dict = {}
+#: verify-key hex -> Ed25519PublicKey (or None when the hex is not a key).
+_PUBKEYS: dict = {}
+
+
+def _stat_key(path: Path):
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size, st.st_ino)
+
+
+def _cached(kind: str, path: Path, load):
+    sig = _stat_key(path)
+    hit = _FILE_CACHE.get((kind, str(path)))
+    if sig is not None and hit is not None and hit[0] == sig:
+        return hit[1]
+    value = load()
+    if sig is not None:
+        _FILE_CACHE[(kind, str(path))] = (sig, value)
+    return value
+
+
+def _public_key(verify_key_hex: str):
+    if verify_key_hex not in _PUBKEYS:
+        try:
+            _PUBKEYS[verify_key_hex] = Ed25519PublicKey.from_public_bytes(bytes.fromhex(verify_key_hex))
+        except (TypeError, ValueError):
+            _PUBKEYS[verify_key_hex] = None
+    return _PUBKEYS[verify_key_hex]
+
+
+def _registry_actors(registry_path: Path) -> dict:
+    """The local registry's actor -> key map, for VERIFICATION only (cached)."""
+    return _cached("registry", registry_path, lambda: dict(_load_registry(registry_path)["actors"]))
+
+
 def _load_registry(registry_path: Path, *, strict: bool = False) -> dict:
     """Verification fails closed; mutation refuses to replace invalid data."""
     try:
@@ -135,8 +179,8 @@ def sign(actor: str, data: bytes, keys_dir: Path | None = None) -> str:
 
 def known_verify_key(actor: str, registry_path: Path | None = None) -> bool:
     """Do we hold ANY verify key for this writer (local registry or principals.yaml)?"""
-    registry = _load_registry(registry_path or DEFAULT_REGISTRY_PATH)
-    return bool(registry["actors"].get(actor) or principals_verify_key(actor))
+    return bool(_registry_actors(registry_path or DEFAULT_REGISTRY_PATH).get(actor)
+                or principals_verify_key(actor))
 
 
 def principals_verify_key(actor: str) -> str | None:
@@ -144,13 +188,16 @@ def principals_verify_key(actor: str) -> str | None:
     written by ledger_keys_collect only for keys that verify that writer's real
     signed events)."""
     p = DATACORE_ROOT / ".datacore" / "registry" / "principals.yaml"
-    try:
-        import yaml
-        d = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-        v = (d.get("verify_keys") or {}).get(actor)
-        return str(v) if v else None
-    except Exception:  # noqa: BLE001
-        return None
+
+    def load() -> dict:
+        try:
+            d = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+            vk = d.get("verify_keys") or {}
+            return {str(k): str(v) for k, v in vk.items() if v} if isinstance(vk, dict) else {}
+        except Exception:  # noqa: BLE001 -- unreadable means no proven keys
+            return {}
+
+    return _cached("principals", p, load).get(actor)
 
 
 def verify(
@@ -179,13 +226,14 @@ def verify(
     # disk. The local registry is now a fallback, for actors not yet collected.
     verify_key_hex = principals_verify_key(actor)
     if not verify_key_hex:
-        registry = _load_registry(registry_path)
-        verify_key_hex = registry["actors"].get(actor)
+        verify_key_hex = _registry_actors(registry_path).get(actor)
     if not verify_key_hex:
         return False
 
+    public_key = _public_key(str(verify_key_hex))
+    if public_key is None:
+        return False
     try:
-        public_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(verify_key_hex))
         public_key.verify(bytes.fromhex(sig_hex), data)
         return True
     except (TypeError, ValueError, InvalidSignature):
