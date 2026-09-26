@@ -285,6 +285,16 @@ def main() -> int:
         return 1
 
     after = snapshot(prof)
+    # A package list that cannot be read is not an empty one. 2026-09-26 on
+    # hermes a half-renamed npm folder broke `npm ls`; the snapshot came back
+    # without npm packages, the diff compared only what it saw, and every run
+    # since 2026-09-20 logged "already current" while npm had failed.
+    missing = [p for eco, key in (("pip", "pip_packages"), ("npm", "npm_packages"))
+               for p in prof[key] if p not in before.get(eco, {}) or p not in after.get(eco, {})]
+    if missing:
+        log(f"!! could not read installed versions of: {', '.join(missing)} — not reporting current")
+        log("=== done (unverified) ===")
+        return 1
     changes = diff(before, after)
 
     # Restart ONLY when something actually changed. A no-op run must not bounce
