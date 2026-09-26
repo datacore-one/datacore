@@ -34,6 +34,7 @@ EXIT CODES are distinct so a caller can tell these apart, which the old
     2  the command itself failed
     3  a precondition failed — required env missing; the job never ran
     4  the job is not in the manifest
+    5  refused: this job is already running (one run at a time, MEM-56)
 
     run.py <job-name>              # run under the contract
     run.py <job-name> --dry-run    # show the env and contract, run nothing
@@ -183,6 +184,21 @@ def _check_artifact(spec: dict, before: float | None,
     return True, f"{p.name} ok" + ("" if advanced else " (unchanged but fresh)")
 
 
+def _single_flight(name: str):
+    """An exclusive, non-blocking lock for one job on this machine, or None
+    when another run holds it. Closing the returned file releases it."""
+    import fcntl
+    d = HOME / ".datacore" / "state" / "jobs"
+    d.mkdir(parents=True, exist_ok=True)
+    f = open(d / f"{re.sub(r'[^A-Za-z0-9._-]', '_', name)}.lock", "a")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return None
+    return f
+
+
 def run(job: dict, dry: bool = False) -> int:
     env = normalized_env(job)
 
@@ -228,12 +244,23 @@ def run(job: dict, dry: bool = False) -> int:
         if type(timeout) not in (int, float) or not 0 < timeout <= 86400:
             print("PRECONDITION FAILED — timeout_seconds must be in (0, 86400]")
             return 3
+        # ONE RUN AT A TIME (MEM-56). A second start while the first is still
+        # running is refused, not queued: the 2026-09-01 double morning
+        # briefing, and the 07:00 headless /today still running when /today is
+        # typed at 09:00. The lock is the kernel's, so a crashed run frees it.
+        lock = _single_flight(job["name"])
+        if lock is None:
+            print(f"REFUSED — {job['name']} is already running on this machine; "
+                  f"this start did nothing (exit 5)")
+            return 5
         try:
             proc = run_process(["/bin/bash", "-o", "pipefail", "-c", job["cmd"]],
                                env=env, capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             print(f"COMMAND FAILED — timed out after {timeout}s; foreground process group stopped")
             return 2
+        finally:
+            lock.close()
         took = time.time() - started
 
     if proc is not None and proc.stdout:
