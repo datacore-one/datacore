@@ -20,7 +20,8 @@ CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.json")
 DEFAULT_CONFIG = {
     "inbox_path": "~/Data/0-personal/org/inbox.org",
     "filtered_prefixes": [
-        "brave://", "chrome://", "about:", "chrome-extension://", "devtools://"
+        "brave://", "chrome://", "about:", "chrome-extension://", "devtools://",
+        "chrome-untrusted://", "view-source:"
     ]
 }
 
@@ -113,7 +114,10 @@ def insert_under_inbox(content, entries):
 def capture_tabs(tabs, config):
     """Capture tabs to inbox.org, returning result stats."""
     inbox_path = os.path.expanduser(config["inbox_path"])
-    filtered_prefixes = config.get("filtered_prefixes", DEFAULT_CONFIG["filtered_prefixes"])
+    # An installed config.json written before a prefix was added must not let
+    # that internal page through: the defaults always apply.
+    filtered_prefixes = list(dict.fromkeys(
+        config.get("filtered_prefixes", []) + DEFAULT_CONFIG["filtered_prefixes"]))
     today_str = date.today().strftime("%Y-%m-%d %a")
 
     # Filter out internal browser pages
@@ -138,7 +142,13 @@ def capture_tabs(tabs, config):
             content = f.read()
             existing_sources = extract_sources(content)
 
-            new_tabs = [t for t in tabs if t["url"] not in existing_sources]
+            # One entry per page: already in the inbox, or open in two tabs
+            # of this same save (CAP-4).
+            new_tabs, seen = [], set(existing_sources)
+            for t in tabs:
+                if t["url"] not in seen:
+                    seen.add(t["url"])
+                    new_tabs.append(t)
             duplicates_skipped = len(tabs) - len(new_tabs)
 
             if new_tabs:
@@ -169,7 +179,14 @@ def main():
     action = msg.get("action", "")
     if action == "capture":
         tabs = msg.get("tabs", [])
-        result = capture_tabs(tabs, config)
+        # A capture that cannot be saved says why (CAP-3). Dying here leaves
+        # the extension with only "Native host has exited".
+        try:
+            result = capture_tabs(tabs, config)
+        except Exception as exc:  # noqa: BLE001 — every failure must reach the popup
+            result = {"success": False, "count": 0,
+                      "error": f"could not save to {config.get('inbox_path', 'the inbox')}: "
+                               f"{type(exc).__name__}: {exc}"}
         send_message(result)
     else:
         send_message({"success": False, "error": f"Unknown action: {action}"})

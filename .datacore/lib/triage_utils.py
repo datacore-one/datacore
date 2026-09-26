@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -32,6 +33,11 @@ def _read_locked(org_file: Path) -> str | None:
     """Watch and read `org_file` inside the current org transaction."""
     org_transaction.watch_file(org_file)
     return org_transaction.read_text(Path(org_file).resolve())
+
+
+def triage_node_id(triage_id: str) -> str:
+    """The deterministic :ID: of the task captured for *triage_id*."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"datacore:triage:{triage_id}"))
 
 
 def create_triage_task(
@@ -86,6 +92,12 @@ def create_triage_task(
 
     if scheduled_date:
         cmd.extend(["--scheduled", scheduled_date.isoformat()])
+
+    # One source item, one task identity on every host (CAP-4): the :ID: is
+    # derived from the TRIAGE_ID, so two unsynced copies that triage the same
+    # issue write the same task, not two with random ids.
+    if task_id:
+        cmd.extend(["--property", f"ID={triage_node_id(task_id)}"])
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
