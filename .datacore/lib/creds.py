@@ -26,6 +26,7 @@ import difflib
 import json
 import os
 import re
+import shlex
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -730,8 +731,9 @@ class CredentialManager:
                     # between this and reading the file yourself. A dead value
                     # served silently is what sends someone to rotate a
                     # credential that was fine.
-                    print(f"{cred_id}: value is DEAD ({detail}). Not served.",
+                    print(f"{cred_id}: this host's value is DEAD ({detail}). Not served.",
                           file=sys.stderr)
+                    print(self._fleet_hint(ca, cred_id, entry), file=sys.stderr)
                     if entry.get("lifecycle") == "rotating":
                         owner = entry.get("owner", "unresolved")
                         mint = entry.get("mint_host", "unknown")
@@ -753,6 +755,78 @@ class CredentialManager:
                           f"n-a (exit 3).", file=sys.stderr)
             print(value)
             return 0
+
+    @staticmethod
+    def _other_hosts(ca, entry: dict) -> list[str]:
+        """The hosts besides this one that the index declares the credential on."""
+        me = ca.instance_name()
+        hosts = entry.get("hosts") if isinstance(entry, dict) else None
+        return [str(h) for h in (hosts or []) if str(h) not in (me, "local")]
+
+    def _fleet_hint(self, ca, cred_id: str, entry: dict) -> str:
+        """What a FAIL on THIS host does and does not mean (MEM-07).
+
+        A 401 here says this host's copy is dead, not that the credential was
+        revoked: on 2026-07-08 the @plur_ai X keys had been rotated into one
+        host's tree and never distributed, so every other copy 401'd while the
+        key was alive. The verdict names the other hosts and the comparison,
+        so nobody has to go looking -- and nobody is sent to replace a key
+        that still works elsewhere."""
+        others = self._other_hosts(ca, entry)
+        if others:
+            return (f"  this is ONE host's copy. {cred_id} is also declared on "
+                    f"{', '.join(others)}: compare every host's value before calling it "
+                    f"revoked -- `creds compare {cred_id}` (sha256 fingerprints over ssh, "
+                    f"read-only, never a value). A copy that works on another host means "
+                    f"this one is stale: distribute that value, nothing is revoked.")
+        return (f"  no other host is declared for {cred_id}; before calling it revoked, "
+                f"compare with the value the provider's console shows (fingerprint: "
+                f"`python3 .datacore/lib/credential_access.py get {cred_id}`).")
+
+    def cmd_compare(self, cred_id: str, timeout: int = 20) -> int:
+        """Fingerprint of a credential's value on every declared host, read-only.
+
+        This host's fingerprint comes from the broker's own resolution; each
+        other host is asked over ssh for `credential_access.py get <id>`, which
+        prints a fingerprint and never the value. Exit 0 when every reachable
+        host holds the same value, 1 when they differ, 2 when a host could not
+        be read (unknown is never "the same")."""
+        import subprocess
+        ca = self._access()
+        try:
+            entry = ca._entry(cred_id)
+        except (ca.CredentialNotIndexed, ca.CredentialUnresolvable) as exc:
+            print(f"{exc}", file=sys.stderr)
+            return 2
+        me = ca.instance_name()
+        rows = []
+        try:
+            rows.append((me, ca.fingerprint(ca.get_value(cred_id, consumer="creds-compare"))))
+        except Exception as exc:  # noqa: BLE001 -- reported, never guessed
+            rows.append((me, f"unreadable ({str(exc)[:60]})"))
+        for host in self._other_hosts(ca, entry):
+            try:
+                r = subprocess.run(
+                    ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={min(timeout, 10)}", host,
+                     f"python3 ~/Data/.datacore/lib/credential_access.py get {shlex.quote(cred_id)}"],
+                    capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+                m = re.search(r"->\s*([0-9a-f]{12}|\(empty\))", r.stdout)
+                rows.append((host, m.group(1) if m else f"unreadable (exit {r.returncode})"))
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                rows.append((host, f"unreadable ({type(exc).__name__})"))
+        for host, fp in rows:
+            print(f"  {host:16} {fp}")
+        prints = {fp for _, fp in rows if re.fullmatch(r"[0-9a-f]{12}", fp)}
+        if len(prints) < len(rows):
+            print(f"\n  not every host could be read -- no conclusion about {cred_id}.")
+            return 2
+        if len(prints) > 1:
+            print(f"\n  the hosts hold DIFFERENT values: the key is not proven revoked. Probe "
+                  f"each host's copy (`creds doctor --id {cred_id}` there); the one that works "
+                  f"is the current value, and the others are stale copies to replace with it.")
+            return 1
+        print(f"\n  every host holds the same value.")
+        return 0
 
     def cmd_doctor(self, cred_id: str = None) -> int:
         """Liveness for every indexed credential. ok / FAIL / n-a.
@@ -811,6 +885,11 @@ class CredentialManager:
             print(f"  {state:5} {cid:32} {detail[:70]}")
         print(f"\n  ok {ok}   FAIL {fail}   n-a {na}"
               f"   ({na} could not be determined — not counted as passing)")
+        by_id = {c.id: c for c in creds}
+        for state, cid, _ in rows:
+            if state == "FAIL" and cid in by_id:
+                print(f"\n  FAIL {cid}:")
+                print(self._fleet_hint(ca, cid, self._full_entry(by_id[cid])))
         self._warn_duplicate_keys(ca, creds if cred_id else None)
         return 1 if fail else 0
 
@@ -1245,6 +1324,10 @@ def main():
         help="Install a freshly minted token from stdin into its declared store")
     adopt_p.add_argument("--id", dest="adopt_id", default="claude-code-oauth")
 
+    compare_p = subparsers.add_parser(
+        "compare", help="Fingerprint a credential on every declared host (read-only)")
+    compare_p.add_argument("credential")
+
     doctor_p = subparsers.add_parser("doctor", help="Liveness for every credential (ok/FAIL/n-a)")
     doctor_p.add_argument("--id", dest="doctor_id", default=None)
 
@@ -1282,6 +1365,8 @@ def main():
                            no_verify=args.no_verify, strict=args.strict)
     elif args.command == "adopt-token":
         return mgr.cmd_adopt_token(args.adopt_id)
+    elif args.command == "compare":
+        return mgr.cmd_compare(args.credential)
     elif args.command == "doctor":
         return mgr.cmd_doctor(args.doctor_id)
     elif args.command == "sync":

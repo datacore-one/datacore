@@ -128,8 +128,8 @@ Use `datacore.modules.list` for installed modules, `datacore.modules.info <name>
 
 ## Credentials — NEVER search for them
 
-Do not grep `.env` files. Do not look on another host. Do not read `~/.hermes/.env`
-or any other copy you happen to find. **Searching is what creates the problem**: a
+Do not grep `.env` files. Do not read another host's files or env (`ssh host cat …`).
+Do not read `~/.hermes/.env` or any other copy you happen to find. **Searching is what creates the problem**: a
 search finds *a* value, and nothing about a found value says whether it is current
 or abandoned. That is how duplicates accumulate and how "the credential is missing"
 gets reported about a credential that is present and working.
@@ -149,6 +149,7 @@ refusal is the feature: add it with `creds add`. Do not go looking.
 | Need | Command |
 |------|---------|
 | Is it alive? | `creds doctor [--id X]` → `ok` / `FAIL` / `n-a` |
+| Same value on every host? | `creds compare X` → sha256 fingerprint per host, never a value |
 | Where does it live? | `creds show X` / `creds list` / `creds search X` |
 | Reassemble this host's env | `creds sync` |
 | Push to every host | `.datacore/secrets/scripts/distribute.sh` |
@@ -159,9 +160,13 @@ refusal is the feature: add it with `creds add`. Do not go looking.
 run `creds sync`. Never edit `.datacore/env/.env` — it is generated, says so in its
 own header, and your edit is silently lost on the next sync.
 
-**Before concluding a credential was revoked**, diff its value across every host.
-A rotation may have reached only one machine. On 2026-07-08 the @plur_ai X keys were
-rotated into one host's working tree and never committed; the canonical store served
+**Before concluding a credential was revoked**, compare its value across every host
+with `creds compare <id>` — the broker does the cross-host diff (fingerprints over
+ssh, read-only), so this is not "looking on another host". A `FAIL` from `get` or
+`doctor` is one host's copy: it names the other hosts the credential lives on. Until
+every host has been compared, say it cannot be told yet; never tell anyone to
+regenerate or rotate. A rotation may have reached only one machine. On 2026-07-08
+the @plur_ai X keys were rotated into one host's working tree and never committed; the canonical store served
 pre-rotation values for four months and a release published everywhere before failing
 to post. Sending someone to regenerate keys that are alive on another machine
 destroys a working credential.
