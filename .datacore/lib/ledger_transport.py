@@ -467,6 +467,84 @@ def _fetch_reason(err: str) -> str:
     return "fetch failed (offline?)"
 
 
+#: A file this large is never shared (GitHub refuses 100 MB; the fleet's own
+#: limit, as in git_fleet_sync, is 50 MB). Same threshold everywhere (SYN-3).
+MAX_SHARED_BYTES = 50 * 1024 * 1024
+
+
+def unshareable(space: Path, paths: list[str] | None = None) -> dict[str, str]:
+    """Staged paths that must never reach the shared copy, with why (SYN-3).
+
+    Conflict markers (`git diff --cached --check` sees an UNTRACKED file once
+    `add -A` staged it, which the working-tree check before the autosave
+    cannot) and files of MAX_SHARED_BYTES or more. `paths` limits the check.
+    """
+    bad: dict[str, str] = {}
+    _, out, _ = _git(space, "-c", "core.quotepath=off", "diff", "--cached", "--check",
+                     "--", *(paths or []))
+    for line in out.splitlines():
+        if "leftover conflict marker" in line:
+            bad.setdefault(line.split(":", 1)[0], "conflict markers")
+    _, names, _ = _git(space, "-c", "core.quotepath=off", "diff", "--cached", "--name-only",
+                       "--diff-filter=AM", "--", *(paths or []))
+    for rel in names.splitlines():
+        try:
+            size = (space / rel).stat().st_size
+        except OSError:
+            continue
+        if size >= MAX_SHARED_BYTES:
+            bad.setdefault(rel, f"too large to share ({size / 1048576:.0f} MB ≥ 50 MB)")
+    return bad
+
+
+def refused_by_hook(repo: Path, paths: list[str]) -> tuple[list[str], str]:
+    """Which of `paths` the pre-commit hook refuses, and what it said (SYN-8).
+
+    A hook refuses a COMMIT, not a file, so ask it about subsets: stage a
+    subset in a scratch index (the real index is not touched), run the hook
+    against it, and bisect. One refused inbox capture then holds back that
+    file alone instead of the whole space (2-datacore, 2026-09-26). If no
+    subset is refused on its own -- a hook that objects to a combination, or
+    to something other than the files -- every path is reported refused,
+    which is the old whole-stop behaviour.
+    """
+    import tempfile
+    rc, hook, _ = _git(repo, "rev-parse", "--git-path", "hooks/pre-commit")
+    hook_path = Path(hook.strip()) if rc == 0 and hook.strip() else None
+    if hook_path is not None and not hook_path.is_absolute():
+        hook_path = repo / hook_path
+    if hook_path is None or not os.access(hook_path, os.X_OK):
+        return list(paths), ""
+    said: list[str] = []
+
+    def refuses(subset: list[str]) -> bool:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {**_net_env(), "GIT_INDEX_FILE": str(Path(tmp) / "index")}
+            try:
+                subprocess.run(["git", "read-tree", "HEAD"], cwd=repo, env=env,
+                               capture_output=True, timeout=60, check=True)
+                subprocess.run(["git", "add", "-A", "--", *subset], cwd=repo, env=env,
+                               capture_output=True, timeout=120, check=True)
+                r = subprocess.run([str(hook_path)], cwd=repo, env=env, capture_output=True,
+                                   text=True, timeout=300)
+            except (OSError, subprocess.SubprocessError):
+                return True
+            if r.returncode != 0:
+                said.append(((r.stdout or "") + (r.stderr or "")).strip())
+            return r.returncode != 0
+
+    def bisect(subset: list[str]) -> list[str]:
+        if not refuses(subset):
+            return []
+        if len(subset) == 1:
+            return subset
+        mid = len(subset) // 2
+        return bisect(subset[:mid]) + bisect(subset[mid:])
+
+    refused = bisect(list(paths))
+    return (refused or list(paths)), "\n".join(dict.fromkeys(x for x in said if x))
+
+
 def _incoming_rewrites(space: Path, ref: str) -> list[str]:
     """Would merging `ref` change or remove history this machine already holds?
 
@@ -575,6 +653,8 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
     # while a commit is on a branch, findable and pushable.
     rc, out, _ = _git(space, "status", "--porcelain")
     autosaved = bool(out.strip())
+    held_back: dict[str, str] = {}
+    hook_detail = ""
     if autosaved:
         _git(space, "add", "-A")
         # NEVER autosave a submodule pointer. `add -A` stages a changed
@@ -643,27 +723,52 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         if repaired:
             print(f"  autosave {space.name}: repaired weekday names in {', '.join(repaired)}")
 
+        # NEVER SHARE BAD STATE (SYN-3): a file with conflict markers or one
+        # too large for the shared copy is unstaged, left in the working tree
+        # and named -- and the rest of the space still syncs (SYN-8).
+        for rel, why in unshareable(space).items():
+            _git(space, "restore", "--staged", "--", rel)
+            held_back[rel] = why
+
+        commit_msg = ["-m", "ledger: autosave before converge"]
+        if os.environ.get("DATACORE_AUTOSAVE_TRAILER"):
+            # A caller's attribution (cos_sync: Winston as co-author), so it no
+            # longer needs an autosave of its own ahead of these checks.
+            commit_msg += ["-m", os.environ["DATACORE_AUTOSAVE_TRAILER"]]
         rc_staged, _, _ = _git(space, "diff", "--cached", "--quiet")
         if rc_staged == 0:                      # 0 = no staged changes remain
             autosaved = False
             crc, cout, cerr = 0, "", ""
         else:
-            crc, cout, cerr = _git(space, "commit",
-                                   "-m", "ledger: autosave before converge")
+            crc, cout, cerr = _git(space, "commit", *commit_msg)
         if crc != 0:
-            # A REFUSED AUTOSAVE MUST STOP THE CONVERGE. This return used to be
-            # absent: a pre-commit hook rejected the commit, `add -A` had already
-            # staged everything, and the merge then failed with "your local
-            # changes would be overwritten" — an error naming the merge, in a
-            # repo whose actual problem was one invalid org tag on line 6042.
-            # Swallowing a non-zero rc from git is the precise defect this
-            # module was written to remove, and it was sitting inside it.
-            #
-            # Not --no-verify: the hook is a guard doing its job. The operator
-            # has to see what it said, so its own output is the reason.
+            # A REFUSED AUTOSAVE HOLDS BACK THE REFUSED FILES, NOT THE SPACE.
+            # Not --no-verify: the hook is a guard doing its job, and its own
+            # words are the reason. But one invalid org tag on line 6042 used to
+            # stop the whole converge (LS-11): nothing else in 2-datacore moved
+            # from 2026-09-26 04:25Z, hourly. Ask the hook which files it
+            # refuses, unstage those (they stay in the working tree, untouched),
+            # commit the rest, and carry on (SYN-8).
             detail = (cout + cerr).strip()
-            return Result(False, "autosave refused by pre-commit hook",
-                          {"detail": detail[:400]})
+            _, staged_out, _ = _git(space, "-c", "core.quotepath=off", "diff", "--cached",
+                                    "--name-only")
+            staged_paths = [x for x in staged_out.splitlines() if x.strip()]
+            refused, said = refused_by_hook(space, staged_paths)
+            if said:
+                detail = said
+            for rel in refused:
+                _git(space, "restore", "--staged", "--", rel)
+                held_back[rel] = "refused by pre-commit hook"
+            rc_staged, _, _ = _git(space, "diff", "--cached", "--quiet")
+            if rc_staged == 0:
+                autosaved, crc = False, 0
+            else:
+                crc, cout, cerr = _git(space, "commit", *commit_msg)
+            if crc != 0:
+                detail = (cout + cerr).strip() or detail
+                return Result(False, "autosave refused by pre-commit hook",
+                              {"detail": detail[:400], "held_back": sorted(held_back)})
+            hook_detail = detail
         if foreign:
             own_principal, own_actor = _own_principal()
             named = "; ".join(f"{path} belongs to {principal} (writer {writer})"
@@ -726,6 +831,15 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
     if not pr.ok:
         return Result(False, f"converged but not published: {pr.reason}",
                       {"branch": db, "autosaved": autosaved, **pr.context})
+    if held_back:
+        # Everything else synced; these did not, and say why (SYN-3, SYN-8).
+        named = "; ".join(f"{rel} ({why})" for rel, why in sorted(held_back.items()))
+        refused = any(why.startswith("refused by") for why in held_back.values())
+        return Result(False, (f"{'autosave refused by pre-commit hook — ' if refused else ''}"
+                              f"held back, still only on this machine: {named}; "
+                              f"everything else synced"),
+                      {"branch": db, "autosaved": autosaved, "held_back": sorted(held_back),
+                       "detail": hook_detail[:400], "pushed": pr.context.get("attempts", 1)})
     return Result(True, "converged", {"branch": db, "autosaved": autosaved,
                                       "pushed": pr.context.get("attempts", 1), "ledger_refs": merged_refs,
                                       "ledger_prefixes": resolved})

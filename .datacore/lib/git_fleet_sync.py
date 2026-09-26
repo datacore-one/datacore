@@ -255,6 +255,25 @@ def is_junk(repo: Path, path: str, tracked: set) -> str:
     return ''
 
 
+def has_conflict_markers(full: Path) -> bool:
+    """Does this file carry leftover merge-conflict markers (SYN-3)?
+
+    Both a `<<<<<<< ` and a `>>>>>>> ` line, at line starts: one alone is
+    ordinary text (a quoted diff, an ASCII rule). The in-progress guard only
+    sees a merge git is still in; markers left in a file after a merge was
+    aborted, or copied into a new note, reach here as ordinary changes.
+    """
+    try:
+        if not full.is_file() or full.stat().st_size >= 50 * 1024 * 1024:
+            return False
+        data = full.read_bytes()
+    except OSError:
+        return False
+    lines = data.split(b'\n')
+    return (any(line.startswith(b'<<<<<<< ') for line in lines)
+            and any(line.startswith(b'>>>>>>> ') for line in lines))
+
+
 def in_progress(repo: Path) -> str:
     """'merge' | 'rebase' | 'cherry-pick' | 'revert' | '' for this checkout.
 
@@ -528,6 +547,9 @@ def _land(repo: Path, result: dict, execute: bool, default: str) -> dict:
         if reason:
             result['skipped'].append((path, reason))
             continue
+        if has_conflict_markers(repo / path):
+            result['skipped'].append((path, 'CONFLICT MARKERS — resolve before syncing'))
+            continue
         # GitHub's hard push limit is 100 MB; warn and skip anything ≥50 MB so
         # there is headroom before a binary artifact causes a blocked push.
         # Observed 2026-06-11: knowledge.db hit 100 MB and blocked ALL pushes.
@@ -567,8 +589,30 @@ def _land(repo: Path, result: dict, execute: bool, default: str) -> dict:
     c = subprocess.run(['git', '--literal-pathspecs', 'commit', '-m', msg, '--', *to_add], cwd=repo,
                        capture_output=True, text=True)
     if c.returncode != 0:
-        result['status'] = f"COMMIT FAILED: {(c.stderr or '').strip()[:120]}"
-        return result
+        # A REFUSED FILE IS HELD BACK, NOT THE REPO (SYN-8). Ask the hook which
+        # files it refuses (ledger_transport.refused_by_hook), name them, and
+        # land the rest: one invalid org tag must not strand every other
+        # change, and the history behind it, on this disk.
+        from ledger_transport import refused_by_hook
+        refused, said = refused_by_hook(repo, to_add)
+        why = ((said or c.stderr or c.stdout or '').strip().splitlines() or [''])[0][:120]
+        rest = [f for f in to_add if f not in refused]
+        subprocess.run(['git', '--literal-pathspecs', 'restore', '--staged', '--', *refused],
+                       cwd=repo, capture_output=True)
+        for f in refused:
+            result['skipped'].append((f, f'REFUSED by pre-commit hook — {why}'))
+        result['hook_refused'] = refused
+        c = None
+        if rest:
+            c = subprocess.run(['git', '--literal-pathspecs', 'commit', '-m', msg, '--', *rest],
+                               cwd=repo, capture_output=True, text=True)
+        if c is None or c.returncode != 0:
+            result['committed'] = []
+            result['status'] = (f"COMMIT FAILED: {why}" if c is None
+                                else f"COMMIT FAILED: {(c.stderr or '').strip()[:120]}")
+            return result
+        to_add = rest
+        result['committed'] = rest
 
     from git_publication import push_arguments
     captured = subprocess.run(['git', 'rev-parse', '--verify', 'HEAD^{commit}'],
@@ -772,7 +816,15 @@ def main() -> int:
                 print(f"    {sha}")
                 for path in paths:
                     print(f"      - {path}")
-    if forked or deleting:
+    refused = [r for r in results if r.get('hook_refused')]
+    if refused:
+        # Named, and the run fails so the alert fires: a refused file stays on
+        # this machine until a person fixes what the hook objects to (SYN-8).
+        print(f"\nFAIL: {len(refused)} repo(s) hold files a pre-commit hook refused "
+              f"(everything else landed; these stay here, unchanged):")
+        for r in refused:
+            print(f"  {r['name']}: {', '.join(r['hook_refused'])}")
+    if forked or deleting or refused:
         return 1
 
     if conflicts:
