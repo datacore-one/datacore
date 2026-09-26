@@ -280,6 +280,17 @@ def _registry(root: Path) -> dict:
         raise ValueError('repository registry is unavailable or invalid') from None
 
 
+def _marker_space(space: Path, root: Path) -> bool:
+    """Is `space` a top-level space under `root` that declares itself by marker?"""
+    try:
+        if Path(space).resolve().parent != Path(root).resolve():
+            return False
+        from spaces import read_marker
+        return read_marker(Path(space)) is not None
+    except (OSError, ValueError, RuntimeError, ImportError):
+        return False
+
+
 def classify(space: Path, root: Path | None = None) -> Result:
     """The repo's category, or a refusal.
 
@@ -311,6 +322,15 @@ def classify(space: Path, root: Path | None = None) -> Result:
             import re as _re
             name = _re.sub(r"\.git$", "", out.strip().rstrip("/").split("/")[-1])
             entry = next((v for v in reg.values() if isinstance(v, dict) and v.get("repo") == name), None)
+
+    # A SPACE IS REGISTERED BY ITS MARKER (SPC-9). A new top-level space
+    # declares itself in `<space>/.datacore/config.yaml`, which discovery,
+    # context and the ledger already read; demanding a second entry in the
+    # tracked registry meant a new space silently never synced (audit C12).
+    # A space is knowledge by definition. Only a direct child of the data root:
+    # a nested (client) space keeps needing an explicit registry entry.
+    if not entry and _marker_space(space, root):
+        entry = {"category": "knowledge", "via": "space marker"}
 
     if not entry:
         return Result(False, "repository not in registry/repositories.yaml",
@@ -926,7 +946,13 @@ def sync_outcomes(root: Path, only: str | None = None,
     never committed. Returns (name, category, outcome) per repo.
     """
     out: list[tuple[str, str, str]] = []
-    for key, entry in _registry(root).items():
+    registry = dict(_registry(root))
+    # New spaces declared only by their marker (SPC-9): see classify().
+    for path in sorted(p for p in root.iterdir() if p.is_dir() and not p.is_symlink()
+                       and p.name not in registry and (p / ".git").exists()
+                       and _marker_space(p, root)):
+        registry[path.name] = {"category": "knowledge", "via": "space marker"}
+    for key, entry in registry.items():
         path = root if key == "<root>" else root / key
         name = "<root>" if key == "<root>" else key
         if only and Path(key).name != only and key != only:

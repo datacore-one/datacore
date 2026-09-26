@@ -118,13 +118,13 @@ converge_one() {
 }
 rc=0
 offline=0
-for d in "$DATACORE_ROOT"/[0-9]-*; do
+for d in "$DATACORE_ROOT"/[0-9]*-*; do
   [ -d "$d/.datacore/events" ] && [ -d "$d/.git" ] || continue
   converge_one "$d"
 done
 failed_now() { case "$FAILED_SPACES" in *" $1 "*) return 0;; esac; return 1; }
 PHASE1=()
-for d in "$DATACORE_ROOT"/[0-9]-*; do
+for d in "$DATACORE_ROOT"/[0-9]*-*; do
   if [ -d "$d/.datacore/events" ] && [ "$(cat "$d/.datacore/ledger-phase" 2>/dev/null | tr -d '[:space:]')" = "1" ]; then
     failed_now "$(basename "$d")" || PHASE1+=("$d")
   fi
@@ -141,7 +141,7 @@ INGEST_ROOT="$DATACORE_ROOT"
 if [ "$FAILED_SPACES" != " " ]; then
   VIEW="$(mktemp -d "$STATE/phase1-ingest-root.XXXXXX")" || { finish 2; exit 2; }
   trap 'rm -rf "$LOCK" "$VIEW"' EXIT
-  for d in "$DATACORE_ROOT"/[0-9]-*; do
+  for d in "$DATACORE_ROOT"/[0-9]*-*; do
     [ -d "$d" ] || continue
     failed_now "$(basename "$d")" || ln -s "$d" "$VIEW/$(basename "$d")"
   done

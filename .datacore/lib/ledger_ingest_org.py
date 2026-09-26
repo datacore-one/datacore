@@ -573,7 +573,17 @@ def main() -> int:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return 2
 
-    spaces = sorted(p for p in args.root.glob("[0-9]-*") if (p / "org").is_dir())
+    # Every top-level space, however many digits its number has (SPC-9: the
+    # eleventh space is `10-…`, which the old `[0-9]-*` glob never matched),
+    # plus any declared only by its marker. The glob also follows the links of
+    # the phase-1 cycle's view root, which discovery deliberately does not.
+    from spaces import LEGACY_GLOB, discover_spaces
+    found = {p for p in args.root.glob(LEGACY_GLOB) if p.name.partition("-")[0].isdigit()}
+    try:
+        found |= {s.path for s in discover_spaces(args.root) if s.path.parent == args.root}
+    except (OSError, ValueError):
+        pass                                # the glob alone is the old behaviour
+    spaces = sorted(p for p in found if (p / "org").is_dir())
     # Sweeping nothing is not a successful sweep.
     if not spaces:
         print(f"ERROR: no spaces with org/ under {args.root} — refusing to report success")

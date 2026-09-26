@@ -30,7 +30,7 @@ def latest_jobs(root: Path, now: float, *, registry: Path | None = None) -> dict
     """
     latest: dict[str, dict[str, Attestation]] = {}
     root = Path(root)
-    spaces = [root, *sorted(p for p in root.glob('[0-9]-*') if p.is_dir())]
+    spaces = [root, *sorted(p for p in root.glob('[0-9]*-*') if p.is_dir())]  # 10-… too (SPC-9)
     for space in spaces:
         events = read_events(space)
         chains: dict[str, list] = {}
