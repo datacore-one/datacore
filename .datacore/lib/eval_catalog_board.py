@@ -47,6 +47,26 @@ def _json_block(name: str, obj: object) -> str:
     return f'<script type="application/json" id="{name}">{s}</script>'
 
 
+def write_board(data: dict, title: str, slug: str) -> Path:
+    """Render `data` on the shared decision-board page; owner-only, never published."""
+    css = (ASSETS / "board.css").read_text()
+    js = (ASSETS / "board.js").read_text()
+    if "</script" in js.lower():
+        raise SystemExit("board.js contains a literal </script")
+    script_hash = base64.b64encode(hashlib.sha256(js.encode()).digest()).decode()
+    csp = (f"default-src 'none'; script-src 'sha256-{script_hash}'; style-src 'unsafe-inline'; "
+           "base-uri 'none'; form-action 'none'")
+    safe = title.replace("&", "&amp;").replace("<", "&lt;")
+    page = ("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            f'<meta http-equiv="Content-Security-Policy" content="{csp}"><title>{safe}</title>'
+            f"<style>{css}</style></head><body><div id=\"app\"></div>"
+            f"{_json_block('data', data)}<script>{js}</script></body></html>\n")
+    out = private_state_directory("decision-boards") / f"{datetime.now().date().isoformat()}-{slug}.html"
+    atomic_write_text(out, page)
+    return out
+
+
 def rows_from(path: Path) -> tuple[str, list[dict]]:
     doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     area = str(doc.get("area") or path.stem)
@@ -110,21 +130,7 @@ def main() -> int:
     meta["build"] = hashlib.sha256(json.dumps(sections, sort_keys=True, ensure_ascii=False)
                                    .encode()).hexdigest()
 
-    css = (ASSETS / "board.css").read_text()
-    js = (ASSETS / "board.js").read_text()
-    if "</script" in js.lower():
-        raise SystemExit("board.js contains a literal </script")
-    script_hash = base64.b64encode(hashlib.sha256(js.encode()).digest()).decode()
-    csp = (f"default-src 'none'; script-src 'sha256-{script_hash}'; style-src 'unsafe-inline'; "
-           "base-uri 'none'; form-action 'none'")
-    title = args.title.replace("&", "&amp;").replace("<", "&lt;")
-    page = ("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
-            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-            f'<meta http-equiv="Content-Security-Policy" content="{csp}"><title>{title}</title>'
-            f"<style>{css}</style></head><body><div id=\"app\"></div>"
-            f"{_json_block('data', data)}<script>{js}</script></body></html>\n")
-    out = private_state_directory("decision-boards") / f"{today.date().isoformat()}-{args.slug}.html"
-    atomic_write_text(out, page)
+    out = write_board(data, args.title, args.slug)
     print(json.dumps({"out": str(out), "claims": total, "broken_today": broken,
                       "areas": {s["label"]: len(s["rows"]) for s in sections}}, indent=1))
     return 0
