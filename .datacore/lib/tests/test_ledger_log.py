@@ -109,7 +109,11 @@ def test_read_events_skips_torn_final_line(tmp_path):
     assert events[0].hash == e1.hash
 
 
-def test_read_events_raises_on_malformed_middle_line(tmp_path):
+def test_read_events_flags_a_malformed_middle_line_and_withholds_the_tail(tmp_path):
+    # Replaced 2026-09-26 (LED-7): read_events used to RAISE here, which
+    # stopped every reader of the space over one writer's damaged log. It now
+    # flags the damage (naming file and line) and withholds that log's events
+    # from the bad line on.
     log = _mk_log(tmp_path, "mac")
     log.append("item.create", {"id": "t1"})
     log.append("item.claim", {"id": "t1"})
@@ -122,10 +126,12 @@ def test_read_events_raises_on_malformed_middle_line(tmp_path):
     corrupted = valid_lines[0] + "\n" + "not valid json {{{" + "\n" + valid_lines[1] + "\n"
     log.path.write_text(corrupted)
 
-    with pytest.raises(CorruptLogError) as exc_info:
-        read_events(tmp_path / "space")
+    from ledger.log import CorruptLogWarning
+    with pytest.warns(CorruptLogWarning) as caught:
+        events = read_events(tmp_path / "space")
 
-    msg = str(exc_info.value)
+    assert [e.type for e in events] == ["item.create"]
+    msg = str(caught[0].message)
     assert str(log.path) in msg
     assert "line 2" in msg
 
@@ -383,10 +389,13 @@ def test_sibling_corrupt_middle_line_is_best_effort_skipped(tmp_path, monkeypatc
     assert b2.prev == b1.hash
     assert b2.hlc > b1.hlc
 
-    # The corruption itself is not swallowed system-wide -- read_events (and
-    # verify_chain) still raise on it loudly.
-    with pytest.raises(CorruptLogError):
+    # The corruption itself is not swallowed -- read_events flags it (LED-7:
+    # flagged, not raised for the whole space) and verify_chain reports it.
+    from ledger.log import CorruptLogWarning
+    with pytest.warns(CorruptLogWarning):
         read_events(tmp_path / "space")
+    from ledger.verify import verify_chain
+    assert any("malformed" in e for e in verify_chain(alice.path))
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses file permissions")

@@ -105,8 +105,11 @@ def test_complete_corrupt_last_record_is_never_discarded(tmp_path, tail):
     log.append("item.create", {"id": "one"})
     original = log.path.read_bytes() + tail
     log.path.write_bytes(original)
-    with pytest.raises(CorruptLogError):
-        read_events(tmp_path)
+    # LED-7: readers flag the damage and keep the events before it (it used to
+    # raise for the whole space); the writer itself still refuses to append.
+    from ledger.log import CorruptLogWarning
+    with pytest.warns(CorruptLogWarning):
+        assert [e.payload["id"] for e in read_events(tmp_path)] == ["one"]
     with pytest.raises(CorruptLogError):
         log.append("item.create", {"id": "two"})
     assert log.path.read_bytes() == original

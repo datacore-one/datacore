@@ -59,11 +59,12 @@ from __future__ import annotations
 import fcntl
 import os
 import re
+import time
 import warnings
 from pathlib import Path
 
 from .events import EVENT_TYPES, Event, body_dict, canonical_bytes, compute_hash, from_line, to_line
-from .hlc import tick
+from .hlc import parse as parse_hlc, tick
 from .keys import ensure_keypair, sign
 from file_utils import atomic_write_text, fsync_directory
 
@@ -79,6 +80,17 @@ class StaleLogError(RuntimeError):
     fact that this machine's log disagrees with the fleet's, which is exactly
     the condition an operator has to know about.
     """
+
+
+#: How far ahead of this machine's clock an HLC may be before it is treated as
+#: a wrong clock rather than a causal floor (LED-7, audit D7). One event dated
+#: 2100 used to become every writer's floor and overflow their HLC counters
+#: after nine appends.
+FUTURE_TOLERANCE_MS = 10 * 60 * 1000
+
+
+class CorruptLogWarning(UserWarning):
+    """One writer's log is damaged; its events from the bad line on are withheld."""
 
 
 class CorruptLogError(ValueError):
@@ -392,6 +404,16 @@ class EventLog:
                         continue
                     if sibling_events:
                         sibling_last_hlc = sibling_events[-1].hlc
+                        try:
+                            ahead = parse_hlc(sibling_last_hlc)[0] - int(time.time() * 1000)
+                        except (TypeError, ValueError, AttributeError):
+                            continue
+                        if ahead > FUTURE_TOLERANCE_MS:
+                            # A wrong clock, not causality: taking it as the
+                            # floor stalls this writer (LED-7). verify flags it.
+                            warnings.warn(f"ignoring {sibling_path.name}'s HLC {sibling_last_hlc}: "
+                                          f"{ahead // 60000} min ahead of this clock", RuntimeWarning)
+                            continue
                         if floor is None or sibling_last_hlc > floor:
                             floor = sibling_last_hlc
                 hlc_stamp = tick(self.actor, floor)
@@ -467,13 +489,32 @@ def _parse_log_bytes(raw: bytes, path: Path) -> tuple[list[Event], int]:
     return events, valid_len
 
 
+def _parse_prefix(raw: bytes) -> list[Event]:
+    """The events before the first malformed line of a damaged log."""
+    events: list[Event] = []
+    for raw_line in raw.split(b"\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            events.append(from_line(line.decode("utf-8")))
+        except Exception:  # noqa: BLE001 -- the first bad line ends the prefix
+            break
+    return events
+
+
 def read_events(space_dir: Path) -> list[Event]:
     """Merge every writer's `*.jsonl` file under `space_dir` into one list,
     sorted by `hlc` (ascending). Returns `[]` if the events dir is missing
     or empty. Read-only: takes no lock, never mutates a file.
 
     A torn final line (a live writer mid-flush, or a crash) is skipped
-    silently. A malformed line anywhere else raises `CorruptLogError`.
+    silently. A malformed line anywhere else is flagged (`CorruptLogWarning`,
+    naming the file and line) and that log's events from the bad line on are
+    withheld; every other log is read in full. One damaged writer log used to
+    raise `CorruptLogError` here and stop fold, projection, checkpoint and
+    policy for the WHOLE space (LED-7, audit A#15). Nothing is repaired: the
+    damage stays for verify_chain to report and an operator to address.
     """
     events_dir = Path(space_dir) / ".datacore" / "events"
     events: list[Event] = []
@@ -481,7 +522,19 @@ def read_events(space_dir: Path) -> list[Event]:
         return events
     for path in sorted(events_dir.glob("*.jsonl")):
         raw = path.read_bytes()
-        file_events, _valid_len = _parse_log_bytes(raw, path)
+        try:
+            file_events, _valid_len = _parse_log_bytes(raw, path)
+        except CorruptLogError as exc:
+            file_events = _parse_prefix(raw)
+            note = (f"{exc}; {path.name}: {len(file_events)} event(s) before it are read, "
+                    "the rest of this log is withheld")
+            warnings.warn(note, CorruptLogWarning)
+            if file_events:
+                # Carried by the last event read, as a plain attribute (never a
+                # dataclass field, like `log`): verify_events reports a chain
+                # ending in it as incomplete, so a reader that trusts only a
+                # verified chain (job attestations) still fails closed.
+                file_events[-1].damaged_after = note
         for e in file_events:
             # Which chain this event came from. A writer may own MORE THAN ONE
             # log -- datacore#148 gave a run branch its own `<actor>-run-<date>`

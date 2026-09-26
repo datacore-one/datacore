@@ -26,6 +26,7 @@ reporting contract is different in two ways that matter here:
 from __future__ import annotations
 
 import json
+import time
 
 from pathlib import Path
 
@@ -153,6 +154,10 @@ def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = 
     errors: list[str] = []
     expected_prev = GENESIS
     expected_seq = 0
+    # A wrong clock is flagged, never followed (LED-7): the same tolerance the
+    # writer uses to refuse such a stamp as its causal floor.
+    from .log import FUTURE_TOLERANCE_MS
+    horizon = int(time.time() * 1000) + FUTURE_TOLERANCE_MS
     for line_no, event in parsed:
         if (type(event.seq) is not int or event.seq < 0
                 or not all(isinstance(v, str) for v in (event.hlc, event.actor, event.type, event.prev, event.hash, event.sig))
@@ -160,6 +165,15 @@ def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = 
             errors.append(f"line {line_no}: invalid event field types")
             continue
         body = body_dict(event.seq, event.hlc, event.actor, event.type, event.payload, event.prev)
+
+        try:
+            physical = int(event.hlc.split(".", 1)[0])
+            if physical > horizon:
+                errors.append(f"line {line_no}: hlc {event.hlc!r} is "
+                              f"{(physical - horizon) // 60000 + FUTURE_TOLERANCE_MS // 60000} min "
+                              "in the future (wrong clock)")
+        except ValueError:
+            errors.append(f"line {line_no}: malformed hlc {event.hlc!r}")
 
         computed = compute_hash(body)
         voided = bool(voids is not None and log is not None and voids.applies(log, event, computed))
@@ -195,6 +209,10 @@ def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = 
                 )
         elif strict:
             errors.append(f"line {line_no}: unsigned event")
+
+        damaged = getattr(event, "damaged_after", None)
+        if damaged:
+            errors.append(f"line {line_no}: chain is incomplete: {damaged}")
 
         # Chain forward using the event's *stored* hash/seq, not a
         # recomputed one -- a wrong stored hash is already flagged by the
