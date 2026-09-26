@@ -45,6 +45,30 @@ FALLBACK_PROTECTED="plur-ai/plur datacore-one/datacore datacore-one/datacore-dip
 # 824 MB unpushed by 2026-06-10 exactly this way).
 REFS_INPUT=$(cat)
 
+# ---- Shared history is never rewritten (MEM-10; owner decision 6) ----------
+# Runs for EVERY repo, before the not-protected early exit further down: until
+# 2026-09-26 a non-protected repo printed "policy check skipped" and let
+# `git push --force origin main` rewrite the shared main. A push to a shared
+# branch must fast-forward it: the remote's tip is an ancestor of what we push.
+# A tip we do not have locally could be someone's unseen work -- refused too
+# (fetch, merge, push again). Deleting a shared branch is refused.
+ZERO_SHA="0000000000000000000000000000000000000000"
+REWRITE=$(printf '%s\n' "$REFS_INPUT" | while IFS=' ' read -r l_ref l_sha r_ref r_sha; do
+    case "$r_ref" in (refs/heads/main|refs/heads/master|refs/heads/develop) ;; (*) continue ;; esac
+    [ -z "$r_sha" ] || [ "$r_sha" = "$ZERO_SHA" ] && continue
+    if [ "$l_sha" = "$ZERO_SHA" ]; then
+        echo "${r_ref#refs/heads/} (deletion)"
+    elif ! git merge-base --is-ancestor "$r_sha" "$l_sha" >/dev/null 2>&1; then
+        echo "${r_ref#refs/heads/}"
+    fi
+done)
+if [ -n "$REWRITE" ]; then
+    echo "pre-push: BLOCKED — this push rewrites shared history on: $(echo $REWRITE)" >&2
+    echo "  The remote tip is not an ancestor of what is pushed (a force-push, or work you have not fetched)." >&2
+    echo "  Fetch, merge or rebase your own commits on top, and push again; shared history is never rewritten." >&2
+    exit 1
+fi
+
 OWNERSHIP="$DATA_DIR/.datacore/lib/hooks/log_ownership_guard.py"
 
 # ---- A Python that can actually run the policy ------------------------------
