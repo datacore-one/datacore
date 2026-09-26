@@ -323,6 +323,12 @@ node_modules/
 .datacore/lib/lens_analyze.py
 .datacore/lib/ws_chat_test.py
 
+# Chief of Staff persona — written by `datacore init` with the name the user
+# chose and their free-text "how I want to be worked with" notes. Their own
+# words, so never in a public repo or a fork of one (audit 2026-09-26: it was
+# neither tracked nor ignored, one `git add -A` from a public fork).
+.datacore/personas/
+
 # Personal CoS config — NEVER in the public repo (2026-07-16 incident;
 # deliver to replicas via chief-of-staff module deploy, like cos_* scripts).
 # Whole directory ignored; only sanitized *.example templates are tracked.
