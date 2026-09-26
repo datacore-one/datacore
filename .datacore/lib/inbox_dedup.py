@@ -28,6 +28,14 @@ Usage
     python3 .datacore/lib/inbox_dedup.py --space 0-personal            # dry run
     python3 .datacore/lib/inbox_dedup.py --space 0-personal --apply
     python3 .datacore/lib/inbox_dedup.py --space 0-personal --apply --tag sprint_s1
+    python3 .datacore/lib/inbox_dedup.py --space-all --exact-only --apply   # morning job
+
+`--space-all --exact-only` is the automatic mode the chief-of-staff morning
+inbox job runs before processing (promise INB-5). For every space with an
+org/inbox.org it removes a capture only when its normalised heading is
+IDENTICAL to a heading in that space's other live org files (archives never
+count). A near-match (same words ignoring case and punctuation) is ambiguous:
+it is kept and reported. A space with nothing to remove is not rewritten.
 
 `--tag` restricts removal to entries carrying that org tag, for when you want to
 clean one batch rather than the whole inbox. Default is a dry run: nothing is
@@ -47,7 +55,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import org_transaction  # noqa: E402
 
-HEADING_RE = re.compile(r"^(\*+)\s+(TODO|NEXT|WAITING|DONE|SOMEDAY|CANCELLED)?\s*(.*?)$")
+HEADING_RE = re.compile(
+    r"^(\*+)\s+(?:(TODO|NEXT|WAITING|REVIEW|DONE|DEFERRED|SOMEDAY|CANCELLED)\s+)?(.*?)$")
 PRIORITY_RE = re.compile(r"^\[#[A-C]\]\s*")
 TAGS_RE = re.compile(r"\s+(:[\w:@#%-]+:)\s*$")
 
@@ -56,6 +65,12 @@ DEFAULT_DESTINATIONS = ("org/next_actions.org", "org/research_learning.org")
 
 def split_heading(line: str) -> tuple[int, str, str] | None:
     """Return (level, normalised_title, tag_string) for an org heading line."""
+    parsed = _split(line)
+    return parsed[:3] if parsed else None
+
+
+def _split(line: str) -> tuple[int, str, str, str | None] | None:
+    """(level, normalised_title, tag_string, todo_state) for a heading line."""
     m = HEADING_RE.match(line.rstrip())
     if not m:
         return None
@@ -68,7 +83,7 @@ def split_heading(line: str) -> tuple[int, str, str] | None:
         rest = rest[: tm.start()]
     title = PRIORITY_RE.sub("", rest).strip()
     title = re.sub(r"\s+", " ", title)
-    return level, title, tags
+    return level, title, tags, m.group(2)
 
 
 def destination_titles(paths: list[Path]) -> set[str]:
@@ -128,6 +143,105 @@ def dedup(inbox: Path, dests: list[Path], tag: str | None) -> tuple[list[str], l
     return kept, removed
 
 
+def loose_key(title: str) -> str:
+    """Near-match key: case and punctuation ignored. Never used to remove."""
+    return " ".join(re.sub(r"[^\w\s]", " ", title.casefold()).split())
+
+
+def space_destinations(space: Path, inbox: Path) -> list[Path]:
+    """The space's other live org files: every org/*.org except the inbox
+    itself and anything named like an archive (what left the inbox as
+    finished is not proof a live item was routed)."""
+    org = space / "org"
+    return sorted(p for p in org.glob("*.org")
+                  if p.resolve() != inbox.resolve() and "archive" not in p.name.lower())
+
+
+def dedup_exact(inbox: Path, dests: list[Path]) -> tuple[list[str], list[str], list[str]]:
+    """Return (kept_lines, removed_titles, ambiguous_titles).
+
+    An entry is a level-2+ heading, or a level-1 heading carrying a TODO
+    state (a top-level capture; a stateless level-1 is a container such as
+    "* Inbox" and is never removed). It is removed with its whole subtree
+    only on an exact normalised-heading match; a loose-key match is kept
+    and returned as ambiguous."""
+    exact = destination_titles(dests)
+    loose = {loose_key(t) for t in exact}
+    lines = inbox.read_text(encoding="utf-8").splitlines()
+    kept: list[str] = []
+    removed: list[str] = []
+    ambiguous: list[str] = []
+    i, n = 0, len(lines)
+    while i < n:
+        parsed = _split(lines[i])
+        if parsed is None:
+            kept.append(lines[i])
+            i += 1
+            continue
+        level, title, _tags, state = parsed
+        is_entry = bool(title) and (level >= 2 or state is not None)
+        if is_entry and title in exact:
+            i += 1
+            while i < n:
+                nxt = _split(lines[i])
+                if nxt and nxt[0] <= level:
+                    break
+                i += 1
+            removed.append(title)
+            continue
+        if is_entry and loose_key(title) in loose:
+            ambiguous.append(title)
+        kept.append(lines[i])
+        i += 1
+    return kept, removed, ambiguous
+
+
+def dedup_space(space: Path, apply: bool, inbox_rel: str = "org/inbox.org") -> dict:
+    """Exact-only repair of one space. With `apply`, back up to
+    <inbox>.bak and rewrite under the org transaction lock, but only when
+    something is removed."""
+    inbox = space / inbox_rel
+    dests = space_destinations(space, inbox)
+
+    def run() -> dict:
+        if apply:
+            org_transaction.watch_file(inbox)
+        kept, removed, ambiguous = dedup_exact(inbox, dests)
+        backup = None
+        if apply and removed:
+            backup = inbox.with_suffix(inbox.suffix + ".bak")
+            shutil.copy2(inbox, backup)
+            org_transaction.write_org_text(inbox, "\n".join(kept) + "\n")
+        return {"space": space.name, "removed": removed, "ambiguous": ambiguous,
+                "backup": str(backup) if backup else None}
+
+    return org_transaction.serialized(run)() if apply else run()
+
+
+def run_all_spaces(root: Path, apply: bool) -> int:
+    """--space-all --exact-only: every space with an inbox. One space's
+    failure is reported and does not stop the others; the exit code is
+    non-zero only if a space failed."""
+    failed = 0
+    for space in sorted(p for p in root.glob("[0-9]-*") if (p / "org" / "inbox.org").is_file()):
+        try:
+            r = dedup_space(space, apply)
+        except Exception as e:  # report, keep going
+            failed += 1
+            print(f"[inbox-dedup] {space.name}: FAILED, inbox left as is: {e}")
+            continue
+        if not r["removed"] and not r["ambiguous"]:
+            continue
+        verb = "removed" if apply else "would remove"
+        print(f"[inbox-dedup] {space.name}: {verb} {len(r['removed'])} routed copies"
+              + (f" (backup {r['backup']})" if r["backup"] else ""))
+        for t in r["removed"]:
+            print(f"  - {t[:100]}")
+        for t in r["ambiguous"]:
+            print(f"  ? near-match kept, needs a look: {t[:100]}")
+    return 1 if failed else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--space", default="0-personal", help="space directory (default: 0-personal)")
@@ -138,7 +252,17 @@ def main() -> int:
                          f"Default: {', '.join(DEFAULT_DESTINATIONS)}")
     ap.add_argument("--tag", default=None, help="only remove entries carrying this org tag")
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
+    ap.add_argument("--space-all", action="store_true",
+                    help="every space under --root that has org/inbox.org (requires --exact-only)")
+    ap.add_argument("--exact-only", action="store_true",
+                    help="remove only exact heading matches found in the space's other live org "
+                         "files; report near-matches and leave them")
     args = ap.parse_args()
+
+    if args.space_all or args.exact_only:
+        if not (args.space_all and args.exact_only):
+            ap.error("--space-all and --exact-only go together")
+        return run_all_spaces(Path(args.root), args.apply)
 
     space = Path(args.root) / args.space
     inbox = space / args.inbox
