@@ -31,3 +31,37 @@ malformed_hash:
       every chain-position variant and four encodings were tried. Correcting the
       hash would invalidate seq 6's prev and require re-sealing the tail, which
       origin's copy would not share: a forked log.
+
+# Reviewed exceptions to SIGNATURE verification. An entry pins the stored hash
+# (which must still be the hash the body produces, so the body is pinned) and
+# the sha256 of the exact signature string. It excuses the signature only;
+# prev and seq are still checked. `disposition: void` means the event's claim
+# is not believed: anything acting on attestations (cadence liveness) already
+# refuses an unverified signature, and key collection ignores these events.
+invalid_signature:
+  - space: 6-meridian
+    log: miles.jsonl
+    seq: 21140
+    hash: dabfeaef2c304d17b65025754f0235c35c8b5d09e66e92cf0ce193e488805fc6
+    sig_sha256: 1596e4f2bfa7f801ff4cdfa4bb5112e408f773aa4f83ae16ce8317a00649239e
+    disposition: void
+    recorded_on: 2026-09-26
+    evidence: 6-meridian commit a9aa456d; 2-datacore/1-tracks/dev/ledger-audit-2026-09-26/D-agents-policy.md
+    reason: >-
+      Hand-written by a Miles heartbeat on 2026-09-25 (~11:28Z): it performed the
+      bot-performance-report cadence itself and appended a "done" metric.attest
+      with sig = the event's own hash, bypassing EventLog (non-canonical JSON on
+      disk). No key signed it. 45 genuine events chain on top, so it cannot be
+      removed without forking the log. The claim is void: the report exists, but
+      the scheduled cadence did not produce it. Owner decision 2026-09-26: fix.
+  - space: 6-meridian
+    log: miles.jsonl
+    seq: 21141
+    hash: 6b84718b6f2d64ba69759acbbc89843ce204ac1aed68e8a956e7ee8572394aa9
+    sig_sha256: 90f13b266f6f546b906d512e458dc441940152f361c71fad3450de2be4bb6a3b
+    disposition: void
+    recorded_on: 2026-09-26
+    evidence: 6-meridian commit a9aa456d; 2-datacore/1-tracks/dev/ledger-audit-2026-09-26/D-agents-policy.md
+    reason: >-
+      The same heartbeat run as seq 21140, for the trade-reconciliation cadence.
+      Same method, same disposition.

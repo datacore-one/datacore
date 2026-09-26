@@ -41,6 +41,12 @@ def _excepted(origin: tuple[str, str], seq: int, recorded: str, computed: str) -
     return is_recorded(origin[0], origin[1], seq, recorded, computed)
 
 
+def _sig_excepted(origin: tuple[str, str], seq: int, stored: str, computed: str, sig: str) -> bool:
+    """Is this exact bad signature recorded as a reviewed, voided exception?"""
+    from .exceptions import signature_excused
+    return signature_excused(origin[0], origin[1], seq, stored, computed, sig)
+
+
 def verify_chain(path: Path, registry_path: Path | None = None, strict: bool = False) -> list[str]:
     """Verify one writer's event-log file: hash chain, seq, and signatures.
 
@@ -164,7 +170,8 @@ def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = 
             )
 
         if event.sig != "":
-            if not verify_sig(event.actor, canonical_bytes(body), event.sig, registry_path=registry_path):
+            if (not verify_sig(event.actor, canonical_bytes(body), event.sig, registry_path=registry_path)
+                    and not (origin and _sig_excepted(origin, event.seq, event.hash, computed, event.sig))):
                 errors.append(
                     f"line {line_no}: signature verification failed for actor {event.actor!r} "
                     "(unknown actor or invalid signature)"

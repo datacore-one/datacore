@@ -87,3 +87,53 @@ def is_recorded(space: str, log: str, seq: int, recorded: str, computed: str,
         return False
     return (space, log, int(seq), str(recorded).lower(),
             str(computed).lower()) in load(root)
+
+
+# ── invalid_signature ────────────────────────────────────────────────────────
+#
+# WHY. 2026-09-25 an agent appended two hand-written events to 6-meridian's
+# miles.jsonl with sig = the event's own hash. Verify caught them (they fail
+# signature verification), but the log is append-only and 45 genuine events
+# already chained on top, so nothing could clear it: every verify and every
+# relay of the space failed, forever. An `invalid_signature` entry records such
+# an event after review, and verify stops reporting it.
+#
+# WHAT IT PINS. The stored hash, which must also be the hash the body produces
+# (so the body is pinned: edit it and the hash moves), and the sha256 of the
+# exact signature string. It excuses the signature only; the chain position
+# (prev, seq) is still checked. `disposition: void` records that the event's
+# claim is not believed: consumers that act on attestations (cadence liveness)
+# already refuse an unverified signature, so a voided event has no effect.
+
+
+def load_signatures(root: Path | None = None) -> set[tuple[str, str, int, str, str]]:
+    """Every recorded signature exception as (space, log, seq, hash, sig_sha256).
+
+    Fails CLOSED, like `load`: absent, unreadable or malformed means none."""
+    try:
+        import yaml
+        data = yaml.safe_load(_path(root).read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 -- absent/broken means none
+        return set()
+    if not isinstance(data, dict):
+        return set()
+    out: set[tuple[str, str, int, str, str]] = set()
+    for entry in data.get("invalid_signature") or ():
+        if not isinstance(entry, dict):
+            continue
+        space, log, seq = entry.get("space"), entry.get("log"), entry.get("seq")
+        h, sig_sha = _digest(entry.get("hash")), _digest(entry.get("sig_sha256"))
+        if (isinstance(space, str) and isinstance(log, str) and type(seq) is int
+                and seq >= 0 and h and sig_sha and entry.get("disposition") == "void"):
+            out.add((space, log, seq, h, sig_sha))
+    return out
+
+
+def signature_excused(space: str, log: str, seq: int, stored_hash: str, computed: str,
+                      sig: str, root: Path | None = None) -> bool:
+    """Is THIS event's bad signature a reviewed exception, on these exact bytes?"""
+    import hashlib
+    if not (space and log) or str(stored_hash).lower() != str(computed).lower():
+        return False                       # the body no longer produces the pinned hash
+    sig_sha = hashlib.sha256(str(sig).encode("utf-8")).hexdigest()
+    return (space, log, int(seq), str(stored_hash).lower(), sig_sha) in load_signatures(root)

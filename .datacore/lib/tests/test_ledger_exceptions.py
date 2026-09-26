@@ -91,3 +91,80 @@ def test_an_entry_claiming_the_hashes_are_equal_is_refused(tmp_path):
     """Equal hashes are not a mismatch; such an entry could only be noise."""
     root = _one(tmp_path, computed=RECORDED)
     assert exceptions.load(root) == set()
+
+
+# ── invalid_signature: EVALS written before the code (ledger upgrade, audit A-4) ──
+#
+# 2026-09-25 an agent appended two hand-written events to 6-meridian's
+# miles.jsonl with sig = its own hash. Verify caught them, and nothing could
+# clear it: the log is append-only, and the registry excused hash mismatches
+# only. These evals define what a reviewed signature exception must do.
+
+import hashlib  # noqa: E402
+import json  # noqa: E402
+
+from ledger.events import body_dict, compute_hash  # noqa: E402
+from ledger.log import EventLog  # noqa: E402
+from ledger.verify import verify_chain  # noqa: E402
+
+
+def _forged_space(tmp_path):
+    space = tmp_path / "6-fixture"
+    log = EventLog(space, "miles")
+    log.append("item.create", {"id": "t1", "title": "real", "state": "NEXT"})
+    path = space / ".datacore" / "events" / "miles.jsonl"
+    last = json.loads(path.read_text().splitlines()[-1])
+    body = body_dict(last["seq"] + 1, "1790335679473.0000.miles", "miles", "metric.attest",
+                     {"metric": "cadence.run", "result": "ok"}, last["hash"])
+    h = compute_hash(body)
+    with path.open("a") as f:     # the hand-written append, as the agent did it
+        f.write(json.dumps({**body, "hash": h, "sig": h}) + "\n")
+    return path, body["seq"], h
+
+
+def _sig_entry(tmp_path, seq, h, sig_sha256=None, space="6-fixture"):
+    return _root(tmp_path, "version: 1\ninvalid_signature:\n"
+                 f"  - space: {space}\n    log: miles.jsonl\n    seq: {seq}\n"
+                 f"    hash: {h}\n    sig_sha256: {sig_sha256 or hashlib.sha256(h.encode()).hexdigest()}\n"
+                 "    disposition: void\n    reason: hand-written by an agent\n")
+
+
+def _sig_errors(path):
+    return [e for e in verify_chain(path) if "signature" in e]
+
+
+def test_a_forged_signature_fails_verify(tmp_path, monkeypatch):
+    path, _, _ = _forged_space(tmp_path)
+    monkeypatch.setattr(exceptions, "DATACORE_ROOT", tmp_path / "no-registry")
+    assert _sig_errors(path)
+
+
+def test_a_reviewed_entry_excuses_exactly_that_event(tmp_path, monkeypatch):
+    path, seq, h = _forged_space(tmp_path)
+    monkeypatch.setattr(exceptions, "DATACORE_ROOT", _sig_entry(tmp_path / "r", seq, h))
+    assert verify_chain(path) == []
+
+
+def test_the_entry_must_pin_the_exact_signature_bytes(tmp_path, monkeypatch):
+    path, seq, h = _forged_space(tmp_path)
+    monkeypatch.setattr(exceptions, "DATACORE_ROOT", _sig_entry(tmp_path / "r", seq, h, sig_sha256="0" * 64))
+    assert _sig_errors(path)
+
+
+def test_editing_an_excused_event_revokes_the_exception(tmp_path, monkeypatch):
+    """Re-hash an edited body and the pinned hash no longer matches: verify fails again."""
+    path, seq, h = _forged_space(tmp_path)
+    monkeypatch.setattr(exceptions, "DATACORE_ROOT", _sig_entry(tmp_path / "r", seq, h))
+    lines = path.read_text().splitlines()
+    ev = json.loads(lines[-1])
+    ev["payload"]["result"] = "edited"
+    body = body_dict(ev["seq"], ev["hlc"], ev["actor"], ev["type"], ev["payload"], ev["prev"])
+    ev["hash"] = ev["sig"] = compute_hash(body)
+    path.write_text("\n".join(lines[:-1] + [json.dumps(ev)]) + "\n")
+    assert _sig_errors(path)
+
+
+def test_another_space_is_not_excused(tmp_path, monkeypatch):
+    path, seq, h = _forged_space(tmp_path)
+    monkeypatch.setattr(exceptions, "DATACORE_ROOT", _sig_entry(tmp_path / "r", seq, h, space="0-other"))
+    assert _sig_errors(path)

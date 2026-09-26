@@ -133,7 +133,13 @@ def cmd_verify(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     total_events = len(read_events(space))
-    print(f"OK {len(files)} files {total_events} events")
+    # Reviewed exceptions are named, never silent: an excused event is still
+    # an event that failed a check once (ledger-exceptions.yaml says why).
+    from ledger.exceptions import load, load_signatures
+    excused = (sum(1 for e in load() if e[0] == space.name)
+               + sum(1 for e in load_signatures() if e[0] == space.name))
+    note = f" ({excused} reviewed exception(s), see ledger-exceptions.yaml)" if excused else ""
+    print(f"OK {len(files)} files {total_events} events{note}")
 
 
 def cmd_items(args: argparse.Namespace) -> None:
