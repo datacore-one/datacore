@@ -175,6 +175,15 @@ def confirm_and_dismiss(space: Path, now: float, execute: bool = False,
     unreadable files skip the space, and the ceiling — because dismiss is
     terminal (DIP-0034) and two scans do not make a bad scanner good.
     """
+    # A PHASE-1 SPACE HAS NO AUTHORED EVIDENCE OF ABSENCE. Its next_actions.org
+    # is generated from the ledger, so an item another host created is simply
+    # not rendered yet on a host whose projection is behind -- and two sweeps an
+    # hour apart dismissed it for good as housekeeping. About 41 live tasks were
+    # lost that way after the flip, two on 2026-09-26 (audit B-F1). Until an
+    # absence can be judged against the last rendered base, do not judge it.
+    if (space / ".datacore" / "ledger-phase").exists():
+        return {"dismissed": 0, "refused": "phase-1 space: the task list is generated "
+                "from the ledger, so absence from it is not evidence"}
     watch = _watch_path(space)
     try:
         prev = json.loads(watch.read_text())

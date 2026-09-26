@@ -615,7 +615,7 @@ def main() -> int:
             orph = confirm_and_dismiss(space, time.time(),
                                        execute=not args.dry_run)
             sy["dismissed"] += orph.get("dismissed", 0)
-            if orph.get("refused"):
+            if orph.get("refused") and not orph["refused"].startswith("phase-1"):
                 print(f"{space.name:14} ORPHAN SWEEP REFUSED — {orph['refused']}")
             drift = new or sy["dismissed"] or sy["updated"]
             flag = "  <-- DRIFT" if drift else ""
