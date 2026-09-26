@@ -15,7 +15,9 @@ makes it checkable:
     aggregate(night_dir) -> {"confirmed": [...], "unconfirmed": [...]}
     calibrate(answer_key, findings_by_family) -> {family: {"recall", "false_positives"}}
     reviewer_for(author_family) -> family
-    may_start(agent, spent_usd, cap_usd) -> bool
+    ready_for_owner(pr) -> bool      pr = {"author_family", "reviews": [{"family", "kind"}]}
+    NIGHTLY_CAP_USD             {agent: positive USD cap}
+    may_start(agent, spent_usd, cap_usd=None) -> bool
     night_alerts(night_dir, agents=None) -> list[str]   what The Firm is told next morning
   principal `auditor` in config/approvals_policy.yaml, enforced by tool_policy.decide
 
