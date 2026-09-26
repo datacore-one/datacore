@@ -325,12 +325,14 @@ def test_roster_names_resolve_the_manifests_machine_names(tmp_path):
     assert autofix.actor_of("box", r) == "winston"
 
 
-def test_an_agent_may_merge_only_into_the_core_repository(tmp_path, monkeypatch):
+def test_an_agent_may_open_a_repair_pr_only_in_the_core_repository(tmp_path, monkeypatch):
     """The owner's boundary, 2026-09-22: 'this is only for datacore'. A module's
     repository, or anything under another organisation, is refused whatever
-    push rights the account holds."""
+    push rights the account holds. No repository is one an agent merges into
+    (owner, 2026-09-25/26)."""
     import autofix
-    assert autofix.MERGE_REPOS == frozenset({"datacore-one/datacore"})
+    assert autofix.PR_REPOS == frozenset({"datacore-one/datacore"})
+    assert not hasattr(autofix, "MERGE_REPOS")
     monkeypatch.setattr(autofix, "contract_sha", lambda name, manifest: "abc")
     for repo in ("datacore-one/datacore-nightshift", "plur-ai/plur", "plur9/module-personal-finance"):
         monkeypatch.setattr(autofix, "repo_for", lambda job, root, r=repo: r)

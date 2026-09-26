@@ -63,13 +63,18 @@ def _space(root: Path) -> Path:
 
 ROSTER = LIB.parent / "registry" / "infrastructure.yaml"
 
-#: Where an agent may MERGE its own repair. The owner's boundary, stated
+#: Where an agent may open a repair PULL REQUEST. The owner's boundary, stated
 #: 2026-09-22 ("this is only for datacore"): the core repository, nothing else
 #: -- not a module's repository, not anything under another organisation --
 #: whatever push rights the account happens to hold. A repair whose producer
 #: lives elsewhere is refused up front and a person owns it. Widening this is
 #: an owner's decision, made here.
-MERGE_REPOS = frozenset({"datacore-one/datacore"})
+#:
+#: It was MERGE_REPOS, "where an agent may merge", until the owner decided no
+#: agent merges (2026-09-25/26, AGT-5): the repair stops at an open PR and the
+#: repository's merge gate (the owner by default) merges it. No repository is
+#: one an agent may merge into; tool_effects.yaml code.merge refuses the call.
+PR_REPOS = frozenset({"datacore-one/datacore"})
 
 
 def _servers(roster: Path | None) -> dict:
@@ -171,8 +176,9 @@ def delegate(job, failures: list[str], rec: dict, *, root: Path,
     # ONE STAGE OR TWO. The repairer can judge its own work only where the
     # artifacts are. On its own host: fix, then the ordinary verification is
     # the check. Anywhere else (decided 2026-09-22): the repairer fixes the
-    # producer in its repository and MERGES -- it holds merge rights for that
-    # -- and the check is the merged pull request. Then, on a resident, the
+    # producer in its repository and OPENS A PULL REQUEST -- it never merges
+    # (owner, 2026-09-25) -- and the check is that pull request, merged by the
+    # owner. Then, on a resident, the
     # host's own principal pulls and runs the verification as a follow-up item
     # created when the first completes; on a visitor (the mac) nothing follows,
     # because the join protocol pulls on wake and the contract passes by itself.
@@ -182,9 +188,9 @@ def delegate(job, failures: list[str], rec: dict, *, root: Path,
         repo = repo_for(job, root)
         if not repo:
             return "refused", f"cannot name the repository {job.name}'s producer lives in"
-        if repo not in MERGE_REPOS:
-            return "refused", (f"{job.name}'s producer lives in {repo}; an agent may merge only into "
-                               f"{', '.join(sorted(MERGE_REPOS))} (owner's boundary, 2026-09-22); "
+        if repo not in PR_REPOS:
+            return "refused", (f"{job.name}'s producer lives in {repo}; an agent may open a repair PR only in "
+                               f"{', '.join(sorted(PR_REPOS))} (owner's boundary, 2026-09-22); "
                                f"a person owns it")
         check = (f"python3 .datacore/lib/jobs/fix_check.py --stage merged --job {job.name} "
                  f"--machine {job.machine} --contract-sha {sha} --item {iid} --repo {repo}")
