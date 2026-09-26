@@ -26,12 +26,16 @@ _FILE = re.compile(r"^test_promise_([A-Za-z]+)_?(\d+)(?:_([0-9]+))?_")
 
 def promise_id(path: Path) -> str | None:
     m = _FILE.match(Path(path).name)
-    return (m.group(1) + m.group(2)).upper() if m else None
+    return (m.group(1).upper() + str(int(m.group(2)))) if m else None
 
 
 def green() -> set[str]:
     try:
-        return {str(x).upper() for x in json.loads(BASELINE.read_text()).get("green", [])}
+        out = set()
+        for x in json.loads(BASELINE.read_text()).get("green", []):
+            m = re.match(r"^([A-Z]+)[^A-Z0-9]*0*(\d+)", str(x).upper())
+            out.add(m.group(1) + m.group(2) if m else str(x).upper())
+        return out
     except (OSError, ValueError, AttributeError):
         return set()
 

@@ -44,7 +44,9 @@ _FILE = re.compile(r"^test_promise_([A-Za-z]+)_?(\d+)(?:_([0-9]+))?_")
 
 
 def norm(pid: str) -> str:
-    return re.sub(r"[^A-Z0-9]", "", pid.upper())
+    """TSK-9, TSK_9, TSK9 -> TSK9; MEM-01, MEM_1 -> MEM1 (leading zeros never matter)."""
+    m = re.match(r"^([A-Z]+)[^A-Z0-9]*0*(\d+)", pid.upper())
+    return m.group(1) + m.group(2) if m else re.sub(r"[^A-Z0-9]", "", pid.upper())
 
 
 def promises() -> dict[str, str]:
