@@ -708,6 +708,64 @@ def validate_layers(component_path: Path, name: str = "CLAUDE") -> list[str]:
     return warnings
 
 
+def expected_context(component_path: Path, name: str = "CLAUDE") -> str:
+    """What `rebuild` would write for this component right now (nothing written)."""
+    component_path = Path(component_path)
+    merged, _ = merge_context(component_path, name)
+    datacore_dir = component_path / ".datacore"
+    if datacore_dir.is_dir() and REGISTRY_MARKER.search(merged):
+        merged = inject_registries(merged, datacore_dir)
+    return merged
+
+
+def composed_drift(component_path: Path, name: str = "CLAUDE") -> Optional[str]:
+    """Why the composed file differs from its layers, or None when it matches (SPC-4).
+
+    Stale: a layer changed after the last rebuild. Hand-edited: the composed
+    file was changed after it was written. Either way a session reads text its
+    layers do not hold.
+    """
+    component_path = Path(component_path)
+    layers = [component_path / f"{name}.{suffix}.md" for suffix, _ in LAYERS]
+    layers = [p for p in layers if p.exists()]
+    if not layers:
+        return None
+    out = component_path / f"{name}.md"
+    if not out.exists():
+        return f"{out} is missing: run `context_merge.py rebuild --path {component_path}`"
+    if out.read_text() == expected_context(component_path, name):
+        return None
+    newest = max(p.stat().st_mtime for p in layers)
+    if newest > out.stat().st_mtime or GENERATED_HEADER not in out.read_text()[:200]:
+        return (f"{out} is stale: its layers changed since the last rebuild "
+                f"(run `context_merge.py rebuild --path {component_path}`)")
+    return (f"{out} was hand-edited: it differs from its layers; move the edit into a "
+            f"layer ({name}.space.md or {name}.local.md), then rebuild")
+
+
+def check_installation(root_path: Path, fix: bool = False) -> list[str]:
+    """Drift of the root's and every space's composed CLAUDE.md (SPC-4).
+
+    With `fix`, a STALE file is rebuilt (its layers are the source); a
+    hand-edited one is only reported -- rebuilding would destroy the edit.
+    Returns one line per component still out of step.
+    """
+    root_path = Path(root_path)
+    dirs = [root_path, *sorted(p for p in root_path.glob("[0-9]*-*") if p.is_dir())]
+    problems = []
+    for d in dirs:
+        drift = composed_drift(d)
+        if drift and fix and (" is stale" in drift or " is missing" in drift):
+            _, msgs = rebuild_context(d, "CLAUDE", emit=emit_targets_from_env())
+            if composed_drift(d) is None:
+                drift = None
+            else:
+                drift = f"{drift} -- rebuild did not fix it: {'; '.join(msgs[-1:])}"
+        if drift:
+            problems.append(drift)
+    return problems
+
+
 def find_all_contexts(root_path: Path) -> list[tuple[Path, str]]:
     """
     Find all context files that need rebuilding.
@@ -792,7 +850,9 @@ def main():
     )
 
     # validate command
-    validate_parser = subparsers.add_parser("validate", help="Validate layers for private content")
+    validate_parser = subparsers.add_parser(
+        "validate", help="Validate layers for private content, and that the composed file "
+                         "matches its layers (not stale, not hand-edited)")
     validate_parser.add_argument(
         "--path", type=Path, default=Path("."),
         help="Path to component directory"
@@ -801,6 +861,15 @@ def main():
         "--name", default="CLAUDE",
         help="Base name of context file (default: CLAUDE)"
     )
+
+    # check command -- the SessionStart hook (SPC-4)
+    check_parser = subparsers.add_parser(
+        "check", help="Check the root's and every space's composed CLAUDE.md against its "
+                      "layers; --fix rebuilds stale ones (hand-edited ones are only reported)")
+    check_parser.add_argument("--path", type=Path, default=Path(__file__).resolve().parents[2],
+                              help="Datacore root (default: this installation)")
+    check_parser.add_argument("--fix", action="store_true", help="rebuild stale composed files")
+    check_parser.add_argument("--quiet", action="store_true", help="print nothing when all match")
 
     # trace command
     trace_parser = subparsers.add_parser("trace", help="Show which layer contains a section")
@@ -840,6 +909,9 @@ def main():
 
     elif args.command == "validate":
         warnings = validate_layers(args.path, args.name)
+        drift = composed_drift(args.path, args.name)
+        if drift:
+            warnings.append(f"ERROR: {drift}")
 
         if warnings:
             print("Validation failed:")
@@ -849,6 +921,15 @@ def main():
         else:
             print("Validation passed")
             sys.exit(0)
+
+    elif args.command == "check":
+        problems = check_installation(args.path, fix=args.fix)
+        for p in problems:
+            print(f"Context check: {p}")
+        if not problems and not args.quiet:
+            print("Context check passed: every composed CLAUDE.md matches its layers")
+        # A SessionStart hook must never block the session: the finding is the output.
+        sys.exit(1 if problems and not args.quiet else 0)
 
     elif args.command == "trace":
         component_path = Path(args.path)
