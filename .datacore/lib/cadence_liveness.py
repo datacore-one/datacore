@@ -92,6 +92,10 @@ def sunset_reviews(root: Path, today: date | None = None) -> tuple[list[tuple[st
 #: `pending-rollout` until its host registers them (DIP-0050 P2b). Judging them
 #: `late` before anything could run them is the "red by construction" this
 #: file refused on 2026-09-05 -- now they are listed, not hidden.
+#:
+#: This decides only what a MISSING registration means (red for an executing
+#: principal, grey otherwise). Every principal is judged from the same signed
+#: records; none from cadence-log.yaml (CAD-3, CAD-4).
 EXECUTING = {"miles"}
 
 
@@ -170,27 +174,34 @@ def _artifact_in_git(space: Path, rel: str, sha: str) -> bool:
 
 
 def scheduled_state(space: Path, venture: str, owner: str, role: str, freq: str, name: str,
-                    today: date) -> tuple | None:
+                    today: date, *, executing: bool = False) -> tuple | None:
     """A cadence its owner's own scheduler runs (DIP-0050 P2): None while unregistered.
 
     ("red", days, why) | ("amber", 0, why) | ("green", 0, why). Judged only from the
     owner's SIGNED records: a registration naming the slug, and run records whose
     artifact is in git at the recorded sha256. The agent's word counts for nothing.
+
+    `executing`: the owner's scheduler already runs in this fleet (EXECUTING), so
+    a missing registration is not "pending rollout" -- it is a duty nobody runs,
+    judged red until a signed run with its artifact says otherwise.
     """
     from cadence_engine import FREQUENCY_WINDOWS
     from cadence_schedule import slug as _slug
     regs = _attests(space, owner, "cadence.registration")
-    if not regs:
+    if not regs and not executing:
         return None
     sl = _slug(venture, role, name)
-    registered_at, latest = regs[-1]
-    if sl not in (latest.get("slugs") or {}):
-        first = next((t for t, p in regs if p.get("slugs")), registered_at)
-        if (datetime.now(timezone.utc) - first) < timedelta(hours=2):
-            return ("amber", 0, f"not-registered yet: {owner} (within 2h)")
-        return ("red", -1, f"not-registered: {owner}'s scheduler does not hold {sl}")
-    since_reg = next((t for t, p in regs if sl in (p.get("slugs") or {})), registered_at)
     window = FREQUENCY_WINDOWS.get(freq, timedelta(days=1))
+    if regs:
+        registered_at, latest = regs[-1]
+        if sl not in (latest.get("slugs") or {}):
+            first = next((t for t, p in regs if p.get("slugs")), registered_at)
+            if (datetime.now(timezone.utc) - first) < timedelta(hours=2):
+                return ("amber", 0, f"not-registered yet: {owner} (within 2h)")
+            return ("red", -1, f"not-registered: {owner}'s scheduler does not hold {sl}")
+        since_reg = next((t for t, p in regs if sl in (p.get("slugs") or {})), registered_at)
+    else:
+        since_reg = None
     limit = window + window / 4
     now = datetime.now(timezone.utc)
     ends = [(t, p) for t, p in _attests(space, owner, "cadence.run")
@@ -201,15 +212,50 @@ def scheduled_state(space: Path, venture: str, owner: str, role: str, freq: str,
             and _artifact_in_git(where(p), p["artifact"], p.get("sha256", ""))]
     last_ok = max(good) if good else None
     anchor = last_ok or since_reg
+    if anchor is None:
+        return ("red", window.days, f"late: {owner} (never ran; no signed run with its artifact)")
     if now - anchor <= limit:
         return ("green", 0, f"ok: {owner}")
     last = ends[-1][1] if ends else {}
     days = (now - anchor - window).days
-    if last.get("result") in ("blocked", "quota") and ends and (now - ends[-1][0]) <= limit:
+    # WAITING ON QUOTA DECAYS (CAD-7). Amber only while the stop is fresh AND the
+    # streak of stops is younger than one window past the limit: a usage limit
+    # hit every morning for ten days, with no real run, is a duty not done.
+    streak = None
+    for t, p in reversed(ends):
+        if p.get("result") not in ("blocked", "quota"):
+            break
+        streak = t
+    if (last.get("result") in ("blocked", "quota") and ends and (now - ends[-1][0]) <= limit
+            and streak is not None and (now - streak) <= limit + window):
         return ("amber", 0, f"{last['result']}: {last.get('reason', '')[:80]}")
+    if last.get("result") in ("blocked", "quota") and streak is not None:
+        return ("red", days, f"late: waiting on {last['result']} for {(now - streak).days} day(s), "
+                             f"no real run: {owner}")
     if last.get("result") == "tripped":
         return ("red", days, f"tripped: {owner}")
     return ("red", days, f"late: {owner} ({'never ran' if not ends else 'last ' + str(last.get('result'))})")
+
+
+#: A pause older than this is repeated as a reminder in every daily report.
+PAUSE_REMIND_DAYS = 7
+
+
+def _pause_note(root: Path, owner: str, sl: str, st) -> str:
+    """'paused since <date> (would be: <state>)', and a reminder past a week."""
+    would = "pending-rollout" if st is None else f"{st[0]}: {st[2]}"
+    try:
+        from cadence_schedule import pause_span
+        span = pause_span(root, owner, sl)
+    except Exception:  # noqa: BLE001 -- an undatable pause is still a pause
+        span = None
+    if not span:
+        return f"paused (date unknown) (would be: {would})"
+    days = (datetime.now(timezone.utc) - span[0]).days
+    note = f"paused since {span[0].date().isoformat()} (would be: {would})"
+    if days > PAUSE_REMIND_DAYS:
+        note += f"; reminder: paused {days} days -- resume it or drop it"
+    return note
 
 
 def collect(root: Path, grace: int, today: date | None = None) -> list:
@@ -228,12 +274,15 @@ def collect_states(root: Path, grace: int, today: date | None = None) -> tuple[l
     Keyed by `venture.yaml: name`, never by a machine's folder number.
     """
     import yaml
-    from cadence_engine import (FREQUENCY_WINDOWS, HUMAN_OWNER, cadence_log_path_for,
-                                cadence_observation, find_overdue_cadences, all_assignments,
-                                load_cadence_log_safe)
+    from cadence_engine import HUMAN_OWNER, all_assignments
 
     today = today or date.today()
     rows, grey = [], []
+    try:
+        from cadence_schedule import control as _control
+        paused = {str(x) for x in (_control(root).get("paused") or [])}
+    except Exception:  # noqa: BLE001 -- no control file: nothing is paused here to report
+        paused = set()
     for space in sorted(root.glob("[0-9]-*")):
         vy = space / "venture.yaml"
         if not vy.is_file():
@@ -268,63 +317,32 @@ def collect_states(root: Path, grace: int, today: date | None = None) -> tuple[l
             rows.append((-1, venture, "?", "?", f"ownership: {exc}"))
             continue
         members = _members(space)
-        judged = set()
         for (role, freq, name), owner in sorted(owners.items()):
             if owner == HUMAN_OWNER:
                 grey.append((0, venture, role, freq, f"{name} [reminder: {owner}]"))
             elif members is not None and owner not in members:
                 rows.append((-1, venture, role, freq, f"{name} [not-held: {owner} is not a member of this space]"))
-            elif owner not in EXECUTING:
-                st = scheduled_state(space, venture, owner, role, freq, name, today)
+            else:
+                # EVERY PRINCIPAL IS JUDGED FROM SIGNED RECORDS (CAD-3, CAD-4).
+                # Miles's duties used to be read from cadence-log.yaml, a file the
+                # agent writes: one typed line turned a never-run duty green. The
+                # log stays output only; what counts is his signed cadence.run end
+                # whose artifact is in git -- the same test as everyone's.
+                st = scheduled_state(space, venture, owner, role, freq, name, today,
+                                     executing=owner in EXECUTING)
+                from cadence_schedule import slug as _slug
+                sl = _slug(venture, role, name)
+                if paused & {"all", owner, sl}:
+                    # PAUSE KEEPS A SHADOW (DIP-0050, CAD-10): listed grey with
+                    # what it would have been, never counted, and never silent.
+                    grey.append((0, venture, role, freq, f"{name} [{_pause_note(root, owner, sl, st)}]"))
+                    continue
                 if st is None:
                     grey.append((0, venture, role, freq, f"{name} [pending-rollout: {owner}]"))
                 elif st[0] == "red":
                     rows.append((st[1], venture, role, freq, f"{name} [{st[2]}]"))
                 elif st[0] == "amber":
                     grey.append((0, venture, role, freq, f"{name} [{st[2]}]"))
-            else:
-                judged.add((role, freq, name))
-        if not judged:
-            continue
-        # cadence_log_path_for FIRST. load_cadence_log_safe quarantines by
-        # renaming the path it is handed, so passing the space directory
-        # renames the space — which is exactly what happened on the first run
-        # of this file and sent eight spaces to `<space>.broken-*.bak`.
-        try:
-            log = load_cadence_log_safe(cadence_log_path_for(space))
-        except Exception as exc:                # noqa: BLE001
-            rows.append((-1, venture, "?", "?", f"cadence log unreadable: {type(exc).__name__}"))
-            continue
-        try:
-            # Only cadences an executor in this fleet runs are judged late;
-            # the rest were sorted into grey states above (2026-09-05: three of
-            # the last three "overdue" were Tris's, which nothing here runs).
-            for c in find_overdue_cadences(roles, log, today=today):
-                if (c.role, c.frequency, c.cadence_name) not in judged:
-                    continue
-                # PAST DUE, which is what DEFAULT_GRACE is documented to measure.
-                # The engine's days_overdue is days since the LAST RUN -- right
-                # for ordering today's work, wrong against a grace: a weekly
-                # cadence reads 7 on the very day it falls due, so this alerted
-                # before the cadence had any chance to run. On 2026-09-17 two
-                # weekly cadences last run 09-10 were reported "7d overdue" at
-                # 07:40Z on their due date, having read 0 the day before.
-                # A cadence that has NEVER run keeps the old measure: the
-                # engine reports it at exactly one window, and never having
-                # run is the broken case this check exists to catch.
-                window = FREQUENCY_WINDOWS.get(c.frequency)
-                ran = cadence_observation(roles, log, c.role, c.frequency, c.cadence_name) is not None
-                past_due = (c.days_overdue - window.days) if (ran and window) else c.days_overdue
-                # RED WITHIN ITS WINDOW (CAD-6). A grace longer than the window let a
-                # daily duty miss three runs before it showed: last run three days ago
-                # is two days past due, inside a 3-day grace. The grace never outlasts
-                # the next window, so a daily duty is red once a whole day is missed;
-                # a weekly one keeps the 3 days.
-                if past_due > (min(grace, window.days - 1) if (ran and window and window.days >= 1) else grace):
-                    rows.append((past_due, venture, c.role,
-                                 c.frequency, c.cadence_name))
-        except Exception as exc:                # noqa: BLE001
-            rows.append((-1, venture, "?", "?", f"engine error: {exc}"))
     rows.sort(reverse=True)
     return rows, grey
 

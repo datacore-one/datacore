@@ -45,8 +45,8 @@ def test_a_cadence_owned_by_an_external_agent_is_not_this_fleets_liveness(tmp_pa
     counting them made the box's contract red by construction (2026-09-05)."""
     (tmp_path / "5-plur").mkdir(); (tmp_path / "5-plur" / "venture.yaml").write_text(VENTURE_WITH_TRIS)
     red, grey = L.collect_states(tmp_path, grace=3, today=datetime.date(2026, 9, 5))
-    names = {(r[2], r[4]) for r in red}
-    assert ("cto", "release-check") in names, "our own never-run weekly cadence is overdue (7 days past a 3-day grace)"
+    names = {(r[2], r[4].split(" [", 1)[0]) for r in red}
+    assert ("cto", "release-check") in names, "our own never-run weekly cadence is overdue"
     assert not any(r[2] == "cio" for r in red), "Tris's cadence is not red while nothing here runs it"
     assert ("cio", "geo-sov-scan [pending-rollout: tris]") in {(r[2], r[4]) for r in grey}, \
         "but it is VISIBLE, with its owner (DIP-0050 P1: it used to vanish)"
@@ -63,30 +63,19 @@ roles:
 """
 
 
-def _ran_on(tmp_path, day):
+def test_the_cadence_log_is_output_only(tmp_path):
+    """CAD-3/4: Miles's duties were judged from cadence-log.yaml, which the agent
+    writes; one typed line turned a never-run duty green. The log is output only:
+    a fresh line with no signed run and artifact is still late. (The window and
+    grace rules for signed runs are pinned in test_liveness_scheduled.)"""
     space = tmp_path / "5-plur"
     space.mkdir()
     (space / "venture.yaml").write_text(WEEKLY_RAN)
     log = space / ".datacore" / "state" / "venture" / "cadence-log.yaml"
     log.parent.mkdir(parents=True)
-    log.write_text(f"cto.sprint-rollover:\n  last_run: '{day}'\n  result: ok\n")
-
-
-def test_a_weekly_cadence_is_not_overdue_on_the_day_it_falls_due(tmp_path):
-    """2026-09-17: last run 09-10, due 09-17, reported "7d overdue" at 07:40Z.
-
-    The engine's days_overdue is days since the last run. The grace is days
-    PAST DUE, so on the due date there is nothing to alert on yet.
-    """
-    _ran_on(tmp_path, "2026-09-10")
-    assert L.collect(tmp_path, grace=3, today=datetime.date(2026, 9, 17)) == []
-    assert L.collect(tmp_path, grace=3, today=datetime.date(2026, 9, 20)) == [], "3 past due is within grace"
-
-
-def test_a_weekly_cadence_past_its_grace_is_still_overdue(tmp_path):
-    _ran_on(tmp_path, "2026-09-10")
-    rows = L.collect(tmp_path, grace=3, today=datetime.date(2026, 9, 21))
-    assert [(r[0], r[4]) for r in rows] == [(4, "sprint-rollover")], "reported as days past due"
+    log.write_text(f"cto.sprint-rollover:\n  last_run: '{datetime.date.today().isoformat()}'\n  result: ok\n")
+    rows = L.collect(tmp_path, grace=3, today=datetime.date.today())
+    assert [(r[1], r[4].split(" [", 1)[0]) for r in rows] == [("plur", "sprint-rollover")]
 
 
 # ---- DIP-0050 P1: every assigned cadence has one state, keyed by venture name
@@ -127,9 +116,3 @@ def test_the_executor_alias_counts_as_membership(tmp_path):
     assert not any("not-held" in r[4] for r in red)
 
 
-def test_a_fresh_cadence_is_ok_and_an_old_one_is_late(tmp_path):
-    sp = _v(tmp_path, WEEKLY_RAN)
-    log = sp / ".datacore" / "state" / "venture" / "cadence-log.yaml"; log.parent.mkdir(parents=True)
-    log.write_text("cto.sprint-rollover:\n  last_run: '2026-09-14'\n  result: ok\n")
-    assert L.collect(tmp_path, 3, datetime.date(2026, 9, 16)) == []
-    assert [(r[1], r[4]) for r in L.collect(tmp_path, 3, datetime.date(2026, 9, 30))] == [("plur", "sprint-rollover")]

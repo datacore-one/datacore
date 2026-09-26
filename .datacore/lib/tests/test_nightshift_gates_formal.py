@@ -43,7 +43,9 @@ def test_an_unreadable_cadence_log_is_not_zero_overdue(tmp_path, monkeypatch):
         raise OSError("unreadable")
     monkeypatch.setattr(cadence_engine, "load_cadence_log_safe", boom)
     rows = CL.collect(tmp_path, 3, datetime.date(2026, 9, 21))
-    assert len(rows) == 1 and "unreadable" in rows[0][4], rows
+    # CAD-3/4: the cadence log is output only and no longer read; the duty is
+    # judged from signed runs, of which there are none -- still not zero overdue.
+    assert len(rows) == 1 and "never ran" in rows[0][4], rows
 
 
 def test_a_space_that_is_not_a_venture_still_counts_nothing(tmp_path):
