@@ -562,10 +562,14 @@ jobs:
         arg: "0 older than"
         since: join
 
+  # Every space's history, not the root's telemetry (OPS-3, 2026-09-26): the
+  # old command verified --space ~/Data, which holds no space events and said
+  # "OK 2 files" every day. ledger_daily.sh (05:35) verifies each space that
+  # has an event log and writes this artifact, last line OK / FAIL / NONE.
   - name: box-ledger-verify
     machine: box
-    schedule: "20 7 * * *"
-    cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/ledger-verify.log -- python3 ~/Data/.datacore/lib/ledger_cli.py verify --space ~/Data"
+    schedule: "35 5 * * *"
+    cmd: "~/Data/.datacore/lib/ledger_daily.sh"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/ledger-verify.log"
