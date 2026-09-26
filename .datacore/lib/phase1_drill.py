@@ -31,6 +31,7 @@ ledger; the file's own history does not.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import tempfile
@@ -158,6 +159,8 @@ def main() -> int:
     ap.add_argument("--keep", action="store_true", help="leave the scratch space in place")
     a = ap.parse_args()
     tmp = tempfile.mkdtemp(prefix="phase1-drill-")
+    # It writes as `mac` in a scratch space, on agent hosts too (AGT-10).
+    os.environ["DATACORE_LEDGER_DRILL"] = "1"
     try:
         return Drill(Path(tmp)).run()
     finally:

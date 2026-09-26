@@ -142,6 +142,58 @@ def _require_declared(actor: str) -> None:
         actor_identity.this_actor(strict=True)
 
 
+#: Logs that belong to a shared role rather than to one principal
+#: (hooks/log_ownership_guard.py keeps the same set).
+SHARED_ROLE_LOGS = {"genesis"}
+
+
+#: The installation this library belongs to (<root>/.datacore/lib/ledger/log.py).
+#: Not DATACORE_ROOT: a drill points that at its scratch fleet.
+_INSTALL_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _drill_scratch(space_dir: Path) -> bool:
+    """A declared drill (DATACORE_LEDGER_DRILL=1) writing a throwaway tree
+    OUTSIDE the installation: the fleet simulations (delegation_drill,
+    phase1_drill) play every principal in a scratch space on an agent host.
+    A real space is never exempt, whatever the environment says."""
+    if os.environ.get("DATACORE_LEDGER_DRILL") != "1":
+        return False
+    try:
+        Path(space_dir).resolve().relative_to(_INSTALL_ROOT)
+        return False
+    except ValueError:
+        return True
+
+
+def _require_own_log(actor: str, space_dir: Path | None = None) -> None:
+    """Refuse a process whose DECLARED actor is an agent writing another
+    principal's log (AGT-10: only an agent's own log holds its records).
+
+    Until 2026-09-26 a script on tris's host could call
+    `EventLog(space, "miles").append(...)` and the record was written; only the
+    push guard noticed, later. Same rule as the Hermes plugin's
+    foreign_actor_write: refused only when the named writer belongs to a
+    DIFFERENT declared principal. An unknown writer name, an undeclared host
+    and a human's host (the owner's tools, migrations, tests) are left to the
+    commit/push gates; so is a declared drill's scratch tree (_drill_scratch)."""
+    import actor_identity
+    declared, _ = actor_identity.resolve()
+    if not declared or actor_identity.base_writer(actor) in SHARED_ROLE_LOGS:
+        return
+    if space_dir is not None and _drill_scratch(space_dir):
+        return
+    mine, entry = actor_identity.principal_of(declared)
+    if not mine or (entry or {}).get("kind") != "agent":
+        return
+    owner, _ = actor_identity.principal_of(actor)
+    if owner and owner != mine:
+        raise PermissionError(
+            f"refused: this process is {declared!r} (principal {mine!r}) and may not append to "
+            f"{actor!r}, which belongs to principal {owner!r}. Only an agent's own log holds its "
+            f"records (AGT-10); write as {declared!r}, or ask {owner} to record it.")
+
+
 class EventLog:
     """Append-only event log for one actor within one space.
 
@@ -238,6 +290,8 @@ class EventLog:
           * a payload holding NaN or +-Infinity (`ValueError`, decision L8);
           * this host's short hostname as the actor when the host declares no
             actor (`actor_identity.UndeclaredActor`, decision L10);
+          * an agent host writing as, or into the log of, another principal
+            (`PermissionError`, AGT-10; see `_require_own_log`);
           * a conditional edit (`_merge`) the space's
             `.datacore/ledger-edit-protocol` does not enable (`EditConflict`).
             Where it says `2`, the edit is written as type-strict version 2
@@ -259,6 +313,8 @@ class EventLog:
         # to declare one. A name the caller chose (a registry writer, --actor)
         # is not a guess and is unaffected.
         _require_declared(self.actor)
+        for name in {self.actor, self.log_name}:
+            _require_own_log(name, self.space_dir)
         if type in ('item.update', 'item.dismiss') and isinstance(payload, dict) and '_merge' in payload:
             from .edits import EditConflict, condition_version, require_edit_protocol
             enabled = require_edit_protocol(self.space_dir)

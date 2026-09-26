@@ -920,6 +920,9 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         raise SystemExit(f"unknown scenario(s): {', '.join(sorted(unknown))}")
 
+    # The drill plays every principal in a scratch fleet; the ledger lets a
+    # declared drill do that outside the installation only (AGT-10).
+    os.environ["DATACORE_LEDGER_DRILL"] = "1"
     with scratch_fleet(prefix="delegation-drill-", keep=a.keep) as root:
         _install_local_executor()
         return DelegationDrill(root, keep=a.keep).run(a.only)
