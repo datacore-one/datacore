@@ -108,6 +108,9 @@ _deliver() {
 # not job_verify's own vocabulary (the verifier itself failing).
 if [ "$RC" -ne 0 ] && [ -n "$OUT" ]; then
   RELAY="$(printf '%s\n' "$OUT" | "$PY_BIN" "$RUNNER/.datacore/lib/job_verify_alert_filter.py")"
+  # The formatting skill's rules (tg_format.py). If the formatter fails, send as-is.
+  FMT="$(printf '%s\n' "$RELAY" | "$PY_BIN" "$RUNNER/.datacore/lib/tg_format.py" 2>/dev/null)"
+  [ -n "$FMT" ] && RELAY="$FMT"
   if [ -z "$RELAY" ]; then
     printf 'relay: nothing operator-facing in this run (withheld / delegated / suppressed only)\n' >> "$LOG"
   else

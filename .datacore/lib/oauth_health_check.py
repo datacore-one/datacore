@@ -76,6 +76,8 @@ def send_telegram(text: str):
     chat = os.environ.get('ALERT_CHAT_ID') or os.environ.get('TELEGRAM_CHAT_ID')  # errors go to The Firm group
     if not bot or not chat:
         return
+    from tg_format import html_safe, normalize
+    text = html_safe(normalize(text))
     try:
         data = urllib.parse.urlencode({'chat_id': chat, 'text': text, 'parse_mode': 'HTML'}).encode()
         req = urllib.request.Request(f'https://api.telegram.org/bot{bot}/sendMessage', data=data)

@@ -170,8 +170,8 @@ def delegate(f: dict, day: str) -> str:
     from ledger.policy import guarded_append
     from jobs.autofix import _space
     iid = f"repair-{f['id']}-{day.replace('-', '')}"
-    body = "\n".join([f"The morning repair sweep found this failing at 02:00 UTC and one safe",
-                      f"remediation did not clear it.", "", f"What: {f['title']}",
+    body = "\n".join(["The morning repair sweep found this failing at 02:00 UTC, and one safe "
+                      "remediation did not clear it.", "", f"What: {f['title']}",
                       f"Evidence: {f.get('evidence', '')}", *(["Tried: " + f["tried"]] if f.get("tried") else []),
                       "", "Done means the sweep's 03:30 re-check no longer finds it.", "", PR_RULE])
     try:
