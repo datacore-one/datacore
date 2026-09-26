@@ -97,18 +97,33 @@ def cmd_count(args):
     judges the blast radius unacceptable, and declines. It has declined every
     night for months, so the pile never shrinks and the next run sees the same
     number. The refusal was right; the number was wrong.
+
+    The inbox SECTION counts as the top level. The real layout keeps captures
+    as `** TODO` under a stateless `* Inbox` heading (every team space, and
+    most of 0-personal); counting only level-1 headings made those inboxes
+    read as empty, so the morning run skipped them (promise INB-1). A direct
+    child of a stateless level-1 heading titled "Inbox" is a capture too.
     """
     ws = _load_ws(*args.files)
     count = 0
     terminal = ws.state_config.terminal_states
     for node in ws.all_nodes():
-        if getattr(args, "top_level", False) and node.level != 1:
+        if getattr(args, "top_level", False) and not _is_capture(node):
             continue
         if node.todo and node.todo not in terminal:
             count += 1
     return {"count": count, "files": args.files,
             "unit": "top-level captures" if getattr(args, "top_level", False)
                     else "headings"}
+
+
+def _is_capture(node) -> bool:
+    """A top-level entry, or a direct child of the stateless `* Inbox` section."""
+    if node.level == 1:
+        return True
+    parent = node.parent if node.level == 2 else None
+    return bool(parent is not None and not parent.todo
+                and (parent.heading or "").strip().lower() == "inbox")
 
 
 # ---------------------------------------------------------------------------
