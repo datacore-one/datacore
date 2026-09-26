@@ -65,25 +65,37 @@ RC=$?
 #   direct -- POST to Telegram using this host's own credentials (agent hosts:
 #             they already have them, and cannot resolve the relay alias)
 # Direct is tried when a credentials file is configured; relay otherwise.
-# Whichever is used, a failure to DELIVER is written to the log rather than
-# swallowed -- a broken alert path must not be quiet about being broken.
+# Whichever is used, a failure to DELIVER is recorded as undelivered (MSG-10):
+# one JSON line in ~/.datacore/state/undelivered-alerts.jsonl, which the
+# morning sweep reads -- not only "RELAY FAILED" in a local log nobody reads.
+_undelivered() {  # reason, text
+  printf 'RELAY FAILED: %s\n' "$1" >> "$LOG"
+  printf '%s\n' "$2" | "$PY_BIN" "$RUNNER/.datacore/lib/tg_format.py" --undelivered job_verify_notify "$1" \
+    >/dev/null 2>&1 || printf 'RELAY FAILED: and the failure could not be recorded as undelivered\n' >> "$LOG"
+  return 1
+}
+
 _deliver() {
   local msg="$1"
   if [ -n "${JOB_VERIFY_ENV_FILE:-}" ] && [ -r "${JOB_VERIFY_ENV_FILE}" ]; then
     # The shared env carries ALERT_CHAT_ID (The Firm group). Host env files
-    # such as nightshift.env do not, and without it an error fell through to
-    # TELEGRAM_CHAT_ID: the agent's 1:1 chat (2026-09-25).
+    # such as nightshift.env do not.
     # shellcheck disable=SC1090
     set -a; [ -r "${DATACORE_ROOT:-$HOME/Data}/.datacore/env/.env" ] && . "${DATACORE_ROOT:-$HOME/Data}/.datacore/env/.env"
     . "${JOB_VERIFY_ENV_FILE}"; set +a
     local tok="${TELEGRAM_BOT_TOKEN:-${WINSTON_BOT_TOKEN:-}}"
-    local chat="${ALERT_CHAT_ID:-${TELEGRAM_CHAT_ID:-${WINSTON_CHAT_ID:-}}}"  # The Firm group first (2026-09-25)
-    if [ -n "$tok" ] && [ -n "$chat" ]; then
-      curl -s -m 15 -X POST "https://api.telegram.org/bot${tok}/sendMessage" \
-        -d "chat_id=${chat}" --data-urlencode "text=${msg}" >/dev/null && return 0
-      printf 'RELAY FAILED: direct telegram send failed\n' >> "$LOG"; return 1
-    fi
-    printf 'RELAY FAILED: %s has no bot token/chat id\n' "$JOB_VERIFY_ENV_FILE" >> "$LOG"; return 1
+    # Errors go ONLY to The Firm group (MSG-1). There is no fallback to
+    # TELEGRAM_CHAT_ID / WINSTON_CHAT_ID: those are an agent's 1:1 chat with the
+    # owner, where an error landed on 2026-09-25 because ALERT_CHAT_ID was unset.
+    local chat="${ALERT_CHAT_ID:-}"
+    [ -n "$chat" ] || { _undelivered "ALERT_CHAT_ID unset in $JOB_VERIFY_ENV_FILE: alerts go only to The Firm group" "$msg"; return 1; }
+    [ -n "$tok" ] || { _undelivered "no bot token (TELEGRAM_BOT_TOKEN) in $JOB_VERIFY_ENV_FILE" "$msg"; return 1; }
+    # The HTTP status is the proof of delivery: `curl -s` alone exits 0 on a 401.
+    local code
+    code="$(curl -s -m 15 -o /dev/null -w '%{http_code}' -X POST "https://api.telegram.org/bot${tok}/sendMessage" \
+      -d "chat_id=${chat}" --data-urlencode "text=${msg}")"
+    [ "$code" = "200" ] && return 0
+    _undelivered "direct telegram send failed (http ${code:-none})" "$msg"; return 1
   fi
   # Paths are the RELAY HOST's, expanded by its shell: winston runs as a
   # normal user with Data under $HOME. The previous /root/Data and
@@ -93,10 +105,11 @@ _deliver() {
   # 2026-09-03. Since 2026-09-05 winston_send.py loads its own environment
   # (cos_env.py: cos.env -> .env -> local.env, later wins); WINSTON_BOT_TOKEN
   # lives only in local.env, so sourcing cos.env here would find nothing.
+  # winston_send --alert records its own delivery failures on the relay host.
   printf '%s\n' "$msg" | ssh -o ConnectTimeout=15 -o BatchMode=yes "$RELAY_HOST" \
     'python3 ~/Data/.datacore/modules/chief-of-staff/server/lib/winston_send.py --alert' \
     >>"$LOG" 2>&1 && return 0
-  printf 'RELAY FAILED: could not deliver via %s\n' "$RELAY_HOST" >> "$LOG"; return 1
+  _undelivered "could not deliver via $RELAY_HOST" "$msg"; return 1
 }
 
 # RELAY WHAT job_verify DECIDED, NOT WHATEVER IT PRINTED. This used to relay
@@ -108,16 +121,17 @@ _deliver() {
 # not job_verify's own vocabulary (the verifier itself failing).
 if [ "$RC" -ne 0 ] && [ -n "$OUT" ]; then
   RELAY="$(printf '%s\n' "$OUT" | "$PY_BIN" "$RUNNER/.datacore/lib/job_verify_alert_filter.py")"
-  # The formatting skill's rules (tg_format.py). If the formatter fails, send as-is.
-  FMT="$(printf '%s\n' "$RELAY" | "$PY_BIN" "$RUNNER/.datacore/lib/tg_format.py" 2>/dev/null)"
-  [ -n "$FMT" ] && RELAY="$FMT"
   if [ -z "$RELAY" ]; then
     printf 'relay: nothing operator-facing in this run (withheld / delegated / suppressed only)\n' >> "$LOG"
   else
-  # Relay to the host that holds the credentials. Failure to relay is itself
-  # reported into the log rather than swallowed -- a broken alert path must not
-  # be quiet about being broken.
-  _deliver "$(printf 'job_verify FAILED on %s:\n%s' "$(hostname -s)" "$RELAY")"
+    MSG="$(printf 'job_verify FAILED on %s:\n%s' "$(hostname -s)" "$RELAY")"
+    # The formatting skill's rules and one phone screen (tg_format.py, MSG-4):
+    # the first failures, then a pointer to this run in the log. Ten failing
+    # jobs were a 40-line message. If the formatter fails, send as-is.
+    FMT="$(printf '%s\n' "$MSG" | "$PY_BIN" "$RUNNER/.datacore/lib/tg_format.py" --fit \
+      --more "$LOG on $(hostname -s)" 2>/dev/null)"
+    [ -n "$FMT" ] && MSG="$FMT"
+    _deliver "$MSG"
   fi
 fi
 

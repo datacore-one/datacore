@@ -70,20 +70,41 @@ def try_refresh(token_data: dict, token_path: Path):
         return False, None, str(e)
 
 
-def send_telegram(text: str):
-    """Send notification via Telegram if configured."""
+def send_telegram(text: str) -> bool:
+    """Send the alert to The Firm group. True only when Telegram accepted it.
+
+    Errors go only to the group (ALERT_CHAT_ID); there is no fallback to
+    TELEGRAM_CHAT_ID, the agent's 1:1 chat with the owner (MSG-1). A send that
+    cannot be made or is refused is recorded as undelivered for the morning
+    sweep (MSG-10) -- it used to be swallowed by `except: pass`. Never raises.
+    """
+    from tg_format import fit, html_safe, keep_full, normalize, record_undelivered
     bot = os.environ.get('TELEGRAM_BOT_TOKEN')
-    chat = os.environ.get('ALERT_CHAT_ID') or os.environ.get('TELEGRAM_CHAT_ID')  # errors go to The Firm group
-    if not bot or not chat:
-        return
-    from tg_format import html_safe, normalize
-    text = html_safe(normalize(text))
+    chat = os.environ.get('ALERT_CHAT_ID')
+    if not chat or not bot:
+        why = ('ALERT_CHAT_ID unset: alerts go only to The Firm group, never a 1:1 chat' if not chat
+               else 'no bot token (TELEGRAM_BOT_TOKEN)')
+        print(f'oauth_health_check: alert NOT sent ({why})', file=sys.stderr)
+        record_undelivered('oauth_health_check', why, text)
+        return False
+    body = normalize(text)
+    short = fit(body)
+    if short != body:
+        short = fit(body, more=keep_full(body, 'oauth_health_check') or None)
     try:
-        data = urllib.parse.urlencode({'chat_id': chat, 'text': text, 'parse_mode': 'HTML'}).encode()
+        data = urllib.parse.urlencode({'chat_id': chat, 'text': html_safe(short), 'parse_mode': 'HTML'}).encode()
         req = urllib.request.Request(f'https://api.telegram.org/bot{bot}/sendMessage', data=data)
-        secret_urlopen(req, timeout=10)
-    except Exception:
-        pass
+        status = secret_urlopen(req, timeout=10).status
+        why = '' if status == 200 else f'http {status}'
+    except urllib.error.HTTPError as e:
+        why = f'http {e.code}'
+    except Exception as e:  # noqa: BLE001 -- a sender never crashes the health check
+        why = f'exception: {type(e).__name__}: {e}'
+    if why:
+        print(f'oauth_health_check: alert NOT delivered ({why})', file=sys.stderr)
+        record_undelivered('oauth_health_check', why, text)
+        return False
+    return True
 
 
 def check_claude_token(now, warn_days):

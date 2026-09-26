@@ -143,8 +143,67 @@ def escalations() -> list[dict]:
              "evidence": why[:300]} for job, why in sorted(jobs.items())]
 
 
+# A reason that names a code error is a repair for Miles; a refused token, a missing
+# group id or an unreachable Telegram is not -- those need a person (MSG-10).
+_TRANSPORT = re.compile(r"^exception: (URLError|HTTPError|TimeoutError|timeout|Connection\w*|OSError|SSL\w*|"
+                        r"RemoteDisconnected|IncompleteRead|gaierror)\b")
+
+
+def _undelivered_log() -> Path:
+    return Path(os.environ.get("DATACORE_UNDELIVERED_LOG")
+                or Path.home() / ".datacore" / "state" / "undelivered-alerts.jsonl")
+
+
+def _last_sweep() -> float | None:
+    """When the previous day's sweep ran. Today's sweep and 03:30 re-check read the
+    same window, so a delivery failure is never "repaired" by being re-read."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    at = []
+    for p in STATE.glob("*.json"):
+        if p.stem < today:
+            try:
+                at.append(float(json.loads(p.read_text())["swept_at"]))
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+    return max(at) if at else None
+
+
+def undelivered() -> list[dict]:
+    """Alerts and briefings that reached nobody since the last sweep, one finding per sender.
+
+    Every sender that cannot deliver appends a line to undelivered-alerts.jsonl
+    (tg_format.record_undelivered). Before this, a failed delivery ended as a local
+    log line or stderr (AM-20), so the owner never learned an alert was lost.
+    Without a previous sweep, the last day is read.
+    """
+    since = _last_sweep() or time.time() - 86400
+    try:
+        lines = _undelivered_log().read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    by: dict[str, list[dict]] = {}
+    for line in lines:
+        try:
+            r = json.loads(line)
+            at = datetime.fromisoformat(str(r["at"]).replace("Z", "+00:00")).timestamp()
+        except (ValueError, KeyError, TypeError, AttributeError):
+            continue
+        if at > since:
+            by.setdefault(str(r.get("sender") or "unknown"), []).append(r)
+    out = []
+    for sender, rs in sorted(by.items()):
+        last = rs[-1]
+        out.append({"id": f"delivery-{_slug(sender)}", "kind": "delivery",
+                    "code": any(str(r.get("reason", "")).startswith("exception:")
+                                and not _TRANSPORT.match(str(r.get("reason", ""))) for r in rs),
+                    "title": f"{sender}: {len(rs)} alert(s) not delivered",
+                    "evidence": (f"last on {last.get('host', '?')} at {last.get('at', '?')}: "
+                                 f"{last.get('reason', '')} -- {last.get('text_head', '')}")[:300]})
+    return out
+
+
 def findings(run_v2: bool = True) -> list[dict]:
-    return v2_checklist(run_v2) + failed_units() + red_cadences() + mail_triage() + escalations()
+    return v2_checklist(run_v2) + failed_units() + red_cadences() + mail_triage() + escalations() + undelivered()
 
 
 # ---- remediation, delegation, reporting ------------------------------------------------
@@ -212,6 +271,8 @@ def sweep() -> int:
         f["cleared_by_sweep"] = f["id"] not in still
         if f["id"] in still and f["kind"] == "escalation":
             f["item"] = ""          # miles already gave up; handing it back is a loop, not a repair
+        elif f["id"] in still and f["kind"] == "delivery" and not f.get("code"):
+            f["item"] = ""          # a refused token or missing group id needs a person, not a code repair
         elif f["id"] in still:
             if delegated < MAX_ITEMS:
                 f["item"] = delegate(f, day)
@@ -251,6 +312,7 @@ def recheck() -> int:
         "still_failing": [{"title": f["title"], "evidence": f.get("evidence_now") or f.get("evidence", ""),
                            "item": f.get("item", ""), "needs": "review the pull request" if f.get("item") else
                            ("a person: Miles gave up after three attempts" if f.get("kind") == "escalation"
+                            else "a person: an alert or briefing reached nobody" if f.get("kind") == "delivery"
                             else "a person: nothing could be delegated")} for f in failing],
     }, indent=1))
     if failing:
