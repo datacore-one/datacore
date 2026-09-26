@@ -60,6 +60,7 @@ def probe(event: str, payload: dict, tool: str = "", settings: Path = SETTINGS,
           timeout: int = 20) -> Outcome:
     res = Outcome()
     with tempfile.TemporaryDirectory(prefix="hook-probe-") as tmp:
+        tmp = os.path.realpath(tmp)          # DATACORE_STATE must be an unaliased path
         env = {**os.environ, "HOME": tmp, "TMPDIR": tmp, "DATACORE_STATE": tmp,
                "CLAUDE_HOOK_EVENT_NAME": event}
         body = {"hook_event_name": event, "session_id": "promise-eval-probe",
