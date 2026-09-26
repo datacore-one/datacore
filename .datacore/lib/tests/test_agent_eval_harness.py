@@ -43,13 +43,11 @@ def test_switched_off_fails_not_skips(tmp_path):
 
 
 def _fake_runner(outcomes):
-    calls = iter(outcomes)
-
     def runner(prompt, scaffold, home, state, **kw):
         # isolation is what the real runner relies on: fresh tmp scaffold, home, state
         assert not str(scaffold).startswith(str(AE.ROOT) + os.sep)
         assert home.is_dir() and state.is_dir()
-        content = next(calls)
+        content = outcomes[int(scaffold.parent.name.removeprefix("run")) - 1]   # runs are parallel
         if content is not None:
             (scaffold / "hello.txt").write_text(content)
         return 0, "done", {"result": "done"}, False

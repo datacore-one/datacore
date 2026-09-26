@@ -45,6 +45,10 @@ Rules the harness enforces:
   registered as not-yet-implemented so a case written for them fails loudly
   rather than silently running on Claude. ``model="claude:sonnet"`` picks an
   alias within the family.
+* Evidence: the claude runner reads stream-json, so each RunResult carries
+  every tool call the agent made (``tool_calls``, ``bash_commands()``) beside
+  its final text -- a grader sees what the agent TRIED, not only what it said.
+  The k runs execute in parallel, each on its own copy.
 
 Credentials: the claude runner asks the credential broker for the subscription
 token (``creds.py get claude-code-oauth``) and hands it to the child via
@@ -104,6 +108,17 @@ class RunResult:
 
     def exists(self, rel: str) -> bool:
         return (self.scaffold / rel).exists()
+
+    @property
+    def tool_calls(self) -> list[dict]:
+        """Every tool the agent called: [{name, input, result, is_error}]."""
+        return list(self.raw.get("tool_calls") or [])
+
+    def calls_to(self, name: str) -> list[dict]:
+        return [c for c in self.tool_calls if c.get("name") == name]
+
+    def bash_commands(self) -> list[str]:
+        return [str(c["input"].get("command", "")) for c in self.calls_to("Bash")]
 
     def stub_log(self, name: str) -> list[str]:
         """Lines a planted bin/<name> stub recorded (see ``plant_stub``)."""
@@ -165,7 +180,7 @@ def _run_claude(prompt: str, scaffold: Path, home: Path, state: Path, *, variant
     exe = shutil.which("claude")
     if not exe:
         raise RuntimeError("claude CLI not on PATH")
-    cmd = [exe, "-p", prompt, "--output-format", "json", "--permission-mode", "dontAsk",
+    cmd = [exe, "-p", prompt, "--output-format", "stream-json", "--verbose", "--permission-mode", "dontAsk",
            "--no-session-persistence", "--strict-mcp-config", "--setting-sources", "project",
            "--allowedTools", *allowed_tools]
     if disallowed_tools:
@@ -180,11 +195,42 @@ def _run_claude(prompt: str, scaffold: Path, home: Path, state: Path, *, variant
                            timeout=timeout_s, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return 124, "", {}, True
-    try:
-        raw = json.loads(p.stdout)
-    except ValueError:
-        raw = {"result": (p.stdout + p.stderr)[-2000:], "is_error": True}
+    raw = _parse_stream(p.stdout)
+    if "result" not in raw:
+        raw.update(result=(p.stdout + p.stderr)[-2000:], is_error=True)
     return p.returncode, str(raw.get("result") or ""), raw, False
+
+
+def _parse_stream(stdout: str) -> dict:
+    """stream-json events -> the final result event plus every tool call made
+    (``tool_calls``: [{name, input, result, is_error}]) and the denials."""
+    raw: dict = {}
+    calls: list[dict] = []
+    by_id: dict[str, dict] = {}
+    for line in stdout.splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        kind = ev.get("type")
+        content = (ev.get("message") or {}).get("content")
+        if kind == "assistant" and isinstance(content, list):
+            for c in content:
+                if c.get("type") == "tool_use":
+                    call = {"name": c.get("name"), "input": c.get("input") or {}, "result": "", "is_error": None}
+                    calls.append(call)
+                    by_id[c.get("id")] = call
+        elif kind == "user" and isinstance(content, list):
+            for c in content:
+                if c.get("type") == "tool_result" and c.get("tool_use_id") in by_id:
+                    body = c.get("content")
+                    if isinstance(body, list):
+                        body = " ".join(str(b.get("text", "")) for b in body if isinstance(b, dict))
+                    by_id[c["tool_use_id"]].update(result=str(body or ""), is_error=c.get("is_error"))
+        elif kind == "result":
+            raw.update(ev)
+    raw["tool_calls"] = calls
+    return raw
 
 
 def _not_yet(family: str, route: str):
@@ -236,21 +282,27 @@ def run_agent(prompt: str, scaffold_dir: Path, model: str = "claude", runs: int 
     base = Path(workdir or tempfile.mkdtemp(prefix="agent-eval-"))
     if str(base.resolve()).startswith(str(ROOT.resolve()) + os.sep):
         raise RuntimeError("agent eval workdir must be outside the real Datacore root")
-    out: list[RunResult] = []
-    for i in range(1, runs + 1):
+    runner = RUNNERS[family]
+
+    def one(i: int) -> RunResult:
         run_dir = base / f"run{i}"
         scaffold = run_dir / "scaffold"
         shutil.copytree(scaffold_dir, scaffold, symlinks=True)
         home, state = run_dir / "home", run_dir / "state"
         (home / "tmp").mkdir(parents=True)
         state.mkdir()
-        code, text, raw, timed_out = RUNNERS[family](
+        code, text, raw, timed_out = runner(
             prompt, scaffold, home, state, variant=variant, timeout_s=timeout_s,
             allowed_tools=list(allowed_tools), disallowed_tools=list(disallowed_tools),
             max_budget_usd=max_budget_usd)
-        out.append(RunResult(run=i, scaffold=scaffold, text=text, exit_code=code,
-                             is_error=bool(raw.get("is_error")), timed_out=timed_out, raw=raw))
-    return out
+        return RunResult(run=i, scaffold=scaffold, text=text, exit_code=code,
+                         is_error=bool(raw.get("is_error")), timed_out=timed_out, raw=raw)
+
+    # Runs are independent copies, so they run side by side: wall time is one
+    # run, not k of them. Order of the returned list is the run number.
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=runs) as pool:
+        return list(pool.map(one, range(1, runs + 1)))
 
 
 # ── cases ───────────────────────────────────────────────────────────────────
