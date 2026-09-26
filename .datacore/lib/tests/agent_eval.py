@@ -212,17 +212,20 @@ def _parse_stream(stdout: str) -> dict:
             ev = json.loads(line)
         except ValueError:
             continue
+        if not isinstance(ev, dict):
+            continue
         kind = ev.get("type")
-        content = (ev.get("message") or {}).get("content")
+        message = ev.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
         if kind == "assistant" and isinstance(content, list):
             for c in content:
-                if c.get("type") == "tool_use":
+                if isinstance(c, dict) and c.get("type") == "tool_use":
                     call = {"name": c.get("name"), "input": c.get("input") or {}, "result": "", "is_error": None}
                     calls.append(call)
                     by_id[c.get("id")] = call
         elif kind == "user" and isinstance(content, list):
             for c in content:
-                if c.get("type") == "tool_result" and c.get("tool_use_id") in by_id:
+                if isinstance(c, dict) and c.get("type") == "tool_result" and c.get("tool_use_id") in by_id:
                     body = c.get("content")
                     if isinstance(body, list):
                         body = " ".join(str(b.get("text", "")) for b in body if isinstance(b, dict))
