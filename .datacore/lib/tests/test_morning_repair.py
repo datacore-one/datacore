@@ -62,23 +62,45 @@ def test_the_budget_caps_delegations(tmp_path, monkeypatch):
     assert sum(1 for f in state["findings"] if f.get("over_budget")) == 3
 
 
-def test_recheck_reports_repaired_and_still_failing_and_alerts_only_for_the_latter(tmp_path, monkeypatch):
+def _recheck_with_one_repair(tmp_path, monkeypatch, *, yesterday=False, pr=""):
     monkeypatch.setattr(M, "STATE", tmp_path / "state")
     monkeypatch.setattr(M, "FRAGMENTS", tmp_path / "frag")
+    monkeypatch.setattr(M, "_pull_request", lambda iid: (True, pr))
+    monkeypatch.setattr(M, "_dead_lettered", lambda iid: False)
     day = M.datetime.now(M.timezone.utc).date().isoformat()
     (tmp_path / "state").mkdir()
+    v2 = {"id": "v2-egress", "kind": "v2", "title": "v2-verify: egress", "item": "repair-v2-egress"}
     (tmp_path / "state" / f"{day}.json").write_text(json.dumps({"findings": [
-        {"id": "unit-x", "kind": "unit", "title": "unit x failed", "tried": "re-ran x.service (rc 0)"},
-        {"id": "v2-egress", "kind": "v2", "title": "v2-verify: egress", "item": "repair-v2-egress"}]}))
+        {"id": "unit-x", "kind": "unit", "title": "unit x failed", "tried": "re-ran x.service (rc 0)"}, v2]}))
+    if yesterday:
+        from datetime import date, timedelta
+        prev = (date.fromisoformat(day) - timedelta(days=1)).isoformat()
+        (tmp_path / "state" / f"{prev}.json").write_text(json.dumps({"findings": [{**v2, "item": "repair-v2-egress-y"}]}))
     monkeypatch.setattr(M, "findings", lambda run_v2=True: [{"id": "v2-egress", "kind": "v2",
                                                              "title": "v2-verify: egress", "evidence": "still 2"}])
     sent = []
     monkeypatch.setattr(M, "_alert_group", sent.append)
     M.recheck()
-    frag = json.loads((tmp_path / "frag" / day / "repairs.json").read_text())
+    return json.loads((tmp_path / "frag" / day / "repairs.json").read_text()), sent
+
+
+def test_recheck_reports_repaired_and_still_failing_and_does_not_page_a_repair_handed_over_tonight(tmp_path, monkeypatch):
+    """CAD-6/AGT-8/MSG-8 (2026-09-26): a repair handed over at 02:00 is listed as in repair,
+    not paged at 03:30, and never "review the pull request" when there is none."""
+    frag, sent = _recheck_with_one_repair(tmp_path, monkeypatch)
     assert [r["title"] for r in frag["repaired"]] == ["unit x failed"]
     assert frag["still_failing"][0]["item"] == "repair-v2-egress"
-    assert frag["still_failing"][0]["needs"] == "review the pull request"
+    assert frag["still_failing"][0]["needs"].startswith("in repair")
+    assert sent == []
+
+
+def test_an_existing_pull_request_is_what_the_owner_reviews(tmp_path, monkeypatch):
+    frag, _ = _recheck_with_one_repair(tmp_path, monkeypatch, pr="https://x/pull/7")
+    assert frag["still_failing"][0]["needs"] == "review the pull request https://x/pull/7"
+
+
+def test_a_repair_still_failing_after_24_hours_pages_the_owner(tmp_path, monkeypatch):
+    _, sent = _recheck_with_one_repair(tmp_path, monkeypatch, yesterday=True)
     assert len(sent) == 1 and "v2-verify: egress" in sent[0]
 
 

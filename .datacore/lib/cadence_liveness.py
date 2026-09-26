@@ -315,13 +315,41 @@ def collect_states(root: Path, grace: int, today: date | None = None) -> tuple[l
                 window = FREQUENCY_WINDOWS.get(c.frequency)
                 ran = cadence_observation(roles, log, c.role, c.frequency, c.cadence_name) is not None
                 past_due = (c.days_overdue - window.days) if (ran and window) else c.days_overdue
-                if past_due > grace:
+                # RED WITHIN ITS WINDOW (CAD-6). A grace longer than the window let a
+                # daily duty miss three runs before it showed: last run three days ago
+                # is two days past due, inside a 3-day grace. The grace never outlasts
+                # the next window, so a daily duty is red once a whole day is missed;
+                # a weekly one keeps the 3 days.
+                if past_due > (min(grace, window.days - 1) if (ran and window and window.days >= 1) else grace):
                     rows.append((past_due, venture, c.role,
                                  c.frequency, c.cadence_name))
         except Exception as exc:                # noqa: BLE001
             rows.append((-1, venture, "?", "?", f"engine error: {exc}"))
     rows.sort(reverse=True)
     return rows, grey
+
+
+def duty_owner(root: Path, venture: str, role: str, freq: str, name: str) -> str | None:
+    """Who owns one duty, named as collect_states names it (a trailing "[state]" is ignored).
+
+    The morning repair hands a red duty to ITS agent (CAD-6); addressing every red
+    duty to miles sent Tris's geo-research to the wrong agent.
+    """
+    import yaml
+    from cadence_engine import all_assignments
+    name = str(name).split(" [", 1)[0]
+    for space in sorted(Path(root).glob("[0-9]-*")):
+        for vy in (space / "venture.yaml", space / ".datacore" / "venture.yaml"):
+            if not vy.is_file():
+                continue
+            try:
+                data = yaml.safe_load(vy.read_text()) or {}
+                if str(data.get("name") or space.name) != venture:
+                    break
+                return all_assignments(data.get("roles") or {}, data.get("defaults")).get((role, freq, name))
+            except Exception:  # noqa: BLE001 -- an unreadable venture names no owner
+                return None
+    return None
 
 
 def _unrunnable(root: Path, spaces: set[str]) -> dict[str, str]:

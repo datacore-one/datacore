@@ -8,9 +8,12 @@
 A FINDING is one thing that is failing now, with the evidence and a way to check it
 again that is fixed when the finding is made. The sweep tries one safe remediation
 per kind (re-run a failed one-shot unit; re-run a failed briefing input) and hands
-whatever is still failing to Miles as a repair item: fix it, and if that needs a code
+whatever is still failing to its agent (a red duty to the duty's owner, the rest to
+Miles) as a repair item: fix it, and if that needs a code
 change, open a pull request -- never merge (owner, 2026-09-25). The re-check decides
-what was repaired; nobody's word does.
+what was repaired; nobody's word does, and a check that could not run is "could not
+tell". The owner is paged only for what needs a person, or a repair that failed three
+times or has taken 24 hours (DIP-0050).
 """
 from __future__ import annotations
 
@@ -75,6 +78,11 @@ def v2_checklist(run: bool = True) -> list[dict]:
 
 def failed_units() -> list[dict]:
     rc, out = _run(["systemctl", "list-units", "--failed", "--no-legend", "--plain"], timeout=30)
+    if rc != 0:
+        # A check that could not run is "could not tell", never an empty list (DAY-6):
+        # [] here read as "no unit failed" on a host whose systemctl was not there.
+        return [{"id": "units-unreadable", "kind": "check", "title": "failed-unit check could not run",
+                 "evidence": f"could not tell: systemctl rc {rc}: {out.strip()[-240:]}"}]
     found = []
     for line in out.splitlines():
         unit = line.split()[0] if line.split() else ""
@@ -92,8 +100,11 @@ def red_cadences() -> list[dict]:
     except Exception as exc:  # noqa: BLE001 -- an unreadable judge is itself a finding
         return [{"id": "cadence-liveness-unreadable", "kind": "cadence", "title": "cadence liveness failed",
                  "evidence": f"{type(exc).__name__}: {exc}"[:300]}]
-    return [{"id": f"cadence-{_slug(f'{v}-{r}-{c}')}", "kind": "cadence",
-             "title": f"cadence {v} {r} {c} is red", "evidence": f"{days} day(s) late ({f})"}
+    # The id names the duty, not its state: "late: tris (never ran)" in the id made a
+    # new finding every time the reason's wording changed.
+    return [{"id": f"cadence-{_slug(v + '-' + r + '-' + c.split(' [', 1)[0])}", "kind": "cadence",
+             "title": f"cadence {v} {r} {c} is red", "evidence": f"{days} day(s) late ({f})",
+             "owner": L.duty_owner(ROOT, v, r, f, c) or ""}
             for days, v, r, f, c in red]
 
 
@@ -223,19 +234,21 @@ def remediate(f: dict) -> str:
 
 
 def delegate(f: dict, day: str) -> str:
-    """A repair item for Miles. Returns the item id, or '' when it could not be written."""
+    """A repair item for the finding's own agent -- a red duty goes to the agent whose
+    duty it is (CAD-6), everything else to Miles. Returns the item id, or ''."""
     from actor_identity import this_actor
     from ledger.log import EventLog
     from ledger.policy import guarded_append
     from jobs.autofix import _space
     iid = f"repair-{f['id']}-{day.replace('-', '')}"
+    f["assignee"] = f.get("owner") or "miles"
     body = "\n".join(["The morning repair sweep found this failing at 02:00 UTC, and one safe "
                       "remediation did not clear it.", "", f"What: {f['title']}",
                       f"Evidence: {f.get('evidence', '')}", *(["Tried: " + f["tried"]] if f.get("tried") else []),
                       "", "Done means the sweep's 03:30 re-check no longer finds it.", "", PR_RULE])
     try:
         guarded_append(EventLog(_space(ROOT), this_actor()), "item.create",
-                       {"id": iid, "title": f"Repair: {f['title']}", "assignee": "miles", "route": "dev",
+                       {"id": iid, "title": f"Repair: {f['title']}", "assignee": f["assignee"], "route": "dev",
                         "body": body, "requested_by": this_actor(), "morning_repair": True})
     except Exception as exc:  # noqa: BLE001 -- report, never crash the sweep
         f["delegation_error"] = f"{type(exc).__name__}: {exc}"[:200]
@@ -282,8 +295,76 @@ def sweep() -> int:
                 f["over_budget"] = True
     (STATE / f"{day}.json").write_text(json.dumps({"swept_at": time.time(), "findings": found}, indent=1))
     print(f"morning_repair sweep: {len(found)} finding(s), {sum(f['cleared_by_sweep'] for f in found)} "
-          f"cleared by one safe remediation, {delegated} delegated to miles")
+          f"cleared by one safe remediation, {delegated} delegated for repair")
     return 0
+
+
+#: The collector finding that means a kind's own check could not run at all. A finding
+#: of that kind absent while it is present was not repaired: nobody could tell (DAY-6).
+CHECK_OF = {"v2": "v2-verify-unreadable", "unit": "units-unreadable", "cadence": "cadence-liveness-unreadable"}
+
+
+def _pull_request(iid: str) -> tuple[bool, str]:
+    """(could ask, url) of an open pull request naming the item; url '' when none."""
+    rc, out = _run(["gh", "search", "prs", iid, "--state", "open", "--json", "url,title", "--limit", "5"],
+                   timeout=30)
+    try:
+        prs = json.loads(out) if rc == 0 else None
+    except ValueError:
+        prs = None
+    if not isinstance(prs, list):
+        return False, ""
+    return True, next((p.get("url", "") for p in prs if iid in str(p.get("title", ""))), "")
+
+
+def _needs(f: dict) -> str:
+    """What the owner has to do, from evidence -- never a pull request that does not exist (MSG-8)."""
+    if f.get("could_not_tell"):
+        return "could not tell: its check could not run at 03:30"
+    if f.get("item"):
+        who = f.get("assignee") or "miles"
+        asked, url = _pull_request(f["item"])
+        if url:
+            return f"review the pull request {url}"
+        return (f"in repair: {who} is on it" if asked
+                else f"in repair: {who} is on it (could not tell whether a fix is waiting for review)")
+    if f.get("kind") == "escalation":
+        return "a person: Miles gave up after three attempts"
+    if f.get("kind") == "delivery":
+        return "a person: an alert or briefing reached nobody"
+    return "a person: nothing could be delegated"
+
+
+def _dead_lettered(iid: str) -> bool:
+    """The repair item was given up on (three failed attempts), per the ledger."""
+    try:
+        from ledger.fold import fold
+        from ledger.log import read_events
+        from jobs.autofix import _space
+        item = fold(read_events(_space(ROOT))).items.get(iid)
+    except Exception:  # noqa: BLE001 -- unreadable: the 24-hour rule still catches it tomorrow
+        return False
+    return bool(item) and item.status == "dismissed" and item.closed_kind == "dropped"
+
+
+def _in_repair_since_yesterday(fid: str, day: str) -> bool:
+    """Yesterday's sweep already handed this finding over: the repair has taken 24 hours."""
+    from datetime import timedelta
+    prev = (date.fromisoformat(day) - timedelta(days=1)).isoformat()
+    try:
+        old = json.loads((STATE / f"{prev}.json").read_text())["findings"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    return any(o.get("id") == fid and o.get("item") for o in old)
+
+
+def _page_owner(f: dict, day: str) -> bool:
+    """DIP-0050, CAD-6/AGT-8: the owner hears only what needs a person -- no repair item,
+    or a repair that failed three times or has taken 24 hours. A repair handed over at
+    02:00 is not news at 03:30."""
+    if not f.get("item"):
+        return True
+    return _dead_lettered(f["item"]) or _in_repair_since_yesterday(f["id"], day)
 
 
 def recheck() -> int:
@@ -297,10 +378,16 @@ def recheck() -> int:
         # The sweep did not run: that is itself the first thing to report.
         swept = [{"id": "morning-repair-sweep", "kind": "self", "title": "the 02:00 sweep did not run",
                   "evidence": f"no {STATE / (day + '.json')}"}] + list(now.values())
-    # A finding about the sweep itself has no re-check: it is failing by definition,
-    # never "repaired" because it is absent from the checks.
-    repaired = [f for f in swept if f["id"] not in now and f["kind"] != "self"]
+    # Repaired means its own check ran at 03:30 and no longer finds it. A finding about
+    # the sweep itself has no re-check, and one whose check could not run is "could not
+    # tell" -- neither is ever "repaired" because it is absent from the checks.
+    unknown = [{**f, "could_not_tell": True,
+                "evidence_now": now[CHECK_OF[f["kind"]]].get("evidence", "")}
+               for f in swept if f["id"] not in now and CHECK_OF.get(f.get("kind")) in now]
+    repaired = [f for f in swept if f["id"] not in now and f["kind"] != "self"
+                and f["id"] not in {u["id"] for u in unknown}]
     failing = [{**f, "evidence_now": now[f["id"]].get("evidence", "")} for f in swept if f["id"] in now]
+    failing += unknown
     failing += [f for f in swept if f["kind"] == "self"]
     failing += [f for fid, f in now.items() if fid not in {s["id"] for s in swept}]  # new since 02:00
     out = FRAGMENTS / day / "repairs.json"
@@ -310,16 +397,17 @@ def recheck() -> int:
         "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "repaired": [{"title": f["title"], "how": f.get("tried") or f.get("item") or "cleared"} for f in repaired],
         "still_failing": [{"title": f["title"], "evidence": f.get("evidence_now") or f.get("evidence", ""),
-                           "item": f.get("item", ""), "needs": "review the pull request" if f.get("item") else
-                           ("a person: Miles gave up after three attempts" if f.get("kind") == "escalation"
-                            else "a person: an alert or briefing reached nobody" if f.get("kind") == "delivery"
-                            else "a person: nothing could be delegated")} for f in failing],
+                           "item": f.get("item", ""), "needs": _needs(f)} for f in failing],
     }, indent=1))
-    if failing:
-        _alert_group("Morning repair, 03:30 UTC -- still failing after repair:\n" +
-                     "\n".join(f"- {f['title']}" + (f" (item {f['item']})" if f.get("item") else "")
-                               for f in failing))
-    print(f"morning_repair recheck: {len(repaired)} repaired, {len(failing)} still failing -> {out}")
+    page = [f for f in failing if _page_owner(f, day)]
+    if page:
+        _alert_group("Morning repair, 03:30 UTC -- needs a person:\n" +
+                     "\n".join(f"- {f['title']}" + (f" (item {f['item']}: failed three times or 24h in repair)"
+                                                     if f.get("item") else "") for f in page) +
+                     (f"\n{len(failing) - len(page)} more in repair; listed in the briefing."
+                      if len(failing) > len(page) else ""))
+    print(f"morning_repair recheck: {len(repaired)} repaired, {len(failing)} still failing "
+          f"({len(page)} need a person) -> {out}")
     return 0
 
 
