@@ -738,10 +738,10 @@ def test_a_recurring_failure_is_counted_per_artifact_and_files_one_task(tmp_path
         os.utime(artifact, (1_700_000_000 + i * 100, 1_700_000_000 + i * 100))
         assert _run_main(argv) == 1
     assert filed == ["mac-id-churn"], "the third consecutive failure files exactly one task"
-    assert len(sent) == 3
+    assert len(sent) == 1, "MSG-3: the same problem is sent once inside its cool-down"
 
     assert _run_main(argv) == 1                # same artifact, looked at again
-    assert filed == ["mac-id-churn"] and len(sent) == 3, "an unchanged artifact is neither counted nor alerted again"
+    assert filed == ["mac-id-churn"] and len(sent) == 1, "an unchanged artifact is neither counted nor alerted again"
     assert R._load()["mac-id-churn"]["consecutive"] == 3
 
     artifact.write_text("id-churn: 11 space(s), 0 with findings")

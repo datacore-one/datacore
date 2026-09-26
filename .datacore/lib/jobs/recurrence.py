@@ -45,10 +45,14 @@ import json
 import os
 import pathlib
 import sys
+import time
 
 # DIP-0031: ">=3 consecutive runs is a recurring failure". Same number, on
 # purpose -- two thresholds for one idea is bug class 1.
 RECURRING_AFTER = 3
+
+#: MSG-3: the same problem is not re-sent within this, and is reminded after it.
+COOL_DOWN_S = 24 * 3600
 
 STATE = pathlib.Path(
     os.environ.get("DATACORE_STATE", pathlib.Path.home() / ".datacore" / "state")
@@ -236,20 +240,29 @@ def prune(known: set[str]) -> list[str]:
 
 
 def should_alert(rec: dict, *, today: str | None = None) -> bool:
-    """Alert on every failure below the threshold, ONCE at escalation, then
-    once a day while it stays recurring.
+    """One message per job per day: the first failure, then a daily reminder
+    while it keeps going (MSG-3, owner-approved: "I get each problem once. The
+    same problem is not re-sent until its cool-down ends, but a problem that
+    keeps going is reminded"). The cool-down is the day.
 
-    The escalation text said "needs a decision, not another alert" while
-    being another alert every 30 minutes: six mac jobs produced twelve
-    Telegram messages an hour the moment the relay started working
-    (2026-09-03). A reader cannot decide anything inside that.
+    This alerted on EVERY failure below DIP-0031's threshold and once more at
+    escalation, so a producer rewriting the same bad artifact three times a day
+    sent the same problem three times on day one. The escalation text said
+    "needs a decision, not another alert" while being another alert every 30
+    minutes: six mac jobs produced twelve Telegram messages an hour the moment
+    the relay started working (2026-09-03). A pass resets the record, so a
+    failure after a recovery is a new problem and is sent at once.
     """
+    explicit = today is not None
     today = today or datetime.date.today().isoformat()
-    if not rec.get("recurring"):
-        return True
-    if int(rec.get("consecutive") or 0) == RECURRING_AFTER:
-        return True
-    return rec.get("last_alerted") != today
+    if rec.get("last_alerted") == today:
+        return False
+    # A full cool-down, not a date flip: an alert at 23:50 is not re-sent at
+    # 00:10. Recorded by note_alerted on the real clock only.
+    at = rec.get("last_alerted_at")
+    if not explicit and isinstance(at, (int, float)):
+        return time.time() - at >= COOL_DOWN_S
+    return True
 
 
 def note_task(job_name: str, task_id: str | None) -> None:
@@ -270,6 +283,7 @@ def note_task(job_name: str, task_id: str | None) -> None:
 
 
 def note_alerted(job_name: str, *, today: str | None = None) -> None:
+    stamp = time.time() if today is None else None
     today = today or datetime.date.today().isoformat()
     try:
         with _locked():
@@ -277,6 +291,10 @@ def note_alerted(job_name: str, *, today: str | None = None) -> None:
             rec = state.get(job_name)
             if isinstance(rec, dict):
                 rec["last_alerted"] = today
+                if stamp is not None:
+                    rec["last_alerted_at"] = stamp
+                else:
+                    rec.pop("last_alerted_at", None)
                 state[job_name] = rec
                 _save(state)
     except OSError:

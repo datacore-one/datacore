@@ -389,9 +389,15 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> 
         sig = _artifact_signature(job) if job is not None else None
         _record = _rec.record(job_name, failed=True, artifact_sig=sig)
         if _record.get("same_artifact"):
-            print(f"alert withheld: {job_name} failed on the same artifact already counted "
-                  f"({_record.get('consecutive')}x); nothing new to report", file=sys.stderr)
-            return
+            # SAME ARTIFACT IS NOT SILENT FOREVER (MSG-3). Within the day it is
+            # the problem already sent; on a later day, if it was the
+            # operator's (it was alerted), it is reminded -- once, below. A
+            # problem handed to a repairer and never alerted stays with the
+            # repair path, whose escalations speak for it.
+            if not _record.get("last_alerted") or not _rec.should_alert(_record):
+                print(f"alert withheld: {job_name} failed on the same artifact already counted "
+                      f"({_record.get('consecutive')}x); nothing new to report", file=sys.stderr)
+                return
         # DELEGATE ON THE FIRST FAILURE, NOT THE THIRD.
         #
         # This waited for DIP-0031's recurring threshold, so failures one and
@@ -431,8 +437,8 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> 
             # list the person needs. Carry them.
             message += _artifact_tail(job)
         if not _rec.should_alert(_record):
-            print(f"alert suppressed: {job_name} is recurring "
-                  f"({_record.get('consecutive')}x) and was already escalated today", file=sys.stderr)
+            print(f"alert withheld: {job_name} was already sent today "
+                  f"({_record.get('consecutive')}x); the cool-down is the day", file=sys.stderr)
             return
         _rec.note_alerted(job_name)
     if mode == "telegram":
