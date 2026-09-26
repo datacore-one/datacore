@@ -22,7 +22,9 @@ check, one that a repair can satisfy by editing the thing that judges it.
 
     fix_check.py --job mac-seq-gap --machine mac --contract-sha <sha256>
 
-Exit 0 only if the contract is unchanged AND the job verifies.
+Exit 0 only if the contract is unchanged AND the job verifies. Stage "merged"
+exits WAITING_ON_OWNER (3) while the repair's pull request is open: done by the
+repairer, waiting for the owner's merge -- neither fixed nor failed.
 """
 from __future__ import annotations
 
@@ -61,6 +63,13 @@ def contract_sha(job_name: str, manifest: Path) -> str | None:
 
 
 MANIFEST_PATHS = ("jobs/manifest.yaml",)
+
+#: Exit status of stage "merged" when the repairer's part is done -- a pull
+#: request names the item and is OPEN -- and only the owner's merge is missing.
+#: Not 1: ledger_claim counts a failing check as a failed attempt, and three of
+#: those dead-lettered finished repairs as "miles gave up" (NS-9, 2026-09-26).
+#: ledger_claim reads this code as "waiting for you": no attempt, no re-run.
+WAITING_ON_OWNER = 3
 
 
 def merged_pr(item_id: str, repo: str, *, gh=("gh",)) -> tuple[dict | None, list[str]]:
@@ -142,7 +151,7 @@ def main() -> int:
         if pr.get("state") != "MERGED":
             print(f"waiting for you: {pr['url']} names {a.item}; the owner merges. Not fixed until "
                   f"{a.job} verifies again on {a.machine}.", file=sys.stderr)
-            return 1
+            return WAITING_ON_OWNER
         from jobs.autofix import recovered_since
         root = Path(os.environ.get("DATACORE_ROOT") or Path.home() / "Data")
         if not recovered_since(root, a.job, _hlc_ms(pr.get("mergedAt"))):

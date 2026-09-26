@@ -301,9 +301,20 @@ def repairs(root: Path) -> list[dict]:
 
     space = _space(root)
     try:
-        state = fold(read_events(space))
+        events = read_events(space)
+        state = fold(events)
     except Exception:  # noqa: BLE001 -- an unreadable ledger is not an escalation
         return []
+    # WAITING FOR YOU (NS-9): the repairer finished and released the item as
+    # `waiting_on_owner` (its check: the pull request is open, the owner
+    # merges). The latest claim/release decides; a later claim ends the wait.
+    last_turn: dict[str, str] = {}
+    for ev in events:
+        iid = (ev.payload or {}).get("id")
+        if iid and ev.type == "item.claim":
+            last_turn[iid] = "claim"
+        elif iid and ev.type == "item.release":
+            last_turn[iid] = (ev.payload or {}).get("kind") or "release"
     out = []
     for iid, item in sorted(state.items.items()):
         payload = item.payload or {}
@@ -312,6 +323,8 @@ def repairs(root: Path) -> list[dict]:
         out.append({
             "id": iid,
             "status": item.status,
+            "waiting_on_owner": (item.status == "created"
+                                 and last_turn.get(iid) == "waiting_on_owner"),
             "closed_kind": item.closed_kind,
             "closed_reason": item.closed_reason,
             "job": payload.get("job", ""),
@@ -351,6 +364,11 @@ def escalations(root: Path, *, window_h: float = ESCALATE_H * 2,
     out = []
     for r in repairs(root):
         if r["id"] in acked:
+            continue
+        if r.get("waiting_on_owner"):
+            # Done by the repairer, waiting on the owner's merge: neither
+            # given up nor abandoned. The morning briefing lists the pull
+            # request to review; paging for it would be the wrong message.
             continue
         if r["status"] in ("created", "claimed"):
             # THE THIRD CONDITION, which this module's docstring promised from
@@ -507,6 +525,8 @@ def main() -> int:
         rows = repairs(root)
         for r in rows:
             mark = r["status"] if r["status"] != "dismissed" else f"dismissed/{r['closed_kind']}"
+            if r.get("waiting_on_owner"):
+                mark = "waiting for you"
             print(f"  {mark:<18} {r['id']:<44} {r['job']} -> {r['assignee']}")
         print(f"\nautofix: {len(rows)} repair item(s)")
         return 0

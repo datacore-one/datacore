@@ -62,6 +62,16 @@ CLAIMABLE = "created"
 # few enough that a genuinely unsatisfiable item stops within one hour of a
 # 15-minute timer instead of running for days.
 MAX_ATTEMPTS = 3
+
+#: A check that exits this says: the agent's part is done and the rest is a
+#: person's -- jobs/fix_check.py --stage merged on an OPEN pull request (the
+#: owner merges, 2026-09-25). It is not a failed attempt: counted as one, a
+#: finished repair was re-run and dead-lettered as "gave up" after three ticks
+#: (NS-9, 2026-09-26). The item is released as `waiting_on_owner`, never
+#: counted, and later ticks re-run only its CHECK until the owner has acted.
+WAITING_ON_OWNER = 3
+#: Release kinds that are not an attempt at the task (see the dead-letter count).
+NOT_AN_ATTEMPT = ("infrastructure", "waiting_on_owner")
 TIMEOUT = 600
 
 # Phrases that mean the agent declined or was prevented, in a run that exits 0
@@ -329,7 +339,16 @@ def _artifact_tree_clean(space, offenders: list | None = None):
 
 
 def _isolated_check(space: Path, check: str) -> tuple[bool, str]:
+    """(passed, sha) -- see _isolated_check_rc, which this answers for."""
+    rc, sha = _isolated_check_rc(space, check)
+    return rc == 0, sha
+
+
+def _isolated_check_rc(space: Path, check: str) -> tuple[int, str]:
     """Check a fresh worktree of the committed result, not the agent's directory.
+
+    Returns (status, sha): 0 passed, WAITING_ON_OWNER when the check said so
+    (under the same isolation conditions as a pass), 1 for anything else.
 
     What this DOES buy, and it is worth having:
 
@@ -366,12 +385,12 @@ def _isolated_check(space: Path, check: str) -> tuple[bool, str]:
         print("         -> check FAILED CLOSED: commit task changes before artifact verification; "
               "existing index and files preserved"
               + (f" (uncommitted: {', '.join(sorted(dirty)[:4])})" if dirty else ""))
-        return False, ""
+        return 1, ""
     rc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=space,
                         capture_output=True, text=True)
     if rc.returncode != 0:
         print("         -> check FAILED CLOSED: cannot resolve HEAD for isolation")
-        return False, ""
+        return 1, ""
     head = rc.stdout.strip()
     with tempfile.TemporaryDirectory(prefix="check-") as tmp:
         wt = Path(tmp) / "verify"
@@ -380,7 +399,7 @@ def _isolated_check(space: Path, check: str) -> tuple[bool, str]:
         if add.returncode != 0:
             print(f"         -> check FAILED CLOSED: no isolated worktree "
                   f"({(add.stderr or '').strip()[:90]})")
-            return False, head
+            return 1, head
         try:
             # THE CHECK'S OWN STDERR IS THE DIAGNOSIS, and it was thrown away.
             # A check runs against the COMMITTED tree, so every input it reads
@@ -392,7 +411,9 @@ def _isolated_check(space: Path, check: str) -> tuple[bool, str]:
             proc = run_process(check, shell=True, cwd=str(wt),
                                capture_output=True, timeout=120)
             ok = proc.returncode == 0
-            if not ok:
+            if proc.returncode == WAITING_ON_OWNER:
+                pass  # its own words are printed by the caller's WAITING line
+            elif not ok:
                 # Decoded defensively: without `text=True` these are BYTES, and
                 # the first version of this concatenated them as str and raised
                 # TypeError mid-dispatch -- leaving the item claimed with no
@@ -407,9 +428,12 @@ def _isolated_check(space: Path, check: str) -> tuple[bool, str]:
                 if why:
                     print(f"         -> the check said: {why[-1][:180]}")
             current = subprocess.run(["git", "rev-parse", "HEAD"], cwd=space, capture_output=True, text=True)
-            return ok and current.returncode == 0 and current.stdout.strip() == head and _artifact_tree_clean(space), head
+            intact = current.returncode == 0 and current.stdout.strip() == head and _artifact_tree_clean(space)
+            if intact and proc.returncode in (0, WAITING_ON_OWNER):
+                return proc.returncode, head
+            return 1, head
         except subprocess.TimeoutExpired:
-            return False, head
+            return 1, head
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", str(wt)],
                            cwd=space, capture_output=True)
@@ -570,8 +594,22 @@ def main() -> int:
             # An infrastructure release is not an attempt at the TASK. Counting
             # it dismissed good items because a host's runtime was down rather
             # than because the work was unsatisfiable -- see the release path.
-            if iid and payload.get("kind") != "infrastructure":
+            if iid and payload.get("kind") not in NOT_AN_ATTEMPT:
                 attempts[iid] = attempts.get(iid, 0) + 1
+
+    # WAITING ON THE OWNER: the item's latest claim/release is a release of
+    # kind `waiting_on_owner` -- the agent finished, a person has the next
+    # move. Such an item is not sent to the agent again; its check is re-run.
+    last_turn: dict[str, str] = {}
+    for ev in events:
+        iid = (ev.payload or {}).get("id")
+        if not iid:
+            continue
+        if ev.type == "item.claim":
+            last_turn[iid] = "claim"
+        elif ev.type == "item.release" and f"{ev.hlc} {ev.actor}" in applied_releases:
+            last_turn[iid] = (ev.payload or {}).get("kind") or "release"
+    waiting = {iid for iid, kind in last_turn.items() if kind == "waiting_on_owner"}
 
     exhausted = [i for i in pending if attempts.get(i.id, 0) >= MAX_ATTEMPTS]
     for item in exhausted:
@@ -619,7 +657,7 @@ def main() -> int:
         return 0
 
     print(f"{len(pending)} delegated item(s) awaiting claim; limit {args.limit}{mirror_note}")
-    dispatched = failed = refused = review = 0
+    dispatched = failed = refused = review = waiting_n = 0
 
     journal_lines: list[str] = []
     for item in pending[:args.limit]:
@@ -676,6 +714,42 @@ def main() -> int:
                       f"\n         -> commit or discard it, then dispatch again")
                 break
 
+        if item.id in waiting and check:
+            # Only the check, never the agent: its part is done. Still waiting
+            # -> nothing written; passed -> claim and complete on the check's
+            # evidence; anything else (the PR was closed unmerged, the job still
+            # fails after the merge) -> back to the agent as an ordinary attempt.
+            rc, sha = _isolated_check_rc(space, check)
+            if rc == WAITING_ON_OWNER:
+                print(f"WAITING  [{route}] {title[:70]}\n         -> still waiting for you "
+                      f"(the owner merges); the agent is not re-run")
+                waiting_n += 1
+                continue
+            if rc == 0:
+                from claim_gate import check_claim
+                _ok, _why = check_claim(args.actor, item.payload or {}, space_dir=space)
+                if not _ok:
+                    print(f"REFUSED  {title[:60]}\n         -> {_why}")
+                    continue
+                try:
+                    guarded_append(EventLog(space, args.actor), "item.claim",
+                                   {"id": item.id, "owner": args.actor, "route": route,
+                                    "reason": "the owner acted on a repair that was waiting for them",
+                                    "payload_hash": approval_payload_hash(item.payload)})
+                except PolicyError as exc:
+                    print(f"REFUSED  {title[:70]}: {exc}")
+                    refused += 1
+                    continue
+                act(space, item.id, "complete", args.actor, detail={
+                    "owner": args.actor, "route": route, "check": check,
+                    "artifact_commit": sha, "waited_on": "owner"})
+                journal_lines.append(f"DONE `{item.id[:12]}` {title[:70]} — the owner acted; "
+                                     f"check passed @ `{sha[:10]}`")
+                print(f"DONE     [{route}] {title[:70]}\n         -> the owner acted; check passed "
+                      f"@ {sha[:10]}")
+                dispatched += 1
+                continue
+
         # Claim BEFORE working, so an interrupted run is visible as claimed.
         from claim_gate import check_claim
         _ok, _why = check_claim(args.actor, item.payload or {}, space_dir=space)
@@ -701,7 +775,20 @@ def main() -> int:
             # sniffing that prose for refusal markers both passed a failure as
             # DONE, because the model rephrases ("I can't" / "I could not").
             # Prose is not evidence. A check that passes is.
-            passed, sha = _isolated_check(space, check)
+            rc, sha = _isolated_check_rc(space, check)
+            passed = rc == 0
+            if rc == WAITING_ON_OWNER:
+                EventLog(space, args.actor).append(
+                    "item.release", {"id": item.id, "owner": args.actor,
+                                     "kind": "waiting_on_owner",
+                                     "artifact_commit": sha,
+                                     "reason": f"waiting for you: {check}"})
+                journal_lines.append(
+                    f"WAITING `{item.id[:12]}` {title[:60]} — done by {args.actor}; waiting for you")
+                print(f"WAITING  [{route}] {title[:70]}\n         -> waiting for you: the agent's part "
+                      f"is done and the owner has the next move; not an attempt")
+                waiting_n += 1
+                continue
             if passed:
                 act(space, item.id, "complete", args.actor, detail={
                     "owner": args.actor,
@@ -767,7 +854,8 @@ def main() -> int:
     # One entry per run, not per item: the batch is the unit of work a reader
     # cares about, and fifteen separate headings would bury the journal.
     _journal(space, args.actor, journal_lines)
-    print(f"\ndispatched {dispatched}, needs-review {review}, failed {failed}, refused {refused}")
+    print(f"\ndispatched {dispatched}, needs-review {review}, failed {failed}, refused {refused}"
+          + (f", waiting for you {waiting_n}" if waiting_n else ""))
     return 1 if failed else 0
 
 

@@ -52,7 +52,9 @@ def test_an_open_pr_naming_the_item_is_waiting_for_the_owner_not_done(tmp_path):
     gh = _fake_gh(tmp_path, [{"number": 9, "title": "fix box-x (autofix-box-x-20260922)", "body": "", "state": "OPEN",
                               "mergedAt": None, "url": "https://x/pull/9"}], ["lib/producer.py"])
     r = _run(tmp_path, gh, "--item", "autofix-box-x-20260922", "--repo", "o/r")
-    assert r.returncode == 1 and "waiting for you" in r.stderr
+    # NS-9: its own exit (WAITING_ON_OWNER = 3), so ledger_claim does not count it
+    # as a failed attempt and dead-letter a finished repair.
+    assert r.returncode == 3 and "waiting for you" in r.stderr
 
 
 def test_a_closed_or_unrelated_pr_is_not_yet(tmp_path):
