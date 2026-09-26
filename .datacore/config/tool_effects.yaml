@@ -120,7 +120,7 @@ effects:
       - '\b(create|delete|update)-access-key\b'
       - '\bgcloud\s+iam\s+service-accounts\s+keys\s+(create|delete)\b'
       - '\bssh-keygen\b[^\n]*\s-f\s'
-      - '\bcreds(\.py)?\s+(set|rotate|remove|delete)\b'
+      - '\bcreds(\.py)?\s+(set|remove|delete)\b'   # `creds rotate` is a read-only checklist
       - '\bdistribute\.sh\b'
       - '\bsecurity\s+(add|delete)-(generic|internet)-password\b'
   gov.submit:
