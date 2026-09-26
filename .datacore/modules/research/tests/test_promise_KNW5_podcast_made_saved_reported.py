@@ -55,10 +55,16 @@ def _min_sources():
     return int(d.get("min_sources", 3))
 
 
-def _alert_patterns():
-    text = COS_RESEARCH.read_text(encoding="utf-8")
-    pats = re.findall(r'"\$OUT"\s*\|\s*grep\s+-q[iE]*\s+(?:\'([^\']+)\'|"([^"]+)")', text)
-    return [a or b for a, b in pats]
+def _alert_conditions():
+    """Each `if` line of cos_research.sh that alerts: all its grep patterns must match."""
+    conds = []
+    for line in COS_RESEARCH.read_text(encoding="utf-8").splitlines():
+        if not line.lstrip().startswith("if ") or '"$OUT"' not in line:
+            continue
+        pats = re.findall(r'grep\s+-q[iE]*\s+(?:\'([^\']+)\'|"([^"]+)")', line)
+        if pats:
+            conds.append([a or b for a, b in pats])
+    return conds
 
 
 def _queue(n):
@@ -94,9 +100,9 @@ def test_enough_sources_make_a_podcast_that_is_saved_in_the_podcast_folder(tmp_p
 
 
 def _reported(out):
-    pats = _alert_patterns()
-    assert pats, f"could not read the alert patterns from {COS_RESEARCH}"
-    return [p for p in pats if re.search(p, out, re.I)]
+    conds = _alert_conditions()
+    assert conds, f"could not read the alert conditions from {COS_RESEARCH}"
+    return [c for c in conds if all(re.search(p, out, re.I) for p in c)]
 
 
 def test_a_failed_notebook_creation_is_reported_with_its_reason(tmp_path, monkeypatch, capsys):
