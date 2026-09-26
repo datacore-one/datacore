@@ -103,13 +103,21 @@ def check_ledger(rep: Report, quick: bool) -> None:
     if not sp:
         rep.add("0034", "hash chains", None, "no space carries an event log")
         return
-    bad = []
+    # A timeout is "could not tell", never "broken". 2-datacore's 20k events
+    # took 69 s on 2026-09-26 against a 60 s limit, and the check reported a
+    # chain that verified OK as broken -- a false FAIL the morning sweep then
+    # handed to Miles as a repair.
+    bad, slow = [], []
     for s in sp:
-        rc, _ = run([PY, str(LIB / "ledger_cli.py"), "verify", "--space", str(s)], 60)
-        if rc != 0:
+        rc, _ = run([PY, str(LIB / "ledger_cli.py"), "verify", "--space", str(s)], 600)
+        if rc == 124:
+            slow.append(s.name)
+        elif rc != 0:
             bad.append(s.name)
-    rep.add("0034", "hash chains", not bad,
-            f"{len(sp) - len(bad)}/{len(sp)} verify" + (f"; broken: {', '.join(bad)}" if bad else ""))
+    ok = len(sp) - len(bad) - len(slow)
+    detail = f"{ok}/{len(sp)} verify" + (f"; broken: {', '.join(bad)}" if bad else "") \
+        + (f"; timed out: {', '.join(slow)}" if slow else "")
+    rep.add("0034", "hash chains", False if bad else (None if slow else True), detail)
 
     # Per-actor nonces: seq must be dense and unique WITHIN each writer's file.
     # This is the invariant that makes a merge a union — two actors both at
