@@ -490,6 +490,18 @@ def _incoming_rewrites(space: Path, ref: str) -> list[str]:
     return bad
 
 
+def _private_context_staged(space: Path) -> list[str]:
+    """Staged paths that are private context (context_merge.private_context_reason)."""
+    from context_merge import private_context_reason
+    rc, out, _ = _git(space, "diff", "--cached", "--name-status", "--no-renames")
+    found = []
+    for line in (out or "").splitlines() if rc == 0 else []:
+        status, _, path = line.partition("\t")
+        if path and status != "D" and private_context_reason(space / path, tracked=status != "A"):
+            found.append(path)
+    return found
+
+
 def _rewrite_refusal(db: str, ref: str, rewrites: list[str], autosaved: bool) -> Result:
     return Result(False,
                   f"refused: {ref} rewrites ledger history this machine holds — "
@@ -570,6 +582,13 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
                 path = line.split("\t", 1)[-1].strip()
                 if path:
                     _git(space, "restore", "--staged", "--", path)
+
+        # NEVER AUTOSAVE PRIVATE CONTEXT (SPC-3). `add -A` stages whatever the
+        # space's .gitignore fails to list, and a hand-made or fresh space may
+        # list nothing -- so CLAUDE.local.md, or a composed CLAUDE.md holding
+        # it, was committed and pushed. Judge the file, not the .gitignore.
+        for path in _private_context_staged(space):
+            _git(space, "restore", "--staged", "--", path)
 
         # Unstaging the submodules may have emptied the index. `git commit` then
         # exits non-zero for "nothing to commit", which the check below would

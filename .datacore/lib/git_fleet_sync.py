@@ -75,6 +75,7 @@ from pathlib import Path
 import yaml
 
 from git_inventory import changes as working_changes, tracked_paths
+from context_merge import private_context_reason
 
 # Filenames matching these are never committed.
 JUNK_SUFFIXES = ('.pyc', '.orig', '.rej', '.swp')
@@ -231,6 +232,11 @@ def is_junk(repo: Path, path: str, tracked: set) -> str:
     # DIP-0002 private layer — never leaves the machine.
     if '.local.' in name:
         return 'private layer (DIP-0002)'
+    # A composed context file (context_merge output) -- generated per machine,
+    # and it may carry the private layer (SPC-3).
+    private = private_context_reason(repo / path.rstrip('/'), tracked=path in tracked)
+    if private:
+        return private
     # An untracked file at the repo root that shadows a tracked lib/<name>:
     # an agent wrote to the wrong path. Committing it creates a second,
     # divergent copy of a module that is already tracked under lib/.

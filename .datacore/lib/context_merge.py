@@ -577,6 +577,36 @@ def output_untracked_refusal(output_file: Path) -> str | None:
             f"(exit {ignored.returncode})")
 
 
+def private_context_reason(path: Path, tracked: bool = False) -> str:
+    """Why `path` must never be committed by a sync, or '' (SPC-3).
+
+    A sync that stages with `add -A` publishes whatever the repo's .gitignore
+    fails to list, and a hand-made or freshly cloned space may list nothing.
+    So the rule is judged from the file, not from .gitignore:
+      * a private layer (`*.local.*`) never leaves the machine;
+      * a composed context file (starts with GENERATED_HEADER) is never newly
+        committed -- it is regenerated on every machine -- and one carrying the
+        LOCAL layer is never committed at all, tracked or not.
+    """
+    path = Path(path)
+    if ".local." in path.name:
+        return "private layer (DIP-0002)"
+    if path.suffix != ".md" or not path.is_file():
+        return ""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            head = fh.read(4000)
+    except OSError:
+        return ""
+    if not head.startswith(GENERATED_HEADER):
+        return ""
+    if "Layer: LOCAL" in head:
+        return "composed context holding the private layer (DIP-0002)"
+    if not tracked:
+        return "composed context file (generated, DIP-0002)"
+    return ""
+
+
 def remote_slug(url: str) -> str:
     """The pre-push hook's repo identifier for a remote URL (org/name for a
     GitHub URL; any other URL unchanged, which no GitHub slug list matches)."""
