@@ -1,4 +1,4 @@
-"""fix_check --stage merged: judged by a merged pull request, bounded by what it touched."""
+"""fix_check --stage merged: a pull request advances a repair, the job verifying again finishes it; bounded by what it touched."""
 from __future__ import annotations
 
 import json
@@ -26,19 +26,33 @@ def _run(tmp_path, bindir, *extra):
                          capture_output=True, text=True, env=env, cwd=str(tmp_path), timeout=60)
 
 
-def test_a_merged_pr_naming_the_item_passes(tmp_path):
+def test_a_merged_pr_alone_is_not_a_repair(tmp_path):
+    """NS-10 (owner, 2026-09-26) supersedes the 2026-09-25 reading: merged, and the job
+    has not verified since, is not fixed."""
     gh = _fake_gh(tmp_path, [{"number": 7, "title": "fix box-x (autofix-box-x-20260922)", "body": "", "state": "MERGED",
                               "mergedAt": "2026-09-22T10:00:00Z", "url": "https://x/pull/7"}], ["lib/producer.py"])
     r = _run(tmp_path, gh, "--item", "autofix-box-x-20260922", "--repo", "o/r")
-    assert r.returncode == 0 and "https://x/pull/7" in r.stdout
+    assert r.returncode == 1 and "https://x/pull/7" in r.stderr and "not yet" in r.stderr
 
 
-def test_an_open_pr_naming_the_item_passes_because_the_owner_merges(tmp_path):
-    """Owner, 2026-09-25: an agent opens the pull request and stops."""
+def test_a_merged_pr_after_which_the_job_verifies_is_repaired(tmp_path, monkeypatch):
+    ev = tmp_path / "root" / "2-datacore" / ".datacore" / "events"; ev.mkdir(parents=True)
+    (ev / "winston.jsonl").write_text(json.dumps({"actor": "winston", "hlc": "1800000000000.0000.winston",
+        "payload": {"metric": "job.verify", "job": "box-x", "ok": True}}) + "\n")
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path / "root"))
+    gh = _fake_gh(tmp_path, [{"number": 7, "title": "fix box-x (autofix-box-x-20260922)", "body": "", "state": "MERGED",
+                              "mergedAt": "2026-09-22T10:00:00Z", "url": "https://x/pull/7"}], ["lib/producer.py"])
+    r = _run(tmp_path, gh, "--item", "autofix-box-x-20260922", "--repo", "o/r")
+    assert r.returncode == 0 and "repaired" in r.stdout
+
+
+def test_an_open_pr_naming_the_item_is_waiting_for_the_owner_not_done(tmp_path):
+    """Owner, 2026-09-25: an agent opens the pull request and stops. NS-10: that is
+    "waiting for you", never "fixed"."""
     gh = _fake_gh(tmp_path, [{"number": 9, "title": "fix box-x (autofix-box-x-20260922)", "body": "", "state": "OPEN",
                               "mergedAt": None, "url": "https://x/pull/9"}], ["lib/producer.py"])
     r = _run(tmp_path, gh, "--item", "autofix-box-x-20260922", "--repo", "o/r")
-    assert r.returncode == 0 and "ready for the owner" in r.stdout
+    assert r.returncode == 1 and "waiting for you" in r.stderr
 
 
 def test_a_closed_or_unrelated_pr_is_not_yet(tmp_path):

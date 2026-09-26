@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -73,8 +74,8 @@ def merged_pr(item_id: str, repo: str, *, gh=("gh",)) -> tuple[dict | None, list
     manifest may have repaired the check instead of the producer, and only a
     person may decide that.
     """
-    # OPEN counts (owner, 2026-09-25): an agent opens the pull request and stops; the
-    # owner merges. Before that decision the stage required a merge by the agent.
+    # OPEN is found too (owner, 2026-09-25: an agent opens the pull request and stops; the
+    # owner merges) -- found, not passed: main() decides what the pull request means.
     q = subprocess.run([*gh, "pr", "list", "--repo", repo, "--state", "all", "--search", item_id,
                         "--json", "number,title,body,mergedAt,url,state", "--limit", "10"],
                        capture_output=True, text=True, timeout=60)
@@ -91,6 +92,15 @@ def merged_pr(item_id: str, repo: str, *, gh=("gh",)) -> tuple[dict | None, list
     return pr, files
 
 
+def _hlc_ms(iso: str | None) -> str | None:
+    """A GitHub timestamp as the HLC-shaped string recovered_since compares against."""
+    from datetime import datetime
+    try:
+        return f"{int(datetime.fromisoformat(str(iso).replace('Z', '+00:00')).timestamp() * 1000)}.0000.gh"
+    except (TypeError, ValueError):
+        return None  # undateable: recovered_since answers "not recovered"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--job", required=True)
@@ -99,8 +109,9 @@ def main() -> int:
                     help="the job's contract hash at the moment the repair was delegated")
     ap.add_argument("--manifest", default=str(LIB / "jobs" / "manifest.yaml"))
     ap.add_argument("--stage", choices=("verify", "merged"), default="verify",
-                    help="verify: the job passes on --machine (default); merged: a merged PR "
-                         "naming --item exists in --repo and did not touch the jobs manifest")
+                    help="verify: the job passes on --machine (default); merged: a PR naming --item "
+                         "in --repo, which did not touch the jobs manifest, is merged AND the job "
+                         "has verified since (an open PR is 'waiting for you', never done)")
     ap.add_argument("--item", help="stage merged: the repair item id the PR must name")
     ap.add_argument("--repo", help="stage merged: OWNER/REPO the producer lives in")
     a = ap.parse_args()
@@ -123,7 +134,22 @@ def main() -> int:
                   f"fixes the producer, not the check that caught it; changing a contract needs a "
                   f"human.", file=sys.stderr)
             return 1
-        print(f"pull request ready for the owner: {pr['url']} names {a.item} and left the jobs manifest alone")
+        # A PULL REQUEST IS NOT A REPAIR (NS-10, owner 2026-09-26). This returned 0 on an
+        # OPEN or MERGED pull request alone (the 2026-09-25 reading), so a repair whose job
+        # still failed was closed as done. The PR advances the item to "waiting for you";
+        # only the failing job's own check passing again -- job_verify's ledger record,
+        # written by the host that runs the job -- makes it fixed.
+        if pr.get("state") != "MERGED":
+            print(f"waiting for you: {pr['url']} names {a.item}; the owner merges. Not fixed until "
+                  f"{a.job} verifies again on {a.machine}.", file=sys.stderr)
+            return 1
+        from jobs.autofix import recovered_since
+        root = Path(os.environ.get("DATACORE_ROOT") or Path.home() / "Data")
+        if not recovered_since(root, a.job, _hlc_ms(pr.get("mergedAt"))):
+            print(f"not yet: {pr['url']} is merged, but {a.job} has not verified on {a.machine} since. "
+                  f"A merged pull request alone is not a repair.", file=sys.stderr)
+            return 1
+        print(f"repaired: {pr['url']} merged and {a.job} has verified since, with the jobs manifest untouched")
         return 0
 
     manifest = Path(a.manifest)

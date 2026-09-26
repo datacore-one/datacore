@@ -271,10 +271,11 @@ def repair_body(job, failures: list[str], rec: dict, *, stage: str = "verify",
         *([] if stage != "merged" else [
             "",
             f"THIS JOB RUNS ON {job.machine}, NOT HERE. You cannot verify it from this host,",
-            f"so the done-condition is a MERGED pull request in {repo} whose title or body",
-            f"contains `{item_id}`. Fix the producer there, open the PR with that id in the",
-            "title, and STOP -- do not merge; the owner merges (owner, 2026-09-25). The check",
-            "accepts the open PR and refuses one that touched the jobs manifest.",
+            f"so your part is a pull request in {repo} whose title or body contains",
+            f"`{item_id}`. Fix the producer there, open the PR with that id in the title, and",
+            "STOP -- do not merge; the owner merges (owner, 2026-09-25). The open PR is",
+            "'waiting for the owner', not done: the check passes only once it is merged and",
+            f"{job.name} verifies again (NS-10), and it refuses a PR that touched the jobs manifest.",
             (f"When it is merged, {follower} pulls on {job.machine} and runs the job's own "
              "verification as a follow-up item; you do not need to do that part.")
             if follower else
@@ -314,6 +315,7 @@ def repairs(root: Path) -> list[dict]:
             "closed_kind": item.closed_kind,
             "closed_reason": item.closed_reason,
             "job": payload.get("job", ""),
+            "stage": payload.get("stage", ""),
             "assignee": payload.get("assignee", ""),
             "owner": item.owner,
             "closed_at": item.closed_at,
@@ -365,7 +367,13 @@ def escalations(root: Path, *, window_h: float = ESCALATE_H * 2,
             continue
         if r["status"] != "dismissed":
             continue
-        if r["closed_kind"] in ("done", "housekeeping"):
+        # DONE ON A PULL REQUEST IS NOT FIXED (NS-10). A repair whose done-check was the
+        # job's own verification finished when that check passed. One closed on the
+        # evidence of a pull request -- stage "merged", which until 2026-09-26 passed on an
+        # open PR alone -- is fixed only once the job verifies again, so it goes through
+        # the same recovered_since test as a dead-letter below.
+        on_pr = r.get("stage") == "merged" or "pull request" in (r.get("closed_reason") or "")
+        if r["closed_kind"] == "housekeeping" or (r["closed_kind"] == "done" and not on_pr):
             continue
         age_h = _age_h(r["closed_at"], now)
         if age_h is not None and age_h > window_h:
@@ -380,6 +388,9 @@ def escalations(root: Path, *, window_h: float = ESCALATE_H * 2,
         if r["closed_kind"] == "dropped":
             out.append(f"{r['job']}: {r['assignee']} gave up — "
                        f"{r['closed_reason'] or 'dead-lettered'}")
+        elif r["closed_kind"] == "done":
+            out.append(f"{r['job']}: repair closed on a pull request, but {r['job']} has not "
+                       f"verified since — not fixed")
         else:
             out.append(f"{r['job']}: repair closed as {r['closed_kind'] or 'unknown'} "
                        f"without verifying")
