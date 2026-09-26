@@ -289,6 +289,31 @@ def _ledger_emit_close(file_path, node, reason):
                         {"id": node.id(), "kind": kind, "reason": reason})
 
 
+def _actor_is_agent(requested_by=None):
+    """True when this writer is an agent principal (principals.yaml kind: agent)
+    filing for itself -- not when a person asked for the task (requested_by
+    names a human principal: the owner's own request through an agent).
+
+    Unknown or unreadable identity answers False: the stamp only ever ADDS a
+    review, and a fresh install without a registry has no agents."""
+    try:
+        _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from actor_identity import principal_of, resolve
+        actor, _source = resolve()
+        if not actor:
+            return False
+        _name, entry = principal_of(actor)
+        if (entry or {}).get("kind") != "agent":
+            return False
+        if requested_by:
+            _who, requester = principal_of(str(requested_by))
+            if (requester or {}).get("kind") == "human":
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def _ledger_emit(file_path, event_type, payload):
     from org_space import ledger_space_for_file
     space = ledger_space_for_file(file_path)
@@ -433,6 +458,16 @@ def cmd_add(args):
                     multiline_props[k] = v
                 else:
                     extra_props[k] = v
+
+    # MEM-57: a task an AGENT files for the fleet is machine-made. The
+    # nightshift gate keys on :ORIGIN: and reads an unmarked task as the
+    # owner's own, so an :AI: task Miles filed here ran without Winston's
+    # review. Stamped at this choke point, unless the caller said otherwise.
+    if tags and any(t == "AI" or t.startswith("AI") for t in tags) \
+            and "ORIGIN" not in extra_props and "ORIGIN" not in multiline_props \
+            and _actor_is_agent(getattr(args, "requested_by", None)
+                                or _os.environ.get("DATACORE_REQUESTED_BY")):
+        extra_props["ORIGIN"] = "agent"
 
     # Body text
     body = getattr(args, 'body', None)
