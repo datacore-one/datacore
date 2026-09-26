@@ -38,8 +38,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import yaml  # noqa: E402
 
-from ledger.events import body_dict, canonical_bytes, compute_hash  # noqa: E402
-from ledger.exceptions import signature_excused  # noqa: E402
+from ledger.events import body_dict, canonical_bytes  # noqa: E402
+from ledger.events import from_line  # noqa: E402
+from ledger.voids import for_events_dir  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PRINCIPALS = ROOT / ".datacore" / "registry" / "principals.yaml"
@@ -87,6 +88,7 @@ def signatures(root: Path) -> dict[str, list[tuple[dict, str]]]:
     """{actor: [(body, sig_hex)]} for every signed event in every space."""
     sigs: dict[str, list[tuple[dict, str]]] = collections.defaultdict(list)
     for path in sorted(root.glob("[0-9]-*/.datacore/events/*.jsonl")):
+        voids = for_events_dir(path.parent)
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             if not line.strip():
                 continue
@@ -98,10 +100,10 @@ def signatures(root: Path) -> dict[str, list[tuple[dict, str]]]:
                 continue
             body = body_dict(event["seq"], event["hlc"], event["actor"],
                              event["type"], event["payload"], event["prev"])
-            # A reviewed, voided forgery is not evidence about any key: counting
-            # it made every candidate key for its actor fail, forever.
-            if signature_excused(path.parents[2].name, path.name, event["seq"], event.get("hash", ""),
-                                 compute_hash(body), event["sig"], root):
+            # An event cancelled by an authorised in-ledger void (ledger.voids)
+            # is not evidence about any key: counting a voided forgery made
+            # every candidate key for its actor fail, forever.
+            if len(voids) and voids.applies(path.stem, from_line(line.strip())):
                 continue
             sigs[event["actor"]].append((body, event["sig"]))
     return sigs

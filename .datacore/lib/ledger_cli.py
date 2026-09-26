@@ -171,12 +171,11 @@ def cmd_verify(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     total_events = len(read_events(space))
-    # Reviewed exceptions are named, never silent: an excused event is still
-    # an event that failed a check once (ledger-exceptions.yaml says why).
-    from ledger.exceptions import load, load_signatures
-    excused = (sum(1 for e in load() if e[0] == space.name)
-               + sum(1 for e in load_signatures() if e[0] == space.name))
-    note = f" ({excused} reviewed exception(s), see ledger-exceptions.yaml)" if excused else ""
+    # Voided records are named, never silent: a voided event is still in the
+    # history, cancelled by an in-ledger ledger.void that says why.
+    from ledger.voids import for_events_dir
+    voided = len(for_events_dir(events_dir))
+    note = f" ({voided} voided record(s))" if voided else ""
     print(f"OK {len(files)} files {total_events} events{note}")
 
 

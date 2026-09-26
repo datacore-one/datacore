@@ -36,18 +36,6 @@ from .keys import verify as verify_sig
 GENESIS = "GENESIS"
 
 
-def _excepted(origin: tuple[str, str], seq: int, recorded: str, computed: str) -> bool:
-    """Is this exact mismatch recorded in the reviewed exception registry?"""
-    from .exceptions import is_recorded
-    return is_recorded(origin[0], origin[1], seq, recorded, computed)
-
-
-def _sig_excepted(origin: tuple[str, str], seq: int, stored: str, computed: str, sig: str) -> bool:
-    """Is this exact bad signature recorded as a reviewed, voided exception?"""
-    from .exceptions import signature_excused
-    return signature_excused(origin[0], origin[1], seq, stored, computed, sig)
-
-
 def verify_chain(path: Path, registry_path: Path | None = None, strict: bool = False) -> list[str]:
     """Verify one writer's event-log file: hash chain, seq, and signatures.
 
@@ -122,23 +110,16 @@ def verify_chain(path: Path, registry_path: Path | None = None, strict: bool = F
             continue
         parsed.append((line_no, event))
 
-    # <space>/.datacore/events/<log>.jsonl -- the identity a reviewed exception
-    # is pinned to. Absent (a bare path in a test tmpdir), no exception can match.
-    try:
-        origin = (path.parents[2].name, path.name)
-    except IndexError:
-        origin = None
     # In-ledger voids (ledger.voids): any log of the same space may hold the
-    # authorised `ledger.void` that cancels an event of this one.
+    # authorised `ledger.void` that cancels an event of this one. Nothing else
+    # excuses a failed check: the out-of-band exception list is retired.
     from .voids import for_events_dir
     return errors + verify_events(parsed, registry_path=registry_path, strict=strict,
-                                  origin=origin, voids=for_events_dir(path.parent),
-                                  log=path.stem)
+                                  voids=for_events_dir(path.parent), log=path.stem)
 
 
 def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = None,
                   strict: bool = False,
-                  origin: tuple[str, str] | None = None,
                   voids=None, log: str | None = None) -> list[str]:
     """Verify one already-read chain without rereading a mutable source file.
 
@@ -182,11 +163,7 @@ def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = 
             if why:
                 errors.append(f"line {line_no}: {why}")
         if computed != event.hash and not voided:
-            # A reviewed exception pins BOTH hashes, so it can only ever excuse
-            # the exact event it names, as that event is written today. Edit the
-            # body and `computed` moves, nothing matches, and this reports again.
-            if not (origin and _excepted(origin, event.seq, event.hash, computed)):
-                errors.append(f"line {line_no}: hash mismatch")
+            errors.append(f"line {line_no}: hash mismatch")
 
         if event.prev != expected_prev:
             errors.append(
@@ -201,8 +178,7 @@ def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = 
 
         if event.sig != "":
             if (not voided
-                    and not verify_sig(event.actor, canonical_bytes(body), event.sig, registry_path=registry_path)
-                    and not (origin and _sig_excepted(origin, event.seq, event.hash, computed, event.sig))):
+                    and not verify_sig(event.actor, canonical_bytes(body), event.sig, registry_path=registry_path)):
                 errors.append(
                     f"line {line_no}: signature verification failed for actor {event.actor!r} "
                     "(unknown actor or invalid signature)"
