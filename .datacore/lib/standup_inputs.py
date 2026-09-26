@@ -212,6 +212,32 @@ def blockers(
     return out
 
 
+_SPACE_TAG_RE = re.compile(r"\[(\d+-[\w-]+)\]\s*")
+
+
+def space_tag(line: str) -> str | None:
+    """The ``[N-space]`` a line is tagged with, or None."""
+    m = _SPACE_TAG_RE.search(line or "")
+    return m.group(1) if m else None
+
+
+def own_space_accomplishments(accomplishments: list[str], space: str) -> list[str]:
+    """Keep only work that belongs to ``space`` (MEM-16).
+
+    A team standup covers its own space: an accomplishment tagged with another
+    space (``[5-plur] ...``) is dropped, and the own-space tag is stripped.
+    Untagged lines are the caller's own-space input and stay.
+    """
+    name = Path(space).name
+    out = []
+    for acc in accomplishments:
+        tag = space_tag(acc)
+        if tag is not None and tag != name:
+            continue
+        out.append(_SPACE_TAG_RE.sub("", acc, count=1).strip() if tag else acc)
+    return out
+
+
 def build(
     *,
     space: str,
@@ -222,6 +248,7 @@ def build(
 ) -> dict:
     org_file = Path(space) / "org" / "next_actions.org"
     tasks = _load_tasks(org_file)
+    accomplishments = own_space_accomplishments(accomplishments, space)
     return {
         "space": space,
         "contributor": contributor,

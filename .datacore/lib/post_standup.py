@@ -14,6 +14,16 @@ and posts it as a comment on the pinned issue using `gh issue comment`.
 
 Use --if-not-posted from cron/launchd: it queries the issue's comments and
 exits silently (rc=0) if today's date marker is already present.
+
+Own space only (MEM-16): the personal journal's standup spans every space, and
+this posts to the datafund team. Only 1-datafund's lines go out -- a line
+tagged with another space (`[5-plur] ...`) or under another space's heading
+(`### 5-plur -- @x`) is dropped, untagged lines outside a 1-datafund section
+are dropped (fail closed) -- and a person's full name that is not a team
+member (1-datafund/.datacore/config.yaml team.members) is replaced by
+"an external contact". A full name is a known contact (a CRM people note,
+*/3-knowledge/reference/people/<Name>.md) or a capitalised pair right after
+with/to/from/by/met/call/cc.
 """
 
 from __future__ import annotations
@@ -28,7 +38,20 @@ from pathlib import Path
 
 REPO = "datafund/datafund-space"
 ISSUE = 4
-JOURNAL_DIR = Path(__file__).resolve().parent.parent.parent / "0-personal" / "notes" / "journals"
+SPACE = "1-datafund"
+DATA_ROOT = Path(__file__).resolve().parent.parent.parent
+JOURNAL_DIR = DATA_ROOT / "0-personal" / "notes" / "journals"
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+_SPACE_HEADING = re.compile(r"^#{1,6}\s+(\d+-[\w-]+)\b")
+_HEADING = re.compile(r"^(#{1,6})\s")
+_FULL_NAME = re.compile(r"\b([A-Z\u00C0-\u017D][a-z\u00DF-\u017E]+)\s+([A-Z\u00C0-\u017D][a-z\u00DF-\u017E]+)\b")
+_PERSON_CONTEXT = re.compile(r"\b(?:with|to|from|by|met|meet|meeting|call|called|cc|thanks|asked|told)\s+$", re.I)
+
+
+def known_contacts(root: Path = DATA_ROOT) -> set[str]:
+    """Full names of people with a CRM note, lowercased."""
+    return {p.stem.lower() for p in root.glob("*/3-knowledge/reference/people/*.md")}
 
 
 def extract_standup(journal_text: str) -> str | None:
@@ -40,6 +63,81 @@ def extract_standup(journal_text: str) -> str | None:
     section = match.group(0).strip()
     section = re.sub(r"^##\s+Standup\b.*?$\n?", "", section, flags=re.MULTILINE | re.IGNORECASE, count=1)
     return section.strip()
+
+
+def team_names(space_dir: Path) -> set[str]:
+    """Names, ids and GitHub handles of the space's team members (lowercased)."""
+    try:
+        import yaml
+        cfg = yaml.safe_load((space_dir / ".datacore" / "config.yaml").read_text()) or {}
+    except Exception:  # noqa: BLE001 -- no roster: nobody is a member
+        return set()
+    names = set()
+    for m in ((cfg.get("team") or {}).get("members") or []):
+        if isinstance(m, dict):
+            for key in ("id", "name", "github"):
+                if m.get(key):
+                    names.update(str(m[key]).lower().split())
+        elif m:
+            names.add(str(m).lower())
+    return names
+
+
+def _prune_empty_headings(lines: list[str]) -> list[str]:
+    """Drop headings left with no content under them."""
+    changed = True
+    while changed:
+        changed = False
+        for i, line in enumerate(lines):
+            h = _HEADING.match(line)
+            if not h:
+                continue
+            rest = [l for l in lines[i + 1:] if l.strip()]
+            nxt = _HEADING.match(rest[0]) if rest else None
+            if not rest or (nxt and len(nxt.group(1)) <= len(h.group(1))):
+                del lines[i]
+                changed = True
+                break
+    return lines
+
+
+def own_space_only(section: str, space: str = SPACE, members: set[str] | None = None,
+                   contacts: set[str] | None = None) -> str:
+    """The lines of a multi-space standup that belong to ``space``, outsiders unnamed."""
+    from standup_inputs import space_tag
+    members = members or set()
+    current = None
+    out: list[str] = []
+    for line in section.splitlines():
+        m = _SPACE_HEADING.match(line)
+        if m:
+            current = m.group(1)
+            if current == space:
+                out.append(line)
+            continue
+        if _HEADING.match(line) or not line.strip():
+            out.append(line)
+            continue
+        tag = space_tag(line)
+        if tag is not None:
+            if tag == space:
+                out.append(re.sub(r"\[" + re.escape(tag) + r"\]\s*", "", line, count=1))
+        elif current == space:
+            out.append(line)
+    text = "\n".join(_prune_empty_headings(out))
+
+    contacts = contacts if contacts is not None else known_contacts()
+
+    def unname(m: re.Match) -> str:
+        first, last = m.group(1).lower(), m.group(2).lower()
+        if first in members or last in members:
+            return m.group(0)
+        person = (f"{first} {last}" in contacts
+                  or _PERSON_CONTEXT.search(m.string[max(0, m.start() - 12):m.start()]))
+        return "an external contact" if person else m.group(0)
+
+    text = _FULL_NAME.sub(unname, text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def journal_path_for(d: date) -> Path:
@@ -94,6 +192,11 @@ def main() -> int:
     if not body_section:
         print(f"No '## Standup' section in {journal}", file=sys.stderr)
         return 1
+
+    body_section = own_space_only(body_section, SPACE, team_names(DATA_ROOT / SPACE))
+    if not body_section:
+        print(f"skip  no {SPACE} lines in the standup of {journal}")
+        return 0
 
     comment = f"**{target_date.isoformat()}** ({target_date.strftime('%a')})\n\n{body_section}"
 
