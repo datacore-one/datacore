@@ -209,7 +209,7 @@ Tasks to create (one per spec step, mark in_progress when starting, completed wh
 >
 > Not a relaxation. Each removed step is now either a JSON field §9 asserts against the filesystem, or a merge that removes a seam. A model marking its own task done was never the stronger check.
 
-**Step 12 is the gate.** Before marking it complete, run `TaskList` and verify every prior task is `completed`. Then write the `## Wrap-up Checklist Audit` section to today's personal journal listing each step's actual status using the §12 allowed statuses: `run ✓`, `skipped-by-user`, `skipped-by-mode-fast`, `not-answered`, `not-applicable (REASON)`, `inferred-and-reported (DESCRIPTION)`, or `applied-from-feedback (N CORRECTIONS)`. The PreToolUse hook `wrap_up_checklist_check.py` blocks `plur_session_end` until that section exists in the journal.
+**Step 12 is the gate.** Before marking it complete, run `TaskList` and verify every prior task is `completed`. Then write the `## Wrap-up Checklist Audit` section to today's personal journal listing each step's actual status using the §12 allowed statuses: `run ✓`, `skipped-by-user`, `skipped-by-mode-fast`, `not-answered`, `not-applicable (REASON)`, `inferred-and-reported (DESCRIPTION)`, or `applied-from-feedback (N CORRECTIONS)`. The PreToolUse hook `wrap_up_checklist_check.py` blocks `plur_session_end` until that section exists in the journal. The section is rendered by `report --journal` from the `checklist` rows (§10). Where TaskList does not exist, carry the checklist inline; `audit --final` is the gate (§0f).
 
 **Why this exists:** Spec step counts in past sessions: 17 spec steps, 9 tasks created, 6 silently skipped (observed 2026-05-29 SMK wrap-up; previously documented as ENG-2026-0512-044 on 2026-05-12 but recurred 17 days later). Memory engrams alone are insufficient — execution-time discipline failure. The hook is the structural defense; one-task-per-step is the readability defense.
 
@@ -292,6 +292,18 @@ These three categories of action are NOT auto-inferred. If the agent's inference
 | **Credential decisions** | rotating a token, changing OAuth scopes, prompting for new auth on a service mid-wrap-up | AskUserQuestion: explicit confirmation |
 
 These are the *only* prompts allowed after §1 (pulse). If the agent finds itself about to add a fourth prompt category here, it's wrong — the right answer is "infer, apply, surface in §10, let user veto in §1 pulse" instead.
+
+### 0f. Other harnesses (Codex, Cursor, anything via `datacore_command_run`)
+
+The command must produce the same result everywhere, so everything that decides the outcome is a script:
+
+| Piece | Claude Code | Elsewhere |
+|---|---|---|
+| Report layout | `report` renders it | Same: `report` renders it. The layout never depends on the model. |
+| Session id | `CLAUDE_CODE_SESSION_ID` | Set `DATACORE_SESSION_ID` if the harness exposes one. Otherwise steps file under `nosession-<date>`. `meta` then reports "unavailable", and the report says so instead of estimating. |
+| Tracked checklist | TaskCreate | Carry it inline; the 12 `checklist` rows are required by `report` either way. |
+| journal-coordinator | subagent | No subagent tool: write the per-space journals inline, one space at a time, before §8. |
+| Completion gate | PreToolUse hook + `audit --final` | `audit --final` alone. Report its `failed[]` verbatim. |
 
 ### 1. Pulse + Notes — FIRST, and it never blocks
 
@@ -918,13 +930,41 @@ Returns `checks[]`, `passed`, `total`, `failed[]`. It asserts, against the files
 
 **HARD RULE: Step 17 must ALWAYS execute, regardless of session length, complexity, or context pressure.** If you are running low on context, compress other steps — never this one. If earlier steps were skipped or failed, still output this report with whatever information you have.
 
-**How to build the consolidated report:**
+**The report is RENDERED, not composed. Never type the template yourself.**
 
-1. **As you work through steps 1-16**, after each step completes, write a brief summary line to a running internal list (e.g., "Continuation: 1 task created for Verity cap table", "Tasks completed: 2 marked DONE", "Dev servers: killed 3"). This is lightweight — just notes, not full output.
+Every model reinterpreted this template when asked to re-type it. Across 168
+archived reports, Opus 5 used this banner-and-rules form 62 times and dropped the
+section rules 77 times. Opus 5.5 switched to markdown headings. Fable kept it every
+time. The shape now comes from code, `.datacore/lib/wrap_up_report.py`, and is
+identical in Claude Code, Codex, Cursor and any other harness that can run Python.
 
-2. **At step 17**, use those notes plus conversation context to compose the full consolidated report. Do NOT rely on being able to scroll back to earlier outputs — context compaction may have removed them.
+1. **As you work through steps 1-9**, keep brief notes (e.g. "Continuation: 1 task
+   created", "2 marked DONE"). Every NUMBER (turns, tokens, journals, push state,
+   audit) is already saved by the mechanics steps; do not retype it.
 
-3. **Output the report as a single unbroken text block** — no tool calls in between, no "let me check one more thing". The user reads this block and is done.
+2. **Write the judgement as JSON** to a scratch file. `wrap_up_report.py`'s
+   docstring lists the keys. Required: `goal`, `done`, `next`, `meta.arc`,
+   `meta.observation`, `social.{personal_x, project_x, linkedin}`, and `checklist`
+   (exactly 12 rows: the §12 audit). Optional: `decisions`, `rejected`,
+   `continuation`, `tasks_completed`, `learnings`, `engrams`, `gtd_proposals`,
+   `delegations`, `coverage`, `files`, `artifacts`, `pulse`, `title`.
+
+3. **Render it, and persist it in the same call:**
+   ```bash
+   python3 ~/Data/.datacore/lib/wrap_up_mechanics.py report --input <file>.json --journal
+   ```
+   A missing required field is a refusal (exit 2, fields named). Fill it and re-run;
+   never hand-write a thinner report instead. Missing mechanics data renders as
+   `unavailable (<reason>)`, never as zero.
+
+4. **Output the command's stdout verbatim, inside a ```text code fence**, as a single
+   unbroken block: no edits, no re-headings, no markdown conversion, and no tool
+   calls in between. The fence keeps every harness from re-rendering the rules as
+   markdown.
+
+The template below is the renderer's specification. `tests/test_wrap_up_report.py`
+fails if its section headers and the renderer's drift apart, so change both
+together or neither.
 
 ```
 ═══════════════════════════════════════════════════
@@ -1130,13 +1170,14 @@ Never report a single point estimate without instrument or arithmetic.
 
 **PERSIST TO JOURNAL (REQUIRED):**
 
-After displaying the consolidated report to the user, **write a condensed version directly to the personal journal**. This replaces the coordinator-written entry as the authoritative session record. The main conversation has the best context — coordinator agents running in background have less.
+`report --journal` (step 3 above) already appended the authoritative record to today's personal journal. It contains:
+- The report verbatim.
+- `### Session Meta-Analysis`, `### Token Cost` and `## Wrap-up Checklist Audit`, rendered from the same JSON.
+- A `<!-- wrap-up-report:<session> -->` marker.
 
-1. **Write session entry to journal** (`0-personal/notes/journals/YYYY-MM-DD.md`):
-   - Use the format from journal-entry-writer (TL;DR, Goal, Accomplished, Key Decisions, Files, Continuation, Learnings, Tags)
-   - Include the artifact table
-   - Include a `### Token Cost` section with the same table from the consolidated report (subagent tokens, main conversation estimate, session total)
-   - This is the **authoritative record** — better than what any subagent produces
+It never appends twice for one session. Do not hand-write these sections as well.
+
+1. **Session entry.** If the journal-coordinator did not already write a narrative entry for this session (TL;DR, Goal, Accomplished, Key Decisions, Files, Continuation, Learnings, Tags), add one above the rendered report. The rendered report is the record; the narrative entry is for reading.
 
 2. **Update Daily TL;DR** at the top of the journal file (after frontmatter):
    ```markdown
@@ -1398,7 +1439,15 @@ vouch for it.
 
 **Why this exists:** Past wrap-up sessions documented in engram ENG-2026-0512-044 (2026-05-12) and ENG-2026-0529 (SMK 2026 wrap-up): steps 11, 12.5, 14, 15, plus parts of 17 were silently skipped. The agent rationalized that the user was "done" and dropped time-sensitive items (e.g. social posts about a just-shipped product). The skipped social posts cost user a viral LinkedIn moment about the SMK 2026 agent-claim demo. Memory engrams were insufficient — same failure repeated 17 days later. Step 18 + hook = structural enforcement.
 
-**Hook behavior:**
+**The audit rows are rendered, not typed.** They are the `checklist` array in the §10 narrative JSON, and `report --journal` writes them. Then run the final audit, which works in every harness:
+
+```bash
+python3 ~/Data/.datacore/lib/wrap_up_mechanics.py audit --final
+```
+
+It asserts that the rendered report (by its marker) and the three required sections are in today's journal. In Claude Code the hook below enforces the same thing. Codex, Cursor and other harnesses have no PreToolUse hook, so there `audit --final` IS the gate. Report its `failed[]` verbatim.
+
+**Hook behavior (Claude Code only):**
 - File: `~/Data/.datacore/lib/hooks/wrap_up_checklist_check.py`
 - Trigger: PreToolUse on `mcp__plur__plur_session_end`
 - Required journal sections: `Wrap-up Checklist Audit`, `Token Cost`, `Session Meta-Analysis`

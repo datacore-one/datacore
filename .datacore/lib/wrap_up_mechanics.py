@@ -12,10 +12,12 @@ WHAT MOVED HERE (spec sections it replaces):
   meta      : §9 session meta-analysis counters, read from the archived meta.json
   finalize  : §13 push, across root, spaces and subproject repos
   audit     : §16 completion verification and §18 self-audit
+  report    : §10 consolidated report, RENDERED from data (wrap_up_report.py)
+              — the model supplies judgement as JSON; the layout is code
 
 WHAT DELIBERATELY DID NOT MOVE: anything requiring judgement — the session
-summary, the continuation decision, task-completion matching, the consolidated
-report. A script that guessed at those would be confidently wrong, which is
+summary, the continuation decision, task-completion matching. The consolidated
+report's CONTENT is judgement; its LAYOUT is not, and is rendered by `report`. A script that guessed at those would be confidently wrong, which is
 worse than slow.
 
 Every subcommand prints JSON on stdout and is safe to re-run. `preflight`
@@ -25,7 +27,13 @@ Usage:
   python3 .datacore/lib/wrap_up_mechanics.py preflight [--dry-run]
   python3 .datacore/lib/wrap_up_mechanics.py meta
   python3 .datacore/lib/wrap_up_mechanics.py finalize [--dry-run]
-  python3 .datacore/lib/wrap_up_mechanics.py audit
+  python3 .datacore/lib/wrap_up_mechanics.py audit [--final]
+  python3 .datacore/lib/wrap_up_mechanics.py report --input narrative.json [--journal]
+
+Each step also saves its JSON under .datacore/state/wrap_up/<session>/ so
+`report` renders from what the steps measured instead of from the model's
+retelling. <session> is CLAUDE_CODE_SESSION_ID, else DATACORE_SESSION_ID, else
+`nosession-<date>` for harnesses that expose no id.
 """
 from __future__ import annotations
 
@@ -42,6 +50,52 @@ from pathlib import Path
 DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
 LIB = Path(__file__).resolve().parent
 ARCHIVE_DIR = DATACORE_ROOT / ".datacore" / "state" / "sessions" / "archive"
+STEP_STATE_DIR = DATACORE_ROOT / ".datacore" / "state" / "wrap_up"
+
+
+def session_key() -> str:
+    """The id this wrap-up is filed under, in any harness."""
+    for var in ("CLAUDE_CODE_SESSION_ID", "DATACORE_SESSION_ID"):
+        sid = os.environ.get(var, "").strip()
+        if sid:
+            return sid
+    return f"nosession-{date.today().isoformat()}"
+
+
+def save_step(result: dict) -> None:
+    d = STEP_STATE_DIR / session_key()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{result.get('step', 'unknown')}.json").write_text(json.dumps(result, indent=2, default=str))
+
+
+def load_steps() -> dict:
+    d = STEP_STATE_DIR / session_key()
+    steps = {}
+    for name in ("preflight", "meta", "finalize", "audit"):
+        f = d / f"{name}.json"
+        if f.exists():
+            try:
+                steps[name] = json.loads(f.read_text())
+            except ValueError:
+                steps[name] = {"error": f"{f.name} unreadable"}
+    sid = session_key()
+    hits = list(ARCHIVE_DIR.glob(f"*/{sid}/meta.json"))
+    if hits:
+        try:
+            steps["archive_meta"] = json.loads(hits[0].read_text())
+        except ValueError:
+            pass
+    return steps
+
+
+def personal_journal() -> Path:
+    today = date.today().isoformat()
+    for p in (DATACORE_ROOT / "0-personal" / "notes" / "journals" / f"{today}.md",
+              DATACORE_ROOT / "0-personal" / "journal" / f"{today}.md"):
+        if p.exists():
+            return p
+    notes = DATACORE_ROOT / "0-personal" / "notes" / "journals"
+    return (notes if notes.is_dir() else DATACORE_ROOT / "0-personal" / "journal") / f"{today}.md"
 
 # Dev servers Claude starts for preview and never cleans up.
 DEV_SERVER_RE = re.compile(
@@ -736,7 +790,7 @@ def journal_sections_lost() -> list[str]:
     return out
 
 
-def cmd_audit() -> dict:
+def cmd_audit(final: bool = False) -> dict:
     today = date.today().isoformat()
     checks = []
 
@@ -780,6 +834,18 @@ def cmd_audit() -> dict:
     cs = context_sync_check()
     check("context in sync", not cs["registry_changed"], cs["action"])
 
+    if final:
+        # Run after `report --journal`. These are file checks, so they hold in
+        # any harness — the PreToolUse hook that enforces the same thing exists
+        # only in Claude Code.
+        from wrap_up_report import MARKER
+        jp = personal_journal()
+        text = jp.read_text() if jp.exists() else ""
+        check("consolidated report in journal", MARKER.format(sid=session_key()) in text,
+              str(jp) if jp.exists() else "journal missing")
+        for sec in ("Wrap-up Checklist Audit", "Token Cost", "Session Meta-Analysis"):
+            check(f"journal has '{sec}'", sec in text, str(jp))
+
     return {
         "step": "audit",
         "date": today,
@@ -792,7 +858,13 @@ def cmd_audit() -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    ap.add_argument("step", choices=["preflight", "meta", "finalize", "audit"])
+    ap.add_argument("step", choices=["preflight", "meta", "finalize", "audit", "report"])
+    ap.add_argument("--final", action="store_true",
+                    help="audit only: also assert the rendered report and checklist reached "
+                         "today's journal (run after `report --journal`)")
+    ap.add_argument("--input", help="report only: narrative JSON file, or - for stdin")
+    ap.add_argument("--journal", action="store_true",
+                    help="report only: also append the journal form to today's personal journal")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--allow-journal-shrink", action="store_true",
                     help="finalize only: commit a journal that loses lines or a section "
@@ -805,6 +877,8 @@ def main() -> int:
                          "everything dirty including other sessions' work")
     args = ap.parse_args()
 
+    if args.step == "report":
+        return cmd_report(args.input, args.journal)
     if args.step == "preflight":
         result = cmd_preflight(args.dry_run)
     elif args.step == "meta":
@@ -812,9 +886,50 @@ def main() -> int:
     elif args.step == "finalize":
         result = cmd_finalize(args.dry_run, args.scope, args.allow_journal_shrink)
     else:
-        result = cmd_audit()
+        result = cmd_audit(args.final)
 
+    save_step(result)
     print(json.dumps(result, indent=2, default=str))
+    return 0
+
+
+def cmd_report(input_path: str | None, journal: bool) -> int:
+    """Print the §10 report exactly as the template, from saved steps + narrative JSON.
+
+    Prints the report text (not JSON) on stdout; journal status on stderr.
+    Exit 2 when the narrative is missing required fields — named, never padded.
+    """
+    from wrap_up_report import MARKER, ReportInputError, render, render_journal
+
+    if not input_path:
+        print("report needs --input <narrative.json> (or - for stdin)", file=sys.stderr)
+        return 2
+    raw = sys.stdin.read() if input_path == "-" else Path(input_path).read_text()
+    try:
+        narrative = json.loads(raw)
+    except ValueError as e:
+        print(f"narrative JSON unreadable: {e}", file=sys.stderr)
+        return 2
+    mech = load_steps()
+    try:
+        text = render(narrative, mech)
+    except ReportInputError as e:
+        print(f"REFUSED — narrative missing: {e}", file=sys.stderr)
+        return 2
+    print(text, end="")
+
+    if journal:
+        sid = session_key()
+        jp = personal_journal()
+        existing = jp.read_text() if jp.exists() else ""
+        if MARKER.format(sid=sid) in existing:
+            print(f"journal: report for {sid} already in {jp} — not appended twice", file=sys.stderr)
+            return 0
+        jp.parent.mkdir(parents=True, exist_ok=True)
+        with jp.open("a") as fh:
+            fh.write(("\n" if existing and not existing.endswith("\n") else "") + "\n"
+                     + render_journal(narrative, mech, sid))
+        print(f"journal: appended to {jp}", file=sys.stderr)
     return 0
 
 
