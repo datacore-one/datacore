@@ -305,13 +305,21 @@ def _file_task(job, rec: dict, failures: list[str]) -> str | None:
     closes it. Best-effort: the adapter failing must not stop verification.
     """
     adapter = Path(__file__).resolve().parent / "org_workspace_adapter.py"
+    # INTO THE INBOX, never the generated file. This used `--allow-any-file`
+    # into next_actions.org, which in a Phase-1 space is a projection: the
+    # adapter nested the heading at level 2 while emitting item.create at
+    # level 1, and the projection then met a "concurrent edit" it could never
+    # resolve -- nightshift's 2-datacore was skipped for 56 cycles from
+    # 2026-09-23 (audit B-F2, P0-4). The inbox is the single capture point;
+    # ingest admits the task to the ledger and the projector renders it.
+    inbox = str(Path(TASK_FILE).with_name("inbox.org"))
     heading = (f"job-verify: {job.name} is failing on {job.machine} "
                f"({rec.get('consecutive')} runs since {rec.get('first_failed')})")
     body = ("Recurring failure (DIP-0031: 3 or more consecutive runs). Failures this run:\n"
             + "\n".join(f"- {f}" for f in failures[:6])
             + f"\nProducer: {getattr(job, 'cmd', '') or 'see manifest'}"
             + f"\nSchedule: {getattr(job, 'schedule', '') or 'see manifest'}")
-    cmd = [sys.executable, str(adapter), "add", "--allow-any-file", "--file", TASK_FILE,
+    cmd = [sys.executable, str(adapter), "add", "--file", inbox,
            "--state", "TODO", "--heading", heading, "--tags", "datacore,ops,job_verify",
            "--priority", "B", "--property", f"SURFACE={job.machine}", "--property", f"JOB={job.name}",
            "--property", (f"DONE_WHEN=job {job.name} passes verification on {job.machine} "

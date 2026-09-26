@@ -80,8 +80,17 @@ def _missing(props: dict, space: str, *, roadmap_spaces=None) -> list[str]:
     return out
 
 
+#: Captures are unclarified by definition (GTD): no SURFACE, no DONE_WHEN yet,
+#: and the executor never reads them -- it queues from next_actions.org. Gating
+#: the inbox refused converge's autosave on one `:AI:` capture in 2-datacore
+#: (nightshift, 2026-09-26 04:25Z on; audit B-F5 / CAP-8), which through the
+#: whole-cycle abort stopped ledger sync for every space on the host. Clarify
+#: time is when the tag has to be earned, not capture time.
+EXEMPT = ("inbox.org",)
+
+
 def main(argv: list[str]) -> int:
-    files = [Path(a) for a in argv if a.endswith(".org")]
+    files = [Path(a) for a in argv if a.endswith(".org") and Path(a).name not in EXEMPT]
     if not files:
         return 0
 

@@ -76,34 +76,85 @@ offline_only() {
   # since the same classifier names both halves of the transport.
   grep -q '"reason": "[^"]*fetch failed (offline?)"' "$1" 2>/dev/null
 }
+# ONE SPACE'S CONVERGE IS ONE SPACE'S CONVERGE (SYN-7, audit B-F4). This used
+# to end the whole cycle on any failed converge: one refused autosave in
+# 2-datacore on 2026-09-26 left nightshift ingesting and projecting NOTHING, for
+# every space, from 04:25Z on -- 69 whole-host aborts on nightshift and 10 on
+# the box in three weeks. A failed receive may leave THAT space mid-merge, so
+# that space is neither ingested nor projected; the others carry on, and the
+# cycle still ends FAIL so the stuck space stays visible.
+#
+# The verdict is also left on disk, one marker per failed space, so the box's
+# standalone hourly ingest (ledger_ingest_hourly.sh) skips the same spaces
+# rather than sweeping them against a projection this cycle did not refresh
+# (audit B-F1).
+converge_reason() {
+  # The transport prints {"ok":..., "reason": "..."}; fall back to its last line.
+  local r
+  r="$(sed -n 's/^[[:space:]]*"reason": "\(.*\)",\{0,1\}[[:space:]]*$/\1/p' "$1" 2>/dev/null | head -1)"
+  [ -n "$r" ] || r="$(grep -v '^[[:space:]]*$' "$1" 2>/dev/null | tail -1)"
+  printf '%s' "${r:-no output}"
+}
+FAILED_SPACES=" "
+converge_one() {
+  # converge_one <space dir>: 0 converged or offline, 1 failed (and recorded).
+  local d="$1" name log
+  name="$(basename "$d")"
+  log="$STATE/phase1-converge-$name.log"
+  if "$PY" "$LIB/ledger_transport.py" converge --space "$d" > "$log" 2>&1; then
+    rm -f "$STATE/phase1-converge-$name.failed"
+    return 0
+  fi
+  if offline_only "$log"; then
+    echo "converge $name: offline; this host will receive it when the network returns"
+    offline=$((offline + 1))
+    return 0
+  fi
+  echo "converge $name: FAILED: $(converge_reason "$log") (skipping this space; see $log)"
+  converge_reason "$log" > "$STATE/phase1-converge-$name.failed"
+  FAILED_SPACES="$FAILED_SPACES$name "
+  rc=1
+  return 1
+}
 rc=0
 offline=0
 for d in "$DATACORE_ROOT"/[0-9]-*; do
   [ -d "$d/.datacore/events" ] && [ -d "$d/.git" ] || continue
-  log="$STATE/phase1-converge-$(basename "$d").log"
-  if ! "$PY" "$LIB/ledger_transport.py" converge --space "$d" > "$log" 2>&1; then
-    if offline_only "$log"; then
-      echo "converge $(basename "$d"): offline; this host will receive it when the network returns"
-      offline=$((offline + 1))
-    else
-      echo "converge $(basename "$d"): failed; see its log"
-      rc=1
-    fi
-  fi
+  converge_one "$d"
 done
-# A failed receive may leave a merge in progress. Never ingest or replace
-# files from that intermediate state.
-if [ "$rc" -ne 0 ]; then finish "$rc"; exit $?; fi
+failed_now() { case "$FAILED_SPACES" in *" $1 "*) return 0;; esac; return 1; }
 PHASE1=()
 for d in "$DATACORE_ROOT"/[0-9]-*; do
   if [ -d "$d/.datacore/events" ] && [ "$(cat "$d/.datacore/ledger-phase" 2>/dev/null | tr -d '[:space:]')" = "1" ]; then
-    PHASE1+=("$d")
+    failed_now "$(basename "$d")" || PHASE1+=("$d")
   fi
 done
-if [ "${#PHASE1[@]}" -eq 0 ]; then echo "no space in Phase 1; nothing to do"; finish 0; exit $?; fi
-"$PY" "$LIB/ledger_ingest_org.py" --root "$DATACORE_ROOT" > "$STATE/phase1-ingest.log" 2>&1
+if [ "${#PHASE1[@]}" -eq 0 ]; then
+  if [ "$rc" -ne 0 ]; then echo "no healthy Phase-1 space left to ingest or project"; finish "$rc"; exit $?; fi
+  echo "no space in Phase 1; nothing to do"; finish 0; exit $?
+fi
+# The sweep takes a root, not a list. When a space failed to converge, hand it
+# a root without that space: a directory of links to every other space, so the
+# failed one is neither ingested nor orphan-swept from its possibly half-merged
+# tree. (org_space treats a whole-space alias as the space itself.)
+INGEST_ROOT="$DATACORE_ROOT"
+if [ "$FAILED_SPACES" != " " ]; then
+  VIEW="$(mktemp -d "$STATE/phase1-ingest-root.XXXXXX")" || { finish 2; exit 2; }
+  trap 'rm -rf "$LOCK" "$VIEW"' EXIT
+  for d in "$DATACORE_ROOT"/[0-9]-*; do
+    [ -d "$d" ] || continue
+    failed_now "$(basename "$d")" || ln -s "$d" "$VIEW/$(basename "$d")"
+  done
+  INGEST_ROOT="$VIEW"
+  echo "ingest: skipping${FAILED_SPACES}- its converge failed"
+fi
+"$PY" "$LIB/ledger_ingest_org.py" --root "$INGEST_ROOT" > "$STATE/phase1-ingest.log" 2>&1
 irc=$?
 echo "ingest rc=$irc"
+# The reasons belong in THIS log (audit B-F13): phase1-ingest.log is rewritten
+# every run, and three weeks of cycle logs could say that 2-datacore failed on
+# 09-23 but never why.
+grep ' FAILED:' "$STATE/phase1-ingest.log" 2>/dev/null | sed 's/^/ingest /'
 # ONE SPACE'S FAULT IS ONE SPACE'S FAULT. Existing IDs do not prove that edited
 # bodies and properties reached the ledger, so a space whose ingest failed must
 # NOT be projected over. But the sweep already isolates per space -- it catches
@@ -115,29 +166,21 @@ echo "ingest rc=$irc"
 # So skip the spaces the sweep named and project the rest. The cycle still ends
 # FAIL, because a space really is stuck and that has to stay visible.
 SKIP=" $(sed -n 's/^\([0-9][^ ]*\)  *FAILED:.*/\1/p' "$STATE/phase1-ingest.log" | tr '\n' ' ')"
-# `rc` stays the CONVERGE verdict -- the next gate uses it to refuse projecting
-# over a half-merged tree. The ingest verdict is carried separately and folded
-# into the cycle's status at the end, so a stuck space fails the cycle without
-# silencing the projection of every healthy one.
+# `rc` stays the CONVERGE verdict; the ingest verdict is carried separately and
+# folded into the cycle's status at the end, so a stuck space fails the cycle
+# without silencing the projection of every healthy one.
 if [ "$irc" -ne 0 ] && [ "$SKIP" = " " ]; then
   # Failed without naming a space: the sweep itself did not run, so nothing is
   # known to be safe to project.
+  echo "ingest FAILED without naming a space: $(grep -v '^[[:space:]]*$' "$STATE/phase1-ingest.log" 2>/dev/null | tail -1)"
   finish "$irc"; exit $?
 fi
 [ "$irc" -ne 0 ] && echo "ingest failed for:$SKIP- projecting the rest"
+# Publish what was ingested. Same per-space rule: a space whose publish fails
+# is not projected (its tree may be mid-merge), the others are.
 for s in "${PHASE1[@]}"; do
-  log="$STATE/phase1-converge-$(basename "$s").log"
-  if ! "$PY" "$LIB/ledger_transport.py" converge --space "$s" > "$log" 2>&1; then
-    if offline_only "$log"; then
-      echo "converge $(basename "$s"): offline; this host will receive it when the network returns"
-      offline=$((offline + 1))
-    else
-      echo "converge $(basename "$s"): failed; see its log"
-      rc=1
-    fi
-  fi
+  converge_one "$s"
 done
-if [ "$rc" -ne 0 ]; then finish "$rc"; exit $?; fi
 # `... | grep -v authored ; echo "rc=$?"` read GREP's status, not the
 # projector's, so this printed `project rc=0` unconditionally -- a projection
 # crash, and every REFUSED line, exited 0 and alerted nobody. PIPESTATUS[0] is
@@ -146,13 +189,17 @@ prc=0
 for s in "${PHASE1[@]}"; do
   name=$(basename "$s")
   case "$SKIP" in *" $name "*) echo "project $name: skipped, its ingest failed"; continue;; esac
+  if failed_now "$name"; then echo "project $name: skipped, its converge failed"; continue; fi
   "$PY" "$LIB/ledger_project_org.py" --space "$name" 2>&1 | grep -v "authored"
   [ "${PIPESTATUS[0]}" -eq 0 ] || prc=${PIPESTATUS[0]}
 done
 echo "project rc=$prc"
 [ "$offline" -gt 0 ] && echo "offline space(s) this cycle: $offline"
+[ "$FAILED_SPACES" != " " ] && echo "converge failed for:$FAILED_SPACES- the other spaces ran"
 [ "$prc" -eq 0 ] || rc=$prc
 [ "$irc" -eq 0 ] || rc=$irc
 
-finish "$rc"
+why=""
+[ "$FAILED_SPACES" != " " ] && why="converge failed:${FAILED_SPACES% }"
+finish "$rc" "$why"
 exit $?
