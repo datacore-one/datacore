@@ -2,7 +2,9 @@
 """Create org-mode tasks from GitHub scan results.
 
 Reads scan output from github_scanner, determines which items are actionable,
-captures tasks into the appropriate space's inbox.org with :AI:github: tags.
+captures tasks into the appropriate space's inbox.org with a :github: tag. Not :AI: -- that tag is the overnight queue and needs a spec
+(SURFACE, DONE_WHEN); an inbox capture has none until it is clarified. The commit
+guard refuses it, which blocked every autosave of the space (2026-09-26).
 
 Usage:
     python3 task_creator.py --scan-file data/scan_cache.json --data-dir ~/Data --repos-file data/repos.json
@@ -111,7 +113,7 @@ def create_tasks_from_scan(
         result = create_triage_task(
             org_file=org_file,
             heading=heading,
-            tags=["AI", "github"],
+            tags=["github"],
             properties=properties,
             context_body=context,
             scheduled_date=date.today(),
@@ -160,7 +162,7 @@ def create_tasks_from_scan(
         result = create_triage_task(
             org_file=org_file,
             heading=heading,
-            tags=["AI", "github"],
+            tags=["github"],
             properties=properties,
             context_body=context,
             scheduled_date=date.today(),
