@@ -41,7 +41,8 @@ For each entry under `* Inbox`, spawn `gtd-inbox-processor` subagent with:
 - Mode: autonomous (no user confirmation needed)
 
 Classification rules (from gtd-inbox-processor):
-- **URL/link with "read/review/check out"** → `research_learning.org` under matching focus area
+- **Bare URL/link** (the URL alone, or only "read/review/check out") → `research_learning.org` under matching focus area
+- **URL/link with the owner's comment** → `next_actions.org` as a verb-first task: the comment says it is already read, so it is an action. Keep the URL as `:SOURCE:` and the comment as `:CONTEXT:` — never research, never someday
 - **Actionable task** → `next_actions.org` under matching focus area
 - **Idea/exploration** → `ideas.org` with scoring
 - **Reference** → knowledge note or next_actions with `:reference:` tag

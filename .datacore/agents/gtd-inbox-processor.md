@@ -93,7 +93,17 @@ For every item, answer in order:
   **Test for "is this a project?":** if you can't say what done looks like in one sentence, it's still too vague (route to someday). If you can name the outcome but it'll take >1 atomic action, it's a project.
 
 - **Aspiration** (vague, no clear outcome yet): `someday.org`
-- **Captured fragment** (URL, tweet, half-thought without context): `someday.org` with a "needs-clarify" marker; user re-triages quarterly
+- **Link (URL)** — decide by whether the owner wrote anything with it:
+  - **Bare link** (only the URL, or only "read / review / check out"): it is
+    something to consume. Route to `research_learning.org` under the matching
+    focus area — never `someday.org`, never `next_actions.org`.
+  - **Link with the owner's comment** (any sentence of their own below or next
+    to it): the comment says they already read it, so it is an ACTION. Route to
+    `next_actions.org` as a verb-first task derived from the comment (e.g. "We
+    move Verity to three pricing tiers" -> "Move Verity to three pricing
+    tiers"), keep the URL as `:SOURCE:` and the comment verbatim as `:CONTEXT:`.
+    Not research, not someday.
+- **Captured fragment** (tweet, half-thought without context — not a link): `someday.org` with a "needs-clarify" marker; user re-triages quarterly
 - **Product or roadmap idea** — a capability the product might gain, a technique
   from a paper, a competitor's move, a customer asking for something that does
   not exist yet: route to `[space]/1-tracks/product/feature-ideas.md`, NOT to
@@ -152,7 +162,7 @@ After clarify, route to one of these files:
 | `0-personal/org/nightshift.org` | AI deliberation, deep/multi-step, batchable | overnight orchestrator | nightly 02:00 UTC |
 | `[space]/org/projects.org` | Multi-action outcome (the project itself, not the next-action) | gregor reviews weekly | weekly |
 | `[space]/org/someday.org` | Parked, no clear next-action, aspirational | quarterly review | parked |
-| `[space]/org/research_learning.org` | URL or content to consume (research-orchestrator picks up) | research-orchestrator | nightly |
+| `[space]/org/research_learning.org` | Bare URL or content to consume (research-orchestrator picks up); a URL with the owner's comment is an action instead | research-orchestrator | nightly |
 | `~/Data/[space]/3-knowledge/pages/` | Pure reference, never an action | none | reference |
 
 **Files RETIRED (do not route to):** `ideas.org`, `calendar.org`, `protocol.org` (the protocol.org content moved to a notes page; calendar.org is Google Calendar; ideas.org merged into someday.org).
