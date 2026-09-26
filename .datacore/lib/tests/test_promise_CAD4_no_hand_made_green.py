@@ -49,7 +49,13 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(K, "principals_verify_key", lambda actor: pub if actor == "tris" else None)
     monkeypatch.setattr(K, "DEFAULT_REGISTRY_PATH", reg)
     log = EventLog(sp, "tris", keys_dir=keys, registry_path=reg, sign=True)
-    log.append("metric.attest", {"metric": "cadence.registration", "slugs": {SLUG: "46 5 * * *", OTHER: "50 5 * * *"}})
+    # Registered three days ago (a genuine, signed record with an old clock), so a duty
+    # with no fresh run is late now.
+    import ledger.hlc as H
+    import time as _t
+    with monkeypatch.context() as m:
+        m.setattr(H, "time", type("Clock", (), {"time": staticmethod(lambda: _t.time() - 3 * 86400)}))
+        log.append("metric.attest", {"metric": "cadence.registration", "slugs": {SLUG: "46 5 * * *", OTHER: "50 5 * * *"}})
     return tmp_path, sp, log
 
 
@@ -74,26 +80,12 @@ def _append_raw(sp, obj):
         fh.write(json.dumps(obj) + "\n")
 
 
-@pytest.fixture(autouse=True)
-def _old_registration(monkeypatch):
-    """Judge 'now' three days after the registration, so a missing run is late."""
-    real = L.datetime
-
-    class Later(real):
-        @classmethod
-        def now(cls, tz=None):
-            from datetime import timedelta
-            return real.now(tz) + timedelta(days=3)
-    monkeypatch.setattr(L, "datetime", Later)
-
-
 def test_control_nothing_ran_is_red_and_a_genuine_run_is_green(world):
     _root, sp, log = world
     assert _state(sp) == "red"
     sha = _commit(sp, "drafts/a.md", "# a real draft\n")
     log.append("metric.attest", {"metric": "cadence.run", "slug": SLUG, "phase": "end", "result": "ok",
                                  "artifact": "drafts/a.md", "sha256": sha})
-    L.datetime = L.datetime.__mro__[1]   # judge at real time: the genuine run is fresh
     assert _state(sp) == "green"
 
 
@@ -101,7 +93,8 @@ def test_a_hand_written_ok_record_does_not_count(world):
     _root, sp, _log = world
     sha = _commit(sp, "drafts/a.md", "# a real draft\n")
     last = json.loads(_lines(sp)[-1])
-    body = body_dict(last["seq"] + 1, last["hlc"], "tris", "metric.attest",
+    import time as _t
+    body = body_dict(last["seq"] + 1, f"{int(_t.time() * 1000) - 3600_000}.0000.tris", "tris", "metric.attest",
                      {"metric": "cadence.run", "slug": SLUG, "phase": "end", "result": "ok",
                       "artifact": "drafts/a.md", "sha256": sha}, last["hash"])
     h = compute_hash(body)
@@ -136,7 +129,6 @@ def test_an_edited_record_does_not_count(world):
 
 def test_a_hand_edited_cadence_log_does_not_turn_a_miles_duty_green(world):
     root, sp, _log = world
-    L.datetime = L.datetime.__mro__[1]   # real clock: the edit claims today
 
     def red():
         rows, _ = L.collect_states(root, grace=0, today=datetime.now(timezone.utc).date())
