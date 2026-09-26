@@ -45,7 +45,7 @@ def test_non_evidence_cannot_report_a_verified_principal(fleet, variant):
     _append(space, etype='item.create' if variant == 'wrong-type' else 'metric.attest',
             ok='false' if variant == 'truthy-string' else True,
             failures=['failed'] if variant == 'inconsistent-failure' else [])
-    path = space / '.datacore/events/runner.jsonl'
+    path = space / '.datacore/telemetry/runner.jsonl'
     if variant == 'future':
         e = json.loads(path.read_text())
         e['hlc'] = f'{int((time.time() + 10 * 86400) * 1000):013d}.0000.runner'
@@ -61,7 +61,7 @@ def test_non_evidence_cannot_report_a_verified_principal(fleet, variant):
 def test_filename_cannot_assign_another_writers_attestation(fleet):
     root, space = fleet
     _append(space, actor='other')
-    (space / '.datacore/events/other.jsonl').rename(space / '.datacore/events/runner.jsonl')
+    (space / '.datacore/telemetry/other.jsonl').rename(space / '.datacore/telemetry/runner.jsonl')
     assert claim_gate.absent('worker', root=root)[0] is True
     assert _row(root)['ok'] is not True
 
@@ -85,7 +85,7 @@ def test_zero_now_is_respected_and_future_evidence_does_not_pass(fleet):
 def test_corrupt_or_malformed_attestation_is_explicitly_unverifiable(fleet, field, value):
     root, space = fleet
     _append(space)
-    path = space / '.datacore/events/runner.jsonl'
+    path = space / '.datacore/telemetry/runner.jsonl'
     event = json.loads(path.read_text())
     event[field] = value
     path.write_text(json.dumps(event) + '\n')
@@ -98,10 +98,10 @@ def test_corrupt_or_malformed_attestation_is_explicitly_unverifiable(fleet, fiel
 def test_hlc_counter_and_tied_failure_are_not_lost(fleet):
     root, space = fleet
     _append(space)
-    first = space / '.datacore/events/runner.jsonl'
+    first = space / '.datacore/telemetry/runner.jsonl'
     event = json.loads(first.read_text())
     _append(space, log_name='runner-run-2026-09-11', ok=False, failures=['stale'])
-    second = space / '.datacore/events/runner-run-2026-09-11.jsonl'
+    second = space / '.datacore/telemetry/runner-run-2026-09-11.jsonl'
     failure = json.loads(second.read_text())
     failure['hlc'] = event['hlc']
     failure['hash'] = compute_hash(body_dict(failure['seq'], failure['hlc'], failure['actor'], failure['type'], failure['payload'], failure['prev']))
@@ -113,7 +113,7 @@ def test_hlc_counter_and_tied_failure_are_not_lost(fleet):
 def test_torn_inflight_tail_does_not_invalidate_a_complete_observation(fleet):
     root, space = fleet
     _append(space)
-    with (space / '.datacore/events/runner.jsonl').open('a') as f:
+    with (space / '.datacore/telemetry/runner.jsonl').open('a') as f:
         f.write('{"seq":')
     assert _row(root)['ok'] is True
     assert claim_gate.absent('worker', root=root)[0] is False
@@ -123,7 +123,7 @@ def test_torn_inflight_tail_does_not_invalidate_a_complete_observation(fleet):
 def test_self_consistent_hash_does_not_excuse_a_broken_chain(fleet, field, value):
     root, space = fleet
     _append(space)
-    path = space / '.datacore/events/runner.jsonl'
+    path = space / '.datacore/telemetry/runner.jsonl'
     event = json.loads(path.read_text())
     event[field] = value
     event['hash'] = compute_hash(body_dict(event['seq'], event['hlc'], event['actor'], event['type'], event['payload'], event['prev']))

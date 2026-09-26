@@ -795,11 +795,13 @@ def append(space: Path, actor: str, type: str, payload: dict,
         return Result(False, 'repository category does not permit direct fact publication', {})
     with _repo_lock(space):
         try:
-            event = EventLog(space, actor).append(type, payload)
+            log = EventLog(space, actor)
+            event = log.append(type, payload)
         except Exception as exc:  # noqa: BLE001 — a bad event type is the caller's bug
             return Result(False, "append rejected", {"error": exc.__class__.__name__})
 
-        rel = f".datacore/events/{actor}.jsonl"
+        # The file it landed in: a telemetry type goes to the telemetry log (LED-8).
+        rel = log.path_for(type, payload).relative_to(space).as_posix()
         rc, _, err = _git(space, "add", "--", rel)
         if rc != 0:
             return Result(False, "git add failed", {"stderr": err.strip()[:200]})

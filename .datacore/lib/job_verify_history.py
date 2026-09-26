@@ -84,7 +84,9 @@ def from_ledger(space: Path, since: str | None):
     """[(ts, actor, job, ok, [details])] from every writer's job.verify events."""
     import datetime as dt
     rows = []
-    for f in sorted((space / ".datacore" / "events").glob("*.jsonl")):
+    # Task logs (older attests) and the telemetry logs (LED-8).
+    for f in [*sorted((space / ".datacore" / "events").glob("*.jsonl")),
+              *sorted((space / ".datacore" / "telemetry").glob("*.jsonl"))]:
         for line in f.read_text(errors="replace").splitlines():
             if '"job.verify"' not in line:
                 continue

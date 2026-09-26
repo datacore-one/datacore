@@ -88,6 +88,52 @@ class StaleLogError(RuntimeError):
 #: after nine appends.
 FUTURE_TOLERANCE_MS = 10 * 60 * 1000
 
+# ROUTINE MEASUREMENTS LIVE IN THEIR OWN LOG (LED-8, owner decision 2026-09-26).
+# 71-97% of the events in the item logs were telemetry (LS-14; 6-meridian held
+# 21k trade attests in its task log), and every task append re-read all of it
+# for its tail and causal floor. `EventLog.append` writes these types to
+# `<space>/.datacore/telemetry/<log>.jsonl` -- its own chain, own witness -- and
+# `read_events` folds them back in. Nothing already written moves: history in
+# the task logs stays where it is.
+#
+# A signed cadence record (cadence.registration / cadence.run) is NOT a routine
+# measurement: it is the evidence a duty ran (CAD-3/CAD-4), read and checked
+# per writer log, so it stays in the task log beside the work it vouches for.
+TELEMETRY_TYPES = frozenset({"metric.attest", "artifact.attest"})
+DUTY_METRICS = frozenset({"cadence.registration", "cadence.run"})
+
+
+def is_telemetry(type: str, payload) -> bool:
+    """Does an event of `type` with `payload` belong in the telemetry log?"""
+    if type not in TELEMETRY_TYPES:
+        return False
+    return not (type == "metric.attest" and isinstance(payload, dict)
+                and payload.get("metric") in DUTY_METRICS)
+TELEMETRY_DIR = "telemetry"
+#: The `log` a reader sees for a telemetry chain: "<stem>.telemetry", so a
+#: telemetry chain never shares a key with the same writer's task chain.
+TELEMETRY_SUFFIX = ".telemetry"
+
+
+def log_paths(space_dir: Path, name: str) -> list[Path]:
+    """Every file one writer log name may hold events in: task log, then telemetry."""
+    base = Path(space_dir) / ".datacore"
+    return [base / "events" / f"{name}.jsonl", base / TELEMETRY_DIR / f"{name}.jsonl"]
+
+
+def witness_path(log_path: Path) -> Path:
+    """The seq high-water mark of one log file (`.hash` beside it for the hash).
+
+    Task logs: `.datacore/state/seq-hwm/<log>.seq`; telemetry logs:
+    `.datacore/state/seq-hwm/telemetry/<log>.seq`, so the two chains of one
+    writer never share a witness.
+    """
+    log_path = Path(log_path)
+    hwm = log_path.parent.parent / "state" / "seq-hwm"
+    if log_path.parent.name == TELEMETRY_DIR:
+        hwm = hwm / TELEMETRY_DIR
+    return hwm / f"{log_path.stem}.seq"
+
 
 class CorruptLogWarning(UserWarning):
     """One writer's log is damaged; its events from the bad line on are withheld."""
@@ -275,11 +321,15 @@ class EventLog:
                 f"digits, '-' or '_' (it becomes the log filename)"
             )
         self.log_name = name
-        self.path = self.space_dir / ".datacore" / "events" / f"{name}.jsonl"
+        self.path, self.telemetry_path = log_paths(self.space_dir, name)
         if self.sign:
             # Acceptable to do at init (keeps callers/tests hermetic): idempotent,
             # reuses an existing key rather than regenerating.
             ensure_keypair(actor, keys_dir=keys_dir, registry_path=registry_path)
+
+    def path_for(self, type: str, payload=None) -> Path:
+        """The file an event is appended to (LED-8: telemetry apart)."""
+        return self.telemetry_path if is_telemetry(type, payload) else self.path
 
     def append(self, type: str, payload: dict) -> Event:
         """Append a new event of `type` with `payload`, chained to this
@@ -329,18 +379,19 @@ class EventLog:
             if version == 1 and enabled == 2:
                 payload = {**payload, '_merge': {**payload['_merge'], 'version': 2}}
 
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        path = self.path_for(type, payload)
+        path.parent.mkdir(parents=True, exist_ok=True)
         # "a+b": creates the file if absent, allows both read (for the tail)
         # and append-write. Concurrent O_CREAT opens of the same path are
         # safe on their own; the actual hazard -- two processes reading the
         # same "last event" and computing the same next seq/prev -- is what
         # the flock below prevents.
-        with open(self.path, "a+b") as f:
+        with open(path, "a+b") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
             try:
                 f.seek(0)
                 raw = f.read()
-                events, valid_len = _parse_log_bytes(raw, self.path)
+                events, valid_len = _parse_log_bytes(raw, path)
                 if valid_len < len(raw):
                     # Torn final line from a crash/in-flight write: the write
                     # never completed, so drop it and restore the invariant
@@ -379,8 +430,7 @@ class EventLog:
                 # been rewound?", and a branch-scoped log is a different file
                 # with its own seq run starting at 1 — under an actor-keyed
                 # mark its first append looks like a rewind of the shared log.
-                hwm_path = (self.path.parent.parent / "state" / "seq-hwm"
-                            / f"{self.log_name}.seq")
+                hwm_path = witness_path(path)
                 hwm = -1
                 try:
                     hwm = int(hwm_path.read_text().strip())
@@ -412,7 +462,7 @@ class EventLog:
                     # machine's log is trustworthy, and that is the operator's
                     # call, not a heuristic's.
                     raise StaleLogError(
-                        f"{self.path.name} ends at seq {tail_seq} but this "
+                        f"{path.name} ends at seq {tail_seq} but this "
                         f"machine already wrote seq {hwm}. The log was rewound "
                         f"(bad merge/checkout); appending now would reuse a seq "
                         f"and fork it.\n"
@@ -437,8 +487,8 @@ class EventLog:
                 # correct here (only the trailing actor name can differ
                 # among ties, and tick()/parse() below ignore that field).
                 floor = last.hlc if last is not None else None
-                for sibling_path in self.path.parent.glob("*.jsonl"):
-                    if sibling_path.name == self.path.name:
+                for sibling_path in path.parent.glob("*.jsonl"):
+                    if sibling_path.name == path.name:
                         continue
                     # NOTE: reads each sibling's ENTIRE file just to get its
                     # tail -- acceptable while files are small; a tail-seek
@@ -485,7 +535,7 @@ class EventLog:
                 f.write((to_line(event) + "\n").encode("utf-8"))
                 f.flush()
                 os.fsync(f.fileno())
-                fsync_directory(self.path.parent)
+                fsync_directory(path.parent)
                 # Record the mark only AFTER the event is on disk, so a crash
                 # between the two leaves the guard permissive rather than
                 # blocking a legitimate retry. Failure to write it is never
@@ -582,10 +632,12 @@ def read_events(space_dir: Path) -> list[Event]:
     damage stays for verify_chain to report and an operator to address.
     """
     events_dir = Path(space_dir) / ".datacore" / "events"
+    telemetry_dir = Path(space_dir) / ".datacore" / TELEMETRY_DIR
     events: list[Event] = []
-    if not events_dir.exists():
-        return events
-    for path in sorted(events_dir.glob("*.jsonl")):
+    # Task logs, then the telemetry logs folded in at read time (LED-8).
+    paths = [*(sorted(events_dir.glob("*.jsonl")) if events_dir.is_dir() else []),
+             *(sorted(telemetry_dir.glob("*.jsonl")) if telemetry_dir.is_dir() else [])]
+    for path in paths:
         raw = path.read_bytes()
         try:
             file_events, _valid_len = _parse_log_bytes(raw, path)
@@ -615,7 +667,7 @@ def read_events(space_dir: Path) -> list[Event]:
             # attribute, never a dataclass field: `to_line` serializes via
             # `asdict`, so a declared field would enter the on-disk format and
             # the hash body with it.
-            e.log = path.stem
+            e.log = path.stem if path.parent == events_dir else path.stem + TELEMETRY_SUFFIX
         events.extend(file_events)
     events.sort(key=lambda e: e.hlc)
     return events

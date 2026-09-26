@@ -10,7 +10,7 @@ from pathlib import Path
 
 from actor_identity import base_writer, principal_of
 from ledger.hlc import parse
-from ledger.log import CorruptLogError, read_events
+from ledger.log import TELEMETRY_SUFFIX, CorruptLogError, read_events
 from ledger.verify import verify_events
 
 
@@ -77,7 +77,8 @@ def latest_jobs(root: Path, now: float, *, registry: Path | None = None) -> dict
                          and isinstance(failures, list) and all(isinstance(f, str) for f in failures)
                          and ok == (not failures) and 0 <= ms < 10**13 and 0 <= counter <= 9999
                          and event.hlc == f"{ms:013d}.{counter:04d}.{writer}"
-                         and writer == event.actor and base_writer(event.log) == base_writer(event.actor))
+                         and writer == event.actor
+                         and base_writer(event.log.removesuffix(TELEMETRY_SUFFIX)) == base_writer(event.actor))
                 if not valid:
                     raise ValueError('invalid job verification evidence')
             except (ValueError, TypeError, AttributeError, OverflowError) as exc:

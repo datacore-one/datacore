@@ -171,6 +171,8 @@ GEMINI.md
 # hash-chained, and carry execution payloads (cost in cents, executor refs).
 # This repo is public; these must not flow through it.
 .datacore/events/
+# Their per-space telemetry logs (metric.attest / artifact.attest, LED-8): same class.
+.datacore/telemetry/
 
 # MCP module (DIP-0002 PRIVATE layer)
 .datacore/mcp-servers.local.yaml

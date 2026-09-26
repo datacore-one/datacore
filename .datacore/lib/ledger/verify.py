@@ -233,8 +233,8 @@ def check_not_rewound(path: Path) -> list[str]:
       * MISSING -- the whole log deleted. `path` may name a log that no longer
         exists; with a witness for it, that is reported, never skipped.
     """
-    actor = path.stem
-    hwm_path = path.parent.parent / "state" / "seq-hwm" / f"{actor}.seq"
+    from .log import witness_path
+    hwm_path = witness_path(path)
     try:
         hwm = int(hwm_path.read_text().strip())
         if hwm < 0:

@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ledger.fold import fold  # noqa: E402
 from ledger.index import build_index, items_by  # noqa: E402
-from ledger.log import EventLog, read_events  # noqa: E402
+from ledger.log import TELEMETRY_DIR, EventLog, read_events  # noqa: E402
 from ledger.verify import check_not_rewound, verify_chain  # noqa: E402
 from ledger.policy import approval_payload_hash, guarded_append, load_policy
 
@@ -151,26 +151,37 @@ def cmd_void(args: argparse.Namespace) -> None:
     print(json.dumps({"hash": event.hash, "hlc": event.hlc, "voids": f"{stem}.jsonl#{target.seq}"}))
 
 
+def _shown(path: Path) -> str:
+    return f"{TELEMETRY_DIR}/{path.name}" if path.parent.name == TELEMETRY_DIR else path.name
+
+
 def cmd_verify(args: argparse.Namespace) -> None:
     space = _require_space(args.space)
     events_dir = space / ".datacore" / "events"
-    files = sorted(events_dir.glob("*.jsonl")) if events_dir.exists() else []
+    telemetry_dir = space / ".datacore" / TELEMETRY_DIR
+    files = []
+    missing = []
+    # Task logs and the per-space telemetry logs (LED-8) are both history.
     # A log this machine wrote and that is now gone is lost history (LED-2):
     # its witness names it, so it is checked even though no file is left.
-    witnesses = space / ".datacore" / "state" / "seq-hwm"
-    held = {p.stem for p in files}
-    missing = sorted(events_dir / f"{w.stem}.jsonl" for w in witnesses.glob("*.seq")
-                     if w.stem not in held) if witnesses.is_dir() else []
+    for folder, witnesses in ((events_dir, space / ".datacore" / "state" / "seq-hwm"),
+                              (telemetry_dir, space / ".datacore" / "state" / "seq-hwm" / TELEMETRY_DIR)):
+        held = sorted(folder.glob("*.jsonl")) if folder.is_dir() else []
+        files += held
+        stems = {p.stem for p in held}
+        if witnesses.is_dir():
+            missing += sorted(folder / f"{w.stem}.jsonl" for w in witnesses.glob("*.seq")
+                              if w.stem not in stems)
 
     had_errors = False
     for path in files + missing:
         for error in verify_chain(path, strict=args.strict):
-            print(f"{path.name}: {error}", file=sys.stderr)
+            print(f"{_shown(path)}: {error}", file=sys.stderr)
             had_errors = True
         # Truncation leaves a shorter but internally perfect chain, so it must
         # be checked against an external witness rather than the chain itself.
         for error in check_not_rewound(path):
-            print(f"{path.name}: {error}", file=sys.stderr)
+            print(f"{_shown(path)}: {error}", file=sys.stderr)
             had_errors = True
 
     if had_errors:
