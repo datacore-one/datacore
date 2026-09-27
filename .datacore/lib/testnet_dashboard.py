@@ -44,7 +44,10 @@ if str(LIB) not in sys.path:
 import reliability_dashboard as rd  # noqa: E402
 
 ROOT = rd.ROOT
-FIRM = "8-firm"
+from spaces import space_for  # noqa: E402
+
+#: The firm's space (install.yaml roles.firm); "" matches no space when unset.
+FIRM = space_for("firm", ROOT, "")
 
 # The agents, by the handle each already publishes under: [persona, handle,
 # lane] from `testnet_dashboard.agents` in the install's principals.yaml, so no

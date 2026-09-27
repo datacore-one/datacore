@@ -28,7 +28,11 @@ REPO = Path(__file__).resolve().parents[2]
 # which all took --space while this one alone hardcoded 5-plur. A second venture
 # with a roadmap could not be checked at all, so the tool could not answer the
 # question it exists for: is THIS roadmap agent-executable?
-SPACE = os.environ.get("ROADMAP_SPACE", "5-plur")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import space_for  # noqa: E402
+
+# Default space: install.yaml roles.product; ROADMAP_SPACE or --space overrides.
+SPACE = os.environ.get("ROADMAP_SPACE") or space_for("product", REPO, "0-personal")
 ROADMAP = REPO / SPACE / "roadmap.yaml"
 ADAPTER = REPO / ".datacore/lib/org_workspace_adapter.py"
 # EVERY space, not just 5-plur. nightshift's find_ai_tasks walks the whole data

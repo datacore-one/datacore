@@ -70,7 +70,7 @@ def render(space: str, v: dict) -> str:
         f"# Seeded by .datacore/lib/intent_graph_scaffold.py from {space}/venture.yaml.",
         "# Heading depth is the graph level; a child obviously serves its parent.",
         "# :SERVES: adds cross-branch parents and MAY point into another space",
-        "# (e.g. 5-plur:knowledge-exchange) — that is how ventures that serve",
+        "# (e.g. 1-myteam:knowledge-exchange) — that is how ventures that serve",
         "# each other stay visible as one graph under the personal view.",
         "#",
         "# Nodes marked DRAFT were derived from venture.yaml, not authored. Goals",

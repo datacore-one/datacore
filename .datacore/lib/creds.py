@@ -1243,7 +1243,7 @@ class CredentialManager:
                 return 1
 
         if scope == "project" and not project:
-            project = input("Project path (e.g. 3-fds/fairdrop): ").strip()
+            project = input("Project path (e.g. 1-myteam/myproject): ").strip()
             if not project:
                 print("Project path is required.")
                 return 1

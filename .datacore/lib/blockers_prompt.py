@@ -17,7 +17,12 @@ from pathlib import Path
 import yaml
 
 REPO = Path(__file__).resolve().parents[2]
-ROADMAP = REPO / "5-plur" / "roadmap.yaml"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import space_for  # noqa: E402
+
+#: The product space (install.yaml roles.product) holds the roadmap.
+PRODUCT = space_for("product", REPO, "0-personal")
+ROADMAP = REPO / PRODUCT / "roadmap.yaml"
 
 KIND = {
     "decision": "A decision, written down",
@@ -55,7 +60,7 @@ def main():
     n = len(blocked)
     out = [f"""# Blockers — the {n} epics that only you can move
 
-Generated {datetime.date.today()} from `5-plur/roadmap.yaml` (`blocked_on: human`).
+Generated {datetime.date.today()} from `{PRODUCT}/roadmap.yaml` (`blocked_on: human`).
 Regenerate with `python3 .datacore/lib/blockers_prompt.py`.
 
 ## How to use this
@@ -73,7 +78,7 @@ of it appears in a sprint.
 ## The prompt
 
 > I want to clear the blockers on the PLUR roadmap. There are {n} epics marked
-> `blocked_on: human` in `5-plur/roadmap.yaml`, each waiting on a decision, a
+> `blocked_on: human` in `{PRODUCT}/roadmap.yaml`, each waiting on a decision, a
 > signature or an approval from me.
 >
 > Work through them with me one group at a time, in the order below. For each:
@@ -108,7 +113,7 @@ of it appears in a sprint.
             out.append("")
 
     dest = Path(args.out) if args.out else (
-        REPO / "5-plur/1-tracks/ops" / f"blockers-{datetime.date.today()}.md")
+        REPO / PRODUCT / "1-tracks/ops" / f"blockers-{datetime.date.today()}.md")
     dest.write_text("\n".join(out))
     print(f"wrote {dest.relative_to(REPO)} — {n} blockers in {len(groups)} groups")
     for k, v in sorted(groups.items(), key=lambda kv: -len(kv[1])):

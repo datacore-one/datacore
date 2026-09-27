@@ -230,7 +230,7 @@ def main() -> int:
     ap.add_argument('--agent', required=True, help='the agent principal wrapping up (as named in principals.yaml)')
     ap.add_argument('--tier', default='session', choices=['tick', 'session', 'batch'])
     ap.add_argument('--summary', default='', help='entry used for every space')
-    ap.add_argument('--entries', help='JSON file: {"5-plur": "...", "0-personal": "..."}')
+    ap.add_argument('--entries', help='JSON file: {"1-myteam": "...", "0-personal": "..."}')
     ap.add_argument('--data-dir', default=str(Path.home() / 'Data'))
     ap.add_argument('--dry-run', action='store_true')
     a = ap.parse_args()

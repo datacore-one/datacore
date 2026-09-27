@@ -41,6 +41,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from org_transaction import SafeOrgWorkspace as OrgWorkspace, new_org_id  # noqa: E402
 from task_audit import normalize, parse_date, OPEN_STATES  # noqa: E402
+from spaces import space_for_all  # noqa: E402
+
+#: Spaces this tool must never edit, e.g. while a merge is held
+#: (install.yaml roles.held).
+HELD = frozenset(space_for_all("held"))
 
 CLOSABLE = {'TODO', 'NEXT', 'WAITING', 'REVIEW'}
 TWIN_CLOSED = {'DONE': 'DONE', 'COMPLETED': 'DONE', 'CANCELLED': 'CANCELLED'}
@@ -165,9 +170,9 @@ def plan_dup_ids(tasks):
         for c in rest:
             if c['file'] == canonical['file']:
                 continue
-            # never touch 6-meridian while its merge is held
-            if c['space'] == '6-meridian':
-                if canonical['space'] != '6-meridian':
+            # never touch a held space (roles.held) while its merge is held
+            if c['space'] in HELD:
+                if canonical['space'] not in HELD:
                     canonical, c = c, canonical  # edit the other side instead
                 else:
                     continue

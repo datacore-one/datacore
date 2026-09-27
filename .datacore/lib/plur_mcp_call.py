@@ -15,9 +15,13 @@ import os
 import subprocess
 import sys
 
-SERVER = os.path.expanduser(
-    "~/Data/5-plur/2-projects/plur/packages/mcp/dist/index.js"
-)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from spaces import space_for  # noqa: E402
+
+#: The PLUR checkout lives in the install's product space (install.yaml roles.product).
+_DATA = os.path.expanduser("~/Data")
+SERVER = os.path.join(_DATA, space_for("product", _DATA, "0-personal"),
+                      "2-projects/plur/packages/mcp/dist/index.js")
 TIMEOUT = 240
 
 

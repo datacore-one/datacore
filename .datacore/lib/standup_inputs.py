@@ -292,7 +292,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--space", required=True, help="Space directory (e.g. 1-datafund)")
+    parser.add_argument("--space", required=True, help="Space directory (e.g. 1-myteam)")
     parser.add_argument("--contributor", required=True, help="Contributor name (lowercase, no @)")
     g = parser.add_mutually_exclusive_group()
     g.add_argument("--accomplishments-file", help="Path to file (one accomplishment per line)")

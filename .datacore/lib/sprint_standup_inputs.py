@@ -214,7 +214,8 @@ def main(argv: list[str] | None = None) -> int:
     g = parser.add_mutually_exclusive_group()
     g.add_argument("--sprint", help="Path to sprint YAML file")
     g.add_argument("--sprint-dir", help="Directory containing sprint files (picks latest)")
-    parser.add_argument("--space", default="5-plur",
+    from spaces import space_for  # the product space: install.yaml roles.product
+    parser.add_argument("--space", default=space_for("product", sprint_files.REPO, "0-personal"),
                         help="Space to discover the running sprint in (default when no path is given)")
     parser.add_argument("--date", help="Override today's date (YYYY-MM-DD)")
     parser.add_argument("--no-pr-check", action="store_true",

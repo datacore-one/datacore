@@ -254,8 +254,11 @@ def _space(space: str | None) -> Path | None:
     # root's glob fallback outrank another root's exact match: on plur-claw
     # `~/Data/1-datacore-space` won over `~/spaces/5-plur`, so attestations
     # would have landed in a space nobody was looking at.
+    # The preferred spaces are this install's own (install.yaml roles.attest).
     roots = _roots()
-    for name in ("1-datafund", "5-plur", "0-personal"):
+    from spaces import space_for_all
+    names = list(dict.fromkeys(n for r in roots for n in space_for_all("attest", r)))
+    for name in names:
         for r in roots:
             cand = r / name
             if (cand / ".datacore" / "events").is_dir():

@@ -320,7 +320,8 @@ from org_transaction import serialized
 @serialized
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--space", default="5-plur")
+    from spaces import space_for  # the product space: install.yaml roles.product
+    ap.add_argument("--space", default=space_for("product", REPO, "0-personal"))
     ap.add_argument("--sprint", help="sprint id or path fragment")
     ap.add_argument("--active", action="store_true",
                     help="every sprint whose status is 'active'")

@@ -34,9 +34,17 @@ PLUR_ROOT = os.path.expanduser("~/.plur")
 DEFAULT_STORES = [
     (os.path.join(PLUR_ROOT, "engrams.yaml"), "global-store"),
     (os.path.expanduser("~/Data/.plur/engrams.yaml"), "project:Data"),
-    (os.path.expanduser("~/Data/5-plur/.plur/engrams.yaml"), "project:5-plur"),
-    (os.path.expanduser("~/Data/5-plur/2-projects/plur/.plur/engrams.yaml"), "project:plur"),
 ]
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from spaces import space_for  # noqa: E402
+
+# The product space's own store and its PLUR checkout (install.yaml roles.product).
+_PRODUCT = space_for("product", os.path.expanduser("~/Data"))
+if _PRODUCT:
+    DEFAULT_STORES += [
+        (os.path.expanduser(f"~/Data/{_PRODUCT}/.plur/engrams.yaml"), f"project:{_PRODUCT}"),
+        (os.path.expanduser(f"~/Data/{_PRODUCT}/2-projects/plur/.plur/engrams.yaml"), "project:plur"),
+    ]
 HISTORY_DIR = os.path.join(PLUR_ROOT, "history")
 
 # PLUR used ENG-YYYY-MMDD-NNN until ~2026-08, then ENG-YYYY-MM-DD-NNN. Match both.

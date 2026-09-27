@@ -142,7 +142,7 @@ def main():
     parser = argparse.ArgumentParser(description="Apply Datacore focus context to projects")
     parser.add_argument("--dry-run", action="store_true", help="Show what would change")
     parser.add_argument("--apply", action="store_true", help="Apply changes")
-    parser.add_argument("--space", help="Filter to single space (e.g., 1-datafund)")
+    parser.add_argument("--space", help="Filter to single space (e.g., 1-myteam)")
     args = parser.parse_args()
 
     if not args.dry_run and not args.apply:

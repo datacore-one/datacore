@@ -60,15 +60,21 @@ fi
 #    server). Rsyncing those failed every 5 minutes with "No such file or
 #    directory", which buried real failures in the log.
 shopt -s nullglob
+# Spaces the daemon never writes (install.yaml roles.held) are skipped.
+# Fail closed: if the held list cannot be read, no space is mirrored this run.
+if ! held_spaces=$(python3 "$(dirname "${BASH_SOURCE[0]}")/spaces.py" role held --root "$DATA_DIR" 2>>"$LOG_FILE"); then
+  log "  cannot read roles.held from install.yaml -- per-space sync skipped"
+  held_unknown=1
+fi
 synced=0
 failed=0
 if remote_spaces=$(ssh "${SSH_OPTS[@]}" "$REMOTE" \
       'cd Data && for d in [1-9]-*/.datacore/state; do [ -d "$d" ] && echo "${d%%/*}"; done; true' \
       2>>"$LOG_FILE"); then
   for space_dir in "$DATA_DIR"/[1-9]-*/; do
+    [[ -n "${held_unknown:-}" ]] && break
     space_name=$(basename "$space_dir")
-    # 6-meridian is intentionally not written by daemon — skip
-    if [[ "$space_name" == "6-meridian" ]]; then
+    if grep -qxF "$space_name" <<<"$held_spaces"; then
       continue
     fi
     if ! grep -qxF "$space_name" <<<"$remote_spaces"; then

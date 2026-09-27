@@ -368,7 +368,8 @@ def _carried_ids(carryover, sprint_id: str) -> set[str]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("command", choices=("list", "health"))
-    ap.add_argument("--space", default="5-plur")
+    from spaces import space_for  # the product space: install.yaml roles.product
+    ap.add_argument("--space", default=space_for("product", REPO, "0-personal"))
     ap.add_argument("--no-fetch", action="store_true")
     ap.add_argument("--no-pr-check", action="store_true")
     args = ap.parse_args(argv)

@@ -1,7 +1,7 @@
 # Deploying the Gitea pre-receive hook (DIP-0046 D5)
 
-Status: **DEPLOYED 2026-08-12, report-only**, on 0-personal, 4-forge,
-6-meridian, 7-megaphone. Three things below were WRONG in the first version of
+Status: **DEPLOYED 2026-08-12, report-only**, on the personal space and three
+team space repos. Three things below were WRONG in the first version of
 this document and were only found by deploying and proving the hook fires. The
 shell hook passes all eight cases in
 `.datacore/lib/tests/test_gitea_pre_receive.py`.
@@ -52,7 +52,7 @@ Gitea runs in Docker here; repositories live on the host under
 
     scp .datacore/hooks/gitea-pre-receive.sh <gitea-host>:/tmp/
     ssh <gitea-host> 'B=/mnt/ssd/gitea/data/git/repositories/<owner>; \
-      for r in 0-personal 4-forge 6-meridian 7-megaphone; do \
+      for r in <space-repo> ...; do \
         d=$B/$r.git/hooks/pre-receive.d; \
         sudo mkdir -p $d && sudo cp /tmp/gitea-pre-receive.sh $d/50-datacore && \
         echo <account> | sudo tee $d/50-datacore.accounts >/dev/null && \

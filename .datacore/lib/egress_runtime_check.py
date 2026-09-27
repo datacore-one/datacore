@@ -209,7 +209,7 @@ def functional() -> tuple[bool, str]:
 
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        (root / "1-datafund" / ".datacore" / "events").mkdir(parents=True)
+        (root / "1-myteam" / ".datacore" / "events").mkdir(parents=True)
         os.environ["DATACORE_ROOT"] = str(root)
         os.environ["DATACORE_ACTOR"] = "mac"
         for m in [k for k in sys.modules if k.startswith("ledger")]:
@@ -226,7 +226,7 @@ def functional() -> tuple[bool, str]:
 
         sys.path.insert(0, str(LIB))
         from ledger.log import read_events
-        events = [e for e in read_events(root / "1-datafund")
+        events = [e for e in read_events(root / "1-myteam")
                   if e.type == "artifact.attest"]
         if not events:
             return False, "decorator ran but no artifact.attest reached the ledger"

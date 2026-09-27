@@ -38,11 +38,14 @@ from pathlib import Path
 
 REPO = "datafund/datafund-space"
 ISSUE = 4
-SPACE = "1-datafund"
 DATA_ROOT = Path(__file__).resolve().parent.parent.parent
 JOURNAL_DIR = DATA_ROOT / "0-personal" / "notes" / "journals"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import space_for  # noqa: E402
+
+#: The team space the standup posts for (install.yaml roles.standup).
+SPACE = space_for("standup", DATA_ROOT, "0-personal")
 _SPACE_HEADING = re.compile(r"^#{1,6}\s+(\d+-[\w-]+)\b")
 _HEADING = re.compile(r"^(#{1,6})\s")
 _FULL_NAME = re.compile(r"\b([A-Z\u00C0-\u017D][a-z\u00DF-\u017E]+)\s+([A-Z\u00C0-\u017D][a-z\u00DF-\u017E]+)\b")

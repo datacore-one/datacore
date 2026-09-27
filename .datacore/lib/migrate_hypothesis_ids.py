@@ -19,16 +19,15 @@ import sys
 from pathlib import Path
 
 
-# Map space-dir name → venture short name used as prefix
-VENTURE_PREFIX = {
-    "1-datafund": "datafund",
-    "2-datacore": "datacore",
-    "3-fds": "fds",
-    "4-forge": "forge",
-    "5-plur": "plur",
-    "6-meridian": "meridian",
-    "7-megaphone": "megaphone",
-}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import _implied_name  # noqa: E402
+
+
+def venture_prefixes(data: Path) -> dict[str, str]:
+    """{space dir: venture prefix} for every space with a hypotheses.yaml; the
+    prefix is the directory name without its ordinal (`<n>-<name>` -> `<name>`)."""
+    return {d.name: _implied_name(d) for d in sorted(data.glob("[0-9]*-*"))
+            if (d / "hypotheses.yaml").is_file()}
 
 
 def migrate_file(path: Path, prefix: str, dry_run: bool = False) -> dict:
@@ -123,7 +122,7 @@ def main():
     data = Path.home() / "Data"
     total = {"renamed": 0, "skipped_already_migrated": 0, "requirements_added": 0}
 
-    for space_name, prefix in VENTURE_PREFIX.items():
+    for space_name, prefix in venture_prefixes(data).items():
         if args.venture and args.venture != space_name and args.venture != prefix:
             continue
         path = data / space_name / "hypotheses.yaml"

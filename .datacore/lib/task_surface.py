@@ -19,8 +19,12 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 ADAPTER = REPO / ".datacore/lib/org_workspace_adapter.py"
-FILES = ["5-plur/org/next_actions.org", "5-plur/org/someday.org",
-         "5-plur/org/inbox.org"]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import space_for  # noqa: E402
+
+#: The product space's org files (install.yaml roles.product).
+PRODUCT = space_for("product", REPO, "0-personal")
+FILES = [f"{PRODUCT}/org/{n}.org" for n in ("next_actions", "someday", "inbox")]
 
 # First match wins. Order matters: the more specific surfaces come first,
 # because a task can legitimately mention two and only one is where you work.

@@ -36,7 +36,11 @@ REPO = Path(__file__).resolve().parents[2]
 ADAPTER = REPO / ".datacore/lib/org_workspace_adapter.py"
 
 # One roadmap per space (see roadmap_validate.configure). --space or ROADMAP_SPACE.
-SPACE = os.environ.get("ROADMAP_SPACE", "5-plur")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import space_for  # noqa: E402
+
+# Default space: install.yaml roles.product; ROADMAP_SPACE or --space overrides.
+SPACE = os.environ.get("ROADMAP_SPACE") or space_for("product", REPO, "0-personal")
 
 
 def space_root(space: str) -> Path:

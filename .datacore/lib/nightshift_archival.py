@@ -286,7 +286,7 @@ Examples:
     )
     parser.add_argument(
         "--space",
-        help="Space to archive (e.g., 0-personal, 1-datafund)"
+        help="Space to archive (e.g., 0-personal, 1-myteam)"
     )
     parser.add_argument(
         "--all-spaces",

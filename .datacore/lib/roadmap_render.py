@@ -30,8 +30,25 @@ except ImportError:
 REPO = Path(__file__).resolve().parents[2]
 
 # One roadmap per space (see roadmap_validate.configure). --space or ROADMAP_SPACE.
-SPACE = os.environ.get("ROADMAP_SPACE", "5-plur")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import space_for  # noqa: E402
+
+# Default space: install.yaml roles.product; ROADMAP_SPACE or --space overrides.
+SPACE = os.environ.get("ROADMAP_SPACE") or space_for("product", REPO, "0-personal")
 NAMES = {"plur": "PLUR"}  # display names that are not the capitalised slug
+
+
+def _owner_name() -> str:
+    """The owner's display name from the install's principals registry."""
+    try:
+        import roster
+        who = roster.owner()
+        return roster.display(who) if who else "the owner"
+    except Exception:
+        return "the owner"
+
+
+OWNER = _owner_name()
 
 
 def space_root(space: str) -> Path:
@@ -385,7 +402,7 @@ footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);
 .vision .nm{font-family:'Literata',Georgia,serif;font-size:19px;color:var(--ink);line-height:1.35}
 
 /* milestones */
-.miles{margin-top:22px;position:relative;display:grid;gap:0}
+.msl{margin-top:22px;position:relative;display:grid;gap:0}
 .mile{display:grid;grid-template-columns:96px 1fr;gap:22px;padding:20px 0;
   border-top:1px solid var(--rule-soft)}
 .mile:first-child{border-top:none}
@@ -564,7 +581,7 @@ footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);
 .half{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.18em;
   text-transform:uppercase;color:var(--accent);margin:26px 0 2px;padding-top:14px;
   border-top:1px solid color-mix(in srgb,var(--accent) 26%,transparent)}
-.miles > .half:first-child{margin-top:0;padding-top:0;border-top:none}
+.msl > .half:first-child{margin-top:0;padding-top:0;border-top:none}
 
 .visionblock{margin-top:20px;padding:26px 28px;border-radius:10px;background:var(--accent-soft);
   border:1px solid color-mix(in srgb,var(--accent) 30%,transparent)}
@@ -745,7 +762,7 @@ tracks; nine further items are deliberately held on conditions and are not queue
 <text x="662" y="331" fill="var(--accent)" font-size="7" font-family="'JetBrains Mono',monospace"
       text-anchor="middle" letter-spacing="0.08em">SVC</text>
 <text x="720" y="356" fill="var(--ink)" font-size="12" font-weight="600"
-      font-family="'Outfit',sans-serif" text-anchor="middle">Gregor</text>
+      font-family="'Outfit',sans-serif" text-anchor="middle">the owner</text>
 <text x="720" y="372" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace"
       text-anchor="middle">capacity 1 · serial</text>
 
@@ -758,7 +775,7 @@ tracks; nine further items are deliberately held on conditions and are not queue
 <text x="992" y="184" fill="var(--ink)" font-size="12" font-weight="600"
       font-family="'Outfit',sans-serif" text-anchor="middle">Work that moves</text>
 <text x="992" y="200" fill="var(--muted)" font-size="9" font-family="'JetBrains Mono',monospace"
-      text-anchor="middle">nightshift · miles · crt</text>
+      text-anchor="middle">the agents</text>
 
 <!-- 8. deferred -->
 <rect x="904" y="316" width="176" height="72" rx="6" fill="var(--paper)"/>
@@ -1082,7 +1099,7 @@ def render_milestones(r):
                 + (f'<p class="means">{e(m["means"]).strip()}</p>' if m.get("means") else "")
                 + f'{rad}<p class="ev">{e(m["evidence"]).strip()}</p>{gate}'
                 f'<div class="imeta">{its}</div>{feats}</div></div>')
-    return f'<div class="miles">{out}</div>'
+    return f'<div class="msl">{out}</div>'
 
 
 def render_ladder(r):
@@ -1308,7 +1325,7 @@ def render_html(r):
       <span class="eyebrow">the story, end to end</span></div>
     <p class="sec-sub"><b>R-numbers are epics.</b> A <em>cannot start until</em> line is a
     precondition — sometimes another epic, sometimes an outside event, sometimes a decision
-    only Gregor can make. It is not a date, and nothing here slips by being late.</p>
+    only {OWNER} can make. It is not a date, and nothing here slips by being late.</p>
     <p class="sec-sub"> Each one is an outcome with a definition of
     done, the tasks that serve it, and the release it ships in — not a ticket. There are
     {n_items} of them.</p>
@@ -1477,7 +1494,7 @@ def execution_html(r: dict) -> str:
     epic they serve; the rest stay unlinked on purpose, because a wrong parent points an agent at
     the wrong work.</p>
 
-    <h3 class="subh">1 &middot; Blockers &mdash; {len(blocked)} epics waiting on Gregor</h3>
+    <h3 class="subh">1 &middot; Blockers &mdash; {len(blocked)} epics waiting on {OWNER}</h3>
     <p class="sec-sub">Nothing else can move these: they need a decision, a signature or an
     approval from one person. <b>This is the list to schedule.</b> Each row shows what would
     have to become true for it to stop being blocked.</p>
