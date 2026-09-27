@@ -128,7 +128,14 @@ effects:
     patterns:
       - '\bgh\s+release\s+(create|upload)\b'
       - '\bnpm\s+publish\b'
+      - '\b(pnpm|yarn)\b[^\n;&|]*\bpublish\b'
+      - '\bcargo\s+publish\b'
+      - '\bchangeset\s+publish\b'
       - '\btwine\s+upload\b'
+      # a version tag is what fires a release workflow (MEM-54)
+      - '\bgit\b[^\n;&|]*\bpush\b[^\n;&|]*\s(--tags|--follow-tags)(\s|$)'
+      - '\bgit\b[^\n;&|]*\bpush\b[^\n;&|]*\s(\+?refs/tags/\S+|\+?v\d+(\.\d+)+\S*)(\s|$)'
+      - '\bgh\s+workflow\s+run\s+[^\n;&|]*release'
       - '\bdocker\s+push\b'
       - '\bkubectl\s+(apply|rollout|delete|scale)\b'
       - '\bterraform\s+(apply|destroy)\b'
@@ -267,7 +274,7 @@ effects:
     patterns:
       # a push to a shared branch, or into another branch by refspec; an
       # agent pushes the branch it made (nightshift/..., autofix...)
-      - '\bgit\b[^\n;&|]*\bpush\b[^\n;&|]*\s(\+?(HEAD:)?(refs/heads/)?(main|master|develop|production|release))(\s|$)'
+      - '\bgit\b[^\n;&|]*\bpush\b[^\n;&|]*\s(\+?(HEAD:)?(refs/heads/)?(main|master|develop|production|releases?(/\S+)?))(\s|$)'
       - '\bgit\b[^\n;&|]*\bpush\b[^\n;&|]*\s[^\s:]*:(?!(refs/heads/)?(nightshift|autofix|agent)[/-])\S+'
   data.delete:
     tools: *acting
