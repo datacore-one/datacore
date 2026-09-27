@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -218,16 +219,46 @@ def _park(repo: Path, host: str, branch: str, pre: str) -> str:
 
     Returning "REFUSED" while the forked merge commit stays on the branch only
     moves the push to the next pusher: git_fleet_sync publishes HEAD, and
-    HEAD is the merge (replayed: tests/test_git_fleet_formal.py). The working
-    tree was verified clean before the merge, so resetting to `pre` loses
-    nothing; the merge stays reachable under refs/relay-refused/.
+    HEAD is the merge (replayed: tests/test_git_fleet_formal.py). The merge
+    stays reachable under refs/relay-refused/.
+
+    THE TREE IS CHECKED AT RESET TIME, not assumed (MEM-62). It was clean
+    before the merge, but an agent can write between that check and this
+    reset, and `reset --hard` would erase its edit to a tracked file without a
+    trace. Anything in the working tree (tracked edits and untracked files) is
+    first committed onto `<ref>-wip` (a scratch index; the real one is not
+    touched) and the status names it. If that save fails, nothing is reset.
     """
+    import tempfile
     ref = f'refs/relay-refused/{host}/{branch}'
     _run(['git', '-C', str(repo), 'update-ref', ref, 'HEAD'])
+    saved = ''
+    dirty = _run(['git', '-C', str(repo), 'status', '--porcelain', '--untracked-files=all'])
+    if dirty.returncode or dirty.stdout.strip():
+        wip = f'{ref}-wip'
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {**os.environ, 'GIT_INDEX_FILE': str(Path(tmp) / 'index')}
+            steps = [['git', '-C', str(repo), 'read-tree', 'HEAD'],
+                     ['git', '-C', str(repo), 'add', '-A']]
+            ok = dirty.returncode == 0 and all(
+                subprocess.run(c, env=env, capture_output=True, timeout=120).returncode == 0
+                for c in steps)
+            tree = subprocess.run(['git', '-C', str(repo), 'write-tree'], env=env,
+                                  capture_output=True, text=True, timeout=60) if ok else None
+            commit = (subprocess.run(['git', '-C', str(repo), 'commit-tree', tree.stdout.strip(),
+                                      '-p', 'HEAD', '-m', f'relay rescue: uncommitted work on {branch} '
+                                      f'before the refused merge was reset'],
+                                     capture_output=True, text=True, timeout=60)
+                      if tree is not None and tree.returncode == 0 else None)
+        if (commit is None or commit.returncode != 0
+                or _run(['git', '-C', str(repo), 'update-ref', wip, commit.stdout.strip()]).returncode):
+            return (f'branch NOT reset — uncommitted work could not be saved first; '
+                    f'do not push; refused merge at {ref}')
+        saved = f'; uncommitted work saved at {wip}'
     reset = _run(['git', '-C', str(repo), 'reset', '-q', '--hard', pre])
     if reset.returncode != 0:
-        return f'branch could NOT be restored to {pre[:10]} — do not push; evidence at {ref}'
-    return f'branch restored to {pre[:10]}; refused merge kept at {ref}'
+        return f'branch could NOT be restored to {pre[:10]} — do not push; evidence at {ref}{saved}'
+    return f'branch restored to {pre[:10]}; refused merge kept at {ref}{saved}'
 
 
 def _normalise_remote(url: str) -> str:
