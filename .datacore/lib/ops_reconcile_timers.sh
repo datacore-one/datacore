@@ -30,7 +30,9 @@
 set -uo pipefail
 
 DATA=${DATACORE_HOME:-${1:-$HOME/Data}}
-DAEMON=$DATA/2-datacore/2-projects/datacore-app/daemon
+# The app daemon lives in the install's system space (install.yaml roles.system).
+SYSTEM=${DATACORE_SYSTEM_SPACE:-$(python3 "$DATA/.datacore/lib/spaces.py" role system --root "$DATA" 2>/dev/null | head -1)}
+DAEMON=$DATA/${SYSTEM:-0-personal}/2-projects/datacore-app/daemon
 TR=$DAEMON/ops/token-refresh
 UNIT=cos-token-refresh.timer
 LOGDIR=$HOME/.datacore/cos

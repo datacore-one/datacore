@@ -17,7 +17,9 @@ import ledger_checkpoint as lc
 
 FIELDS = lc.VIEW_FIELDS
 
-for space_name in sys.argv[1:] or ['2-datacore']:
+from spaces import space_for
+
+for space_name in sys.argv[1:] or [space_for('system', ROOT, '0-personal')]:
     space = ROOT / space_name
     state = fold(read_events(space))
     live = lc._fingerprint(state)

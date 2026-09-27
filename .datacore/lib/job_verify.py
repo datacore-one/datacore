@@ -328,10 +328,13 @@ def _artifact_tail(job, n: int = 8) -> str:
     return ("\n\n" + "\n\n".join(out)) if out else ""
 
 
-#: Where a recurring failure becomes a task. 2-datacore is the system space; the
-#: machine goes on the task as SURFACE so the owner knows where to look.
+#: Where a recurring failure becomes a task: the install's system space
+#: (install.yaml roles.system), else the personal space. The machine goes on the
+#: task as SURFACE so the owner knows where to look.
+from spaces import space_for  # noqa: E402
+
 TASK_FILE = os.environ.get("JOB_VERIFY_TASK_FILE") or str(
-    DATACORE_ROOT / "2-datacore" / "org" / "next_actions.org")
+    DATACORE_ROOT / space_for("system", DATACORE_ROOT, "0-personal") / "org" / "next_actions.org")
 
 
 def _delegate_repair(job, failures: list[str], rec: dict) -> tuple[str, str]:
@@ -632,14 +635,15 @@ def _run_doctor(machine: str, manifest_path: Path) -> None:
 
 
 def _attest_space() -> Path:
-    """First space checkout that converges: 2-datacore where present, else any
+    """First space checkout that converges: the system space where present, else any
     `[0-9]-*` repository with an event log under the root, then under ~/Data
     (hermes keeps a 5-plur clone at ~/Data/2-plur). Spaces live under ~/Data
     only; a ~/spaces clone is never selected (see ledger_attest._roots)."""
     home = Path.home()
     roots = [DATACORE_ROOT, home / "Data"]
-    for r in roots:
-        c = r / "2-datacore"
+    system = space_for("system", DATACORE_ROOT)
+    for r in roots if system else []:
+        c = r / system
         if (c / ".datacore" / "events").is_dir() and (c / ".git").exists():
             return c
     for r in roots:

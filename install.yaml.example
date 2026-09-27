@@ -28,3 +28,12 @@ spaces: {}
   #   projects:
   #     - repo: org/project1
   #       path: projects/project1
+
+# Which space holds which duty. Tools ask for a role, never a space by name.
+# Unset roles are fine: the tool falls back or asks for --space.
+roles:
+  system: 1-myteam      # where Datacore's own work lives: promises, repair tasks
+  product: 1-myteam     # the roadmap, sprints and product triage tools default here
+  standup: 1-myteam     # the team space the daily standup posts for
+  held: []              # spaces tools must never write to
+  attest: [1-myteam, 0-personal]   # where attestations land, first with a ledger wins

@@ -30,12 +30,18 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-PROMISES = ROOT / "2-datacore" / "1-tracks" / "dev" / "datacore-upgrade" / "promises"
+sys.path.insert(0, str(ROOT / ".datacore" / "lib"))
+from spaces import space_for  # noqa: E402
+
+#: The install's system space (install.yaml roles.system) holds the promise
+#: files and the app daemon; a fresh install without one has neither.
+SYSTEM = ROOT / space_for("system", ROOT, "0-personal")
+PROMISES = SYSTEM / "1-tracks" / "dev" / "datacore-upgrade" / "promises"
 PY = sys.executable
 SUITE_TIMEOUT_S = 900   # an eval that hangs must not hang the scoreboard
 SUITES = [  # (name, cwd, test dir relative to cwd, extra env)
     ("root", ROOT / ".datacore" / "lib", "tests", {}),
-    ("app", ROOT / "2-datacore" / "2-projects" / "datacore-app" / "daemon", "tests", {}),
+    ("app", SYSTEM / "2-projects" / "datacore-app" / "daemon", "tests", {}),
 ]
 for mod in sorted((ROOT / ".datacore" / "modules").glob("*/tests")):
     SUITES.append((f"module:{mod.parent.name}", mod.parent, "tests", {"DATACORE_ROOT": str(ROOT)}))

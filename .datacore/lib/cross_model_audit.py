@@ -52,7 +52,9 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 ROOT = Path(os.environ.get("DATACORE_ROOT") or LIB.parents[1])
-SPACE = ROOT / "2-datacore"
+from spaces import space_for  # noqa: E402
+
+SPACE = ROOT / space_for("system", ROOT, "0-personal")  # install.yaml roles.system
 PROMISES = SPACE / "1-tracks" / "dev" / "datacore-upgrade" / "promises"
 AUDITS = SPACE / "1-tracks" / "dev" / "audits"
 NIGHTLY = AUDITS / "nightly"

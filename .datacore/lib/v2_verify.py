@@ -671,6 +671,11 @@ def _pinned_org_workspace() -> tuple[int, ...] | None:
     return None
 
 
+def _system_space() -> str:
+    from spaces import space_for
+    return space_for("system", ROOT, "0-personal")
+
+
 def interpreters() -> list[str]:
     """The Pythons this host actually runs jobs with: the one running this
     checklist first, then everything named python3 on PATH, the system one,
@@ -678,7 +683,7 @@ def interpreters() -> list[str]:
     import shutil
     cands = [sys.executable, shutil.which("python3"), "/usr/bin/python3",
              "/opt/homebrew/bin/python3", "/usr/local/bin/python3",
-             str(ROOT / "2-datacore" / "2-projects" / "datacore-app" / "daemon" / ".venv" / "bin" / "python")]
+             str(ROOT / _system_space() / "2-projects" / "datacore-app" / "daemon" / ".venv" / "bin" / "python")]
     out: list[str] = []
     for c in cands:
         if not c:

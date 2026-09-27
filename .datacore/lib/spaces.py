@@ -35,8 +35,11 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
-from yaml_safety import UniqueStringKeyLoader
+try:
+    import yaml
+    from yaml_safety import UniqueStringKeyLoader
+except ImportError:  # the role lookup must still answer from a bare system python
+    yaml = None     # (launchd, sudo); discovery itself needs PyYAML
 
 log = logging.getLogger(__name__)
 
@@ -362,3 +365,103 @@ def find_space(path: Path, root: Path | None = None) -> Space | None:
         if best is None or len(space.path.parts) > len(best.path.parts):
             best = space
     return best
+
+
+#: The install manifest at the install root. Gitignored; the tracked template is
+#: ``install.yaml.example``.
+INSTALL = "install.yaml"
+
+
+def _plain_roles(text: str) -> dict:
+    """The top-level ``roles:`` mapping without PyYAML: ``key: value``,
+    ``key: [a, b]`` and indented ``- item`` lists. Anything else is skipped."""
+    roles: dict = {}
+    inside, last = False, None
+    for raw in text.splitlines():
+        line = raw.split(" #", 1)[0].rstrip()
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line[0].isspace():
+            inside = line.strip() == "roles:"
+            continue
+        if not inside:
+            continue
+        s = line.strip()
+        if s.startswith("- ") and last is not None:
+            roles.setdefault(last, [])
+            if isinstance(roles[last], list):
+                roles[last].append(s[2:].strip().strip("'\""))
+            continue
+        key, sep, value = s.partition(":")
+        if not sep:
+            continue
+        last, value = key.strip(), value.strip()
+        if value.startswith("[") and value.endswith("]"):
+            roles[last] = [v.strip().strip("'\"") for v in value[1:-1].split(",") if v.strip()]
+        elif value:
+            roles[last] = value.strip("'\"")
+    return roles
+
+
+def _role_values(role: str, root: Path | None) -> list[str]:
+    try:
+        text = (Path(root or data_root()) / INSTALL).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    if yaml is None:
+        doc = {"roles": _plain_roles(text)}
+    else:
+        try:
+            doc = yaml.load(text, Loader=UniqueStringKeyLoader)
+        except (yaml.YAMLError, ValueError):
+            return []
+    roles = doc.get("roles") if isinstance(doc, dict) else None
+    value = roles.get(role) if isinstance(roles, dict) else None
+    if value is None or value == "":
+        return []
+    out = []
+    for v in value if isinstance(value, list) else [value]:
+        p = Path(str(v))
+        # A role names a directory inside the install, never outside it.
+        if str(v) and not p.is_absolute() and ".." not in p.parts:
+            out.append(str(v))
+    return out
+
+
+def space_for_all(role: str, root: Path | None = None) -> list[str]:
+    """Every space this install gives ``role`` (``roles.<role>`` in install.yaml),
+    as directory paths relative to the install root, in declared order. Empty
+    when unset, so shipped code names no space of anyone's (INS-3)."""
+    return _role_values(role, root)
+
+
+def space_for(role: str, root: Path | None = None, default: str | None = None) -> str | None:
+    """The one space holding ``role`` (e.g. ``system``, ``product``), relative to
+    the install root; ``default`` when this install declares none."""
+    found = _role_values(role, root)
+    return found[0] if found else default
+
+
+def _cli(argv: list[str]) -> int:
+    """For shell callers: ``spaces.py role NAME [--root DIR]`` prints one space
+    per line, nothing when unset."""
+    root = None
+    if "--root" in argv:
+        i = argv.index("--root")
+        if i + 1 >= len(argv):
+            print("usage: spaces.py role NAME [--root DIR]")
+            return 2
+        root = Path(argv[i + 1])
+        argv = argv[:i] + argv[i + 2:]
+    if len(argv) != 2 or argv[0] != "role":
+        print("usage: spaces.py role NAME [--root DIR]")
+        return 2
+    out = space_for_all(argv[1], root)
+    if out:
+        print("\n".join(out))
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    raise SystemExit(_cli(sys.argv[1:]))

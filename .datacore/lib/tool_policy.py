@@ -292,7 +292,8 @@ def record_refusal(decision: Decision, *, principal: str, tool_name: str,
     try:
         from actor_identity import this_actor
         from ledger.log import EventLog
-        space = Path(space_dir) if space_dir else ROOT / "2-datacore"
+        from spaces import space_for
+        space = Path(space_dir) if space_dir else ROOT / space_for("system", ROOT, "0-personal")
         if not (space / ".datacore" / "events").is_dir():
             print(f"[tool-policy] no ledger at {space}; refusal not recorded", file=sys.stderr)
             return False

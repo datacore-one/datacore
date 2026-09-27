@@ -16,6 +16,9 @@ LIB="${DATACORE_LIB:-$HOME/Data/.datacore/lib}"
 STATE="${DATACORE_STATE:-$HOME/.datacore/state}"
 PY="${DATACORE_PYTHON:-python3}"
 mkdir -p "$STATE"
+# The install's system space (install.yaml roles.system); no space of ours is named here.
+SYSTEM=$("$PY" "$LIB/spaces.py" role system 2>/dev/null | head -1)
+SYSTEM_SPACE="${DATACORE_ROOT:-$HOME/Data}/${SYSTEM:-0-personal}"
 
 case "${1:-}" in
   invariants)
@@ -27,11 +30,11 @@ case "${1:-}" in
   canary-run)
     # No --assignee: the canary addresses the install's chief of operations
     # (principals.yaml), so no agent of ours is named here (INS-3).
-    "$PY" "$LIB/delegation_canary.py" --run --space "$HOME/Data/2-datacore" \
+    "$PY" "$LIB/delegation_canary.py" --run --space "$SYSTEM_SPACE" \
       > "$STATE/delegation-canary.log" 2>&1
     ;;
   canary-check)
-    "$PY" "$LIB/delegation_canary.py" --check --space "$HOME/Data/2-datacore" \
+    "$PY" "$LIB/delegation_canary.py" --check --space "$SYSTEM_SPACE" \
       > "$STATE/delegation-canary-check.log" 2>&1
     ;;
   drill)

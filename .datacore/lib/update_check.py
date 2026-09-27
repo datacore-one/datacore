@@ -26,10 +26,13 @@ CACHE_TTL_AVAILABLE = 43200     # 12 hours
 CACHE_TTL_UNKNOWN = 1800        # 30 min — retry sooner when probe failed
 OVERALL_TIMEOUT = 12            # max seconds for all checks combined
 
-# Known install path for datacore-mcp (npm-linked from git checkout)
-_DATACORE_MCP_PACKAGE_JSON = (
-    Path.home() / "Data" / "2-datacore" / "2-projects" / "datacore-mcp" / "package.json"
-)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import space_for  # noqa: E402
+
+# Known install path for datacore-mcp (npm-linked from git checkout), inside the
+# install's system space (install.yaml roles.system).
+_DATACORE_MCP_DIR = f"~/Data/{space_for('system', Path.home() / 'Data', '0-personal')}/2-projects/datacore-mcp"
+_DATACORE_MCP_PACKAGE_JSON = Path(_DATACORE_MCP_DIR).expanduser() / "package.json"
 
 # Version string pattern — rejects HTML error pages, garbage
 _VERSION_RE = re.compile(r"^\d+\.\d+[\d.]*$")
@@ -39,7 +42,7 @@ PACKAGES = [
         "name": "datacore-mcp",
         "npm_name": "@datacore-one/mcp",
         "local_version_fn": "_local_version_datacore_mcp",
-        "install_hint": "cd ~/Data/2-datacore/2-projects/datacore-mcp && git pull && npm install",
+        "install_hint": f"cd {_DATACORE_MCP_DIR} && git pull && npm install",
     },
     {
         "name": "plur-mcp",

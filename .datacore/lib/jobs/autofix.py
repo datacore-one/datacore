@@ -57,8 +57,17 @@ MARK = "autofix"
 
 
 def _space(root: Path) -> Path:
-    """Where repair items live: the system space, which is where the jobs are."""
-    return root / "2-datacore"
+    """Where repair items live: the system space, which is where the jobs are
+    (install.yaml roles.system); with no role declared, the first space under
+    the root that keeps a ledger; else the personal space."""
+    from spaces import space_for
+    declared = space_for("system", root)
+    if declared:
+        return root / declared
+    for cand in sorted(root.glob("[0-9]*-*")):
+        if (cand / ".datacore" / "events").is_dir():
+            return cand
+    return root / "0-personal"
 
 
 ROSTER = LIB.parent / "registry" / "infrastructure.yaml"
