@@ -959,7 +959,7 @@ def _commit(paths: list[Path], message: str) -> str:
 def check(night: date, *, write: bool, send: bool) -> int:
     folder = NIGHTLY / night.isoformat()
     if write:
-        _git(SPACE, "pull", "-q", "--rebase", "--autostash")
+        _git(SPACE, "pull", "-q", "--no-rebase", "--autostash")   # merge, never rebase (DIP-0046)
     alerts = night_alerts(folder)
     result = aggregate(folder, pool=load_pool())
     print(f"cross_model_audit check {night}: {len(result['confirmed'])} confirmed, "
