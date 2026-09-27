@@ -590,12 +590,34 @@ def cmd_complete(args):
 # ---------------------------------------------------------------------------
 
 def cmd_agenda(args):
-    """List tasks SCHEDULED within the next N days."""
-    from org_workspace import Query
+    """List open tasks SCHEDULED up to N days ahead, including missed dates.
+
+    TSK-7: a task scheduled in the past and still open stays on the agenda
+    flagged ``overdue`` instead of silently dropping out the day after its
+    date (Query.agenda's window starts today). Finished tasks do not show.
+    """
+    from org_workspace.query import _to_date
     ws = _load_ws(args.file)
-    q = Query(ws)
-    nodes = q.agenda(days=args.days)
-    return {"days": args.days, "count": len(nodes), "tasks": [_node_to_dict(n) for n in nodes]}
+    today = date.today()
+    end = today + timedelta(days=args.days)
+    state_config = ws.state_config
+    picked = []
+    for n in ws.all_nodes():
+        d = _to_date(n.scheduled) if n.scheduled is not None else None
+        if d is None or d > end:
+            continue
+        if n.todo and state_config.is_terminal(n.todo):
+            continue
+        picked.append((d, n))
+    picked.sort(key=lambda p: p[0])
+    tasks = []
+    for d, n in picked:
+        task = _node_to_dict(n)
+        task["days_until"] = (d - today).days
+        task["overdue"] = d < today
+        tasks.append(task)
+    return {"days": args.days, "count": len(tasks),
+            "overdue": sum(1 for t in tasks if t["overdue"]), "tasks": tasks}
 
 
 # ---------------------------------------------------------------------------
