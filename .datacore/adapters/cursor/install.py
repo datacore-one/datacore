@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -38,6 +39,9 @@ HERE = Path(__file__).resolve().parent
 BRIDGE_MARK = "adapters/cursor/hook.py"
 PLUR_SUBCOMMANDS = ("hook-cursor-session-start", "hook-cursor-guard", "hook-cursor-post-tool", "hook-cursor-stop")
 CURSOR_TOOL_CAP = 40
+WINDOWS = os.name == "nt"
+# npm package behind each server binary, for resolving node + script on Windows.
+MCP_PACKAGES = {"datacore-mcp": "@datacore-one/mcp", "plur-mcp": "@plur-ai/mcp"}
 
 
 class InstallError(Exception):
@@ -56,16 +60,49 @@ def default_root() -> Path:
     return Path(os.environ.get("DATACORE_PATH") or HERE.parents[2]).resolve()   # <root>/.datacore/adapters/cursor
 
 
-def resolve_tools(root: Path) -> Tools:
-    venv_py = root / ".datacore" / "venv" / "bin" / "python"
-    plur_hook = Path.home() / ".plur" / "bin" / "plur-hook"
-    plur_shim = Path.home() / ".plur" / "bin" / "plur-mcp"
+def resolve_tools(root: Path, windows: bool = WINDOWS, home: Path | None = None, which=shutil.which) -> Tools:
+    home = home or Path.home()
+    # Windows venvs keep the interpreter in Scripts\, and PLUR's shims are .cmd
+    # files there (plur's init.ts names them so).
+    venv_py = root / ".datacore" / "venv" / ("Scripts/python.exe" if windows else "bin/python")
+    ext = ".cmd" if windows else ""
+    plur_hook = home / ".plur" / "bin" / f"plur-hook{ext}"
+    plur_shim = home / ".plur" / "bin" / f"plur-mcp{ext}"
     return Tools(
-        datacore_mcp=shutil.which("datacore-mcp"),
-        plur_mcp=shutil.which("plur-mcp") or (str(plur_shim) if plur_shim.exists() else None),
+        datacore_mcp=which("datacore-mcp"),
+        plur_mcp=which("plur-mcp") or (str(plur_shim) if plur_shim.exists() else None),
         plur_hook=str(plur_hook) if plur_hook.exists() else None,
         python=str(venv_py) if venv_py.exists() else sys.executable,
     )
+
+
+def mcp_entry(command: str, node: str | None = None, windows: bool = WINDOWS) -> dict:
+    """The server entry. On Windows an npm binary is a .cmd shim; run node on the
+    package script instead, as the Datacore CLI does, so a client that spawns
+    without a shell can still launch it. Falls back to the command itself."""
+    if windows and command.lower().endswith(".cmd"):
+        shim = Path(command)
+        pkg = MCP_PACKAGES.get(shim.stem.lower())
+        node = node or shutil.which("node")
+        if pkg and node:
+            pkg_dir = shim.parent / "node_modules" / Path(*pkg.split("/"))
+            try:
+                bins = json.loads((pkg_dir / "package.json").read_text()).get("bin")
+                rel = bins if isinstance(bins, str) else (bins or {}).get(shim.stem.lower())
+                if rel and (pkg_dir / rel).exists():
+                    return {"command": node, "args": [str(pkg_dir / rel)]}
+            except (OSError, ValueError):
+                pass
+    return {"command": command}
+
+
+def hook_command(executable: str, *args: str, windows: bool = WINDOWS) -> str:
+    """A hook command line with every path quoted for the shell that runs it.
+    Unquoted, a space in the user name split the command and every call failed."""
+    parts = [str(executable), *map(str, args)]
+    if windows:
+        return " ".join(f'"{p}"' if (" " in p or "\t" in p) else p for p in parts)
+    return shlex.join(parts)
 
 
 def merge_mcp(existing: dict, root: Path, tools: Tools) -> dict:
@@ -77,34 +114,37 @@ def merge_mcp(existing: dict, root: Path, tools: Tools) -> dict:
     if "venv" in tools.python:
         env["DATACORE_PYTHON"] = tools.python
     env["DATACORE_TOOL_PROFILE"] = "cursor"
-    servers["datacore"] = {"command": tools.datacore_mcp, "env": env}
+    servers["datacore"] = {**mcp_entry(tools.datacore_mcp), "env": env}
     if tools.plur_mcp:
-        servers["plur"] = {"command": tools.plur_mcp, "env": {"PLUR_TOOL_PROFILE": "cursor"}}
+        servers["plur"] = {**mcp_entry(tools.plur_mcp), "env": {"PLUR_TOOL_PROFILE": "cursor"}}
     cfg["mcpServers"] = servers
     return cfg
 
 
 def _ours(entry: dict) -> bool:
-    command = str(entry.get("command", ""))
+    # Windows paths use backslashes; without this every re-run appended a copy.
+    command = str(entry.get("command", "")).replace("\\", "/")
     if BRIDGE_MARK in command:
         return True
     return "plur-hook" in command and any(sub in command for sub in PLUR_SUBCOMMANDS)
 
 
-def merge_hooks(existing: dict, root: Path, tools: Tools) -> dict:
+def merge_hooks(existing: dict, root: Path, tools: Tools, windows: bool = WINDOWS) -> dict:
     cfg = dict(existing)
     hooks = {event: [h for h in (entries or []) if isinstance(h, dict) and not _ours(h)]
              for event, entries in (cfg.get("hooks") or {}).items()}
-    bridge = f"{tools.python} {root / '.datacore' / 'adapters' / 'cursor' / 'hook.py'}"
+    sep = "\\" if windows else "/"
+    bridge = hook_command(tools.python, sep.join([str(root), ".datacore", "adapters", "cursor", "hook.py"]), windows=windows)
+    plur = lambda sub: hook_command(tools.plur_hook, sub, windows=windows)  # noqa: E731
     additions: dict[str, list[dict]] = {
         "preToolUse": [{"command": bridge, "timeout": 25, "failClosed": False}],
         "beforeShellExecution": [{"command": bridge, "timeout": 25, "failClosed": False}],
     }
     if tools.plur_hook:
-        additions["sessionStart"] = [{"command": f"{tools.plur_hook} hook-cursor-session-start", "timeout": 10, "failClosed": False}]
-        additions["preToolUse"].append({"command": f"{tools.plur_hook} hook-cursor-guard", "timeout": 3, "failClosed": False})
-        additions["postToolUse"] = [{"command": f"{tools.plur_hook} hook-cursor-post-tool", "timeout": 10, "failClosed": False}]
-        additions["stop"] = [{"command": f"{tools.plur_hook} hook-cursor-stop", "timeout": 3, "failClosed": False}]
+        additions["sessionStart"] = [{"command": plur("hook-cursor-session-start"), "timeout": 10, "failClosed": False}]
+        additions["preToolUse"].append({"command": plur("hook-cursor-guard"), "timeout": 3, "failClosed": False})
+        additions["postToolUse"] = [{"command": plur("hook-cursor-post-tool"), "timeout": 10, "failClosed": False}]
+        additions["stop"] = [{"command": plur("hook-cursor-stop"), "timeout": 3, "failClosed": False}]
     for event, entries in additions.items():
         hooks[event] = hooks.get(event, []) + entries
     cfg["version"] = cfg.get("version", 1)
@@ -213,7 +253,7 @@ def doctor(root: Path) -> int:
     registered = [h for hs in (hooks.get("hooks") or {}).values() for h in hs if BRIDGE_MARK in str(h.get("command", ""))]
     results.append(("ok" if len(registered) >= 2 else "FAIL", "guard hooks", f"{len(registered)} bridge entries"))
     if registered:
-        probe = subprocess.run(registered[0]["command"].split(" ", 1), input=json.dumps(
+        probe = subprocess.run(shlex.split(registered[0]["command"], posix=not WINDOWS), input=json.dumps(
             {"hook_event_name": "preToolUse", "tool_name": "Shell", "tool_input": {"command": "true"}}),
             capture_output=True, text=True, timeout=30)
         results.append(("ok" if probe.returncode == 0 and not probe.stdout.strip() else "FAIL",

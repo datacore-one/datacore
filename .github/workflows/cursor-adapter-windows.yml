@@ -1,0 +1,18 @@
+# The Cursor adapter was written on macOS; its Windows paths broke unseen until a
+# user's install (docs: test_cursor_install_windows.py). This is the one place
+# its tests run on Windows.
+name: cursor-adapter-windows
+on:
+  pull_request:
+    paths: ['.datacore/adapters/cursor/**', '.datacore/lib/tests/test_cursor_*.py', '.github/workflows/cursor-adapter-windows.yml']
+  workflow_dispatch:
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install pytest
+      # test_cursor_install.py is written with POSIX paths (/data) and stays POSIX-only.
+      - run: python -m pytest -q .datacore/lib/tests/test_cursor_install_windows.py
