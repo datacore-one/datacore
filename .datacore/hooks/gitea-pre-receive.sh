@@ -49,7 +49,15 @@
 # knows its own identity. Stated rather than papered over: on Gitea the
 # single-writer invariant rests on the client hook plus config_drift watching
 # that core.hooksPath stays set, not on this file.
-ACCOUNTS="gregor"
+#
+# WHICH accounts are admitted is the install's own, so none is named here
+# (INS-3): $DATACORE_GITEA_ACCOUNTS, else the space-separated words in
+# `<this hook>.accounts` beside it (written at deploy, see DEPLOY-gitea.md),
+# else none -- every push is then judged against members.yaml alone.
+ACCOUNTS="${DATACORE_GITEA_ACCOUNTS:-}"
+if [ -z "$ACCOUNTS" ] && [ -r "$0.accounts" ]; then
+    ACCOUNTS=$(grep -v '^[[:space:]]*#' "$0.accounts" | tr '\n' ' ')
+fi
 
 ZERO="0000000000000000000000000000000000000000"
 ACTOR="${DATACORE_ACTOR:-${GITEA_PUSHER_NAME:-${GL_USERNAME:-${USER:-unknown}}}}"

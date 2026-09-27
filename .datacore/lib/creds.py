@@ -1084,7 +1084,9 @@ class CredentialManager:
 
         if not secrets_dir.exists():
             print("Secrets repo not found at .datacore/secrets/")
-            print("Bootstrap with: git clone gregor@blackpi.local:~/secrets.git .datacore/secrets")
+            # The secrets remote is the install's own (INS-3: none of ours ships).
+            remote = os.environ.get("DATACORE_SECRETS_REMOTE") or "<your-secrets-remote>"
+            print(f"Bootstrap with: git clone {remote} .datacore/secrets")
             return 1
 
         if not sync_script.exists():

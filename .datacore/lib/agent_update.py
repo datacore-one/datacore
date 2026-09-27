@@ -44,7 +44,7 @@ HEALTH_BACKOFF = 10
 
 PROFILES = {
     "hermes": {
-        "description": "Tris — Hermes Agent gateway + PLUR bridge",
+        "description": "Hermes Agent gateway + PLUR bridge",
         # Paths are home-relative and expanded at load (see _expand). The
         # updater runs as the agent's own user on the agent's own host.
         "home": "~",

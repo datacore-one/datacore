@@ -227,7 +227,7 @@ def wrap_up(data_dir: Path, agent: str, tier: str, summary: str,
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--agent', required=True, help='miles | tris | data')
+    ap.add_argument('--agent', required=True, help='the agent principal wrapping up (as named in principals.yaml)')
     ap.add_argument('--tier', default='session', choices=['tick', 'session', 'batch'])
     ap.add_argument('--summary', default='', help='entry used for every space')
     ap.add_argument('--entries', help='JSON file: {"5-plur": "...", "0-personal": "..."}')

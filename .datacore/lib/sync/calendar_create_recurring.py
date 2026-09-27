@@ -178,7 +178,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Create recurring events on Google Calendar")
     parser.add_argument("command", choices=["preview", "insert"])
     parser.add_argument("--account", default=None,
-                        help="Named account from gcal_auth (default: gregor@datafund.io)")
+                        help="Named account from gcal_auth (default: the account named 'default' in settings)")
     parser.add_argument("--calendar", default="primary",
                         help="Calendar ID (default: primary)")
     args = parser.parse_args()

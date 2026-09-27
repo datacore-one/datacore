@@ -1,0 +1,8 @@
+# Template for publish-scrub.local.yaml (gitignored): the author's own
+# identities module_publish_scrub.py replaces before a module is published.
+# Pairs of [real, replacement], applied in order -- longer strings first.
+identities:
+  - [Jane Author, the founder]
+  - [jane.author, user]
+  - [Jane, the founder]
+  - [yourcompany.com, example.com]

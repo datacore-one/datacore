@@ -53,19 +53,32 @@ PEOPLE = ['alice', 'bob', 'carol', 'dave', 'erin', 'frank', 'grace', 'heidi',
 # An address is not the only thing that names someone. A persona string, a
 # colleague's handle in an actor map, a real snippet left in a test fixture and
 # a vendor domain in a tagging rule all identify the author just as well.
-# Ordered longest-first so 'crt.ahlin' is consumed before 'crt'.
-IDENTITIES = [
-    ('Vladimir Oleksiienko', 'Victor Example'), ('Dimitriadis, Georgios', 'Example, Dave'),
-    ('crt.ahlin', 'teammate'), ('crtahlin', 'teammate'),
-    ('novak-law.eu', 'lawfirm.example.com'), ('sar-leads.agency', 'agency.example.com'),
-    ('defactor.com', 'vendor.example.com'), ('betoken.fund', 'vendor.example.com'),
-    ('ethswarm.org', 'example.org'), ('ethswarm', 'example-org'),
-    ('Fair Data Society', 'Example Foundation'),
-    ('Datafund', 'Acme'), ('datafund', 'acme'), ('DATAFUND', 'ACME'),
-    ('Gregor', 'the founder'), ('gregor', 'user'), ('plur9', 'user'),
-    ('Vladimir', 'Victor'), ('Tadej', 'Trent'), ('Tanja', 'Tina'),
-    ('Agnes', 'Alice'), ('Yasar', 'Walter'), ('Nejc', 'Niaj'), ('Novak', 'Example'),
-]
+#
+# WHOSE identities those are is the installing author's own list, so it is not
+# in this file (INS-3: shipped code names nobody of ours) -- it is
+# `identities:` in the gitignored config/publish-scrub.local.yaml, pairs of
+# [real, replacement], applied in order. Keep them longest-first so
+# 'first.last' is consumed before 'first'. No file: only addresses and home
+# directories are scrubbed.
+IDENTITIES_FILE = Path(__file__).resolve().parent.parent / "config" / "publish-scrub.local.yaml"
+
+
+def load_identities(path: Path = IDENTITIES_FILE) -> list[tuple[str, str]]:
+    try:
+        import yaml
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except FileNotFoundError:
+        return []
+    pairs = data.get("identities") or [] if isinstance(data, dict) else []
+    out = []
+    for pair in pairs:
+        if not (isinstance(pair, (list, tuple)) and len(pair) == 2 and all(isinstance(x, str) and x for x in pair)):
+            raise SystemExit(f"{path}: every identity must be a [real, replacement] pair of strings")
+        out.append((pair[0], pair[1]))
+    return out
+
+
+IDENTITIES = load_identities()
 
 
 def tracked(mod: Path) -> list[str]:

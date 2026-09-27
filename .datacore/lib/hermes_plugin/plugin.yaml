@@ -6,7 +6,7 @@ description: >-
   injected into memory every session, a pre_tool_call gate refuses a ledger
   write under another principal's name, and the fleet's tool-effect policy
   (approvals_policy.yaml) applies to Hermes tool calls exactly as it does to
-  nightshift and Miles. Inert when DATACORE_ROOT holds no .datacore/lib.
+  the fleet's other executors. Inert when DATACORE_ROOT holds no .datacore/lib.
 author: Datacore
 kind: standalone
 hooks:

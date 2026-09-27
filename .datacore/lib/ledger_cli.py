@@ -241,7 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("void", help="Cancel one bad event with an in-ledger void record")
     p.add_argument("--space", required=True, help="Space directory root")
-    p.add_argument("--log", required=True, help="The voided event's log file (e.g. miles.jsonl)")
+    p.add_argument("--log", required=True, help="The voided event's log file (e.g. agent-a.jsonl)")
     p.add_argument("--seq", required=True, type=int, help="The voided event's seq")
     p.add_argument("--reason", required=True, help="Why it is void (recorded in the ledger)")
     p.add_argument("--actor", default=None, help="Actor id (default: this machine's declared actor)")

@@ -38,7 +38,7 @@ suite now targets. A hook needing an absent interpreter installs cleanly and is
 inert — the same check-strength failure as hazard 1, from another direction.
 
 **4. Gitea reports the ACCOUNT, not the actor.** `GITEA_PUSHER_NAME` is
-`gregor` for every machine, while `members.yaml` lists machine actors. The
+the one Gitea account every machine pushes as, while `members.yaml` lists machine actors. The
 server therefore cannot attribute a push to a machine, so per-actor log
 ownership is enforced CLIENT-side by
 `.datacore/lib/hooks/log_ownership_guard.py`; the server checks only that the
@@ -48,14 +48,15 @@ client hook plus config_drift watching `core.hooksPath`.
 ## Install (report-only)
 
 Gitea runs in Docker here; repositories live on the host under
-`/mnt/ssd/gitea/data/git/repositories/<owner>/<repo>.git`, owned by `gregor`.
+`/mnt/ssd/gitea/data/git/repositories/<owner>/<repo>.git`, owned by `<owner>`.
 
     scp .datacore/hooks/gitea-pre-receive.sh <gitea-host>:/tmp/
-    ssh <gitea-host> 'B=/mnt/ssd/gitea/data/git/repositories/gregor; \
+    ssh <gitea-host> 'B=/mnt/ssd/gitea/data/git/repositories/<owner>; \
       for r in 0-personal 4-forge 6-meridian 7-megaphone; do \
         d=$B/$r.git/hooks/pre-receive.d; \
         sudo mkdir -p $d && sudo cp /tmp/gitea-pre-receive.sh $d/50-datacore && \
-        sudo chown gregor:gregor $d/50-datacore && sudo chmod 755 $d/50-datacore; \
+        echo <account> | sudo tee $d/50-datacore.accounts >/dev/null && \
+        sudo chown <owner>:<owner> $d/50-datacore $d/50-datacore.accounts && sudo chmod 755 $d/50-datacore; \
       done'
 
 **Do not set `DATACORE_ENFORCE` yet.** Report-only writes `datacore/warn:` and

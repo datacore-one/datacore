@@ -125,5 +125,24 @@ def main() -> int:
     return 1 if fails else 0
 
 
+def test_admitted_accounts_come_from_the_install_not_the_hook(tmp_path):
+    """INS-3: the hook names no account of ours. An account listed in
+    `<hook>.accounts` is admitted and exempt from per-actor ownership; the
+    same pusher with no accounts file is judged as an unknown actor."""
+    srv, wt = setup(tmp_path)
+    push(wt, "mac")                               # the branch exists; later pushes diff against it
+    (wt / ".datacore" / "events" / "winston.jsonl").write_text('{"seq":9}\n')
+    sh(wt, "git", "add", "-A")
+    sh(wt, "git", "commit", "-qm", "cross")
+    rc, out = push(wt, "the-account")
+    assert "not in .datacore/members.yaml" in out and "single-writer" in out, out[-300:]
+
+    (srv / "hooks" / "pre-receive.accounts").write_text("# admitted\nthe-account\n")
+    (wt / ".datacore" / "events" / "winston.jsonl").write_text('{"seq":10}\n')
+    sh(wt, "git", "commit", "-qam", "cross again")
+    rc, out = push(wt, "the-account")
+    assert rc == 0 and "datacore/" not in out, out[-300:]
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
