@@ -92,6 +92,24 @@ def run(args: list[str], timeout: int = 180) -> tuple[int, str]:
         return 126, str(exc)
 
 
+def unlooked(rc: int, out: str) -> str:
+    """Why a helper did NOT look, or "" when it did (OPS-2).
+
+    A timeout, a helper that is not there or cannot start, and a helper that
+    died on a Python traceback (an ImportError under this interpreter, most
+    often) have seen nothing: the row is "could not check" (n-a), never FAIL
+    (a false "broken") and never ok (a false "fine").
+    """
+    if rc == 124:
+        return out.strip()[:60] or "timed out"
+    if rc in (126, 127):
+        return out.strip()[:60] or "helper could not start"
+    if rc != 0 and "Traceback (most recent call last)" in out:
+        last = next((l for l in reversed(out.strip().splitlines()) if l.strip()), "")
+        return f"helper crashed: {last.strip()[:60]}"
+    return ""
+
+
 def spaces() -> list[Path]:
     return [s.path for s in discover_spaces(ROOT)
             if (s.path / ".datacore" / "events").is_dir()]
@@ -109,14 +127,14 @@ def check_ledger(rep: Report, quick: bool) -> None:
     # handed to Miles as a repair.
     bad, slow = [], []
     for s in sp:
-        rc, _ = run([PY, str(LIB / "ledger_cli.py"), "verify", "--space", str(s)], 600)
-        if rc == 124:
+        rc, out = run([PY, str(LIB / "ledger_cli.py"), "verify", "--space", str(s)], 600)
+        if unlooked(rc, out):
             slow.append(s.name)
         elif rc != 0:
             bad.append(s.name)
     ok = len(sp) - len(bad) - len(slow)
     detail = f"{ok}/{len(sp)} verify" + (f"; broken: {', '.join(bad)}" if bad else "") \
-        + (f"; timed out: {', '.join(slow)}" if slow else "")
+        + (f"; not checked (timeout/crash): {', '.join(slow)}" if slow else "")
     rep.add("0034", "hash chains", False if bad else (None if slow else True), detail)
 
     # Per-actor nonces: seq must be dense and unique WITHIN each writer's file.
@@ -171,6 +189,16 @@ def check_jobs(rep: Report) -> None:
     rc, out = run([PY, str(jv), "--machine", machine, "--no-emit"], 200)
     failed = [l.split("'")[1] for l in out.splitlines() if "FAILED" in l and "'" in l]
     ok_line = next((l for l in out.splitlines() if l.startswith("OK")), "")
+    why = unlooked(rc, out)
+    if why:
+        rep.add("0035", f"job contracts ({machine})", None, f"could not check: {why}")
+        return
+    # "OK 0 jobs" means the verifier matched nothing for this machine (an
+    # identity nobody declared jobs for): nothing was checked, so not a pass.
+    if rc == 0 and re.match(r"OK 0 jobs\b", ok_line):
+        rep.add("0035", f"job contracts ({machine})", None,
+                f"no job declared for machine '{machine}' -- nothing checked")
+        return
     rep.add("0035", f"job contracts ({machine})", rc == 0,
             ok_line or (f"failing: {', '.join(failed)}" if failed else out.strip()[:70]))
 
@@ -254,7 +282,9 @@ def check_projection(rep: Report) -> None:
     if ck.exists():
         rc, out = run([PY, str(ck), "verify"], 250)
         last = next((l for l in reversed(out.splitlines()) if "checkpoint-verify" in l), "")
-        rep.add("0043", "checkpoint restores", rc == 0, last.strip()[:70])
+        why = unlooked(rc, out)
+        rep.add("0043", "checkpoint restores", None if why else rc == 0,
+                f"could not check: {why}" if why else last.strip()[:70])
 
 
 # ── DIP-0044: actor identity ────────────────────────────────────────────────
@@ -476,16 +506,20 @@ def check_stores(rep: Report) -> None:
     2026-08-19 and 2026-09-06 with a retention sweep that nothing scheduled
     (datacore-lens#1); a ceiling here is what notices that before the disk does.
     """
-    tracked = []
+    tracked, unread = [], []
     for space in sorted(ROOT.glob("[0-9]-*")):
         if not (space / ".git").exists():
             continue
         rc, out = run(["git", "-C", str(space), "ls-files", "--",
                        ".datacore/*.db", ".datacore/*.db-*", "*.sqlite", "*.sqlite3"], 30)
-        if rc == 0 and out.strip():
+        if rc != 0:
+            unread.append(space.name)   # git did not answer: this space was not looked at
+        elif out.strip():
             tracked.append(f"{space.name}: {out.strip().splitlines()[0]}")
-    rep.add("0046", "no tracked derived db", not tracked,
-            "clean" if not tracked else "; ".join(tracked[:3]))
+    rep.add("0046", "no tracked derived db",
+            False if tracked else (None if unread else True),
+            ("; ".join(tracked[:3]) if tracked else "clean")
+            + (f"; not checked: {', '.join(unread)}" if unread else ""))
     home = Path(os.environ.get("DATACORE_LENS_HOME") or (Path.home() / ".datacore" / "lens"))
     db = home / "observations.db"
     if db.exists():
@@ -953,9 +987,22 @@ def check_egress(rep: Report) -> None:
                        cwd="/", capture_output=True, timeout=60, check=True)
         rep.add("app", "core importable by modules", True,
                 "from datacore.ledger import attests")
-    except Exception as exc:  # noqa: BLE001
-        rep.add("app", "core importable by modules", False,
-                f"{type(exc).__name__} — module decorators would record nothing")
+    except subprocess.CalledProcessError as exc:
+        # `datacore` itself missing is the fault this row exists for. Any other
+        # crash (a dependency of the probe's interpreter, a timeout) means the
+        # probe did not get as far as looking: could not check, not broken.
+        err = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        err += exc.output.decode(errors="replace") if isinstance(exc.output, bytes) else (exc.output or "")
+        if re.search(r"No module named '?datacore", err) or "Traceback" not in err:
+            rep.add("app", "core importable by modules", False,
+                    "CalledProcessError — module decorators would record nothing")
+        else:
+            rep.add("app", "core importable by modules", None,
+                    f"could not check: {err.strip().splitlines()[-1][:60]}")
+        return
+    except Exception as exc:  # noqa: BLE001 - timeout / cannot start: did not look
+        rep.add("app", "core importable by modules", None,
+                f"could not check: {type(exc).__name__}")
         return
 
     scan = LIB / "egress_scan.py"
