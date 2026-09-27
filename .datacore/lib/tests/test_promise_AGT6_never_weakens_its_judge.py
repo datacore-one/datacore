@@ -62,9 +62,9 @@ def test_a_deleted_job_is_refused(manifest):
     assert r.returncode == 1 and "REFUSED" in r.stderr
 
 
-def _merged(monkeypatch, files):
+def _merged(monkeypatch, files, state="OPEN"):
     monkeypatch.setattr(fix_check, "merged_pr", lambda item, repo, gh=("gh",): (
-        {"number": 9, "url": "https://github.com/o/r/pull/9", "state": "OPEN", "title": item}, files))
+        {"number": 9, "url": "https://github.com/o/r/pull/9", "state": state, "title": item}, files))
     monkeypatch.setattr(sys, "argv", ["fix_check.py", "--stage", "merged", "--job", "fixture-job", "--machine", "box",
                                       "--contract-sha", "x", "--item", "autofix-fixture-job-20260926", "--repo", "o/r"])
     return fix_check.main()
@@ -81,7 +81,12 @@ def test_a_pull_request_that_edits_the_judge_does_not_count(monkeypatch, judge):
 
 
 def test_a_pull_request_that_fixes_only_the_producer_counts(monkeypatch):
-    assert _merged(monkeypatch, [".datacore/lib/producer.py"]) == 0
+    # Owner decision 2026-09-27 (NS-9 wins): an OPEN repair PR is "waiting for
+    # you", never done and never a failure; only a MERGED producer-only PR counts.
+    import jobs.autofix
+    monkeypatch.setattr(jobs.autofix, "recovered_since", lambda root, job, since: True)   # the job verifies again
+    assert _merged(monkeypatch, [".datacore/lib/producer.py"], state="MERGED") == 0
+    assert _merged(monkeypatch, [".datacore/lib/producer.py"]) == fix_check.WAITING_ON_OWNER
 
 
 # ── agent behaviour ────────────────────────────────────────────────────────────────

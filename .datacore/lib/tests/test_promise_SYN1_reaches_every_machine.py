@@ -84,6 +84,11 @@ def _cycle(root: Path, monkeypatch) -> None:
 def test_a_change_reaches_every_other_machine_in_one_cycle(fleet, origin_machine, monkeypatch):
     src = fleet[origin_machine] / SPACE
     (src / "notes" / "a.md").write_text(f"edited on {origin_machine}\n")
+    # The record is written AS the origin machine, so declare it first: the
+    # ledger refuses an append by a writer other than the process's declared one
+    # (AGT-10), and without this the test inherits the real machine's identity
+    # (owner-approved eval fix 2026-09-27).
+    monkeypatch.setenv("DATACORE_ACTOR", origin_machine)
     EventLog(src, origin_machine, sign=False).append(
         "item.create", {"id": f"from-{origin_machine}", "title": "t", "state": "NEXT"})
 
