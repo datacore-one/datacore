@@ -107,6 +107,8 @@ def test_a_cadence_duty_without_done_when_goes_to_the_inbox():
     """The exception is narrow: a duty with no DONE_WHEN is not fully specified,
     so cadence_capture must not bypass the inbox for it."""
     import importlib.util
+    import sys as _sys
+    _sys.path.insert(0, str(DC / "modules" / "ventures" / "lib"))
     spec = importlib.util.spec_from_file_location(
         "cadence_capture", DC / "modules" / "ventures" / "lib" / "cadence_capture.py")
     cc = importlib.util.module_from_spec(spec)
