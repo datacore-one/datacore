@@ -325,7 +325,13 @@ def _needs(f: dict) -> str:
         who = f.get("assignee") or "miles"
         asked, url = _pull_request(f["item"])
         if url:
-            return f"review the pull request {url}"
+            # AUD-5: an agent's pull request reaches the owner only after a second
+            # model family has commented on it (cross_model_audit.review).
+            from cross_model_audit import AGENTS, pr_ready
+            ready = pr_ready(url, AGENTS.get(who, "claude"))
+            if ready is False:
+                return f"in review: a second model reviews the pull request {url} before you do"
+            return f"review the pull request {url}" + ("" if ready else " (could not tell whether a second model reviewed it)")
         return (f"in repair: {who} is on it" if asked
                 else f"in repair: {who} is on it (could not tell whether a fix is waiting for review)")
     if f.get("kind") == "escalation":

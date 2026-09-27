@@ -95,8 +95,18 @@ def test_recheck_reports_repaired_and_still_failing_and_does_not_page_a_repair_h
 
 
 def test_an_existing_pull_request_is_what_the_owner_reviews(tmp_path, monkeypatch):
+    import cross_model_audit
+    monkeypatch.setattr(cross_model_audit, "pr_reviews", lambda url: [{"family": "gpt", "kind": "comment"}])
     frag, _ = _recheck_with_one_repair(tmp_path, monkeypatch, pr="https://x/pull/7")
     assert frag["still_failing"][0]["needs"] == "review the pull request https://x/pull/7"
+
+
+def test_a_pull_request_no_second_model_reviewed_is_not_the_owners_yet(tmp_path, monkeypatch):
+    """AUD-5: Miles's PR goes to the owner only after another family commented."""
+    import cross_model_audit
+    monkeypatch.setattr(cross_model_audit, "pr_reviews", lambda url: [{"family": "claude", "kind": "comment"}])
+    frag, _ = _recheck_with_one_repair(tmp_path, monkeypatch, pr="https://x/pull/7")
+    assert frag["still_failing"][0]["needs"].startswith("in review: a second model reviews")
 
 
 def test_a_repair_still_failing_after_24_hours_pages_the_owner(tmp_path, monkeypatch):
