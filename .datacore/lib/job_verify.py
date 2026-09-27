@@ -116,11 +116,71 @@ def _default_manifest_path() -> Path:
     reason. The manifest that ships beside this file is the one belonging to
     the code actually running.
     """
+    # THE INSTALL'S OWN LIST COMES FIRST (INS-5). The tracked manifest is THIS
+    # fleet's list -- 57 jobs on mac, box, nightshift, hermes and plur-claw --
+    # and every `git pull` rewrites it, so an install that wants its own jobs
+    # cannot keep them there. `manifest.local.yaml` (gitignored) is the
+    # install's list; the tracked one is used only on a machine whose roster
+    # declares a machine that list schedules, i.e. by the fleet it describes.
+    local = DATACORE_ROOT / ".datacore" / "lib" / "jobs" / LOCAL_MANIFEST
+    beside_local = Path(__file__).resolve().parent / "jobs" / LOCAL_MANIFEST
+    for candidate in (local, beside_local):
+        if candidate.exists():
+            return candidate
     from_root = DATACORE_ROOT / ".datacore" / "lib" / "jobs" / "manifest.yaml"
-    if from_root.exists():
-        return from_root
     beside = Path(__file__).resolve().parent / "jobs" / "manifest.yaml"
-    return beside if beside.exists() else from_root
+    tracked = from_root if from_root.exists() else beside if beside.exists() else None
+    if tracked is not None and _fleet_member(tracked):
+        return tracked
+    return local
+
+
+LOCAL_MANIFEST = "manifest.local.yaml"
+
+
+def _fleet_member(manifest: Path) -> bool:
+    """Does this machine's roster declare a machine the tracked list schedules?"""
+    try:
+        from jobs.manifest import known_machines
+        roster = known_machines()
+        if not roster:
+            return False
+        import yaml
+        jobs = (yaml.safe_load(manifest.read_text()) or {}).get("jobs") or []
+        return any(isinstance(j, dict) and j.get("machine") in roster for j in jobs)
+    except Exception:  # noqa: BLE001 - an unreadable roster is not membership
+        return False
+
+
+def _alert_command() -> str:
+    """The command an install routes `on_fail: command` alerts to, or "".
+
+    `$DATACORE_ALERT_COMMAND`, else `command:` in ~/.datacore/alerts.yaml. It
+    reads the alert text on stdin: `mail -s 'datacore' me@example.com`, a
+    `curl` to a webhook, `ntfy publish ...` -- whatever this install uses.
+    """
+    cmd = os.environ.get("DATACORE_ALERT_COMMAND", "").strip()
+    if cmd:
+        return cmd
+    try:
+        import yaml
+        cfg = yaml.safe_load((Path.home() / ".datacore" / "alerts.yaml").read_text()) or {}
+        return str(cfg.get("command") or "").strip() if isinstance(cfg, dict) else ""
+    except (OSError, ValueError, ImportError):
+        return ""
+
+
+def _send_command(message: str) -> bool:
+    """Deliver an alert through the install's own command; False when there is none or it failed."""
+    cmd = _alert_command()
+    if not cmd:
+        return False
+    try:
+        result = subprocess.run(["bash", "-c", cmd], input=message, capture_output=True,
+                                text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
 
 
 def _send_telegram(message: str) -> bool:
@@ -444,6 +504,10 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> 
     if mode == "telegram":
         if not _send_telegram(message):
             print(f"alert: telegram unavailable, logged only ({job_name})", file=sys.stderr)
+    elif mode == "command":
+        if not _send_command(message):
+            print(f"alert: no working alert command (DATACORE_ALERT_COMMAND or ~/.datacore/alerts.yaml), "
+                  f"logged only ({job_name}): {message}", file=sys.stderr)
     else:
         print(f"alert: {message}", file=sys.stderr)
 
@@ -498,9 +562,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--alert",
-        choices=("log", "telegram"),
+        choices=("log", "telegram", "command"),
         default=None,
-        help="Override every job's on_fail for this run (default: unset -- each job uses its own on_fail)",
+        help="Override every job's on_fail for this run (default: unset -- each job uses its own on_fail). "
+             "'command' pipes the alert to $DATACORE_ALERT_COMMAND or ~/.datacore/alerts.yaml's command",
     )
     parser.add_argument(
         "--no-emit",
@@ -603,6 +668,12 @@ def main(argv: list[str] | None = None) -> None:
     # scoreboard rows read "not heard from". First space that carries an event
     # log wins; the root is the last resort.
     space = Path(args.space) if args.space else _attest_space()
+
+    if not args.manifest and manifest_path.name == LOCAL_MANIFEST and not manifest_path.exists():
+        # An install that has not chosen any jobs has none to verify. Said as
+        # "0 jobs" -- which v2_verify reads as "nothing checked", not a pass.
+        print(f"OK 0 jobs 0 artifacts (this install lists no jobs: {manifest_path})")
+        return
 
     try:
         jobs = load_manifest(manifest_path)

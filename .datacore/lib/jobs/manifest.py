@@ -95,7 +95,9 @@ def known_machines(path: Path | None = None) -> frozenset[str] | None:
     return frozenset(names)
 CHECKS = frozenset({"exists", "nonempty", "json_has_keys", "regex", "last_line_regex",
                     "min_bytes", "no_crash"})
-ON_FAILS = frozenset({"log", "telegram"})
+#: `command` pipes the alert to the install's own command (job_verify._alert_command):
+#: mail, a webhook, anything -- alerts need not go to Telegram (INS-5).
+ON_FAILS = frozenset({"log", "telegram", "command"})
 
 #: What makes a VISITOR's duty happen (DIP-0046 §14/§15). A visitor carries no
 #: clock: its duties run because a person opened the lid, so they are named by

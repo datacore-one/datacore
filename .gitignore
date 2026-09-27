@@ -390,3 +390,6 @@ skills-lock.json
 
 # Cursor adapter output (machine-local paths) — written by .datacore/adapters/cursor/install.py
 .cursor/
+
+# The install's own job list (INS-5): the tracked manifest.yaml is the fleet's.
+.datacore/lib/jobs/manifest.local.yaml

@@ -760,13 +760,44 @@ def test_a_recurring_failure_is_counted_per_artifact_and_files_one_task(tmp_path
 # with an explicit --manifest, was not verified at all.
 
 def test_the_data_root_manifest_still_wins_when_it_is_there(tmp_path, monkeypatch):
+    """On a machine of the fleet the tracked list describes (its roster names a
+    machine the list schedules), the data root's manifest is the default."""
     import job_verify
     root_manifest = tmp_path / ".datacore" / "lib" / "jobs" / "manifest.yaml"
     root_manifest.parent.mkdir(parents=True)
-    root_manifest.write_text("jobs: []\n")
+    root_manifest.write_text("jobs:\n- {name: j, machine: box}\n")
+    roster = tmp_path / ".datacore" / "registry" / "infrastructure.yaml"
+    roster.parent.mkdir(parents=True)
+    roster.write_text("servers:\n  box: {}\n")
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
     monkeypatch.setattr(job_verify, "DATACORE_ROOT", tmp_path)
 
     assert job_verify._default_manifest_path() == root_manifest
+
+
+def test_the_installs_own_list_wins_over_the_tracked_one(tmp_path, monkeypatch):
+    """INS-5: manifest.local.yaml is the install's choice and is read first."""
+    import job_verify
+    jobs = tmp_path / ".datacore" / "lib" / "jobs"
+    jobs.mkdir(parents=True)
+    (jobs / "manifest.yaml").write_text("jobs:\n- {name: j, machine: box}\n")
+    (jobs / "manifest.local.yaml").write_text("jobs: []\n")
+    monkeypatch.setattr(job_verify, "DATACORE_ROOT", tmp_path)
+
+    assert job_verify._default_manifest_path() == jobs / "manifest.local.yaml"
+
+
+def test_an_install_outside_the_fleet_does_not_get_the_fleets_list(tmp_path, monkeypatch):
+    """INS-5: with no roster naming the tracked list's machines, the default is
+    the install's own (absent) list, never another fleet's 57 jobs."""
+    import job_verify
+    jobs = tmp_path / ".datacore" / "lib" / "jobs"
+    jobs.mkdir(parents=True)
+    (jobs / "manifest.yaml").write_text("jobs:\n- {name: j, machine: box}\n")
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
+    monkeypatch.setattr(job_verify, "DATACORE_ROOT", tmp_path)
+
+    assert job_verify._default_manifest_path() == jobs / "manifest.local.yaml"
 
 
 def test_it_falls_back_to_the_manifest_beside_the_code(tmp_path, monkeypatch):
@@ -785,4 +816,4 @@ def test_a_root_with_neither_still_names_the_root_path(tmp_path, monkeypatch):
     monkeypatch.setattr(job_verify, "DATACORE_ROOT", tmp_path)
     monkeypatch.setattr(job_verify, "__file__", str(tmp_path / "absent" / "job_verify.py"))
 
-    assert job_verify._default_manifest_path() == tmp_path / ".datacore" / "lib" / "jobs" / "manifest.yaml"
+    assert job_verify._default_manifest_path() == tmp_path / ".datacore" / "lib" / "jobs" / "manifest.local.yaml"
