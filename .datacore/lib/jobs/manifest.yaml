@@ -68,6 +68,23 @@ jobs:
         arg: "agent-outcomes:"
         max_age_hours: 192
 
+  # KNW-10: broken links and orphaned notes are found and reported, not left
+  # to rot. Weekly over every space's 3-knowledge/. The log lists every broken
+  # link and orphan per space; the alert fires only for broken links that were
+  # not there last week (--state), so it says what rotted, not the backlog.
+  - name: box-knowledge-lint
+    machine: box
+    schedule: "15 6 * * 0"
+    cmd: "python3 ~/Data/.datacore/lib/knowledge_lint.py --all-spaces --state ~/.datacore/state/knowledge-lint.json >> ~/.datacore/cos/knowledge-lint.log 2>&1"
+    # Exit 1 is "ran, found new broken links" -- a finding the regex reports.
+    exit_ok: [0, 1]
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/cos/knowledge-lint.log"
+        check: last_line_regex
+        arg: "knowledge-lint: \\d+ broken links \\(0 new"
+        max_age_hours: 192
+
   - name: box-reliability-scoreboard
     machine: box
     schedule: "20 7 * * *"
