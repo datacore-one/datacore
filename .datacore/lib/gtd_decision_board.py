@@ -360,8 +360,10 @@ def build(args):
                 continue
             open_count += 1
             # A decision made on a board in the last week is not asked again.
+            # A REVIEW task still waits for the owner whatever was decided on
+            # it before, so it is always on the board (MEM-41).
             reviewed = _date(props.get("LAST_REVIEWED"))
-            if reviewed and (today - reviewed).days < 7:
+            if d["state"] != "REVIEW" and reviewed and (today - reviewed).days < 7:
                 quiet += 1
                 continue
             c = classify(it, today, nxt, later, is_project, is_inbox)
@@ -376,8 +378,8 @@ def build(args):
             if rec not in keys:
                 keys = keys[:3] + [rec]
             # Work often gets done without the task being closed; every task
-            # row can say so. (REVIEW rows already have Accept.)
-            if section != "review" and "done" not in keys:
+            # row can say so, REVIEW rows included (MEM-41).
+            if "done" not in keys:
                 keys.append("done")
             when = _date(ov.get("defer")) or when
             from ledger_project_org import phase, ORG
