@@ -173,7 +173,7 @@ def main() -> int:
     payload = json.dumps([[p, c] for p, c, _ in plan])
     script = (
         "import json,os,shutil,sys,time\n"
-        "items=json.load(sys.stdin)\n"
+        f"items=json.loads({payload!r})\n"
         "bk=os.path.expanduser('~/.datacore/state/local-files-backup-'+time.strftime('%Y%m%d-%H%M%S'))\n"
         "for p,c in items:\n"
         "  p=os.path.expanduser(p)\n"
@@ -183,7 +183,7 @@ def main() -> int:
         "  t=p+'.tmp';open(t,'w').write(c);os.chmod(t,0o600);os.replace(t,p)\n"
         "print('backup:',bk)\n"
     )
-    p = ssh(a.host, f"python3 -c {json.dumps(script)}", stdin=payload)
+    p = ssh(a.host, "python3 -", stdin=script)   # the script travels on stdin: no shell quoting
     print(p.stdout.strip() or p.stderr.strip())
     return p.returncode
 
