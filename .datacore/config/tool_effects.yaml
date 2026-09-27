@@ -223,6 +223,22 @@ effects:
       # a force push rewrites whatever it lands on (MEM-10)
       - '\bgit\b[^\n;&|]*\bpush\b[^\n;&|]*\s(-f|--force|--force-with-lease(=\S*)?|--mirror|--delete|-d)(\s|$)'
       - '\bgit\b[^\n;&|]*\bpush\b[^\n;&|]*\s\+[\w/.:-]+'
+  # ── the audit only reads (AUD-2, spec .datacore/specs/cross-model-audit.md) ──
+  # `write` is any change: a file tool on anything but an audit's own findings
+  # file (2-datacore/1-tracks/dev/audits/nightly/<date>/<agent>.yaml, no `..`),
+  # a shell command that is not one read-only command (or a pipe/&& chain of
+  # them, no redirection, no substitution), code execution, and an MCP tool
+  # whose name is a verb of change. Every principal's call is classified; only
+  # the `auditor` principal lists it in never_effects, so it binds nobody else.
+  write:
+    tools: ["Bash", "terminal", "execute_code", "Edit", "Write", "MultiEdit", "NotebookEdit",
+            "write_file", "patch", "mcp__*", "cronjob", "delegate_task", "computer_use"]
+    tool_patterns:
+      - '^(execute_code|NotebookEdit|cronjob|delegate_task|computer_use)$'
+      - '^mcp__.*(add|create|update|delete|remove|set|write|send|mark|complete|capture|archive|move|edit|post|merge|comment|trigger|pause|resume|decide|submit|learn|forget|promote|ingest|navigate|refresh|escalate|delegate)'
+    patterns:
+      - '"(file_path|notebook_path|path)":\s*"(?!(?![^"]*\.\./)(?:[^"\\]*/)?1-tracks/dev/audits/nightly/\d{4}-\d{2}-\d{2}/(?:miles|winston|tris|data)\.yaml")'
+      - '"command":\s*"(?!\s*(?:git(?:\s+-C\s+[^\s;&|<>"\\]+)?\s+(?:log|show|diff|blame|grep|ls-files|ls-tree|rev-parse|cat-file|status|shortlog|describe|rev-list|merge-base)|cat|head|tail|grep|egrep|rg|ls|wc|find|sed\s+-n|sort|uniq|stat|nl|cut|tr|pwd|date|echo|jq|diff|comm|file|basename|dirname|realpath|tree|column)\b(?:(?!\s-(?:delete|exec|execdir|ok|okdir|fprint\w*|fls)\b)[^;&|<>`$"\\]|\\[^n\\]|2>&1|2>/dev/null)*(?:\s*(?:\||&&)\s*(?:git(?:\s+-C\s+[^\s;&|<>"\\]+)?\s+(?:log|show|diff|blame|grep|ls-files|ls-tree|rev-parse|cat-file|status|shortlog|describe|rev-list|merge-base)|cat|head|tail|grep|egrep|rg|ls|wc|find|sed\s+-n|sort|uniq|stat|nl|cut|tr|pwd|date|echo|jq|diff|comm|file|basename|dirname|realpath|tree|column)\b(?:(?!\s-(?:delete|exec|execdir|ok|okdir|fprint\w*|fls)\b)[^;&|<>`$"\\]|\\[^n\\]|2>&1|2>/dev/null)*)*\s*\")'
   # ── agents wait for a grant: a trial item first, then the owner's go (MEM-02) ──
   push.shared:
     tools: *acting

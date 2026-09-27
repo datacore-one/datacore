@@ -62,6 +62,9 @@ known_effects:
   - public.post
   - message.send
   - eval.edit
+  # AUD-2: any change but an audit's own findings file (only the auditor
+  # principal is bound by it)
+  - write
 
 # Per-principal limits (product description, stage 4; DIP-0044 §7). Defaults
 # when a principal is absent: agents get max_hops 3 and 50 creates a day,
@@ -100,6 +103,17 @@ principals:
                     secret.search, guard.disable, ledger.forge, calendar.respond,
                     data.egress, history.rewrite, eval.edit]
     may_delegate_to: [miles, tris, winston]
+  # The nightly cross-model audit (AUD-2, spec .datacore/specs/cross-model-audit.md):
+  # whichever agent's model runs it, the audit only reads. It may write its own
+  # findings file and nothing else, and it delegates nothing. cross_model_audit.py
+  # sets DATACORE_POLICY_PRINCIPAL=auditor for the model turn.
+  auditor:
+    never_effects: [write, payment, prod.deploy, trading, credential.rotate, gov.submit, code.merge,
+                    secret.search, guard.disable, ledger.forge, calendar.respond, data.egress,
+                    history.rewrite, eval.edit, email.send, public.post, message.send, push.shared,
+                    data.delete, bulk.change]
+    may_delegate_to: []
+    max_creates_per_day: 0
 
 # Arbitration across principals (product description, stage 5). Earlier
 # outranks later: a principal may close or release another principal's item
