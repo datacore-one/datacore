@@ -13,14 +13,68 @@ prevents a second open once it has been shown.
 Safe by construction: sync goes through the single transport (commit-first,
 never stash, never rebase), and this script itself never writes to the repo.
 """
+from __future__ import annotations
+
+import os
+import shutil
 import subprocess
 import sys
 from datetime import date
 from pathlib import Path
 
 DATA = Path.home() / "Data"
+LIB = DATA / ".datacore" / "lib"
 JOURNALS = DATA / "0-personal" / "notes" / "journals"
 STATE = Path.home() / ".datacore" / "state" / "morning-journal"
+
+
+def _candidates() -> list[str]:
+    """Interpreters to try for the ledger sync, best first.
+
+    launchd starts this script with /usr/bin/python3 (3.9 on macOS), and
+    launchd's PATH has none of the user's interpreters on it, so the usual
+    install locations are listed explicitly.
+    """
+    home = Path.home()
+    names = [os.environ.get("DATACORE_PYTHON", ""), sys.executable]
+    names += sorted((str(p) for p in (home / ".pyenv" / "versions").glob("3.1*/bin/python3")),
+                    reverse=True)
+    names += ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "python3"]
+    out: list[str] = []
+    for n in names:
+        p = shutil.which(n) if n else None
+        if p and p not in out:
+            out.append(p)
+    return out
+
+
+def _can_import_ledger(py: str) -> bool:
+    try:
+        return subprocess.run(
+            [py, "-c", f"import sys; sys.path.insert(0, {str(LIB)!r}); import ledger.log"],
+            capture_output=True, timeout=60).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def ledger_python() -> str | None:
+    """The first interpreter that can import the ledger the sync runs on."""
+    return next((py for py in _candidates() if _can_import_ledger(py)), None)
+
+
+def notify(msg: str) -> None:
+    """Best-effort desktop notification. The exit code carries the verdict.
+
+    osascript can hang under launchd (seen 2026-09-27: 10 s timeout), and a
+    notification that cannot be shown must not turn a clean "not delivered"
+    into a crash.
+    """
+    try:
+        subprocess.run(["osascript", "-e",
+                        f'display notification "{msg}" with title "Datacore morning"'],
+                       capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"desktop notification not shown: {type(exc).__name__}", file=sys.stderr)
 
 
 def main() -> int:
@@ -31,16 +85,31 @@ def main() -> int:
         print(f"{today}: already opened — nothing to do")
         return 0
 
-    sync = subprocess.run(
-        [sys.executable, str(DATA / ".datacore" / "lib" / "ledger_transport.py"),
-         "sync", "--repo", "0-personal", "--quiet"],
-        capture_output=True, text=True, timeout=300,
-    )
-    print(sync.stdout.strip())
-    if sync.stderr.strip():
+    # The sync runs under an interpreter that can import the ledger, not
+    # sys.executable: launchd's /usr/bin/python3 is 3.9 and the ledger needs
+    # 3.10+. Until 2026-09-27 the sync crashed there every morning, its exit
+    # code was ignored, and the job then blamed nightshift for a journal this
+    # Mac had simply never pulled.
+    py = ledger_python()
+    if py is None:
+        sync = subprocess.CompletedProcess([], 1, "", "no interpreter here can import the ledger")
+    else:
+        sync = subprocess.run(
+            [py, str(LIB / "ledger_transport.py"), "sync", "--repo", "0-personal", "--quiet"],
+            capture_output=True, text=True, timeout=300,
+        )
+    if (sync.stdout or "").strip():
+        print(sync.stdout.strip())
+    if (sync.stderr or "").strip():
         print(sync.stderr.strip(), file=sys.stderr)
 
     journal = JOURNALS / f"{today}.md"
+    if sync.returncode != 0 and not journal.exists():
+        msg = ("Morning journal sync FAILED on this Mac (rc=%d) — the briefing may be "
+               "published but was not pulled" % sync.returncode)
+        print(f"{today}: {msg}")
+        notify(msg)
+        return 1
     # "## Daily Briefing" check retired 2026-07-29: miles_delivery paste was
     # retired; briefing now ships as audio + Telegram + app card — nothing
     # writes that heading into the journal anymore. Keep only the file-exists
@@ -53,11 +122,7 @@ def main() -> int:
         # was about.
         msg = f"Morning briefing NOT delivered ({missing}) — check nightshift on the server"
         print(f"{today}: {msg}")
-        subprocess.run(
-            ["osascript", "-e",
-             f'display notification "{msg}" with title "Datacore morning"'],
-            capture_output=True, timeout=10,
-        )
+        notify(msg)
         return 1
 
     subprocess.run(["open", str(journal)], timeout=30)
