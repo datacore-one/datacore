@@ -68,6 +68,10 @@ git remote -v
 
 ```bash
 pip install -r .datacore/lib/requirements.txt
+
+# Make `import datacore` work for this interpreter (cron and systemd jobs
+# have no PYTHONPATH; module decorators record nothing without it)
+python3 .datacore/lib/install_datacore_path.py
 ```
 
 ### Step 2: Activate Templates
@@ -78,7 +82,9 @@ Copy template files to create your local configuration:
 # Installation manifest
 cp install.yaml.example install.yaml
 
-# GTD org files
+# GTD org files (0-personal/ is your own space, not part of this repo, so a
+# fresh checkout does not have it yet)
+mkdir -p 0-personal/org
 cp .datacore/templates/org/inbox.org.example 0-personal/org/inbox.org
 cp .datacore/templates/org/next_actions.org.example 0-personal/org/next_actions.org
 cp .datacore/templates/org/someday.org.example 0-personal/org/someday.org
@@ -86,6 +92,11 @@ cp .datacore/templates/org/habits.org.example 0-personal/org/habits.org
 
 # Build CLAUDE.md from layers (see Layered Context Pattern below)
 python .datacore/lib/context_merge.py rebuild --path .
+
+# Who this machine writes as, and an event log for your personal space, so
+# the first task you create reaches the history (use your own name)
+mkdir -p ~/.datacore && echo 'DATACORE_ACTOR=your-name' >> ~/.datacore/identity.env
+mkdir -p 0-personal/.datacore/events
 ```
 
 ### Step 3: Configure install.yaml
@@ -259,6 +270,10 @@ ls -la ~/Data/.datacore/
 
 # Test sync (the transport; the old ./sync script is retired)
 python3 .datacore/lib/ledger_transport.py status
+
+# Everything still missing, with the fix for each (identity, principals,
+# event logs, personal inbox, jobs); `datacore doctor` includes the same list
+python3 .datacore/lib/install_doctor.py
 ```
 
 ## Adding Team Spaces

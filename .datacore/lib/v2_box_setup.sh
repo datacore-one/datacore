@@ -33,19 +33,29 @@
 set -u
 
 PREFIX="${DATACORE_V2_SETUP_PREFIX:-}"
-ROOT="$PREFIX/root/Data"
-HOME_DC="$PREFIX/root/.datacore"
+# Locations come from the environment of whoever runs the installer (INS-1): a
+# new team's box is not this fleet's /root layout. SETUP_HOME is the home of
+# the user whose Datacore this is -- $HOME by default; under the test prefix
+# the fixture tree keeps its root-user layout.
+SETUP_HOME="${DATACORE_SETUP_HOME:-${PREFIX:+/root}}"
+SETUP_HOME="${SETUP_HOME:-$HOME}"
+ROOT="${DATACORE_ROOT:-$SETUP_HOME/Data}"
+[ -n "$PREFIX" ] && ROOT="$PREFIX$SETUP_HOME/Data"   # a fixture never follows the caller's root
+HOME_DC="$PREFIX$SETUP_HOME/.datacore"
 CANONICAL_ENV="$HOME_DC/datacore.env"
-LEGACY_COS_ENV="$PREFIX/root/.config/cos.env"
+LEGACY_COS_ENV="$PREFIX$SETUP_HOME/.config/cos.env"
 LEGACY_DATACORED_ENV="$PREFIX/etc/datacored.env"
-LEGACY_HERMES_ENV="$PREFIX/root/.hermes/.env"
+LEGACY_HERMES_ENV="$PREFIX$SETUP_HOME/.hermes/.env"
 MANIFEST="$ROOT/.datacore/lib/jobs/manifest.yaml"
 # 08:00 assumed UTC: this box's crontab already runs on UTC wall-clock time
 # with no timezone conversion anywhere in its setup -- cos_morning.sh is
 # installed at "0 4 * * *" and COS-SERVER.md documents that exact slot as
 # "04:00" (UTC), so 08:00 here follows the same, already-established
 # convention rather than introducing a new one.
-CRON_LINE="0 8 * * * DATACORE_V2=1 DATACORE_ROOT=/root/Data python3 /root/Data/.datacore/lib/job_verify.py --machine box --alert telegram >> /root/.datacore/state/job_verify.log 2>&1"
+# Home-relative (`~` is expanded by cron's shell in the crontab's own user's
+# home), so the line is right for whichever user installs it. job_verify.py
+# defaults DATACORE_ROOT to ~/Data itself.
+CRON_LINE="0 8 * * * DATACORE_V2=1 python3 ~/Data/.datacore/lib/job_verify.py --machine box --alert telegram >> ~/.datacore/state/job_verify.log 2>&1"
 
 log() { echo "[v2] $1: $2 $3"; }
 
@@ -215,7 +225,7 @@ step_env() {
 # match, no regex-metacharacter risk (the `-F` fixed-string mode neutralizes
 # `$CRON_LINE`'s own `*` characters), and no substring false-positive
 # against an unrelated or stale line.
-cron_line_present() { crontab -l 2>/dev/null | grep -qxF "$CRON_LINE"; }
+cron_line_present() { crontab -l 2>/dev/null | sed 's/ # datacore-job:[a-z0-9-]*$//' | grep -qxF "$CRON_LINE"; }
 
 # ── Step 3: job_verify cron (root crontab, 08:00 UTC, DATACORE_V2 guard) ──
 step_cron() {
@@ -231,7 +241,12 @@ step_cron() {
     log cron FAILED "job_verify cron missing from root crontab"
     return 1
   fi
-  if { crontab -l 2>/dev/null; echo "$CRON_LINE"; } | crontab -; then
+  # cron_install.py, not `crontab -l | ... | crontab -`: it replaces an older
+  # form of this same job (e.g. the /root/Data spelling) instead of adding a
+  # second copy beside it, and it refuses to write when the current crontab
+  # cannot be read (OPS-4) instead of treating that as empty.
+  if python3 "$ROOT/.datacore/lib/cron_install.py" --state "$HOME_DC/state/cron" \
+       --entry job-verify-box "$CRON_LINE" >/dev/null; then
     log cron APPLIED "installed job_verify cron line"
     return 0
   fi
@@ -262,8 +277,8 @@ step_todo_report() {
           continue
         fi
         case "$path_part" in
-          "~/"*) expanded="$PREFIX/root/${path_part#\~/}" ;;
-          "~") expanded="$PREFIX/root" ;;
+          "~/"*) expanded="$PREFIX$SETUP_HOME/${path_part#\~/}" ;;
+          "~") expanded="$PREFIX$SETUP_HOME" ;;
           /*) expanded="$PREFIX$path_part" ;;
           *) expanded="$path_part" ;;
         esac
