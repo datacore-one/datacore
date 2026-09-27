@@ -228,6 +228,11 @@ Detection: `python3 .datacore/lib/focus_mode.py detect`
 - **Never multi-line Bash.** Chain with `&&`.
 - Prefer your harness's dedicated file tools (read, search, glob) over shell equivalents when it has them.
 
+### Git — commit only your own change
+
+- **Commit with explicit paths:** `git commit -m "..." -- <your files>`. Never `git add <file> && git commit`, `git commit -a` or `git add .`: a bare commit takes everything already staged, and a change you did not make that is staged or edited in the working tree belongs to someone else. It stays pending exactly as you found it — not committed, not unstaged, not stashed.
+- Push only to a branch you made or one the owner named. Never force-push, rebase or otherwise rewrite shared history.
+
 > Detailed conventions are in engram memory (DIP pack, 747 engrams). Call `plur_recall_hybrid` for specifics.
 
 ## System Patterns (DIPs)
