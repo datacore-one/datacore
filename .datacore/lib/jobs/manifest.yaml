@@ -1602,17 +1602,24 @@ jobs:
     why_pinned: "assembly happens where the central credential store is (distribute.sh header)"
     unpin_when: "the store is served by the broker from a host that is always on"
     machine: mac
-    schedule: "17 8 * * *"
+    # On arrival, not at 08:17. The cron line never fired on 2026-09-26 or
+    # 09-27: the laptop was asleep at 08:17 (dark wakes only), and cron does
+    # not run a minute that passed in sleep. The first converged join after a
+    # full wake is awake, networked and once a session -- when a person is here.
+    trigger: arrival
+    schedule: "on arrival: visitor_join.py runs it after the first converged join of a session"
     # The broker's own delivery step: it writes the env files every consumer
     # must not read directly, so it is not a consumer the broker-only lint
     # (OPS-6) governs. Written as `cd && ./` to keep it out of that lint.
-    cmd: "cd ~/Data/.datacore/secrets && /bin/bash ./scripts/distribute.sh"
+    # The exit line the artifact is judged by is written here (it used to be
+    # appended by the crontab line), and the script's own rc is kept.
+    cmd: "cd ~/Data/.datacore/secrets && { /bin/bash ./scripts/distribute.sh; rc=$?; echo \"exit=$rc $(date)\"; } >> ~/Data/.datacore/state/logs/creds-distribute.log 2>&1; exit $rc"
     on_fail: telegram
     artifacts:
       - path: "~/Data/.datacore/state/logs/creds-distribute.log"
         check: last_line_regex
         arg: '^exit=0 '
-        max_age_hours: 26
+        since: arrival
 
   - name: mac-ledger-publish
     scope: local
