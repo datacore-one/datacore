@@ -171,6 +171,22 @@ def main() -> int:
         else:
             print(f"  same  {rel}: nothing missing")
 
+    # A file only goes where the host's repo will NOT commit it. On the agent
+    # hosts ~/Data is the agent's own space repo, whose sync commits and pushes
+    # anything not ignored (2026-09-27: registry files are tracked there and
+    # *.local.yaml is not ignored). Runner copies are judged in their own repo.
+    safe = []
+    for path, content, note in plan:
+        repo = "~/.datacore/v2-runner" if path.startswith("~/.datacore/v2-runner/") else REMOTE_ROOT
+        rel = path[len(repo) + 1:]
+        chk = ssh(a.host, f"cd {repo} && (git ls-files --error-unmatch {rel} >/dev/null 2>&1 && echo tracked"
+                          f" || (git check-ignore -q {rel} && echo ignored || echo exposed))")
+        verdict = chk.stdout.strip() or "unknown"
+        if verdict != "ignored":
+            print(f"  REFUSE {path}: {verdict} in the host's repo -- it would be committed there; not written")
+            continue
+        safe.append((path, content, note))
+    plan = safe
     for path, _, note in plan:
         print(f"  {'WRITE' if a.apply else 'would'} {path}: {note}")
     if not a.apply or not plan:
