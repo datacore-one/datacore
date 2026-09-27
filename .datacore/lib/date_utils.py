@@ -40,6 +40,15 @@ DATE_DOW_RE = re.compile(r"(\d{4}-\d{2}-\d{2})[ \t]+(Mon|Tue|Wed|Thu|Fri|Sat|Sun
 DOWS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 DAY_WORDS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
+# The other ways a weekday is written beside a date (MEM-43). find_mismatches
+# checks them too; fix_day_names still rewrites only the stamp form above.
+#   "2026-09-26 Saturday"                  -- full name after the date
+#   "Saturday, 2026-09-26" / "Sat 2026-09-26" -- name (full or short) before it
+_NAME = r"(Mon(?:day)?|Tue(?:sday)?|Wed(?:nesday)?|Thu(?:rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)"
+DATE_LONG_DOW_RE = re.compile(
+    r"(\d{4}-\d{2}-\d{2})[ \t]+(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)(?![A-Za-z])")
+DOW_DATE_RE = re.compile(r"(?<![A-Za-z])" + _NAME + r",?[ \t]+(\d{4}-\d{2}-\d{2})")
+
 
 def _parse_iso(s: str) -> date:
     m = DATE_RE.match(s)
@@ -180,19 +189,21 @@ def find_mismatches(text: str) -> list[dict]:
     """Find all date/dow mismatches in text. Returns list of {date, claimed, actual, line}."""
     out = []
     for i, line in enumerate(text.splitlines(), 1):
-        for m in DATE_DOW_RE.finditer(line):
-            date_str, claimed = m.group(1), m.group(2)
+        found = [(m.group(1), m.group(2)) for m in DATE_DOW_RE.finditer(line)]
+        found += [(m.group(1), m.group(2)) for m in DATE_LONG_DOW_RE.finditer(line)]
+        found += [(m.group(2), m.group(1)) for m in DOW_DATE_RE.finditer(line)]
+        for date_str, claimed in found:
             try:
                 actual = dow(date_str)
-                if actual != claimed:
-                    out.append({
-                        "line": i,
-                        "date": date_str,
-                        "claimed": claimed,
-                        "actual": actual,
-                    })
             except ValueError:
-                pass
+                continue
+            if actual != claimed[:3]:
+                out.append({
+                    "line": i,
+                    "date": date_str,
+                    "claimed": claimed,
+                    "actual": actual,
+                })
     return out
 
 
