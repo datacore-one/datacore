@@ -60,16 +60,51 @@ def tail_seq(text: str) -> int | None:
         return None
 
 
+def remote_tips(space: Path) -> dict[str, str]:
+    """{sha: 'remote:branch'} for every branch on every remote, fetched as objects.
+
+    A branch another machine pushed after this clone last fetched is on no
+    local ref at all, so `rev-list --all` cannot see it. Ask each remote what
+    it has and fetch those tips WITHOUT writing any ref (no refspec
+    destination, no FETCH_HEAD): the objects arrive, nothing local moves.
+    """
+    tips: dict[str, str] = {}
+    for remote in git(space, 'remote').split():
+        for line in git(space, 'ls-remote', '--heads', remote).splitlines():
+            sha, _, ref = line.partition('\t')
+            if not sha or not ref.startswith('refs/heads/'):
+                continue
+            tips.setdefault(sha, f'{remote}:{ref[len("refs/heads/"):]}')
+            if subprocess.run(['git', '-C', str(space), 'cat-file', '-e', f'{sha}^{{commit}}'],
+                              capture_output=True).returncode != 0:
+                git(space, 'fetch', '-q', '--no-write-fetch-head', remote, ref)
+    return {sha: name for sha, name in tips.items()
+            if subprocess.run(['git', '-C', str(space), 'cat-file', '-e', f'{sha}^{{commit}}'],
+                              capture_output=True).returncode == 0}
+
+
 def find(space: Path, actor: str, since: str) -> list[tuple[str, int]]:
-    """Every commit in EVERY history whose copy of this log runs further."""
+    """Every commit in EVERY history whose copy of this log runs further.
+
+    Every history means: every local ref (`--all`), every reflog entry
+    (`--reflog`: a commit reset away is on no branch any more), and every
+    branch on every remote, including ones this machine never fetched.
+    """
     rel = log_path(space, actor)
     current = tail_seq((space / rel).read_text(encoding='utf-8'))
+    tips = remote_tips(space)
     out = []
-    for commit in git(space, 'rev-list', '--all', f'--since={since}', '--', rel).split():
+    for commit in git(space, 'rev-list', '--all', '--reflog', *tips,
+                      f'--since={since}', '--', rel).split():
         seq = tail_seq(git(space, 'show', f'{commit}:{rel}'))
         if seq is not None and current is not None and seq > current:
             subject = git(space, 'log', '-1', '--format=%s', commit).strip()
             refs = git(space, 'branch', '-a', '--contains', commit).strip().replace('\n', ', ')
+            if not refs:
+                refs = ', '.join(name for sha, name in tips.items()
+                                 if subprocess.run(['git', '-C', str(space), 'merge-base',
+                                                    '--is-ancestor', commit, sha],
+                                                   capture_output=True).returncode == 0)
             out.append((commit, seq, subject, refs))
     return sorted(out, key=lambda r: -r[1])
 
@@ -183,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         for commit, seq, subject, refs in rows:
             print(f'{commit[:9]}  tail seq {seq}  {subject[:50]}')
-            print(f'           refs: {refs or "(unreferenced)"}')
+            print(f'           refs: {refs or "(unreferenced: reflog only)"}')
         return 0
     if not a.rev:
         ap.error('--from is required unless --find')
