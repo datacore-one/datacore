@@ -46,6 +46,12 @@ INTEGRATION_BRANCHES = ("development",)
 # Someone is on it. Matches ACTIVE_STATES in enterprise scripts/claim/checks.py.
 IN_FLIGHT = {"claimed", "in-progress", "review"}
 
+# How an item leaves a closed sprint properly (TSK-10): done, carried over (the
+# sprint's `carryover` names it), or dropped WITH a reason.
+DONE_STATES = {"done"}
+DROPPED_STATES = {"dropped", "cancelled", "canceled"}
+REASON_KEYS = ("reason", "drop_reason", "dropped_reason")
+
 GIT_TIMEOUT = 30
 
 
@@ -274,6 +280,15 @@ def health(disc: Discovery, *, today: date | None = None,
         end = _end_date(sf)
         problems.append(f"{sf.sprint_id}: still marked active, ended {end} "
                         f"({(today - end).days} days ago) — close it")
+    # Any other status short of `closed` (planning, review, ...) past its end
+    # is just as over; it used to pass silently because only `active` was read.
+    for sf in disc.sprints:
+        status = sf.data.get("status")
+        end = _end_date(sf)
+        if status in ("active", "closed") or not end or end >= today:
+            continue
+        problems.append(f"{sf.sprint_id}: still marked {status!r}, ended {end} "
+                        f"({(today - end).days} days ago) — close it")
 
     unverified = 0
     cache: dict[tuple[str, int], dict | None] = {}
@@ -282,12 +297,22 @@ def health(disc: Discovery, *, today: date | None = None,
         closed = sf.data.get("status") == "closed"
         for section in ("backlog", "stretch"):
             for it in sf.data.get(section) or []:
-                if not isinstance(it, dict) or it.get("state") not in IN_FLIGHT:
+                if not isinstance(it, dict):
                     continue
                 iid, state = it.get("id", "?"), it.get("state")
-                if closed and iid not in carried:
-                    problems.append(f"{sf.sprint_id}#{iid}: {state!r} in a closed sprint "
-                                    f"and not carried — nobody is on it")
+                if closed and iid not in carried and state not in DONE_STATES:
+                    if state in DROPPED_STATES:
+                        if not any(str(it.get(k) or "").strip() for k in REASON_KEYS):
+                            problems.append(f"{sf.sprint_id}#{iid}: dropped with no reason "
+                                            f"— say why")
+                    elif state in IN_FLIGHT:
+                        problems.append(f"{sf.sprint_id}#{iid}: {state!r} in a closed sprint "
+                                        f"and not carried — nobody is on it")
+                    else:
+                        problems.append(f"{sf.sprint_id}#{iid}: {state!r} in a closed sprint "
+                                        f"— not done, carried over or dropped with a reason")
+                if state not in IN_FLIGHT:
+                    continue
                 pr = parse_pr(it.get("pr"))
                 if pr is None or pr_lookup is None:
                     continue
