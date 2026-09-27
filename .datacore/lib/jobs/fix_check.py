@@ -63,7 +63,9 @@ def contract_sha(job_name: str, manifest: Path) -> str | None:
     return None
 
 
-MANIFEST_PATHS = ("jobs/manifest.yaml",)
+#: The judge of a repair: the contracts, and the code that reads them (AGT-6).
+#: A PR that edits any of these changed the check, not the producer.
+MANIFEST_PATHS = ("jobs/manifest.yaml", "jobs/fix_check.py", "lib/job_verify.py")
 
 #: Exit status of stage "merged" when the repairer's part is done -- a pull
 #: request names the item and is OPEN -- and only the owner's merge is missing.
@@ -140,8 +142,8 @@ def main() -> int:
             return 1
         touched = [p for p in files if any(p.endswith(m) for m in MANIFEST_PATHS)]
         if touched:
-            print(f"REFUSED: {pr['url']} touched the jobs manifest ({', '.join(touched)}). A repair "
-                  f"fixes the producer, not the check that caught it; changing a contract needs a "
+            print(f"REFUSED: {pr['url']} touched the check that judges it ({', '.join(touched)}). A "
+                  f"repair fixes the producer, not the check that caught it; changing a contract needs a "
                   f"human.", file=sys.stderr)
             return 1
         # A PULL REQUEST IS NOT A REPAIR (NS-10, owner 2026-09-26). This returned 0 on an
