@@ -62,19 +62,81 @@ def ledger_python() -> str | None:
     return next((py for py in _candidates() if _can_import_ledger(py)), None)
 
 
+#: The group sender on the relay host: the same command job_verify_notify.sh
+#: relays to. --alert posts to The Firm group (ALERT_CHAT_ID) and never to a
+#: 1:1 chat, and records its own delivery failures on that host.
+GROUP_SENDER = "python3 ~/Data/.datacore/modules/chief-of-staff/server/lib/winston_send.py --alert"
+
+
+def _relay_host() -> str:
+    """The roster's always-on host (roles.always_on), as an ssh alias; '' if unset.
+    manifest.py needs PyYAML, which launchd's /usr/bin/python3 does not have."""
+    for py in _candidates():
+        try:
+            r = subprocess.run([py, str(LIB / "jobs" / "manifest.py"), "role-ssh", "always_on"],
+                               capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        host = (r.stdout or "").strip().splitlines()[:1] if r.returncode == 0 else []
+        if host and host[0].strip():
+            return host[0].strip()
+    return ""
+
+
+def _record_undelivered(reason: str, msg: str) -> None:
+    try:
+        sys.path.insert(0, str(LIB))
+        import tg_format
+        if tg_format.record_undelivered("morning_journal", reason, msg):
+            return
+    except Exception:  # noqa: BLE001 -- the job is already failing; say so, do not crash
+        pass
+    print(f"alert NOT delivered and could not be recorded as undelivered: {reason}", file=sys.stderr)
+
+
+def alert_group(msg: str) -> bool:
+    """Post to The Firm group, where every automated error goes (never a 1:1 chat).
+
+    This Mac holds no bot token (Winston's bot lives on the always-on host), so
+    the text is relayed over ssh and sent there by winston_send.py --alert --
+    the route job_verify_notify.sh uses. A failure to deliver is recorded as
+    undelivered for the morning sweep. Never raises.
+    """
+    host = _relay_host()
+    if not host:
+        _record_undelivered("no relay host: set roles.always_on in .datacore/registry/infrastructure.yaml", msg)
+        return False
+    try:
+        r = subprocess.run(["ssh", "-o", "ConnectTimeout=15", "-o", "BatchMode=yes", host, GROUP_SENDER],
+                           input=msg, capture_output=True, text=True, timeout=120)
+        if r.returncode == 0:
+            return True
+        why = f"relay via {host} failed (rc={r.returncode}): {(r.stderr or '').strip()[:160]}"
+    except (OSError, subprocess.SubprocessError) as exc:
+        why = f"relay via {host} failed: {type(exc).__name__}"
+    _record_undelivered(why, msg)
+    print(f"alert NOT delivered to The Firm group: {why}", file=sys.stderr)
+    return False
+
+
 def notify(msg: str) -> None:
-    """Best-effort desktop notification. The exit code carries the verdict.
+    """Best-effort desktop notification, an extra beside the group alert.
 
     osascript can hang under launchd (seen 2026-09-27: 10 s timeout), and a
-    notification that cannot be shown must not turn a clean "not delivered"
-    into a crash.
+    notification that cannot be shown must never block or crash the job.
     """
     try:
         subprocess.run(["osascript", "-e",
                         f'display notification "{msg}" with title "Datacore morning"'],
                        capture_output=True, timeout=10)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except Exception as exc:  # noqa: BLE001 -- an extra; nothing it does may fail the job
         print(f"desktop notification not shown: {type(exc).__name__}", file=sys.stderr)
+
+
+def alert(msg: str) -> None:
+    """A loud non-delivery: The Firm group first, then the screen as an extra."""
+    alert_group(msg)
+    notify(msg)
 
 
 def main() -> int:
@@ -108,7 +170,7 @@ def main() -> int:
         msg = ("Morning journal sync FAILED on this Mac (rc=%d) — the briefing may be "
                "published but was not pulled" % sync.returncode)
         print(f"{today}: {msg}")
-        notify(msg)
+        alert(msg)
         return 1
     # "## Daily Briefing" check retired 2026-07-29: miles_delivery paste was
     # retired; briefing now ships as audio + Telegram + app card — nothing
@@ -122,7 +184,7 @@ def main() -> int:
         # was about.
         msg = f"Morning briefing NOT delivered ({missing}) — check nightshift on the server"
         print(f"{today}: {msg}")
-        notify(msg)
+        alert(msg)
         return 1
 
     subprocess.run(["open", str(journal)], timeout=30)
