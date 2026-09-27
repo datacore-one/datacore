@@ -47,8 +47,9 @@ TAIL_LINES, LINE_CHARS = 8, 100
 tail = [clip(l, LINE_CHARS) for l in recent.splitlines() if l.strip()][-TAIL_LINES:]
 text = (
     "\U0001f6a8 <b>fleet-sync needs a human</b>\n"
-    "Repos have pull conflicts or push failures and are not converging.\n"
-    "On nightshift: <code>journalctl -u datacore-fleet-sync.service -n 50 --no-pager</code>\n"
+    "Repos have pull conflicts, push failures or stranded work and are not converging.\n"
+    f"On {html_safe(socket.gethostname().split('.')[0])}: "
+    "<code>journalctl -u datacore-fleet-sync.service -n 50 --no-pager</code>\n"
     "Last lines:\n"
     f"<pre>{html_safe(chr(10).join(tail) or '(the journal is empty)')}</pre>"
 )

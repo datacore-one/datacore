@@ -715,6 +715,33 @@ def _land(repo: Path, result: dict, execute: bool, default: str) -> dict:
     return result
 
 
+#: Unpushed work older than this is stranded: named, and the run fails (SYN-5).
+STRANDED_AFTER_S = 24 * 3600
+
+
+def stranded_branches(repo: Path, now: float | None = None) -> list[tuple[str, int, float]]:
+    """Local branches holding commits that are on no remote, oldest > a day.
+
+    [(branch, commits, oldest commit time)]. Every local branch, not only the
+    checked-out one: work committed on `agent/draft` while the checkout is back
+    on main is invisible to the sweep, which only ever looks at HEAD, and was
+    reported nowhere (SYN-5). Fresh unpushed work stays quiet -- a branch an
+    agent is still working on is not stuck yet.
+    """
+    import time as _time
+    now = _time.time() if now is None else now
+    out = []
+    for branch in git(repo, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/').splitlines():
+        branch = branch.strip()
+        if not branch:
+            continue
+        times = git(repo, 'log', '--format=%ct', f'refs/heads/{branch}', '--not', '--remotes').split()
+        stamps = [int(t) for t in times if t.isdigit()]
+        if stamps and now - min(stamps) > STRANDED_AFTER_S:
+            out.append((branch, len(stamps), float(min(stamps))))
+    return out
+
+
 def find_repos(root: Path) -> list:
     repos = []
     if (root / '.git').exists():
@@ -768,7 +795,8 @@ def main() -> int:
     if not execute:
         print("DRY RUN — nothing will be committed. Pass --execute to act.\n")
 
-    results = [sync_repo(r, execute, hold, pull) for r in find_repos(root)]
+    repos = find_repos(root)
+    results = [sync_repo(r, execute, hold, pull) for r in repos]
 
     total_c = total_s = 0
     for r in results:
@@ -840,7 +868,9 @@ def main() -> int:
     # Only conflicts fail the run. `held` repos are parked on a non-default
     # branch, which is a deliberate and often long-lived state — failing on it
     # would leave the unit permanently red and train whoever reads it to
-    # ignore the signal. That habit is exactly what let a stale-input verifier
+    # ignore the signal. (What does fail is unpushed work on ANY branch older
+    # than a day -- `stranded` below, SYN-5: that is work at risk, not a
+    # parked branch.) That habit is exactly what let a stale-input verifier
     # report four confident wrong failures a day for five days before anyone
     # looked. A check that is always red is not a check.
     forked = [r for r in results if r.get('ledger_fork')]
@@ -864,6 +894,25 @@ def main() -> int:
                 print(f"    {sha}")
                 for path in paths:
                     print(f"      - {path}")
+    # WORK STUCK ON THIS MACHINE FOR MORE THAN A DAY FAILS THE RUN (SYN-5).
+    # Held side branches used to print under "Held back" and exit 0, so the
+    # unit stayed green and no alert said which machine and branch the work
+    # was stuck on. Named here with the host, and the alert fires.
+    import socket
+    import time as _time
+    host = socket.gethostname().split('.')[0]
+    stranded = []
+    for repo in repos:
+        if repo.name in hold:
+            continue
+        for branch, n, oldest in stranded_branches(repo):
+            stranded.append((repo.name, branch, n, oldest))
+    if stranded:
+        print(f"\nFAIL: work older than a day is only on {host} (not on any remote):")
+        for name, branch, n, oldest in stranded:
+            print(f"  {host}: {name} branch {branch}: {n} unpushed commit(s), oldest "
+                  f"{_time.strftime('%Y-%m-%d %H:%M', _time.localtime(oldest))}")
+
     refused = [r for r in results if r.get('hook_refused')]
     if refused:
         # Named, and the run fails so the alert fires: a refused file stays on
@@ -872,7 +921,7 @@ def main() -> int:
               f"(everything else landed; these stay here, unchanged):")
         for r in refused:
             print(f"  {r['name']}: {', '.join(r['hook_refused'])}")
-    if forked or deleting or refused:
+    if forked or deleting or refused or stranded:
         return 1
 
     if conflicts:
