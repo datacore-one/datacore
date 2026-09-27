@@ -1,7 +1,8 @@
 """Promise CAP-2:
 
-    Agents and automations add new tasks only to an inbox, never straight into
-    my task lists.
+    Agents and automations add new tasks only to an inbox. The one exception
+    is a scheduled duty that is fully specified (a clear done-when): it goes
+    straight to its agent's queue. (Owner decision 2026-09-27.)
 
 Kind: deterministic (real adapter and real task creators against a tmp Data
 tree) plus a source contract over the automation code.
@@ -97,6 +98,25 @@ def _code_files():
         yield p
 
 
+#: The only automation allowed the bypass, and only for a fully specified duty
+#: (owner decision 2026-09-27). It must decide on DONE_WHEN itself.
+BYPASS_ALLOWED = {"modules/ventures/lib/cadence_capture.py"}
+
+
+def test_a_cadence_duty_without_done_when_goes_to_the_inbox():
+    """The exception is narrow: a duty with no DONE_WHEN is not fully specified,
+    so cadence_capture must not bypass the inbox for it."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "cadence_capture", DC / "modules" / "ventures" / "lib" / "cadence_capture.py")
+    cc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cc)
+    assert hasattr(cc, "fully_specified"), "cadence_capture must decide the bypass in one place: fully_specified()"
+    assert cc.fully_specified({"DONE_WHEN": "the weekly report exists"}) is True
+    assert cc.fully_specified({"DONE_WHEN": "  "}) is False
+    assert cc.fully_specified({}) is False
+
+
 def test_no_automation_uses_the_inbox_bypass():
     offenders = []
     pat = re.compile(r"--allow-any-file|allow_any_file\s*=\s*True")
@@ -108,5 +128,7 @@ def test_no_automation_uses_the_inbox_bypass():
         for n, line in enumerate(lines, 1):
             m = pat.search(line)
             if m and "#" not in line[:m.start()]:
+                if str(p.relative_to(DC)) in BYPASS_ALLOWED and "fully_specified" in p.read_text(encoding="utf-8"):
+                    continue
                 offenders.append(f"{p.relative_to(DC)}:{n}")
     assert not offenders, f"automations bypass the inbox-only rule: {offenders}"
