@@ -79,6 +79,24 @@ effects:
       - 'api\.linkedin\.com/(v2/ugcPosts|rest/posts)'
       - 'com\.atproto\.repo\.createRecord'
       - 'api\.telegram\.org/bot[^\s]*/send\w*[^\n]*chat_id["=:\s]*@\w'
+  # A work product put on a hosted page or a shared link (MEM-17): it stays
+  # local until the owner says so. Artifact publishes by default -- an
+  # Artifact call is a publish unless its action only reads or shows.
+  page.publish:
+    tools: ["Artifact", "Bash", "WebFetch", "mcp__*",
+            "terminal", "execute_code", "write_file", "patch", "web_extract",
+            "browser_*", "computer_use", "delegate_task", "cronjob"]
+    patterns:
+      - '"action":\s*"publish"'
+      - '^(?![\s\S]*"(action|command|url|pattern)":)[\s\S]*"(file_path|file_paths|type_url)":'
+      - '\bgh\s+gist\s+create\b'
+      - '\bsurge\b[^\n]*\.surge\.sh\b'
+      - '\bnpx\s+surge\b'
+      - '\bnetlify\s+deploy\b'
+      - '\bvercel\b[^\n]*(--prod\b|\bdeploy\b)'
+      - '\bgh-pages\s+-d\b'
+      - '\bfirebase\s+deploy\b'
+      - '\bwrangler\s+pages\s+deploy\b'
   payment:
     tools: *acting
     # MEM-04: one approval is one transaction. `approved` is the owner's list

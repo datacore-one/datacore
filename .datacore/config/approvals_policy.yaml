@@ -39,6 +39,8 @@ cosign_effects:
   # for a grant like an e-mail does.
   - public.post
   - message.send
+  # MEM-17: a hosted page or shared link waits for the owner's go.
+  - page.publish
 known_effects:
   - email.send
   - payment
@@ -61,6 +63,7 @@ known_effects:
   - history.rewrite
   - public.post
   - message.send
+  - page.publish
   - eval.edit
   # AUD-2: any change but an audit's own findings file (only the auditor
   # principal is bound by it)
@@ -102,7 +105,7 @@ principals:
   auditor:
     never_effects: [write, payment, prod.deploy, trading, credential.rotate, gov.submit, code.merge,
                     secret.search, guard.disable, ledger.forge, calendar.respond, data.egress,
-                    history.rewrite, eval.edit, email.send, public.post, message.send, push.shared,
+                    history.rewrite, eval.edit, email.send, public.post, message.send, push.shared, page.publish,
                     data.delete, bulk.change]
     may_delegate_to: []
     max_creates_per_day: 0
