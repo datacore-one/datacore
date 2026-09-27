@@ -185,7 +185,7 @@ Analyzing current session...
    - Otherwise → schedule tomorrow
    - Format: `<YYYY-MM-DD Day>`
 
-3. **Create continuation task** in `0-personal/org/inbox.org` (or appropriate space) using Rich Task Standard (DIP-0009 Part 3.5):
+3. **Create continuation task** in `{space}/org/inbox.org` — the inbox of the space the work was in (`org_path` from `focus_mode.py detect`; personal only when the work was personal) — using Rich Task Standard (DIP-0009 Part 3.5):
 
 ```org
 *** TODO Continue: [topic or auto-generated summary]     :continuation:
@@ -219,7 +219,7 @@ CONTINUATION SAVED
 ──────────────────
 Task: Continue: [topic]
 Scheduled: <next-working-day>
-Location: 0-personal/org/inbox.org
+Location: {space}/org/inbox.org
 
 Launching /wrap-up...
 ```
@@ -243,7 +243,7 @@ Triggered when the user says "create continuation task", "continuation task for 
 
 1. **Extract context from conversation** — same as save mode step 1
 2. **Determine next working day** — same as save mode step 2
-3. **Create continuation task** in `0-personal/org/inbox.org` using Rich Task Standard — same format as save mode step 3. **CRITICAL: Always include the `:continuation:` tag on the heading.**
+3. **Create continuation task** in `{space}/org/inbox.org` (the inbox of the space the work was in, as in save mode) using Rich Task Standard — same format as save mode step 3. **CRITICAL: Always include the `:continuation:` tag on the heading.**
 4. **Confirm to user:**
 
 ```
@@ -251,7 +251,7 @@ CONTINUATION TASK CREATED
 ─────────────────────────
 Task: Continue: [topic]
 Scheduled: <next-working-day>
-Location: 0-personal/org/inbox.org
+Location: {space}/org/inbox.org
 Tag: :continuation:
 
 Session continues.

@@ -805,7 +805,26 @@ def cmd_audit(final: bool = False) -> dict:
     space_journals = [str(p.relative_to(DATACORE_ROOT))
                       for s in spaces()
                       for p in [s / "journal" / f"{today}.md"] if p.exists()]
-    check("space journals", True, f"{len(space_journals)} written: {space_journals}")
+    # Every space this session wrote to needs today's entry (DAY-8). Until
+    # 2026-09-27 this check passed unconditionally.
+    mine, err = session_files()
+    worked = set()
+    for f in mine:
+        try:
+            top = Path(f).resolve().relative_to(DATACORE_ROOT.resolve()).parts[:1]
+        except ValueError:
+            continue
+        if top and re.match(r"^\d+-", top[0]) and (DATACORE_ROOT / top[0]).is_dir():
+            worked.add(top[0])
+    unjournalled = sorted(
+        s for s in worked
+        if not any((DATACORE_ROOT / s / d / f"{today}.md").exists() for d in ("journal", "notes/journals")))
+    if err:
+        check("space journals", False, f"cannot tell which spaces this session worked in: {err}")
+    else:
+        check("space journals", not unjournalled,
+              f"no journal entry today in {', '.join(unjournalled)}" if unjournalled
+              else f"{len(space_journals)} written: {space_journals}")
 
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
     archived = bool(sid and list(ARCHIVE_DIR.glob(f"*/{sid}/meta.json")))
