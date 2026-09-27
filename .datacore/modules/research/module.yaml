@@ -118,3 +118,9 @@ exempt:
     reason: operator summary to the configured chat
   - fn: "lib/research_orchestrator.py:_post_telegram"
     reason: failure alert to the operator's own group -- same channel as send_telegram_summary
+
+# MOD-3: the scheduled jobs this module owns. Their full entries (machine, schedule,
+# cmd, artifact) live in .datacore/lib/jobs/manifest.yaml, which the installer and
+# verifier read; `module_remove.py research` takes these out of it with the module.
+schedules:
+  - name: mac-nlm-auth-sync
