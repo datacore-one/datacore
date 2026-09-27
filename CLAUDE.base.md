@@ -257,6 +257,8 @@ When the user corrects a recalled fact: call `plur_learn` immediately, then `plu
   (a check number, a finding letter, an engram, DIP or promise id) never stands in for
   its meaning. Write "the hourly inbox import check (R-018) is red", never "R-018 is
   red" — even when the file you are summarising is written in ids and has a glossary.
+  Before you send, reread the reply: any code left outside brackets gets its meaning
+  written in its place, and the code moves into brackets or goes.
 - **A report is saved before it is answered.** Any audit, review, report or hand-off
   you produce is written to a file in the repository (or filed as an issue) in the
   same turn, before you reply; the reply summarises it and names the path. A report
