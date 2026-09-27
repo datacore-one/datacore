@@ -35,7 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tag_utils import sanitize_org_tags  # noqa: E402
-from org_transaction import SafeOrgWorkspace, new_org_id, serialized
+from org_transaction import SafeOrgWorkspace, delete_file, new_org_id, serialized, watch_file, write_org_text
 
 
 def _load_ws(*paths: str, state_config=None):
@@ -420,6 +420,12 @@ def cmd_add(args):
     # Priority belongs in the heading as [#A], not in PROPERTIES
     heading = f"[#{args.priority}] {args.heading}" if args.priority else args.heading
 
+    # A Phase 1 space's next_actions.org is generated from the ledger. The node
+    # is still built here -- the ledger payload is read from it -- but the file
+    # that remains is the projection, never this adapter's layout (below).
+    generated = _generated_target(file_path)
+    generated_before = watch_file(file_path)["before"] if generated else None
+
     # Find parent node
     parent_node = None
     if getattr(args, 'parent_id', None):
@@ -434,8 +440,9 @@ def cmd_add(args):
                 break
         if parent_node is None:
             return {"error": f"Parent heading not found: {args.parent}"}
-    else:
-        # Default: first level-1 heading
+    elif not generated:
+        # Default: first level-1 heading. Not in a generated file: it has no
+        # sections, and its first heading is just some task.
         for n in ws.all_nodes():
             if n.level == 1:
                 parent_node = n
@@ -512,9 +519,36 @@ def cmd_add(args):
     _assignee = _assignee_from_tags(file_path, sorted(tags) if tags else None)
     if _assignee:
         _create_payload["assignee"] = _assignee
+    if generated:
+        return _add_to_generated(file_path, generated_before, _create_payload, node_id, args.heading)
     emitted = _ledger_emit(file_path, "item.create", _create_payload)
     return {"added": True, "id": node_id, "heading": args.heading,
             "ledger_actor": emitted}
+
+
+def _add_to_generated(file_path, before, payload, node_id, heading):
+    """Create the task in the ledger, then re-render the generated file from it.
+
+    Writing the heading into the projection and appending `item.create` beside
+    it left a file item the projection base had never seen. The first time the
+    ledger's copy moved on (another host's edit) or rendered differently, the
+    three-way merge met base-absent / file-present / ledger-different and
+    refused the whole space -- the system space on the overnight host, 2026-09-23 to 09-27,
+    which stopped every night's task admission. Rendered from the ledger, the
+    file and its base agree with the record by construction.
+    """
+    from org_space import ledger_space_for_file
+    from ledger_project_org import project_space
+    # Undo this adapter's own layout before the ledger hears of the task.
+    delete_file(file_path) if before is None else write_org_text(file_path, before)
+    emitted = _ledger_emit(file_path, "item.create", payload)
+    line = project_space(ledger_space_for_file(file_path))
+    out = {"added": True, "id": node_id, "heading": heading, "ledger_actor": emitted}
+    if line.startswith("REFUSED"):
+        # The task IS recorded; the file already held changes the ledger has not
+        # admitted, and the next ingest-then-project cycle renders it.
+        out["projection"] = "deferred: " + line
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1012,6 +1046,15 @@ def cmd_move(args):
     """Move a task from one file to another, preserving all properties and body."""
     from_path = Path(args.source).resolve()
     to_path = Path(args.target).resolve()
+
+    # A move is not a ledger event. Into a Phase 1 space's generated file it is
+    # a heading the ledger has never seen (the projection refuses the space);
+    # out of one it is a removal the projection puts back (a duplicate).
+    for end in (from_path, to_path):
+        if _generated_target(end):
+            return {"error": f"{end} is generated from the ledger (Phase 1, DIP-0046); a move "
+                             "cannot reach the ledger. Capture into inbox.org, or change the "
+                             "task's state with update (DEFERRED for someday)."}
 
     ws = _load_ws(args.source, args.target)
 

@@ -224,6 +224,22 @@ def project_space(space: Path, force: bool = False, adopt_org: bool = False) -> 
     return f"generated {ORG} ({text.count(chr(10))} lines)"
 
 
+def _refusal_reason(line: str) -> str:
+    """The part of a refusal automation may carry: what to reconcile, not what it says.
+
+    A refusal line can quote task titles (headings the ledger has not seen) or
+    an exception's text. The reason keeps the ledger path of a concurrent edit
+    (ids only, the same rule nightshift applies to EditConflict) and the fixed
+    wording of the guards, and drops everything a title could hide in.
+    """
+    reason = line.split("—", 1)[-1].strip()
+    if " heading(s) in " in reason:
+        return reason.split(";", 1)[0] + "; ingest first, then project"
+    if reason.startswith("cannot verify against the ledger"):
+        return "cannot verify against the ledger"
+    return reason.split("(", 1)[0].strip()[:200]
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--root", type=Path, default=Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data")))
@@ -264,7 +280,8 @@ def main(argv: list[str] | None = None) -> int:
         status = ('refused' if line.startswith('REFUSED') else
                   'generated' if line.startswith('generated ') else 'authored')
         relative = s.relative_to(root).as_posix()
-        results.append({'space': relative, 'status': status})
+        results.append({'space': relative, 'status': status,
+                        **({'reason': _refusal_reason(line)} if status == 'refused' else {})})
         if not a.json:
             print(f"  {relative:14} {line}")
     if a.json:
