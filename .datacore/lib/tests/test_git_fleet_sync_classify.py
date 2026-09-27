@@ -41,17 +41,31 @@ REAL_CONFLICT = [
 ]
 
 
+OFFLINE = [
+    "ssh: connect to host example.invalid port 22: Operation timed out\n"
+    "fatal: Could not read from remote repository.\n\n"
+    "Please make sure you have the correct access rights\nand the repository exists.",
+    "ssh: Could not resolve hostname h: nodename nor servname provided, or not known",
+    "fatal: unable to access 'https://github.com/x/y.git/': Failed to connect to github.com port 443",
+]
+
+
 def _classify(out: str) -> str:
-    """Mirror of the branch under test, so the strings are what is asserted."""
-    if any(s in out for s in (
-            'Permission denied', 'could not read Username',
-            'Authentication failed', 'access rights',
-            'Repository not found', '403 Forbidden',
-            'error: 403', 'error: 401')):
+    """The branch under test, through the classifier it uses."""
+    kind = fs.failure_kind(out)
+    if kind == 'denied':
         return "NO ACCESS"
+    if kind == 'offline':
+        return "OFFLINE"
     if 'refusing to merge unrelated histories' in out:
         return "UNRELATED HISTORY"
     return "PULL CONFLICT"
+
+
+@pytest.mark.parametrize("out", OFFLINE)
+def test_an_unreachable_host_is_offline_not_denied(out):
+    """git appends "check your access rights" to EVERY ssh failure (SYN-6)."""
+    assert _classify(out) == "OFFLINE", f"misclassified: {out[:60]}"
 
 
 @pytest.mark.parametrize("out", NO_ACCESS)
@@ -80,7 +94,7 @@ def test_no_access_never_claims_work_is_at_risk_from_a_stale_ref():
     that can reach it.
     """
     src = (LIB / "git_fleet_sync.py").read_text()
-    branch = src[src.index("if any(s in out for s in ("):]
+    branch = src[src.index("elif kind == 'denied':"):]
     branch = branch[:branch.index("elif 'refusing to merge unrelated histories'")]
 
     assert "result['access_at_risk'] = False" in branch, (
@@ -92,6 +106,6 @@ def test_no_access_never_claims_work_is_at_risk_from_a_stale_ref():
 def test_source_carries_every_pattern_this_asserts():
     """Pin the mirror to the implementation, so they cannot drift apart."""
     src = (LIB / "git_fleet_sync.py").read_text()
-    for pattern in ('error: 403', 'error: 401', '403 Forbidden',
-                    'could not read Username', 'Repository not found'):
+    for pattern in ('error: 403', 'error: 401', '403 forbidden',
+                    'could not read username', 'repository not found'):
         assert f"'{pattern}'" in src, f"{pattern} missing from git_fleet_sync.py"

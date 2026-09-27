@@ -375,6 +375,31 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
         return result
 
 
+#: What git prints when the remote refused THIS host, as opposed to not
+#: answering. Checked before the network words: both kinds end with git's
+#: generic "Please make sure you have the correct access rights", which it
+#: prints for EVERY ssh failure -- matching on that sentence reported an
+#: unreachable host as a credential problem (SYN-6).
+_DENIED = ('permission denied', 'authentication failed', 'could not read username',
+           'error: 403', 'error: 401', '403 forbidden', 'repository not found',
+           'host key verification failed')
+_OFFLINE = ('timed out', 'could not resolve', 'connection refused', 'network is unreachable',
+            'no route to host', 'connection reset', 'connection closed', 'name resolution',
+            'failed to connect', 'could not connect', 'nodename nor servname')
+
+
+def failure_kind(out: str) -> str:
+    """'denied' | 'offline' | '' for a failed fetch/pull/push's output."""
+    low = (out or '').lower()
+    if any(s in low for s in _DENIED):
+        return 'denied'
+    if any(s in low for s in _OFFLINE):
+        return 'offline'
+    if 'could not read from remote repository' in low or 'unable to access' in low:
+        return 'offline'            # the remote did not answer; nothing said "denied"
+    return ''
+
+
 def _pull(repo: Path, result: dict, default: str) -> None:
     """Fetch and merge origin/<default>. Runs under _repo_lock (decision Q6).
 
@@ -418,11 +443,16 @@ def _pull(repo: Path, result: dict, default: str) -> None:
         # winston were therefore reported as PULL CONFLICT on 2026-08-31 —
         # sending someone to resolve a merge that does not exist — for
         # exactly the credential reason this branch was written to catch.
-        if any(s in out for s in (
-                'Permission denied', 'could not read Username',
-                'Authentication failed', 'access rights',
-                'Repository not found', '403 Forbidden',
-                'error: 403', 'error: 401')):
+        kind = failure_kind(out)
+        if kind == 'offline':
+            # OFFLINE IS NOT DENIED. A host that cannot reach the remote right
+            # now needs waiting, not a key: "NO ACCESS — credential job" sent
+            # people to regenerate keys for a laptop on a train (SYN-6).
+            first = next((l for l in detail if l.strip()), '')[:120]
+            result['pull'] = (f'OFFLINE — this host could not reach the remote '
+                              f'(network/timeout); local work is kept and retried '
+                              f'next run [{first}]')
+        elif kind == 'denied':
             # Distinguish "stale" from "work at risk". A host that cannot
             # reach a remote it has nothing to send is merely behind; a
             # host holding unpushed commits it cannot push has work
@@ -477,7 +507,12 @@ def fetch_default(repo: Path, default: str):
     except subprocess.TimeoutExpired:
         return 'git fetch timed out'
     if r.returncode:
-        lines = ((r.stderr or '') + (r.stdout or '')).strip().splitlines()
+        text = ((r.stderr or '') + (r.stdout or '')).strip()
+        lines = [l for l in text.splitlines() if l.strip()]
+        kind = failure_kind(text)
+        if kind and lines:
+            # Name the cause, from the line that states it (SYN-6).
+            return f"{'offline' if kind == 'offline' else 'access denied'} — {lines[0][:120]}"
         return (lines[-1][:120] if lines else f'git fetch exited {r.returncode}')
     return None
 
@@ -515,7 +550,12 @@ def _land(repo: Path, result: dict, execute: bool, default: str) -> dict:
         result['status'] = 'INVENTORY FAILED — existing work retained; no publication attempted'
         return result
     if not inventory:
-        result['status'] = 'clean' + (f" ({result.get('pull')})" if result.get('pull') else '')
+        pulled = result.get('pull')
+        # "clean" only when nothing failed: a pull that did not happen is not
+        # a clean sync, whatever the working tree looks like (SYN-6).
+        result['status'] = ('clean' + (f" ({pulled})" if pulled else '')
+                            if not pulled or pulled == 'pulled'
+                            else f'nothing to send; pull failed: {pulled}')
         return result
 
     to_add = []
@@ -759,6 +799,14 @@ def main() -> int:
         print('No access — this host cannot reach these remotes '
               '(credential/deploy-key job, NOT a merge):')
         for r in noaccess:
+            print(f"  {r['name']}: {r['pull']}")
+        print()
+
+    offline = [r for r in results if r.get('pull', '').startswith('OFFLINE')]
+    if offline:
+        print('Offline — this host could not reach these remotes (network; clears on '
+              'its own, local work is kept):')
+        for r in offline:
             print(f"  {r['name']}: {r['pull']}")
         print()
 
