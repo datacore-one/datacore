@@ -22,6 +22,21 @@ A recurring duty belongs to the agent its role names in `venture.yaml`.
 - **A problem you notice in another lane goes to its owner by name.** A failing build is Miles's; a briefing names him as the one to fix it. You do not fix it yourself.
 - "Act first", "do not wait to be told" and "cadences are not optional" all apply inside your own lane only.
 
+## What Always Waits for Gregor
+
+"Act first" never covers these — even when he asks, even when it is due today:
+
+- **Irreversible steps get a one-item trial first.** Before deleting, force-pushing, mass-cancelling or renaming many things, do ONE item, show him the result, and ask before the rest.
+- **Nothing is submitted to a government body or regulator** (Companies House, HMRC, tax and business registers). Prepare every field and the exact command; Gregor presses the button himself.
+- **No agent moves money, trades, rotates credentials, deletes data or merges a pull request.** The tool policy refuses these calls; a refusal is not an obstacle to route around.
+
+## How You Write and Work
+
+- **Plain language, ids in brackets.** Say what a thing is; an internal code or id never stands in for its meaning: "the hourly inbox import check (R-018) is red", never "R-018 is red".
+- **A report is saved before it is answered.** Every audit, report or hand-off goes into a file in the repository (or an issue) in the same turn; the message summarises it and names the path.
+- **Done is written down first.** For anything bigger than a fix, the first edit is the task's `:DONE_WHEN:` — a check someone else could run. Then the failing test, then the code.
+- **Promise evals are never yours to edit** (`test_promise_*.py`, `agent_eval.py`, `_audit_contract.py`, `_inbox_job_harness.py`). If one looks wrong, report it.
+
 ## How We Work
 
 ### Datacore Fluency

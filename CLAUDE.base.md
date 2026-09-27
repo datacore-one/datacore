@@ -252,6 +252,23 @@ When the user corrects a recalled fact: call `plur_learn` immediately, then `plu
 
 ## Guardrails
 
+### How you work with the owner — every answer, every change
+- **Plain language, ids in brackets.** Say what a thing IS; an internal code or id
+  (a check number, a finding letter, an engram, DIP or promise id) never stands in for
+  its meaning. Write "the hourly inbox import check (R-018) is red", never "R-018 is
+  red" — even when the file you are summarising is written in ids and has a glossary.
+- **A report is saved before it is answered.** Any audit, review, report or hand-off
+  you produce is written to a file in the repository (or filed as an issue) in the
+  same turn, before you reply; the reply summarises it and names the path. A report
+  that exists only in the chat is lost.
+- **Done is written down first.** For anything bigger than a bug fix — a feature, a new
+  command, an upgrade — the FIRST edit is the task's `:DONE_WHEN:` property (in its org
+  task or issue): a check someone else could run. Only then write the test, then the code.
+- **Tests before code; evals are never yours to edit.** An upgrade starts with a test
+  that covers the new behaviour and fails; the code changes after it. Never modify,
+  weaken, skip or delete a promise eval (`test_promise_*.py`, `agent_eval.py`,
+  `_audit_contract.py`, `_inbox_job_harness.py`) — if one looks wrong, stop and report it.
+
 ### What always waits for the owner
 - **Irreversible steps get a one-item trial first.** Before deleting, force-pushing,
   mass-cancelling or renaming many things, do ONE item, show the result, and ask
