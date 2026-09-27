@@ -422,11 +422,14 @@ def recheck() -> int:
     }, indent=1))
     page = [f for f in failing if _page_owner(f, day)]
     if page:
-        _alert_group("Morning repair, 03:30 UTC -- needs a person:\n" +
-                     "\n".join(f"- {f['title']}" + (f" (item {f['item']}: failed three times or 24h in repair)"
-                                                     if f.get("item") else "") for f in page) +
-                     (f"\n{len(failing) - len(page)} more in repair; listed in the briefing."
-                      if len(failing) > len(page) else ""))
+        # MEM-66 (owner 2026-09-27): the group gets a summary with the count; the full
+        # list of every still-failing item lives in repairs.json, which the briefing reads.
+        in_repair = len(failing) - len(page)
+        _alert_group(f"Morning repair, 03:30 UTC: {len(failing)} still failing, {len(page)} need a person"
+                     + (f", {in_repair} in repair" if in_repair else "")
+                     + ": " + "; ".join(f["title"] for f in page[:3])
+                     + (f"; and {len(page) - 3} more" if len(page) > 3 else "")
+                     + ". The full list is in the morning briefing.")
     print(f"morning_repair recheck: {len(repaired)} repaired, {len(failing)} still failing "
           f"({len(page)} need a person) -> {out}")
     return 0
