@@ -802,6 +802,12 @@ def hook_script_path(command: str) -> Path | None:
     for tok in parts:
         if tok in _INTERPRETERS:
             continue
+        # Claude Code runs project hooks with CLAUDE_PROJECT_DIR set to the project
+        # root; the shipped settings start from it (then DATACORE_ROOT) so no
+        # install location is hardcoded. Here that root is ROOT.
+        at = tok.find("/.datacore/")
+        if tok.startswith("$") and at > 0:
+            tok = str(ROOT) + tok[at:]
         if tok.startswith(("/", "~", ".")):
             return Path(os.path.expanduser(tok))
         return None   # first real token is a PATH binary or npx: not a file path
@@ -1014,7 +1020,20 @@ def check_egress(rep: Report) -> None:
         # probe did not get as far as looking: could not check, not broken.
         err = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
         err += exc.output.decode(errors="replace") if isinstance(exc.output, bytes) else (exc.output or "")
-        if re.search(r"No module named '?datacore", err) or "Traceback" not in err:
+        import site
+        try:
+            pth = Path(site.getusersitepackages()) / "datacore-core.pth"
+            set_up = pth.exists()
+        except Exception:  # noqa: BLE001 - cannot locate the user site: treat as set up
+            set_up = True
+        if re.search(r"No module named '?datacore", err) and not set_up:
+            # INSTALL.md step 1b (install_datacore_path.py) has not run for this
+            # interpreter yet: a setup step not taken, named with its fix, rather
+            # than a core that broke. Once the .pth exists, a failing import FAILs.
+            rep.add("app", "core importable by modules", None,
+                    f"not set up for {sys.executable} yet -- run "
+                    "python3 .datacore/lib/install_datacore_path.py (INSTALL.md step 1b)")
+        elif re.search(r"No module named '?datacore", err) or "Traceback" not in err:
             rep.add("app", "core importable by modules", False,
                     "CalledProcessError — module decorators would record nothing")
         else:

@@ -87,12 +87,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/session_bootstrap.py",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/session_bootstrap.py",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/datacore_sync.py sync --quiet",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/datacore_sync.py sync --quiet",
             "timeout": 30
           }
         ]
@@ -103,22 +103,22 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/session_firstmsg.py",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/session_firstmsg.py",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/session_time_guardian.py",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/session_time_guardian.py",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/hooks/command_suggest.py",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/hooks/command_suggest.py",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/hooks/plur_inject_wrapper.py --unless-user-hook",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/hooks/plur_inject_wrapper.py --unless-user-hook",
             "timeout": 90,
             "async": true
           }
@@ -131,7 +131,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event plan_mode",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/active_memory.py --event plan_mode",
             "timeout": 10
           }
         ]
@@ -141,12 +141,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event skill",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/active_memory.py --event skill",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/hooks/command_receipt.py",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/hooks/command_receipt.py",
             "timeout": 3
           }
         ]
@@ -156,7 +156,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event agent",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/active_memory.py --event agent",
             "timeout": 10
           }
         ]
@@ -166,7 +166,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/org_guard.py",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/org_guard.py",
             "timeout": 5
           }
         ]
@@ -176,7 +176,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/hooks/org_date_prewrite.py",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/hooks/org_date_prewrite.py",
             "timeout": 5
           }
         ]
@@ -186,7 +186,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/plur_cli.py --timeout 8 hook-inject --event plan_mode",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/plur_cli.py --timeout 8 hook-inject --event plan_mode",
             "timeout": 10
           }
         ]
@@ -196,7 +196,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/plur_cli.py --timeout 8 hook-inject --event skill",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/plur_cli.py --timeout 8 hook-inject --event skill",
             "timeout": 10
           }
         ]
@@ -206,7 +206,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/plur_cli.py --timeout 8 hook-inject --event agent",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/plur_cli.py --timeout 8 hook-inject --event agent",
             "timeout": 10
           }
         ]
@@ -216,7 +216,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/hooks/plur_observe.py >/dev/null",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/hooks/plur_observe.py >/dev/null",
             "timeout": 3
           }
         ]
@@ -228,7 +228,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event subagent",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/active_memory.py --event subagent",
             "timeout": 10
           }
         ]
@@ -238,7 +238,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/plur_cli.py --timeout 8 hook-inject --event subagent",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/plur_cli.py --timeout 8 hook-inject --event subagent",
             "timeout": 10
           }
         ]
@@ -250,7 +250,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/active_memory.py --event rehydrate",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/active_memory.py --event rehydrate",
             "timeout": 15
           }
         ]
@@ -260,7 +260,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/plur_cli.py --timeout 13 hook-inject --rehydrate",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/plur_cli.py --timeout 13 hook-inject --rehydrate",
             "timeout": 15
           }
         ]
@@ -272,7 +272,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/hooks/ralph_loop_safety.py patch-session-id",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/hooks/ralph_loop_safety.py patch-session-id",
             "timeout": 3
           }
         ]
@@ -282,7 +282,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/Data/.datacore/hooks/org-date-fix.sh",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/hooks/org-date-fix.sh",
             "timeout": 10
           }
         ]
@@ -292,7 +292,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/hooks/plur_observe.py --post >/dev/null",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/hooks/plur_observe.py --post >/dev/null",
             "timeout": 3
           }
         ]
@@ -303,12 +303,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/session_archive.py",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/session_archive.py",
             "timeout": 60
           },
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/session_cleanup.py",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/session_cleanup.py",
             "timeout": 5
           }
         ]
@@ -320,7 +320,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/hooks/ralph_loop_safety.py stop-guard",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/hooks/ralph_loop_safety.py stop-guard",
             "timeout": 3
           }
         ]
@@ -330,7 +330,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/Data/.datacore/lib/plur_cli.py --timeout 2 hook-learn-check",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/plur_cli.py --timeout 2 hook-learn-check",
             "timeout": 3
           }
         ]

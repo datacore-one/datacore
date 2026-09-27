@@ -202,6 +202,12 @@ def cmd_items(args: argparse.Namespace) -> None:
     db_path = space / ".datacore" / "state" / "ledger" / "index.db"
     build_index(state, db_path)
     for item in items_by(db_path, status=args.status, owner=args.owner):
+        # A closed item says how it closed: `item.dismiss` carries both "done"
+        # (a task completed) and "dropped"/"housekeeping", and "dismissed" alone
+        # reads finished work as cancelled (INS-2).
+        st = state.items.get(item["id"])
+        if st is not None and st.closed_kind:
+            item["closed_as"] = st.closed_kind
         print(json.dumps(item))
 
 
