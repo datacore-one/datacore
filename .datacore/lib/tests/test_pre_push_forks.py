@@ -76,3 +76,41 @@ def test_unrelated_repo_is_still_skipped(tmp_path):
 def test_persona_is_gitignored():
     r = subprocess.run(["git", "-C", str(ROOT), "check-ignore", "-q", ".datacore/personas/winston.md"])
     assert r.returncode == 0, ".datacore/personas/ must be ignored: it holds the user's own words"
+
+
+def _fake_gh(tmp_path: Path, visibility: str | None) -> dict:
+    """A `gh` on PATH that answers `repo view ... visibility` (None = gh fails)."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    gh = bindir / "gh"
+    body = f'echo "{visibility}"' if visibility else "exit 1"
+    gh.write_text(f"#!/bin/sh\n{body}\n")
+    gh.chmod(0o755)
+    return {"PATH": f"{bindir}:{os.environ['PATH']}"}
+
+
+def _push_with(repo: Path, extra_env: dict) -> subprocess.CompletedProcess:
+    sha = _git(repo, "rev-parse", "HEAD")
+    env = {**os.environ, "DATA_DIR": str(ROOT), **extra_env}
+    env.pop("SKIP_PRE_PUSH", None)
+    return subprocess.run(
+        ["bash", str(HOOK), "origin", "https://github.com/alice/datacore.git"],
+        cwd=repo, input=f"refs/heads/main {sha} refs/heads/main {ZERO}\n",
+        capture_output=True, text=True, env=env, timeout=120,
+    )
+
+
+def test_a_private_repo_with_a_public_upstream_remote_is_not_a_public_fork(tmp_path):
+    """A private space repo keeps the public template as its `upstream` remote.
+    GitHub says the push target is PRIVATE, so it is not a public fork and its
+    journals and task files must not be blocked (2-datacore, 2026-09-27)."""
+    repo = _repo(tmp_path, "https://github.com/datacore-one/datacore.git")
+    r = _push_with(repo, _fake_gh(tmp_path, "PRIVATE"))
+    assert "treating as PROTECTED" not in r.stderr, r.stderr
+
+
+def test_when_visibility_cannot_be_read_the_fork_is_still_scanned(tmp_path):
+    """Fail closed: no answer from GitHub keeps the fork protected."""
+    repo = _repo(tmp_path, "https://github.com/datacore-one/datacore.git")
+    r = _push_with(repo, _fake_gh(tmp_path, None))
+    assert "treating as PROTECTED" in r.stderr, r.stderr
