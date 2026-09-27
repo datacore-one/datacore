@@ -9,7 +9,7 @@
 #
 #   reviewed:
 #     - commit: 1a2b3c4d
-#       space: 1-myteam
+#       space: myteam   # the space NAME, never its local folder number
 #       writer: agent-a
 #       committed_as: owner
 #       date: 2026-01-01

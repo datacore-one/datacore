@@ -450,6 +450,19 @@ def _space_name(folder: Path) -> str:
     return _implied_name(folder)
 
 
+def same_space(ident: object, folder: Path) -> bool:
+    """Does a record's space value ``ident`` name the space in ``folder``?
+
+    Compared as bare names on both sides, so ``plur`` and a legacy ``5-plur``
+    both match the folder ``3-plur`` on a host that numbers it differently
+    (ENG-2026-08-03-047). The folder side is its configured name or its folder
+    name without the local prefix."""
+    if not isinstance(ident, str) or not ident.strip():
+        return False
+    want = _implied_name(Path(ident.strip()))
+    return want in {_space_name(folder), _implied_name(folder)}
+
+
 def _folder_for(ident: str, base: Path) -> str | None:
     """The folder holding the space named ``ident`` on THIS install.
 

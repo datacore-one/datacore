@@ -15,16 +15,18 @@
 #
 # The script falls back to `git remote get-url origin` for unconfigured spaces.
 #
-# Example (in gh-reconcile.local.yaml): 1-myteam's git remote is
+# Example (in gh-reconcile.local.yaml): the myteam space's git remote is
 # my-org/myteam-space (the notes repo), but its tasks track PRs/issues in
 # my-org/app (the code repo). Without the override, "Merge PR #774" would
 # resolve to myteam-space#774 (wrong) instead of my-org/app#774 (correct).
+# Keys name the space (its config name, or its folder without the local number
+# prefix, which differs per host); a legacy numbered key such as 1-myteam still works.
 #
 #   space_repos:
-#     1-myteam: my-org/app
+#     myteam: my-org/app
 #
 #   extra_repos:
-#     1-myteam:
+#     myteam:
 #       docs: my-org/docs
 
 space_repos: {}

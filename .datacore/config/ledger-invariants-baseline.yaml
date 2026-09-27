@@ -11,7 +11,7 @@
 #
 #   accepted:
 #     - invariant: hashes
-#       space: 1-myteam
+#       space: myteam   # the space NAME, never its local folder number
 #       detail_startswith: "agent-a seq 5"
 #       accepted_on: 2026-01-01
 #       why: >

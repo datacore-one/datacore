@@ -195,9 +195,13 @@ def _prefix_matches(detail: str, prefix: object) -> bool:
     return not rest or not (prefix[-1:].isalnum() and (rest[0].isalnum() or rest[0] == "_"))
 
 
-def _accepted(finding, accepted: list[dict]) -> bool:
+def _accepted(finding, accepted: list[dict], root: Path | None = None) -> bool:
+    """An entry names its space by NAME (`plur`), never by this host's folder
+    number; a legacy `5-plur` still matches `3-plur` (ENG-2026-08-03-047)."""
+    from spaces import same_space
+    folder = (root / finding.space) if root else Path(finding.space)
     return any(e.get("invariant") == finding.invariant
-               and e.get("space") == finding.space
+               and same_space(e.get("space"), folder)
                and _prefix_matches(finding.detail, e.get("detail_startswith"))
                for e in accepted)
 
@@ -240,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
     for f in findings:
         if f.unknown:
             continue
-        (known if _accepted(f, accepted) else broken).append(f)
+        (known if _accepted(f, accepted, a.root) else broken).append(f)
     unknown = [f for f in findings if f.unknown]
     word, code = verdict(broken, unknown)
     if a.json:
@@ -250,7 +254,7 @@ def main(argv: list[str] | None = None) -> int:
                           "unknown": [vars(f) for f in unknown]}, indent=2))
     else:
         for f in findings:
-            mark = "known" if (not f.unknown and _accepted(f, accepted)) else None
+            mark = "known" if (not f.unknown and _accepted(f, accepted, a.root)) else None
             print(f"  {f}" + (f"   [{mark}, accepted by the owner]" if mark else ""))
         print(f"ledger-invariants: {word} — {len(spaces)} space(s), "
               f"{len(broken)} new, {len(known)} accepted, {len(unknown)} could-not-tell")

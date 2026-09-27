@@ -184,9 +184,11 @@ def load_config(data_dir: Path) -> Tuple[Dict[str, Tuple[str, str]], Dict[str, D
     Load space→repo mapping from .datacore/config/gh-reconcile.yaml.
 
     Returns:
-        primary  : {space_dirname: (owner, repo)}  — primary repo per space
-        secondary: {space_dirname: {shortname: (owner, repo)}}  — extra repos
+        primary  : {space: (owner, repo)}  — primary repo per space
+        secondary: {space: {shortname: (owner, repo)}}  — extra repos
                    for resolving "REPONAME #NNN" bare refs (e.g. "enterprise #389")
+    A key names the space (``plur``); a legacy numbered key (``5-plur``) is
+    kept as written. Look an entry up with for_space(), never by folder name.
     Falls back to git remotes for unconfigured spaces.
     """
     primary: Dict[str, Tuple[str, str]] = {}
@@ -245,6 +247,21 @@ def load_config(data_dir: Path) -> Tuple[Dict[str, Tuple[str, str]], Dict[str, D
             log.warning(f"Could not read {config_path.name}: {e}")
 
     return primary, secondary
+
+
+def for_space(mapping: Dict[str, object], space_dir: Path):
+    """The entry of a load_config() mapping for the space in ``space_dir``.
+
+    Keys name the space by NAME (``plur``), never by this host's folder number;
+    a legacy key such as ``5-plur`` still matches the folder ``3-plur`` on a host
+    that numbers it differently (ENG-2026-08-03-047). An exact folder-name key
+    wins, then the last key that names the same space (the local file is read
+    last, so it wins over the shipped one)."""
+    if space_dir.name in mapping:
+        return mapping[space_dir.name]
+    from spaces import same_space
+    hits = [k for k in mapping if same_space(k, space_dir)]
+    return mapping[hits[-1]] if hits else None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1094,8 +1111,9 @@ def reconcile_all(data_dir: Path, dry_run: bool) -> int:
         log.info(f"\nSpace: {space_dir.name}")
 
         # Resolve the space's primary GitHub repo
-        if space_dir.name in primary_config:
-            space_owner, space_repo = primary_config[space_dir.name]
+        configured = for_space(primary_config, space_dir)
+        if configured:
+            space_owner, space_repo = configured
             log.debug(f"  repo (config): {space_owner}/{space_repo}")
         else:
             remote = get_space_repo_from_remote(space_dir)
@@ -1106,7 +1124,7 @@ def reconcile_all(data_dir: Path, dry_run: bool) -> int:
                 space_owner = space_repo = None
                 log.debug("  repo: unknown — bare refs won't resolve")
 
-        extra_repos = secondary_config.get(space_dir.name)
+        extra_repos = for_space(secondary_config, space_dir)
 
         # Pull before modifying
         if not dry_run and (space_dir / ".git").exists():
@@ -1172,13 +1190,14 @@ def verify_patterns(data_dir: Path) -> None:
 
     for space_dir in space_dirs:
         space_owner = space_repo = None
-        if space_dir.name in primary_config:
-            space_owner, space_repo = primary_config[space_dir.name]
+        configured = for_space(primary_config, space_dir)
+        if configured:
+            space_owner, space_repo = configured
         else:
             remote = get_space_repo_from_remote(space_dir)
             if remote:
                 space_owner, space_repo = remote
-        extra_repos = secondary_config.get(space_dir.name)
+        extra_repos = for_space(secondary_config, space_dir)
 
         for fname in ["inbox.org", "next_actions.org"]:
             org_file = space_dir / "org" / fname
