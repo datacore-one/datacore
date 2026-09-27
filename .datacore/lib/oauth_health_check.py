@@ -26,6 +26,7 @@ import sys
 import urllib.parse
 import urllib.request
 from secret_http import urlopen as secret_urlopen
+from datacore.ledger import attests
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -70,6 +71,8 @@ def try_refresh(token_data: dict, token_path: Path):
         return False, None, str(e)
 
 
+@attests("telegram.sent", detail="oauth_health_check: alert to The Firm group",
+         when=lambda sent, *a, **k: sent is True)
 def send_telegram(text: str) -> bool:
     """Send the alert to The Firm group. True only when Telegram accepted it.
 

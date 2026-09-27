@@ -33,6 +33,7 @@ import time
 import urllib.parse
 import urllib.request
 from secret_http import urlopen as secret_urlopen
+from datacore.ledger import attests
 from pathlib import Path
 
 SECRETS = Path.home() / 'Data/.datacore/secrets/spaces'
@@ -109,6 +110,9 @@ def sign(creds: dict[str, str]) -> str:
     return 'OAuth ' + ', '.join(f'{_quote(k)}="{_quote(params[k])}"' for k in sorted(params))
 
 
+@attests("x.post",
+         ref=lambda r: str((r.get("data") or {}).get("id", "")) if isinstance(r, dict) else "",
+         detail="x_post: tweet published")
 def post(text: str, creds: dict[str, str], reply_to: str | None, quote: str | None) -> dict:
     """Post one tweet.
 

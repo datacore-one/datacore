@@ -56,6 +56,9 @@ EGRESS_KINDS = frozenset({
     # product in front of buyers. Collapsing them would make the ledger unable
     # to answer "when did this go on sale?", which is the question that matters.
     "etsy.listing", "etsy.publish",
+    # A post published through a multi-platform scheduler (getlate.dev): the
+    # platform is chosen per call, so no single-platform kind is true of it.
+    "social.post",
 })
 
 # Credential access. NOT egress — none of it reaches a third party — which is
@@ -164,7 +167,8 @@ def attest(kind: str, *, ref: str = "", detail: str = "",
 def attests(kind: str, *,
             ref: Callable[..., str] | str = "",
             detail: Callable[..., str] | str = "",
-            space: str | None = None) -> Callable:
+            space: str | None = None,
+            when: Callable[..., bool] | None = None) -> Callable:
     """Attest an egress function's result, after it returns.
 
     `ref` and `detail` may be constants or callables. A callable receives the
@@ -175,6 +179,11 @@ def attests(kind: str, *,
     something that may not have happened, and that record reads as
     authoritative. If the wrapped call raises, nothing is attested — because
     nothing went out.
+
+    `when`, for senders that report failure by RETURNING it (an HTTP status, a
+    False) rather than raising: called as `when(result, *args, **kwargs)`, and
+    nothing is attested unless it returns true. Also how a transport shared by
+    reads and writes records only the writes (`method != "GET"`).
     """
     def _record(result: Any) -> None:
         try:
@@ -183,6 +192,14 @@ def attests(kind: str, *,
         except Exception:  # noqa: BLE001 — a bad extractor must not eat the result
             r, d = "", ""
         attest(kind, ref=str(r or ""), detail=str(d or ""), space=space)
+
+    def _sent(result: Any, args: tuple, kwargs: dict) -> bool:
+        if when is None:
+            return True
+        try:
+            return bool(when(result, *args, **kwargs))
+        except Exception:  # noqa: BLE001 — an unsure predicate records nothing rather than a false send
+            return False
 
     def decorate(fn: Callable) -> Callable:
         # ASYNC SENDERS NEED THEIR OWN WRAPPER. Calling an `async def` returns a
@@ -198,7 +215,8 @@ def attests(kind: str, *,
             @functools.wraps(fn)
             async def awrapper(*args: Any, **kwargs: Any) -> Any:
                 result = await fn(*args, **kwargs)
-                _record(result)
+                if _sent(result, args, kwargs):
+                    _record(result)
                 return result
             awrapper.__datacore_egress__ = kind
             return awrapper
@@ -206,7 +224,8 @@ def attests(kind: str, *,
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             result = fn(*args, **kwargs)
-            _record(result)
+            if _sent(result, args, kwargs):
+                _record(result)
             return result
 
         wrapper.__datacore_egress__ = kind   # what the conformance scan reads
