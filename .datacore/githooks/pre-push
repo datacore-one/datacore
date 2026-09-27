@@ -314,7 +314,16 @@ fi
 # remote. Checking only the push target's name skipped the scan for every fork,
 # so it ran for nobody but the operator. Any remote of THIS repo that is a
 # protected repo makes the push protected, scanned under the protected policy.
-if [ "$IS_PROTECTED" != "1" ]; then
+# ...but only when the push target itself can be public. A private space repo
+# that keeps the public template as its `upstream` remote is not a fork anyone
+# can read, and treating it as one blocked every journal and task push
+# (2-datacore, 2026-09-27). GitHub decides: PRIVATE skips the promotion; no
+# answer (gh missing, offline) keeps it, so the check fails closed.
+_TARGET_VIS=""
+if [ "$IS_PROTECTED" != "1" ] && command -v gh >/dev/null 2>&1; then
+    _TARGET_VIS=$(gh repo view "$REPO" --json visibility -q .visibility 2>/dev/null || true)
+fi
+if [ "$IS_PROTECTED" != "1" ] && [ "$_TARGET_VIS" != "PRIVATE" ]; then
     for _u in $(git remote 2>/dev/null); do
         _slug=$(git remote get-url "$_u" 2>/dev/null | sed -E 's#^(git@github.com:|https://github.com/|ssh://git@github.com/)##; s#\.git$##')
         [ -n "$_slug" ] && [ "$_slug" != "$REPO" ] || continue
