@@ -80,7 +80,10 @@ def _index() -> list[dict]:
     import yaml  # noqa: PLC0415 — optional at import time, required here
     if not INDEX.is_file():
         raise CredentialUnresolvable(f"no credential index at {INDEX}")
-    return (yaml.safe_load(INDEX.read_text()) or {}).get("credentials") or []
+    # libyaml's safe loader when present: same safety, and the pure-Python one
+    # was most of a warm `creds get` (the index is parsed several times a call).
+    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    return (yaml.load(INDEX.read_text(), Loader=loader) or {}).get("credentials") or []  # noqa: S506
 
 
 def _entry(name: str) -> dict:
@@ -893,13 +896,24 @@ def verify_value(var: str, value: str, timeout: int = 25,
         import shutil as _sh
         if not _sh.which("claude"):
             return "n-a", "claude CLI not on PATH on this host"
+        import tempfile  # noqa: PLC0415
+        # The probe proves one thing: the provider accepts THIS token. Loading
+        # the user's settings, hooks and every MCP server proved nothing more
+        # and cost ~36 s of a ~40 s probe (measured 2026-09-27), so none are
+        # loaded and it runs outside any project. Any other Anthropic auth in
+        # the environment is removed, so a good API key cannot answer for a
+        # dead OAuth token. A bad token still comes back is_error (401).
+        probe_env = {k: v for k, v in os.environ.items()
+                     if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+        probe_env.update({"DATACORE_HEADLESS": "1", "CLAUDE_CODE_OAUTH_TOKEN": value})
         try:
             r = subprocess.run(
-                ["claude", "-p", "Reply with exactly: OK", "--output-format", "json"],
+                ["claude", "-p", "Reply with exactly: OK", "--output-format", "json",
+                 "--strict-mcp-config", "--setting-sources", "",
+                 "--no-session-persistence"],
                 capture_output=True, text=True, timeout=150,
-                stdin=subprocess.DEVNULL,
-                env={**os.environ, "DATACORE_HEADLESS": "1",
-                     "CLAUDE_CODE_OAUTH_TOKEN": value})
+                stdin=subprocess.DEVNULL, cwd=tempfile.gettempdir(),
+                env=probe_env)
         except Exception as e:  # noqa: BLE001
             return "n-a", f"probe failed: {type(e).__name__}"
         raw = r.stdout or ""

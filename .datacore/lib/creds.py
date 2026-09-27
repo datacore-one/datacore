@@ -28,6 +28,7 @@ import os
 import re
 import shlex
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -680,6 +681,70 @@ class CredentialManager:
         return {**extra, "id": c.id, "name": c.name, "type": c.type,
                 "provider": c.provider, "status": c.status}
 
+    # ---- Verified-ok cache (see VERIFY_CACHE_TTL_S) -------------------------
+    # Called only under _cred_lock. Any doubt (unreadable, corrupt, mismatched,
+    # expired, future-dated) is a miss: the answer is always "ask the provider".
+
+    @staticmethod
+    def _verify_cache_path() -> Path:
+        return Path.home() / ".datacore" / "state" / "creds-verified.json"
+
+    @staticmethod
+    def _verify_cache_ttl() -> int:
+        try:
+            return max(0, int(os.environ.get("DATACORE_CREDS_VERIFY_TTL",
+                                             VERIFY_CACHE_TTL_S)))
+        except ValueError:
+            return 0
+
+    @staticmethod
+    def _verify_cache_key(key: str, var: str, value: str) -> tuple:
+        import hashlib  # noqa: PLC0415
+        return f"{key}|{var}", hashlib.sha256(value.encode()).hexdigest()
+
+    def _verify_cache_load(self) -> dict:
+        try:
+            data = json.loads(self._verify_cache_path().read_text())
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _verify_cache_hit(self, key: str, var: str, value: str) -> bool:
+        ttl = self._verify_cache_ttl()
+        if ttl <= 0 or not value:
+            return False
+        slot, digest = self._verify_cache_key(key, var, value)
+        rec = self._verify_cache_load().get(slot)
+        if not isinstance(rec, dict) or rec.get("sha256") != digest:
+            return False
+        try:
+            age = time.time() - float(rec.get("verified_at"))
+        except (TypeError, ValueError):
+            return False
+        return 0 <= age < ttl
+
+    def _verify_cache_store(self, key: str, var: str, value: str, ok: bool) -> None:
+        """Record an ok verdict, or drop the slot on anything else."""
+        if self._verify_cache_ttl() <= 0 and ok:
+            return
+        slot, digest = self._verify_cache_key(key, var, value)
+        data = self._verify_cache_load()
+        if ok:
+            data[slot] = {"sha256": digest, "verified_at": time.time()}
+        elif data.pop(slot, None) is None:
+            return
+        path = self._verify_cache_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as fh:
+                json.dump(data, fh)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+        except OSError:
+            pass  # no cache means the next get verifies again: fail closed
+
     def cmd_get(self, cred_id: str, consumer: str = "cli",
                 no_verify: bool = False, strict: bool = False) -> int:
         """Serve a currently-valid credential value. THE BROKER.
@@ -712,7 +777,8 @@ class CredentialManager:
             print(f"{exc}", file=sys.stderr)
             return 1
 
-        with self._cred_lock(str(entry.get("id") or cred_id)):
+        key = str(entry.get("id") or cred_id)
+        with self._cred_lock(key):
             try:
                 value = ca.get_value(cred_id, consumer=consumer)
             except (ca.CredentialNotIndexed, ca.CredentialUnresolvable) as exc:
@@ -724,8 +790,9 @@ class CredentialManager:
             # primary's provider (api.openai.com) and judged it by that.
             var = ca._var_for(entry, cred_id)
 
-            if not no_verify:
+            if not no_verify and not self._verify_cache_hit(key, var, value):
                 state, detail = ca.verify_value(var, value, entry=entry)
+                self._verify_cache_store(key, var, value, ok=(state == "ok"))
                 if state == "FAIL":
                     # Refusing to serve a value proven dead is the difference
                     # between this and reading the file yourself. A dead value
@@ -1246,6 +1313,16 @@ class CredentialManager:
 # unverified" from every other outcome; nothing else `creds get` prints uses it.
 NA_NOTICE_PREFIX = "creds get: n-a:"
 
+# A SUCCESSFUL provider verification is reused by `creds get` for this long.
+# The Claude login's verifier is a whole `claude -p` session (~36 s measured
+# 2026-09-27), and paying it on every get made the agent-eval harness's 60 s
+# broker limit time out before any eval ran. Only "ok" is remembered, keyed by
+# index id + variable + sha256 of the value (never the value), in an owner-only
+# file; a changed value, an expired or future-dated entry, n-a and FAIL all go
+# back to the provider. DATACORE_CREDS_VERIFY_TTL overrides it (0 = off).
+# `creds doctor` never reads it: doctor is the live check.
+VERIFY_CACHE_TTL_S = 600
+
 GET_EPILOG = f"""\
 outcomes (stdout carries the value only when it is served):
   ok         served, exit 0, stderr silent
@@ -1258,6 +1335,10 @@ outcomes (stdout carries the value only when it is served):
   FAIL       the provider says the value is dead: NOT served, exit 1
   not found  not indexed or unresolvable: exit 1
   --no-verify  served, exit 0, no check made and no n-a line
+
+an ok verdict is reused for {VERIFY_CACHE_TTL_S}s for the same value (sha256 match,
+owner-only file ~/.datacore/state/creds-verified.json; DATACORE_CREDS_VERIFY_TTL,
+0 disables). n-a and FAIL are never reused; `creds doctor` always asks the provider.
 """
 
 

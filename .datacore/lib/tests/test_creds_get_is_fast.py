@@ -167,3 +167,32 @@ def test_doctor_still_asks_the_provider_every_time(broker):
     with redirect_stdout(out), redirect_stderr(io.StringIO()):
         broker.cmd_doctor("claude-code-oauth")
     assert len(broker.probes) == 2
+
+
+def test_the_claude_probe_is_isolated_and_cannot_be_answered_by_another_key(monkeypatch):
+    """The verifier loads no user settings, hooks or MCP servers (that was ~36 s
+    of the probe), and no other Anthropic credential rides along with the token
+    under test. A 401 is still FAIL."""
+    import shutil
+    import subprocess
+    seen = {}
+
+    class _R:
+        stdout = '{"is_error": false, "result": "OK"}'
+        stderr = ""
+
+    def fake_run(cmd, **k):
+        seen["cmd"], seen["env"] = cmd, k["env"]
+        return _R()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-other-key")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "fake-other-token")
+    monkeypatch.setattr(shutil, "which", lambda n: "/usr/bin/claude")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert ca.verify_value("CLAUDE_CODE_OAUTH_TOKEN", FAKE)[0] == "ok"
+    assert {"--strict-mcp-config", "--no-session-persistence"} <= set(seen["cmd"])
+    assert seen["cmd"][seen["cmd"].index("--setting-sources") + 1] == ""
+    assert seen["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == FAKE
+    assert "ANTHROPIC_API_KEY" not in seen["env"] and "ANTHROPIC_AUTH_TOKEN" not in seen["env"]
+
+    _R.stdout = '{"is_error": true, "result": "API Error: 401 OAuth access token is invalid."}'
+    assert ca.verify_value("CLAUDE_CODE_OAUTH_TOKEN", FAKE)[0] == "FAIL"
