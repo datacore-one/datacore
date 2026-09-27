@@ -32,41 +32,66 @@ mkdir -p "$(dirname "$LOG_FILE")"
 ts() { date -u "+%Y-%m-%dT%H:%M:%SZ"; }
 log() { printf '[%s] %s\n' "$(ts)" "$*" >> "$LOG_FILE"; }
 
+# Every remote call is bounded. On 2026-09-24 one rsync hung on a dead ssh link
+# for days; launchd does not start a StartInterval job while the last run is
+# still alive, so the whole sync silently stopped. BatchMode: never wait on a
+# prompt. ConnectTimeout + ServerAlive*: a dead link fails in ~40 s.
+# rsync --timeout: a stalled transfer fails after 120 s of no I/O.
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=2)
+RSYNC=(rsync -a --timeout=120 -e "ssh ${SSH_OPTS[*]}")
+
 log "begin sync from $REMOTE"
 
 # 1) Crew agent state (single directory, fixed location)
 mkdir -p "$DATA_DIR/.datacore/state/agents"
-if rsync -a --include='*.json' --exclude='*' \
+if "${RSYNC[@]}" --include='*.json' --exclude='*' \
     "$REMOTE:Data/.datacore/state/agents/" \
     "$DATA_DIR/.datacore/state/agents/" 2>>"$LOG_FILE"; then
   log "crew state ok"
 else
-  log "crew state FAILED (rc=$?)"
+  rc=$?
+  log "crew state FAILED (rc=$rc)"
 fi
 
 # 2) Per-venture heartbeat.json + decisions-pending.json
 #    Iterate the local space dirs; mirror state per venture.
+#    Only spaces the remote actually has: some spaces live on this Mac alone
+#    (9-practice holds private health data and is never deployed to the
+#    server). Rsyncing those failed every 5 minutes with "No such file or
+#    directory", which buried real failures in the log.
 shopt -s nullglob
 synced=0
 failed=0
-for space_dir in "$DATA_DIR"/[1-9]-*/; do
-  space_name=$(basename "$space_dir")
-  # 6-meridian is intentionally not written by daemon — skip
-  if [[ "$space_name" == "6-meridian" ]]; then
-    continue
-  fi
+if remote_spaces=$(ssh "${SSH_OPTS[@]}" "$REMOTE" \
+      'cd Data && for d in [1-9]-*/.datacore/state; do [ -d "$d" ] && echo "${d%%/*}"; done; true' \
+      2>>"$LOG_FILE"); then
+  for space_dir in "$DATA_DIR"/[1-9]-*/; do
+    space_name=$(basename "$space_dir")
+    # 6-meridian is intentionally not written by daemon — skip
+    if [[ "$space_name" == "6-meridian" ]]; then
+      continue
+    fi
+    if ! grep -qxF "$space_name" <<<"$remote_spaces"; then
+      log "  $space_name not on $REMOTE — skipped (local-only space)"
+      continue
+    fi
 
-  mkdir -p "$space_dir.datacore/state"
-  if rsync -a --include='heartbeat.json' --include='decisions-pending.json' \
-        --exclude='*' \
-        "$REMOTE:Data/$space_name/.datacore/state/" \
-        "$space_dir.datacore/state/" 2>>"$LOG_FILE"; then
-    synced=$((synced + 1))
-  else
-    failed=$((failed + 1))
-    log "  $space_name FAILED (rc=$?)"
-  fi
-done
+    mkdir -p "$space_dir.datacore/state"
+    if "${RSYNC[@]}" --include='heartbeat.json' --include='decisions-pending.json' \
+          --exclude='*' \
+          "$REMOTE:Data/$space_name/.datacore/state/" \
+          "$space_dir.datacore/state/" 2>>"$LOG_FILE"; then
+      synced=$((synced + 1))
+    else
+      rc=$?
+      failed=$((failed + 1))
+      log "  $space_name FAILED (rc=$rc)"
+    fi
+  done
+else
+  failed=$((failed + 1))
+  log "venture state FAILED: cannot list spaces on $REMOTE"
+fi
 
 log "venture state: $synced ok, $failed failed"
 log "end sync"
@@ -104,7 +129,7 @@ if [[ -e "$RUNNER/.git" ]]; then
     mkdir -p "$(dirname "$STAMP")"
     # Merge, never rebase (DIP-0046). --ff-only would be safer still, but this
     # checkout is read-only in practice, so a merge cannot strand local work.
-    if git -C "$RUNNER" pull -q --no-rebase origin main 2>&1 | tail -2 >> "$LOG_FILE"; then
+    if GIT_SSH_COMMAND="ssh ${SSH_OPTS[*]}" git -C "$RUNNER" pull -q --no-rebase origin main 2>&1 | tail -2 >> "$LOG_FILE"; then
       echo "$now" > "$STAMP"
       # ASSERT the outcome, do not assume it. The whole point is that the
       # detectors run current code; a pull that "succeeded" while leaving the
