@@ -5,8 +5,10 @@
 itself: the gaps a new team really has after following INSTALL.md, which no
 dependency check can see.
 
-    identity      which actor this machine writes as (DIP-0044)
+    identity      which actor this machine writes as (DIP-0044) -- and not
+                  the guide's placeholder (`your-name`)
     principals    the registry that binds writers to principals
+    space labels  every space says what it is (.datacore/config.yaml space.type)
     ledger        every space carries an event log (.datacore/events)
     inbox         the personal inbox the GTD tools write to
     jobs          the job manifest names only machines this install declares
@@ -25,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -43,6 +46,30 @@ def _infra(root: Path) -> Path:
     return root / ".datacore" / "registry" / "infrastructure.yaml"
 
 
+# Names the guide and templates use in place of a real one. INSTALL.md step 2
+# writes DATACORE_ACTOR=your-name; this doctor's own fix says <your-name>; the
+# space templates use {{AUTHOR_ID}}. None of them is anybody.
+PLACEHOLDER_NAMES = frozenset({"your-name", "your_name", "yourname", "your-actor", "your_actor",
+                               "changeme", "change-me", "example", "todo", "xxx"})
+_PLACEHOLDER_SHAPE = re.compile(r"<.*>|\{\{.*\}\}|\$\{.*\}")
+
+
+def is_placeholder(actor: str) -> bool:
+    a = actor.strip().lower()
+    return a in PLACEHOLDER_NAMES or bool(_PLACEHOLDER_SHAPE.fullmatch(a))
+
+
+def _placeholder_fix(actor: str, source: str) -> str:
+    if source == "env":
+        return ("set DATACORE_ACTOR to your own short name (e.g. alice) where your shell exports it, "
+                f"instead of '{actor}'")
+    if source == "registry":
+        return ("set servers.<this machine>.access.actor to your own short name in "
+                ".datacore/registry/infrastructure.yaml")
+    return (f"edit ~/.datacore/identity.env: replace DATACORE_ACTOR={actor} with your own short "
+            "name (e.g. DATACORE_ACTOR=alice)")
+
+
 def check_identity(root: Path) -> dict:
     try:
         import actor_identity as ai
@@ -50,6 +77,11 @@ def check_identity(root: Path) -> dict:
     except Exception as exc:  # noqa: BLE001 - a broken helper is its own finding
         return _item("identity", None, f"could not resolve the actor: {type(exc).__name__}",
                      "python3 .datacore/lib/actor_identity.py  (and fix the error it prints)")
+    if actor and is_placeholder(actor):
+        return _item("identity", False,
+                     f"this machine writes as '{actor}' (from {source}), the guide's placeholder, "
+                     "not a person: every write is attributed to nobody",
+                     _placeholder_fix(actor, source))
     if actor:
         return _item("identity", True, f"writes as '{actor}' (from {source})")
     return _item("identity", False,
@@ -78,15 +110,54 @@ def check_principals(root: Path) -> dict:
     return _item("principals", True, f"{len(entries)} principal(s)")
 
 
-def _spaces(root: Path) -> list[Path]:
+# A space whose type is not declared is labelled "unknown" by discovery (no
+# marker, or a marker without space.type). It still is a space: it keeps a
+# ledger, and check_space_labels names it as a gap of its own.
+LEDGER_TYPES = (None, "", "unknown", "personal", "team")
+
+
+def _discovered(root: Path) -> list | None:
+    """Every space under root (not root itself), or None if discovery failed."""
     try:
         from spaces import discover_spaces
-        # Personal and team spaces keep a ledger; a client space nested in a
-        # team space is recorded by that team's log.
-        return [s.path for s in discover_spaces(root)
-                if s.path != root and getattr(s, "type", None) in (None, "", "personal", "team")]
-    except Exception:  # noqa: BLE001 - fall back to the numbered-directory convention
+        return [s for s in discover_spaces(root) if s.path != root]
+    except Exception:  # noqa: BLE001 - callers fall back or say they could not tell
+        return None
+
+
+def _spaces(root: Path) -> list[Path]:
+    found = _discovered(root)
+    if found is None:  # fall back to the numbered-directory convention
         return sorted(p for p in root.glob("[0-9]-*") if p.is_dir())
+    # Personal and team spaces keep a ledger; a client space nested in a
+    # team space is recorded by that team's log.
+    return [s.path for s in found if getattr(s, "type", None) in LEDGER_TYPES]
+
+
+def _label_fix(root: Path, space) -> str:
+    rel = space.path.relative_to(root).as_posix()
+    kind = "personal" if space.path.name.startswith("0-") else "team"
+    name = getattr(space, "name", None) or space.path.name
+    marker = space.path / ".datacore" / "config.yaml"
+    if marker.is_file():
+        return f"add 'type: {kind}' (personal or team) under space: in {rel}/.datacore/config.yaml"
+    return (f"mkdir -p {rel}/.datacore && printf 'space:\\n  name: {name}\\n  type: {kind}\\n' "
+            f"> {rel}/.datacore/config.yaml  (full template: .datacore/templates/space/config.yaml.template)")
+
+
+def check_space_labels(root: Path) -> dict:
+    found = _discovered(root)
+    if found is None:
+        return _item("space labels", None, "could not discover the spaces",
+                     "python3 .datacore/lib/spaces.py  (and fix the error it prints)")
+    unlabelled = [s for s in found if getattr(s, "type", None) in (None, "", "unknown")]
+    if unlabelled:
+        return _item("space labels", False,
+                     f"unlabelled space(s): {', '.join(s.path.relative_to(root).as_posix() for s in unlabelled)} "
+                     "-- no .datacore/config.yaml saying what the space is (space.type), so tools that "
+                     "select personal or team spaces skip it",
+                     "; ".join(_label_fix(root, s) for s in unlabelled))
+    return _item("space labels", True, f"{len(found)} space(s) declare their type")
 
 
 def check_ledger(root: Path) -> dict:
@@ -136,7 +207,7 @@ def check_jobs(root: Path) -> dict:
     return _item("jobs", True, f"{len(jobs)} job(s) on {len(machines)} declared machine(s)")
 
 
-CHECKS = (check_identity, check_principals, check_ledger, check_inbox, check_jobs)
+CHECKS = (check_identity, check_principals, check_space_labels, check_ledger, check_inbox, check_jobs)
 
 
 def run(root: Path) -> list[dict]:
