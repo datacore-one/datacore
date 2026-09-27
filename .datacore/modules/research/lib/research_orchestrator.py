@@ -292,12 +292,68 @@ def _fetch_jina(url: str) -> Optional[str]:
         return None
 
 
+#: MEM-50: pages that came back but are not the article. A bot check, a 403
+#: body or a paywall is long enough to pass the length floor, and a model asked
+#: to summarise it summarises it, so it was filed as knowledge. The <title> is
+#: checked against every marker; the start of the text only against phrases no
+#: article opens with.
+_FAILED_LOAD_TITLE = (
+    ('bot-check page', ('just a moment', 'attention required!', 'are you a robot',
+                        'verify you are human', 'captcha')),
+    ('access denied', ('access denied', '403 forbidden', '401 unauthorized',
+                       '404 not found', 'error 403', 'error 404')),
+    ('paywall', ('subscribe to read', 'subscribe to continue', 'subscribers only')),
+)
+#: Whole titles that are an error page on their own.
+_FAILED_LOAD_BARE_TITLE = {'forbidden': 'access denied', 'subscribe': 'paywall',
+                           'sign in': 'paywall', 'log in': 'paywall',
+                           'attention required': 'bot-check page'}
+_FAILED_LOAD_TEXT = (
+    ('bot-check page', ('enable javascript and cookies to continue',
+                        'checking your browser before accessing', 'verify you are human',
+                        'please enable javascript to continue')),
+    ('access denied', ("you don't have permission to access this",
+                       'you do not have permission to access this')),
+    ('paywall', ('subscribe to continue reading', 'for subscribers only',
+                 'this article is for subscribers', 'to continue reading, subscribe')),
+)
+
+#: url -> why its last fetch was refused (read by fetch_failure_reason).
+_FETCH_FAILURES: Dict[str, str] = {}
+
+
+def failed_load_reason(html: str) -> Optional[str]:
+    """Why a fetched page is not the article (bot check, 403, paywall), or None."""
+    m = re.search(r'<title[^>]*>(.*?)</title>', html, re.I | re.S)
+    title = re.sub(r'\s+', ' ', m.group(1)).strip().lower() if m else ''
+    if title.rstrip('.!| ') in _FAILED_LOAD_BARE_TITLE:
+        return _FAILED_LOAD_BARE_TITLE[title.rstrip('.!| ')]
+    for reason, markers in _FAILED_LOAD_TITLE:
+        if title and any(mk in title for mk in markers):
+            return reason
+    head = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', html))[:1500].lower()
+    for reason, markers in _FAILED_LOAD_TEXT:
+        if any(mk in head for mk in markers):
+            return reason
+    return None
+
+
+def fetch_failure_reason(url: str) -> str:
+    """The reason recorded for a URL that fetch_url could not load."""
+    return _FETCH_FAILURES.get(url) or 'could not fetch (no readable content)'
+
+
 def _fetch_direct(url: str, with_cookies: bool = False) -> Optional[str]:
     """Bounded public HTTP fetch with origin-bound explicit credentials."""
     try:
         cookies = _cookies_for(url) if with_cookies else None
         content = download_public(url, max_bytes=2 * 1024 * 1024,
             headers={'Cookie': cookies} if cookies else None).decode('utf-8', errors='replace')
+        failed = failed_load_reason(content)
+        if failed:
+            _FETCH_FAILURES[url] = failed
+            log(f"  Direct fetch returned a {failed}, not the article")
+            return None
         content = re.sub(r'<[^>]+>', ' ', content)
         content = re.sub(r'\s+', ' ', content)
         if len(content) > 500:
@@ -330,6 +386,7 @@ def fetch_url(url: str) -> Optional[str]:
     """Fetch directly; source URLs reach extraction/archive proxies only by opt-in."""
     if not url:
         return None
+    _FETCH_FAILURES.pop(url, None)
     content = _fetch_direct(url, with_cookies=_cookies_for(url) is not None)
     if content:
         return content
@@ -771,7 +828,7 @@ _FAILURE_KINDS = {
 
 
 @serialized
-def note_failure(item: Dict[str, str], kind: str) -> Optional[int]:
+def note_failure(item: Dict[str, str], kind: str, reason: Optional[str] = None) -> Optional[int]:
     """Count a failed fetch or analysis on the item; at the limit park it.
 
     Three paywalled links sat at the head of the queue for weeks (2026-09-03:
@@ -821,6 +878,9 @@ def note_failure(item: Dict[str, str], kind: str) -> Optional[int]:
         attempts = 0
     attempts += 1
     _set_item_prop(lines, hi, prop, str(attempts))
+    if reason:
+        # KNW-3: the item says why it is still here, not only how often.
+        _set_item_prop(lines, hi, 'LAST_ERROR', ' '.join(str(reason).split())[:200])
     if attempts >= limit and ' TODO ' in heading:
         lines[hi] = heading.replace(' TODO ', ' WAITING ', 1)
         _set_item_prop(lines, hi, 'RESULT', result.format(n=attempts))
@@ -829,12 +889,12 @@ def note_failure(item: Dict[str, str], kind: str) -> Optional[int]:
     return attempts
 
 
-def note_fetch_failure(item: Dict[str, str]) -> Optional[int]:
-    return note_failure(item, 'fetch')
+def note_fetch_failure(item: Dict[str, str], reason: Optional[str] = None) -> Optional[int]:
+    return note_failure(item, 'fetch', reason)
 
 
-def note_analysis_failure(item: Dict[str, str]) -> Optional[int]:
-    return note_failure(item, 'analysis')
+def note_analysis_failure(item: Dict[str, str], reason: Optional[str] = None) -> Optional[int]:
+    return note_failure(item, 'analysis', reason)
 
 
 @serialized
@@ -1166,9 +1226,10 @@ def main():
         log(f"  Fetching: {item['url'][:60]}...")
         content = fetch_url(item['url'])
         if not content:
-            log(f"  SKIP: Could not fetch URL")
+            item['failure'] = fetch_failure_reason(item['url'])
+            log(f"  SKIP: Could not fetch URL ({item['failure']})")
             failed.append(item)
-            if (note_fetch_failure(item) or 0) >= MAX_FETCH_ATTEMPTS:
+            if (note_fetch_failure(item, item['failure']) or 0) >= MAX_FETCH_ATTEMPTS:
                 parked.append(item)
             continue
 
@@ -1178,9 +1239,10 @@ def main():
         log(f"  Analyzing with Claude...")
         result = process_item(item, content)
         if not result:
+            item['failure'] = 'analysis failed (model returned no usable result)'
             log(f"  SKIP: Claude analysis failed")
             failed.append(item)
-            if (note_analysis_failure(item) or 0) >= MAX_ANALYSIS_ATTEMPTS:
+            if (note_analysis_failure(item, item['failure']) or 0) >= MAX_ANALYSIS_ATTEMPTS:
                 parked.append(item)
             continue
 
@@ -1279,6 +1341,14 @@ def main():
                     "client being out of date, an unusable session is the credential.")
         except Exception as e:
             log(f"NotebookLM step failed (non-fatal): {e}")
+
+    # KNW-3 / MEM-50: every failed item is reported to The Firm group, every
+    # run, whether or not anything else succeeded. It stays in the queue.
+    if failed:
+        try:
+            send_failure_alert(failed, parked)
+        except Exception as e:
+            log(f"Failure alert failed (non-fatal): {e}")
 
     # Step 5: Telegram push (notebook URL + summary)
     if processed:
@@ -1583,6 +1653,98 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
         log(transition)
     log("  Audio overview queued")
     return notebook_id
+
+
+def _env_file_value(name: str) -> Optional[str]:
+    """An identifier (chat id) from ~/.datacore/datacore.env; never a secret."""
+    env_file = Path.home() / ".datacore" / "datacore.env"
+    value = None
+    try:
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("export "):
+                line = line[7:]
+            if line.startswith(f"{name}="):
+                value = line.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return value or None
+
+
+def _telegram_token() -> Optional[str]:
+    """The research bot token, from the environment or the credential broker."""
+    token = os.environ.get('TELEGRAM_BOT_TOKEN')
+    if token:
+        return token
+    broker = Path.home() / "Data" / ".datacore" / "lib" / "creds.py"
+    if broker.is_file():
+        try:
+            r = subprocess.run(
+                ["python3", str(broker), "get", "mrdata-telegram-bot",
+                 "--consumer", "research.digest"],
+                capture_output=True, text=True, timeout=90)
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout.strip()
+            log(f"  [creds] broker declined the telegram bot token: "
+                f"{(r.stderr or '').strip()[:120]}")
+        except Exception as e:  # noqa: BLE001
+            log(f"  [creds] broker unavailable ({type(e).__name__})")
+    return None
+
+
+def _post_telegram(token: str, chat_id: str, msg: str) -> bool:
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        data=urllib.parse.urlencode({
+            'chat_id': chat_id,
+            'text': msg,
+            'disable_web_page_preview': 'true',
+        }).encode('utf-8'),
+        method='POST'
+    )
+    from secret_http import urlopen
+    with urlopen(req, timeout=15) as resp:
+        return resp.status == 200
+
+
+def send_failure_alert(failed: List[Dict[str, str]], parked: List[Dict[str, str]]) -> bool:
+    """Tell The Firm group (ALERT_CHAT_ID, never the 1:1 chat) which research
+    items failed and why. They stay queued (TODO, or WAITING when parked).
+
+    KNW-3: on 2026-09-26 three failed articles stayed WAITING and the run was
+    reported only in the 1:1 summary, which is sent only when something was
+    processed. An undeliverable alert is recorded for the morning sweep.
+    """
+    lines = [f"⚠️ Research {TODAY}: {len(failed)} item(s) failed, kept in the queue"]
+    for f in failed[:10]:
+        state = "parked WAITING, needs a readable source" if any(f is p for p in parked) \
+            else "kept TODO for retry"
+        lines.append(f"• {f.get('title', '?')[:80]} — {f.get('failure') or 'failed'} ({state})")
+    if len(failed) > 10:
+        lines.append(f"… and {len(failed) - 10} more in research_learning.org")
+    msg = "\n".join(lines)
+    chat_id = os.environ.get('ALERT_CHAT_ID') or _env_file_value('ALERT_CHAT_ID')
+    token = _telegram_token()
+    why = None
+    if not chat_id:
+        why = 'ALERT_CHAT_ID unset: alerts go only to The Firm group, never a 1:1 chat'
+    elif not token:
+        why = 'no bot token (TELEGRAM_BOT_TOKEN)'
+    else:
+        try:
+            if _post_telegram(token, chat_id, msg):
+                log("  Failure alert sent to The Firm group")
+                return True
+            why = 'telegram refused'
+        except Exception as e:  # noqa: BLE001
+            why = f"exception: {type(e).__name__}"
+    log(f"  Failure alert NOT delivered ({why})")
+    try:
+        from tg_format import record_undelivered
+        record_undelivered('research.failures', why, msg)
+    except ImportError:
+        pass
+    return False
 
 
 def send_telegram_summary(processed: List[Dict[str, Any]], failed: List[Dict[str, str]],
