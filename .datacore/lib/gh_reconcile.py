@@ -2,14 +2,16 @@
 """
 gh_reconcile.py — org-vs-GitHub reconciliation.
 
-Scans open/WAITING tasks in inbox.org and next_actions.org across all spaces
-for GitHub PR/issue references. Checks live state via `gh api`. Marks tasks
-DONE if the referent is unambiguously closed (issue) or merged (PR).
+Scans open tasks (TODO, NEXT, WAITING, REVIEW) in inbox.org and next_actions.org
+across all spaces for GitHub PR/issue references. Checks live state via `gh api`.
+Marks tasks DONE if the referent is unambiguously closed (issue) or merged (PR),
+and CANCELLED if a PR was closed without merging (TSK-4).
 
 False-positive policy
 ---------------------
 Only transitions to DONE when state is provably terminal:
-  - pull request : merged_at is NOT None  (merged — not merely closed without merge)
+  - pull request : merged_at is NOT None  (merged — a PR closed without merge is
+                   CANCELLED, never DONE)
   - issue        : state == "closed" and state_reason is "completed" (or absent,
                    for issues closed before GitHub recorded a reason)
 Open, draft, CHANGES_REQUESTED → no change. Never a false DONE.
@@ -77,7 +79,9 @@ from org_transaction import RecoveryRequired, serialized, watch_file, write_org_
 log = logging.getLogger("gh_reconcile")
 
 # ── States that are candidates for reconciliation ────────────────────────────
-OPEN_STATES = frozenset({"TODO", "NEXT", "WAITING", "QUEUED"})
+# REVIEW is open (DIP-0009 v2.0: TODO, NEXT, WAITING, REVIEW | DONE, ...): a task
+# awaiting review of a PR closes when the PR lands (TSK-4).
+OPEN_STATES = frozenset({"TODO", "NEXT", "WAITING", "REVIEW", "QUEUED"})
 
 # ── Tracking properties: refs here are treated as "this task IS about the ref"
 TRACKING_PROPS = frozenset({
@@ -751,7 +755,7 @@ def _check_github_ref_uncached(ref: GithubRef) -> Optional[Dict]:
             r = subprocess.run(
                 ["gh", "api",
                  f"repos/{ref.owner}/{ref.repo}/pulls/{ref.num}",
-                 "--jq", "{state: .state, merged_at: .merged_at, merged: .merged}"],
+                 "--jq", "{state: .state, merged_at: .merged_at, merged: .merged, closed_at: .closed_at}"],
                 capture_output=True, text=True, timeout=30
             )
             if r.returncode != 0:
@@ -759,17 +763,23 @@ def _check_github_ref_uncached(ref: GithubRef) -> Optional[Dict]:
                 return None
             data = json.loads(r.stdout)
             merged = data.get("merged_at") is not None or data.get("merged") is True
+            # A PR closed without merging closes its task too (TSK-4, owner
+            # promise 2026-09-26): the work will not land as written, so the
+            # task is CANCELLED -- never DONE -- and the reason says so.
+            abandoned = not merged and data.get("state") == "closed"
+            if merged:
+                close_as, reason = "DONE", f"PR {ref.full_repo}#{ref.num} merged"
+            elif abandoned:
+                close_as, reason = "CANCELLED", f"PR {ref.full_repo}#{ref.num} closed without merging"
+            else:
+                close_as = None
+                reason = f"PR {ref.full_repo}#{ref.num} not yet merged (state={data.get('state')})"
             return {
-                "terminal": merged,
-                "close_as": "DONE" if merged else None,
+                "terminal": close_as is not None,
+                "close_as": close_as,
                 "kind": "pr",
-                "closed_at": data.get("merged_at"),
-                "reason": (
-                    f"PR {ref.full_repo}#{ref.num} merged"
-                    if merged
-                    else f"PR {ref.full_repo}#{ref.num} not yet merged "
-                         f"(state={data.get('state')})"
-                ),
+                "closed_at": data.get("merged_at") or data.get("closed_at"),
+                "reason": reason,
             }
 
         elif ref.kind == "issue":

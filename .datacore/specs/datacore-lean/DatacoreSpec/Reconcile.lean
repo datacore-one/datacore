@@ -11,10 +11,11 @@ and P6 (an issue closed as a duplicate is dropped → CANCELLED), and Q9
 
 Abstractions:
 * A ref's true GitHub state is `truth r : RS`. `open` covers every non-terminal
-  state (open, draft, closed-unmerged PR: none of them proves done or
-  will-not-do). `done` = merged PR or issue closed `completed` (or with no
-  recorded reason). `dropped` = issue closed `not_planned`, or (decision P6)
-  closed as a `duplicate`: both are "will not do as written" and CANCELLED.
+  state (open, draft: neither proves done or will-not-do). `done` = merged PR
+  or issue closed `completed` (or with no recorded reason). `dropped` = issue
+  closed `not_planned`, or (decision P6) closed as a `duplicate`, or (promise
+  TSK-4, 2026-09-26) a PR closed without merging: all are "will not do as
+  written" and CANCELLED.
 * The lookup `check_github_ref` is an oracle `look r : Option RS`: `none` is a
   failed call (auth, timeout, 5xx, 404). The only assumption is that a lookup
   that answers answers truthfully (`Sound`). Theorems hold for every such oracle.
