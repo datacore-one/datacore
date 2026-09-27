@@ -8,7 +8,9 @@ environment: HOME, DATACORE_ROOT and DATACORE_STATE all point into tmp, and no
 DATACORE_* variable of this machine leaks in.
 
 Steps that need a network, an account or a person (fork/clone, pip install,
-MCP registration, editing a personal layer, git push) are not run; every step
+MCP registration, editing a personal layer, git push) are not run, nor is
+install_datacore_path.py (step 1b): it writes into the running interpreter's
+site-packages, outside the tmp install (owner OK to update this list, 2026-09-27); every step
 that IS run is asserted to still be in INSTALL.md, so the harness cannot drift
 from the guide silently.
 """
@@ -28,11 +30,14 @@ GUIDE = REAL / "INSTALL.md"
 # (step, command exactly as INSTALL.md writes it)
 GUIDE_STEPS = [
     ("2 templates", "cp install.yaml.example install.yaml"),
+    ("2 templates", "mkdir -p 0-personal/org"),
     ("2 templates", "cp .datacore/templates/org/inbox.org.example 0-personal/org/inbox.org"),
     ("2 templates", "cp .datacore/templates/org/next_actions.org.example 0-personal/org/next_actions.org"),
     ("2 templates", "cp .datacore/templates/org/someday.org.example 0-personal/org/someday.org"),
     ("2 templates", "cp .datacore/templates/org/habits.org.example 0-personal/org/habits.org"),
     ("2 templates", "python .datacore/lib/context_merge.py rebuild --path ."),
+    ("2 templates", "mkdir -p ~/.datacore && echo 'DATACORE_ACTOR=your-name' >> ~/.datacore/identity.env"),
+    ("2 templates", "mkdir -p 0-personal/.datacore/events"),
     ("4 mcp", "cp .mcp.json.example .mcp.json"),
     ("4 mcp", "cp .datacore/env/.env.example .datacore/env/.env"),
     ("6 databases", "python .datacore/lib/zettel_db.py init-all"),
