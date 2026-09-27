@@ -1587,15 +1587,22 @@ jobs:
     why_pinned: "the central credential store is cloned on this machine only"
     unpin_when: "the store is served by the broker from a host that is always on"
     machine: mac
-    schedule: "7 8 * * *"
-    cmd: "cd ~/Data && python3 .datacore/lib/creds.py sync"
+    # On arrival, not at 08:07 -- the same sleep defect mac-creds-distribute
+    # had (73b69f7): cron does not run a minute that passed while the laptop
+    # slept. The first converged join after a full wake runs it; it sits before
+    # mac-creds-distribute in this file, so the join assembles, then pushes.
+    trigger: arrival
+    schedule: "on arrival: visitor_join.py runs it after the first converged join of a session"
+    # The exit line the artifact is judged by is written here (it used to be
+    # appended by the crontab line), and the command's own rc is kept.
+    cmd: "cd ~/Data && { python3 .datacore/lib/creds.py sync; rc=$?; echo \"exit=$rc $(date)\"; } >> ~/Data/.datacore/state/logs/creds-sync.log 2>&1; exit $rc"
     on_fail: telegram
     artifacts:
-      # The crontab line appends "exit=<rc> <date>" after every run.
       - path: "~/Data/.datacore/state/logs/creds-sync.log"
         check: last_line_regex
         arg: '^exit=0 '
-        max_age_hours: 26
+        since: arrival
+        max_age_hours: 48  # awake hours: an arrival is the first join of a session; two days awake without one is a stalled join -- OPS-1
 
   - name: mac-creds-distribute
     scope: pinned
@@ -1620,6 +1627,7 @@ jobs:
         check: last_line_regex
         arg: '^exit=0 '
         since: arrival
+        max_age_hours: 48  # awake hours: an arrival is the first join of a session; two days awake without one is a stalled join -- OPS-1
 
   - name: mac-ledger-publish
     scope: local

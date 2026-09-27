@@ -110,8 +110,11 @@ def test_a_pinned_job_names_the_condition_that_frees_it():
 
 
 #: Three on 2026-09-21 (config-drift, registry-gc, suite-audit); two on
-#: 2026-09-22, when registry-gc became a test. Only ever lowered.
-PINNED_CAP = 2
+#: 2026-09-22, when registry-gc became a test. Raised to 6 on 2026-09-27 by the
+#: owner's decision ("increase limit"): five pinned (bench, config-drift,
+#: creds-distribute, creds-sync, suite-audit), one of headroom. Lower it again
+#: as each is unpinned.
+PINNED_CAP = 6
 
 
 def test_pinned_debt_does_not_grow_unnoticed():
