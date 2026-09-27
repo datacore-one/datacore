@@ -22,12 +22,12 @@ from spaces import space_for  # noqa: E402
 #: The product space's org files (install.yaml roles.product).
 PRODUCT = space_for("product", REPO, "0-personal")
 FILES = [f"{PRODUCT}/org/{n}.org" for n in ("next_actions", "someday", "inbox")]
-# A bare #NNN in a PLUR task means plur-ai/plur unless the heading says otherwise.
-DEFAULT_REPO = "plur-ai/plur"
-REPO_HINTS = [(r'enterprise#(\d+)|enterprise\b', 'plur-ai/enterprise'),
-              (r'omnigent', 'omnigent-ai/omnigent'),
-              (r'hermes-agent', 'NousResearch/hermes-agent'),
-              (r'website', 'plur-ai/website')]
+# Which repo a bare #NNN names: the install's own map, `referent_repos:` in the
+# gitignored config/task-themes.local.yaml (first regex matching the heading
+# wins; a last '.' entry is the default). Shipped neutral: none (INS-3).
+from task_triage import themes  # noqa: E402
+
+REPO_HINTS = list(themes("referent_repos").items())
 
 
 def tasks():
@@ -46,7 +46,7 @@ def repo_for(heading):
     for pat, repo in REPO_HINTS:
         if re.search(pat, heading, re.I):
             return repo
-    return DEFAULT_REPO
+    return None
 
 
 def main():
@@ -56,8 +56,11 @@ def main():
 
     refs = defaultdict(list)          # (repo, num) -> [task, ...]
     for t in tasks():
+        repo = repo_for(t["heading"])
+        if repo is None:
+            continue                  # this install names no repo for it
         for num in set(re.findall(r'#(\d{2,5})\b', t["heading"])):
-            refs[(repo_for(t["heading"]), int(num))].append(t)
+            refs[(repo, int(num))].append(t)
     print(f"{len(refs)} distinct issue/PR references across "
           f"{len({id(x) for v in refs.values() for x in v})} tasks\n")
 

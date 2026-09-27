@@ -176,8 +176,14 @@ def _cli(argv: list[str]) -> int:
         out = role_all(argv[1])
     elif argv[:1] == ["role-ssh"] and len(argv) == 2:
         out = [a for a in (ssh_alias(m) for m in role_all(argv[1])) if a]
+    elif argv[:1] == ["jobs"] and len(argv) in (1, 2):
+        # The effective job list, one `name<TAB>machine<TAB>cmd` per line: what
+        # this install runs, tracked and local together.
+        doc = effective_doc(Path(argv[1]) if len(argv) == 2 else OWN_TRACKED)
+        out = [f"{j.get('name')}\t{j.get('machine')}\t{j.get('cmd')}"
+               for j in doc.get("jobs") or [] if isinstance(j, dict)]
     else:
-        print("usage: manifest.py ssh-hosts | ssh-alias MACHINE | role NAME | role-ssh NAME")
+        print("usage: manifest.py ssh-hosts | ssh-alias MACHINE | role NAME | role-ssh NAME | jobs [MANIFEST]")
         return 2
     print("\n".join(o for o in out if o))
     return 0
@@ -243,8 +249,107 @@ class Job:
     trigger: str | None = None
 
 
+# ── the install's own jobs: manifest.local.yaml over the tracked list (INS-3) ──
+# The tracked manifest.yaml ships jobs any fleet member of this shape may run,
+# with no machine, agent, path or space of ours in them. The jobs that ARE ours
+# -- named after our agents, on a machine only we have, writing into one of our
+# spaces -- live in the gitignored manifest.local.yaml, which every reader sees
+# laid over the tracked list: a local job replaces the tracked job of the same
+# name, and a local-only job is added. One rule, applied here, so no reader can
+# see a different job list from another.
+
+LOCAL_NAME = "manifest.local.yaml"
+#: The tracked list that ships with this code. Only for THIS file does the
+#: install's local list also get looked up under the data root: a runner
+#: checkout (~/.datacore/v2-runner) carries tracked files only, while the
+#: install's own list sits in its data tree. A manifest anywhere else (a test's
+#: scratch file) is overlaid only by a local list beside it.
+OWN_TRACKED = Path(__file__).resolve().parent / "manifest.yaml"
+
+
+def local_for(tracked: Path) -> Path | None:
+    """The install's own job list that overlays `tracked`, or None."""
+    tracked = Path(tracked)
+    beside = tracked.with_name(LOCAL_NAME)
+    if beside.is_file():
+        return beside
+    try:
+        own = tracked.resolve() == OWN_TRACKED.resolve()
+    except OSError:
+        own = False
+    if own:
+        import os
+        root = os.environ.get("DATACORE_ROOT")
+        base = Path(root) if root else Path.home() / "Data"
+        cand = base / ".datacore" / "lib" / "jobs" / LOCAL_NAME
+        if cand.is_file():
+            return cand
+    return None
+
+
+def overlay(base: dict | None, local: dict | None) -> dict:
+    """`base` with `local`'s jobs laid over it: same name replaces, in place;
+    local-only jobs follow, in the local file's order."""
+    base = base if isinstance(base, dict) else {}
+    local = local if isinstance(local, dict) else {}
+    out = {**{k: v for k, v in local.items() if k != "jobs"}, **base}
+    mine = [j for j in (local.get("jobs") or []) if isinstance(j, dict)]
+    by_name = {j.get("name"): j for j in mine}
+    merged = []
+    for j in base.get("jobs") or []:
+        name = j.get("name") if isinstance(j, dict) else None
+        merged.append(by_name.pop(name) if name in by_name else j)
+    merged += [j for j in mine if j.get("name") in by_name]
+    out["jobs"] = merged
+    return out
+
+
+def lists_roster_machines(tracked: Path, path: Path | None = None) -> bool:
+    """Does this install's roster declare a machine the tracked list schedules?
+    Only then is the tracked list this install's to run (a stranger's install
+    gets its own list alone, never another fleet's)."""
+    try:
+        roster = known_machines(path)
+        if not roster:
+            return False
+        jobs = (yaml.safe_load(Path(tracked).read_text()) or {}).get("jobs") or []
+        return any(isinstance(j, dict) and j.get("machine") in roster for j in jobs)
+    except Exception:  # noqa: BLE001 - an unreadable roster or list is not membership
+        return False
+
+
+def _read(path: Path) -> dict:
+    try:
+        return yaml.safe_load(Path(path).read_text()) or {}
+    except yaml.YAMLError as error:
+        raise ManifestError(f"cannot parse {path}: {error}") from error
+
+
+def effective_doc(path: Path) -> dict:
+    """The parsed job list at `path` as this install runs it.
+
+    `path` is the tracked list: the install's manifest.local.yaml (beside it, or
+    under the data root for the code's own list) is laid over it.
+    `path` is a manifest.local.yaml: the tracked list beside it goes underneath,
+    when this install's roster declares a machine it schedules.
+    OSError from reading `path` itself propagates, as it always did.
+    """
+    path = Path(path)
+    doc = _read(path)
+    if path.name == LOCAL_NAME:
+        tracked = path.with_name("manifest.yaml")
+        if tracked.is_file() and lists_roster_machines(tracked):
+            return overlay(_read(tracked), doc)
+        return doc
+    local = local_for(path)
+    return overlay(doc, _read(local)) if local else doc
+
+
 def load_manifest(path: Path, *, roster_path: Path | None = None) -> list[Job]:
     """Load and validate a job manifest, returning its jobs.
+
+    The document validated is `effective_doc(path)`: the install's own
+    manifest.local.yaml laid over the tracked list.
 
     Raises `ManifestError` (carrying every problem found, one per line) if
     the manifest is missing required fields, uses an unrecognized
@@ -252,7 +357,7 @@ def load_manifest(path: Path, *, roster_path: Path | None = None) -> list[Job]:
     declares two jobs with the same name. Unknown top-level or per-job
     keys are ignored.
     """
-    return validate_manifest(yaml.safe_load(Path(path).read_text()), roster_path=roster_path)
+    return validate_manifest(effective_doc(Path(path)), roster_path=roster_path)
 
 
 def validate_manifest(data, *, roster_path: Path | None = None) -> list[Job]:

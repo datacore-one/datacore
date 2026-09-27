@@ -333,8 +333,18 @@ def _expand(declared: str) -> str:
     return expand_path(declared)
 
 
+
+def _effective(path):
+    """The job list as this install runs it: manifest.local.yaml over the tracked list."""
+    try:
+        from .manifest import effective_doc
+    except ImportError:  # executed as a script
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+        from jobs.manifest import effective_doc
+    return effective_doc(path)
+
 def check(live: bool = False, machine: str | None = None) -> list[dict]:
-    doc = yaml.safe_load(MANIFEST.read_text())
+    doc = _effective(MANIFEST)
     jobs = [j for j in doc["jobs"] if not machine or j["machine"] == machine]
 
     sched_cache: dict[str, tuple[str | None, str | None]] = {}

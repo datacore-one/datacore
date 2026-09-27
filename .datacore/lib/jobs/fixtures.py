@@ -206,8 +206,18 @@ def _read_artifact(path: str, machine: str) -> str | None:
     return r.stdout.decode("utf-8", errors="replace")
 
 
+
+def _effective(path):
+    """The job list as this install runs it: manifest.local.yaml over the tracked list."""
+    try:
+        from .manifest import effective_doc
+    except ImportError:  # executed as a script
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+        from jobs.manifest import effective_doc
+    return effective_doc(path)
+
 def regex_checks() -> list[tuple[str, str, int, str, str]]:
-    doc = yaml.safe_load(MANIFEST.read_text())
+    doc = _effective(MANIFEST)
     out = []
     for j in doc["jobs"]:
         for i, a in enumerate(j.get("artifacts", [])):

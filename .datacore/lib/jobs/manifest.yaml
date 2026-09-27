@@ -277,7 +277,7 @@ jobs:
   # .git/hooks cannot be the mechanism and a global hooksPath is.
   - name: mac-config-drift
     scope: pinned
-    why_pinned: "polls four hosts over ssh, and only the operator's machine holds that trust -- nightshift has the aliases and reached 2 of 5"
+    why_pinned: "polls four hosts over ssh, and only the operator's machine holds that trust -- the overnight host has the aliases and reached 2 of 5"
     unpin_when: "each host attests its own config and nobody polls"
     machine: mac
     # On join, not at 08:50/14:50/20:50. The launchd calendar existed because
@@ -322,7 +322,7 @@ jobs:
     # its window and missed 9 tasks outright — a sweep that only runs when a
     # laptop is awake is a sweep that mostly does not run, and the ledger is
     # the system's record, not the Mac's.
-    schedule: "cron 0 * * * * on winston (hourly)"
+    schedule: "cron 0 * * * * on the box (hourly)"
     cmd: "~/Data/.datacore/lib/ledger_ingest_hourly.sh"   # winston
     on_fail: telegram
     artifacts:
@@ -356,7 +356,7 @@ jobs:
 
   - name: box-phase1-cycle
     machine: box
-    schedule: "cron 25 * * * * on winston"
+    schedule: "cron 25 * * * * on the box"
     cmd: "~/Data/.datacore/lib/ledger_phase1_cycle.sh"   # winston
     on_fail: telegram
     artifacts:
@@ -409,7 +409,7 @@ jobs:
   # composes sections from nothing. This makes that loud.
   - name: box-today-registration
     machine: box
-    schedule: "cron 20 3 * * * on winston"
+    schedule: "cron 20 3 * * * on the box"
     cmd: "python3 ~/Data/.datacore/lib/today_registry.py --validate"
     # A list, not `true`: jobs/run.py builds a set from it and crashes on a bool
     # (found on the mac's twin, 2026-09-22). Exit 1 is "ran, found problems".
@@ -471,7 +471,7 @@ jobs:
     # invisible. Unlike a credential gap, it is actionable: run the cadence or
     # retire it. If it is still red in a month, the answer is to retire what
     # nobody runs, not to widen the threshold.
-    schedule: "cron 40 7 * * * on winston"
+    schedule: "cron 40 7 * * * on the box"
     cmd: "python3 ~/Data/.datacore/lib/cadence_liveness.py"
     on_fail: telegram
     artifacts:
@@ -495,7 +495,7 @@ jobs:
     #
     # Runs on the box because the box holds both sides: the private module is
     # checked out there and the running copies are in .datacore/lib.
-    schedule: "cron 25 7 * * * on winston"
+    schedule: "cron 25 7 * * * on the box"
     cmd: "~/Data/.datacore/lib/cos_deploy_drift.sh"
     on_fail: telegram
     artifacts:
@@ -522,7 +522,7 @@ jobs:
     # unreachable repos are reported in the body by design and must not read
     # as failure, or the check goes permanently red on a credential gap and
     # stops being read.
-    schedule: "systemd datacore-fleet-sync.timer, 06:10 and 18:10 UTC on winston"
+    schedule: "systemd datacore-fleet-sync.timer, 06:10 and 18:10 UTC on the box"
     cmd: "python3 ~/Data/.datacore/lib/git_fleet_sync.py ~/Data --execute --pull"
     on_fail: telegram
     artifacts:
@@ -547,7 +547,7 @@ jobs:
       # failure to triage.
   - name: box-projection-drift
     machine: box
-    schedule: "cron 35 5 * * * on winston (runs after the ingest, same script)"
+    schedule: "cron 35 5 * * * on the box (runs after the ingest, same script)"
     cmd: "~/Data/.datacore/lib/ledger_daily.sh"   # winston
     on_fail: telegram
     artifacts:
@@ -952,19 +952,6 @@ jobs:
         arg: "gate ok"
         max_age_hours: 26
 
-  - name: nightshift-miles-bot
-    machine: nightshift
-    schedule: "*/15 * * * *"
-    cmd: "~/.datacore/v2-runner/.datacore/lib/unit_alive.sh datacore-telegram.service ~/.datacore/state/miles-bot.alive 2>>~/.datacore/state/miles-bot.alive.err"
-    on_fail: telegram
-    artifacts:
-      # The bot has no artifact of its own; unit_alive.sh stamps this file
-      # every 15 minutes while datacore-telegram.service is active and
-      # leaves it alone when it is not, so age is the signal.
-      - path: "~/.datacore/state/miles-bot.alive"
-        check: no_crash
-        max_age_hours: 1
-
   - name: nightshift-github-triage
     machine: nightshift
     # 03:30, not 04:30: Winston's briefing is generated at 04:00 and reads
@@ -1012,22 +999,6 @@ jobs:
       - path: "~/Data/.datacore/state/public-repo-audit-last.json"
         check: json_has_keys
         arg: ["hits", "forbidden_count", "_timestamp"]
-        max_age_hours: 26
-
-  - name: nightshift-market-phase
-    machine: nightshift
-    schedule: "30 5 * * *"
-    cmd: "~/Data/.datacore/modules/nightshift/nightshift run --command=/analyze-market-phase"
-    on_fail: telegram
-    artifacts:
-      # The adapter's single declared output (market_phase_orchestrator.py).
-      # The completion marker is written last, so a matching file is a whole
-      # report, not a partial one; the glob takes the newest day. Refused from
-      # 2026-09-16 until the adapter existed -- the failures reached no one,
-      # because nothing contracted this job.
-      - path: "~/Data/6-meridian/reports/market-phase/market-phase-*.md"
-        check: regex
-        arg: '<!-- market-phase: complete -->'
         max_age_hours: 26
 
   - name: nightshift-health-audit
@@ -1157,19 +1128,6 @@ jobs:
   # entirely unverified. Found by TESTING the claim "every deployment gap is
   # closed" instead of asserting it -- the claim was false.
 
-  - name: hermes-tris-heartbeat
-    machine: hermes
-    schedule: "tris-heartbeat.timer (every 30 min)"
-    cmd: "~/tris-heartbeat.sh"
-    on_fail: telegram
-    artifacts:
-      # tris-heartbeat.sh writes the last report it managed to send to
-      # STATE_FILE (line 81); a report it could not send is logged but not
-      # stamped, so age here means "Tris has not been heard from".
-      - path: "~/.hermes/state/heartbeat-last-report"
-        check: no_crash
-        max_age_hours: 2
-
   - name: hermes-creds-sync
     machine: hermes
     schedule: "0 * * * *"
@@ -1191,37 +1149,6 @@ jobs:
         max_age_hours: 2
 
 
-  # ── plur-claw (Data — OpenClaw agent host) ───────────────────────────────
-  # Added 2026-08-10, the last roster host to gain any verification at all.
-
-  - name: plur-claw-data-heartbeat
-    machine: plur-claw
-    schedule: "data-heartbeat.timer (~30 min)"
-    cmd: "~/data-heartbeat.sh"
-    on_fail: telegram
-    artifacts:
-      # The state file is rewritten every run, so its freshness proves the
-      # heartbeat ran -- unlike the daily log, which a single early run would
-      # leave fresh-looking for the rest of the day.
-      - path: "~/.openclaw/state-heartbeat-last-report"
-        check: no_crash
-        max_age_hours: 2
-
-  - name: plur-claw-agent-stream-tail
-    machine: plur-claw
-    schedule: "continuous (datacore-agent-stream-tail sidecar)"
-    cmd: "agent_stream_tail.py"
-    on_fail: telegram
-    artifacts:
-      # This is the SOURCE of the workstation's agent-stream rsync: if the
-      # tailer stops, mac-agent-stream-rsync goes stale downstream and the
-      # cause is here. Checking both ends means the failure is attributed to
-      # the side that actually broke.
-      - path: "~/.datacore/agent-stream-tail/state.json"
-        check: no_crash
-        max_age_hours: 2
-
-
   # Phase 0 migration gate. The flip to Phase 1 is gated on N consecutive days
   # of a clean shadow diff -- a gate that means nothing unless the diff is
   # actually computed daily and its result is durable. Contracted on CONTENT
@@ -1239,21 +1166,6 @@ jobs:
       # all_clean assertion is dropped. Progress belongs in the briefing, where
       # "7/9 spaces clean, streak 0" reads as a number to move rather than a
       # failure to triage.
-
-  - name: plur-claw-ledger-dispatch
-    machine: plur-claw
-    schedule: "*/15 * * * *"
-    cmd: "~/.datacore/v2-runner/.datacore/lib/ledger-claim-pull.sh >> ~/.datacore/state/ledger-dispatch.log 2>&1"
-    on_fail: telegram
-    artifacts:
-      # Every tick ends with one dated "dispatch rc=N" line (ledger-claim-pull.sh).
-      # The previous tick (a root-owned copy) had failed silently on every run
-      # since 2026-08-13 into a log its user could not write; this is the
-      # contract that would have said so on day one.
-      - path: "~/.datacore/state/ledger-dispatch.log"
-        check: regex
-        arg: "dispatch rc="
-        max_age_hours: 1
 
   # mac-shadow-diff DELETED 2026-09-22 (visitor conversion). It gated the Phase 1
   # flip and all ten spaces have flipped: shadow-status.json on that date read
@@ -1309,7 +1221,7 @@ jobs:
   # measured. Sunday and not Monday: Monday morning is for starting.
   - name: box-weekly-plan
     machine: box
-    schedule: "cron 0 7 * * 0 on winston"
+    schedule: "cron 0 7 * * 0 on the box"
     cmd: ~/Data/.datacore/lib/cos_weekly_plan.sh
     on_fail: telegram
     artifacts:
@@ -1342,7 +1254,7 @@ jobs:
     # delegation_canary.cmd_run).
     machine: box
     schedule: "15 4 * * *"
-    cmd: ~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/delegation-canary.log -- python3 ~/Data/.datacore/lib/delegation_canary.py --run --space ~/Data/2-datacore --assignee miles
+    cmd: ~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/delegation-canary.log -- python3 ~/Data/.datacore/lib/delegation_canary.py --run
     exit_ok: [0, 1]
     on_fail: telegram
     artifacts:
@@ -1391,7 +1303,7 @@ jobs:
     # machinery.
     machine: box
     schedule: "5,20,35,50 * * * *"
-    cmd: ~/Data/.datacore/lib/ledger_claim_run.sh ~/Data/2-datacore winston 2
+    cmd: ~/Data/.datacore/lib/ledger_claim_run.sh
     on_fail: telegram
     delegate: false
     artifacts:
@@ -1648,7 +1560,7 @@ jobs:
     unpin_when: "datacore-bench runs in CI"
     machine: mac
     schedule: "launchd com.datacore.bench: Sunday 03:00"
-    cmd: "/bin/bash ~/Data/2-datacore/2-projects/datacore-bench/bench.sh"
+    cmd: '/bin/bash ~/Data/"$(python3 ~/Data/.datacore/lib/spaces.py role system)"/2-projects/datacore-bench/bench.sh'
     on_fail: telegram
     artifacts:
       # The plist's StandardOutPath. /tmp is cleared by a reboot, so a reboot
@@ -1723,7 +1635,7 @@ jobs:
     why_local: "the health data this machine's practice space owns"
     machine: mac
     schedule: "launchd one.datacore.health.sync: 07:30"
-    cmd: "python3 ~/Data/9-practice/2-projects/health-dashboard/scripts/backfill.py --source oura,withings"
+    cmd: 'python3 ~/Data/"$(python3 ~/Data/.datacore/lib/spaces.py role practice)"/2-projects/health-dashboard/scripts/backfill.py --source oura,withings'
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/health/sync.log"
@@ -1735,7 +1647,7 @@ jobs:
     why_local: "publishes this machine's practice fragment"
     machine: mac
     schedule: "launchd one.datacore.practice.fragment: every 900 s"
-    cmd: "python3 ~/Data/9-practice/2-projects/health-dashboard/scripts/publish_briefing.py --ingest"
+    cmd: 'python3 ~/Data/"$(python3 ~/Data/.datacore/lib/spaces.py role practice)"/2-projects/health-dashboard/scripts/publish_briefing.py --ingest'
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/health/fragment.log"

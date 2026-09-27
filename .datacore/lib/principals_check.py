@@ -29,8 +29,8 @@ TEN = ("identity", "purpose", "memory", "cadence", "decision_rights", "budget", 
 
 def _manifest_jobs(root: Path) -> list[str]:
     try:
-        import yaml
-        d = yaml.safe_load((root / ".datacore" / "lib" / "jobs" / "manifest.yaml").read_text()) or {}
+        from jobs.manifest import effective_doc
+        d = effective_doc(root / ".datacore" / "lib" / "jobs" / "manifest.yaml") or {}
         return [j.get("name", "") for j in d.get("jobs") or []]
     except Exception:  # noqa: BLE001
         return []

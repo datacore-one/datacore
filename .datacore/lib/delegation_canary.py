@@ -37,7 +37,7 @@ failing reported a healthy loop every day for ever
 verdict that is still on disk after BLOCKED_MAX_AGE_HOURS (48 h) fails
 `--check`: a condition that lasts two days is a broken loop.
 
-    delegation_canary.py --run    --space DIR [--assignee WHO]
+    delegation_canary.py --run    [--space DIR] [--assignee WHO]
     delegation_canary.py --check  [--max-age-hours N]
 
 Exit 0 when the last canary completed inside its budget; 1 when it did not.
@@ -224,7 +224,8 @@ def main(argv: list[str] | None = None) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run", action="store_true", help="seed one canary item")
     ap.add_argument("--check", action="store_true", help="report on the last one")
-    ap.add_argument("--space", required=True, type=Path)
+    ap.add_argument("--space", type=Path, default=None,
+                    help="the space to seed it in (default: the install's system space, install.yaml roles.system)")
     ap.add_argument("--assignee", default=None,
                     help="the principal expected to do it (default: the install's "
                          "chief of operations, from principals.yaml)")
@@ -232,6 +233,13 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     if a.run == a.check:
         ap.error("exactly one of --run or --check")
+    if a.space is None:
+        from spaces import space_for
+        root = Path(os.environ.get("DATACORE_ROOT") or LIB.parents[1])
+        name = space_for("system", root)
+        if a.run and not name:
+            ap.error("no --space, and install.yaml declares no roles.system")
+        a.space = root / name if name else root
     if a.run and not a.assignee:
         import roster
         a.assignee = roster.by_role("chief of operations")

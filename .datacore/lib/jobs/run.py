@@ -310,9 +310,9 @@ def main() -> int:
     MANIFEST_OVERRIDE = pathlib.Path(a.manifest).expanduser() if getattr(a, "manifest", None) else None
 
     manifest_path = MANIFEST_OVERRIDE or MANIFEST
-    from jobs.manifest import validate_manifest
+    from jobs.manifest import effective_doc, validate_manifest
     try:
-        doc = yaml.safe_load(manifest_path.read_text())
+        doc = effective_doc(manifest_path)   # manifest.local.yaml laid over it (INS-3)
         validate_manifest(doc, roster_path=ROOT / ".datacore/registry/infrastructure.yaml")
     except (OSError, ValueError, yaml.YAMLError) as error:
         print(f"PRECONDITION FAILED — invalid job manifest: {error}")

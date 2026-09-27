@@ -122,17 +122,23 @@ def _default_manifest_path() -> Path:
     # cannot keep them there. `manifest.local.yaml` (gitignored) is the
     # install's list; the tracked one is used only on a machine whose roster
     # declares a machine that list schedules, i.e. by the fleet it describes.
-    local = DATACORE_ROOT / ".datacore" / "lib" / "jobs" / LOCAL_MANIFEST
-    beside_local = Path(__file__).resolve().parent / "jobs" / LOCAL_MANIFEST
-    for candidate in (local, beside_local):
-        if candidate.exists():
-            return candidate
+    # Loading the local list lays it over that tracked list for such a machine
+    # (jobs.manifest.effective_doc), so returning it loses none of the tracked jobs.
+    local =DATACORE_ROOT / ".datacore" / "lib" / "jobs" / LOCAL_MANIFEST
+    if local.exists():
+        return local
+    # A data root that is an install decides alone: never fall through to the
+    # code's own lists (a test's scratch root must not reach the real ones).
     from_root = DATACORE_ROOT / ".datacore" / "lib" / "jobs" / "manifest.yaml"
+    if from_root.exists():
+        return from_root if _fleet_member(from_root) else local
+    # A runner checkout: loading the tracked list beside the code lays the
+    # install's manifest.local.yaml over it, so the tracked path loses nothing.
     beside = Path(__file__).resolve().parent / "jobs" / "manifest.yaml"
-    tracked = from_root if from_root.exists() else beside if beside.exists() else None
-    if tracked is not None and _fleet_member(tracked):
-        return tracked
-    return local
+    if beside.exists() and _fleet_member(beside):
+        return beside
+    beside_local = beside.with_name(LOCAL_MANIFEST)
+    return beside_local if beside_local.exists() else local
 
 
 LOCAL_MANIFEST = "manifest.local.yaml"
@@ -140,16 +146,8 @@ LOCAL_MANIFEST = "manifest.local.yaml"
 
 def _fleet_member(manifest: Path) -> bool:
     """Does this machine's roster declare a machine the tracked list schedules?"""
-    try:
-        from jobs.manifest import known_machines
-        roster = known_machines()
-        if not roster:
-            return False
-        import yaml
-        jobs = (yaml.safe_load(manifest.read_text()) or {}).get("jobs") or []
-        return any(isinstance(j, dict) and j.get("machine") in roster for j in jobs)
-    except Exception:  # noqa: BLE001 - an unreadable roster is not membership
-        return False
+    from jobs.manifest import lists_roster_machines
+    return lists_roster_machines(manifest)
 
 
 def _alert_command() -> str:

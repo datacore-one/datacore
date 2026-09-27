@@ -232,8 +232,8 @@ def cadences() -> dict:
 
 def jobs() -> dict:
     try:
-        import yaml
-        data = yaml.safe_load(MANIFEST.read_text())
+        from jobs.manifest import effective_doc
+        data = effective_doc(MANIFEST)
     except Exception as exc:  # noqa: BLE001
         return {"unobservable": f"{type(exc).__name__}: {exc}"}
     js = data.get("jobs") or []

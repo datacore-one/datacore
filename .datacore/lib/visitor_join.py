@@ -157,7 +157,8 @@ def duties(triggers: set[str], *, machine: str | None = None,
     if machine is None:
         from actor_identity import this_actor
         machine = this_actor()
-    jobs = (yaml.safe_load((manifest or MANIFEST).read_text()) or {}).get("jobs") or []
+    from jobs.manifest import effective_doc
+    jobs = (effective_doc(manifest or MANIFEST) or {}).get("jobs") or []
     mine = [j for j in jobs if j.get("machine") == machine and j.get("trigger") in triggers]
     order = {"join": 0, "arrival": 1}
     return [j["name"] for j in sorted(mine, key=lambda j: order.get(j["trigger"], 9))]

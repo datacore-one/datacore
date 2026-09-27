@@ -154,8 +154,9 @@ def main() -> int:
     if a.ledger:
         kinds = {}
         try:
-            import yaml
-            kinds = {j["name"]: contract_kind(j) for j in yaml.safe_load(Path(a.manifest).read_text())["jobs"]}
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from jobs.manifest import effective_doc
+            kinds = {j["name"]: contract_kind(j) for j in effective_doc(Path(a.manifest))["jobs"]}
         except Exception as exc:  # noqa: BLE001
             print(f"manifest not read: {exc}", file=sys.stderr)
         rows = from_ledger(a.ledger, a.since)
@@ -173,8 +174,9 @@ def main() -> int:
         p["first"] = min(p["first"] or ts, ts); p["last"] = max(p["last"] or ts, ts); p["last_detail"] = detail
     kinds = {}
     try:
-        import yaml
-        for j in yaml.safe_load(Path(a.manifest).read_text())["jobs"]:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from jobs.manifest import effective_doc
+        for j in effective_doc(Path(a.manifest))["jobs"]:
             if not a.machine or j.get("machine") == a.machine:
                 kinds[j["name"]] = contract_kind(j)
     except Exception as exc:  # noqa: BLE001

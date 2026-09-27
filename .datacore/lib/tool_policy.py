@@ -104,6 +104,22 @@ def fleet_hosts_alternation() -> str:
     return "|".join(re.escape(n) for n in [*names, "localhost"])
 
 
+AUDIT_AGENTS = "{audit_agents}"
+
+
+def audit_agents_alternation() -> str:
+    """`a|b`: the agents that write nightly audit findings, from the
+    `cross_model_audit.agents` section of the install's principals.yaml,
+    regex-escaped. What `{audit_agents}` in tool_effects.yaml stands for. None
+    declared: a pattern that matches nothing, so no findings file is exempt."""
+    try:
+        import roster
+        names = [str(a) for a in (roster.section("cross_model_audit").get("agents") or {})]
+    except Exception:  # noqa: BLE001 -- an unreadable registry exempts nothing
+        names = []
+    return "|".join(re.escape(n) for n in names) or "(?!)"
+
+
 def load_effects(path: Path | None = None) -> dict[str, dict]:
     """{effect: {tools, tool_patterns, patterns}} from tool_effects.yaml.
     An unreadable or malformed vocabulary cannot authorize tool use."""
@@ -118,14 +134,19 @@ def load_effects(path: Path | None = None) -> dict[str, dict]:
         raise ValueError("tool effects must contain a nonempty effects mapping")
     out: dict[str, dict] = {}
     hosts: str | None = None
+    auditors: str | None = None
 
     def _fill(r: str) -> str:
-        nonlocal hosts
-        if FLEET_HOSTS not in r:
-            return r
-        if hosts is None:
-            hosts = fleet_hosts_alternation()
-        return r.replace(FLEET_HOSTS, hosts)
+        nonlocal hosts, auditors
+        if FLEET_HOSTS in r:
+            if hosts is None:
+                hosts = fleet_hosts_alternation()
+            r = r.replace(FLEET_HOSTS, hosts)
+        if AUDIT_AGENTS in r:
+            if auditors is None:
+                auditors = audit_agents_alternation()
+            r = r.replace(AUDIT_AGENTS, auditors)
+        return r
     for name, spec in (data.get("effects") or {}).items():
         if not isinstance(spec, dict):
             raise ValueError("effect specification must be a mapping")

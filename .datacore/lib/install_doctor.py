@@ -188,7 +188,9 @@ def check_jobs(root: Path) -> dict:
         return _item("jobs", True, "no job manifest: nothing scheduled to verify")
     try:
         import yaml
-        jobs = (yaml.safe_load(manifest.read_text()) or {}).get("jobs") or []
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from jobs.manifest import effective_doc
+        jobs = (effective_doc(manifest) or {}).get("jobs") or []
         machines = sorted({str(j.get("machine")) for j in jobs if isinstance(j, dict) and j.get("machine")})
         infra = _infra(root)
         servers = set(((yaml.safe_load(infra.read_text()) or {}).get("servers") or {}).keys()) \

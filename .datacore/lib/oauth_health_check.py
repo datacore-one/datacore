@@ -121,18 +121,24 @@ def _claude_row_name() -> str:
         return "claude_code_oauth"
 
 
+def _this_host() -> str:
+    """The token checked is this machine's own (~/.claude), so recovery is here."""
+    import socket
+    return socket.gethostname().split(".")[0] or "this host"
+
+
 def check_claude_token(now, warn_days):
     """Check the Claude Code (Anthropic Max) OAuth token that powers Miles.
 
     Unlike the Google tokens, this one cannot be refreshed non-interactively
     once its refresh token is rotated/revoked. Recovery is interactive:
-    `ssh nightshift` then `claude setup-token`. So we only monitor + alert.
+    `claude setup-token` on the host this runs on. So we only monitor + alert.
     Returns (row_tuple_or_None, problem_str_or_None, exit_contribution_int).
     """
     name = _claude_row_name()
     if not CLAUDE_CRED.exists():
         return ((name, 'MISSING', f'no file at {CLAUDE_CRED}'),
-                f"{name}: credentials file missing — run `claude setup-token` on nightshift", 1)
+                f"{name}: credentials file missing — run `claude setup-token` on {_this_host()}", 1)
     try:
         d = json.loads(CLAUDE_CRED.read_text())
         o = d.get('claudeAiOauth', {})
@@ -153,10 +159,10 @@ def check_claude_token(now, warn_days):
     #   - access token expired hard (>12h past) → refresh is actually broken.
     if hours_left < -12:
         return ((name, 'EXPIRED', f'expired {(-hours_left):.1f}h ago; refresh not working'),
-                f"{name}: token stale and NOT auto-refreshing — re-auth: ssh nightshift then `claude setup-token`", 1)
+                f"{name}: token stale and NOT auto-refreshing — re-auth: run `claude setup-token` on {_this_host()}", 1)
     if not has_refresh:
         return ((name, 'NO_REFRESH', f'{hours_left:.1f}h left, no refresh token'),
-                f"{name}: no refresh token — will die at expiry; run `claude setup-token` on nightshift", 2)
+                f"{name}: no refresh token — will die at expiry; run `claude setup-token` on {_this_host()}", 2)
     return ((name, 'OK', f'access token {hours_left:.1f}h left; auto-refreshes (Max, refresh token present)'), None, 0)
 
 

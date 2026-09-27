@@ -52,7 +52,8 @@ def contract_sha(job_name: str, manifest: Path) -> str | None:
     import yaml
 
     try:
-        data = yaml.safe_load(manifest.read_text()) or {}
+        from jobs.manifest import effective_doc
+        data = effective_doc(manifest) or {}
     except Exception:  # noqa: BLE001 -- an unreadable manifest is not a hash
         return None
     for job in data.get("jobs", []):

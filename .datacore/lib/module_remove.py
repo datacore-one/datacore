@@ -9,7 +9,8 @@ Root is $DATACORE_ROOT, else the installation this file lives in.
 
 What goes:
   * the module folder .datacore/modules/<name>/ (code, commands, agents, tools);
-  * every job in .datacore/lib/jobs/manifest.yaml the module owns: the ones its
+  * every job in .datacore/lib/jobs/manifest.yaml (and the install's own
+    manifest.local.yaml) the module owns: the ones its
     module.yaml declares under `schedules:` and any whose cmd runs the module's code.
     The manifest is edited in place as text, so every other entry and comment is
     kept byte for byte.
@@ -117,12 +118,12 @@ def strip_jobs(text: str, names: set[str]) -> str:
     return "".join(out)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("name")
     ap.add_argument("--dry-run", action="store_true", help="say what would happen, change nothing")
     ap.add_argument("--force", action="store_true", help="remove even with uncommitted code changes")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     if not NAME.match(a.name):
         print(f"module_remove: not a module name: {a.name!r}", file=sys.stderr)
         return 2
@@ -141,19 +142,24 @@ def main() -> int:
                   file=sys.stderr)
             return 1
 
-    manifest = root / ".datacore" / "lib" / "jobs" / "manifest.yaml"
-    text = manifest.read_text(encoding="utf-8") if manifest.is_file() else ""
-    jobs = ((yaml.safe_load(text) or {}).get("jobs") or []) if text else []
-    leaving = owned_jobs(a.name, mod, jobs)
-    names = {j.get("name") for j in leaving}
-    new_text = strip_jobs(text, names) if leaving else text
-    if leaving:
-        after = [j.get("name") for j in (yaml.safe_load(new_text) or {}).get("jobs") or [] if isinstance(j, dict)]
-        expected = [j.get("name") for j in jobs if isinstance(j, dict) and j.get("name") not in names]
-        if after != expected:
-            print(f"module_remove: could not take {sorted(names)} out of {manifest} cleanly; nothing changed",
-                  file=sys.stderr)
-            return 1
+    # Both job lists: the tracked one and the install's own (manifest.local.yaml,
+    # gitignored, INS-3). A module's schedule may sit in either.
+    plans = []   # (manifest, new_text, leaving)
+    for fname in ("manifest.yaml", "manifest.local.yaml"):
+        manifest = root / ".datacore" / "lib" / "jobs" / fname
+        text = manifest.read_text(encoding="utf-8") if manifest.is_file() else ""
+        jobs = ((yaml.safe_load(text) or {}).get("jobs") or []) if text else []
+        leaving = owned_jobs(a.name, mod, jobs)
+        names = {j.get("name") for j in leaving}
+        new_text = strip_jobs(text, names) if leaving else text
+        if leaving:
+            after = [j.get("name") for j in (yaml.safe_load(new_text) or {}).get("jobs") or [] if isinstance(j, dict)]
+            expected = [j.get("name") for j in jobs if isinstance(j, dict) and j.get("name") not in names]
+            if after != expected:
+                print(f"module_remove: could not take {sorted(names)} out of {manifest} cleanly; nothing changed",
+                      file=sys.stderr)
+                return 1
+            plans.append((manifest, new_text, leaving))
 
     keep = [c for c in COMPONENTS if (mod / c).exists() and not (mod / c).is_symlink()]
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -163,8 +169,9 @@ def main() -> int:
         print(f"would remove {mod}")
         for c in keep:
             print(f"would keep {c} at {dest / c}")
-        for j in leaving:
-            print(f"would drop job {j.get('name')} (machine {j.get('machine', '?')}) from {manifest}")
+        for manifest, _, leaving in plans:
+            for j in leaving:
+                print(f"would drop job {j.get('name')} (machine {j.get('machine', '?')}) from {manifest}")
         return 0
 
     # 1. The owner's data first, verified, before anything is deleted.
@@ -181,7 +188,7 @@ def main() -> int:
                       file=sys.stderr)
                 return 1
     # 2. Its schedules out of the job list.
-    if leaving:
+    for manifest, new_text, _ in plans:
         tmp = manifest.with_suffix(".yaml.tmp")
         tmp.write_text(new_text, encoding="utf-8")
         os.replace(tmp, manifest)
@@ -196,10 +203,11 @@ def main() -> int:
         print(f"kept your {c} at {dest / c}")
     if not keep:
         print("the module held no data/, state/ or settings.local.yaml")
-    for j in leaving:
-        print(f"dropped job {j.get('name')} from {manifest.relative_to(root)}; if it is installed on "
-              f"machine {j.get('machine', '?')}, retire it there (cron: cron_install.py --retire <script> "
-              f"--state <dir>; systemd: disable its timer). No crontab or unit was touched.")
+    for manifest, _, leaving in plans:
+        for j in leaving:
+            print(f"dropped job {j.get('name')} from {manifest.relative_to(root)}; if it is installed on "
+                  f"machine {j.get('machine', '?')}, retire it there (cron: cron_install.py --retire <script> "
+                  f"--state <dir>; systemd: disable its timer). No crontab or unit was touched.")
     print("space files (journals, org, knowledge) were not touched")
     return 0
 

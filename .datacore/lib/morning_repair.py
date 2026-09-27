@@ -233,15 +233,26 @@ def remediate(f: dict) -> str:
     return ""
 
 
+def _repairer() -> str | None:
+    """The install's chief of operations (principals.yaml), who takes every repair
+    that is not some agent's own duty; None when the install names none."""
+    import roster
+    return roster.by_role("chief of operations")
+
+
 def delegate(f: dict, day: str) -> str:
     """A repair item for the finding's own agent -- a red duty goes to the agent whose
-    duty it is (CAD-6), everything else to Miles. Returns the item id, or ''."""
+    duty it is (CAD-6), everything else to the chief of operations. Returns the item
+    id, or ''."""
     from actor_identity import this_actor
     from ledger.log import EventLog
     from ledger.policy import guarded_append
     from jobs.autofix import _space
     iid = f"repair-{f['id']}-{day.replace('-', '')}"
-    f["assignee"] = f.get("owner") or "miles"
+    f["assignee"] = f.get("owner") or _repairer()
+    if not f["assignee"]:
+        f["delegation_error"] = "no principal has the role 'chief of operations' in principals.yaml"
+        return ""
     body = "\n".join(["The morning repair sweep found this failing at 02:00 UTC, and one safe "
                       "remediation did not clear it.", "", f"What: {f['title']}",
                       f"Evidence: {f.get('evidence', '')}", *(["Tried: " + f["tried"]] if f.get("tried") else []),
@@ -337,7 +348,7 @@ def _needs(f: dict) -> str:
     if f.get("could_not_tell"):
         return "could not tell: its check could not run at 03:30"
     if f.get("item"):
-        who = f.get("assignee") or "miles"
+        who = f.get("assignee") or _repairer() or "the chief of operations"
         asked, url = _pull_request(f["item"])
         if url:
             # AUD-5: an agent's pull request reaches the owner only after a second
@@ -350,7 +361,9 @@ def _needs(f: dict) -> str:
         return (f"in repair: {who} is on it" if asked
                 else f"in repair: {who} is on it (could not tell whether a fix is waiting for review)")
     if f.get("kind") == "escalation":
-        return "a person: Miles gave up after three attempts"
+        import roster
+        who = _repairer()
+        return f"a person: {roster.display(who) if who else 'the repairer'} gave up after three attempts"
     if f.get("kind") == "delivery":
         return "a person: an alert or briefing reached nobody"
     return "a person: nothing could be delegated"

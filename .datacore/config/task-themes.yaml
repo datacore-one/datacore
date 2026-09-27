@@ -12,3 +12,17 @@ themes:
   "security / trust": "security|vulnerab|secret|credential|permission"
   "bugs": "\\bbug|crash|regression|broken"
   "infra / ops": "backup|monitor|server|dns|deploy|systemd"
+
+# task_surface.py: WHERE a task lands (the working copy you would open), a second
+# axis beside the roadmap. First match wins; no match is "unassigned". Neutral
+# default; the install's own surfaces go under surfaces: in task-themes.local.yaml.
+surfaces:
+  "docs": "\\bdocs?\\b|readme|guide|blog"
+  "ops": "deploy|server|backup|monitor|systemd|cron"
+  "core": "\\bbug|crash|test|refactor|\\bapi\\b"
+
+# task_referent_check.py: which GitHub repo a bare #NNN in a task heading names.
+# First regex that matches the heading wins; an entry '.' last names the default.
+# Neutral default: none, so bare references are not resolved. The install's own
+# map goes under referent_repos: in task-themes.local.yaml.
+referent_repos: {}

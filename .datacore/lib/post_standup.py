@@ -1,6 +1,7 @@
 """
 Post today's standup section from the personal journal as a comment on the
-pinned standup issue in datafund/datafund-space#4.
+pinned standup issue named in the gitignored config/standup.local.yaml
+(`repo: OWNER/NAME`, `issue: N`).
 
 Usage:
     python3 .datacore/lib/post_standup.py                   # post today's
@@ -36,9 +37,26 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
-REPO = "datafund/datafund-space"
-ISSUE = 4
 DATA_ROOT = Path(__file__).resolve().parent.parent.parent
+CONFIG = DATA_ROOT / ".datacore" / "config" / "standup.local.yaml"
+
+
+def _target() -> tuple[str | None, int | None]:
+    """(repo, issue) the standup is posted to: this install's own, from the
+    gitignored config/standup.local.yaml (`repo: OWNER/NAME`, `issue: N`).
+    Never a repo of ours by default (INS-3)."""
+    try:
+        import yaml
+        doc = yaml.safe_load(CONFIG.read_text(encoding="utf-8")) or {}
+    except (OSError, ImportError, ValueError):
+        return None, None
+    if not isinstance(doc, dict):
+        return None, None
+    repo, issue = doc.get("repo"), doc.get("issue")
+    return (str(repo) if repo else None), (int(issue) if isinstance(issue, int) else None)
+
+
+REPO, ISSUE = _target()
 JOURNAL_DIR = DATA_ROOT / "0-personal" / "notes" / "journals"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -176,6 +194,10 @@ def main() -> int:
     target_date = (
         datetime.strptime(args.date, "%Y-%m-%d").date() if args.date else date.today()
     )
+
+    if not args.dry_run and not (REPO and ISSUE):
+        print(f"no standup issue configured: set repo and issue in {CONFIG}", file=sys.stderr)
+        return 2
 
     if args.if_not_posted:
         try:
