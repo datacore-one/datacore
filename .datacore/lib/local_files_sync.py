@@ -71,16 +71,24 @@ def remote_read(host: str, rel: str) -> str | None:
     return None if p.stdout.strip() == "__MISSING__" else p.stdout
 
 
+def bare(name: str) -> str:
+    """A space's name without the local number: roles name the space, and the
+    number in front of a folder differs per host (ENG-2026-08-03-047)."""
+    head, _, tail = str(name).rstrip("/").partition("-")
+    return tail if head.isdigit() and tail else str(name).rstrip("/")
+
+
 def host_spaces(host: str) -> set[str]:
-    p = ssh(host, f"cd {REMOTE_ROOT} && ls -d [0-9]-*/ 2>/dev/null")
-    return {l.strip().rstrip("/") for l in p.stdout.splitlines() if l.strip()}
+    """The space names a host has, whatever its folders are numbered there."""
+    p = ssh(host, f"cd {REMOTE_ROOT} && for d in */; do [ -d \"$d.datacore\" ] && echo \"$d\"; done")
+    return {bare(l.strip()) for l in p.stdout.splitlines() if l.strip()}
 
 
 def only_existing(roles: dict, spaces: set[str]) -> tuple[dict, list[str]]:
     kept, dropped = {}, []
     for k, v in roles.items():
         vals = v if isinstance(v, list) else [v]
-        ok = [x for x in vals if str(x).rstrip("/") in spaces]
+        ok = [bare(x) for x in vals if bare(x) in spaces]
         if ok:
             kept[k] = ok if isinstance(v, list) else ok[0]
         else:

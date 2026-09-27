@@ -24,6 +24,11 @@ def _root(tmp_path: Path, roles: dict | None) -> Path:
     doc = {"meta": {"name": "t"}}
     if roles is not None:
         doc["roles"] = roles
+        # a role resolves to a space this install really has, so make them
+        for v in roles.values():
+            for x in v if isinstance(v, list) else [v]:
+                if isinstance(x, str) and "/" not in x and ".." not in x:
+                    (tmp_path / x / ".datacore").mkdir(parents=True, exist_ok=True)
     (tmp_path / "install.yaml").write_text(yaml.safe_dump(doc))
     return tmp_path
 
@@ -57,7 +62,8 @@ def test_a_role_cannot_point_outside_the_install(tmp_path):
     root = _root(tmp_path, {"system": "/etc", "product": "../elsewhere", "ok": "1-a/nested"})
     assert spaces.space_for("system", root=root) is None
     assert spaces.space_for("product", root=root) is None
-    assert spaces.space_for("ok", root=root) == "1-a/nested"
+    # a role names one space, never a path inside one
+    assert spaces.space_for("ok", root=root) is None
 
 
 def test_malformed_install_yaml_is_no_roles(tmp_path):
@@ -91,7 +97,9 @@ def test_example_ships_neutral_roles():
         assert name in roles, f"example names the {name} role"
     for value in roles.values():
         for v in value if isinstance(value, list) else [value]:
-            assert str(v) in ("1-myteam", "0-personal"), f"example role value {v!r} is not neutral"
+            assert str(v) in ("myteam", "personal"), f"example role value {v!r} is not neutral"
+            assert not str(v).partition("-")[0].isdigit(), (
+                f"example role {v!r} names a folder number; roles name the space (ENG-2026-08-03-047)")
 
 
 def test_plain_reader_agrees_with_yaml_for_shell_callers(tmp_path):
@@ -116,3 +124,25 @@ def test_cli_answers_without_pyyaml(tmp_path):
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     assert out.stdout.split() == ["6-x"]
+
+
+def test_a_role_names_the_space_not_its_local_number(tmp_path):
+    """The number prefix is added per install: the product space is 5-plur on one
+    host and 3-plur on another. A role says `plur` and finds whichever folder this
+    host has; a role written with another host's number still resolves
+    (ENG-2026-08-03-047, owner correction 2026-09-27)."""
+    import spaces
+    for d in ("0-personal", "3-plur", "4-firm"):
+        (tmp_path / d / ".datacore").mkdir(parents=True)
+    (tmp_path / "install.yaml").write_text("roles:\n  product: plur\n  firm: 8-firm\n  held: [meridian]\n")
+    assert spaces.space_for("product", root=tmp_path) == "3-plur"
+    assert spaces.space_for("firm", root=tmp_path) == "4-firm"
+    assert spaces.space_for_all("held", root=tmp_path) == []
+
+
+def test_the_space_config_name_wins_over_the_folder_name(tmp_path):
+    import spaces
+    (tmp_path / "7-work" / ".datacore").mkdir(parents=True)
+    (tmp_path / "7-work" / ".datacore" / "config.yaml").write_text("space:\n  name: plur\n  type: team\n")
+    (tmp_path / "install.yaml").write_text("roles:\n  product: plur\n")
+    assert spaces.space_for("product", root=tmp_path) == "7-work"

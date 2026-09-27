@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+import re
 from pathlib import Path
 
 try:
@@ -419,13 +420,55 @@ def _role_values(role: str, root: Path | None) -> list[str]:
     value = roles.get(role) if isinstance(roles, dict) else None
     if value is None or value == "":
         return []
+    base = Path(root or data_root())
     out = []
     for v in value if isinstance(value, list) else [value]:
         p = Path(str(v))
-        # A role names a directory inside the install, never outside it.
-        if str(v) and not p.is_absolute() and ".." not in p.parts:
-            out.append(str(v))
+        # A role names a space inside the install, never outside it.
+        if not str(v) or p.is_absolute() or ".." in p.parts or len(p.parts) != 1:
+            continue
+        found = _folder_for(str(v), base)
+        if found:
+            out.append(found)
     return out
+
+
+_CONFIG_NAME = re.compile(r"^\s+name:\s*['\"]?([^'\"#\s]+)", re.M)
+
+
+def _space_name(folder: Path) -> str:
+    """A space's stable identity: its config's space name, else the folder name
+    without the local ordinal prefix. Readable without PyYAML (launchd, sudo)."""
+    try:
+        text = (folder / ".datacore" / "config.yaml").read_text(encoding="utf-8")
+        head, sep, rest = text.partition("space:")
+        m = _CONFIG_NAME.search(rest) if sep else None
+        if m:
+            return m.group(1)
+    except (OSError, UnicodeDecodeError):
+        pass
+    return _implied_name(folder)
+
+
+def _folder_for(ident: str, base: Path) -> str | None:
+    """The folder holding the space named ``ident`` on THIS install.
+
+    The number prefix is added locally and differs per host (the product space is
+    5-plur on one machine and 3-plur on another), so a role names the space --
+    ``plur`` -- and never keys off the prefix (ENG-2026-08-03-047). A value written
+    with a prefix (``5-plur``) is read as its bare name, so older roles still work."""
+    want = _implied_name(Path(ident))
+    try:
+        dirs = sorted(d for d in base.iterdir() if d.is_dir() and not d.name.startswith("."))
+    except OSError:
+        return None
+    for d in dirs:
+        if (d / ".datacore").is_dir() and _space_name(d) == want:
+            return d.name
+    for d in dirs:
+        if _implied_name(d) == want:
+            return d.name
+    return None
 
 
 def space_for_all(role: str, root: Path | None = None) -> list[str]:

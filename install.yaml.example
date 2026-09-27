@@ -30,10 +30,13 @@ spaces: {}
   #       path: projects/project1
 
 # Which space holds which duty. Tools ask for a role, never a space by name.
+# A role names the SPACE (its config name, or its folder without the number):
+# the number in front of a folder is a local sort order and differs per machine,
+# so write `myteam`, never `1-myteam`.
 # Unset roles are fine: the tool falls back or asks for --space.
 roles:
-  system: 1-myteam      # where Datacore's own work lives: promises, repair tasks
-  product: 1-myteam     # the roadmap, sprints and product triage tools default here
-  standup: 1-myteam     # the team space the daily standup posts for
+  system: myteam        # where Datacore's own work lives: promises, repair tasks
+  product: myteam       # the roadmap, sprints and product triage tools default here
+  standup: myteam       # the team space the daily standup posts for
   held: []              # spaces tools must never write to
-  attest: [1-myteam, 0-personal]   # where attestations land, first with a ledger wins
+  attest: [myteam, personal]   # where attestations land, first with a ledger wins
