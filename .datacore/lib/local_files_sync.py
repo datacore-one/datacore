@@ -51,6 +51,14 @@ MERGE = [
     "install.yaml",
 ]
 NESTED = {"roles"}   # mappings merged key by key rather than as a whole
+# Only these keys ever travel; a host's own modules, spaces, servers stay its own.
+ALLOWED = {
+    ".datacore/registry/infrastructure.yaml": {"roles"},
+    ".datacore/registry/principals.yaml": {"sprint_sync", "delegation_exercise", "cross_model_audit",
+                                           "testnet_dashboard"},
+    "install.yaml": {"roles"},
+}
+SPACE_ROLES_FILE = "install.yaml"   # its role values name space folders; keep only those the host has
 
 
 def ssh(host: str, cmd: str, stdin: str | None = None) -> subprocess.CompletedProcess:
@@ -61,6 +69,23 @@ def ssh(host: str, cmd: str, stdin: str | None = None) -> subprocess.CompletedPr
 def remote_read(host: str, rel: str) -> str | None:
     p = ssh(host, f"cat {REMOTE_ROOT}/{rel} 2>/dev/null || echo __MISSING__")
     return None if p.stdout.strip() == "__MISSING__" else p.stdout
+
+
+def host_spaces(host: str) -> set[str]:
+    p = ssh(host, f"cd {REMOTE_ROOT} && ls -d [0-9]-*/ 2>/dev/null")
+    return {l.strip().rstrip("/") for l in p.stdout.splitlines() if l.strip()}
+
+
+def only_existing(roles: dict, spaces: set[str]) -> tuple[dict, list[str]]:
+    kept, dropped = {}, []
+    for k, v in roles.items():
+        vals = v if isinstance(v, list) else [v]
+        ok = [x for x in vals if str(x).rstrip("/") in spaces]
+        if ok:
+            kept[k] = ok if isinstance(v, list) else ok[0]
+        else:
+            dropped.append(f"{k}={v}")
+    return kept, dropped
 
 
 def merged(local: dict, remote: dict) -> tuple[dict, list[str]]:
@@ -97,7 +122,10 @@ def main() -> int:
             print(f"  same  {rel}")
         else:
             print(f"  keep  {rel}: host has its own copy, differs from this machine's (not overwritten)")
-    if a.runner:
+    has_runner = ssh(a.host, "test -d ~/.datacore/v2-runner/.datacore && echo yes").stdout.strip() == "yes"
+    if a.runner and not has_runner:
+        print("  skip  runner copy: this host has no v2-runner")
+    if a.runner and has_runner:
         rel = ".datacore/lib/jobs/manifest.local.yaml"
         rp = f"~/.datacore/v2-runner/{rel}"
         have = ssh(a.host, f"cat {rp} 2>/dev/null || echo __MISSING__").stdout
@@ -109,11 +137,17 @@ def main() -> int:
         src = ROOT / rel
         if not src.is_file():
             continue
-        local = yaml.safe_load(src.read_text()) or {}
+        local = {k: v for k, v in (yaml.safe_load(src.read_text()) or {}).items() if k in ALLOWED[rel]}
+        if rel == SPACE_ROLES_FILE and isinstance(local.get("roles"), dict):
+            local["roles"], dropped = only_existing(local["roles"], host_spaces(a.host))
+            if dropped:
+                print(f"  note  {rel}: roles not added, the host has no such space: {', '.join(dropped)}")
         have = remote_read(a.host, rel)
         if have is None:
-            print(f"  WARN  {rel}: host has none -- create it by hand from this machine's copy; not copied blindly")
-            continue
+            if rel != SPACE_ROLES_FILE or not local.get("roles"):
+                print(f"  WARN  {rel}: host has none -- not created")
+                continue
+            have = ""
         remote = yaml.safe_load(have) or {}
         out, added = merged(local, remote)
         if added and all("." not in k for k in added):
