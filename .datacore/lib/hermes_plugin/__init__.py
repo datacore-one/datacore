@@ -27,6 +27,12 @@ WHAT IT DOES. Three things, all from the registry the fleet already keeps:
              same `metric.attest policy.refusal` in the ledger as the Claude
              SDK hook. A refusal reaches the model as the block message.
 
+  presses   Approve / Dismiss presses on approval questions (callback data
+             `cosap:`) are passed on to the chief-of-staff press handler
+             (`cos_approvals_poll.py --press`) before Hermes's own button
+             handler sees them — owner decision 2026-09-27, "Hermes passes
+             presses on". See install_press_forwarder.
+
 Guard failures refuse tool execution. This plugin is a policy check, not an
 OS sandbox: arbitrary code with the same filesystem credentials can bypass
 it, and deployed runtimes must supply an independent execution boundary.
@@ -500,6 +506,190 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
     return (f"appended {etype} to {space} as {ident['actor']} "
             f"(seq={getattr(ev, 'seq', '?')} hash={str(getattr(ev, 'hash', ''))[:12]})")
 
+# ── Approval button presses (owner decision 2026-09-27) ─────────────────────
+#
+# The gateway is the bot's one getUpdates consumer, and Hermes's Telegram
+# adapter dispatches callback data by prefix: `cosap:` (the chief-of-staff
+# Approve / Dismiss buttons) matched none of its prefixes and was dropped
+# unanswered — the button spun and the approval never moved. Hermes has no
+# plugin API for Telegram callbacks (it has one for Slack actions), so the
+# forwarder attaches where the adapter registers its callback handler with
+# python-telegram-bot: every CallbackQueryHandler added to an Application gets
+# its callback wrapped, `cosap:` data goes to the press handler, and anything
+# else reaches Hermes's handler unchanged.
+#
+# The press handler decides, authorises (only the principal), answers the
+# button, rewrites the message and alerts decision errors to The Firm group.
+# This side adds nothing to that: it answers the button only when the handler
+# could not (so it stops spinning, with the typed reply as the way out) and
+# alerts the group through the same cos_alert.sh. Never a 1:1 message.
+
+COSAP_PREFIX = "cosap:"
+PRESS_HANDLER = "cos_approvals_poll.py"
+
+
+def _fleet_script(name: str) -> Path | None:
+    for lib in lib_candidates():
+        path = lib / name
+        if path.is_file():
+            return path
+    return None
+
+
+def callback_payload(query) -> dict:
+    """A python-telegram-bot CallbackQuery as the Bot API dict the handler reads."""
+    msg = getattr(query, "message", None)
+    chat = getattr(msg, "chat", None)
+    chat_id = getattr(chat, "id", None)
+    if chat_id is None:
+        chat_id = getattr(msg, "chat_id", None)
+    out = {"id": str(getattr(query, "id", "") or ""),
+           "data": getattr(query, "data", None),
+           "from": {"id": getattr(getattr(query, "from_user", None), "id", None)}}
+    if msg is not None:
+        out["message"] = {"message_id": getattr(msg, "message_id", None),
+                          "chat": {"id": chat_id},
+                          "text": getattr(msg, "text", None) or ""}
+    return out
+
+
+def run_press(payload: dict, timeout: int = 60) -> dict:
+    """Hand one press to `cos_approvals_poll.py --press` -> its JSON verdict.
+
+    {"outcome": decided|already|missing|unauthorised|ignored|error,
+     "answered": whether the handler answered the button}. Anything that is
+    not the handler's own verdict is an unanswered error."""
+    script = _fleet_script(PRESS_HANDLER)
+    if script is None:
+        return {"outcome": "error", "answered": False,
+                "why": f"{PRESS_HANDLER} is not in the fleet lib on this host"}
+    import subprocess  # noqa: PLC0415
+    argv = [sys.executable, str(script), "--press"]
+    try:
+        try:
+            from process_run import run  # noqa: PLC0415
+        except ImportError:
+            run = subprocess.run
+        r = run(argv, input=json.dumps(payload), capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"outcome": "error", "answered": False, "why": f"timed out after {timeout}s"}
+    except (OSError, ValueError, RuntimeError) as exc:
+        return {"outcome": "error", "answered": False, "why": f"{type(exc).__name__}: {exc}"}
+    for line in reversed((r.stdout or "").strip().splitlines()):
+        try:
+            verdict = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(verdict, dict) and "outcome" in verdict:
+            verdict.setdefault("answered", False)
+            if r.stderr:
+                verdict.setdefault("log", r.stderr.strip()[-400:])
+            return verdict
+    return {"outcome": "error", "answered": False,
+            "why": f"rc={r.returncode}: {((r.stderr or '') + (r.stdout or '')).strip()[-200:]}"}
+
+
+def alert_group(text: str) -> None:
+    """The fleet's operational alert: The Firm group, posted by Winston's bot."""
+    script = _fleet_script("cos_alert.sh")
+    if script is None:
+        logger.error("datacore: approvals alert not sent (no cos_alert.sh): %s", text)
+        return
+    import subprocess  # noqa: PLC0415
+    try:
+        subprocess.run([str(script), text], timeout=60,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (subprocess.SubprocessError, OSError) as exc:
+        logger.error("datacore: cos_alert.sh failed (%s): %s", exc, text)
+
+
+async def forward_press(query) -> str:
+    """Pass one `cosap:` press on. Never raises: the gateway must outlive it."""
+    import asyncio  # noqa: PLC0415
+    data = str(getattr(query, "data", "") or "")
+    rid = data.rsplit(":", 1)[-1][:36]
+    who = getattr(getattr(query, "from_user", None), "id", "?")
+    try:
+        verdict = await asyncio.to_thread(run_press, callback_payload(query))
+    except Exception as exc:  # noqa: BLE001
+        verdict = {"outcome": "error", "answered": False, "why": f"{type(exc).__name__}: {exc}"}
+    outcome = str(verdict.get("outcome", "error"))
+    if verdict.get("log"):
+        logger.info("datacore: press handler said: %s", verdict["log"])
+    if outcome == "unauthorised":
+        logger.warning("datacore: approval press on %s refused — from %s, not the principal", rid, who)
+    else:
+        logger.info("datacore: approval press on %s from %s -> %s", rid, who, outcome)
+    if outcome == "error" and not verdict.get("answered"):
+        try:
+            await query.answer(text=(f"Could not record this press. Reply approve {rid} "
+                                     f"or dismiss {rid} instead.")[:200])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("datacore: could not answer the press: %s", exc)
+        alert_group(f"approvals: a Telegram button press on {rid[:8]} did not reach the "
+                    f"decision ({str(verdict.get('why', ''))[:160]}). The approval is still "
+                    f"pending; the typed reply works.")
+    elif outcome == "ignored" and not verdict.get("answered"):
+        try:
+            await query.answer()
+        except Exception:  # noqa: BLE001
+            pass
+    return outcome
+
+
+def wrap_callback(original):
+    """`cosap:` presses to forward_press; every other button to `original`."""
+    if getattr(original, "_datacore_press_forwarder", False):
+        return original
+
+    async def callback(update, context):
+        query = getattr(update, "callback_query", None)
+        data = getattr(query, "data", None)
+        if isinstance(data, str) and data.startswith(COSAP_PREFIX):
+            try:
+                await forward_press(query)
+            except Exception:  # noqa: BLE001 — forward_press never raises; belt and braces
+                logger.exception("datacore: approval press forwarding failed")
+            return None
+        return await original(update, context)
+
+    callback._datacore_press_forwarder = True
+    callback.__wrapped__ = original
+    return callback
+
+
+def install_press_forwarder(tx=None) -> bool:
+    """Wrap python-telegram-bot's Application.add_handler so every callback-query
+    handler the gateway adds forwards `cosap:` presses. Installed at plugin
+    registration, which the gateway runs before any adapter connects; the
+    Telegram adapter itself loads lazily, so its class is not patched."""
+    if tx is None:
+        try:
+            import telegram.ext as tx  # noqa: PLC0415
+        except Exception:  # noqa: BLE001 — no Telegram on this host: nothing to forward
+            return False
+    app_cls = getattr(tx, "Application", None)
+    cqh = getattr(tx, "CallbackQueryHandler", None)
+    if app_cls is None or cqh is None:
+        return False
+    current = app_cls.add_handler
+    if getattr(current, "_datacore_press_forwarder", False):
+        return True
+
+    def add_handler(self, handler, *args, **kwargs):
+        if isinstance(handler, cqh):
+            try:
+                handler.callback = wrap_callback(handler.callback)
+            except Exception as exc:  # noqa: BLE001 — never block Hermes's own handler
+                logger.warning("datacore: could not attach the approval press forwarder: %s", exc)
+        return current(self, handler, *args, **kwargs)
+
+    add_handler._datacore_press_forwarder = True
+    add_handler.__wrapped__ = current
+    app_cls.add_handler = add_handler
+    return True
+
+
 def register(ctx) -> None:
     ctx.register_hook("pre_tool_call", pre_tool_call)
     ctx.register_hook("on_session_start", on_session_start)
@@ -518,6 +708,11 @@ def register(ctx) -> None:
                               handler=handler, description=desc, emoji=emoji)
         except Exception as exc:  # noqa: BLE001 — hooks matter more than any tool
             logger.warning("datacore: could not register %s (%s)", name, exc)
+    try:
+        if install_press_forwarder():
+            logger.info("datacore plugin: approval button presses (cosap:) are passed on")
+    except Exception as exc:  # noqa: BLE001 — hooks matter more than the forwarder
+        logger.warning("datacore: approval press forwarder not installed (%s)", exc)
     d = identity()
     logger.info("datacore plugin: %s",
                 f"{d['principal']} as {d['actor']} — guards in force" if d["ok"]
