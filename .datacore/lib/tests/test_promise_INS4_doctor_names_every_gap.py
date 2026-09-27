@@ -3,10 +3,17 @@ misconfigured, and how to fix each item."
 
 Kind: deterministic, on a fresh install built by following INSTALL.md (see
 _fresh_install.py). The install is left with the gaps a new team really has
-after the guide -- no declared identity for this machine, no principals, no
-event log in any space, no personal inbox, and a job manifest naming machines
-that are not in this install -- and `datacore doctor --format json` (the CLI's
-doctor, `@datacore-one/cli`) is run against it (DATACORE_ROOT).
+after the guide -- the identity still the guide's placeholder `your-name`, no
+principals, a personal space the guide created but never labelled (no space
+config saying what it is), and a job manifest naming machines that are not in
+this install -- and `datacore doctor --format json` (the CLI's doctor,
+`@datacore-one/cli`) is run against it (DATACORE_ROOT).
+
+Owner decision 2026-09-27: since the guide now creates the personal inbox, the
+identity file and the personal event log (INSTALL.md step 2), the eval tests the
+gaps that remain after it: the placeholder name and the unlabelled space. The
+identity gap must name the placeholder itself, so a doctor that merely mentions
+"actor" somewhere does not pass by accident.
 
 Every one of those gaps must appear as a not-ok item, and every not-ok item
 must carry a fix (a command or instruction). A doctor that says "could not
@@ -28,10 +35,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _fresh_install as F  # noqa: E402
 
 GAPS = {
-    "identity": ("identity", "datacore_actor", "actor"),
+    "placeholder identity": ("your-name", "placeholder"),
     "principals": ("principal",),
-    "ledger": ("event log", "ledger", "chains", "events"),
-    "personal inbox": ("inbox",),
+    "unlabelled personal space": ("0-personal",),
     "jobs": ("job", "manifest", "schedule", "cron"),
 }
 FIX_KEYS = ("fix", "installCommand", "hint", "remedy", "howToFix", "command")
