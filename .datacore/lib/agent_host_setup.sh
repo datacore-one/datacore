@@ -86,13 +86,16 @@ case "$HOST" in
     CRON_LINES+=("40 8 * * * python3 $HOME/Data/.datacore/modules/nightshift/lib/gate_check.py >> $STATE/nightshift-gate.history 2>&1")
     ;;
   plur-claw)
-    CRON_KEYS=(phase1-cycle ledger-claim)
+    CRON_KEYS=(phase1-cycle ledger-claim job-verify)
     # ONE clone per writer per host. Data attests X posts into ~/Data/2-plur-space
     # (DATACORE_ATTEST_SPACE) and the dispatcher used ~/spaces/5-plur: two copies
     # of the same writer log forked at seq 22 (found 2026-09-06). The dispatcher
     # now works in the same clone, and the hourly cycle converges it.
     CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
     CRON_LINES+=("*/15 * * * * DISPATCH_SPACE=$HOME/Data/2-plur-space $LIB/ledger-claim-pull.sh >> $STATE/ledger-dispatch.log 2>&1")
+    # plur-claw had contracts in the manifest and nothing running the verifier
+    # (INS-7, 2026-09-26) -- the same gap hermes had until 2026-09-06.
+    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine plur-claw --manifest $LIB/jobs/manifest.yaml --alert log >> $STATE/job_verify.log 2>&1")
     ;;
   hermes)
     CRON_KEYS=(phase1-cycle job-verify)
@@ -114,6 +117,11 @@ esac
 # pull that cannot fast-forward is a problem to report, not to merge.
 CRON_KEYS+=(runner-refresh)
 CRON_LINES+=("17 * * * * git -C $RUNNER pull -q --ff-only origin main >> $STATE/runner-refresh.log 2>&1")
+# Every host that runs Claude sessions keeps a copy of their transcripts:
+# Claude Code prunes its own after a month, and nightshift (4,976) and the box
+# (597) had no copy at all (MEM-67). Beside the host's state, not in a space.
+CRON_KEYS+=(sync-traces)
+CRON_LINES+=("10 0 * * * TRACES_DEST=$HOME/.datacore/traces/claude-code bash $LIB/sync_traces.sh >> $STATE/sync-traces.log 2>&1")
 
 # ── slash commands the scheduled jobs invoke ────────────────────────────────
 # A cron script that runs `claude -p "/weekly-plan ..."` needs that command
@@ -168,6 +176,35 @@ case "$HOST" in
     : # Tris's heartbeat is a systemd timer (tris-heartbeat.timer); no spaces to project here
     ;;
 esac
+# ── protections every machine gets (INS-7) ──────────────────────────────────
+# A machine added to the fleet gets what the others have, from here, not by
+# hand: the update guard and the git safety hooks were present on all four
+# hosts and installed by no installer (OI-11), so the next machine would have
+# had neither.
+#
+# Update guard: needrestart must not restart a unit mid-job (OPS-5).
+GUARD_SRC="$RUNNER/.datacore/config/host/needrestart-datacore.conf"
+GUARD_DST=/etc/needrestart/conf.d/datacore.conf
+if [ "$VERIFY_ONLY" = 0 ] && [ -f "$GUARD_SRC" ] && ! cmp -s "$GUARD_SRC" "$GUARD_DST"; then
+  sudo -n install -D -m 644 "$GUARD_SRC" "$GUARD_DST" && log "update guard installed ($GUARD_DST)" \
+    || { log "FAIL could not install the update guard to $GUARD_DST (needs sudo)"; fail=1; }
+fi
+# Safety hooks: every checkout (the root and each space) runs Datacore's
+# pre-commit through the central dispatcher. A checkout that already has a
+# hook -- a hooksPath or its own .git/hooks/pre-commit -- is left as it is.
+GITHOOKS="$RUNNER/.datacore/githooks"
+has_hook() {  # has_hook DIR
+  local hp; hp=$(git -C "$1" config core.hooksPath 2>/dev/null)
+  { [ -n "$hp" ] && (cd "$1" && [ -x "$hp/pre-commit" ]); } || [ -e "$1/.git/hooks/pre-commit" ]
+}
+for _d in "$HOME/Data" "$HOME"/Data/[0-9]-*; do
+  [ -e "$_d/.git" ] || continue
+  has_hook "$_d" && continue
+  if [ "$VERIFY_ONLY" = 0 ] && [ -x "$GITHOOKS/pre-commit" ]; then
+    git -C "$_d" config core.hooksPath "$GITHOOKS" && log "safety hooks enabled for $(basename "$_d") (core.hooksPath)"
+  fi
+done
+
 # lines this installer retires (superseded by one of the above)
 RETIRE=("/usr/local/bin/ledger-pull-data.sh")
 
@@ -187,6 +224,15 @@ grep -qsE "^(export )?DATACORE_ACTOR=$ACTOR\$" "$ID_FILE" && log "OK  identity d
 grep -qsE '^(export )?DATACORE_LEDGER_SIGN=1' "$ID_FILE" && log "OK  events signed (DATACORE_LEDGER_SIGN=1)" || { log "FAIL signing not declared in $ID_FILE"; fail=1; }
 res="$(python3 "$LIB/actor_identity.py" 2>/dev/null)"; [ "${res%% *}" = "$ACTOR" ] && log "OK  resolver agrees: $res" || { log "FAIL resolver says '$res', registry says $ACTOR"; fail=1; }
 python3 "$LIB/cron_install.py" --verify "${CRON_ARGS[@]}" || fail=1
+if [ ! -f "$GUARD_SRC" ]; then
+  log "WARN this runner ships no update guard ($GUARD_SRC) -- nothing to compare"
+else
+  cmp -s "$GUARD_SRC" "$GUARD_DST" && log "OK  update guard in place ($GUARD_DST)" || { log "FAIL update guard missing or stale: $GUARD_DST"; fail=1; }
+fi
+for _d in "$HOME/Data" "$HOME"/Data/[0-9]-*; do
+  [ -e "$_d/.git" ] || continue
+  has_hook "$_d" && log "OK  safety hooks: $(basename "$_d")" || { log "FAIL no pre-commit hook in $_d"; fail=1; }
+done
 [ -x "$LIB/ledger_phase1_cycle.sh" ] && log "OK  runner lib present at $LIB" || { log "FAIL runner lib missing: $LIB"; fail=1; }
 # Current, not merely present: compare with origin/main as of the last fetch
 # (the runner-refresh cron fetches hourly). Behind is a warning, not a failure:

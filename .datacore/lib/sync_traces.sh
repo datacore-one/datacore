@@ -8,7 +8,9 @@
 # out of the mirror (MEM-67: 621 missing on the mac). Only *.jsonl travels;
 # the directories that hold them are recreated, empty ones are not.
 
-DEST="$HOME/Data/0-personal/traces/claude-code"
+# TRACES_DEST: where the copy goes. The workstation's lives in the personal
+# space; a server keeps its copy beside its own state (agent_host_setup.sh).
+DEST="${TRACES_DEST:-$HOME/Data/0-personal/traces/claude-code}"
 SRC="$HOME/.claude/projects"
 
 for dir in "$SRC"/*/; do
@@ -20,3 +22,5 @@ for dir in "$SRC"/*/; do
             "$dir" "$DEST/$dirname/"
     fi
 done
+# One line per run, so a scheduled copy leaves a fresh artifact to verify.
+echo "$(date -u +%FT%TZ) sync_traces: $(find "$DEST" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ') transcript(s) in $DEST"
