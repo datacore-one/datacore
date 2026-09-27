@@ -220,6 +220,16 @@
             "timeout": 3
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/org_guard.py",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "SubagentStart": [
