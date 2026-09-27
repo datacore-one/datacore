@@ -1500,6 +1500,44 @@ def record_audio_availability(ok: bool, reason: Optional[str], *, today: Optiona
     return None
 
 
+#: KNW-5: the line cos_research.sh alerts on when no notebook could be made at all
+#: (no client, notebook creation refused, no notebook id; an unusable session has
+#: its own sentence, SESSION_UNUSABLE_MARK). Printed every run it happens: unlike
+#: the upstream audio break, each of these has an owner action.
+PODCAST_NOT_MADE_MARK = "PODCAST NOT MADE"
+
+#: The sentence cos_research.sh pages on for an unusable NotebookLM session.
+SESSION_UNUSABLE_MARK = "The session is unusable: refresh it on the Mac"
+
+
+def _podcast_not_made(reason: str) -> None:
+    log(f"{PODCAST_NOT_MADE_MARK}: {reason}")
+
+
+def save_podcast_record(notebook_id: str, sources: List[str], audio: str) -> Optional[Path]:
+    """KNW-5: write where the owner finds podcasts (podcast_output_dir) what was
+    made: the notebook link, the date, the sources and the audio status. The
+    audio itself can only be downloaded in a browser (CDN cookie), so the
+    notebook link is the podcast's address."""
+    path = PODCAST_DIR / f"{TODAY}-research-podcast.md"
+    entry = (f"\n## Notebook {notebook_id}\n\n"
+             f"- Link: https://notebooklm.google.com/notebook/{notebook_id}\n"
+             f"- Made: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+             f"- Audio: {audio}\n"
+             f"- Sources ({len(sources)}):\n"
+             + "".join(f"  - {Path(src).name}\n" for src in sources))
+    try:
+        PODCAST_DIR.mkdir(parents=True, exist_ok=True)
+        locked_read_modify_write_text(path, lambda existing:
+            (existing if existing is not None else
+             f"---\ndate: {TODAY}\ntype: podcast\n---\n\n# Research podcast {TODAY}\n") + entry)
+    except OSError as e:
+        log(f"  could not save the podcast record to {path}: {e}")
+        return None
+    log(f"  Podcast record saved: {path}")
+    return path
+
+
 def create_notebook_with_podcast(processed: List[Dict[str, Any]],
                                   daily_brief_path: Optional[Path] = None) -> Optional[str]:
     """Create a NotebookLM notebook, add literature notes + daily-news brief as sources,
@@ -1513,6 +1551,8 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
     if not client:
         log("  no Gemini Notebook client found — skipping podcast")
         log("  install one:  uv tool install 'notebooklm-py[browser]'")
+        _podcast_not_made("no Gemini Notebook client is installed on this host "
+                          "(uv tool install 'notebooklm-py[browser]')")
         return None
     if kind == 'nlm':
         log("  WARNING: falling back to the nlm CLI, whose audio RPC has been")
@@ -1555,12 +1595,19 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
                          r'browser auth failed', err) for _, err in errors):
             log("  nlm auth on this host has expired. The credential is copied browser cookies, "
                 "which Google rotates; refresh it on the Mac (nlm_auth_sync.py sync).")
+            # cos_research.sh pages on this sentence; no second PODCAST NOT MADE line.
+            log(f"  PODCAST NOT MADE because the notebook could not be created. "
+                f"{SESSION_UNUSABLE_MARK} (nlm_auth_sync.py sync).")
+        else:
+            last = ' '.join((errors[-1][1] if errors else '').split())[:160]
+            _podcast_not_made(f"notebook creation failed: {last or 'no error text'}")
         return None
 
     # Extract notebook ID from output
     nb_match = re.search(r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', res.stdout)
     if not nb_match:
         log(f"  Could not extract notebook ID from: {res.stdout[:200]}")
+        _podcast_not_made("the notebook client printed no notebook id")
         return None
     notebook_id = nb_match.group(1)
     log(f"  Notebook ID: {notebook_id}")
@@ -1599,6 +1646,7 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
 
     if sources_added == 0:
         log("  No sources added — skipping audio generation")
+        save_podcast_record(notebook_id, [], "not requested: no source could be added")
         return notebook_id
 
     # Queue audio overview.
@@ -1655,12 +1703,15 @@ def create_notebook_with_podcast(processed: List[Dict[str, Any]],
         transition = record_audio_availability(False, reason)
         if transition:
             log(transition)
+        save_podcast_record(notebook_id, sources, f"FAILED — {reason or 'see research.log'}")
         return None
 
     transition = record_audio_availability(True, None)
     if transition:
         log(transition)
     log("  Audio overview queued")
+    save_podcast_record(notebook_id, sources,
+                        "queued in NotebookLM (Audio Overview → ⋯ → Download in a browser)")
     return notebook_id
 
 
