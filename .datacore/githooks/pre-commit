@@ -47,7 +47,9 @@ case "$repo_root" in
     # caught one -- twice in three days, both from same-day trading commits.
     mod=${repo_root#"$data_root"/.datacore/modules/}
     mod=${mod%%/*}
-    if grep -q "^egress:" "$data_root/.datacore/modules/$mod/module.yaml" 2>/dev/null; then
+    # Every module, not only those that already declare: a module that never
+    # declared could otherwise grow its first network call unseen (MOD-5).
+    if [ -f "$data_root/.datacore/modules/$mod/module.yaml" ]; then
       if ! python3 "$data_root/.datacore/lib/egress_scan.py" --enforce --module "$mod" >/tmp/egress-precommit.$$ 2>&1; then
         grep -A6 "UNDECLARED" /tmp/egress-precommit.$$ >&2
         printf '\nDeclare it under egress: (it acts) or exempt: (read-only) in %s/module.yaml.\n' "$mod" >&2

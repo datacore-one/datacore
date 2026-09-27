@@ -202,10 +202,12 @@ def main() -> int:
             unscannable.append(f"{mod.name}/module.yaml ({r['error'][:60]})")
             continue
         # A module that has declared ANY egress is held to the full contract.
-        # One that has not is reported and not failed -- otherwise turning this
-        # on would fail every module at once and the check would be switched
-        # off the same day. Declaring is the ratchet: once a module opts in, it
-        # cannot silently grow a new action.
+        # One that has not used to be reported and not failed, so the rollout
+        # would not fail every module at once. The rollout is done (every
+        # installed module declares or exempts what it sends), and the
+        # exception had become the hole: a module that never declared could
+        # grow a POST and pass --enforce (MOD-5). Now an outward write nobody
+        # declared fails whether or not its module opted in.
         opted_in = bool(r["declared"] or r["exempt"])
         if opted_in:
             unscannable += [f"{mod.name}/{f} (does not parse)" for f in r["unparsed"]]
@@ -231,7 +233,7 @@ def main() -> int:
                         ("UNDECORATED (declared, not wired)", undecorated),
                         ("UNKNOWN KIND (not in vocabulary)", bad_kind),
                         ("UNSCANNABLE (egress unknown)", unscannable),
-                        ("NOT YET DECLARING (reported, not failed)", unopted)):
+                        ("UNDECLARED IN A MODULE THAT DECLARES NOTHING (acts, nothing says so)", unopted)):
         if rows:
             print(f"\n  {label}: {len(rows)}")
             cap = len(rows) if a.limit == 0 else a.limit
@@ -240,7 +242,7 @@ def main() -> int:
             if len(rows) > cap:
                 print(f"    ... and {len(rows)-cap} more")
 
-    bad = len(undeclared) + len(undecorated) + len(bad_kind) + len(unscannable)
+    bad = len(undeclared) + len(undecorated) + len(bad_kind) + len(unscannable) + len(unopted)
     if not a.enforce:
         print("\n  (report-only; --enforce to fail)")
         return 0

@@ -116,3 +116,5 @@ exempt:
     reason: read-only — archive.org fallback
   - fn: "lib/research_orchestrator.py:send_telegram_summary"
     reason: operator summary to the configured chat
+  - fn: "lib/research_orchestrator.py:_post_telegram"
+    reason: failure alert to the operator's own group -- same channel as send_telegram_summary
