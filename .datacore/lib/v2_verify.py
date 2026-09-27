@@ -186,6 +186,21 @@ def check_jobs(rep: Report) -> None:
         return
     import socket
     machine = os.environ.get("DATACORE_ACTOR") or socket.gethostname().split(".")[0].lower()
+    # A host that declares no identity cannot say which of the manifest's
+    # machines it is: matching on its hostname checked a fresh install against
+    # another fleet's jobs and FAILed its first health check (INS-2).
+    if not os.environ.get("DATACORE_ACTOR"):
+        try:
+            sys.path.insert(0, str(LIB))
+            from actor_identity import resolve as _resolve_actor
+            declared = _resolve_actor()[0]
+        except Exception:  # noqa: BLE001 - cannot tell is not "undeclared"
+            declared = machine
+        if not declared:
+            rep.add("0035", f"job contracts ({machine})", None,
+                    "no identity declared for this machine -- which jobs are its own cannot be told"
+                    " (install_doctor.py names the fix)")
+            return
     rc, out = run([PY, str(jv), "--machine", machine, "--no-emit"], 200)
     failed = [l.split("'")[1] for l in out.splitlines() if "FAILED" in l and "'" in l]
     ok_line = next((l for l in out.splitlines() if l.startswith("OK")), "")
@@ -601,14 +616,19 @@ def check_topology(rep: Report) -> None:
         rep.add("0046", "repo topology", None, "no registered repositories on this host")
         return
     wrong, parked_knowledge, parked_code, stranded, code_unpushed = [], [], [], [], []
+    no_origin = []
     for name, path, category, canonical in repos:
         rc, url = _git(path, "remote", "get-url", "origin")
         base = ""
         if rc == 0 and url.strip():
             import re as _re
             base = _re.sub(r"\.git$", "", url.strip().rstrip("/").split("/")[-1].split(":")[-1])
-        if not canonical or base != canonical:
-            wrong.append(f"{name}: origin={base or 'none'} registry={canonical or '?'}")
+        if not base:
+            # No origin yet (a fresh checkout before its fork is added): there
+            # is nothing to compare, which is "could not tell", not a wrong remote.
+            no_origin.append(name)
+        elif not canonical or base != canonical:
+            wrong.append(f"{name}: origin={base} registry={canonical or '?'}")
         db = _default_branch(path)
         _, cur = _git(path, "branch", "--show-current")
         cur = cur.strip() or "detached"
@@ -623,8 +643,9 @@ def check_topology(rep: Report) -> None:
             # so it is reported here for the deploy-drift review, not failed.
             (stranded if category == "knowledge" else code_unpushed).append(
                 f"{name}: {n} commit(s), oldest {age:.0f}h")
-    rep.add("0046", "remotes canonical", not wrong,
-            f"{len(repos)} repos" if not wrong else "; ".join(wrong[:3]))
+    rep.add("0046", "remotes canonical", False if wrong else (None if no_origin else True),
+            ("; ".join(wrong[:3]) if wrong else f"{len(repos)} repos")
+            + (f"; no origin: {', '.join(no_origin[:3])}" if no_origin else ""))
     rep.add("0046", "knowledge on default branch", not parked_knowledge,
             ("; ".join(parked_knowledge[:3]) if parked_knowledge
              else (f"code parked: {'; '.join(parked_code[:3])}" if parked_code else "all on default")))
