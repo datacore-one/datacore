@@ -275,6 +275,14 @@ def sweep() -> int:
     STATE.mkdir(parents=True, exist_ok=True)
     pulled = pull_latest()
     print(f"morning_repair: {pulled}")
+    # The budget is PER NIGHT, not per invocation: a manual re-run or a
+    # restarted unit must not hand Miles another ten (MEM-66). What earlier
+    # sweeps tonight already delegated is read back from tonight's state file.
+    try:
+        earlier = json.loads((STATE / f"{day}.json").read_text()).get("findings") or []
+    except (OSError, ValueError):
+        earlier = []
+    handed = {e["id"]: e["item"] for e in earlier if isinstance(e, dict) and e.get("item")}
     found, delegated = findings(), 0
     for f in found:
         f["tried"] = remediate(f)
@@ -286,13 +294,20 @@ def sweep() -> int:
             f["item"] = ""          # miles already gave up; handing it back is a loop, not a repair
         elif f["id"] in still and f["kind"] == "delivery" and not f.get("code"):
             f["item"] = ""          # a refused token or missing group id needs a person, not a code repair
+        elif f["id"] in still and f["id"] in handed:
+            f["item"] = handed[f["id"]]    # already Miles's tonight: not a second hand-off
         elif f["id"] in still:
-            if delegated < MAX_ITEMS:
+            if len(handed) + delegated < MAX_ITEMS:
                 f["item"] = delegate(f, day)
                 delegated += bool(f["item"])
             else:
                 f["item"] = ""
                 f["over_budget"] = True
+    # Keep tonight's earlier hand-offs on record even if their finding cleared
+    # since, so a later sweep still counts them against the budget.
+    seen = {f["id"] for f in found}
+    found += [dict(e, cleared_by_sweep=True) for e in earlier
+              if isinstance(e, dict) and e.get("item") and e.get("id") not in seen]
     (STATE / f"{day}.json").write_text(json.dumps({"swept_at": time.time(), "findings": found}, indent=1))
     print(f"morning_repair sweep: {len(found)} finding(s), {sum(f['cleared_by_sweep'] for f in found)} "
           f"cleared by one safe remediation, {delegated} delegated for repair")
