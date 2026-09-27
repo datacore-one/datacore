@@ -998,23 +998,32 @@ def auto_archive_stale_research(max_age_days: int = 60) -> int:
              and n.todo and n.todo not in ('DONE', 'CANCELLED', 'CLOSED', 'FAILED')]
 
     stale_ids = []
+    first_seen = []
     for n in opens:
-        raw = n.get_property('CREATED') or n.get_property('RECEIVED') or ''
+        raw = (n.get_property('CREATED') or n.get_property('RECEIVED')
+               or n.get_property('FIRST_SEEN') or '')
         m = re.search(r'(\d{4}-\d{2}-\d{2})', raw)
         if not m:
-            # Undated items >max_age_days assumed stale (no provenance)
-            # but only if the FILE itself is older than max_age_days — we
-            # don't want to archive items added yesterday that lack a date.
-            # Heuristic: undated items get a grace period of max_age_days
-            # before they're considered stale. Since we have no created
-            # date for them, we don't archive on this pass — they stay
-            # until they accrue a date or get manually triaged.
+            # KNW-4: an undated item used to be exempt forever (24 of 31 open
+            # items on 2026-09-26). The first pass that sees it stamps
+            # :FIRST_SEEN: today, so it ages out like any dated item.
+            first_seen.append(n)
             continue
         d = date(*[int(x) for x in m.group().split('-')])
         if (today_d - d).days > max_age_days:
             stale_ids.append(n.id())
 
+    for n in first_seen:
+        try:
+            ws.set_property(n, 'FIRST_SEEN', today_d.isoformat())
+        except Exception as e:
+            log(f"  could not stamp FIRST_SEEN on {n.heading[:60]}: {e}")
+    if first_seen:
+        log(f"Stamped FIRST_SEEN on {len(first_seen)} undated research item(s)")
+
     if not stale_ids:
+        if first_seen:
+            ws.save_all()
         return 0
 
     log(f"Auto-archiving {len(stale_ids)} research items older than {max_age_days}d...")
