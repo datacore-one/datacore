@@ -267,6 +267,17 @@ def _space(space: str | None) -> Path | None:
     return None
 
 
+def _space_members(space: Path) -> list[str]:
+    """The space's declared writers, read by the pre-push ownership guard's own
+    parser (one definition of membership); [] when it cannot be read."""
+    import importlib.util
+    path = Path(__file__).resolve().parent / "hooks" / "log_ownership_guard.py"
+    spec = importlib.util.spec_from_file_location("log_ownership_guard", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.members(space)
+
+
 def attest(kind: str, *, ref: str = "", detail: str = "",
            space: str | None = None, extra: dict | None = None) -> str | None:
     """Record an external action. Returns the event hash, or None on failure.
@@ -278,6 +289,14 @@ def attest(kind: str, *, ref: str = "", detail: str = "",
     try:
         target = _space(space)
         if target is None:
+            return None
+        # Only a declared member of the space may write in it (LED-3). The
+        # agent-eval harness read a credential as the test actor "fixture" and
+        # this wrote 12 events under that name into a real space (2026-09-27);
+        # only the pre-push ownership guard stopped them. A space that declares
+        # its members is the authority; one that declares none is not judged here.
+        declared = _space_members(Path(target))
+        if declared and _actor() not in declared:
             return None
         _ensure_ledger_importable()
         from ledger.log import EventLog
