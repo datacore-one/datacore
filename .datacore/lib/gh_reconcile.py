@@ -185,11 +185,15 @@ def load_config(data_dir: Path) -> Tuple[Dict[str, Tuple[str, str]], Dict[str, D
                    for resolving "REPONAME #NNN" bare refs (e.g. "enterprise #389")
     Falls back to git remotes for unconfigured spaces.
     """
-    config_path = data_dir / ".datacore" / "config" / "gh-reconcile.yaml"
     primary: Dict[str, Tuple[str, str]] = {}
     secondary: Dict[str, Dict[str, Tuple[str, str]]] = {}
 
-    if config_path.exists():
+    # The shipped file is a template; this install's mappings live in the
+    # gitignored gh-reconcile.local.yaml beside it, read second so it wins (INS-3).
+    for config_path in (data_dir / ".datacore" / "config" / "gh-reconcile.yaml",
+                        data_dir / ".datacore" / "config" / "gh-reconcile.local.yaml"):
+        if not config_path.exists():
+            continue
         try:
             text = config_path.read_text()
             section = None
@@ -234,7 +238,7 @@ def load_config(data_dir: Path) -> Tuple[Dict[str, Tuple[str, str]], Dict[str, D
                         section = None
                         cur_space = None
         except Exception as e:
-            log.warning(f"Could not read gh-reconcile.yaml: {e}")
+            log.warning(f"Could not read {config_path.name}: {e}")
 
     return primary, secondary
 

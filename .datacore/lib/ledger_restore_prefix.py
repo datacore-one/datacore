@@ -159,7 +159,7 @@ def _restore_locked(f, space, actor, path, recovered, apply, from_line, _chain_i
     # commits left `bridge-v2-verify` REGRESSED on winston, unnoticed, until a
     # contract sweep found it a day later.
     print(f'  NEXT: commit this, then record the commit in '
-          f'.datacore/config/authorship-reviewed.yaml as writer {actor!r} in '
+          f'.datacore/config/authorship-reviewed.local.yaml as writer {actor!r} in '
           f'{space.name} -- the DIP-0044 authorship check fails until you do.')
     return 0
 

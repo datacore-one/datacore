@@ -1,39 +1,32 @@
 # gh-reconcile.yaml — space-to-GitHub-repo mapping
 #
 # Purpose: gh_reconcile.py uses this to resolve bare PR/issue references like
-# "PR #774" or "plur#504" found in task titles, without relying on the space's
+# "PR #774" or "app#504" found in task titles, without relying on the space's
 # own git remote (which may point to a notes/space repo, not the code repo).
 #
+# THIS FILE SHIPS EMPTY. An installation's own mapping goes in the gitignored
+# gh-reconcile.local.yaml beside it, same format; gh_reconcile.py reads both,
+# the local one last so it wins (INS-3: a fresh install names no repo of ours).
+#
 # Format:
-#   space_repos: primary code repo per space (resolves "PR #N", "plur#N", etc.)
+#   space_repos: primary code repo per space (resolves "PR #N", "app#N", etc.)
 #   extra_repos: additional repos per space (resolves "REPONAME #N" patterns
-#                such as "enterprise #389" or "PLUR #240" cross-space refs)
+#                such as "enterprise #389" cross-space refs)
 #
 # The script falls back to `git remote get-url origin` for unconfigured spaces.
 #
-# Example: 5-plur's git remote is plur-ai/plur-space (the org notes repo),
-# but its tasks track PRs/issues in plur-ai/plur (the code repo).
-# Without this override, "Merge PR #774" would resolve to plur-space#774
-# (wrong) instead of plur-ai/plur#774 (correct).
+# Example (in gh-reconcile.local.yaml): 1-myteam's git remote is
+# my-org/myteam-space (the notes repo), but its tasks track PRs/issues in
+# my-org/app (the code repo). Without the override, "Merge PR #774" would
+# resolve to myteam-space#774 (wrong) instead of my-org/app#774 (correct).
+#
+#   space_repos:
+#     1-myteam: my-org/app
+#
+#   extra_repos:
+#     1-myteam:
+#       docs: my-org/docs
 
-space_repos:
-  5-plur: plur-ai/plur
-  2-datacore: datacore-one/datacore
-  1-datafund: datafund/verity
-  0-personal: plur-ai/plur  # personal tasks most often track plur-ai/plur issues
+space_repos: {}
 
-# extra_repos: additional short-name aliases per space.
-# Used to resolve "REPONAME #NNN" bare refs where the repo name differs from
-# the primary space repo (e.g. "enterprise #389" in 5-plur tasks).
-extra_repos:
-  5-plur:
-    enterprise: plur-ai/enterprise
-    plur: plur-ai/plur
-  0-personal:
-    enterprise: plur-ai/enterprise
-    plur: plur-ai/plur
-    datacore: datacore-one/datacore
-    verity: datafund/verity
-  2-datacore:
-    enterprise: plur-ai/enterprise
-    plur: plur-ai/plur
+extra_repos: {}

@@ -162,13 +162,19 @@ def _baseline(path: Path) -> list[dict]:
     and the START of the detail, so a SECOND bad event in the same log is still
     a new finding. Each entry carries the date it was accepted and why, so the
     list can be read later and argued with.
+
+    The shipped file is a template; this install's accepted findings live in
+    the gitignored `<name>.local.yaml` beside it, read too (INS-3).
     """
-    try:
-        import yaml
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        return [e for e in (data.get("accepted") or []) if isinstance(e, dict)]
-    except (OSError, ValueError, Exception):  # noqa: BLE001 -- no baseline is not an error
-        return []
+    out: list[dict] = []
+    for p in (path, path.with_name(path.name.replace(".yaml", ".local.yaml"))):
+        try:
+            import yaml
+            data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+            out += [e for e in (data.get("accepted") or []) if isinstance(e, dict)]
+        except (OSError, ValueError, Exception):  # noqa: BLE001 -- no baseline is not an error
+            continue
+    return out
 
 
 def _prefix_matches(detail: str, prefix: object) -> bool:

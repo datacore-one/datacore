@@ -358,14 +358,19 @@ def check_identity(rep: Report) -> None:
 
 
 def _reviewed_commits() -> set[str]:
-    """Short hashes a human has reviewed (config/authorship-reviewed.yaml)."""
-    p = ROOT / ".datacore" / "config" / "authorship-reviewed.yaml"
-    try:
-        import yaml
-        d = yaml.safe_load(p.read_text()) or {}
-        return {str(e.get("commit", "")).strip() for e in (d.get("reviewed") or []) if e.get("commit")}
-    except Exception:  # noqa: BLE001
-        return set()
+    """Short hashes a human has reviewed: config/authorship-reviewed.yaml (the
+    shipped template) and authorship-reviewed.local.yaml beside it, where this
+    install keeps its own incidents -- gitignored, never shipped (INS-3)."""
+    out: set[str] = set()
+    for name in ("authorship-reviewed.yaml", "authorship-reviewed.local.yaml"):
+        p = ROOT / ".datacore" / "config" / name
+        try:
+            import yaml
+            d = yaml.safe_load(p.read_text()) or {}
+            out |= {str(e.get("commit", "")).strip() for e in (d.get("reviewed") or []) if e.get("commit")}
+        except Exception:  # noqa: BLE001 -- absent or unreadable: nothing reviewed there
+            continue
+    return out
 
 
 def check_writer_authorship(rep: Report) -> None:
