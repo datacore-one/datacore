@@ -26,6 +26,14 @@ from ledger.seal import (  # noqa: E402
     build_seal_payload, latest_seal, settled_events, verify_seal,
 )
 
+@pytest.fixture(autouse=True)
+def _roster_names_the_sequencer(monkeypatch):
+    """These tests' fleet declares winston as its sequencer (roles.sequencer in
+    its roster). Hermetic: never read the real install's roster (INS-3)."""
+    import ledger.seal as _seal
+    monkeypatch.setattr(_seal, "_roster_sequencer", lambda: "winston")
+
+
 
 # --- L1: only the sequencer's seals count ------------------------------------
 
@@ -88,6 +96,20 @@ def test_the_cli_and_the_readers_name_the_same_sequencer(monkeypatch):
     assert seal.sequencer() == "winston"
     monkeypatch.setenv("DATACORE_SEQUENCER", "other")
     assert seal.sequencer() == "other" and ledger_seal.sequencer() == "other"
+
+
+def test_no_sequencer_of_ours_without_a_roster(monkeypatch, tmp_path):
+    """INS-3: the sequencer comes from the install's roster, never a default
+    naming one of our machines; with neither roster nor env, no seal counts."""
+    import ledger.seal as seal
+    monkeypatch.undo()
+    monkeypatch.delenv("DATACORE_SEQUENCER", raising=False)
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
+    assert seal.sequencer() == ""
+    reg = tmp_path / ".datacore" / "registry"
+    reg.mkdir(parents=True)
+    (reg / "infrastructure.yaml").write_text("roles:\n  sequencer: sealer\nservers: {}\n")
+    assert seal.sequencer() == "sealer"
 
 
 def test_a_forced_seal_says_readers_will_ignore_it(sealed, monkeypatch, capsys):

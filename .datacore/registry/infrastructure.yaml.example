@@ -10,8 +10,18 @@
 # Values here are placeholders. Never commit real host names, aliases or access
 # details to a public repository, even when each looks harmless on its own:
 # together they are the topology.
+#
+# Shipped tools name no host: they read host lists, ssh aliases and fleet-wide
+# duties from here (jobs/manifest.py: ssh_alias(), ssh_hosts(), role()).
+roles:
+  always_on: server        # relays alerts, keeps the reliability scoreboard
+  sequencer: assistant     # the ledger ACTOR whose seals every reader believes
+  assets: server           # heavy-asset mirror (assets_sync.py)
+  executor: server         # overnight execution host (smoke.py)
+  hermes_hosts: [server]   # where hermes_plugin/deploy.sh installs the plugin
 servers:
   laptop:
+    role_label: workstation      # shown instead of the name under --redact
     purpose: primary workstation — interactive sessions, local agent runs
     kind: workstation
     ssh_alias: null              # not reachable inbound; nothing deploys to it
@@ -27,6 +37,8 @@ servers:
       how: physical
 
   server:
+    role_label: always-on host
+    # setup_profile: nightshift  # agent_host_setup.sh: nightshift | hermes | openclaw
     purpose: always-on host — scheduled jobs, briefing generation, delivery
     kind: vps
     ssh_alias: your-ssh-alias    # the alias in ~/.ssh/config, never an address
@@ -43,3 +55,4 @@ servers:
     access:
       who: owner
       how: ssh key
+      # run_as: svc              # config_drift checks this machine as that user (sudo -u)

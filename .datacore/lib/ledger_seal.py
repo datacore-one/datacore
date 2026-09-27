@@ -13,7 +13,8 @@ by default so the role stays a decision rather than an accident of which box
 happened to run a cron job.
 
 AND ONLY THE SEQUENCER'S SEALS ARE READ (decision L1, 2026-09-23). The sequencer
-is `ledger.seal.sequencer()` -- `$DATACORE_SEQUENCER`, default winston -- the
+is `ledger.seal.sequencer()` -- `$DATACORE_SEQUENCER`, else the roster's
+`roles.sequencer` (registry/infrastructure.yaml), else none -- the
 same function every reader asks. `emit --force` from another machine still
 appends a seal, but readers ignore it (it is reported by `status`, never
 fatal). A forced seal therefore settles nothing unless DATACORE_SEQUENCER names
@@ -60,6 +61,11 @@ def _spaces(root: Path) -> list[Path]:
 def cmd_emit(space: Path, force: bool) -> int:
     actor = _actor()
     seq = sequencer()
+    if not seq:
+        print("refusing: no sequencer is declared. Name the actor whose seals "
+              "readers believe as roles.sequencer in .datacore/registry/"
+              "infrastructure.yaml (or DATACORE_SEQUENCER) on every machine.")
+        return 2
     if actor != seq and not force:
         print(f"refusing: this machine is '{actor}', the sequencer is "
               f"'{seq}'. Finality is a designated role — run this on the "

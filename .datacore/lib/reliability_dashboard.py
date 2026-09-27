@@ -56,20 +56,52 @@ LIB = Path(__file__).resolve().parent
 ROOT = Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
 MANIFEST = LIB / "jobs" / "manifest.yaml"
 TIMEOUT = 60
-OWNER_HOST = os.environ.get("DATACORE_SCOREBOARD_HOST", "winston")
+
+
+def _roster():
+    sys.path.insert(0, str(LIB))
+    from jobs import manifest
+    return manifest
+
+
+def _owner_host() -> str:
+    """$DATACORE_SCOREBOARD_HOST, else the roster's always-on machine by its ssh
+    alias, else none ("no owner host configured") -- never a host of ours (INS-3)."""
+    if os.environ.get("DATACORE_SCOREBOARD_HOST"):
+        return os.environ["DATACORE_SCOREBOARD_HOST"]
+    try:
+        m = _roster()
+        machine = m.role("always_on")
+        return (m.ssh_alias(machine) or "") if machine else ""
+    except Exception:  # noqa: BLE001 -- unreadable roster: not configured
+        return ""
+
+
+OWNER_HOST = _owner_host()
 SCOREBOARD_LOG = "~/.datacore/state/reliability-scoreboard.log"
 HISTORY_DAYS = 21
 _IPV4 = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
 
-# Machine -> role label, used only under --redact.
-ROLES = {
-    "box": "chief-of-staff host",
-    "winston": "chief-of-staff host",
-    "mac": "workstation",
-    "nightshift": "execution host",
-    "hermes": "gateway host",
-    "plur-claw": "comms host",
-}
+
+
+def _roles() -> dict[str, str]:
+    """Machine -> role label, used only under --redact. Each roster machine's
+    `role_label` (else its `kind`), under its roster name, manifest name and
+    ssh alias -- the install's own machines, never a list of ours (INS-3)."""
+    out: dict[str, str] = {}
+    try:
+        m = _roster()
+        for name, cfg in m._servers().items():
+            label = str(cfg.get("role_label") or cfg.get("kind") or "host")
+            for n in (name, cfg.get("manifest_machine"), m._reachable_alias(cfg)):
+                if n:
+                    out[str(n)] = label
+    except Exception:  # noqa: BLE001 -- unreadable roster: every machine is "host"
+        pass
+    return out
+
+
+ROLES = _roles()
 
 RULES = {
     "R1": ("Delivered", "No scheduled job is stuck in a recurring failure state."),

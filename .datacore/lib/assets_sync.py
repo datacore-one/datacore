@@ -24,8 +24,8 @@ Usage
   assets_sync.py evict <space> <path>      # delete local copy (after verify)
 
 Config: ~/.config/datacore/assets_sync.yaml  (optional)
-  remote_host: nightshift
-  remote_root: ~/assets
+  remote_host: my-server     # else the roster's roles.assets machine, by ssh alias
+  remote_root: assets
 """
 from __future__ import annotations
 
@@ -35,8 +35,35 @@ import subprocess
 import sys
 from pathlib import Path
 
-REMOTE_HOST = "nightshift"
-REMOTE_ROOT = "assets"  # expanded to ~/assets on remote
+CONFIG = Path.home() / ".config" / "datacore" / "assets_sync.yaml"
+
+
+def _config() -> dict:
+    try:
+        import yaml
+        data = yaml.safe_load(CONFIG.read_text())
+    except Exception:  # noqa: BLE001 -- absent or unreadable: defaults
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _remote_host() -> str:
+    """The mirror host: the config's remote_host, else the machine holding
+    roles.assets in the install's roster, by ssh alias -- never a host of
+    ours written here (INS-3). "" when neither says."""
+    if _config().get("remote_host"):
+        return str(_config()["remote_host"])
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from jobs.manifest import role, ssh_alias
+        machine = role("assets")
+        return (ssh_alias(machine) or "") if machine else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+REMOTE_HOST = _remote_host()
+REMOTE_ROOT = str(_config().get("remote_root") or "assets")  # expanded to ~/assets on remote
 DATA_ROOT = Path.home() / "Data"
 
 
@@ -187,6 +214,9 @@ def main() -> None:
     p.add_argument("space")
     p.add_argument("path")
     args = ap.parse_args()
+    if not REMOTE_HOST:
+        sys.exit(f"error: no mirror host: set remote_host in {CONFIG} "
+                 "or roles.assets in .datacore/registry/infrastructure.yaml")
 
     if args.cmd == "push":
         cmd_push(args.space, args.paths)

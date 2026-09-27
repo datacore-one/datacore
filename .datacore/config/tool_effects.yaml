@@ -210,13 +210,16 @@ effects:
     tools: *acting
     patterns:
       # Data leaving to a destination no list approves (MEM-04). The approved
-      # destinations are the fleet's own hosts; add one here, not in code.
+      # destinations are the install's own hosts: {fleet_hosts} is filled from
+      # its machine roster (registry/infrastructure.yaml: names and ssh
+      # aliases, plus localhost) by tool_policy.load_effects -- never a list
+      # of ours written here (INS-3).
       - '\bcurl\b[^\n]*(--upload-file|\s-T\s)'
       - '\b(transfer\.sh|file\.io|0x0\.st|bashupload|termbin|paste\.rs|pastebin\.com)\b'
       - '\baws\s+s3\s+(cp|sync|mv)\b[^\n]*\ss3://'
       - '\bgsutil\s+(-m\s+)?(cp|rsync|mv)\b[^\n]*\sgs://'
       - '\brclone\s+(copy|copyto|sync|move|moveto)\b'
-      - '\b(scp|rsync)\b[^\n;&|]*\s(?:[\w.-]+@)?(?!(?:winston|nightshift|hermes|plur-claw|box|localhost)\b)[\w.-]+:(?!//)'
+      - '\b(scp|rsync)\b[^\n;&|]*\s(?:[\w.-]+@)?(?!(?:{fleet_hosts})\b)[\w.-]+:(?!//)'
   history.rewrite:
     tools: *acting
     patterns:

@@ -130,8 +130,10 @@ def proves(verify_key_hex: str, evidence: list[tuple[dict, str]]) -> tuple[int, 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--hosts", default="winston,nightshift,hermes,plur-claw",
-                    help="comma-separated ssh targets to collect from")
+    from jobs.manifest import ssh_hosts
+    ap.add_argument("--hosts", default=",".join(ssh_hosts()),
+                    help="comma-separated ssh targets to collect from "
+                         "(default: every machine the roster reaches over ssh)")
     ap.add_argument("--root", type=Path, default=ROOT)
     ap.add_argument("--apply", action="store_true",
                     help="write proven keys into principals.yaml (default: report only)")
@@ -141,7 +143,12 @@ def main() -> int:
     registered = dict(doc.get("verify_keys") or {})
 
     print("collecting public keys...", file=sys.stderr)
-    held = candidates([h.strip() for h in args.hosts.split(",") if h.strip()])
+    hosts = [h.strip() for h in args.hosts.split(",") if h.strip()]
+    if not hosts:
+        print("no hosts: pass --hosts, or declare machines with an ssh_alias in "
+              ".datacore/registry/infrastructure.yaml", file=sys.stderr)
+        return 2
+    held = candidates(hosts)
     evidence = signatures(args.root)
 
     proven: dict[str, str] = {}

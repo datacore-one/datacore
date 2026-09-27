@@ -54,11 +54,20 @@ MANIFEST = ROOT / ".datacore" / "lib" / "jobs" / "manifest.yaml"
 FIXTURES = ROOT / ".datacore" / "lib" / "tests" / "fixtures" / "jobs"
 HOME = pathlib.Path.home()
 
-# manifest machine name -> ssh alias. The manifest calls winston "box"; ssh
-# does not. Without this map every --live check against box returned n-a,
-# which reads as "could not tell" and is correct but useless.
-SSH_ALIAS = {"box": "winston", "nightshift": "nightshift",
-             "hermes": "hermes", "plur-claw": "plur-claw"}
+# manifest machine name -> ssh alias. The manifest and ssh can name one
+# machine differently. Without this map every --live check against such a
+# machine returned n-a, which reads as "could not tell" and is correct but useless.
+def _ssh(machine: str) -> str:
+    """The ssh alias for a manifest machine, from the install's roster
+    (registry/infrastructure.yaml, via jobs.manifest.ssh_alias). The manifest
+    and ssh may name one machine differently; the map is the install's, never
+    a list of ours written here (INS-3). Unknown: the name itself."""
+    try:
+        from .manifest import ssh_alias
+    except ImportError:  # executed as a script
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+        from jobs.manifest import ssh_alias
+    return ssh_alias(machine) or machine
 
 SUCCESS_MARK = "# represents: SUCCESS"
 UNMARKED = "# represents: UNVERIFIED — a human must confirm this is success output"
@@ -170,7 +179,7 @@ def _read_artifact(path: str, machine: str) -> str | None:
         if len(t) <= 20000:
             return t
         return t[:12000] + "\n# ...elided...\n" + t[-8000:]
-    host = SSH_ALIAS.get(machine, machine)
+    host = _ssh(machine)
     try:
         r = subprocess.run(
             ["ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes", host,

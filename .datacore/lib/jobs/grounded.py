@@ -54,12 +54,22 @@ HOME = pathlib.Path.home()
 # schedule read without ssh.
 LOCAL = os.environ.get("DATACORE_MACHINE", "mac")
 
-# manifest machine name -> ssh alias. The manifest calls winston "box"; ssh does
-# not. Without this every --live check against box returned n-a ("could not
-# tell"), which is honest but useless — and it is why three jobs whose producer
-# exists and is unscheduled went undetected by the very checker built to find
-# them. Same map as fixtures.py.
-SSH_ALIAS = {"box": "winston"}
+# manifest machine name -> ssh alias. The manifest and ssh can name one machine
+# differently. Without this every --live check against such a machine returned
+# n-a ("could not tell"), which is honest but useless — and it is why three jobs
+# whose producer exists and is unscheduled went undetected by the very checker
+# built to find them. Same map as fixtures.py: the roster's.
+def _ssh(machine: str) -> str:
+    """The ssh alias for a manifest machine, from the install's roster
+    (registry/infrastructure.yaml, via jobs.manifest.ssh_alias). The manifest
+    and ssh may name one machine differently; the map is the install's, never
+    a list of ours written here (INS-3). Unknown: the name itself."""
+    try:
+        from .manifest import ssh_alias
+    except ImportError:  # executed as a script
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+        from jobs.manifest import ssh_alias
+    return ssh_alias(machine) or machine
 
 
 def _quote_remote(path: str) -> str:
@@ -447,7 +457,7 @@ def check(live: bool = False, machine: str | None = None) -> list[dict]:
             remote_path = _raw_path(cmd) or str(script)
             r = subprocess.run(
                 ["ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
-                 SSH_ALIAS.get(mach, mach),
+                 _ssh(mach),
                  f"test -e {_quote_remote(remote_path)} && echo YES || echo NO"],
                 capture_output=True, text=True, timeout=45)
             ok = r.returncode == 0 and "YES" in r.stdout
@@ -459,7 +469,7 @@ def check(live: bool = False, machine: str | None = None) -> list[dict]:
                            else f"{mach} unreachable — not a pass")})
 
         if mach not in sched_cache:
-            host = None if mach == LOCAL else SSH_ALIAS.get(mach, mach)
+            host = None if mach == LOCAL else _ssh(mach)
             sched_cache[mach] = (_crontab(host), _systemd(host),
                                  _launchd(host) if mach == "mac" else None)
         cron, timers, launchd = sched_cache[mach]

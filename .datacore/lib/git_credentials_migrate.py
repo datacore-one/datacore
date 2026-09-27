@@ -32,7 +32,20 @@ HOME = Path.home()
 STORE = HOME / ".git-credentials"
 LOCAL_ENV = HOME / "Data" / ".datacore" / "env" / "local.env"
 HELPER = Path(__file__).resolve().parent / "git_credential_broker.py"
-HOST = os.environ.get("CREDS_INSTANCE") or "winston"
+
+
+def _instance() -> str:
+    """The broker instance these tokens belong to: $CREDS_INSTANCE, else this
+    machine's declared actor (actor_identity) -- the host running the
+    migration, never a name of ours written here (INS-3)."""
+    if os.environ.get("CREDS_INSTANCE"):
+        return os.environ["CREDS_INSTANCE"]
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from actor_identity import this_actor
+    return this_actor()
+
+
+HOST = _instance()
 LINE = re.compile(r"https://([^:]+):([^@]+)@github\.com/(.+?)(?:\.git)?$")
 
 

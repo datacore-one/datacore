@@ -19,7 +19,8 @@
 
 set -uo pipefail
 
-RELAY_HOST="${JOB_VERIFY_RELAY_HOST:-winston}"
+# Unset: the roster's always-on machine (roles.always_on), resolved below.
+RELAY_HOST="${JOB_VERIFY_RELAY_HOST:-}"
 RUNNER="${JOB_VERIFY_RUNNER:-$HOME/.datacore/v2-runner}"
 LOG="${JOB_VERIFY_LOG:-$HOME/.datacore/state/job_verify.log}"
 ARGS=()
@@ -52,6 +53,9 @@ if [ -z "$PY_BIN" ]; then
   printf 'FATAL: no python3 with PyYAML found; job_verify cannot run\n' >> "$LOG"
   exit 2
 fi
+# The relay is the install's own always-on host from its roster -- never a
+# host of ours written here (INS-3). Empty: relay delivery reports undelivered.
+[ -n "$RELAY_HOST" ] || RELAY_HOST="$("$PY_BIN" "$RUNNER/.datacore/lib/jobs/manifest.py" role-ssh always_on 2>/dev/null | head -1)"
 
 OUT="$(DATACORE_V2=1 DATACORE_ROOT="${DATACORE_ROOT:-$HOME/Data}" \
   "$PY_BIN" "$RUNNER/.datacore/lib/job_verify.py" "${ARGS[@]}" --alert log 2>&1)"
@@ -106,6 +110,7 @@ _deliver() {
   # (cos_env.py: cos.env -> .env -> local.env, later wins); WINSTON_BOT_TOKEN
   # lives only in local.env, so sourcing cos.env here would find nothing.
   # winston_send --alert records its own delivery failures on the relay host.
+  [ -n "$RELAY_HOST" ] || { _undelivered "no relay host: set roles.always_on in .datacore/registry/infrastructure.yaml or JOB_VERIFY_RELAY_HOST" "$msg"; return 1; }
   printf '%s\n' "$msg" | ssh -o ConnectTimeout=15 -o BatchMode=yes "$RELAY_HOST" \
     'python3 ~/Data/.datacore/modules/chief-of-staff/server/lib/winston_send.py --alert' \
     >>"$LOG" 2>&1 && return 0

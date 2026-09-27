@@ -93,7 +93,97 @@ def known_machines(path: Path | None = None) -> frozenset[str] | None:
                 raise ManifestError("invalid manifest_machine alias")
             names.add(alias)
     return frozenset(names)
-CHECKS = frozenset({"exists", "nonempty", "json_has_keys", "regex", "last_line_regex",
+
+
+# ── the roster as the one source of host names (INS-3) ───────────────────────
+# Tools used to carry this fleet's host names as defaults (HOSTS = ('winston',
+# ...), SSH_ALIAS = {"box": "winston"}), so a stranger's install ssh'd to our
+# machines. They ask the roster instead. None of these raise: a missing or
+# unreadable roster means "this install declares no hosts", and each caller
+# says so in its own terms rather than guessing one of ours.
+
+def _roster_doc(path: Path | None = None) -> dict:
+    try:
+        data = yaml.safe_load((path or roster_path()).read_text())
+    except (OSError, yaml.YAMLError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _servers(path: Path | None = None) -> dict:
+    servers = _roster_doc(path).get("servers")
+    return {str(k): v for k, v in servers.items() if isinstance(v, dict)} if isinstance(servers, dict) else {}
+
+
+def _reachable_alias(cfg: dict) -> str | None:
+    alias = cfg.get("ssh_alias")
+    return str(alias) if alias not in (None, "", "-") else None
+
+
+def ssh_alias(machine: str, path: Path | None = None) -> str | None:
+    """How ssh reaches a roster machine, named by roster key or manifest_machine.
+
+    None for a machine the roster declares unreachable by ssh (ssh_alias null or
+    '-', e.g. the workstation this runs on). A name the roster does not know is
+    returned unchanged: it may already be an ssh alias.
+    """
+    for name, cfg in _servers(path).items():
+        if machine in (name, cfg.get("manifest_machine")):
+            return _reachable_alias(cfg)
+    return machine
+
+
+def ssh_hosts(path: Path | None = None) -> list[str]:
+    """Every roster machine ssh can reach, by ssh alias, in roster order."""
+    return [a for a in (_reachable_alias(c) for c in _servers(path).values()) if a]
+
+
+def fleet_names(path: Path | None = None) -> list[str]:
+    """Every name this install's own machines go by: roster keys, manifest
+    names and ssh aliases. What an allow-list of 'our hosts' is built from."""
+    out: list[str] = []
+    for name, cfg in _servers(path).items():
+        for n in (name, cfg.get("manifest_machine"), _reachable_alias(cfg)):
+            if n and str(n) not in out:
+                out.append(str(n))
+    return out
+
+
+def role_all(name: str, path: Path | None = None) -> list[str]:
+    """`roles.<name>` in the roster: which machine(s) or actor this install
+    gives a fleet-wide duty (always_on, sequencer, ...). Empty when unset."""
+    roles = _roster_doc(path).get("roles")
+    value = roles.get(name) if isinstance(roles, dict) else None
+    if value is None or value == "":
+        return []
+    return [str(v) for v in value] if isinstance(value, list) else [str(value)]
+
+
+def role(name: str, path: Path | None = None) -> str | None:
+    """The single machine or actor holding a roster role, or None."""
+    found = role_all(name, path)
+    return found[0] if found else None
+
+
+def _cli(argv: list[str]) -> int:
+    """For shell callers: `manifest.py ssh-alias MACHINE | ssh-hosts | role NAME
+    | role-ssh NAME`. Prints one value per line; prints nothing when unset."""
+    if argv[:1] == ["ssh-hosts"] and len(argv) == 1:
+        out = ssh_hosts()
+    elif argv[:1] == ["ssh-alias"] and len(argv) == 2:
+        out = [ssh_alias(argv[1]) or ""]
+    elif argv[:1] == ["role"] and len(argv) == 2:
+        out = role_all(argv[1])
+    elif argv[:1] == ["role-ssh"] and len(argv) == 2:
+        out = [a for a in (ssh_alias(m) for m in role_all(argv[1])) if a]
+    else:
+        print("usage: manifest.py ssh-hosts | ssh-alias MACHINE | role NAME | role-ssh NAME")
+        return 2
+    print("\n".join(o for o in out if o))
+    return 0
+
+
+CHECKS =frozenset({"exists", "nonempty", "json_has_keys", "regex", "last_line_regex",
                     "min_bytes", "no_crash"})
 #: `command` pipes the alert to the install's own command (job_verify._alert_command):
 #: mail, a webhook, anything -- alerts need not go to Telegram (INS-5).
@@ -365,3 +455,8 @@ def _build_artifact(raw: object, job_ref: str, index: int, errors: list[str]) ->
         return None
 
     return Artifact(path=path, check=check, max_age_hours=max_age_hours, arg=arg, since=since)
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(_cli(sys.argv[1:]))

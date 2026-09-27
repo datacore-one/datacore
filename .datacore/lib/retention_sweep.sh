@@ -23,5 +23,18 @@ sweep() {  # dir, days, glob, label
   echo "$label: kept $after of $before (>${days}d removed), $(du -sh "$dir" 2>/dev/null | cut -f1) remaining"
 }
 
-sweep "$HOME/backups/winston"              14 'plur-state-*.tar.gz' 'winston-backups'
-sweep "$HOME/polymarket-scanner/data/scans" 30 '*.jsonl'             'polymarket-scans'
+# WHAT is swept is this machine's own list, not ours (INS-3): one line per
+# archive in $RETENTION_CONF (default ~/.datacore/retention.conf):
+#   <dir> <days> <glob> <label>        e.g.  ~/backups/app 14 'state-*.tar.gz' app-backups
+# `~` and $HOME expand; # starts a comment. No file: nothing is swept, said loudly.
+CONF="${RETENTION_CONF:-$HOME/.datacore/retention.conf}"
+if [ ! -r "$CONF" ]; then
+  echo "retention: no $CONF -- nothing declared, nothing swept"
+  exit 0
+fi
+while read -r dir days glob label; do
+  case "$dir" in ''|'#'*) continue ;; esac
+  dir="${dir/#\~/$HOME}"; dir="${dir//\$HOME/$HOME}"
+  glob="${glob#\'}"; glob="${glob%\'}"
+  sweep "$dir" "$days" "$glob" "${label:-$dir}"
+done < "$CONF"

@@ -40,19 +40,19 @@ PROBE = r'''
 # cd'd into a literal "~/Data" and reported every head as empty.
 D=$(eval echo __DATA__); R=$(eval echo __RUNNER__)
 cd "$D" 2>/dev/null && echo "data_head=$(git rev-parse --short HEAD 2>/dev/null)"
-# WHICH BRANCH, not only which commit (SYN-4): hermes' runner served from
-# fix/geo-research-delivery-format, 29 commits behind main, and a short head
-# hash alone never said so. data_core says whether the data root is a Datacore
-# code checkout at all (on hermes and plur-claw it is the agent's own space).
+# WHICH BRANCH, not only which commit (SYN-4): a satellite's runner served from
+# a fix branch 29 commits behind main, and a short head hash alone never said
+# so. data_core says whether the data root is a Datacore code checkout at all
+# (on a satellite agent host it is the agent's own space).
 is_core() { case "$(git -C "$1" remote get-url origin 2>/dev/null)" in
   *datacore-one/datacore|*datacore-one/datacore.git|*/datacore.git|*/datacore) return 0;; esac; return 1; }
 [ -d "$D/.git" ] && echo "data_branch=$(git -C "$D" rev-parse --abbrev-ref HEAD 2>/dev/null)"
 [ -d "$D/.git" ] && is_core "$D" && echo "data_core=1"
 [ -n "$R" ] && [ -d "$R/.git" ] && echo "runner_branch=$(git -C "$R" rev-parse --abbrev-ref HEAD 2>/dev/null)"
-# Core version can live in the data root OR the runner. On plur-claw and
-# hermes the "Data" tree is the AGENT'S OWN SPACE repo (data-space /
-# tris-space), not the datacore core — so reading VERSION only from there
-# reported them as having no core at all, when the core is in their runner.
+# Core version can live in the data root OR the runner. On a satellite agent
+# host the "Data" tree is the AGENT'S OWN SPACE repo, not the datacore core —
+# so reading VERSION only from there reported it as having no core at all,
+# when the core is in its runner.
 CORE=""
 [ -f "$D/.datacore/VERSION" ] && CORE=$(head -1 "$D/.datacore/VERSION" | tr -d " ")
 [ -z "$CORE" ] && [ -n "$R" ] && [ -f "$R/.datacore/VERSION" ] && \
@@ -61,14 +61,14 @@ echo "core=${CORE:-?}"
 [ -n "$R" ] && cd "$R" 2>/dev/null && echo "runner_head=$(git rev-parse --short HEAD 2>/dev/null)"
 # datacore-mcp is an IN-REPO BUILD, not a package. The deployed tree has dist/
 # and node_modules/ and NO package.json, so a package.json probe reports it
-# absent on every server while Winston serves v1.6.0. The version is compiled
+# absent on every server while the always-on host serves v1.6.0. The version is compiled
 # into dist/index.js, and the launch path lives in ~/.hermes/config.yaml — not
 # .mcp.json, which is why a config fallback missed it as well.
 # ASK THE SYSTEM WHAT IT ACTUALLY RUNS, FIRST.
 # Every other branch below is inference — a config file that may name a path
 # nothing uses, or a source checkout that may be a leftover. `command -v` is
 # the only one that answers "what executes when something types this". It was
-# last, so on winston the probe kept reporting the stale in-repo build (1.6.0)
+# last, so on the always-on host the probe kept reporting the stale in-repo build (1.6.0)
 # while /usr/bin/datacore-mcp was 2.1.0: a machine we had just upgraded looked
 # un-upgraded, and the disagreement pointed at the wrong thing entirely.
 m=""
@@ -81,11 +81,11 @@ fi
 [ -z "$m" ] && m=$(grep -ho "[^ \"']*datacore-mcp[^ \"']*" ~/.hermes/config.yaml ~/.claude.json ~/.mcp.json "$D/.mcp.json" 2>/dev/null | head -1 | sed "s#/dist/.*##")
 # A config may name a path that DOES NOT EXIST — nightshift's .mcp.json points
 # at a tree that was never deployed there. Accepting it non-empty made every
-# later fallback unreachable, so the machine reported no MCP while Miles was
+# later fallback unreachable, so the machine reported no MCP while the executor host was
 # running one. Validate before accepting.
 [ -n "$m" ] && [ ! -d "$m" ] && m=""
 [ -z "$m" ] && m=$(ls -d "$D"/*/2-projects/datacore-mcp 2>/dev/null | head -1)
-# GLOBAL NPM INSTALL. Miles runs /usr/bin/datacore-mcp ->
+# GLOBAL NPM INSTALL. The executor host runs /usr/bin/datacore-mcp ->
 # /usr/lib/node_modules/@datacore-one/mcp, which no in-repo search could ever
 # find — the third place this probe had to learn to look, after a guessed path
 # and the hermes config.
@@ -94,7 +94,7 @@ fi
   [ -f "$g/package.json" ] && { m="$g"; break; }
 done
 # Hermes ships its OWN node install, so the package is not on the default PATH
-# and `command -v` finds nothing — Tris has been running v1.6.0 for 14 days
+# and `command -v` finds nothing — the gateway host has been running v1.6.0 for 14 days
 # while every probe reported it absent.
 for hp in "$HOME/.hermes/node/lib/node_modules/@datacore-one/mcp"; do
   [ -z "$m" ] && [ -f "$hp/package.json" ] && m="$hp"
@@ -120,7 +120,7 @@ echo "org_workspace=$("$PY3" -c 'import org_workspace as o;print(getattr(o,"__ve
 
 # Hermes ships its OWN node, so its global bin is not on a non-interactive
 # PATH and `command -v datacore` finds nothing there — the same blind spot that
-# reported Tris as having no MCP for 14 days. List it explicitly rather than
+# reported the gateway host as having no MCP for 14 days. List it explicitly rather than
 # hoping the login shell exports it.
 for c in datacore "$HOME/.hermes/node/bin/datacore" "$HOME/.local/bin/datacore" \
          /usr/local/bin/datacore /usr/bin/datacore; do

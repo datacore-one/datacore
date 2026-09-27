@@ -45,12 +45,22 @@ def _load_hosts() -> tuple[str, str]:
             if "=" in line and not line.strip().startswith("#"):
                 k, _, v = line.partition("=")
                 env[k.strip()] = v.strip()
-    # The box defaults to its ssh ALIAS, like nightshift already does -- an alias
-    # is not topology (CLAUDE.md publishes both). With no default and no
-    # SMOKE_BOX in verify.env, BOX was "", every box check ran `ssh ""`, and
-    # mail_triage and audio_stamp reported "box unreachable" on every run for a
-    # box that was up (found 2026-09-17).
-    return env.get("SMOKE_BOX", "winston"), env.get("SMOKE_NIGHTSHIFT", "nightshift")
+    # Unset in verify.env, each host comes from the install's roster
+    # (roles.always_on / roles.executor, resolved to ssh aliases) -- never a
+    # name of ours written here (INS-3). With no host at all, BOX was "", every
+    # box check ran `ssh ""`, and mail_triage and audio_stamp reported "box
+    # unreachable" on every run for a box that was up (found 2026-09-17); ssh()
+    # below now reports an empty host as unreachable without calling ssh.
+    def from_roster(name: str) -> str:
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from jobs.manifest import role, ssh_alias
+            machine = role(name)
+            return (ssh_alias(machine) or "") if machine else ""
+        except Exception:  # noqa: BLE001 -- a roster problem is "not configured"
+            return ""
+    return (env.get("SMOKE_BOX") or from_roster("always_on"),
+            env.get("SMOKE_NIGHTSHIFT") or from_roster("executor"))
 
 
 BOX, NIGHTSHIFT = _load_hosts()

@@ -31,11 +31,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-#: SSH aliases to inspect. The Data root is resolved on the host itself
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from jobs.manifest import ssh_hosts  # noqa: E402
+
+#: SSH aliases to inspect: every machine the install's roster
+#: (registry/infrastructure.yaml) reaches over ssh -- never a list of ours
+#: written here (INS-3). The Data root is resolved on the host itself
 #: (`$HOME/Data`) rather than hardcoded here — the path is the remote user's
 #: business, and writing it down would bake one machine's layout into a tool
-#: that runs against four.
-HOSTS = ('winston', 'nightshift', 'plur-claw', 'hermes')
+#: that runs against several.
+HOSTS = tuple(ssh_hosts())
 DATA_ROOT = '$HOME/Data'
 
 
@@ -416,6 +421,10 @@ def main() -> int:
         return 1 if total else 0
 
     hosts = [a.host] if a.host else list(HOSTS)
+    if not hosts:
+        print("no hosts: the machine roster (.datacore/registry/infrastructure.yaml) "
+              "declares none reachable over ssh", file=sys.stderr)
+        return 2
     total = 0
     for host in hosts:
         # RESOLVE $HOME ON THE HOST, once. DATA_ROOT is written with `$HOME` so

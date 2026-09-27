@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Install the Datacore plugin into a Hermes host and enable it.
 #
-#   .datacore/lib/hermes_plugin/deploy.sh [host ...]      (default: winston hermes)
+#   .datacore/lib/hermes_plugin/deploy.sh [host ...]
+#
+# No hosts given: the roster's `roles.hermes_hosts` machines, by ssh alias
+# (.datacore/registry/infrastructure.yaml) -- never a list of ours (INS-3).
 #
 # The plugin is a user plugin (~/.hermes/plugins/datacore/): Hermes scans that
 # directory but leaves user plugins OFF until config.yaml lists them under
@@ -10,8 +13,14 @@
 # reading a half-written config is a worse failure than an unenabled plugin.
 set -euo pipefail
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOSTS=("${@:-winston hermes}")
-[ $# -gt 0 ] && HOSTS=("$@") || HOSTS=(winston hermes)
+if [ $# -gt 0 ]; then
+  HOSTS=("$@")
+else
+  HOSTS=()
+  while IFS= read -r h; do [ -n "$h" ] && HOSTS+=("$h"); done \
+    < <(python3 "$SRC/../jobs/manifest.py" role-ssh hermes_hosts 2>/dev/null)
+fi
+[ ${#HOSTS[@]} -gt 0 ] || { echo "no hosts: pass them, or set roles.hermes_hosts in .datacore/registry/infrastructure.yaml" >&2; exit 2; }
 
 for H in "${HOSTS[@]}"; do
   echo "── $H"

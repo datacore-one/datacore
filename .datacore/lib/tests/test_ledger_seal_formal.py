@@ -19,6 +19,14 @@ from ledger.fold import fold  # noqa: E402
 from ledger.log import EventLog, read_events  # noqa: E402
 from ledger.seal import build_seal_payload, settled_events, verify_seal  # noqa: E402
 
+@pytest.fixture(autouse=True)
+def _roster_names_the_sequencer(monkeypatch):
+    """These tests' fleet declares winston as its sequencer (roles.sequencer in
+    its roster). Hermetic: never read the real install's roster (INS-3)."""
+    import ledger.seal as _seal
+    monkeypatch.setattr(_seal, "_roster_sequencer", lambda: "winston")
+
+
 
 # --- seal finality: settled(t) ⊆ settled(t') (Lean: seal_settled_monotone) ----
 

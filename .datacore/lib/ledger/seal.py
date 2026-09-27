@@ -68,16 +68,32 @@ class Seal:
         return wm is not None and event.seq <= wm
 
 
-DEFAULT_SEQUENCER = "winston"
+#: No sequencer of ours by default (INS-3): an install names its own in the
+#: roster (`roles.sequencer` in registry/infrastructure.yaml) or the env.
+DEFAULT_SEQUENCER = ""
+
+
+def _roster_sequencer() -> str:
+    try:
+        from jobs.manifest import role
+    except ImportError:
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        try:
+            from jobs.manifest import role
+        except ImportError:  # no PyYAML on this interpreter: env only
+            return ""
+    return role("sequencer") or ""
 
 
 def sequencer() -> str:
-    """The designated sequencer, read at call time: `$DATACORE_SEQUENCER` or winston.
+    """The designated sequencer, read at call time: `$DATACORE_SEQUENCER`, else
+    the roster's `roles.sequencer`, else none ("" -- no seal is believed).
 
     One definition for the writer (`ledger_seal.py emit`) and every reader, so
     the role that may seal and the role whose seals are believed cannot drift.
     """
-    return os.environ.get("DATACORE_SEQUENCER") or DEFAULT_SEQUENCER
+    return os.environ.get("DATACORE_SEQUENCER") or _roster_sequencer() or DEFAULT_SEQUENCER
 
 
 def _seal_events(events: list[Event]) -> list[Event]:

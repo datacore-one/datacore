@@ -2,7 +2,7 @@
 # Declare an agent host, or verify it: identity, the crons the job contracts
 # assume, the artifacts they read. Idempotent; run it again after every change.
 #
-#   agent_host_setup.sh --host box|nightshift|hermes|plur-claw      apply, then verify
+#   agent_host_setup.sh --host NAME            apply, then verify (NAME: a roster machine)
 #   agent_host_setup.sh --host NAME --verify                        check, change nothing
 #
 # Why this exists: the box has had an installer with a verify step since
@@ -15,7 +15,7 @@ set -uo pipefail
 HOST=""; VERIFY_ONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --host) HOST="${2:?--host needs box|nightshift|hermes|plur-claw}"; shift ;;
+    --host) HOST="${2:?--host needs a machine name from .datacore/registry/infrastructure.yaml}"; shift ;;
     --verify) VERIFY_ONLY=1 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac; shift
@@ -52,6 +52,26 @@ print(((d.get("servers") or {}).get(host) or {}).get("access", {}).get("actor", 
 PY
 )"
 [ -n "$ACTOR" ] || { log "FAIL registry declares no actor for host $HOST"; exit 2; }
+# WHAT KIND of agent host this is picks the crons and checks below -- not its
+# name, so no host of ours is written here (INS-3). The roster says it
+# (servers.<host>.setup_profile); a host whose identity file already declares
+# the openclaw executor is an openclaw host; otherwise the profile is the
+# host name itself (nightshift, hermes).
+PROFILE="$(python3 - "$HOST" "$LIB" <<'PY'
+import sys, yaml
+host, lib = sys.argv[1], sys.argv[2]
+sys.path.insert(0, lib)
+from actor_identity import REGISTRY_DIR
+try:
+    d = yaml.safe_load(open(REGISTRY_DIR / "infrastructure.yaml")) or {}
+except OSError:
+    d = {}
+print(((d.get("servers") or {}).get(host) or {}).get("setup_profile", ""))
+PY
+)"
+if [ -z "$PROFILE" ]; then
+  if grep -qsE '^(export )?DATACORE_EXECUTOR=openclaw' "$ID_FILE"; then PROFILE=openclaw; else PROFILE="$HOST"; fi
+fi
 if [ "$VERIFY_ONLY" = 0 ]; then
   if ! grep -qsE '^(export )?DATACORE_ACTOR=' "$ID_FILE"; then
     mkdir -p "$(dirname "$ID_FILE")"
@@ -68,7 +88,7 @@ if [ "$VERIFY_ONLY" = 0 ]; then
   mkdir -p "$HOME/.datacore/keys"; chmod 700 "$HOME/.datacore/keys"
   # The executor this host runs delegated items through (ledger_claim ->
   # executors/base.get_executor). plur-claw has no claude binary; it has openclaw.
-  if [ "$HOST" = plur-claw ] && ! grep -qsE '^(export )?DATACORE_EXECUTOR=' "$ID_FILE"; then
+  if [ "$PROFILE" = openclaw ] && ! grep -qsE '^(export )?DATACORE_EXECUTOR=' "$ID_FILE"; then
     printf '%s\n' "DATACORE_EXECUTOR=openclaw" >> "$ID_FILE"; log "executor declared: openclaw"
   fi
 fi
@@ -78,14 +98,14 @@ fi
 # marker is replaced, so a path change here reaches the crontab on the next run.
 CRON_LINES=()
 CRON_KEYS=()
-case "$HOST" in
+case "$PROFILE" in
   nightshift)
     CRON_KEYS=(phase1-cycle bot-alive gate-check)
     CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
-    CRON_LINES+=("*/15 * * * * $LIB/unit_alive.sh datacore-telegram.service $STATE/miles-bot.alive 2>>$STATE/miles-bot.alive.err")
+    CRON_LINES+=("*/15 * * * * $LIB/unit_alive.sh datacore-telegram.service $STATE/${ACTOR}-bot.alive 2>>$STATE/${ACTOR}-bot.alive.err")
     CRON_LINES+=("40 8 * * * python3 $HOME/Data/.datacore/modules/nightshift/lib/gate_check.py >> $STATE/nightshift-gate.history 2>&1")
     ;;
-  plur-claw)
+  openclaw)
     CRON_KEYS=(phase1-cycle ledger-claim job-verify)
     # ONE clone per writer per host. Data attests X posts into ~/Data/2-plur-space
     # (DATACORE_ATTEST_SPACE) and the dispatcher used ~/spaces/5-plur: two copies
@@ -95,7 +115,7 @@ case "$HOST" in
     CRON_LINES+=("*/15 * * * * DISPATCH_SPACE=$HOME/Data/2-plur-space $LIB/ledger-claim-pull.sh >> $STATE/ledger-dispatch.log 2>&1")
     # plur-claw had contracts in the manifest and nothing running the verifier
     # (INS-7, 2026-09-26) -- the same gap hermes had until 2026-09-06.
-    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine plur-claw --manifest $LIB/jobs/manifest.yaml --alert log >> $STATE/job_verify.log 2>&1")
+    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine $HOST --manifest $LIB/jobs/manifest.yaml --alert log >> $STATE/job_verify.log 2>&1")
     ;;
   hermes)
     CRON_KEYS=(phase1-cycle job-verify)
@@ -105,7 +125,7 @@ case "$HOST" in
     # hermes had contracts in the manifest and nothing running the verifier
     # (found 2026-09-06): its rows read "not heard from" by construction.
     # --manifest: hermes has no ~/Data/.datacore/lib; the runner copy is the canonical one (test_runner_manifest_matches_canonical).
-    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine hermes --manifest $LIB/jobs/manifest.yaml --alert log >> $STATE/job_verify.log 2>&1")
+    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine $HOST --manifest $LIB/jobs/manifest.yaml --alert log >> $STATE/job_verify.log 2>&1")
     ;;
 esac
 
@@ -170,8 +190,8 @@ ensure_github_host_key() {
     log "FAIL github.com host key fingerprint did not match GitHub's published key ($fp) — not added"; fail=1
   fi
 }
-case "$HOST" in
-  plur-claw) ensure_github_host_key ;;
+case "$PROFILE" in
+  openclaw) ensure_github_host_key ;;
   hermes)
     : # Tris's heartbeat is a systemd timer (tris-heartbeat.timer); no spaces to project here
     ;;
@@ -239,17 +259,17 @@ done
 # it clears on the next refresh, and failing here would block a re-run.
 _behind=$(git -C "$RUNNER" rev-list --count HEAD..origin/main 2>/dev/null || echo "?")
 if [ "$_behind" = "0" ]; then log "OK  runner current with origin/main"; else log "WARN runner is $_behind commit(s) behind origin/main (runner-refresh cron pulls hourly)"; fi
-case "$HOST" in
+case "$PROFILE" in
   nightshift)
     systemctl show -p Environment --value nightshift-overnight.service 2>/dev/null | tr ' ' '\n' | qgrep -x "DATACORE_ACTOR=nightshift" && log "OK  overnight executor declares its own writer (nightshift)" || { log "FAIL overnight unit does not declare DATACORE_ACTOR=nightshift"; fail=1; }
-    systemctl is-active --quiet datacore-telegram.service && log "OK  Miles bot unit active" || { log "FAIL datacore-telegram.service not active"; fail=1; }
+    systemctl is-active --quiet datacore-telegram.service && log "OK  $ACTOR bot unit active" || { log "FAIL datacore-telegram.service not active"; fail=1; }
     systemctl is-active --quiet venture-heartbeat.service && log "OK  venture heartbeat active" || { log "FAIL venture-heartbeat.service not active"; fail=1; }
     ;;
   hermes)
-    systemctl is-active --quiet tris-heartbeat.timer && log "OK  tris-heartbeat.timer active" || { log "FAIL tris-heartbeat.timer not active"; fail=1; }
+    systemctl is-active --quiet "${ACTOR}-heartbeat.timer" && log "OK  ${ACTOR}-heartbeat.timer active" || { log "FAIL ${ACTOR}-heartbeat.timer not active"; fail=1; }
     systemctl --user is-active --quiet hermes-gateway.service 2>/dev/null && log "OK  hermes gateway (user unit) active" || { log "FAIL hermes-gateway.service (user) not active"; fail=1; }
     ;;
-  plur-claw)
+  openclaw)
     [ -d "$HOME/Data/2-plur-space/.git" ] && log "OK  dispatch space present ($HOME/Data/2-plur-space)" || { log "FAIL $HOME/Data/2-plur-space is not a repository"; fail=1; }
     grep -qsE '^(export )?DATACORE_EXECUTOR=openclaw' "$ID_FILE" && log "OK  executor declared: openclaw" || { log "FAIL executor not declared in $ID_FILE"; fail=1; }
     ;;

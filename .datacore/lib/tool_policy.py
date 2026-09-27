@@ -88,6 +88,22 @@ class Decision:
 
 
 # ── effects ─────────────────────────────────────────────────────────────────
+FLEET_HOSTS = "{fleet_hosts}"
+
+
+def fleet_hosts_alternation() -> str:
+    """`a|b|localhost`: the install's own machines by every name they go by
+    (roster names, manifest names, ssh aliases), regex-escaped. What
+    `{fleet_hosts}` in tool_effects.yaml stands for. No roster: localhost only,
+    so a stranger's install approves none of our hosts (INS-3)."""
+    try:
+        from jobs.manifest import fleet_names
+        names = fleet_names()
+    except Exception:  # noqa: BLE001 -- an unreadable roster approves nothing extra
+        names = []
+    return "|".join(re.escape(n) for n in [*names, "localhost"])
+
+
 def load_effects(path: Path | None = None) -> dict[str, dict]:
     """{effect: {tools, tool_patterns, patterns}} from tool_effects.yaml.
     An unreadable or malformed vocabulary cannot authorize tool use."""
@@ -101,6 +117,15 @@ def load_effects(path: Path | None = None) -> dict[str, dict]:
     if not isinstance(data, dict) or not isinstance(data.get("effects"), dict) or not data["effects"]:
         raise ValueError("tool effects must contain a nonempty effects mapping")
     out: dict[str, dict] = {}
+    hosts: str | None = None
+
+    def _fill(r: str) -> str:
+        nonlocal hosts
+        if FLEET_HOSTS not in r:
+            return r
+        if hosts is None:
+            hosts = fleet_hosts_alternation()
+        return r.replace(FLEET_HOSTS, hosts)
     for name, spec in (data.get("effects") or {}).items():
         if not isinstance(spec, dict):
             raise ValueError("effect specification must be a mapping")
@@ -115,7 +140,7 @@ def load_effects(path: Path | None = None) -> dict[str, dict]:
         out[str(name)] = {
             "tools": [str(t) for t in (spec.get("tools") or [])],
             "tool_patterns": [re.compile(str(r), re.I) for r in (spec.get("tool_patterns") or [])],
-            "patterns": [re.compile(str(r), re.I) for r in (spec.get("patterns") or [])],
+            "patterns": [re.compile(_fill(str(r)), re.I) for r in (spec.get("patterns") or [])],
             "per_transaction": bool(spec.get("per_transaction", False)),
             "approved": [re.compile(str(r), re.I) for r in (spec.get("approved") or [])],
         }
