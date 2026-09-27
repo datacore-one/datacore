@@ -53,7 +53,6 @@ effects:
     tool_patterns:
       - 'send_?(e?mail|message)'
     patterns:
-      - '\bwinston_send\.py\b'
       - '\bsendmail\b'
       - '\bmail\s+-s\b'
       - '\bmutt\s'
@@ -61,6 +60,25 @@ effects:
       - 'gmail/v1/users/[^/\s]+/(messages|drafts)/send'
       - 'api\.(sendgrid|mailgun|resend|postmarkapp|sparkpost)\.'
       - '\bgmail_send\b'
+  # A message to the owner's own chat (Winston's Telegram sender). Not e-mail
+  # and not public: agents may propose it, a grant releases it (AGT-1, MOD6).
+  message.send:
+    tools: *acting
+    patterns:
+      - '\bwinston_send\.py\b'
+  # Speaking in public: a post, a tweet, a channel message. Mr Data's lane --
+  # never for the other agents, a grant for Data (AGT-1, 2026-09-27).
+  public.post:
+    tools: *acting
+    tool_patterns:
+      - '(create|post|publish)_?(tweet|post|status)'
+    patterns:
+      - '\b(engagement_post|x_post(er)?|chrome_poster|autonomous_poster|post_today_thread)\.py\b'
+      - '(-X\s*POST|--request\s+POST|--data\b|\s-d\s)[^\n]*api\.(x|twitter)\.com/(2/tweets|1\.1/statuses/update)'
+      - 'api\.(x|twitter)\.com/(2/tweets|1\.1/statuses/update)\b[^\n]*(-X\s*POST|--request\s+POST|--data\b|\s-d\s)'
+      - 'api\.linkedin\.com/(v2/ugcPosts|rest/posts)'
+      - 'com\.atproto\.repo\.createRecord'
+      - 'api\.telegram\.org/bot[^\s]*/send\w*[^\n]*chat_id["=:\s]*@\w'
   payment:
     tools: *acting
     # MEM-04: one approval is one transaction. `approved` is the owner's list
@@ -233,3 +251,12 @@ effects:
       - '\brename\s+(-\w+\s+)*[''"]?s/'
       - '\bxargs\b[^\n]*\b(mv|rename)\b'
       - '\bfor\b[^\n]*;\s*do\b[^\n]*\b(git\s+)?mv\b'
+  # ── agents never: the judge is not the defendant (MEM-30) ──
+  eval.edit:
+    # A promise eval and the harness it runs on are written by the eval
+    # author and changed only with the owner; a builder never edits its own
+    # judge. Reading and running them stays open.
+    tools: ["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "terminal", "execute_code", "write_file", "patch"]
+    patterns:
+      - '"(file_path|path|notebook_path)":\s*"(?:[^"\\]|\\.)*/(test_promise_[^"/]*|agent_eval|_audit_contract|_inbox_job_harness)\.py"'
+      - '"command":\s*"(?:[^"\\]|\\.)*(>(?!&)|\btee\b|\bsed\s+-i|\bperl\s+-\w*i|\bmv\b|\bcp\b|\brm\b|\bgit\s+(rm|mv|checkout)\b|\btruncate\b|\bchmod\b)(?:[^"\\]|\\.)*\b(test_promise_\w*|agent_eval|_audit_contract|_inbox_job_harness)\.py\b'

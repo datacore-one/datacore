@@ -33,6 +33,11 @@ Privacy guards (2026-09-26, promises SPC-4/5, MEM-13/15/17/19), wired the same w
   context_merge.py check  SessionStart. Rebuilds a stale composed CLAUDE.md,
                           reports a hand-edited one.
 
+Eval guard (2026-09-27, promise MEM-30):
+
+  eval_guard.py           PreToolUse Edit|Write|MultiEdit|Bash. Changing an
+                          existing promise eval asks the owner first.
+
 Run:   python3 .datacore/lib/hooks/install_redaction_guards.py [--dry-run]
 
 Idempotent. Backs up settings.json before writing. Never removes a hook.
@@ -51,6 +56,7 @@ IG = f"python3 {HOOKS / 'injection_integrity_guard.py'}"
 SPG = f"python3 {HOOKS / 'space_policy_guard.py'}"
 MG = f"python3 {HOOKS / 'memory_guard.py'}"
 PG = f"python3 {HOOKS / 'publish_guard.py'}"
+EG = f"python3 {HOOKS / 'eval_guard.py'}"
 CC = f"python3 {HOOKS.parent / 'context_merge.py'} check --fix --quiet"
 
 # (guard, event, matcher, command, timeout). matcher None => no matcher key.
@@ -65,6 +71,7 @@ WIRING = [
     ("memory", "PreToolUse", "Edit|Write|MultiEdit", MG, 5),
     ("publish", "PreToolUse", "Artifact|Bash", PG, 5),
     ("context", "SessionStart", None, CC, 20),
+    ("evals", "PreToolUse", "Edit|Write|MultiEdit|Bash", EG, 5),
 ]
 GUARDS = sorted({w[0] for w in WIRING})
 
