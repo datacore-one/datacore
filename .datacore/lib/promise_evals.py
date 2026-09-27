@@ -69,12 +69,17 @@ def eval_files() -> dict[str, list[tuple[str, Path]]]:
     return found
 
 
+AGENTS = False   # --agents: also run agent-behaviour evals (real model runs, pass^3)
+
+
 def run_suite(cwd: Path, files: list[Path], env_extra: dict) -> dict[str, bool]:
     """{file name: all tests in it passed}"""
     import os
     with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as fh:
         xml = fh.name
     env = {**os.environ, **env_extra, "PROMISE_EVALS_ALL": "1"}   # the scoreboard collects every eval
+    if AGENTS:
+        env["DATACORE_AGENT_EVALS"] = "1"   # without it an agent eval fails by design (n-a is never a pass)
     result: dict[str, bool] = {f.name: False for f in files}   # a file pytest never reported is not a pass
     try:
         subprocess.run([PY, "-m", "pytest", "-q", "-p", "no:cacheprovider", f"--junitxml={xml}",
@@ -105,9 +110,15 @@ def main() -> int:
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--only", default="")
     ap.add_argument("--list", action="store_true", help="list promises and eval files, run nothing")
+    ap.add_argument("--agents", action="store_true",
+                    help="also run agent-behaviour evals (costs model runs; pass^3 each)")
     ap.add_argument("--write-baseline", action="store_true",
                     help="record the green promises in .datacore/registry/promise-baseline.json (the CI gate)")
     args = ap.parse_args()
+    global AGENTS, SUITE_TIMEOUT_S
+    AGENTS = args.agents
+    if AGENTS:
+        SUITE_TIMEOUT_S = max(SUITE_TIMEOUT_S, 5400)   # agent cases run minutes each
 
     ps = promises()
     files = eval_files()
