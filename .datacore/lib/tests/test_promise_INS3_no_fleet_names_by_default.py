@@ -8,12 +8,18 @@ behavioural probe on a fresh install).
     the *.example files) is scanned for this fleet's names in CODE and VALUES:
     string literals in Python (docstrings excluded), non-comment text in shell,
     values in YAML/JSON. Comments are the allow-list: they may tell history.
-    Names: machines (winston, nightshift as a host, hermes, plur-claw, miles,
+    Names: machines (winston, nightshift and hermes as hosts, plur-claw, miles,
     tris), the user (gregor, and his home directory on linux and mac), our paths (/root/Data)
     and our spaces (1-datafund, 2-datacore, 5-plur, 6-meridian, 7-megaphone,
     8-firm, 9-practice, 3-fds, 4-forge).
   - Behaviour: on a fresh install (git archive HEAD, INSTALL.md followed) the job
     verifier finds no job of ours to check for this machine.
+
+Owner decision 2026-09-27: "nightshift" and "hermes" count only where they name a
+MACHINE (an ssh, scp or rsync target, a host:path). "hermes" is also the third-party
+agent runtime Tris runs on (its paths, package and runtime name must stay), and
+"nightshift" is also the overnight module and queue. A host list that names one of
+them next to another of our machines is still caught by the other name.
 
 Seeded failure: a default like DEFAULT_SEQUENCER = "winston", git_relay HOSTS,
 the owner's linux home in a setup script, or the tracked manifest's mac-* jobs being
@@ -35,11 +41,12 @@ import _fresh_install as F  # noqa: E402
 
 DATA = F.REAL
 NAMES = re.compile(
-    r"\b(?:winston|miles|tris|gregor|hermes|plur-claw)\b"
+    r"\b(?:winston|miles|tris|gregor|plur-claw)\b"
     r"|/(?:home|Users)/greg[o]r|/root/Data\b"
     r"|\b(?:1-datafund|2-datacore|3-fds|4-forge|5-plur|6-meridian|7-megaphone|8-firm|9-practice)\b",
     re.I)
-NIGHTSHIFT_HOST = re.compile(r"""^nightshift$|\bssh\s+(?:-\S+\s+)*nightshift\b|\bnightshift:[~/]""")
+NIGHTSHIFT_HOST = re.compile(
+    r"""\b(?:ssh|scp|rsync)\b[^\n]*?(?:\s|@)(?:nightshift|hermes)\b(?!-)|\b(?:nightshift|hermes):[~/]""")
 SCOPES = (".datacore/lib/", ".datacore/config/", ".datacore/templates/", ".datacore/hooks/")
 SKIP = ("/tests/", "/4-archive/", "/__pycache__/")
 
