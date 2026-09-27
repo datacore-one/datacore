@@ -130,6 +130,37 @@ class Policy:
         return self.known_effects if self.known_effects is not None else self.cosign_effects
 
 
+def _with_local_overlay(path: Path, data: dict) -> dict:
+    """Merge the install's own principals over the shipped, neutral ones.
+
+    The tracked policy cannot name this install's people and agents (INS-3:
+    a fresh install names nothing of ours), so they live in the gitignored
+    `<stem>.local.yaml` beside it. A local `principals` entry replaces the
+    tracked entry of that name and new names are added; a local
+    `arbitration` replaces the tracked order. Nothing else overlays. The
+    merged mapping then goes through the same validation as one file, so a
+    malformed local entry is refused, never skipped -- skipping would switch
+    a principal's limits off.
+    """
+    local = path.with_name(path.stem + ".local.yaml")
+    if not local.exists() and not local.is_symlink():
+        return data
+    from yaml_safety import UniqueStringKeyLoader
+    try:
+        extra = yaml.load(local.read_text(encoding="utf-8"), Loader=UniqueStringKeyLoader) or {}
+    except (OSError, UnicodeError, ValueError, yaml.YAMLError):
+        raise PolicyError('local approvals policy is unreadable or ambiguous') from None
+    if not isinstance(extra, dict) or not isinstance(extra.get("principals", {}), dict):
+        raise PolicyError(f"approvals policy {local}: 'principals' must be a mapping of name -> limits")
+    merged = dict(data)
+    if "principals" in extra:
+        base = data.get("principals") if isinstance(data.get("principals"), dict) else {}
+        merged["principals"] = {**base, **extra["principals"]}
+    if "arbitration" in extra:
+        merged["arbitration"] = extra["arbitration"]
+    return merged
+
+
 def load_policy(path: Path | None = None) -> Policy:
     """Load the approvals policy from `path` (default: the tracked
     `<DATACORE_ROOT>/.datacore/config/approvals_policy.yaml`).
@@ -180,6 +211,7 @@ def load_policy(path: Path | None = None) -> Policy:
         raise PolicyError(
             f"approvals policy {path}: root must be a mapping (got {type(data).__name__})"
         )
+    data = _with_local_overlay(path, data)
 
     errors: list[str] = []
 

@@ -80,29 +80,21 @@ known_effects:
 # guard off, writing another's log, answering an invite, data to an
 # unapproved destination, rewriting shared history, editing a promise eval
 # (MEM-30: the builder never edits its judge). Outward speech -- e-mail and
-# public posts -- is Mr Data's lane alone (AGT-1): never for the others, a
-# grant for Data. Every agent may hand work to every other and to Winston
-# (AGT-2, 2026-09-27).
+# public posts -- belongs to one agent's lane (AGT-1): never for the others, a
+# grant for that one.
+#
+# THIS INSTALL'S OWN PRINCIPALS ARE NOT HERE. The file is tracked and a fresh
+# install must name nothing of ours (INS-3), so the entries below are neutral
+# examples. The install's people and agents, and its arbitration order, go in
+# the gitignored approvals_policy.local.yaml beside this file: load_policy
+# merges it over this one (an entry there replaces the one of the same name).
 principals:
-  gregor: {}
-  winston:
-    never_effects: &AGENT_NEVER [payment, trading, credential.rotate, gov.submit, code.merge,
-                                 secret.search, guard.disable, ledger.forge, calendar.respond,
-                                 data.egress, history.rewrite, eval.edit, email.send, public.post]
-    may_delegate_to: [miles, tris, data]
-  miles:
-    never_effects: *AGENT_NEVER
-    may_delegate_to: [tris, data, winston]
-  tris:
-    never_effects: [payment, prod.deploy, trading, credential.rotate, gov.submit, code.merge,
+  owner: {}
+  assistant:
+    never_effects: [payment, trading, credential.rotate, gov.submit, code.merge,
                     secret.search, guard.disable, ledger.forge, calendar.respond,
                     data.egress, history.rewrite, eval.edit, email.send, public.post]
-    may_delegate_to: [miles, data, winston]
-  data:
-    never_effects: [payment, prod.deploy, trading, credential.rotate, gov.submit, code.merge,
-                    secret.search, guard.disable, ledger.forge, calendar.respond,
-                    data.egress, history.rewrite, eval.edit]
-    may_delegate_to: [miles, tris, winston]
+    may_delegate_to: []
   # The nightly cross-model audit (AUD-2, spec .datacore/specs/cross-model-audit.md):
   # whichever agent's model runs it, the audit only reads. It may write its own
   # findings file and nothing else, and it delegates nothing. cross_model_audit.py
@@ -119,5 +111,5 @@ principals:
 # outranks later: a principal may close or release another principal's item
 # only if it precedes the owner here; agents not listed cannot override each
 # other at all. The client outranks everyone; the chief of staff outranks the
-# agents.
-arbitration: [gregor, winston]
+# agents. (Replaced by the local file's `arbitration` when it has one.)
+arbitration: [owner, assistant]

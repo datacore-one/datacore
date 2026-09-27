@@ -438,7 +438,7 @@ class Drill:
 
         # Distinct writers, as two hosts would be: per-writer files are disjoint.
         self.log(space, "mac").append("item.create", {"id": "m1", "title": "from mac"})
-        self.log(other, "winston").append("item.create", {"id": "n1", "title": "from winston"})
+        self.log(other, "host-b").append("item.create", {"id": "n1", "title": "from host-b"})
 
         script = (
             "import sys\n"
@@ -455,15 +455,15 @@ class Drill:
                  for d in (space, other)]
         outs = [p.communicate()[0].decode().strip() for p in procs]
         print(f"      mac     -> {outs[0] or 'no output'}")
-        print(f"      winston -> {outs[1] or 'no output'}")
+        print(f"      host-b  -> {outs[1] or 'no output'}")
 
         # Whatever each race outcome was, converging again must reconcile them.
         for d in (space, other):
             t.converge(d, root=self.root)
         rc_m, remote_mac = self.git(origin, "show", "main:.datacore/events/mac.jsonl")
-        rc_w, remote_win = self.git(origin, "show", "main:.datacore/events/winston.jsonl")
+        rc_w, remote_win = self.git(origin, "show", "main:.datacore/events/host-b.jsonl")
         self.check("mac's event reached the remote", rc_m == 0 and '"m1"' in remote_mac)
-        self.check("winston's event reached the remote", rc_w == 0 and '"n1"' in remote_win)
+        self.check("host-b's event reached the remote", rc_w == 0 and '"n1"' in remote_win)
         self.check("neither host was left mid-merge",
                    not (space / ".git" / "MERGE_HEAD").exists()
                    and not (other / ".git" / "MERGE_HEAD").exists())

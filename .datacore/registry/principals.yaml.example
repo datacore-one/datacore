@@ -63,6 +63,24 @@ principals:
     budget_monthly_usd: null
     permission_mode: propose     # proposes; a human approves anything that leaves
 
+# Settings that list this installation's own agents. Shipped code names no
+# agent (INS-3); it reads these through roster.section(). Every section is
+# optional: without it the tool does nothing agent-specific.
+sprint_sync:
+  agent_claimer: "nightshift|agent|assistant"   # regex: sprint claimers that are agents
+delegation_exercise:                            # delegation_fleet_exercise.py
+  ring: {assistant: [teammate-agent]}           # who seeds work for whom
+  forbidden: [teammate-agent, assistant]        # an edge the policy must refuse
+cross_model_audit:                              # cross_model_audit.py: one model family per agent
+  agents: {assistant: claude}
+  nightly_cap_usd: {assistant: 1.00}
+testnet_dashboard:                              # testnet_dashboard.py: personas on the public page
+  agents:                                       # [persona, public handle, lane]
+    - ["Assistant", "@your_assistant_bot", "operations"]
+  published:                                    # terms deliberately published, and why
+    "Assistant": "agent persona, published under its own bot handle"
+    "@your_assistant_bot": "public bot handle"
+
 # Verify keys (stage 8). Each writer signs its events with a private key that
 # never leaves its host (~/.datacore/keys/<actor>.key); the public half is
 # registered here from the host's own registry so any machine can verify the

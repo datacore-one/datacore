@@ -1,0 +1,16 @@
+# Template for approvals_policy.local.yaml (gitignored), which holds THIS
+# installation's own principals. ledger.policy.load_policy merges it over the
+# tracked approvals_policy.yaml: an entry here replaces the tracked entry of
+# the same name, new names are added, and `arbitration` replaces the tracked
+# order. Names are principals from .datacore/registry/principals.yaml.
+principals:
+  owner: {}
+  assistant:
+    never_effects: &AGENT_NEVER [payment, trading, credential.rotate, gov.submit, code.merge,
+                                 secret.search, guard.disable, ledger.forge, calendar.respond,
+                                 data.egress, history.rewrite, eval.edit, email.send, public.post]
+    may_delegate_to: [researcher]
+  researcher:
+    never_effects: *AGENT_NEVER
+    may_delegate_to: [assistant]
+arbitration: [owner, assistant]

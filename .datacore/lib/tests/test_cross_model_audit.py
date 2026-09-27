@@ -212,3 +212,14 @@ def test_each_agent_has_its_nightly_and_calibration_template(agent):
         assert f"^model: {cma.AGENTS[agent]}$" in meta["evidence"]["require"]
         script = ROOT / meta["script"]
         assert script.is_file() and os.access(script, os.X_OK)
+
+
+def test_the_audit_roster_is_the_installs_own(monkeypatch):
+    """INS-3: agents, families and caps come from principals.yaml; none ship."""
+    import roster
+    monkeypatch.setattr(roster, "section", lambda key, path=None: {
+        "agents": {"ops": "claude", "cos": "gpt"}, "nightly_cap_usd": {"ops": 1, "cos": 0.5}}
+        if key == "cross_model_audit" else {})
+    assert cma._audit_roster() == ({"ops": "claude", "cos": "gpt"}, {"ops": 1.0, "cos": 0.5})
+    monkeypatch.setattr(roster, "section", lambda key, path=None: {})
+    assert cma._audit_roster() == ({}, {})

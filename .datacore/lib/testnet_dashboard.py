@@ -46,13 +46,16 @@ import reliability_dashboard as rd  # noqa: E402
 ROOT = rd.ROOT
 FIRM = "8-firm"
 
-# The three agents, by the handle each already publishes under. Names of people
-# are not here and must not be added: see the disclosure rules in MEMORY.md.
-AGENTS = [
-    ("Mr Data", "@plurclaw_bot", "community and communication"),
-    ("Tris", "@TrisHermes_bot", "research and cross-domain analysis"),
-    ("Miles", "@datacore_1_bot", "code, deployment, product"),
-]
+# The agents, by the handle each already publishes under: [persona, handle,
+# lane] from `testnet_dashboard.agents` in the install's principals.yaml, so no
+# agent of ours ships in this file (INS-3). Names of people are not there and
+# must not be added: see the disclosure rules in MEMORY.md.
+def _page_config() -> dict:
+    import roster
+    return roster.section("testnet_dashboard")
+
+
+AGENTS = [tuple(a) for a in (_page_config().get("agents") or [])]
 
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
 _VERSION = re.compile(r"\b\d+\.\d+\.\d+\b")
@@ -69,15 +72,13 @@ _VERSION = re.compile(r"\b\d+\.\d+\.\d+\b")
 #: genuine mention of the hermes host through anywhere else on the page. Masking
 #: the approved literal removes exactly the approved string and leaves every
 #: other occurrence exposed to the check.
+#:
+#: The personas and handles come from `testnet_dashboard.published` in
+#: principals.yaml, beside the agents they publish.
 PUBLISHED = {
     "Datacore": "the product, and the domain this page is served from",
     "The Firm": "the subject of the page",
-    "Mr Data": "agent persona, published under its own bot handle",
-    "@plurclaw_bot": "public Telegram bot handle",
-    "Tris": "agent persona, published under its own bot handle",
-    "@TrisHermes_bot": "public Telegram bot handle",
-    "Miles": "agent persona, published under its own bot handle",
-    "@datacore_1_bot": "public Telegram bot handle",
+    **{str(k): str(v) for k, v in (_page_config().get("published") or {}).items()},
 }
 
 

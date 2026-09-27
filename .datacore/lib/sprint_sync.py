@@ -52,8 +52,25 @@ import yaml
 REPO = Path(__file__).resolve().parents[2]
 
 # A claimer that is an agent. Everything else is a person, and a person's item
-# is NOT projected into the agent queue however well specified it is.
-AGENT_CLAIMER = re.compile(r"nightshift|miles|tris|agent|winston", re.I)
+# is NOT projected into the agent queue however well specified it is. Which
+# claimer strings are this install's agents is the install's own business: the
+# pattern is `sprint_sync.agent_claimer` in principals.yaml, so no agent of ours
+# is named here (INS-3). Without it, only a claimer that says it is an agent
+# (or the overnight queue) counts.
+DEFAULT_AGENT_CLAIMER = r"nightshift|agent"
+
+
+def _agent_claimer() -> re.Pattern:
+    import sys
+    lib = str(Path(__file__).resolve().parent)
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    import roster
+    pattern = roster.section("sprint_sync").get("agent_claimer") or DEFAULT_AGENT_CLAIMER
+    return re.compile(str(pattern), re.I)
+
+
+AGENT_CLAIMER = _agent_claimer()
 
 PRIORITY = {"must": "A", "should": "B", "could": "C"}
 

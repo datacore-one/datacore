@@ -153,3 +153,23 @@ def test_the_run_after_a_failure_starts_fresh(tmp_path):
                                          "item": "canary-old"}))
     assert canary.cmd_run(_args(space)) == 0
     assert json.loads(canary.RESULT.read_text())["verdict"] == "dispatched"
+
+
+# ── the canary's addressee is the install's own operations agent (INS-3) ──────
+
+def test_the_default_assignee_is_the_installs_operations_agent(tmp_path, monkeypatch):
+    import roster
+    seen = {}
+    monkeypatch.setattr(roster, "by_role", lambda role, path=None: "ops" if role == "chief of operations" else None)
+    monkeypatch.setattr(canary, "cmd_run", lambda a: seen.setdefault("assignee", a.assignee) and 0)
+    canary.main(["--run", "--space", str(tmp_path)])
+    assert seen["assignee"] == "ops"
+
+
+def test_with_no_operations_agent_and_no_assignee_the_run_is_refused(tmp_path, monkeypatch):
+    import roster
+    monkeypatch.setattr(roster, "by_role", lambda role, path=None: None)
+    monkeypatch.setattr(canary, "cmd_run", lambda a: pytest.fail("seeded with no addressee"))
+    with pytest.raises(SystemExit) as e:
+        canary.main(["--run", "--space", str(tmp_path)])
+    assert e.value.code == 2

@@ -116,3 +116,13 @@ def test_the_executor_alias_counts_as_membership(tmp_path):
     assert not any("not-held" in r[4] for r in red)
 
 
+
+
+def test_executing_principals_are_those_the_registry_gives_an_executor(monkeypatch):
+    """INS-3: no agent's name ships here; an executing principal is one whose
+    principals.yaml entry declares `executors:`."""
+    import roster
+    import cadence_liveness
+    monkeypatch.setattr(roster, "entries", lambda path=None: {
+        "ops": {"kind": "agent", "executors": ["runner"]}, "cos": {"kind": "agent"}, "boss": {}})
+    assert cadence_liveness._executing() == {"ops"}

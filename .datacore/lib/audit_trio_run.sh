@@ -25,8 +25,10 @@ case "${1:-}" in
     "$PY" "$LIB/config_resolution_probe.py" > "$STATE/config-resolution.log" 2>&1
     ;;
   canary-run)
+    # No --assignee: the canary addresses the install's chief of operations
+    # (principals.yaml), so no agent of ours is named here (INS-3).
     "$PY" "$LIB/delegation_canary.py" --run --space "$HOME/Data/2-datacore" \
-      --assignee miles > "$STATE/delegation-canary.log" 2>&1
+      > "$STATE/delegation-canary.log" 2>&1
     ;;
   canary-check)
     "$PY" "$LIB/delegation_canary.py" --check --space "$HOME/Data/2-datacore" \

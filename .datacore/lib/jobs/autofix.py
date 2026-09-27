@@ -138,7 +138,7 @@ def repo_for(job, root: Path) -> str | None:
 
 
 def delegate(job, failures: list[str], rec: dict, *, root: Path,
-             assignee: str = "miles", dry: bool = False,
+             assignee: str | None = None, dry: bool = False,
              roster: Path | None = None) -> tuple[str, str]:
     """Hand one failing job to `assignee`. Returns (state, detail).
 
@@ -160,6 +160,15 @@ def delegate(job, failures: list[str], rec: dict, *, root: Path,
 
     if not getattr(job, "delegate", True):
         return "refused", f"{job.name} opts out of delegation (delegate: false); a person owns it"
+
+    # The repairer is this install's operations agent, from its own registry;
+    # no agent's name ships in this file (INS-3).
+    if assignee is None:
+        import roster as _roster
+        assignee = _roster.by_role("chief of operations")
+        if not assignee:
+            return "refused", ("no principal has the role 'chief of operations' in "
+                               "principals.yaml; nobody to hand the repair to")
 
     manifest = LIB / "jobs" / "manifest.yaml"
     sha = contract_sha(job.name, manifest)

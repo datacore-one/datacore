@@ -376,3 +376,23 @@ def test_a_pass_before_the_drop_does_not_count(tmp_path, monkeypatch):
     _verify_event(tmp_path, "box-x", ok=False, ms=now - 300_000)
     out = autofix.escalations(tmp_path, now_ms=now)
     assert len(out) == 1 and "gave up" in out[0]
+
+
+# ── who repairs is the install's own operations agent (INS-3) ─────────────────
+
+def test_the_default_repairer_is_the_installs_operations_agent(tmp_path, monkeypatch):
+    """No agent name ships: the default assignee is whoever principals.yaml
+    gives the role of chief of operations."""
+    import roster
+    monkeypatch.setattr(roster, "by_role", lambda role, path=None: "miles" if role == "chief of operations" else None)
+    state, why, p = _capture_delegation(monkeypatch, tmp_path, _job("box-x", "box"))
+    assert state == "delegated" and p["assignee"] == "miles", why
+
+
+def test_with_no_operations_agent_declared_the_repair_is_refused(tmp_path, monkeypatch):
+    import autofix
+    import roster
+    monkeypatch.setattr(roster, "by_role", lambda role, path=None: None)
+    state, why = autofix.delegate(_job("box-x", "box"), ["f"], {}, root=tmp_path, roster=_roster(tmp_path))
+    assert state == "refused" and "chief of operations" in why
+    assert not (tmp_path / "2-datacore").exists(), "a refusal must write nothing"

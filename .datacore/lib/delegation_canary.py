@@ -225,11 +225,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--run", action="store_true", help="seed one canary item")
     ap.add_argument("--check", action="store_true", help="report on the last one")
     ap.add_argument("--space", required=True, type=Path)
-    ap.add_argument("--assignee", default="miles", help="the principal expected to do it")
+    ap.add_argument("--assignee", default=None,
+                    help="the principal expected to do it (default: the install's "
+                         "chief of operations, from principals.yaml)")
     ap.add_argument("--max-age-hours", type=float, default=DEFAULT_BUDGET_HOURS)
     a = ap.parse_args(argv)
     if a.run == a.check:
         ap.error("exactly one of --run or --check")
+    if a.run and not a.assignee:
+        import roster
+        a.assignee = roster.by_role("chief of operations")
+        if not a.assignee:
+            ap.error("no --assignee, and no principal has the role 'chief of operations' in principals.yaml")
     return cmd_run(a) if a.run else cmd_check(a)
 
 

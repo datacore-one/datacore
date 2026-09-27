@@ -62,8 +62,28 @@ def consume() -> str | None:
     return _brief(facts)
 
 
+#: What the assistant calls itself when neither the installer nor the
+#: install's principals.yaml names a chief of staff. Neutral on purpose: a
+#: fresh install is not ours (INS-3).
+DEFAULT_COS_NAME = "your chief of staff"
+
+
+def _cos_name() -> str:
+    """The install's own chief of staff, by display name, from principals.yaml."""
+    import sys
+    lib = os.path.dirname(os.path.abspath(__file__))
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    try:
+        import roster
+        cos = roster.by_role("chief of staff")
+        return roster.display(cos) if cos else DEFAULT_COS_NAME
+    except ImportError:
+        return DEFAULT_COS_NAME
+
+
 def _brief(f: dict) -> str:
-    cos = f.get("cosName") or "Winston"
+    cos = f.get("cosName") or _cos_name()
     spaces = f.get("spaces") or []
     modules = f.get("modules") or []
     name = f.get("userName") or ""

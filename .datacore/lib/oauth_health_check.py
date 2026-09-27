@@ -110,6 +110,17 @@ def send_telegram(text: str) -> bool:
     return True
 
 
+def _claude_row_name() -> str:
+    """The row names the agent whose token this is -- the install's chief of
+    operations, from principals.yaml -- so no agent of ours ships here (INS-3)."""
+    try:
+        import roster
+        ops = roster.by_role("chief of operations")
+        return f"claude_code_oauth ({roster.display(ops)})" if ops else "claude_code_oauth"
+    except ImportError:
+        return "claude_code_oauth"
+
+
 def check_claude_token(now, warn_days):
     """Check the Claude Code (Anthropic Max) OAuth token that powers Miles.
 
@@ -118,7 +129,7 @@ def check_claude_token(now, warn_days):
     `ssh nightshift` then `claude setup-token`. So we only monitor + alert.
     Returns (row_tuple_or_None, problem_str_or_None, exit_contribution_int).
     """
-    name = "claude_code_oauth (Miles)"
+    name = _claude_row_name()
     if not CLAUDE_CRED.exists():
         return ((name, 'MISSING', f'no file at {CLAUDE_CRED}'),
                 f"{name}: credentials file missing — run `claude setup-token` on nightshift", 1)

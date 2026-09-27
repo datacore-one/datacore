@@ -48,17 +48,25 @@ from pathlib import Path
 LIB = Path(__file__).resolve().parent
 sys.path.insert(0, str(LIB))
 
+def _exercise() -> tuple[dict, tuple | None]:
+    """(ring, forbidden edge) from `delegation_exercise` in principals.yaml.
+
+    The ring names this install's own agents, so it lives in the install's
+    gitignored registry, not here (INS-3). No section: an empty ring, and every
+    `seed` reports that its actor delegates to nobody.
+    """
+    import roster
+    cfg = roster.section("delegation_exercise")
+    ring = {str(k): [str(x) for x in (v or [])] for k, v in (cfg.get("ring") or {}).items()}
+    edge = cfg.get("forbidden")
+    return ring, (tuple(map(str, edge)) if isinstance(edge, list) and len(edge) == 2 else None)
+
+
 #: Who delegates to whom, and what each pair is for. Kept as data so `status`
 #: and `sweep` read the same roster `seed` wrote from.
-RING = {
-    "winston": ["miles", "data"],
-    "miles": ["data"],
-    "data": ["miles"],
-}
-
 #: The closing edge the policy forbids. Asserted rather than assumed: a rule
 #: nobody tests is a rule nobody knows is still there.
-FORBIDDEN = ("data", "winston")
+RING, FORBIDDEN = _exercise()
 
 MARK = "delegation-fleet-exercise"
 SOURCE = "org/next_actions.org"
@@ -132,7 +140,7 @@ def cmd_seed(args) -> int:
             print(f"REFUSED {actor} -> {to}: {exc}")
             return 1
 
-    if args.assert_refusals and actor == FORBIDDEN[0]:
+    if args.assert_refusals and FORBIDDEN and actor == FORBIDDEN[0]:
         frm, to = FORBIDDEN
         title, check = _task(to)
         try:

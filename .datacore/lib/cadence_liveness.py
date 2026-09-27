@@ -87,8 +87,10 @@ def sunset_reviews(root: Path, today: date | None = None) -> tuple[list[tuple[st
     return past, undated
 
 
-#: Principals whose cadences already have an executor in this fleet: the
-#: venture heartbeat runs as Miles. Every other owner's cadences are
+#: Principals whose cadences already have an executor in this fleet: those
+#: whose principals.yaml entry declares `executors:` (here, the agent the
+#: venture heartbeat runs as). Read from the install's own registry, so no
+#: agent of ours is named in this file (INS-3). Every other owner's cadences are
 #: `pending-rollout` until its host registers them (DIP-0050 P2b). Judging them
 #: `late` before anything could run them is the "red by construction" this
 #: file refused on 2026-09-05 -- now they are listed, not hidden.
@@ -96,7 +98,14 @@ def sunset_reviews(root: Path, today: date | None = None) -> tuple[list[tuple[st
 #: This decides only what a MISSING registration means (red for an executing
 #: principal, grey otherwise). Every principal is judged from the same signed
 #: records; none from cadence-log.yaml (CAD-3, CAD-4).
-EXECUTING = {"miles"}
+def _executing() -> set[str]:
+    if str(LIB) not in sys.path:
+        sys.path.insert(0, str(LIB))
+    import roster
+    return {name for name, p in roster.entries().items() if p.get("executors")}
+
+
+EXECUTING = _executing()
 
 
 def _members(space: Path) -> set[str] | None:

@@ -63,8 +63,25 @@ CANDIDATES = SPACE / "1-tracks" / "dev" / "datacore-upgrade" / "evals" / "audit-
 DEV = ROOT / ".datacore" / "modules" / "dev"
 FRAGMENTS = Path.home() / ".datacore" / "cos" / "fragments"
 
+def _audit_roster() -> tuple[dict, dict]:
+    """(agents, nightly caps) from `cross_model_audit` in principals.yaml.
+
+    Which agents audit, on which model family, under which daily cap, is the
+    install's own roster, so it lives in its gitignored registry and no agent
+    of ours is named here (INS-3). No section: no auditors, and `_agent`
+    refuses every name.
+    """
+    import roster
+    cfg = roster.section("cross_model_audit")
+    agents = {str(a): str(f) for a, f in (cfg.get("agents") or {}).items()}
+    caps = {str(a): float(c) for a, c in (cfg.get("nightly_cap_usd") or {}).items()}
+    return agents, caps
+
+
+_ROSTER = _audit_roster()
+
 #: The Firm: agent -> model family. Four agents, four families (AUD-1).
-AGENTS = {"miles": "claude", "winston": "deepseek", "tris": "glm", "data": "gpt"}
+AGENTS = _ROSTER[0]
 
 #: How each family is reached. Model ids can be overridden per host with
 #: AUDIT_MODEL_<FAMILY>; prices (USD per million tokens) only feed the
@@ -83,7 +100,7 @@ FAMILIES = {
 
 #: Per agent, per UTC day, all audit spend together (nightly, calibration, review).
 #: Owner-set values; these are the build's conservative defaults (AUD-6).
-NIGHTLY_CAP_USD = {"miles": 2.00, "winston": 0.50, "tris": 0.50, "data": 1.00}
+NIGHTLY_CAP_USD = _ROSTER[1]
 
 #: Who reviews whose code (AUD-5): never the author's own family.
 REVIEW_RING = {"claude": "gpt", "gpt": "deepseek", "deepseek": "glm", "glm": "claude"}
