@@ -147,6 +147,9 @@ GEMINI.md
 # -----------------------------------------------------------------------------
 .datacore/settings.local.json
 .datacore/settings.local.yaml
+# This install's own values for a tracked config file (INS-3: the tracked one
+# ships neutral), e.g. approvals_policy.local.yaml.
+.datacore/config/*.local.yaml
 .datacore/comms/
 **/.datacore/learning/
 **/.datacore/marketplace/
