@@ -300,6 +300,27 @@ def in_progress(repo: Path) -> str:
     return ''
 
 
+def scheduled_run_active() -> bool:
+    """Does a scheduled run (nightshift's run.py) hold its run lock right now?
+
+    run.py holds ~/.datacore/state/nightshift-run.lock (flock, exclusive) for
+    the whole overnight run. Probed with a shared, non-blocking lock that is
+    released at once, so this never keeps a run from starting.
+    """
+    import fcntl
+    path = Path.home() / '.datacore' / 'state' / 'nightshift-run.lock'
+    try:
+        with open(path, 'r') as fh:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except OSError:
+                return True
+            fcntl.flock(fh, fcntl.LOCK_UN)
+    except OSError:
+        return False                # no lock file: no run has ever held it here
+    return False
+
+
 def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -> dict:
     branch = git(repo, 'branch', '--show-current')
     default = default_branch(repo)
@@ -327,6 +348,15 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
     gated = review_gate(repo, default)
     if gated:
         result['status'] = f'SKIP — {gated}'
+        return result
+
+    if execute and scheduled_run_active():
+        # NOTHING CHANGES UNDER A RUNNING SCHEDULED RUN (MEM-65). A pull here
+        # moved nightshift's checkout to new code mid-run, and a commit would
+        # capture files the run is still writing. Report it; the next run
+        # (every sweep is idempotent) does the work once the run has ended.
+        result['status'] = ('BUSY — a scheduled run holds its run lock '
+                            '(nightshift-run.lock); nothing pulled or committed, next run retries')
         return result
 
     if not execute:
@@ -375,6 +405,53 @@ def sync_repo(repo: Path, execute: bool, hold: tuple = (), pull: bool = False) -
         return result
 
 
+#: A LARGE LOSS IS HELD, NEVER PROPAGATED SILENTLY (MEM-61). Deleting this many
+#: tracked files in one range, or shrinking a file of at least SHRINK_MIN_LINES
+#: to SHRINK_KEEP or less of its lines, stops the sync for that repo and fails
+#: the run (the alert fires); the files stay as they are here. A human accepts a
+#: loss that was meant by merging it by hand.
+MASS_DELETION = 10
+SHRINK_MIN_LINES = 50
+SHRINK_KEEP = 0.2
+
+
+def _lines(text: str | None) -> int:
+    return len(text.splitlines()) if text else 0
+
+
+def drastic_shrink(old_lines: int, new_lines: int) -> bool:
+    return old_lines >= SHRINK_MIN_LINES and new_lines <= old_lines * SHRINK_KEEP
+
+
+def incoming_losses(repo: Path, ref: str) -> list[str]:
+    """What merging `ref` would delete or drastically shrink here (MEM-61).
+
+    Judged on origin's side of the merge only (merge-base..ref): another
+    machine's commits that lack 25 files, or cut a 400-line file to one line,
+    arrive as an ordinary clean merge and remove the files here without a
+    word. [] means nothing large is lost.
+    """
+    base = git(repo, 'merge-base', 'HEAD', ref)
+    if not base:
+        return []
+    deleted = [x for x in git(repo, '-c', 'core.quotepath=off', 'diff', '--no-renames',
+                              '--diff-filter=D', '--name-only', base, ref).splitlines() if x]
+    out = []
+    if len(deleted) >= MASS_DELETION:
+        out.append(f"deletes {len(deleted)} tracked files ({', '.join(deleted[:5])}"
+                   f"{', …' if len(deleted) > 5 else ''})")
+    for row in git(repo, '-c', 'core.quotepath=off', 'diff', '--no-renames', '--numstat',
+                   '--diff-filter=M', base, ref).splitlines():
+        added, removed, path = (row.split('\t', 2) + ['', '', ''])[:3]
+        if not removed.isdigit() or int(removed) < SHRINK_MIN_LINES * (1 - SHRINK_KEEP):
+            continue
+        old_n = _lines(git_raw(repo, 'show', f'{base}:{path}'))
+        new_n = _lines(git_raw(repo, 'show', f'{ref}:{path}'))
+        if drastic_shrink(old_n, new_n):
+            out.append(f"shrinks {path} from {old_n} to {new_n} lines")
+    return out
+
+
 #: What git prints when the remote refused THIS host, as opposed to not
 #: answering. Checked before the network words: both kinds end with git's
 #: generic "Please make sure you have the correct access rights", which it
@@ -409,6 +486,12 @@ def _pull(repo: Path, result: dict, default: str) -> None:
     written, so he was "sharing" a months-old view of the world.
     """
     subprocess.run(['git', 'fetch', '-q', 'origin'], cwd=repo, capture_output=True)
+    losses = incoming_losses(repo, f'origin/{default}')
+    if losses:
+        result['incoming_loss'] = losses
+        result['pull'] = ('PULL REFUSED — origin/' + default + ' ' + '; '.join(losses)
+                          + ' — kept here; a human merges it by hand if it was meant')[:300]
+        return
     # MERGE, NEVER REBASE (DIP-0046). Rebase rewrites this box's local
     # commits to sit on top of origin, which gives them new hashes. If the
     # subsequent push then fails — offline, gated, rejected — those commits
@@ -600,6 +683,20 @@ def _land(repo: Path, result: dict, execute: bool, default: str) -> dict:
                 result['skipped'].append(
                     (path, f'oversized ({size_mb:.1f} MB ≥ 50 MB limit) — add to .gitignore'))
                 continue
+            # A TRACKED FILE CUT TO A FRACTION IS NOT PUBLISHED (MEM-61): a
+            # truncated write or a bad edit on this one machine would replace
+            # the file everywhere. Held here, named, and the run fails.
+            if path in tracked:
+                old_n = _lines(git_raw(repo, 'show', f'HEAD:{path}'))
+                try:
+                    new_n = _lines(full_path.read_text(errors='replace'))
+                except OSError:
+                    new_n = old_n
+                if drastic_shrink(old_n, new_n):
+                    result['skipped'].append(
+                        (path, f'SHRUNK from {old_n} to {new_n} lines — not published; a human decides'))
+                    result.setdefault('shrunk', []).append(f'{path} ({old_n} -> {new_n} lines)')
+                    continue
         to_add.append(path)
 
     if not to_add:
@@ -913,6 +1010,16 @@ def main() -> int:
             print(f"  {host}: {name} branch {branch}: {n} unpushed commit(s), oldest "
                   f"{_time.strftime('%Y-%m-%d %H:%M', _time.localtime(oldest))}")
 
+    losing = [r for r in results if r.get('incoming_loss') or r.get('shrunk')]
+    if losing:
+        # A large deletion or a drastic shrink stops the sync (MEM-61).
+        print(f"\nFAIL: {len(losing)} repo(s) would lose content in sync; held, files kept here:")
+        for r in losing:
+            for what in r.get('incoming_loss', []):
+                print(f"  {r['name']}: origin {what}")
+            for what in r.get('shrunk', []):
+                print(f"  {r['name']}: this machine shrank {what}")
+
     refused = [r for r in results if r.get('hook_refused')]
     if refused:
         # Named, and the run fails so the alert fires: a refused file stays on
@@ -921,7 +1028,7 @@ def main() -> int:
               f"(everything else landed; these stay here, unchanged):")
         for r in refused:
             print(f"  {r['name']}: {', '.join(r['hook_refused'])}")
-    if forked or deleting or refused or stranded:
+    if forked or deleting or refused or stranded or losing:
         return 1
 
     if conflicts:
