@@ -115,6 +115,12 @@
             "type": "command",
             "command": "python3 ~/Data/.datacore/lib/hooks/command_suggest.py",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/Data/.datacore/lib/hooks/plur_inject_wrapper.py --unless-user-hook",
+            "timeout": 90,
+            "async": true
           }
         ]
       }
