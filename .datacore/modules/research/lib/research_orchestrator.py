@@ -402,7 +402,7 @@ from ops_markers import AUTH_FAILURE_MARKERS  # noqa: E402
 from text_model import claude_text_options
 from generated_notes import create_note as _create_note
 from public_download import download as download_public, parse_public_url, public_addresses
-from file_utils import locked_read_modify_write_text as _locked_text
+from file_utils import atomic_write_text as _atomic_text, locked_read_modify_write_text as _locked_text
 from org_literal import scalar as org_scalar, prose as org_prose
 from org_transaction import SafeOrgWorkspace as _SafeOrgWorkspace, serialized, watch_file, write_org_text as _write_org_text
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -1527,10 +1527,14 @@ def save_podcast_record(notebook_id: str, sources: List[str], audio: str) -> Opt
              f"- Sources ({len(sources)}):\n"
              + "".join(f"  - {Path(src).name}\n" for src in sources))
     try:
+        # One writer (this run), so no journal transaction: an atomic publish.
         PODCAST_DIR.mkdir(parents=True, exist_ok=True)
-        locked_read_modify_write_text(path, lambda existing:
-            (existing if existing is not None else
-             f"---\ndate: {TODAY}\ntype: podcast\n---\n\n# Research podcast {TODAY}\n") + entry)
+        try:
+            existing = path.read_text(encoding='utf-8')
+        except FileNotFoundError:
+            existing = f"---\ndate: {TODAY}\ntype: podcast\n---\n\n# Research podcast {TODAY}\n"
+        _atomic_text(path, existing + entry)
+        _record_output(path, existing + entry)
     except OSError as e:
         log(f"  could not save the podcast record to {path}: {e}")
         return None

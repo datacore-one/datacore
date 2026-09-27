@@ -357,11 +357,14 @@ def locked_read_modify_write_json(path: Path, modifier: Callable[[Any], Any]) ->
 
 
 def locked_read_modify_write_text(path: Path, modifier: Callable[[str | None], str]) -> None:
-    """Preserve raw UTF-8 text while serializing a complete read/modify/write."""
-    path = Path(path)
-    with file_lock(path):
-        try:
-            existing = path.read_bytes().decode("utf-8")
-        except FileNotFoundError:
-            existing = None
-        atomic_write_text(path, modifier(existing))
+    """Preserve raw UTF-8 text while serializing a complete read/modify/write.
+
+    KNW-9: this runs inside the ONE org transaction, the same lock and
+    stale-source check journal_store.update_journal uses. It used to take its
+    own per-file lock (`.<page>.lock`), so the research writer and a journal
+    writer could both read the page and the later write silently dropped the
+    other's section. A page that changes under it is refused, never
+    overwritten; a crash leaves the previous page (atomic publish + recovery).
+    """
+    from journal_store import update_journal  # lazy: org_transaction imports this module
+    update_journal(Path(path), modifier)
