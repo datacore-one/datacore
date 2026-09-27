@@ -70,3 +70,15 @@ def test_an_unreachable_remote_is_one_clear_failure(tmp_path):
     log, calls = _run(tmp_path, "", rsync_rc=255, ssh_rc=255)
     assert "cannot list spaces on nightshift" in log, log
     assert "Data/1-alpha/.datacore/state" not in calls
+
+
+def test_a_space_numbered_differently_on_the_remote_is_matched_by_name(tmp_path):
+    """The number prefix is local and differs per host (ENG-2026-08-03-047):
+    `2-beta` here and `4-beta` on the remote are the same space, mirrored from
+    the remote's own folder into this host's."""
+    log, calls = _run(tmp_path, "1-alpha\\n4-beta\\n")
+    beta = [c for c in calls.splitlines() if c.startswith("rsync ") and "beta" in c]
+    assert beta, f"the beta space was not mirrored: {log}"
+    assert "nightshift:Data/4-beta/.datacore/state/" in beta[0], beta[0]
+    assert "/Data/2-beta/.datacore/state/" in beta[0], beta[0]
+    assert "venture state: 2 ok, 0 failed" in log, log

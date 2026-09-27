@@ -77,7 +77,18 @@ if remote_spaces=$(ssh "${SSH_OPTS[@]}" "$REMOTE" \
     if grep -qxF "$space_name" <<<"$held_spaces"; then
       continue
     fi
-    if ! grep -qxF "$space_name" <<<"$remote_spaces"; then
+    # The number prefix is local and differs per host (ENG-2026-08-03-047):
+    # find the remote folder holding the same space by its bare name.
+    bare="$space_name"
+    [[ "$space_name" =~ ^[0-9]+-(.+)$ ]] && bare="${BASH_REMATCH[1]}"
+    remote_name=""
+    while IFS= read -r r; do
+      [[ -z "$r" ]] && continue
+      rb="$r"
+      [[ "$r" =~ ^[0-9]+-(.+)$ ]] && rb="${BASH_REMATCH[1]}"
+      if [[ "$rb" == "$bare" ]]; then remote_name="$r"; break; fi
+    done <<<"$remote_spaces"
+    if [[ -z "$remote_name" ]]; then
       log "  $space_name not on $REMOTE — skipped (local-only space)"
       continue
     fi
@@ -85,7 +96,7 @@ if remote_spaces=$(ssh "${SSH_OPTS[@]}" "$REMOTE" \
     mkdir -p "$space_dir.datacore/state"
     if "${RSYNC[@]}" --include='heartbeat.json' --include='decisions-pending.json' \
           --exclude='*' \
-          "$REMOTE:Data/$space_name/.datacore/state/" \
+          "$REMOTE:Data/$remote_name/.datacore/state/" \
           "$space_dir.datacore/state/" 2>>"$LOG_FILE"; then
       synced=$((synced + 1))
     else
