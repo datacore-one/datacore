@@ -146,3 +146,17 @@ def test_the_space_config_name_wins_over_the_folder_name(tmp_path):
     (tmp_path / "7-work" / ".datacore" / "config.yaml").write_text("space:\n  name: plur\n  type: team\n")
     (tmp_path / "install.yaml").write_text("roles:\n  product: plur\n")
     assert spaces.space_for("product", root=tmp_path) == "7-work"
+
+
+def test_the_callers_default_names_the_space_not_its_local_number(tmp_path):
+    """Callers pass a default like "0-personal". On a host whose personal space
+    folder carries another number the default still resolves to that folder;
+    a default this install has no folder for comes back unchanged
+    (ENG-2026-08-03-047, ENG-2026-09-27-007)."""
+    import spaces
+    (tmp_path / "9-personal" / ".datacore").mkdir(parents=True)
+    (tmp_path / "install.yaml").write_text("roles:\n  product: plur\n")
+    assert spaces.space_for("system", root=tmp_path, default="0-personal") == "9-personal"
+    assert spaces.space_for("system", root=tmp_path, default="personal") == "9-personal"
+    assert spaces.space_for("system", root=tmp_path, default="2-elsewhere") == "2-elsewhere"
+    assert spaces.space_for("system", root=tmp_path) is None

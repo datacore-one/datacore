@@ -493,9 +493,19 @@ def space_for_all(role: str, root: Path | None = None) -> list[str]:
 
 def space_for(role: str, root: Path | None = None, default: str | None = None) -> str | None:
     """The one space holding ``role`` (e.g. ``system``, ``product``), relative to
-    the install root; ``default`` when this install declares none."""
+    the install root; ``default`` when this install declares none.
+
+    The default is a space name too, so it resolves like a role: a caller's
+    ``0-personal`` finds this host's personal space whatever its number
+    (ENG-2026-08-03-047). A default with no folder here comes back unchanged."""
     found = _role_values(role, root)
-    return found[0] if found else default
+    if found:
+        return found[0]
+    if default:
+        p = Path(default)
+        if not p.is_absolute() and ".." not in p.parts and len(p.parts) == 1:
+            return _folder_for(default, Path(root or data_root())) or default
+    return default
 
 
 def _cli(argv: list[str]) -> int:
