@@ -38,6 +38,12 @@ Eval guard (2026-09-27, promise MEM-30):
   eval_guard.py           PreToolUse Edit|Write|MultiEdit|Bash. Changing an
                           existing promise eval asks the owner first.
 
+Guard guard (2026-09-27, promise MEM-09, owner approved):
+
+  config_protection.py    PreToolUse Bash|Edit|Write|MultiEdit. A guard cannot be
+                          unplugged: dropping its hook, stubbing it, or the git
+                          bypasses (--no-verify, SKIP_PRE_PUSH, core.hooksPath).
+
 Run:   python3 .datacore/lib/hooks/install_redaction_guards.py [--dry-run]
 
 Idempotent. Backs up settings.json before writing. Never removes a hook.
@@ -57,6 +63,7 @@ SPG = f"python3 {HOOKS / 'space_policy_guard.py'}"
 MG = f"python3 {HOOKS / 'memory_guard.py'}"
 PG = f"python3 {HOOKS / 'publish_guard.py'}"
 EG = f"python3 {HOOKS / 'eval_guard.py'}"
+CP = f"python3 {HOOKS / 'config_protection.py'}"
 CC = f"python3 {HOOKS.parent / 'context_merge.py'} check --fix --quiet"
 
 # (guard, event, matcher, command, timeout). matcher None => no matcher key.
@@ -72,6 +79,7 @@ WIRING = [
     ("publish", "PreToolUse", "Artifact|Bash", PG, 5),
     ("context", "SessionStart", None, CC, 20),
     ("evals", "PreToolUse", "Edit|Write|MultiEdit|Bash", EG, 5),
+    ("guards", "PreToolUse", "Bash|Edit|Write|MultiEdit", CP, 5),
 ]
 GUARDS = sorted({w[0] for w in WIRING})
 
