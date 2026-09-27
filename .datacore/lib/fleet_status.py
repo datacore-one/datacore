@@ -40,6 +40,15 @@ PROBE = r'''
 # cd'd into a literal "~/Data" and reported every head as empty.
 D=$(eval echo __DATA__); R=$(eval echo __RUNNER__)
 cd "$D" 2>/dev/null && echo "data_head=$(git rev-parse --short HEAD 2>/dev/null)"
+# WHICH BRANCH, not only which commit (SYN-4): hermes' runner served from
+# fix/geo-research-delivery-format, 29 commits behind main, and a short head
+# hash alone never said so. data_core says whether the data root is a Datacore
+# code checkout at all (on hermes and plur-claw it is the agent's own space).
+is_core() { case "$(git -C "$1" remote get-url origin 2>/dev/null)" in
+  *datacore-one/datacore|*datacore-one/datacore.git|*/datacore.git|*/datacore) return 0;; esac; return 1; }
+[ -d "$D/.git" ] && echo "data_branch=$(git -C "$D" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+[ -d "$D/.git" ] && is_core "$D" && echo "data_core=1"
+[ -n "$R" ] && [ -d "$R/.git" ] && echo "runner_branch=$(git -C "$R" rev-parse --abbrev-ref HEAD 2>/dev/null)"
 # Core version can live in the data root OR the runner. On plur-claw and
 # hermes the "Data" tree is the AGENT'S OWN SPACE repo (data-space /
 # tris-space), not the datacore core — so reading VERSION only from there
@@ -170,9 +179,23 @@ def probe(name: str, cfg: dict) -> dict:
     return out
 
 
+def off_main(row: dict) -> list[str]:
+    """Datacore code checkouts on this machine that are not on main (SYN-4)."""
+    out = []
+    rb = row.get("runner_branch")
+    if rb and rb != "main":
+        out.append(f"runner on {rb}" if rb != "HEAD" else "runner on a detached HEAD")
+    db = row.get("data_branch")
+    if row.get("data_core") and db and db != "main":
+        out.append(f"data root on {db}" if db != "HEAD" else "data root on a detached HEAD")
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--branches", action="store_true",
+                    help="only check that every Datacore checkout is on main; exit 1 naming any that is not")
     a = ap.parse_args()
 
     import yaml
@@ -189,6 +212,19 @@ def main() -> int:
     if a.json:
         print(json.dumps({"machines": rows}, indent=2))
         return 1 if any(not r["reachable"] for r in rows) else 0
+
+    if a.branches:
+        # A machine left on a side branch is named, and the run fails so the
+        # job's alert fires. Unreachable is "could not tell", never a pass.
+        bad = [(r["machine"], w) for r in rows if r["reachable"] for w in off_main(r)]
+        for r in rows:
+            if not r["reachable"]:
+                print(f"{r['machine']}: UNREACHABLE — could not check ({r.get('error', '?')})")
+        for machine, what in bad:
+            print(f"{machine}: {what}, not main")
+        print(f"branches: {len(rows)} machine(s), {len(bad)} checkout(s) off main, "
+              f"{sum(1 for r in rows if not r['reachable'])} unreachable")
+        return 1 if bad or any(not r["reachable"] for r in rows) else 0
 
     cols = ["data_head", "core", "mcp", "org_workspace", "cli", "python"]
     print(f"  {'machine':<12} {'data':<9} {'core':<7} {'mcp':<7} {'org-ws':<7} {'cli':<7} py")
@@ -218,6 +254,9 @@ def main() -> int:
                   for k in ("core", "mcp", "org_workspace", "cli")
                   if r.get(k, "?") == "?")
     unreachable = [r["machine"] for r in rows if not r["reachable"]]
+    for r in rows:
+        for what in off_main(r) if r["reachable"] else []:
+            print(f"  OFF MAIN: {r['machine']} {what}")
     print(f"\nfleet: {len(rows)} machine(s), {len(unreachable)} unreachable"
           + (f", DRIFT in {', '.join(drift)}" if drift else ", all versions agree")
           + (f", {unknown} value(s) the probe COULD NOT DETERMINE — ask the "
