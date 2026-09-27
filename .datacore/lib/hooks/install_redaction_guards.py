@@ -53,17 +53,20 @@ MG = f"python3 {HOOKS / 'memory_guard.py'}"
 PG = f"python3 {HOOKS / 'publish_guard.py'}"
 CC = f"python3 {HOOKS.parent / 'context_merge.py'} check --fix --quiet"
 
-# (event, matcher, command, timeout). matcher None => no matcher key.
+# (guard, event, matcher, command, timeout). matcher None => no matcher key.
+# Each guard is switched on by the owner, not by an agent: `--only` names them
+# (owner, 2026-09-26: redaction, publish and context; not space or memory yet).
 WIRING = [
-    ("UserPromptSubmit", None, RG, 5),
-    ("PostToolUse", "mcp__plur__plur_session_start", f"{IG} mark", 5),
-    ("PreToolUse", "*", f"{IG} check", 5),
-    ("PostToolUse", "Read|Bash|Grep|Glob", f"{IG} clear", 5),
-    ("PreToolUse", "Bash|Edit|Write|Read|MultiEdit", SPG, 5),
-    ("PreToolUse", "Edit|Write|MultiEdit", MG, 5),
-    ("PreToolUse", "Artifact|Bash", PG, 5),
-    ("SessionStart", None, CC, 20),
+    ("redaction", "UserPromptSubmit", None, RG, 5),
+    ("redaction", "PostToolUse", "mcp__plur__plur_session_start", f"{IG} mark", 5),
+    ("redaction", "PreToolUse", "*", f"{IG} check", 5),
+    ("redaction", "PostToolUse", "Read|Bash|Grep|Glob", f"{IG} clear", 5),
+    ("space", "PreToolUse", "Bash|Edit|Write|Read|MultiEdit", SPG, 5),
+    ("memory", "PreToolUse", "Edit|Write|MultiEdit", MG, 5),
+    ("publish", "PreToolUse", "Artifact|Bash", PG, 5),
+    ("context", "SessionStart", None, CC, 20),
 ]
+GUARDS = sorted({w[0] for w in WIRING})
 
 
 def already(groups, cmd):
@@ -89,9 +92,16 @@ def add(hooks, event, matcher, cmd, timeout):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--only", default=",".join(GUARDS),
+                    help=f"comma-separated guards to wire (default all): {', '.join(GUARDS)}")
     args = ap.parse_args()
+    wanted = {g.strip() for g in args.only.split(",") if g.strip()}
+    unknown = wanted - set(GUARDS)
+    if unknown:
+        sys.exit(f"unknown guard(s): {', '.join(sorted(unknown))}; choose from {', '.join(GUARDS)}")
+    wiring = [w[1:] for w in WIRING if w[0] in wanted]
 
-    for _event, _matcher, cmd, _timeout in WIRING:
+    for _event, _matcher, cmd, _timeout in wiring:
         script = Path(cmd.split()[1])
         if not script.exists():
             sys.exit(f"missing hook: {script}")
@@ -103,7 +113,7 @@ def main():
     hooks = data.setdefault("hooks", {})
 
     print(f"settings: {SETTINGS}")
-    for event, matcher, cmd, timeout in WIRING:
+    for event, matcher, cmd, timeout in wiring:
         print(add(hooks, event, matcher, cmd, timeout))
 
     if args.dry_run:
