@@ -445,8 +445,8 @@ def locked_read_modify_write_text(path, modifier):
 
 
 class SafeOrgWorkspace(_SafeOrgWorkspace):
-    def _safe_write(self, path, content):
-        super()._safe_write(path, content)
+    def _safe_write(self, path, content, **kwargs):
+        super()._safe_write(path, content, **kwargs)
         _record_output(path, content)
 
 

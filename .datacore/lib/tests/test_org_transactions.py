@@ -304,3 +304,25 @@ def test_literal_conflict_examples_remain_readable(tmp_path, body):
     path.write_text(source)
     assert len(org_nodes(tmp_path, path)) == 1
     assert 'example' in snapshot(source, 'fixture')['items']
+
+
+def test_refile_accepts_the_dependency_planned_removal_size(tmp_path):
+    """org-workspace >=0.7 passes expected_delta to _safe_write on refile; the
+    safe override must take it and measure the shrink guard against it, or every
+    refile (and research auto-archive) fails with a TypeError."""
+    source, target = tmp_path / 'source.org', tmp_path / 'target.org'
+    big = '\n'.join(f'  line {i}' for i in range(30))
+    source.write_text('* TODO Big\n  :PROPERTIES:\n  :ID: big\n  :END:\n' + big + '\n'
+                      '* TODO Small\n  :PROPERTIES:\n  :ID: small\n  :END:\n')
+    target.write_text('* Archive\n')
+
+    @tx.serialized
+    def move():
+        ws = tx.SafeOrgWorkspace()
+        ws.load(source)
+        ws.load(target)
+        ws.refile(ws.find_by_id('big'), target)
+        ws.save()
+    move()
+    assert ':ID: big' in target.read_text() and ':ID: big' not in source.read_text()
+    assert ':ID: small' in source.read_text()

@@ -356,7 +356,10 @@ class SafeOrgWorkspace(OrgWorkspace):
                                  f'{Path(existing.path).name}')
         return super().load(path)
 
-    def _safe_write(self, path, content):
+    def _safe_write(self, path, content, *, expected_delta=0):
+        # expected_delta: lines the dependency removed on purpose (a refiled
+        # subtree, org-workspace >=0.7). The shrink floor is measured against
+        # what should remain, exactly as upstream does.
         path = Path(path).resolve()
         transaction = _current.get()
         if transaction is None:
@@ -365,7 +368,8 @@ class SafeOrgWorkspace(OrgWorkspace):
             previous = read_text(path)
             if previous is not None:
                 old_lines = previous.count("\n")
-                if old_lines > 20 and content.count("\n") < int(old_lines * (1 - self._MAX_SHRINK_FRACTION)):
+                remaining = max(0, old_lines - expected_delta)
+                if old_lines > 20 and content.count("\n") < int(remaining * (1 - self._MAX_SHRINK_FRACTION)):
                     raise CatastrophicShrinkError("serialized Org output exceeds the dependency's shrink guard")
             transaction.write(path, content)
         except BaseException:
