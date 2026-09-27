@@ -38,6 +38,9 @@ LOG=$LOGDIR/reconcile.log
 
 mkdir -p "$LOGDIR"
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
+# Every run stamps its exit code: reconcile.log is written only on drift, so it
+# cannot show that the job runs at all (job contract box-reconcile-timers).
+trap 'printf "%s rc=%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$?" > "$LOGDIR/reconcile.last-run"' EXIT
 
 # Healthy: unit file present, enabled, timer armed. Nothing to do.
 if [ -e "/etc/systemd/system/$UNIT" ] \

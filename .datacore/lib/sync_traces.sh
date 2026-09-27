@@ -22,5 +22,8 @@ for dir in "$SRC"/*/; do
             "$dir" "$DEST/$dirname/"
     fi
 done
-# One line per run, so a scheduled copy leaves a fresh artifact to verify.
-echo "$(date -u +%FT%TZ) sync_traces: $(find "$DEST" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ') transcript(s) in $DEST"
+# One line per run, so a scheduled copy leaves a fresh artifact to verify
+# (the job contract reads the stamp; the cron line may not redirect output).
+line="$(date -u +%FT%TZ) sync_traces: $(find "$DEST" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ') transcript(s) in $DEST"
+echo "$line"
+mkdir -p "$HOME/.datacore/state" && echo "$line" > "$HOME/.datacore/state/sync-traces.last"

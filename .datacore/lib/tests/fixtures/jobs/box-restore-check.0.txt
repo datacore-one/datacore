@@ -1,0 +1,7 @@
+# fixture for box-restore-check artifact[0]
+# producer artifact: ~/.datacore/cos/restore-check.log on box
+# harvested: 2026-09-27 (success line in the producer's own format)
+# regex under test: restore-check ok
+# represents: SUCCESS
+# ---
+2026-09-27T03:10:15+00:00 restore-check ok: snapshot=plur-state-20260927-023001.tar.gz (0h) engrams=3503 live=3503 state_files=324 offsite=present (16 on <offsite>)

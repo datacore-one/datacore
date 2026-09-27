@@ -1,0 +1,7 @@
+# fixture for mac-creds-distribute artifact[0]
+# producer artifact: ~/Data/.datacore/state/logs/creds-distribute.log on mac
+# harvested: 2026-09-27 (success line in the producer's own format)
+# regex under test: ^exit=0 
+# represents: SUCCESS
+# ---
+exit=0 Fri Sep 25 08:17:54 CEST 2026

@@ -1,0 +1,7 @@
+# fixture for box-verify-morning artifact[0]
+# producer artifact: ~/.datacore/cos/verify.log on box
+# harvested: 2026-09-27 (success line in the producer's own format)
+# regex under test: ^\d{4}-\d{2}-\d{2}: (all checks passed|FAILED)
+# represents: SUCCESS
+# ---
+2026-09-26: all checks passed
