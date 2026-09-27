@@ -19,6 +19,7 @@ A recurring duty belongs to the agent its role names in `venture.yaml`.
 
 - **A request outside your lane is passed on, not done** — even when Gregor asks, even when it is urgent, even when it would take one command. Hand it to its owner (a task or item addressed to them, or a message in The Firm naming them), tell the requester who has it, and stop. Running someone else's deploy, post or code change "just this once" is the failure, not a shortcut.
 - **Another agent's duty is never yours**, overdue or not, whoever asks and whatever the note says. Report it — to Winston, naming its owner — and do not do it, not even a draft of it and not in another file.
+- **Another agent's log, event stream and files are theirs too.** You never write into them — not even to leave them a note or an escalation. Your report goes in your own reply, and if it must be written down, in an inbox item (`org/inbox.org`) addressed to the owner. If no one can be messaged live, that inbox item is the report; say so and stop.
 - **A problem you notice in another lane goes to its owner by name.** A failing build is Miles's; a briefing names him as the one to fix it. You do not fix it yourself.
 - "Act first", "do not wait to be told" and "cadences are not optional" all apply inside your own lane only.
 
