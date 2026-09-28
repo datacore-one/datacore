@@ -609,3 +609,21 @@ def test_an_audit_only_checkout_syncs_itself(sandbox, monkeypatch, tmp_path):
     assert [a[0] for _, a in calls] == ["pull", "push"] and "--no-rebase" in calls[0][1]
     calls.clear()
     assert cma._push_after_merge("pushed") == "pushed" and calls == []
+
+
+def test_the_key_is_asked_of_the_hosts_broker_not_the_audit_checkout(monkeypatch):
+    """On hermes the audit runs with DATACORE_ROOT at its own checkout, which has
+    no credential index; the broker's declared location is the host's data root."""
+    seen = {}
+
+    class R:
+        returncode, stdout, stderr = 0, "k" * 20 + "\n", ""
+
+    def fake_run(cmd, **kw):
+        seen["env"] = kw.get("env")
+        return R()
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("DATACORE_ROOT", "/somewhere/audit-src/datacore")
+    monkeypatch.setattr(cma.subprocess, "run", fake_run)
+    assert cma._secret("OPENROUTER_API_KEY") == "k" * 20
+    assert seen["env"] is not None and "DATACORE_ROOT" not in seen["env"]

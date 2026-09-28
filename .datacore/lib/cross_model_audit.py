@@ -592,11 +592,16 @@ def estimate_usd(family: str, prompt: str) -> float:
 
 # ── calling one model, once ─────────────────────────────────────────────────
 def _secret(name: str) -> str:
-    """A key from this host's environment, else from the credential broker. Never printed."""
+    """A key from this host's environment, else from the credential broker. Never printed.
+
+    The broker is asked about the host's data root (its default, ~/Data), where
+    the credential index lives -- not DATACORE_ROOT, which on hermes and
+    plur-claw points at the audit-only checkout."""
     if os.environ.get(name):
         return os.environ[name]
+    env = {k: v for k, v in os.environ.items() if k != "DATACORE_ROOT"}
     r = subprocess.run([sys.executable, str(LIB / "creds.py"), "get", name, "--consumer", "cross-model-audit"],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, timeout=60, env=env)
     if r.returncode != 0 or not r.stdout.strip():
         raise RuntimeError(f"{name} is not available from the credential broker")
     return r.stdout.strip()
