@@ -394,6 +394,12 @@ Monday's assumptions after Tuesday invalidated them.
 
 Use `org_workspace_adapter.py` — never grep raw .org files.
 
+**Evidence before "overdue".** A passed date only makes a task a candidate. For
+each one, look in the journals from its date onward (and sent mail for an email
+task) for a record that it was done. Record found → list it as done, naming the
+record, and suggest closing it in org. No record → it stays overdue with "not
+recorded" written on its own line in the briefing — never "not sent" or "not done".
+
 ---
 
 ## Step 10: Fetch News Headlines

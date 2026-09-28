@@ -277,6 +277,12 @@ When the user corrects a recalled fact: call `plur_learn` immediately, then `plu
   live response). When you could not check, write the words "not verified" and name
   the check that would settle it. A hand calculation or a reading of the code is not
   a check.
+- **Evidence before "overdue" or "not sent".** A date that has passed is not proof
+  that something was not done. Before calling a task overdue or an email unsent,
+  look for a record that it happened (the journal around and after its date, sent
+  mail, commits). A record found → report it as done and name the record. None found
+  → write "not recorded" on that same line, in the file or message itself, rather
+  than asserting it was not done.
 - **Tests before code; evals are never yours to edit.** An upgrade starts with a test
   that covers the new behaviour and fails; the code changes after it. Never modify,
   weaken, skip or delete a promise eval (`test_promise_*.py`, `agent_eval.py`,
