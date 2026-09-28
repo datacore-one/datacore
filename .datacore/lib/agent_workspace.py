@@ -96,6 +96,56 @@ def create(source: Path, task_id: str, *, root: Path | None = None) -> Workspace
     return Workspace(path=path, branch=branch, source=Path(source))
 
 
+def task_root(source: Path, base: Path | None = None) -> Path:
+    """Where one repository's task workspaces live: one directory per repository.
+
+    Keyed by name plus a short digest of the resolved path, so one task that
+    touches two repositories (the root and a module) gets two workspaces, and
+    two clones with the same directory name never share one.
+    """
+    import hashlib
+    resolved = Path(source).resolve()
+    digest = hashlib.sha256(str(resolved).encode()).hexdigest()[:8]
+    return (base or (Path.home() / ".datacore" / "worktrees")) / f"{resolved.name}-{digest}"
+
+
+def ensure(source: Path, task_id: str, *, root: Path | None = None) -> Workspace:
+    """The task's workspace for `source`: reuse it when it exists, else create it.
+
+    The overnight executor tells an agent to open this before changing any code
+    repository (2026-09-27: a task committed onto the root's `main` because its
+    only checkout WAS the shared one). A retry of the same task, or a second
+    step in the same repository, finds the workspace already there -- that is
+    the same task continuing, not a collision, so it is reused. Anything that
+    is not exactly this task's worktree on `agent/<task-id>` still refuses.
+    """
+    source = Path(source).resolve()
+    rc, top, _ = _git(source, "rev-parse", "--show-toplevel")
+    if rc != 0:
+        raise IsolationError(f"{source} is not a git repository")
+    source = Path(top.strip()).resolve()
+    branch = f"agent/{task_id}"
+    base = task_root(source, root)
+    path = base / task_id
+    if path.exists():
+        rc, current, _ = _git(path, "symbolic-ref", "--short", "-q", "HEAD")
+        rc2, common, _ = _git(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        rc3, own, _ = _git(source, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        if (rc or rc2 or rc3 or current.strip() != branch
+                or Path(common.strip()).resolve() != Path(own.strip()).resolve()):
+            raise IsolationError(f"{path} exists but is not {branch} of {source}; refusing to reuse")
+        return Workspace(path=path, branch=branch, source=source)
+    if branch_exists(source, branch):
+        # The branch survived its workspace (retired after an earlier attempt):
+        # check it out again rather than inventing a second branch for one task.
+        base.mkdir(parents=True, exist_ok=True)
+        rc, _, err = _git(source, "worktree", "add", str(path), branch)
+        if rc != 0:
+            raise IsolationError(f"could not reopen {branch}: {err.strip()[:200]}")
+        return Workspace(path=path, branch=branch, source=source)
+    return create(source, task_id, root=base)
+
+
 def cleanup(ws: Workspace, *, keep_branch_if_commits: bool = True) -> str:
     """Retire a clean worker's checkout without deleting possible late writes."""
     rc, status, _ = _git(ws.path, 'status', '--porcelain', '--untracked-files=all', '--ignored=matching')
@@ -131,7 +181,7 @@ def _base(ws: Workspace) -> str:
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="per-task worktree isolation")
-    ap.add_argument("op", choices=["create", "list", "prune"])
+    ap.add_argument("op", choices=["create", "ensure", "list", "prune"])
     ap.add_argument("--source", type=Path, default=Path.cwd())
     ap.add_argument("--task-id")
     a = ap.parse_args()
@@ -140,6 +190,14 @@ if __name__ == "__main__":
         if not a.task_id:
             ap.error("--task-id required")
         ws = create(a.source, a.task_id)
+        print(f"{ws.path}\t{ws.branch}")
+    elif a.op == "ensure":
+        if not a.task_id:
+            ap.error("--task-id required")
+        try:
+            ws = ensure(a.source, a.task_id)
+        except IsolationError as exc:
+            raise SystemExit(f"agent_workspace: {exc}")
         print(f"{ws.path}\t{ws.branch}")
     elif a.op == "list":
         print(_git(a.source, "worktree", "list")[1].rstrip())

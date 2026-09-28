@@ -54,7 +54,12 @@ def _clone(origin: Path, dest: Path) -> Path:
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path, monkeypatch):
+    # The fixture is a knowledge space ('1-space'), whose default branch is where
+    # its work lands. The registry cannot see a tmp clone, so say so: a code
+    # repository would hold local commits for a pull request instead
+    # (test_git_fleet_sync_foreign_commits.py).
+    monkeypatch.setattr(fs, 'direct_publication', lambda repo: True)
     origin = tmp_path / 'origin.git'
     git(tmp_path, 'init', '-q', '--bare', '--initial-branch=main', str(origin))
     seed = tmp_path / 'seed'

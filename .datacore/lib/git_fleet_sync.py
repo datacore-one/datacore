@@ -624,6 +624,53 @@ def range_deletions(repo: Path, ref: str, commit: str):
     return [(sha, paths) for sha, paths in found if paths]
 
 
+#: Subject of the sweep's own commit (below). A commit with this subject is the
+#: sweep's, from this run or an earlier one whose push was held.
+SWEEP_SUBJECT = 'sync: land agent work trapped on this machine'
+
+
+def direct_publication(repo: Path) -> bool:
+    """True for knowledge/agent-personal repos: their default branch is where work lands.
+
+    Anything else -- code, or a repository the registry cannot classify -- takes
+    commits only through a reviewed pull request (DIP-0046; owner rule: agents
+    never merge). Unknown is not knowledge.
+    """
+    try:
+        from ledger_transport import classify
+        result = classify(repo)
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(result.ok and result.reason in ('knowledge', 'agent-personal'))
+
+
+def foreign_commits(repo: Path, default: str, tip: str = 'HEAD') -> list[str]:
+    """Non-merge commits on `tip` that origin/<default> lacks and this sweep did not make.
+
+    2026-09-27: an overnight task committed 93f3879 onto the nightshift host's
+    local main of the public root repository. The sweep lands UNCOMMITTED work;
+    a commit already on the branch is somebody's decision, and on a code
+    repository that decision is a pull request the owner merges. Pushing HEAD
+    here would have published it unreviewed along with the sweep's own commit.
+    Merges are skipped: they are the sweep's own pulls of origin.
+    """
+    origin = f'refs/remotes/origin/{default}'
+    if not git(repo, 'rev-parse', '--verify', '-q', origin):
+        return []
+    rows = git(repo, 'log', '--no-merges', '--format=%H %s', tip, f'^{origin}')
+    commits = [line.split(' ', 1) + [''] for line in rows.splitlines() if line]
+    return [f'{sha[:12]} {subject[:70]}' for sha, subject, *_ in commits
+            if not subject.startswith(SWEEP_SUBJECT)]
+
+
+def _hold_foreign(repo: Path, result: dict, default: str, foreign: list[str], prefix: str) -> dict:
+    result['foreign'] = foreign
+    result['status'] = (f"{prefix} — {len(foreign)} commit(s) on {default} that origin lacks and "
+                        f"this sweep did not make; not pushed (a code repository changes by "
+                        f"pull request): " + '; '.join(foreign))[:240]
+    return result
+
+
 def _land(repo: Path, result: dict, execute: bool, default: str) -> dict:
     """Inventory, stage, commit, gate and push. Runs under _repo_lock when executing."""
     try:
@@ -632,7 +679,11 @@ def _land(repo: Path, result: dict, execute: bool, default: str) -> dict:
     except RuntimeError:
         result['status'] = 'INVENTORY FAILED — existing work retained; no publication attempted'
         return result
+    code = not direct_publication(repo)
     if not inventory:
+        foreign = foreign_commits(repo, default) if code else []
+        if foreign:
+            return _hold_foreign(repo, result, default, foreign, 'HELD')
         pulled = result.get('pull')
         # "clean" only when nothing failed: a pull that did not happen is not
         # a clean sync, whatever the working tree looks like (SYN-6).
@@ -802,6 +853,13 @@ def _land(repo: Path, result: dict, execute: bool, default: str) -> dict:
         result['status'] = ('committed, PUSH REFUSED — the range deletes tracked files: '
                             + named)[:200]
         return result
+    # (After the deletion check, which names the more specific refusal.)
+    # NEVER PUBLISH A COMMIT THIS SWEEP DID NOT MAKE onto a code repository's
+    # default branch (2026-09-27, 93f3879). Judged against the origin just
+    # fetched; the sweep's own commit stays here with the rest, for a human.
+    foreign = foreign_commits(repo, default, captured.stdout.strip()) if code else []
+    if foreign:
+        return _hold_foreign(repo, result, default, foreign, 'committed, PUSH REFUSED')
     p = subprocess.run(['git', *args], cwd=repo,
                        capture_output=True, text=True)
     if p.returncode != 0:
@@ -1020,6 +1078,18 @@ def main() -> int:
             for what in r.get('shrunk', []):
                 print(f"  {r['name']}: this machine shrank {what}")
 
+    foreign = [r for r in results if r.get('foreign')]
+    if foreign:
+        # Named, and the run fails so the alert fires. A person moves each commit
+        # to a branch and opens its pull request, then resets the default branch
+        # to origin; the sweep never publishes them.
+        print(f"\nFAIL: {len(foreign)} code repo(s) hold commits on their default branch that "
+              f"origin lacks and no sweep made; NOT pushed (these change only by pull request):")
+        for r in foreign:
+            print(f"  {r['name']} [{r['branch']}]:")
+            for line in r['foreign']:
+                print(f"    {line}")
+
     refused = [r for r in results if r.get('hook_refused')]
     if refused:
         # Named, and the run fails so the alert fires: a refused file stays on
@@ -1028,7 +1098,7 @@ def main() -> int:
               f"(everything else landed; these stay here, unchanged):")
         for r in refused:
             print(f"  {r['name']}: {', '.join(r['hook_refused'])}")
-    if forked or deleting or refused or stranded or losing:
+    if forked or deleting or refused or stranded or losing or foreign:
         return 1
 
     if conflicts:
