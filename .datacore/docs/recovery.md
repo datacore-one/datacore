@@ -10,6 +10,7 @@ After any procedure, the health check is the same:
 
 ```bash
 python3 ~/Data/.datacore/lib/ledger_cli.py verify --space ~/Data/<space>
+python3 ~/Data/.datacore/lib/ledger_invariants.py --quick
 python3 ~/Data/.datacore/lib/v2_verify.py --quick
 ```
 
@@ -19,60 +20,99 @@ edits or deletes an event; the only way to cancel one is an in-ledger void.
 ## Stale log (StaleLogError: "The log was rewound")
 
 **You see:** an append refused with `StaleLogError: <writer>.jsonl ends at seq N
-but this machine already wrote seq M`.
+but this machine already wrote seq M`, and `ledger_cli.py stopped --space
+<space>` lists the log.
 
 **It means:** this machine's sequence mark (`.datacore/state/seq-hwm/<writer>.seq`,
 outside git) remembers writing further than the log file now goes. Either the
-file was rewound (a bad checkout or merge dropped events that exist somewhere
-else), or the mark itself is wrong (restored from another machine's backup,
-corrupted). Appending anyway would reuse a seq and fork the log.
+file was rewound (a bad checkout, merge or rebase dropped events that exist
+somewhere else), the fleet's copies have forked, or the mark itself is wrong
+(restored from another machine's backup, or it records a chain the owner has
+discarded). Appending anyway would reuse a seq and fork the log. The refusal
+also wrote a stop record beside the mark (`<writer>.stopped`), which keeps
+refusing until this procedure has run or the log has genuinely caught up.
 
-**Procedure.** First get every copy of the log that exists, then clear the mark
-only when no copy anywhere runs further. Clearing it while the events still sit
-on a park branch makes a recoverable situation permanent (2026-09-16: eleven
-events thought lost were on a park branch the whole time).
+**Who acts: the owner, and only the owner** (owner decision 2026-09-28: nobody
+goes past the ledger). An agent, a job or a session that meets this error stops
+the job, records it, and alerts The Firm once; it never retries around it, never
+touches `.datacore/state/seq-hwm/`, and never sets an override (there is none).
+The tool policy and the config-protection hook refuse those commands from any
+agent. The owner runs the steps below in a terminal of their own.
+
+**Procedure** (precedent: the box's `winston.jsonl` repair, 2026-09-28).
+
+1. **Verify the replicas.** Find every copy of the log that exists before
+   deciding the mark is what is wrong. Clearing it while the events still sit on
+   a park branch, or on another host, makes a recoverable situation permanent
+   (2026-09-16: eleven events thought lost were on a park branch the whole
+   time). Search every local history with the block below; on every other host
+   that holds a clone of the space, look for the missing seqs too (for example
+   `ssh <host> 'git -C ~/Data/<space> log --all --oneline -- .datacore/events/<writer>.jsonl'`).
+   If a longer copy exists, restore it with `ledger_restore_prefix.py --apply`
+   (append-only, proven prefix, verifying chain) and stop there: the stop
+   record lifts itself on the next append.
+2. **Move the mark aside, never delete it.** Only when no copy anywhere runs
+   further, move the mark, its hash witness and the stop record of each log
+   that runs ahead into `.datacore/state/seq-hwm-retired/`, stamped with the
+   date. That folder is outside every glob that reads marks, and it keeps the
+   evidence.
+3. **Converge by merge, never rebase.** Merge origin into the space
+   (`git merge`, never rebase); resolve a conflict by the space's own rule.
+4. **Check.** Run the health check at the top of this page:
+   `ledger_cli.py verify` must print `OK`, and `ledger_invariants.py --quick`
+   must print `SOUND`. The next append continues the chain from the log's real
+   tail and writes a fresh mark.
 
 ```bash
 SPACE=~/Data/<space>
 LIB=~/Data/.datacore/lib
-  # 1. Converge: the missing events may simply not be pulled yet.
-if git -C "$SPACE" rev-parse --git-dir >/dev/null 2>&1 && git -C "$SPACE" remote get-url origin >/dev/null 2>&1; then
-  git -C "$SPACE" pull -q --no-rebase --ff-only || echo "pull did not fast-forward: see 'Forked log' below"
-fi
-  # 2. Search EVERY history (branches, park refs, unreferenced commits) for a longer copy.
+  # 1. Verify the replicas: every history here (branches, park refs, unreferenced commits).
 found=0
-for mark in "$SPACE"/.datacore/state/seq-hwm/*.seq; do
+for mark in "$SPACE"/.datacore/state/seq-hwm/*.seq "$SPACE"/.datacore/state/seq-hwm/*.stopped; do
   [ -e "$mark" ] || continue
-  writer=$(basename "$mark" .seq)
+  writer=$(basename "${mark%.*}")
   if git -C "$SPACE" rev-parse --git-dir >/dev/null 2>&1; then
     out=$(python3 "$LIB/ledger_restore_prefix.py" --space "$SPACE" --actor "$writer" --find)
     echo "$writer: $out"
     case "$out" in "no commit in any history"*) ;; *) found=1 ;; esac
   fi
 done
-  # 3. A longer copy exists: restore it (append-only, proven prefix + verifying chain),
-  #    then stop here. Otherwise the mark is what is wrong: clear the marks that run
-  #    ahead of their log, and only those.
 if [ "$found" = 1 ]; then
-  echo "restore with: python3 $LIB/ledger_restore_prefix.py --space $SPACE --actor <writer> --from <commit> --apply"
+  echo "a longer copy exists: python3 $LIB/ledger_restore_prefix.py --space $SPACE --actor <writer> --from <commit> --apply"
 else
+  # 2. Move each mark that runs ahead of its log aside (with its hash and stop record). Never delete.
   python3 - "$SPACE" <<'PY'
-import json, sys
+import json, sys, time
 from pathlib import Path
 space = Path(sys.argv[1])
-for mark in sorted((space / ".datacore" / "state" / "seq-hwm").glob("*.seq")):
-    log = space / ".datacore" / "events" / f"{mark.stem}.jsonl"
-    lines = [l for l in log.read_text().splitlines() if l.strip()] if log.exists() else []
-    tail = json.loads(lines[-1])["seq"] if lines else -1
-    if int(mark.read_text().strip() or -1) > tail:
-        mark.unlink()
-        print(f"cleared {mark.name}: the log ends at seq {tail} and no copy anywhere runs further")
+state = space / ".datacore" / "state"
+stamp = time.strftime("%Y-%m-%d")
+for sub in ("", "telemetry"):
+    marks = state / "seq-hwm" / sub
+    log_dir = space / ".datacore" / (sub or "events")
+    for stem in sorted({p.stem for p in marks.glob("*.seq")} | {p.stem for p in marks.glob("*.stopped")}):
+        log = log_dir / f"{stem}.jsonl"
+        lines = [l for l in log.read_text().splitlines() if l.strip()] if log.exists() else []
+        tail = json.loads(lines[-1])["seq"] if lines else -1
+        seq_file, stop_file = marks / f"{stem}.seq", marks / f"{stem}.stopped"
+        ahead = seq_file.exists() and int(seq_file.read_text().strip() or -1) > tail
+        if not ahead and not stop_file.exists():
+            continue
+        retired = state / "seq-hwm-retired" / sub
+        retired.mkdir(parents=True, exist_ok=True)
+        for f in (seq_file, marks / f"{stem}.hash", stop_file):
+            if f.exists():
+                f.rename(retired / f"{f.name}.retired-{stamp}")
+        print(f"moved aside the mark of {stem}: the log ends at seq {tail} and no copy anywhere runs further")
 PY
+  # 3. Converge by merge (git merge only).
+  if git -C "$SPACE" rev-parse --git-dir >/dev/null 2>&1 && git -C "$SPACE" remote get-url origin >/dev/null 2>&1; then
+    git -C "$SPACE" fetch -q origin && git -C "$SPACE" merge --no-edit origin/main || echo "merge stopped on a conflict: resolve it by the space's rule, then commit"
+  fi
 fi
+  # 4. Check: the health check at the top of this page (verify, then ledger invariants).
+python3 "$LIB/ledger_cli.py" verify --space "$SPACE"
 ```
-
-Then run the health check at the top of this page. The next append continues
-the chain from the log's real tail.
 
 ## Edit conflict (unresolved replicated edits)
 

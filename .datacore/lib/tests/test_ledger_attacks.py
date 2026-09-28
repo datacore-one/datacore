@@ -302,12 +302,16 @@ class TestGuardIsRecoverable:
         return s, s / ".datacore" / "state" / "seq-hwm" / "mac.seq"
 
     def test_a_corrupt_mark_states_its_own_recovery(self, tmp_path):
+        """Named, but as the owner's: stop, alert, the runbook. Not a bypass
+        (owner decision 2026-09-28; the old text named `rm` and an override,
+        and an unattended job followed it into a fork)."""
         s, hwm = self._prep(tmp_path)
         hwm.write_text("999999")
         with pytest.raises(StaleLogError) as exc:
             EventLog(s, "mac").append("item.create", {"id": "b", "title": "y"})
         msg = str(exc.value)
-        assert str(hwm) in msg and "DATACORE_HWM_OVERRIDE" in msg
+        assert str(hwm.parent) in msg and "recovery.md" in msg and "owner" in msg
+        assert "DATACORE_HWM_OVERRIDE" not in msg
 
     def test_removing_the_mark_restores_appends(self, tmp_path):
         s, hwm = self._prep(tmp_path)
@@ -315,11 +319,13 @@ class TestGuardIsRecoverable:
         hwm.unlink()
         EventLog(s, "mac").append("item.create", {"id": "b", "title": "y"})
 
-    def test_explicit_override_restores_appends(self, tmp_path, monkeypatch):
+    def test_no_override_flag_restores_appends(self, tmp_path, monkeypatch):
+        """There is no flag past the ledger (owner decision 2026-09-28)."""
         s, hwm = self._prep(tmp_path)
         hwm.write_text("999999")
         monkeypatch.setenv("DATACORE_HWM_OVERRIDE", "1")
-        EventLog(s, "mac").append("item.create", {"id": "b", "title": "y"})
+        with pytest.raises(StaleLogError):
+            EventLog(s, "mac").append("item.create", {"id": "b", "title": "y"})
 
     def test_unparseable_mark_preserves_log_pending_explicit_recovery(self, tmp_path):
         """A damaged witness cannot establish whether history was rewound."""

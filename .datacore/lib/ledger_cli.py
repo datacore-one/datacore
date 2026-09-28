@@ -196,6 +196,31 @@ def cmd_verify(args: argparse.Namespace) -> None:
     print(f"OK {len(files)} files {total_events} events{note}")
 
 
+def cmd_stopped(args: argparse.Namespace) -> None:
+    """Every log in the space the ledger has stopped (a binding stop record).
+
+    Read-only. Exit 3 and one line per stopped log when there is any, exit 0
+    when none: the check a job runs before writing, so it stops instead of
+    working around the refusal (owner decision 2026-09-28).
+    """
+    from ledger.log import read_stop
+    from ledger.verify import _tail_seq
+    space = Path(args.space)
+    hwm = space / ".datacore" / "state" / "seq-hwm"
+    stopped = []
+    for rec in sorted(hwm.glob("*.stopped")) + sorted((hwm / TELEMETRY_DIR).glob("*.stopped")):
+        folder = space / ".datacore" / (TELEMETRY_DIR if rec.parent.name == TELEMETRY_DIR else "events")
+        log = folder / f"{rec.stem}.jsonl"
+        stop = read_stop(log) or {"hwm": None}
+        tail = _tail_seq(log)
+        if stop["hwm"] is None or tail < stop["hwm"]:
+            stopped.append(f"{_shown(log)}: appends stopped since {stop.get('at', '?')} -- the log "
+                           f"ends at seq {tail}, this machine wrote seq {stop['hwm']}")
+    for line in stopped:
+        print(line)
+    sys.exit(3 if stopped else 0)
+
+
 def cmd_items(args: argparse.Namespace) -> None:
     space = _require_space(args.space)
     state = fold(read_events(space))
@@ -239,6 +264,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--space", required=True, help="Space directory root")
     p.add_argument("--strict", action="store_true", help="Flag unsigned events as errors")
 
+    p = sub.add_parser("stopped", help="List logs the ledger stopped (exit 3 when any)")
+    p.add_argument("--space", required=True, help="Space directory root")
+
     p = sub.add_parser("void", help="Cancel one bad event with an in-ledger void record")
     p.add_argument("--space", required=True, help="Space directory root")
     p.add_argument("--log", required=True, help="The voided event's log file (e.g. agent-a.jsonl)")
@@ -261,6 +289,7 @@ COMMANDS = {
     "append": cmd_append,
     "approve": cmd_approve,
     "verify": cmd_verify,
+    "stopped": cmd_stopped,
     "void": cmd_void,
     "items": cmd_items,
     "balances": cmd_balances,

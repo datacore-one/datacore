@@ -18,16 +18,26 @@ owner's cross-space view and is not restricted by this rule.
 
 One customer per session (MEM-13)
 ---------------------------------
-The first time a session touches a ``client`` space, that space is recorded
-for the session (private state, keyed on session_id). From then on the
-session may not write inside the install outside that client space, and may
-not run a git network command outside it: other work goes to a new session.
+The first time a session writes in a ``client`` space (Edit/Write, a git
+network call, or a shell command that changes something and names a client
+path or runs there), that space is recorded for the session (private state,
+keyed on session_id). From then on the session may not write inside the
+install outside that client space, and may not run a git network command
+outside it: other work goes to a new session. Reading is never recorded and
+never stopped.
 
 Person documents (MEM-15)
 -------------------------
 Writing a document about a named person's pay, equity or performance into a
 space that is not ``personal`` asks first: such documents live only in the
 personal space.
+
+Client guards only (``--client``)
+---------------------------------
+Owner decision 2026-09-28: "Client guards should be in place." With
+``--client`` the hook applies only the two client guards above (one customer
+per session; person documents) and skips the cross-space rule and the
+space-type policy. The installer wires this mode as the ``client`` guard.
 
 Fail behaviour
 --------------
@@ -294,6 +304,40 @@ def _remember_client(state: Path | None, client: Path) -> None:
         pass
 
 
+# A shell command that changes something: a redirect, a file-changing tool, a
+# git write or a GitHub write. Reading commands (cat, grep, sed -n, ls) do not
+# make a client session and are not stopped in one.
+_HARMLESS_REDIRECT = re.compile(r"\d*>&\d+|&>\s*/dev/null|\d*>\s*/dev/null")
+_SHELL_WRITE = re.compile(
+    r">|\btee\b|\b(?:cp|mv|rm|rmdir|mkdir|touch|ln|chmod|rsync|truncate|install)\s"
+    r"|\bsed\s+(?:-\w+\s+)*-i"
+    r"|\bgit\s+(?:-C\s+\S+\s+)*(?:add|commit|mv|rm|checkout|switch|reset|restore|stash|merge|"
+    r"rebase|apply|am|cherry-pick|revert|tag|push|pull|clone|init)\b"
+    r"|\bgh\s+\w+\s+(?:create|edit|comment|close|reopen|merge|delete|upload)\b")
+_LEADING_CD = re.compile(r"""^\s*cd\s+("[^"]+"|'[^']+'|[^\s;&|]+)\s*(?:&&|;)""")
+
+
+def _writes(tool: str, category: str, inp: dict) -> bool:
+    """Whether this call changes something (Edit/Write, a git network call, a shell write)."""
+    if tool in ("Edit", "Write", "MultiEdit"):
+        return True
+    if tool != "Bash":
+        return False
+    if category == "network":
+        return True
+    command = _HARMLESS_REDIRECT.sub(" ", str(inp.get("command") or ""))
+    return _SHELL_WRITE.search(command) is not None
+
+
+def _shell_workdir(command: str, cwd: str | None) -> Path | None:
+    """Where a shell command runs: the directory of a leading ``cd X &&``, else cwd."""
+    m = _LEADING_CD.match(command)
+    if m:
+        p = Path(m.group(1).strip("'\"")).expanduser()
+        return p if p.is_absolute() or not cwd else Path(cwd) / p
+    return Path(cwd) if cwd else None
+
+
 def _inside(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
@@ -337,19 +381,41 @@ def _is_person_document(text: str) -> bool:
 # Main
 # ---------------------------------------------------------------------------
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    client_only = "--client" in (sys.argv[1:] if argv is None else argv)
     added = "DATACORE_ROOT" not in os.environ
     if added:
         os.environ["DATACORE_ROOT"] = str(INSTALL_ROOT)
+    restore = _discover_once()
     try:
-        return _main()
+        return _main(client_only)
     finally:
+        restore()
         if added:
             os.environ.pop("DATACORE_ROOT", None)
         _SPACE_CACHE.clear()
 
 
-def _main() -> int:
+def _discover_once():
+    """Walk the install for spaces once per hook call, not once per path (~0.3 s each).
+    Returns the function that puts spaces.discover_spaces back."""
+    try:
+        import spaces
+    except Exception:  # noqa: BLE001
+        return lambda: None
+    real, seen = spaces.discover_spaces, {}
+
+    def cached(*args, **kwargs):
+        key = repr((args, sorted(kwargs.items())))
+        if key not in seen:
+            seen[key] = real(*args, **kwargs)
+        return seen[key]
+
+    spaces.discover_spaces = cached
+    return lambda: setattr(spaces, "discover_spaces", real)
+
+
+def _main(client_only: bool = False) -> int:
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
@@ -373,7 +439,7 @@ def _main() -> int:
 
     # SPC-5: a session inside one space stays out of the others.
     session = _space_of(Path(cwd)) if cwd else None
-    crossing = _cross_space(session, paths)
+    crossing = None if client_only else _cross_space(session, paths)
     if crossing:
         other, path = crossing
         return _deny(
@@ -383,21 +449,23 @@ def _main() -> int:
 
     space = _space_of(target)
 
-    # MEM-13: once a session has touched a client space, it stays there.
-    state = _session_state(str(payload.get("session_id") or ""))
-    client = _session_client(state)
-    touched = [s for s in (_space_of(p) for p in paths) if s is not None and s.type == "client"]
-    if client is None and touched:
-        client = touched[0].path
-        _remember_client(state, client)
-    if client is not None and category in ("write", "network"):
-        outside = [p for p in (paths if tool == "Bash" else [target])
-                   if not _inside(p, client) and _inside(p, _install_root())]
-        if tool == "Bash" and category == "write":
-            outside = [p for p in outside if p != Path(cwd or "")]   # cwd alone is not a write
+    # MEM-13: once a session has written in a client space, it writes nowhere else.
+    if _writes(tool, category, inp):
+        where = [target]
+        if tool == "Bash":
+            where = paths + [_shell_workdir(str(inp.get("command") or ""), cwd)]
+            where = [p for p in where if p is not None]
+        state = _session_state(str(payload.get("session_id") or ""))
+        client = _session_client(state)
+        touched = [s for s in map(_space_of, where) if s is not None and s.type == "client"]
+        if client is None and touched:
+            client = touched[0].path
+            _remember_client(state, client)
+        outside = [p for p in where if client is not None
+                   and not _inside(p, client) and _inside(p, _install_root())]
         if outside:
             return _deny(
-                "Customer isolation: this session has worked in a client space, so it may "
+                "Customer isolation: this session has written in a client space, so it may "
                 f"change nothing outside it ({outside[0]} is outside). Start a separate "
                 "session for other work.")
 
@@ -406,12 +474,12 @@ def _main() -> int:
         if _is_person_document(_written_text(inp)):
             return _ask(
                 f"Person document: this names a person with pay, equity or performance detail "
-                f"and would be written into the {space.type} space {space.name!r}. Documents "
+                f"and would be written into {_label(space)} ({space.type}). Documents "
                 "about a named person belong in the personal space (0-personal/1-active/"
                 "<venture>/people/). Confirm only if the owner asked for this location.")
 
-    if space is None:
-        return 0  # path not in any space
+    if space is None or client_only:
+        return 0  # path not in any space, or only the client guards are switched on
 
     policies = _load_policy()
     if not policies:

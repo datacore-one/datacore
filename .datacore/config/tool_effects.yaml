@@ -223,6 +223,16 @@ effects:
       # no shell redirect, in anyone's name
       - '"(file_path|path)":\s*"(?:[^"\\]|\\.)*\.datacore/(events|telemetry)/[^"/]+\.jsonl"'
       - '"command":\s*"(?:[^"\\]|\\.)*(>>?|\btee\b(\s+-a)?|\bsed\s+-i\b|\btruncate\b)(?:[^"\\]|\\.)*\.datacore/(events|telemetry)/[\w.-]+\.jsonl'
+      # nobody goes past the ledger (owner decision 2026-09-28): no override
+      # flag (there is none left to honour, and setting one is the intent),
+      # and no delete, move or rewrite of a sequence witness or stop record.
+      # 2026-09-27 an unattended job did `echo 2631 >`, `rm` and the override
+      # on the box and forked a log. Reading a mark stays open.
+      - '"(command|code)":\s*"(?:[^"\\]|\\.)*DATACORE_HWM_OVERRIDE\s*='
+      - '"(command|code)":\s*"(?:[^"\\]|\\.)*\b(environ|putenv|setenv)\b(?:[^"\\]|\\.){0,16}DATACORE_HWM_OVERRIDE'
+      - '"(file_path|path|notebook_path)":\s*"(?:[^"\\]|\\.)*\.datacore/state/seq-hwm(/|")'
+      - '"(command|code)":\s*"(?:[^"\\]|\\.)*((?<![\w.-])(rm|mv|cp|unlink|truncate|shred|tee|ln|install|rsync|rename)\b|\bsed\s+-i|\bperl\s+-\w*i|(?<![0-9&>-])>{1,2}(?!&|\s*/dev/null)|\s-delete\b|\.(unlink|rename|replace|write_text|write_bytes|touch)\(|\bos\.(remove|unlink|rename|replace)\b|\bshutil\.)(?:[^"\\]|\\.)*seq-hwm'
+      - '"(command|code)":\s*"(?:[^"\\]|\\.)*seq-hwm(?:[^"\\]|\\.)*((?<![\w.-])(rm|mv|cp|unlink|truncate|shred|tee|ln|install|rsync|rename)\b|\bsed\s+-i|\bperl\s+-\w*i|(?<![0-9&>-])>{1,2}(?!&|\s*/dev/null)|\s-delete\b|\.(unlink|rename|replace|write_text|write_bytes|touch)\(|\bos\.(remove|unlink|rename|replace)\b|\bshutil\.)'
   calendar.respond:
     tools: *acting
     tool_patterns:

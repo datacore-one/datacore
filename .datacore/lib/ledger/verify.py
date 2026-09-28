@@ -201,6 +201,20 @@ def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = 
     return errors
 
 
+def _tail_seq(path: Path) -> int:
+    """The highest seq in a log file, -1 when there is none."""
+    tail = -1
+    try:
+        for line in path.read_text(errors="replace").splitlines():
+            try:
+                tail = max(tail, int(json.loads(line).get("seq", -1)))
+            except (ValueError, TypeError, AttributeError):
+                continue
+    except OSError:
+        pass
+    return tail
+
+
 def check_not_rewound(path: Path) -> list[str]:
     """Has this log lost events from its tail?
 
@@ -233,13 +247,24 @@ def check_not_rewound(path: Path) -> list[str]:
       * MISSING -- the whole log deleted. `path` may name a log that no longer
         exists; with a witness for it, that is reported, never skipped.
     """
-    from .log import witness_path
+    from .log import read_stop, witness_path
     hwm_path = witness_path(path)
     try:
         hwm = int(hwm_path.read_text().strip())
         if hwm < 0:
             raise ValueError("negative witness")
     except FileNotFoundError:
+        # No witness -- but a stop record still remembers how far this
+        # machine wrote when the ledger refused the log. A witness deleted
+        # after that refusal (2026-09-27) is not a clean log.
+        stop = read_stop(path)
+        if stop is None:
+            return []
+        tail = _tail_seq(path)
+        if stop["hwm"] is None or tail < stop["hwm"]:
+            return [f"TRUNCATED: log ends at seq {tail} but this machine wrote up to seq "
+                    f"{stop['hwm']} (recorded when the ledger stopped appends; the seq witness "
+                    f"is gone). The owner repairs it: .datacore/docs/recovery.md"]
         return []
     except (OSError, ValueError):
         return ["sequence witness is unreadable or invalid; rewind status cannot be verified"]

@@ -24,6 +24,21 @@ import cross_model_audit as cma  # noqa: E402
 import tool_policy  # noqa: E402
 
 
+#: The real function, for the test that exercises it on a repository it builds.
+_PUBLISHED_HEAD = cma.published_head
+
+
+@pytest.fixture(autouse=True)
+def _pinned_to_local_head(monkeypatch):
+    """Slices here are pinned to the checkout's own HEAD, which always exists
+    locally. The real pin (published_head) is the upstream commit whenever HEAD
+    is a local commit not yet pushed -- true on this machine whenever any session
+    has committed and not pushed, which made these tests depend on the live
+    branch state (2026-09-28). test_a_slice_is_pinned_to_a_commit_others_can_fetch
+    checks the real rule on a temporary repository of its own."""
+    monkeypatch.setattr(cma, "published_head", cma.head)
+
+
 @pytest.fixture
 def sandbox(tmp_path, monkeypatch):
     audits = tmp_path / "audits"
@@ -178,8 +193,10 @@ def test_the_auditor_changes_nothing(tool, args):
 
 def test_the_write_effect_binds_only_the_auditor():
     edit = ("Edit", {"file_path": str(ROOT / ".datacore/lib/job_verify.py"), "old_string": "a", "new_string": "b"})
-    assert "write" in tool_policy.decide("miles", *edit).effects
-    assert tool_policy.decide("miles", *edit).allow
+    # `assistant` is declared in the committed policy, so this holds on any
+    # install, not only one whose private policy names its agents.
+    assert "write" in tool_policy.decide("assistant", *edit).effects
+    assert tool_policy.decide("assistant", *edit).allow
 
 
 def test_a_pr_is_ready_only_after_another_family_commented(monkeypatch):
@@ -359,11 +376,11 @@ def test_a_slice_is_pinned_to_a_commit_others_can_fetch(tmp_path):
     git(work, "push", "-q", "origin", "HEAD:main")
     git(work, "branch", "-q", "--set-upstream-to=origin/main")
     published = git(work, "rev-parse", "HEAD")
-    assert cma.published_head(work) == published
+    assert _PUBLISHED_HEAD(work) == published
     (work / "f.txt").write_text("2\n")
     git(work, "commit", "-q", "-am", "local only")
     assert git(work, "rev-parse", "HEAD") != published
-    assert cma.published_head(work) == published, "an unpushed HEAD was pinned"
+    assert _PUBLISHED_HEAD(work) == published, "an unpushed HEAD was pinned"
 
 
 
@@ -488,3 +505,159 @@ def test_nothing_is_written_without_a_declared_system_space(sandbox, monkeypatch
         cma.check(date(2026, 9, 28), write=True, send=False)
     with pytest.raises(SystemExit, match="install.yaml"):
         cma.run_nightly("miles", date(2026, 9, 28), commit=True)
+
+
+# ── the writer validates its pins; the morning check needs no repository ────
+# Owner, 2026-09-28: "why does the box need nightshift repo access, it is not
+# running it?" The host that writes a findings file has the code it read, so it
+# validates the pins then and records that in the file; the box only checks the
+# file arrived, is well-formed and carries a successful write-time validation.
+def _no_git(monkeypatch):
+    def refuse(*a, **k):
+        raise AssertionError(f"the morning check touched a repository: {a}")
+    monkeypatch.setattr(cma, "_git", refuse)
+    cma._commit_exists.cache_clear()
+    cma._blob.cache_clear()
+
+
+def _stamped_four(d, **kw):
+    _four(d, **kw)
+    for p in sorted(d.glob("*.yaml")):
+        assert cma.stamp_validation(p, repo=ROOT) == []
+    return d
+
+
+def test_the_writing_host_validates_its_pins_and_records_it(sandbox, monkeypatch):
+    monkeypatch.setattr(cma, "rotation", lambda caps, night, agents=None: {a: "audits" for a in cma.AGENTS})
+    monkeypatch.setattr(cma, "call_model", lambda *a, **k: {"model": "m", "usd": 0.01, "text": _answer(
+        finding("AUD-3", ".datacore/lib/promise_evals.py:10"))})
+    committed = []
+    monkeypatch.setattr(cma, "_commit", lambda paths, message: committed.append(message) or "ok")
+    out = cma.run_nightly("tris", date(2026, 9, 28), commit=True)
+    v = yaml.safe_load(out.read_text())["validation"]
+    assert v["ok"] is True and v["host"] and v["at"] and len(v["digest"]) == 64
+    assert v["repos"]["."] == head_sha(), "the record names what was checked, at which commit"
+    assert "validated at write time" in committed[0]
+    assert cma.validate_findings(out, repo=ROOT) == [], "the strict validator (AUD-7) still accepts it"
+    assert cma.write_time_errors(out) == []
+
+
+def test_the_morning_check_reads_no_repository(tmp_path, monkeypatch):
+    d = _stamped_four(tmp_path / "2026-09-28")
+    _no_git(monkeypatch)
+    assert cma.night_alerts(d, write_time=True) == []
+    agg = cma.aggregate(d, write_time=True)
+    assert agg["invalid"] == {} and len(agg["unconfirmed"]) + len(agg["confirmed"]) >= 1
+
+
+def test_a_pin_to_a_module_the_judge_lacks_is_no_concern_of_the_judge(tmp_path, monkeypatch):
+    """Miles's slice read the nightshift module; the box does not have it and
+    does not need it: nightshift validated the pin when it wrote the file."""
+    d = tmp_path / "2026-09-28"
+    _four(d)
+    p = d / "miles.yaml"
+    doc = yaml.safe_load(p.read_text())
+    doc["commits"] = {".datacore/modules/nightshift": "a" * 40}
+    p.write_text(yaml.safe_dump(doc, sort_keys=False))
+    for q in d.glob("*.yaml"):
+        cma._stamp(q, {"ok": True, "host": "writer", "at": "2026-09-29T01:30:00+00:00", "repos": {}})
+    _no_git(monkeypatch)
+    assert cma.night_alerts(d, write_time=True) == []
+
+
+@pytest.mark.parametrize("breakage", ["unstamped", "edited", "not-ok", "malformed"])
+def test_the_morning_check_still_alerts_on_what_it_can_see(tmp_path, monkeypatch, breakage):
+    d = _stamped_four(tmp_path / "2026-09-28")
+    p = d / "data.yaml"
+    doc = yaml.safe_load(p.read_text())
+    if breakage == "unstamped":
+        doc.pop("validation")
+    elif breakage == "edited":
+        doc["findings"][0]["claim"] = "changed after it was validated"
+    elif breakage == "not-ok":
+        doc["validation"]["ok"] = False
+    elif breakage == "malformed":
+        doc["commit"] = "main"
+    p.write_text(yaml.safe_dump(doc, sort_keys=False))
+    _no_git(monkeypatch)
+    alerts = cma.night_alerts(d, write_time=True)
+    assert len(alerts) == 1 and "data" in alerts[0], alerts
+    assert "data" in cma.aggregate(d, write_time=True)["invalid"]
+
+
+def test_the_box_check_judges_by_the_write_time_record(sandbox, monkeypatch, capsys):
+    d = _stamped_four(cma.NIGHTLY / "2026-09-28")
+    assert d.is_dir()
+    _no_git(monkeypatch)
+    assert cma.check(date(2026, 9, 28), write=False, send=False) == 0
+    assert "0 alert(s)" in capsys.readouterr().out
+
+
+def test_a_calibration_run_is_validated_where_it_is_written(sandbox, monkeypatch):
+    monkeypatch.setattr(cma, "CALIBRATION", sandbox / "calibration")
+    monkeypatch.setattr(cma, "fixture", lambda: (".", head_sha(), ".datacore/lib", ["promise_evals.py"]))
+    monkeypatch.setattr(cma, "call_model", lambda *a, **k: {"model": "m", "usd": 0.0, "text": _answer(
+        finding("G1", "promise_evals.py:10"))})
+    out = cma.run_calibration("data")
+    doc = yaml.safe_load(out.read_text())
+    assert doc["validation"]["ok"] is True and cma.write_time_errors(out) == []
+
+
+def test_an_audit_only_checkout_syncs_itself(sandbox, monkeypatch, tmp_path):
+    """On hermes and plur-claw the audit reads from its own checkout, which no
+    space sync maintains: it pulls (merge, never rebase) before reading, and a
+    push refused because another host pushed first is merged and retried."""
+    calls = []
+
+    class R:
+        def __init__(self, rc=0, out=""):
+            self.returncode, self.stdout, self.stderr = rc, out, ""
+
+    def fake_git(repo, *args):
+        calls.append((Path(repo), args))
+        return R()
+    monkeypatch.setattr(cma, "_git", fake_git)
+    cma.sync_sources()
+    pulls = [(r, a) for r, a in calls if a[0] == "pull"]
+    assert any(r == cma.SPACE and "--no-rebase" in a for r, a in pulls)
+    assert all("--rebase" not in a for _, a in pulls)
+    calls.clear()
+    assert cma._push_after_merge("push failed (rejected); committed locally") == "pushed after merging"
+    assert [a[0] for _, a in calls] == ["pull", "push"] and "--no-rebase" in calls[0][1]
+    calls.clear()
+    assert cma._push_after_merge("pushed") == "pushed" and calls == []
+
+
+def test_the_key_is_asked_of_the_hosts_broker_not_the_audit_checkout(monkeypatch):
+    """On hermes the audit runs with DATACORE_ROOT at its own checkout, which has
+    no credential index; the broker's declared location is the host's data root."""
+    seen = {}
+
+    class R:
+        returncode, stdout, stderr = 0, "k" * 20 + "\n", ""
+
+    def fake_run(cmd, **kw):
+        seen["env"] = kw.get("env")
+        return R()
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("DATACORE_ROOT", "/somewhere/audit-src/datacore")
+    monkeypatch.setattr(cma.subprocess, "run", fake_run)
+    assert cma._secret("OPENROUTER_API_KEY") == "k" * 20
+    assert seen["env"] is not None and "DATACORE_ROOT" not in seen["env"]
+
+
+def test_an_audit_only_checkout_pushes_under_its_own_git_guards(sandbox, monkeypatch):
+    """The shared git hooks judge a push with the guard scripts under DATA_DIR
+    (default ~/Data). On plur-claw ~/Data is the agent's space repo, whose
+    vendored lib lacks the ledger write gate, so the hook failed closed
+    (2026-09-28). An audit-only checkout is a complete, current tree: its own
+    guards judge its push. The hooks still run; nothing is skipped."""
+    monkeypatch.setattr(cma, "rotation", lambda caps, night, agents=None: {a: "audits" for a in cma.AGENTS})
+    monkeypatch.setattr(cma, "call_model", lambda *a, **k: {"model": "m", "usd": 0.0, "text": "findings: []"})
+    monkeypatch.setattr(cma, "sync_sources", lambda: None)
+    monkeypatch.delenv("DATA_DIR", raising=False)
+    seen = []
+    monkeypatch.setattr(cma, "_commit", lambda paths, message: seen.append(os.environ.get("DATA_DIR")) or "pushed")
+    cma.run_nightly("data", date(2026, 9, 28), commit=True, sync=True)
+    assert seen == [str(cma.ROOT)]
+    assert "SKIP_PRE_PUSH" not in os.environ

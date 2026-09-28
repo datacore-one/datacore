@@ -125,6 +125,14 @@ def resolve(module, code, *, root=None, space=None, create=True):
     else:
         matches = [row for row in rows if row['type'] == 'personal'
                    or (not row['marked'] and row['name'] == 'personal')]
+        if len(matches) > 1:
+            # Two personal spaces on one machine (e.g. personal and practice):
+            # the install declares which is the default, by bare space name,
+            # as ``roles.personal`` in install.yaml. Only a personal space can
+            # be chosen this way; anything else stays ambiguous.
+            from spaces import space_for_all
+            declared = set(space_for_all('personal', root))
+            matches = [row for row in matches if row['path'] in declared]
     if len(matches) != 1:
         raise ValueError('module space is missing or ambiguous')
     entry = matches[0]

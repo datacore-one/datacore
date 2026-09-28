@@ -918,6 +918,44 @@ jobs:
         arg: 'cross_model_audit check [0-9]{4}-[0-9]{2}-[0-9]{2}: '
         max_age_hours: 26
 
+  # The box's own audit slice and its weekly calibration (AUD-1, AUD-4), and the
+  # morning publish (AUD-3). Neutral commands: the agent comes from
+  # DATACORE_POLICY_PRINCIPAL; an install's exact lines, naming its agent, are
+  # in manifest.local.yaml. Each run writes one findings file, validates its
+  # pins where it was written, and commits only that file.
+  - name: box-audit-nightly
+    machine: box
+    schedule: "25 1 * * *"
+    cmd: "DATACORE_ROOT=~/Data /usr/bin/python3 ~/Data/.datacore/lib/cross_model_audit.py nightly --commit >> ~/.datacore/state/audit-nightly.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/audit-nightly.log"
+        check: regex
+        arg: 'pins validated at write time'
+        max_age_hours: 26
+
+  - name: box-audit-calibration
+    machine: box
+    schedule: "25 2 * * 0"
+    cmd: "DATACORE_ROOT=~/Data /usr/bin/python3 ~/Data/.datacore/lib/cross_model_audit.py calibrate --commit >> ~/.datacore/state/audit-calibration.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/audit-calibration.log"
+        check: regex
+        arg: 'pins validated at write time'
+        max_age_hours: 170
+
+  - name: box-audit-publish
+    machine: box
+    schedule: "50 6 * * *"
+    cmd: "DATACORE_ROOT=~/Data /usr/bin/python3 ~/Data/.datacore/lib/cross_model_audit.py check --write >> ~/.datacore/state/audit-publish.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/audit-publish.log"
+        check: regex
+        arg: 'cross_model_audit check [0-9]{4}-[0-9]{2}-[0-9]{2}: '
+        max_age_hours: 26
+
   - name: runner-refresh
     machine: box
     schedule: "17 * * * *"
@@ -1046,7 +1084,7 @@ jobs:
     cmd: "bash ~/Data/.datacore/modules/github/lib/triage_github.sh"
     on_fail: telegram
     artifacts:
-      - path: "~/Data/.datacore/modules/github/data/scan_cache.json"
+      - path: "~/Data/0-personal/.datacore/module-data/github/data/scan_cache.json"
         check: no_crash
         max_age_hours: 26
 

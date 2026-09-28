@@ -10,6 +10,10 @@ Blocks the moves that weaken a check instead of fixing what it caught:
   that can no longer block (`sys.exit(0)`), and the git bypasses
   (`SKIP_PRE_PUSH=1`, `--no-verify`, `core.hooksPath`). Changing a guard is
   still possible; unplugging it is not. What it caught is understood first.
+* going past the ledger (owner decision 2026-09-28): setting the removed
+  override flag, or deleting, moving or rewriting a sequence witness or stop
+  record under `.datacore/state/seq-hwm/`. The owner repairs a stale log from
+  a terminal of their own (.datacore/docs/recovery.md); no session does.
 
 Paths are recognised by their shape, not by $HOME, so the guard judges the
 same call the same way whoever runs it.
@@ -46,6 +50,38 @@ BYPASSES = [
     (re.compile(r"\bcore\.hooksPath\b"), "changing core.hooksPath unplugs the git guards"),
     (re.compile(r"\bgit\s+commit\b[^\n;&|]*\s-n\b"), "git commit -n skips the git guards"),
 ]
+
+# Going past the ledger. On 2026-09-27 an unattended job met the (correct)
+# StaleLogError, overwrote and deleted the witness and appended with an
+# override flag, forking a log. Reading a mark is diagnosis and stays open.
+LEDGER_OVERRIDE = re.compile(
+    r"DATACORE_HWM_OVERRIDE\s*=|\b(environ|putenv|setenv)\b.{0,16}DATACORE_HWM_OVERRIDE")
+_MUTATES = (r"((?<![\w.-])(rm|mv|cp|unlink|truncate|shred|tee|ln|install|rsync|rename)\b|\bsed\s+-i"
+            r"|\bperl\s+-\w*i|(?<![0-9&>-])>{1,2}(?!&|\s*/dev/null)|\s-delete\b"
+            r"|\.(unlink|rename|replace|write_text|write_bytes|touch)\(|\bos\.(remove|unlink|rename|replace)\b"
+            r"|\bshutil\.)")
+WITNESS_TOUCH = re.compile(_MUTATES + r".*seq-hwm|seq-hwm.*" + _MUTATES, re.S)
+WITNESS_FILE = re.compile(r"/\.datacore/state/seq-hwm(/|$)")
+LEDGER_WHY = ("this goes past the ledger ({what}; owner decision 2026-09-28). Stop the job, "
+              "record it and alert The Firm; the owner repairs a stale log by "
+              ".datacore/docs/recovery.md")
+
+
+def ledger_bypass(tool: str, tool_input: dict) -> str | None:
+    """Why this call goes past the ledger's stale-log refusal, or None."""
+    if tool == "Bash":
+        command = str(tool_input.get("command", ""))
+        if LEDGER_OVERRIDE.search(command):
+            return LEDGER_WHY.format(what="it sets the removed ledger override flag")
+        if WITNESS_TOUCH.search(command):
+            return LEDGER_WHY.format(what="it deletes, moves or rewrites a sequence witness")
+        return None
+    if tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+        path = str(tool_input.get("file_path", "") or tool_input.get("notebook_path", "") or "")
+        if WITNESS_FILE.search(path):
+            return LEDGER_WHY.format(what="it rewrites a sequence witness")
+    return None
+
 
 PROTECTED_BASENAMES = {
     # ESLint
@@ -101,6 +137,9 @@ def switch_off(tool: str, tool_input: dict) -> str | None:
     """Why this call switches a safety guard off, or None."""
     if not isinstance(tool_input, dict):
         return None
+    why = ledger_bypass(tool, tool_input)
+    if why:
+        return why
     if tool == "Bash":
         command = str(tool_input.get("command", ""))
         for rx, why in BYPASSES:

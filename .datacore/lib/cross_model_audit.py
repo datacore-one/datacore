@@ -7,8 +7,8 @@ turn over the code behind that capability read at a pinned commit; a script
 (no model) then clusters the four findings files, and only a finding two
 different families agree on becomes a candidate eval for the owner.
 
-    cross_model_audit.py nightly   --agent A [--night D] [--dry-run] [--commit] [--max-chars N]
-    cross_model_audit.py calibrate --agent A [--dry-run] [--commit]    the weekly practice project
+    cross_model_audit.py nightly   --agent A [--night D] [--dry-run] [--commit] [--sync] [--max-chars N]
+    cross_model_audit.py calibrate --agent A [--dry-run] [--commit] [--sync]  the weekly practice project
     cross_model_audit.py check     [--night D] [--write] [--send]      next morning, on the box
     cross_model_audit.py review    --pr URL --author-family F [--post]  AUD-5: another family comments
     cross_model_audit.py validate  FILE...
@@ -25,6 +25,9 @@ Boundaries (loop design gate):
     only its own findings file (config/approvals_policy.yaml);
   * the script writes exactly one file, the findings file; cadence_run commits
     only that file. It never commits, pushes, opens or merges anything;
+  * the host that writes a findings file validates its pins there (it has the
+    code it read) and records that in the file (`validation`); the morning
+    check judges the record and the file's shape, and reads no repository;
   * the brief, the slice and the commits are fixed before the model turn, and
     the promise list is read fresh on every run;
   * per agent per UTC day, spend stays under NIGHTLY_CAP_USD (may_start is
@@ -282,7 +285,8 @@ def _resolve(evidence_path: str, doc: dict, base: Path) -> tuple[Path, str | Non
 
 
 # ── the findings schema (AUD-7) ─────────────────────────────────────────────
-def validate_findings(path, repo: Path = ROOT, *, unverifiable: list | None = None) -> list[str]:
+def validate_findings(path, repo: Path = ROOT, *, unverifiable: list | None = None,
+                      check_git: bool = True) -> list[str]:
     """Schema errors of one findings file; [] when it is valid.
 
     Valid means repeatable: `commit` is a full sha that exists in the repository
@@ -294,6 +298,10 @@ def validate_findings(path, repo: Path = ROOT, *, unverifiable: list | None = No
     host at all is noted there instead of failing the file: the judge cannot
     check it, which is not the same as the audit being wrong. Without it (AUD-7,
     and anywhere the full checkout is present) every repository must check out.
+
+    With check_git=False only the shape is checked -- full shas, file:line
+    evidence, the required fields -- and no repository is read (the morning
+    check, which trusts the write-time record for the pins).
     """
     path = Path(path)
     try:
@@ -318,7 +326,7 @@ def validate_findings(path, repo: Path = ROOT, *, unverifiable: list | None = No
     commit = doc.get("commit")
     if not isinstance(commit, str) or not SHA40.match(commit):
         errors.append(f"commit {commit!r} is not a full 40-hex sha")
-    elif not _commit_exists(str(base), commit):
+    elif check_git and not _commit_exists(str(base), commit):
         errors.append(f"commit {commit} does not exist in {base}")
     nested = doc.get("commits")
     absent: set[str] = set()
@@ -329,6 +337,8 @@ def validate_findings(path, repo: Path = ROOT, *, unverifiable: list | None = No
             for p, sha in nested.items():
                 if not _safe_rel(str(p)) or not isinstance(sha, str) or not SHA40.match(sha):
                     errors.append(f"commits[{p!r}] is not a relative path pinned to a full sha")
+                elif not check_git:
+                    continue
                 elif unverifiable is not None and not (base / str(p)).exists():
                     absent.add(str(p).strip("/"))
                     unverifiable.append(f"{Path(path).stem}: commits[{p}] cannot be checked here "
@@ -341,11 +351,12 @@ def validate_findings(path, repo: Path = ROOT, *, unverifiable: list | None = No
     if errors:
         return errors
     for i, f in enumerate(findings, 1):
-        errors += [f"finding {i}: {e}" for e in finding_errors(f, doc, base, absent)]
+        errors += [f"finding {i}: {e}" for e in finding_errors(f, doc, base, absent, check_git=check_git)]
     return errors
 
 
-def finding_errors(f, doc: dict, base: Path, absent: set[str] = frozenset()) -> list[str]:
+def finding_errors(f, doc: dict, base: Path, absent: set[str] = frozenset(), *,
+                   check_git: bool = True) -> list[str]:
     if not isinstance(f, dict):
         return ["not a mapping"]
     errors = [f"no {k}" for k in ("promise", "claim", "seeded_failure")
@@ -358,6 +369,8 @@ def finding_errors(f, doc: dict, base: Path, absent: set[str] = frozenset()) -> 
     rel, line = m.group("path"), int(m.group("line"))
     if not _safe_rel(rel):
         return errors + [f"evidence {rel!r} is not a relative path"]
+    if not check_git:
+        return errors
     repo, sha, inner = _resolve(rel, doc, base)
     if absent and repo.relative_to(base).as_posix() in absent:
         return errors                       # in a repository this host cannot read
@@ -369,13 +382,67 @@ def finding_errors(f, doc: dict, base: Path, absent: set[str] = frozenset()) -> 
     return errors
 
 
+# ── write-time validation: the writer checks its pins, the judge its record ─
+def _digest(doc: dict) -> str:
+    """sha256 of a findings document without its validation record: binds the
+    record to exactly the content that was validated."""
+    body = {k: v for k, v in doc.items() if k != "validation"}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, default=str, ensure_ascii=False).encode()).hexdigest()
+
+
+def _stamp(path: Path, record: dict) -> None:
+    doc = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    doc.pop("validation", None)
+    doc["validation"] = {**record, "digest": _digest(doc)}
+    _write_yaml(Path(path), doc)
+
+
+def stamp_validation(path, repo: Path = ROOT) -> list[str]:
+    """Validate a findings file strictly on the host that wrote it -- the host
+    that has the code it read -- and record the result in the file. [] when the
+    pins hold and the record is written; the errors (and no record) otherwise."""
+    errors = validate_findings(path, repo=repo)
+    if errors:
+        return errors
+    import socket
+    doc = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    repos = {".": doc.get("commit"), **(doc.get("commits") or {})}
+    _stamp(Path(path), {"ok": True, "host": socket.gethostname(),
+                        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        "by": "cross_model_audit.validate_findings", "repos": repos})
+    return []
+
+
+def write_time_errors(path) -> list[str]:
+    """What the judge can check without any repository: the file is well-formed
+    and carries a successful write-time validation of exactly this content."""
+    errors = validate_findings(path, check_git=False)
+    if errors:
+        return errors
+    doc = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    v = doc.get("validation")
+    if not isinstance(v, dict):
+        return ["carries no write-time validation (its pins were never checked where it was written)"]
+    if v.get("ok") is not True:
+        return [f"its write-time validation on {v.get('host', '?')} did not pass"]
+    if v.get("digest") != _digest(doc):
+        return ["was changed after its write-time validation"]
+    return []
+
+
+def _accepted(path, repo: Path, write_time: bool, unverifiable: list | None = None) -> list[str]:
+    if write_time:
+        return write_time_errors(path)
+    return validate_findings(path, repo=repo, unverifiable=unverifiable)
+
+
 # ── aggregation (AUD-3): a script, no model ─────────────────────────────────
-def _load_night(night_dir: Path, repo: Path) -> tuple[list[dict], dict[str, list[str]]]:
+def _load_night(night_dir: Path, repo: Path, write_time: bool = False) -> tuple[list[dict], dict[str, list[str]]]:
     items, invalid = [], {}
     for p in sorted(Path(night_dir).glob("*.yaml")):
         if p.stem not in AGENTS:
             continue
-        errors = validate_findings(p, repo=repo, unverifiable=[])
+        errors = _accepted(p, repo, write_time, unverifiable=[])
         if errors:
             invalid[p.stem] = errors
             continue
@@ -424,11 +491,12 @@ def cluster(items: list[dict]) -> list[dict]:
     return out
 
 
-def aggregate(night_dir, repo: Path = ROOT, pool: list[dict] | None = None) -> dict:
+def aggregate(night_dir, repo: Path = ROOT, pool: list[dict] | None = None, *, write_time: bool = False) -> dict:
     """{confirmed, unconfirmed, invalid} for one night's folder, merged with the
     unconfirmed pool of earlier nights when given. Pure: writes nothing, calls
-    no model. A confirmed row is a CANDIDATE for the owner, never a fix."""
-    items, invalid = _load_night(Path(night_dir), Path(repo))
+    no model. A confirmed row is a CANDIDATE for the owner, never a fix.
+    write_time: accept a file on its write-time validation record (no repository read)."""
+    items, invalid = _load_night(Path(night_dir), Path(repo), write_time)
     for old in pool or []:
         for ev in old.get("evidence") or []:
             m = EVIDENCE.match(ev)
@@ -451,10 +519,16 @@ def aggregate(night_dir, repo: Path = ROOT, pool: list[dict] | None = None) -> d
 
 
 # ── the morning check (AUD-6) ───────────────────────────────────────────────
-def night_alerts(night_dir, agents=None, repo: Path = ROOT, unverifiable: list | None = None) -> list[str]:
+def night_alerts(night_dir, agents=None, repo: Path = ROOT, unverifiable: list | None = None, *,
+                 write_time: bool = False) -> list[str]:
     """What The Firm group is told the next morning: one line per agent whose
     findings file is missing, invalid, or not on its own model. [] on a clean
-    night -- a clean night says nothing."""
+    night -- a clean night says nothing.
+
+    write_time: judge each file by its shape and its write-time validation
+    record, reading no repository -- the box's morning check. The judge needs
+    no copy of code it does not run (owner, 2026-09-28); the host that wrote
+    the file had that code and checked the pins then."""
     night_dir = Path(night_dir)
     out = []
     for agent in agents or AGENTS:
@@ -464,7 +538,7 @@ def night_alerts(night_dir, agents=None, repo: Path = ROOT, unverifiable: list |
                        f"missed or failed (~/.datacore/state/audit-nightly.log on the host that runs "
                        f"{agent}'s audit says why).")
             continue
-        errors = validate_findings(p, repo=repo, unverifiable=[] if unverifiable is None else unverifiable)
+        errors = _accepted(p, repo, write_time, [] if unverifiable is None else unverifiable)
         if errors:
             out.append(f"Audit {night_dir.name}: {agent}'s findings file is invalid: "
                        + "; ".join(errors[:3]) + (f" (+{len(errors) - 3} more)" if len(errors) > 3 else ""))
@@ -518,11 +592,16 @@ def estimate_usd(family: str, prompt: str) -> float:
 
 # ── calling one model, once ─────────────────────────────────────────────────
 def _secret(name: str) -> str:
-    """A key from this host's environment, else from the credential broker. Never printed."""
+    """A key from this host's environment, else from the credential broker. Never printed.
+
+    The broker is asked about the host's data root (its default, ~/Data), where
+    the credential index lives -- not DATACORE_ROOT, which on hermes and
+    plur-claw points at the audit-only checkout."""
     if os.environ.get(name):
         return os.environ[name]
+    env = {k: v for k, v in os.environ.items() if k != "DATACORE_ROOT"}
     r = subprocess.run([sys.executable, str(LIB / "creds.py"), "get", name, "--consumer", "cross-model-audit"],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, timeout=60, env=env)
     if r.returncode != 0 or not r.stdout.strip():
         raise RuntimeError(f"{name} is not available from the credential broker")
     return r.stdout.strip()
@@ -881,12 +960,14 @@ def _write_yaml(path: Path, doc: dict, header: str = "") -> None:
 
 
 def run_nightly(agent: str, night: date | None = None, *, dry_run: bool = False, commit: bool = False,
-                max_chars: int | None = None) -> Path | None:
+                max_chars: int | None = None, sync: bool = False) -> Path | None:
     """Tonight's slice for one agent: one model turn, one findings file."""
     if agent not in AGENTS:
         raise SystemExit(f"cross_model_audit: {agent!r} is not one of the Firm's agents {sorted(AGENTS)}")
     if not dry_run:
         _require_declared_space()
+    if sync:
+        _audit_only_checkout()
     family = AGENTS[agent]
     night = night or datetime.now(timezone.utc).date()
     capability = rotation(capabilities(), night)[agent]
@@ -910,13 +991,15 @@ def run_nightly(agent: str, night: date | None = None, *, dry_run: bool = False,
     raw = parse_findings(turn["text"])
     doc["findings"], doc["rejected"] = normalize(raw, doc, ROOT, set(b["promises"]))
     _write_yaml(out, doc)
-    errors = validate_findings(out, repo=ROOT)
+    errors = stamp_validation(out, repo=ROOT)
     if errors:
         raise SystemExit(f"cross_model_audit: wrote an invalid findings file {out}: {errors[:3]}")
     print(f"cross_model_audit: {len(doc['findings'])} finding(s), {len(doc['rejected'])} rejected, "
-          f"${doc['cost_usd']:.4f}")
+          f"${doc['cost_usd']:.4f}; pins validated at write time")
     if commit:   # exactly this one file, nothing else staged or dirty (AUD-2)
-        print(f"cross_model_audit: {_commit([out], f'audit: {agent} nightly {night} ({capability})')}")
+        res = _commit([out], f"audit: {agent} nightly {night} ({capability}); pins validated at write time "
+                             f"on {_hostname()}")
+        print(f"cross_model_audit: {_push_after_merge(res) if sync else res}")
     return out
 
 
@@ -999,9 +1082,11 @@ def fixture() -> tuple[str, str, str, list[str]]:
     raise RuntimeError(f"{repo} has no {fx['ref']} branch")
 
 
-def run_calibration(agent: str, *, dry_run: bool = False, commit: bool = False) -> Path | None:
+def run_calibration(agent: str, *, dry_run: bool = False, commit: bool = False, sync: bool = False) -> Path | None:
     if not dry_run:
         _require_declared_space()
+    if sync:
+        _audit_only_checkout()
     family = AGENTS[agent]
     repo_rel, sha, root, files = fixture()
     brief_text, brief_sha = brief()
@@ -1025,14 +1110,18 @@ def run_calibration(agent: str, *, dry_run: bool = False, commit: bool = False) 
            "cost_usd": round(turn["usd"], 4)}
     doc["findings"], doc["rejected"] = normalize(parse_findings(turn["text"]), doc, ROOT / repo_rel, None)
     _write_yaml(out, doc)
+    errors = stamp_validation(out, repo=ROOT)
+    if errors:
+        raise SystemExit(f"cross_model_audit: wrote an invalid calibration run {out}: {errors[:3]}")
     print(f"cross_model_audit: {len(doc['findings'])} finding(s), {len(doc['rejected'])} rejected, "
-          f"${doc['cost_usd']:.4f}")
+          f"${doc['cost_usd']:.4f}; pins validated at write time")
     if commit:
-        print(f"cross_model_audit: {_commit([out], f'audit: {agent} calibration {today}')}")
+        res = _commit([out], f"audit: {agent} calibration {today}; pins validated at write time on {_hostname()}")
+        print(f"cross_model_audit: {_push_after_merge(res) if sync else res}")
     return out
 
 
-def score_week(today: date | None = None, *, write: bool = False) -> Path | None:
+def score_week(today: date | None = None, *, write: bool = False, write_time: bool = False) -> Path | None:
     """Score the last seven days' calibration runs (latest per agent) against the
     key and publish calibration/<ISO week>.yaml with every family's recall."""
     today = today or datetime.now(timezone.utc).date()
@@ -1044,7 +1133,7 @@ def score_week(today: date | None = None, *, write: bool = False) -> Path | None
         except ValueError:
             continue
         agent = p.stem[11:]
-        if agent in AGENTS and today - timedelta(days=7) <= d <= today and not validate_findings(p, repo=ROOT):
+        if agent in AGENTS and today - timedelta(days=7) <= d <= today and not _accepted(p, ROOT, write_time):
             latest[agent] = p
     if not latest:
         return None
@@ -1159,24 +1248,71 @@ def _commit(paths: list[Path], message: str) -> str:
     return _commit_push(SPACE, [str(p.relative_to(SPACE)) for p in paths], message)
 
 
+def _hostname() -> str:
+    import socket
+    return socket.gethostname()
+
+
+def _audit_only_checkout() -> None:
+    """--sync: this is an audit-only checkout (hermes, plur-claw). Its git pushes
+    are judged by its own guard scripts -- the shared hooks read them from
+    DATA_DIR, which defaults to ~/Data, the agent's space repo there, whose
+    vendored lib lacks some of them (the hook then fails closed). The hooks all
+    still run. Then bring the sources up to date."""
+    os.environ.setdefault("DATA_DIR", str(ROOT))
+    sync_sources()
+
+
+def sync_sources() -> None:
+    """Bring an audit-only checkout up to date before it reads (--sync).
+
+    On hermes and plur-claw the audit runs from its own checkout outside the
+    agent's space repo (~/.datacore/audit-src/datacore), which no space sync
+    maintains: the code and each module clone fast-forward, and the system
+    space merges (never rebases) so the promise list -- hence the rotation --
+    is the one every other host reads tonight. A failed pull is reported and
+    the run goes on with what is there; the pins say what was read."""
+    repos = [(ROOT, ("pull", "-q", "--ff-only"))]
+    repos += [(p, ("pull", "-q", "--ff-only")) for p in sorted((ROOT / ".datacore" / "modules").glob("*/"))
+              if (p / ".git").exists()]
+    repos.append((SPACE, ("pull", "-q", "--no-rebase", "--no-edit")))
+    for repo, args in repos:
+        r = _git(repo, *args)
+        if r.returncode != 0:
+            print(f"cross_model_audit: sync: {repo.name}: pull failed ({(r.stderr or '').strip()[-160:]})",
+                  file=sys.stderr)
+
+
+def _push_after_merge(result: str, tries: int = 3) -> str:
+    """A push refused because another host pushed first: merge (never rebase)
+    and push again. Only for an audit-only checkout, where nothing else writes."""
+    if not result.startswith("push failed"):
+        return result
+    for _ in range(tries):
+        if _git(SPACE, "pull", "-q", "--no-rebase", "--no-edit").returncode != 0:
+            break
+        if _git(SPACE, "push", "-q").returncode == 0:
+            return "pushed after merging"
+    return result + "; merge-and-push retry failed, the commit stays local for the next run's sync"
+
+
 def check(night: date, *, write: bool, send: bool) -> int:
     folder = NIGHTLY / night.isoformat()
     if write:
         _require_declared_space()
         _git(SPACE, "pull", "-q", "--no-rebase", "--autostash")   # merge, never rebase (DIP-0046)
-    notes: list[str] = []
-    alerts = night_alerts(folder, unverifiable=notes)
-    result = aggregate(folder, pool=load_pool())
+    # Judged on the write-time record: the box reads no repository of code it
+    # does not run (owner, 2026-09-28).
+    alerts = night_alerts(folder, write_time=True)
+    result = aggregate(folder, pool=load_pool(), write_time=True)
     print(f"cross_model_audit check {night}: {len(result['confirmed'])} confirmed, "
           f"{len(result['unconfirmed'])} unconfirmed, {len(alerts)} alert(s)")
     if write:
         pub = publish(result)
         print(f"  {len(pub['new'])} new candidate(s): {_commit(pub['paths'], f'audit: aggregate {night}')}")
-        week = score_week(write=True)
+        week = score_week(write=True, write_time=True)
         if week:
             print(f"  calibration {week.name}: {_commit([week], f'audit: calibration {week.stem}')}")
-    for n in notes:
-        print(f"  note: {n}")
     for a in alerts:
         print(f"  ALERT {a}")
     if alerts and send:
@@ -1288,10 +1424,13 @@ def main(argv=None) -> int:
     n.add_argument("--dry-run", action="store_true")
     n.add_argument("--commit", action="store_true", help="commit (and push) the findings file, and only it")
     n.add_argument("--max-chars", type=int, help="read less than the family's input budget (a rehearsal)")
+    n.add_argument("--sync", action="store_true",
+                   help="an audit-only checkout: pull code, modules and the space first; merge and retry a refused push")
     c = sub.add_parser("calibrate")
     c.add_argument("--agent")
     c.add_argument("--dry-run", action="store_true")
     c.add_argument("--commit", action="store_true", help="commit (and push) the run file, and only it")
+    c.add_argument("--sync", action="store_true", help="as for nightly")
     k = sub.add_parser("check")
     k.add_argument("--night", type=date.fromisoformat,
                    default=datetime.now(timezone.utc).date() - timedelta(days=1))
@@ -1308,10 +1447,11 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     if a.cmd in (None, "nightly"):
         run_nightly(_agent(getattr(a, "agent", None)), getattr(a, "night", None), dry_run=getattr(a, "dry_run", False),
-                    commit=getattr(a, "commit", False), max_chars=getattr(a, "max_chars", None))
+                    commit=getattr(a, "commit", False), max_chars=getattr(a, "max_chars", None),
+                    sync=getattr(a, "sync", False))
         return 0
     if a.cmd == "calibrate":
-        run_calibration(_agent(a.agent), dry_run=a.dry_run, commit=a.commit)
+        run_calibration(_agent(a.agent), dry_run=a.dry_run, commit=a.commit, sync=a.sync)
         return 0
     if a.cmd == "check":
         return check(a.night, write=a.write, send=a.send)

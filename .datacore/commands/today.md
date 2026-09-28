@@ -406,7 +406,7 @@ recorded" written on its own line in the briefing — never "not sent" or "not d
 python3 .datacore/modules/news/lib/feed_fetcher.py  # if >4h stale
 ```
 
-Read from `.datacore/modules/news/data/headlines.json`.
+Read from `0-personal/.datacore/module-data/news/data/headlines.json` (the personal space's private module-data folder; `python3 .datacore/modules/news/lib/news_paths.py` prints it).
 
 ---
 

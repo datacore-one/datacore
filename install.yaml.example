@@ -38,5 +38,6 @@ roles:
   system: myteam        # where Datacore's own work lives: promises, repair tasks
   product: myteam       # the roadmap, sprints and product triage tools default here
   standup: myteam       # the team space the daily standup posts for
+  personal: personal    # the default personal space, needed only when a machine has more than one
   held: []              # spaces tools must never write to
   attest: [myteam, personal]   # where attestations land, first with a ledger wins
