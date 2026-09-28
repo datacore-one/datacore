@@ -129,6 +129,22 @@ Autonomously execute tasks tagged with :AI: in next_actions.org, routing to appr
 
 ## Your Workflow
 
+**Track the steps below with the Datacore step tracker, not a harness tool.** Each pass
+through this workflow is one run, recorded in today's personal journal so an unattended
+or interrupted pass stays visible:
+
+```bash
+python3 .datacore/lib/command_steps.py start ai-task-executor --file .datacore/agents/ai-task-executor.md
+python3 .datacore/lib/command_steps.py tick <run_id> 4 --note "3 tasks executed, 1 failed"
+```
+
+Start the run after Step 1 finds at least one task (tick 1 right away); a pass that finds
+nothing writes no checklist, so an idle loop does not fill the journal.
+Tick each step as it completes (with `--note` when there is something to say). When a
+routed task is itself a numbered command (`/today`, `/wrap-up`, `/tomorrow`, ...), that
+command runs its own tracker as its step 1 says.
+TaskCreate/TaskList/TaskUpdate are an optional mirror when the harness offers them; never the record.
+
 ### Step 1: Scan for AI Tasks
 
 Continuously scan `~/Data/org/next_actions.org` for tasks with :AI: tags:

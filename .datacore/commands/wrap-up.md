@@ -25,15 +25,16 @@ recall:
 ## EXECUTION MODEL — INLINE WITH TRACKED CHECKLIST
 
 **Execute /wrap-up inline** in the main conversation. The tracked checklist (Step 0b) prevents
-step-skipping by making every step visible as a TaskCreate item that must be marked complete.
+step-skipping by making every step visible as an unticked line in today's journal, written and
+ticked by the Datacore step tracker (`command_steps.py`), the same in every harness.
 
 **Why not subagent:** Subagent dispatch (tried 2026-04-11) produces zero console output for
 15-20 minutes — unacceptable UX. The user sees nothing while the agent runs 170+ tool calls
 in the background. The tracked checklist is the actual compression guard, not process isolation.
 
 **Anti-compression rule:** If you feel tempted to skip steps 6-9 ("no tasks to extract",
-"nothing to verify"), STOP. The checklist forces you to mark each step in_progress and
-completed. You cannot skip what is tracked. This is the fix for ENG-2026-0411-001.
+"nothing to verify"), STOP. The checklist forces you to tick each step as it
+completes. You cannot skip what is tracked. This is the fix for ENG-2026-0411-001.
 
 ---
 
@@ -171,12 +172,22 @@ python3 ~/Data/.datacore/lib/focus_mode.py detect
 
 ### 0b. Create Tracked Checklist (MANDATORY)
 
-**After context recovery**, create a tracked task list — **one TaskCreate per spec step. NO CLUSTERING.**
+**After context recovery**, start the run's checklist with the Datacore step tracker. It writes one `- [ ]` line per spec step into today's personal journal, so it works in every harness (Claude Code with or without its task tools, any MCP client, Hermes/OpenClaw agents, unattended runs):
 
-**HARD RULE — one-to-one mapping:** The spec has 12 tracked steps. Create EXACTLY 12 tasks, in order. Each spec step gets its own task. Clustering is where skipping hides: once "X + Y" is one task you can do X, mark it done, and silently drop Y. (§6 is deliberately one task — its two halves are a single decision about one item, not two steps. See §6.)
+```bash
+python3 .datacore/lib/command_steps.py resume wrap-up    # an unfinished wrap-up from earlier today? continue it
+python3 .datacore/lib/command_steps.py start wrap-up     # otherwise: one "- [ ]" per "### N." step below
+python3 .datacore/lib/command_steps.py tick <run_id> 3   # the moment step 3 completes
+python3 .datacore/lib/command_steps.py tick <run_id> 1 --note "not-answered"   # the §12 status, when not "run ✓"
+python3 .datacore/lib/command_steps.py status <run_id>   # done / pending, plus the 12 `checklist` rows
+```
+
+(Over MCP: `datacore_command_steps` with `op: resume | start | tick | status`.) Keep the `run_id` from `start`. **Optional mirror:** if your harness has a checklist tool (Claude Code's TaskCreate/TaskUpdate), you may mirror the 12 steps there for the on-screen view; the journal checklist stays the record, and a mirror never replaces a `tick`.
+
+**HARD RULE — one-to-one mapping, NO CLUSTERING:** The spec has 12 tracked steps and the tracker writes exactly 12 lines, in order. Each spec step gets its own tick. Clustering is where skipping hides: once "X + Y" is one task you can do X, mark it done, and silently drop Y. (§6 is deliberately one task — its two halves are a single decision about one item, not two steps. See §6.)
 
 ```
-Tasks to create (one per spec step, mark in_progress when starting, completed when done):
+The 12 lines the tracker writes (tick each when done; the titles are the "### N." headings):
 
  1. "Step 1  — Pulse + notes (ask, DO NOT WAIT)"
  2. "Step 2  — Preflight (wrap_up_mechanics.py preflight)"
@@ -209,7 +220,7 @@ Tasks to create (one per spec step, mark in_progress when starting, completed wh
 >
 > Not a relaxation. Each removed step is now either a JSON field §9 asserts against the filesystem, or a merge that removes a seam. A model marking its own task done was never the stronger check.
 
-**Step 12 is the gate.** Before marking it complete, run `TaskList` and verify every prior task is `completed`. Then write the `## Wrap-up Checklist Audit` section to today's personal journal listing each step's actual status using the §12 allowed statuses: `run ✓`, `skipped-by-user`, `skipped-by-mode-fast`, `not-answered`, `not-applicable (REASON)`, `inferred-and-reported (DESCRIPTION)`, or `applied-from-feedback (N CORRECTIONS)`. The PreToolUse hook `wrap_up_checklist_check.py` blocks `plur_session_end` until that section exists in the journal. The section is rendered by `report --journal` from the `checklist` rows (§10). Where TaskList does not exist, carry the checklist inline; `audit --final` is the gate (§0f).
+**Step 12 is the gate.** Before ticking it, run `command_steps.py status <run_id>` and verify steps 1-11 are all in `done`. Then write the `## Wrap-up Checklist Audit` section to today's personal journal listing each step's actual status using the §12 allowed statuses: `run ✓`, `skipped-by-user`, `skipped-by-mode-fast`, `not-answered`, `not-applicable (REASON)`, `inferred-and-reported (DESCRIPTION)`, or `applied-from-feedback (N CORRECTIONS)`. The PreToolUse hook `wrap_up_checklist_check.py` blocks `plur_session_end` until that section exists in the journal. The section is rendered by `report --journal` from the `checklist` rows (§10); take those rows from `status`'s `checklist` field (the `--note` of each tick is its status). `audit --final` is the gate in every harness (§0f).
 
 **Why this exists:** Spec step counts in past sessions: 17 spec steps, 9 tasks created, 6 silently skipped (observed 2026-05-29 SMK wrap-up; previously documented as ENG-2026-0512-044 on 2026-05-12 but recurred 17 days later). Memory engrams alone are insufficient — execution-time discipline failure. The hook is the structural defense; one-task-per-step is the readability defense.
 
@@ -301,7 +312,7 @@ The command must produce the same result everywhere, so everything that decides 
 |---|---|---|
 | Report layout | `report` renders it | Same: `report` renders it. The layout never depends on the model. |
 | Session id | `CLAUDE_CODE_SESSION_ID` | Set `DATACORE_SESSION_ID` if the harness exposes one. Otherwise steps file under `nosession-<date>`. `meta` then reports "unavailable", and the report says so instead of estimating. |
-| Tracked checklist | TaskCreate | Carry it inline; the 12 `checklist` rows are required by `report` either way. |
+| Tracked checklist | `command_steps.py` (TaskCreate only as an optional mirror) | Same: `command_steps.py`, from a shell or `datacore_command_steps` over MCP. |
 | journal-coordinator | subagent | No subagent tool: write the per-space journals inline, one space at a time, before §8. |
 | Completion gate | PreToolUse hook + `audit --final` | `audit --final` alone. Report its `failed[]` verbatim. |
 
@@ -1445,7 +1456,7 @@ vouch for it.
 python3 ~/Data/.datacore/lib/wrap_up_mechanics.py audit --final
 ```
 
-It asserts that the rendered report (by its marker) and the three required sections are in today's journal. In Claude Code the hook below enforces the same thing. Codex, Cursor and other harnesses have no PreToolUse hook, so there `audit --final` IS the gate. Report its `failed[]` verbatim.
+It asserts that the rendered report (by its marker) and the three required sections are in today's journal. In Claude Code the hook below enforces the same thing. Codex, Cursor and other harnesses have no PreToolUse hook, so there `audit --final` IS the gate. Report its `failed[]` verbatim. When it passes, `command_steps.py tick <run_id> 12`; `status <run_id>` must then say `"complete": true`.
 
 **Hook behavior (Claude Code only):**
 - File: `~/Data/.datacore/lib/hooks/wrap_up_checklist_check.py`

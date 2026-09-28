@@ -61,31 +61,29 @@ The briefing tells a story in three acts:
 
 ## Step 1: Create Tracked Checklist
 
-**Before doing anything else**, create a tracked task list for each step.
+**Before doing anything else**, start the run's checklist with the Datacore step
+tracker. It works the same in every harness (Claude Code with or without its own
+task tools, any MCP client, Hermes/OpenClaw agents, unattended runs), because the
+checklist lives in today's personal journal, not in the harness.
 
-Use `TaskCreate` to create one task per step:
+```bash
+python3 .datacore/lib/command_steps.py resume today     # an unfinished run from earlier today? continue it
+python3 .datacore/lib/command_steps.py start today      # otherwise: writes every "## Step N" below as "- [ ]"
+python3 .datacore/lib/command_steps.py tick <run_id> 1  # this step is done
+```
 
-```
-1. "Check for existing briefing"
-2. "Sync repositories"
-3. "Fetch Oura vitals"
-4. "Fetch calendar events"
-5. "Scan email"
-6. "Scan GitHub"
-7. "Collect nightshift results"
-7b. "Check overnight learning sweep"
-8. "Compute GTD health"
-9. "Fetch news headlines"
-10. "Gather trading data"
-11. "Gather venture data"
-12. "Check research outputs"
-13. "Execute inline module hooks"
-14. "Generate briefing"
-15. "Write to journal"
-16. "Generate standup drafts"
-17. "Execute post-hooks (audio + notifications)"
-18. "Verify completion"
-```
+(Over MCP: `datacore_command_steps` with `op: resume | start | tick | status`.)
+
+- `start` prints JSON with the `run_id`, the journal path and every step. Keep the
+  `run_id`; if `previous_unfinished` is not empty, say so and ask whether to resume it.
+- **Tick each step the moment it completes**: `tick <run_id> <step>` (for example
+  `tick <run_id> 8b`). A step that did not run is still ticked, with the reason:
+  `tick <run_id> 11 --note "not-applicable (no open positions)"`. Never tick ahead.
+- `status <run_id>` shows what is done and pending. Unticked lines in the journal are
+  the visible trace of an unfinished run; `resume today` picks it up.
+- **Optional mirror:** if your harness has a checklist tool (Claude Code's
+  TaskCreate/TaskUpdate), you may mirror the steps there for the on-screen view. The
+  journal checklist stays the record; never let the mirror replace a `tick`.
 
 ---
 
@@ -615,6 +613,9 @@ Pattern sources: productivity, habit streaks, task trends, readiness correlation
 **If file exists but no `## Daily Briefing`:** Insert after frontmatter.
 **If `## Daily Briefing` exists:** Replace in-place with fresh content.
 
+The `## Command steps: /today (run …)` block that step 1 wrote is not part of the
+briefing: leave it where it is and never rewrite it by hand (only `tick` changes it).
+
 **After writing:** `open <journal_path>` to launch in default editor.
 
 ---
@@ -688,7 +689,9 @@ happens. Read the prompt and follow it.
 
 ## Step 19: Verify Completion
 
-Check all steps completed. Print console summary of top 3 priorities.
+Run `python3 .datacore/lib/command_steps.py status <run_id>`. Every step except
+this one must be in `done`; go back and finish any that is `pending`, then
+`tick <run_id> 19`. Print console summary of top 3 priorities.
 
 ---
 
