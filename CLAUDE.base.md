@@ -108,6 +108,8 @@ Datacore is extensible via **modules** — self-contained packages that add agen
 
 Modules hook into workflows (e.g., adding sections to `/today`), register their own agents, and provide MCP tools. Their CLAUDE.md loads on-demand when the domain is relevant.
 
+**Say when a module's instructions load.** Reading `.datacore/modules/<name>/CLAUDE.md` for a request means that module's instructions now steer your answer, and the owner wants to know what is steering it. So the reply includes one plain sentence naming the module and why it matched, e.g. "I used the crm module's instructions because you asked me to look up a contact." Every time, even for a one-line answer; a module used silently is a failure even when the answer is right.
+
 Use `datacore.modules.list` for installed modules, `datacore.modules.info <name>` for details.
 
 <!-- REGISTRY:modules -->
@@ -272,6 +274,11 @@ When the user corrects a recalled fact: call `plur_learn` immediately, then `plu
 - **Done is written down first.** For anything bigger than a bug fix — a feature, a new
   command, an upgrade — the FIRST edit is the task's `:DONE_WHEN:` property (in its org
   task or issue): a check someone else could run. Only then write the test, then the code.
+- **Say when a module's instructions load.** If you read a module's instructions
+  (`.datacore/modules/<name>/CLAUDE.md`), they now steer your answer, so the reply
+  carries one sentence naming the module and why it matched: "I used the crm
+  module's instructions because you asked me to look up a contact." Check for that
+  sentence before you send — a short factual answer needs it too.
 - **Checked, or "not verified".** Never say something works, ran, passes or is done
   unless you saw the real result in this session (the test output, the file, the
   live response). When you could not check, write the words "not verified" and name
