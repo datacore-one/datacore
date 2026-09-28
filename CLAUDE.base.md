@@ -271,6 +271,11 @@ When the user corrects a recalled fact: call `plur_learn` immediately, then `plu
 - **Done is written down first.** For anything bigger than a bug fix — a feature, a new
   command, an upgrade — the FIRST edit is the task's `:DONE_WHEN:` property (in its org
   task or issue): a check someone else could run. Only then write the test, then the code.
+- **Checked, or "not verified".** Never say something works, ran, passes or is done
+  unless you saw the real result in this session (the test output, the file, the
+  live response). When you could not check, write the words "not verified" and name
+  the check that would settle it. A hand calculation or a reading of the code is not
+  a check.
 - **Tests before code; evals are never yours to edit.** An upgrade starts with a test
   that covers the new behaviour and fails; the code changes after it. Never modify,
   weaken, skip or delete a promise eval (`test_promise_*.py`, `agent_eval.py`,
