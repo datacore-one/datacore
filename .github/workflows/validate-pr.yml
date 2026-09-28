@@ -111,6 +111,7 @@ jobs:
             .datacore/lib/tests \
             .datacore/lib/sync/tests \
             .datacore/tests \
+            .datacore/modules/github/tests \
             .datacore/modules/research/tests \
             .datacore/modules/tab-capture/tests
           ruff check --select F821,F822,F823,E9 .datacore
