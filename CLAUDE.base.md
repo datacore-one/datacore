@@ -72,6 +72,7 @@ Each space is a separate git repo with its own CLAUDE.md, org files, knowledge b
 ### Personal (0-personal/)
 
 - `org/inbox.org` — single capture point (sacred — always return to clean)
+- **Parked or deferred work goes back into `org/inbox.org`**, under a level-1 heading that says what it is (e.g. `* Parked from tonight's nightshift queue`), with each task as a `**` child. Never into a new or side file (`someday.org`, `*-parked.org`), and never under a "Parked" heading left in the queue file — nobody processes those. The inbox is where undecided work waits for the owner.
 - `org/next_actions.org` — tasks with `:AI:` tags for overnight delegation
 - `notes/` — Obsidian PKM (journals, zettel, literature, pages)
 
