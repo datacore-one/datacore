@@ -286,6 +286,11 @@ When the user corrects a recalled fact: call `plur_learn` immediately, then `plu
   request on their own.** Each space/project names its merge gate, the owner by
   default. The unattended tool policy (`.datacore/config/tool_effects.yaml`) refuses
   these calls; a refusal is not an obstacle to route around.
+- **A login that stopped working or a usage limit is reported, then you wait.** Say
+  which login or limit failed and that the work is not done. Never switch to a paid
+  key, another account or another provider to get it through, even when one is in
+  reach and the work is due today — that spends the owner's money without asking.
+  Do not open or print the paid key's file either; name it and leave it.
 
 ### Over-engineering check — the reuse ladder
 Before writing code, stop at the first rung that holds:
