@@ -10,6 +10,32 @@
   ],
   "$comment": "additionalProperties is intentionally true: sprint files accumulate ad-hoc operational keys (topic notes, hitl_log metadata, per-sprint tracking fields) that cannot be enumerated in advance. The primary requirement from #1042 — detecting absent required keys — is met by the required array above. Switching to false would require maintaining an exhaustive allowlist that drifts faster than the schema.",
   "additionalProperties": true,
+  "definitions": {
+    "item_state": {
+      "type": "string",
+      "enum": ["todo", "ready", "claimed", "in-progress", "review", "blocked", "done", "cancelled", "dropped"],
+      "description": "todo/ready: not started. claimed/in-progress/review: someone is on it; a closed sprint may not keep an item in these unless it is listed in carryover (enforced in sprint_validate.py). blocked. Terminal: done; cancelled (a decision not to do it); dropped (the sprint closed without finishing or carrying it, and its linked issue remains the live record)."
+    },
+    "backlog_item": {
+      "type": "object",
+      "required": ["id", "state"],
+      "additionalProperties": true,
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "state": {"$ref": "#/definitions/item_state"}
+      }
+    },
+    "stretch_item": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": true,
+      "$comment": "state is optional on a stretch item: one that was never pulled was never started.",
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "state": {"$ref": "#/definitions/item_state"}
+      }
+    }
+  },
   "properties": {
     "sprint_id": {
       "type": "string",
@@ -81,11 +107,13 @@
     },
     "backlog": {
       "type": "array",
-      "description": "Committed sprint items"
+      "description": "Committed sprint items",
+      "items": {"$ref": "#/definitions/backlog_item"}
     },
     "stretch": {
       "type": "array",
-      "description": "Items to pick up if capacity allows"
+      "description": "Items to pick up if capacity allows",
+      "items": {"$ref": "#/definitions/stretch_item"}
     },
     "hitl_log": {
       "type": "array",
