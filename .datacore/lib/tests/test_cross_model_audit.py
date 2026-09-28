@@ -223,3 +223,60 @@ def test_the_audit_roster_is_the_installs_own(monkeypatch):
     assert cma._audit_roster() == ({"ops": "claude", "cos": "gpt"}, {"ops": 1.0, "cos": 0.5})
     monkeypatch.setattr(roster, "section", lambda key, path=None: {})
     assert cma._audit_roster() == ({}, {})
+
+
+# ── model access comes from the install, never from the code ────────────────
+def _models(monkeypatch, models):
+    import roster
+    monkeypatch.setattr(roster, "section", lambda key, path=None: {"models": models} if key == "cross_model_audit" else {})
+
+
+def test_no_model_id_is_written_into_the_code():
+    for fam, f in cma.FAMILIES.items():
+        assert f["model"] == "", f"{fam}: a model id in the code is a guess; it belongs in the install's roster"
+
+
+def test_the_model_and_its_access_come_from_the_installs_roster(monkeypatch):
+    _models(monkeypatch, {"glm": {"model": "z-ai/glm-test", "transport": "openrouter"}})
+    f = cma.family_config("glm")
+    assert f["model"] == "z-ai/glm-test" and f["transport"] == "openrouter"
+    assert f["in"] == cma.FAMILIES["glm"]["in"], "prices and limits stay the code's"
+
+
+def test_a_family_with_no_configured_model_is_refused_not_guessed(monkeypatch):
+    _models(monkeypatch, {})
+    monkeypatch.setattr(cma, "_post_json", lambda *a, **k: pytest.fail("a model was called with no model id"))
+    with pytest.raises(RuntimeError, match="no model"):
+        cma.call_model("deepseek", "x", max_usd=0.1)
+
+
+def test_a_local_model_is_reached_without_a_key(monkeypatch):
+    _models(monkeypatch, {"glm": {"transport": "local", "model": "glm-local", "base_url": "http://127.0.0.1:11434/v1/"}})
+    seen = {}
+
+    def fake_post(url, body, headers, timeout):
+        seen.update(url=url, body=body, headers=headers)
+        return {"model": "glm-local", "choices": [{"message": {"content": "findings: []"}}], "usage": {}}
+    monkeypatch.setattr(cma, "_post_json", fake_post)
+    monkeypatch.setattr(cma, "_secret", lambda name: pytest.fail("a local model needs no key"))
+    out = cma.call_model("glm", "x", max_usd=0.1)
+    assert seen["url"] == "http://127.0.0.1:11434/v1/chat/completions"
+    assert "Authorization" not in seen["headers"] and seen["body"]["model"] == "glm-local"
+    assert out["usd"] == 0.0 and out["text"] == "findings: []"
+
+
+def test_a_committed_night_commits_only_its_findings_file(sandbox, monkeypatch):
+    monkeypatch.setattr(cma, "rotation", lambda caps, night, agents=None: {a: "audits" for a in cma.AGENTS})
+    monkeypatch.setattr(cma, "call_model", lambda *a, **k: {"model": "m", "usd": 0.01, "text": "findings: []"})
+    committed = []
+    monkeypatch.setattr(cma, "_commit", lambda paths, message: committed.append((list(paths), message)) or "ok")
+    out = cma.run_nightly("winston", date(2026, 9, 28), commit=True)
+    assert committed == [([out], committed[0][1])] and "winston" in committed[0][1]
+
+
+def test_a_rehearsal_can_read_a_smaller_slice(sandbox, monkeypatch):
+    monkeypatch.setattr(cma, "rotation", lambda caps, night, agents=None: {a: "audits" for a in cma.AGENTS})
+    real, asked = cma.bundle, []
+    monkeypatch.setattr(cma, "bundle", lambda cap, max_chars, pins=None: asked.append(max_chars) or real(cap, max_chars, pins))
+    cma.run_nightly("miles", date(2026, 9, 28), dry_run=True, max_chars=20_000)
+    assert asked == [20_000]

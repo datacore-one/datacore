@@ -194,3 +194,20 @@ def test_rsync_jobs_are_told_apart_by_what_they_copy():
     assert C.reconcile(result, {'mail-pull': pull}) == result
     # flags before the source are not what tells jobs apart
     assert C.invocation('1 * * * * rsync -a --delete /src/ /dst/') == ('rsync', '/src/')
+
+
+def test_cross_model_audit_jobs_are_told_apart_by_their_arguments():
+    """One script, many jobs: each agent's nightly slice and calibration, the
+    morning check that alerts and the one that publishes. By executable alone,
+    installing one would drop all the others."""
+    base = '0 1 * * * DATACORE_ROOT=/h/Data /usr/bin/python3 /h/Data/.datacore/lib/cross_model_audit.py '
+    lines = {'nightly-a': base + 'nightly --agent a --commit >> /h/log 2>&1',
+             'nightly-b': base + 'nightly --agent b --commit >> /h/log 2>&1',
+             'calibrate-a': base + 'calibrate --agent a --commit >> /h/log 2>&1',
+             'publish': base + 'check --write >> /h/log 2>&1'}
+    other = base + 'check --send >> /h/other.log 2>&1 # datacore-job:someone-elses-check\n'
+    result = C.reconcile(other, lines)
+    assert result.startswith(other), "another job on the same script was dropped"
+    assert all(f'# datacore-job:{k}\n' in result for k in lines)
+    with pytest.raises(ValueError, match='ambiguous'):
+        C.reconcile('', {'x': base + 'nightly --agent a', 'y': base + 'nightly --agent a'})

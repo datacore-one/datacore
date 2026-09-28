@@ -74,6 +74,11 @@ delegation_exercise:                            # delegation_fleet_exercise.py
 cross_model_audit:                              # cross_model_audit.py: one model family per agent
   agents: {assistant: claude}
   nightly_cap_usd: {assistant: 1.00}
+  models:                                       # copied from each agent's runtime config, never guessed;
+    claude: {transport: claude-cli, model: ""}  # "" = the subscription CLI's own default
+    # deepseek: {transport: openrouter, model: <id the agent's runtime uses>}
+    # gpt:      {transport: openai, model: <id>}
+    # glm:      {transport: local, model: <id>, base_url: "http://127.0.0.1:11434/v1"}
 testnet_dashboard:                              # testnet_dashboard.py: personas on the public page
   agents:                                       # [persona, public handle, lane]
     - ["Assistant", "@your_assistant_bot", "operations"]

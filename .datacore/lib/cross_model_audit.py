@@ -7,8 +7,8 @@ turn over the code behind that capability read at a pinned commit; a script
 (no model) then clusters the four findings files, and only a finding two
 different families agree on becomes a candidate eval for the owner.
 
-    cross_model_audit.py nightly   --agent A [--night D] [--dry-run]   tonight's slice
-    cross_model_audit.py calibrate --agent A [--dry-run]               the weekly practice project
+    cross_model_audit.py nightly   --agent A [--night D] [--dry-run] [--commit] [--max-chars N]
+    cross_model_audit.py calibrate --agent A [--dry-run] [--commit]    the weekly practice project
     cross_model_audit.py check     [--night D] [--write] [--send]      next morning, on the box
     cross_model_audit.py review    --pr URL --author-family F [--post]  AUD-5: another family comments
     cross_model_audit.py validate  FILE...
@@ -85,20 +85,51 @@ _ROSTER = _audit_roster()
 #: The Firm: agent -> model family. Four agents, four families (AUD-1).
 AGENTS = _ROSTER[0]
 
-#: How each family is reached. Model ids can be overridden per host with
-#: AUDIT_MODEL_<FAMILY>; prices (USD per million tokens) only feed the
-#: estimate asked of may_start -- the spend recorded is what the provider reports
-#: when it reports one.
+#: What the code knows about each family: how it is reached by default, and the
+#: prices (USD per million tokens) that feed the estimate asked of may_start --
+#: the spend recorded is what the provider reports when it reports one. The
+#: MODEL ID is never here: it is the install's, copied from each agent's own
+#: runtime config into principals.yaml `cross_model_audit.models` (see family_config()),
+#: and can be overridden per host with AUDIT_MODEL_<FAMILY>.
 FAMILIES = {
     "claude": {"transport": "claude-cli", "model": "", "in": 5.0, "out": 25.0,
                "max_input_chars": 400_000, "max_output_tokens": 8_000},
-    "deepseek": {"transport": "openrouter", "model": "deepseek/deepseek-v4-pro", "in": 0.6, "out": 2.4,
+    "deepseek": {"transport": "openrouter", "model": "", "in": 0.6, "out": 2.4,
                  "max_input_chars": 240_000, "max_output_tokens": 8_000},
-    "glm": {"transport": "openrouter", "model": "z-ai/glm-4.6", "in": 0.6, "out": 2.2,
+    "glm": {"transport": "openrouter", "model": "", "in": 0.6, "out": 2.2,
             "max_input_chars": 300_000, "max_output_tokens": 8_000},
-    "gpt": {"transport": "openai", "model": "gpt-5", "in": 1.25, "out": 10.0,
+    "gpt": {"transport": "openai", "model": "", "in": 1.25, "out": 10.0,
             "max_input_chars": 400_000, "max_output_tokens": 8_000},
 }
+
+#: Every way a family can be reached: a subscription CLI login (claude-cli), an
+#: API key (openai), OpenRouter, or a local OpenAI-compatible server (local,
+#: e.g. ollama or llama.cpp at `base_url`, no key).
+TRANSPORTS = ("claude-cli", "openai", "openrouter", "local")
+
+
+def family_config(name: str) -> dict:
+    """FAMILIES[name] with the install's model, transport and base_url laid over it.
+
+    principals.yaml:
+        cross_model_audit:
+          models:
+            deepseek: {transport: openrouter, model: <id from the agent's runtime>}
+            glm:      {transport: local, model: <id>, base_url: http://127.0.0.1:11434/v1}
+    """
+    import roster
+    f = dict(FAMILIES[name])
+    cfg = ((roster.section("cross_model_audit").get("models") or {}).get(name)) or {}
+    if isinstance(cfg, str):
+        cfg = {"model": cfg}
+    for k in ("transport", "model", "base_url"):
+        if cfg.get(k) is not None:
+            f[k] = str(cfg[k])
+    f["model"] = os.environ.get(f"AUDIT_MODEL_{name.upper()}", f["model"])
+    if f["transport"] not in TRANSPORTS:
+        raise RuntimeError(f"{name}: transport {f['transport']!r} is not one of {TRANSPORTS}")
+    return f
+
 
 #: Per agent, per UTC day, all audit spend together (nightly, calibration, review).
 #: Owner-set values; these are the build's conservative defaults (AUD-6).
@@ -463,8 +494,13 @@ def _post_json(url: str, body: dict, headers: dict, timeout: int) -> dict:
 
 def call_model(family: str, prompt: str, *, max_usd: float, timeout_s: int = 1500) -> dict:
     """One model turn, no tools. {text, usd, model}. Raises on failure."""
-    f = FAMILIES[family]
-    model = os.environ.get(f"AUDIT_MODEL_{family.upper()}", f["model"])
+    f = family_config(family)
+    model = f["model"]
+    if not model and f["transport"] != "claude-cli":
+        # The subscription CLI may use its own default; every other route needs the
+        # id the agent's runtime uses. None configured: refuse, never guess one.
+        raise RuntimeError(f"no model configured for {family}: set cross_model_audit.models.{family} "
+                           "in principals.yaml from that agent's runtime config")
     if f["transport"] == "claude-cli":
         import shutil
         from tool_policy import settings_json
@@ -502,6 +538,14 @@ def call_model(family: str, prompt: str, *, max_usd: float, timeout_s: int = 150
             "model": model, "messages": [{"role": "user", "content": prompt}],
             "max_completion_tokens": f["max_output_tokens"]},
             {"Authorization": f"Bearer {_secret('OPENAI_API_KEY')}"}, timeout_s)
+    elif f["transport"] == "local":
+        base = str(f.get("base_url") or "").rstrip("/")
+        if not base:
+            raise RuntimeError(f"{family}: a local model needs base_url in cross_model_audit.models")
+        data = _post_json(f"{base}/chat/completions", {
+            "model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0,
+            "max_tokens": f["max_output_tokens"]}, {}, timeout_s)
+        data.setdefault("usage", {})["cost"] = float((data.get("usage") or {}).get("cost") or 0.0)
     else:
         raise RuntimeError(f"unknown transport {f['transport']!r}")
     usage = data.get("usage") or {}
@@ -708,7 +752,8 @@ def _write_yaml(path: Path, doc: dict, header: str = "") -> None:
     atomic_write_text(path, header + yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=110))
 
 
-def run_nightly(agent: str, night: date | None = None, *, dry_run: bool = False) -> Path | None:
+def run_nightly(agent: str, night: date | None = None, *, dry_run: bool = False, commit: bool = False,
+                max_chars: int | None = None) -> Path | None:
     """Tonight's slice for one agent: one model turn, one findings file."""
     if agent not in AGENTS:
         raise SystemExit(f"cross_model_audit: {agent!r} is not one of the Firm's agents {sorted(AGENTS)}")
@@ -716,7 +761,7 @@ def run_nightly(agent: str, night: date | None = None, *, dry_run: bool = False)
     night = night or datetime.now(timezone.utc).date()
     capability = rotation(capabilities(), night)[agent]
     brief_text, brief_sha = brief()
-    b = bundle(capability, FAMILIES[family]["max_input_chars"])
+    b = bundle(capability, min(FAMILIES[family]["max_input_chars"], max_chars or FAMILIES[family]["max_input_chars"]))
     reoffer = [r for r in load_pool() if r.get("capability") == capability and family not in (r.get("families") or [])]
     prompt = nightly_prompt(agent, capability, b, brief_text, reoffer)
     out = NIGHTLY / night.isoformat() / f"{agent}.yaml"
@@ -739,6 +784,8 @@ def run_nightly(agent: str, night: date | None = None, *, dry_run: bool = False)
         raise SystemExit(f"cross_model_audit: wrote an invalid findings file {out}: {errors[:3]}")
     print(f"cross_model_audit: {len(doc['findings'])} finding(s), {len(doc['rejected'])} rejected, "
           f"${doc['cost_usd']:.4f}")
+    if commit:   # exactly this one file, nothing else staged or dirty (AUD-2)
+        print(f"cross_model_audit: {_commit([out], f'audit: {agent} nightly {night} ({capability})')}")
     return out
 
 
@@ -821,7 +868,7 @@ def fixture() -> tuple[str, str, str, list[str]]:
     raise RuntimeError(f"{repo} has no {fx['ref']} branch")
 
 
-def run_calibration(agent: str, *, dry_run: bool = False) -> Path | None:
+def run_calibration(agent: str, *, dry_run: bool = False, commit: bool = False) -> Path | None:
     family = AGENTS[agent]
     repo_rel, sha, root, files = fixture()
     brief_text, brief_sha = brief()
@@ -845,6 +892,10 @@ def run_calibration(agent: str, *, dry_run: bool = False) -> Path | None:
            "cost_usd": round(turn["usd"], 4)}
     doc["findings"], doc["rejected"] = normalize(parse_findings(turn["text"]), doc, ROOT / repo_rel, None)
     _write_yaml(out, doc)
+    print(f"cross_model_audit: {len(doc['findings'])} finding(s), {len(doc['rejected'])} rejected, "
+          f"${doc['cost_usd']:.4f}")
+    if commit:
+        print(f"cross_model_audit: {_commit([out], f'audit: {agent} calibration {today}')}")
     return out
 
 
@@ -1098,9 +1149,12 @@ def main(argv=None) -> int:
     n.add_argument("--agent")
     n.add_argument("--night", type=date.fromisoformat)
     n.add_argument("--dry-run", action="store_true")
+    n.add_argument("--commit", action="store_true", help="commit (and push) the findings file, and only it")
+    n.add_argument("--max-chars", type=int, help="read less than the family's input budget (a rehearsal)")
     c = sub.add_parser("calibrate")
     c.add_argument("--agent")
     c.add_argument("--dry-run", action="store_true")
+    c.add_argument("--commit", action="store_true", help="commit (and push) the run file, and only it")
     k = sub.add_parser("check")
     k.add_argument("--night", type=date.fromisoformat,
                    default=datetime.now(timezone.utc).date() - timedelta(days=1))
@@ -1116,10 +1170,11 @@ def main(argv=None) -> int:
     ro.add_argument("--night", type=date.fromisoformat, default=datetime.now(timezone.utc).date())
     a = ap.parse_args(argv)
     if a.cmd in (None, "nightly"):
-        run_nightly(_agent(getattr(a, "agent", None)), getattr(a, "night", None), dry_run=getattr(a, "dry_run", False))
+        run_nightly(_agent(getattr(a, "agent", None)), getattr(a, "night", None), dry_run=getattr(a, "dry_run", False),
+                    commit=getattr(a, "commit", False), max_chars=getattr(a, "max_chars", None))
         return 0
     if a.cmd == "calibrate":
-        run_calibration(_agent(a.agent), dry_run=a.dry_run)
+        run_calibration(_agent(a.agent), dry_run=a.dry_run, commit=a.commit)
         return 0
     if a.cmd == "check":
         return check(a.night, write=a.write, send=a.send)

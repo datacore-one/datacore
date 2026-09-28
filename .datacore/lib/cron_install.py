@@ -73,6 +73,10 @@ def invocation(line: str, *, reject_compound: bool = False) -> tuple[str, ...] |
     # apart. By executable alone, tagging one rsync line dropped every other.
     if program == 'rsync':
         return (identity, next((a for a in args if not a.startswith('-')), ''))
+    # cross_model_audit.py is every agent's nightly slice and calibration and the
+    # morning check and publish: the whole argument list is the job.
+    if program == 'cross_model_audit.py':
+        return (identity, ' '.join(args))
     if program == 'job_verify.py':
         return (identity, args[args.index('--machine') + 1] if '--machine' in args and args.index('--machine') + 1 < len(args) else '')
     return (identity,)
