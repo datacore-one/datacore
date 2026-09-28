@@ -59,9 +59,48 @@ def validate_file(path: Path, schema: dict) -> list[str]:
     data = _coerce(raw)
 
     validator = jsonschema.Draft7Validator(schema)
-    return [
+    errors = [
         f"{'.'.join(str(p) for p in err.path) or '(root)'}: {err.message}"
         for err in sorted(validator.iter_errors(data), key=lambda e: list(e.path))
+    ]
+    return errors or closed_sprint_errors(data)
+
+
+# States that say someone is on the item. A closed sprint that still shows one
+# is reporting live work that nobody is doing: on 2026-09-25 the morning
+# briefing named W23 B1/B2 as open go-live blockers "in review", 108 days
+# after their PRs merged. JSON Schema cannot express "unless listed in
+# carryover", so the rule lives here.
+IN_FLIGHT = {"claimed", "in-progress", "review"}
+
+
+def _carried_ids(carryover: list, sprint_id: str) -> set[str]:
+    """Item ids named by carryover: `B1`, `<sprint_id>#B1`, or `{id: B1}`."""
+    ids: set[str] = set()
+    for entry in carryover:
+        if isinstance(entry, dict):
+            entry = entry.get("id")
+        if not isinstance(entry, str):
+            continue
+        sprint, sep, item = entry.partition("#")
+        if not sep:
+            ids.add(entry)
+        elif sprint == sprint_id:
+            ids.add(item)
+    return ids
+
+
+def closed_sprint_errors(data: dict) -> list[str]:
+    """A closed sprint may not keep an item in flight unless it carried it."""
+    if data.get("status") != "closed":
+        return []
+    carried = _carried_ids(data.get("carryover") or [], data.get("sprint_id", ""))
+    return [
+        f"{section}.{item['id']}: state {item['state']!r} in a closed sprint — "
+        f"set a terminal state (done / cancelled / dropped) or list it in carryover"
+        for section in ("backlog", "stretch")
+        for item in data.get(section) or []
+        if item.get("state") in IN_FLIGHT and item["id"] not in carried
     ]
 
 
