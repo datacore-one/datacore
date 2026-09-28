@@ -257,7 +257,7 @@ This enables trend analysis in `/today` morning briefing and weekly review.
 
 **Update today's journal with the day summary:**
 
-Append to journal under `## End of Day`:
+Append to today's one personal journal page, `0-personal/notes/journals/[today].md`, under `## End of Day`. Never start a second page for the day (no `0-personal/journal/[today].md`): each space has one journal page per day (DAY-9).
 
 ```markdown
 ## End of Day
@@ -410,7 +410,7 @@ No architectural decisions requiring DIP documentation detected today.
 
 **Detection Logic:**
 
-Scan today's journal (`0-personal/journal/[today].md`) for:
+Scan today's journal (`0-personal/notes/journals/[today].md`) for:
 
 1. **Explicit DIP work without DIP file:**
    - Mentions "DIP-XXXX Implementation" but no corresponding file in `.datacore/dips/`

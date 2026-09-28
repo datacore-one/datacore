@@ -520,32 +520,32 @@ There is NO dedicated "What Data Did" section. The work is visible throughout.
 ```markdown
 ## Daily Briefing
 
-## Good Morning
+### Good Morning
 [Coach-like opening. Reference vitals, yesterday, what was handled overnight.]
 
-## The World
+### The World
 [News synthesis + market prices + trading signals. Research outputs/podcasts.]
 
-## Your Agenda
+### Your Agenda
 [What needs YOU today. Meetings + tasks + actionable emails + GitHub items.
 Everything else already handled. Capacity-adjusted.]
 
-## Spaces
+### Spaces
 [Per-space: work done + GitHub triage + priorities + venture status.]
 
-## Decisions Due
+### Decisions Due
 [Formal decisions + email decisions needing human input.]
 
-## Horizon
+### Horizon
 [This week + strategic priorities.]
 
-## Proactive Suggestions
+### Proactive Suggestions
 [Things Data can do tonight with approval. External comms = draft only.]
 
-### Metacognition
+#### Metacognition
 [Knowledge base pulse from inline hook. File counts, stubs, suggested command.]
 
-## Data's Observation
+### Data's Observation
 [Always last. Pattern analysis in Data's voice.]
 ```
 
@@ -608,6 +608,12 @@ Pattern sources: productivity, habit streaks, task trends, readiness correlation
 **Output location:** `0-personal/notes/journals/YYYY-MM-DD.md`
 
 **The Daily Briefing ALWAYS goes at the top** (after frontmatter).
+
+It is ONE section: `## Daily Briefing` is the only H2 the briefing writes, and every
+part of it (Good Morning, The World, Your Agenda, Spaces, Decisions Due, Horizon,
+Proactive Suggestions, Data's Observation) is an H3 inside it, as in the Briefing
+Structure above. A part written as its own H2 is a second briefing beside the first
+(MEM-45). No other H2 goes above it — not `## Daily Summary`, not an update.
 
 **If file doesn't exist:** Create with frontmatter + briefing.
 **If file exists but no `## Daily Briefing`:** Insert after frontmatter.

@@ -113,3 +113,17 @@ def test_entry_verifier_refuses_a_non_https_probe_target():
     assert ca._entry_verifier({"api_base": "http://internal/api"}) is None
     assert ca._entry_verifier({"api_base": "internal/api"}) is None
     assert ca._entry_verifier({"api_base": "https://gitea.example/", "provider": "gitea"}) is not None
+
+
+def test_a_telegram_bot_token_entry_is_probed_whatever_its_variable_is_called():
+    """AGT-9: each agent's bot token is proven alive by the broker. Bot tokens
+    are named per agent (one bot per agent), so a verifier keyed on variable
+    names reported every new agent's bot n-a. An entry that says it is a
+    Telegram bot token gets getMe; a Telegram chat id (not a secret) does not."""
+    import importlib.util, pathlib
+    spec = importlib.util.spec_from_file_location(
+        "ca", pathlib.Path(__file__).resolve().parents[1] / "credential_access.py")
+    ca = importlib.util.module_from_spec(spec); spec.loader.exec_module(ca)
+    probe = ca._entry_verifier({"provider": "telegram", "type": "bot_token"})
+    assert probe is not None and "api.telegram.org/bot{v}/getMe" in probe[0]
+    assert ca._entry_verifier({"provider": "telegram", "type": "chat_id"}) is None

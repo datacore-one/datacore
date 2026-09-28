@@ -1190,14 +1190,14 @@ It never appends twice for one session. Do not hand-write these sections as well
 
 1. **Session entry.** If the journal-coordinator did not already write a narrative entry for this session (TL;DR, Goal, Accomplished, Key Decisions, Files, Continuation, Learnings, Tags), add one above the rendered report. The rendered report is the record; the narrative entry is for reading.
 
-2. **Update Daily TL;DR** at the top of the journal file (after frontmatter):
+2. **Update Daily TL;DR** near the top of the journal file (below the briefing, if there is one):
    ```markdown
    ## Daily Summary
    - [Session 1 name]: [one line from TL;DR]
    - [Session 2 name]: [one line from TL;DR]
    - [Session 3 name]: [one line from TL;DR]
    ```
-   If a `## Daily Summary` section already exists, update it (add/replace the current session's line). If it doesn't exist, create it right after the frontmatter.
+   If a `## Daily Summary` section already exists, update it (add/replace the current session's line). If it doesn't exist, create it right after the `## Daily Briefing` section, or right after the frontmatter when the page has no briefing yet. The briefing stays the first section of the page (MEM-45); a later briefing run puts itself back on top.
 
 3. **Append to artifact index** (`0-personal/notes/artifact-index-YYYY-MM.md`):
    - Create file if it doesn't exist (with header row)

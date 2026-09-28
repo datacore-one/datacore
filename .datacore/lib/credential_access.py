@@ -789,6 +789,14 @@ def _entry_verifier(entry: dict) -> tuple | None:
     installation. An entry declaring `api_base` gets a probe; one that does not
     reports n-a and says why, which is honest and portable.
     """
+    # A Telegram bot token has one universal, free, read-only probe (getMe),
+    # whatever the variable is called. Bots are one per agent, so their
+    # variables are named per agent; keyed on names alone, every new agent's
+    # bot read n-a (AGT-9, 2026-09-28). Only an entry that says it is a bot
+    # token: a chat id carries provider telegram too and is not a secret.
+    if ((entry or {}).get("provider") or "").lower() == "telegram" \
+            and ((entry or {}).get("type") or "").lower() == "bot_token":
+        return ("https://api.telegram.org/bot{v}/getMe", None, '"ok":true')
     base = (entry or {}).get("api_base")
     if not base:
         return None
