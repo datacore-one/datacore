@@ -93,14 +93,18 @@ AGENTS = _ROSTER[0]
 #: and can be overridden per host with AUDIT_MODEL_<FAMILY>.
 FAMILIES = {
     "claude": {"transport": "claude-cli", "model": "", "in": 5.0, "out": 25.0,
-               "max_input_chars": 400_000, "max_output_tokens": 8_000},
+               "max_input_chars": 400_000, "max_output_tokens": 8_000, "max_reasoning_tokens": 0},
     "deepseek": {"transport": "openrouter", "model": "", "in": 0.6, "out": 2.4,
-                 "max_input_chars": 240_000, "max_output_tokens": 8_000},
+                 "max_input_chars": 240_000, "max_output_tokens": 8_000, "max_reasoning_tokens": 16_000},
     "glm": {"transport": "openrouter", "model": "", "in": 0.6, "out": 2.2,
-            "max_input_chars": 300_000, "max_output_tokens": 8_000},
+            "max_input_chars": 300_000, "max_output_tokens": 8_000, "max_reasoning_tokens": 16_000},
     "gpt": {"transport": "openai", "model": "", "in": 1.25, "out": 10.0,
-            "max_input_chars": 400_000, "max_output_tokens": 8_000},
+            "max_input_chars": 400_000, "max_output_tokens": 8_000, "max_reasoning_tokens": 16_000},
 }
+#: A reasoning model counts its thinking against the output limit; 2026-09-28 GLM
+#: spent all of an 8000-token limit thinking and answered nothing. So the answer
+#: budget (max_output_tokens) comes ON TOP of a reasoning budget, and the cap
+#: estimate pays for both.
 
 #: Every way a family can be reached: a subscription CLI login (claude-cli), an
 #: API key (openai), OpenRouter, or a local OpenAI-compatible server (local,
@@ -464,7 +468,7 @@ def record_spend(agent: str, usd: float, what: str) -> None:
 
 def estimate_usd(family: str, prompt: str) -> float:
     f = FAMILIES[family]
-    return (len(prompt) / 4 * f["in"] + f["max_output_tokens"] * f["out"]) / 1_000_000
+    return (len(prompt) / 4 * f["in"] + (f["max_output_tokens"] + f["max_reasoning_tokens"]) * f["out"]) / 1_000_000
 
 
 # ── calling one model, once ─────────────────────────────────────────────────
@@ -527,16 +531,17 @@ def call_model(family: str, prompt: str, *, max_usd: float, timeout_s: int = 150
             raise _Spent(f"claude reported an error: {str(env_out.get('result'))[:200]}", usd)
         return {"text": str(env_out.get("result") or ""), "usd": usd,
                 "model": ",".join(sorted(env_out.get("modelUsage") or {})) or model or "claude"}
+    limit = f["max_output_tokens"] + f["max_reasoning_tokens"]
     if f["transport"] == "openrouter":
         data = _post_json("https://openrouter.ai/api/v1/chat/completions", {
             "model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0,
-            "max_tokens": f["max_output_tokens"], "usage": {"include": True}},
+            "max_tokens": limit, "reasoning": {"max_tokens": f["max_reasoning_tokens"]}, "usage": {"include": True}},
             {"Authorization": f"Bearer {_secret('OPENROUTER_API_KEY')}",
              "HTTP-Referer": "https://datacore.one"}, timeout_s)
     elif f["transport"] == "openai":
         data = _post_json("https://api.openai.com/v1/chat/completions", {
             "model": model, "messages": [{"role": "user", "content": prompt}],
-            "max_completion_tokens": f["max_output_tokens"]},
+            "max_completion_tokens": limit},
             {"Authorization": f"Bearer {_secret('OPENAI_API_KEY')}"}, timeout_s)
     elif f["transport"] == "local":
         base = str(f.get("base_url") or "").rstrip("/")
@@ -544,7 +549,7 @@ def call_model(family: str, prompt: str, *, max_usd: float, timeout_s: int = 150
             raise RuntimeError(f"{family}: a local model needs base_url in cross_model_audit.models")
         data = _post_json(f"{base}/chat/completions", {
             "model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0,
-            "max_tokens": f["max_output_tokens"]}, {}, timeout_s)
+            "max_tokens": limit}, {}, timeout_s)
         data.setdefault("usage", {})["cost"] = float((data.get("usage") or {}).get("cost") or 0.0)
     else:
         raise RuntimeError(f"unknown transport {f['transport']!r}")
@@ -552,12 +557,15 @@ def call_model(family: str, prompt: str, *, max_usd: float, timeout_s: int = 150
     usd = usage.get("cost")
     if not isinstance(usd, (int, float)):
         usd = ((usage.get("prompt_tokens") or len(prompt) / 4) * f["in"]
-               + (usage.get("completion_tokens") or f["max_output_tokens"]) * f["out"]) / 1_000_000
+               + (usage.get("completion_tokens") or limit) * f["out"]) / 1_000_000
     choices = data.get("choices") or []
     if not choices:
         raise _Spent("the model returned no answer", float(usd))
-    return {"text": str((choices[0].get("message") or {}).get("content") or ""), "usd": float(usd),
-            "model": str(data.get("model") or model)}
+    text = str((choices[0].get("message") or {}).get("content") or "")
+    if not text.strip():
+        raise _Spent(f"the model returned no answer text (finish_reason {choices[0].get('finish_reason')!r}, "
+                     f"{usage.get('completion_tokens', '?')} output tokens)", float(usd))
+    return {"text": text, "usd": float(usd), "model": str(data.get("model") or model)}
 
 
 class _Spent(RuntimeError):

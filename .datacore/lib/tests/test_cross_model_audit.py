@@ -280,3 +280,33 @@ def test_a_rehearsal_can_read_a_smaller_slice(sandbox, monkeypatch):
     monkeypatch.setattr(cma, "bundle", lambda cap, max_chars, pins=None: asked.append(max_chars) or real(cap, max_chars, pins))
     cma.run_nightly("miles", date(2026, 9, 28), dry_run=True, max_chars=20_000)
     assert asked == [20_000]
+
+
+def test_a_reasoning_model_gets_room_to_answer_after_it_thinks(monkeypatch):
+    """GLM on 2026-09-28 spent all 8000 output tokens reasoning and returned no
+    answer text: the answer budget must come on top of a reasoning budget."""
+    _models(monkeypatch, {"glm": {"transport": "openrouter", "model": "z-ai/glm-test"}})
+    monkeypatch.setattr(cma, "_secret", lambda name: "k")
+    seen = {}
+
+    def fake_post(url, body, headers, timeout):
+        seen.update(body=body)
+        return {"choices": [{"message": {"content": "findings: []"}}], "usage": {"cost": 0.01}}
+    monkeypatch.setattr(cma, "_post_json", fake_post)
+    cma.call_model("glm", "x", max_usd=0.4)
+    f = cma.FAMILIES["glm"]
+    assert seen["body"]["reasoning"] == {"max_tokens": f["max_reasoning_tokens"]}
+    assert seen["body"]["max_tokens"] == f["max_output_tokens"] + f["max_reasoning_tokens"]
+    assert cma.estimate_usd("glm", "") == pytest.approx(
+        (f["max_output_tokens"] + f["max_reasoning_tokens"]) * f["out"] / 1_000_000)
+
+
+def test_an_empty_answer_says_why_and_still_counts_its_spend(monkeypatch):
+    _models(monkeypatch, {"gpt": {"transport": "openai", "model": "gpt-test"}})
+    monkeypatch.setattr(cma, "_secret", lambda name: "k")
+    monkeypatch.setattr(cma, "_post_json", lambda *a, **k: {
+        "choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 100}})
+    with pytest.raises(cma._Spent, match="length") as exc:
+        cma.call_model("gpt", "x", max_usd=0.4)
+    assert exc.value.usd > 0
