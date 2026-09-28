@@ -230,6 +230,7 @@ Detection: `python3 .datacore/lib/focus_mode.py detect`
 
 - **Never multi-line Bash.** Chain with `&&`.
 - Prefer your harness's dedicated file tools (read, search, glob) over shell equivalents when it has them.
+- A refused command refuses that command only, not the shell. Still run the specific command a task names (e.g. its calendar or broker command) before calling a tool unavailable; read files with the file tools, not `cat`.
 - A file named in a request is looked for in the working directory first (Glob). Never search the whole disk (`find /`, `find ~`): it takes minutes and can eat the run's time budget.
 
 ### Git — commit only your own change

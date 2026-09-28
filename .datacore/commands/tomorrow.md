@@ -77,26 +77,17 @@ Execute the evening shutdown sequence with a focus on accomplishment and anticip
 
 ## Step 0: Create Tracked Checklist (MANDATORY FIRST STEP)
 
-**Before doing anything else**, create a tracked task list for the /tomorrow steps. This prevents step skipping in end-of-day processing.
+**Before doing anything else**, start the run's checklist with the Datacore step tracker. This prevents step skipping in end-of-day processing, and it works in every harness because the checklist lives in today's personal journal:
 
-Use `TaskCreate` to create one task per major step:
-
-```
-Tasks to create (mark in_progress when starting, completed when done):
-
-1. "Sync and inbox status" (activeForm: "Checking sync and inbox")
-2. "Quick diagnostics" (activeForm: "Running diagnostics")
-3. "Day summary and goal achievement" (activeForm: "Computing daily score")
-4. "Journal entry" (activeForm: "Writing journal entry")
-5. "Evening coaching" (activeForm: "Running evening check-in")
-6. "DIP gap detection" (activeForm: "Scanning for DIP gaps")
-7. "Task housekeeping + priorities" (activeForm: "Processing tasks")
-8. "AI delegation review" (activeForm: "Reviewing AI task queue")
-9. "Tomorrow preview, prep tasks + final status" (activeForm: "Writing prep tasks for tomorrow")
-10. "Verify all checklist tasks completed" (activeForm: "Verifying checklist completion")
+```bash
+python3 .datacore/lib/command_steps.py resume tomorrow    # an unfinished run from earlier? continue it
+python3 .datacore/lib/command_steps.py start tomorrow     # otherwise: one "- [ ]" per "### N." step below
+python3 .datacore/lib/command_steps.py tick <run_id> 4b   # the moment a step completes (--note "reason" if it did not run)
 ```
 
-**The final task (#9) is a gate:** Before marking it complete, run `TaskList` and verify every prior task shows `completed`. If any task is still `pending` or `in_progress`, go back and finish it.
+(Over MCP: `datacore_command_steps` with `op: resume | start | tick | status`.) **Optional mirror:** if your harness has a checklist tool (Claude Code's TaskCreate/TaskUpdate), you may mirror the steps there; the journal checklist stays the record.
+
+**The last step is a gate:** before ticking it, run `command_steps.py status <run_id>` and verify every prior step is in `done`. If any is `pending`, go back and finish it.
 
 **Why this exists:** /tomorrow's middle steps (DIP gap detection, task housekeeping) get compressed when the user is tired at end-of-day. Tracked tasks ensure each step gets proper attention.
 
@@ -669,8 +660,11 @@ ready, so this step WRITES them, even when the rest of the review is skipped for
 lack of tools:
 
 1. Read tomorrow's calendar (the calendar tool or command available) and the
-   commitments due or scheduled tomorrow (org-workspace `agenda`/`deadlines` on the
-   personal space's `org/next_actions.org`).
+   commitments due or scheduled tomorrow. Run the calendar command itself even if
+   another shell command was refused earlier in the session: a refusal covers that
+   one command, not the shell. Only when the calendar command itself is refused is
+   the calendar unavailable — then say so. Read the commitments with org-workspace
+   `agenda`/`deadlines` on the personal space's `org/next_actions.org`.
 2. For **each meeting** and **each commitment due tomorrow**, add one prep task to
    the personal space's `org/inbox.org` (agents add tasks only to an inbox), under a
    level-1 heading `* Prep for <tomorrow's date>`:
