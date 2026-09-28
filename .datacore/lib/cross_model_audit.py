@@ -55,6 +55,16 @@ ROOT = Path(os.environ.get("DATACORE_ROOT") or LIB.parents[1])
 from spaces import space_for  # noqa: E402
 
 SPACE = ROOT / space_for("system", ROOT, "0-personal")  # install.yaml roles.system
+#: Whether install.yaml declares the system space. Without it SPACE is the fallback
+#: (the personal space), and nothing is written or committed there: on the box a
+#: ledger repair is pending in that space (owner, 2026-09-28).
+SYSTEM_DECLARED = bool(space_for("system", ROOT))
+
+
+def _require_declared_space() -> None:
+    if not SYSTEM_DECLARED:
+        raise SystemExit(f"cross_model_audit: refused: install.yaml declares no roles.system, so the "
+                         f"audit folder would fall back to {SPACE.name}; nothing is written there")
 PROMISES = SPACE / "1-tracks" / "dev" / "datacore-upgrade" / "promises"
 AUDITS = SPACE / "1-tracks" / "dev" / "audits"
 NIGHTLY = AUDITS / "nightly"
@@ -272,13 +282,18 @@ def _resolve(evidence_path: str, doc: dict, base: Path) -> tuple[Path, str | Non
 
 
 # ── the findings schema (AUD-7) ─────────────────────────────────────────────
-def validate_findings(path, repo: Path = ROOT) -> list[str]:
+def validate_findings(path, repo: Path = ROOT, *, unverifiable: list | None = None) -> list[str]:
     """Schema errors of one findings file; [] when it is valid.
 
     Valid means repeatable: `commit` is a full sha that exists in the repository
     read, and every finding's evidence names a file and a line that exist at
     that commit. A file may name other repositories it read under `commits`
     ({path: sha}) and a sub-folder under `root`; `repo` (relative) moves the base.
+
+    With `unverifiable` (a list), a nested repository that does not exist on this
+    host at all is noted there instead of failing the file: the judge cannot
+    check it, which is not the same as the audit being wrong. Without it (AUD-7,
+    and anywhere the full checkout is present) every repository must check out.
     """
     path = Path(path)
     try:
@@ -306,6 +321,7 @@ def validate_findings(path, repo: Path = ROOT) -> list[str]:
     elif not _commit_exists(str(base), commit):
         errors.append(f"commit {commit} does not exist in {base}")
     nested = doc.get("commits")
+    absent: set[str] = set()
     if nested is not None:
         if not isinstance(nested, dict):
             errors.append("commits is not a mapping of repository path -> sha")
@@ -313,6 +329,10 @@ def validate_findings(path, repo: Path = ROOT) -> list[str]:
             for p, sha in nested.items():
                 if not _safe_rel(str(p)) or not isinstance(sha, str) or not SHA40.match(sha):
                     errors.append(f"commits[{p!r}] is not a relative path pinned to a full sha")
+                elif unverifiable is not None and not (base / str(p)).exists():
+                    absent.add(str(p).strip("/"))
+                    unverifiable.append(f"{Path(path).stem}: commits[{p}] cannot be checked here "
+                                        "(that repository is not on this host)")
                 elif not _commit_exists(str(base / str(p)), sha):
                     errors.append(f"commits[{p}] {sha} does not exist")
     findings = doc.get("findings")
@@ -321,11 +341,11 @@ def validate_findings(path, repo: Path = ROOT) -> list[str]:
     if errors:
         return errors
     for i, f in enumerate(findings, 1):
-        errors += [f"finding {i}: {e}" for e in finding_errors(f, doc, base)]
+        errors += [f"finding {i}: {e}" for e in finding_errors(f, doc, base, absent)]
     return errors
 
 
-def finding_errors(f, doc: dict, base: Path) -> list[str]:
+def finding_errors(f, doc: dict, base: Path, absent: set[str] = frozenset()) -> list[str]:
     if not isinstance(f, dict):
         return ["not a mapping"]
     errors = [f"no {k}" for k in ("promise", "claim", "seeded_failure")
@@ -339,6 +359,8 @@ def finding_errors(f, doc: dict, base: Path) -> list[str]:
     if not _safe_rel(rel):
         return errors + [f"evidence {rel!r} is not a relative path"]
     repo, sha, inner = _resolve(rel, doc, base)
+    if absent and repo.relative_to(base).as_posix() in absent:
+        return errors                       # in a repository this host cannot read
     n = _lines_at(repo, str(sha), inner) if sha else None
     if n is None:
         errors.append(f"evidence {rel} does not exist at {str(sha)[:10]}")
@@ -353,7 +375,7 @@ def _load_night(night_dir: Path, repo: Path) -> tuple[list[dict], dict[str, list
     for p in sorted(Path(night_dir).glob("*.yaml")):
         if p.stem not in AGENTS:
             continue
-        errors = validate_findings(p, repo=repo)
+        errors = validate_findings(p, repo=repo, unverifiable=[])
         if errors:
             invalid[p.stem] = errors
             continue
@@ -429,7 +451,7 @@ def aggregate(night_dir, repo: Path = ROOT, pool: list[dict] | None = None) -> d
 
 
 # ── the morning check (AUD-6) ───────────────────────────────────────────────
-def night_alerts(night_dir, agents=None, repo: Path = ROOT) -> list[str]:
+def night_alerts(night_dir, agents=None, repo: Path = ROOT, unverifiable: list | None = None) -> list[str]:
     """What The Firm group is told the next morning: one line per agent whose
     findings file is missing, invalid, or not on its own model. [] on a clean
     night -- a clean night says nothing."""
@@ -439,9 +461,10 @@ def night_alerts(night_dir, agents=None, repo: Path = ROOT) -> list[str]:
         p = night_dir / f"{agent}.yaml"
         if not p.is_file():
             out.append(f"Audit {night_dir.name}: {agent} left no findings file -- the audit was "
-                       f"missed or failed (its cadence run record says why).")
+                       f"missed or failed (~/.datacore/state/audit-nightly.log on the host that runs "
+                       f"{agent}'s audit says why).")
             continue
-        errors = validate_findings(p, repo=repo)
+        errors = validate_findings(p, repo=repo, unverifiable=[] if unverifiable is None else unverifiable)
         if errors:
             out.append(f"Audit {night_dir.name}: {agent}'s findings file is invalid: "
                        + "; ".join(errors[:3]) + (f" (+{len(errors) - 3} more)" if len(errors) > 3 else ""))
@@ -862,6 +885,8 @@ def run_nightly(agent: str, night: date | None = None, *, dry_run: bool = False,
     """Tonight's slice for one agent: one model turn, one findings file."""
     if agent not in AGENTS:
         raise SystemExit(f"cross_model_audit: {agent!r} is not one of the Firm's agents {sorted(AGENTS)}")
+    if not dry_run:
+        _require_declared_space()
     family = AGENTS[agent]
     night = night or datetime.now(timezone.utc).date()
     capability = rotation(capabilities(), night)[agent]
@@ -975,6 +1000,8 @@ def fixture() -> tuple[str, str, str, list[str]]:
 
 
 def run_calibration(agent: str, *, dry_run: bool = False, commit: bool = False) -> Path | None:
+    if not dry_run:
+        _require_declared_space()
     family = AGENTS[agent]
     repo_rel, sha, root, files = fixture()
     brief_text, brief_sha = brief()
@@ -1135,8 +1162,10 @@ def _commit(paths: list[Path], message: str) -> str:
 def check(night: date, *, write: bool, send: bool) -> int:
     folder = NIGHTLY / night.isoformat()
     if write:
+        _require_declared_space()
         _git(SPACE, "pull", "-q", "--no-rebase", "--autostash")   # merge, never rebase (DIP-0046)
-    alerts = night_alerts(folder)
+    notes: list[str] = []
+    alerts = night_alerts(folder, unverifiable=notes)
     result = aggregate(folder, pool=load_pool())
     print(f"cross_model_audit check {night}: {len(result['confirmed'])} confirmed, "
           f"{len(result['unconfirmed'])} unconfirmed, {len(alerts)} alert(s)")
@@ -1146,6 +1175,8 @@ def check(night: date, *, write: bool, send: bool) -> int:
         week = score_week(write=True)
         if week:
             print(f"  calibration {week.name}: {_commit([week], f'audit: calibration {week.stem}')}")
+    for n in notes:
+        print(f"  note: {n}")
     for a in alerts:
         print(f"  ALERT {a}")
     if alerts and send:

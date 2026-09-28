@@ -438,3 +438,53 @@ def test_the_forced_command_runs_only_one_inference(tmp_path):
         r = subprocess.run(["sh", str(script)], input="x", capture_output=True, text=True,
                            env={**env, "SSH_ORIGINAL_COMMAND": cmd})
         assert r.returncode != 0 and "infer|" not in r.stdout, cmd
+
+
+# ── the morning check judges what actually ran ──────────────────────────────
+def _four(d, *, nested=None, skip=()):
+    sha = head_sha()
+    for agent in cma.AGENTS:
+        if agent in skip:
+            continue
+        p = findings_file(d / f"{agent}.yaml", agent=agent, capability=f"cap-{agent}", commit=sha,
+                          findings=[finding()])
+        if nested:
+            doc = yaml.safe_load(p.read_text())
+            doc["commits"] = nested
+            p.write_text(yaml.safe_dump(doc, sort_keys=False))
+    return d
+
+
+def test_a_repository_the_judge_does_not_have_is_noted_not_alerted(tmp_path, capsys):
+    """2026-09-28: the box (the judge) has no copy of a module Miles's slice read;
+    his file validates on the Mac. That is 'cannot check here', not a missed or
+    invalid audit, and must not reach The Firm as one."""
+    d = _four(tmp_path / "2026-09-28", nested={".datacore/modules/not-on-this-host": "a" * 40})
+    assert cma.validate_findings(d / "miles.yaml", repo=ROOT), "the strict validator (AUD-7) stays strict"
+    notes = []
+    assert cma.night_alerts(d, unverifiable=notes) == []
+    assert any("not-on-this-host" in n for n in notes)
+
+
+def test_a_repository_the_judge_has_but_without_the_commit_is_still_alerted(tmp_path):
+    d = _four(tmp_path / "2026-09-28", nested={".datacore/lib": "0" * 40})
+    alerts = cma.night_alerts(d, unverifiable=[])
+    assert len(alerts) == 4 and all("does not exist" in a for a in alerts)
+
+
+def test_a_missing_file_points_at_the_job_that_should_have_written_it(tmp_path):
+    d = _four(tmp_path / "2026-09-28", skip=("data",))
+    (alert,) = cma.night_alerts(d)
+    assert "data" in alert and "cadence" not in alert and "audit-nightly.log" in alert
+
+
+def test_nothing_is_written_without_a_declared_system_space(sandbox, monkeypatch):
+    """The fallback space is the personal one; on the box a ledger repair is
+    pending there. Publishing refuses rather than write into it."""
+    monkeypatch.setattr(cma, "SYSTEM_DECLARED", False)
+    monkeypatch.setattr(cma, "_git", lambda *a, **k: pytest.fail("pulled into an undeclared space"))
+    monkeypatch.setattr(cma, "publish", lambda *a, **k: pytest.fail("published into an undeclared space"))
+    with pytest.raises(SystemExit, match="install.yaml"):
+        cma.check(date(2026, 9, 28), write=True, send=False)
+    with pytest.raises(SystemExit, match="install.yaml"):
+        cma.run_nightly("miles", date(2026, 9, 28), commit=True)
