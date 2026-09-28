@@ -227,6 +227,17 @@ def head(repo: Path) -> str:
     return r.stdout.strip()
 
 
+def published_head(repo: Path) -> str:
+    """The commit to read `repo` at: HEAD when a remote branch holds it, else the
+    upstream's commit. A pin nobody else can fetch makes findings unrepeatable
+    (a host with an unpushed or diverged history, 2026-09-28)."""
+    sha = head(repo)
+    if _git(repo, "branch", "-r", "--contains", sha).stdout.strip():
+        return sha
+    up = _git(repo, "rev-parse", "--verify", "-q", "@{upstream}")
+    return up.stdout.strip() if up.returncode == 0 and up.stdout.strip() else sha
+
+
 def repo_of(path: Path, top: Path = ROOT) -> Path:
     """The nearest enclosing git repository of `path`, not above `top`."""
     p = path if path.is_dir() else path.parent
@@ -623,7 +634,7 @@ def bundle(capability: str, max_chars: int, pins: dict[str, str] | None = None) 
     def pin(repo: Path) -> str:
         key = repo.resolve().relative_to(ROOT.resolve()).as_posix() or "."
         if key not in pins:
-            pins[key] = head(repo)
+            pins[key] = published_head(repo)
         return pins[key]
 
     evals, sources = [], {}

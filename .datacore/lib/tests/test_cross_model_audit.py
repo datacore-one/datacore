@@ -338,3 +338,28 @@ findings:
     assert got[1]["evidence"] == ".datacore/lib/promise_evals.py:12"
     with pytest.raises(ValueError):
         cma.parse_findings("no findings here")
+
+
+def test_a_slice_is_pinned_to_a_commit_others_can_fetch(tmp_path):
+    """Rehearsal 2026-09-28: the box read a space whose HEAD had never been pushed
+    (a diverged local history), and the findings file was unverifiable anywhere
+    else. A repository is pinned at HEAD only when a remote branch holds it;
+    otherwise at its upstream."""
+    def git(repo, *a):
+        return subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, check=True).stdout.strip()
+    bare, work = tmp_path / "origin.git", tmp_path / "work"
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+    subprocess.run(["git", "clone", "-q", str(bare), str(work)], check=True)
+    for k, v in (("user.email", "t@example.invalid"), ("user.name", "t")):
+        git(work, "config", k, v)
+    (work / "f.txt").write_text("1\n")
+    git(work, "add", "f.txt")
+    git(work, "commit", "-q", "-m", "published")
+    git(work, "push", "-q", "origin", "HEAD:main")
+    git(work, "branch", "-q", "--set-upstream-to=origin/main")
+    published = git(work, "rev-parse", "HEAD")
+    assert cma.published_head(work) == published
+    (work / "f.txt").write_text("2\n")
+    git(work, "commit", "-q", "-am", "local only")
+    assert git(work, "rev-parse", "HEAD") != published
+    assert cma.published_head(work) == published, "an unpushed HEAD was pinned"
