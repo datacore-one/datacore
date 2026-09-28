@@ -3,7 +3,7 @@
 
 Walks spaces at ~/Data/[N]-[name]/, extracts GitHub org/owner from
 git remotes, fetches all non-archived repos per org via `gh` CLI.
-Caches results to data/repos.json, refreshes if older than 7 days.
+Caches results to repos.json in the private module-data folder (github_paths), refreshes if older than 7 days.
 
 Usage:
     python3 repo_discovery.py [--data-dir ~/Data] [--force-refresh]
@@ -14,6 +14,7 @@ Output: JSON to stdout with discovered repos.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -180,7 +181,11 @@ def main():
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
-    cache_path = data_dir / ".datacore" / "modules" / "github" / "data" / "repos.json"
+    # The cache is user data: the space's private module-data folder (MEM-63).
+    os.environ.setdefault("DATACORE_ROOT", str(data_dir.resolve()))
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import github_paths
+    cache_path = github_paths.data_dir() / "repos.json"
 
     result = discover_repos(
         data_dir, cache_path,

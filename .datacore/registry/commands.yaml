@@ -878,11 +878,11 @@ module_commands:
       required:
       - .datacore/modules/mail/rules.base.yaml
       contextual:
-      - .datacore/modules/mail/data/scan_cache.json
+      - .datacore/state/mail/scan_cache_<account>.json
       - '{space}/mail.yaml'
     writes:
     - '{space}/org/next_actions.org'
-    - .datacore/modules/mail/data/scan_cache.json
+    - .datacore/state/mail/scan_cache_<account>.json
     status: active
     trigger: triage email|email triage|process email
   news:

@@ -43,7 +43,7 @@ python3 .datacore/modules/github/lib/github_scanner.py \
   --username plur9 \
   --orgs "<comma-separated orgs from step 1>" \
   --hours 24 \
-  --cache .datacore/modules/github/data/scan_cache.json \
+  --cache 0-personal/.datacore/module-data/github/data/scan_cache.json \
   --format json
 ```
 
@@ -53,8 +53,8 @@ If `auto_task_create` is enabled (default: true), create tasks from actionable i
 
 ```bash
 python3 .datacore/modules/github/lib/task_creator.py \
-  --scan-file .datacore/modules/github/data/scan_cache.json \
-  --repos-file .datacore/modules/github/data/repos.json \
+  --scan-file 0-personal/.datacore/module-data/github/data/scan_cache.json \
+  --repos-file 0-personal/.datacore/module-data/github/data/repos.json \
   --data-dir ~/Data
 ```
 

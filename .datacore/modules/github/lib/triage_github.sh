@@ -19,8 +19,14 @@ set -euo pipefail
 # each host supplies from its own private config.
 DATA_DIR="${DATA_DIR:-$HOME/Data}"
 MODULE_DIR="$DATA_DIR/.datacore/modules/github"
-CACHE_DIR="$MODULE_DIR/data"
 LOG_PREFIX="[github-triage]"
+# The repo list and scan cache are user data: they live in the space's private
+# module-data folder (MEM-63), never in the module. The resolver refuses while
+# legacy data still sits in $MODULE_DIR/data -- a refusal stops the run.
+CACHE_DIR=$(DATACORE_ROOT="${DATACORE_ROOT:-$DATA_DIR}" python3 "$MODULE_DIR/lib/github_paths.py") || {
+    echo "$LOG_PREFIX FAILED: module data folder unresolved (legacy data in the module? migrate with module_data_migrate.py)"
+    exit 3
+}
 
 echo "$LOG_PREFIX Starting at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 

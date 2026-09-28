@@ -1046,7 +1046,7 @@ jobs:
     cmd: "bash ~/Data/.datacore/modules/github/lib/triage_github.sh"
     on_fail: telegram
     artifacts:
-      - path: "~/Data/.datacore/modules/github/data/scan_cache.json"
+      - path: "~/Data/0-personal/.datacore/module-data/github/data/scan_cache.json"
         check: no_crash
         max_age_hours: 26
 

@@ -7,7 +7,7 @@ captures tasks into the appropriate space's inbox.org with a :github: tag. Not :
 guard refuses it, which blocked every autosave of the space (2026-09-26).
 
 Usage:
-    python3 task_creator.py --scan-file data/scan_cache.json --data-dir ~/Data --repos-file data/repos.json
+    python3 task_creator.py --scan-file <data>/scan_cache.json --data-dir ~/Data --repos-file <data>/repos.json   (<data>: python3 lib/github_paths.py)
 
 Output: JSON summary of created tasks.
 """
