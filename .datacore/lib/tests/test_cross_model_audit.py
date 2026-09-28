@@ -24,6 +24,37 @@ import cross_model_audit as cma  # noqa: E402
 import tool_policy  # noqa: E402
 
 
+#: The install every test here runs in, built per test (no install-local file is
+#: read: CI has no principals.yaml, no install.yaml and no system space). The
+#: roster is the contract's four agents on four families; model ids are test
+#: ids, never real ones.
+ROSTER = {
+    "agents": {"miles": "claude", "winston": "deepseek", "tris": "glm", "data": "gpt"},
+    "nightly_cap_usd": {"miles": 2.0, "winston": 0.5, "tris": 0.5, "data": 1.0},
+    "models": {"claude": {"transport": "claude-cli", "model": ""},
+               "deepseek": {"transport": "openrouter", "model": "test/deepseek"},
+               "glm": {"transport": "openrouter", "model": "test/glm"},
+               "gpt": {"transport": "openclaw-cli", "model": "openai/gpt-test"}},
+}
+PROMISE_LIST = {"capabilities": [
+    {"key": "audits", "promises": [{"id": "AUD-3", "promise": "two families confirm a finding", "today": "red"}]},
+    {"key": "tasks", "promises": [{"id": "TSK-2", "promise": "a task has one id", "today": "green"}]},
+]}
+
+
+@pytest.fixture(autouse=True)
+def _temp_install(tmp_path, monkeypatch):
+    import roster
+    monkeypatch.setattr(roster, "section", lambda key, path=None: ROSTER if key == "cross_model_audit" else {})
+    monkeypatch.setattr(cma, "AGENTS", dict(ROSTER["agents"]))
+    monkeypatch.setattr(cma, "NIGHTLY_CAP_USD", dict(ROSTER["nightly_cap_usd"]))
+    monkeypatch.setattr(cma, "SYSTEM_DECLARED", True)
+    promises = tmp_path / "install" / "promises"
+    promises.mkdir(parents=True)
+    (promises / "part1.yaml").write_text(yaml.safe_dump(PROMISE_LIST, sort_keys=False))
+    monkeypatch.setattr(cma, "PROMISES", promises)
+
+
 #: The real function, for the test that exercises it on a repository it builds.
 _PUBLISHED_HEAD = cma.published_head
 
@@ -143,7 +174,10 @@ def test_an_unconfirmed_finding_is_reoffered_and_confirmed_on_a_later_night(sand
 
 
 def test_calibration_scores_the_real_key_by_the_nearest_planted_defect():
-    key = yaml.safe_load((cma.CALIBRATION / "keys" / "ledgerlite.yaml").read_text())
+    path = cma.CALIBRATION / "keys" / "ledgerlite.yaml"
+    if not path.is_file():
+        pytest.skip("the answer key is the install's system-space data; this checkout has none")
+    key = yaml.safe_load(path.read_text())
     got = cma.calibrate(key["planted"], {
         "claude": [{"evidence": "ledgerlite/fold.py:18"},       # H1
                    {"evidence": "ledgerlite/fold.py:14"},       # H12, not H1 again
