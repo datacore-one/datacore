@@ -37,18 +37,23 @@ def policy_file(tmp_path):
 # ── classification ──────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("tool,inp,expected", [
-    ("Bash", {"command": "curl -X POST https://api.stripe.com/v1/charges -d amount=100"}, {"payment"}),
-    ("Bash", {"command": "python3 ~/Data/.datacore/lib/winston_send.py 'hello'"}, {"email.send"}),
-    ("Bash", {"command": "gh release create v1.2.0 --notes x"}, {"prod.deploy"}),
-    ("Bash", {"command": "sudo systemctl restart datacored"}, {"prod.deploy"}),
+    # `write` (AUD-2, f104619) is any change: every shell command that is not a
+    # chain of read-only commands, every file tool outside an audit's findings
+    # file, every MCP verb of change. It binds only the auditor principal.
+    ("Bash", {"command": "curl -X POST https://api.stripe.com/v1/charges -d amount=100"}, {"payment", "write"}),
+    # Winston's Telegram sender is message.send, not e-mail (AGT-1, 5cf0026).
+    ("Bash", {"command": "python3 ~/Data/.datacore/lib/winston_send.py 'hello'"}, {"message.send", "write"}),
+    ("Bash", {"command": "sendmail x@example.org"}, {"email.send", "write"}),
+    ("Bash", {"command": "gh release create v1.2.0 --notes x"}, {"prod.deploy", "write"}),
+    ("Bash", {"command": "sudo systemctl restart datacored"}, {"prod.deploy", "write"}),
     ("Bash", {"command": "ls -la && git status"}, set()),
     ("Bash", {"command": "grep -rn 'stripe' docs/ | head"}, set()),
     ("WebFetch", {"url": "https://api.paypal.com/v2/checkout/orders"}, {"payment"}),
-    ("mcp__gmail__send_email", {"to": "x@example.org", "body": "hi"}, {"email.send"}),
+    ("mcp__gmail__send_email", {"to": "x@example.org", "body": "hi"}, {"email.send", "write"}),
     ("mcp__gateio__place_order", {"pair": "BTC_USDT"}, {"payment"}),
-    # Reading, editing or writing cannot act: no effect, whatever the text says.
+    # Reading cannot act; editing is a `write` and nothing more, whatever the text says.
     ("Read", {"file_path": "/x/deploy.sh"}, set()),
-    ("Edit", {"file_path": "/x/pay.py", "new_string": "requests.post('https://api.stripe.com/v1/charges')"}, set()),
+    ("Edit", {"file_path": "/x/pay.py", "new_string": "requests.post('https://api.stripe.com/v1/charges')"}, {"write"}),
 ])
 def test_classify_by_the_shipped_vocabulary(tool, inp, expected):
     assert tp.classify(tool, inp, EFFECTS) == expected
@@ -75,21 +80,25 @@ def test_never_effect_is_refused_whatever_the_grants(policy_file):
 
 
 def test_cosign_effect_without_grant_is_paused(policy_file):
-    d = tp.decide("miles", "Bash", {"command": "python3 winston_send.py 'x'"},
+    d = tp.decide("miles", "Bash", {"command": "sendmail x@example.org"},
                   effects=EFFECTS, policy_path=policy_file)
     assert d.blocked and d.kind == "cosign"
     assert "email.send needs a co-signed grant" in d.reason and "proposal" in d.reason
 
 
 def test_cosign_effect_with_grant_is_allowed(policy_file):
-    d = tp.decide("miles", "Bash", {"command": "python3 winston_send.py 'x'"},
+    d = tp.decide("miles", "Bash", {"command": "sendmail x@example.org"},
                   granted=["email.send"], effects=EFFECTS, policy_path=policy_file)
     assert d.allow and d.kind == "granted"
 
 
 def test_plain_calls_are_allowed(policy_file):
-    d = tp.decide("tris", "Bash", {"command": "pytest -q"}, effects=EFFECTS, policy_path=policy_file)
+    d = tp.decide("tris", "Bash", {"command": "ls -la && git status"}, effects=EFFECTS, policy_path=policy_file)
     assert d.allow and d.kind == "allow" and d.effects == set()
+    # A command that changes something is a `write` (AUD-2): not a never- or
+    # cosign-effect for tris, so it runs.
+    d = tp.decide("tris", "Bash", {"command": "pytest -q"}, effects=EFFECTS, policy_path=policy_file)
+    assert d.allow and d.kind == "granted" and d.effects == {"write"}
 
 
 def test_tris_may_never_deploy(policy_file):
@@ -151,7 +160,7 @@ def test_hook_allows_plain_calls_and_granted_effects(tmp_path, policy_file):
     env = {"DATACORE_POLICY_PRINCIPAL": "miles", "DATACORE_POLICY_GRANTED": "email.send"}
     assert tp.evaluate_hook({"tool_name": "Bash", "tool_input": {"command": "ls"}},
                             env=env, effects=EFFECTS, policy_path=policy_file) is None
-    assert tp.evaluate_hook({"tool_name": "Bash", "tool_input": {"command": "python3 winston_send.py x"}},
+    assert tp.evaluate_hook({"tool_name": "Bash", "tool_input": {"command": "sendmail x@example.org"}},
                             env=env, effects=EFFECTS, policy_path=policy_file) is None
 
 
@@ -247,4 +256,7 @@ def test_refusal_does_not_copy_sensitive_tool_input(tmp_path, monkeypatch):
     decision = tp.Decision(False, {'payment'}, 'refused', 'never')
     assert tp.record_refusal(decision, principal='miles', tool_name='Bash',
         space_dir=space, actor='nightshift', detail='token=PRIVATE-TEST-TOKEN')
-    assert 'PRIVATE-TEST-TOKEN' not in next((space / '.datacore/events').glob('*.jsonl')).read_text()
+    # A refusal is a metric.attest: routine telemetry, in its own log (LED-8, e6c0928).
+    logs = sorted((space / '.datacore').glob('*/*.jsonl'))
+    assert (space / '.datacore/telemetry/nightshift.jsonl') in logs
+    assert all('PRIVATE-TEST-TOKEN' not in f.read_text() for f in logs)

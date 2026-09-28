@@ -83,8 +83,13 @@ def test_projector_reports_every_space_and_refuses_without_source_disclosure(tmp
     (space / '.datacore/ledger-phase').write_text('1\n')
     before = (space / 'org/next_actions.org').read_bytes()
     assert G.main(['--root', str(tmp_path), '--all', '--json']) == 1
-    assert json.loads(capsys.readouterr().out) == {'version': 1, 'spaces': [
-        {'space': space.name, 'status': 'refused'}]}
+    # A refused space carries the guard's fixed wording as its reason (c1ef7b8),
+    # never a task title from the source.
+    out = capsys.readouterr().out
+    assert json.loads(out) == {'version': 1, 'spaces': [
+        {'space': space.name, 'status': 'refused',
+         'reason': 'no projection base and Org/ledger differ; reconciliation required'}]}
+    assert 'Alpha task' not in out and 'Nobody has this in org' not in out
     assert (space / 'org/next_actions.org').read_bytes() == before
 
 
