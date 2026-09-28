@@ -227,6 +227,7 @@ Detection: `python3 .datacore/lib/focus_mode.py detect`
 
 - **Never multi-line Bash.** Chain with `&&`.
 - Prefer your harness's dedicated file tools (read, search, glob) over shell equivalents when it has them.
+- A file named in a request is looked for in the working directory first (Glob). Never search the whole disk (`find /`, `find ~`): it takes minutes and can eat the run's time budget.
 
 ### Git — commit only your own change
 
