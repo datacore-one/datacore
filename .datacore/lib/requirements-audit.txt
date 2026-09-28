@@ -19,7 +19,7 @@ jsonschema-specifications==2025.9.1
 mcp==1.28.1
 markdown-it-py==4.2.0
 mdurl==0.1.2
-org-workspace==0.5.4
+org-workspace==0.7.0
 packaging==26.3
 pdf2image==1.17.0
 pillow==12.3.0
