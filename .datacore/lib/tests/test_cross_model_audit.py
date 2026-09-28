@@ -254,14 +254,15 @@ def test_a_local_model_is_reached_without_a_key(monkeypatch):
     _models(monkeypatch, {"glm": {"transport": "local", "model": "glm-local", "base_url": "http://127.0.0.1:11434/v1/"}})
     seen = {}
 
-    def fake_post(url, body, headers, timeout):
-        seen.update(url=url, body=body, headers=headers)
+    def fake_post(url, body, headers, timeout, **k):
+        seen.update(url=url, body=body, headers=headers, keyed=k.get("keyed", True))
         return {"model": "glm-local", "choices": [{"message": {"content": "findings: []"}}], "usage": {}}
     monkeypatch.setattr(cma, "_post_json", fake_post)
     monkeypatch.setattr(cma, "_secret", lambda name: pytest.fail("a local model needs no key"))
     out = cma.call_model("glm", "x", max_usd=0.1)
     assert seen["url"] == "http://127.0.0.1:11434/v1/chat/completions"
     assert "Authorization" not in seen["headers"] and seen["body"]["model"] == "glm-local"
+    assert seen["keyed"] is False, "no key is sent, so a plain-HTTP local server is allowed"
     assert out["usd"] == 0.0 and out["text"] == "findings: []"
 
 
@@ -363,3 +364,16 @@ def test_a_slice_is_pinned_to_a_commit_others_can_fetch(tmp_path):
     git(work, "commit", "-q", "-am", "local only")
     assert git(work, "rev-parse", "HEAD") != published
     assert cma.published_head(work) == published, "an unpushed HEAD was pinned"
+
+
+def test_an_http_error_names_the_providers_reason(monkeypatch):
+    import io
+    import urllib.error
+    import secret_http
+
+    def refuse(req, timeout=30, **k):
+        raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", {}, io.BytesIO(
+            b'{"error": {"type": "insufficient_quota", "code": "credit_balance_exhausted", "message": "no credits"}}'))
+    monkeypatch.setattr(secret_http, "urlopen", refuse)
+    with pytest.raises(RuntimeError, match=r"HTTP 429 from api.openai.com \(insufficient_quota credit_balance_exhausted\)"):
+        cma._post_json("https://api.openai.com/v1/chat/completions", {}, {"Authorization": "Bearer k"}, 5)

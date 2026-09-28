@@ -496,17 +496,29 @@ def _secret(name: str) -> str:
     return r.stdout.strip()
 
 
-def _post_json(url: str, body: dict, headers: dict, timeout: int) -> dict:
+def _post_json(url: str, body: dict, headers: dict, timeout: int, *, keyed: bool = True) -> dict:
+    """POST JSON, return JSON. A keyed call goes through secret_http (HTTPS only);
+    a local model gets no key, so plain HTTP to it is fine. An HTTP error names
+    the provider's own error code (credits exhausted is not a rate limit)."""
     import urllib.error
     import urllib.request
-    from secret_http import urlopen as secret_urlopen
     req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={
         "Content-Type": "application/json", **headers})
+    if keyed:
+        from secret_http import urlopen as opener
+    else:
+        opener = urllib.request.urlopen
     try:
-        with secret_urlopen(req, timeout=timeout) as resp:
+        with opener(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"HTTP {exc.code} from {url.split('/')[2]}") from None
+        why = ""
+        try:
+            err = json.loads(exc.read().decode("utf-8", "replace") or "{}").get("error") or {}
+            why = " ".join(str(err.get(k)) for k in ("type", "code") if err.get(k))
+        except (ValueError, AttributeError, OSError):
+            pass
+        raise RuntimeError(f"HTTP {exc.code} from {url.split('/')[2]}" + (f" ({why})" if why else "")) from None
 
 
 def call_model(family: str, prompt: str, *, max_usd: float, timeout_s: int = 1500) -> dict:
@@ -562,7 +574,7 @@ def call_model(family: str, prompt: str, *, max_usd: float, timeout_s: int = 150
             raise RuntimeError(f"{family}: a local model needs base_url in cross_model_audit.models")
         data = _post_json(f"{base}/chat/completions", {
             "model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0,
-            "max_tokens": limit}, {}, timeout_s)
+            "max_tokens": limit}, {}, timeout_s, keyed=False)
         data.setdefault("usage", {})["cost"] = float((data.get("usage") or {}).get("cost") or 0.0)
     else:
         raise RuntimeError(f"unknown transport {f['transport']!r}")
