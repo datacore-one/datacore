@@ -108,10 +108,17 @@ FAMILIES = {
 #: thought through all 24000), so it is asked for low effort instead (12000 tokens,
 #: a full answer).
 
-#: Every way a family can be reached: a subscription CLI login (claude-cli), an
-#: API key (openai), OpenRouter, or a local OpenAI-compatible server (local,
-#: e.g. ollama or llama.cpp at `base_url`, no key).
-TRANSPORTS = ("claude-cli", "openai", "openrouter", "local")
+#: Every way a family can be reached: a subscription login through its CLI
+#: (claude-cli: Claude Code; openclaw-cli: OpenClaw's `infer model run`, e.g. a
+#: ChatGPT login, on this host or over SSH on `host`), an API key (openai),
+#: OpenRouter, or a local OpenAI-compatible server (local, at `base_url`, no key).
+TRANSPORTS = ("claude-cli", "openclaw-cli", "openai", "openrouter", "local")
+
+#: openclaw takes the prompt only as `--prompt <text>`, and Linux caps a single
+#: argument at 128 KiB: the prompt must stay under this, so the slice read for
+#: that route is smaller (OPENCLAW_MAX_INPUT_CHARS of code, plus brief and format).
+OPENCLAW_PROMPT_BYTES = 120_000
+OPENCLAW_MAX_INPUT_CHARS = 95_000
 
 
 def family_config(name: str) -> dict:
@@ -128,9 +135,11 @@ def family_config(name: str) -> dict:
     cfg = ((roster.section("cross_model_audit").get("models") or {}).get(name)) or {}
     if isinstance(cfg, str):
         cfg = {"model": cfg}
-    for k in ("transport", "model", "base_url"):
+    for k in ("transport", "model", "base_url", "host"):
         if cfg.get(k) is not None:
             f[k] = str(cfg[k])
+    if f["transport"] == "openclaw-cli":
+        f["max_input_chars"] = min(f["max_input_chars"], OPENCLAW_MAX_INPUT_CHARS)
     f["model"] = os.environ.get(f"AUDIT_MODEL_{name.upper()}", f["model"])
     if f["transport"] not in TRANSPORTS:
         raise RuntimeError(f"{name}: transport {f['transport']!r} is not one of {TRANSPORTS}")
@@ -520,6 +529,8 @@ def call_model(family: str, prompt: str, *, max_usd: float, timeout_s: int = 150
     """One model turn, no tools. {text, usd, model}. Raises on failure."""
     f = family_config(family)
     model = f["model"]
+    if f["transport"] == "openclaw-cli":
+        return _openclaw_turn(f, model, prompt, timeout_s)
     if not model and f["transport"] != "claude-cli":
         # The subscription CLI may use its own default; every other route needs the
         # id the agent's runtime uses. None configured: refuse, never guess one.
@@ -586,6 +597,40 @@ def call_model(family: str, prompt: str, *, max_usd: float, timeout_s: int = 150
         raise _Spent(f"the model returned no answer text (finish_reason {choices[0].get('finish_reason')!r}, "
                      f"{usage.get('completion_tokens', '?')} output tokens)", float(usd))
     return {"text": text, "usd": float(usd), "model": str(data.get("model") or model)}
+
+
+def _openclaw_turn(f: dict, model: str, prompt: str, timeout_s: int) -> dict:
+    """One `openclaw infer model run` turn on the subscription OpenClaw is logged
+    in with: a plain model turn, no tools, no cost reported. With `host`, over SSH
+    to a key whose forced command is audit_infer_forced.sh: the prompt goes on
+    stdin, never into a command line."""
+    if len(prompt.encode("utf-8")) > OPENCLAW_PROMPT_BYTES:
+        raise RuntimeError(f"prompt too large for openclaw's --prompt ({len(prompt.encode())} bytes > "
+                           f"{OPENCLAW_PROMPT_BYTES})")
+    host = str(f.get("host") or "")
+    if host:
+        if not re.fullmatch(r"[A-Za-z0-9._/-]+/[A-Za-z0-9._-]+", model or ""):
+            raise RuntimeError("an openclaw-cli family over SSH needs its provider/model id in cross_model_audit.models")
+        argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", host, f"audit-infer {model}"]
+        r = subprocess.run(argv, input=prompt, capture_output=True, text=True, timeout=timeout_s)
+    else:
+        argv = ["openclaw", "infer", "model", "run", "--local", "--json"] + (["--model", model] if model else [])
+        r = subprocess.run(argv + ["--prompt", prompt], capture_output=True, text=True, timeout=timeout_s,
+                           cwd=str(Path.home()))
+    out = r.stdout or ""
+    try:
+        doc = json.loads(out[out.index("{"):])
+    except ValueError:
+        raise RuntimeError(f"openclaw exited {r.returncode} without a JSON answer: "
+                           f"{(r.stderr or out).strip()[-200:]}") from None
+    if not doc.get("ok"):
+        err = doc.get("error") or {}
+        raise RuntimeError(f"openclaw: {err.get('type', 'error')}: {str(err.get('message', ''))[:200]}")
+    text = "".join(str(o.get("text") or "") for o in doc.get("outputs") or [])
+    if not text.strip():
+        raise RuntimeError("openclaw returned no answer text")
+    used = "/".join(x for x in (doc.get("provider"), doc.get("model")) if x) or model
+    return {"text": text, "usd": 0.0, "model": model or used}
 
 
 class _Spent(RuntimeError):
@@ -821,7 +866,8 @@ def run_nightly(agent: str, night: date | None = None, *, dry_run: bool = False,
     night = night or datetime.now(timezone.utc).date()
     capability = rotation(capabilities(), night)[agent]
     brief_text, brief_sha = brief()
-    b = bundle(capability, min(FAMILIES[family]["max_input_chars"], max_chars or FAMILIES[family]["max_input_chars"]))
+    budget = family_config(family)["max_input_chars"]
+    b = bundle(capability, min(budget, max_chars or budget))
     reoffer = [r for r in load_pool() if r.get("capability") == capability and family not in (r.get("families") or [])]
     prompt = nightly_prompt(agent, capability, b, brief_text, reoffer)
     out = NIGHTLY / night.isoformat() / f"{agent}.yaml"

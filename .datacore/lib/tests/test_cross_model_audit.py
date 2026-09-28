@@ -365,3 +365,76 @@ def test_a_slice_is_pinned_to_a_commit_others_can_fetch(tmp_path):
     assert git(work, "rev-parse", "HEAD") != published
     assert cma.published_head(work) == published, "an unpushed HEAD was pinned"
 
+
+
+# ── a subscription reached through OpenClaw (Data's ChatGPT login) ──────────
+def _openclaw_answer(text="findings: []", ok=True):
+    doc = {"ok": ok, "capability": "model.run", "provider": "openai", "model": "gpt-test",
+           "outputs": [{"text": text, "mediaUrl": None}]}
+    if not ok:
+        doc = {"ok": False, "error": {"type": "provider_error", "message": "login expired"}}
+    return json.dumps(doc, indent=2)
+
+
+def test_the_openclaw_subscription_runs_one_toolless_turn_locally(monkeypatch):
+    _models(monkeypatch, {"gpt": {"transport": "openclaw-cli", "model": "openai/gpt-test"}})
+    monkeypatch.setattr(cma, "_secret", lambda name: pytest.fail("a subscription needs no API key"))
+    seen = {}
+
+    def fake_run(argv, **k):
+        seen.update(argv=argv, input=k.get("input"))
+        return subprocess.CompletedProcess(argv, 0, _openclaw_answer(), "")
+    monkeypatch.setattr(cma.subprocess, "run", fake_run)
+    out = cma.call_model("gpt", "PROMPT", max_usd=0.5)
+    assert seen["argv"][:6] == ["openclaw", "infer", "model", "run", "--local", "--json"]
+    assert seen["argv"][-2:] == ["--prompt", "PROMPT"] and "--model" in seen["argv"]
+    assert out == {"text": "findings: []", "usd": 0.0, "model": "openai/gpt-test"}
+
+
+def test_the_openclaw_subscription_on_another_host_gets_the_prompt_on_stdin(monkeypatch):
+    _models(monkeypatch, {"gpt": {"transport": "openclaw-cli", "model": "openai/gpt-test", "host": "claw-audit"}})
+    seen = {}
+
+    def fake_run(argv, **k):
+        seen.update(argv=argv, input=k.get("input"))
+        return subprocess.CompletedProcess(argv, 0, "banner\n" + _openclaw_answer("findings: []"), "")
+    monkeypatch.setattr(cma.subprocess, "run", fake_run)
+    cma.call_model("gpt", "PROMPT", max_usd=0.5)
+    assert seen["argv"][0] == "ssh" and "BatchMode=yes" in seen["argv"]
+    assert seen["argv"][-2:] == ["claw-audit", "audit-infer openai/gpt-test"]
+    assert seen["input"] == "PROMPT", "the prompt travels on stdin, never in a command line"
+
+
+def test_the_openclaw_route_says_why_it_failed(monkeypatch):
+    _models(monkeypatch, {"gpt": {"transport": "openclaw-cli", "model": "openai/gpt-test"}})
+    monkeypatch.setattr(cma.subprocess, "run",
+                        lambda argv, **k: subprocess.CompletedProcess(argv, 1, _openclaw_answer(ok=False), ""))
+    with pytest.raises(RuntimeError, match="login expired"):
+        cma.call_model("gpt", "x", max_usd=0.5)
+
+
+def test_the_openclaw_prompt_fits_one_command_line_argument(monkeypatch):
+    """openclaw takes the prompt only as --prompt, and Linux caps one argument at
+    128 KiB: the slice is read smaller, and an oversized prompt is refused."""
+    _models(monkeypatch, {"gpt": {"transport": "openclaw-cli", "model": "openai/gpt-test"}})
+    f = cma.family_config("gpt")
+    assert f["max_input_chars"] + 20_000 <= cma.OPENCLAW_PROMPT_BYTES <= 128 * 1024
+    monkeypatch.setattr(cma.subprocess, "run", lambda *a, **k: pytest.fail("an oversized prompt was sent"))
+    with pytest.raises(RuntimeError, match="too large"):
+        cma.call_model("gpt", "x" * (cma.OPENCLAW_PROMPT_BYTES + 1), max_usd=0.5)
+
+
+def test_the_forced_command_runs_only_one_inference(tmp_path):
+    script = Path(cma.LIB) / "audit_infer_forced.sh"
+    fake = tmp_path / "openclaw"
+    fake.write_text('#!/bin/sh\nprintf "%s|" "$@"\n')
+    fake.chmod(0o755)
+    env = {"PATH": f"{tmp_path}:/usr/bin:/bin", "HOME": str(tmp_path)}
+    ok = subprocess.run(["sh", str(script)], input="THE PROMPT", capture_output=True, text=True,
+                        env={**env, "SSH_ORIGINAL_COMMAND": "audit-infer openai/gpt-test"})
+    assert ok.returncode == 0, ok.stderr
+    assert ok.stdout == "infer|model|run|--local|--json|--model|openai/gpt-test|--prompt|THE PROMPT|"
+    for cmd in ("rm -rf /", "audit-infer openai/gpt;id", "audit-infer a b", ""):
+        r = subprocess.run(["sh", str(script)], input="x", capture_output=True, text=True,
+                           env={**env, "SSH_ORIGINAL_COMMAND": cmd})
+        assert r.returncode != 0 and "infer|" not in r.stdout, cmd
