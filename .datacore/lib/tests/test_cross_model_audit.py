@@ -24,6 +24,21 @@ import cross_model_audit as cma  # noqa: E402
 import tool_policy  # noqa: E402
 
 
+#: The real function, for the test that exercises it on a repository it builds.
+_PUBLISHED_HEAD = cma.published_head
+
+
+@pytest.fixture(autouse=True)
+def _pinned_to_local_head(monkeypatch):
+    """Slices here are pinned to the checkout's own HEAD, which always exists
+    locally. The real pin (published_head) is the upstream commit whenever HEAD
+    is a local commit not yet pushed -- true on this machine whenever any session
+    has committed and not pushed, which made these tests depend on the live
+    branch state (2026-09-28). test_a_slice_is_pinned_to_a_commit_others_can_fetch
+    checks the real rule on a temporary repository of its own."""
+    monkeypatch.setattr(cma, "published_head", cma.head)
+
+
 @pytest.fixture
 def sandbox(tmp_path, monkeypatch):
     audits = tmp_path / "audits"
@@ -178,8 +193,10 @@ def test_the_auditor_changes_nothing(tool, args):
 
 def test_the_write_effect_binds_only_the_auditor():
     edit = ("Edit", {"file_path": str(ROOT / ".datacore/lib/job_verify.py"), "old_string": "a", "new_string": "b"})
-    assert "write" in tool_policy.decide("miles", *edit).effects
-    assert tool_policy.decide("miles", *edit).allow
+    # `assistant` is declared in the committed policy, so this holds on any
+    # install, not only one whose private policy names its agents.
+    assert "write" in tool_policy.decide("assistant", *edit).effects
+    assert tool_policy.decide("assistant", *edit).allow
 
 
 def test_a_pr_is_ready_only_after_another_family_commented(monkeypatch):
@@ -359,11 +376,11 @@ def test_a_slice_is_pinned_to_a_commit_others_can_fetch(tmp_path):
     git(work, "push", "-q", "origin", "HEAD:main")
     git(work, "branch", "-q", "--set-upstream-to=origin/main")
     published = git(work, "rev-parse", "HEAD")
-    assert cma.published_head(work) == published
+    assert _PUBLISHED_HEAD(work) == published
     (work / "f.txt").write_text("2\n")
     git(work, "commit", "-q", "-am", "local only")
     assert git(work, "rev-parse", "HEAD") != published
-    assert cma.published_head(work) == published, "an unpushed HEAD was pinned"
+    assert _PUBLISHED_HEAD(work) == published, "an unpushed HEAD was pinned"
 
 
 
@@ -519,7 +536,7 @@ def test_the_writing_host_validates_its_pins_and_records_it(sandbox, monkeypatch
     out = cma.run_nightly("tris", date(2026, 9, 28), commit=True)
     v = yaml.safe_load(out.read_text())["validation"]
     assert v["ok"] is True and v["host"] and v["at"] and len(v["digest"]) == 64
-    assert v["repos"]["."] == cma.published_head(ROOT), "the record names what was checked, at which commit"
+    assert v["repos"]["."] == head_sha(), "the record names what was checked, at which commit"
     assert "validated at write time" in committed[0]
     assert cma.validate_findings(out, repo=ROOT) == [], "the strict validator (AUD-7) still accepts it"
     assert cma.write_time_errors(out) == []
