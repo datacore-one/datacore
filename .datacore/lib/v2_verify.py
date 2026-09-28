@@ -940,15 +940,24 @@ def check_transport(rep: Report) -> None:
 
     # No rebase anywhere in the scheduled path. Comments naming the anti-pattern
     # are fine; a live call is not.
+    # Modules' code runs on the schedule too: the rebase that paused in the
+    # box's 0-personal on 2026-09-27 was in modules/ventures/lib/cadence_run.py,
+    # which this check did not read. Tests are not a scheduled path.
     hits = []
-    for p in list(LIB.rglob("*.py")) + list(LIB.rglob("*.sh")):
-        if "node_modules" in str(p) or p.name == "v2_verify.py":
+    roots = [LIB] + [d for m in sorted((LIB.parent / "modules").glob("*"))
+                     for d in (m / "lib", m / "server", m / "scripts", m / "bin") if d.is_dir()]
+    files = [p for r in roots for pat in ("*.py", "*.sh") for p in r.rglob(pat)]
+    for p in files:
+        if ("node_modules" in p.parts or ".git" in p.parts or "tests" in p.parts
+                or p.name.startswith("test_") or p.name == "v2_verify.py"):
             continue
         try:
             for i, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
                 s = line.strip()
                 if s.startswith(("#", "*", "//")):
                     continue
+                if p.suffix == ".py":           # prose in a docstring quotes the anti-pattern in backticks
+                    s = re.sub(r"`[^`]*`", "", s)
                 if "pull --rebase" in s or "'--rebase'" in s or '"--rebase"' in s:
                     hits.append(f"{p.name}:{i}")
         except OSError:
