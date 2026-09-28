@@ -268,7 +268,11 @@ When the user corrects a recalled fact: call `plur_learn` immediately, then `plu
   its meaning. Write "the hourly inbox import check (R-018) is red", never "R-018 is
   red" — even when the file you are summarising is written in ids and has a glossary.
   Before you send, reread the reply: any code left outside brackets gets its meaning
-  written in its place, and the code moves into brackets or goes.
+  written in its place, and the code moves into brackets or goes. A label in front
+  does not count: "engram ENG-2026-01-01-001" or "DIP-0099" is still a bare id. Say
+  what it holds — "the memory note on how releases are signed (ENG-2026-01-01-001)" —
+  or, when you do not know, what kind of thing it is: "the details are in a memory
+  note (ENG-2026-01-01-001)". The id itself is always inside the brackets.
 - **A report is saved before it is answered.** Any audit, review, report or hand-off
   you produce is written to a file in the repository (or filed as an issue) in the
   same turn, before you reply; the reply summarises it and names the path. A report
