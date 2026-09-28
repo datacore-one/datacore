@@ -21,6 +21,8 @@ Need vocabulary:
                     root, or ~/... for this user's home (install-local state
                     that never ships in the repository)
     cli:<name>      the command is on PATH
+    python:<module> an optional Python package is importable (one that the
+                    audited requirements deliberately leave out)
     fleet           this machine is part of a fleet: its infrastructure.yaml
                     roster exists, so hosts can be read over ssh
     agent           real agent sessions are allowed (DATACORE_AGENT_EVALS=1)
@@ -33,7 +35,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DECLARED = ROOT / ".datacore" / "config" / "test-needs.yaml"
-KINDS = ("module", "file", "cli", "fleet", "agent")
+KINDS = ("module", "file", "cli", "python", "fleet", "agent")
 
 
 def load(path: Path = DECLARED) -> list[dict]:
@@ -59,6 +61,12 @@ def met(need: str, root: Path = ROOT, env=None) -> bool:
         return p.exists()
     if k == "cli":
         return shutil.which(arg) is not None
+    if k == "python":
+        import importlib.util
+        try:
+            return importlib.util.find_spec(arg) is not None
+        except (ImportError, ValueError):
+            return False
     if k == "fleet":
         return (root / ".datacore" / "registry" / "infrastructure.yaml").exists()
     if k == "agent":

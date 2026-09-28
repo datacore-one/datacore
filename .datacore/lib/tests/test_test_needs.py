@@ -18,6 +18,9 @@ import pytest
 import needs_gate as ng
 
 ENTRIES = ng.load()
+AUDITED = {re.split(r"[=<>\[ ]", line.strip(), 1)[0].lower().replace("_", "-")
+           for line in (ng.ROOT / ".datacore/lib/requirements-audit.txt").read_text().splitlines()
+           if line.strip() and not line.startswith("#")}
 
 
 def _tracked(path: str) -> bool:
@@ -58,6 +61,10 @@ def test_every_need_is_one_the_repository_cannot_supply(entry):
                 f"{entry['test']}: module {arg} ships in this repository -- not a need")
         if kind == "cli":
             assert arg, f"{entry['test']}: cli need without a command"
+        if kind == "python":
+            dist = arg.split(".", 1)[0].replace("_", "-").lower()
+            assert arg and dist not in AUDITED, (
+                f"{entry['test']}: {arg} is in requirements-audit.txt -- CI installs it, so it is not a need")
 
 
 def test_a_met_need_leaves_the_test_in(tmp_path):

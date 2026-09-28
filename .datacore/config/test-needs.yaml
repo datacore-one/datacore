@@ -21,7 +21,7 @@
 # repository does not track, every `module:` need a module it does not contain.
 #
 # Needs (see lib/needs_gate.py):
-#   module:<name>  file:<path or ~/path>  cli:<name>  fleet  agent
+#   module:<name>  file:<path or ~/path>  cli:<name>  python:<module>  fleet  agent
 version: 1
 
 tests:
@@ -109,6 +109,13 @@ tests:
   - test: .datacore/lib/tests/test_promise_SPC6_memories_recalled.py
     needs: [cli:plur]
     why: recalls through the installed PLUR CLI
+
+  # ---- ordinary tests that need an optional dependency ------------------------
+  - test: .datacore/lib/tests/test_gcal_auth_never_exits.py
+    needs: [python:google_auth_oauthlib, python:google.oauth2]
+    why: >
+      the Google Calendar client libraries are an optional dependency
+      (requirements.txt lists them commented out) that the audited CI set leaves out
 
   # ---- ordinary tests that check the installation ----------------------------
   - test: .datacore/lib/tests/test_agent_eval_harness.py

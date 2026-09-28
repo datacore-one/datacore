@@ -5,6 +5,10 @@ LIB = pathlib.Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("rs", LIB / "reliability_scoreboard.py")
 M = importlib.util.module_from_spec(spec); spec.loader.exec_module(M)
 M._unit_show = lambda unit: {}  # no systemd in the test box; each test says what the unit reports
+# Nor the host's journal: R2 reads `journalctl` before the failed-unit list, so
+# on a machine with systemd (a CI runner) the tests met that machine's own
+# failed units (podman-restart.service). A test that needs a journal sets one.
+M._journal = lambda args: ""
 
 
 def _good_box(tmp_path, day):
