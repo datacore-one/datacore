@@ -46,7 +46,9 @@ def setup(tmp: Path) -> tuple[Path, Path]:
     sh(tmp, "git", "init", "-q", "--bare", str(srv))
     shutil.copy(HOOK, srv / "hooks" / "pre-receive")
     (srv / "hooks" / "pre-receive").chmod(0o755)
-    sh(tmp, "git", "init", "-q", str(wt))
+    # The pushes name `main`; say so rather than inherit init.defaultBranch,
+    # which the hermetic git config nulls (git's own default is still master).
+    sh(tmp, "git", "init", "-q", "-b", "main", str(wt))
     sh(wt, "git", "config", "user.email", "t@t")
     sh(wt, "git", "config", "user.name", "t")
     # Point the CLIENT hooks at this fixture's own (empty) hooks dir. Without

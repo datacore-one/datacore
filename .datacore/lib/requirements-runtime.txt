@@ -429,9 +429,9 @@ mdurl==0.1.2 \
     --hash=sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8 \
     --hash=sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba
     # via markdown-it-py
-org-workspace==0.5.1 \
-    --hash=sha256:62009ab8900ba3a057538e387698cb266b5a98b911d2ce57e8b77fec843a6359 \
-    --hash=sha256:a9384a18b919b6df9f6567a4243420252cbd91a39965edbc0f0ebd8478e81a55
+org-workspace==0.5.4 \
+    --hash=sha256:5f7bdb1611c348c48d8db457532d8fb81076db22fd70e4fd01c99ff859d9ab14 \
+    --hash=sha256:d43a11b401ef52789a35f953332e8a99e842f09bbd6d03ece8473d8a3b6f9b09
     # via
     #   -r .datacore/lib/requirements-runtime.in
     #   -r .datacore/lib/requirements.txt
