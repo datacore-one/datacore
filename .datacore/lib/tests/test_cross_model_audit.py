@@ -627,3 +627,20 @@ def test_the_key_is_asked_of_the_hosts_broker_not_the_audit_checkout(monkeypatch
     monkeypatch.setattr(cma.subprocess, "run", fake_run)
     assert cma._secret("OPENROUTER_API_KEY") == "k" * 20
     assert seen["env"] is not None and "DATACORE_ROOT" not in seen["env"]
+
+
+def test_an_audit_only_checkout_pushes_under_its_own_git_guards(sandbox, monkeypatch):
+    """The shared git hooks judge a push with the guard scripts under DATA_DIR
+    (default ~/Data). On plur-claw ~/Data is the agent's space repo, whose
+    vendored lib lacks the ledger write gate, so the hook failed closed
+    (2026-09-28). An audit-only checkout is a complete, current tree: its own
+    guards judge its push. The hooks still run; nothing is skipped."""
+    monkeypatch.setattr(cma, "rotation", lambda caps, night, agents=None: {a: "audits" for a in cma.AGENTS})
+    monkeypatch.setattr(cma, "call_model", lambda *a, **k: {"model": "m", "usd": 0.0, "text": "findings: []"})
+    monkeypatch.setattr(cma, "sync_sources", lambda: None)
+    monkeypatch.delenv("DATA_DIR", raising=False)
+    seen = []
+    monkeypatch.setattr(cma, "_commit", lambda paths, message: seen.append(os.environ.get("DATA_DIR")) or "pushed")
+    cma.run_nightly("data", date(2026, 9, 28), commit=True, sync=True)
+    assert seen == [str(cma.ROOT)]
+    assert "SKIP_PRE_PUSH" not in os.environ
