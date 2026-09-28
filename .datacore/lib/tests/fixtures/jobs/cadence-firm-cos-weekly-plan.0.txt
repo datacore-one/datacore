@@ -1,0 +1,7 @@
+# fixture for cadence-firm-cos-weekly-plan artifact[0]
+# producer artifact: ~/Data/0-personal/notes/pages/weekly-plan-*.md on box
+# harvested: 2026-09-28 (title line of weekly-plan-2026-W40.md)
+# regex under test: ^# Weekly Plan — [0-9]{4}-W[0-9]{2}
+# represents: SUCCESS
+# ---
+# Weekly Plan — 2026-W40

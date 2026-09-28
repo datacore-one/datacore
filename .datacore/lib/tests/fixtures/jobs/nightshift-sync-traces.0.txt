@@ -1,0 +1,7 @@
+# fixture for nightshift-sync-traces artifact[0]
+# producer artifact: ~/.datacore/state/sync-traces.last on nightshift
+# harvested: 2026-09-28 (first run, the job's own command)
+# regex under test: sync_traces: \d+ transcript
+# represents: SUCCESS
+# ---
+2026-09-28T11:34:05Z sync_traces: 4528 transcript(s) in ~/.datacore/traces/claude-code

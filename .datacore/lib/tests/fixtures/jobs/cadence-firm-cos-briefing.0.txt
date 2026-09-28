@@ -1,0 +1,7 @@
+# fixture for cadence-firm-cos-briefing artifact[0]
+# producer artifact: ~/Data/0-personal/notes/journals/20*-*-*.md on box
+# harvested: 2026-09-28 (heading line of the 2026-09-26 journal the cadence judged ok)
+# regex under test: ^## Daily Briefing
+# represents: SUCCESS
+# ---
+## Daily Briefing

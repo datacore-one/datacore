@@ -1,0 +1,7 @@
+# fixture for plur-claw-sync-traces artifact[0]
+# producer artifact: ~/.datacore/state/sync-traces.last on plur-claw
+# harvested: 2026-09-28 (first run, the job's own command)
+# regex under test: sync_traces: \d+ transcript
+# represents: SUCCESS
+# ---
+2026-09-28T11:34:07Z sync_traces: 0 transcript(s) in ~/.datacore/traces/claude-code

@@ -1,0 +1,7 @@
+# fixture for sync-traces artifact[0]
+# producer artifact: ~/.datacore/state/sync-traces.last on box
+# harvested: 2026-09-28 (first run, the job's own command)
+# regex under test: sync_traces: \d+ transcript
+# represents: SUCCESS
+# ---
+2026-09-28T11:33:51Z sync_traces: 484 transcript(s) in ~/.datacore/traces/claude-code

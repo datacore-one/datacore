@@ -178,3 +178,19 @@ def test_the_same_artifact_twice_is_still_ambiguous():
     with pytest.raises(ValueError):
         ci.reconcile("", {"job-a": "25 * * * * /h/.datacore/lib/atomic_out.sh /s/a.log -- python3 /h/x.py",
                           "job-b": "40 * * * * /h/.datacore/lib/atomic_out.sh /s/a.log -- python3 /h/y.py"})
+
+
+def test_rsync_jobs_are_told_apart_by_what_they_copy():
+    """Several unrelated jobs are plain rsync lines. Identified by the executable
+    alone they were one job, so tagging the one that pulls state would have
+    dropped every other rsync line from the crontab (2026-09-28, OPS-1)."""
+    pull = "15 * * * * /usr/bin/rsync -az host:'~/state/mail/' $HOME/state/mail/ >/dev/null 2>&1"
+    push_a = '0 */6 * * * /usr/bin/rsync -az $HOME/a/ user@10.0.0.1:/x/a/ >/dev/null 2>&1\n'
+    push_b = '30 */6 * * * /usr/bin/rsync -az $HOME/b/ user@10.0.0.1:/x/b/ >/dev/null 2>&1\n'
+    current = push_a + pull + '\n' + push_b
+    result = C.reconcile(current, {'mail-pull': pull})
+    assert push_a in result and push_b in result
+    assert result.count('mail/') == 2 and result.endswith(pull + ' # datacore-job:mail-pull\n')
+    assert C.reconcile(result, {'mail-pull': pull}) == result
+    # flags before the source are not what tells jobs apart
+    assert C.invocation('1 * * * * rsync -a --delete /src/ /dst/') == ('rsync', '/src/')

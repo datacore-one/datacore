@@ -852,6 +852,55 @@ jobs:
         check: exists
         max_age_hours: 1
 
+  # Every agent host copies its own Claude transcripts nightly (MEM-67): installed
+  # by agent_host_setup.sh under the cron key `sync-traces`, so the crontab line is
+  # tagged `# datacore-job:sync-traces` on every host and the box's entry carries
+  # that exact name. sync_traces.sh stamps one line per run into
+  # ~/.datacore/state/sync-traces.last (the redirected log is not the artifact).
+  - name: sync-traces
+    machine: box
+    schedule: "10 0 * * *"
+    cmd: "TRACES_DEST=~/.datacore/traces/claude-code bash ~/Data/.datacore/lib/sync_traces.sh >> ~/.datacore/state/sync-traces.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/sync-traces.last"
+        check: regex
+        arg: 'sync_traces: \d+ transcript'
+        max_age_hours: 26
+
+  # The box's two cadences (DIP-0050), installed by the ventures module's
+  # cadence_schedule_sync.py as `# datacore-job:<slug>` lines and declared by that
+  # module (module.yaml schedules:, MOD-3). cadence_run.py runs the duty's script
+  # and judges it by the evidence its template declares
+  # (.datacore/templates/cadences/{briefing,weekly-plan}.md); these contracts read
+  # that same evidence. The scripts' own outputs stay box-briefing and
+  # box-weekly-plan, whose cron lines these cadences replaced.
+  - name: cadence-firm-cos-briefing
+    machine: box
+    schedule: "0 4 * * *"
+    cmd: "DATACORE_ROOT=~/Data /usr/bin/python3 ~/Data/.datacore/modules/ventures/lib/cadence_run.py cadence-firm-cos-briefing >> ~/.datacore/state/cadence-run.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      # The template's evidence: today's journal carries the briefing section.
+      # A glob (newest journal), not {today}: the run is at 04:00 and the hourly
+      # verifier would otherwise read a missing file every night before it.
+      - path: "~/Data/0-personal/notes/journals/20*-*-*.md"
+        check: regex
+        arg: '^## Daily Briefing'
+        max_age_hours: 26
+
+  - name: cadence-firm-cos-weekly-plan
+    machine: box
+    schedule: "0 7 * * 0"
+    cmd: "DATACORE_ROOT=~/Data /usr/bin/python3 ~/Data/.datacore/modules/ventures/lib/cadence_run.py cadence-firm-cos-weekly-plan >> ~/.datacore/state/cadence-run.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      # The template's evidence: the plan page written into the owner's space.
+      - path: "~/Data/0-personal/notes/pages/weekly-plan-*.md"
+        check: regex
+        arg: '^# Weekly Plan — [0-9]{4}-W[0-9]{2}'
+        max_age_hours: 170
+
   - name: runner-refresh
     machine: box
     schedule: "17 * * * *"
@@ -903,6 +952,18 @@ jobs:
       # the 08:00 verification whenever a run that started at 06:03 was still going.
       - path: "~/Data/.datacore/state/nightshift/manifest-latest.yaml"
         check: no_crash
+        max_age_hours: 26
+
+  # sync-traces on this host (agent_host_setup.sh; see the box's `sync-traces`).
+  - name: nightshift-sync-traces
+    machine: nightshift
+    schedule: "10 0 * * *"
+    cmd: "TRACES_DEST=~/.datacore/traces/claude-code bash ~/.datacore/v2-runner/.datacore/lib/sync_traces.sh >> ~/.datacore/state/sync-traces.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/sync-traces.last"
+        check: regex
+        arg: 'sync_traces: \d+ transcript'
         max_age_hours: 26
 
   # ── the unattended principals (product description, stage 2): a contract
@@ -1458,6 +1519,23 @@ jobs:
       - path: "~/.datacore/state/sync-traces.last"
         check: regex
         arg: 'sync_traces: \d+ transcript'
+        max_age_hours: 26
+
+  # The box runs mail triage and writes .datacore/state/mail/, which is gitignored,
+  # so this hourly pull is the only route the results have to this machine's
+  # /today. rsync keeps the box's mtimes, so the age of audit.jsonl is the age of
+  # the last triage that reached here. Neutral here; this install's exact line is
+  # in manifest.local.yaml.
+  - name: mac-mail-state-pull
+    scope: local
+    why_local: "pulls the mail triage state onto this machine"
+    machine: mac
+    schedule: "15 * * * *"
+    cmd: 'rsync -az "$(python3 ~/Data/.datacore/lib/jobs/manifest.py ssh-alias box)":~/Data/.datacore/state/mail/ ~/Data/.datacore/state/mail/'
+    on_fail: telegram
+    artifacts:
+      - path: "~/Data/.datacore/state/mail/audit.jsonl"
+        check: exists
         max_age_hours: 26
 
   - name: mac-recall-extract

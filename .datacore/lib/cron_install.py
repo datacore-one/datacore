@@ -69,6 +69,10 @@ def invocation(line: str, *, reject_compound: bool = False) -> tuple[str, ...] |
     # its executable, which is right until several jobs share a wrapper.
     if program in ('atomic_out.sh', 'audit_trio_run.sh'):
         return (identity, args[0] if args else '')
+    # rsync is the executable of many unrelated copy jobs; the source tells them
+    # apart. By executable alone, tagging one rsync line dropped every other.
+    if program == 'rsync':
+        return (identity, next((a for a in args if not a.startswith('-')), ''))
     if program == 'job_verify.py':
         return (identity, args[args.index('--machine') + 1] if '--machine' in args and args.index('--machine') + 1 < len(args) else '')
     return (identity,)
