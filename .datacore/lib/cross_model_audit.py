@@ -104,7 +104,9 @@ FAMILIES = {
 #: A reasoning model counts its thinking against the output limit; 2026-09-28 GLM
 #: spent all of an 8000-token limit thinking and answered nothing. So the answer
 #: budget (max_output_tokens) comes ON TOP of a reasoning budget, and the cap
-#: estimate pays for both.
+#: estimate pays for both. OpenRouter did not honour a token cap on reasoning (GLM
+#: thought through all 24000), so it is asked for low effort instead (12000 tokens,
+#: a full answer).
 
 #: Every way a family can be reached: a subscription CLI login (claude-cli), an
 #: API key (openai), OpenRouter, or a local OpenAI-compatible server (local,
@@ -535,7 +537,7 @@ def call_model(family: str, prompt: str, *, max_usd: float, timeout_s: int = 150
     if f["transport"] == "openrouter":
         data = _post_json("https://openrouter.ai/api/v1/chat/completions", {
             "model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0,
-            "max_tokens": limit, "reasoning": {"max_tokens": f["max_reasoning_tokens"]}, "usage": {"include": True}},
+            "max_tokens": limit, "reasoning": {"effort": "low"}, "usage": {"include": True}},
             {"Authorization": f"Bearer {_secret('OPENROUTER_API_KEY')}",
              "HTTP-Referer": "https://datacore.one"}, timeout_s)
     elif f["transport"] == "openai":
@@ -722,10 +724,42 @@ def parse_findings(text: str) -> list:
     i = t.find("findings:")
     if i < 0:
         raise ValueError("the answer has no `findings:` block")
-    doc = yaml.safe_load(t[i:])
+    try:
+        doc = yaml.safe_load(t[i:])
+    except yaml.YAMLError:
+        # Almost-YAML (a `: ` inside an unquoted claim) must not cost the night:
+        # the schema is flat, so read it key by key. Every finding is still
+        # checked on its own by normalize().
+        return _lenient_findings(t[i:])
     if not isinstance(doc, dict) or not isinstance(doc.get("findings"), list):
         raise ValueError("`findings` is not a list")
     return doc["findings"]
+
+
+_ITEM = re.compile(r"^\s*-\s+(\w+):\s?(.*)$")
+_FIELD = re.compile(r"^\s+(\w+):\s?(.*)$")
+
+
+def _lenient_findings(block: str) -> list[dict]:
+    """The flat findings list read line by line: `- key: value` opens a finding,
+    `key: value` adds to it; a value is the rest of its line, outer quotes removed."""
+    def value(v: str) -> str:
+        v = re.sub(r"\s+#.*$", "", v).strip() if not v.strip().startswith(("'", '"')) else v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+            v = v[1:-1]
+        return v
+    out: list[dict] = []
+    for line in block.splitlines()[1:]:
+        m = _ITEM.match(line)
+        if m:
+            out.append({m.group(1): value(m.group(2))})
+            continue
+        m = _FIELD.match(line)
+        if m and out:
+            out[-1][m.group(1)] = value(m.group(2))
+    if not out:
+        raise ValueError("`findings` could not be read")
+    return out
 
 
 def normalize(raw: list, doc: dict, base: Path, allowed: set[str] | None) -> tuple[list, list]:

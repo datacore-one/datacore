@@ -295,7 +295,9 @@ def test_a_reasoning_model_gets_room_to_answer_after_it_thinks(monkeypatch):
     monkeypatch.setattr(cma, "_post_json", fake_post)
     cma.call_model("glm", "x", max_usd=0.4)
     f = cma.FAMILIES["glm"]
-    assert seen["body"]["reasoning"] == {"max_tokens": f["max_reasoning_tokens"]}
+    # A token cap on reasoning was not honoured (GLM thought through all 24000);
+    # a low effort left 12000 tokens of which the answer took 1300.
+    assert seen["body"]["reasoning"] == {"effort": "low"}
     assert seen["body"]["max_tokens"] == f["max_output_tokens"] + f["max_reasoning_tokens"]
     assert cma.estimate_usd("glm", "") == pytest.approx(
         (f["max_output_tokens"] + f["max_reasoning_tokens"]) * f["out"] / 1_000_000)
@@ -310,3 +312,29 @@ def test_an_empty_answer_says_why_and_still_counts_its_spend(monkeypatch):
     with pytest.raises(cma._Spent, match="length") as exc:
         cma.call_model("gpt", "x", max_usd=0.4)
     assert exc.value.usd > 0
+
+
+def test_an_answer_that_is_almost_yaml_still_yields_its_findings():
+    """Claude's rehearsal answer (2026-09-28) put `: ` inside an unquoted claim,
+    which strict YAML refuses; the night lost every finding for one colon."""
+    text = """Here you go:
+```yaml
+findings:
+  - promise: OPS-3
+    claim: the task is closed with closed_reason "check passed: pull request ready", job box-x not rerun
+    evidence: .datacore/lib/promise_evals.py:10
+    severity: high
+    seeded_failure: 'a job that fails: after the check'
+  - promise: OPS-4
+    claim: plain one
+    evidence: .datacore/lib/promise_evals.py:12
+    severity: low
+    seeded_failure: none
+```"""
+    got = cma.parse_findings(text)
+    assert [f["promise"] for f in got] == ["OPS-3", "OPS-4"]
+    assert got[0]["claim"].endswith('"check passed: pull request ready", job box-x not rerun')
+    assert got[0]["seeded_failure"] == "a job that fails: after the check"
+    assert got[1]["evidence"] == ".datacore/lib/promise_evals.py:12"
+    with pytest.raises(ValueError):
+        cma.parse_findings("no findings here")
