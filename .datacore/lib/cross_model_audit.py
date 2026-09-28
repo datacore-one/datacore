@@ -498,8 +498,7 @@ def _secret(name: str) -> str:
 
 def _post_json(url: str, body: dict, headers: dict, timeout: int, *, keyed: bool = True) -> dict:
     """POST JSON, return JSON. A keyed call goes through secret_http (HTTPS only);
-    a local model gets no key, so plain HTTP to it is fine. An HTTP error names
-    the provider's own error code (credits exhausted is not a rate limit)."""
+    a local model gets no key, so plain HTTP to it is fine."""
     import urllib.error
     import urllib.request
     req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={
@@ -512,13 +511,9 @@ def _post_json(url: str, body: dict, headers: dict, timeout: int, *, keyed: bool
         with opener(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        why = ""
-        try:
-            err = json.loads(exc.read().decode("utf-8", "replace") or "{}").get("error") or {}
-            why = " ".join(str(err.get(k)) for k in ("type", "code") if err.get(k))
-        except (ValueError, AttributeError, OSError):
-            pass
-        raise RuntimeError(f"HTTP {exc.code} from {url.split('/')[2]}" + (f" ({why})" if why else "")) from None
+        # secret_http drops the provider's body on purpose (it may reflect the key),
+        # so only the status is known: a 429 may be a rate limit or exhausted credits.
+        raise RuntimeError(f"HTTP {exc.code} from {url.split('/')[2]}") from None
 
 
 def call_model(family: str, prompt: str, *, max_usd: float, timeout_s: int = 1500) -> dict:

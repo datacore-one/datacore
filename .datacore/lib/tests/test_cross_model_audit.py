@@ -365,15 +365,3 @@ def test_a_slice_is_pinned_to_a_commit_others_can_fetch(tmp_path):
     assert git(work, "rev-parse", "HEAD") != published
     assert cma.published_head(work) == published, "an unpushed HEAD was pinned"
 
-
-def test_an_http_error_names_the_providers_reason(monkeypatch):
-    import io
-    import urllib.error
-    import secret_http
-
-    def refuse(req, timeout=30, **k):
-        raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", {}, io.BytesIO(
-            b'{"error": {"type": "insufficient_quota", "code": "credit_balance_exhausted", "message": "no credits"}}'))
-    monkeypatch.setattr(secret_http, "urlopen", refuse)
-    with pytest.raises(RuntimeError, match=r"HTTP 429 from api.openai.com \(insufficient_quota credit_balance_exhausted\)"):
-        cma._post_json("https://api.openai.com/v1/chat/completions", {}, {"Authorization": "Bearer k"}, 5)
