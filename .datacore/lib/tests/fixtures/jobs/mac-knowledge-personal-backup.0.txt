@@ -1,0 +1,7 @@
+# fixture for mac-knowledge-personal-backup artifact[0]
+# producer artifact: ~/.datacore/state/knowledge-personal-backup.log on mac
+# harvested: 2026-09-28
+# regex under test: ^sqlite_push: ok 
+# represents: SUCCESS
+# ---
+sqlite_push: ok ~/.datacore/example.db -> example-host:.datacore/example.db bytes=4096 remote_bytes=4096

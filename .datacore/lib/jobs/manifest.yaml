@@ -1555,6 +1555,51 @@ jobs:
         check: exists
         max_age_hours: 26
 
+  # Consistent SQLite snapshots pushed off this machine (sqlite_push.py: backup
+  # API, journal_mode=DELETE, rsync over the roster's ssh alias, remote size read
+  # back). Each run leaves one result line; the contract is that line, so a push
+  # that did not land is red rather than a quiet no-op. Replaced 2026-09-28 three
+  # raw rsync lines that copied live databases to a retired /root layout.
+  # Neutral here; this install's exact lines are in manifest.local.yaml.
+  - name: mac-lens-push
+    scope: local
+    why_local: "pushes this machine's lens observations to the box's lens reader"
+    machine: mac
+    schedule: "0 */6 * * *"
+    cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/lens-push.log -- python3 ~/Data/.datacore/lib/sqlite_push.py ~/.datacore/lens/observations.db box .datacore/lens/observations.db"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/lens-push.log"
+        check: last_line_regex
+        arg: '^sqlite_push: ok '
+        max_age_hours: 13
+
+  - name: mac-knowledge-backup
+    scope: local
+    why_local: "backs up this machine's knowledge index off the machine"
+    machine: mac
+    schedule: "0 12 1 * *"
+    cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/knowledge-backup.log -- python3 ~/Data/.datacore/lib/sqlite_push.py ~/Data/.datacore/knowledge.db nightshift backups/knowledge/knowledge.db"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/knowledge-backup.log"
+        check: last_line_regex
+        arg: '^sqlite_push: ok '
+        max_age_hours: 745
+
+  - name: mac-knowledge-personal-backup
+    scope: local
+    why_local: "backs up this machine's personal-space knowledge index off the machine"
+    machine: mac
+    schedule: "10 12 1 * *"
+    cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/knowledge-personal-backup.log -- python3 ~/Data/.datacore/lib/sqlite_push.py ~/Data/0-personal/.datacore/knowledge.db nightshift backups/knowledge/knowledge-personal.db"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/knowledge-personal-backup.log"
+        check: last_line_regex
+        arg: '^sqlite_push: ok '
+        max_age_hours: 745
+
   - name: mac-recall-extract
     scope: local
     why_local: "reads this machine's own session transcripts"
