@@ -92,7 +92,7 @@ Tasks to create (mark in_progress when starting, completed when done):
 6. "DIP gap detection" (activeForm: "Scanning for DIP gaps")
 7. "Task housekeeping + priorities" (activeForm: "Processing tasks")
 8. "AI delegation review" (activeForm: "Reviewing AI task queue")
-9. "Tomorrow preview + final status" (activeForm: "Generating preview")
+9. "Tomorrow preview, prep tasks + final status" (activeForm: "Writing prep tasks for tomorrow")
 10. "Verify all checklist tasks completed" (activeForm: "Verifying checklist completion")
 ```
 
@@ -662,7 +662,28 @@ If no server:
 - Tasks queue for local execution
 - Manual trigger or scheduled local run
 
-### 9. Tomorrow's Preview
+### 9. Tomorrow's Preview and Prep Tasks
+
+**A preview alone is not this step.** The owner wakes up to prep tasks that are
+ready, so this step WRITES them, even when the rest of the review is skipped for
+lack of tools:
+
+1. Read tomorrow's calendar (the calendar tool or command available) and the
+   commitments due or scheduled tomorrow (org-workspace `agenda`/`deadlines` on the
+   personal space's `org/next_actions.org`).
+2. For **each meeting** and **each commitment due tomorrow**, add one prep task to
+   the personal space's `org/inbox.org` (agents add tasks only to an inbox), under a
+   level-1 heading `* Prep for <tomorrow's date>`:
+   ```
+   ** TODO Prep for <meeting or commitment> (<time>)
+   :PROPERTIES:
+   :CREATED: [<now, YYYY-MM-DD Day HH:MM>]
+   :END:
+   <one or two lines: what to read, bring or decide beforehand>
+   ```
+   Check the inbox first and skip one that already exists for the same item.
+3. Then show the preview below, listing the prep tasks you wrote.
+
 
 **Show what's already scheduled:**
 
