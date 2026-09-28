@@ -972,20 +972,10 @@ jobs:
         check: no_crash
         max_age_hours: 26
 
-  - name: nightshift-inbox-process
-    machine: nightshift
-    schedule: "0 5 * * *"
-    cmd: "~/Data/.datacore/modules/nightshift/nightshift run --command=/process-inbox"
-    on_fail: telegram
-    artifacts:
-      # This runs through run_command_mode (a Claude-driven slash command,
-      # not a deterministic script), so there's no code-traced writer --
-      # the unit file's own Description is the evidence: "classify inbox.org
-      # -> research_learning.org + next_actions.org".
-      - path: "~/Data/0-personal/org/research_learning.org"
-        check: no_crash
-        max_age_hours: 26
-
+  # nightshift-inbox-process: RETIRED 2026-09-17 (its timer was disabled on the
+  # overnight host; box-inbox runs the same /process-inbox workflow at 05:00).
+  # Its contract outlived the timer and was judged on a file another job writes
+  # -- green by coincidence, red otherwise. test_one_inbox_processor.py pins it.
 
   - name: nightshift-public-repo-audit
     machine: nightshift

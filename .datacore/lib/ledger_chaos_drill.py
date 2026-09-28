@@ -382,7 +382,8 @@ class Drill:
         The log's contract distinguishes the two by POSITION: an unparseable
         FINAL line can only be an interrupted write, so `append` truncates it
         and `read_events` skips it; the same damage anywhere else cannot be
-        explained that way and must raise rather than silently drop events.
+        explained that way and must never be dropped silently (since LED-7 the
+        reader warns and withholds that log's tail; the writer still refuses).
         The drill asserts both halves, because a reader that swallowed a
         mid-file corruption would lose data with no error at all.
         """
@@ -404,19 +405,46 @@ class Drill:
         self.check("no complete event was lost to the repair",
                    [r["payload"]["id"] for r in rows[:5]] == [f"p{n}" for n in range(5)])
 
+        # Damage in the MIDDLE. Since LED-7 (afd3e84) a reader no longer raises
+        # here -- one damaged writer log used to stop fold, projection and
+        # policy for the whole space. It reads the events before the damage and
+        # withholds the rest. That is only safe if the withholding is NEVER
+        # silent, so the drill asserts every way it must be seen: a warning
+        # naming the file and line, a chain that verifies as incomplete (so
+        # attestation readers fail closed), and a writer that refuses to append
+        # past the damage rather than "repairing" it away.
+        import warnings as _w
+        from ledger.log import CorruptLogWarning
+        from ledger.verify import verify_events
         lines = whole.splitlines()
         lines[2] = '{"seq": 2, "type": "item.crea'
         path.write_text("\n".join(lines) + "\n")
+        with _w.catch_warnings(record=True) as caught:
+            _w.simplefilter("always")
+            try:
+                got = list(read_events(space))
+                raised = False
+            except CorruptLogError:
+                got, raised = [], True
+        notes = [str(w.message) for w in caught if issubclass(w.category, CorruptLogWarning)]
+        self.check("damage in the MIDDLE of the log is never read silently",
+                   raised or bool(notes), f"read_events returned {len(got)} event(s) with no warning")
+        if notes:
+            self.check("the warning names the file and the line",
+                       "drill.jsonl" in notes[0] and "line 3" in notes[0], notes[0])
+            self.check("only the events before the damage are read",
+                       [e.payload.get("id") for e in got] == ["p0", "p1"],
+                       str([e.payload.get("id") for e in got]))
+            errors = verify_events(list(enumerate(got, 1)))
+            self.check("the chain verifies as INCOMPLETE, so evidence readers fail closed",
+                       any("incomplete" in e for e in errors), str(errors))
         try:
-            list(read_events(space))
-            raised, detail = False, ""
-        except CorruptLogError as exc:
-            raised, detail = True, str(exc)
-        self.check("damage in the MIDDLE of the log raises instead of dropping events",
-                   raised, "read_events silently returned a short log")
-        if raised:
-            self.check("the error names the file and the line",
-                       "drill.jsonl" in detail and "3" in detail, detail)
+            self.log(space, "drill").append("item.create", {"id": "px", "title": "past the damage"})
+            refused = False
+        except CorruptLogError:
+            refused = True
+        self.check("a writer refuses to append past mid-log damage",
+                   refused, "append wrote over a damaged log")
 
     def simultaneous_hosts(self) -> None:
         """Two hosts appending and publishing to one remote at the same moment.
