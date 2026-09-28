@@ -33,6 +33,15 @@ Privacy guards (2026-09-26, promises SPC-4/5, MEM-13/15/17/19), wired the same w
   context_merge.py check  SessionStart. Rebuilds a stale composed CLAUDE.md,
                           reports a hand-edited one.
 
+Client guards (2026-09-28, promises MEM-13/15, owner: "Client guards should be in place"):
+
+  space_policy_guard.py --client   PreToolUse Bash|Edit|Write|Read|MultiEdit. Only
+                          the two client rules of the space guard: a session that
+                          touched a client space changes nothing outside it, and a
+                          person document outside the personal space asks first.
+                          The space-type policy and the cross-space rule stay off
+                          (they are the separate "space" guard).
+
 Eval guard (2026-09-27, promise MEM-30):
 
   eval_guard.py           PreToolUse Edit|Write|MultiEdit|Bash. Changing an
@@ -75,6 +84,7 @@ WIRING = [
     ("redaction", "PreToolUse", "*", f"{IG} check", 5),
     ("redaction", "PostToolUse", "Read|Bash|Grep|Glob", f"{IG} clear", 5),
     ("space", "PreToolUse", "Bash|Edit|Write|Read|MultiEdit", SPG, 5),
+    ("client", "PreToolUse", "Bash|Edit|Write|Read|MultiEdit", f"{SPG} --client", 5),
     ("memory", "PreToolUse", "Edit|Write|MultiEdit", MG, 5),
     ("publish", "PreToolUse", "Artifact|Bash", PG, 5),
     ("context", "SessionStart", None, CC, 20),
@@ -85,7 +95,9 @@ GUARDS = sorted({w[0] for w in WIRING})
 
 
 def already(groups, cmd):
-    return any(cmd in h.get("command", "") for g in groups for h in g.get("hooks", []))
+    # endswith, not "in": the client guard's command contains the space guard's.
+    return any(h.get("command", "").strip().endswith(cmd)
+               for g in groups for h in g.get("hooks", []))
 
 
 def add(hooks, event, matcher, cmd, timeout):
