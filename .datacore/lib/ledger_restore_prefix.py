@@ -13,8 +13,9 @@ Finding them is the hard part and it is easy to get wrong. A first search of
 working copies, origin/main and dangling objects concluded they were
 UNRECOVERABLE; they were on a park branch the whole time, which only
 `git rev-list --all` reveals. Acting on that wrong conclusion -- clearing the
-witness mark, or DATACORE_HWM_OVERRIDE=1 -- would have written new events over
-those sequence numbers and made a recoverable situation permanent. So `--find`
+witness mark, or appending past it (the override flag that allowed that was
+removed 2026-09-28) -- would have written new events over those sequence
+numbers and made a recoverable situation permanent. So `--find`
 searches every commit in every history, and nothing here writes without proof.
 
 The proof required before any write, both conditions, no exceptions:

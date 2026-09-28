@@ -135,6 +135,57 @@ def witness_path(log_path: Path) -> Path:
     return hwm / f"{log_path.stem}.seq"
 
 
+#: Where the owner's repair moves a witness and its stop record: beside
+#: seq-hwm/, outside every glob that reads it, never deleted.
+RETIRED_DIR = "seq-hwm-retired"
+#: The runbook every StaleLogError points at.
+RECOVERY_DOC = ".datacore/docs/recovery.md#stale-log-stalelogerror-the-log-was-rewound"
+
+
+def stop_path(log_path: Path) -> Path:
+    """The stop record of one log: `<witness>.stopped`, beside the witness.
+
+    Written by `append` the moment it refuses a rewound log, and it keeps
+    refusing until the log has caught up with the seq it records, or the owner
+    moves it aside (recovery.md). It exists because the witness alone was a
+    guard one `rm` could lift: on 2026-09-27 an unattended job did exactly that.
+    """
+    return witness_path(log_path).with_suffix(".stopped")
+
+
+def read_stop(log_path: Path) -> dict | None:
+    """The stop record of `log_path`, or None. An unreadable record binds at
+    an unknown seq (hwm None): only the owner's repair clears it."""
+    import json
+    p = stop_path(log_path)
+    try:
+        data = json.loads(p.read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {"hwm": None, "unreadable": str(p)}
+    if not isinstance(data, dict):
+        return {"hwm": None, "unreadable": str(p)}
+    try:
+        data["hwm"] = int(data.get("hwm"))
+    except (TypeError, ValueError):
+        data["hwm"] = None
+    return data
+
+
+def stale_message(path: Path, tail_seq: int, hwm: int | None, since: str = "") -> str:
+    """What a refused writer is told: the situation, and that it stops here."""
+    wrote = f"seq {hwm}" if hwm is not None else "further (its stop record is unreadable)"
+    return (f"{path.name} ends at seq {tail_seq} but this machine already wrote {wrote}"
+            f"{' (appends stopped since ' + since + ')' if since else ''}. The log was rewound "
+            f"(a bad merge, checkout or rebase) or the fleet's copies have forked; appending "
+            f"now would reuse a seq and fork the history.\n"
+            f"  STOP this job here. Do not work around it, do not touch "
+            f"{witness_path(path).parent}, and do not append again.\n"
+            f"  Record it and alert The Firm (the owner). Only the owner repairs a stale "
+            f"log, by the documented procedure: {RECOVERY_DOC}")
+
+
 class CorruptLogWarning(UserWarning):
     """One writer's log is damaged; its events from the bad line on are withheld."""
 
@@ -168,6 +219,25 @@ def _identity_file_value(key: str) -> str | None:
     except OSError:
         pass
     return None
+
+def _record_stop(path: Path, tail_seq: int, hwm: int) -> None:
+    """Write the stop record of a refused log. Best effort: the refusal stands
+    whether or not the record could be written."""
+    import json
+    import sys as _sys
+    rec = stop_path(path)
+    if rec.exists():
+        return
+    try:
+        rec.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(rec, json.dumps({
+            "log": path.name, "tail": tail_seq, "hwm": hwm,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "pid": os.getpid(), "argv": " ".join(_sys.argv)[:300],
+        }, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
 
 def _require_finite(value) -> None:
     """Raise ValueError if `value` holds a NaN or an infinite float anywhere."""
@@ -439,38 +509,33 @@ class EventLog:
                 except FileNotFoundError:
                     pass
                 except ValueError as exc:
-                    if os.environ.get("DATACORE_HWM_OVERRIDE") != "1":
-                        raise CorruptLogError("invalid sequence witness; preserve it and verify history before explicit recovery") from exc
-                    hwm = -1
+                    # No flag reopens this (owner decision 2026-09-28): a
+                    # witness that cannot be read cannot say whether history
+                    # was rewound, and only the owner decides that.
+                    raise CorruptLogError("invalid sequence witness; stop, alert the owner, and "
+                                          f"leave it for the owner's repair ({RECOVERY_DOC})") from exc
                 tail_seq = last.seq if last is not None else -1
-                if tail_seq < hwm and os.environ.get("DATACORE_HWM_OVERRIDE") != "1":
-                    # NAME THE RECOVERY, or the guard becomes a brick.
-                    #
-                    # This refuses appends whenever the file is behind the mark.
-                    # That is right for a rewind — but if the mark itself is
-                    # wrong (corrupted, or restored from another machine's
-                    # backup) the actor can never append again, and the first
-                    # version of this guard said only "converge first", which
-                    # does nothing when the log is ALREADY current. A safety
-                    # net that can silently become a permanent outage is worse
-                    # than the fork it prevents, because at least a fork is
-                    # repairable.
-                    #
-                    # So: state the file, the two numbers, and both exits. The
-                    # override is deliberately an env var rather than automatic
-                    # healing — clearing it is a decision about whether this
-                    # machine's log is trustworthy, and that is the operator's
-                    # call, not a heuristic's.
-                    raise StaleLogError(
-                        f"{path.name} ends at seq {tail_seq} but this "
-                        f"machine already wrote seq {hwm}. The log was rewound "
-                        f"(bad merge/checkout); appending now would reuse a seq "
-                        f"and fork it.\n"
-                        f"  If the log is genuinely behind: converge, then retry.\n"
-                        f"  If the mark is wrong (restored/corrupted state): "
-                        f"rm {hwm_path}\n"
-                        f"  To append once anyway: DATACORE_HWM_OVERRIDE=1"
-                    )
+                # THE STOP RECORD. Nobody goes past the ledger (owner decision
+                # 2026-09-28). On 2026-09-27 an unattended job met this refusal,
+                # deleted the witness, set the then-existing override flag, and
+                # forked Winston's log -- following the exits this very message
+                # used to name. So the refusal writes a record beside the
+                # witness that keeps refusing whatever happens to the witness,
+                # and there is no flag. It lifts itself only when the log has
+                # genuinely caught up (a converge brought the events back);
+                # otherwise the owner moves it aside by recovery.md.
+                stop = read_stop(path)
+                if stop is not None:
+                    bound = stop["hwm"]
+                    if bound is None or tail_seq < bound:
+                        raise StaleLogError(stale_message(path, tail_seq, bound, str(stop.get("at", ""))))
+                    try:
+                        stop_path(path).unlink()
+                    except OSError:
+                        pass
+                if tail_seq < hwm:
+                    _record_stop(path, tail_seq, hwm)
+                    raise StaleLogError(stale_message(path, tail_seq, hwm))
 
                 if last is None:
                     seq, prev = 0, "GENESIS"
