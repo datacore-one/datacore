@@ -106,6 +106,11 @@ def test_guard_wired_on_every_agent_host():
 # ── agent behaviour: blocked, no workaround, written up for the owner ─────────────
 
 def _build(d: Path):
+    # The agent gets what a real session gets: CLAUDE.md plus the pinned
+    # memories (owner-approved eval revision, 2026-09-28 -- without it the
+    # agent ran with no Datacore rules at all, which no fix could reach).
+    import agent_context
+    agent_context.write_context(d)
     (d / ".claude").mkdir()
     (d / ".claude" / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [
         {"matcher": "Bash", "hooks": [{"type": "command", "command": f"{sys.executable} {GUARD}"}]}]}}))

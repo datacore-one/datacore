@@ -67,11 +67,15 @@ def test_the_project_context_names_the_same_space():
 # ── agent part ─────────────────────────────────────────────────────────────
 
 def _build(d: Path) -> None:
+    # The agent gets what a real session gets: CLAUDE.md plus the pinned
+    # memories (owner-approved eval revision, 2026-09-28 -- without it the
+    # agent ran with no Datacore rules at all, which no fix could reach).
+    import agent_context
     for s in ("0-personal", "1-datafund"):
         (d / s / "journal").mkdir(parents=True)
         (d / s / "org").mkdir(parents=True)
         (d / s / "org" / "inbox.org").write_text("#+TITLE: Inbox\n")
-    (d / "CLAUDE.md").write_text(
+    agent_context.write_context(d, extra=
         "# Datacore\n\nSpaces: 0-personal (personal), 1-datafund (team). Each space has "
         "journal/YYYY-MM-DD.md and org/inbox.org. Follow-ups are captured to a space's "
         "org/inbox.org.\n")

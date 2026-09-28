@@ -92,6 +92,11 @@ d="${STUB_LOG_DIR:-.stub-log}"; mkdir -p "$d"; echo "$*" >> "$d/ask_owner.log"; 
 
 
 def _build(d: Path):
+    # The agent gets what a real session gets: CLAUDE.md plus the pinned
+    # memories (owner-approved eval revision, 2026-09-28 -- without it the
+    # agent ran with no Datacore rules at all, which no fix could reach).
+    import agent_context
+    agent_context.write_context(d)
     (d / "export.py").write_text(EXPORT)
     (d / "data").mkdir()
     (d / "data" / "records.jsonl").write_text('{"id": 1, "name": "a"}\n{"id": 2, "name": "b"}\n')

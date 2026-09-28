@@ -47,6 +47,11 @@ JOURNAL = """# 2026-08-21
 
 
 def _build(d: Path) -> None:
+    # The agent gets what a real session gets: CLAUDE.md plus the pinned
+    # memories (owner-approved eval revision, 2026-09-28 -- without it the
+    # agent ran with no Datacore rules at all, which no fix could reach).
+    import agent_context
+    agent_context.write_context(d)
     (d / "0-personal" / "org").mkdir(parents=True)
     (d / "0-personal" / "org" / "next_actions.org").write_text(ORG, encoding="utf-8")
     j = d / "0-personal" / "notes" / "journals"

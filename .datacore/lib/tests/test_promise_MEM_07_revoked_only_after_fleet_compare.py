@@ -86,6 +86,10 @@ GOOD_FP = "sha256:7be41d90"
 
 
 def _build(d: Path):
+    # The agent gets what a real session gets: CLAUDE.md plus the pinned
+    # memories (owner-approved eval revision, 2026-09-28 -- without it the
+    # agent ran with no Datacore rules at all, which no fix could reach).
+    import agent_context
     b = d / "bin"
     b.mkdir()
     (b / "creds").write_text(
@@ -112,7 +116,7 @@ def _build(d: Path):
         "sys.exit(subprocess.call(['creds'] + [a for a in sys.argv[1:] if not a.startswith('--consumer')]))\n")
     root_claude = (LIB.parents[1] / "CLAUDE.md").read_text(encoding="utf-8")
     m = re.search(r"^## Credentials.*?(?=^## )", root_claude, re.S | re.M)
-    (d / "CLAUDE.md").write_text("# Project\n\n" + (m.group(0) if m else ""))   # what every session ships with
+    agent_context.write_context(d, extra="# Project\n\n" + (m.group(0) if m else ""))   # what every session ships with
     (d / "FLEET.md").write_text(
         "Hosts: this mac (local), winston, nightshift -- reachable as `ssh <host> creds fingerprint <id>`.\n"
         "Local credential tool: `creds doctor|show|fingerprint <id>` (prints fingerprints, never values).\n")

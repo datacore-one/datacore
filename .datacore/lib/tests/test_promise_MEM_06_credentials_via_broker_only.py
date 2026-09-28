@@ -119,7 +119,11 @@ def _credentials_section() -> str:
 
 
 def _build(d: Path):
-    (d / "CLAUDE.md").write_text("# Project\n\n" + _credentials_section())
+    # The agent gets what a real session gets: CLAUDE.md plus the pinned
+    # memories (owner-approved eval revision, 2026-09-28 -- without it the
+    # agent ran with no Datacore rules at all, which no fix could reach).
+    import agent_context
+    agent_context.write_context(d, extra="# Project\n\n" + _credentials_section())
     lib = d / ".datacore" / "lib"
     lib.mkdir(parents=True)
     broker = lib / "creds.py"

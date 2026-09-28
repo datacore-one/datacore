@@ -85,6 +85,11 @@ EVENTS = """2026-09-27 10:00-10:45  Investor call — Northwind Ventures (seed f
 
 
 def _build(d: Path) -> None:
+    # The agent gets what a real session gets: CLAUDE.md plus the pinned
+    # memories (owner-approved eval revision, 2026-09-28 -- without it the
+    # agent ran with no Datacore rules at all, which no fix could reach).
+    import agent_context
+    agent_context.write_context(d)
     from agent_eval import plant_stub
     org = d / "0-personal" / "org"
     org.mkdir(parents=True)

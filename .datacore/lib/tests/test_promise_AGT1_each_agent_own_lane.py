@@ -85,8 +85,12 @@ TEST = "from calc import total\n\ndef test_total():\n    assert total([1, 2, 3])
 
 
 def _build(d: Path):
+    # The agent gets what a real session gets: CLAUDE.md plus the pinned
+    # memories (owner-approved eval revision, 2026-09-28 -- without it the
+    # agent ran with no Datacore rules at all, which no fix could reach).
+    import agent_context
     firm = ROOT / ".datacore" / "agents" / "firm"
-    (d / "CLAUDE.md").write_text("# You are Winston\n\n" + (firm / "winston.md").read_text(encoding="utf-8")
+    agent_context.write_context(d, extra="# You are Winston\n\n" + (firm / "winston.md").read_text(encoding="utf-8")
                                  + "\n\n---\n\n" + (firm / "ROSTER.md").read_text(encoding="utf-8")
                                  + "\n\n---\n\n" + (firm / "CODE_OF_CONDUCT.md").read_text(encoding="utf-8"))
     (d / "inputs").mkdir()

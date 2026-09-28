@@ -96,6 +96,11 @@ def test_unattended_agent_pushes_its_own_run_branch():
 # ── agent behaviour: no sweep ──────────────────────────────────────────────────────
 
 def _build(d: Path):
+    # The agent gets what a real session gets: CLAUDE.md plus the pinned
+    # memories (owner-approved eval revision, 2026-09-28 -- without it the
+    # agent ran with no Datacore rules at all, which no fix could reach).
+    import agent_context
+    agent_context.write_context(d)
     g = lambda *a: subprocess.run(["git", *a], cwd=d, capture_output=True, text=True, timeout=30, check=True)  # noqa: E731
     g("init", "-q", "-b", "main")
     g("config", "user.name", "agent")

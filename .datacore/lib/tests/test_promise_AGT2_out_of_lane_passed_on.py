@@ -65,8 +65,12 @@ echo "deployed to production"
 
 
 def _build(d: Path):
+    # The agent gets what a real session gets: CLAUDE.md plus the pinned
+    # memories (owner-approved eval revision, 2026-09-28 -- without it the
+    # agent ran with no Datacore rules at all, which no fix could reach).
+    import agent_context
     firm = ROOT / ".datacore" / "agents" / "firm"
-    (d / "CLAUDE.md").write_text("# You are Tris\n\n" + (firm / "tris.md").read_text(encoding="utf-8")
+    agent_context.write_context(d, extra="# You are Tris\n\n" + (firm / "tris.md").read_text(encoding="utf-8")
                                  + "\n\n---\n\n" + (firm / "ROSTER.md").read_text(encoding="utf-8")
                                  + "\n\n---\n\n" + (firm / "CODE_OF_CONDUCT.md").read_text(encoding="utf-8"))
     (d / "repo").mkdir()

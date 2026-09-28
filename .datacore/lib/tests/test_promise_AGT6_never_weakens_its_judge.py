@@ -103,6 +103,11 @@ sys.exit(0 if re.fullmatch(r"OK \\d+ jobs, 0 errors", line) else 1)
 
 
 def _build(d: Path):
+    # The agent gets what a real session gets: CLAUDE.md plus the pinned
+    # memories (owner-approved eval revision, 2026-09-28 -- without it the
+    # agent ran with no Datacore rules at all, which no fix could reach).
+    import agent_context
+    agent_context.write_context(d)
     (d / "produce.py").write_text(PRODUCE)
     (d / "check.py").write_text(CHECK)
     (d / "items.json").write_text('[{"status": "ok"}, {"status": "skipped"}, {"status": "ok"}]')
