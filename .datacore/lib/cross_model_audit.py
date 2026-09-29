@@ -1615,6 +1615,16 @@ def file_issues(findings_path, *, repo: str) -> list[dict]:
                     raise RuntimeError(f"gh issue create: {(r.stderr or r.stdout).strip()[:200]}")
                 known[target][key] = url
                 out.append({"finding": n, "url": url, "created": True})
+                # Without triage rights GitHub opens the issue but silently drops
+                # its label and assignee: look, never assume it landed in the queue.
+                v = _gh(["issue", "view", url, "--json", "labels,assignees"])
+                seen = json.loads(v.stdout or "{}") if v.returncode == 0 else {}
+                missing = [w for w, ok in (
+                    ("label", ISSUE_LABEL in [x.get("name") for x in seen.get("labels") or []]),
+                    ("assignee", account in [x.get("login") for x in seen.get("assignees") or []])) if not ok]
+                if missing:
+                    raise RuntimeError(f"{url} was opened but GitHub shows no {' or '.join(missing)} "
+                                       f"(the filing account likely lacks triage access to {target})")
             except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
                 errors.append(f"finding {n} ({f.get('promise')} at {ev}) in {target}: {exc}")
     _write_yaml(record, {"agent": agent, "model": doc.get("model"), "commit": doc.get("commit"),

@@ -827,6 +827,8 @@ def test_a_finding_in_a_nested_repository_is_filed_in_that_repository(tmp_path, 
         if args[:2] == ["issue", "create"]:
             repo = args[args.index("-R") + 1]
             out = f"https://github.com/{repo}/issues/{len(calls)}\n"
+        if args[:2] == ["issue", "view"]:
+            out = json.dumps({"labels": [{"name": "audit-finding"}], "assignees": [{"login": "miles-account"}]})
         return subprocess.CompletedProcess(args, 0, out, "")
     monkeypatch.setattr(cma, "_gh", fake_gh)
     got = cma.file_issues(p, repo="example-org/datacore")
@@ -835,3 +837,25 @@ def test_a_finding_in_a_nested_repository_is_filed_in_that_repository(tmp_path, 
     creates = [c for c in calls if c[:2] == ["issue", "create"]]
     assert all("miles-account" in c for c in creates) and all("audit-finding" in c for c in creates)
     assert "d" * 40 in creates[0][creates[0].index("--body") + 1], "the nested repository's own pin is named"
+
+
+def test_an_issue_github_stripped_of_its_label_or_assignee_is_reported_not_trusted(tmp_path, monkeypatch):
+    """An account without triage rights may open an issue, but GitHub silently
+    drops its labels and assignees: the issue exists and nobody's queue has it."""
+    import roster
+    monkeypatch.setattr(roster, "by_role", lambda role, path=None: "miles")
+    monkeypatch.setattr(roster, "entries", lambda path=None: {"miles": {"github": "miles-account"}})
+    p = findings_file(tmp_path / "2026-09-30" / "data.yaml", agent="data", capability="c", commit=head_sha(),
+                      findings=[finding("TSK-2", ".datacore/lib/promise_evals.py:10")])
+
+    def stripping_gh(args, input=None):
+        if args[:2] == ["issue", "create"]:
+            return subprocess.CompletedProcess(args, 0, "https://github.com/example-org/datacore/issues/9\n", "")
+        if args[:2] == ["issue", "view"]:
+            return subprocess.CompletedProcess(args, 0, json.dumps({"labels": [], "assignees": []}), "")
+        return subprocess.CompletedProcess(args, 0, "[]", "")
+    monkeypatch.setattr(cma, "_gh", stripping_gh)
+    with pytest.raises(RuntimeError, match="label|assignee"):
+        cma.file_issues(p, repo="example-org/datacore")
+    rec = yaml.safe_load(p.with_name("data.issues.yaml").read_text())
+    assert rec["issues"][0]["url"].endswith("/issues/9") and rec["errors"], rec
