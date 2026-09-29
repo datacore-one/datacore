@@ -1824,4 +1824,54 @@ jobs:
         check: no_crash
         max_age_hours: 1
 
+  # ── PLUR memory reaches every owner machine (SPC-7) ────────────────────────
+  # The full personal store lives only on the owner's machines (owner decision
+  # 2026-09-29): mac, box, nightshift. Each ~/.plur is a git clone of the
+  # shared plur-engrams remote; plur_store_sync.py merges it with the remote BY
+  # ENGRAM ID (`plur sync`'s line merge of the 16 MB engrams.yaml always
+  # conflicted once two machines had both learned, so box stopped receiving
+  # memory on 2026-08-10 and nightshift on 2026-07-29). An id two machines
+  # minted for different engrams keeps both: the remote's keeps it, this side's
+  # becomes <id>-<host>. The status file holds commit ids and counts only.
+  # hermes and plur-claw get shared group scopes only, through the PLUR server
+  # stores they already subscribe to -- never this store.
+  - name: box-plur-sync
+    machine: box
+    schedule: "17 */2 * * *"
+    # cron's PATH lacks /usr/local/bin, where box's plur lives.
+    cmd: "PATH=/usr/local/bin:/usr/bin:/bin python3 ~/Data/.datacore/lib/plur_store_sync.py >> ~/.datacore/state/plur-sync.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      # Rewritten every run; "in_sync": true only when HEAD == the remote's
+      # head after the merge and push. Two missed runs plus slack.
+      - path: "~/.datacore/state/plur-sync.json"
+        check: regex
+        arg: '"in_sync": true'
+        max_age_hours: 5
+
+  - name: nightshift-plur-sync
+    machine: nightshift
+    schedule: "47 */2 * * *"
+    cmd: "python3 ~/Data/.datacore/lib/plur_store_sync.py >> ~/.datacore/state/plur-sync.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/plur-sync.json"
+        check: regex
+        arg: '"in_sync": true'
+        max_age_hours: 5
+
+  - name: mac-plur-sync
+    scope: local
+    why_local: "publishes and receives this machine's own PLUR memory store"
+    machine: mac
+    trigger: join
+    schedule: "on join: visitor_join.py runs it after every converged join"
+    cmd: "python3 ~/Data/.datacore/lib/plur_store_sync.py"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/plur-sync.json"
+        check: regex
+        arg: '"in_sync": true'
+        since: join
+
 unverified_jobs_see_comment_above: true
