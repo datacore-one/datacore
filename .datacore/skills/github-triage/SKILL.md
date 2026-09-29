@@ -32,6 +32,7 @@ This file only adds how the nightly run is scoped, bounded and delivered.
   - `full`: every open issue and PR in scope, as the reference prompt
     describes. Deep-review at most 40 PRs, ranked by the prioritisation model.
 - `DATE` — the run date (YYYY-MM-DD), used in the output file names.
+- `OUT` — the output folder inside `0-personal/` (`content/reports/github-triage`).
 - `OWNER` — the owner's GitHub login. "Me", "my PRs" and "waiting on me" in
   the reference prompt all mean this login.
 
@@ -55,7 +56,7 @@ write that into the report instead of guessing.
 
 ## Outputs
 
-Write both into `0-personal/notes/github-triage/`:
+Write both into `0-personal/<OUT>/`, i.e. `0-personal/content/reports/github-triage/` (a space's reports live in its `content/reports/`, per the GTD DIP):
 
 1. `<DATE>-<SCOPE>.md`: the report, with the reference prompt's FINAL
    OUTPUT sections 1–13, concise and decision-oriented. State MODE, the
@@ -71,7 +72,7 @@ Write both into `0-personal/notes/github-triage/`:
 {"meta": {"slug": "github-triage-<DATE>-<SCOPE>", "title": "GitHub triage — <SCOPE>",
           "h1": "GitHub triage", "eyebrow": "GITHUB · <SCOPE> · <MODE> · <DATE>",
           "lede": "<one sentence: what deserves attention>", "asOf": "<DATE HH:MM UTC>",
-          "sources": ["notes/github-triage/<DATE>-<SCOPE>.md"],
+          "sources": ["content/reports/github-triage/<DATE>-<SCOPE>.md"],
           "path": [["Triage", "<MODE>"], ["Your calls", "<N> decisions"], ["Applied", "after you say “apply the decisions”"]]},
  "sections": [{"key": "...", "label": "...", "hint": "...", "noted": ["..."],
    "rows": [{"id": "Q1", "area": "<repo> #<n>", "title": "<the decision, plainly>",

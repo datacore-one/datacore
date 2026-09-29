@@ -20,7 +20,7 @@ def _board(**over):
     b = {
         "meta": {"slug": "github-triage-2026-09-30-public", "title": "GitHub triage — public repos",
                  "h1": "GitHub triage", "eyebrow": "GITHUB · public · 2026-09-30", "lede": "What waits on you.",
-                 "asOf": "2026-09-30 03:40 UTC", "sources": ["notes/github-triage/2026-09-30-public.md"],
+                 "asOf": "2026-09-30 03:40 UTC", "sources": ["content/reports/github-triage/2026-09-30-public.md"],
                  "path": [["Triage", "incremental"], ["Your calls", "2 decisions"], ["Applied", "after you say apply"]]},
         "sections": [{"key": "waiting", "label": "Waiting on you", "hint": "", "noted": [], "rows": [
             {"id": "W1", "area": "plur-ai/plur #1353", "title": "Your PR has 4 failing checks — fix or close?",

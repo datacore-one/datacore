@@ -16,7 +16,7 @@ DATE="$(date -u +%F)"
 [ "${1:-}" = "--date" ] && DATE="$2"
 DOW="$(python3 -c "import datetime,sys;print(datetime.date.fromisoformat(sys.argv[1]).isoweekday())" "$DATE")"
 MODE=incremental; [ "$DOW" = "7" ] && MODE=full
-OUT_REL="notes/github-triage"
+OUT_REL="content/reports/github-triage"   # a space's reports live in content/reports/ (GTD DIP)
 PERSONAL="$DATA_DIR/0-personal"
 LOG_DIR="${TRIAGE_LOG_DIR:-$HOME/.datacore/state/github-triage}"
 mkdir -p "$LOG_DIR" "$PERSONAL/$OUT_REL"
@@ -27,7 +27,7 @@ files=()
 for SCOPE in public enterprise; do
   log="$LOG_DIR/$DATE-$SCOPE.log"
   echo "[github-triage] $SCOPE $MODE $DATE start $(date -u +%T)" | tee -a "$log"
-  prompt="Use the github-triage skill: read .datacore/skills/github-triage/SKILL.md and follow it exactly. SCOPE=$SCOPE MODE=$MODE DATE=$DATE OWNER=$OWNER. Work only in $DATA_DIR."
+  prompt="Use the github-triage skill: read .datacore/skills/github-triage/SKILL.md and follow it exactly. SCOPE=$SCOPE MODE=$MODE DATE=$DATE OWNER=$OWNER OUT=$OUT_REL. Work only in $DATA_DIR."
   ( cd "$DATA_DIR" && printf '%s' "$prompt" | timeout "${TRIAGE_TIMEOUT:-5400}" "$CLAUDE_BIN" -p \
       --dangerously-skip-permissions --disallowedTools Task,Agent ) >> "$log" 2>&1
   rc=$?

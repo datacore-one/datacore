@@ -287,11 +287,11 @@ python3 .datacore/lib/sprint_files.py health --space 5-plur
 
 **The nightly GitHub triage board.** Miles runs the `github-triage` skill at
 03:30 UTC: public repos and the enterprise repo in separate runs. It commits
-`0-personal/notes/github-triage/<date>-<scope>.{md,board.json}`. For each board
+`0-personal/content/reports/github-triage/<date>-<scope>.{md,board.json}`. For each board
 file dated today, render it locally and open it:
 
 ```bash
-python3 .datacore/skills/github-triage/triage_board.py render 0-personal/notes/github-triage/<date>-<scope>.board.json
+python3 .datacore/skills/github-triage/triage_board.py render 0-personal/content/reports/github-triage/<date>-<scope>.board.json
 open <printed path>
 ```
 

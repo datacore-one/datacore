@@ -276,7 +276,11 @@ When the user corrects a recalled fact: call `plur_learn` immediately, then `plu
 - **A report is saved before it is answered.** Any audit, review, report or hand-off
   you produce is written to a file in the repository (or filed as an issue) in the
   same turn, before you reply; the reply summarises it and names the path. A report
-  that exists only in the chat is lost.
+  that exists only in the chat is lost. **Where:** the space it is about, in
+  `<space>/content/reports/YYYY-MM-DD-<topic>-report.md` (GTD DIP); a recurring
+  report gets a subfolder (`content/reports/github-triage/`). Never `3-knowledge/pages/`
+  (lasting reference only) and never a top-level `reports/`. Overnight agent output
+  still lands in `0-inbox/` first (nightshift DIP).
 - **Done is written down first.** For anything bigger than a bug fix — a feature, a new
   command, an upgrade — the FIRST edit is the task's `:DONE_WHEN:` property (in its org
   task or issue): a check someone else could run. Only then write the test, then the code.
