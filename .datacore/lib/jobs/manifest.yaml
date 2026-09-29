@@ -1076,7 +1076,11 @@ jobs:
     # the scan cache Miles publishes. Behind it, the briefing quotes
     # yesterday's triage -- which it did for as long as this job pointed
     # at a script that did not exist and the box ran its own copy.
-    schedule: "30 3 * * *"
+    # 03:15 since 2026-09-29: the owner split GitHub triage in two jobs -- this
+    # one CAPTURES (issues, including audit findings for the chief of
+    # operations, become inbox tasks once); nightshift-github-triage-report
+    # writes the read-only report at 03:30. Both before the 04:00 briefing.
+    schedule: "15 3 * * *"
     # server/triage-github.sh HAS NEVER EXISTED. The real script is
     # modules/github/lib/triage_github.sh (lib not server, underscore not
     # hyphen). Both spellings look plausible, so this job failed on a
@@ -1088,6 +1092,18 @@ jobs:
     artifacts:
       - path: "~/Data/0-personal/.datacore/module-data/github/data/scan_cache.json"
         check: no_crash
+        max_age_hours: 26
+
+  - name: nightshift-github-triage-report
+    machine: nightshift
+    # The read-only triage (github-triage skill): a decision-oriented report and
+    # a decision-board file in the personal space; never modifies GitHub.
+    schedule: "30 3 * * *"
+    cmd: "bash ~/Data/.datacore/skills/github-triage/run_nightly.sh"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/github-triage.log"
+        check: nonempty
         max_age_hours: 26
 
   # nightshift-inbox-process: RETIRED 2026-09-17 (its timer was disabled on the
