@@ -1026,15 +1026,148 @@ def test_divergent() -> int:
     return worst
 
 
+# --- Retirement (promise OPS-7) ----------------------------------------------
+#
+# A credential is retired by removing it from the central store. Distribution
+# then delivers a .env without it, but that alone left every other store on the
+# host holding the old value (OI-13: ANTHROPIC_API_KEY left global.env and
+# stayed in cos.env), and a daemon started earlier kept it in its environment.
+#
+# "Retired" is derived, never guessed: a variable the host was delivered LAST
+# time and is not delivered NOW. A host-local value that was never delivered is
+# not ours to remove, and app-owned (external) stores are never edited.
+
+SYSTEMD_UNIT_DIRS = {"user": ("{HOME}/.config/systemd/user",),
+                     "system": ("/etc/systemd/system",)}
+
+
+def _line_key(line: str) -> str | None:
+    s = line.strip()
+    if s.startswith("export "):
+        s = s[7:]
+    if not s or s.startswith("#") or "=" not in s:
+        return None
+    return s.partition("=")[0].strip()
+
+
+def _prune_file(path: Path, retired: set) -> list[str]:
+    """Drop every assignment of a retired variable; atomic, mode kept.
+    Returns the removed names. Raises OSError when the file cannot be rewritten."""
+    lines = path.read_text().splitlines(keepends=True)
+    keep, removed = [], []
+    for line in lines:
+        k = _line_key(line)
+        if k in retired:
+            removed.append(k)
+        else:
+            keep.append(line)
+    if not removed:
+        return []
+    mode = path.stat().st_mode & 0o777
+    tmp = path.with_name(f".{path.name}.retire-{os.getpid()}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write("".join(keep))
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+    return sorted(set(removed))
+
+
+def env_consumers(changed, unit_dirs: dict | None = None) -> list[tuple[str, str]]:
+    """(scope, unit) for every systemd unit whose EnvironmentFile is a changed
+    file. Such a process read its credentials once, at start, and keeps them
+    until restarted; a cron that sources the file re-reads it on its next run."""
+    home = str(Path.home())
+    targets = {os.path.realpath(str(p)) for p in changed}
+    if unit_dirs is None:
+        unit_dirs = {s: [Path(d.format(HOME=home)) for d in ds]
+                     for s, ds in SYSTEMD_UNIT_DIRS.items()}
+    found = set()
+    for scope, dirs in unit_dirs.items():
+        for d in dirs:
+            for unit in sorted(Path(d).glob("*.service")):
+                try:
+                    text = unit.read_text()
+                except OSError:
+                    continue
+                for line in text.splitlines():
+                    line = line.strip()
+                    if not line.startswith("EnvironmentFile="):
+                        continue
+                    for ref in line.partition("=")[2].split():
+                        ref = os.path.expanduser(ref.lstrip("-").replace("%h", home))
+                        if os.path.realpath(ref) in targets:
+                            found.add((scope, unit.name))
+    return sorted(found)
+
+
+def retire_absent(previous_keys, *, env_replaced: bool = True,
+                  unit_dirs: dict | None = None) -> dict:
+    """Remove every variable delivered last time and not delivered now from
+    each Datacore-owned store on this host, and name the running consumers of
+    what changed. Names only; no value is returned or printed."""
+    assembled = ENV / ".env"
+    retired = sorted(set(previous_keys) - set(_env_keys(assembled)))
+    pruned, unwritable = [], []
+    if retired:
+        skip = {os.path.realpath(str(assembled))}
+        for path in sorted(_expand(KNOWN_STORES())):
+            if os.path.realpath(str(path)) in skip:
+                continue
+            try:
+                removed = _prune_file(path, set(retired))
+            except OSError:
+                held = sorted({k for k in _env_keys(path) if k in retired})
+                if held:
+                    unwritable.append((path, held))
+                continue
+            if removed:
+                pruned.append((path, removed))
+                attest("credential.retire", ref=str(path),
+                       detail=f"{','.join(removed)} removed (names only)")
+    changed = [p for p, _ in pruned] + ([assembled] if env_replaced else [])
+    return {"retired": retired, "pruned": pruned, "unwritable": unwritable,
+            "consumers": env_consumers(changed, unit_dirs) if changed else []}
+
+
+def _cmd_retire(previous_keys_file: str, env_replaced: bool) -> int:
+    try:
+        prev = set(Path(previous_keys_file).read_text().split())
+    except OSError:
+        prev = set()          # first delivery: nothing was delivered before
+    out = retire_absent(prev, env_replaced=env_replaced)
+    if out["retired"]:
+        print(f"  retired: {', '.join(out['retired'])}")
+    for path, names in out["pruned"]:
+        print(f"  removed {', '.join(names)} from {path}")
+    for path, names in out["unwritable"]:
+        print(f"  CANNOT REMOVE {', '.join(names)} from {path} (not writable; needs its owner)")
+    for scope, unit in out["consumers"]:
+        print(f"restart {scope} {unit}")
+    return 1 if out["unwritable"] else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("op", choices=["resolve", "get", "unindexed", "duplicates", "test-divergent"])
+    ap.add_argument("op", choices=["resolve", "get", "unindexed", "duplicates", "test-divergent",
+                                   "retire"])
     ap.add_argument("name", nargs="?", default="")
     ap.add_argument("--consumer", default="cli")
+    ap.add_argument("--previous-keys", default="",
+                    help="retire: file of variable names delivered last time")
+    ap.add_argument("--env-replaced", action="store_true",
+                    help="retire: the assembled .env was replaced in this run")
     a = ap.parse_args()
 
     if a.op == "test-divergent":
         return test_divergent()
+
+    if a.op == "retire":
+        return _cmd_retire(a.previous_keys, a.env_replaced)
 
     if a.op == "duplicates":
         div, red = duplicates()
