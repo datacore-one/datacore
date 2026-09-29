@@ -1873,5 +1873,7 @@ jobs:
         check: regex
         arg: '"in_sync": true'
         since: join
+        # Awake time, like mac-join's: two missed 4-hour refreshes.
+        max_age_hours: 8
 
 unverified_jobs_see_comment_above: true
