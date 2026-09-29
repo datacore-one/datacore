@@ -9,6 +9,9 @@ set -uo pipefail
 SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="${DATA_DIR:-$HOME/Data}"
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
+# The owner whose queue this is. On the nightshift host gh is logged in as the
+# bot account, so the owner is never inferred from `gh api user`.
+OWNER="${TRIAGE_OWNER:-${GITHUB_TRIAGE_USERNAME:-plur9}}"
 DATE="$(date -u +%F)"
 [ "${1:-}" = "--date" ] && DATE="$2"
 DOW="$(python3 -c "import datetime,sys;print(datetime.date.fromisoformat(sys.argv[1]).isoweekday())" "$DATE")"
@@ -24,7 +27,7 @@ files=()
 for SCOPE in public enterprise; do
   log="$LOG_DIR/$DATE-$SCOPE.log"
   echo "[github-triage] $SCOPE $MODE $DATE start $(date -u +%T)" | tee -a "$log"
-  prompt="Use the github-triage skill: read .datacore/skills/github-triage/SKILL.md and follow it exactly. SCOPE=$SCOPE MODE=$MODE DATE=$DATE. Work only in $DATA_DIR."
+  prompt="Use the github-triage skill: read .datacore/skills/github-triage/SKILL.md and follow it exactly. SCOPE=$SCOPE MODE=$MODE DATE=$DATE OWNER=$OWNER. Work only in $DATA_DIR."
   ( cd "$DATA_DIR" && printf '%s' "$prompt" | timeout "${TRIAGE_TIMEOUT:-5400}" "$CLAUDE_BIN" -p \
       --dangerously-skip-permissions --disallowedTools Task,Agent ) >> "$log" 2>&1
   rc=$?

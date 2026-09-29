@@ -32,10 +32,16 @@ This file only adds how the nightly run is scoped, bounded and delivered.
   - `full`: every open issue and PR in scope, as the reference prompt
     describes. Deep-review at most 40 PRs, ranked by the prioritisation model.
 - `DATE` — the run date (YYYY-MM-DD), used in the output file names.
+- `OWNER` — the owner's GitHub login. "Me", "my PRs" and "waiting on me" in
+  the reference prompt all mean this login.
 
 ## Identity
 
-Determine the owner's GitHub login with `gh api user --jq .login`. Never guess it.
+The owner is `OWNER` from the run prompt. On the nightshift host `gh` is logged
+in as the bot account (`gh api user` returns the bot), so **never** use the
+authenticated account as the owner. The reference prompt's "determine my
+GitHub identity" step is answered by `OWNER`. If `OWNER` is missing, stop and
+write that into the report instead of guessing.
 
 ## Hard boundaries
 

@@ -14,6 +14,8 @@ prompt="$(cat)"
 scope=$(printf '%s' "$prompt" | sed -n 's/.*SCOPE=\([a-z]*\).*/\1/p' | head -1)
 mode=$(printf '%s' "$prompt" | sed -n 's/.*MODE=\([a-z]*\).*/\1/p' | head -1)
 date=$(printf '%s' "$prompt" | sed -n 's/.*DATE=\([0-9-]*\).*/\1/p' | head -1)
+owner=$(printf '%s' "$prompt" | sed -n 's/.*OWNER=\([A-Za-z0-9-]*\).*/\1/p' | head -1)
+echo "OWNER $owner" >> "$STUB_LOG.owner"
 echo "$scope $mode $(command -v gh)" >> "$STUB_LOG"
 out="$DATA_DIR/0-personal/notes/github-triage"; mkdir -p "$out"
 echo "# report $scope" > "$out/$date-$scope.md"
@@ -59,6 +61,9 @@ def test_two_separate_runs_readonly_gh_and_commit_only_outputs(tmp_path):
         "notes/github-triage/2026-09-30-public.md", "notes/github-triage/2026-09-30-public.board.json",
         "notes/github-triage/2026-09-30-enterprise.md", "notes/github-triage/2026-09-30-enterprise.board.json"])
     assert "stray.txt" not in committed
+    # The owner is named explicitly: on the nightshift host gh is logged in as the bot, not the owner.
+    owners = set((tmp_path / "calls.log.owner").read_text().split()) - {"OWNER"}
+    assert owners == {"plur9"}
 
 
 def test_sunday_is_a_full_sweep(tmp_path):
