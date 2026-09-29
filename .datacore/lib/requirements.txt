@@ -1,6 +1,6 @@
 # Datacore core dependencies
 pyyaml>=6.0
-org-workspace>=0.5.1   # main's pin kept: 0.5.1 was published 2026-08-10 to fix 7 dead nightshift services; the branch's >=0.4.4 would regress that
+org-workspace>=0.7.0   # installed fleet-wide since 2026-09-27; the code relies on 0.7 behaviour (duplicate-ID refusal, v2-only states, move() signature -- ec1aa39)
 cryptography>=50.0.0  # includes current certificate, curve-validation and bundled OpenSSL fixes
 packaging>=24.0       # verify runtime versions against declared requirements
 markdown-it-py==4.2.0  # source-mapped Markdown sections; preserve literal examples
