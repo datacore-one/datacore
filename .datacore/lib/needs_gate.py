@@ -20,6 +20,9 @@ Need vocabulary:
     file:<path>     that file or directory exists; relative to the repository
                     root, or ~/... for this user's home (install-local state
                     that never ships in the repository)
+    role:<role>/<path>  that path exists inside the space this install gives the
+                    role (install.yaml `roles:`); the space's folder is the
+                    install's own and never ships (INS-3)
     cli:<name>      the command is on PATH
     python:<module> an optional Python package is importable (one that the
                     audited requirements deliberately leave out)
@@ -35,7 +38,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DECLARED = ROOT / ".datacore" / "config" / "test-needs.yaml"
-KINDS = ("module", "file", "cli", "python", "fleet", "agent")
+KINDS = ("module", "file", "role", "cli", "python", "fleet", "agent")
 
 
 def load(path: Path = DECLARED) -> list[dict]:
@@ -59,6 +62,11 @@ def met(need: str, root: Path = ROOT, env=None) -> bool:
     if k == "file":
         p = Path(arg).expanduser() if arg.startswith("~") else root / arg
         return p.exists()
+    if k == "role":
+        import spaces
+        role, _, sub = arg.partition("/")
+        space = spaces.space_for(role, root=root)
+        return bool(space) and (root / space / sub).exists()
     if k == "cli":
         return shutil.which(arg) is not None
     if k == "python":

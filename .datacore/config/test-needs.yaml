@@ -28,7 +28,7 @@ tests:
   # ---- promise evals: this install's principals and policy ------------------
   - test: .datacore/lib/tests/test_promise_AGT5_no_agent_merges.py
     needs: [file:.datacore/config/approvals_policy.local.yaml]
-    why: judges the install's own agents (winston, miles...) against their declared policy
+    why: judges the install's own agents against their declared policy
   - test: .datacore/lib/tests/test_promise_AGT7_money_trading_keys_deletion_wait.py
     needs: [file:.datacore/config/approvals_policy.local.yaml]
     why: judges the install's own agents against their declared policy
@@ -55,7 +55,7 @@ tests:
     why: reads this machine's session-start hooks
   - test: .datacore/lib/tests/test_promise_TSK6_recurring_moves_on.py
     only: [test_finishing_in_the_app_moves_it_on]
-    needs: [file:2-datacore/2-projects/datacore-app/daemon]
+    needs: [role:system/2-projects/datacore-app/daemon]
     why: drives the desktop app's daemon, which lives in the install's system space
 
   # ---- promise evals: module repositories ------------------------------------

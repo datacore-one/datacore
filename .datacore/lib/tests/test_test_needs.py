@@ -94,3 +94,16 @@ def test_only_names_single_tests_and_their_parameters():
 def test_an_unknown_need_is_an_error_not_a_skip(tmp_path):
     with pytest.raises(ValueError):
         ng.met("hosts", tmp_path, {})
+
+
+def test_a_role_need_finds_the_space_by_its_role_not_its_folder(tmp_path):
+    """A path inside a space is declared by the space's ROLE: the folder name
+    and its number are this install's own, and a fresh install must not ship
+    them (INS-3). 2026-09-29: a file: need named the system space's folder."""
+    (tmp_path / "7-sys" / ".datacore").mkdir(parents=True)
+    (tmp_path / "7-sys" / "daemon").mkdir()
+    (tmp_path / "install.yaml").write_text("roles:\n  system: sys\n")
+    assert ng.met("role:system/daemon", root=tmp_path)
+    assert not ng.met("role:system/missing", root=tmp_path)
+    assert not ng.met("role:product/daemon", root=tmp_path)      # role not declared
+    assert not ng.met("role:system/daemon", root=tmp_path / "bare")
