@@ -317,7 +317,10 @@ def test_last_night_every_inbox_was_processed():
     held = set(spaces.space_for_all("held", INSTALL))
     judged = 0
     for s in spaces.discover_spaces(INSTALL):
-        if s.path.name in held or not (s.path / "org" / "inbox.org").is_file():
+        # A held space is named by its path in the install; a nested one is not
+        # a top-level folder (owner-approved 2026-09-29: nested spaces can be held).
+        if (s.path.relative_to(INSTALL).as_posix() in held or s.path.name in held
+                or not (s.path / "org" / "inbox.org").is_file()):
             continue
         judged += 1
         if run is None:

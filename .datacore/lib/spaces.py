@@ -481,6 +481,14 @@ def _folder_for(ident: str, base: Path) -> str | None:
     for d in dirs:
         if _implied_name(d) == want:
             return d.name
+    # A space kept inside another space (its own marker, at any depth) is named
+    # the same way; it resolves to its path inside the install, e.g. `3-work/lab`.
+    try:
+        for s in discover_spaces(base):
+            if len(s.path.relative_to(base).parts) > 1 and _space_name(s.path) == want:
+                return s.path.relative_to(base).as_posix()
+    except Exception:
+        pass
     return None
 
 

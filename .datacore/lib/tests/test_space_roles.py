@@ -160,3 +160,16 @@ def test_the_callers_default_names_the_space_not_its_local_number(tmp_path):
     assert spaces.space_for("system", root=tmp_path, default="personal") == "9-personal"
     assert spaces.space_for("system", root=tmp_path, default="2-elsewhere") == "2-elsewhere"
     assert spaces.space_for("system", root=tmp_path) is None
+
+
+def test_a_role_finds_a_space_nested_inside_another_by_its_name(tmp_path):
+    """A space kept inside another space (its own marker) is named like any
+    other: `held: [lab]` finds `3-work/lab`. Without this a nested space could
+    not be held at all (owner decision 2026-09-29: a nested client space is out
+    of nightly inbox processing)."""
+    import spaces
+    (tmp_path / "3-work" / ".datacore").mkdir(parents=True)
+    (tmp_path / "3-work" / "lab" / ".datacore").mkdir(parents=True)
+    (tmp_path / "3-work" / "lab" / ".datacore" / "config.yaml").write_text("space:\n  name: lab\n  type: team\n")
+    (tmp_path / "install.yaml").write_text("roles:\n  held: [lab]\n")
+    assert spaces.space_for_all("held", root=tmp_path) == ["3-work/lab"]
