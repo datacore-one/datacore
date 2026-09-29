@@ -228,6 +228,63 @@ def _split(doc):
     raise SyncError("unrecognised record file shape")
 
 
+def _same_engram(a: dict, b: dict) -> bool:
+    if a.get("statement") is not None and a.get("statement") == b.get("statement"):
+        return True
+    return bool(a.get("content_hash")) and a.get("content_hash") == b.get("content_hash")
+
+
+HOST_TAG: str | None = None
+
+
+def _host_tag() -> str:
+    if HOST_TAG:
+        return HOST_TAG
+    tag = "".join(c for c in socket.gethostname().split(".")[0].lower() if c.isalnum())
+    return tag or "host"
+
+
+def find_collisions(base_doc, ours_doc, theirs_doc, tag: str) -> dict[str, str]:
+    """{id: new id} for this side's engrams whose id the remote minted too, for a
+    different engram, since the two last shared history."""
+    b = _index(_split(base_doc)[0] if base_doc is not None else [])
+    o = _index(_split(ours_doc)[0] if ours_doc is not None else [])
+    t = _index(_split(theirs_doc)[0] if theirs_doc is not None else [])
+    taken = set(o) | set(t)
+    renames = {}
+    for k, ov in o.items():
+        tv = t.get(k)
+        if k in b or tv is None or k.startswith("#") or not isinstance(ov, dict) or not isinstance(tv, dict):
+            continue
+        if _same_engram(ov, tv):
+            continue
+        new, n = f"{k}-{tag}", 2
+        while new in taken:
+            new, n = f"{k}-{tag}{n}", n + 1
+        taken.add(new)
+        renames[k] = new
+    return renames
+
+
+def _rename_refs(doc, renames: dict[str, str]):
+    """Every exact id token of a renamed engram, in every string of `doc`."""
+    if not renames:
+        return doc
+    import re
+    rx = re.compile(r"(?<![A-Za-z0-9-])(" + "|".join(re.escape(k) for k in sorted(renames, key=len, reverse=True))
+                    + r")(?![A-Za-z0-9-])")
+
+    def walk(v):
+        if isinstance(v, str):
+            return rx.sub(lambda m: renames[m.group(1)], v) if rx.search(v) else v
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        if isinstance(v, dict):
+            return {walk(k) if isinstance(k, str) else k: walk(x) for k, x in v.items()}
+        return v
+    return walk(doc)
+
+
 def merge_record_file(base_doc, ours_doc, theirs_doc):
     if ours_doc is None and theirs_doc is None:
         return None
@@ -365,6 +422,15 @@ def _attempt(store: Path, branch: str, state: dict) -> None:
     result: dict[str, str | None] = {}          # path -> blob sha in the commit
     work_out: dict[str, bytes | None] = {}      # path -> new working-tree content
 
+    # Ids minted on both sides for different engrams: this side's are renamed
+    # before anything merges, and every reference on this side follows them.
+    renames: dict[str, str] = {}
+    if "engrams.yaml" in paths:
+        w = _read_work(store, "engrams.yaml")
+        renames = find_collisions(_load(_blob(store, B.get("engrams.yaml"))), _load(w),
+                                  _load(_blob(store, T.get("engrams.yaml"))), _host_tag())
+    state["renamed"] = len(renames)
+
     for p in paths:
         b, h, t = B.get(p), H.get(p), T.get(p)
         if _is_sync_path(p):
@@ -374,11 +440,13 @@ def _attempt(store: Path, branch: str, state: dict) -> None:
         else:
             o = h
         if _is_record_file(p):
-            if o == t:
+            touched = bool(renames) and p in RECORD_ROOT_FILES
+            if o == t and not touched:
                 result[p] = t
                 continue
             ours_doc, theirs_doc = _load(read_work[p]), _load(_blob(store, t))
-            merged = merge_record_file(_load(_blob(store, b)), ours_doc, theirs_doc)
+            ours_in = _rename_refs(ours_doc, renames) if touched else ours_doc
+            merged = merge_record_file(_load(_blob(store, b)), ours_in, theirs_doc)
             commit_doc = _strip_local(merged) if p == "engrams.yaml" else merged
             if merged is None:
                 result[p], work_out[p] = None, None
@@ -538,7 +606,8 @@ def _default_cli() -> str:
     import shutil
     if os.environ.get("DATACORE_PLUR_CLI"):
         return os.environ["DATACORE_PLUR_CLI"]
-    found = shutil.which("plur")
+    found = shutil.which("plur") or next(
+        (c for c in ("/usr/local/bin/plur", "/opt/homebrew/bin/plur") if os.access(c, os.X_OK)), None)
     if found:
         return found
     nvm = sorted(Path.home().glob(".nvm/versions/node/*/bin/plur"),
@@ -552,12 +621,16 @@ def main(argv=None) -> int:
     ap.add_argument("--state", default=str(Path.home() / ".datacore" / "state" / "plur-sync.json"))
     ap.add_argument("--plur-cli", default=None)
     ap.add_argument("--no-index", action="store_true", help="skip the `plur sync` reindex step")
+    ap.add_argument("--host-tag", help="suffix for this side's renamed ids (default: the host name); "
+                    "for merging another machine's store copy on its behalf")
     a = ap.parse_args(argv)
+    global HOST_TAG
+    HOST_TAG = "".join(c for c in (a.host_tag or "").lower() if c.isalnum()) or None
     store = Path(a.store).expanduser()
     t0 = time.monotonic()
     state = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "host": socket.gethostname(),
              "store": str(store), "branch": None, "head": None, "remote_head": None, "in_sync": False,
-             "merged": False, "pulled": 0, "pushed": False, "retries": 0, "engrams": None,
+             "merged": False, "pulled": 0, "pushed": False, "retries": 0, "renamed": 0, "engrams": None,
              "local_only": None, "index": "skipped", "error": None}
     try:
         converge(store, index=not a.no_index, cli=a.plur_cli or _default_cli(), state=state)

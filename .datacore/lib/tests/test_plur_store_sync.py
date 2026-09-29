@@ -228,3 +228,47 @@ def test_a_file_only_this_machine_changed_is_committed_byte_for_byte(fleet, tmp_
     assert rc == 0, state
     assert _git(remote, "show", "main:packs/p/engrams.yaml") + "\n" == text
     assert "packs/p/engrams.yaml" not in _git(host, "status", "--porcelain")
+
+
+def test_one_id_minted_on_two_machines_for_different_engrams_keeps_both(fleet, tmp_path, monkeypatch):
+    """PLUR ids are a per-machine date sequence, so two machines that learned on
+    the same day mint the same id for different engrams. The remote's keeps the
+    id; this machine's is renamed and every reference on this side follows it.
+    Found 2026-09-29: the first merge blended 1,633 such pairs."""
+    remote, mac, host = fleet
+    monkeypatch.setattr(pss.socket, "gethostname", lambda: "Night-Shift.local")
+    cid = "ENG-2026-09-02-001"
+    m = _read(mac / "engrams.yaml")
+    m.append(_eng(0, id=cid, statement="the mac's engram", content_hash="aaa"))
+    m.append(_eng(40, associations=[{"target": cid}]))
+    _write(mac, "engrams.yaml", m)
+    _git(mac, "commit", "-am", "mac")
+    _git(mac, "push")
+    h = _read(host / "engrams.yaml")
+    h.append(_eng(0, id=cid, statement="the host's engram", content_hash="bbb"))
+    h.append(_eng(41, associations=[{"target": cid}], rationale=f"see {cid}"))
+    # The same engram reached both machines under one id: it is one engram.
+    same = _eng(50, content_hash="ccc")
+    h.append(same)
+    _write(host, "engrams.yaml", h)
+    _write(host, "episodes.yaml", [{"id": "EP-1", "summary": "one"},
+                                   {"id": "EP-9", "summary": f"learned {cid}"}])
+    m.append(same)
+    _write(mac, "engrams.yaml", m)
+    _git(mac, "commit", "-am", "mac2")
+    _git(mac, "push")
+
+    rc, state = _run(host, tmp_path)
+    assert rc == 0, state
+    assert state["renamed"] == 1
+    new = f"{cid}-nightshift"
+    for doc in (_read(host / "engrams.yaml"), yaml.safe_load(_git(remote, "show", "main:engrams.yaml"))):
+        by = {e["id"]: e for e in doc}
+        assert by[cid]["statement"] == "the mac's engram"
+        assert by[new]["statement"] == "the host's engram", "the host's engram was lost or blended"
+        assert by["ENG-2026-09-01-040"]["associations"] == [{"target": cid}], "the mac's reference moved"
+        assert by["ENG-2026-09-01-041"]["associations"] == [{"target": new}]
+        assert by["ENG-2026-09-01-041"]["rationale"] == f"see {new}"
+        assert [e["id"] for e in doc].count("ENG-2026-09-01-050") == 1
+    eps = {e["id"]: e for e in _read(host / "episodes.yaml")}
+    assert eps["EP-9"]["summary"] == f"learned {new}"
