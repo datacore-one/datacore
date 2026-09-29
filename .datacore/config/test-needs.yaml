@@ -241,3 +241,26 @@ tests:
     only: [test_this_installation_actually_has_a_visitor]
     needs: [file:.datacore/registry/infrastructure.yaml]
     why: the visitor is a machine in the install's roster
+  - test: .datacore/lib/tests/test_promise_INB8_inbox_processed_nightly.py
+    only: [test_the_nightly_job_hands_every_spaces_inbox_to_the_processor_unattended]
+    needs: [module:chief-of-staff]
+    why: runs the inbox job's real script in chief-of-staff's sandbox harness
+  - test: .datacore/lib/tests/test_promise_INB8_inbox_processed_nightly.py
+    only: [test_last_night_every_inbox_was_processed]
+    needs: [file:install.yaml, role:system/.datacore/events]
+    why: reads this install's spaces, held roles and the system space's ledger
+  - test: .datacore/lib/tests/test_promise_INB8_inbox_processed_nightly.py
+    only: [test_the_processor_routes_each_entry_and_leaves_only_the_undecidable_one_marked]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1)
+  - test: .datacore/lib/tests/test_promise_AUD1_weekly_agent_audits.py
+    only: [test_each_agent_audits_once_a_week_on_its_own_night_machine_and_model]
+    needs: [file:.datacore/registry/principals.yaml, file:.datacore/lib/jobs/manifest.local.yaml]
+    why: the auditing agents, their machines and their jobs are this install's own
+  - test: .datacore/lib/tests/test_promise_AUD1_weekly_agent_audits.py
+    only: [test_last_week_each_agent_audited_on_its_own_night_and_filed_its_issues]
+    needs: [file:.datacore/registry/principals.yaml, role:system/1-tracks/dev/audits, cli:gh]
+    why: reads this install's audit nights and checks their issues on GitHub
+  - test: .datacore/lib/tests/test_promise_KNW8_import_plan_first.py
+    needs: [agent]
+    why: real agent sessions (DATACORE_AGENT_EVALS=1)
