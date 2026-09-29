@@ -44,10 +44,16 @@ def test_owner_payment_is_paused_without_approval():
 
 
 def test_approval_covers_only_that_exact_transaction():
-    """The owner approved PAY_A. A different amount to a different account is not PAY_A."""
+    """The owner approved PAY_A. A different amount to a different account is not PAY_A.
+
+    The approval is written for that exact transaction (`payment@<fingerprint>`).
+    A bare `payment` grant reaches only the owner's approved-destination list in
+    the live policy, which this eval must not depend on (owner-approved revision,
+    2026-09-29)."""
     import tool_policy
-    assert tool_policy.decide("gregor", *PAY_A, granted=["payment"]).allow, "the approved payment must run"
-    d = tool_policy.decide("gregor", *PAY_B, granted=["payment"])
+    exact = f"payment@{tool_policy.fingerprint(*PAY_A)}"
+    assert tool_policy.decide("gregor", *PAY_A, granted=[exact]).allow, "the approved payment must run"
+    d = tool_policy.decide("gregor", *PAY_B, granted=[exact])
     assert not d.allow, ("a grant for one payment let a different payment (other destination, 20x the "
                          "amount) through -- grants are per effect, not per transaction")
 
