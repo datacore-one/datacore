@@ -82,7 +82,8 @@ def invocation(line: str, *, reject_compound: bool = False) -> tuple[str, ...] |
     return (identity,)
 
 
-def reconcile(current: str, entries: dict[str, str], retire: tuple[str, ...] = ()) -> str:
+def reconcile(current: str, entries: dict[str, str], retire: tuple[str, ...] = (),
+              retire_keys: tuple[str, ...] = ()) -> str:
     """Return the desired crontab; identifiers must be unique and well formed."""
     desired = {}
     for key, line in entries.items():
@@ -105,7 +106,7 @@ def reconcile(current: str, entries: dict[str, str], retire: tuple[str, ...] = (
             continue
         signature = invocation(line)
         marker = re.search(r'# datacore-job:([a-z0-9-]+)\s*$', line)
-        if marker and marker.group(1) in entries:
+        if marker and (marker.group(1) in entries or marker.group(1) in retire_keys):
             continue
         if signature in desired or (signature and signature[0] in retire):
             invocation(line, reject_compound=True)
@@ -128,10 +129,11 @@ def read_crontab() -> str:
     raise RuntimeError('cannot read crontab; refusing to replace unknown contents')
 
 
-def install(entries: dict[str, str], state: Path, *, verify: bool = False, retire: tuple[str, ...] = ()) -> bool:
+def install(entries: dict[str, str], state: Path, *, verify: bool = False, retire: tuple[str, ...] = (),
+            retire_keys: tuple[str, ...] = ()) -> bool:
     if verify:
         current = read_crontab()
-        return reconcile(current, entries, retire) == current
+        return reconcile(current, entries, retire, retire_keys) == current
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     if state.is_symlink() or state.stat().st_mode & 0o077:
         raise RuntimeError('cron recovery directory must be private')
@@ -139,7 +141,7 @@ def install(entries: dict[str, str], state: Path, *, verify: bool = False, retir
     with os.fdopen(fd, 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         before = read_crontab()
-        after = reconcile(before, entries, retire)
+        after = reconcile(before, entries, retire, retire_keys)
         if after == before:
             return True
         backup = state / (hashlib.sha256(before.encode()).hexdigest() + '.crontab')
@@ -166,13 +168,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--entry', nargs=2, action='append', default=[], metavar=('KEY', 'LINE'))
     parser.add_argument('--retire', action='append', default=[])
+    # One managed job by its marker. --retire matches the executable, and several
+    # jobs share one (every agent's audit slice is cross_model_audit.py).
+    parser.add_argument('--retire-key', action='append', default=[])
     parser.add_argument('--verify', action='store_true')
     parser.add_argument('--state', type=Path, required=True)
     args = parser.parse_args()
-    if not args.entry or len(dict(args.entry)) != len(args.entry):
+    if (not args.entry and not args.retire_key) or len(dict(args.entry)) != len(args.entry):
         parser.error('provide distinct managed entry keys')
     try:
-        good = install(dict(args.entry), args.state, verify=args.verify, retire=tuple(args.retire))
+        good = install(dict(args.entry), args.state, verify=args.verify, retire=tuple(args.retire),
+                       retire_keys=tuple(args.retire_key))
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         print(f'cron installation FAILED ({type(exc).__name__}); existing entries and private recovery copies retained')
         return 1

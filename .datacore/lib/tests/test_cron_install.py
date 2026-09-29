@@ -211,3 +211,15 @@ def test_cross_model_audit_jobs_are_told_apart_by_their_arguments():
     assert all(f'# datacore-job:{k}\n' in result for k in lines)
     with pytest.raises(ValueError, match='ambiguous'):
         C.reconcile('', {'x': base + 'nightly --agent a', 'y': base + 'nightly --agent a'})
+
+
+def test_retiring_one_managed_key_keeps_every_other_job_of_the_same_script():
+    """cross_model_audit.py runs several agents' slices on one host. Retiring by
+    executable (--retire) would drop them all; a job that moved to another host
+    is retired by its own marker and nothing else (2026-09-29, Tris's slice)."""
+    winston = '25 1 * * * /d/.datacore/lib/cross_model_audit.py nightly --agent winston --commit # datacore-job:box-audit-nightly\n'
+    tris = '30 1 * * * /d/.datacore/lib/cross_model_audit.py nightly --agent tris --commit # datacore-job:box-audit-nightly-tris\n'
+    check = '40 6 * * * /d/.datacore/lib/cross_model_audit.py check # datacore-job:box-audit-check\n'
+    result = C.reconcile(winston + tris + check, {}, retire_keys=('box-audit-nightly-tris',))
+    assert result == winston + check
+    assert C.reconcile(result, {}, retire_keys=('box-audit-nightly-tris',)) == result
