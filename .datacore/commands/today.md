@@ -285,6 +285,22 @@ Then check sprint files against their PRs, for every space that has sprints:
 python3 .datacore/lib/sprint_files.py health --space 5-plur
 ```
 
+**The nightly GitHub triage board.** Miles runs the `github-triage` skill at
+03:30 UTC: public repos and the enterprise repo in separate runs. It commits
+`0-personal/notes/github-triage/<date>-<scope>.{md,board.json}`. For each board
+file dated today, render it locally and open it:
+
+```bash
+python3 .datacore/skills/github-triage/triage_board.py render 0-personal/notes/github-triage/<date>-<scope>.board.json
+open <printed path>
+```
+
+In the briefing, give one line per scope: the report's first "do first" item,
+the number of decisions, and the board path. If no board for today exists, say
+the nightly triage did not deliver and name the log
+(`~/.datacore/state/github-triage/<date>-<scope>.log` on the nightshift host).
+Never publish the board anywhere.
+
 **Never quote a sprint item's `state` as fact without this.** On 2026-09-25 the
 briefing named enterprise W23 B1/B2 as open go-live blockers "in review"; their
 PRs had merged 108 days earlier. `sprint_files` reads each repo's integration
