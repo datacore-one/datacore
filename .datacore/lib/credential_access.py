@@ -1151,10 +1151,63 @@ def _cmd_retire(previous_keys_file: str, env_replaced: bool) -> int:
     return 1 if out["unwritable"] else 0
 
 
+# --- Cross-host parity (promise OPS-6) ----------------------------------------
+#
+# `duplicates()` catches two copies disagreeing on ONE host. It cannot see two
+# hosts disagreeing with each other: the 2026-07-08 X-key rotation reached one
+# host only, and each host was internally consistent. So each host reports a
+# fingerprint per credential, and the delivery step compares them.
+
+_CRED_WORDS = ("TOKEN", "KEY", "SECRET", "PASSWORD", "PAT", "CREDENTIAL")
+
+
+def host_fingerprints() -> dict[str, set]:
+    """{VAR: {fingerprint, ...}} over this host's Datacore-owned stores that are
+    meant to agree across the fleet. local.env is instance-local by declaration
+    and app-owned stores are another namespace, so neither is compared."""
+    local = os.path.realpath(str(ENV / "local.env"))
+    out: dict[str, set] = {}
+    for path in sorted(_expand(KNOWN_STORES())):
+        if os.path.realpath(str(path)) == local:
+            continue
+        for var, val in _vars_in(path).items():
+            if any(w in var.upper() for w in _CRED_WORDS):
+                out.setdefault(var, set()).add(fingerprint(val))
+    return out
+
+
+def cross_host_divergence(per_host: dict) -> list[tuple[str, list]]:
+    """[(VAR, [(host, fingerprint), ...])] for every variable whose value is not
+    the same on every host that holds it."""
+    by_var: dict[str, list] = {}
+    for host, fps in sorted(per_host.items()):
+        for var, vals in fps.items():
+            for v in sorted(vals):
+                by_var.setdefault(var, []).append((host, v))
+    return [(var, rows) for var, rows in sorted(by_var.items())
+            if len({v for _, v in rows}) > 1]
+
+
+def _cmd_cross_host(path: str) -> int:
+    """Read `host VAR fingerprint` lines; report variables that disagree."""
+    per_host: dict[str, dict] = {}
+    for line in Path(path).read_text().splitlines():
+        parts = line.split()
+        if len(parts) == 3:
+            per_host.setdefault(parts[0], {}).setdefault(parts[1], set()).add(parts[2])
+    div = cross_host_divergence(per_host)
+    for var, rows in div:
+        print(f"  *** {var} differs between machines: "
+              + ", ".join(f"{h} {v}" for h, v in rows) + " ***")
+    if not div:
+        print(f"  every credential agrees across {len(per_host)} machine(s)")
+    return 1 if div else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("op", choices=["resolve", "get", "unindexed", "duplicates", "test-divergent",
-                                   "retire"])
+                                   "retire", "fingerprints", "cross-host"])
     ap.add_argument("name", nargs="?", default="")
     ap.add_argument("--consumer", default="cli")
     ap.add_argument("--previous-keys", default="",
@@ -1168,6 +1221,15 @@ def main() -> int:
 
     if a.op == "retire":
         return _cmd_retire(a.previous_keys, a.env_replaced)
+
+    if a.op == "fingerprints":        # names and truncated fingerprints only
+        for var, fps in sorted(host_fingerprints().items()):
+            for f in sorted(fps):
+                print(f"FP {var} {f}")
+        return 0
+
+    if a.op == "cross-host":
+        return _cmd_cross_host(a.name)
 
     if a.op == "duplicates":
         div, red = duplicates()

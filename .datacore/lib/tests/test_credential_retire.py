@@ -108,3 +108,21 @@ def test_retire_names_the_consumers_of_what_it_changed(host):
     out = ca.retire_absent({"OLD_API_KEY"}, env_replaced=False,
                            unit_dirs={"user": [host / ".config/systemd/user"], "system": []})
     assert out["consumers"] == [("user", "cos.service")]
+
+
+# ── cross-host parity (promise OPS-6) ─────────────────────────────────────────
+
+def test_host_fingerprints_cover_owned_shared_stores(host):
+    _w(host / ".config/cos.env", "BOT_TOKEN=a\nPLAIN_SETTING=x\n")
+    _w(host / "Data/.datacore/env/local.env", "HOST_ONLY_TOKEN=mine\n")
+    _w(host / ".hermes/.env", "BOT_TOKEN=theirs\n")
+    got = ca.host_fingerprints()
+    assert got == {"BOT_TOKEN": {ca.fingerprint("a")}, "KEPT_API_KEY": {ca.fingerprint("kept")}}
+
+
+def test_cross_host_divergence_names_the_variable():
+    per_host = {"hosta": {"BOT_TOKEN": {"aaa"}, "SAME_KEY": {"s"}},
+                "hostb": {"BOT_TOKEN": {"bbb"}, "SAME_KEY": {"s"}},
+                "hostc": {"ONLY_HERE_KEY": {"x"}}}
+    assert ca.cross_host_divergence(per_host) == [
+        ("BOT_TOKEN", [("hosta", "aaa"), ("hostb", "bbb")])]
