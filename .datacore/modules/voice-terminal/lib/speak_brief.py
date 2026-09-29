@@ -376,6 +376,49 @@ def summarize_with_llm(report_text):
     sys.exit(1)
 
 
+# Kokoro accepts at most 510 phoneme tokens per call ("index 510 is out of
+# bounds" otherwise). Characters track phonemes closely enough that 400 chars
+# leaves headroom.
+KOKORO_CHUNK_CHARS = 400
+
+
+def _chunk_for_kokoro(paragraph, limit=KOKORO_CHUNK_CHARS):
+    """Split a paragraph into chunks no longer than `limit` characters.
+
+    Prefers sentence ends, then line breaks and clause punctuation, then plain
+    word boundaries — so text with no sentence punctuation (the facts-only
+    briefing fallback on 2026-09-28/29) still fits Kokoro's input limit.
+    """
+    pieces = []
+    for sentence in re.split(r'(?<=[.!?])\s+|\n+', paragraph):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        if len(sentence) <= limit:
+            pieces.append(sentence)
+            continue
+        for clause in re.split(r'(?<=[,;:])\s+', sentence):
+            while len(clause) > limit:
+                cut = clause.rfind(" ", 0, limit)
+                if cut <= 0:
+                    cut = limit
+                pieces.append(clause[:cut].strip())
+                clause = clause[cut:].strip()
+            if clause:
+                pieces.append(clause)
+
+    chunks, current = [], ""
+    for piece in pieces:
+        if current and len(current) + 1 + len(piece) > limit:
+            chunks.append(current)
+            current = piece
+        else:
+            current = f"{current} {piece}" if current else piece
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def _generate_audio_kokoro(text, voice=DEFAULT_VOICE, speed=DEFAULT_SPEED, output_path=None):
     """Generate speech with Kokoro ONNX. Returns (path, duration)."""
     from kokoro_onnx import Kokoro
@@ -398,20 +441,7 @@ def _generate_audio_kokoro(text, voice=DEFAULT_VOICE, speed=DEFAULT_SPEED, outpu
     chunk_count = 0
 
     for pi, paragraph in enumerate(paragraphs):
-        sentences = re.split(r'(?<=[.!?])\s+', paragraph)
-        chunks = []
-        current = ""
-        for s in sentences:
-            if len(current) + len(s) > 400:
-                if current:
-                    chunks.append(current.strip())
-                current = s
-            else:
-                current = current + " " + s if current else s
-        if current:
-            chunks.append(current.strip())
-
-        for chunk in chunks:
+        for chunk in _chunk_for_kokoro(paragraph):
             samples, sr = kokoro.create(chunk, voice=voice, speed=speed)
             all_samples.append(samples)
             all_samples.append(np.zeros(int(sr * 0.3)))

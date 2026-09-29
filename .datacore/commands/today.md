@@ -658,7 +658,7 @@ For each module with `slot: post`:
 
 | Module | What it does |
 |--------|-------------|
-| voice-terminal | Write `_spoken.txt` → Kokoro TTS → Telegram voice message |
+| voice-terminal | Write `_spoken.txt` only — **no audio send**; Winston is the sole audio sender |
 | whatsapp | Push briefing notification to mobile |
 
 **Voice-terminal instructions:**
@@ -686,10 +686,14 @@ happens. Read the prompt and follow it.
      real pattern from today's report, concrete, never a generic aphorism); close.
    - Numbers as spoken words: "seventy-two", not "72".
    - End with "Your full report is on your desk" or variant.
-2. Generate audio and send:
-   ```bash
-   "${DATACORE_PYTHON:-python3}" .datacore/modules/voice-terminal/lib/speak_brief.py {date} --telegram
-   ```
+2. **Do NOT send audio.** Winston's morning pipeline is the only sender of the
+   audio briefing (owner, 2026-09-26: "keep only Winston's"; memory
+   ENG-2026-09-26-010; `voice-terminal/module.yaml`: `telegram_delivery: false`).
+   On the Mac, `speak_brief.py --telegram` sends through Miles's bot, so running it
+   here produces a second, wrong-sender briefing — which this step did on 2026-09-28
+   and 2026-09-29 because it still said "generate audio and send". If Winston's audio
+   did not arrive, say so in the briefing as a problem to fix; never cover for it
+   with a Mac send.
 
 ---
 
