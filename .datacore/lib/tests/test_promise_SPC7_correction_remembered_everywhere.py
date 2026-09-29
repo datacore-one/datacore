@@ -10,8 +10,12 @@ session id) for a prompt it applies to -- and the superseded advice is not.
 
 Production (@production): the mac's PLUR store (~/.plur, a git repo synced to
 the shared plur-engrams remote) as it stood a day ago must be in the store of
-every other machine that runs sessions (box, nightshift, hermes, plur-claw):
+the owner's other machines (box, nightshift):
 `git merge-base --is-ancestor <mac commit older than 24 h> HEAD` there.
+The agents' own machines (hermes, plur-claw) must NOT hold it: the owner's
+store carries private, personal, trading and client-project memory, and those
+machines get only shared scopes (owner decision, 2026-09-29; owner-approved
+revision of this eval, which previously required every machine to hold it).
 
 Agent part pending: that a session calls plur_learn when corrected needs the
 agent harness to wire PLUR into its child (see SPC-6).
@@ -34,7 +38,8 @@ import pytest
 
 LIB = Path(__file__).resolve().parents[1]
 WRAPPER = LIB / "hooks" / "plur_inject_wrapper.py"
-HOSTS = {"box": "winston", "nightshift": "nightshift", "hermes": "hermes", "plur-claw": "plur-claw"}
+HOSTS = {"box": "winston", "nightshift": "nightshift"}              # the owner's machines: full memory
+AGENT_HOSTS = {"hermes": "hermes", "plur-claw": "plur-claw"}       # agents' machines: shared scopes only
 
 
 @pytest.fixture
@@ -86,8 +91,7 @@ def _ssh(host, cmd):
                           capture_output=True, text=True, timeout=40)
 
 
-@pytest.mark.production
-def test_every_machine_holds_the_macs_memory_from_a_day_ago():
+def _mac_commit_a_day_old():
     store = Path.home() / ".plur"
     r = subprocess.run(["git", "-C", str(store), "log", "--format=%H %ct", "-200"],
                        capture_output=True, text=True, timeout=30)
@@ -95,17 +99,42 @@ def test_every_machine_holds_the_macs_memory_from_a_day_ago():
     cutoff = time.time() - 86400
     commit = next((c for c, t in (l.split() for l in r.stdout.splitlines()) if int(t) < cutoff), None)
     assert commit, "no mac PLUR commit older than a day (could not check)"
+    return commit
+
+
+def _holds(hosts, commit):
     cmd = (f"for d in ~/.plur ~gregor/.plur; do [ -d \"$d/.git\" ] && "
            f"{{ git -C \"$d\" merge-base --is-ancestor {commit} HEAD 2>/dev/null && echo HAS || echo LACKS; exit 0; }}; "
            f"done; echo NOSTORE")
-    with ThreadPoolExecutor(len(HOSTS)) as pool:
-        outs = dict(zip(HOSTS, pool.map(lambda h: _ssh(h, cmd), HOSTS.values())))
+    with ThreadPoolExecutor(len(hosts)) as pool:
+        outs = dict(zip(hosts, pool.map(lambda h: _ssh(h, cmd), hosts.values())))
+    return {name: (None if res.returncode != 0 and not res.stdout.strip()
+                   else (res.stdout.strip().splitlines() or ["?"])[-1], res.returncode)
+            for name, res in outs.items()}
+
+
+@pytest.mark.production
+def test_every_owner_machine_holds_the_macs_memory_from_a_day_ago():
+    commit = _mac_commit_a_day_old()
     problems = []
-    for name, res in outs.items():
-        word = (res.stdout.strip().splitlines() or ["?"])[-1]
-        if res.returncode != 0 and not res.stdout.strip():
-            problems.append(f"{name}: could not check (ssh rc={res.returncode})")
+    for name, (word, rc) in _holds(HOSTS, commit).items():
+        if word is None:
+            problems.append(f"{name}: could not check (ssh rc={rc})")
         elif word != "HAS":
             problems.append(f"{name}: {'no synced PLUR store' if word == 'NOSTORE' else 'lacks'} "
                             f"the mac's memory as of {commit[:8]}")
+    assert not problems, "; ".join(problems)
+
+
+@pytest.mark.production
+def test_no_agent_machine_holds_the_owners_memory():
+    """The owner's full store stays on the owner's machines; an agent machine
+    that holds the mac's commit holds private and client-project memory."""
+    commit = _mac_commit_a_day_old()
+    problems = []
+    for name, (word, rc) in _holds(AGENT_HOSTS, commit).items():
+        if word is None:
+            problems.append(f"{name}: could not check (ssh rc={rc})")
+        elif word == "HAS":
+            problems.append(f"{name}: holds the owner's full memory as of {commit[:8]}")
     assert not problems, "; ".join(problems)
