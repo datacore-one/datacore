@@ -79,7 +79,18 @@ You are the **coordinator**, not the processor. You:
 2. **PROCESS** - Spawn `knowledge-extractor` subagents for each item
 3. **REPORT** - Aggregate results, show what was done
 4. **VALIDATE** - Scan content-review reports for actionable markers, extract to inbox
-5. **CLEANUP** - Delete successfully ingested files from source
+5. **CLEANUP** - Clear a source file only after every note and task from it is saved (see below)
+
+### The source is cleared last — only once everything from it is saved
+
+This rule overrides every phase below, including "bulk archive the remaining files".
+
+- A source file may be cleared (moved, archived or deleted) only after **every** note AND every task extracted from it has been written and you have read it back on disk. Clearing is the very last step of the run, after all saves.
+- If **any** save for a source fails (a write error, a read-only or missing folder, a refused command), that source file **stays where it is, unchanged**: do not move it, archive it, rename it, edit it or delete it. Other sources whose saves all succeeded may still be cleared.
+- Report the failure plainly: which source, what could not be saved, and why, and say that the source was left in place so a re-run can finish it. Handing the unsaved task back in chat ("add this by hand") is **not** a save and does not allow clearing the source.
+- Never force a save by changing permissions (chmod/chown/chflags/sudo) or by writing somewhere the plan did not name.
+- Nothing is half-cleared: a source is either fully saved and then cleared, or left exactly as it was.
+
 
 ## File Locations
 
@@ -511,7 +522,7 @@ Extract all 15 items to inbox.org? [Y/n]
 |-------|--------|
 | File unreadable | Log warning, continue with other files |
 | Invalid marker syntax | Skip, log for review |
-| inbox.org write fails | STOP archiving, report error |
+| inbox.org / org write fails | STOP archiving, leave the source in place unchanged, report the error |
 | Too many markers (>50) | Prompt user for bulk extraction or skip |
 | inbox.org doesn't exist | Create it with proper header |
 
@@ -527,6 +538,14 @@ Skip this phase if:
 ### Phase 4: CLEANUP (with Mandatory Verification)
 
 **CRITICAL: Never declare completion without explicit file count verification.**
+
+**Step 4.0: Save Gate (MANDATORY, first)**
+
+For each source file, read back every note and task extracted from it. Any
+save that failed or cannot be found → that source stays where it is,
+unchanged, and goes in the final report under errors with what could not be
+saved and why. Steps 4.2–4.5 never touch such a file. A task handed back to
+the owner in chat does not count as saved.
 
 **Step 4.1: Count Source Files (MANDATORY)**
 
@@ -546,7 +565,7 @@ WARNING: Source not empty. Cannot declare completion.
 
 **Step 4.2: Execute Bulk Archive/Move**
 
-If files remain, process them:
+If files remain that PASSED the save gate, process them (never a file kept by the save gate):
 
 ```
 Bulk archiving remaining files...
@@ -646,6 +665,7 @@ Continue? [Y/n]
 | Unknown format | Create basic companion, route to 0-inbox for review |
 | All subagents fail | Stop, report issue, suggest manual review |
 | Sensitive detected | Skip processing, preserve in source, report |
+| A note or task cannot be saved (write error, read-only folder, refused command) | Leave that source file in place, unchanged; do not change permissions; report which save failed and why; clear only sources whose saves all succeeded |
 
 ## Integration with Commands
 
@@ -677,7 +697,8 @@ After all processing:
 - **EXTRACT actionable items to inbox.org** with context and source links
 - **COUNT source files before declaring completion** (mandatory verification)
 - Report progress during long operations (never go silent for >50 files)
-- Delete source files only after successful ingestion AND verification
+- Delete source files only after successful ingestion AND verification — every note and task from that file saved and read back
+- Leave a source whose save failed exactly where it was, and report it
 - Preserve sensitive files in source
 - Handle errors gracefully
 - Report comprehensive summary including knowledge extracted
@@ -686,6 +707,8 @@ After all processing:
 - Process files yourself (delegate to subagents)
 - Start processing without user approval
 - Delete sensitive files
+- Clear, move or archive a source whose notes or tasks were not all saved (handing a task back in chat is not saving it)
+- Change permissions (chmod/chown/chflags/sudo) to force a save
 - Skip items without reporting
 - Ignore Git LFS requirements for large files
 - **Declare completion without counting source files** (prevents premature completion)

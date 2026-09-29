@@ -66,6 +66,16 @@ Process files from inbox folders or external sources into Datacore with **deep k
 - **Default**: Processes `0-inbox/` folders across all spaces
 - **With path**: Processes specified folder (e.g., `~/Documents/Migration/`)
 
+## The source is cleared last — only once everything from it is saved
+
+This rule overrides every step below, including "bulk archive the remaining files".
+
+- A source file may be cleared (moved, archived or deleted) only after **every** note AND every task extracted from it has been written and you have read it back on disk. Clearing is the very last step of the run, after all saves.
+- If **any** save for a source fails (a write error, a read-only or missing folder, a refused command), that source file **stays where it is, unchanged**: do not move it, archive it, rename it, edit it or delete it. Other sources whose saves all succeeded may still be cleared.
+- Report the failure plainly: which source, what could not be saved, and why, and say that the source was left in place so a re-run can finish it. Handing the unsaved task back in chat ("add this by hand") is **not** a save and does not allow clearing the source.
+- Never force a save by changing permissions (chmod/chown/chflags/sudo) or by writing somewhere the plan did not name.
+- Nothing is half-cleared: a source is either fully saved and then cleared, or left exactly as it was.
+
 ## Workflow
 
 ### Pre-Phase: Goal Clarification
@@ -374,12 +384,13 @@ After processing, generate detailed report:
 
 After successful processing:
 
+0. **SAVE GATE** (mandatory, first) - For each source file, confirm every note and task extracted from it is on disk (read it back). A source with any failed or missing save is NOT cleared: it stays in place, unchanged, and is listed under Errors (see "The source is cleared last" above).
 1. **COUNT SOURCE FILES** (mandatory) - `find source/ -type f | wc -l`
    - If count > 0: Report remaining, do NOT declare complete
-   - Execute bulk archive for remaining files
+   - Bulk-archive only remaining files that passed the save gate; never one whose notes or tasks failed to save
 2. **Final entity scan** - During archive movement, check file/folder names for missed entities
 3. **Verify destinations** - Confirm all files exist in destination
-4. **Delete source** - Only after count = 0 (except sensitive)
+4. **Delete source** - Only after count = 0 (except sensitive and except sources kept by the save gate)
 5. **Preserve sensitive** - Keep flagged sensitive files
 6. **Clean empty dirs** - Remove empty directories
 7. **Final report** - Show counts: archived, active, CRM contacts, zettels
@@ -404,7 +415,7 @@ Before marking complete, verify:
 - [ ] Wiki-links created where relevant
 - [ ] Tags applied per registry
 - [ ] Journal updated with session summary
-- [ ] No files left in source folder (except sensitive)
+- [ ] No files left in source folder (except sensitive, and except sources whose saves failed — those stay, unchanged, and are reported)
 
 ### Phase 6: Archive Review (Manual)
 
