@@ -175,6 +175,57 @@ def create_tasks_from_scan(
         else:
             errors.append(f"Failed to create task for {repo}#{number}: {result.get('error')}")
 
+    # AUD-1: each open audit finding assigned to the chief of operations is
+    # captured once, addressed to him, in the space its repository belongs to.
+    assignee = scan.get("audit_assignee") or ""
+    for item in scan.get("audit_findings", []):
+        repo = item.get("repo", "")
+        number = item.get("number", 0)
+        title = item.get("title", "")
+        url = item.get("url", "")
+        space = _space_for_repo(repo, org_to_spaces)
+
+        if not space or not number:
+            continue
+
+        task_id = _make_task_id(repo, number)
+        org_file = _org_file_for_space(data_dir, space)
+
+        if not org_file.exists():
+            errors.append(f"Org file not found: {org_file}")
+            continue
+
+        heading = f"Audit finding {repo}#{number} — {title[:70]}"
+        properties = {
+            "TRIAGE_ID": task_id,
+            "TRIAGE_DATE": today,
+            "GITHUB_URL": url,
+            "GITHUB_TYPE": "audit_finding",
+            "SPACE": space,
+            "COMPLEXITY": "unknown",
+            "CONFIDENCE": "0",
+        }
+        if assignee:
+            properties["ASSIGNEE"] = assignee
+        context = (f"Filed by the weekly cross-model audit and assigned to the chief of operations: "
+                   f"{repo}#{number}: {title}\nConfirm it with a failing test before fixing.\nURL: {url}")
+
+        result = create_triage_task(
+            org_file=org_file,
+            heading=heading,
+            tags=["github", "audit"],
+            properties=properties,
+            context_body=context,
+            scheduled_date=date.today(),
+        )
+
+        if result.get("skipped"):
+            skipped += 1
+        elif result.get("success"):
+            created.append({"id": task_id, "heading": heading, "space": space, "type": "audit_finding"})
+        else:
+            errors.append(f"Failed to create task for {repo}#{number}: {result.get('error')}")
+
     return {
         "created": len(created),
         "skipped": skipped,
@@ -204,6 +255,8 @@ def main():
             print(f"  [mention] {item['repo']}#{item['number']}: {item['title']}")
         for item in scan.get("authored", []):
             print(f"  [authored] {item['repo']}#{item['number']}: {item['title']}")
+        for item in scan.get("audit_findings", []):
+            print(f"  [audit finding] {item['repo']}#{item['number']}: {item['title']}")
         return
 
     result = create_tasks_from_scan(scan, data_dir, org_to_spaces)

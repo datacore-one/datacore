@@ -1,7 +1,7 @@
 ---
 cadence: audit-nightly-miles
 role: coo
-frequency: daily
+frequency: weekly
 # AUD-1..7 (spec .datacore/specs/cross-model-audit.md): a script with one model
 # turn, not an agent session. miles audits tonight's capability of the promise list
 # on its own model family (claude), read at pinned commits, with no tools.

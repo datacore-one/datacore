@@ -7,7 +7,7 @@ turn over the code behind that capability read at a pinned commit; a script
 (no model) then clusters the four findings files, and only a finding two
 different families agree on becomes a candidate eval for the owner.
 
-    cross_model_audit.py nightly   --agent A [--night D] [--dry-run] [--commit] [--sync] [--max-chars N]
+    cross_model_audit.py nightly   --agent A [--night D] [--dry-run] [--commit] [--sync] [--issues] [--max-chars N]
     cross_model_audit.py calibrate --agent A [--dry-run] [--commit] [--sync]  the weekly practice project
     cross_model_audit.py check     [--night D] [--write] [--send]      next morning, on the box
     cross_model_audit.py review    --pr URL --author-family F [--post]  AUD-5: another family comments
@@ -535,7 +535,7 @@ def night_alerts(night_dir, agents=None, repo: Path = ROOT, unverifiable: list |
     the file had that code and checked the pins then."""
     night_dir = Path(night_dir)
     out = []
-    for agent in agents or AGENTS:
+    for agent in (AGENTS if agents is None else agents):
         p = night_dir / f"{agent}.yaml"
         if not p.is_file():
             out.append(f"Audit {night_dir.name}: {agent} left no findings file -- the audit was "
@@ -964,8 +964,9 @@ def _write_yaml(path: Path, doc: dict, header: str = "") -> None:
 
 
 def run_nightly(agent: str, night: date | None = None, *, dry_run: bool = False, commit: bool = False,
-                max_chars: int | None = None, sync: bool = False) -> Path | None:
-    """Tonight's slice for one agent: one model turn, one findings file."""
+                max_chars: int | None = None, sync: bool = False, issues: bool = False) -> Path | None:
+    """Tonight's slice for one agent: one model turn, one findings file; with
+    `issues`, each finding then becomes a GitHub issue for the chief of operations."""
     if agent not in AGENTS:
         raise SystemExit(f"cross_model_audit: {agent!r} is not one of the Firm's agents {sorted(AGENTS)}")
     if not dry_run:
@@ -1004,6 +1005,8 @@ def run_nightly(agent: str, night: date | None = None, *, dry_run: bool = False,
         res = _commit([out], f"audit: {agent} nightly {night} ({capability}); pins validated at write time "
                              f"on {_hostname()}")
         print(f"cross_model_audit: {_push_after_merge(res) if sync else res}")
+    if issues:
+        _file_night(agent, out, commit=commit, sync=sync)
     return out
 
 
@@ -1300,14 +1303,75 @@ def _push_after_merge(result: str, tries: int = 3) -> str:
     return result + "; merge-and-push retry failed, the commit stays local for the next run's sync"
 
 
+_DOW = {"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
+_NOT_AUDITS = {"calibrate", "check", "review", "validate", "rotation"}
+
+
+def _cron_weekday(schedule: str) -> int | None:
+    """The one weekday (0 = Sunday) a `M H * * D` cron fires on; None for any other shape."""
+    f = str(schedule or "").split()
+    if len(f) != 5 or f[2:4] != ["*", "*"]:
+        return None
+    d = f[4].lower()[:3]
+    if d.isdigit() and 0 <= int(d) <= 7:
+        return int(d) % 7
+    return _DOW.get(d)
+
+
+def audit_nights(doc: dict | None = None) -> dict[str, int | None]:
+    """{agent: weekday its audit job fires on (0 = Sunday), or None for every night},
+    read from the install's job list (tracked + manifest.local.yaml): each agent
+    audits once a week on its own night (AUD-1, owner 2026-09-29). An agent with
+    no audit job of its own is not in the result."""
+    if doc is None:
+        try:
+            from jobs.manifest import effective_doc
+            doc = effective_doc(LIB / "jobs" / "manifest.yaml")
+        except Exception as exc:  # noqa: BLE001 -- no job list: expect every agent, say why
+            print(f"cross_model_audit: job list unreadable ({exc}); every agent is expected", file=sys.stderr)
+            return {}
+    import shlex
+    out: dict[str, int | None] = {}
+    for j in doc.get("jobs") or []:
+        cmd = str((j or {}).get("cmd") or "")
+        if "cross_model_audit.py" not in cmd:
+            continue
+        try:
+            argv = shlex.split(cmd)
+        except ValueError:
+            argv = cmd.split()
+        at = next(i for i, t in enumerate(argv) if t.endswith("cross_model_audit.py"))
+        rest = argv[at + 1:]
+        sub = rest[0] if rest and not rest[0].startswith("-") else "nightly"
+        if sub in _NOT_AUDITS or "--agent" not in rest or rest.index("--agent") + 1 >= len(rest):
+            continue
+        f = str(j.get("schedule") or "").split()
+        out[rest[rest.index("--agent") + 1]] = _cron_weekday(j.get("schedule")) if len(f) == 5 and f[4] != "*" else None
+    return out
+
+
+def expected_agents(night, nights: dict | None = None) -> list[str]:
+    """The agents whose audit night `night` is. An install that declares no
+    per-agent audit job expects every agent every night (the old rotation)."""
+    nights = audit_nights() if nights is None else nights
+    known = {a: d for a, d in nights.items() if a in AGENTS}
+    if not known:
+        return sorted(AGENTS)
+    dow = _as_date(night).isoweekday() % 7
+    return sorted(a for a, d in known.items() if d is None or d == dow)
+
+
 def check(night: date, *, write: bool, send: bool) -> int:
     folder = NIGHTLY / night.isoformat()
     if write:
         _require_declared_space()
         _git(SPACE, "pull", "-q", "--no-rebase", "--autostash")   # merge, never rebase (DIP-0046)
-    # Judged on the write-time record: the box reads no repository of code it
-    # does not run (owner, 2026-09-28).
-    alerts = night_alerts(folder, write_time=True)
+    # Once a week per agent (AUD-1): only the agents whose night this is are
+    # expected; a quiet night says nothing. A file another agent wrote anyway is
+    # still judged. Judged on the write-time record: the box reads no repository
+    # of code it does not run (owner, 2026-09-28).
+    present = {p.stem for p in folder.glob("*.yaml") if p.stem in AGENTS} if folder.is_dir() else set()
+    alerts = night_alerts(folder, agents=sorted(set(expected_agents(night)) | present), write_time=True)
     result = aggregate(folder, pool=load_pool(), write_time=True)
     print(f"cross_model_audit check {night}: {len(result['confirmed'])} confirmed, "
           f"{len(result['unconfirmed'])} unconfirmed, {len(alerts)} alert(s)")
@@ -1410,6 +1474,189 @@ def review(url: str, author_family: str, *, post: bool) -> int:
     return r.returncode
 
 
+# ── findings become GitHub issues for the chief of operations (AUD-1) ────────
+ISSUE_LABEL = "audit-finding"
+OPS_ROLE = "chief of operations"
+_MARKER = re.compile(r"<!--\s*audit-finding\s+promise=(\S+)\s+evidence=(\S+)\s*-->")
+_SLUG = re.compile(r"github\.com[:/]+([\w.-]+/[\w.-]+?)(?:\.git)?/?$")
+
+
+def _gh(args: list[str], input: str | None = None) -> subprocess.CompletedProcess:
+    """The `gh` CLI on PATH, logged in as whoever this host's account is."""
+    return subprocess.run(["gh", *args], input=input, capture_output=True, text=True, timeout=120)
+
+
+def _gh_login() -> str | None:
+    """The GitHub account `gh` on this host acts as; None when it cannot tell."""
+    try:
+        r = _gh(["api", "user", "--jq", ".login"])
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return (r.stdout.strip() or None) if r.returncode == 0 else None
+
+
+def _remote_slug(repo: Path) -> str | None:
+    """owner/name of a checkout's GitHub origin, or None."""
+    r = _git(Path(repo), "remote", "get-url", "origin")
+    m = _SLUG.search(r.stdout.strip()) if r.returncode == 0 else None
+    return m.group(1) if m else None
+
+
+def issues_repo() -> str:
+    """Where findings are filed: principals.yaml `cross_model_audit.issues_repo`,
+    else the GitHub repository this checkout was cloned from (the code audited)."""
+    import roster
+    configured = str(roster.section("cross_model_audit").get("issues_repo") or "").strip()
+    slug = configured or _remote_slug(ROOT)
+    if not slug:
+        raise RuntimeError("no repository to file audit findings in: set cross_model_audit.issues_repo "
+                           "in principals.yaml")
+    return slug
+
+
+def _ops_account() -> tuple[str, str]:
+    """(principal, GitHub account) of the chief of operations, from principals.yaml."""
+    import roster
+    who = roster.by_role(OPS_ROLE)
+    account = str(((roster.entries().get(who) or {}) if who else {}).get("github") or "").strip()
+    if not who or not account:
+        raise RuntimeError(f"no principal with role {OPS_ROLE!r} and a github account in principals.yaml")
+    return who, account
+
+
+def _open_findings(repo: str) -> dict[tuple[str, str], str]:
+    """{(promise, path:line): url} of the open audit-finding issues in `repo`."""
+    r = _gh(["issue", "list", "-R", repo, "--label", ISSUE_LABEL, "--state", "open",
+             "--limit", "1000", "--json", "number,url,body"])
+    if r.returncode != 0:
+        raise RuntimeError(f"gh issue list {repo}: {(r.stderr or r.stdout).strip()[:200]}")
+    out = {}
+    for i in json.loads(r.stdout or "[]"):
+        m = _MARKER.search(str(i.get("body") or ""))
+        if m:
+            out.setdefault((m.group(1), m.group(2)), str(i.get("url")))
+    return out
+
+
+def _issue_text(f: dict, doc: dict, repo: str, sha: str, inner: str, line: int) -> tuple[str, str]:
+    ev = str(f["evidence"]).strip()
+    claim = " ".join(str(f.get("claim") or "").split())
+    title = f"[audit] {f['promise']} at {ev}: {claim}"
+    title = title if len(title) <= 120 else title[:117].rstrip() + "..."
+    pins = [f"- Pinned commit: `{doc.get('commit')}` (the checkout audited)"]
+    if sha and sha != doc.get("commit"):
+        pins.append(f"- Pinned commit of this repository: `{sha}`")
+    body = "\n".join([
+        f"<!-- audit-finding promise={f['promise']} evidence={ev} -->",
+        "Finding from the weekly cross-model audit of Datacore. It is a candidate, not a verified bug: "
+        "confirm it with a failing test before fixing.",
+        "",
+        f"- Promise: **{f['promise']}**",
+        f"- Evidence: `{ev}` -- https://github.com/{repo}/blob/{sha}/{inner}#L{line}",
+        f"- Severity: {f.get('severity', '')}",
+        f"- Found by: {doc.get('agent')} (model family: {doc.get('model')}), night {doc.get('night')}, "
+        f"capability `{doc.get('capability')}`",
+        *pins,
+        "",
+        "**Claim.** " + claim,
+        "",
+        "**Seeded failure** (what a failing test would plant). " + " ".join(str(f.get("seeded_failure") or "").split()),
+    ])
+    return title, body
+
+
+def file_issues(findings_path, *, repo: str) -> list[dict]:
+    """File each finding of one findings file as a GitHub issue for the chief of operations.
+
+    One open `audit-finding` issue per problem: a finding whose promise and
+    evidence path:line already have an open one -- whoever filed it, however it
+    was worded -- points at that issue (created False). A new issue names the
+    agent, its model family, the pinned commit, the promise and the evidence,
+    and is assigned to the chief of operations' GitHub account. A finding whose
+    evidence is in a nested repository the audit pinned (a module) is filed in
+    that repository; everything else in `repo`.
+
+    Writes [{finding, url, created}] beside the findings file as
+    `<agent>.issues.yaml` and returns it. The findings file is never touched:
+    its write-time validation digest covers it."""
+    path = Path(findings_path)
+    doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    agent = str(doc.get("agent") or path.stem)
+    findings = list(doc.get("findings") or [])
+    record = path.with_name(f"{agent}.issues.yaml")
+    out: list[dict] = []
+    errors: list[str] = []
+    if findings:
+        _who, account = _ops_account()
+        base = ROOT / str(doc["repo"]) if doc.get("repo") else ROOT
+        known: dict[str, dict] = {}
+        for n, f in enumerate(findings, 1):
+            m = EVIDENCE.match(str(f.get("evidence", "")).strip())
+            ev = str(f.get("evidence", "")).strip()
+            nested, sha, inner = _resolve(m.group("path") if m else ev, doc, base)
+            target = repo
+            if Path(nested) != base:
+                target = _remote_slug(nested) or repo
+            try:
+                if target not in known:
+                    known[target] = _open_findings(target)
+                    _gh(["label", "create", ISSUE_LABEL, "-R", target, "--color", "B60205",
+                         "--description", "Found by the weekly cross-model audit"])
+                key = (str(f.get("promise")), ev)
+                if key in known[target]:
+                    out.append({"finding": n, "url": known[target][key], "created": False})
+                    continue
+                title, body = _issue_text(f, doc, target, str(sha or doc.get("commit")), inner,
+                                          int(m.group("line")) if m else 0)
+                r = _gh(["issue", "create", "-R", target, "--title", title, "--body", body,
+                         "--label", ISSUE_LABEL, "--assignee", account])
+                url = (r.stdout.strip().splitlines() or [""])[-1].strip()
+                if r.returncode != 0 or "/issues/" not in url:
+                    raise RuntimeError(f"gh issue create: {(r.stderr or r.stdout).strip()[:200]}")
+                known[target][key] = url
+                out.append({"finding": n, "url": url, "created": True})
+            except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                errors.append(f"finding {n} ({f.get('promise')} at {ev}) in {target}: {exc}")
+    _write_yaml(record, {"agent": agent, "model": doc.get("model"), "commit": doc.get("commit"),
+                         "night": doc.get("night"), "repo": repo, "issues": out,
+                         **({"errors": errors} if errors else {})},
+                "# The GitHub issues this night's findings are tracked by (AUD-1): one open\n"
+                "# audit-finding issue per problem, assigned to the chief of operations.\n")
+    if errors:
+        raise RuntimeError(f"{len(errors)} of {len(findings)} finding(s) not filed: " + "; ".join(errors[:3]))
+    return out
+
+
+def _file_night(agent: str, out: Path, *, commit: bool, sync: bool) -> None:
+    """After the findings file is validated (and committed): file its issues
+    under the agent's own GitHub account, never another's, and commit the record."""
+    import roster
+    own = str((roster.entries().get(agent) or {}).get("github") or "").strip()
+    login = _gh_login()
+    if not own:
+        raise SystemExit(f"cross_model_audit: issues not filed: {agent} has no github account in principals.yaml")
+    if login is None:
+        raise SystemExit(f"cross_model_audit: issues not filed: gh on {_hostname()} is not logged in (could not "
+                         f"tell its account); {agent} files as {own}")
+    if login != own:
+        raise SystemExit(f"cross_model_audit: issues not filed: gh on {_hostname()} acts as {login}, not "
+                         f"{agent}'s own account {own}")
+    try:
+        got = file_issues(out, repo=issues_repo())
+        failure = None
+    except RuntimeError as exc:
+        got, failure = None, str(exc)
+    record = out.with_name(f"{agent}.issues.yaml")
+    if got is not None:
+        print(f"cross_model_audit: issues: {sum(e['created'] for e in got)} filed, "
+              f"{sum(not e['created'] for e in got)} already open, as {own}")
+    if commit and record.is_file():
+        res = _commit([record], f"audit: {agent} issues for {out.parent.name}")
+        print(f"cross_model_audit: {_push_after_merge(res) if sync else res}")
+    if failure:
+        raise SystemExit(f"cross_model_audit: issues: {failure}")
+
+
 # ── CLI ─────────────────────────────────────────────────────────────────────
 def _agent(a) -> str:
     agent = (a or os.environ.get("DATACORE_POLICY_PRINCIPAL") or "").strip().lower()
@@ -1430,6 +1677,8 @@ def main(argv=None) -> int:
     n.add_argument("--max-chars", type=int, help="read less than the family's input budget (a rehearsal)")
     n.add_argument("--sync", action="store_true",
                    help="an audit-only checkout: pull code, modules and the space first; merge and retry a refused push")
+    n.add_argument("--issues", action="store_true",
+                   help="file each finding as a GitHub issue for the chief of operations, as this agent's own account")
     c = sub.add_parser("calibrate")
     c.add_argument("--agent")
     c.add_argument("--dry-run", action="store_true")
@@ -1452,7 +1701,7 @@ def main(argv=None) -> int:
     if a.cmd in (None, "nightly"):
         run_nightly(_agent(getattr(a, "agent", None)), getattr(a, "night", None), dry_run=getattr(a, "dry_run", False),
                     commit=getattr(a, "commit", False), max_chars=getattr(a, "max_chars", None),
-                    sync=getattr(a, "sync", False))
+                    sync=getattr(a, "sync", False), issues=getattr(a, "issues", False))
         return 0
     if a.cmd == "calibrate":
         run_calibration(_agent(a.agent), dry_run=a.dry_run, commit=a.commit, sync=a.sync)

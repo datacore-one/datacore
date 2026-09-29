@@ -922,17 +922,19 @@ jobs:
   # morning publish (AUD-3). Neutral commands: the agent comes from
   # DATACORE_POLICY_PRINCIPAL; an install's exact lines, naming its agent, are
   # in manifest.local.yaml. Each run writes one findings file, validates its
-  # pins where it was written, and commits only that file.
+  # pins where it was written, and commits only that file. Once a week, on the
+  # agent's own night (AUD-1); an install's lines add --issues once the host's
+  # gh acts as that agent's own GitHub account.
   - name: box-audit-nightly
     machine: box
-    schedule: "25 1 * * *"
+    schedule: "25 1 * * 2"
     cmd: "DATACORE_ROOT=~/Data /usr/bin/python3 ~/Data/.datacore/lib/cross_model_audit.py nightly --commit >> ~/.datacore/state/audit-nightly.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/audit-nightly.log"
         check: regex
         arg: 'pins validated at write time'
-        max_age_hours: 26
+        max_age_hours: 170
 
   - name: box-audit-calibration
     machine: box

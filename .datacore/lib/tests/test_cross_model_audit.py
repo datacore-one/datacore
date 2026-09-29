@@ -708,3 +708,130 @@ def test_an_openrouter_family_can_think_through_a_large_slice_and_still_answer()
         assert f["max_output_tokens"] + f["max_reasoning_tokens"] >= 64_000, fam
         full_slice = "x" * f["max_input_chars"]
         assert cma.estimate_usd(fam, full_slice) < 0.50, fam
+
+
+# ── AUD-1 (2026-09-29): one audit night a week per agent; findings become issues ─
+WEEK = {"miles": 1, "winston": 2, "tris": 3, "data": 4}     # cron weekday, 0 = Sunday
+
+
+def _job(name, agent, schedule, sub="nightly"):
+    return {"name": name, "machine": "h", "schedule": schedule,
+            "cmd": f"DATACORE_ROOT=~/Data python3 ~/Data/.datacore/lib/cross_model_audit.py {sub} "
+                   f"--agent {agent} --commit >> ~/.datacore/state/audit-nightly.log 2>&1"}
+
+
+def test_each_agents_audit_night_is_read_from_the_job_list():
+    doc = {"jobs": [_job("a", "miles", "20 1 * * 1"), _job("b", "winston", "25 1 * * tue"),
+                    _job("c", "tris", "30 1 * * *"), _job("d", "data", "35 2 * * 0", sub="calibrate"),
+                    {"name": "e", "machine": "h", "schedule": "40 6 * * *",
+                     "cmd": "python3 cross_model_audit.py check --send"}]}
+    assert cma.audit_nights(doc) == {"miles": 1, "winston": 2, "tris": None}, (
+        "a weekly job gives its weekday, a nightly one None; calibration and the check are not audit nights")
+
+
+def test_the_morning_check_expects_only_the_agents_whose_night_it_is(tmp_path, monkeypatch):
+    monkeypatch.setattr(cma, "audit_nights", lambda doc=None: dict(WEEK))
+    monday = tmp_path / "2026-09-28"          # a Monday: miles's night
+    monday.mkdir()
+    assert cma.expected_agents(date(2026, 9, 28)) == ["miles"]
+    alerts = cma.night_alerts(monday, agents=cma.expected_agents(date(2026, 9, 28)))
+    assert len(alerts) == 1 and "miles" in alerts[0], alerts
+    assert cma.expected_agents(date(2026, 10, 2)) == [], "Friday is a quiet night: nobody is expected"
+
+
+def test_a_quiet_night_is_not_an_alert(sandbox, monkeypatch, capsys):
+    monkeypatch.setattr(cma, "audit_nights", lambda doc=None: dict(WEEK))
+    _no_git(monkeypatch)
+    sent = []
+    monkeypatch.setattr(cma, "send_to_firm", lambda text: sent.append(text) or True)
+    assert cma.check(date(2026, 10, 2), write=False, send=True) == 0      # a Friday, no folder at all
+    assert sent == [] and "0 alert(s)" in capsys.readouterr().out
+    assert cma.check(date(2026, 9, 29), write=False, send=True) == 1      # Tuesday: winston's night, missed
+    assert len(sent) == 1 and "winston" in sent[0] and "miles" not in sent[0]
+
+
+def test_an_agent_without_any_weekly_job_is_expected_every_night(monkeypatch):
+    monkeypatch.setattr(cma, "audit_nights", lambda doc=None: {})
+    assert cma.expected_agents(date(2026, 10, 2)) == sorted(cma.AGENTS), (
+        "an install that declares no per-agent audit job keeps the every-night expectation")
+
+
+def _gh_login(monkeypatch, login):
+    monkeypatch.setattr(cma, "_gh_login", lambda: login)
+    import roster
+    monkeypatch.setattr(roster, "entries", lambda path=None: {
+        "miles": {"role": "chief of operations", "github": "miles-account"},
+        "tris": {"role": "research", "github": "tris-account"}})
+
+
+def test_a_night_files_its_findings_as_issues_after_write_time_validation(sandbox, monkeypatch):
+    monkeypatch.setattr(cma, "rotation", lambda caps, night, agents=None: {a: "audits" for a in cma.AGENTS})
+    monkeypatch.setattr(cma, "call_model", lambda *a, **k: {"model": "m", "usd": 0.01, "text": _answer(
+        finding("AUD-3", ".datacore/lib/promise_evals.py:10"))})
+    _gh_login(monkeypatch, "tris-account")
+    filed, committed = [], []
+
+    def fake_file(path, *, repo):
+        assert cma.write_time_errors(path) == [], "issues are filed only from a validated findings file"
+        filed.append((Path(path), repo))
+        rec = Path(path).with_name("tris.issues.yaml")
+        rec.write_text("issues: []\n")
+        return []
+    monkeypatch.setattr(cma, "file_issues", fake_file)
+    monkeypatch.setattr(cma, "issues_repo", lambda: "example-org/datacore")
+    monkeypatch.setattr(cma, "_commit", lambda paths, message: committed.append(list(paths)) or "ok")
+    out = cma.run_nightly("tris", date(2026, 9, 30), commit=True, issues=True)
+    assert filed == [(out, "example-org/datacore")]
+    assert committed == [[out], [out.with_name("tris.issues.yaml")]], (
+        "the findings file is committed first, on its own; the issues record after it")
+
+
+def test_issues_are_filed_only_under_the_agents_own_account(sandbox, monkeypatch):
+    monkeypatch.setattr(cma, "rotation", lambda caps, night, agents=None: {a: "audits" for a in cma.AGENTS})
+    monkeypatch.setattr(cma, "call_model", lambda *a, **k: {"model": "m", "usd": 0.01, "text": "findings: []"})
+    _gh_login(monkeypatch, "the-owners-account")
+    monkeypatch.setattr(cma, "file_issues", lambda *a, **k: pytest.fail("filed under another account"))
+    with pytest.raises(SystemExit, match="tris-account"):
+        cma.run_nightly("tris", date(2026, 9, 30), issues=True)
+    assert (cma.NIGHTLY / "2026-09-30" / "tris.yaml").is_file(), "the findings stay; only the filing is refused"
+    _gh_login(monkeypatch, None)
+    with pytest.raises(SystemExit, match="not logged in|could not tell"):
+        cma.run_nightly("tris", date(2026, 9, 30), issues=True)
+
+
+def test_without_issues_a_night_never_calls_github(sandbox, monkeypatch):
+    monkeypatch.setattr(cma, "rotation", lambda caps, night, agents=None: {a: "audits" for a in cma.AGENTS})
+    monkeypatch.setattr(cma, "call_model", lambda *a, **k: {"model": "m", "usd": 0.01, "text": "findings: []"})
+    monkeypatch.setattr(cma, "_gh", lambda *a, **k: pytest.fail("a night without --issues called gh"))
+    cma.run_nightly("tris", date(2026, 9, 30))
+
+
+def test_a_finding_in_a_nested_repository_is_filed_in_that_repository(tmp_path, monkeypatch):
+    import roster
+    monkeypatch.setattr(roster, "by_role", lambda role, path=None: "miles")
+    monkeypatch.setattr(roster, "entries", lambda path=None: {"miles": {"github": "miles-account"}})
+    sha = head_sha()
+    p = findings_file(tmp_path / "2026-09-30" / "tris.yaml", agent="tris", capability="c", commit=sha,
+                      findings=[finding("AUD-3", ".datacore/modules/dev/lab.py:3"),
+                                finding("TSK-2", ".datacore/lib/promise_evals.py:10")])
+    doc = yaml.safe_load(p.read_text())
+    doc["commits"] = {".datacore/modules/dev": "d" * 40}
+    p.write_text(yaml.safe_dump(doc, sort_keys=False))
+    monkeypatch.setattr(cma, "_remote_slug", lambda repo: "example-org/dev-module"
+                        if Path(repo).name == "dev" else "example-org/datacore")
+    calls = []
+
+    def fake_gh(args, input=None):
+        calls.append(args)
+        out = "[]"
+        if args[:2] == ["issue", "create"]:
+            repo = args[args.index("-R") + 1]
+            out = f"https://github.com/{repo}/issues/{len(calls)}\n"
+        return subprocess.CompletedProcess(args, 0, out, "")
+    monkeypatch.setattr(cma, "_gh", fake_gh)
+    got = cma.file_issues(p, repo="example-org/datacore")
+    assert [e["url"].split("/issues/")[0] for e in got] == ["https://github.com/example-org/dev-module",
+                                                            "https://github.com/example-org/datacore"]
+    creates = [c for c in calls if c[:2] == ["issue", "create"]]
+    assert all("miles-account" in c for c in creates) and all("audit-finding" in c for c in creates)
+    assert "d" * 40 in creates[0][creates[0].index("--body") + 1], "the nested repository's own pin is named"
