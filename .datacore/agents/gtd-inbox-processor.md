@@ -35,9 +35,11 @@ Engrams encode learned behavioral patterns that improve task quality.
 
 | Question | Answer |
 |----------|--------|
-| Where is inbox? | `0-personal/org/inbox.org` |
-| Where do tasks go? | `0-personal/org/next_actions.org` |
-| Where do research items go? | `0-personal/org/research_learning.org` |
+| Where is inbox? | `[space]/org/inbox.org` (the one you were given; personal = install.yaml `roles.personal`) |
+| Where do tasks go? | `[space]/org/next_actions.org` |
+| Where do research items go? | `[space]/org/research_learning.org` |
+| Where do finished (DONE/CANCELLED) entries go? | `[space]/org/inbox_archive.org`, unchanged |
+| What if I cannot decide? | It stays in the inbox, title prefixed `[NEEDS_REVIEW]` |
 | Who spawns me? | `gtd-inbox-coordinator` |
 
 ### Related DIPs
@@ -75,6 +77,23 @@ You will receive a single inbox entry and must:
 - Line number where the entry starts in inbox.org
 - Path to inbox.org: `~/Data/[space]/org/inbox.org`
 
+## Before clarifying: finished entries and entries you cannot decide
+
+These two rules match `/process-inbox` and the owner's promise, and override
+anything below that seems to say otherwise.
+
+- **Finished entry** (state DONE or CANCELLED): it leaves the inbox and is
+  kept. Move the whole entry unchanged (state, `CLOSED:`, properties, body) to
+  the end of `[space]/org/inbox_archive.org` (create it with
+  `#+TITLE: Inbox archive` if missing). Never reopen it, never file it as an
+  open task, never delete it.
+- **Entry you cannot decide** (you cannot tell what it is or what its next
+  action would be — e.g. "blue thing w/ Marko??"): it STAYS in the inbox where
+  it is, with `[NEEDS_REVIEW]` at the front of its title after any state
+  keyword (`** TODO [NEEDS_REVIEW] blue thing w/ Marko??`). Do not file it in
+  someday.org or next_actions.org. The owner reviews it. When someone is
+  present you may ask instead; unanswered, it is marked the same way.
+
 ## Clarify Step — the GTD discipline that's been missing
 
 For every item, answer in order:
@@ -103,7 +122,7 @@ For every item, answer in order:
     move Verity to three pricing tiers" -> "Move Verity to three pricing
     tiers"), keep the URL as `:SOURCE:` and the comment verbatim as `:CONTEXT:`.
     Not research, not someday.
-- **Captured fragment** (tweet, half-thought without context — not a link): `someday.org` with a "needs-clarify" marker; user re-triages quarterly
+- **Captured fragment** (tweet, half-thought without context — not a link): if you cannot tell what it means or what to do with it, it stays in the inbox marked `[NEEDS_REVIEW]` (see above). Only an aspiration whose meaning is clear goes to `someday.org`.
 - **Product or roadmap idea** — a capability the product might gain, a technique
   from a paper, a competitor's move, a customer asking for something that does
   not exist yet: route to `[space]/1-tracks/product/feature-ideas.md`, NOT to
@@ -369,7 +388,7 @@ For items classified as Ideas:
 
 ### Decision Tree for Unclear Items
 - Cannot determine focus area? → `* Operations` with note
-- Unclear what action is needed? → Add `[NEEDS CLARIFICATION]` to heading, place in Operations
+- Unclear what action is needed? → Leave it in the inbox with `[NEEDS_REVIEW]` at the front of its title
 - Multiple focus areas apply? → Choose primary focus, add Related links to others
 - Not sure if actionable? → Default to making it actionable with clarifying questions in Details field
 
@@ -421,7 +440,7 @@ Example:
 ## Error Handling
 
 **If you encounter issues:**
-- **Ambiguous entry** → Add `[NEEDS CLARIFICATION]` to heading, place in Operations with note explaining ambiguity
+- **Ambiguous entry** → Leave it in the inbox with `[NEEDS_REVIEW]` at the front of its title (never move it to Operations)
 - **Cannot determine focus area** → Default to Operations with note: "Needs focus area classification"
 - **Technical file error** → Stop, report error clearly, do NOT corrupt files
 - **Missing metadata** → Infer intelligently from context, mark uncertain fields with `[Inferred]`
