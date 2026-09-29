@@ -1,0 +1,243 @@
+# Tests that check an INSTALLATION, and what each one needs to run.
+#
+# WHY THIS FILE EXISTS. Some tests -- promise evals above all -- check this
+# install, not the code: its principal registry, its fleet over ssh, a module
+# that lives in its own repository, the PLUR CLI, a real agent session. A bare
+# checkout has none of those. From 2026-09-24 the Gates check failed on every
+# pull request (233 failures on #216), almost all of them tests like these, so a
+# red Gates said nothing about the change it was attached to.
+#
+# HOW IT IS USED (lib/needs_gate.py, from .datacore/conftest.py). Each need is
+# CHECKED on the machine running the tests. Where it is met -- a full install --
+# the test is collected exactly as before. Where it is missing, the test is not
+# collected, and the run's summary (and CI's step summary) lists every test left
+# out and the need that was missing. PROMISE_EVALS_ALL=1, the promise scoreboard,
+# collects everything regardless: the scoreboard stays the authority.
+#
+# WHAT MAY NOT GO HERE. A test that fails on a full install too is a red, not a
+# missing need; listing it hides it only where the need is missing, which is why
+# the needs must be things a bare checkout genuinely lacks.
+# test_test_needs.py holds that line: every `file:` need must be a path the
+# repository does not track, every `module:` need a module it does not contain.
+#
+# Needs (see lib/needs_gate.py):
+#   module:<name>  file:<path or ~/path>  cli:<name>  python:<module>  fleet  agent
+version: 1
+
+tests:
+  # ---- promise evals: this install's principals and policy ------------------
+  - test: .datacore/lib/tests/test_promise_AGT5_no_agent_merges.py
+    needs: [file:.datacore/config/approvals_policy.local.yaml]
+    why: judges the install's own agents (winston, miles...) against their declared policy
+  - test: .datacore/lib/tests/test_promise_AGT7_money_trading_keys_deletion_wait.py
+    needs: [file:.datacore/config/approvals_policy.local.yaml]
+    why: judges the install's own agents against their declared policy
+  - test: .datacore/lib/tests/test_promise_AGT10_only_own_log.py
+    needs: [file:.datacore/registry/principals.yaml, file:.datacore/config/approvals_policy.local.yaml]
+    why: which writer owns which log is the install's principal registry
+  - test: .datacore/lib/tests/test_promise_MSG8_morning_repair_before_i_wake.py
+    needs: [file:.datacore/registry/principals.yaml]
+    why: the repair goes to whoever holds the chief-of-operations role in the registry
+  - test: .datacore/lib/tests/test_promise_NS9_repair_goes_to_miles.py
+    needs: [file:.datacore/registry/principals.yaml]
+    why: the repair goes to whoever holds the chief-of-operations role in the registry
+  - test: .datacore/lib/tests/test_promise_NS_9_waiting_on_owner_is_not_a_failure.py
+    needs: [file:.datacore/registry/principals.yaml]
+    why: writes as the install's declared agents
+  - test: .datacore/lib/tests/test_promise_MEM_16_standups_own_space_only.py
+    needs: [file:install.yaml]
+    why: which space is whose comes from the install's space roster
+  - test: .datacore/lib/tests/test_promise_MOD7_tools_start_and_answer_in_time.py
+    needs: [file:.mcp.json]
+    why: starts the MCP servers this install configures
+  - test: .datacore/lib/tests/test_promise_SPC4_context_rebuilt_and_checked.py
+    needs: [file:~/.claude/settings.json]
+    why: reads this machine's session-start hooks
+  - test: .datacore/lib/tests/test_promise_TSK6_recurring_moves_on.py
+    only: [test_finishing_in_the_app_moves_it_on]
+    needs: [file:2-datacore/2-projects/datacore-app/daemon]
+    why: drives the desktop app's daemon, which lives in the install's system space
+
+  # ---- promise evals: module repositories ------------------------------------
+  - test: .datacore/lib/tests/test_promise_CAD3_done_means_artifact_saved.py
+    needs: [module:ventures]
+    why: imports cadence_run from the ventures module
+  - test: .datacore/lib/tests/test_promise_CAD4_no_hand_made_green.py
+    needs: [module:ventures]
+    why: imports cadence_engine from the ventures module
+  - test: .datacore/lib/tests/test_promise_CAD6_missed_duty_red_repair_escalate.py
+    needs: [module:ventures]
+    why: imports cadence_engine from the ventures module
+  - test: .datacore/lib/tests/test_promise_CAD7_quota_waits_then_red.py
+    needs: [module:ventures]
+    why: imports cadence_run from the ventures module
+  - test: .datacore/lib/tests/test_promise_CAP_4_capture_twice_one_entry.py
+    needs: [module:mail]
+    why: runs the mail module's task_creator
+  - test: .datacore/lib/tests/test_promise_CAP_7_ai_needs_clarified_task.py
+    needs: [module:nightshift]
+    why: imports task_queue from the nightshift module
+  - test: .datacore/lib/tests/test_promise_LED1_every_change_recorded.py
+    needs: [module:nightshift]
+    why: runs the nightshift module's ledger_hooks
+  - test: .datacore/lib/tests/test_promise_SPC1_space_data_stays_home.py
+    needs: [module:nightshift]
+    why: runs the nightshift module's ledger_hooks
+  - test: .datacore/lib/tests/test_promise_SYN6_failure_says_why.py
+    needs: [module:chief-of-staff]
+    why: runs chief-of-staff's cos_sync.sh
+  - test: .datacore/modules/research/tests/test_promise_KNW5_podcast_made_saved_reported.py
+    needs: [module:chief-of-staff]
+    why: runs chief-of-staff's research delivery
+
+  # ---- promise evals: the live fleet and installed tools ---------------------
+  - test: .datacore/lib/tests/test_promise_MEM_46_one_audio_briefing.py
+    needs: [fleet]
+    why: reads every host's schedule over ssh
+  - test: .datacore/lib/tests/test_promise_MEM_62_reset_saves_work_to_rescue_branch.py
+    needs: [fleet]
+    why: reads every host's scheduled scripts over ssh
+  - test: .datacore/lib/tests/test_promise_SYN4_every_machine_on_main.py
+    needs: [fleet]
+    why: reads every host's checkout over ssh
+  - test: .datacore/lib/tests/test_promise_TSK3_one_work_one_task.py
+    needs: [fleet]
+    why: reads every host's schedule over ssh
+  - test: .datacore/modules/research/tests/test_promise_KNW2_queue_to_notes.py
+    needs: [fleet]
+    why: reads the last overnight run's log on the always-on host
+  - test: .datacore/lib/tests/test_promise_SPC6_memories_recalled.py
+    needs: [cli:plur]
+    why: recalls through the installed PLUR CLI
+
+  # ---- ordinary tests that need an optional dependency ------------------------
+  - test: .datacore/lib/tests/test_gcal_auth_never_exits.py
+    needs: [python:google_auth_oauthlib, python:google.oauth2]
+    why: >
+      the Google Calendar client libraries are an optional dependency
+      (requirements.txt lists them commented out) that the audited CI set leaves out
+
+  # ---- ordinary tests that check the installation ----------------------------
+  - test: .datacore/lib/tests/test_agent_eval_harness.py
+    only: [test_end_to_end_hello]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_autofix_boundary.py
+    only:
+      - test_a_job_whose_repository_cannot_be_named_is_refused_before_anything_is_written
+      - test_a_job_on_the_repairers_own_host_is_still_delegated
+      - test_a_box_job_is_a_pull_request_for_miles_and_the_owner_merges
+      - test_a_mac_job_is_a_merge_with_no_follow_up
+      - test_a_nightshift_job_is_still_one_stage
+      - test_an_agent_may_open_a_repair_pr_only_in_the_core_repository
+    needs: [file:.datacore/registry/principals.yaml, file:.datacore/registry/infrastructure.yaml]
+    why: who repairs a job, and for which host, is the install's registry and roster
+  - test: .datacore/lib/tests/test_cadence_liveness.py
+    only:
+      - test_a_cadence_owned_by_an_external_agent_is_not_this_fleets_liveness
+      - test_a_human_owned_cadence_is_a_reminder_never_red
+      - test_a_role_nobody_owns_is_red_not_silently_miles
+      - test_an_owner_who_is_not_a_member_of_the_space_is_not_held
+      - test_archived_venture_contributes_no_overdue_rows
+      - test_the_cadence_log_is_output_only
+      - test_the_executor_alias_counts_as_membership
+    needs: [module:ventures]
+    why: imports cadence_engine from the ventures module
+  - test: .datacore/lib/tests/test_liveness_scheduled.py
+    needs: [module:ventures]
+    why: imports cadence_engine from the ventures module
+  - test: .datacore/lib/tests/test_nightshift_gates_formal.py
+    only:
+      - test_a_space_that_is_not_a_venture_still_counts_nothing
+      - test_an_unreadable_cadence_log_is_not_zero_overdue
+      - test_an_unreadable_venture_is_not_zero_overdue
+    needs: [module:ventures]
+    why: imports cadence_engine from the ventures module
+  - test: .datacore/lib/tests/test_cross_model_audit.py
+    only:
+      - test_a_committed_night_commits_only_its_findings_file
+      - test_a_failed_turn_still_counts_its_spend
+      - test_a_missing_file_points_at_the_job_that_should_have_written_it
+      - test_a_rehearsal_can_read_a_smaller_slice
+      - test_a_repository_the_judge_does_not_have_is_noted_not_alerted
+      - test_a_repository_the_judge_has_but_without_the_commit_is_still_alerted
+      - test_an_unconfirmed_finding_is_reoffered_and_confirmed_on_a_later_night
+      - test_night_alerts_names_an_agent_on_the_wrong_model
+      - test_nothing_is_written_without_a_declared_system_space
+      - test_one_slice_end_to_end_keeps_only_checkable_findings
+      - test_the_cap_is_checked_before_the_model_is_called
+      - test_the_write_effect_binds_only_the_auditor
+    needs: [file:.datacore/registry/principals.yaml, file:.datacore/config/approvals_policy.local.yaml]
+    why: the audited agents and their models are the install's registry (cross_model_audit.agents)
+  - test: .datacore/lib/tests/test_cross_model_audit.py
+    only: [test_calibration_scores_the_real_key_by_the_nearest_planted_defect]
+    needs: [file:install.yaml]
+    why: scores the real calibration key, kept in the install's system space (install.yaml roles.system)
+  - test: .datacore/lib/tests/test_dip_conformance_specs.py
+    only: [test_dip_0002_composed_context_is_generated_and_untracked]
+    needs: [file:CLAUDE.md]
+    why: CLAUDE.md is composed on the install from its layers; a checkout has only the layers
+  - test: .datacore/lib/tests/test_dip_conformance_specs.py
+    only: [test_dip_0005_install_manifest_and_lockfile_parse]
+    needs: [file:install.yaml]
+    why: parses the install's manifest
+  - test: .datacore/lib/tests/test_dip_conformance_specs.py
+    only:
+      - test_dip_0031_failure_classification_surface_exists
+      - test_module_dip_subject_is_installed_and_identifies_itself[0011-nightshift]
+    needs: [module:nightshift]
+    why: the DIP's subject is the nightshift module
+  - test: .datacore/lib/tests/test_dip_conformance_specs.py
+    only: ["test_module_dip_subject_is_installed_and_identifies_itself[0012-crm]"]
+    needs: [module:crm]
+    why: the DIP's subject is the crm module
+  - test: .datacore/lib/tests/test_dip_conformance_specs.py
+    only: ["test_module_dip_subject_is_installed_and_identifies_itself[0013-meetings]"]
+    needs: [module:meetings]
+    why: the DIP's subject is the meetings module
+  - test: .datacore/lib/tests/test_fixtures_hygiene.py
+    only: [test_every_fixture_has_a_live_regex_check]
+    needs: [file:.datacore/lib/jobs/manifest.local.yaml]
+    why: the fixtures' checks live in the install's own job list
+  - test: .datacore/lib/tests/test_hermes_plugin.py
+    only: [test_our_own_actor_and_our_own_alias_pass]
+    needs: [file:.datacore/config/approvals_policy.local.yaml]
+    why: the call passes only when the install's policy declares the agent
+  - test: .datacore/lib/tests/test_job_verify.py
+    only: [test_it_falls_back_to_the_manifest_beside_the_code]
+    needs: [file:.datacore/registry/infrastructure.yaml]
+    why: the tracked manifest is used only where the roster names a machine it schedules (INS-5)
+  - test: .datacore/lib/tests/test_jobs_grounded.py
+    only:
+      - test_every_job_cmd_resolves
+      - test_no_freshness_check_without_a_producer
+      - test_production_code_is_versioned_or_deliberately_ignored
+    needs: [fleet]
+    why: resolves the fleet's job commands, including paths on the hosts that run them
+  - test: .datacore/lib/tests/test_morning_journal.py
+    only: [test_the_sync_runs_under_an_interpreter_that_can_import_the_ledger]
+    needs: [file:~/Data/.datacore/lib/ledger]
+    why: the launchd job runs the install at ~/Data
+  - test: .datacore/lib/tests/test_registry_grounded.py
+    only: [test_every_registry_source_resolves]
+    needs: [file:install.yaml]
+    why: the agent registry lists the install's modules and spaces; a checkout has neither
+  - test: .datacore/lib/tests/test_stages_gates.py
+    only: [test_policy_loads_arbitration]
+    needs: [file:.datacore/config/approvals_policy.local.yaml]
+    why: arbitration names the install's owner, from the local policy overlay
+  - test: .datacore/lib/tests/test_testnet_disclosure.py
+    only:
+      - test_a_client_space_name_is_refused
+      - test_a_person_is_refused
+      - test_the_same_word_outside_an_approved_term_is_still_caught
+    needs: [file:.datacore/registry/principals.yaml, file:install.yaml]
+    why: the terms to refuse are the install's people, personas and spaces
+  - test: .datacore/lib/tests/test_today_hooks_grounded.py
+    only: [test_slot_table_lists_no_module_that_does_not_register_a_hook]
+    needs: [file:install.yaml]
+    why: the briefing slot table names the install's modules; a checkout has none of them
+  - test: .datacore/lib/tests/test_visitor_nodes.py
+    only: [test_this_installation_actually_has_a_visitor]
+    needs: [file:.datacore/registry/infrastructure.yaml]
+    why: the visitor is a machine in the install's roster

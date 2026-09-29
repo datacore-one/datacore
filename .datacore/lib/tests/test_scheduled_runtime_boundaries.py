@@ -19,6 +19,10 @@ def run_job(tmp_path, script, fail='', python=None):
     shutil.copyfile(LIB / script, installed / script)
     if (LIB / 'runtime_shell.sh').exists():
         shutil.copyfile(LIB / 'runtime_shell.sh', installed / 'runtime_shell.sh')
+    # ledger_daily.sh discovers spaces with the INSTALLED spaces.py. Without a
+    # copy here the test passed only where datacore-core.pth made the real
+    # .datacore/lib importable -- a developer machine, never a CI runner.
+    shutil.copyfile(LIB / 'spaces.py', installed / 'spaces.py')
     trace = tmp_path / 'trace.jsonl'
     names = ['ledger_ingest_org.py', 'shadow_check.py', 'ledger_checkpoint.py',
              'v2_verify.py', 'session_archive.py', 'session_learning_sweep.py',

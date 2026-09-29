@@ -88,6 +88,17 @@ jobs:
           DATACORE_ROOT: ${{ github.workspace }}
           DATACORE_STATE: ${{ runner.temp }}/datacore-audit-state
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+          # The runner declares who it is, as every machine must (DIP-0044). With
+          # no declaration, every test that writes a ledger event through the
+          # strict resolver died with "no actor declared for 'runnervm...'" --
+          # a fact about the runner, not about the change under review.
+          DATACORE_ACTOR: ci
+        # Tests that check an INSTALLATION (its principal registry, its fleet,
+        # a module repository, the PLUR CLI, a live agent) are not collected
+        # here, because a checkout has none of that; each is declared with its
+        # need in .datacore/config/test-needs.yaml, and the step summary lists
+        # every one left out. A full install runs them all.
+        #
         # These were ~100 filenames listed one per line. A test file not on the
         # list was run by nothing, and nothing said so: 111 of the 212 files in
         # lib/tests had never been gated, and the failures that accumulated in
@@ -99,7 +110,10 @@ jobs:
           python -m pytest -q --continue-on-collection-errors \
             .datacore/lib/tests \
             .datacore/lib/sync/tests \
-            .datacore/tests
+            .datacore/tests \
+            .datacore/modules/github/tests \
+            .datacore/modules/research/tests \
+            .datacore/modules/tab-capture/tests
           ruff check --select F821,F822,F823,E9 .datacore
 
   runtime-profile:
