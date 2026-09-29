@@ -160,9 +160,18 @@ def test_the_nightly_job_hands_every_spaces_inbox_to_the_processor_unattended(tm
         "vault": {"inbox.org": vault_inbox, "next_actions.org": H.next_actions()},
     }, timeout=120)
 
-    expected = {"personal", "research-lab", "archive-only"}
+    # A space whose inbox holds only finished entries needs no model run: the
+    # promise is that finished entries LEAVE, which the job's deterministic tidy
+    # does (owner-approved revision 2026-09-29: judging hand-over here was a
+    # proxy for the promise, and contradicted INB-1's "nothing new, no run").
+    expected = {"personal", "research-lab"}
     prompted = set(run.spaces_prompted())
     problems = []
+    for space in ("personal", "archive-only"):
+        left = [t for t in ("Pay the electricity bill", "Submit the expense report")
+                if t in run.read(space, "inbox.org")]
+        if left:
+            problems.append(f"{space}: finished entries are still in the inbox after the run: {left}")
     if expected - prompted:
         problems.append(f"these spaces' inboxes were never handed to the processor: "
                         f"{sorted(expected - prompted)}")
@@ -190,7 +199,11 @@ _JOB_RE = re.compile(r'"job"\s*:\s*"inbox"')
 def _last_inbox_run(system: Path) -> datetime | None:
     """The newest completed inbox-job run the ledger recorded (UTC), or None."""
     newest = None
-    for log in sorted((system / ".datacore" / "events").glob("*.jsonl")):
+    # Job records are routine measurements: since the ledger split them out
+    # (e6c0928, 2026-09-27) they live in .datacore/telemetry/, not events/.
+    logs = [*sorted((system / ".datacore" / "events").glob("*.jsonl")),
+            *sorted((system / ".datacore" / "telemetry").glob("*.jsonl"))]
+    for log in logs:
         with log.open(encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 if not _JOB_RE.search(line) or "cos.job" not in line:
