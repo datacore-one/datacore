@@ -111,6 +111,20 @@ def run_suite(cwd: Path, files: list[Path], env_extra: dict) -> dict[str, bool]:
     return result
 
 
+#: Files per pytest run. SUITE_TIMEOUT_S covers one chunk, not a whole suite:
+#: the core suite (160+ files) takes ~10 min on a quiet machine, so a single
+#: limit over all of it tripped under load and counted every promise red.
+CHUNK_FILES = 20
+
+
+def run_suite_chunked(cwd: Path, files: list[Path], env_extra: dict) -> dict[str, bool]:
+    """run_suite per chunk of CHUNK_FILES: a hang reds its own chunk only."""
+    result: dict[str, bool] = {}
+    for i in range(0, len(files), CHUNK_FILES):
+        result.update(run_suite(cwd, files[i:i + CHUNK_FILES], env_extra))
+    return result
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--json", action="store_true")
@@ -143,7 +157,7 @@ def main() -> int:
         passed: dict[str, bool] = {}
         for name, cwd, _tdir, env in SUITES:
             if by_suite.get(name):
-                for fname, ok in run_suite(cwd, sorted(set(by_suite[name])), env).items():
+                for fname, ok in run_suite_chunked(cwd, sorted(set(by_suite[name])), env).items():
                     passed[f"{name}:{fname}"] = ok
         for pid in wanted:
             fs = files.get(norm(pid), [])
