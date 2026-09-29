@@ -695,3 +695,16 @@ def test_an_audit_only_checkout_pushes_under_its_own_git_guards(sandbox, monkeyp
     cma.run_nightly("data", date(2026, 9, 28), commit=True, sync=True)
     assert seen == [str(cma.ROOT)]
     assert "SKIP_PRE_PUSH" not in os.environ
+
+
+def test_an_openrouter_family_can_think_through_a_large_slice_and_still_answer():
+    """Night of 2026-09-29: DeepSeek (249k chars) and GLM (292k chars) both
+    thought through the whole 24000-token ceiling despite low effort and gave
+    no answer. The ceiling is 64000 (billing is per token produced), and a
+    worst-case run must still start under the smallest nightly cap ($0.50)
+    with a full-size slice."""
+    for fam in ("deepseek", "glm"):
+        f = cma.FAMILIES[fam]
+        assert f["max_output_tokens"] + f["max_reasoning_tokens"] >= 64_000, fam
+        full_slice = "x" * f["max_input_chars"]
+        assert cma.estimate_usd(fam, full_slice) < 0.50, fam

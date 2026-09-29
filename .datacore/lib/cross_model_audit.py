@@ -108,9 +108,9 @@ FAMILIES = {
     "claude": {"transport": "claude-cli", "model": "", "in": 5.0, "out": 25.0,
                "max_input_chars": 400_000, "max_output_tokens": 8_000, "max_reasoning_tokens": 0},
     "deepseek": {"transport": "openrouter", "model": "", "in": 0.6, "out": 2.4,
-                 "max_input_chars": 240_000, "max_output_tokens": 8_000, "max_reasoning_tokens": 16_000},
+                 "max_input_chars": 240_000, "max_output_tokens": 8_000, "max_reasoning_tokens": 56_000},
     "glm": {"transport": "openrouter", "model": "", "in": 0.6, "out": 2.2,
-            "max_input_chars": 300_000, "max_output_tokens": 8_000, "max_reasoning_tokens": 16_000},
+            "max_input_chars": 300_000, "max_output_tokens": 8_000, "max_reasoning_tokens": 56_000},
     "gpt": {"transport": "openai", "model": "", "in": 1.25, "out": 10.0,
             "max_input_chars": 400_000, "max_output_tokens": 8_000, "max_reasoning_tokens": 16_000},
 }
@@ -120,6 +120,10 @@ FAMILIES = {
 #: estimate pays for both. OpenRouter did not honour a token cap on reasoning (GLM
 #: thought through all 24000), so it is asked for low effort instead (12000 tokens,
 #: a full answer).
+#: 2026-09-29: on 249k/292k-char slices DeepSeek and GLM thought through the
+#: whole 24000 ceiling even at low effort. The OpenRouter families get 56000 of
+#: reasoning on top of the 8000 answer (billing is per token produced; a worst
+#: case still starts under the smallest nightly cap).
 
 #: Every way a family can be reached: a subscription login through its CLI
 #: (claude-cli: Claude Code; openclaw-cli: OpenClaw's `infer model run`, e.g. a
