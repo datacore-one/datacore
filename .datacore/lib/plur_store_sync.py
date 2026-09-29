@@ -385,6 +385,10 @@ def _attempt(store: Path, branch: str, state: dict) -> None:
                 continue
             if commit_doc == theirs_doc:
                 result[p] = t
+            elif commit_doc == ours_doc and read_work[p] is not None:
+                # Only this machine changed it: commit its bytes, not a re-dump,
+                # so the next `plur sync` finds nothing to reformat.
+                result[p] = _hash(store, read_work[p], write=True)
             elif h and commit_doc == _load(_blob(store, h)):
                 result[p] = h
             else:
@@ -475,8 +479,11 @@ class _Changed(Exception):
 
 
 def _reindex(store: Path, cli: str, state: dict) -> None:
+    env = dict(os.environ)
+    if os.sep in cli:  # an nvm plur needs its own node next to it
+        env["PATH"] = str(Path(cli).parent) + os.pathsep + env.get("PATH", "")
     r = subprocess.run([cli, "--path", str(store), "--json", "sync"], capture_output=True,
-                       text=True, timeout=900)
+                       text=True, timeout=900, env=env)
     if r.returncode != 0:
         state["index"] = "failed"
         raise SyncError(f"plur sync (reindex) failed rc={r.returncode}: {r.stderr.strip()[-200:]}")
@@ -526,11 +533,24 @@ def _count(store: Path, state: dict) -> None:
         state["engrams"] = None
 
 
+def _default_cli() -> str:
+    """The job envelope's PATH has no nvm; the mac's plur lives there."""
+    import shutil
+    if os.environ.get("DATACORE_PLUR_CLI"):
+        return os.environ["DATACORE_PLUR_CLI"]
+    found = shutil.which("plur")
+    if found:
+        return found
+    nvm = sorted(Path.home().glob(".nvm/versions/node/*/bin/plur"),
+                 key=lambda f: [int(x) if x.isdigit() else 0 for x in f.parts[-3].lstrip("v").split(".")])
+    return str(nvm[-1]) if nvm else "plur"
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--store", default=str(Path.home() / ".plur"))
     ap.add_argument("--state", default=str(Path.home() / ".datacore" / "state" / "plur-sync.json"))
-    ap.add_argument("--plur-cli", default=os.environ.get("DATACORE_PLUR_CLI", "plur"))
+    ap.add_argument("--plur-cli", default=None)
     ap.add_argument("--no-index", action="store_true", help="skip the `plur sync` reindex step")
     a = ap.parse_args(argv)
     store = Path(a.store).expanduser()
@@ -540,7 +560,7 @@ def main(argv=None) -> int:
              "merged": False, "pulled": 0, "pushed": False, "retries": 0, "engrams": None,
              "local_only": None, "index": "skipped", "error": None}
     try:
-        converge(store, index=not a.no_index, cli=a.plur_cli, state=state)
+        converge(store, index=not a.no_index, cli=a.plur_cli or _default_cli(), state=state)
     except (SyncError, subprocess.TimeoutExpired, OSError, yaml.YAMLError) as e:
         state["error"] = f"{type(e).__name__}: {e}" if not isinstance(e, SyncError) else str(e)
     if (store / ".git").is_dir() and state.get("branch"):

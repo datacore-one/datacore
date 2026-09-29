@@ -212,3 +212,19 @@ def test_state_names_no_engram_content(fleet, tmp_path):
     text = json.dumps(state)
     assert "statement" not in text
     assert set(state) >= {"ts", "host", "head", "remote_head", "in_sync", "engrams"}
+
+
+def test_a_file_only_this_machine_changed_is_committed_byte_for_byte(fleet, tmp_path):
+    remote, mac, host = fleet
+    m = _read(mac / "engrams.yaml")
+    m.append(_eng(10))
+    _write(mac, "engrams.yaml", m)
+    _git(mac, "commit", "-am", "mac")
+    _git(mac, "push")
+    # The host rewrote its pack in PLUR's own formatting and added a record.
+    text = json.dumps({"name": "p", "engrams": [_eng(90), _eng(93)]}, indent=1) + "\n"
+    (host / "packs/p/engrams.yaml").write_text(text)
+    rc, state = _run(host, tmp_path)
+    assert rc == 0, state
+    assert _git(remote, "show", "main:packs/p/engrams.yaml") + "\n" == text
+    assert "packs/p/engrams.yaml" not in _git(host, "status", "--porcelain")
