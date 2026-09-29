@@ -29,7 +29,7 @@ Automated inbox processing — classify and route all entries from inbox.org.
 
 1. **Clarified and moved** to where it belongs (the routing rules below). It leaves the inbox.
 2. **Finished** — its state is DONE or CANCELLED. It leaves the inbox and is kept: move the whole entry, unchanged (state, `CLOSED:` stamp, properties, body), to the end of `[space]/org/inbox_archive.org` (create it with `#+TITLE: Inbox archive` if missing). Never reopen it (no TODO/NEXT), never route it into next_actions.org as an open task, never delete it.
-3. **Cannot decide** — you cannot tell what it is or what the next action would be (a fragment such as "blue thing w/ Marko??"). It STAYS in the inbox, where it is, with `[NEEDS_REVIEW]` put at the front of its title, after any state keyword: `** TODO [NEEDS_REVIEW] blue thing w/ Marko??`. Not someday.org, not next_actions.org, not "Operations with a note". An entry already marked `[NEEDS_REVIEW]` is left as it is.
+3. **Cannot decide** — you cannot tell what it is or what the next action would be (a fragment such as "blue thing w/ Marko??"). It STAYS in the inbox, where it is, with the literal text `[NEEDS_REVIEW]` put at the front of its title, after any state keyword: `** TODO [NEEDS_REVIEW] blue thing w/ Marko??` — a prefix in the title, not a `:NEEDS_REVIEW:` tag and not a state. Not someday.org, not next_actions.org, not "Operations with a note". An entry already marked `[NEEDS_REVIEW]` is left as it is.
 
 Nothing else remains in the inbox after a run.
 
@@ -39,7 +39,7 @@ Nothing else remains in the inbox after a run.
 
 Read the inbox you were given (`[space]/org/inbox.org`). When none is named, use the personal space's inbox: the space `install.yaml` names as `roles.personal` (never assume a folder name or number).
 
-An entry is each direct child of the `* Inbox` section and each top-level heading outside it — open or finished. Count them all; finished entries are work too (outcome 2).
+An entry is each direct child of the `* Inbox` section, each top-level heading with a state, and each top-level heading with nothing under it (a bare capture — process it like any other) — open or finished. A stateless top-level heading WITH children is a section the owner parked work under: its open children wait for the owner, but its finished children leave like any finished entry (outcome 2). The nightly job moves finished entries to `inbox_archive.org` in code before and after you run.
 
 If 0 entries: log "Inbox empty" and exit.
 
