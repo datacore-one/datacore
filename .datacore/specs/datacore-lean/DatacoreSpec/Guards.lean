@@ -10,7 +10,7 @@ Python's actual classification of the handful of tokens involved.
 
 | § | Python | Result |
 |---|---|---|
-| 1 | `hooks/restricted_hosts_guard.py` | old: refuted (4 bypasses); fixed: **candidate directories are sound** |
+| 1 | `hooks/restricted_hosts_guard.py` | old: refuted (4 bypasses; a loop body read once); fixed: **candidate directories are sound**, also with directories spelled through variables and with loops, given the resolution contract |
 | 2 | `tool_policy.decide` / `call_text` / `classify` | never ⇒ deny for all grants: **proved**; S1+Q4: **every input field is matched but Bash's `description`** |
 | 3 | `hooks/injection_integrity_guard.py` | old: refuted (any mention clears); fixed: **clears only on a full read**; S2: **armed Bash reads only the spill** |
 | 4 | `hooks/log_ownership_guard.py` | old: refuted (evil merge, forged author); S3/S4: **every unpushed write is judged; an unlistable range refuses** |
@@ -20,8 +20,12 @@ Python's actual classification of the handful of tokens involved.
 | 8 | `commit_gate.decide` | **proved**: allowed ⊎ withheld = dirty, allowed ⊆ produced |
 
 Not modelled: shell quoting and `sh -c` / `eval` / `$( )` unpacking in §1
-(covered by the pytest replays), directories only known at run time (the
-Python fails closed on them), URL/scp host extraction, regex semantics.
+(covered by the pytest replays); the binding analysis that resolves a
+variable to its candidate values — §1 takes its result as the hypothesis
+`hres` (the real directory is a candidate, or an unknown is), exercised by
+`test_restricted_hosts_unknown_dirs.py`; URL/scp host extraction, config
+rewrites, regex semantics; and a repository's config changing during the
+command other than by the git commands the Python reads.
 -/
 
 namespace DatacoreSpec.Guards
@@ -217,6 +221,341 @@ theorem old_misses_prefixes :
     guard py absCd bad ["/bad"] [["FOO=1", "git", "push"]] = true ∧
     guard py absCd bad ["/bad"] [["env", "git", "push"]] = true ∧
     guard py absCd bad ["/bad"] [["git", "-c", "k=v", "push"]] = true := by decide
+
+/-! ### 2026-09-30: directories spelled through variables, and loops
+
+Owner decision "Network guard: smarter". A directory may now be spelled
+through a variable the command binds itself (`for r in a b; do git -C $r
+push; done`, `W=/x && cd $W`). The Python resolves such an argument to a
+LIST of candidate directories, or to one containing the unknown marker
+(`UNKNOWN_DIR`) when only the run can tell. `res` below is that resolution
+and `act` is what the shell really does; the hypothesis `hres` — the real
+directory is among the candidates, or an unknown is — is the contract of the
+Python's binding analysis (`_program`, `_clobbered`, `_expand`). It is not
+proved here: it is exercised by `test_restricted_hosts_unknown_dirs.py`.
+
+Given that contract, the guard is sound, and a loop is handled soundly by
+walking its body as the Python does: `n` passes for a `for` over `n` words,
+one pass for any other loop without a `cd`, one pass after entering an
+unknown directory for any other loop with a `cd`. -/
+
+/-- The guard with multi-valued resolution and unknowns (`_git_targets`). -/
+def guardM (res : D → T → List D) (bad isUnk : D → Bool) : List D → List (List T) → Bool
+  | _, [] => false
+  | S, seg :: rest =>
+    match cdTarget L (invocation L seg) with
+    | some a => guardM res bad isUnk (S ++ S.flatMap (res · a)) rest
+    | none => (netGit L (invocation L seg) && S.any (fun x => bad x || isUnk x))
+              || guardM res bad isUnk S rest
+
+/-- The actual directory is a candidate, or some candidate is unknown. -/
+def Cov (isUnk : D → Bool) (S : List D) (d : D) : Prop := d ∈ S ∨ ∃ u ∈ S, isUnk u = true
+
+theorem Cov.append_left {isUnk : D → Bool} {S : List D} {d : D} (S' : List D)
+    (h : Cov isUnk S d) : Cov isUnk (S ++ S') d := by
+  rcases h with h | ⟨u, hu, hk⟩
+  · exact Or.inl (List.mem_append_left _ h)
+  · exact Or.inr ⟨u, List.mem_append_left _ hu, hk⟩
+
+/-- **Soundness with resolution.** Whatever the variables hold and whichever
+`cd`s take effect, if the command reaches a restricted remote, the guard
+blocks it — provided the resolution never leaves the real directory out
+without saying "unknown". -/
+theorem resolved_candidates_sound (res : D → T → List D) (act : D → T → D) (bad isUnk : D → Bool)
+    (hres : ∀ d a, act d a ∈ res d a ∨ ∃ u ∈ res d a, isUnk u = true) :
+    ∀ (cmd : List (List T)) (S : List D) (d : D) (cs : List Bool),
+      Cov isUnk S d → shell L act bad d cs cmd = true → guardM L res bad isUnk S cmd = true := by
+  intro cmd
+  induction cmd with
+  | nil => intro S d cs _ h; simp [shell] at h
+  | cons seg rest ih =>
+    intro S d cs hd h
+    cases hc : cdTarget L (invocation L seg) with
+    | some a =>
+      cases cs with
+      | nil =>
+        simp only [shell, guardM, hc] at h ⊢
+        exact ih _ d [] (hd.append_left _) h
+      | cons c cs' =>
+        simp only [shell, guardM, hc] at h ⊢
+        refine ih _ _ cs' ?_ h
+        cases c
+        · exact hd.append_left _
+        · simp only [ite_true]
+          rcases hd with hd | ⟨u, hu, hk⟩
+          · rcases hres d a with hm | ⟨u, hu, hk⟩
+            · exact Or.inl (List.mem_append_right _ (List.mem_flatMap.mpr ⟨d, hd, hm⟩))
+            · exact Or.inr ⟨u, List.mem_append_right _ (List.mem_flatMap.mpr ⟨d, hd, hu⟩), hk⟩
+          · exact Or.inr ⟨u, List.mem_append_left _ hu, hk⟩
+    | none =>
+      have hs : shell L act bad d cs (seg :: rest) =
+          ((netGit L (invocation L seg) && bad d) || shell L act bad d cs rest) := by
+        cases cs <;> simp [shell, hc]
+      rw [hs] at h
+      simp only [guardM, hc]
+      simp only [Bool.or_eq_true, Bool.and_eq_true] at h ⊢
+      rcases h with ⟨hg, hb⟩ | h
+      · refine Or.inl ⟨hg, List.any_eq_true.mpr ?_⟩
+        rcases hd with hd | ⟨u, hu, hk⟩
+        · exact ⟨d, hd, by simp [hb]⟩
+        · exact ⟨u, hu, by simp [hk]⟩
+      · exact Or.inr (ih S d cs hd h)
+
+/-- The candidate set after a prefix. -/
+def post (res : D → T → List D) : List D → List (List T) → List D
+  | S, [] => S
+  | S, seg :: rest =>
+    match cdTarget L (invocation L seg) with
+    | some a => post res (S ++ S.flatMap (res · a)) rest
+    | none => post res S rest
+
+theorem guardM_append (res : D → T → List D) (bad isUnk : D → Bool) :
+    ∀ (p q : List (List T)) (S : List D),
+      guardM L res bad isUnk S (p ++ q) =
+        (guardM L res bad isUnk S p || guardM L res bad isUnk (post L res S p) q) := by
+  intro p
+  induction p with
+  | nil => intro q S; simp [guardM, post]
+  | cons seg rest ih =>
+    intro q S
+    cases hc : cdTarget L (invocation L seg) with
+    | some a => simp only [List.cons_append, guardM, post, hc, ih]
+    | none => simp only [List.cons_append, guardM, post, hc, ih, Bool.or_assoc]
+
+theorem post_super (res : D → T → List D) :
+    ∀ (p : List (List T)) (S : List D) (x : D), x ∈ S → x ∈ post L res S p := by
+  intro p
+  induction p with
+  | nil => intro S x hx; simpa [post] using hx
+  | cons seg rest ih =>
+    intro S x hx
+    cases hc : cdTarget L (invocation L seg) with
+    | some a => simp only [post, hc]; exact ih _ x (List.mem_append_left _ hx)
+    | none => simp only [post, hc]; exact ih S x hx
+
+/-- More candidates never unblock a command. -/
+theorem guardM_mono (res : D → T → List D) (bad isUnk : D → Bool) :
+    ∀ (cmd : List (List T)) (S S' : List D), (∀ x ∈ S, x ∈ S') →
+      guardM L res bad isUnk S cmd = true → guardM L res bad isUnk S' cmd = true := by
+  intro cmd
+  induction cmd with
+  | nil => intro S S' _ h; simp [guardM] at h
+  | cons seg rest ih =>
+    intro S S' hsub h
+    cases hc : cdTarget L (invocation L seg) with
+    | some a =>
+      simp only [guardM, hc] at h ⊢
+      refine ih _ _ ?_ h
+      intro x hx
+      rcases List.mem_append.mp hx with hx | hx
+      · exact List.mem_append_left _ (hsub x hx)
+      · obtain ⟨y, hy, hxy⟩ := List.mem_flatMap.mp hx
+        exact List.mem_append_right _ (List.mem_flatMap.mpr ⟨y, hsub y hy, hxy⟩)
+    | none =>
+      simp only [guardM, hc, Bool.or_eq_true, Bool.and_eq_true] at h ⊢
+      rcases h with ⟨hg, ha⟩ | h
+      · obtain ⟨x, hx, hb⟩ := List.any_eq_true.mp ha
+        exact Or.inl ⟨hg, List.any_eq_true.mpr ⟨x, hsub x hx, hb⟩⟩
+      · exact Or.inr (ih S S' hsub h)
+
+/-- Walking extra segments in the middle never unblocks a command. -/
+theorem guardM_pad (res : D → T → List D) (bad isUnk : D → Bool) (S : List D)
+    (p x q : List (List T)) (h : guardM L res bad isUnk S (p ++ q) = true) :
+    guardM L res bad isUnk S (p ++ (x ++ q)) = true := by
+  rw [guardM_append] at h ⊢
+  simp only [Bool.or_eq_true] at h ⊢
+  rcases h with h | h
+  · exact Or.inl h
+  · refine Or.inr ?_
+    rw [guardM_append]
+    simp only [Bool.or_eq_true]
+    exact Or.inr (guardM_mono L res bad isUnk q _ _ (post_super L res x _) h)
+
+/-- `n` passes of a loop body. -/
+def rep (body : List (List T)) : Nat → List (List T)
+  | 0 => []
+  | n + 1 => body ++ rep body n
+
+theorem rep_add (body : List (List T)) (k m : Nat) :
+    rep body (k + m) = rep body k ++ rep body m := by
+  induction k with
+  | zero => simp [rep]
+  | succ k ih => rw [Nat.succ_add]; simp [rep, ih]
+
+/-- **A `for` loop over `n` words.** The Python walks the body `n` times
+(`_git_targets`, a `loop` item with a count). Any run of `k ≤ n` passes —
+fewer when a `break` fires — that reaches a restricted remote is blocked. -/
+theorem for_loop_sound (res : D → T → List D) (act : D → T → D) (bad isUnk : D → Bool)
+    (hres : ∀ d a, act d a ∈ res d a ∨ ∃ u ∈ res d a, isUnk u = true)
+    (pre body rest : List (List T)) (k n : Nat) (hk : k ≤ n)
+    (S : List D) (d : D) (cs : List Bool) (hd : Cov isUnk S d)
+    (h : shell L act bad d cs (pre ++ rep body k ++ rest) = true) :
+    guardM L res bad isUnk S (pre ++ rep body n ++ rest) = true := by
+  have hg := resolved_candidates_sound L res act bad isUnk hres _ S d cs hd h
+  obtain ⟨m, rfl⟩ := Nat.exists_eq_add_of_le hk
+  rw [rep_add, List.append_assoc, List.append_assoc]
+  rw [List.append_assoc] at hg
+  have := guardM_pad L res bad isUnk S (pre ++ rep body k) (rep body m) rest (by
+    simpa [List.append_assoc] using hg)
+  simpa [List.append_assoc] using this
+
+/-- A body without `cd` does not move the candidates. -/
+def NoCd (body : List (List T)) : Prop := ∀ seg ∈ body, cdTarget L (invocation L seg) = none
+
+theorem post_nocd (res : D → T → List D) :
+    ∀ (body : List (List T)) (S : List D), NoCd L body → post L res S body = S := by
+  intro body
+  induction body with
+  | nil => intro S _; rfl
+  | cons seg rest ih =>
+    intro S h
+    have hc := h seg (by simp)
+    simp only [post, hc]
+    exact ih S (fun s hs => h s (by simp [hs]))
+
+theorem guardM_rep_nocd (res : D → T → List D) (bad isUnk : D → Bool)
+    (body rest : List (List T)) (hb : NoCd L body) (S : List D) :
+    ∀ k, guardM L res bad isUnk S (rep body k ++ rest) = true →
+      guardM L res bad isUnk S (body ++ rest) = true := by
+  intro k
+  induction k with
+  | zero =>
+    intro h
+    simp only [rep, List.nil_append] at h
+    rw [guardM_append, post_nocd L res body S hb]
+    simp [h]
+  | succ k ih =>
+    intro h
+    simp only [rep, List.append_assoc] at h
+    rw [guardM_append, post_nocd L res body S hb] at h
+    simp only [Bool.or_eq_true] at h
+    rcases h with h | h
+    · rw [guardM_append]; simp [h]
+    · exact ih h
+
+/-- **Any other loop, without a `cd` in it** (`while`, `until`, a `for` over
+words only known at run time). The Python walks the body once. Any number of
+passes that reaches a restricted remote is blocked. -/
+theorem nocd_loop_sound (res : D → T → List D) (act : D → T → D) (bad isUnk : D → Bool)
+    (hres : ∀ d a, act d a ∈ res d a ∨ ∃ u ∈ res d a, isUnk u = true)
+    (pre body rest : List (List T)) (hb : NoCd L body) (k : Nat)
+    (S : List D) (d : D) (cs : List Bool) (hd : Cov isUnk S d)
+    (h : shell L act bad d cs (pre ++ rep body k ++ rest) = true) :
+    guardM L res bad isUnk S (pre ++ body ++ rest) = true := by
+  have hg := resolved_candidates_sound L res act bad isUnk hres _ S d cs hd h
+  rw [List.append_assoc, guardM_append] at hg ⊢
+  simp only [Bool.or_eq_true] at hg ⊢
+  rcases hg with hg | hg
+  · exact Or.inl hg
+  · exact Or.inr (guardM_rep_nocd L res bad isUnk body rest hb _ k hg)
+
+/-- Some segment of the command is a network git that is not a `cd`. -/
+def hasNet (cmd : List (List T)) : Bool :=
+  cmd.any (fun seg => (cdTarget L (invocation L seg)).isNone && netGit L (invocation L seg))
+
+/-- Once an unknown directory is a candidate, the guard blocks exactly the
+commands that still run a network git. -/
+theorem guardM_unknown (res : D → T → List D) (bad isUnk : D → Bool) :
+    ∀ (cmd : List (List T)) (S : List D), (∃ u ∈ S, isUnk u = true) →
+      guardM L res bad isUnk S cmd = hasNet L cmd := by
+  intro cmd
+  induction cmd with
+  | nil => intro S _; simp [guardM, hasNet]
+  | cons seg rest ih =>
+    intro S ⟨u, hu, hk⟩
+    have hany : S.any (fun x => bad x || isUnk x) = true :=
+      List.any_eq_true.mpr ⟨u, hu, by simp [hk]⟩
+    cases hc : cdTarget L (invocation L seg) with
+    | some a =>
+      simp only [guardM, hc]
+      rw [ih _ ⟨u, List.mem_append_left _ hu, hk⟩]
+      simp [hasNet, hc]
+    | none =>
+      simp only [guardM, hc, hany, Bool.and_true]
+      rw [ih S ⟨u, hu, hk⟩]
+      simp [hasNet, hc]
+
+/-- A command with no network git never blocks, from any candidate set. -/
+theorem guardM_nonet (res : D → T → List D) (bad isUnk : D → Bool) :
+    ∀ (cmd : List (List T)) (S : List D), hasNet L cmd = false →
+      guardM L res bad isUnk S cmd = false := by
+  intro cmd
+  induction cmd with
+  | nil => intro S _; rfl
+  | cons s r ih =>
+    intro S hn
+    simp only [hasNet, List.any_cons, Bool.or_eq_false_iff] at hn
+    cases hcs : cdTarget L (invocation L s) with
+    | some a => simp only [guardM, hcs]; exact ih _ hn.2
+    | none =>
+      have hg : netGit L (invocation L s) = false := by simpa [hcs] using hn.1
+      simp only [guardM, hcs, hg, Bool.false_and, Bool.false_or]
+      exact ih _ hn.2
+
+theorem hasNet_rep (body rest : List (List T)) :
+    ∀ j, hasNet L (rep body j ++ rest) = true → hasNet L (body ++ rest) = true := by
+  intro j
+  induction j with
+  | zero =>
+    intro hj
+    simp only [rep, List.nil_append] at hj
+    simp [hasNet, List.any_append] at hj ⊢
+    exact Or.inr hj
+  | succ j ih =>
+    intro hj
+    simp only [rep, List.append_assoc, hasNet, List.any_append, Bool.or_eq_true] at hj
+    rcases hj with hj | hj
+    · simp [hasNet, List.any_append, hj]
+    · exact ih (by simpa [hasNet, List.any_append] using hj)
+
+/-- **Any other loop, with a `cd` in it.** Passes cannot be counted, so the
+Python enters an unknown directory before walking the body once — modelled
+as a segment `enter` whose resolution holds an unknown. Any number of passes
+that reaches a restricted remote is blocked. -/
+theorem cd_loop_sound (res : D → T → List D) (act : D → T → D) (bad isUnk : D → Bool)
+    (hres : ∀ d a, act d a ∈ res d a ∨ ∃ u ∈ res d a, isUnk u = true)
+    (enter : List T) (e : T) (he : cdTarget L (invocation L enter) = some e)
+    (hunk : ∀ d, ∃ u ∈ res d e, isUnk u = true)
+    (pre body rest : List (List T)) (k : Nat)
+    (S : List D) (d : D) (cs : List Bool) (hd : Cov isUnk S d)
+    (h : shell L act bad d cs (pre ++ rep body k ++ rest) = true) :
+    guardM L res bad isUnk S (pre ++ enter :: body ++ rest) = true := by
+  have hg := resolved_candidates_sound L res act bad isUnk hres _ S d cs hd h
+  rw [List.append_assoc, guardM_append] at hg ⊢
+  simp only [Bool.or_eq_true] at hg ⊢
+  rcases hg with hg | hg
+  · exact Or.inl hg
+  · refine Or.inr ?_
+    -- the candidates after the prefix are never empty: they contain S
+    have hne : ∃ x, x ∈ post L res S pre := by
+      rcases hd with hd | ⟨u, hu, _⟩
+      · exact ⟨d, post_super L res pre S d hd⟩
+      · exact ⟨u, post_super L res pre S u hu⟩
+    obtain ⟨x, hx⟩ := hne
+    obtain ⟨u, hu, hk⟩ := hunk x
+    have hpre : ∃ u ∈ post L res S pre ++ (post L res S pre).flatMap (res · e), isUnk u = true :=
+      ⟨u, List.mem_append_right _ (List.mem_flatMap.mpr ⟨x, hx, hu⟩), hk⟩
+    simp only [List.cons_append, guardM, he]
+    rw [guardM_unknown L res bad isUnk _ _ hpre]
+    cases hn : hasNet L (rep body k ++ rest) with
+    | false =>
+      rw [guardM_nonet L res bad isUnk _ _ hn] at hg
+      exact absurd hg Bool.false_ne_true
+    | true => exact hasNet_rep L body rest k hn
+
+/-- The defect the 2026-09-30 change also fixed: a loop body was read once.
+`for x in 1 2; do cd sub && git push; done` from /w pushes from /w/sub/sub
+on the second pass; one pass never sees that directory. -/
+def relCd : String → String → List String := fun d a => [d ++ "/" ++ a]
+def relAct : String → String → String := fun d a => d ++ "/" ++ a
+def badSub : String → Bool := (· == "/w/sub/sub")
+def noUnk : String → Bool := fun _ => false
+
+theorem one_pass_misses_relative_cd :
+    guardM py relCd badSub noUnk ["/w"] [["cd", "sub"], ["git", "push"]] = false ∧
+    shell py relAct badSub "/w" [true, true] (rep [["cd", "sub"], ["git", "push"]] 2) = true ∧
+    guardM py relCd badSub noUnk ["/w"] (rep [["cd", "sub"], ["git", "push"]] 2) = true := by
+  decide
 
 /-- Failure behaviour. `Outcome.error unevaluable`: `true` for `Unevaluable`,
 `false` for any other exception. `reach` is `_can_reach_network`. -/
