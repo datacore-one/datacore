@@ -280,8 +280,11 @@ def run_claude(prompt: str) -> tuple[bool, str]:
         return False, f"{type(e).__name__}: {str(e)[:300]}"
 
     out = (r.stdout or "").strip()
-    if r.returncode != 0 and not out:
-        return False, f"claude -p exited {r.returncode}: {(r.stderr or '')[:300] or '(no output)'}"
+    if r.returncode != 0:
+        # A refusal (expired login, usage limit) arrives on stdout with a
+        # non-zero exit; it is a failed sweep, never a done one (OPS-13).
+        why = (out or (r.stderr or "").strip())[-300:] or "(no output)"
+        return False, f"claude -p exited {r.returncode}: {why}"
     if not out:
         # An empty success is the auth-outage signature that hid a nine-day
         # failure in ledger_transport — never report it as done.
