@@ -255,7 +255,12 @@ def _clean_title_and_tags(title: str, tags) -> tuple[str, list[str]]:
     # dispatcher proof items created straight into the ledger in Aug 2026
     # carried "...\nNo other content...") rendered only its first line, so a
     # restore read back a different title and reported the item altered.
-    title = " ".join(str(title or "").split())
+    # Only a title that HAS a line break is re-flowed. Collapsing every
+    # whitespace run of every title rendered one holding `":   "` with one
+    # space, which then read back differently from the ledger and stopped
+    # 2-datacore's ingest (2026-09-30). A one-line title renders verbatim.
+    title = str(title or "")
+    title = " ".join(title.split()) if ("\n" in title or "\r" in title) else title.strip()
     title = title or ""
     found: list[str] = []
     m = _TRAILING_TAG_BLOCK.search(title)

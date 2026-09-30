@@ -58,6 +58,9 @@ OVERLAY_STATES = ("QUEUED", "WORKING", "REVIEW", "FAILED")
 #: the only states that stay behind as history.
 ACTIVE_STATES = HUMAN_STATES + OVERLAY_STATES
 
+#: Closed states, and the dismissal kind each one records.
+CLOSED_KINDS = {"DONE": "done", "CANCELLED": "dropped"}
+
 #: Used only when a task has no `:CREATED:` and no git history -- e.g. a task
 #: created in an uncommitted edit. Documented rather than invented per task so
 #: every such item shares one obvious, greppable timestamp.
@@ -72,6 +75,9 @@ class ScanResult:
     already_present: list[str] = field(default_factory=list)
     missing_id: list[str] = field(default_factory=list)
     out_of_scope: dict[str, int] = field(default_factory=dict)
+    #: id -> dismissal kind, for importable items that arrived already closed
+    #: in a phase-1 (generated) file. import_space closes them after creating.
+    closed: dict[str, str] = field(default_factory=dict)
 
     @property
     def summary(self) -> str:
@@ -311,6 +317,10 @@ def scan(space_dir: Path, org_file: Path | None = None) -> ScanResult:
 
     known = set(fold(read_events(space_dir)).items.keys())
     sections: dict[str, dict] = {}
+    try:
+        phase1 = (space_dir / ".datacore" / "ledger-phase").read_text().strip() == "1"
+    except OSError:
+        phase1 = False
 
     ws = SafeOrgWorkspace()
     ws.load(str(org_file))
@@ -343,6 +353,24 @@ def scan(space_dir: Path, org_file: Path | None = None) -> ScanResult:
                 sections[node_id] = _section_payload(node, space)
             continue
         if state not in ACTIVE_STATES:
+            # A CLOSED HEADING IN A GENERATED FILE IS STILL ADMITTED. In a
+            # phase-1 space the projection's three-way merge refuses any
+            # heading the ledger has never seen ("new heading is not admitted
+            # to the ledger; ingest first"), and skipping it here made that
+            # refusal permanent: 5-plur on winston from 2026-09-27, one heading
+            # that reached the file already DONE. Admitted and closed in the
+            # same pass, the ledger records that the task existed and ended.
+            # Phase 0 keeps the old rule: authored files carry years of DONE
+            # history the ledger was never meant to import.
+            node_id = node.get_property("ID")
+            if (phase1 and state in CLOSED_KINDS and node_id and node_id not in known
+                    and node_id not in result.closed):
+                date, rung = valid_time(node, repo, rel)
+                payload = task_payload(node, space, date, rung)
+                payload["filetags"] = filetags
+                result.importable.append(payload)
+                result.closed[node_id] = CLOSED_KINDS[state]
+                continue
             result.out_of_scope[state] = result.out_of_scope.get(state, 0) + 1
             continue
         node_id = node.get_property("ID")
@@ -389,4 +417,7 @@ def import_space(space_dir: Path, org_file: Path | None = None,
     log = EventLog(space_dir, actor)
     for payload in result.importable:
         log.append("item.create", payload)
+    for node_id, kind in result.closed.items():
+        log.append("item.dismiss", {"id": node_id, "kind": kind,
+                                    "reason": "admitted already closed in the generated next_actions.org"})
     return result
