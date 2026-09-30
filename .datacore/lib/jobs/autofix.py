@@ -188,6 +188,18 @@ def delegate(job, failures: list[str], rec: dict, *, root: Path,
     actor = this_actor()
     iid = f"{MARK}-{job.name}-{time.strftime('%Y%m%d', time.gmtime())}"
     title = f"Repair {job.name}: failing on {job.machine} since {rec.get('first_failed')}"
+    # ONE CREATE PER JOB PER DAY. The id already bounds the item; this bounds
+    # the EVENT. Re-appending item.create for an id the ledger holds changes
+    # nothing in the fold but still counts against the writer's daily creation
+    # allowance -- on 2026-09-27..30 winston spent 30 of its 50 a day on repeats
+    # of four ids, and every new repair after that was refused.
+    try:
+        from ledger.fold import fold as _fold
+        from ledger.log import read_events as _read_events
+        if (space / ".datacore" / "events").is_dir() and iid in _fold(_read_events(space)).items:
+            return "exists", f"{iid} is already in the ledger"
+    except Exception:  # noqa: BLE001 -- an unreadable ledger falls through to the old path
+        pass
     verify = (f"python3 .datacore/lib/jobs/fix_check.py --job {job.name} "
               f"--machine {job.machine} --contract-sha {sha}")
 

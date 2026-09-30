@@ -475,7 +475,9 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> 
         # about who gets woken first.
         if job is not None:
             state, detail = _delegate_repair(job, failures, _record)
-            if state == "delegated":
+            if state in ("delegated", "exists"):
+                # `exists`: today's repair is already filed; the repair path
+                # (and its escalation report) owns it, as it did an hour ago.
                 print(f"delegated repair of {job_name} ({detail}); "
                       f"operator not alerted", file=sys.stderr)
                 if _record.get("recurring") and not _record.get("task_id"):
