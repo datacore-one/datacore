@@ -284,6 +284,7 @@ def collect_states(root: Path, grace: int, today: date | None = None) -> tuple[l
     """
     import yaml
     from cadence_engine import HUMAN_OWNER, all_assignments
+    from cadence_schedule import CONTINUOUS
 
     today = today or date.today()
     rows, grey = [], []
@@ -329,6 +330,12 @@ def collect_states(root: Path, grace: int, today: date | None = None) -> tuple[l
         for (role, freq, name), owner in sorted(owners.items()):
             if owner == HUMAN_OWNER:
                 grey.append((0, venture, role, freq, f"{name} [reminder: {owner}]"))
+            elif freq in CONTINUOUS:
+                # A BOT LOOP, NOT A DUTY. The scheduler plans every_4h/every_15min
+                # for nobody (cadence_schedule.CONTINUOUS, CAD-1) and cadence_engine
+                # skips them, so "not registered" was red by construction
+                # (2026-09-28, three meridian loops). Listed, never counted.
+                grey.append((0, venture, role, freq, f"{name} [continuous: {owner}'s own loop, not a scheduled duty]"))
             elif members is not None and owner not in members:
                 rows.append((-1, venture, role, freq, f"{name} [not-held: {owner} is not a member of this space]"))
             else:

@@ -126,3 +126,18 @@ def test_executing_principals_are_those_the_registry_gives_an_executor(monkeypat
     monkeypatch.setattr(roster, "entries", lambda path=None: {
         "ops": {"kind": "agent", "executors": ["runner"]}, "cos": {"kind": "agent"}, "boss": {}})
     assert cadence_liveness._executing() == {"ops"}
+
+
+def test_a_continuous_cadence_is_a_bot_loop_listed_grey_never_a_missing_registration(tmp_path, monkeypatch):
+    """every_4h / every_15min are a bot's own loop: the scheduler plans them for
+    nobody (cadence_schedule.CONTINUOUS, CAD-1) and cadence_engine skips them.
+    Judging them "not-registered" made the box's contract red by construction
+    from 2026-09-28 (three meridian loops), while the daily duty beside them is
+    still judged."""
+    monkeypatch.setattr(L, "EXECUTING", {"miles"})
+    _v(tmp_path, "name: meridian\nstage: growth\nroles:\n  trader:\n    agent: miles\n    cadences:\n"
+                 "      every_4h: [tick]\n      every_15min: [health]\n      daily: [report]\n")
+    red, grey = L.collect_states(tmp_path, 3, datetime.date(2026, 9, 30))
+    assert [r[4].split(" [", 1)[0] for r in red] == ["report"], red
+    assert {(g[3], g[4]) for g in grey} >= {("every_4h", "tick [continuous: miles's own loop, not a scheduled duty]"),
+                                            ("every_15min", "health [continuous: miles's own loop, not a scheduled duty]")}
