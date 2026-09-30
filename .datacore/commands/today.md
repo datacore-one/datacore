@@ -47,7 +47,7 @@ The briefing tells a story in three acts:
 | Output location? | Personal space journal: `0-personal/notes/journals/YYYY-MM-DD.md` |
 | Nightshift outputs? | `*/0-inbox/nightshift-*.md` |
 | Calendar source? | Google Calendar — multiple accounts (from `settings.local.yaml`) |
-| Market phase? | Pre-computed by nightshift cron at 05:30 UTC |
+| Market phase? | Pre-computed by nightshift timer at 05:30 UTC → `6-meridian/reports/market-phase/market-phase-YYYY-MM-DD.md` |
 | What DIPs govern this? | DIP-0009 (GTD), DIP-0011 (Nightshift) |
 
 ### Cron Schedule (nightshift server, UTC)
@@ -419,10 +419,22 @@ recorded" written on its own line in the briefing — never "not sent" or "not d
 ## Step 10: Fetch News Headlines
 
 ```bash
-python3 .datacore/modules/news/lib/feed_fetcher.py  # if >4h stale
+python3 .datacore/modules/news/lib/feed_fetcher.py     # always: nothing else refreshes the Mac's copy
+python3 .datacore/modules/news/lib/news_briefing.py --json   # scored items from the last 24 h, by tier
 ```
 
-Read from `0-personal/.datacore/module-data/news/data/headlines.json` (the personal space's private module-data folder; `python3 .datacore/modules/news/lib/news_paths.py` prints it).
+Always fetch. No job on the Mac refreshes headlines, and each host keeps its own
+copy that never syncs (`.datacore/module-data/news/` is gitignored), so the
+file is as old as the last /today run. The fetch scores every item as it stores
+it (about 20 s in all).
+
+Read the news through `news_briefing.py`, not the raw file. Its tiers hold only
+scored items from the last 24 hours. Each item's score is in `relevance_score`
+and its tier in `tier`. There are no `score` or `ai_score` keys, and reading them
+returns None for every item. If `summary.unscored` is above 0 after the fetch,
+say the scoring pass failed and quote the fetcher's "Scored this run" line.
+The store itself is `0-personal/.datacore/module-data/news/data/headlines.json`
+(`python3 .datacore/modules/news/lib/news_paths.py` prints the folder).
 
 ---
 
@@ -434,9 +446,21 @@ If trading module installed:
 python3 ~/.datacore/modules/trading/lib/gateio/today_summary.py --remote
 ```
 
-Also read market phase analysis output (pre-computed by nightshift cron at 05:30 UTC).
-Check `0-personal/0-inbox/` for market phase report. Integrate signals and
-suggestions into the briefing's trading section.
+Also read the market phase analysis. The `nightshift-market-phase` timer on the
+nightshift host computes it at 05:30 UTC and publishes it to the meridian
+repo: `6-meridian/reports/market-phase/market-phase-YYYY-MM-DD.md` (today's
+date). It reaches the Mac with the normal repo sync; if it is not there, run
+`git -C 6-meridian pull --ff-only` once and look again. The timer is its own
+job and does not wait for the nightshift task queue, so a paused queue is not
+a reason for it to be missing. Integrate signals and suggestions into the
+briefing's trading section.
+
+If there is still no report for today, write that in the trading section:
+"No market-phase report for today yet." Add the reason when you can find it:
+`ssh nightshift journalctl -u nightshift-market-phase.service --since today`
+(read-only). A line starting `NO REPORT:` or `RETAINED:` gives it. If you cannot
+check, write "reason not verified". Never leave the market phase out without
+saying so.
 
 **IMPORTANT — Educational tone for trading data:**
 The user is learning trading. Raw monitoring jargon is NOT helpful. When presenting
