@@ -13,9 +13,25 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 from process_run import run as run_process
 
 from .base import Executor, estimate_cost_cents, register
+
+
+def _run_openclaw(command, *, env, **kwargs):
+    """Run openclaw with a private TMPDIR that is removed afterwards.
+
+    `openclaw agent exec` leaves a ~108 MB state dir (openclaw-agent-exec-*) in
+    the temp dir on every run and never removes it; a claim retried every 15
+    minutes through it filled plur-claw's disk (2026-09-28..30). Whatever the
+    outcome, nothing a run puts in its temp dir survives it.
+    """
+    private = tempfile.mkdtemp(prefix="openclaw-run-", dir=tempfile.gettempdir())
+    try:
+        return run_process(command, env={**env, "TMPDIR": private}, **kwargs)
+    finally:
+        shutil.rmtree(private, ignore_errors=True)
 
 
 @register
@@ -32,9 +48,9 @@ class OpenClawExecutor(Executor):
         config = os.environ.get("DATACORE_OPENCLAW_CONFIG")
         if config:
             command.extend(["--config", config])
-        result = run_process(command, input=prompt, capture_output=True, text=True,
-                                timeout=timeout_s + 15, check=False, cwd=workspace,
-                                env=self._execution_env())
+        result = _run_openclaw(command, input=prompt, capture_output=True, text=True,
+                               timeout=timeout_s + 15, check=False, cwd=workspace,
+                               env=self._execution_env())
         try:
             envelope = json.loads(result.stdout)
         except (ValueError, TypeError):
@@ -90,7 +106,6 @@ class OpenClawGatewayExecutor(OpenClawExecutor):
         workspace = str(Path(self._cwd or os.getcwd()).resolve())
         message = (f"Work only in `{workspace}`: `cd` there before anything else; every relative path "
                    f"below is relative to it.\n\n{prompt}")
-        import tempfile
         # `openclaw agent` reads --message-file from a path only (stdin is an
         # `agent exec` feature): a private file, removed after the turn.
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", prefix="dispatch-") as fh:
@@ -99,8 +114,8 @@ class OpenClawGatewayExecutor(OpenClawExecutor):
             command = [binary, "agent", "--agent", "main", "--session-key",
                        f"agent:main:dispatch-{uuid.uuid4().hex[:12]}",
                        "--message-file", fh.name, "--json", "--timeout", str(timeout_s)]
-            result = run_process(command, capture_output=True, text=True, timeout=timeout_s + 30,
-                                 check=False, cwd=workspace, env=self._execution_env())
+            result = _run_openclaw(command, capture_output=True, text=True, timeout=timeout_s + 30,
+                                   check=False, cwd=workspace, env=self._execution_env())
         try:
             envelope = json.loads(result.stdout)
         except (ValueError, TypeError):

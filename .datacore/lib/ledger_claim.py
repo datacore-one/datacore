@@ -659,8 +659,20 @@ def main() -> int:
     print(f"{len(pending)} delegated item(s) awaiting claim; limit {args.limit}{mirror_note}")
     dispatched = failed = refused = review = waiting_n = 0
 
+    # A LOGIN OR CREDIT FAILURE PAUSES THIS HOST (claim_backoff): items stay
+    # queued, one probe per quiet interval, the first success resumes.
+    import claim_backoff
+    limit = args.limit
+    if args.execute:
+        paused, why = claim_backoff.status(args.actor)
+        if paused:
+            print(f"PAUSED   claiming on this host -- {why}")
+            return 0
+        if claim_backoff.probing(args.actor):
+            limit = 1
+
     journal_lines: list[str] = []
-    for item in pending[:args.limit]:
+    for item in pending[:limit]:
         title = (item.payload or {}).get("title") or item.id
         effects = (item.payload or {}).get("effects") or []
         # A CREATOR THAT KNOWS THE ROUTE MAY SAY SO. The heuristics infer a
@@ -766,6 +778,8 @@ def main() -> int:
             refused += 1
             continue
         ok, detail, meta = run_task(title, route, space, item.id, actor=args.actor)
+        if ok:
+            claim_backoff.clear(args.actor)
         if ok and check:
             committed, why_not = _commit_result(space, item.id)
             if not committed and why_not:
@@ -850,6 +864,14 @@ def main() -> int:
                 f"FAILED `{item.id[:12]}` {title[:60]} — {detail[:110]}")
             print(f"FAILED   [{route}] {title[:70]}\n         -> {detail[:150]}")
             failed += 1
+            if claim_backoff.is_access_failure(detail):
+                if claim_backoff.record_failure(args.actor, detail):
+                    journal_lines.append(
+                        f"ACTION NEEDED — `{args.actor}` cannot run work on this host (login or "
+                        f"credits): {detail[:140]}. Claiming paused, items stay queued, "
+                        f"one retry every {int(claim_backoff.PROBE_AFTER.total_seconds() // 3600)}h.")
+                print("         -> login/credit failure: claiming paused on this host")
+                break
 
     # One entry per run, not per item: the batch is the unit of work a reader
     # cares about, and fifteen separate headings would bury the journal.

@@ -88,8 +88,16 @@ if [ "$VERIFY_ONLY" = 0 ]; then
   mkdir -p "$HOME/.datacore/keys"; chmod 700 "$HOME/.datacore/keys"
   # The executor this host runs delegated items through (ledger_claim ->
   # executors/base.get_executor). plur-claw has no claude binary; it has openclaw.
-  if [ "$PROFILE" = openclaw ] && ! grep -qsE '^(export )?DATACORE_EXECUTOR=' "$ID_FILE"; then
-    printf '%s\n' "DATACORE_EXECUTOR=openclaw" >> "$ID_FILE"; log "executor declared: openclaw"
+  # Always the Gateway: `agent exec` reads the env's pay-per-use key and leaves
+  # a ~108 MB state dir in /tmp per run -- a 15-minute retry through it filled
+  # plur-claw's disk (2026-09-28..30). A stale `openclaw` line is rewritten.
+  if [ "$PROFILE" = openclaw ]; then
+    if grep -qsE '^(export )?DATACORE_EXECUTOR=openclaw[[:space:]]*$' "$ID_FILE"; then
+      sed -i.bak -E 's/^((export )?DATACORE_EXECUTOR=)openclaw[[:space:]]*$/\1openclaw-gateway/' "$ID_FILE" && rm -f "$ID_FILE.bak"
+      log "executor switched: openclaw -> openclaw-gateway"
+    elif ! grep -qsE '^(export )?DATACORE_EXECUTOR=' "$ID_FILE"; then
+      printf '%s\n' "DATACORE_EXECUTOR=openclaw-gateway" >> "$ID_FILE"; log "executor declared: openclaw-gateway"
+    fi
   fi
 fi
 
@@ -275,7 +283,7 @@ case "$PROFILE" in
     ;;
   openclaw)
     [ -d "$HOME/Data/2-plur-space/.git" ] && log "OK  dispatch space present ($HOME/Data/2-plur-space)" || { log "FAIL $HOME/Data/2-plur-space is not a repository"; fail=1; }
-    grep -qsE '^(export )?DATACORE_EXECUTOR=openclaw' "$ID_FILE" && log "OK  executor declared: openclaw" || { log "FAIL executor not declared in $ID_FILE"; fail=1; }
+    grep -qsE '^(export )?DATACORE_EXECUTOR=openclaw-gateway[[:space:]]*$' "$ID_FILE" && log "OK  executor declared: openclaw-gateway" || { log "FAIL executor is not openclaw-gateway in $ID_FILE (agent exec leaks /tmp and uses the env key)"; fail=1; }
     ;;
 esac
 [ "$fail" = 0 ] && log "ALL CHECKS PASS ($HOST)" || log "SOME CHECKS FAILED ($HOST)"
