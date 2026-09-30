@@ -1,0 +1,16 @@
+{
+  "id": "datacore",
+  "name": "Datacore tool gate",
+  "description": "Checks every tool call against the Datacore tool policy (tool_effects.yaml, approvals_policy.yaml). Fails closed.",
+  "version": "1.0.0",
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "gate": { "type": "string", "description": "Path to gate.py (default: beside index.js)" },
+      "python": { "type": "string", "description": "Python interpreter (default: python3)" },
+      "timeoutMs": { "type": "number", "description": "Per-call gate budget in ms (default 10000)" }
+    }
+  }
+}

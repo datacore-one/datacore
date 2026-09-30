@@ -1,0 +1,8 @@
+{
+  "name": "datacore-openclaw-gate",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Checks every OpenClaw tool call against the Datacore tool policy.",
+  "openclaw": { "extensions": ["./index.js"] }
+}
