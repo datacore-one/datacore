@@ -162,7 +162,10 @@ def _alert_command() -> str:
         return cmd
     try:
         import yaml
-        cfg = yaml.safe_load((Path.home() / ".datacore" / "alerts.yaml").read_text()) or {}
+        # DATACORE_ALERTS_FILE moves the file (the test suite points it at nothing,
+        # so no test run can send a real alert -- 2026-09-30, CAP-4 posted twice).
+        where = os.environ.get("DATACORE_ALERTS_FILE") or str(Path.home() / ".datacore" / "alerts.yaml")
+        cfg = yaml.safe_load(Path(where).read_text()) or {}
         return str(cfg.get("command") or "").strip() if isinstance(cfg, dict) else ""
     except (OSError, ValueError, ImportError):
         return ""

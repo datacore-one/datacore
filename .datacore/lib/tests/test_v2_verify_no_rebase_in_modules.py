@@ -51,3 +51,13 @@ def test_python_prose_naming_the_anti_pattern_does_not_count(tmp_path, monkeypat
     c = _check(tmp_path, monkeypatch, "modules/nightshift/lib/claim.py",
                '    This was `git pull --rebase --autostash`, and it is the last writer\n')
     assert c.ok is True, c.detail
+
+
+def test_the_fleet_simulators_fault_injector_does_not_count(tmp_path, monkeypatch):
+    """lib/sim/ is the fleet week simulator's stand-in model: it runs the bad
+    command on purpose, to prove the guard stops it (2026-09-30: its stand_in.py
+    turned the box's 18:00 verification red). A real sync path beside it still counts."""
+    c = _check(tmp_path, monkeypatch, "lib/sim/stand_in.py", '_bash("git pull --rebase --autostash")\n')
+    assert c.ok is True, c.detail
+    c2 = _check(tmp_path / "b", monkeypatch, "lib/simple_sync.py", '_bash("git pull --rebase")\n')
+    assert c2.ok is False and "simple_sync.py" in c2.detail

@@ -948,7 +948,10 @@ def check_transport(rep: Report) -> None:
                      for d in (m / "lib", m / "server", m / "scripts", m / "bin") if d.is_dir()]
     files = [p for r in roots for pat in ("*.py", "*.sh") for p in r.rglob(pat)]
     for p in files:
+        # lib/sim/ is the fleet simulator's fault injector: it runs the bad command
+        # on purpose so the guard can be seen stopping it. Not a sync path.
         if ("node_modules" in p.parts or ".git" in p.parts or "tests" in p.parts
+                or (p.parent.name == "sim" and p.parent.parent == LIB)
                 or p.name.startswith("test_") or p.name == "v2_verify.py"):
             continue
         try:

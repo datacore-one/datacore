@@ -15,6 +15,16 @@ def _isolated_datacore_state(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_alerts(tmp_path_factory, monkeypatch):
+    """No test run sends a real alert. The host's alert command (~/.datacore/alerts.yaml)
+    is the first route for job_verify and the promise board; on 2026-09-30 a board test
+    posted to The Firm through it, twice. A test that needs a command sets
+    DATACORE_ALERT_COMMAND itself."""
+    monkeypatch.setenv("DATACORE_ALERTS_FILE", str(tmp_path_factory.mktemp("no-alerts") / "alerts.yaml"))
+    monkeypatch.delenv("DATACORE_ALERT_COMMAND", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _hermetic_git_config(monkeypatch):
     """No test may inherit this machine's git configuration.
 
