@@ -219,6 +219,44 @@ def test_token_counts_are_marked_unavailable_not_an_error(tmp_path):
         f"'not applicable here', not send the agent to re-run preflight: {meta}")
 
 
+#: The only checks that may read "not applicable here" once the session has listed
+#: its files: they need a Claude transcript, which no other harness writes.
+TRANSCRIPT_ONLY = {"session archived"}
+#: ...and, when no file list was recorded, the checks that need that list ("context
+#: in sync" scores only this session's own edits, which cannot be told apart without it).
+FILE_LIST_ONLY = {"space journals", "session work committed and pushed", "context in sync"}
+
+
+@pytest.mark.parametrize("harness", list(HARNESSES))
+def test_not_applicable_is_limited_to_the_named_steps(tmp_path, harness):
+    """"Not applicable" is not counted at all, so it must never spread: every other
+    check is judged, and the total counts exactly the judged ones (added 2026-09-30,
+    owner-approved: an unbounded n/a would let any failing step be waved through)."""
+    root, env = _install(tmp_path)
+    env.update(HARNESSES[harness])
+    _pre, _fin, aud = _full_wrap_up(tmp_path, root, env)
+    na = {c["check"] for c in aud["checks"] if _status(c) == "n/a"}
+    assert na <= TRANSCRIPT_ONLY, (
+        f"[{harness}] checks outside the transcript-only steps read 'not applicable': "
+        f"{sorted(na - TRANSCRIPT_ONLY)}")
+    judged = [c for c in aud["checks"] if _status(c) != "n/a"]
+    assert aud.get("total") == len(judged), (
+        f"[{harness}] the audit total ({aud.get('total')}) is not the number of judged checks "
+        f"({len(judged)})")
+
+
+def test_without_a_file_list_only_the_list_steps_are_not_applicable(tmp_path):
+    root, env = _install(tmp_path)
+    env.update(HARNESSES["codex"])
+    _mech(env, root, "preflight", "--dry-run")
+    _mech(env, root, "finalize")
+    _rc, aud = _mech(env, root, "audit")
+    na = {c["check"] for c in aud["checks"] if _status(c) == "n/a"}
+    assert na <= TRANSCRIPT_ONLY | FILE_LIST_ONLY, (
+        f"with no file list, checks that do not need it read 'not applicable': "
+        f"{sorted(na - TRANSCRIPT_ONLY - FILE_LIST_ONLY)}")
+
+
 def test_without_a_file_list_the_audit_says_cannot_tell_and_nothing_is_committed(tmp_path):
     root, env = _install(tmp_path)
     env.update(HARNESSES["codex"])
