@@ -24,6 +24,7 @@ import pytest
 
 LIB = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LIB))
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # agent_eval
 
 SETTINGS = Path.home() / ".claude" / "settings.json"
 
