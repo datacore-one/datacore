@@ -1320,6 +1320,15 @@ class Week:
         for name in ("calls.jsonl",):
             if (self.fleet.state / name).exists():
                 shutil.copy2(self.fleet.state / name, self.o.out / name)
+        # Each machine's own logs and state files, for tracing a break afterwards.
+        for m in self.fleet.machines.values():
+            for sub in (".datacore/state", ".datacore/cos"):
+                src = m.home / sub
+                for f in src.rglob("*") if src.is_dir() else []:
+                    if f.is_file() and f.suffix in (".log", ".txt", ".json", ".jsonl") and f.stat().st_size < 5_000_000:
+                        dest = self.o.out / "machines" / m.name / sub / f.relative_to(src)
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(f, dest)
         report = self.report(time.monotonic() - t_wall)
         return report
 
@@ -1336,7 +1345,7 @@ class Week:
         first_fault = min((s["start"] for s in self.faults.specs
                            if not str(s["status"]).startswith("skipped")), default=None)
         def sig_of(e):
-            return re.sub(r"\d+", "#", e["first_check"])[:120]
+            return re.sub(r"\d+", "#", e["first_check"].split(" (carried:")[0])[:120]
         red_before = {(e["machine"], e["source"], e["subject"]) for e in self.events
                       if first_fault is None or dt.datetime.fromisoformat(e["ts"]) < first_fault}
         # The same job red for the SAME reason before any fault is baseline; a
@@ -1345,7 +1354,7 @@ class Week:
                       if first_fault is None or dt.datetime.fromisoformat(e["ts"]) < first_fault}
         groups: dict = {}
         for e in self.events:
-            sig = re.sub(r"\d+", "#", e["first_check"])[:120]
+            sig = re.sub(r"\d+", "#", e["first_check"].split(" (carried:")[0])[:120]
             key = (e["machine"], e["source"], e["subject"], sig if e["source"] != "job_verify" else "")
             g = groups.setdefault(key, {"machine": e["machine"], "source": e["source"], "subject": e["subject"],
                                         "first_check": e["first_check"], "first_night": e["night"],
