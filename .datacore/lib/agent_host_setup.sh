@@ -115,7 +115,9 @@ case "$PROFILE" in
     CRON_LINES+=("*/15 * * * * DISPATCH_SPACE=$HOME/Data/2-plur-space $LIB/ledger-claim-pull.sh >> $STATE/ledger-dispatch.log 2>&1")
     # plur-claw had contracts in the manifest and nothing running the verifier
     # (INS-7, 2026-09-26) -- the same gap hermes had until 2026-09-06.
-    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine $HOST --manifest $LIB/jobs/manifest.yaml --alert log >> $STATE/job_verify.log 2>&1")
+    # --alert command: Data's machine sends its own alerts through its own bot
+    # (~/.datacore/alerts.yaml -> agent_alert.py --bot data-telegram-bot; owner 2026-09-30).
+    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine $HOST --manifest $LIB/jobs/manifest.yaml --alert command >> $STATE/job_verify.log 2>&1")
     ;;
   hermes)
     CRON_KEYS=(phase1-cycle job-verify)
