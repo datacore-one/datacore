@@ -264,6 +264,29 @@ def _line_count(path: str) -> int:
     return data.count(b"\n") + (0 if not data or data.endswith(b"\n") else 1)
 
 
+# The harness's own refusal of a too-large Read: a plain-text reply that OPENS with
+# its message ("File content (N tokens) exceeds…", "Error: result (…) exceeds…",
+# optionally inside <tool_use_error>). Judged by the reply's shape, never by
+# searching the file's text: on 2026-10-01 a spill quoted this very phrase (the
+# memory note about the overflow) on line 4, every Read of that line was voided,
+# and the gate could never lift.
+_REFUSAL = re.compile(
+    r"^\s*(?:<tool_use_error>\s*)?(?:Error:\s*)?"
+    r"(?:File content|result)\s*\([^)\n]{0,80}\)\s*exceeds maximum allowed tokens")
+
+
+def _read_was_refused(resp) -> bool:
+    """True only for the harness's refusal. A structured Read result (a dict with
+    the file's content) always read something, whatever that content says."""
+    if isinstance(resp, dict):
+        if isinstance(resp.get("file"), dict):
+            return False
+        resp = resp.get("error") or resp.get("content") or ""
+        if not isinstance(resp, str):
+            return False
+    return isinstance(resp, str) and bool(_REFUSAL.match(resp))
+
+
 def clear(data: dict) -> None:
     p = _state(data.get("session_id", ""))
     if not p.exists():
@@ -284,7 +307,7 @@ def clear(data: dict) -> None:
         return
     if os.path.realpath(ti["file_path"]) != os.path.realpath(target):
         return
-    if SPILL_PAT.search(_text(data.get("tool_response", ""))):
+    if _read_was_refused(data.get("tool_response", "")):
         return      # the read itself was refused as too large: nothing was read
     try:
         total = _line_count(target)

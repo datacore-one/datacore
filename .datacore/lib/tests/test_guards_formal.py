@@ -200,6 +200,65 @@ def test_gap_in_pages_keeps_the_gate(gate):
     assert gate["armed"]()
 
 
+# 2026-10-01: the spill's own content quoted the refusal phrase (the memory note
+# about this very overflow), so a successful Read of that line was thrown away as
+# "refused" and the gate never lifted: 308 of 308 lines read, every Bash refused.
+# A Read counts or not by the SHAPE of the harness's reply, never by the file's text.
+QUOTE = "note: when a result exceeds maximum allowed tokens it is saved to a file\n"
+
+
+@pytest.fixture
+def quoting_gate(gate):
+    spill = Path(gate["spill"])
+    lines = [f"engram {i}\n" for i in range(308)]
+    lines[3] = QUOTE                               # line 4, as in the real spill
+    spill.write_text("".join(lines))
+    return gate
+
+
+def _read_as(gate, offset, limit, response):
+    gate["call"]("clear", {"tool_name": "Read",
+                           "tool_input": {"file_path": gate["spill"], "offset": offset, "limit": limit},
+                           "tool_response": response})
+
+
+def _file_reply(gate, offset, limit):
+    """The structured reply Claude Code gives a successful Read (as its transcripts record it)."""
+    text = Path(gate["spill"]).read_text().splitlines(keepends=True)[offset - 1:offset - 1 + limit]
+    return {"type": "text", "file": {"filePath": gate["spill"], "content": "".join(text),
+                                     "numLines": len(text), "startLine": offset, "totalLines": 308}}
+
+
+def test_a_spill_that_quotes_the_refusal_phrase_still_clears_on_a_full_read(quoting_gate):
+    for off, lim in ((1, 3), (4, 1), (5, 252), (257, 52)):     # the real session's four Reads
+        _read_as(quoting_gate, off, lim, _file_reply(quoting_gate, off, lim))
+    assert not quoting_gate["armed"](), "every line was read; the quoted phrase must not void a Read"
+
+
+def test_a_plain_text_reply_quoting_the_phrase_still_counts(quoting_gate):
+    _read_as(quoting_gate, 1, 3, "     1\tengram 0\n")
+    _read_as(quoting_gate, 4, 1, "     4\t" + QUOTE)
+    _read_as(quoting_gate, 5, 304, "     5\tengram 4\n")
+    assert not quoting_gate["armed"]()
+
+
+@pytest.mark.parametrize("refusal", [
+    "File content (40213 tokens) exceeds maximum allowed tokens (25000). Please use offset and limit "
+    "parameters to read specific portions of the file.",
+    "Error: result (62,693 characters across 308 lines) exceeds maximum allowed tokens. "
+    "Output has been saved to /tmp/tool-results/x.txt",
+    "<tool_use_error>File content (40213 tokens) exceeds maximum allowed tokens (25000).</tool_use_error>",
+])
+def test_a_read_the_harness_refused_never_counts(quoting_gate, refusal):
+    _read_as(quoting_gate, 1, 5000, refusal)
+    assert quoting_gate["armed"](), "a Read the harness refused as too large read nothing"
+
+
+def test_a_partial_structured_read_still_does_not_clear(quoting_gate):
+    _read_as(quoting_gate, 1, 10, _file_reply(quoting_gate, 1, 10))
+    assert quoting_gate["armed"]()
+
+
 # ── log_ownership_guard ────────────────────────────────────────────────────
 def _git(repo, *args, **kw):
     return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True,
