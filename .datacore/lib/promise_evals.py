@@ -18,6 +18,7 @@ Exit 0 only when every promise with an eval is green AND none lacks one.
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import re
 import subprocess
@@ -36,7 +37,10 @@ from spaces import space_for  # noqa: E402
 #: The install's system space (install.yaml roles.system) holds the promise
 #: files and the app daemon; a fresh install without one has neither.
 SYSTEM = ROOT / space_for("system", ROOT, "0-personal")
-PROMISES = SYSTEM / "1-tracks" / "dev" / "datacore-upgrade" / "promises"
+#: DATACORE_PROMISES_DIR names the list where the code has no system space: the
+#: satellites run from a bare runner checkout, their copy is under the data root.
+PROMISES = (Path(os.environ["DATACORE_PROMISES_DIR"]).expanduser() if os.environ.get("DATACORE_PROMISES_DIR")
+            else SYSTEM / "1-tracks" / "dev" / "datacore-upgrade" / "promises")
 PY = sys.executable
 SUITE_TIMEOUT_S = 900   # an eval that hangs must not hang the scoreboard
 SUITES = [  # (name, cwd, test dir relative to cwd, extra env)

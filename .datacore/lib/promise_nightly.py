@@ -89,6 +89,13 @@ GREEN, RED, CNR = "green", "red", "could-not-run"
 
 # ---- running the scoreboard ------------------------------------------------------
 
+def has_pytest() -> bool:
+    """Can this interpreter run the evals at all? Without pytest every eval
+    'crashes' and the board would be all red (box, 2026-09-30: 0 green, 188 red)."""
+    import importlib.util
+    return importlib.util.find_spec("pytest") is not None
+
+
 def runner_command() -> list[str]:
     return [sys.executable, str(LIB / "promise_evals.py"), "--json"]
 
@@ -369,7 +376,8 @@ def _settings() -> dict[str, str]:
 
 
 def send_to_firm(text: str) -> tuple[bool, str]:
-    """One message to The Firm group -- the route this host's own alerts take
+    """One message to The Firm group -- the route this host's own alerts take.
+    DATACORE_ALERT_COMMAND, when set, is that route (the text on stdin). Else
     (job_verify_notify.sh's direct route, nightshift run.py, fleet_sync_alert.sh):
     TELEGRAM_BOT_TOKEN posts to ALERT_CHAT_ID. Only the group, never a fallback
     to a 1:1 chat (MSG-1). One phone screen with a pointer to the full text
@@ -377,6 +385,19 @@ def send_to_firm(text: str) -> tuple[bool, str]:
     (MSG-10). winston_send.py is not used: on the overnight host its loader
     refuses to start (a root-owned ~/.config/cos.env, found 2026-09-30).
     """
+    command = os.environ.get("DATACORE_ALERT_COMMAND", "").strip()
+    if command:
+        # The host's own alert route, as job_verify uses it (box: Winston's
+        # sender; the workstation: the same, over ssh to the always-on host).
+        try:
+            r = subprocess.run(["bash", "-c", command], input=text, capture_output=True, text=True, timeout=60)
+            if r.returncode == 0:
+                return True, "sent"
+            why = f"alert command exit {r.returncode}"
+        except (OSError, subprocess.SubprocessError) as e:
+            why = f"alert command {type(e).__name__}"
+        _undelivered(why, text)
+        return False, why
     cfg = _settings()
     token, chat = cfg.get("TELEGRAM_BOT_TOKEN", ""), cfg.get("ALERT_CHAT_ID", "")
     if not chat:
@@ -434,6 +455,10 @@ def main(argv: list[str] | None = None) -> int:
     history = load_history(state, night) if state.exists() else []
     base = baseline_green()
 
+    if not has_pytest():
+        print(f"promise-scoreboard: FAILED to run (no pytest for {sys.executable}: this host cannot run "
+              f"the evals, so there is no board)")
+        return 1
     try:
         unmet = unmet_needs()
         lacking = {k.split("::", 1)[0] for k in unmet}

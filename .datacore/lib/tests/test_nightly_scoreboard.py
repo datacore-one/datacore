@@ -518,3 +518,48 @@ def test_the_first_night_on_a_host_reruns_every_red_for_its_reason(tmp_path, mon
     monkeypatch.setattr(pn, "today", lambda: WED)
     pn.main(["--no-send"])
     assert asked["want"] is None or asked["want"]("NEW-1") is True
+
+
+def test_a_host_without_pytest_says_it_could_not_run_instead_of_a_board_of_reds(tmp_path, monkeypatch, capsys):
+    """box's first board (2026-09-30): 0 green, 188 red -- its python3 has no
+    pytest, so every eval 'crashed'. That is this host unable to run the board,
+    not 188 broken promises."""
+    state = tmp_path / "state"
+    monkeypatch.setattr(pn, "STATE_DIR", state)
+    monkeypatch.setattr(pn, "today", lambda: WED)
+    monkeypatch.setattr(pn, "has_pytest", lambda: False)
+    monkeypatch.setattr(pn, "run_board", lambda want=None: raw({"CAP-4": "red"}))
+    assert pn.main(["--no-send"]) == 1
+    assert not state.exists() or not list(state.glob("board-*.json"))
+    last = capsys.readouterr().out.strip().splitlines()[-1]
+    assert "FAILED" in last and "pytest" in last
+
+
+def test_a_host_whose_alerts_go_through_its_own_command_uses_it(tmp_path, monkeypatch):
+    """box's alerts go through Winston's sender, the workstation's through the
+    always-on host; DATACORE_ALERT_COMMAND (the variable job_verify already
+    honours) names that route, reading the text on stdin."""
+    out = tmp_path / "sent.txt"
+    monkeypatch.setenv("DATACORE_ALERT_COMMAND", f"cat > {out}")
+    monkeypatch.setattr(pn, "ENV_FILES", [])
+    monkeypatch.setattr(pn.urllib.request, "urlopen", lambda *a, **k: pytest.fail("no direct send"))
+    ok, why = pn.send_to_firm("Promise scoreboard: A capture made twice lands once (CAP-4) turned red")
+    assert ok and why == "sent"
+    assert "(CAP-4)" in out.read_text()
+    monkeypatch.setenv("DATACORE_ALERT_COMMAND", "exit 3")
+    monkeypatch.setenv("DATACORE_UNDELIVERED_LOG", str(tmp_path / "undelivered.jsonl"))
+    ok, why = pn.send_to_firm("x")
+    assert ok is False and "3" in why
+
+
+def test_the_promise_list_can_be_named_where_the_code_has_no_system_space(tmp_path):
+    """The satellites run the code from a bare runner checkout; their promise
+    list is in the data root's copy of the system space."""
+    import subprocess
+    d = tmp_path / "promises"
+    d.mkdir()
+    (d / "p.yaml").write_text("capabilities:\n  - promises:\n      - {id: ZZ-1, promise: A test promise}\n")
+    r = subprocess.run([sys.executable, "-c", "import promise_evals as p; print(p.promises())"], cwd=LIB,
+                       env={**__import__("os").environ, "DATACORE_PROMISES_DIR": str(d)},
+                       capture_output=True, text=True)
+    assert "'ZZ-1': 'A test promise'" in r.stdout, r.stderr
