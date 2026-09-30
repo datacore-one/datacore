@@ -99,7 +99,7 @@ jobs:
   - name: box-backup
     machine: box
     schedule: "30 2 * * *"
-    cmd: "~/Data/.datacore/lib/cos_backup.sh"
+    cmd: "~/Data/.datacore/lib/cos_backup.sh >> ~/.datacore/cos/backup.log 2>&1"
     artifacts:
       # cos-server-setup.sh:78 pins the exact crontab redirect target.
       # cos_backup.sh's own tar output has a timestamp in the filename
@@ -118,7 +118,7 @@ jobs:
   - name: box-news
     machine: box
     schedule: "0 3 * * *"
-    cmd: "~/Data/.datacore/lib/cos_news.sh"
+    cmd: "~/Data/.datacore/lib/cos_news.sh >> ~/.datacore/cos/news.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/cos/news.log"
@@ -128,7 +128,7 @@ jobs:
   - name: box-email-triage
     machine: box
     schedule: "30 3 * * *"
-    cmd: "~/Data/.datacore/modules/mail/server/triage-email.sh"
+    cmd: "cd ~/Data && DATACORE_ROOT=~/Data bash ~/Data/.datacore/modules/mail/server/triage-email.sh >> ~/.datacore/cos/email-triage.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/cos/email-triage.log"
@@ -713,7 +713,7 @@ jobs:
   - name: box-inbox
     machine: box
     schedule: "0 5 * * *"
-    cmd: "~/Data/.datacore/lib/cos_inbox.sh"
+    cmd: "~/Data/.datacore/lib/cos_inbox.sh >> ~/.datacore/cos/inbox.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/cos/inbox.log"
@@ -723,7 +723,7 @@ jobs:
   - name: box-research
     machine: box
     schedule: "30 5 * * *"
-    cmd: "~/Data/.datacore/lib/cos_research.sh"
+    cmd: "~/Data/.datacore/lib/cos_research.sh >> ~/.datacore/cos/research.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/cos/research.log"
@@ -733,7 +733,7 @@ jobs:
   - name: box-health-digest
     machine: box
     schedule: "15 7 * * *"
-    cmd: "~/Data/.datacore/lib/cos_health_digest.sh"
+    cmd: "~/Data/.datacore/lib/cos_health_digest.sh >> ~/.datacore/cos/health.log 2>&1"
     on_fail: telegram
     artifacts:
       # cos-server-setup.sh:79 pins the exact crontab line + redirect target.
@@ -749,7 +749,7 @@ jobs:
   - name: box-tomorrow
     machine: box
     schedule: "0 20 * * *"
-    cmd: "~/Data/.datacore/lib/cos_tomorrow.sh"
+    cmd: "~/Data/.datacore/lib/cos_tomorrow.sh >> ~/.datacore/cos/tomorrow.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/cos/tomorrow.log"
@@ -759,7 +759,7 @@ jobs:
   - name: box-cos-sync
     machine: box
     schedule: "*/15 * * * *"
-    cmd: "~/Data/.datacore/lib/cos_sync.sh"
+    cmd: "~/Data/.datacore/lib/cos_sync.sh >> ~/.datacore/cos/sync.log 2>&1"
     artifacts:
       # log_max_age dict in cos_verify_morning.py:check_ops gives sync.log
       # exactly 1h -- the tightest bucket, matching the 15-min cadence.
@@ -774,7 +774,7 @@ jobs:
   - name: box-verify-morning
     machine: box
     schedule: "0 8 * * *"
-    cmd: "~/Data/.datacore/lib/cos_verify_morning.sh"
+    cmd: "~/Data/.datacore/lib/cos_verify_morning.sh >> ~/.datacore/cos/verify.log 2>&1"
     on_fail: telegram
     artifacts:
       # cos_verify_morning.py prints "<date>: all checks passed" or
@@ -788,7 +788,7 @@ jobs:
   - name: box-restore-check
     machine: box
     schedule: "10 3 * * 0"
-    cmd: "~/Data/.datacore/lib/cos_restore_check.sh"
+    cmd: "~/Data/.datacore/lib/cos_restore_check.sh >> ~/.datacore/cos/restore-check.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/cos/restore-check.log"
@@ -813,7 +813,7 @@ jobs:
   - name: box-token-health
     machine: box
     schedule: "50 6 * * *"
-    cmd: "/usr/bin/python3 ~/Data/.datacore/lib/cos_token_health.py"
+    cmd: "/usr/bin/python3 ~/Data/.datacore/lib/cos_token_health.py >> ~/.datacore/cos/token-health.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/cos/token-health.log"
@@ -823,7 +823,7 @@ jobs:
   - name: box-lens-analyze
     machine: box
     schedule: "55 3 * * *"
-    cmd: "/usr/bin/python3 ~/Data/.datacore/lib/lens_analyze.py --profile-out"
+    cmd: "/usr/bin/python3 ~/Data/.datacore/lib/lens_analyze.py --profile-out >> ~/.datacore/cos/lens.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/cos/lens.log"
@@ -833,7 +833,7 @@ jobs:
   - name: box-setup-verify
     machine: box
     schedule: "10 7 * * *"
-    cmd: "sudo -n ~/Data/.datacore/lib/cos-server-setup.sh --verify"
+    cmd: 'sudo -n ~/Data/.datacore/lib/cos-server-setup.sh --verify 2>&1 | sed "s/^/$(date +%F) /" >> ~/.datacore/cos/verify-daily.log'
     on_fail: telegram
     artifacts:
       # Every line is prefixed with the date by the crontab's sed; the verdicts
@@ -1101,7 +1101,7 @@ jobs:
     # The read-only triage (github-triage skill): a decision-oriented report and
     # a decision-board file in the personal space; never modifies GitHub.
     schedule: "30 3 * * *"
-    cmd: "bash ~/Data/.datacore/skills/github-triage/run_nightly.sh"
+    cmd: "DATA_DIR=~/Data bash ~/Data/.datacore/skills/github-triage/run_nightly.sh >> ~/.datacore/state/github-triage.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/github-triage.log"
@@ -1741,7 +1741,7 @@ jobs:
     why_local: "reads this machine's own session transcripts"
     machine: mac
     schedule: "5 0 * * *"
-    cmd: "/usr/bin/python3 ~/Data/.datacore/lib/extract_recall_events.py --since <2 days ago> --quiet"
+    cmd: "/usr/bin/python3 ~/Data/.datacore/lib/extract_recall_events.py --since $(date -v-2d +%F) --quiet >> ~/.plur/observations/extract.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: "~/.plur/observations/extract.log"
@@ -1753,7 +1753,7 @@ jobs:
     why_local: "the NotebookLM login lives in this machine's browser"
     machine: mac
     schedule: "5 * * * *"
-    cmd: "/opt/homebrew/bin/python3 ~/Data/.datacore/modules/research/lib/nlm_auth_sync.py sync"
+    cmd: "/opt/homebrew/bin/python3 ~/Data/.datacore/modules/research/lib/nlm_auth_sync.py sync >> ~/Data/.datacore/logs/nlm-auth-sync.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: "~/Data/.datacore/logs/nlm-auth-sync.log"
@@ -1812,7 +1812,7 @@ jobs:
     why_local: "publishes this machine's own ledger writes"
     machine: mac
     schedule: "5 * * * *"
-    cmd: "DATACORE_ROOT=~/Data python3 ~/Data/.datacore/lib/ledger_publish_safe.py"
+    cmd: "DATACORE_ROOT=~/Data /opt/homebrew/bin/python3 ~/Data/.datacore/lib/ledger_publish_safe.py >> ~/.datacore/state/ledger-publish.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/ledger-publish.log"

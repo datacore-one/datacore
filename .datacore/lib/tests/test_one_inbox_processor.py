@@ -24,7 +24,7 @@ def _jobs():
 
 def _processes_inbox(job):
     cmd = job.get("cmd") or ""
-    return "--command=/process-inbox" in cmd or cmd.endswith("cos_inbox.sh")
+    return "--command=/process-inbox" in cmd or "/cos_inbox.sh" in cmd.split(">")[0]
 
 
 def test_exactly_one_job_processes_the_inbox():

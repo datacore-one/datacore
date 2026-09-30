@@ -267,3 +267,77 @@ def test_produced_stays_quiet_for_a_job_that_is_merely_late(tmp_path, monkeypatc
     os.utime(late, (hours_late, hours_late))
     assert _manifest_with(tmp_path, monkeypatch, {
         "path": str(late), "check": "regex", "arg": "x", "max_age_hours": 3}) == []
+
+
+# ── a cron job's declared cmd writes the log its check reads ──────────────────
+# Fleet week simulation, finding 6 (2026-09-30): for 13 box jobs the manifest's
+# cmd was the bare script while the real crontab line (cos-server-setup.sh)
+# ends `>> ~/.datacore/cos/<job>.log 2>&1`. The declared command never wrote
+# the file its own check reads, so anything scheduling from the manifest --
+# an installer, the simulator, a rebuilt host -- got a job that is red forever.
+
+import re as _re  # noqa: E402
+
+_CRON = _re.compile(r"^\s*[\d*/,-]+(\s+[\w*/,-]+){4}\s*$")
+_COS_SRC = ROOT / ".datacore" / "modules" / "chief-of-staff" / "server" / "lib"
+
+
+def _script_sources(cmd: str) -> list[pathlib.Path]:
+    """Where the script a cmd runs can be read in this checkout: the path it
+    names (~/Data mapped to this checkout), and for the box's deployed cos_*
+    copies (gitignored in .datacore/lib) their source in the chief-of-staff module."""
+    out = []
+    for tok in _re.split(r"\s+", cmd):
+        tok = tok.split(">")[0]
+        if not tok.endswith((".sh", ".py")):
+            continue
+        if tok.startswith("~/Data/"):
+            p = ROOT / tok[len("~/Data/"):]
+        elif tok.startswith(("~", "$")):
+            continue
+        elif tok.startswith("/"):
+            p = pathlib.Path(tok)
+        else:
+            p = ROOT / tok
+        out += [q for q in (p, _COS_SRC / p.name) if q.is_file()]
+        break
+    return out
+
+
+def writer_gaps(doc: dict) -> list[str]:
+    gaps = []
+    for j in doc.get("jobs") or []:
+        cmd, sched = str(j.get("cmd") or ""), str(j.get("schedule") or "")
+        if not cmd or not _CRON.match(sched):
+            continue           # launchd/systemd put stdout in the unit, not the cmd
+        for a in j.get("artifacts") or []:
+            path = str(a.get("path") or "")
+            if not path.endswith(".log") or any(c in path for c in "*{"):
+                continue
+            if path in cmd:
+                continue
+            srcs = _script_sources(cmd)
+            if srcs and not any(pathlib.PurePath(path).name in s.read_text(errors="replace") for s in srcs):
+                gaps.append(f"{j.get('name')}: checks {path}, and neither its cmd ({cmd}) "
+                            f"nor {srcs[0].name} writes it")
+    return gaps
+
+
+def test_a_cron_jobs_declared_cmd_writes_the_log_its_check_reads():
+    import yaml
+    doc = yaml.safe_load((ROOT / ".datacore" / "lib" / "jobs" / "manifest.yaml").read_text())
+    gaps = writer_gaps(doc)
+    assert not gaps, "declared commands that never write the file their check reads:\n  " + "\n  ".join(gaps)
+
+
+def test_writer_gaps_catches_a_missing_redirect_and_accepts_the_crontab_form(tmp_path):
+    script = tmp_path / "job.sh"
+    script.write_text("#!/bin/sh\necho hello\n")
+    art = [{"path": "~/.datacore/cos/job.log", "check": "no_crash"}]
+    bare = {"jobs": [{"name": "j", "schedule": "0 3 * * *", "cmd": str(script), "artifacts": art}]}
+    assert writer_gaps(bare), "a bare script that never names its log passed"
+    wired = {"jobs": [{"name": "j", "schedule": "0 3 * * *",
+                       "cmd": f"{script} >> ~/.datacore/cos/job.log 2>&1", "artifacts": art}]}
+    assert writer_gaps(wired) == []
+    script.write_text("#!/bin/sh\necho ok >> \"$HOME/.datacore/cos/job.log\"\n")
+    assert writer_gaps(bare) == [], "a script that writes its own log was flagged"
