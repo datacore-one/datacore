@@ -80,6 +80,10 @@ COVERED_ELSEWHERE = {
     "box-audit-publish": "lib/tests/test_promise_AUD6_cost_cap_and_missed_night.py",
     # a usage limit defers the night's tasks and the deferral is reported
     "nightshift-overnight": "modules/nightshift/tests/test_promise_NS7_caps_defer_not_fail.py",
+    # owner-approved 2026-09-30: the claim loop exits 1 on a failed item and pauses
+    # claiming on a login or credit failure; the sweep's refused run is a failed day
+    "box-ledger-claim": "lib/tests/test_claim_access_block.py",
+    "mac-session-learning": "lib/tests/test_session_learning_sweep_refusal.py",
 }
 
 #: Model jobs the static discovery below cannot see, because their runtime is chosen
