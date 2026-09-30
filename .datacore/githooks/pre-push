@@ -30,9 +30,34 @@ if [ "${SKIP_PRE_PUSH:-0}" = "1" ]; then
     exit 0
 fi
 
-DATA_DIR="${DATA_DIR:-$HOME/Data}"
-DENYLIST="$DATA_DIR/.datacore/config/public-repo-denylist.yaml"
-SCANNER="$DATA_DIR/.datacore/lib/pre_push_scan.py"
+# ---- Where the core scripts come from ---------------------------------------
+# From THIS hook's own checkout: the hook file lives in <checkout>/.datacore/githooks.
+# Until 2026-09-30 the default was $HOME/Data. On an agent's host (plur-claw,
+# hermes) the global hooks directory is the runner checkout's
+# (~/.datacore/v2-runner) while ~/Data is the AGENT'S OWN space repo, with a
+# stale ownership guard and no ledger write gate. Every push there failed with
+# "can't open file .../Data/.datacore/lib/hooks/ledger_write_gate.py" and Data's
+# blog stopped publishing; where ~/Data had neither script the gate was skipped
+# without a word. Order: an explicit DATA_DIR, then the hook's own checkout, then
+# $HOME/Data (hooks copied out of any checkout). A gate found in none of them
+# refuses the push and names the file; it is never skipped silently.
+HOOK_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+DATA_DIR="${DATA_DIR:-$HOOK_ROOT}"
+core_file() {  # core_file <path under .datacore/>: the first checkout that carries it
+    for _root in "$DATA_DIR" "$HOOK_ROOT" "$HOME/Data"; do
+        if [ -e "$_root/.datacore/$1" ]; then echo "$_root/.datacore/$1"; return 0; fi
+    done
+    echo "$HOOK_ROOT/.datacore/$1"   # found nowhere: callers refuse (gates) or fail closed (policy)
+    return 1
+}
+require_core_file() {
+    core_file "$1" && return 0
+    echo "pre-push: BLOCKED — required gate .datacore/$1 not found in $DATA_DIR, $HOOK_ROOT or $HOME/Data" >&2
+    echo "  This hook takes core scripts from its own checkout; update it: git -C $HOOK_ROOT pull --ff-only" >&2
+    return 1
+}
+DENYLIST=$(core_file config/public-repo-denylist.yaml || true)
+SCANNER=$(core_file lib/pre_push_scan.py || true)
 # Fallback protection list, used ONLY when the denylist file is missing.
 # These are our public end-user repos; better to block a push here than
 # to fail open because a checkout is incomplete.
@@ -69,7 +94,8 @@ if [ -n "$REWRITE" ]; then
     exit 1
 fi
 
-OWNERSHIP="$DATA_DIR/.datacore/lib/hooks/log_ownership_guard.py"
+LEDGER_GATE=$(require_core_file lib/hooks/ledger_write_gate.py) || exit 1
+OWNERSHIP=$(require_core_file lib/hooks/log_ownership_guard.py) || exit 1
 
 # ---- A Python that can actually run the policy ------------------------------
 # NOT bare `python3`. This hook runs under whatever launched the push, and cron
@@ -98,7 +124,16 @@ done
 # Reads REFS_INPUT rather than calling `cat` again: stdin can be read ONCE, and
 # an earlier revision of this block consumed it here, leaving REFS_INPUT empty
 # so LFS chaining and the denylist scan silently scanned nothing.
-if [ -f "$OWNERSHIP" ] && [ -n "$HOOK_PY" ] && [ -n "$REFS_INPUT" ]; then
+# The ledger gate is stdlib-only (3.9+), so a host without PyYAML still runs it.
+GATE_PY="${HOOK_PY:-$(command -v python3 || true)}"
+if [ -n "$REFS_INPUT" ] && [ -z "$GATE_PY" ]; then
+    echo "pre-push: BLOCKED — no python3 on PATH, so the ledger write gate cannot run" >&2
+    exit 1
+fi
+if [ -n "$REFS_INPUT" ] && [ -z "$HOOK_PY" ]; then
+    echo "pre-push: ⚠ no python3 with PyYAML — ownership guard NOT run (set DATACORE_PYTHON); ledger gate runs with $GATE_PY" >&2
+fi
+if [ -n "$REFS_INPUT" ]; then
     OWN_RANGES=$(printf '%s\n' "$REFS_INPUT" | while IFS=' ' read -r l_ref l_sha r_ref r_sha; do
         [ -z "$l_ref" ] && continue
         [ "$l_sha" = "0000000000000000000000000000000000000000" ] && continue
@@ -143,8 +178,8 @@ if [ -f "$OWNERSHIP" ] && [ -n "$HOOK_PY" ] && [ -n "$REFS_INPUT" ]; then
     done)
     if [ -n "$OWN_RANGES" ]; then
         # shellcheck disable=SC2086
-        "$HOOK_PY" "$OWNERSHIP" $OWN_RANGES || exit 1
-        "$HOOK_PY" "$DATA_DIR/.datacore/lib/hooks/ledger_write_gate.py" --ranges $OWN_RANGES || exit 1  # LED-3: only EventLog-written ledger lines
+        if [ -n "$HOOK_PY" ]; then "$HOOK_PY" "$OWNERSHIP" $OWN_RANGES || exit 1; fi
+        "$GATE_PY" "$LEDGER_GATE" --ranges $OWN_RANGES || exit 1  # LED-3: only EventLog-written ledger lines
     fi
 fi
 
@@ -361,7 +396,7 @@ echo "pre-push: $REPO is PROTECTED — running policy chain…" >&2
 [ -f "$SCANNER" ]   || fail_closed "scanner script missing"
 
 # ---- Collect outgoing commit range per ref --------------------------------
-RANGE_TOOL="$DATA_DIR/.datacore/lib/git_privacy.py"
+RANGE_TOOL=$(core_file lib/git_privacy.py || true)
 [ -f "$RANGE_TOOL" ] || fail_closed "Git range validator missing"
 ALL_RANGE=$(printf '%s\n' "$REFS_INPUT" | "$HOOK_PY" "$RANGE_TOOL" --outgoing "$REMOTE") \
     || fail_closed "cannot establish outgoing commits; fetch the remote and retry"
