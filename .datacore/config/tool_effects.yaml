@@ -62,8 +62,20 @@ effects:
       - '\bgmail_send\b'
   # A message to the owner's own chat (Winston's Telegram sender). Not e-mail
   # and not public: agents may propose it, a grant releases it (AGT-1, MOD6).
+  #
+  # OpenClaw's own senders (Data on plur-claw, owner decision 2026-09-30):
+  # `message` acts in a chat channel, `conversations_send` delivers to an
+  # external conversation. The OpenClaw gate (openclaw_plugin/gate.py) names a
+  # `message` call `openclaw_message.<action>` (no action = send), so only its
+  # reading actions stay open. Until then both passed the gate unchecked.
   message.send:
-    tools: *acting
+    tools: ["Bash", "WebFetch", "mcp__*",
+            "terminal", "execute_code", "write_file", "patch", "web_extract",
+            "browser_*", "computer_use", "delegate_task", "cronjob",
+            "openclaw_message.*", "conversations_send"]
+    tool_patterns:
+      - '^openclaw_message\.(?!(?:reactions|read|list-pins|permissions|thread-list|search|sticker-search|member-info|role-info|emoji-list|channel-info|channel-list|voice-status|event-list|download-file)$)'
+      - '^conversations_send$'
     patterns:
       - '\bwinston_send\.py\b'
   # Speaking in public: a post, a tweet, a channel message. Mr Data's lane --
@@ -124,7 +136,14 @@ effects:
       - '\b(send|transfer)\b[^\n]{0,40}\b(eth|usdc|usdt|btc|bzz|icp|sol|xdai)\b'
       - '\bdfx\s+(ledger\s+transfer|canister\s+call\s+\S+\s+(transfer|icrc1_transfer))'
   prod.deploy:
-    tools: *acting
+    # + OpenClaw's `gateway` tool updating its own runtime (update.run), which
+    # the gate names `openclaw_gateway.<action>`; reading config stays open.
+    tools: ["Bash", "WebFetch", "mcp__*",
+            "terminal", "execute_code", "write_file", "patch", "web_extract",
+            "browser_*", "computer_use", "delegate_task", "cronjob",
+            "openclaw_gateway.*"]
+    tool_patterns:
+      - '^openclaw_gateway\.update\.run$'
     patterns:
       - '\bgh\s+release\s+(create|upload)\b'
       - '\bnpm\s+publish\b'
@@ -338,3 +357,12 @@ effects:
       - '\bgit(?:[ \t]+(?:-[Cc][ \t]+\S+|--?[\w-]+(?:=\S+)?))*[ \t]+switch\b[^\n;&|]*[ \t](?:-f|--force|--discard-changes)(?=[ \t"]|$)'
       # the same verbs as an argv list in code: subprocess.run(["git", "stash"])
       - '\\?["'']git\\?["''](?:\s*,\s*\\?["''][^"''\\]*\\?["''])*\s*,\s*\\?["''](?:stash|reset|restore|clean)\\?["'']'
+      # A pull, rebase or merge that stashes by itself (owner decision
+      # 2026-09-30, OPS-10): when the stash does not re-apply, the work stays
+      # set aside -- the incident in one command. The flag, the one-call `-c`
+      # config (a bare key means true), setting that config, and argv in code.
+      # `--no-autostash` and `autoStash=false` stay open.
+      - '\bgit(?:[ \t]+(?:-[Cc][ \t]+\S+|--?[\w-]+(?:=\S+)?))*[ \t]+(?:pull|rebase|merge)\b[^\n;&|]*[ \t]--autostash(?=[ \t"]|$)'
+      - '\bgit\b[^\n;&|]*[ \t]-c[ \t]*(?:rebase|merge)\.autostash(?:=["'']?(?:true|yes|on|1)["'']?)?(?=[ \t"]|$)'
+      - '\bgit(?:[ \t]+(?:-[Cc][ \t]+\S+|--?[\w-]+(?:=\S+)?))*[ \t]+config\b[^\n;&|]*[ \t](?:rebase|merge)\.autostash[ \t]+["'']?(?:true|yes|on|1)\b'
+      - '\\?["'']git\\?["''](?:\s*,\s*\\?["''][^"''\\]*\\?["''])*\s*,\s*\\?["'']--autostash\\?["'']'

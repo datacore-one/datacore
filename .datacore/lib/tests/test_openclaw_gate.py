@@ -121,6 +121,57 @@ def test_an_mcp_tool_without_the_prefix_is_still_an_mcp_tool(gate):
     assert out["block"] is True
 
 
+# ── OpenClaw's own tools (owner decision 2026-09-30) ────────────────────────
+# `message` sends into a chat channel, `conversations_send` delivers to an
+# external conversation, `gateway update.run` updates the runtime itself.
+# Until now none was in the vocabulary, so all passed unchecked.
+
+@pytest.mark.parametrize("params", [
+    {"action": "send", "channel": "telegram", "target": "@plur_ai", "message": "hi"},
+    {"action": "reply", "message": "hi"},
+    {"action": "thread-reply", "message": "hi"},
+    {"action": "broadcast", "message": "hi"},
+    {"action": "sendAttachment", "path": "/tmp/x.png"},
+    {"action": "upload-file", "path": "/tmp/x.png"},
+    {"action": "poll", "question": "?"},
+    {"action": "delete", "messageId": "1"},
+    {"message": "no action given means a send"},
+])
+def test_the_message_tool_sending_is_a_message_send(gate, params):
+    out = gate({"toolName": "message", "params": params})
+    assert out["block"] is True and "message.send" in out["blockReason"], params
+
+
+@pytest.mark.parametrize("action", ["read", "search", "channel-list", "member-info", "thread-list",
+                                    "reactions", "download-file"])
+def test_the_message_tool_reading_stays_open(gate, action):
+    assert gate({"toolName": "message", "params": {"action": action}}) == {"block": False}
+
+
+def test_conversations_send_is_a_message_send(gate):
+    out = gate({"toolName": "conversations_send", "params": {"conversationRef": "x", "text": "hi"}})
+    assert out["block"] is True and "message.send" in out["blockReason"]
+
+
+def test_the_gateway_tool_may_read_but_never_update_the_runtime(gate):
+    out = gate({"toolName": "gateway", "params": {"action": "update.run"}})
+    assert out["block"] is True and "prod.deploy" in out["blockReason"]
+    assert gate({"toolName": "gateway", "params": {"action": "config.get"}}) == {"block": False}
+    assert gate({"toolName": "gateway", "params": {"action": "config.schema.lookup",
+                                                   "path": "agents"}}) == {"block": False}
+
+
+def test_openclaw_tool_names_do_not_leak_into_other_runtimes():
+    """The action-qualified names exist only for OpenClaw's own tools: a Claude
+    or Hermes tool called `message` is not a thing, and computer_use's
+    `"action": "left_click"` is not a message."""
+    sys.path.insert(0, str(LIB))
+    import tool_policy as tp
+    effects = tp.load_effects()
+    assert "message.send" not in tp.classify("computer_use", {"action": "left_click"}, effects)
+    assert "message.send" not in tp.classify("Bash", {"command": "echo '\"action\": \"send\"'"}, effects)
+
+
 # ── fail closed ─────────────────────────────────────────────────────────────
 
 def test_a_missing_policy_refuses(tmp_path):

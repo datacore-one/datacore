@@ -270,21 +270,11 @@ def _chdir(base: str | None, arg: str) -> str | None:
     return os.path.normpath(os.path.join(base, arg)) if base else None
 
 
-def _push_destinations(tool_input) -> list[str | None] | None:
-    """The destination URL of every `git push` in a shell command, in order;
-    None for a push whose repository or remote cannot be told. None overall
-    when the input is not a shell command (code is never resolved).
-
-    The repository is the one the command itself names -- `git -C <dir>`, a
-    preceding `cd <dir>`, or the tool's own `workdir`/`cwd` -- never this
-    process's working directory: the gateway's cwd is not its terminal's."""
-    if not isinstance(tool_input, dict) or not isinstance(tool_input.get("command"), str):
-        return None
-    base = next((str(tool_input[k]) for k in ("workdir", "cwd")
-                 if isinstance(tool_input.get(k), str) and os.path.isabs(os.path.expanduser(tool_input[k]))), None)
-    base = os.path.expanduser(base) if base else None
+def _split_commands(command: str) -> list[list[str]] | None:
+    """The argv of each command in a shell line, split on its separators;
+    None when the line cannot be read."""
     try:
-        lex = shlex.shlex(tool_input["command"].replace("\n", " ; "), posix=True, punctuation_chars=True)
+        lex = shlex.shlex(command.replace("\n", " ; "), posix=True, punctuation_chars=True)
         lex.whitespace_split = True
         tokens = list(lex)
     except ValueError:
@@ -299,6 +289,25 @@ def _push_destinations(tool_input) -> list[str | None] | None:
             cur.append(t)
     if cur:
         commands.append(cur)
+    return commands
+
+
+def _push_destinations(tool_input) -> list[str | None] | None:
+    """The destination URL of every `git push` in a shell command, in order;
+    None for a push whose repository or remote cannot be told. None overall
+    when the input is not a shell command (code is never resolved).
+
+    The repository is the one the command itself names -- `git -C <dir>`, a
+    preceding `cd <dir>`, or the tool's own `workdir`/`cwd` -- never this
+    process's working directory: the gateway's cwd is not its terminal's."""
+    if not isinstance(tool_input, dict) or not isinstance(tool_input.get("command"), str):
+        return None
+    base = next((str(tool_input[k]) for k in ("workdir", "cwd")
+                 if isinstance(tool_input.get(k), str) and os.path.isabs(os.path.expanduser(tool_input[k]))), None)
+    base = os.path.expanduser(base) if base else None
+    commands = _split_commands(tool_input["command"])
+    if commands is None:
+        return None
     out: list[str | None] = []
     for argv in commands:
         if argv[0] in ("cd", "pushd"):
@@ -353,6 +362,35 @@ def pushes_only_to_own(tool_input, own: list[re.Pattern]) -> bool:
         return False
     dests = _push_destinations(tool_input)
     return bool(dests) and all(d is not None and any(r.search(d) for r in own) for d in dests)
+
+
+# ── a standing grant (owner decision 2026-09-30, Data's daily X post) ─────
+def standing_grants_for(principal: str, policy_path: Path | None = None) -> list[tuple[str, re.Pattern]]:
+    """(effect, command regex) for each of the principal's `standing_grants`."""
+    from ledger.policy import load_policy
+    policy = load_policy(Path(policy_path or DEFAULT_POLICY_FILE))
+    entry = (policy.principals or {}).get(principal) or {}
+    return [(str(g["effect"]), re.compile(str(g["command"]))) for g in (entry.get("standing_grants") or [])]
+
+
+def standing_grant_covers(effect: str, grants: list[tuple[str, re.Pattern]], tool_name: str,
+                          tool_input, effects: dict[str, dict]) -> bool:
+    """True when a standing grant releases `effect` for this call: a shell
+    command whose every command causing the effect is one the grant names.
+    Code is never resolved, and the effect may not come from any other field."""
+    rxs = [rx for e, rx in grants if e == effect]
+    if not rxs or not isinstance(tool_input, dict) or not isinstance(tool_input.get("command"), str):
+        return False
+    only = {effect: effects.get(effect) or {}}
+    rest = {k: v for k, v in tool_input.items() if k not in ("command", "description")}
+    if rest and classify(tool_name, rest, only):
+        return False
+    commands = _split_commands(tool_input["command"])
+    if not commands:
+        return False
+    hits = [" ".join(argv) for argv in commands
+            if classify(tool_name, {"command": " ".join(argv)}, only)]
+    return bool(hits) and all(any(rx.search(h) for rx in rxs) for h in hits)
 
 
 def principal_for(actor: str | None = None) -> str:
@@ -416,6 +454,15 @@ def decide(principal: str, tool_name: str, tool_input, granted=(),
     # force push was refused above as history.rewrite, a tag push stays prod.deploy.
     if "push.shared" in needs and pushes_only_to_own(tool_input, own_repos_for(principal, policy_path)):
         needs.discard("push.shared")
+    # A standing grant (owner decision 2026-09-30, Data's scheduled X post,
+    # whose gateway carries no per-task grant): one co-signed effect, only for
+    # the commands it names. Never-effects were refused above; a
+    # per-transaction effect (payment) always needs that exact call's grant.
+    if needs:
+        standing = standing_grants_for(principal, policy_path)
+        if standing:
+            needs = {e for e in needs if (effects.get(e) or {}).get("per_transaction")
+                     or not standing_grant_covers(e, standing, tool_name, tool_input, effects)}
     if needs:
         what = ", ".join(sorted(needs))
         return Decision(False, hit, f"{what} needs a co-signed grant before it runs and this task "

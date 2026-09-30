@@ -16,6 +16,8 @@ place:
     write / edit / read                  -> Write / Edit / Read (file_path)
     web_fetch                            -> WebFetch
     cron / spawn_agent / browser         -> cronjob / delegate_task / browser_openclaw
+    message (action A; none = send)      -> openclaw_message.A
+    gateway (action A)                   -> openclaw_gateway.A
     <server>__<tool>                     -> mcp__<server>__<tool>
     anything else                        -> unchanged
 
@@ -36,6 +38,8 @@ if str(LIB) not in sys.path:
 SHELL = {"exec", "exec_command", "bash", "shell", "shell_command"}
 RENAME = {"write": "Write", "edit": "Edit", "read": "Read", "web_fetch": "WebFetch",
           "cron": "cronjob", "spawn_agent": "delegate_task", "browser": "browser_openclaw"}
+#: OpenClaw tools whose verb is their `action` param -> the action assumed when none is given.
+ACTION_QUALIFIED = {"message": "send", "gateway": ""}
 _PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$|^\*\*\* Move to: (.+?)\s*$", re.M)
 
 
@@ -101,6 +105,13 @@ def translate(event: dict) -> list[tuple[str, dict]]:
         return [(RENAME[low], params)]
     if low in RENAME:
         return [(RENAME[low], params)]
+    if low in ACTION_QUALIFIED:
+        # The verb of these OpenClaw tools is their `action`; like an MCP
+        # tool's name, the qualified name carries it, so tool_effects.yaml can
+        # tell `message send` from `message read` (no action = a send).
+        action = params.get("action")
+        action = action.strip() if isinstance(action, str) and action.strip() else ACTION_QUALIFIED[low]
+        return [(f"openclaw_{low}.{action}", params)]
     if "__" in name and not name.startswith("mcp__"):
         return [("mcp__" + name, params)]
     return [(name, params)]

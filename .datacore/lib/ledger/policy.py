@@ -119,7 +119,9 @@ class Policy:
     #: the global set for this principal), `may_delegate_to` (who this
     #: principal may address an item to), `max_creates_per_day`, `max_hops`,
     #: `own_repos` (the principal's own repositories, by push URL: a push that
-    #: provably lands in one is not a shared push -- tool_policy.decide).
+    #: provably lands in one is not a shared push -- tool_policy.decide),
+    #: `standing_grants` (one co-signed effect released for the shell commands
+    #: a regex names -- tool_policy.decide).
     #: None means the file declares no principals section; claim_gate applies
     #: its documented defaults then.
     principals: dict | None = None
@@ -285,8 +287,30 @@ def load_policy(path: Path | None = None) -> Policy:
                                 re.compile(rx)
                             except re.error:
                                 errors.append(f"{path}: principals entry 'own_repos' has an invalid pattern")
+                # standing_grants: [{effect, command, why?}] -- one co-signed
+                # effect released for the shell commands `command` (a regex)
+                # names; tool_policy judges it per command, never for a
+                # never-effect or a per-transaction one.
+                v = lim.get("standing_grants")
+                if v is not None:
+                    if not isinstance(v, list):
+                        errors.append(f"{path}: principals entry 'standing_grants' must be a list")
+                    else:
+                        for g in v:
+                            if not (isinstance(g, dict) and set(g) <= {"effect", "command", "why"}
+                                    and isinstance(g.get("effect"), str) and g["effect"]
+                                    and isinstance(g.get("command"), str) and g["command"]
+                                    and isinstance(g.get("why", ""), str)):
+                                errors.append(f"{path}: principals entry 'standing_grants' items must be "
+                                              f"{{effect, command, why?}} with non-empty strings")
+                                continue
+                            try:
+                                re.compile(g["command"])
+                            except re.error:
+                                errors.append(f"{path}: principals entry 'standing_grants' has an invalid pattern")
                 unknown = sorted(set(lim) - {"never_effects", "cosign_effects", "may_delegate_to",
-                                             "max_creates_per_day", "max_hops", "own_repos"})
+                                             "max_creates_per_day", "max_hops", "own_repos",
+                                             "standing_grants"})
                 if unknown:
                     errors.append(f"{path}: principals entry has unknown key(s)")
                 principals[str(name)] = dict(lim)

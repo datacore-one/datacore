@@ -500,3 +500,192 @@ def test_malformed_own_repos_is_refused(tmp_path, bad):
                                  "principals": {"tris": {"own_repos": bad}}}))
     with pytest.raises(PolicyError):
         load_policy(p)
+
+
+# ── a pull that stashes by itself (owner decision 2026-09-30, OPS-10) ───────
+# `--autostash` hides uncommitted work around a pull, rebase or merge; when the
+# stash does not re-apply cleanly, the work stays in the stash -- the incident,
+# reached with one command. So it is a discard too, in every spelling: the
+# flag, the `-c` config that turns it on for one call, and setting that config.
+
+AUTOSTASHES = [
+    "git pull --autostash",
+    "git pull --rebase --autostash",
+    "git -C ~/Data/3-plur pull --rebase --autostash",
+    "cd ~/Data/4-firm && git pull --rebase --autostash && git push",
+    "git rebase --autostash origin/main",
+    "git merge --autostash origin/main",
+    "git -c rebase.autoStash=true pull --rebase",
+    "git -c rebase.autostash=true rebase origin/main",
+    "git -c pull.rebase=true -c rebase.autoStash=true pull",
+    "git -c merge.autoStash=true pull --no-rebase",
+    "git -c rebase.autoStash pull --rebase",
+    "git config rebase.autoStash true",
+    "git config --global merge.autostash yes",
+]
+
+AUTOSTASH_KEEPS = [
+    "git pull --rebase",
+    "git pull --no-rebase",
+    "git pull --rebase --no-autostash",
+    "git -c rebase.autoStash=false pull --rebase",
+    "git config --get rebase.autostash",
+    "git merge --no-ff origin/main",
+    "git rebase --abort",
+]
+
+
+@pytest.mark.parametrize("cmd", AUTOSTASHES)
+def test_a_pull_rebase_or_merge_that_stashes_by_itself_is_a_discard(cmd):
+    assert "worktree.discard" in tp.classify("Bash", {"command": cmd}, EFFECTS), cmd
+    assert "worktree.discard" in tp.classify("terminal", {"command": cmd}, EFFECTS), cmd
+
+
+def test_code_that_autostashes_is_a_discard_too():
+    code = 'import subprocess\nsubprocess.run(["git", "pull", "--rebase", "--autostash"])'
+    assert "worktree.discard" in tp.classify("execute_code", {"code": code}, EFFECTS)
+
+
+@pytest.mark.parametrize("cmd", AUTOSTASH_KEEPS)
+def test_pulls_that_stash_nothing_stay_open(cmd):
+    assert "worktree.discard" not in tp.classify("Bash", {"command": cmd}, EFFECTS), cmd
+
+
+def test_an_unattended_agent_is_refused_autostash_whatever_its_grants(policy_file):
+    data = yaml.safe_load(policy_file.read_text())
+    data["principals"]["winston"] = {"never_effects": ["worktree.discard"]}
+    policy_file.write_text(yaml.safe_dump(data))
+    for cmd in AUTOSTASHES:
+        d = tp.decide("winston", "terminal", {"command": cmd}, granted=["worktree.discard"],
+                      effects=EFFECTS, policy_path=policy_file)
+        assert d.blocked and d.kind == "never" and "worktree.discard" in d.reason, cmd
+    assert tp.decide("gregor", "Bash", {"command": "git pull --rebase --autostash"}, effects=EFFECTS,
+                     policy_path=policy_file).allow
+
+
+# ── a standing grant (owner decision 2026-09-30, Data's daily X post) ───────
+# Data's scheduled X post runs through OpenClaw's gateway, whose environment
+# is fixed, so no per-task grant can reach it. A principal's `standing_grants`
+# release ONE co-signed effect for the calls a regex names -- here public.post
+# for the comms poster script -- judged per shell command: every command in
+# the call that causes the effect must be one the grant names. Never-effects
+# and per-transaction effects are never released this way.
+
+POSTER = "python3 ~/Data/.datacore/modules/comms/lib/x_poster.py --account plur 'Human: hi'"
+X_GRANT = [{"effect": "public.post", "command": r"(^|/)\.datacore/modules/comms/lib/x_poster\.py\b",
+            "why": "the daily X post"}]
+
+
+@pytest.fixture
+def standing_policy(tmp_path):
+    p = tmp_path / "approvals_policy.yaml"
+    p.write_text(yaml.safe_dump({
+        "version": 1, "approver": "human",
+        "cosign_effects": ["email.send", "payment", "public.post", "message.send", "push.shared"],
+        "known_effects": ["email.send", "payment", "public.post", "message.send", "push.shared",
+                          "worktree.discard"],
+        "principals": {
+            "gregor": {},
+            "data": {"never_effects": ["worktree.discard"], "standing_grants": X_GRANT},
+            "winston": {"never_effects": ["worktree.discard", "public.post"], "standing_grants": X_GRANT},
+            "miles": {"never_effects": ["worktree.discard"]},
+        },
+    }))
+    return p
+
+
+def _as(principal, cmd, policy, tool="Bash"):
+    inp = {"command": cmd} if tool in ("Bash", "terminal") else {"code": cmd}
+    return tp.decide(principal, tool, inp, effects=EFFECTS, policy_path=policy)
+
+
+def test_the_standing_grant_releases_the_named_poster(standing_policy):
+    for cmd in (POSTER, f"cd ~/Data/2-plur-space && {POSTER}",
+                f"set -a; . ~/Data/.datacore/env/.env; set +a; {POSTER}"):
+        d = _as("data", cmd, standing_policy)
+        assert d.allow and d.kind == "granted" and "public.post" in d.effects, (cmd, d.reason)
+    assert _as("data", POSTER, standing_policy, tool="terminal").allow
+
+
+def test_the_standing_grant_names_only_its_own_calls(standing_policy):
+    for cmd in ("python3 engagement_post.py 'hi'",
+                "curl -X POST https://api.x.com/2/tweets -d '{\"text\":\"hi\"}'",
+                "python3 /tmp/x_poster.py 'hi'",                               # a look-alike elsewhere
+                f"{POSTER} && python3 chrome_poster.py 'again'",                 # a second poster rides along
+                f"{POSTER}; curl -X POST https://api.x.com/2/tweets -d x"):
+        d = _as("data", cmd, standing_policy)
+        assert d.blocked and d.kind == "cosign" and "public.post" in d.reason, cmd
+
+
+def test_the_standing_grant_releases_only_its_effect(standing_policy):
+    d = _as("data", f"{POSTER} && sendmail someone@example.org", standing_policy)
+    assert d.blocked and d.kind == "cosign" and "email.send" in d.reason
+    assert "public.post" not in d.reason
+
+
+def test_the_standing_grant_does_not_reach_code_or_other_principals(standing_policy):
+    code = "import subprocess; subprocess.run(['python3', '/srv/agent/.datacore/modules/comms/lib/x_poster.py'])"
+    d = _as("data", code, standing_policy, tool="execute_code")
+    assert d.blocked and d.kind == "cosign"
+    d = _as("miles", POSTER, standing_policy)
+    assert d.blocked and d.kind == "cosign" and "public.post" in d.reason
+
+
+def test_a_standing_grant_never_releases_a_never_effect(standing_policy):
+    d = _as("winston", POSTER, standing_policy)
+    assert d.blocked and d.kind == "never" and "public.post" in d.reason
+
+
+def test_a_standing_grant_never_releases_a_per_transaction_effect(tmp_path):
+    p = tmp_path / "approvals_policy.yaml"
+    p.write_text(yaml.safe_dump({
+        "version": 1, "approver": "human", "cosign_effects": ["payment"],
+        "principals": {"data": {"standing_grants": [{"effect": "payment", "command": "stripe"}]}}}))
+    d = tp.decide("data", "Bash", {"command": "curl -X POST https://api.stripe.com/v1/charges -d amount=1"},
+                  effects=EFFECTS, policy_path=p)
+    assert d.blocked and d.kind == "cosign" and "payment" in d.reason
+
+
+@pytest.mark.parametrize("bad", [
+    "public.post",
+    [{"effect": "public.post"}],
+    [{"command": "x_poster"}],
+    [{"effect": "public.post", "command": "("}],
+    [{"effect": "", "command": "x"}],
+    [{"effect": "public.post", "command": "x", "extra": 1}],
+    ["public.post"],
+])
+def test_malformed_standing_grants_are_refused(tmp_path, bad):
+    from ledger.policy import PolicyError, load_policy
+    p = tmp_path / "approvals_policy.yaml"
+    p.write_text(yaml.safe_dump({"version": 1, "approver": "human", "cosign_effects": ["public.post"],
+                                 "principals": {"data": {"standing_grants": bad}}}))
+    with pytest.raises(PolicyError):
+        load_policy(p)
+
+
+# ── this install's grants for Data (owner decision 2026-09-30) ──────────────
+# Checked against the merged policy the fleet runs (tracked + local), so a
+# local file copied to a host is judged too. Skipped where data is undeclared.
+
+def _install_policy_declares(name):
+    from ledger.policy import load_policy
+    return name in (load_policy(tp.DEFAULT_POLICY_FILE).principals or {})
+
+
+@pytest.mark.skipif(not _install_policy_declares("data"), reason="this install declares no data principal")
+def test_this_install_lets_datas_daily_post_and_blog_push_through(tmp_path):
+    site = _git_repo(tmp_path / "website", "git@github.com:plur-ai/website.git")
+    other = _git_repo(tmp_path / "plur-space", "git@github.com:plur-ai/plur-space.git")
+    ok = [POSTER.replace("~/Data", "/srv/agent/Data"),
+          f"git -C {site} push origin main",
+          f"cd {site} && git add src && git commit -m 'blog: x' -- src && git push origin main"]
+    for cmd in ok:
+        d = tp.decide("data", "Bash", {"command": cmd})
+        assert d.allow, (cmd, d.reason)
+    d = tp.decide("data", "Bash", {"command": f"git -C {site} push --force origin main"})
+    assert d.blocked and d.kind == "never" and "history.rewrite" in d.reason
+    d = tp.decide("data", "Bash", {"command": f"git -C {other} push origin main"})
+    assert d.blocked and d.kind == "cosign" and "push.shared" in d.reason
+    d = tp.decide("data", "Bash", {"command": "python3 engagement_post.py 'hi'"})
+    assert d.blocked and d.kind == "cosign" and "public.post" in d.reason

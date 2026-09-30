@@ -84,6 +84,13 @@ known_effects:
 # shared push, so push.shared (and nothing else) is released for it. The
 # repository must be named by the call itself (git -C, cd, the tool's workdir);
 # one that cannot be told stays co-signed. Owner decision 2026-09-30.
+# `standing_grants` (optional) is a list of {effect, command, why?}: the
+# co-signed `effect` is released for a shell call whose every command causing
+# it matches the `command` regex -- for a scheduled job whose runtime carries
+# no per-task grant (Data's daily X post through OpenClaw's gateway). A
+# never-effect is still refused, a per-transaction effect (payment) still
+# needs its exact call's grant, and code is never resolved. Owner decision
+# 2026-09-30.
 #
 # AGENT_NEVER is what no agent may cause, whatever a task's grants say: money,
 # trading, credentials, filings, merges (each space/project names its human
