@@ -241,6 +241,120 @@ def limits_for(principal: str, policy_path: Path | None = None) -> tuple[set[str
     return never, cosign
 
 
+def own_repos_for(principal: str, policy_path: Path | None = None) -> list[re.Pattern]:
+    """The principal's own repositories (approvals_policy `own_repos`): regexes
+    over a push destination's URL. Empty for a principal that declares none."""
+    from ledger.policy import load_policy
+    policy = load_policy(Path(policy_path or DEFAULT_POLICY_FILE))
+    entry = (policy.principals or {}).get(principal) or {}
+    return [re.compile(str(r)) for r in (entry.get("own_repos") or [])]
+
+
+# ── a push to the principal's own repository (owner decision 2026-09-30) ────
+#: Shell separators between commands; a push is judged per command.
+_SEPARATORS = {"&&", "||", ";", "|", "&", "\n"}
+_URLISH = re.compile(r"^(\w[\w+.-]*://|[\w.-]+@[\w.-]+:)")
+
+
+def _strip_userinfo(url: str) -> str:
+    return re.sub(r"^(\w[\w+.-]*://)[^@/]+@", r"\1", url.strip())
+
+
+def _chdir(base: str | None, arg: str) -> str | None:
+    """Where `cd arg` (or `git -C arg`) leads from `base`, or None when it cannot be told."""
+    if not arg or any(c in arg for c in "$`*?{"):
+        return None
+    arg = os.path.expanduser(arg)
+    if os.path.isabs(arg):
+        return os.path.normpath(arg)
+    return os.path.normpath(os.path.join(base, arg)) if base else None
+
+
+def _push_destinations(tool_input) -> list[str | None] | None:
+    """The destination URL of every `git push` in a shell command, in order;
+    None for a push whose repository or remote cannot be told. None overall
+    when the input is not a shell command (code is never resolved).
+
+    The repository is the one the command itself names -- `git -C <dir>`, a
+    preceding `cd <dir>`, or the tool's own `workdir`/`cwd` -- never this
+    process's working directory: the gateway's cwd is not its terminal's."""
+    if not isinstance(tool_input, dict) or not isinstance(tool_input.get("command"), str):
+        return None
+    base = next((str(tool_input[k]) for k in ("workdir", "cwd")
+                 if isinstance(tool_input.get(k), str) and os.path.isabs(os.path.expanduser(tool_input[k]))), None)
+    base = os.path.expanduser(base) if base else None
+    try:
+        lex = shlex.shlex(tool_input["command"].replace("\n", " ; "), posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        tokens = list(lex)
+    except ValueError:
+        return None
+    commands, cur = [], []
+    for t in tokens:
+        if t in _SEPARATORS or set(t) <= set("&|;()"):
+            if cur:
+                commands.append(cur)
+            cur = []
+        else:
+            cur.append(t)
+    if cur:
+        commands.append(cur)
+    out: list[str | None] = []
+    for argv in commands:
+        if argv[0] in ("cd", "pushd"):
+            base = _chdir(base, argv[1]) if len(argv) > 1 else os.path.expanduser("~")
+            continue
+        if os.path.basename(argv[0]) != "git":
+            continue
+        i, where, ok = 1, base, True
+        while i < len(argv) and argv[i].startswith("-"):
+            opt = argv[i]
+            if opt == "-C" and i + 1 < len(argv):
+                where = _chdir(where, argv[i + 1]); i += 2; continue
+            if opt == "-c" and i + 1 < len(argv):
+                i += 2; continue
+            if opt.startswith(("--git-dir", "--work-tree", "--namespace", "--exec-path")):
+                ok = False
+            i += 1
+        if i >= len(argv) or argv[i] != "push":
+            continue
+        rest = argv[i + 1:]
+        positional, j = [], 0
+        while j < len(rest):
+            a = rest[j]
+            if a in ("-o", "--push-option", "--receive-pack", "--exec"):
+                j += 2; continue
+            if a.startswith("--repo"):
+                ok = False
+            elif not a.startswith("-"):
+                positional.append(a)
+            j += 1
+        if not ok or not positional:
+            out.append(None); continue
+        remote = positional[0]
+        if _URLISH.match(remote):
+            out.append(_strip_userinfo(remote)); continue
+        if not where or not os.path.isdir(where) or "/" in remote or remote.startswith("."):
+            out.append(None); continue
+        try:
+            import subprocess
+            r = subprocess.run(["git", "-C", where, "remote", "get-url", "--push", remote],
+                               capture_output=True, text=True, timeout=5)
+            out.append(_strip_userinfo(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None)
+        except (OSError, subprocess.TimeoutExpired):
+            out.append(None)
+    return out
+
+
+def pushes_only_to_own(tool_input, own: list[re.Pattern]) -> bool:
+    """True when the call pushes, and every push provably lands in one of
+    the principal's own repositories."""
+    if not own:
+        return False
+    dests = _push_destinations(tool_input)
+    return bool(dests) and all(d is not None and any(r.search(d) for r in own) for d in dests)
+
+
 def principal_for(actor: str | None = None) -> str:
     """The principal whose limits bind this executor: the writer's own entry,
     or the principal that lists it under writes_as (nightshift -> miles)."""
@@ -296,6 +410,12 @@ def decide(principal: str, tool_name: str, tool_input, granted=(),
     grants = {str(g).strip() for g in granted if str(g).strip()}
     needs = {e for e in hit & cosign
              if not _grant_covers(e, effects.get(e) or {}, grants, tool_name, tool_input)}
+    # A push to the principal's own repository is not a shared push (owner
+    # decision 2026-09-30, Tris and tris-space). Only push.shared is released,
+    # and only when every push in the call provably lands in an own repo; a
+    # force push was refused above as history.rewrite, a tag push stays prod.deploy.
+    if "push.shared" in needs and pushes_only_to_own(tool_input, own_repos_for(principal, policy_path)):
+        needs.discard("push.shared")
     if needs:
         what = ", ".join(sorted(needs))
         return Decision(False, hit, f"{what} needs a co-signed grant before it runs and this task "

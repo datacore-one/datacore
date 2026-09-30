@@ -79,6 +79,11 @@ known_effects:
 # principal's writer names, today UTC, in the space being written to): each
 # space allows the full cap, so the fleet-wide ceiling is cap x spaces.
 # Owner decision L6, 2026-09-23.
+# `own_repos` (optional) lists regexes over a push destination's URL naming
+# the principal's own repositories: a push that provably lands in one is not a
+# shared push, so push.shared (and nothing else) is released for it. The
+# repository must be named by the call itself (git -C, cd, the tool's workdir);
+# one that cannot be told stays co-signed. Owner decision 2026-09-30.
 #
 # AGENT_NEVER is what no agent may cause, whatever a task's grants say: money,
 # trading, credentials, filings, merges (each space/project names its human

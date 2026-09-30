@@ -370,3 +370,133 @@ def test_the_shipped_policy_binds_every_agent_principal():
     assert agents, "no agent principals declared"
     for name, entry in agents.items():
         assert "worktree.discard" in entry["never_effects"], name
+
+
+# ── a principal's own repository (owner decision 2026-09-30) ────────────────
+# Tris's live gateway moves onto the current core code, so her whole declared
+# policy applies; the owner allows her ordinary pushes to her OWN space
+# repository (tris-space) and nothing wider: a force push stays never
+# (history.rewrite), a push to any other repository's main stays co-signed
+# (push.shared), stash stays never (worktree.discard). The grant is scoped by
+# the push's destination URL, resolved from the repository the command names;
+# a push whose repository cannot be told stays co-signed (fail closed).
+
+OWN_URL = "https://github.com/tris-on-hermes/tris-space.git"
+OWN_REPOS = [r"^(https://github\.com/|git@github\.com:|ssh://git@github\.com/)tris-on-hermes/tris-space(\.git)?/?$"]
+
+
+def _git_repo(path: Path, url: str) -> Path:
+    import subprocess
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(["git", "-C", str(path), "remote", "add", "origin", url], check=True)
+    return path
+
+
+@pytest.fixture
+def own_repo_policy(tmp_path):
+    never = ["payment", "prod.deploy", "history.rewrite", "email.send", "public.post", "worktree.discard"]
+    p = tmp_path / "approvals_policy.yaml"
+    p.write_text(yaml.safe_dump({
+        "version": 1, "approver": "human",
+        "cosign_effects": ["email.send", "payment", "prod.deploy", "data.delete", "push.shared"],
+        "known_effects": ["email.send", "payment", "prod.deploy", "data.delete", "push.shared",
+                          "history.rewrite", "public.post", "worktree.discard", "write"],
+        "principals": {
+            "gregor": {},
+            "tris": {"never_effects": never, "own_repos": OWN_REPOS},
+            "miles": {"never_effects": never},
+        },
+    }))
+    return p
+
+
+@pytest.fixture
+def repos(tmp_path):
+    return {"own": _git_repo(tmp_path / "tris-space", OWN_URL),
+            "core": _git_repo(tmp_path / "datacore", "git@github.com:datacore-one/datacore.git"),
+            "evil": _git_repo(tmp_path / "evil", "https://github.com/tris-on-hermes/tris-space-fork.git")}
+
+
+def _tris(cmd, policy, tool="terminal", **extra):
+    return tp.decide("tris", tool, {"command": cmd, **extra}, effects=EFFECTS, policy_path=policy)
+
+
+def test_tris_may_push_to_her_own_repository(own_repo_policy, repos):
+    own = repos["own"]
+    for cmd in (f"git -C {own} push origin main",
+                f"cd {own} && git add x && git commit -m 'tris: x' -- x && git push origin main",
+                f"git push {OWN_URL} HEAD:main"):
+        d = _tris(cmd, own_repo_policy)
+        assert d.allow and d.kind == "granted" and "push.shared" in d.effects, (cmd, d.reason)
+    # the Hermes terminal's own working directory, and the Claude Code tool name
+    assert _tris("git push origin main", own_repo_policy, workdir=str(own)).allow
+    assert _tris(f"git -C {own} push origin main", own_repo_policy, tool="Bash").allow
+
+
+def test_tris_force_push_to_her_own_repository_is_never(own_repo_policy, repos):
+    own = repos["own"]
+    for cmd in (f"git -C {own} push --force origin main", f"git -C {own} push -f origin main",
+                f"cd {own} && git push origin +main", f"git -C {own} push --force-with-lease origin main"):
+        d = _tris(cmd, own_repo_policy)
+        assert d.blocked and d.kind == "never" and "history.rewrite" in d.reason, cmd
+
+
+def test_tris_push_to_another_repositorys_main_stays_cosigned(own_repo_policy, repos):
+    for cmd in (f"git -C {repos['core']} push origin main",
+                f"cd {repos['core']} && git push origin main",
+                f"git -C {repos['evil']} push origin main",       # a look-alike name is not hers
+                "git push git@github.com:datacore-one/datacore.git main",
+                # one push to her own repo does not carry a second one elsewhere
+                f"git -C {repos['own']} push origin main && git -C {repos['core']} push origin main",
+                # cd elsewhere after hers: the push runs where the last cd left it
+                f"cd {repos['own']} && cd {repos['core']} && git push origin main"):
+        d = _tris(cmd, own_repo_policy)
+        assert d.blocked and d.kind == "cosign" and "push.shared" in d.reason, cmd
+
+
+def test_a_push_whose_repository_cannot_be_told_stays_cosigned(own_repo_policy, repos):
+    # no -C, no cd, no workdir: the gateway's own cwd is not the terminal's
+    for cmd in ("git push origin main", "cd relative/dir && git push origin main",
+                f"git -C {repos['own']} push nosuchremote main",
+                f"git --git-dir=/elsewhere/.git -C {repos['own']} push origin main",
+                f"cd $REPO && git push origin main"):
+        d = _tris(cmd, own_repo_policy)
+        assert d.blocked and d.kind == "cosign", cmd
+
+
+def test_own_repository_does_not_release_tags_or_other_effects(own_repo_policy, repos):
+    own = repos["own"]
+    d = _tris(f"git -C {own} push origin main --tags", own_repo_policy)
+    assert d.blocked and d.kind == "never" and "prod.deploy" in d.reason
+    d = _tris(f"cd {own} && rm -rf org && git push origin main", own_repo_policy)
+    assert d.blocked and d.kind == "cosign" and "data.delete" in d.reason
+
+
+def test_tris_rest_of_the_declared_policy_stands(own_repo_policy, repos):
+    own = repos["own"]
+    for cmd in (f"cd {own} && git stash", f"git -C {own} reset --hard", "git stash"):
+        d = _tris(cmd, own_repo_policy)
+        assert d.blocked and d.kind == "never" and "worktree.discard" in d.reason, cmd
+    assert _tris(f"git -C {own} status", own_repo_policy).allow
+    d = _tris("sendmail someone@example.org", own_repo_policy)
+    assert d.blocked and d.kind == "never" and "email.send" in d.reason
+    # a bare push names no shared branch: allowed, as before
+    assert _tris("git push", own_repo_policy).allow
+
+
+def test_own_repositories_are_per_principal(own_repo_policy, repos):
+    """Nothing loosens for anyone else: miles pushing to tris-space is co-signed."""
+    d = tp.decide("miles", "terminal", {"command": f"git -C {repos['own']} push origin main"},
+                  effects=EFFECTS, policy_path=own_repo_policy)
+    assert d.blocked and d.kind == "cosign" and "push.shared" in d.reason
+
+
+@pytest.mark.parametrize("bad", ["tris-space", ["("], [""], [3]])
+def test_malformed_own_repos_is_refused(tmp_path, bad):
+    from ledger.policy import PolicyError, load_policy
+    p = tmp_path / "approvals_policy.yaml"
+    p.write_text(yaml.safe_dump({"version": 1, "approver": "human", "cosign_effects": ["push.shared"],
+                                 "principals": {"tris": {"own_repos": bad}}}))
+    with pytest.raises(PolicyError):
+        load_policy(p)

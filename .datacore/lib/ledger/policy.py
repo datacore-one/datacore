@@ -78,6 +78,7 @@ from __future__ import annotations
 import os
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -116,7 +117,9 @@ class Policy:
     #: Per-principal limits (product description, stage 4): `never_effects`
     #: (refused outright, no grant can allow them), `cosign_effects` (added to
     #: the global set for this principal), `may_delegate_to` (who this
-    #: principal may address an item to), `max_creates_per_day`, `max_hops`.
+    #: principal may address an item to), `max_creates_per_day`, `max_hops`,
+    #: `own_repos` (the principal's own repositories, by push URL: a push that
+    #: provably lands in one is not a shared push -- tool_policy.decide).
     #: None means the file declares no principals section; claim_gate applies
     #: its documented defaults then.
     principals: dict | None = None
@@ -269,7 +272,21 @@ def load_policy(path: Path | None = None) -> Policy:
                     v = lim.get(k)
                     if v is not None and not (type(v) is int and v >= 0):
                         errors.append(f"{path}: principals entry '{k}' must be a non-negative integer")
-                unknown = sorted(set(lim) - {"never_effects", "cosign_effects", "may_delegate_to", "max_creates_per_day", "max_hops"})
+                # own_repos: regexes over a push destination's URL naming the
+                # principal's own repositories; tool_policy releases push.shared
+                # (only that) for a push that provably lands in one of them.
+                v = lim.get("own_repos")
+                if v is not None:
+                    if not (isinstance(v, list) and all(isinstance(e, str) and e for e in v)):
+                        errors.append(f"{path}: principals entry 'own_repos' must be a list of non-empty strings")
+                    else:
+                        for rx in v:
+                            try:
+                                re.compile(rx)
+                            except re.error:
+                                errors.append(f"{path}: principals entry 'own_repos' has an invalid pattern")
+                unknown = sorted(set(lim) - {"never_effects", "cosign_effects", "may_delegate_to",
+                                             "max_creates_per_day", "max_hops", "own_repos"})
                 if unknown:
                     errors.append(f"{path}: principals entry has unknown key(s)")
                 principals[str(name)] = dict(lim)
