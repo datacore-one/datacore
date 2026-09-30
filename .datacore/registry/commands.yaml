@@ -249,6 +249,25 @@ commands:
     related:
     - today
     - wrap-up
+  fleet-sim:
+    name: Fleet Week Simulation
+    description: Run a simulated week of every machine's real schedule with injected faults, report the breaks, and compare with the previous run
+    version: 1.0.0
+    status: active
+    trigger: fleet sim|simulate the week|fleet week simulation
+    source: .datacore/commands/fleet-sim.md
+    invokes: []
+    reads:
+      required:
+      - .datacore/lib/jobs/manifest.yaml
+      - .datacore/registry/infrastructure.yaml
+    writes:
+    - ~/.datacore/state/fleet-sim/{date}-{days}d/
+    references:
+      dips: []
+      specs: []
+    related:
+    - diagnostic
   diagnostic:
     name: System Diagnostic
     description: Comprehensive system health check and troubleshooting

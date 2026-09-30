@@ -32,12 +32,16 @@ at HEAD) plus a short list of the install's own gitignored configuration files
 list). No credential is read: no .env, no secrets directory.
 
     fleet_week_sim.py docker [--days 7] [--out DIR] [--selftest]   # on the Mac
+    fleet_week_sim.py compare RUN [--prev RUN]                     # new / fixed / still red
     fleet_week_sim.py prepare --seed DIR                           # seed only
     fleet_week_sim.py run --seed DIR --out DIR [--days N]          # inside Linux
 
 Output: <out>/report.json and <out>/report.md -- every break, day by day, with
 its machine, job, first failing check and a one-line cause guess, and for each
-injected fault whether anything noticed it.
+injected fault whether anything noticed it -- plus <out>/summary.json, the
+small stable view `compare` reads. `docker` without --out writes to
+~/.datacore/state/fleet-sim/<date>-<N>d/ and compares with the previous run
+there (<out>/compare.md). The slash command is /fleet-sim.
 """
 from __future__ import annotations
 
@@ -1439,9 +1443,121 @@ class Week:
                   "sandbox_env": SANDBOX_ENV,
                   "checkpoints": self.checkpoints, "breaks": breaks, "faults": faults,
                   "promise_evals": self.eval_results}
-        (self.o.out / "report.json").write_text(json.dumps(report, indent=1, default=str))
-        (self.o.out / "report.md").write_text(render_md(report))
+        write_outputs(report, self.o.out)
         return report
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Re-running: one folder per run, a comparable summary, and a compare step
+# ═════════════════════════════════════════════════════════════════════════════
+
+#: Where `docker` puts a run when --out is not given. One folder per run, so
+#: the previous run is always there to compare with.
+RUNS_ROOT = Path.home() / ".datacore" / "state" / "fleet-sim"
+CLASSES = ("fault", "unexplained", "baseline")
+
+
+def break_key(b: dict) -> str:
+    """What makes two runs' breaks "the same break": machine, source, subject
+    and the first failing check with the sandbox's scratch path and every
+    number taken out (line numbers, counts and temp names change run to run)."""
+    check = b.get("first_check", "").split(" (carried:")[0]
+    check = re.sub(r"/\S*?fleet-sim-[^/\s]+", "<sandbox>", check)
+    check = re.sub(r"\d+", "#", check)[:120]
+    return " | ".join((b.get("machine", ""), b.get("source", ""), b.get("subject", ""), check))
+
+
+def summarize(report: dict) -> dict:
+    """The small, stable, machine-readable view of a run that `compare` reads."""
+    counts = {c: sum(1 for b in report["breaks"] if b.get("class") == c) for c in ("baseline", "fault",
+                                                                                   "unexplained")}
+    counts["total"] = len(report["breaks"])
+    return {"generated": report.get("generated"), "start": report.get("start"), "days": report.get("days"),
+            "job_runs": report.get("job_runs"), "wall_seconds": report.get("wall_seconds"),
+            "counts": counts,
+            "faults": {f["id"]: f.get("outcome") for f in report.get("faults") or []},
+            "breaks": sorted(({"key": break_key(b), "class": b.get("class"), "machine": b.get("machine"),
+                               "source": b.get("source"), "subject": b.get("subject"),
+                               "first_check": b.get("first_check", "")[:200], "nights": b.get("nights")}
+                              for b in report["breaks"]), key=lambda x: x["key"])}
+
+
+def write_outputs(report: dict, out: Path) -> None:
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "report.json").write_text(json.dumps(report, indent=1, default=str))
+    (out / "report.md").write_text(render_md(report))
+    (out / "summary.json").write_text(json.dumps(summarize(report), indent=1, default=str))
+
+
+def load_summary(run: Path) -> dict:
+    run = Path(run)
+    if (run / "summary.json").is_file():
+        return json.loads((run / "summary.json").read_text())
+    return summarize(json.loads((run / "report.json").read_text()))
+
+
+def default_out(root: Path, days: int, today: dt.date | None = None) -> Path:
+    base = f"{(today or dt.date.today()).isoformat()}-{days}d"
+    out, n = Path(root) / base, 1
+    while out.exists():
+        n += 1
+        out = Path(root) / f"{base}-{n}"
+    return out
+
+
+def _is_run(d: Path) -> bool:
+    return d.is_dir() and (d / "report.json").is_file()
+
+
+def previous_run(root: Path, current: Path) -> Path | None:
+    """The newest finished run in `root` before `current`, preferring one of
+    the same length (a 2-day run is not compared with a 7-day one if a 7-day
+    one exists)."""
+    current = Path(current).resolve()
+    cur_t = (current / "report.json").stat().st_mtime if _is_run(current) else float("inf")
+    runs = [d for d in Path(root).iterdir() if _is_run(d) and d.resolve() != current
+            and (d / "report.json").stat().st_mtime <= cur_t] if Path(root).is_dir() else []
+    if not runs:
+        return None
+    try:
+        days = load_summary(current).get("days") if _is_run(current) else None
+        same = [d for d in runs if load_summary(d).get("days") == days]
+    except (OSError, ValueError, KeyError):
+        same = []
+    return max(same or runs, key=lambda d: (d / "report.json").stat().st_mtime)
+
+
+def compare_runs(prev: Path, cur: Path) -> dict:
+    a, b = load_summary(prev), load_summary(cur)
+    ka, kb = {x["key"]: x for x in a["breaks"]}, {x["key"]: x for x in b["breaks"]}
+    fa, fb = a.get("faults") or {}, b.get("faults") or {}
+    return {"prev": str(prev), "cur": str(cur), "prev_counts": a["counts"], "cur_counts": b["counts"],
+            "new": [kb[k] for k in sorted(kb) if k not in ka],
+            "fixed": [ka[k] for k in sorted(ka) if k not in kb],
+            "still": [kb[k] for k in sorted(kb) if k in ka],
+            "faults_changed": {i: [fa.get(i), fb.get(i)] for i in sorted(set(fa) | set(fb))
+                               if fa.get(i) != fb.get(i)}}
+
+
+def render_compare(d: dict) -> str:
+    pc, cc = d["prev_counts"], d["cur_counts"]
+    L = [f"# Fleet week simulation: compared with the previous run", "",
+         f"Previous: `{d['prev']}`  ", f"This run: `{d['cur']}`", "",
+         "| Class | Previous | This run |", "|---|---|---|"]
+    L += [f"| {c} | {pc.get(c, 0)} | {cc.get(c, 0)} |" for c in (*CLASSES, "total")]
+    for title, rows in (("New breaks", d["new"]), ("Fixed (red before, not now)", d["fixed"])):
+        L += ["", f"## {title} ({len(rows)})", ""]
+        L += [f"- [{r['class']}] {r['machine']} / {r['subject']} ({r['source']}): "
+              f"{r['first_check'][:140]}" for r in rows] or ["- none"]
+    L += ["", f"## Still red ({len(d['still'])})", ""]
+    by = {c: sum(1 for r in d["still"] if r["class"] == c) for c in CLASSES}
+    L += [f"- {', '.join(f'{v} {k}' for k, v in by.items())}"]
+    L += [f"- [{r['class']}] {r['machine']} / {r['subject']}" for r in d["still"] if r["class"] != "baseline"]
+    if d["faults_changed"]:
+        L += ["", "## Fault outcomes that changed", ""]
+        L += [f"- {i}: {a} -> {b}" for i, (a, b) in d["faults_changed"].items()]
+    return "\n".join(L) + "\n"
 
 
 def render_md(r: dict) -> str:
@@ -1492,7 +1608,13 @@ def run_week(opts: Options) -> dict:
 def _docker(args) -> int:
     src = LIB.parents[1]
     base = Path(args.workdir or tempfile.mkdtemp(prefix="fleet-sim-")).resolve()
-    seed, out = base / "seed", Path(args.out or base / "out").resolve()
+    seed = base / "seed"
+    if args.out:
+        out = Path(args.out).resolve()
+    elif args.selftest:
+        out = base / "out"
+    else:
+        out = default_out(RUNS_ROOT, args.days)
     out.mkdir(parents=True, exist_ok=True)
     print(f"[fleet-sim] seed -> {seed}", flush=True)
     prepare(src, seed)
@@ -1513,6 +1635,15 @@ def _docker(args) -> int:
     print("[fleet-sim] " + " ".join(shlex.quote(c) for c in cmd), flush=True)
     rc = subprocess.run(cmd).returncode
     print(f"[fleet-sim] output in {out}", flush=True)
+    if not args.selftest and _is_run(out):
+        prev = previous_run(out.parent, out)
+        if prev is None:
+            print("[fleet-sim] no previous run in the same folder to compare with", flush=True)
+        else:
+            text = render_compare(compare_runs(prev, out))
+            (out / "compare.md").write_text(text)
+            print(text, flush=True)
+            print(f"[fleet-sim] comparison written to {out / 'compare.md'}", flush=True)
     return rc
 
 
@@ -1540,7 +1671,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-faults", action="store_true")
     p.add_argument("--no-build", action="store_true")
     p.add_argument("--selftest", action="store_true", help="run the harness's own tests in the container")
+    p = sub.add_parser("compare", help="compare a run's breaks with an earlier run's")
+    p.add_argument("run", help="the run folder (holds report.json)")
+    p.add_argument("--prev", help="the earlier run folder; default: the newest earlier run next to it")
     a = ap.parse_args(argv)
+    if a.cmd == "compare":
+        cur = Path(a.run).resolve()
+        prev = Path(a.prev).resolve() if a.prev else previous_run(cur.parent, cur)
+        if prev is None:
+            print(f"[fleet-sim] no earlier run next to {cur}", file=sys.stderr)
+            return 1
+        text = render_compare(compare_runs(prev, cur))
+        (cur / "compare.md").write_text(text)
+        print(text)
+        return 0
     if a.cmd == "prepare":
         print(prepare(LIB.parents[1], Path(a.seed).resolve()))
         return 0

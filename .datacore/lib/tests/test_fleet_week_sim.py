@@ -163,3 +163,80 @@ def test_an_injected_usage_limit_is_found_with_its_first_failing_check(tmp_path)
     verdict = {f["id"]: f for f in report["faults"]}["F-limit"]
     assert verdict["detected"], verdict
     assert not any(b["machine"] == "beta" for b in report["breaks"]), report["breaks"]
+
+
+# -- re-running: a comparable summary per run, and a compare step --------------
+
+def _brk(machine, subject, check, cls="baseline", source="job exit", nights=(1,)):
+    return {"machine": machine, "source": source, "subject": subject, "first_check": check,
+            "first_night": nights[0], "first_ts": "2026-10-01T01:00:00+00:00", "nights": list(nights),
+            "class": cls, "cause": "x", "faults": [], "still_red_at_end": True}
+
+
+def _fault(fid, outcome):
+    return {"id": fid, "kind": "executor_mode", "machine": "box", "desc": "d", "outcome": outcome,
+            "detected": outcome == "detected", "misbehaviour_ran": 0, "misbehaviour_refused": 0, "breaks": []}
+
+
+def _report(breaks, faults=()):
+    return {"generated": "2026-09-30T00:00:00+00:00", "wall_seconds": 1, "days": 2, "start": "2026-10-01",
+            "machines": {"box": {"kind": "server", "jobs": 1}}, "job_runs": 3, "min_interval_s": 3600,
+            "daemons_not_simulated": [], "not_modelled": {}, "schedules_not_understood": [], "notes": [],
+            "hardcoded_home": [], "sandbox_env": {}, "checkpoints": [], "breaks": list(breaks),
+            "faults": list(faults), "promise_evals": {}}
+
+
+def test_a_break_key_ignores_the_sandbox_path_and_numbers():
+    a = _brk("box", "news", "exit 1: cd: /tmp/fleet-sim-bdns_16q/m/box/data/x: No such file (line 12)")
+    b = _brk("box", "news", "exit 1: cd: /tmp/fleet-sim-zz9_ab/m/box/data/x: No such file (line 40)")
+    assert sim.break_key(a) == sim.break_key(b)
+    assert sim.break_key(a) != sim.break_key(_brk("box", "news", "exit 2: something else"))
+
+
+def test_every_run_writes_a_machine_readable_summary(tmp_path):
+    rep = _report([_brk("box", "news", "exit 1"), _brk("box", "inbox", "FATAL", cls="fault")],
+                  faults=[_fault("F4", "detected")])
+    sim.write_outputs(rep, tmp_path)
+    for name in ("report.json", "report.md", "summary.json"):
+        assert (tmp_path / name).is_file(), name
+    s = json.loads((tmp_path / "summary.json").read_text())
+    assert s["counts"] == {"baseline": 1, "fault": 1, "unexplained": 0, "total": 2}
+    assert s["faults"] == {"F4": "detected"}
+    assert len(s["breaks"]) == 2 and all("key" in b and "class" in b for b in s["breaks"])
+
+
+def test_compare_lists_new_fixed_and_still_red(tmp_path):
+    prev, cur = tmp_path / "2026-09-30-7d", tmp_path / "2026-10-01-7d"
+    sim.write_outputs(_report([_brk("box", "news", "exit 1"), _brk("box", "inbox", "FATAL", cls="fault")],
+                              faults=[_fault("F4", "NOT DETECTED")]), prev)
+    sim.write_outputs(_report([_brk("box", "news", "exit 1"), _brk("mac", "drift", "stale", cls="unexplained")],
+                              faults=[_fault("F4", "detected")]), cur)
+    d = sim.compare_runs(prev, cur)
+    assert [b["subject"] for b in d["fixed"]] == ["inbox"]
+    assert [b["subject"] for b in d["new"]] == ["drift"]
+    assert [b["subject"] for b in d["still"]] == ["news"]
+    assert d["faults_changed"] == {"F4": ["NOT DETECTED", "detected"]}
+    md = sim.render_compare(d)
+    assert "inbox" in md and "drift" in md
+
+
+def test_compare_reads_a_run_that_has_only_report_json(tmp_path):
+    """The first runs (2026-09-30) predate summary.json: compare still works."""
+    prev = tmp_path / "old"
+    prev.mkdir()
+    (prev / "report.json").write_text(json.dumps(_report([_brk("box", "news", "exit 1")])))
+    cur = tmp_path / "new"
+    sim.write_outputs(_report([]), cur)
+    assert [b["subject"] for b in sim.compare_runs(prev, cur)["fixed"]] == ["news"]
+
+
+def test_runs_land_in_one_folder_and_the_previous_run_is_found(tmp_path):
+    first = sim.default_out(tmp_path, days=7, today=dt.date(2026, 9, 30))
+    assert first == tmp_path / "2026-09-30-7d"
+    sim.write_outputs(_report([]), first)
+    again = sim.default_out(tmp_path, days=7, today=dt.date(2026, 9, 30))
+    assert again == tmp_path / "2026-09-30-7d-2"
+    sim.write_outputs(_report([]), again)
+    (tmp_path / "scratch").mkdir()            # not a run: no report.json
+    assert sim.previous_run(tmp_path, again) == first
+    assert sim.previous_run(tmp_path, first) is None
