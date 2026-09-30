@@ -133,6 +133,22 @@ def _after(tool: str, tool_input: dict, file_path: str) -> str | None:
     return text
 
 
+# Reading the hooks-path setting is diagnosis (owner-approved 2026-09-30: six read-only
+# lookups refused in one session). A mention counts as a read only when it is a
+# `git config` lookup that names the key with nothing after it -- no value, no
+# --unset/--add/--replace-all -- up to the end of that command. Every other mention
+# (a value, `-c key=`, GIT_CONFIG_PARAMETERS, an edit) is still a switch-off.
+_HOOKS_PATH_READ = re.compile(
+    r"\bgit(?:\s+-C\s+\S+)?\s+config"
+    r"(?:\s+--(?:global|local|system|worktree|show-origin|show-scope|get|get-all|includes|null|file\s+\S+))*"
+    r"\s+core\.hooksPath\s*(?=$|[;&|)\n])")
+
+
+def _only_reads_hooks_path(command: str) -> bool:
+    mentions = len(BYPASSES[2][0].findall(command))
+    return mentions > 0 and mentions == len(_HOOKS_PATH_READ.findall(command))
+
+
 def switch_off(tool: str, tool_input: dict) -> str | None:
     """Why this call switches a safety guard off, or None."""
     if not isinstance(tool_input, dict):
@@ -144,6 +160,8 @@ def switch_off(tool: str, tool_input: dict) -> str | None:
         command = str(tool_input.get("command", ""))
         for rx, why in BYPASSES:
             if rx.search(command):
+                if rx is BYPASSES[2][0] and _only_reads_hooks_path(command):
+                    continue
                 return why
         return None
     if tool not in ("Edit", "Write", "MultiEdit"):
