@@ -127,8 +127,9 @@ def _git(repo: Path, *args: str, timeout: int = 120) -> tuple[int, str, str]:
 _WRITER_LOG = re.compile(r"\.datacore/events/[^/]+\.jsonl")
 
 
-def _merge(space: Path, ref: str) -> tuple[bool, str, list[str]]:
-    """Merge `ref`. (ok, detail, writer logs resolved as prefix extensions).
+def _merge(space: Path, ref: str, *, keep_both: bool = False) -> tuple[bool, str, list[str], list[dict]]:
+    """Merge `ref`. (ok, detail, writer logs resolved as prefix extensions,
+    content conflicts kept for a person).
 
     A per-writer log is append-only, so when both sides appended to it after a
     common base and one copy is an exact prefix of the other, git reports a
@@ -142,31 +143,250 @@ def _merge(space: Path, ref: str) -> tuple[bool, str, list[str]]:
     prefix-proven, working copy checked against both stages) -- and only when
     EVERY conflicted path is a writer log it accepts. Anything else, a fork
     included, aborts the whole merge exactly as before: nothing half-merged.
+
+    `keep_both` (the default branch's merge only, SYN-9): every other conflicted
+    file is resolved by `_keep_both` and the merge completes, so one file
+    waiting for a person no longer stops the whole space. A writer log that is
+    not a prefix extension is a fork and still aborts everything.
     """
     rc, mout, err = _git(space, "merge", "--no-edit", ref)
     if rc == 0:
-        return True, "", []
+        return True, "", [], []
     # BOTH streams. git reports conflicts on STDOUT ("CONFLICT (content):
     # Merge conflict in ...") and leaves stderr empty, so capturing only
     # stderr yields a failure with a blank reason — the identical defect
     # that hid a nine-day auth outage behind `claude -p failed: `.
     detail = "\n".join(x for x in (mout.strip(), err.strip()) if x)
+    ok, detail, logs, kept = resolve_in_progress(space, detail, keep_both=keep_both)
+    if ok:
+        return True, detail, logs, kept
+    _git(space, "merge", "--abort")
+    return False, detail, [], []
+
+
+def resolve_in_progress(space: Path, detail: str = "", *, keep_both: bool = False
+                        ) -> tuple[bool, str, list[str], list[dict]]:
+    """Finish a merge git stopped on, if every conflict has a lossless answer.
+
+    (ok, detail, writer logs resolved, conflicts kept for a person). On ok the
+    merge is committed; otherwise the caller runs `git merge --abort`, which
+    undoes anything this wrote, and nothing is half-merged.
+    Shared by converge and the fleet sweep (git_fleet_sync), so both answer a
+    conflict the same way.
+    """
     from resolve_ledger_conflicts import resolve_file, unmerged
     try:
         names = unmerged(space)
-        if names and all(_WRITER_LOG.fullmatch(n) for n in names):
-            for name in names:
-                resolve_file(space, name)
-            rc, aout, aerr = _git(space, "add", "--", *names)
-            if rc == 0 and not unmerged(space):
-                rc, cout, cerr = _git(space, "commit", "--no-edit", "-q")
-                if rc == 0:
-                    return True, detail, names
-                detail += "\n" + (cout + cerr).strip()
+        if not names:
+            return False, detail, [], []
+        logs = [n for n in names if _WRITER_LOG.fullmatch(n)]
+        rest = [n for n in names if n not in logs]
+        if rest and (not keep_both or any(n.startswith(".datacore/events/") for n in rest)):
+            return False, detail, [], []
+        stages = _unmerged_stages(space) if rest else {}
+        if rest and any(1 not in s and (2 not in s or 3 not in s) for s in stages.values()):
+            # Added on one side only yet unmerged: a rename/directory case this
+            # does not guess at.
+            return False, detail, [], []
+        for name in logs:
+            resolve_file(space, name)
+        if logs:
+            rc, aout, aerr = _git(space, "add", "--", *logs)
+            if rc != 0:
+                return False, detail + "\n" + (aout + aerr).strip(), [], []
+        kept = [_keep_both(space, name, stages[name]) for name in rest]
+        if unmerged(space):
+            return False, detail, [], []
+        if kept:
+            # The commit itself is the record of what waits: one trailer per
+            # file, read back by waiting_conflicts on every later sync.
+            for k in kept:
+                k["task"] = _conflict_item_id(space, k)
+            msg = ["-m", f"sync: merge; conflict in {', '.join(k['path'] for k in kept)} "
+                         f"kept for a person (both versions kept, a task names them)",
+                   "-m", "\n".join(f"{CONFLICT_TRAILER}: {k['task']} {k['path']}" for k in kept)]
+        else:
+            msg = ["--no-edit"]
+        rc, cout, cerr = _git(space, "commit", "-q", *msg)
+        if rc != 0:
+            return False, detail + "\n" + (cout + cerr).strip(), [], []
+        _, merge, _ = _git(space, "rev-parse", "HEAD")
+        for k in kept:
+            k["merge"] = merge.strip()
+            _, blob, _ = _git(space, "rev-parse", f"HEAD:{k['path']}")
+            k["blob"] = blob.strip()
+        return True, detail, logs, kept
     except (OSError, ValueError, TypeError, RuntimeError, subprocess.TimeoutExpired) as exc:
-        detail += f"\nnot a prefix extension: {exc}"
-    _git(space, "merge", "--abort")
-    return False, detail, []
+        return False, detail + f"\nnot a prefix extension: {exc}", [], []
+
+
+# ── a content conflict waits for a person; the rest of the space flows ─────
+#
+# SYN-9, and the owner's decision of 2026-09-30: "let's avoid creating multiple
+# copies and excessive backups. If there are conflicting files, the conflict
+# should be resolved. It can be a task on its own, even."
+#
+# So a conflicted file is resolved IN PLACE and the merge completes: no copy
+# files, no side branch, no parallel commit. A text file takes git's `union`
+# resolution -- both sides' lines, no markers -- which is what the fleet's
+# .gitattributes already does for journals (deployed 2026-09-02); each side's
+# version also stays in history. A file union cannot hold (binary) keeps this
+# host's copy; a file one side deleted keeps the surviving edit. Then ONE
+# ledger task, addressed to the owner, names the space, the file and both
+# commits, and every sync names the file again until someone edits it or
+# closes the task.
+
+CONFLICT_KEY = "sync_conflict"
+CONFLICT_TRAILER = "Sync-Conflict"
+
+
+def _unmerged_stages(space: Path) -> dict[str, dict[int, str]]:
+    """{path: {stage: blob}} for every unmerged path."""
+    rc, out, _ = _git(space, "ls-files", "-u", "-z")
+    stages: dict[str, dict[int, str]] = {}
+    for row in out.split("\0"):
+        if not row.strip():
+            continue
+        meta, _, path = row.partition("\t")
+        _mode, blob, stage = meta.split()
+        stages.setdefault(path, {})[int(stage)] = blob
+    return stages
+
+
+def _blob(space: Path, sha: str) -> bytes:
+    return subprocess.run(["git", "-C", str(space), "cat-file", "blob", sha],
+                          capture_output=True, timeout=60, check=True).stdout
+
+
+def _keep_both(space: Path, path: str, stages: dict[int, str]) -> dict:
+    """Resolve one conflicted path without losing either side; stage it."""
+    import tempfile
+    how = "union"
+    if 2 not in stages or 3 not in stages:
+        merged, how = _blob(space, stages.get(2) or stages[3]), "kept the surviving edit"
+    else:
+        ours, theirs = _blob(space, stages[2]), _blob(space, stages[3])
+        base = _blob(space, stages[1]) if 1 in stages else b""
+        if b"\0" in ours or b"\0" in theirs or b"\0" in base:
+            merged, how = ours, "binary: kept this host's copy"
+        else:
+            with tempfile.TemporaryDirectory() as tmp:
+                files = []
+                for name, data in (("ours", ours), ("base", base), ("theirs", theirs)):
+                    f = Path(tmp) / name
+                    f.write_bytes(data)
+                    files.append(str(f))
+                merged = subprocess.run(["git", "merge-file", "-p", "--union", *files],
+                                        capture_output=True, timeout=60).stdout
+    (space / path).write_bytes(merged)
+    rc, out, err = _git(space, "add", "--", path)
+    if rc != 0:
+        raise RuntimeError(f"could not stage {path}: {(out + err).strip()}")
+    # The commit on each side that last wrote this file: the two versions.
+    _, head, _ = _git(space, "log", "-1", "--format=%H", "HEAD", "--", path)
+    _, other, _ = _git(space, "log", "-1", "--format=%H", "MERGE_HEAD", "--", path)
+    return {"path": path, "how": how, "ours": head.strip(), "theirs": other.strip()}
+
+
+def _conflict_item_id(space: Path, k: dict) -> str:
+    import hashlib
+    key = f"{Path(space).name}|{k['path']}|{k['ours']}|{k['theirs']}"
+    return "sync-conflict-" + hashlib.sha256(key.encode()).hexdigest()[:12]
+
+
+def file_conflict_tasks(space: Path, kept: list[dict]) -> list[str]:
+    """One ledger task per kept conflict, filed once, committed (not pushed).
+
+    Deduplicated by an id derived from space, file and both commits, checked
+    against the fold before appending -- the same rule jobs/autofix.py uses, so
+    a repeat never spends the writer's daily creation allowance. Returns what
+    each conflict is known by: the task id, or why no task could be filed (the
+    sync report still names the file either way).
+    """
+    if not kept:
+        return []
+    from actor_identity import this_actor
+    from ledger.fold import fold
+    from ledger.log import read_events
+    from ledger.policy import guarded_append
+    import roster
+    out, filed = [], []
+    try:
+        actor = this_actor()
+        log = EventLog(space, actor)
+        known = fold(read_events(space)).items if (space / ".datacore" / "events").is_dir() else {}
+    except Exception as exc:  # noqa: BLE001 -- the report still names the file
+        return [f"no task filed: {type(exc).__name__}: {exc}"[:200] for _ in kept]
+    owner = roster.owner()
+    for k in kept:
+        iid = _conflict_item_id(space, k)
+        k["task"] = iid
+        if iid in known:
+            out.append(iid)
+            continue
+        where = f"{Path(space).name}/{k['path']}"
+        body = (f"Syncing {Path(space).name} met a content conflict in {k['path']}.\n"
+                f"- this host's commit: {k['ours']}\n- the other side's commit: {k['theirs']}\n"
+                f"- merged in: {k.get('merge', '?')} ({k['how']})\n"
+                f"Both versions are in git history (git show <commit>:{k['path']}). "
+                f"Edit the file into the version that should stand and commit; the rest of "
+                f"the space kept syncing and this file is named in every sync until then.")
+        payload = {"id": iid, "title": f"Resolve the sync conflict in {where}", "body": body,
+                   "state": "TODO", CONFLICT_KEY: {kk: k.get(kk) for kk in
+                                                  ("path", "ours", "theirs", "merge", "blob", "how")}}
+        if owner:
+            payload["assignee"] = owner
+        try:
+            guarded_append(log, "item.create", payload)
+        except Exception as exc:  # noqa: BLE001 -- the report still names the file
+            out.append(f"no task filed: {type(exc).__name__}: {exc}"[:200])
+            continue
+        filed.append(log.path_for("item.create", payload).relative_to(space).as_posix())
+        out.append(iid)
+    if filed:
+        rels = sorted(set(filed))
+        _git(space, "add", "--", *rels)
+        _git(space, "commit", "-q", "-m", "ledger: task for a sync conflict", "--only", "--", *rels)
+    return out
+
+
+def waiting_conflicts(space: Path) -> list[tuple[str, str]]:
+    """[(path, task id)] for conflicts still waiting for a person.
+
+    The record is the merge commit that kept the conflict (its Sync-Conflict
+    trailers), so this holds even when no task could be filed. A file waits
+    while it is still exactly what that merge wrote and its task, if the
+    ledger has it, is not closed. Most recent merge wins for a path.
+    """
+    rc, out, _ = _git(space, "log", "--merges", "-F", f"--grep={CONFLICT_TRAILER}: ",
+                      "--format=%H%x00%B%x01", "HEAD")
+    if rc != 0 or not out.strip():
+        return []
+    seen, candidates = set(), []
+    for record in out.split("\x01"):
+        sha, _, body = record.strip().partition("\0")
+        for line in body.splitlines():
+            if not line.startswith(f"{CONFLICT_TRAILER}: "):
+                continue
+            iid, _, path = line[len(CONFLICT_TRAILER) + 2:].strip().partition(" ")
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            rc1, now, _ = _git(space, "rev-parse", f"HEAD:{path}")
+            rc2, then, _ = _git(space, "rev-parse", f"{sha}:{path}")
+            if rc1 == 0 and rc2 == 0 and now.strip() == then.strip():
+                candidates.append((path, iid))
+    if not candidates:
+        return []
+    try:
+        from ledger.fold import fold
+        from ledger.log import read_events
+        items = fold(read_events(space)).items if (Path(space) / ".datacore" / "events").is_dir() else {}
+    except Exception:  # noqa: BLE001 -- an unreadable ledger cannot close anything
+        items = {}
+    closed = ("completed", "verified", "dismissed")
+    return sorted((p, i) for p, i in candidates if not (i in items and items[i].status in closed))
+
 
 _REPO_LOCK_TIMEOUT = 120
 
@@ -782,7 +1002,11 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
     rewrites = _incoming_rewrites(space, f"origin/{db}")
     if rewrites:
         return _rewrite_refusal(db, f"origin/{db}", rewrites, autosaved)
-    ok, err, resolved = _merge(space, f"origin/{db}")
+    ok, err, resolved, kept = _merge(space, f"origin/{db}", keep_both=True)
+    if kept:
+        # SYN-9: the merge completed around the conflicted file(s); a person
+        # gets one task each, and the rest of the space publishes below.
+        file_conflict_tasks(space, kept)
     if not ok:
         # Never reset, never rescue-branch, never discard. A conflict here
         # is genuine disagreement about content and belongs to a human; the
@@ -809,7 +1033,7 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         rewrites = _incoming_rewrites(space, ref)
         if rewrites:
             return _rewrite_refusal(db, ref, rewrites, autosaved)
-        ok, err, prefixes = _merge(space, ref)
+        ok, err, prefixes, _ = _merge(space, ref)
         if not ok:
             return Result(False, "merge conflict on a ledger ref — human needed",
                           {"branch": db, "ref": ref, "autosaved": autosaved, "detail": err[:400]})
@@ -831,14 +1055,24 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
     if not pr.ok:
         return Result(False, f"converged but not published: {pr.reason}",
                       {"branch": db, "autosaved": autosaved, **pr.context})
-    if held_back:
-        # Everything else synced; these did not, and say why (SYN-3, SYN-8).
-        named = "; ".join(f"{rel} ({why})" for rel, why in sorted(held_back.items()))
-        refused = any(why.startswith("refused by") for why in held_back.values())
-        return Result(False, (f"{'autosave refused by pre-commit hook — ' if refused else ''}"
-                              f"held back, still only on this machine: {named}; "
-                              f"everything else synced"),
+    waiting = waiting_conflicts(space)
+    if held_back or waiting:
+        # Everything else synced; these did not, and say why (SYN-3, SYN-8),
+        # or they wait for a person to settle a conflict (SYN-9).
+        parts = []
+        if held_back:
+            named = "; ".join(f"{rel} ({why})" for rel, why in sorted(held_back.items()))
+            refused = any(why.startswith("refused by") for why in held_back.values())
+            parts.append(f"{'autosave refused by pre-commit hook — ' if refused else ''}"
+                         f"held back, still only on this machine: {named}")
+        if waiting:
+            parts.append("conflict waiting for a person: " + "; ".join(
+                f"{path} (both versions kept in the file; task {iid})" for path, iid in waiting))
+        # Not "synced" beside a conflict: that word reads as success (SYN-6).
+        return Result(False, "; ".join(parts) + ("; the rest of the space went through" if waiting
+                                                 else "; everything else synced"),
                       {"branch": db, "autosaved": autosaved, "held_back": sorted(held_back),
+                       "conflicts": [p for p, _ in waiting],
                        "detail": hook_detail[:400], "pushed": pr.context.get("attempts", 1)})
     return Result(True, "converged", {"branch": db, "autosaved": autosaved,
                                       "pushed": pr.context.get("attempts", 1), "ledger_refs": merged_refs,
@@ -1126,6 +1360,8 @@ if __name__ == "__main__":
     ap.add_argument("--repo", help="sync: limit to one space by directory name")
     ap.add_argument("--root", type=Path, default=_data_root())
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--line", action="store_true",
+                    help="converge: one line (space, ok/FAIL, reason) instead of JSON, for logs")
     ap.add_argument("--no-code", action="store_true",
                     help="sync: knowledge repos only, leave code repos alone")
     a = ap.parse_args()
@@ -1140,6 +1376,9 @@ if __name__ == "__main__":
         ap.error(f"--space is required for {a.op}")
     fn = {"converge": converge, "gaps": gaps, "classify": classify}[a.op]
     res = fn(a.space) if a.op == 'gaps' else fn(a.space, root=a.root)
+    if a.line:
+        print(f"{a.op} {a.space.name}: {'ok' if res.ok else 'FAIL'} — {res.reason}")
+        raise SystemExit(0 if res.ok else 1)
     print(json.dumps({"ok": res.ok, "reason": res.reason, "context": res.context},
                      indent=2, default=str))
     raise SystemExit(0 if res.ok else 1)

@@ -505,6 +505,8 @@ def _pull(repo: Path, result: dict, default: str) -> None:
     # disjoint files — there is nothing for it to conflict over.
     r = subprocess.run(['git', 'pull', '--no-rebase', 'origin', default],
                        cwd=repo, capture_output=True, text=True)
+    if r.returncode != 0 and _keep_conflict(repo, result, r):
+        return
     if r.returncode != 0:
         # Never leave a half-applied merge behind for the next run to trip on.
         subprocess.run(['git', 'merge', '--abort'], cwd=repo, capture_output=True)
@@ -573,6 +575,43 @@ def _pull(repo: Path, result: dict, default: str) -> None:
             result['pull'] = f'PULL CONFLICT — needs a human [{tail}]'
     else:
         result['pull'] = 'pulled'
+        _name_waiting(repo, result)
+
+
+def _keep_conflict(repo: Path, result: dict, r: subprocess.CompletedProcess) -> bool:
+    """ONE CONFLICT NEVER STOPS THE SPACE (SYN-9). On a knowledge repository,
+    finish the merge the way converge does (ledger_transport.resolve_in_progress:
+    both versions kept in the file, no copies, no side branch), file one task per
+    conflicted file, and let the rest of the sweep land and push. True when the
+    merge completed; False leaves the old path (abort, PULL CONFLICT) to run.
+    Code repositories are never resolved here: they change by pull request."""
+    if not direct_publication(repo):
+        return False
+    try:
+        from ledger_transport import resolve_in_progress, file_conflict_tasks
+        detail = ((r.stdout or '') + (r.stderr or '')).strip()
+        ok, _, _, kept = resolve_in_progress(repo, detail, keep_both=True)
+        if not ok:
+            return False
+        file_conflict_tasks(repo, kept)
+    except Exception:  # noqa: BLE001 -- fall back to the abort path, which names it
+        return False
+    result['pull'] = 'pulled'
+    _name_waiting(repo, result)
+    return True
+
+
+def _name_waiting(repo: Path, result: dict) -> None:
+    """Conflicts still waiting for a person, named on every sweep until settled."""
+    if not direct_publication(repo):
+        return
+    try:
+        from ledger_transport import waiting_conflicts
+        waiting = waiting_conflicts(repo)
+    except Exception:  # noqa: BLE001
+        return
+    if waiting:
+        result['conflicts_waiting'] = waiting
 
 
 
@@ -974,6 +1013,16 @@ def main() -> int:
             print(f"  {r['name']}")
         print()
 
+    # A conflict the sweep merged around (SYN-9) is not a failure of the run:
+    # the space synced, and the person has a task. Named every run until settled.
+    waiting = [r for r in results if r.get('conflicts_waiting')]
+    if waiting:
+        print('Conflicts waiting for a person — everything else in each space synced:')
+        for r in waiting:
+            for path, task in r['conflicts_waiting']:
+                print(f"  {r['name']}: {path} (both versions kept in the file; task {task})")
+        print()
+
     # Access failures are reported SEPARATELY from conflicts: they need a
     # credential, not a merge, and grouping them taught the reader to look
     # for the wrong thing entirely.
@@ -1098,7 +1147,12 @@ def main() -> int:
               f"(everything else landed; these stay here, unchanged):")
         for r in refused:
             print(f"  {r['name']}: {', '.join(r['hook_refused'])}")
-    if forked or deleting or refused or stranded or losing or foreign:
+    if waiting:
+        # Same rule as a refused file (SYN-8): named, and the run fails, until
+        # a person settles it -- the rest of each space already went through.
+        print(f"\nFAIL: {len(waiting)} repo(s) have a conflict waiting for a person "
+              f"(a task names it; the rest of each space went through).")
+    if forked or deleting or refused or stranded or losing or foreign or waiting:
         return 1
 
     if conflicts:
