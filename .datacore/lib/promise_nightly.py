@@ -375,9 +375,20 @@ def _settings() -> dict[str, str]:
     return merged
 
 
+def alert_command() -> str:
+    """This host's own alert command, or "": job_verify's lookup, reused --
+    $DATACORE_ALERT_COMMAND, else `command:` in ~/.datacore/alerts.yaml."""
+    try:
+        from job_verify import _alert_command
+        return _alert_command()
+    except Exception:  # noqa: BLE001 -- job_verify not importable here: the variable alone
+        return os.environ.get("DATACORE_ALERT_COMMAND", "").strip()
+
+
 def send_to_firm(text: str) -> tuple[bool, str]:
     """One message to The Firm group -- the route this host's own alerts take.
-    DATACORE_ALERT_COMMAND, when set, is that route (the text on stdin). Else
+    An alert command (DATACORE_ALERT_COMMAND or ~/.datacore/alerts.yaml, as
+    job_verify reads it), when set, is that route (the text on stdin). Else
     (job_verify_notify.sh's direct route, nightshift run.py, fleet_sync_alert.sh):
     TELEGRAM_BOT_TOKEN posts to ALERT_CHAT_ID. Only the group, never a fallback
     to a 1:1 chat (MSG-1). One phone screen with a pointer to the full text
@@ -385,10 +396,10 @@ def send_to_firm(text: str) -> tuple[bool, str]:
     (MSG-10). winston_send.py is not used: on the overnight host its loader
     refuses to start (a root-owned ~/.config/cos.env, found 2026-09-30).
     """
-    command = os.environ.get("DATACORE_ALERT_COMMAND", "").strip()
+    command = alert_command()
     if command:
-        # The host's own alert route, as job_verify uses it (box: Winston's
-        # sender; the workstation: the same, over ssh to the always-on host).
+        # The host's own alert route (box: Winston's sender; the workstation:
+        # the same, over ssh to the always-on host).
         try:
             r = subprocess.run(["bash", "-c", command], input=text, capture_output=True, text=True, timeout=60)
             if r.returncode == 0:
