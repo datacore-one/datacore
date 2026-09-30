@@ -597,21 +597,28 @@ def _keep_conflict(repo: Path, result: dict, r: subprocess.CompletedProcess) -> 
     except Exception:  # noqa: BLE001 -- fall back to the abort path, which names it
         return False
     result['pull'] = 'pulled'
-    _name_waiting(repo, result)
+    _name_waiting(repo, result, fresh=[k['path'] for k in kept])
     return True
 
 
-def _name_waiting(repo: Path, result: dict) -> None:
-    """Conflicts still waiting for a person, named on every sweep until settled."""
+def _name_waiting(repo: Path, result: dict, fresh=()) -> None:
+    """Conflicts still waiting for a person, named on every sweep until settled.
+
+    Alert once, then quiet (owner, 2026-09-30): one this sweep met goes in
+    `conflicts_waiting` and fails the run; one whose task is already open goes
+    in `conflicts_handled`, named but not a failure (ledger_transport.split_waiting).
+    """
     if not direct_publication(repo):
         return
     try:
-        from ledger_transport import waiting_conflicts
-        waiting = waiting_conflicts(repo)
+        from ledger_transport import split_waiting
+        alert, handled = split_waiting(repo, fresh=fresh)
     except Exception:  # noqa: BLE001
         return
-    if waiting:
-        result['conflicts_waiting'] = waiting
+    if alert:
+        result['conflicts_waiting'] = alert
+    if handled:
+        result['conflicts_handled'] = handled
 
 
 
@@ -1013,14 +1020,19 @@ def main() -> int:
             print(f"  {r['name']}")
         print()
 
-    # A conflict the sweep merged around (SYN-9) is not a failure of the run:
-    # the space synced, and the person has a task. Named every run until settled.
+    # A conflict the sweep merged around (SYN-9): the rest of the space went
+    # through, and a person has a task. Named every run until settled; only the
+    # run that met it fails (alert once, then quiet -- owner, 2026-09-30).
     waiting = [r for r in results if r.get('conflicts_waiting')]
-    if waiting:
-        print('Conflicts waiting for a person — everything else in each space synced:')
+    handled = [r for r in results if r.get('conflicts_handled')]
+    if waiting or handled:
+        print('Conflicts waiting for a person — the rest of each space went through:')
         for r in waiting:
             for path, task in r['conflicts_waiting']:
-                print(f"  {r['name']}: {path} (both versions kept in the file; task {task})")
+                print(f"  {r['name']}: {path} (new: merged around it, nothing lost; task {task})")
+        for r in handled:
+            for path, task in r['conflicts_handled']:
+                print(f"  {r['name']}: {path} (already reported; task {task} is open)")
         print()
 
     # Access failures are reported SEPARATELY from conflicts: they need a
@@ -1150,7 +1162,7 @@ def main() -> int:
     if waiting:
         # Same rule as a refused file (SYN-8): named, and the run fails, until
         # a person settles it -- the rest of each space already went through.
-        print(f"\nFAIL: {len(waiting)} repo(s) have a conflict waiting for a person "
+        print(f"\nFAIL: {len(waiting)} repo(s) met a new conflict that waits for a person "
               f"(a task names it; the rest of each space went through).")
     if forked or deleting or refused or stranded or losing or foreign or waiting:
         return 1

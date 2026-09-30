@@ -75,7 +75,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             outcome = sync_repo(space_dir, quiet=True)
         except Exception:  # transport errors must not expose local paths or credentials
             outcome = "error"
-        status = 200 if outcome == "clean" else 503 if outcome == "offline" else 500
+        # "waiting": a conflict already reported, its task open -- handled.
+        status = 200 if outcome in ("clean", "waiting") else 503 if outcome == "offline" else 500
         body = json.dumps({
             "ok": status == 200, "space": space,
             "duration_sec": round(time.monotonic() - started, 2),
