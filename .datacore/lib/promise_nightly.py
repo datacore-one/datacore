@@ -24,9 +24,8 @@ What it does, in order:
      promises green in the owner's baseline -- .datacore/registry/
      promise-baseline.json, read only -- are red here). Only reds that could be
      news (not already red here) are rerun for their failure line.
-  5. Sends ONE message to The Firm (winston_send.py --alert -- the install's copy
-     in .datacore/lib, else the tracked chief-of-staff one -- the route this
-     host's job_verify uses) listing what turned red -- plain promise text, id in
+  5. Sends ONE message to The Firm group (ALERT_CHAT_ID, this host's bot token --
+     the route the overnight host's own alerts take) listing what turned red -- plain promise text, id in
      brackets, first failure line -- what recovered, and what newly could not run.
      Nothing moved: nothing sent. A red that stays red is not repeated; on the
      weekly day (Monday) a summary lists every regression still red.
@@ -35,7 +34,7 @@ The last line printed is the job's contract (jobs/manifest.yaml,
 nightshift-promise-scoreboard):
     promise-scoreboard: G green, R red, C could not run here; T turned red, V recovered; alert sent|none
 An alert that could not be delivered ends the line "alert NOT delivered (...)"
-and exits 1; it is also recorded as undelivered by winston_send (MSG-10).
+and exits 1; it is also recorded as undelivered (tg_format, MSG-10).
 """
 from __future__ import annotations
 
@@ -47,6 +46,9 @@ import socket
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import date as _date, datetime, timezone
 from pathlib import Path
@@ -322,11 +324,8 @@ def message(ch: dict[str, list[str]], board: dict, *, weekly: bool, pointer: str
     return f"Promise scoreboard, {board['date']} on {board['host']}\n\n" + "\n".join(lines) + f"\n\nBoard: {pointer}"
 
 
-def sender() -> Path:
-    """winston_send.py: the install's copy in .datacore/lib, else the tracked
-    chief-of-staff one (the overnight host has only that one)."""
-    local = LIB / "winston_send.py"
-    return local if local.exists() else ROOT / ".datacore" / "modules" / "chief-of-staff" / "server" / "lib" / "winston_send.py"
+#: The install's shared env files: TELEGRAM_BOT_TOKEN and ALERT_CHAT_ID (The Firm).
+ENV_FILES = [ROOT / ".datacore" / "env" / ".env", ROOT / ".datacore" / "env" / "local.env"]
 
 
 def _undelivered(reason: str, text: str) -> None:
@@ -337,41 +336,63 @@ def _undelivered(reason: str, text: str) -> None:
         pass
 
 
-def send_to_firm(text: str) -> tuple[bool, str]:
-    """One alert to The Firm group through winston_send.py --alert.
+def _settings() -> dict[str, str]:
+    """The two settings, from the env files (os.environ wins when it has them)."""
+    from env_utils import parse_env_file
+    merged: dict[str, str] = {}
+    for f in ENV_FILES:
+        try:
+            if Path(f).exists():
+                merged.update(parse_env_file(Path(f), inline_comments=True))
+        except (OSError, ValueError):
+            continue
+    for key in ("TELEGRAM_BOT_TOKEN", "ALERT_CHAT_ID"):
+        if os.environ.get(key):
+            merged[key] = os.environ[key]
+    return merged
 
-    On the overnight host the bot token is TELEGRAM_BOT_TOKEN in the install's
-    env files; winston_send reads WINSTON_BOT_TOKEN, so it is mapped exactly as
-    this host's job_verify cron line maps it. winston_send records a failed send
-    as undelivered (MSG-10) and exits non-zero.
+
+def send_to_firm(text: str) -> tuple[bool, str]:
+    """One message to The Firm group -- the route this host's own alerts take
+    (job_verify_notify.sh's direct route, nightshift run.py, fleet_sync_alert.sh):
+    TELEGRAM_BOT_TOKEN posts to ALERT_CHAT_ID. Only the group, never a fallback
+    to a 1:1 chat (MSG-1). One phone screen with a pointer to the full text
+    (MSG-4). A send that cannot be made or is refused is recorded as undelivered
+    (MSG-10). winston_send.py is not used: on the overnight host its loader
+    refuses to start (a root-owned ~/.config/cos.env, found 2026-09-30).
     """
-    env = dict(os.environ)
-    path = sender()
-    if not path.exists():
-        why = f"no winston_send.py on this host ({path})"
+    cfg = _settings()
+    token, chat = cfg.get("TELEGRAM_BOT_TOKEN", ""), cfg.get("ALERT_CHAT_ID", "")
+    if not chat:
+        why = "ALERT_CHAT_ID unset: alerts go only to The Firm group, never a 1:1 chat"
         _undelivered(why, text)
         return False, why
-    if not env.get("WINSTON_BOT_TOKEN"):
-        try:
-            sys.path.insert(0, str(path.parent))
-            import cos_env
-            merged = cos_env.read()
-            if merged.get("TELEGRAM_BOT_TOKEN"):
-                env["WINSTON_BOT_TOKEN"] = merged["TELEGRAM_BOT_TOKEN"]
-        except Exception:  # noqa: BLE001 -- winston_send then says which setting is missing
-            pass
-    try:
-        r = subprocess.run([sys.executable, str(path), "--alert"], input=text, text=True,
-                           capture_output=True, timeout=120, env=env)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        _undelivered(type(exc).__name__, text)
-        return False, f"{type(exc).__name__}"
-    if r.returncode == 0:
-        return True, "sent"
-    # winston_send records its own failed sends (MSG-10); this covers a crash before it could.
-    why = ((r.stderr or r.stdout).strip().splitlines() or [f"exit {r.returncode}"])[-1][:200]
-    if "NOT delivered" not in (r.stderr or "") and "NOT sent" not in (r.stderr or ""):
+    if not token:
+        why = "no bot token (TELEGRAM_BOT_TOKEN)"
         _undelivered(why, text)
+        return False, why
+    body = text
+    try:
+        import tg_format
+        body = tg_format.normalize(text)
+        short = tg_format.fit(body)
+        if short != body:
+            short = tg_format.fit(body, more=tg_format.keep_full(body, "promise_nightly") or None)
+        body = short
+    except Exception:  # noqa: BLE001 -- a missing formatter must not stop the alert
+        pass
+    data = urllib.parse.urlencode({"chat_id": chat, "text": body}).encode()
+    try:
+        with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/sendMessage", data=data,
+                                    timeout=15) as r:
+            if r.status == 200:
+                return True, "sent"
+            why = f"http {r.status}"
+    except urllib.error.HTTPError as e:
+        why = f"http {e.code}"
+    except Exception as e:  # noqa: BLE001
+        why = f"{type(e).__name__}"
+    _undelivered(why, text)
     return False, why
 
 

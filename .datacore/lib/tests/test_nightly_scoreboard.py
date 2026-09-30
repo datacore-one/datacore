@@ -344,19 +344,55 @@ def test_only_reds_that_could_be_news_are_rerun_for_their_failure_line(tmp_path,
     assert asked["want"]("CAP-4") is False       # red last night: already told
 
 
-def test_the_sender_is_the_tracked_chief_of_staff_copy_when_lib_has_none(tmp_path, monkeypatch):
-    monkeypatch.setattr(pn, "LIB", tmp_path / "lib")
-    monkeypatch.setattr(pn, "ROOT", tmp_path)
-    tracked = tmp_path / ".datacore" / "modules" / "chief-of-staff" / "server" / "lib" / "winston_send.py"
-    tracked.parent.mkdir(parents=True)
-    tracked.write_text("")
-    assert pn.sender() == tracked
+class _Resp:
+    def __init__(self, status):
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
 
 
-def test_a_sender_that_cannot_start_is_recorded_as_undelivered(tmp_path, monkeypatch):
+def _env_files(tmp_path, body: str) -> list:
+    f = tmp_path / ".env"
+    f.write_text(body)
+    return [f]
+
+
+def test_the_alert_goes_to_the_firm_group_with_this_hosts_bot(tmp_path, monkeypatch):
+    """On the overnight host winston_send cannot load (a root-owned ~/.config/cos.env,
+    2026-09-30); its own alerts post directly: TELEGRAM_BOT_TOKEN to ALERT_CHAT_ID."""
+    monkeypatch.setattr(pn, "ENV_FILES", _env_files(tmp_path, "TELEGRAM_BOT_TOKEN=tok\nALERT_CHAT_ID=-100\nTELEGRAM_CHAT_ID=1to1\n"))
+    seen = {}
+
+    def fake_urlopen(url, data=None, timeout=None):
+        seen["url"], seen["data"] = url, data.decode()
+        return _Resp(200)
+    monkeypatch.setattr(pn.urllib.request, "urlopen", fake_urlopen)
+    ok, why = pn.send_to_firm("Promise scoreboard: A capture made twice lands once (CAP-4) turned red")
+    assert ok and why == "sent"
+    assert seen["url"].endswith("/bottok/sendMessage")
+    assert "chat_id=-100" in seen["data"] and "1to1" not in seen["data"]
+
+
+def test_no_group_means_no_send_and_a_recorded_undelivered(tmp_path, monkeypatch):
     monkeypatch.setenv("DATACORE_UNDELIVERED_LOG", str(tmp_path / "undelivered.jsonl"))
-    monkeypatch.setattr(pn, "sender", lambda: tmp_path / "missing" / "winston_send.py")
+    monkeypatch.setattr(pn, "ENV_FILES", _env_files(tmp_path, "TELEGRAM_BOT_TOKEN=tok\nTELEGRAM_CHAT_ID=1to1\n"))
+    monkeypatch.delenv("ALERT_CHAT_ID", raising=False)
+    called = []
+    monkeypatch.setattr(pn.urllib.request, "urlopen", lambda *a, **k: called.append(a))
     ok, why = pn.send_to_firm("Promise scoreboard: test")
-    assert ok is False
+    assert ok is False and "ALERT_CHAT_ID" in why and called == []
     rec = json.loads((tmp_path / "undelivered.jsonl").read_text().splitlines()[-1])
     assert rec["sender"] == "promise_nightly"
+
+
+def test_a_refused_send_is_recorded_as_undelivered(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATACORE_UNDELIVERED_LOG", str(tmp_path / "undelivered.jsonl"))
+    monkeypatch.setattr(pn, "ENV_FILES", _env_files(tmp_path, "TELEGRAM_BOT_TOKEN=tok\nALERT_CHAT_ID=-100\n"))
+    monkeypatch.setattr(pn.urllib.request, "urlopen", lambda *a, **k: _Resp(401))
+    ok, why = pn.send_to_firm("Promise scoreboard: test")
+    assert ok is False and "401" in why
+    assert (tmp_path / "undelivered.jsonl").exists()
