@@ -107,3 +107,21 @@ def test_a_role_need_finds_the_space_by_its_role_not_its_folder(tmp_path):
     assert not ng.met("role:system/missing", root=tmp_path)
     assert not ng.met("role:product/daemon", root=tmp_path)      # role not declared
     assert not ng.met("role:system/daemon", root=tmp_path / "bare")
+
+
+def test_a_role_need_works_without_lib_on_the_import_path(tmp_path):
+    """Finding 9 of the fleet week simulation (2026-09-30): the conftest loads
+    needs_gate by file path, and a `role:` need then did `import spaces`, which
+    only works when .datacore/lib is on sys.path (this Mac adds it through a
+    user-site .pth). pytest started from anywhere else crashed at conftest
+    import with ModuleNotFoundError: spaces. `python -s` drops the user site."""
+    import sys
+    code = ("import importlib.util, sys\n"
+            f"spec = importlib.util.spec_from_file_location('needs_gate', {str(ng.ROOT / '.datacore/lib/needs_gate.py')!r})\n"
+            "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+            "assert not any(p.endswith('.datacore/lib') for p in sys.path), sys.path\n"
+            "print(m.met('role:no-such-role/x'))\n")
+    r = subprocess.run([sys.executable, "-s", "-c", code], cwd=tmp_path, capture_output=True, text=True,
+                       timeout=60, env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)})
+    assert r.returncode == 0, r.stderr[-1500:]
+    assert r.stdout.strip() == "False"

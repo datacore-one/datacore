@@ -44,6 +44,30 @@ DECLARED = ROOT / ".datacore" / "config" / "test-needs.yaml"
 KINDS = ("module", "file", "role", "cli", "python", "fleet", "agent")
 
 
+def _sibling(name: str):
+    """A module from this directory, whatever sys.path holds. The conftest loads
+    this file by path, so pytest started outside .datacore/lib has no lib on its
+    import path, and a plain `import spaces` crashed collection there (fleet
+    week simulation, finding 9, 2026-09-30)."""
+    import importlib
+    import importlib.util
+    import sys
+    try:
+        return importlib.import_module(name)
+    except ModuleNotFoundError as exc:
+        if exc.name != name:
+            raise
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / f"{name}.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    try:
+        spec.loader.exec_module(mod)
+    except BaseException:
+        sys.modules.pop(name, None)
+        raise
+    return mod
+
+
 def load(path: Path = DECLARED) -> list[dict]:
     """[{test, only: [names]?, needs: [..], why}] -- a missing file declares nothing."""
     if not path.exists():
@@ -66,7 +90,7 @@ def met(need: str, root: Path = ROOT, env=None) -> bool:
         p = Path(arg).expanduser() if arg.startswith("~") else root / arg
         return p.exists()
     if k == "role":
-        import spaces
+        spaces = _sibling("spaces")
         role, _, sub = arg.partition("/")
         space = spaces.space_for(role, root=root)
         return bool(space) and (root / space / sub).exists()
@@ -109,7 +133,7 @@ def is_console(root: Path = ROOT, env=None) -> bool:
     actor = str(env.get("DATACORE_ACTOR") or "").strip().lower()
     if not actor:
         try:
-            import actor_identity
+            actor_identity = _sibling("actor_identity")
             actor = str(actor_identity.resolve(infra=roster)[0] or "").lower()
         except Exception:  # noqa: BLE001 -- an unknown machine is not the console
             return False
