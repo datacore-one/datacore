@@ -123,22 +123,20 @@ def run_suite(suite: Path, python: str, cov_dir: Path | None = None) -> Result:
         # -p keeps one data file per process, which is what lets 19 separate
         # pytest runs be combined into a single picture afterwards.
         pre = [python, "-m", "coverage", "run", "-p", "--source", str(DATACORE / "lib"), "-m"]
-    proc = subprocess.run(
-        # --continue-on-collection-errors is the point of this runner. Without it a
-        # single un-importable file aborts its whole root: `pytest .datacore/lib`
-        # collected ZERO of 212 files because ws_chat_test.py reads a token at
-        # import, and reported "1 error" -- which reads as one broken test, not as
-        # "none of your tests ran". The suite that guards the ledger, identity and
-        # delegation was silently not running for anyone who typed the directory.
-        [*pre, "pytest", "-q", "-p", "no:cacheprovider", "--no-header", "-rf",
-         "--continue-on-collection-errors", "."],
-        cwd=suite,
-        capture_output=True,
-        text=True,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
-             **({"COVERAGE_FILE": str(cov_dir / ".coverage")} if cov_dir else {})},
-        timeout=1800,
-    )
+    try:
+        proc = _run_pytest(pre, suite, cov_dir)
+    except subprocess.TimeoutExpired as exc:
+        # A HANG IS A RED SUITE, NOT A CRASHED AUDIT. Escaping the pool, this
+        # killed the whole run with a traceback (mac-suite-audit, 2026-09-26..30),
+        # so nobody could see which suite hung or how the others did.
+        res = Result(suite=rel, rc=-1, errors=1)
+        partial = exc.output if isinstance(exc.output, str) else (exc.output or b"").decode(errors="replace")
+        for n, what in _COUNT.findall(partial or ""):
+            if what == "passed":
+                res.passed = int(n)
+        res.summary = f"timed out after {SUITE_TIMEOUT_S}s"
+        res.failures = [f"ERROR {rel}: suite timed out after {SUITE_TIMEOUT_S}s (a test hangs)"]
+        return res
     out = proc.stdout + proc.stderr
     res = Result(suite=rel, rc=proc.returncode)
     tail = out.strip().splitlines()[-1] if out.strip() else ""
@@ -155,6 +153,29 @@ def run_suite(suite: Path, python: str, cov_dir: Path | None = None) -> Result:
             res.skipped = n
     res.failures = [ln.strip() for ln in out.splitlines() if ln.startswith("FAILED") or ln.startswith("ERROR")][:40]
     return res
+
+
+#: Per-suite wall clock. A suite over this is reported as hung, not waited on.
+SUITE_TIMEOUT_S = 1800
+
+
+def _run_pytest(pre: list[str], suite: Path, cov_dir: Path | None):
+    return subprocess.run(
+        # --continue-on-collection-errors is the point of this runner. Without it a
+        # single un-importable file aborts its whole root: `pytest .datacore/lib`
+        # collected ZERO of 212 files because ws_chat_test.py reads a token at
+        # import, and reported "1 error" -- which reads as one broken test, not as
+        # "none of your tests ran". The suite that guards the ledger, identity and
+        # delegation was silently not running for anyone who typed the directory.
+        [*pre, "pytest", "-q", "-p", "no:cacheprovider", "--no-header", "-rf",
+         "--continue-on-collection-errors", "."],
+        cwd=suite,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+             **({"COVERAGE_FILE": str(cov_dir / ".coverage")} if cov_dir else {})},
+        timeout=SUITE_TIMEOUT_S,
+    )
 
 
 def ci_gated_paths() -> set[str]:
