@@ -8,7 +8,8 @@ principals:
   assistant:
     never_effects: &AGENT_NEVER [payment, trading, credential.rotate, gov.submit, code.merge,
                                  secret.search, guard.disable, ledger.forge, calendar.respond,
-                                 data.egress, history.rewrite, eval.edit, email.send, public.post]
+                                 data.egress, history.rewrite, eval.edit, email.send, public.post,
+                                 worktree.discard]
     may_delegate_to: [researcher]
   researcher:
     never_effects: *AGENT_NEVER

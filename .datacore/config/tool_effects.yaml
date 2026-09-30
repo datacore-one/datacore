@@ -315,3 +315,26 @@ effects:
     patterns:
       - '"(file_path|path|notebook_path)":\s*"(?:[^"\\]|\\.)*/(test_promise_[^"/]*|agent_eval|_audit_contract|_inbox_job_harness)\.py"'
       - '"command":\s*"(?:[^"\\]|\\.)*(>(?!&)|\btee\b|\bsed\s+-i|\bperl\s+-\w*i|\bmv\b|\bcp\b|\brm\b|\bgit\s+(rm|mv|checkout)\b|\btruncate\b|\bchmod\b)(?:[^"\\]|\\.)*\b(test_promise_\w*|agent_eval|_audit_contract|_inbox_job_harness)\.py\b'
+  # ── agents never: uncommitted work belongs to other writers (2026-09-30) ──
+  # 05:12 UTC on the box, the nightly inbox job's agent ran `git stash` in the
+  # personal space to get a pull through; the stash swallowed five uncommitted
+  # events of Winston's log, the ledger (correctly) refused the rewound log and
+  # the hash-chain check went red. In a ledger space the working tree holds
+  # other writers' event logs, and the ledger's rule is "commit, never stash"
+  # (ledger_transport.py). So no agent hides or discards uncommitted work, in
+  # any form: stash (even `list`: the verb is the intent), reset, checkout or
+  # restore of paths, a forced checkout/switch, clean. A git problem is
+  # reported, not tidied. `git checkout <branch>`, `-b`, add, commit -- <paths>,
+  # pull, push and every read stay open. Matched on the git subcommand after
+  # any global options (-C <dir>, -c k=v), and on an argv list in code.
+  worktree.discard:
+    tools: *acting
+    patterns:
+      - '\bgit(?:[ \t]+(?:-[Cc][ \t]+\S+|--(?:git-dir|work-tree|namespace)(?:=\S+|[ \t]+\S+)|--?[\w-]+(?:=\S+)?))*[ \t]+(?:stash|reset|restore|clean)\b'
+      - '\bgit(?:[ \t]+(?:-[Cc][ \t]+\S+|--?[\w-]+(?:=\S+)?))*[ \t]+checkout\b[^\n;&|]*[ \t]--(?=[ \t"]|$)'
+      - '\bgit(?:[ \t]+(?:-[Cc][ \t]+\S+|--?[\w-]+(?:=\S+)?))*[ \t]+checkout\b[^\n;&|]*[ \t](?:-f|--force|-p|--patch|--ours|--theirs|-m|--merge)(?=[ \t"]|$)'
+      - '\bgit(?:[ \t]+(?:-[Cc][ \t]+\S+|--?[\w-]+(?:=\S+)?))*[ \t]+checkout[ \t]+(?:[^\s;&|"-][^\s;&|"]*[ \t]+)*(?:\.|\./[^\s;&|"]*|[^\s;&|"]*\.[A-Za-z]\w{0,5}|[^\s;&|"]*[*?][^\s;&|"]*)(?=[ \t;&|"]|$)'
+      - '\bgit(?:[ \t]+(?:-[Cc][ \t]+\S+|--?[\w-]+(?:=\S+)?))*[ \t]+checkout[ \t]+[^\s;&|"-][^\s;&|"]*[ \t]+[^\s;&|"-]'
+      - '\bgit(?:[ \t]+(?:-[Cc][ \t]+\S+|--?[\w-]+(?:=\S+)?))*[ \t]+switch\b[^\n;&|]*[ \t](?:-f|--force|--discard-changes)(?=[ \t"]|$)'
+      # the same verbs as an argv list in code: subprocess.run(["git", "stash"])
+      - '\\?["'']git\\?["''](?:\s*,\s*\\?["''][^"''\\]*\\?["''])*\s*,\s*\\?["''](?:stash|reset|restore|clean)\\?["'']'

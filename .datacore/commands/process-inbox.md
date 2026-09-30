@@ -82,7 +82,9 @@ For items routed to `research_learning.org`:
 After all entries processed:
 1. Verify the inbox holds only entries marked `[NEEDS_REVIEW]` (every other entry was routed or archived, and can be found at its destination)
 2. Count items routed to each destination
-3. Git commit and push
+3. Git commit the files you changed, by explicit path: `git commit -m "..." -- <your files>`, then push. When the caller says it commits for you (the nightly inbox job does), do not commit, pull or push at all.
+
+**Uncommitted files belong to other writers.** The working tree of a space holds other agents' uncommitted work, including the ledger's event logs (`.datacore/events/*.jsonl`). Never run `git stash` (any form), `git reset` (any form), `git checkout -- <file>` / `git checkout <path>`, `git restore` or `git clean` — they hide or discard that work. On 2026-09-30 an unattended run stashed to get a pull through and swallowed five uncommitted ledger events. The unattended tool policy refuses these commands (`worktree.discard`); a refusal is not an obstacle to route around. **A git problem is reported, not tidied:** if a commit, pull or push fails, stop, change nothing more in git, and say in one line what failed.
 
 ### Step 5: Report
 
@@ -102,7 +104,7 @@ Inbox processing complete:
 
 - If an entry can't be classified: keep it in inbox.org with the `[NEEDS_REVIEW]` prefix (outcome 3)
 - If target file doesn't exist: create it with standard header
-- If git push fails: log warning but don't fail the run
+- If git commit, pull or push fails: report it in one line and stop there — never stash, reset, checkout, restore or clean to get past it; the inbox work already done stays as it is for the owner or the calling job
 
 ## Boundaries
 
@@ -117,3 +119,4 @@ Inbox processing complete:
 - Guess an undecidable entry into a list instead of marking it `[NEEDS_REVIEW]`
 - Modify entries already in next_actions.org (only add new ones)
 - Skip entries silently — every entry must be accounted for in the report
+- Run `git stash`, `git reset`, `git checkout <path>`, `git restore` or `git clean` — uncommitted files belong to other writers

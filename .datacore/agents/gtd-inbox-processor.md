@@ -400,6 +400,7 @@ For items classified as Ideas:
 3. **Preserve org-mode formatting** - Heading levels (`*`, `**`, `***`), property drawers (`:PROPERTIES:` ... `:END:`), timestamps
 4. **Never remove standing items** - Specifically: `TODO Do more. With Less.` and `* Inbox` heading
 5. **Create backups for major edits** - Use `.backup` extension if editing multiple files
+6. **Uncommitted files belong to other writers** - Never run `git stash` (any form), `git reset` (any form), `git checkout -- <file>` / `git checkout <path>`, `git restore` or `git clean`. The working tree holds other agents' uncommitted work, including the ledger's event logs (`.datacore/events/*.jsonl`); these commands hide or discard it (2026-09-30: an unattended run stashed to get a pull through and swallowed five ledger events). To undo your own edit, edit it back. Commit only your own files, by explicit path (`git commit -m "..." -- <files>`), and not at all when the caller commits for you. The unattended tool policy refuses these commands (`worktree.discard`); a refusal is not an obstacle to route around.
 
 ### Execution Sequence
 1. **Read** the specific inbox entry location in inbox.org
@@ -443,6 +444,7 @@ Example:
 - **Ambiguous entry** → Leave it in the inbox with `[NEEDS_REVIEW]` at the front of its title (never move it to Operations)
 - **Cannot determine focus area** → Default to Operations with note: "Needs focus area classification"
 - **Technical file error** → Stop, report error clearly, do NOT corrupt files
+- **Git problem** (a commit, pull or push fails, a conflict, unexpected changes in the tree) → Report it in one line and stop there. It is reported, not tidied: never stash, reset, checkout, restore or clean to get past it
 - **Missing metadata** → Infer intelligently from context, mark uncertain fields with `[Inferred]`
 - **Complex multi-part task** → Break into separate tasks if appropriate, or keep as one with detailed steps in Details field
 

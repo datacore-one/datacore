@@ -260,3 +260,113 @@ def test_refusal_does_not_copy_sensitive_tool_input(tmp_path, monkeypatch):
     logs = sorted((space / '.datacore').glob('*/*.jsonl'))
     assert (space / '.datacore/telemetry/nightshift.jsonl') in logs
     assert all('PRIVATE-TEST-TOKEN' not in f.read_text() for f in logs)
+
+
+# ── uncommitted work belongs to other writers (incident 2026-09-30) ─────────
+# 05:12 UTC on the box: the nightly inbox job's agent ran `git stash` in the
+# personal space to get a pull through. The stash swallowed five uncommitted
+# events of Winston's log, the ledger (correctly) refused the rewound log, and
+# the hash-chain check went red. In a ledger space the working tree holds other
+# writers' event logs; the ledger's own rule is "commit, never stash"
+# (ledger_transport.py). So an unattended agent may not hide or discard
+# uncommitted work in any form -- stash, reset, checkout/restore of paths,
+# clean -- whatever a task grants. The owner, at the keyboard, still may.
+
+DISCARDS = [
+    "git stash",
+    "git stash push -m tidy",
+    "git stash -u",
+    "git stash pop",
+    "git stash list",
+    "git stash && git pull --rebase && git stash pop",
+    "cd ~/Data/0-personal && git stash",
+    "git -C /srv/data/0-personal stash",
+    "git -c core.pager=cat stash save wip",
+    "git reset",
+    "git reset --hard",
+    "git reset --hard origin/main",
+    "git reset HEAD org/inbox.org",
+    "git reset --soft HEAD~1",
+    "git -C 0-personal reset --mixed",
+    "git checkout -- org/inbox.org",
+    "git checkout org/someday.org",
+    "git checkout org/inbox.org org/someday.org",
+    "git checkout HEAD -- .datacore/events/winston.jsonl",
+    "git checkout .",
+    "git checkout -f main",
+    "git checkout -p",
+    "git restore org/inbox.org",
+    "git restore --staged org/inbox.org",
+    "git restore --source=HEAD --worktree .",
+    "git clean -fd",
+    "git clean -n",
+    "git switch --discard-changes main",
+    "git switch -f main",
+]
+
+
+@pytest.mark.parametrize("cmd", DISCARDS)
+def test_every_form_of_hiding_uncommitted_work_is_classified(cmd):
+    assert "worktree.discard" in tp.classify("Bash", {"command": cmd}, EFFECTS), cmd
+    # Hermes, the runtime the box's inbox job runs on, calls its shell `terminal`.
+    assert "worktree.discard" in tp.classify("terminal", {"command": cmd}, EFFECTS), cmd
+
+
+def test_code_that_shells_out_to_a_discard_is_classified_too():
+    code = 'import subprocess\nsubprocess.run(["git", "stash"], cwd="0-personal")'
+    assert "worktree.discard" in tp.classify("execute_code", {"code": code}, EFFECTS)
+    code = "subprocess.check_call(['git', '-C', 'x', 'reset', '--hard'])"
+    assert "worktree.discard" in tp.classify("execute_code", {"code": code}, EFFECTS)
+
+
+KEEPS = [
+    "git status --short",
+    "git log --oneline -5",
+    "git diff org/inbox.org",
+    "git show HEAD:org/inbox.org",
+    "git add org/inbox.org org/next_actions.org",
+    "git commit -m 'cos: process-inbox' -- org/inbox.org org/next_actions.org",
+    "git pull --no-rebase",
+    "git push",
+    "git check-ignore .datacore/events/winston.jsonl",
+    "git checkout main",
+    "git checkout -b nightshift/fix-inbox",
+    "git switch nightshift/fix-inbox",
+    "git fetch origin && git rev-parse HEAD",
+    "grep -rn stash docs/",
+    "python3 .datacore/lib/ledger_transport.py --help",
+]
+
+
+@pytest.mark.parametrize("cmd", KEEPS)
+def test_ordinary_git_and_commit_by_path_are_not_a_discard(cmd):
+    assert "worktree.discard" not in tp.classify("Bash", {"command": cmd}, EFFECTS), cmd
+
+
+def test_an_unattended_agent_is_refused_every_discard_whatever_its_grants(policy_file):
+    data = yaml.safe_load(policy_file.read_text())
+    data["principals"]["winston"] = {"never_effects": ["worktree.discard"]}
+    policy_file.write_text(yaml.safe_dump(data))
+    for cmd in DISCARDS:
+        d = tp.decide("winston", "terminal", {"command": cmd}, granted=["worktree.discard", "data.delete"],
+                      effects=EFFECTS, policy_path=policy_file)
+        assert d.blocked and d.kind == "never" and "worktree.discard" in d.reason, cmd
+    for cmd in KEEPS:
+        d = tp.decide("winston", "terminal", {"command": cmd}, effects=EFFECTS, policy_path=policy_file)
+        assert d.allow, (cmd, d.reason)
+    # The owner at the keyboard is not an unattended principal.
+    assert tp.decide("gregor", "Bash", {"command": "git stash"}, effects=EFFECTS,
+                     policy_path=policy_file).allow
+
+
+def test_the_shipped_policy_binds_every_agent_principal():
+    """Every principal with limits (an agent) lists worktree.discard among its
+    never-effects, in the tracked file and in this install's local one; the
+    effect is part of the closed vocabulary."""
+    from ledger.policy import load_policy
+    policy = load_policy(tp.DEFAULT_POLICY_FILE)
+    assert "worktree.discard" in set(policy.known_effects)
+    agents = {n: e for n, e in (policy.principals or {}).items() if (e or {}).get("never_effects")}
+    assert agents, "no agent principals declared"
+    for name, entry in agents.items():
+        assert "worktree.discard" in entry["never_effects"], name
