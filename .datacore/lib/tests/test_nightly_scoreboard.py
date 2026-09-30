@@ -563,3 +563,21 @@ def test_the_promise_list_can_be_named_where_the_code_has_no_system_space(tmp_pa
                        env={**__import__("os").environ, "DATACORE_PROMISES_DIR": str(d)},
                        capture_output=True, text=True)
     assert "'ZZ-1': 'A test promise'" in r.stdout, r.stderr
+
+
+def test_an_eval_that_cannot_be_imported_here_does_not_hide_the_rest_of_its_batch(tmp_path):
+    """hermes, 2026-09-30: two evals import a module that host does not have; the
+    collection error stopped pytest for the whole batch of twenty, and every other
+    file in it counted red with no reason (two of them pass when run)."""
+    import promise_evals
+    bad = tmp_path / "test_promise_ZZ3_needs_a_module.py"
+    bad.write_text("import a_module_this_host_does_not_have\n\ndef test_x():\n    pass\n")
+    good = tmp_path / "test_promise_ZZ4_fine.py"
+    good.write_text("def test_ok():\n    assert True\n")
+    red = tmp_path / "test_promise_ZZ5_red.py"
+    red.write_text("def test_bad():\n    assert 1 == 2, 'a real failure'\n")
+    result = promise_evals.run_suite(tmp_path, [bad, good, red], {})
+    assert result == {bad.name: False, good.name: True, red.name: False}
+    details = pn.failure_details(tmp_path, [bad, red], {})
+    [(test, line)] = details[str(red)]
+    assert test == "test_bad" and "a real failure" in line

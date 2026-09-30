@@ -92,7 +92,7 @@ def run_suite(cwd: Path, files: list[Path], env_extra: dict) -> dict[str, bool]:
         env["DATACORE_AGENT_EVALS"] = "1"   # without it an agent eval fails by design (n-a is never a pass)
     result: dict[str, bool] = {f.name: False for f in files}   # a file pytest never reported is not a pass
     try:
-        subprocess.run([PY, "-m", "pytest", "-q", "-p", "no:cacheprovider", f"--junitxml={xml}",
+        subprocess.run([PY, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--continue-on-collection-errors", f"--junitxml={xml}",
                         *[str(f) for f in files]], cwd=cwd, env=env, capture_output=True, text=True,
                        timeout=SUITE_TIMEOUT_S)
     except subprocess.TimeoutExpired:

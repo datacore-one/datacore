@@ -114,7 +114,7 @@ def failure_details(cwd: Path, files: list[Path], env_extra: dict) -> dict[str, 
     env = {**runner_env(), **env_extra, "PROMISE_EVALS_ALL": "1"}
     out: dict[str, list[tuple[str, str]]] = {}
     try:
-        subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", f"--junitxml={xml}",
+        subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--continue-on-collection-errors", f"--junitxml={xml}",
                         *[str(f) for f in files]], cwd=cwd, env=env, capture_output=True, text=True,
                        timeout=promise_evals.SUITE_TIMEOUT_S)
         tree = ET.parse(xml)
