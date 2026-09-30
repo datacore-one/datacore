@@ -364,6 +364,8 @@ def _env_files(tmp_path, body: str) -> list:
 def test_the_alert_goes_to_the_firm_group_with_this_hosts_bot(tmp_path, monkeypatch):
     """On the overnight host winston_send cannot load (a root-owned ~/.config/cos.env,
     2026-09-30); its own alerts post directly: TELEGRAM_BOT_TOKEN to ALERT_CHAT_ID."""
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("ALERT_CHAT_ID", raising=False)
     monkeypatch.setattr(pn, "ENV_FILES", _env_files(tmp_path, "TELEGRAM_BOT_TOKEN=tok\nALERT_CHAT_ID=-100\nTELEGRAM_CHAT_ID=1to1\n"))
     seen = {}
 
