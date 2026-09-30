@@ -243,3 +243,20 @@ def test_runs_land_in_one_folder_and_the_previous_run_is_found(tmp_path):
     os.utime(again / "report.json", ns=(same, same))
     assert sim.previous_run(tmp_path, again) == first
     assert sim.previous_run(tmp_path, first) is None
+
+
+def test_a_redirected_jobs_output_is_found_in_the_log_it_appends_to(tmp_path):
+    """Once the job list carries the crontab's `>> log 2>&1` (finding 6), a failing
+    job's cause is in that log, not on stdout: the break must still quote it."""
+    home = tmp_path / "home"
+    assert sim.redirect_target("~/x/run.sh >> ~/.datacore/cos/news.log 2>&1", home) == \
+        home / ".datacore/cos/news.log"
+    assert sim.redirect_target('a 2>&1 | sed "s/^/x /" >> ~/.datacore/cos/v.log', home) == \
+        home / ".datacore/cos/v.log"
+    assert sim.redirect_target("~/x/run.sh", home) is None
+    log = home / ".datacore/cos/news.log"
+    log.parent.mkdir(parents=True)
+    log.write_text("yesterday ok\n")
+    before = sim.log_size(log)
+    log.write_text(log.read_text() + "ERROR: MAIL_TRIAGE_ACCOUNTS is not set\n")
+    assert sim.appended_since(log, before) == "ERROR: MAIL_TRIAGE_ACCOUNTS is not set\n"

@@ -1011,6 +1011,36 @@ def _at(start: dt.date, day: int, hhmm: str) -> dt.datetime:
 _JOB_FAIL = re.compile(r"^job '([^']+)' FAILED:\s*$")
 
 
+def redirect_target(cmd: str, home: Path) -> Path | None:
+    """The file a job's cmd appends its output to (`>> ~/x.log`), if any: since
+    the job list carries the crontab's redirect, a failing job's cause is there."""
+    hits = re.findall(r">>\s*(\S+)", cmd)
+    if not hits:
+        return None
+    t = hits[-1].strip("'\"")
+    if t.startswith("~/"):
+        return home / t[2:]
+    if t.startswith("$HOME/"):
+        return home / t[6:]
+    return Path(t) if t.startswith("/") else None
+
+
+def log_size(path: Path | None) -> int:
+    try:
+        return path.stat().st_size if path else 0
+    except OSError:
+        return 0
+
+
+def appended_since(path: Path | None, size: int) -> str:
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(size)
+            return fh.read()[-20000:].decode(errors="replace")
+    except (OSError, TypeError):
+        return ""
+
+
 def _first_line(text: str) -> str:
     lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
     pat = re.compile(r"error|fail|refus|denied|not found|no such|traceback|fatal|stale|missing|"
@@ -1200,7 +1230,11 @@ class Week:
         if cur is None:
             return
         j = cur
+        target = redirect_target(str(j.get("cmd") or ""), m.home)
+        before = log_size(target)
         rc, out, secs = self.fleet.sh(m, str(j.get("cmd") or "true"), ts, job=j["name"])
+        if target is not None:
+            out = (out + appended_since(target, before)) if out.strip() else appended_since(target, before)
         self.runs += 1
         self.first_run.setdefault((m.name, j["name"]), ts)
         if rc in (j.get("exit_ok") or [0]):
