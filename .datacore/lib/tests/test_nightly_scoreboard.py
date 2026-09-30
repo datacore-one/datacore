@@ -65,7 +65,7 @@ def night(tmp_path, monkeypatch, history: list[dict], tonight: dict, *, date=WED
     sent: list[str] = []
     monkeypatch.setattr(pn, "STATE_DIR", state)
     monkeypatch.setattr(pn, "BASELINE", base)
-    monkeypatch.setattr(pn, "run_board", lambda: tonight)
+    monkeypatch.setattr(pn, "run_board", lambda want=None: tonight)
     monkeypatch.setattr(pn, "unmet_needs", lambda: unmet or {})
     monkeypatch.setattr(pn, "promise_texts", lambda: TEXTS)
     monkeypatch.setattr(pn, "send_to_firm", lambda text: (sent.append(text) or (True, "sent")))
@@ -101,13 +101,27 @@ def test_the_same_red_the_next_night_is_not_alerted_again(tmp_path, monkeypatch)
     assert rc == 0 and sent == []
 
 
-def test_the_first_night_compares_with_the_owners_baseline(tmp_path, monkeypatch):
+def test_the_first_night_on_a_host_starts_its_history_and_sends_nothing(tmp_path, monkeypatch, capsys):
+    """The baseline is recorded on the workstation. On 2026-09-30 the overnight
+    host's first run found 27 baseline-green promises red there -- unreachable
+    hosts, files that checkout lacks, its own agent identity -- none a broken
+    promise. "Was green" means green on THIS host, so the first night only records."""
     tonight = raw({"CAP-4": "red", "NEW-1": "red"},
                   {"CAP-4": [fail("t.py", "t", "boom")], "NEW-1": [fail("u.py", "u", "never green")]})
-    sent, _, _ = night(tmp_path, monkeypatch, [], tonight)
-    assert len(sent) == 1
-    assert "(CAP-4)" in sent[0]                 # green in the baseline, red tonight
-    assert "NEW-1" not in sent[0]               # never green: not a regression
+    sent, rc, state = night(tmp_path, monkeypatch, [], tonight)
+    assert rc == 0 and sent == []
+    assert (state / "board-2026-09-30.json").exists()
+    out = capsys.readouterr().out
+    assert "first night on this host" in out
+    assert out.strip().splitlines()[-1].endswith("alert none")
+
+
+def test_the_second_night_compares_with_the_first(tmp_path, monkeypatch):
+    hist = [board("2026-09-29", {"CAP-4": "red", "DAY-2": "green"}, {"CAP-4": [fail("t.py", "t", "x")]})]
+    sent, _, _ = night(tmp_path, monkeypatch, hist, raw({"CAP-4": "red", "DAY-2": "red"},
+                                                         {"CAP-4": [fail("t.py", "t", "x")],
+                                                          "DAY-2": [fail("d.py", "d", "boom")]}))
+    assert len(sent) == 1 and "(DAY-2)" in sent[0] and "(CAP-4)" not in sent[0]
 
 
 def test_a_red_behind_a_night_that_could_not_run_still_counts_as_turned_red(tmp_path, monkeypatch):
@@ -246,7 +260,7 @@ def test_an_undelivered_alert_fails_the_run_and_says_so(tmp_path, monkeypatch, c
     base.write_text('{"green": []}')
     monkeypatch.setattr(pn, "STATE_DIR", state)
     monkeypatch.setattr(pn, "BASELINE", base)
-    monkeypatch.setattr(pn, "run_board", lambda: raw({"CAP-4": "red"}, {"CAP-4": [fail("t.py", "t", "x")]}))
+    monkeypatch.setattr(pn, "run_board", lambda want=None: raw({"CAP-4": "red"}, {"CAP-4": [fail("t.py", "t", "x")]}))
     monkeypatch.setattr(pn, "unmet_needs", lambda: {})
     monkeypatch.setattr(pn, "promise_texts", lambda: TEXTS)
     monkeypatch.setattr(pn, "send_to_firm", lambda text: (False, "http 401"))
@@ -260,7 +274,7 @@ def test_a_runner_that_fails_writes_no_board(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(pn, "STATE_DIR", state)
     monkeypatch.setattr(pn, "today", lambda: WED)
 
-    def broken():
+    def broken(want=None):
         raise RuntimeError("promise_evals.py printed no JSON")
     monkeypatch.setattr(pn, "run_board", broken)
     assert pn.main([]) == 1
@@ -289,3 +303,60 @@ def test_a_red_that_passes_on_the_second_run_says_so(tmp_path):
     f.write_text("def test_ok():\n    assert True\n")
     details = pn.failure_details(tmp_path, [f], {})
     assert details[str(f)] == [("", "passed when run again for its failure line (flaky?)")]
+
+
+@pytest.mark.parametrize("line", [
+    "subprocess.TimeoutExpired: Command '['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', 'box', 'crontab -l']' timed out",
+    "AssertionError: machines not on current main: box: could not check (UNREACHABLE timeout)",
+    "AssertionError: could not tell (unreachable): ['box', 'hermes']",
+    "Failed: box: could not read the crontab (timeout) -- could not tell is not a pass",
+])
+def test_an_ssh_timeout_or_could_not_tell_is_could_not_run(line):
+    b = board(WED, {"SYN-4": "red"}, {"SYN-4": [fail("s.py", "t", line)]})
+    assert b["promises"]["SYN-4"]["state"] == "could-not-run"
+
+
+def test_a_promise_whose_every_eval_file_lacks_a_need_could_not_run_without_a_rerun():
+    r = raw({"MSG-8": "red"})
+    r["eval_files"] = {"MSG-8": ["m.py"]}
+    b = pn.build_board(r, {"m.py": ["fleet"]}, TEXTS, date=WED, host="h")
+    assert b["promises"]["MSG-8"]["state"] == "could-not-run"
+
+
+def test_only_reds_that_could_be_news_are_rerun_for_their_failure_line(tmp_path, monkeypatch):
+    hist = [board("2026-09-29", {"CAP-4": "red", "DAY-2": "green"}, {"CAP-4": [fail("t.py", "t", "x")]})]
+    asked = {}
+
+    def fake(want=None):
+        asked["want"] = want
+        return raw({"CAP-4": "red", "DAY-2": "green"}, {"CAP-4": [fail("t.py", "t", "x")]})
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "board-2026-09-29.json").write_text(json.dumps(hist[0]))
+    monkeypatch.setattr(pn, "STATE_DIR", state)
+    monkeypatch.setattr(pn, "run_board", fake)
+    monkeypatch.setattr(pn, "unmet_needs", lambda: {})
+    monkeypatch.setattr(pn, "promise_texts", lambda: TEXTS)
+    monkeypatch.setattr(pn, "send_to_firm", lambda text: (True, "sent"))
+    monkeypatch.setattr(pn, "today", lambda: WED)
+    pn.main([])
+    assert asked["want"]("DAY-2") is True        # green last night: a red tonight is news
+    assert asked["want"]("CAP-4") is False       # red last night: already told
+
+
+def test_the_sender_is_the_tracked_chief_of_staff_copy_when_lib_has_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(pn, "LIB", tmp_path / "lib")
+    monkeypatch.setattr(pn, "ROOT", tmp_path)
+    tracked = tmp_path / ".datacore" / "modules" / "chief-of-staff" / "server" / "lib" / "winston_send.py"
+    tracked.parent.mkdir(parents=True)
+    tracked.write_text("")
+    assert pn.sender() == tracked
+
+
+def test_a_sender_that_cannot_start_is_recorded_as_undelivered(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATACORE_UNDELIVERED_LOG", str(tmp_path / "undelivered.jsonl"))
+    monkeypatch.setattr(pn, "sender", lambda: tmp_path / "missing" / "winston_send.py")
+    ok, why = pn.send_to_firm("Promise scoreboard: test")
+    assert ok is False
+    rec = json.loads((tmp_path / "undelivered.jsonl").read_text().splitlines()[-1])
+    assert rec["sender"] == "promise_nightly"

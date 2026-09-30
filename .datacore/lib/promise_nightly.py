@@ -19,9 +19,13 @@ What it does, in order:
      (and latest.json), keeping the last KEEP nights.
   4. Compares with the history: a promise whose last judged state (green/red,
      skipping could-not-run nights) was green and is red tonight "turned red";
-     red to green "recovered". With no history, the owner's baseline
-     (.datacore/registry/promise-baseline.json, read only) is the prior.
-  5. Sends ONE message to The Firm (winston_send.py --alert, the route this
+     red to green "recovered". "Was green" means green on THIS host: the first
+     night on a host only starts its history and sends nothing (it prints which
+     promises green in the owner's baseline -- .datacore/registry/
+     promise-baseline.json, read only -- are red here). Only reds that could be
+     news (not already red here) are rerun for their failure line.
+  5. Sends ONE message to The Firm (winston_send.py --alert -- the install's copy
+     in .datacore/lib, else the tracked chief-of-staff one -- the route this
      host's job_verify uses) listing what turned red -- plain promise text, id in
      brackets, first failure line -- what recovered, and what newly could not run.
      Nothing moved: nothing sent. A red that stays red is not repeated; on the
@@ -63,7 +67,12 @@ WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 UNREACHABLE = re.compile(
     r"ssh: connect to host|Could not resolve hostname|No route to host|Connection timed out"
     r"|Connection refused|Host key verification failed|Permission denied \(publickey"
-    r"|ssh: Could not|Operation timed out", re.I)
+    r"|ssh: Could not|Operation timed out"
+    # the evals' own words for a host they could not reach (seen on the first
+    # nightshift run, 2026-09-30): an ssh call that timed out, "could not check
+    # (UNREACHABLE ...)", "could not tell (unreachable)", "could not read the crontab (timeout)"
+    r"|TimeoutExpired: Command '\['ssh'|\bUNREACHABLE\b|could not tell \(unreachable\)"
+    r"|could not read the crontab \(timeout\)", re.I)
 
 GREEN, RED, CNR = "green", "red", "could-not-run"
 
@@ -131,8 +140,9 @@ def _first_line(el) -> str:
     return el.tag
 
 
-def run_board() -> dict:
-    """promise_evals.py --json, plus {"failures": {pid: [{file, test, line}]}} for the reds."""
+def run_board(want=None) -> dict:
+    """promise_evals.py --json, plus {"failures": {pid: [{file, test, line}]}} for the reds
+    that `want(pid)` says could be news (all reds when None), and {"eval_files": {pid: [file]}}."""
     r = subprocess.run(runner_command(), cwd=ROOT, env=runner_env(), capture_output=True, text=True,
                        timeout=RUN_TIMEOUT_S)
     start = r.stdout.find("{")
@@ -142,7 +152,7 @@ def run_board() -> dict:
     raw = json.loads(r.stdout[start:])
     import promise_evals
     files = promise_evals.eval_files()
-    reds = [pid for pid, st in raw.get("promises", {}).items() if st == "red"]
+    reds = [pid for pid, st in raw.get("promises", {}).items() if st == "red" and (want is None or want(pid))]
     wanted: dict[str, set[Path]] = {}
     for pid in reds:
         for suite, f in files.get(promise_evals.norm(pid), []):
@@ -156,6 +166,8 @@ def run_board() -> dict:
                              for _s, f in files.get(promise_evals.norm(pid), [])
                              for t, line in details.get(str(f), [])]
                        for pid in reds}
+    raw["eval_files"] = {pid: [_rel(f) for _s, f in files.get(promise_evals.norm(pid), [])]
+                         for pid in raw.get("promises", {})}
     return raw
 
 
@@ -205,6 +217,13 @@ def build_board(raw: dict, unmet: dict[str, list[str]], texts: dict[str, str], *
         fails = (raw.get("failures") or {}).get(pid) or []
         if st == "no-eval":
             entry.update(state=CNR, why="no eval file for it on this host")
+        elif st == RED and not fails:
+            # Not rerun (already red here), or no detail: could-not-run only when
+            # every eval file behind it lacks a need this host does not have.
+            efs = (raw.get("eval_files") or {}).get(pid) or []
+            missing = [unmet.get(f) for f in efs]
+            if efs and all(missing):
+                entry.update(state=CNR, why="needs " + ", ".join(sorted({x for m in missing for x in m})))
         elif st == RED:
             needs = [_covered(f, unmet) for f in fails]
             # The first failure nothing on this host explains is the one worth reading.
@@ -303,6 +322,21 @@ def message(ch: dict[str, list[str]], board: dict, *, weekly: bool, pointer: str
     return f"Promise scoreboard, {board['date']} on {board['host']}\n\n" + "\n".join(lines) + f"\n\nBoard: {pointer}"
 
 
+def sender() -> Path:
+    """winston_send.py: the install's copy in .datacore/lib, else the tracked
+    chief-of-staff one (the overnight host has only that one)."""
+    local = LIB / "winston_send.py"
+    return local if local.exists() else ROOT / ".datacore" / "modules" / "chief-of-staff" / "server" / "lib" / "winston_send.py"
+
+
+def _undelivered(reason: str, text: str) -> None:
+    try:
+        from tg_format import record_undelivered
+        record_undelivered("promise_nightly", reason, text)
+    except Exception:  # noqa: BLE001 -- the contract line still says NOT delivered
+        pass
+
+
 def send_to_firm(text: str) -> tuple[bool, str]:
     """One alert to The Firm group through winston_send.py --alert.
 
@@ -312,8 +346,14 @@ def send_to_firm(text: str) -> tuple[bool, str]:
     as undelivered (MSG-10) and exits non-zero.
     """
     env = dict(os.environ)
+    path = sender()
+    if not path.exists():
+        why = f"no winston_send.py on this host ({path})"
+        _undelivered(why, text)
+        return False, why
     if not env.get("WINSTON_BOT_TOKEN"):
         try:
+            sys.path.insert(0, str(path.parent))
             import cos_env
             merged = cos_env.read()
             if merged.get("TELEGRAM_BOT_TOKEN"):
@@ -321,13 +361,18 @@ def send_to_firm(text: str) -> tuple[bool, str]:
         except Exception:  # noqa: BLE001 -- winston_send then says which setting is missing
             pass
     try:
-        r = subprocess.run([sys.executable, str(LIB / "winston_send.py"), "--alert"], input=text, text=True,
+        r = subprocess.run([sys.executable, str(path), "--alert"], input=text, text=True,
                            capture_output=True, timeout=120, env=env)
     except (OSError, subprocess.TimeoutExpired) as exc:
+        _undelivered(type(exc).__name__, text)
         return False, f"{type(exc).__name__}"
     if r.returncode == 0:
         return True, "sent"
-    return False, ((r.stderr or r.stdout).strip().splitlines() or [f"exit {r.returncode}"])[-1][:200]
+    # winston_send records its own failed sends (MSG-10); this covers a crash before it could.
+    why = ((r.stderr or r.stdout).strip().splitlines() or [f"exit {r.returncode}"])[-1][:200]
+    if "NOT delivered" not in (r.stderr or "") and "NOT sent" not in (r.stderr or ""):
+        _undelivered(why, text)
+    return False, why
 
 
 # ---- main --------------------------------------------------------------------------
@@ -348,24 +393,40 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--weekly-day", default="mon", choices=WEEKDAYS)
     args = ap.parse_args(argv)
     night = today()
+    state = Path(STATE_DIR)
+    history = load_history(state, night) if state.exists() else []
+    base = baseline_green()
+
+    def could_be_news(pid: str) -> bool:
+        """A red is news unless it was already red here last time it was judged."""
+        past = [h["promises"].get(pid, {}).get("state") for h in history]
+        judged = next((x for x in past if x in (GREEN, RED)), None)
+        return judged != RED if history else _norm(pid) in base
+
     try:
-        raw = run_board()
+        raw = run_board(could_be_news)
         board = build_board(raw, unmet_needs(), promise_texts(), date=night)
     except Exception as exc:  # noqa: BLE001 -- the contract line must say it failed
         print(f"promise-scoreboard: FAILED to run ({type(exc).__name__}: {str(exc)[:200]})")
         return 1
-    state = Path(STATE_DIR)
     state.mkdir(parents=True, exist_ok=True)
-    history = load_history(state, night)
     path = state / f"board-{night}.json"
     _write(path, board)
     _write(state / "latest.json", board)
     for old in sorted(state.glob("board-*.json"))[:-KEEP]:
         old.unlink(missing_ok=True)
 
-    ch = changes(history, board, baseline_green())
+    ch = changes(history, board, base)
     weekly = WEEKDAYS[_date.fromisoformat(night).weekday()] == args.weekly_day
     text = message(ch, board, weekly=weekly, pointer=f"{path} on {board['host']}")
+    if not history:
+        # "Was green" means green on THIS host. The baseline is the workstation's;
+        # compared with it, the overnight host's first run found 27 promises red
+        # that it simply cannot run the way the workstation does (2026-09-30).
+        print(f"first night on this host: history started, nothing sent; {len(ch['turned_red'])} promise(s) "
+              f"green in the owner's baseline are red here: {', '.join(ch['turned_red']) or 'none'}")
+        text = None
+        ch = {**ch, "turned_red": [], "recovered": [], "newly_cnr": []}
     rc, outcome = 0, "none"
     if text and args.no_send:
         print(text)
