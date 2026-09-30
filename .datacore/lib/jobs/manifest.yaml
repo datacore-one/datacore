@@ -1446,7 +1446,8 @@ jobs:
   # over ssh (need `fleet`, met only on the roster's roles.console -- the
   # workstation) or runs a real agent session (need `agent`, never on in the
   # nightly) is "could not run here" there, never red. Staggered, UTC: box
-  # 01:40, hermes 02:10, plur-claw 02:50, nightshift 04:30; the workstation at
+  # 01:40, hermes 02:10, plur-claw 02:50 (its entry is in manifest.local.yaml:
+  # a tracked file names no such host, INS-3), nightshift 04:30; the workstation at
   # 21:30 local while it is usually awake. Each alerts by its own route:
   #   box         Winston's sender, as its job checks do
   #   workstation the same sender over ssh on the always-on host, as
@@ -1477,20 +1478,6 @@ jobs:
     machine: hermes
     schedule: "10 2 * * *"
     cmd: "DATACORE_PROMISES_DIR=~/Data/1-datacore/1-tracks/dev/datacore-upgrade/promises python3 ~/.datacore/v2-runner/.datacore/lib/promise_nightly.py --no-send >> ~/.datacore/state/promise-nightly.log 2>&1"
-    on_fail: telegram
-    artifacts:
-      - path: ~/.datacore/state/promise-nightly.log
-        check: last_line_regex
-        arg: '^promise-scoreboard: \d+ green, \d+ red, \d+ could not run here; \d+ turned red, \d+ recovered; alert none( \(--no-send\))?$'
-        max_age_hours: 26
-      - path: ~/.datacore/state/promise-scoreboard/latest.json
-        check: json_has_keys
-        arg: [date, counts, promises]
-        max_age_hours: 26
-  - name: plur-claw-promise-scoreboard
-    machine: plur-claw
-    schedule: "50 2 * * *"
-    cmd: "DATACORE_PROMISES_DIR=~/Data/1-datacore-space/1-tracks/dev/datacore-upgrade/promises ~/.datacore/eval-venv/bin/python ~/.datacore/v2-runner/.datacore/lib/promise_nightly.py --no-send >> ~/.datacore/state/promise-nightly.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: ~/.datacore/state/promise-nightly.log
