@@ -2,6 +2,8 @@
 
 This guide covers setting up new spaces and maintaining existing ones.
 
+Codex, Cursor and OpenCode connect to this same installation. See [Using Datacore from Codex, Cursor and OpenCode](using-other-apps.md).
+
 ## Setting Up a New Space
 
 Use the `create-space` agent to scaffold new team or personal spaces.
