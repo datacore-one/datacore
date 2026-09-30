@@ -328,6 +328,10 @@ node_modules/
 .datacore/lib/miles_delivery.*
 .datacore/lib/lens_analyze.py
 .datacore/lib/ws_chat_test.py
+# The model-driven jobs' git guard (chief-of-staff server/lib/agent-bin/),
+# shipped by that module's server/deploy.sh like the cos_* scripts. It sat
+# untracked and unignored on the chief-of-staff host after a hand copy (OPS-11).
+.datacore/lib/agent-bin/
 
 # Chief of Staff persona — written by `datacore init` with the name the user
 # chose and their free-text "how I want to be worked with" notes. Their own
