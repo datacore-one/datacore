@@ -898,7 +898,9 @@ jobs:
       # The template's evidence: the plan page written into the owner's space.
       - path: "~/Data/0-personal/notes/pages/weekly-plan-*.md"
         check: regex
-        arg: '^# Weekly Plan — [0-9]{4}-W[0-9]{2}'
+        # "Weekly Plan — 2026-W40" (the template) or "Weekly Plan: 2026-W40" (the
+        # owner's own W40 run, 2026-09-28): the page is the evidence, not its dash.
+        arg: '^# Weekly Plan ?[:—] [0-9]{4}-W[0-9]{2}'
         max_age_hours: 170
 
   # AUD-6: the morning after each audit night, the box checks the night's
