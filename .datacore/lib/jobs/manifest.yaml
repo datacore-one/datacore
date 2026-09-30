@@ -1415,6 +1415,32 @@ jobs:
         arg: 'ledger-invariants: SOUND'
         max_age_hours: 26
 
+  # THE PROMISE SCOREBOARD, NIGHTLY (owner decision 2026-09-30). Every promise
+  # eval, deterministic and production -- never --agents (agent evals cost model
+  # runs) and never --write-baseline (the baseline stays the owner's). One
+  # message to The Firm when a promise that was green turns red, or recovers, or
+  # newly cannot run on this host; nothing when nothing moved; a red that stays
+  # red is repeated only in the Monday summary. 04:30 UTC: after the drills
+  # (02:45), the triage (03:15/03:30) and the ledger check (03:40), clear of the
+  # 06:00 overnight run and the 06:10 fleet sync. The history (last 14 boards)
+  # is in ~/.datacore/state/promise-scoreboard/.
+  - name: nightshift-promise-scoreboard
+    machine: nightshift
+    schedule: "30 4 * * *"
+    cmd: "python3 ~/Data/.datacore/lib/promise_nightly.py >> ~/.datacore/state/promise-nightly.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      # The last line is the run's verdict. "alert NOT delivered" or "FAILED to
+      # run" fail this contract; reds found are the message's job, not this one's.
+      - path: ~/.datacore/state/promise-nightly.log
+        check: last_line_regex
+        arg: '^promise-scoreboard: \d+ green, \d+ red, \d+ could not run here; \d+ turned red, \d+ recovered; alert (sent|none)$'
+        max_age_hours: 26
+      - path: ~/.datacore/state/promise-scoreboard/latest.json
+        check: json_has_keys
+        arg: [date, counts, promises]
+        max_age_hours: 26
+
   # THE ESCALATION PATH FOR DELEGATED REPAIRS, and the reason withholding the
   # other alerts is safe. job_verify now hands a recurring failure to miles and
   # says nothing to the operator; if that were the whole change, a repair that
