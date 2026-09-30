@@ -17,7 +17,10 @@ add. Two gates (product description, stages 4 and 5):
                              refused.
 
 Limits come from `approvals_policy.yaml` (`principals:`), with documented
-defaults: agents get max_hops 3 and 50 creates a day; humans are unbounded.
+defaults: agents get max_hops 3; creates are unbounded for everyone unless the
+policy names a `max_creates_per_day` for that principal (owner decision
+2026-09-30: "There should be no limit" -- the 50-a-day agent default of
+2026-09-06 had refused Winston's repair and job-failure tasks for four days).
 
 `max_creates_per_day` IS PER PRINCIPAL PER SPACE (owner decision L6,
 2026-09-23). `creates_today` counts the `item.create` events of every writer
@@ -38,7 +41,7 @@ from pathlib import Path
 from actor_identity import addressed_to, principal_of, principals as _principals
 
 DEFAULT_MAX_HOPS = 3
-DEFAULT_MAX_CREATES_PER_DAY = 50
+DEFAULT_MAX_CREATES_PER_DAY = None   # no default cap (owner decision 2026-09-30)
 ABSENT_AFTER_HOURS = 26  # a principal whose contracts have not been verified for this long is absent
 
 
@@ -207,8 +210,8 @@ def check_create(actor: str, payload: dict | None, policy=None, space_dir: Path 
             payload["assignee_absent"] = note  # recorded, never worked around
     if not human:
         cap = lims.get("max_creates_per_day", DEFAULT_MAX_CREATES_PER_DAY)
-        n = creates_today(space_dir, actor, today)
-        if n >= cap:
+        n = creates_today(space_dir, actor, today) if cap is not None else 0
+        if cap is not None and n >= cap:
             return False, f"{name} has created {n} item(s) today; the allowance is {cap}"
     return True, f"{name} may create"
 

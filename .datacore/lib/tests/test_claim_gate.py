@@ -59,6 +59,19 @@ def test_daily_creation_allowance_counts_this_writers_own_log(tmp_path, monkeypa
     assert G.creates_today(space, "data", today=dt.date(2000, 1, 1)) == 0
 
 
+def test_an_agent_with_no_declared_allowance_is_never_refused_for_volume(tmp_path, monkeypatch):
+    """Owner decision 2026-09-30: "There should be no limit". The 50-a-day default
+    for agents (2026-09-06) refused Winston's repair tasks and job-failure tasks for
+    four days running. An agent is capped only where the policy names a cap."""
+    _reg(monkeypatch, tmp_path)
+    space = tmp_path / "5-plur"; (space / ".datacore" / "events").mkdir(parents=True)
+    log = EventLog(space, "data")
+    for i in range(60):
+        log.append("item.create", {"id": f"i{i}", "title": "x"})
+    ok, why = G.check_create("data", {"id": "i99"}, policy=_policy(data={}), space_dir=space)
+    assert ok, why
+
+
 def test_guarded_append_refuses_a_create_past_the_gate(tmp_path, monkeypatch):
     _reg(monkeypatch, tmp_path)
     space = tmp_path / "5-plur"; (space / ".datacore" / "events").mkdir(parents=True)

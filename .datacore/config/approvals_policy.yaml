@@ -73,8 +73,9 @@ known_effects:
   - write
 
 # Per-principal limits (product description, stage 4; DIP-0044 §7). Defaults
-# when a principal is absent: agents get max_hops 3 and 50 creates a day,
-# humans are unbounded (claim_gate.py). `never_effects` cannot be granted.
+# when a principal is absent: agents get max_hops 3; creates are unbounded
+# unless a principal names `max_creates_per_day` (owner decision 2026-09-30,
+# "There should be no limit"; the 50-a-day agent default is gone) (claim_gate.py). `never_effects` cannot be granted.
 # `max_creates_per_day` is counted per principal PER SPACE (all of the
 # principal's writer names, today UTC, in the space being written to): each
 # space allows the full cap, so the fleet-wide ceiling is cap x spaces.
