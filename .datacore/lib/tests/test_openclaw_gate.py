@@ -161,6 +161,28 @@ def test_the_gateway_tool_may_read_but_never_update_the_runtime(gate):
                                                    "path": "agents"}}) == {"block": False}
 
 
+def test_a_standing_grant_reaches_a_codex_argv_command(tmp_path):
+    """Codex hands a shell call over as argv `cmd`; the gate reads it into
+    `command`, and the argv copy must not make the same command look like a
+    second, ungranted one (found live on plur-claw, 2026-09-30)."""
+    mod = _load_gate()
+    policy = tmp_path / "approvals_policy.yaml"
+    policy.write_text(POLICY + r"""    standing_grants:
+      - effect: public.post
+        command: '(^|/)\.datacore/modules/comms/lib/x_poster\.py\b'
+""")
+    env = {"DATACORE_POLICY_PRINCIPAL": "data", "DATACORE_POLICY_SPACE": str(tmp_path / "no-ledger")}
+    poster = "python3 /srv/agent/Data/.datacore/modules/comms/lib/x_poster.py --account plur hi"
+    for params in ({"command": poster}, {"cmd": ["bash", "-lc", f"cd /srv/agent/Data && {poster}"]},
+                   {"cmd": poster}):
+        out = mod.decide_event({"toolName": "exec", "params": params}, env=env, policy_path=policy, record=False)
+        assert out == {"block": False}, (params, out)
+    # a different `cmd` beside `command` is still judged: it is not the same call
+    out = mod.decide_event({"toolName": "exec", "params": {"command": poster, "cmd": "python3 engagement_post.py"}},
+                           env=env, policy_path=policy, record=False)
+    assert out["block"] is True
+
+
 def test_openclaw_tool_names_do_not_leak_into_other_runtimes():
     """The action-qualified names exist only for OpenClaw's own tools: a Claude
     or Hermes tool called `message` is not a thing, and computer_use's

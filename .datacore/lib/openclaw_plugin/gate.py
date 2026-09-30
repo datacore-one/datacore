@@ -86,6 +86,11 @@ def translate(event: dict) -> list[tuple[str, dict]]:
             if event.get("toolKind") == "code_mode_exec" or isinstance(params.get("code"), str):
                 return [("execute_code", params)]
             raise ValueError(f"cannot read the command of this {name} call")
+        # When the command was read from `cmd` (Codex's argv), that copy is the
+        # same call: dropping it keeps a standing grant from seeing the command
+        # twice. A `cmd` beside a `command` of its own stays and is judged.
+        if not (isinstance(params.get("command"), str) and params["command"].strip()):
+            params.pop("cmd", None)
         return [("Bash", {**params, "command": cmd})]
     if low == "apply_patch":
         calls = [("patch", params)]
