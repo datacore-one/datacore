@@ -448,3 +448,44 @@ tests:
     only: [test_an_agent_files_project_work_in_its_space]
     needs: [agent]
     why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  # (found by following module-level `SSH = ["ssh", ...]` constants)
+  - test: .datacore/lib/tests/test_promise_AGT3_configured_model_access.py
+    only: [test_no_agent_host_runs_anything_with_the_retired_key, test_each_agent_runtime_names_a_configured_model]
+    needs: [fleet]
+    why: reads other machines over ssh
+  - test: .datacore/lib/tests/test_promise_AGT5_no_agent_merges.py
+    only: [test_no_host_runs_an_unattended_merger]
+    needs: [fleet]
+    why: reads other machines over ssh
+  - test: .datacore/lib/tests/test_promise_INS7_new_machine_same_protections.py
+    only: [test_every_machine_has_every_protection]
+    needs: [fleet]
+    why: reads other machines over ssh
+  - test: .datacore/lib/tests/test_promise_MEM_51_agents_act_under_own_account.py
+    only: [test_the_agent_host_commits_and_pushes_as_the_agent]
+    needs: [fleet]
+    why: reads other machines over ssh
+  - test: .datacore/lib/tests/test_promise_MEM_52_no_self_invented_work_on_timer.py
+    only: [test_each_agent_host_starts_models_only_for_named_duties]
+    needs: [fleet]
+    why: reads other machines over ssh
+  - test: .datacore/lib/tests/test_promise_MEM_63_modules_hold_no_user_data.py
+    only: [test_no_module_on_an_agent_host_holds_user_data]
+    needs: [fleet]
+    why: reads other machines over ssh
+  - test: .datacore/lib/tests/test_promise_MEM_67_transcripts_copied_nightly.py
+    only: [test_every_host_with_sessions_copies_them_nightly]
+    needs: [fleet]
+    why: reads other machines over ssh
+  - test: .datacore/lib/tests/test_promise_MSG8_morning_repair_before_i_wake.py
+    only: [test_on_the_box_the_repair_runs_before_the_briefing]
+    needs: [fleet]
+    why: reads other machines over ssh
+  - test: .datacore/lib/tests/test_promise_OPS1_jobs_declared_and_checked.py
+    only: [test_every_box_cron_job_is_declared_and_verified_daily]
+    needs: [fleet]
+    why: reads other machines over ssh
+  - test: .datacore/lib/tests/test_promise_OPS5_updates_never_interrupt_jobs.py
+    only: [test_every_host_protects_every_installed_scheduled_job]
+    needs: [fleet]
+    why: reads other machines over ssh
