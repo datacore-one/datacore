@@ -401,3 +401,8 @@ skills-lock.json
 # backup (manifest.local.yaml.bak-20260930-cos) sat untracked in the core repo
 # on the nightshift host, and the git preflight refused both overnight runs for it.
 .datacore/lib/jobs/manifest.local.yaml.*
+
+# Dated backups (<file>.bak-<stamp>) are never source. One left untracked in the
+# core repo on the overnight host refused two overnight runs on 2026-09-30.
+# Backups belong in ~/.datacore/state/config-backups/; this rule is the net.
+*.bak-*
