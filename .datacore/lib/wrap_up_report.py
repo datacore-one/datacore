@@ -326,6 +326,8 @@ def _all_pushed(audit: dict | None, finalize: dict | None) -> str:
     if audit:
         for c in audit.get("checks") or []:
             if (c.get("check") or c.get("name") or "").startswith(("all repos pushed", "session work")):
+                if c.get("status") == "n/a":
+                    return str(c.get("detail"))   # "not applicable here — <why>"
                 return "Yes" if c.get("pass") else f"No — {c.get('detail')}"
     if finalize:
         bad = [p["repo"] for p in finalize.get("pushes") or [] if p.get("ok") is False]

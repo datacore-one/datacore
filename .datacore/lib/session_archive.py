@@ -538,8 +538,13 @@ def main() -> int:
         # Silent no-op, not an error: the SessionEnd hook fires in contexts
         # that have no session id, and a hook that fails there is a hook that
         # gets disabled.
-        print(json.dumps({"status": "no-session-id"}) if args.json else
-              "no session id available (set --session or CLAUDE_CODE_SESSION_ID)")
+        # Outside Claude Code (Codex, Hermes, OpenClaw, ...) there is no Claude
+        # transcript to copy, so this step does not apply — callers (/wrap-up,
+        # /tomorrow, /continue) report it as such, never as a failure.
+        reason = ("no Claude Code session here: this harness keeps no transcript "
+                  "Datacore archives (pass --session to archive a Claude session by id)")
+        print(json.dumps({"status": "not-applicable", "reason": reason}) if args.json
+              else f"not applicable — {reason}")
         return 0
 
     result = archive(sid, force=args.force)

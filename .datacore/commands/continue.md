@@ -171,6 +171,8 @@ Analyzing current session...
    about a month. Report the returned `path` in the save confirmation. If the
    status is not `archived`, say so — silently losing the session is worse than
    a noisy save.
+   Outside Claude Code the status is `not-applicable` (there is no Claude
+   transcript): say "not applicable here" and carry on; it is not a failure.
 
 1. **Summarize session context** — review conversation to extract:
    - What was being worked on

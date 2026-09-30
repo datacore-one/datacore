@@ -151,3 +151,35 @@ class TestJournalSectionLoss:
             j.write_text(j.read_text() + "\n## @me - new entry\n\n"
                          + "".join(f"- line {i}\n" for i in range(added - 2)))
             assert wm.journal_damage_in_worktree(repo, ["journal/2026-09-08.md"]) == []
+
+
+# ---------------------------------------------------------------------------
+# A re-rendered briefing is not a destroyed section (2026-09-30)
+# ---------------------------------------------------------------------------
+
+STUB_BRIEFING = ("# d\n\n## Daily Briefing\n\n### What needs you: still failing\n\n- x\n\n"
+                 "### Facts\n\n- y\n\n## @other — their session\n\n### Token Cost\n\n- 1\n")
+FULL_BRIEFING = ("# d\n\n## Daily Briefing\n\n### Good Morning\n\n- hi\n\n### The World\n\n- z\n\n"
+                 "## @other — their session\n\n### Token Cost\n\n- 1\n")
+
+
+class TestBriefingRegeneration:
+    """/today replaces its own `## Daily Briefing` in place. A stub briefing's
+    parts differ from a full one's, and the 2026-09-30 audit scored that
+    routine replacement as a destroyed journal section."""
+
+    def test_replacing_the_briefing_parts_is_not_a_loss(self):
+        assert wm.headings_lost(STUB_BRIEFING, FULL_BRIEFING) == []
+
+    def test_losing_the_briefing_itself_is_still_a_loss(self):
+        after = FULL_BRIEFING.replace("## Daily Briefing\n", "")
+        assert "## Daily Briefing" in wm.headings_lost(STUB_BRIEFING, after)
+
+    def test_a_subsection_of_someone_elses_entry_is_still_a_loss(self):
+        after = FULL_BRIEFING.replace("### Token Cost\n", "")
+        assert wm.headings_lost(STUB_BRIEFING, after) == ["### Token Cost"]
+
+    def test_the_worktree_guard_lets_a_rebrief_commit(self, tmp_path):
+        repo = _repo(tmp_path, STUB_BRIEFING)
+        (repo / "journal" / "2026-09-08.md").write_text(FULL_BRIEFING)
+        assert wm.journal_damage_in_worktree(repo, ["journal/2026-09-08.md"]) == []

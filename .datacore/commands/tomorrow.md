@@ -710,6 +710,8 @@ python3 ~/Data/.datacore/lib/session_archive.py --json
 python3 ~/Data/.datacore/lib/session_learning_sweep.py --status | tail -2
 ```
 
+Outside Claude Code the archive returns `status: not-applicable` (no Claude transcript exists): report it as not applicable, not as a failure.
+
 `/tomorrow` is a day-end command, so it is the last chance to guarantee the day's own session reaches the archive that the 05:20 sweep reads. Idempotent — if `/wrap-up` or the SessionEnd hook already did it, this costs nothing and preserves `learning_status`.
 
 Report the queue depth in the closing message so a sweep that has silently stopped running becomes visible the same evening rather than weeks later.

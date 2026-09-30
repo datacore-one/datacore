@@ -311,10 +311,12 @@ The command must produce the same result everywhere, so everything that decides 
 | Piece | Claude Code | Elsewhere |
 |---|---|---|
 | Report layout | `report` renders it | Same: `report` renders it. The layout never depends on the model. |
-| Session id | `CLAUDE_CODE_SESSION_ID` | Set `DATACORE_SESSION_ID` if the harness exposes one. Otherwise steps file under `nosession-<date>`. `meta` then reports "unavailable", and the report says so instead of estimating. |
+| Session id | `CLAUDE_CODE_SESSION_ID` | Codex: `CODEX_THREAD_ID`, read automatically. Any other harness: set `DATACORE_SESSION_ID` if it exposes an id. Otherwise steps file under `nosession-<date>`. |
+| This session's files | read from the archived transcript | Record them yourself before §8, one call per batch: `wrap_up_mechanics.py files --add <path>...` (every file you wrote, journals included). `finalize` then commits and pushes exactly those paths. With no list it commits nothing, and the audit's file checks read "not applicable here". |
+| Transcript archive, token counts | `session_archive.py`, `meta` | Not applicable: there is no Claude transcript. `preflight` reports `session_archive.status: not-applicable`, `meta` reports `not_applicable: true`, the audit marks "session archived" n/a, and the report says so instead of estimating. None of these is a failure. |
 | Tracked checklist | `command_steps.py` (TaskCreate only as an optional mirror) | Same: `command_steps.py`, from a shell or `datacore_command_steps` over MCP. |
 | journal-coordinator | subagent | No subagent tool: write the per-space journals inline, one space at a time, before §8. |
-| Completion gate | PreToolUse hook + `audit --final` | `audit --final` alone. Report its `failed[]` verbatim. |
+| Completion gate | PreToolUse hook + `audit --final` | `audit --final` alone. Report its `failed[]` verbatim, and its `not_applicable[]` as "not applicable here" (never as passed). |
 
 ### 1. Pulse + Notes — FIRST, and it never blocks
 
@@ -854,7 +856,8 @@ python3 ~/Data/.datacore/lib/wrap_up_mechanics.py finalize
 
 **Session-scoped by default.** It commits and pushes ONLY the files this session
 touched, read from the archive's `files_modified` (main thread **and**
-subagents). Everything else dirty in the repo is left alone.
+subagents) and from any recorded with `files --add` — the only source outside
+Claude Code (§0f). Everything else dirty in the repo is left alone.
 
 > **Why.** The retired `./sync push` staged everything with `git add --ignore-removal .` and
 > commits it as `Sync: <date>`. Correct for a single-session day; wrong the
@@ -925,11 +928,13 @@ Returns `checks[]`, `passed`, `total`, `failed[]`. It asserts, against the files
 | Check | Passes when |
 |---|---|
 | personal journal written | `0-personal/journal/<today>.md` (or `notes/journals/`) exists |
-| space journals | reports which spaces got one — informational, never a failure |
-| session archived | this session has a `meta.json` under the archive — i.e. the learning sweep will actually see it |
-| all repos pushed | no repo has unpushed commits |
-| no uncommitted work | no repo is dirty |
-| context in sync | agents/commands/registry unchanged, or the rebuild was run |
+| space journals | every space this session wrote to has today's journal |
+| session archived | this session has a `meta.json` under the archive — i.e. the learning sweep will actually see it. Outside Claude Code: n/a |
+| session work committed and pushed | this session's files are committed and their repos pushed; other sessions' dirt is reported, not scored |
+| no journal section destroyed today | no commit today removed a journal section (a re-rendered `## Daily Briefing` is its owner replacing it, not a loss) |
+| context in sync | this session changed no agent/command/registry file; other sessions' registry changes are reported, not scored |
+
+Each check has `status`: `pass`, `fail`, or `n/a` (cannot be judged in this harness — the detail says why). `total` counts the applicable checks; `not_applicable[]` lists the rest. n/a is never reported as passed.
 
 **This replaces the old tick-box list.** A checklist the model fills in about its own behaviour tests nothing: 17 spec steps, 9 tasks created, 6 silently skipped (2026-05-29) happened *with* the checklist present. These checks read the disk.
 
