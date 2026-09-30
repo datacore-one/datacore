@@ -264,3 +264,14 @@ tests:
   - test: .datacore/lib/tests/test_promise_KNW8_import_plan_first.py
     needs: [agent]
     why: real agent sessions (DATACORE_AGENT_EVALS=1)
+  - test: .datacore/lib/tests/test_promise_OPS10_jobs_never_set_aside_others_work.py
+    only: [test_no_always_on_machine_holds_a_recent_stash]
+    needs: [fleet, file:.datacore/registry/infrastructure.yaml]
+    why: reads every always-on machine's repositories over ssh
+  - test: .datacore/lib/tests/test_promise_OPS10_jobs_never_set_aside_others_work.py
+    only: [test_an_unattended_agent_meeting_a_blocked_pull_sets_nothing_aside]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1)
+  - test: .datacore/lib/tests/test_promise_OPS11_code_only_from_git.py
+    needs: [fleet, file:.datacore/registry/infrastructure.yaml]
+    why: reads every job-running machine's code checkouts over ssh
