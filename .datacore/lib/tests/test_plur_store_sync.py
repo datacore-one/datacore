@@ -272,3 +272,96 @@ def test_one_id_minted_on_two_machines_for_different_engrams_keeps_both(fleet, t
         assert [e["id"] for e in doc].count("ENG-2026-09-01-050") == 1
     eps = {e["id"]: e for e in _read(host / "episodes.yaml")}
     assert eps["EP-9"]["summary"] == f"learned {new}"
+
+
+# ── a PLUR writer that keeps writing while the sync merges ────────────────────
+# On nightshift the merge of a 26 MB engrams.yaml takes ~4 minutes an attempt,
+# and overnight sessions write the store every few minutes. Every attempt saw
+# the file change under it and gave up; three in a row failed the run
+# (2026-09-30, nightshift-plur-sync red three runs). The writer's change is
+# this machine's own, so it is folded onto the merge, never dropped and never
+# blended into a remote engram.
+def _writer_during_each_merge(monkeypatch, host, engrams, at="_strip_local"):
+    """After each attempt has read engrams.yaml (by default: once it has merged
+    it), a PLUR writer adds one engram."""
+    todo = list(engrams)
+    real = getattr(pss, at)
+
+    def find(*a, **kw):
+        out = real(*a, **kw)
+        if todo:
+            h = _read(host / "engrams.yaml")
+            h.append(todo.pop(0))
+            h[2]["activation"] = {"retrieval_strength": round(0.1 + 0.01 * len(h), 2)}
+            _write(host, "engrams.yaml", h)
+        return out
+    monkeypatch.setattr(pss, at, find)
+    return todo
+
+
+def test_a_writer_that_writes_during_every_merge_is_folded_in_not_dropped(fleet, tmp_path, monkeypatch):
+    remote, mac, host = fleet
+    m = _read(mac / "engrams.yaml")
+    m[1]["status"] = "retired"
+    m.append(_eng(10, statement="the mac learned this"))
+    _write(mac, "engrams.yaml", m)
+    _git(mac, "commit", "-am", "mac")
+    _git(mac, "push")
+    writes = [_eng(30 + i, statement=f"written mid-merge {i}") for i in range(pss.ATTEMPTS)]
+    _writer_during_each_merge(monkeypatch, host, writes)
+
+    rc, state = _run(host, tmp_path)
+    assert rc == 0, state
+    assert state["in_sync"] is True
+    work = {e["id"]: e for e in _read(host / "engrams.yaml")}
+    assert "ENG-2026-09-01-030" in work, "the writer's engram was dropped"
+    assert work["ENG-2026-09-01-002"]["status"] == "retired", "the remote's correction did not arrive"
+    assert "ENG-2026-09-01-010" in work
+    assert work["ENG-2026-09-01-003"]["activation"]["retrieval_strength"] != 0.5, "the writer's edit was lost"
+    assert len(work) == len(_read(host / "engrams.yaml")), "an id appears twice"
+
+
+@pytest.mark.parametrize("at", ["_strip_local", "find_collisions"])
+def test_a_concurrently_minted_id_the_remote_also_holds_is_renamed_not_blended(fleet, tmp_path, monkeypatch, at):
+    remote, mac, host = fleet
+    monkeypatch.setattr(pss.socket, "gethostname", lambda: "nightshift")
+    cid = "ENG-2026-09-03-001"
+    m = _read(mac / "engrams.yaml")
+    m.append(_eng(0, id=cid, statement="the mac's engram", content_hash="aaa"))
+    _write(mac, "engrams.yaml", m)
+    _git(mac, "commit", "-am", "mac")
+    _git(mac, "push")
+    writes = [_eng(0, id=cid, statement="minted mid-merge on the host", content_hash="bbb")]
+    writes += [_eng(60 + i, statement=f"later write {i}") for i in range(pss.ATTEMPTS)]
+    _writer_during_each_merge(monkeypatch, host, writes, at=at)
+
+    rc, state = _run(host, tmp_path)
+    assert rc == 0, state
+    for doc in (_read(host / "engrams.yaml"), yaml.safe_load(_git(remote, "show", "main:engrams.yaml"))):
+        by = {e["id"]: e for e in doc}
+        assert by[cid]["statement"] == "the mac's engram", "the remote's engram was blended"
+    by = {e["id"]: e for e in _read(host / "engrams.yaml")}
+    assert by[f"{cid}-nightshift"]["statement"] == "minted mid-merge on the host"
+    assert by[f"{cid}-nightshift"]["content_hash"] == "bbb"
+
+
+def test_a_change_to_a_file_the_sync_does_not_write_does_not_fail_the_run(fleet, tmp_path, monkeypatch):
+    remote, mac, host = fleet
+    m = _read(mac / "engrams.yaml")
+    m.append(_eng(10))
+    _write(mac, "engrams.yaml", m)
+    _git(mac, "commit", "-am", "mac")
+    _git(mac, "push")
+    real = pss._is_ancestor  # first called once every path has been read
+    n = {"i": 0}
+
+    def find(*a, **kw):
+        n["i"] += 1
+        _write(host, "episodes.yaml", [{"id": "EP-1", "summary": "one"},
+                                       {"id": f"EP-{100 + n['i']}", "summary": "live"}])
+        return real(*a, **kw)
+    monkeypatch.setattr(pss, "_is_ancestor", find)
+    rc, state = _run(host, tmp_path)
+    assert rc == 0, state
+    eps = _ids(_read(host / "episodes.yaml"))
+    assert eps[-1] == f"EP-{100 + n['i']}", "the writer's episode was overwritten"

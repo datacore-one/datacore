@@ -50,9 +50,13 @@ import yaml
 
 RECORD_ROOT_FILES = ("engrams.yaml", "episodes.yaml", "candidates.yaml", "tensions.yaml")
 PACK_ALLOW_NAMES = ("SKILL.md", "engrams.yaml", "INTEGRITY", "metadata.json")
-LOCK_WAIT_S = 30.0
+# A PLUR writer can hold the lock for over 30 s while it rewrites a 26 MB store
+# (nightshift, 2026-09-30 04:47 and 06:47). This is a cron job: waiting costs
+# nothing, and the lock is never taken from a live holder either way.
+LOCK_WAIT_S = 120.0
 LOCK_STALE_S = 60.0
 ATTEMPTS = 3
+FOLD_ROUNDS = 6
 GIT_TIMEOUT = 180
 _MISSING = object()
 
@@ -300,6 +304,40 @@ def merge_record_file(base_doc, ours_doc, theirs_doc):
     return {**top, "engrams": records}
 
 
+def fold_local_change(read_doc, now_doc, merged_doc):
+    """This machine's own writes, landed after the sync read a record file,
+    carried onto the merged result -- or None when that is not provably safe.
+
+    Only disjoint changes fold: every record the local writer added, edited or
+    deleted since the read must be one the merge left exactly as it was read.
+    A record both sides touched, a newly minted id the remote also holds, a
+    duplicate id or a changed file shape all return None, and the caller starts
+    the whole merge over from the new file. Nothing is ever blended here.
+    """
+    try:
+        (rr, rc), (cr, cc), (mr, mc) = _split(read_doc), _split(now_doc), _split(merged_doc)
+    except SyncError:
+        return None
+    if rr is None or cr is None or mr is None:
+        return None
+    if (rc is None) != (cc is None) or (rc is None) != (mc is None):
+        return None
+    ri, ci, mi = _index(rr), _index(cr), _index(mr)
+    if len(ri) != len(rr) or len(ci) != len(cr) or len(mi) != len(mr):
+        return None
+    changed = {k for k in ci if ri.get(k) != ci[k]} | {k for k in ri if k not in ci}
+    if any(mi.get(k) != ri.get(k) for k in changed):
+        return None
+    container = mc
+    if rc != cc:
+        if mc != rc:
+            return None
+        container = cc
+    out = [ci[k] if k in changed else v for k, v in mi.items() if k not in changed or k in ci]
+    out += [ci[k] for k in ci if k in changed and k not in mi]
+    return out if container is None else {**container, "engrams": out}
+
+
 def _strip_local(doc):
     """PLUR's personal-remote push rule: `scope: local` never leaves the machine."""
     if isinstance(doc, list):
@@ -421,12 +459,15 @@ def _attempt(store: Path, branch: str, state: dict) -> None:
     read_work: dict[str, bytes | None] = {}     # what the working tree held when read
     result: dict[str, str | None] = {}          # path -> blob sha in the commit
     work_out: dict[str, bytes | None] = {}      # path -> new working-tree content
+    fold_base: dict[str, tuple] = {}            # path -> (read doc, merged doc) as parsed
 
     # Ids minted on both sides for different engrams: this side's are renamed
     # before anything merges, and every reference on this side follows them.
     renames: dict[str, str] = {}
     if "engrams.yaml" in paths:
-        w = _read_work(store, "engrams.yaml")
+        # Read once: the collision check and the merge must see the same bytes,
+        # or an id minted between two reads is merged without being renamed.
+        w = read_work["engrams.yaml"] = _read_work(store, "engrams.yaml")
         renames = find_collisions(_load(_blob(store, B.get("engrams.yaml"))), _load(w),
                                   _load(_blob(store, T.get("engrams.yaml"))), _host_tag())
     state["renamed"] = len(renames)
@@ -434,7 +475,7 @@ def _attempt(store: Path, branch: str, state: dict) -> None:
     for p in paths:
         b, h, t = B.get(p), H.get(p), T.get(p)
         if _is_sync_path(p):
-            w = _read_work(store, p)
+            w = read_work[p] if p in read_work else _read_work(store, p)
             read_work[p] = w
             o = None if w is None else _hash(store, w)
         else:
@@ -463,6 +504,7 @@ def _attempt(store: Path, branch: str, state: dict) -> None:
                 result[p] = _hash(store, _dump(commit_doc), write=True)
             if merged != ours_doc:
                 work_out[p] = _dump(merged)
+                fold_base[p] = (ours_in, merged)
             continue
         if o == t or o == b:
             result[p] = t
@@ -507,32 +549,33 @@ def _attempt(store: Path, branch: str, state: dict) -> None:
         new = _git(store, *args, "-m", msg).decode().strip()
     state["merged"] = new not in (head, theirs)
 
-    # Apply under PLUR's lock, only if nobody wrote the files since we read them.
-    with PlurLock(store / "engrams.yaml"):
-        for p, before in read_work.items():
-            if _read_work(store, p) != before:
+    # Apply under PLUR's lock, only onto exactly the bytes the result was built
+    # from. A file this run does not write may change freely: the commit holds
+    # what was read, and the next run carries the rest. A record file this run
+    # does write, changed by a local PLUR writer meanwhile, has that change
+    # folded onto the result first (fold_local_change) -- outside the lock, so
+    # PLUR's own writers are never held up by a merge.
+    for _round in range(FOLD_ROUNDS):
+        for p in list(work_out):
+            now = _read_work(store, p)
+            if now == read_work[p]:
+                continue
+            if p not in fold_base or now is None:
                 raise _Changed(p)
-        old_blobs = H
-        if new != head:
-            _git(store, "update-ref", f"refs/heads/{branch}", new, head)
-            _git(store, "read-tree", "HEAD")
-        for p, content in work_out.items():
-            if content is None:
-                if (store / p).exists():
-                    (store / p).unlink()
-            else:
-                _atomic_write(store / p, content)
-        if new != head:  # files PLUR does not sync: follow the commit when untouched here
-            N = _tree_blobs(store, new)
-            for p in set(old_blobs) | set(N):
-                if _is_sync_path(p) or old_blobs.get(p) == N.get(p):
-                    continue
-                w = _read_work(store, p)
-                if (w is None and p not in old_blobs) or (w is not None and old_blobs.get(p) == _hash(store, w)):
-                    if N.get(p) is None:
-                        (store / p).unlink(missing_ok=True)
-                    else:
-                        _atomic_write(store / p, _blob(store, N[p]))
+            now_doc = _load(now)
+            if bool(renames) and p in RECORD_ROOT_FILES:
+                now_doc = _rename_refs(now_doc, renames)
+            folded = fold_local_change(fold_base[p][0], now_doc, fold_base[p][1])
+            if folded is None:
+                raise _Changed(p)
+            work_out[p], read_work[p], fold_base[p] = _dump(folded), now, (now_doc, folded)
+        with PlurLock(store / "engrams.yaml"):
+            if any(_read_work(store, p) != read_work[p] for p in work_out):
+                continue  # written again since the fold: fold that too
+            _apply(store, branch, head, new, H, work_out)
+            break
+    else:
+        raise _Changed(next(iter(work_out), "engrams.yaml"))
 
     if new != theirs and not _is_ancestor(store, new, theirs):
         r = subprocess.run(["git", "-C", str(store), "push", "origin", f"HEAD:refs/heads/{branch}"],
@@ -540,6 +583,31 @@ def _attempt(store: Path, branch: str, state: dict) -> None:
         if r.returncode != 0:
             raise SyncError(f"push rejected: {r.stderr.strip()[:200]}")
         state["pushed"] = True
+
+
+def _apply(store: Path, branch: str, head: str, new: str, H: dict, work_out: dict) -> None:
+    """Move the branch and write the working tree. Caller holds PLUR's lock."""
+    old_blobs = H
+    if new != head:
+        _git(store, "update-ref", f"refs/heads/{branch}", new, head)
+        _git(store, "read-tree", "HEAD")
+    for p, content in work_out.items():
+        if content is None:
+            if (store / p).exists():
+                (store / p).unlink()
+        else:
+            _atomic_write(store / p, content)
+    if new != head:  # files PLUR does not sync: follow the commit when untouched here
+        N = _tree_blobs(store, new)
+        for p in set(old_blobs) | set(N):
+            if _is_sync_path(p) or old_blobs.get(p) == N.get(p):
+                continue
+            w = _read_work(store, p)
+            if (w is None and p not in old_blobs) or (w is not None and old_blobs.get(p) == _hash(store, w)):
+                if N.get(p) is None:
+                    (store / p).unlink(missing_ok=True)
+                else:
+                    _atomic_write(store / p, _blob(store, N[p]))
 
 
 class _Changed(Exception):
