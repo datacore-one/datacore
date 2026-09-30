@@ -27,6 +27,8 @@ import os as _os
 
 import argparse
 import json
+import subprocess
+import uuid
 import sys
 import sys as _sys
 import socket as _socket
@@ -928,6 +930,48 @@ def cmd_duplicates(args):
 # ensure-ids
 # ---------------------------------------------------------------------------
 
+class _CommitAnchor:
+    """The identity of a heading that ARRIVED without one, the same on every host.
+
+    Fleet week simulation, finding 8 (2026-09-30): a heading committed without
+    an :ID: reached two hosts, each host's ingest minted its own random UUID,
+    and their next converge conflicted on the :ID: line ("human needed").
+
+    Identity is still never inferred from a title (org_transaction.new_org_id):
+    two captures with the same words are two tasks. What makes two hosts'
+    copies the SAME heading is the commit that brought it, so a heading that is
+    already committed gets uuid5(the oldest commit that added its text to this
+    file, the file's repository path, the text, its position among identical
+    un-identified headings in the file). A heading not committed yet -- a fresh
+    local capture -- and any file outside git get a random identity, as before.
+    Any git failure falls back to random: never worse than before.
+    """
+    NS = uuid.UUID("5b0e7c52-8f1e-4c1a-9d57-3f2d6c0a9e11")
+
+    def __init__(self, path: Path):
+        self.dir, self.name, self.rel = path.parent, path.name, None
+        r = self._git("ls-files", "--full-name", "--error-unmatch", "--", self.name)
+        if r:
+            self.rel = r.splitlines()[0].strip()
+
+    def _git(self, *args: str) -> str | None:
+        try:
+            r = subprocess.run(["git", "-C", str(self.dir), *args], capture_output=True, text=True,
+                               timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return r.stdout if r.returncode == 0 else None
+
+    def id_for(self, heading: str, k: int) -> str | None:
+        if not self.rel or not heading.strip():
+            return None
+        out = self._git("log", "--reverse", "--format=%H", "-S", heading, "--", self.name)
+        commit = (out or "").split("\n", 1)[0].strip()
+        if not commit:
+            return None
+        return str(uuid.uuid5(self.NS, "\0".join((commit, self.rel, heading, str(k)))))
+
+
 def cmd_ensure_ids(args):
     """Add :ID: properties to EVERY heading that lacks one, task or not.
 
@@ -937,6 +981,8 @@ def cmd_ensure_ids(args):
 
     New captures use independent UUIDs, including identical headings created
     in separate files or on separate hosts. Existing identities never change.
+    A heading that is already COMMITTED without an ID gets the same identity on
+    every host that pulled it (see _CommitAnchor).
 
     PLAIN HEADINGS COUNT. This skipped anything without a todo state, while
     `genesis._section_payload` documents the opposite as its premise --
@@ -960,10 +1006,13 @@ def cmd_ensure_ids(args):
             seen_ids.add(node.id())
 
     pending = []
+    anchor = _CommitAnchor(file_path)
+    ordinal: dict[str, int] = {}
     for node in ws.all_nodes():
         if node.id():
             continue
-        new_id = new_org_id()
+        k = ordinal[node.heading] = ordinal.get(node.heading, -1) + 1
+        new_id = anchor.id_for(node.heading, k) or new_org_id()
         while new_id in seen_ids:
             new_id = new_org_id()
         seen_ids.add(new_id)
