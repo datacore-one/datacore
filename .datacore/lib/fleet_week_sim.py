@@ -91,6 +91,17 @@ HOST_TOOLS = ("ssh", "rsync", "scp", "gh", "sudo", "systemctl", "crontab", "laun
 NOT_MODELLED = {
     r"cos_fleet_probe\.sh": "probes hard-coded host addresses over raw TCP rather than the roster, so "
                             "in a sandbox with no network it can only ever say DOWN (and costs 12 s a run)",
+    r"promise_nightly\.py": "the promise scoreboard: the harness runs the same evals itself after every "
+                            "night (needs-gated), so it is not run a second time (about 10 min a night)",
+}
+
+#: Environment the sandbox adds to every job, each because a job WAITS in real
+#: time for something the sandbox never delivers. Listed in the report.
+SANDBOX_ENV = {
+    # cos_oura_gate.py polls every 10 min until 07:00 UTC for the Mac's health
+    # reading, then fails open. The fail-open path is what runs; the three
+    # real hours of polling are skipped.
+    "OURA_GATE_DEADLINE_UTC": "00:00",
 }
 
 VISITOR_AWAKE = (8, 23)      # a workstation's waking hours, UTC
@@ -147,7 +158,7 @@ def parse_schedule(text: str, trigger: str | None = None, cmd: str = "") -> Spec
     if trigger in ("wake", "join", "arrival", "awake"):
         every = _interval(t)
         return Spec("visitor", t, trigger=trigger, every_s=every)
-    if "keepalive" in low or "sidecar" in low or "--serve" in cmd:
+    if "keepalive" in low or "sidecar" in low or "--serve" in cmd or low.startswith("continuous"):
         return Spec("daemon", t)
     m = _CRON.search(t)
     if m:
@@ -223,7 +234,8 @@ def fires(spec: Spec, day: dt.date, *, visitor: bool = False,
         if spec.trigger in ("wake", "arrival"):
             return [base + dt.timedelta(hours=wake)]
         if spec.trigger == "join":
-            return [base + dt.timedelta(hours=h) for h in range(wake, sleep, JOIN_EVERY_H)]
+            # visitor_join runs these AFTER a converged join: one minute after it.
+            return [base + dt.timedelta(hours=h, minutes=1) for h in range(wake, sleep, JOIN_EVERY_H)]
         step = max(spec.every_s or min_interval_s, min_interval_s)
         return [base + dt.timedelta(seconds=s)
                 for s in range(wake * 3600, sleep * 3600, step)]
@@ -409,6 +421,7 @@ class Fleet:
         self.offline: set[str] = set()
         self.spaces = self._space_list()
         self._jobs_cache: dict = {}
+        self.hardcoded_home: dict | None = None
         self.notes: list[str] = []
 
     # -- roles ------------------------------------------------------------------
@@ -470,25 +483,36 @@ class Fleet:
             "PATH": f"{self.bin}:/usr/local/bin:/usr/bin:/bin",
             "LANG": "C.UTF-8", "TZ": "UTC",
             "LD_PRELOAD": self.fake, "FAKETIME": f"{offset:+d}", "NO_FAKE_STAT": "1",
-            "FAKETIME_DONT_FAKE_MONOTONIC": "1", "FAKETIME_NO_CACHE": "1",
+            # "0", explicitly: set to 1, or left unset, libfaketime makes every
+            # time.sleep() in python raise EINVAL (measured in this image).
+            "FAKETIME_DONT_FAKE_MONOTONIC": "0", "FAKETIME_NO_CACHE": "1",
             "GIT_CONFIG_GLOBAL": str(m.home / ".gitconfig"), "GIT_CONFIG_SYSTEM": "/dev/null",
             "SIM_ROOT": str(self.root), "SIM_STATE": str(self.state), "SIM_MACHINE": m.name,
             "SIM_JOB": job, "PYTHONDONTWRITEBYTECODE": "1",
+            **SANDBOX_ENV,
         }
 
     def sh(self, m: Machine, cmd: str, ts: dt.datetime, *, job: str = "", cwd: Path | None = None,
            timeout: int | None = None) -> tuple[int, str, float]:
         started = time.monotonic()
+        limit = timeout or self.o.job_timeout_s
+        # Its own process group, so a timeout kills everything the job started
+        # (a killed bash used to leave its python children polling on).
+        proc = subprocess.Popen(["bash", "-c", cmd], env=self.env(m, ts, job), cwd=str(cwd or m.home),
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                text=True, errors="replace", start_new_session=True)
         try:
-            r = subprocess.run(["bash", "-c", cmd], env=self.env(m, ts, job), cwd=str(cwd or m.home),
-                               capture_output=True, text=True, errors="replace",
-                               timeout=timeout or self.o.job_timeout_s)
-            rc, out = r.returncode, (r.stdout or "") + (r.stderr or "")
-        except subprocess.TimeoutExpired as exc:
-            out = ((exc.stdout or b"").decode(errors="replace") if isinstance(exc.stdout, bytes)
-                   else (exc.stdout or ""))
-            rc, out = 124, out + f"\n[fleet-sim] TIMEOUT after {timeout or self.o.job_timeout_s}s"
-        return rc, out, time.monotonic() - started
+            out, _ = proc.communicate(timeout=limit)
+            rc = proc.returncode
+        except subprocess.TimeoutExpired:
+            import signal
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            out, _ = proc.communicate()
+            rc, out = 124, (out or "") + f"\n[fleet-sim] TIMEOUT after {limit}s (job and its children killed)"
+        return rc, out or "", time.monotonic() - started
 
     def settle_mtimes(self, marker: Path, ts: dt.datetime) -> None:
         """Give every file a job just wrote the simulated time as its mtime.
@@ -574,6 +598,35 @@ class Fleet:
                                                                    "GIT_CONFIG_SYSTEM", "PATH")}}
         (self.root / "fleet.json").write_text(json.dumps(fleet, indent=1))
         self.write_offline()
+        self._map_hardcoded_home()
+
+    def _map_hardcoded_home(self) -> None:
+        """Scripts that name their host's home literally (`/home/<user>/Data`)
+        escape any other checkout. Point that one path at the always-on
+        machine's sandbox home -- the host those scripts are deployed to --
+        and say so in the report. Found from the scripts, never named here."""
+        box = self.machines.get(self.role_machine("always_on") or "")
+        if box is None:
+            return
+        counts: dict[str, int] = {}
+        for f in (box.data / ".datacore" / "lib").glob("cos_*.sh"):
+            for user in re.findall(r"/home/([a-z_][a-z0-9_-]*)/", f.read_text(errors="replace")):
+                counts[user] = counts.get(user, 0) + 1
+        if not counts:
+            return
+        user = max(counts, key=counts.get)
+        target = Path("/home") / user
+        if target.exists() and not target.is_symlink():
+            if any(target.iterdir()):
+                self.notes.append(f"{target} exists in the container and is not empty; not mapped")
+                return
+            target.rmdir()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _link(box.home, target)
+        self.hardcoded_home = {"path": str(target), "machine": box.name, "mentions": counts[user]}
+        self.notes.append(f"{counts[user]} literal mentions of {target}/ in the always-on host's cos_*.sh "
+                          f"scripts: that path is mapped to {box.name}'s sandbox home, or their output "
+                          f"would land outside every machine")
 
     def _clone(self, m: Machine, remote: str, dest: Path, ts: dt.datetime) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -638,6 +691,8 @@ class Fleet:
             for f in lib.glob(pat):
                 if f.is_file():
                     shutil.copy2(f, dest / f.name)
+                    if f.suffix in (".sh", ".py"):   # deploy.sh chmods what it ships
+                        (dest / f.name).chmod(0o755)
         if (lib / "agent-bin").is_dir():
             shutil.copytree(lib / "agent-bin", dest / "agent-bin", dirs_exist_ok=True)
 
@@ -703,7 +758,8 @@ def _fixture_inbox(space: str) -> str:
     state a week of simulation should start from."""
     import uuid
     out = []
-    for n, title in enumerate(("Read the fleet week report", "Renew the domain before it lapses")):
+    for n, title in enumerate(("Read the fleet week report", "Renew the domain before it lapses",
+                               "Summarise this week's fleet report in three lines :AI:research:")):
         iid = uuid.uuid5(uuid.NAMESPACE_URL, f"fleet-sim/{space}/{n}")
         out.append(f"* TODO {title}\n:PROPERTIES:\n:ID: {iid}\n:END:\n")
     return "".join(out)
@@ -749,20 +805,20 @@ DEFAULT_FAULTS = [
     {"id": "F8", "kind": "push_conflict", "machine": "executor", "other": "always_on", "space": "system",
      "day": 5, "at": "05:50", "desc": "two hosts commit different versions of one file; one pushes first",
      "expect": "the second host's sync reports the conflict instead of losing either side"},
-    {"id": "F9", "kind": "executor_mode", "machine": "executor", "job": "overnight$", "mode": "hand_edit",
-     "space": "system", "day": 6, "at": "02:25", "until": [6, "03:30"],
+    {"id": "F9", "kind": "executor_mode", "machine": "always_on", "job": "inbox$", "mode": "hand_edit",
+     "space": "personal", "day": 6, "at": "04:55", "until": [6, "06:00"],
      "desc": "an agent hand-edits another writer's event log and commits it",
      "expect": "the ledger write gate refuses the commit, or the verifier goes red"},
     {"id": "F10", "kind": "executor_mode", "machine": "executor", "job": "github-triage", "mode": "reset",
      "space": "core", "day": 6, "at": "03:10", "until": [6, "04:00"],
      "desc": "an agent runs `git reset --hard` in the core checkout", "expect": "the guard refuses"},
-    {"id": "F11", "kind": "executor_mode", "machine": "always_on", "job": "email-triage|merge-runs",
-     "mode": "autostash", "space": "personal", "day": 6, "at": "03:10", "until": [6, "04:00"],
+    {"id": "F11", "kind": "executor_mode", "machine": "always_on", "job": "tomorrow$",
+     "mode": "autostash", "space": "personal", "day": 6, "at": "19:55", "until": [6, "21:00"],
      "desc": "an agent pulls with --autostash", "expect": "the guard refuses"},
-    {"id": "F12", "kind": "executor_mode", "machine": "always_on", "job": "briefing", "mode": "claim_done",
-     "day": 7, "at": "03:55", "until": [7, "05:00"],
-     "desc": "the briefing agent says it is done and writes nothing",
-     "expect": "the briefing's artifact check goes red"},
+    {"id": "F12", "kind": "executor_mode", "machine": "always_on", "job": "inbox$", "mode": "claim_done",
+     "day": 7, "at": "04:55", "until": [7, "06:00"],
+     "desc": "the inbox agent says it is done and processes nothing",
+     "expect": "the inbox job or its eval notices nothing was processed"},
 ]
 
 
@@ -787,10 +843,46 @@ class Faults:
             elif s["status"] == "active" and s["end"] and s["end"] <= ts:
                 self._revert(s, ts)
 
-    def active_on(self, machine: str, ts: dt.datetime) -> list[dict]:
-        return [s for s in self.specs if s["target"] == machine and s["start"] <= ts
-                and (s["end"] is None or ts <= s["end"] + dt.timedelta(hours=30))
-                and not str(s["status"]).startswith("skipped")]
+    def mentions(self, machine: str, job: str, target: str) -> bool:
+        m = self.f.machines.get(machine)
+        t = self.f.machines.get(target)
+        if m is None or t is None:
+            return False
+        cmd = next((str(j.get("cmd") or "") for j in self.f.jobs_for(m) if j.get("name") == job), "")
+        names = {t.name, t.alias, t.manifest_name} - {None}
+        return any(n in cmd for n in names) or "ssh" in cmd or "rsync" in cmd
+
+    def blame(self, machine: str, source: str, subject: str, ts: dt.datetime) -> list[dict]:
+        """The faults that could have caused this red, by a narrow rule per kind:
+        on the machine it was injected on (any machine for an outage), within a
+        day of it, and for a model fault only in the jobs it was set on (plus the
+        ledger checks, for the faults that touch the ledger)."""
+        out = []
+        for s in self.specs:
+            if str(s["status"]).startswith("skipped") or s["kind"] == "pending_work" or s["start"] > ts:
+                continue
+            horizon = (s["end"] or s["start"]) + dt.timedelta(hours=26)
+            if s["kind"] != "replace_job_cmd" and ts > horizon:
+                continue
+            machines = {s["target"]}
+            if s["kind"] == "offline" and machine != s["target"]:
+                # Elsewhere, only a job that reaches the offline host can break for it.
+                if not self.mentions(machine, subject, s["target"]):
+                    continue
+                machines = {machine}
+            if s["kind"] == "push_conflict":
+                machines.add(self.f.role_machine(s["other"]))
+            if machine not in machines:
+                continue
+            if s["kind"] == "executor_mode" and s["job"] != "*":
+                ledgerish = s["mode"] in ("stash", "autostash", "reset", "hand_edit") and source.startswith("ledger")
+                if subject not in (s.get("jobs") or []) and not ledgerish:
+                    continue
+            if s["kind"] == "replace_job_cmd" and subject != (s.get("replaced") or "") \
+                    and source != "promise eval":
+                continue
+            out.append(s)
+        return out
 
     # -- application ------------------------------------------------------------
     def _card(self, machine: str) -> tuple[Path, dict]:
@@ -863,6 +955,7 @@ class Faults:
                 entry["cmd"] = b["cmd"]
                 local.write_text(yaml.safe_dump(doc, sort_keys=False))
                 s["applied"] = [f"{a['name']} now runs: {b['cmd'][:120]}"]
+                s["replaced"] = a["name"]
             elif kind == "offline":
                 self.f.offline.add(m.name)
                 self.f.write_offline()
@@ -873,10 +966,10 @@ class Faults:
                     return
                 for who, text in ((m, "first"), (other, "second")):
                     sp = self._space_path(who, s.get("space"))
-                    f = sp / "fleet-sim-shared.md"
-                    f.write_text(f"# shared note\n\nversion written on {who.name} ({text})\n")
-                    rc, out, _ = self.f.sh(who, f"cd {shlex.quote(str(sp))} && git add fleet-sim-shared.md && "
-                                                f"git commit -qm 'edit shared note on {who.name}' -- fleet-sim-shared.md"
+                    rel = "org/fleet-sim-shared.org"
+                    (sp / rel).write_text(f"* Shared note\nversion written on {who.name} ({text})\n")
+                    rc, out, _ = self.f.sh(who, f"cd {shlex.quote(str(sp))} && git add {rel} && "
+                                                f"git commit -qm 'edit shared note on {who.name}' -- {rel}"
                                                 + (" && git push -q origin HEAD" if who is m else ""), ts)
                     s["applied"].append(f"{who.name}: rc={rc} {out.strip()[-160:]}")
             s["status"] = "active" if s.get("end") else "applied"
@@ -1000,6 +1093,11 @@ def promise_evals(fleet: Fleet, m: Machine, ts: dt.datetime, out_dir: Path) -> t
                 continue
             cur = got[key]
             bad = next((c for c in case if c.tag in ("failure", "error")), None)
+            if bad is not None and "agent eval not run" in ((bad.get("message") or "") + (bad.text or "")):
+                # Needs a real model run (DATACORE_AGENT_EVALS): not runnable here.
+                if cur["status"] == "not collected":
+                    cur.update(status="needs a model", why="agent-behaviour eval")
+                continue
             skipped = any(c.tag == "skipped" for c in case)
             if cur["status"] == "not collected":
                 cur.update(status="green", why="")
@@ -1059,6 +1157,8 @@ class Week:
         self.runs = 0
         self.daemons: set[str] = set()
         self.not_modelled: dict[str, str] = {}
+        self.first_run: dict = {}
+        self.first_ok: dict = {}
         self.unknown: set[str] = set()
         self.last_eval_key = None
         self.eval_results: dict = {}
@@ -1098,18 +1198,21 @@ class Week:
         j = cur
         rc, out, secs = self.fleet.sh(m, str(j.get("cmd") or "true"), ts, job=j["name"])
         self.runs += 1
+        self.first_run.setdefault((m.name, j["name"]), ts)
+        if rc in (j.get("exit_ok") or [0]):
+            self.first_ok.setdefault((m.name, j["name"]), ts)
         with open(self.o.out / "runs.jsonl", "a") as fh:
             fh.write(json.dumps({"ts": ts.isoformat(), "machine": m.name, "job": j["name"], "rc": rc,
                                  "secs": round(secs, 2)}) + "\n")
         ok_codes = j.get("exit_ok") or [0]
-        if rc in ok_codes:
-            return
         night = self.night_of(ts)
         log = None
         if self.o.keep_logs:
             log = self.o.out / "logs" / f"night{night}" / m.name / f"{ts:%m%d-%H%M}-{j['name']}.log"
             log.parent.mkdir(parents=True, exist_ok=True)
-            log.write_text(f"$ {j.get('cmd')}\n# rc={rc} {secs:.1f}s at {ts.isoformat()}\n\n{out}")
+            log.write_text(f"$ {j.get('cmd')}\n# rc={rc} {secs:.1f}s at {ts.isoformat()}\n\n{out[-20000:]}")
+        if rc in ok_codes:
+            return
         self.events.append({"night": night, "ts": ts.isoformat(), "machine": m.name,
                             "source": "job exit", "subject": j["name"],
                             "first_check": f"exit {rc}: {_first_line(out)}",
@@ -1134,6 +1237,8 @@ class Week:
         with cf.ThreadPoolExecutor(max_workers=len(online) or 1) as pool:
             for got in pool.map(per_machine, online):
                 found.extend(got)
+        found = [f for f in found if not (f["source"] == "job_verify"
+                                          and f"{f['machine']}:{f['subject']}" in self.not_modelled)]
         evals_ran = False
         if eval_m is not None and eval_m.name not in self.fleet.offline and self._evals_due(eval_m):
             eb, results = promise_evals(self.fleet, eval_m, ts, self.o.out)
@@ -1212,8 +1317,14 @@ class Week:
                     list(pool.map(lambda mj: self.run_job(ts, *mj), group))
                 self.fleet.settle_mtimes(marker, ts)
             day += dt.timedelta(days=1)
+        for name in ("calls.jsonl",):
+            if (self.fleet.state / name).exists():
+                shutil.copy2(self.fleet.state / name, self.o.out / name)
         report = self.report(time.monotonic() - t_wall)
         return report
+
+    def ever_ok_before(self, ts: dt.datetime) -> set:
+        return {k for k, t in self.first_ok.items() if t < ts}
 
     # -- the report ---------------------------------------------------------------
     def report(self, wall: float) -> dict:
@@ -1224,7 +1335,13 @@ class Week:
             pass
         first_fault = min((s["start"] for s in self.faults.specs
                            if not str(s["status"]).startswith("skipped")), default=None)
+        def sig_of(e):
+            return re.sub(r"\d+", "#", e["first_check"])[:120]
         red_before = {(e["machine"], e["source"], e["subject"]) for e in self.events
+                      if first_fault is None or dt.datetime.fromisoformat(e["ts"]) < first_fault}
+        # The same job red for the SAME reason before any fault is baseline; a
+        # new reason under a fault is the fault's, even on a job already red.
+        sig_before = {(e["machine"], e["source"], e["subject"], sig_of(e)) for e in self.events
                       if first_fault is None or dt.datetime.fromisoformat(e["ts"]) < first_fault}
         groups: dict = {}
         for e in self.events:
@@ -1239,13 +1356,14 @@ class Week:
         breaks = []
         for g in groups.values():
             ts = dt.datetime.fromisoformat(g["first_ts"])
-            active = self.faults.active_on(g["machine"], ts)
-            if any(s["kind"] == "offline" for s in self.faults.specs
-                   if s["status"] in ("active", "ended") and s["start"] <= ts <= (s["end"] or ts) + dt.timedelta(hours=30)):
-                active = active + [s for s in self.faults.specs if s["kind"] == "offline"
-                                   and s["start"] <= ts <= (s["end"] or ts) + dt.timedelta(hours=30)
-                                   and s not in active]
-            baseline = (g["machine"], g["source"], g["subject"]) in red_before
+            active = self.faults.blame(g["machine"], g["source"], g["subject"], ts)
+            first_run = self.first_run.get((g["machine"], g["subject"]))
+            never_ok = (g["machine"], g["subject"]) not in self.ever_ok_before(ts)
+            same_reason = (g["machine"], g["source"], g["subject"], sig_of(g)) in sig_before
+            baseline = (((g["machine"], g["source"], g["subject"]) in red_before
+                         and (same_reason or not active))
+                        or (first_run is not None and first_run >= (first_fault or ts) and never_ok
+                            and not active))
             guess = _cause_guess(g["text"] + " " + g["first_check"])
             g["faults"] = [s["id"] for s in active] if not baseline else []
             if active and not baseline:
@@ -1253,7 +1371,9 @@ class Week:
                 cause = f"injected ({ids}: {active[0]['desc'][:80]}); looks like: {guess}"
                 cls = "fault"
             elif baseline:
-                cause = f"baseline, red before any fault was injected: {guess}"
+                cause = (f"baseline, red before any fault was injected: {guess}"
+                         if (g["machine"], g["source"], g["subject"]) in red_before else
+                         f"baseline, red on its first run in the week (a weekly job), no fault on it: {guess}")
                 cls = "baseline"
             else:
                 cause = f"unexplained (no fault on this machine): {guess}"
@@ -1282,7 +1402,7 @@ class Week:
                 detected, outcome = None, "not reached: after the end of the run"
             elif str(s["status"]).startswith("skipped"):
                 outcome = s["status"]
-            elif misbehaves and not related:
+            elif s.get("mode") and not related:
                 outcome = "not reached: the job made no model call while the fault was set"
             elif misbehaves and refused and not ran:
                 outcome = "prevented: the guard refused every misbehaving command"
@@ -1306,7 +1426,8 @@ class Week:
                   "daemons_not_simulated": sorted(self.daemons),
                   "not_modelled": self.not_modelled,
                   "schedules_not_understood": sorted(self.unknown),
-                  "notes": self.fleet.notes,
+                  "notes": self.fleet.notes, "hardcoded_home": self.fleet.hardcoded_home,
+                  "sandbox_env": SANDBOX_ENV,
                   "checkpoints": self.checkpoints, "breaks": breaks, "faults": faults,
                   "promise_evals": self.eval_results}
         (self.o.out / "report.json").write_text(json.dumps(report, indent=1, default=str))

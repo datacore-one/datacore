@@ -67,7 +67,10 @@ def test_clock_times_in_prose():
 
 
 def test_intervals_and_daemons():
-    tick = sim.parse_schedule("continuous (venture-heartbeat.service, one tick every 1800 s)")
+    # A continuous service that ticks internally is a daemon: run as a job it
+    # sleeps out its own interval and blocks the simulated hour.
+    assert sim.parse_schedule("continuous (venture-heartbeat.service, one tick every 1800 s)").kind == "daemon"
+    tick = sim.parse_schedule("launchd io.datacore.state-sync: every 300 s")
     assert tick.kind == "interval" and len(sim.fires(tick, THU, min_interval_s=3600)) == 24
     assert sim.parse_schedule("tris-heartbeat.timer (every 30 min)").kind == "interval"
     assert sim.parse_schedule("continuous (launchd KeepAlive daemon, RunAtLoad)").kind == "daemon"
@@ -76,7 +79,7 @@ def test_intervals_and_daemons():
 
 def test_a_visitor_runs_only_while_awake_and_catches_up_at_wake():
     join = sim.parse_schedule("on join: visitor_join.py runs it", trigger="join")
-    assert sim.fires(join, THU, visitor=True) == [at(THU, h) for h in (8, 12, 16, 20)]
+    assert sim.fires(join, THU, visitor=True) == [at(THU, h, 1) for h in (8, 12, 16, 20)]
     midnight = sim.parse_schedule("0 0 * * *")
     # Asleep at midnight: launchd runs the missed calendar job once on wake.
     assert sim.fires(midnight, THU, visitor=True) == [at(THU, 8)]
@@ -120,6 +123,24 @@ def _tiny(tmp_path: Path, faults: list) -> dict:
     return sim.run_week(sim.Options(
         seed=SEED, out=out, days=1, start=THU, faults=faults, roster=roster, manifest=manifest,
         spaces=["personal"], evals="off", workdir=tmp_path / "fleet"))
+
+
+@needs_fleet
+def test_the_simulated_clock_moves_and_sleep_still_works(tmp_path):
+    """Under the fake clock a job sees the simulated date, and sleeping and
+    subprocess timeouts still work (they raised EINVAL in the first week run)."""
+    opts = sim.Options(seed=SEED, out=tmp_path / "out", days=1, start=THU, faults=[],
+                       roster=tmp_path / "r.json", manifest=tmp_path / "j.json", spaces=["personal"],
+                       evals="off", workdir=tmp_path / "fleet")
+    opts.roster.write_text(json.dumps(ROSTER))
+    opts.manifest.write_text(json.dumps(JOBS))
+    fleet = sim.Fleet(opts)
+    fleet.build()
+    rc, out, _ = fleet.sh(fleet.machines["alpha"], "date -u +%F; python3 -c \"import time, subprocess; "
+                          "time.sleep(0.05); subprocess.run(['sleep', '0.1'], timeout=5); print('slept')\"",
+                          at(THU, 3))
+    assert rc == 0, out
+    assert "2026-10-01" in out and "slept" in out, out
 
 
 @needs_fleet
