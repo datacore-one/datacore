@@ -89,6 +89,12 @@ tests:
   - test: .datacore/modules/research/tests/test_promise_KNW5_podcast_made_saved_reported.py
     needs: [module:chief-of-staff]
     why: runs chief-of-staff's research delivery
+  - test: .datacore/lib/tests/test_promise_OPS13_ai_job_that_could_not_run_is_failed.py
+    needs: [module:chief-of-staff]
+    why: runs chief-of-staff's inbox, research and tomorrow jobs against a stand-in model
+  - test: .datacore/lib/tests/test_promise_OPS14_quiet_machine_reported_from_roster.py
+    needs: [module:chief-of-staff]
+    why: runs chief-of-staff's fleet probe against a made-up roster
 
   # ---- promise evals: the live fleet and installed tools ---------------------
   - test: .datacore/lib/tests/test_promise_MEM_46_one_audio_briefing.py
