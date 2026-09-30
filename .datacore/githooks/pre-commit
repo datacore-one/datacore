@@ -78,6 +78,16 @@ case "$repo_root" in
     export SAFETY_ONLY
     exec "$data_root/.datacore/hooks/space-pre-commit" "$@"
     ;;
+  "$data_root"/.datacore/secrets)
+    # The credential store: `creds add` commits credentials here by design, so
+    # the credential-pattern rule is skipped for this repository alone (it had
+    # refused every `creds add` commit; owner-approved 2026-09-30). Conflict
+    # markers and the ledger gate still apply.
+    SAFETY_ONLY=1
+    CREDENTIAL_STORE=1
+    export SAFETY_ONLY CREDENTIAL_STORE
+    exec "$data_root/.datacore/hooks/space-pre-commit" "$@"
+    ;;
   *)
     SAFETY_ONLY=1
     export SAFETY_ONLY

@@ -84,6 +84,9 @@ echo "$staged" | while IFS= read -r file; do
     */tests/*|*/test/*|*/__tests__/*|*/testdata/*|*/fixtures/*)
       continue ;;
   esac
+  # The credential store (.datacore/secrets, set by the githooks dispatcher)
+  # holds credentials by design; the checks above still ran for it.
+  [ "${CREDENTIAL_STORE:-0}" = "1" ] && continue
   if echo "$blob" | grep -qE "$cred_pattern"; then
     printf "  %s (credential pattern — move secrets to .datacore/env/)\n" "$file" >> "$sfile"
   fi
