@@ -1476,7 +1476,7 @@ jobs:
   - name: hermes-promise-scoreboard
     machine: hermes
     schedule: "10 2 * * *"
-    cmd: "cd ~/.datacore/v2-runner && DATACORE_PROMISES_DIR=~/Data/1-datacore/1-tracks/dev/datacore-upgrade/promises python3 .datacore/lib/promise_nightly.py --no-send >> ~/.datacore/state/promise-nightly.log 2>&1"
+    cmd: "DATACORE_PROMISES_DIR=~/Data/1-datacore/1-tracks/dev/datacore-upgrade/promises python3 ~/.datacore/v2-runner/.datacore/lib/promise_nightly.py --no-send >> ~/.datacore/state/promise-nightly.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: ~/.datacore/state/promise-nightly.log
@@ -1490,7 +1490,7 @@ jobs:
   - name: plur-claw-promise-scoreboard
     machine: plur-claw
     schedule: "50 2 * * *"
-    cmd: "cd ~/.datacore/v2-runner && DATACORE_PROMISES_DIR=~/Data/1-datacore-space/1-tracks/dev/datacore-upgrade/promises ~/.datacore/eval-venv/bin/python .datacore/lib/promise_nightly.py --no-send >> ~/.datacore/state/promise-nightly.log 2>&1"
+    cmd: "DATACORE_PROMISES_DIR=~/Data/1-datacore-space/1-tracks/dev/datacore-upgrade/promises ~/.datacore/eval-venv/bin/python ~/.datacore/v2-runner/.datacore/lib/promise_nightly.py --no-send >> ~/.datacore/state/promise-nightly.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: ~/.datacore/state/promise-nightly.log
