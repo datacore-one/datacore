@@ -125,7 +125,9 @@ case "$PROFILE" in
     # hermes had contracts in the manifest and nothing running the verifier
     # (found 2026-09-06): its rows read "not heard from" by construction.
     # --manifest: hermes has no ~/Data/.datacore/lib; the runner copy is the canonical one (test_runner_manifest_matches_canonical).
-    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine $HOST --manifest $LIB/jobs/manifest.yaml --alert log >> $STATE/job_verify.log 2>&1")
+    # --alert command: Tris's machine sends its own alerts through its own bot
+    # (owner decision 2026-09-30): ~/.datacore/alerts.yaml runs agent_alert.py --bot tris-telegram-bot.
+    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine $HOST --manifest $LIB/jobs/manifest.yaml --alert command >> $STATE/job_verify.log 2>&1")
     ;;
 esac
 

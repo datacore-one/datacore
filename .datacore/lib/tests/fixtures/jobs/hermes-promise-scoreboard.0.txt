@@ -1,7 +1,7 @@
 # fixture for hermes-promise-scoreboard artifact[0]
 # producer artifact: ~/.datacore/state/promise-nightly.log on hermes
 # harvested: 2026-09-30, last line of a scratch run of the same command (PROMISE_NIGHTLY_DIR=/tmp/pn-scratch)
-# regex under test: ^promise-scoreboard: \d+ green, \d+ red, \d+ could not run here; \d+ turned red, \d+ recovered; alert none( \(--no-send\))?$
+# regex under test: ^promise-scoreboard: \d+ green, \d+ red, \d+ could not run here; \d+ turned red, \d+ recovered; alert (sent|none)$
 # represents: SUCCESS
 # ---
 promise-scoreboard: 55 green, 56 red, 106 could not run here; 0 turned red, 0 recovered; alert none

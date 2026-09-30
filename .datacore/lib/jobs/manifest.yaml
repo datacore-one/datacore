@@ -1440,10 +1440,14 @@ jobs:
   #   box         Winston's sender, as its job checks do
   #   workstation the same sender over ssh on the always-on host, as
   #               job_verify_notify.sh relays its alerts
-  #   (both declared in that host's ~/.datacore/alerts.yaml `command:`, the
+  #   hermes      Tris's own bot (agent_alert.py --bot tris-telegram-bot, token
+  #               and group from the broker at send time), as its job checks
+  #               (--alert command) do since 2026-09-30
+  #   (all three declared in that host's ~/.datacore/alerts.yaml `command:`, the
   #   install-local alert command job_verify already reads)
-  #   hermes, plur-claw  NO alert route: their job checks run --alert log, so
-  #               these run --no-send; the board is written and nobody is told
+  #   plur-claw   NO alert route yet: Data's own bot is not in the broker's
+  #               index, so its job checks run --alert log and this --no-send;
+  #               the board is written and nobody is told
   # box and plur-claw run an interpreter with pytest (~/.datacore/eval-venv:
   # their system python3 has none, and a board without it is all red). The
   # satellites run the code from ~/.datacore/v2-runner, which has no system
@@ -1465,12 +1469,12 @@ jobs:
   - name: hermes-promise-scoreboard
     machine: hermes
     schedule: "10 2 * * *"
-    cmd: "DATACORE_PROMISES_DIR=~/Data/1-datacore/1-tracks/dev/datacore-upgrade/promises python3 ~/.datacore/v2-runner/.datacore/lib/promise_nightly.py --no-send >> ~/.datacore/state/promise-nightly.log 2>&1"
+    cmd: "DATACORE_PROMISES_DIR=~/Data/1-datacore/1-tracks/dev/datacore-upgrade/promises python3 ~/.datacore/v2-runner/.datacore/lib/promise_nightly.py >> ~/.datacore/state/promise-nightly.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: ~/.datacore/state/promise-nightly.log
         check: last_line_regex
-        arg: '^promise-scoreboard: \d+ green, \d+ red, \d+ could not run here; \d+ turned red, \d+ recovered; alert none( \(--no-send\))?$'
+        arg: '^promise-scoreboard: \d+ green, \d+ red, \d+ could not run here; \d+ turned red, \d+ recovered; alert (sent|none)$'
         max_age_hours: 26
       - path: ~/.datacore/state/promise-scoreboard/latest.json
         check: json_has_keys
