@@ -275,3 +275,176 @@ tests:
   - test: .datacore/lib/tests/test_promise_OPS11_code_only_from_git.py
     needs: [fleet, file:.datacore/registry/infrastructure.yaml]
     why: reads every job-running machine's code checkouts over ssh
+
+  # ---- promise evals that ssh to other machines or run a real agent session ----
+  # Owner decision 2026-09-30: every machine runs its own nightly board; these
+  # run only where their need is met -- `fleet` on the roster's console
+  # (roles.console), `agent` with DATACORE_AGENT_EVALS=1 -- and are
+  # "could not run here" everywhere else, never red.
+  # Evals in module repositories are not listed here (CI has no such file); the
+  # scoreboard knows them by their own failure words (promise_nightly UNREACHABLE,
+  # AGENT_NOT_RUN).
+  - test: .datacore/lib/tests/test_promise_AGT9_telegram_one_to_one.py
+    only: [test_the_process_that_answers_the_agents_bot_is_running, test_the_agents_bot_is_a_known_live_credential_on_its_host]
+    needs: [fleet]
+    why: reads other machines over ssh
+  - test: .datacore/lib/tests/test_promise_AUD6_cost_cap_and_missed_night.py
+    only: [test_the_missed_night_check_is_scheduled_on_the_box]
+    needs: [fleet]
+    why: reads other machines over ssh
+  - test: .datacore/lib/tests/test_promise_CAP_4_capture_twice_one_entry.py
+    only: [test_github_triage_is_scheduled_once_in_the_fleet]
+    needs: [fleet]
+    why: reads other machines over ssh
+  - test: .datacore/lib/tests/test_promise_MEM_01_restricted_networks_unreachable.py
+    only: [test_guard_wired_on_every_agent_host]
+    needs: [fleet]
+    why: reads other machines over ssh
+  - test: .datacore/lib/tests/test_promise_MEM_47_audio_opening_and_length.py
+    only: [test_the_last_audio_briefing_lasts_about_two_and_a_half_minutes]
+    needs: [fleet]
+    why: reads other machines over ssh
+  - test: .datacore/lib/tests/test_promise_SPC7_correction_remembered_everywhere.py
+    only: [test_every_owner_machine_holds_the_macs_memory_from_a_day_ago, test_no_agent_machine_holds_the_owners_memory]
+    needs: [fleet]
+    why: reads other machines over ssh
+  - test: .datacore/lib/tests/test_promise_SYN1_reaches_every_machine.py
+    only: [test_every_machine_runs_a_space_sync_at_least_hourly]
+    needs: [fleet]
+    why: reads other machines over ssh
+  - test: .datacore/lib/tests/test_promise_AGT1_each_agent_own_lane.py
+    only: [test_winston_briefs_and_routes_instead_of_fixing]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_AGT2_out_of_lane_passed_on.py
+    only: [test_tris_passes_a_deploy_to_miles]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_AGT6_never_weakens_its_judge.py
+    only: [test_agent_fixes_the_producer_not_the_check]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_AGT8_solve_alone_escalate_when_stuck.py
+    only: [test_agent_fixes_a_solvable_failure_without_asking]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_01_restricted_networks_unreachable.py
+    only: [test_agent_does_not_reach_and_writes_it_up]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_02_irreversible_needs_trial_run.py
+    only: [test_agent_shows_a_one_item_trial_before_mass_cancel]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_03_nothing_submitted_to_government.py
+    only: [test_agent_prepares_but_never_submits]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_06_credentials_via_broker_only.py
+    only: [test_agent_asks_the_broker_and_prints_nothing]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_07_revoked_only_after_fleet_compare.py
+    only: [test_agent_compares_every_host_before_calling_it_revoked]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_10_push_own_branches_no_sweep.py
+    only: [test_agent_commits_only_its_own_change]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_12_customer_never_named_first.py
+    only: [test_agent_never_names_a_customer_the_owner_did_not]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_13_customer_work_isolated_session.py
+    only: [test_agent_keeps_customer_work_to_its_workspace]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_14_demo_redacts_before_showing.py
+    only: [test_agent_redacts_during_a_screen_share]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_15_person_docs_only_personal.py
+    only: [test_agent_files_person_documents_in_the_personal_space]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_17_nothing_published_without_asking.py
+    only: [test_agent_keeps_the_page_local]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_20_never_claims_unverified.py
+    only: [test_agent_says_not_verified_when_it_could_not_check]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_21_plain_language_ids_in_brackets.py
+    only: [test_agent_writes_plain_language]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_22_keeps_working_never_asks_to_continue.py
+    only: [test_agent_finishes_without_asking]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_23_confirm_step_really_waits.py
+    only: [test_agent_waits_at_the_confirm_step]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_24_routine_steps_never_skipped.py
+    only: [test_agent_runs_every_step_in_order]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_25_decisions_on_one_page.py
+    only: [test_agent_puts_decisions_on_one_page]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_26_reports_saved_at_once.py
+    only: [test_agent_saves_the_report]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_27_scripts_kept_in_tool_folders.py
+    only: [test_agent_keeps_the_script]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_28_reuses_before_building.py
+    only: [test_agent_reuses_what_exists]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_29_done_written_first.py
+    only: [test_agent_writes_done_first]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_30_evals_first_builder_cannot_edit.py
+    only: [test_agent_writes_the_failing_test_first]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_31_no_invented_pronouns_for_firm_agents.py
+    only: [test_agent_uses_the_name_not_pronouns]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_36_link_routing.py
+    only: [test_bare_link_to_research_commented_link_to_action]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_37_parked_goes_to_inbox.py
+    only: [test_agent_parks_into_the_inbox]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_42_evidence_before_overdue.py
+    only: [test_agent_checks_evidence_before_calling_overdue]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_48_overnight_prep_from_calendar.py
+    only: [test_evening_review_leaves_prep_tasks_for_tomorrow]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_53_triage_is_analysis_only.py
+    only: [test_agent_triage_changes_nothing_on_github]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_MEM_64_module_load_announced.py
+    only: [test_agent_says_which_module_loaded_and_why]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_SPC2_work_filed_in_its_space.py
+    only: [test_an_agent_files_project_work_in_its_space]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design

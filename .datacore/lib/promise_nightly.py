@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """The promise scoreboard, every night, and one message to The Firm when it moves.
 
-Owner decision 2026-09-30: run the scoreboard nightly on the overnight host and
-alert The Firm when a promise that was green turns red.
+Owner decision 2026-09-30: run the scoreboard nightly and alert The Firm when a
+promise that was green turns red. Every machine runs it for itself (owner,
+2026-09-30): an eval that needs another machine over ssh (need `fleet`, met
+only on the roster's console) or a live agent session (need `agent`, never on
+here) is "could not run here" on a machine that cannot do that, never red.
 
     promise_nightly.py [--no-send] [--weekly-day mon]
 
@@ -22,8 +25,9 @@ What it does, in order:
      red to green "recovered". "Was green" means green on THIS host: the first
      night on a host only starts its history and sends nothing (it prints which
      promises green in the owner's baseline -- .datacore/registry/
-     promise-baseline.json, read only -- are red here). Only reds that could be
-     news (not already red here) are rerun for their failure line.
+     promise-baseline.json, read only -- are red here). Every red is rerun for its
+     failure line on the first night; after that only reds that could be news
+     (not already red here) and reds whose eval file lacks a need here.
   5. Sends ONE message to The Firm group (ALERT_CHAT_ID, this host's bot token --
      the route the overnight host's own alerts take) listing what turned red -- plain promise text, id in
      brackets, first failure line -- what recovered, and what newly could not run.
@@ -75,6 +79,10 @@ UNREACHABLE = re.compile(
     # (UNREACHABLE ...)", "could not tell (unreachable)", "could not read the crontab (timeout)"
     r"|TimeoutExpired: Command '\['ssh'|\bUNREACHABLE\b|could not tell \(unreachable\)"
     r"|could not read the crontab \(timeout\)", re.I)
+
+#: agent_eval.require_enabled()'s own words: an agent eval the nightly did not
+#: run (it never turns DATACORE_AGENT_EVALS on -- real model runs cost money).
+AGENT_NOT_RUN = re.compile(r"agent eval not run \(set DATACORE_AGENT_EVALS=1\)")
 
 GREEN, RED, CNR = "green", "red", "could-not-run"
 
@@ -187,6 +195,12 @@ def unmet_needs() -> dict[str, list[str]]:
     return needs_gate.unmet_by_test(root=ROOT, env=env)
 
 
+def promise_eval_files() -> dict[str, list[str]]:
+    """{normalized promise id: [repo-relative eval file]}"""
+    import promise_evals
+    return {pid: [_rel(f) for _s, f in fs] for pid, fs in promise_evals.eval_files().items()}
+
+
 def promise_texts() -> dict[str, str]:
     import promise_evals
     return promise_evals.promises()
@@ -208,6 +222,8 @@ def _covered(failure: dict, unmet: dict[str, list[str]]) -> list[str] | None:
             return list(needs)
     if UNREACHABLE.search(failure.get("line") or ""):
         return ["a host reachable over ssh from here"]
+    if AGENT_NOT_RUN.search(failure.get("line") or ""):
+        return ["agent"]
     return None
 
 
@@ -418,15 +434,31 @@ def main(argv: list[str] | None = None) -> int:
     history = load_history(state, night) if state.exists() else []
     base = baseline_green()
 
-    def could_be_news(pid: str) -> bool:
-        """A red is news unless it was already red here last time it was judged."""
+    try:
+        unmet = unmet_needs()
+        lacking = {k.split("::", 1)[0] for k in unmet}
+        files = promise_eval_files()
+    except Exception as exc:  # noqa: BLE001 -- the contract line must say it failed
+        print(f"promise-scoreboard: FAILED to run ({type(exc).__name__}: {str(exc)[:200]})")
+        return 1
+
+    def rerun(pid: str) -> bool:
+        """Which reds are run once more for their failure lines: every red on the
+        first night here (a red recorded without its reason is never rerun later);
+        after that a red that could be news (not already red here last time it was
+        judged), and any red whose eval file lacks a need here -- a need declared
+        for single tests is judged per failing test, so it needs the failures."""
+        if not history:
+            return True
+        if any(f in lacking for f in files.get(_norm(pid), [])):
+            return True
         past = [h["promises"].get(pid, {}).get("state") for h in history]
         judged = next((x for x in past if x in (GREEN, RED)), None)
-        return judged != RED if history else _norm(pid) in base
+        return judged != RED
 
     try:
-        raw = run_board(could_be_news)
-        board = build_board(raw, unmet_needs(), promise_texts(), date=night)
+        raw = run_board(rerun)
+        board = build_board(raw, unmet, promise_texts(), date=night)
     except Exception as exc:  # noqa: BLE001 -- the contract line must say it failed
         print(f"promise-scoreboard: FAILED to run ({type(exc).__name__}: {str(exc)[:200]})")
         return 1

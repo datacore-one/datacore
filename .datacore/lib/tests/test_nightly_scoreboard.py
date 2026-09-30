@@ -398,3 +398,123 @@ def test_a_refused_send_is_recorded_as_undelivered(tmp_path, monkeypatch):
     ok, why = pn.send_to_firm("Promise scoreboard: test")
     assert ok is False and "401" in why
     assert (tmp_path / "undelivered.jsonl").exists()
+
+
+# ---- every machine runs its own board (owner decision 2026-09-30) ----------------
+#
+# nightshift's first board: 89 red, most of them evals that ssh to the other hosts
+# (which nightshift cannot reach) or need a live agent session (never on in the
+# nightly). Neither is a broken promise; both are "could not run here".
+
+ROSTER = """\
+roles:
+  console: mac
+servers:
+  mac:
+    kind: workstation
+    ssh_alias: '-'
+    access: {actor: mac, hostname: Mac}
+  nightshift:
+    kind: server
+    ssh_alias: nightshift
+    ledger_actors: [nightshift, miles]
+    access: {actor: miles, hostname: nightshift}
+"""
+
+
+def _roster(tmp_path, body=ROSTER):
+    reg = tmp_path / ".datacore" / "registry"
+    reg.mkdir(parents=True, exist_ok=True)
+    (reg / "infrastructure.yaml").write_text(body)
+    return tmp_path
+
+
+def test_fleet_is_met_only_on_the_machine_the_roster_names_as_its_console(tmp_path):
+    """Having the roster is not reaching the fleet: nightshift has it and cannot
+    ssh to box, hermes or plur-claw. The roster names the one machine that reads
+    the fleet (roles.console); everywhere else `fleet` is not met."""
+    import needs_gate as ng
+    root = _roster(tmp_path)
+    assert ng.met("fleet", root, {"DATACORE_ACTOR": "mac"})
+    assert not ng.met("fleet", root, {"DATACORE_ACTOR": "miles"})
+    assert not ng.met("fleet", root, {"DATACORE_ACTOR": "nightshift"})
+    # a roster that names no console: nobody has declared who reads the fleet
+    root2 = _roster(tmp_path / "noconsole", ROSTER.replace("roles:\n  console: mac\n", ""))
+    assert not ng.met("fleet", root2, {"DATACORE_ACTOR": "mac"})
+    assert not ng.met("fleet", tmp_path / "bare", {"DATACORE_ACTOR": "mac"})
+
+
+def test_a_fleet_eval_on_a_host_that_cannot_reach_the_fleet_could_not_run(tmp_path):
+    import needs_gate as ng
+    root = _roster(tmp_path)
+    path = ".datacore/lib/tests/test_promise_SYN4_x.py"
+    entries = [{"test": path, "only": ["test_every_host"], "needs": ["fleet"], "why": "ssh"}]
+    unmet = ng.unmet_by_test(root=root, env={"DATACORE_ACTOR": "miles"}, entries=entries)
+    b = pn.build_board(raw({"SYN-4": "red"}, {"SYN-4": [fail(path, "test_every_host", "AssertionError: box differs")]}),
+                       unmet, TEXTS, date=WED, host="nightshift")
+    assert b["promises"]["SYN-4"]["state"] == "could-not-run" and "fleet" in b["promises"]["SYN-4"]["why"]
+    # the console runs it, and the same failure is a red there
+    unmet_mac = ng.unmet_by_test(root=root, env={"DATACORE_ACTOR": "mac"}, entries=entries)
+    b = pn.build_board(raw({"SYN-4": "red"}, {"SYN-4": [fail(path, "test_every_host", "AssertionError: box differs")]}),
+                       unmet_mac, TEXTS, date=WED, host="mac")
+    assert b["promises"]["SYN-4"]["state"] == "red"
+
+
+def test_a_red_not_rerun_as_news_whose_test_lacks_a_need_here_could_not_run(tmp_path, monkeypatch):
+    """A red already red last night is not rerun for its failure line, and only a
+    FILE-wide unmet need used to excuse it; a need declared for single tests
+    (file::test) was ignored, so on the first nights every per-test fleet or agent
+    eval stayed red. A red whose eval file carries any unmet need is rerun, so each
+    failing test is judged against its own needs."""
+    path = ".datacore/lib/tests/test_promise_MSG8_x.py"
+    hist = [board("2026-09-28", {"MSG-8": "green"}),
+            board("2026-09-29", {"MSG-8": "red"}, {"MSG-8": [fail(path, "test_agent", "x")]})]
+
+    def fake(want=None):
+        r = raw({"MSG-8": "red"}, {"MSG-8": [fail(path, "test_agent", "agent eval not run (set DATACORE_AGENT_EVALS=1)")]}
+                if want is None or want("MSG-8") else {})
+        r["eval_files"] = {"MSG-8": [path]}
+        return r
+    state = tmp_path / "state"
+    state.mkdir()
+    for b in hist:
+        (state / f"board-{b['date']}.json").write_text(json.dumps(b))
+    monkeypatch.setattr(pn, "STATE_DIR", state)
+    monkeypatch.setattr(pn, "run_board", fake)
+    monkeypatch.setattr(pn, "unmet_needs", lambda: {f"{path}::test_agent": ["agent"]})
+    monkeypatch.setattr(pn, "promise_eval_files", lambda: {"MSG8": [path]})
+    monkeypatch.setattr(pn, "promise_texts", lambda: TEXTS)
+    monkeypatch.setattr(pn, "send_to_firm", lambda text: (True, "sent"))
+    monkeypatch.setattr(pn, "today", lambda: WED)
+    pn.main([])
+    b = json.loads((state / "board-2026-09-30.json").read_text())
+    assert b["promises"]["MSG-8"]["state"] == "could-not-run"
+
+
+def test_an_agent_eval_that_was_not_enabled_could_not_run():
+    """agent_eval.require_enabled() fails with its own words when the nightly
+    (which never turns agent evals on) runs it: the eval did not run."""
+    line = "Failed: agent eval not run (set DATACORE_AGENT_EVALS=1)"
+    b = board(WED, {"MEM-1": "red"}, {"MEM-1": [fail("m.py", "test_agent_does_not_reach", line)]})
+    assert b["promises"]["MEM-1"]["state"] == "could-not-run"
+
+
+def test_the_first_night_on_a_host_reruns_every_red_for_its_reason(tmp_path, monkeypatch):
+    """The first night starts the host's history; a red recorded there without
+    its failure line is never rerun later (already red), so its reason would be
+    lost for good."""
+    asked = {}
+
+    def fake(want=None):
+        asked["want"] = want
+        return raw({"NEW-1": "red"}, {"NEW-1": [fail("u.py", "u", "x")]})
+    state = tmp_path / "state"
+    monkeypatch.setattr(pn, "STATE_DIR", state)
+    monkeypatch.setattr(pn, "BASELINE", tmp_path / "none.json")
+    monkeypatch.setattr(pn, "run_board", fake)
+    monkeypatch.setattr(pn, "unmet_needs", lambda: {})
+    monkeypatch.setattr(pn, "promise_eval_files", lambda: {})
+    monkeypatch.setattr(pn, "promise_texts", lambda: TEXTS)
+    monkeypatch.setattr(pn, "today", lambda: WED)
+    pn.main(["--no-send"])
+    assert asked["want"] is None or asked["want"]("NEW-1") is True

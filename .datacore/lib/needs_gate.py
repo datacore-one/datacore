@@ -26,8 +26,11 @@ Need vocabulary:
     cli:<name>      the command is on PATH
     python:<module> an optional Python package is importable (one that the
                     audited requirements deliberately leave out)
-    fleet           this machine is part of a fleet: its infrastructure.yaml
-                    roster exists, so hosts can be read over ssh
+    fleet           this machine reads the fleet over ssh: it is the machine the
+                    roster (infrastructure.yaml) names as `roles.console`. Having
+                    the roster is not enough -- the overnight host has it and
+                    cannot ssh to the others (2026-09-30); a roster that names
+                    no console declares no machine that reads the fleet
     agent           real agent sessions are allowed (DATACORE_AGENT_EVALS=1)
 """
 from __future__ import annotations
@@ -76,10 +79,43 @@ def met(need: str, root: Path = ROOT, env=None) -> bool:
         except (ImportError, ValueError):
             return False
     if k == "fleet":
-        return (root / ".datacore" / "registry" / "infrastructure.yaml").exists()
+        return is_console(root, env)
     if k == "agent":
         return env.get("DATACORE_AGENT_EVALS") == "1"
     raise ValueError(f"unknown need {need!r}; one of {', '.join(KINDS)}")
+
+
+def is_console(root: Path = ROOT, env=None) -> bool:
+    """Is this machine the one the roster names as the fleet's console?
+
+    Declared, never probed: an ssh probe would turn a host that is really down
+    into "could not run" on the one machine whose job is to notice it, and one
+    host (box) answers a non-interactive ssh with an interactive check. This
+    machine is known by its declared actor (DATACORE_ACTOR, else
+    actor_identity: ~/.datacore/identity.env, then the roster's hostname row).
+    """
+    env = os.environ if env is None else env
+    roster = root / ".datacore" / "registry" / "infrastructure.yaml"
+    try:
+        import yaml
+        doc = yaml.safe_load(roster.read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001 -- no readable roster: no fleet to read
+        return False
+    roles = doc.get("roles") if isinstance(doc, dict) else None
+    console = str((roles or {}).get("console") or "") if isinstance(roles, dict) else ""
+    cfg = (doc.get("servers") or {}).get(console) if console else None
+    if not isinstance(cfg, dict):
+        return False
+    actor = str(env.get("DATACORE_ACTOR") or "").strip().lower()
+    if not actor:
+        try:
+            import actor_identity
+            actor = str(actor_identity.resolve(infra=roster)[0] or "").lower()
+        except Exception:  # noqa: BLE001 -- an unknown machine is not the console
+            return False
+    names = {console.lower(), str((cfg.get("access") or {}).get("actor") or "").lower(),
+             *(str(a).lower() for a in cfg.get("ledger_actors") or [])}
+    return bool(actor) and actor in names - {""}
 
 
 def unmet_by_test(root: Path = ROOT, env=None, entries=None) -> dict[str, list[str]]:
