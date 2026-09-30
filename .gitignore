@@ -397,3 +397,7 @@ skills-lock.json
 
 # The install's own job list (INS-5): the tracked manifest.yaml is the fleet's.
 .datacore/lib/jobs/manifest.local.yaml
+# A copy of that local file is as local as the file. On 2026-09-30 an agent's
+# backup (manifest.local.yaml.bak-20260930-cos) sat untracked in the core repo
+# on the nightshift host, and the git preflight refused both overnight runs for it.
+.datacore/lib/jobs/manifest.local.yaml.*
