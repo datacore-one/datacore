@@ -89,24 +89,16 @@ python3 .datacore/lib/command_steps.py tick <run_id> 1  # this step is done
 
 ## Step 2: Check for Existing Briefing
 
-Check if today's briefing already exists:
+Check if today's briefing already exists, and whether it is a real one:
 
 ```bash
-python3 -c "
-from pathlib import Path
-from datetime import date
-today = date.today().isoformat()
-journal = Path.home() / 'Data' / '0-personal' / 'notes' / 'journals' / f'{today}.md'
-if journal.exists():
-    content = journal.read_text()
-    if '## Daily Briefing' in content:
-        print('EXISTS')
-    else:
-        print('NO_BRIEFING')
-else:
-    print('NO_FILE')
-"
+python3 .datacore/lib/briefing_state.py      # NO_FILE | NO_BRIEFING | STUB | EXISTS
 ```
+
+`STUB` is a `## Daily Briefing` without its narrative sections (Good Morning,
+The World), e.g. Winston's fallback when its writer's draft was withheld
+(2026-09-30: only a raw "Facts" list). Checking for the heading alone called that
+EXISTS and would have skipped the briefing entirely.
 
 **If EXISTS (incremental mode):**
 1. Pull repos (quick sync only — step 3)
@@ -116,8 +108,9 @@ else:
 5. Skip to step 16 (standup generation) — this is always interactive
 6. Start interactive session
 
-**If NO_BRIEFING or NO_FILE:**
-Proceed with full briefing generation (step 3 onward).
+**If STUB, NO_BRIEFING or NO_FILE:**
+Proceed with full briefing generation (step 3 onward). For STUB, step 16 replaces
+the section in place and says at the top that it replaces a withheld draft.
 
 ---
 

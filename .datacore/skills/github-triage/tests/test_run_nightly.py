@@ -43,7 +43,7 @@ def _setup(tmp_path):
     (bindir / "claude").write_text(STUB)
     (bindir / "claude").chmod(0o755)
     env = dict(os.environ, DATA_DIR=str(data), CLAUDE_BIN=str(bindir / "claude"),
-               STUB_LOG=str(tmp_path / "calls.log"), TRIAGE_NO_PUSH="1",
+               STUB_LOG=str(tmp_path / "calls.log"), TRIAGE_NO_PUSH="1", TRIAGE_LOG_DIR=str(tmp_path / "logs"),
                GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
     return data, personal, env
 
@@ -75,3 +75,22 @@ def test_sunday_is_a_full_sweep(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     calls = (tmp_path / "calls.log").read_text().splitlines()
     assert all(c.split()[1] == "full" for c in calls)
+
+
+def test_tests_never_write_the_hosts_real_log(tmp_path):
+    """2026-09-30: run on the nightshift host, these tests appended fake
+    "2026-09-30 public" lines to Miles's real triage logs."""
+    data, personal, env = _setup(tmp_path)
+    subprocess.run(["bash", str(RUNNER), "--date", "2026-09-30"], capture_output=True, text=True, env=env)
+    assert (tmp_path / "logs" / "2026-09-30-public.log").exists()
+
+
+def test_the_output_folder_is_not_ignored_by_the_personal_space():
+    """2026-09-30: 0-personal ignored all of content/, so the runner's commit of the
+    boards failed on the host and the morning had none."""
+    personal = SKILL.parents[2] / "0-personal"
+    if not (personal / ".git").exists():
+        return
+    r = subprocess.run(["git", "-C", str(personal), "check-ignore", "-q",
+                        "content/reports/github-triage/2026-01-01-public.board.json"])
+    assert r.returncode == 1, "0-personal's .gitignore ignores the triage output folder"
