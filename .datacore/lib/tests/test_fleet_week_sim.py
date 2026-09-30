@@ -238,5 +238,8 @@ def test_runs_land_in_one_folder_and_the_previous_run_is_found(tmp_path):
     assert again == tmp_path / "2026-09-30-7d-2"
     sim.write_outputs(_report([]), again)
     (tmp_path / "scratch").mkdir()            # not a run: no report.json
+    # The container's file system gave both the same mtime: order still holds.
+    same = (first / "report.json").stat().st_mtime_ns
+    os.utime(again / "report.json", ns=(same, same))
     assert sim.previous_run(tmp_path, again) == first
     assert sim.previous_run(tmp_path, first) is None

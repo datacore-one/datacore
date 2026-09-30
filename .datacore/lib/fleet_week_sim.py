@@ -1515,9 +1515,14 @@ def previous_run(root: Path, current: Path) -> Path | None:
     the same length (a 2-day run is not compared with a 7-day one if a 7-day
     one exists)."""
     current = Path(current).resolve()
-    cur_t = (current / "report.json").stat().st_mtime if _is_run(current) else float("inf")
+
+    def order(d: Path) -> tuple:
+        # Finish time, then name: two runs finished within the file system's
+        # time resolution (seen in the container) still have one order.
+        return ((d / "report.json").stat().st_mtime_ns, d.name)
+    cur_k = order(current) if _is_run(current) else (float("inf"), "")
     runs = [d for d in Path(root).iterdir() if _is_run(d) and d.resolve() != current
-            and (d / "report.json").stat().st_mtime <= cur_t] if Path(root).is_dir() else []
+            and order(d) < cur_k] if Path(root).is_dir() else []
     if not runs:
         return None
     try:
@@ -1525,7 +1530,7 @@ def previous_run(root: Path, current: Path) -> Path | None:
         same = [d for d in runs if load_summary(d).get("days") == days]
     except (OSError, ValueError, KeyError):
         same = []
-    return max(same or runs, key=lambda d: (d / "report.json").stat().st_mtime)
+    return max(same or runs, key=order)
 
 
 def compare_runs(prev: Path, cur: Path) -> dict:
