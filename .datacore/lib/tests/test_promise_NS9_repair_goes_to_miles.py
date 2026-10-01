@@ -1,5 +1,10 @@
-"""NS-9: A job that keeps failing goes to Miles as a repair pull request automatically.
-I am told only if he cannot take it or gives up after three tries.
+"""NS-9: A job that keeps failing goes to the agent of the machine it runs on, as a repair;
+on my Mac it comes to me as a task. I am told only if the agent cannot take it or gives up
+after three tries.
+
+Owner-approved revision 2026-10-01 (decision board D1, "each box should have own repair
+agent"): until then every repair went to Miles, and 0 of 122 box and Mac repairs succeeded.
+The file name keeps its old id-bearing name.
 
 Kind: deterministic. Exercises the real chain against tmp fixtures:
   job_verify.main (a failing job, repeated with fresh artifacts)
@@ -77,9 +82,9 @@ def test_a_repair_miles_cannot_take_reaches_the_owner(tmp_path, monkeypatch):
     assert len(sent) == 1 and "box-x" in sent[0], "a refused delegation must reach the owner"
 
 
-# ── autofix.delegate: the item is a pull request, addressed to miles ───────────
+# ── autofix.delegate: the repair goes to the failing machine's own agent ─────────
 
-def test_the_repair_item_is_a_pull_request_for_miles(tmp_path, monkeypatch):
+def test_the_repair_item_goes_to_the_failing_machines_own_agent(tmp_path, monkeypatch):
     import actor_identity
     import ledger.policy
     from jobs import autofix
@@ -95,9 +100,24 @@ def test_the_repair_item_is_a_pull_request_for_miles(tmp_path, monkeypatch):
     job = types.SimpleNamespace(name="box-x", machine="box", delegate=True, cmd="x", schedule="x")
     state, why = autofix.delegate(job, ["f"], {"first_failed": "2026-09-22"}, root=tmp_path, roster=roster)
     assert state == "delegated", why
-    assert captured["assignee"] == "miles"
-    assert "--stage merged" in captured["check"] and f"--item {captured['id']}" in captured["check"]
-    assert "PR" in captured["body"] or "pull request" in captured["body"]
+    assert captured["assignee"] == "winston", (
+        f"a box job's repair went to {captured.get('assignee')!r}, not the box's own agent")
+    # The repair is done on the job's own machine, so its done-check is the job itself
+    # passing again there -- not a merged pull request on another machine.
+    assert "fix_check.py" in captured["check"] and "--job box-x" in captured["check"] \
+        and "--machine box" in captured["check"], captured["check"]
+
+
+def test_a_job_on_the_owners_machine_becomes_a_task_not_a_repair(tmp_path, monkeypatch):
+    import ledger.policy
+    from jobs import autofix
+    captured = {}
+    monkeypatch.setattr(ledger.policy, "guarded_append", lambda log, kind, payload: captured.update(payload))
+    monkeypatch.setattr(autofix, "contract_sha", lambda name, manifest: "abc")
+    job = types.SimpleNamespace(name="mac-x", machine="mac", delegate=True, cmd="x", schedule="x")
+    state, why = autofix.delegate(job, ["f"], {"first_failed": "2026-09-22"}, root=tmp_path)
+    assert state == "owner", f"a job on the owner's own machine was handed to an agent: {state} {why}"
+    assert captured == {}, "no repair item may be written for the owner's machine"
 
 
 # ── three failed tries: dead-letter, then the owner is told ───────────────────
