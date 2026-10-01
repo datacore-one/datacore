@@ -236,6 +236,20 @@ for _d in "$HOME/Data" "$HOME"/Data/[0-9]-*; do
     git -C "$_d" config core.hooksPath "$GITHOOKS" && log "safety hooks enabled for $(basename "$_d") (core.hooksPath)"
   fi
 done
+# Safety guard (AGT-11): every Claude Code run on an agent's machine passes the
+# tool-policy guard, whatever script starts it -- wired in the user settings,
+# because a script that runs `claude -p` without --settings loads nothing else.
+# On the four hosts this was added by hand on 2026-09-30; the fleet week
+# simulator then showed a machine built without it lets `git reset --hard`
+# through (4 of 4, 2026-10-01). A machine without Claude Code has no settings
+# to guard (hermes's own plugin calls the same guard).
+POLICY_INSTALLER="$LIB/hooks/install_redaction_guards.py"
+POLICY_ARGS=(--only policy --hooks-dir "$LIB/hooks")
+if [ "$VERIFY_ONLY" = 0 ] && command -v claude >/dev/null 2>&1; then
+  python3 "$POLICY_INSTALLER" "${POLICY_ARGS[@]}" --create >/dev/null \
+    && log "safety guard wired in ~/.claude/settings.json (tool_policy_guard.py)" \
+    || { log "FAIL could not wire the safety guard into ~/.claude/settings.json"; fail=1; }
+fi
 
 # lines this installer retires (superseded by one of the above)
 RETIRE=("/usr/local/bin/ledger-pull-data.sh")
@@ -265,6 +279,13 @@ for _d in "$HOME/Data" "$HOME"/Data/[0-9]-*; do
   [ -e "$_d/.git" ] || continue
   has_hook "$_d" && log "OK  safety hooks: $(basename "$_d")" || { log "FAIL no pre-commit hook in $_d"; fail=1; }
 done
+if command -v claude >/dev/null 2>&1; then
+  _pg="$(python3 "$POLICY_INSTALLER" "${POLICY_ARGS[@]}" --verify 2>&1)" \
+    && log "OK  safety guard before every tool call (~/.claude/settings.json)" \
+    || { log "FAIL safety guard: ${_pg:-not wired}"; fail=1; }
+else
+  log "--  safety guard: Claude Code is not installed here, no user settings to guard"
+fi
 [ -x "$LIB/ledger_phase1_cycle.sh" ] && log "OK  runner lib present at $LIB" || { log "FAIL runner lib missing: $LIB"; fail=1; }
 # Current, not merely present: compare with origin/main as of the last fetch
 # (the runner-refresh cron fetches hourly). Behind is a warning, not a failure:
