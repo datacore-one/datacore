@@ -61,3 +61,35 @@ def test_the_fleet_simulators_fault_injector_does_not_count(tmp_path, monkeypatc
     assert c.ok is True, c.detail
     c2 = _check(tmp_path / "b", monkeypatch, "lib/simple_sync.py", '_bash("git pull --rebase")\n')
     assert c2.ok is False and "simple_sync.py" in c2.detail
+
+
+GUARD = '''_FLAGS = {
+    "pull": {"-q", "--quiet", "-f", "--force", "--ff-only", "--rebase", "-r", "--no-rebase",
+             "--no-edit"},
+}
+_BAD = re.compile(r"git pull --rebase")
+def refused(argv):
+    return "--rebase" in argv or argv[-1] == "--rebase"
+'''
+
+
+def test_a_guard_that_only_recognises_the_pattern_does_not_count(tmp_path, monkeypatch):
+    """lib/hooks/restricted_hosts_guard.py (2026-09-30, 3adb97e) lists `--rebase`
+    in a set of git flags it parses, and matches against it: data it inspects,
+    never a command it runs. It turned the box's verification red."""
+    c = _check(tmp_path, monkeypatch, "lib/hooks/restricted_hosts_guard.py", GUARD)
+    assert c.ok is True, c.detail
+
+
+def test_a_real_rebase_call_in_a_hooks_script_still_counts(tmp_path, monkeypatch):
+    """No folder exemption: a hook that RUNS the rebase is a sync path like any other."""
+    c = _check(tmp_path, monkeypatch, "lib/hooks/sync_hook.py",
+               'subprocess.run(["git", "pull", "--rebase"])\n')
+    assert c.ok is False and "sync_hook.py" in c.detail
+    c2 = _check(tmp_path / "b", monkeypatch, "lib/hooks/sync_hook2.py",
+                'subprocess.run([\n    "git", "pull",\n    "--rebase",\n])\n')
+    assert c2.ok is False and "sync_hook2.py" in c2.detail
+    c3 = _check(tmp_path / "c", monkeypatch, "lib/hooks/pull.sh", "git pull --rebase -q\n")
+    assert c3.ok is False and "pull.sh" in c3.detail
+    c4 = _check(tmp_path / "d", monkeypatch, "lib/hooks/g.py", 'CMD = "git pull --rebase"\nos.system(CMD)\n')
+    assert c4.ok is False and "g.py" in c4.detail

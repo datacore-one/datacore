@@ -931,6 +931,43 @@ def check_install_current(rep: Report) -> None:
     rep.add("0046", "install is current", int(behind) == 0, detail)
 
 
+def _py_rebase_lines(text: str) -> list[int] | None:
+    """Lines of a Python file where a rebase is part of something it could RUN.
+
+    A string naming the rebase counts unless it is data the code inspects: an
+    element of a set (a set is never an argv -- it has no order), an operand of
+    a comparison (`"--rebase" in argv`), a pattern handed to `re`, or a bare
+    string statement (a docstring). The network guard lists `--rebase` among
+    the git flags it parses (lib/hooks/restricted_hosts_guard.py, 2026-09-30),
+    which turned the box's verification red. No folder is exempt: a hook that
+    builds `["git", "pull", "--rebase"]` still counts. None = not parseable;
+    the caller falls back to the line scan.
+    """
+    import ast
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
+    excused: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Set):
+            excused.update(id(e) for e in node.elts)
+        elif isinstance(node, ast.Compare):
+            excused.update(id(e) for e in [node.left, *node.comparators])
+        elif isinstance(node, ast.Expr):
+            excused.add(id(node.value))
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+              and isinstance(node.func.value, ast.Name) and node.func.value.id == "re"):
+            excused.update(id(a) for a in node.args[:1])
+    lines = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in excused:
+            s = re.sub(r"`[^`]*`", "", node.value)
+            if "pull --rebase" in s or s.strip() == "--rebase":
+                lines.append(node.lineno)
+    return sorted(set(lines))
+
+
 def check_transport(rep: Report) -> None:
     t = LIB / "ledger_transport.py"
     if not t.exists():
@@ -955,7 +992,13 @@ def check_transport(rep: Report) -> None:
                 or p.name.startswith("test_") or p.name == "v2_verify.py"):
             continue
         try:
-            for i, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
+            text = p.read_text(errors="replace")
+            if p.suffix == ".py":
+                found = _py_rebase_lines(text)
+                if found is not None:
+                    hits.extend(f"{p.name}:{i}" for i in found)
+                    continue
+            for i, line in enumerate(text.splitlines(), 1):
                 s = line.strip()
                 if s.startswith(("#", "*", "//")):
                     continue
