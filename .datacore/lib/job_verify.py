@@ -405,10 +405,55 @@ def _file_task(job, rec: dict, failures: list[str]) -> str | None:
     return None
 
 
+def _close_through_ledger(task_id: str) -> bool | None:
+    """Dismiss the task in the ledger of a phase-1 space. None = no ledger here.
+
+    THROUGH THE LEDGER, never the generated file (owner decision 2026-10-01).
+    `adapter complete` on 2-datacore's generated next_actions.org at 05:07
+    moved the file AND the projection base to DONE; at 05:07:51 the inbox
+    job's guard restored its 05:00 snapshot of the file, and from 06:00 every
+    hourly import refused the TODO it now showed ("edit to a terminal item")
+    until a hand repair at 17:30. A dismissal leaves the file and its base as
+    they are, so a revert of the file is no edit at all, and the projector
+    renders the task DONE on its next cycle.
+    """
+    try:
+        from org_space import ledger_space_for_file
+        from ledger_project_org import phase
+        space = ledger_space_for_file(TASK_FILE)
+        if space is None or phase(space) != 1:
+            return None
+        from ledger.fold import fold
+        from ledger.log import read_events
+        item = fold(read_events(space)).items.get(task_id)
+        if item is None:
+            # Still a capture the import has not admitted: it sits in the
+            # inbox, an authored file, where the adapter may close it.
+            return _adapter_complete(str(Path(TASK_FILE).with_name("inbox.org")), task_id)
+        if item.status == "dismissed":
+            return True
+        EventLog(space, _default_actor()).append("item.dismiss", {
+            "id": task_id, "kind": "done",
+            "reason": "job_verify: the job passed verification (the task's DONE_WHEN)"})
+        return True
+    except Exception as exc:  # noqa: BLE001 -- bookkeeping must not stop verification
+        print(f"task {task_id} not closed through the ledger: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+        return False
+
+
 def _close_task(task_id: str) -> bool:
+    closed = _close_through_ledger(task_id)
+    if closed is not None:
+        return closed
+    return _adapter_complete(TASK_FILE, task_id)
+
+
+def _adapter_complete(task_file: str, task_id: str) -> bool:
+    """The pre-ledger path: mark the heading DONE in an authored org file."""
     adapter = Path(__file__).resolve().parent / "org_workspace_adapter.py"
     try:
-        out = subprocess.run([sys.executable, str(adapter), "complete", "--file", TASK_FILE,
+        out = subprocess.run([sys.executable, str(adapter), "complete", "--file", task_file,
                               "--id", task_id], capture_output=True, text=True, timeout=120)
         return out.returncode == 0
     except Exception:  # noqa: BLE001
