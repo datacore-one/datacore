@@ -93,11 +93,21 @@ HOST_TOOLS = ("ssh", "rsync", "scp", "gh", "sudo", "systemctl", "crontab", "laun
 #: Jobs the sandbox cannot model, by the script they run, and why. They are
 #: listed in the report as not simulated -- never counted as green.
 NOT_MODELLED = {
-    r"cos_fleet_probe\.sh": "probes hard-coded host addresses over raw TCP rather than the roster, so "
-                            "in a sandbox with no network it can only ever say DOWN (and costs 12 s a run)",
     r"promise_nightly\.py": "the promise scoreboard: the harness runs the same evals itself after every "
                             "night (needs-gated), so it is not run a second time (about 10 min a night)",
 }
+
+#: Jobs modelled only when every machine can answer on :22 at its roster names
+#: (Fleet._serve_ports: root in the container, and not a fleet nested in a job).
+NEEDS_PORTS = {
+    r"cos_fleet_probe\.sh": "probes each agent host's :22 at its roster name, and this sandbox could not "
+                            "give its machines addresses (not root, or built inside another simulated "
+                            "machine), so it could only ever say DOWN",
+}
+
+#: Listening sockets, by loopback address, for the machines that are online.
+#: Module-level: a second fleet in the same process (the tests) reuses them.
+_LISTENERS: dict = {}
 
 #: Environment the sandbox adds to every job, each because a job WAITS in real
 #: time for something the sandbox never delivers. Listed in the report.
@@ -293,8 +303,9 @@ def sanitize_roster(doc: dict) -> dict:
                 "ssh_alias": cfg.get("ssh_alias"),
                 "ledger_actors": list(cfg.get("ledger_actors") or []),
                 "access": {"actor": access.get("actor") or name, "hostname": name}}
-        if cfg.get("manifest_machine"):
-            keep["manifest_machine"] = cfg["manifest_machine"]
+        for k in ("manifest_machine", "setup_profile"):   # setup_profile: the host setup's kind
+            if cfg.get(k):
+                keep[k] = cfg[k]
         servers[str(name)] = keep
     return {"servers": servers, "roles": doc.get("roles") or {}}
 
@@ -427,6 +438,11 @@ class Fleet:
         self._jobs_cache: dict = {}
         self.hardcoded_home: dict | None = None
         self.notes: list[str] = []
+        #: Built inside a job of an outer run (the audit job runs this file's tests):
+        #: the container-wide /home/<user> link, /etc/hosts and :22 belong to it.
+        self.nested = bool(os.environ.get("SIM_ROOT"))
+        self.ports_modelled = False
+        self.ips: dict[str, str] = {}
 
     # -- roles ------------------------------------------------------------------
     def role_machine(self, role: str) -> str | None:
@@ -601,8 +617,96 @@ class Fleet:
             fleet["machines"][m.name] = {"env": {k: env[k] for k in ("HOME", "GIT_CONFIG_GLOBAL",
                                                                    "GIT_CONFIG_SYSTEM", "PATH")}}
         (self.root / "fleet.json").write_text(json.dumps(fleet, indent=1))
+        self._serve_ports()
         self.write_offline()
         self._map_hardcoded_home()
+        for m in self.machines.values():
+            self._host_setup(m, t0)
+
+    def _host_setup(self, m: Machine, ts: dt.datetime) -> None:
+        """Build an agent machine the way a real one is built: through the
+        add-a-machine installer (INS-7), so what it wires -- the safety guard in
+        the user settings, the git hooks, signing -- is what the sandbox runs
+        with. The workstation is the owner's and has no such installer."""
+        script = m.data / ".datacore" / "lib" / "agent_host_setup.sh"
+        if m.visitor or not script.is_file():
+            return
+        rc, out, _ = self.sh(m, f"DATACORE_RUNNER={shlex.quote(str(m.data))} "
+                                f"DATACORE_STATE={shlex.quote(str(m.home / '.datacore' / 'state'))} "
+                                f"bash {shlex.quote(str(script))} --host {shlex.quote(m.name)}", ts, timeout=240)
+        fails = [l.split("FAIL", 1)[1].strip()[:90] for l in out.splitlines() if "] FAIL" in l]
+        self.notes.append(f"host setup on {m.name}: agent_host_setup.sh rc={rc}"
+                          + (f"; {len(fails)} check(s) it could not pass here: " + " | ".join(fails[:6])
+                             if fails else "; every check passed"))
+
+    def _serve_ports(self) -> None:
+        """Give each machine a loopback address under its roster names in
+        /etc/hosts, and answer on :22 there while it is online -- what the fleet
+        probe asks of a real host. Only as root in the container, and never from
+        a fleet nested in an outer run's job (those names and ports are its)."""
+        hosts = Path("/etc/hosts")
+        if self.nested or not hasattr(os, "geteuid") or os.geteuid() != 0 or not os.access(hosts, os.W_OK):
+            return
+        text = hosts.read_text()
+        existing: dict[str, str] = {}
+        for line in text.splitlines():
+            parts = line.split("#", 1)[0].split()
+            for n in parts[1:]:
+                existing.setdefault(n, parts[0])
+        add, self.ips = [], {}
+        for i, m in enumerate(sorted(self.machines.values(), key=lambda x: x.name)):
+            names = sorted({m.name, m.alias, m.manifest_name} - {None})
+            ip = next((existing[n] for n in names if existing.get(n, "").startswith("127.0.0.")),
+                      f"127.0.0.{10 + i}")
+            self.ips[m.name] = ip
+            new = [n for n in names if existing.get(n) != ip]
+            if new:
+                add.append(f"{ip} {' '.join(new)}  # fleet-sim")
+        try:
+            if add:
+                hosts.write_text(text.rstrip("\n") + "\n" + "\n".join(add) + "\n")
+        except OSError as exc:
+            self.notes.append(f"machines not given addresses ({exc}): the fleet probe is not modelled")
+            return
+        self.ports_modelled = True
+        self.notes.append("each machine answers on :22 at its roster names (" + ", ".join(
+            f"{k}={v}" for k, v in sorted(self.ips.items())) + ") while it is online, so the fleet probe runs")
+
+    def _sync_ports(self) -> None:
+        import socket
+        import threading
+        for m in self.machines.values():
+            ip = self.ips.get(m.name)
+            if ip is None:
+                continue
+            sock = _LISTENERS.get(ip)
+            if m.name in self.offline and sock is not None:
+                _LISTENERS.pop(ip, None)
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                sock.close()
+            elif m.name not in self.offline and sock is None:
+                sock = socket.socket()
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    sock.bind((ip, 22))
+                except OSError as exc:
+                    sock.close()
+                    self.notes.append(f"{m.name}: could not answer on {ip}:22 ({exc})")
+                    continue
+                sock.listen(16)
+                _LISTENERS[ip] = sock
+
+                def serve(s=sock):
+                    while True:
+                        try:
+                            conn, _ = s.accept()
+                        except OSError:
+                            return
+                        conn.close()
+                threading.Thread(target=serve, daemon=True).start()
 
     def _map_hardcoded_home(self) -> None:
         """Scripts that name their host's home literally (`/home/<user>/Data`)
@@ -611,6 +715,10 @@ class Fleet:
         and say so in the report. Found from the scripts, never named here."""
         box = self.machines.get(self.role_machine("always_on") or "")
         if box is None:
+            return
+        if self.nested:
+            self.notes.append("built inside another simulated machine (a job ran this harness's own tests): "
+                              "/home/<user> and the host names are the outer run's and are left alone")
             return
         counts: dict[str, int] = {}
         for f in (box.data / ".datacore" / "lib").glob("cos_*.sh"):
@@ -702,6 +810,8 @@ class Fleet:
 
     def write_offline(self) -> None:
         (self.state / "offline.json").write_text(json.dumps(sorted(self.offline)))
+        if self.ports_modelled:
+            self._sync_ports()
 
     # -- the job list -------------------------------------------------------------
     def jobs_for(self, m: Machine, doc_only: bool = False) -> list[dict]:
@@ -1207,7 +1317,8 @@ class Week:
         for m in self.fleet.machines.values():
             for j in self.fleet.jobs_for(m):
                 spec = parse_schedule(j.get("schedule"), j.get("trigger"), str(j.get("cmd") or ""))
-                why = next((w for pat, w in NOT_MODELLED.items()
+                rules = NOT_MODELLED if self.fleet.ports_modelled else {**NOT_MODELLED, **NEEDS_PORTS}
+                why = next((w for pat, w in rules.items()
                             if re.search(pat, str(j.get("cmd") or ""))), None)
                 if why:
                     self.not_modelled[f"{m.name}:{j['name']}"] = why
@@ -1306,12 +1417,21 @@ class Week:
               f"{' (evals ran)' if evals_ran else ''}; {self.runs} job runs so far", flush=True)
 
     def _eval_machine(self) -> Machine | None:
+        """The agent machine whose scoreboard the harness's evals stand in for: the
+        executor when it runs one, else the first agent machine that does. Never a
+        workstation: since every machine runs a scoreboard (e2acd46, 2026-09-30) the
+        first in the roster was the owner's, and the agent-machine evals judged it."""
         if self.o.evals == "off":
             return None
+        def scores(m: Machine) -> bool:
+            return any("promise_nightly" in str(j.get("cmd") or "") for j in self.fleet.jobs_for(m))
+        ex = self.fleet.machines.get(self.fleet.role_machine("executor") or "")
+        if ex is not None and not ex.visitor and scores(ex):
+            return ex
         for m in self.fleet.machines.values():
-            if any("promise_nightly" in str(j.get("cmd") or "") for j in self.fleet.jobs_for(m)):
+            if not m.visitor and scores(m):
                 return m
-        return self.fleet.machines.get(self.fleet.role_machine("executor") or "")
+        return ex
 
     def _code_key(self, m: Machine) -> str:
         return _git_out(m.data, "rev-parse", "HEAD") + _git_out(m.data, "status", "--porcelain")
@@ -1400,10 +1520,19 @@ class Week:
                                         "text": e.get("text", "")})
             if e["night"] not in g["nights"]:
                 g["nights"].append(e["night"])
+            g.setdefault("tss", []).append(e["ts"])
         breaks = []
         for g in groups.values():
             ts = dt.datetime.fromisoformat(g["first_ts"])
             active = self.faults.blame(g["machine"], g["source"], g["subject"], ts)
+            # A fault that turns an already-red job red again for the same reason
+            # (F7 on research, two nights after F4) is credited too: blame is
+            # asked for every night the break was seen, not only its first.
+            later = []
+            for t in g.pop("tss", []):
+                for s in self.faults.blame(g["machine"], g["source"], g["subject"], dt.datetime.fromisoformat(t)):
+                    if s not in active and s not in later:
+                        later.append(s)
             first_run = self.first_run.get((g["machine"], g["subject"]))
             never_ok = (g["machine"], g["subject"]) not in self.ever_ok_before(ts)
             same_reason = (g["machine"], g["source"], g["subject"], sig_of(g)) in sig_before
@@ -1412,10 +1541,11 @@ class Week:
                         or (first_run is not None and first_run >= (first_fault or ts) and never_ok
                             and not active))
             guess = _cause_guess(g["text"] + " " + g["first_check"])
-            g["faults"] = [s["id"] for s in active] if not baseline else []
-            if active and not baseline:
+            blamed = active + later
+            g["faults"] = [s["id"] for s in blamed] if not baseline else []
+            if blamed and not baseline:
                 ids = ", ".join(g["faults"])
-                cause = f"injected ({ids}: {active[0]['desc'][:80]}); looks like: {guess}"
+                cause = f"injected ({ids}: {blamed[0]['desc'][:80]}); looks like: {guess}"
                 cls = "fault"
             elif baseline:
                 cause = (f"baseline, red before any fault was injected: {guess}"
@@ -1668,6 +1798,9 @@ def _docker(args) -> int:
                   "--evals", args.evals, "--min-interval", str(args.min_interval)]
         if args.no_faults:
             inner.append("--no-faults")
+        elif args.faults:
+            shutil.copy2(args.faults, out / "faults.json")   # /out is the only writable mount
+            inner += ["--faults", "/out/faults.json"]
     cmd = ["docker", "run", "--rm", "--network", "none", "-e", "FLEET_SIM_SEED=/seed",
            "-w", "/seed/core-src/.datacore/lib",
            "-v", f"{seed}:/seed:ro", "-v", f"{out}:/out", IMAGE, *inner]
@@ -1709,6 +1842,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--min-interval", type=int, default=3600)
     p.add_argument("--no-faults", action="store_true")
     p.add_argument("--no-build", action="store_true")
+    p.add_argument("--faults", help="JSON file with a fault list instead of the default week")
     p.add_argument("--selftest", action="store_true", help="run the harness's own tests in the container")
     p = sub.add_parser("compare", help="compare a run's breaks with an earlier run's")
     p.add_argument("run", help="the run folder (holds report.json)")
