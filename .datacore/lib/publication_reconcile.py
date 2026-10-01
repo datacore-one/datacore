@@ -24,6 +24,12 @@ exactly as publication_state does for an unverified clear. If any path cannot be
 proven, nothing changes and the unproven paths are named: that is real work
 retained locally, and it belongs to a human.
 
+A RECORD THAT CAPTURED NOTHING (expected_tree null: its process stopped
+between reserving and capturing) has no intended version to compare. Its proof
+is that the CURRENT version of every reserved path is already on origin
+(`prove_uncaptured`); the same all-or-nothing rule applies, and a capture ref,
+if one exists, is kept like any other.
+
   publication_reconcile.py [--root ~/Data]            # list records, dry run
   publication_reconcile.py --repo <path> --apply      # clear on proof
 """
@@ -49,12 +55,40 @@ def record_path(repo: Path) -> Path:
     return Path(common) / "datacore-publication-pending.json"
 
 
+def prove_uncaptured(repo: Path, paths: list[str]) -> tuple[list[str], list[str]]:
+    """A record that captured nothing: is each path's CURRENT version on origin?
+
+    2026-10-01 03:04 UTC, 3-fds on the nightshift host: a claim reserved its
+    publication and its process was replaced before it captured anything. Such
+    a record holds no work of its own -- the reserved paths' only copy is the
+    working file -- so the proof is about that file: its version (through the
+    path's clean filters) is the blob at that path on some origin ref. Every
+    path must be proven; a missing file, or no origin ref to compare with,
+    refuses. Origin refs are read as last fetched; nothing is fetched here.
+    """
+    _, listed = git(repo, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/")
+    tips = [ref for ref in listed.split() if ref != "refs/remotes/origin/HEAD"]
+    proven, unproven = [], []
+    for path in paths:
+        source = repo / path
+        if not tips or source.is_symlink() or not source.is_file():
+            unproven.append(path)
+            continue
+        rc, want = git(repo, "hash-object", f"--path={path}", "--", str(source))
+        landed = rc == 0 and any(git(repo, "rev-parse", "-q", "--verify", f"{tip}:{path}")[1] == want
+                                 for tip in tips)
+        (proven if landed else unproven).append(path)
+    return proven, unproven
+
+
 def prove(repo: Path, record: dict) -> tuple[list[str], list[str]]:
     """(proven, unproven) reserved paths."""
     tree = record.get("expected_tree")
     base = record.get("target_head")
     branch = (record.get("target_branch") or "").removeprefix("refs/heads/")
     paths = list(record.get("paths") or [])
+    if not tree and paths:
+        return prove_uncaptured(repo, paths)
     if not tree or not base or not branch:
         return [], paths or ["(record has no captured tree -- nothing to compare)"]
     tips = [ref for ref in (f"refs/heads/{branch}", f"refs/remotes/origin/{branch}")
@@ -87,6 +121,9 @@ def reconcile(repo: Path, apply: bool) -> int:
         return 0
     record = json.loads(rp.read_text(encoding="utf-8"))
     proven, unproven = prove(repo, record)
+    if not record.get("expected_tree"):
+        print(f"{repo.name}: the record captured nothing; proving each reserved path's "
+              "current version is on origin")
     print(f"{repo.name}: pending record for {len(record.get('paths') or [])} path(s), "
           f"target {record.get('target_branch')} base {str(record.get('target_head'))[:10]}")
     for p in proven:

@@ -292,6 +292,38 @@ def _publication_mode(repo: Path, base: str, rel: str, mode: str) -> str:
     return mode
 
 
+def _sparse_pattern(rel: str) -> str:
+    """One published path as an exact, anchored checkout pattern."""
+    if '\n' in rel or '\r' in rel:
+        raise GitError('publication path cannot be expressed as a checkout pattern')
+    escaped = ''.join('\\' + c if c in '\\*?[' else c for c in rel)
+    stripped = escaped.rstrip(' ')
+    return '/' + stripped + '\\ ' * (len(escaped) - len(stripped))
+
+
+def _check_out_only(worktree: Path, paths: list[str]) -> None:
+    """Fill a --no-checkout worktree's index from HEAD; write only `paths`
+    and the .gitattributes files.
+
+    Every other entry keeps its place in the index, so the commit's tree is
+    still the whole base tree plus this publication, but is marked
+    skip-worktree and never written: no smudge filter (LFS) runs on content
+    the publication does not touch, and no status check reads it. The pattern
+    file is this worktree's own; the shared repository config is not changed.
+    """
+    gitdir = Path(_git(worktree, 'rev-parse', '--path-format=absolute', '--git-dir'))
+    (gitdir / 'info').mkdir(mode=0o700, exist_ok=True)
+    # Every .gitattributes too: Git reads attributes from the work tree, and
+    # the clean filters and EOL rules they name decide the published blob.
+    patterns = '.gitattributes\n' + ''.join(_sparse_pattern(rel) + '\n' for rel in paths)
+    fd = os.open(gitdir / 'info' / 'sparse-checkout',
+                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+        stream.write(patterns)
+    _git(worktree, '-c', 'core.sparseCheckout=true', '-c', 'core.sparseCheckoutCone=false',
+         'read-tree', '-mu', 'HEAD')
+
+
 def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, push: bool,
                        *, append_only: bool = False, publication=None, moves=()) -> str:
     """Reserve the target checkout; validate a detached commit before advancing it."""
@@ -310,9 +342,17 @@ def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, 
     try:
         # Git's own worktree ownership prevents a normal concurrent checkout of
         # this branch. If another writer already has it, no ref is changed.
+        # NEITHER WORKSPACE CHECKS OUT THE SPACE (2026-10-01). Both used to be
+        # full checkouts, so a claim publishing one events log depended on
+        # every other file in the space: 3-fds holds images committed raw
+        # under an LFS rule, a fresh checkout of them can read as modified
+        # (same-second index write), and the status check below refused most
+        # claims overnight. An LFS object missing from the server fails the
+        # checkout outright. The reservation only has to hold the branch; the
+        # candidate gets exactly the published paths (_check_out_only).
         for path, target, detached in ((reservation, branch, False), (candidate, base, True)):
             try:
-                _git(repo, '-c', f'core.hooksPath={hooks}', 'worktree', 'add',
+                _git(repo, '-c', f'core.hooksPath={hooks}', 'worktree', 'add', '--no-checkout',
                      *(['--detach'] if detached else []), '--', str(path), target)
             finally:
                 # A rejecting post-checkout hook can return failure after Git
@@ -321,8 +361,15 @@ def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, 
                     created.append(path)
         if _git(reservation, 'rev-parse', 'HEAD') != base:
             raise GitError('publication destination advanced during reservation')
-        if _git(candidate, 'status', '--porcelain', '--untracked-files=all'):
-            raise GitError('checkout hook changed publication workspace; all output retained')
+        # The reservation writes no file but keeps the whole tree in its index:
+        # publication_workspace_gc reclaims a retired worktree only when its
+        # index is a tree on origin, and an empty index never is.
+        _check_out_only(reservation, [])
+        _check_out_only(candidate, paths)
+        changed = _git(candidate, 'status', '--porcelain', '--untracked-files=all')
+        if changed:
+            named = ', '.join(line[3:] for line in changed.splitlines()[:3])
+            raise GitError(f'checkout hook changed publication workspace ({named}); all output retained')
         for rel, (content, mode) in captured.items():
             mode = _publication_mode(candidate, base, rel, mode)
             # --path preserves the target tree's clean filters and encoding/EOL
