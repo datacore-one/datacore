@@ -317,6 +317,72 @@ def agent_items(sprint: dict, include_stretch: bool) -> tuple[list[dict], list[s
 
 from org_transaction import serialized
 
+#: Queue entries in these states would run; a closed entry is history, not queue.
+OPEN_ENTRY_STATES = {"TODO", "NEXT", "WAITING"}
+_ID_LINE = re.compile(r"^\s*:ID:\s*(\S+)\s*$", re.M)
+
+
+def _existing_task_ids(root: Path) -> set[str] | None:
+    """Every :ID: in every space's org files, archives included, queues excluded.
+
+    None when a space's own task file cannot be read: a missing projection is
+    not proof that every task is gone, and pruning on it would empty the queue.
+    """
+    ids: set[str] = set()
+    for org in sorted(Path(root).glob("[0-9]-*/org")):
+        for f in org.rglob("*.org"):
+            if f.name == "nightshift.org" or any(p.startswith(".") for p in f.relative_to(org).parts):
+                continue
+            try:
+                ids.update(_ID_LINE.findall(f.read_text(encoding="utf-8", errors="replace")))
+            except OSError:
+                return None
+    return ids
+
+
+@serialized
+def prune_dead_entries(space: str, apply: bool, root: Path | None = None,
+                       limit: int | None = None) -> list[tuple[str, str, str]]:
+    """Remove open queue entries whose SOURCE_ID names a task that exists nowhere.
+
+    The runner refuses such an entry ("resolves to no task") and keeps refusing
+    it every run, because nothing else removes it once its sprint is over: on
+    2026-10-01 eleven 5-plur entries were refused on every run since their
+    tasks were completed. Removing it here says so once, in this output, and
+    the entry is gone. Only the queue ENTRY goes; no task is touched. An entry
+    whose task exists anywhere (another space, an archive) is left alone.
+    Returns [(entry id, source id, heading)] pruned (or, dry run, to prune).
+    """
+    root = Path(root or REPO)
+    qfile = root / space / "org" / "nightshift.org"
+    own = root / space / "org" / "next_actions.org"
+    if not qfile.exists() or not own.is_file() or not _ID_LINE.search(
+            own.read_text(encoding="utf-8", errors="replace")):
+        return []
+    existing = _existing_task_ids(root)
+    if existing is None:
+        return []
+    from org_transaction import SafeOrgWorkspace
+    ws = SafeOrgWorkspace()
+    ws.load(qfile)
+    dead = []
+    for n in ws.all_nodes():
+        pr = n.properties or {}
+        source = str(pr.get("SOURCE_ID") or "").strip()
+        if not source or n.todo not in OPEN_ENTRY_STATES or source in existing:
+            continue
+        dead.append((n, str(pr.get("ID") or ""), source))
+        if limit is not None and len(dead) >= limit:
+            break
+    if apply:
+        # One save per entry: each removal is a small edit the shrink guard
+        # (a quarter of the file) accepts; eleven at once would not be.
+        for n, _, _ in dead:
+            ws.remove_node(n)
+            ws.save(qfile)
+    return [(qid, source, n.heading[:60]) for n, qid, source in dead]
+
+
 @serialized
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -330,11 +396,25 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true", help="write; default is a dry run")
     ap.add_argument("--strict", action="store_true",
                     help="exit non-zero if any sprint item is underspecified")
+    ap.add_argument("--prune-limit", type=int, default=None,
+                    help="prune at most N dead queue entries (try one first)")
     args = ap.parse_args()
+
+    # Dead entries go whether or not a sprint is active: the sprint that queued
+    # them is usually over, which is exactly why nothing else removes them.
+    pruned = prune_dead_entries(args.space, args.apply, limit=args.prune_limit)
+    if pruned:
+        verb = "pruned" if args.apply else "would prune"
+        print(f"nightshift.org: {verb} {len(pruned)} queue entr{'y' if len(pruned) == 1 else 'ies'} "
+              f"whose source task no longer exists (the tasks are untouched)")
+        for qid, source, heading in pruned:
+            print(f"   x {qid} -> {source}  {heading}")
 
     paths = pick(args.space, args.sprint, args.active)
     if not paths:
-        print("no sprint selected — pass --sprint <id> or mark one status: active")
+        # run.py hides output containing "no sprint selected"; a prune must show.
+        print("no active sprint — nothing else to sync" if pruned else
+              "no sprint selected — pass --sprint <id> or mark one status: active")
         return 0
 
     from org_transaction import SafeOrgWorkspace as OrgWorkspace
