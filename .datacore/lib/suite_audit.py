@@ -155,8 +155,8 @@ def run_suite(suite: Path, python: str, cov_dir: Path | None = None) -> Result:
         for n, what in _COUNT.findall(partial or ""):
             if what == "passed":
                 res.passed = int(n)
-        res.summary = f"timed out after {SUITE_TIMEOUT_S}s"
-        res.failures = [f"ERROR {rel}: suite timed out after {SUITE_TIMEOUT_S}s (a test hangs)"]
+        res.summary = f"timed out after {_timeout_for(suite)}s"
+        res.failures = [f"ERROR {rel}: suite timed out after {_timeout_for(suite)}s (a test hangs)"]
         return res
     out = proc.stdout + proc.stderr
     res = Result(suite=rel, rc=proc.returncode)
@@ -178,6 +178,14 @@ def run_suite(suite: Path, python: str, cov_dir: Path | None = None) -> Result:
 
 #: Per-suite wall clock. A suite over this is reported as hung, not waited on.
 SUITE_TIMEOUT_S = 1800
+#: Suites that are slow, not hung, get their own limit. lib/tests ran 81% in 45
+#: minutes with no test over the 240 s hang detector (owner, 2026-10-01: 90 min).
+SUITE_TIMEOUTS = {"lib/tests": 5400}
+
+
+def _timeout_for(suite: Path) -> int:
+    rel = suite.relative_to(DATACORE).as_posix() if suite.is_relative_to(DATACORE) else str(suite)
+    return SUITE_TIMEOUTS.get(rel, SUITE_TIMEOUT_S)
 
 
 def _run_pytest(pre: list[str], suite: Path, cov_dir: Path | None):
@@ -195,7 +203,7 @@ def _run_pytest(pre: list[str], suite: Path, cov_dir: Path | None):
         text=True,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
              **({"COVERAGE_FILE": str(cov_dir / ".coverage")} if cov_dir else {})},
-        timeout=SUITE_TIMEOUT_S,
+        timeout=_timeout_for(suite),
     )
 
 

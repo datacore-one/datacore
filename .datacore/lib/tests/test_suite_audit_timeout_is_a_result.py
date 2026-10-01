@@ -29,3 +29,19 @@ def test_a_suite_that_times_out_is_reported_as_a_failing_suite(monkeypatch):
     assert res.errors >= 1
     assert any("timed out" in f for f in res.failures), res.failures
     assert res.suite == "lib/tests"
+
+
+def test_the_core_suite_gets_its_own_longer_limit(monkeypatch):
+    """lib/tests is slow, not hung: run alone it passed 81% in 45 minutes with no
+    test over the 240 s hang detector, so 30 minutes always cut it off and the Mac
+    suite audit could never go green (owner 2026-10-01: give it 90 minutes)."""
+    seen = []
+
+    def run(cmd, **kw):
+        seen.append(kw.get("timeout"))
+        return subprocess.CompletedProcess(cmd, 0, "1 passed\n", "")
+
+    monkeypatch.setattr(suite_audit.subprocess, "run", run)
+    suite_audit.run_suite(suite_audit.DATACORE / "lib" / "tests", sys.executable)
+    suite_audit.run_suite(suite_audit.DATACORE / "modules" / "mail" / "tests", sys.executable)
+    assert seen == [5400, 1800], f"core suite 90 min, others 30 min; got {seen}"
