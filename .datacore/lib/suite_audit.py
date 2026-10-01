@@ -60,6 +60,24 @@ def is_source(path: Path) -> bool:
 SERIAL_SUITES = ("modules/lens/tests",)
 
 
+def _declared_fixtures() -> list[str]:
+    """Directories (relative to .datacore) that config/ungated-test-suites.yaml
+    declares `state: fixture`: a practice project kept as an eval fixture, whose
+    tests belong to that project and are never Datacore's own suite."""
+    path = DATACORE / "config" / "ungated-test-suites.yaml"
+    try:
+        import yaml
+        doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, ValueError, ImportError):
+        return []
+    out = []
+    for s in doc.get("suites") or []:
+        p = str((s or {}).get("path") or "").strip().rstrip("/")
+        if (s or {}).get("state") == "fixture" and p.startswith(".datacore/"):
+            out.append(p[len(".datacore/"):])
+    return out
+
+
 def discover_suites() -> list[Path]:
     """A suite is a directory that owns test files and is run from its own root.
 
@@ -67,9 +85,12 @@ def discover_suites() -> list[Path]:
     pytest can actually collect in one process.
     """
     dirs: set[Path] = set()
+    fixtures = _declared_fixtures()
     for p in DATACORE.rglob("test_*.py"):
         rel = p.relative_to(DATACORE)
         if not is_source(rel):
+            continue
+        if any(rel.as_posix().startswith(f + "/") for f in fixtures):
             continue
         dirs.add(p.parent)
     # Drop a directory pytest already reaches by recursing from an ancestor suite,

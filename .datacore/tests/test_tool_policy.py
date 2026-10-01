@@ -676,7 +676,7 @@ def _install_policy_declares(name):
 @pytest.mark.skipif(not _install_policy_declares("data"), reason="this install declares no data principal")
 def test_this_install_lets_datas_daily_post_and_blog_push_through(tmp_path):
     site = _git_repo(tmp_path / "website", "git@github.com:plur-ai/website.git")
-    other = _git_repo(tmp_path / "plur-space", "git@github.com:plur-ai/plur-space.git")
+    other = _git_repo(tmp_path / "plur", "git@github.com:plur-ai/plur.git")  # not one of own_repos (plur-space is, since 2026-09-30)
     ok = [POSTER.replace("~/Data", "/srv/agent/Data"),
           f"git -C {site} push origin main",
           f"cd {site} && git add src && git commit -m 'blog: x' -- src && git push origin main"]

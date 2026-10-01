@@ -42,6 +42,28 @@ suites:
       against CI install time.
     reviewed: 2026-09-25
     state: green
+  - path: .datacore/modules/dev/evals/audit/fixture
+    reason: >
+      Not a suite: a practice project with planted defects that the audit
+      calibration (AUD-4) hands to every model. Its tests are part of the
+      project the auditors read and may fail by design; nothing here protects
+      Datacore. suite_audit.py skips a `state: fixture` directory.
+    reviewed: 2026-10-01
+    state: fixture
+  - path: .datacore/modules/dev/evals/audit/fixture2
+    reason: The second planted-defect practice project; same as fixture above.
+    reviewed: 2026-10-01
+    state: fixture
+  - path: .datacore/modules/ventures/tests
+    reason: Passing locally (24). Same as ventures/lib/tests; not yet costed against CI install time.
+    reviewed: 2026-10-01
+    state: green
+  - path: .datacore/skills/github-triage/tests
+    reason: >
+      Passing locally (11). The nightly GitHub triage skill run by Miles on
+      nightshift; not yet costed against CI install time.
+    reviewed: 2026-10-01
+    state: green
   - path: .datacore/modules/lens/tests
     reason: Passing locally (188). Not yet costed against CI install time.
     reviewed: 2026-09-19
