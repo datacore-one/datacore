@@ -53,3 +53,19 @@ def test_a_changed_value_still_counts_as_a_replacement(tmp_path):
     f.central({"FIXTURE_API_KEY": "fixture-v2"})
     f.distribute()
     assert "--env-replaced" in f.ssh_log()[len(log_before):]
+
+
+# ── a delivery never restarts a running job (main session, 2026-10-01) ───────
+
+def test_a_changed_delivery_defers_a_oneshot_job_and_restarts_nothing(tmp_path):
+    f = Fleet(tmp_path)
+    f.central({"FIXTURE_API_KEY": "fixture-v1"})
+    f.distribute()
+    unit = tmp_path / "hosts" / "hosta" / ".config/systemd/user/overnight.service"
+    unit.parent.mkdir(parents=True, exist_ok=True)
+    unit.write_text("[Service]\nType=oneshot\nEnvironmentFile=%h/Data/.datacore/env/.env\n")
+    f.central({"FIXTURE_API_KEY": "fixture-v2"})
+    out = f.distribute()
+    assert "deferred: overnight.service" in out.stdout, out.stdout[-1200:]
+    assert "restarted overnight.service" not in out.stdout
+    assert "RESTART FAILED overnight.service" not in out.stdout

@@ -212,3 +212,35 @@ def test_oneshot_unit_is_not_named_for_restart(host, tmp_path):
     got = ca.env_consumers([host / "Data/.datacore/env/.env"],
                            unit_dirs={"user": [], "system": [sys_dir]})
     assert got == [("system", "daemon.service"), ("system", "plain.service")]
+
+
+# ── a oneshot is deferred, by name, never restarted (main session, 2026-10-01) ─
+#
+# Two Fairdrive tasks were killed tonight by `try-restart nightshift-overnight`
+# (20:25:54Z, 20:52:27Z). A oneshot -- declared in the unit or in a drop-in --
+# is reported "deferred" and left alone; it reads the new env at its next start.
+
+def test_oneshot_consumer_is_reported_deferred(host, tmp_path):
+    sys_dir = tmp_path / "etc-systemd"
+    env = f"EnvironmentFile=-{host}/Data/.datacore/env/.env\n"
+    _w(sys_dir / "overnight.service", "[Service]\nType=oneshot\n" + env)
+    _w(sys_dir / "dropin.service", "[Service]\n" + env)
+    _w(sys_dir / "dropin.service.d" / "10-type.conf", "[Service]\nType=oneshot\n")
+    _w(sys_dir / "daemon.service", "[Service]\nType=simple\n" + env)
+    restart, deferred = ca.env_consumers_split([host / "Data/.datacore/env/.env"],
+                                               unit_dirs={"user": [], "system": [sys_dir]})
+    assert restart == [("system", "daemon.service")]
+    assert deferred == [("system", "dropin.service"), ("system", "overnight.service")]
+
+
+def test_retire_prints_deferred_and_no_restart_line(host, capsys, monkeypatch):
+    udir = host / ".config/systemd/user"
+    _w(udir / "overnight.service",
+       "[Service]\nType=oneshot\nEnvironmentFile=%h/Data/.datacore/env/.env\n")
+    monkeypatch.setattr(ca, "SYSTEMD_UNIT_DIRS", {"user": (str(udir),), "system": ()})
+    prev = host / "prev"
+    prev.write_text("KEPT_API_KEY\n")
+    assert ca._cmd_retire(str(prev), env_replaced=True) == 0
+    out = capsys.readouterr().out
+    assert "restart user overnight.service" not in out
+    assert "deferred: overnight.service" in out
