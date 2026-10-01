@@ -402,6 +402,9 @@ def worktree_rows() -> list[dict]:
     repos += [p.parent for p in DATACORE_ROOT.glob(".datacore/modules/*/.git")]
     sid = session_key()
     wrote, _err = session_files()
+    # Resolved ONCE: a long session wrote ~2,000 files, and resolving each of
+    # them again for every worktree of every module took minutes.
+    wrote = [os.path.realpath(f if os.path.isabs(f) else DATACORE_ROOT / f) for f in wrote]
     seen, rows = set(), []
     for repo in repos:
         rc, out, _ = _run(["git", "worktree", "list", "--porcelain"], cwd=repo, timeout=30)
@@ -415,7 +418,7 @@ def worktree_rows() -> list[dict]:
             if not fields.get("worktree") or key in seen:
                 continue
             seen.add(key)
-            inside = any(str(Path(f).resolve()).startswith(key + os.sep) for f in wrote)
+            inside = any(f.startswith(key + os.sep) for f in wrote)
             rows.append({"repo": str(repo), "path": str(path),
                          "branch": fields.get("branch", "").replace("refs/heads/", "") or "(detached)",
                          "locked": "locked" in fields, "missing": "prunable" in fields or not path.exists(),
