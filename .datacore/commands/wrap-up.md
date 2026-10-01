@@ -917,6 +917,25 @@ python3 ~/Data/.datacore/lib/journal_parser.py --sync --space personal
 > the error in §10 rather than swallowing it — the journal files remain the
 > source of truth, but a silently stale index is one you will still trust.
 
+**Then remove this session's own worktrees (§8b):**
+
+```bash
+python3 ~/Data/.datacore/lib/wrap_up_mechanics.py worktrees            # --dry-run to preview
+```
+
+A worktree is this session's when its path carries the session id (scratch
+checkouts under the session's own directory) or it holds a file this session
+wrote. Each one that is clean and whose HEAD is on a remote is removed with
+`git worktree remove` — **never `--force`**. The rest come back in `kept[]` with
+the reason (uncommitted changes, HEAD on no remote, locked, directory gone);
+report each in §10 and push or remove it by hand. `others[]` are other
+sessions' worktrees and the runner checkout: listed, never touched. Run it
+after `finalize`, so the session's own commits are pushed first.
+
+> Why (board D12, 2026-10-01): worktrees outlived the sessions that made them,
+> on a disk with about 5 GB free. A worktree that is clean and on a remote loses
+> nothing by going; one that is not is somebody's unfinished work and stays.
+
 ### 9. Audit — asserted, not eyeballed
 
 ```bash
@@ -933,6 +952,7 @@ Returns `checks[]`, `passed`, `total`, `failed[]`. It asserts, against the files
 | session work committed and pushed | this session's files are committed and their repos pushed; other sessions' dirt is reported, not scored |
 | no journal section destroyed today | no commit today removed a journal section (a re-rendered `## Daily Briefing` is its owner replacing it, not a loss) |
 | context in sync | this session changed no agent/command/registry file; other sessions' registry changes are reported, not scored |
+| session worktrees removed | no worktree of this session is left (§8b); a kept one names its path |
 
 Each check has `status`: `pass`, `fail`, or `n/a` (cannot be judged in this harness — the detail says why). `total` counts the applicable checks; `not_applicable[]` lists the rest. n/a is never reported as passed.
 

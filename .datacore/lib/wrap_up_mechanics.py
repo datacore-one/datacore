@@ -11,6 +11,7 @@ WHAT MOVED HERE (spec sections it replaces):
               check, §10 artifact scan, plus the session archive
   meta      : §9 session meta-analysis counters, read from the archived meta.json
   finalize  : §13 push, across root, spaces and subproject repos
+  worktrees : §8b remove this session's own clean, pushed worktrees
   audit     : §16 completion verification and §18 self-audit
   report    : §10 consolidated report, RENDERED from data (wrap_up_report.py)
               — the model supplies judgement as JSON; the layout is code
@@ -28,6 +29,7 @@ Usage:
   python3 .datacore/lib/wrap_up_mechanics.py preflight [--dry-run]
   python3 .datacore/lib/wrap_up_mechanics.py meta
   python3 .datacore/lib/wrap_up_mechanics.py finalize [--dry-run]
+  python3 .datacore/lib/wrap_up_mechanics.py worktrees [--dry-run]
   python3 .datacore/lib/wrap_up_mechanics.py audit [--final]
   python3 .datacore/lib/wrap_up_mechanics.py report --input narrative.json [--journal]
 
@@ -382,6 +384,83 @@ def cmd_preflight(dry_run: bool) -> dict:
         "artifacts": artifact_scan(),
         "repos": repo_status(),
     }
+
+
+# --------------------------------------------------------------------------
+# worktrees  (§8b)
+# --------------------------------------------------------------------------
+
+def worktree_rows() -> list[dict]:
+    """Every linked worktree of the root, the spaces and the modules, once each.
+
+    `mine` is this session's: its path carries the session id (scratch
+    checkouts live under the session's own directory), or it holds a file this
+    session wrote. Nothing else is this session's to remove -- the runner
+    checkout and other sessions' worktrees look exactly as clean and pushed.
+    """
+    repos = [DATACORE_ROOT] + [s for s in spaces() if (s / ".git").exists()]
+    repos += [p.parent for p in DATACORE_ROOT.glob(".datacore/modules/*/.git")]
+    sid = session_key()
+    wrote, _err = session_files()
+    seen, rows = set(), []
+    for repo in repos:
+        rc, out, _ = _run(["git", "worktree", "list", "--porcelain"], cwd=repo, timeout=30)
+        if rc != 0:
+            continue
+        blocks = [b for b in out.split("\n\n") if b.strip()]
+        for block in blocks[1:]:            # the first is the main checkout
+            fields = dict((l.split(" ", 1) + [""])[:2] for l in block.splitlines())
+            path = Path(fields.get("worktree", ""))
+            key = str(path.resolve()) if path.exists() else str(path)
+            if not fields.get("worktree") or key in seen:
+                continue
+            seen.add(key)
+            inside = any(str(Path(f).resolve()).startswith(key + os.sep) for f in wrote)
+            rows.append({"repo": str(repo), "path": str(path),
+                         "branch": fields.get("branch", "").replace("refs/heads/", "") or "(detached)",
+                         "locked": "locked" in fields, "missing": "prunable" in fields or not path.exists(),
+                         "mine": (sid and sid in str(path)) or inside})
+    return rows
+
+
+def cmd_worktrees(dry_run: bool) -> dict:
+    """Remove this session's own worktrees that lose nothing by going.
+
+    Removed only when clean (no change, no untracked file) and HEAD is on a
+    remote, with `git worktree remove` -- which itself refuses a dirty or
+    locked tree. Everything of this session's that stays is reported with its
+    reason; other sessions' worktrees are listed and never touched.
+    """
+    removed, kept, others = [], [], []
+    for row in worktree_rows():
+        path = row["path"]
+        if not row["mine"]:
+            others.append({"path": path, "branch": row["branch"]})
+            continue
+        if row["missing"]:
+            kept.append({**row, "reason": "directory is gone; `git worktree prune` in its repository clears the entry"})
+            continue
+        if row["locked"]:
+            kept.append({**row, "reason": "locked"})
+            continue
+        _, dirty, _ = _run(["git", "status", "--porcelain"], cwd=Path(path), timeout=30)
+        if dirty.strip():
+            kept.append({**row, "reason": f"uncommitted changes ({len(dirty.splitlines())} path(s))"})
+            continue
+        _, remotes, _ = _run(["git", "branch", "-r", "--contains", "HEAD"], cwd=Path(path), timeout=30)
+        if not remotes.strip():
+            kept.append({**row, "reason": "HEAD is not on any remote: push it, or remove it by hand"})
+            continue
+        if dry_run:
+            removed.append(row)
+            continue
+        rc, _, err = _run(["git", "worktree", "remove", path], cwd=Path(row["repo"]), timeout=60)
+        if rc == 0:
+            removed.append(row)
+        else:
+            kept.append({**row, "reason": f"git worktree remove refused: {err.strip()[:200]}"})
+    return {"step": "worktrees", "dry_run": dry_run, "removed": removed,
+            "kept": kept, "others": others}
 
 
 # --------------------------------------------------------------------------
@@ -1000,6 +1079,11 @@ def cmd_audit(final: bool = False) -> dict:
             check("context in sync", True, f"this session changed no registry file; "
                   f"other sessions' registry changes, not scored: {other_changes}")
 
+    left = [r for r in worktree_rows() if r["mine"] and not r["missing"]]
+    check("session worktrees removed", not left,
+          "left: " + ", ".join(r["path"] for r in left) + " (run `wrap_up_mechanics.py worktrees`)"
+          if left else "this session has no worktree left")
+
     if final:
         # Run after `report --journal`. These are file checks, so they hold in
         # any harness — the PreToolUse hook that enforces the same thing exists
@@ -1028,7 +1112,8 @@ def cmd_audit(final: bool = False) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    ap.add_argument("step", choices=["files", "preflight", "meta", "finalize", "audit", "report"])
+    ap.add_argument("step", choices=["files", "preflight", "meta", "finalize", "worktrees",
+                                    "audit", "report"])
     ap.add_argument("--add", nargs="+", metavar="PATH",
                     help="files only: record paths this session wrote (harnesses with no "
                          "Claude transcript); without it, list what is recorded")
@@ -1061,6 +1146,8 @@ def main() -> int:
         result = cmd_meta()
     elif args.step == "finalize":
         result = cmd_finalize(args.dry_run, args.scope, args.allow_journal_shrink)
+    elif args.step == "worktrees":
+        result = cmd_worktrees(args.dry_run)
     else:
         result = cmd_audit(args.final)
 
