@@ -1101,7 +1101,15 @@ def env_consumers(changed, unit_dirs: dict | None = None) -> list[tuple[str, str
                     for ref in line.partition("=")[2].split():
                         ref = os.path.expanduser(ref.lstrip("-").replace("%h", home))
                         if os.path.realpath(ref) in targets:
-                            found.add((scope, unit.name))
+                            # A template (alert@.service) cannot be restarted by
+                            # name -- systemctl refuses it, root or not. Its
+                            # instances can: `try-restart 'alert@*.service'`
+                            # restarts the running ones and leaves the rest,
+                            # which read the file when they next start.
+                            name = unit.name
+                            if name.endswith("@.service"):
+                                name = name[:-len("@.service")] + "@*.service"
+                            found.add((scope, name))
     return sorted(found)
 
 
@@ -1176,12 +1184,28 @@ def host_fingerprints() -> dict[str, set]:
     return out
 
 
-def cross_host_divergence(per_host: dict) -> list[tuple[str, list]]:
+def host_scoped_vars(index: list[dict]) -> set[str]:
+    """Variables declared ONLY by index entries that name their hosts.
+
+    Such a credential is one machine's own (Winston's bot on the box), so a
+    different value elsewhere is a different credential, not drift. A variable
+    that any fleet-wide entry also declares stays compared."""
+    scoped, shared = set(), set()
+    for c in index:
+        names = {c.get("var_name")} | set(c.get("vars") or [])
+        (scoped if c.get("hosts") else shared).update(n for n in names if n)
+    return scoped - shared
+
+
+def cross_host_divergence(per_host: dict, skip=frozenset()) -> list[tuple[str, list]]:
     """[(VAR, [(host, fingerprint), ...])] for every variable whose value is not
-    the same on every host that holds it."""
+    the same on every host that holds it. Variables in `skip` (host-scoped
+    credentials) are not compared."""
     by_var: dict[str, list] = {}
     for host, fps in sorted(per_host.items()):
         for var, vals in fps.items():
+            if var in skip:
+                continue
             for v in sorted(vals):
                 by_var.setdefault(var, []).append((host, v))
     return [(var, rows) for var, rows in sorted(by_var.items())
@@ -1195,7 +1219,14 @@ def _cmd_cross_host(path: str) -> int:
         parts = line.split()
         if len(parts) == 3:
             per_host.setdefault(parts[0], {}).setdefault(parts[1], set()).add(parts[2])
-    div = cross_host_divergence(per_host)
+    try:
+        skip = host_scoped_vars(_index())
+    except Exception:  # noqa: BLE001 -- no index: compare everything
+        skip = set()
+    div = cross_host_divergence(per_host, skip=skip)
+    held = sorted({v for fps in per_host.values() for v in fps} & skip)
+    if held:
+        print(f"  not compared (host-scoped in the index): {', '.join(held)}")
     for var, rows in div:
         print(f"  *** {var} differs between machines: "
               + ", ".join(f"{h} {v}" for h, v in rows) + " ***")

@@ -126,3 +126,70 @@ def test_cross_host_divergence_names_the_variable():
                 "hostc": {"ONLY_HERE_KEY": {"x"}}}
     assert ca.cross_host_divergence(per_host) == [
         ("BOT_TOKEN", [("hosta", "aaa"), ("hostb", "bbb")])]
+
+
+# ── a template unit is not a restartable unit (2026-10-01) ────────────────────
+#
+# The box's alert@.service reads the fleet .env. env_consumers named the
+# TEMPLATE, and `systemctl try-restart alert@.service` fails on every host
+# ("missing the instance name") with or without root, so every distribution
+# ended "RESTART FAILED alert@.service (needs root)" and exit 1.
+
+def test_template_unit_is_named_by_its_instances(host, tmp_path):
+    sys_dir = tmp_path / "etc-systemd"
+    _w(sys_dir / "alert@.service",
+       f"[Service]\nType=oneshot\nEnvironmentFile=-{host}/Data/.datacore/env/.env\n")
+    got = ca.env_consumers([host / "Data/.datacore/env/.env"],
+                           unit_dirs={"user": [], "system": [sys_dir]})
+    assert got == [("system", "alert@*.service")]
+
+
+# ── cross-host parity skips host-scoped credentials ───────────────────────────
+#
+# A credential whose index entry names its hosts (hosts: [...]) is one machine's
+# own -- Winston's bot on the box, Data's on hers. Comparing it across machines
+# reports two different credentials as one divergent value. A variable that any
+# fleet-wide entry also declares is still compared, and so is an unindexed one.
+
+INDEX_FIXTURE = [
+    {"id": "winston-telegram-bot", "var_name": "WINSTON_BOT_TOKEN", "hosts": ["winston"]},
+    {"id": "tris-telegram-bot", "var_name": "TELEGRAM_BOT_TOKEN", "hosts": ["tris"]},
+    {"id": "mrdata-telegram-bot", "vars": ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]},
+    {"id": "redalert", "var_name": "REDALERT_BOT_TOKEN", "hosts": ["nightshift"],
+     "vars": ["REDALERT_TELEGRAM_BOT_TOKEN"]},
+]
+
+
+def test_host_scoped_vars_are_those_only_host_scoped_entries_declare():
+    assert ca.host_scoped_vars(INDEX_FIXTURE) == {
+        "WINSTON_BOT_TOKEN", "REDALERT_BOT_TOKEN", "REDALERT_TELEGRAM_BOT_TOKEN"}
+
+
+def test_cross_host_divergence_skips_host_scoped_variables():
+    per_host = {"winston": {"WINSTON_BOT_TOKEN": {"aaa"}, "BOT_TOKEN": {"x"}},
+                "mac": {"WINSTON_BOT_TOKEN": {"bbb"}, "BOT_TOKEN": {"y"}}}
+    assert ca.cross_host_divergence(per_host, skip={"WINSTON_BOT_TOKEN"}) == [
+        ("BOT_TOKEN", [("mac", "y"), ("winston", "x")])]
+
+
+def test_cross_host_command_reads_the_index(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(ca, "_index", lambda: INDEX_FIXTURE)
+    fps = tmp_path / "fps"
+    fps.write_text("winston WINSTON_BOT_TOKEN aaa\nmac WINSTON_BOT_TOKEN bbb\n"
+                   "winston TELEGRAM_BOT_TOKEN t1\nmac TELEGRAM_BOT_TOKEN t2\n"
+                   "winston FIXTURE_BOT_TOKEN f1\nmac FIXTURE_BOT_TOKEN f2\n")
+    assert ca._cmd_cross_host(str(fps)) == 1
+    out = capsys.readouterr().out
+    assert "WINSTON_BOT_TOKEN differs" not in out
+    assert "not compared (host-scoped in the index): WINSTON_BOT_TOKEN" in out
+    assert "TELEGRAM_BOT_TOKEN differs" in out and "FIXTURE_BOT_TOKEN differs" in out
+
+
+def test_cross_host_command_without_an_index_compares_everything(tmp_path, monkeypatch, capsys):
+    def boom():
+        raise ca.CredentialUnresolvable("no index")
+    monkeypatch.setattr(ca, "_index", boom)
+    fps = tmp_path / "fps"
+    fps.write_text("winston WINSTON_BOT_TOKEN aaa\nmac WINSTON_BOT_TOKEN bbb\n")
+    assert ca._cmd_cross_host(str(fps)) == 1
+    assert "WINSTON_BOT_TOKEN differs" in capsys.readouterr().out
