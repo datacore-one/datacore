@@ -648,3 +648,54 @@ def test_a_red_recorded_from_skips_alone_is_rerun_and_becomes_could_not_run(tmp_
     pn.main([])
     b = json.loads((state / "board-2026-09-30.json").read_text())
     assert b["promises"]["AGT-11"]["state"] == "could-not-run", b["promises"]["AGT-11"]
+
+
+# ---- the weekly agent board (board D14, 2026-10-01) ------------------------------
+# The live-AI evals cost model runs, so the nightly never runs them. Once a week
+# `--agents` runs only the promises that have an agent eval, with the switch on,
+# into its own history beside the nightly's, and alerts on what turned red.
+
+def test_the_agent_board_runs_only_promises_with_an_agent_eval(monkeypatch):
+    monkeypatch.setattr(pn, "agent_promises", lambda: ["AGT6", "MEM6"])
+    cmd = pn.runner_command(agents=True)
+    assert "--agents" in cmd and "--write-baseline" not in cmd
+    assert cmd[cmd.index("--only") + 1] == "AGT6,MEM6"
+    assert "--agents" not in pn.runner_command()
+
+
+def test_the_agent_board_turns_the_switch_on_and_the_nightly_still_never_does(monkeypatch):
+    monkeypatch.setenv("DATACORE_AGENT_EVALS", "1")
+    assert pn.runner_env(agents=True).get("DATACORE_AGENT_EVALS") == "1"
+    assert "DATACORE_AGENT_EVALS" not in pn.runner_env()
+
+
+def test_agent_promises_are_the_ones_whose_eval_runs_an_agent():
+    ids = pn.agent_promises()
+    assert "AGT6" in ids, "AGT-6's eval runs a real agent (require_enabled)"
+    assert "CAP4" not in ids
+
+
+def test_the_agent_board_keeps_its_own_history_and_alerts_on_what_turned_red(tmp_path, monkeypatch, capsys):
+    state = tmp_path / "state"
+    (state / "agents").mkdir(parents=True)
+    (state / "agents" / "board-2026-09-23.json").write_text(json.dumps(board("2026-09-23", {"CAP-4": "green"})))
+    (state / "board-2026-09-29.json").write_text(json.dumps(board("2026-09-29", {"CAP-4": "red"})))
+    base = tmp_path / "promise-baseline.json"
+    base.write_text(json.dumps({"green": []}) + "\n")
+    sent, wants = [], []
+    monkeypatch.setattr(pn, "STATE_DIR", state)
+    monkeypatch.setattr(pn, "BASELINE", base)
+    monkeypatch.setattr(pn, "run_board", lambda want=None, agents=False: (
+        wants.append((want, agents)) or raw({"CAP-4": "red"})))
+    monkeypatch.setattr(pn, "unmet_needs", lambda agents=False: {})
+    monkeypatch.setattr(pn, "promise_texts", lambda: TEXTS)
+    monkeypatch.setattr(pn, "send_to_firm", lambda text: (sent.append(text) or (True, "sent")))
+    monkeypatch.setattr(pn, "today", lambda: WED)
+    rc = pn.main(["--agents"])
+    out = capsys.readouterr().out
+    assert rc == 0 and len(sent) == 1 and "CAP-4" in sent[0] and sent[0].startswith("Agent evals (weekly")
+    assert (state / "agents" / f"board-{WED}.json").exists()
+    assert not (state / f"board-{WED}.json").exists(), "the agent board wrote into the nightly's history"
+    assert wants and wants[0][1] is True
+    assert wants[0][0]("CAP-4") is False, "a red agent eval must not be run a second time for its line (cost)"
+    assert out.strip().splitlines()[-1].startswith("agent-evals: ")

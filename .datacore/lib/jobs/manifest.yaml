@@ -1429,6 +1429,30 @@ jobs:
         arg: [date, counts, promises]
         max_age_hours: 26
 
+  # THE LIVE-AI EVALS, WEEKLY (owner decision 2026-10-01, board D14). The
+  # promises whose eval runs a real agent (agent_eval.require_enabled) cost
+  # model runs, so the nightly never runs them. Here, on the overnight host --
+  # always on, its own minted subscription token through the broker
+  # (claude-code-oauth, instance-local), claude and pytest present -- once a
+  # week, Sunday 13:20 UTC: after the overnight run (20:00-06:00) and the
+  # Sunday 02:20 calibration, outside the owner's working week. Its own history
+  # under promise-scoreboard/agents/; what turned red goes to The Firm through
+  # the host's alert route, like the nightly's.
+  - name: nightshift-agent-evals
+    machine: nightshift
+    schedule: "20 13 * * 0"
+    cmd: "python3 ~/Data/.datacore/lib/promise_nightly.py --agents >> ~/.datacore/state/agent-evals.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: ~/.datacore/state/agent-evals.log
+        check: last_line_regex
+        arg: '^agent-evals: \d+ green, \d+ red, \d+ could not run here; \d+ turned red, \d+ recovered; alert (sent|none)$'
+        max_age_hours: 192
+      - path: ~/.datacore/state/promise-scoreboard/agents/latest.json
+        check: json_has_keys
+        arg: [date, counts, promises]
+        max_age_hours: 192
+
   # THE SAME BOARD ON EVERY MACHINE, FOR ITSELF (owner decision 2026-09-30).
   # Each host judges only what it can run: an eval that reads other machines
   # over ssh (need `fleet`, met only on the roster's roles.console -- the

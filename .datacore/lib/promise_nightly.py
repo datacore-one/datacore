@@ -7,7 +7,13 @@ promise that was green turns red. Every machine runs it for itself (owner,
 only on the roster's console) or a live agent session (need `agent`, never on
 here) is "could not run here" on a machine that cannot do that, never red.
 
-    promise_nightly.py [--no-send] [--weekly-day mon]
+    promise_nightly.py [--no-send] [--weekly-day mon] [--agents]
+
+`--agents` is the WEEKLY agent board (owner decision 2026-10-01, board D14):
+only the promises whose eval runs a real agent (agent_eval.require_enabled),
+with DATACORE_AGENT_EVALS=1, into its own history under <state>/agents/, and
+its own contract line ("agent-evals: ..."). A red is not run a second time for
+its failure line -- every agent run costs model time; the board names the file.
 
 What it does, in order:
   1. Runs `promise_evals.py --json` (deterministic and production evals; never
@@ -96,13 +102,25 @@ def has_pytest() -> bool:
     return importlib.util.find_spec("pytest") is not None
 
 
-def runner_command() -> list[str]:
-    return [sys.executable, str(LIB / "promise_evals.py"), "--json"]
+def agent_promises() -> list[str]:
+    """Normalized ids of the promises with an eval that runs a real agent."""
+    import promise_evals
+    return sorted(pid for pid, fs in promise_evals.eval_files().items()
+                  if any("require_enabled(" in f.read_text(encoding="utf-8", errors="replace") for _s, f in fs))
 
 
-def runner_env() -> dict:
+def runner_command(agents: bool = False) -> list[str]:
+    cmd = [sys.executable, str(LIB / "promise_evals.py"), "--json"]
+    if agents:
+        cmd += ["--agents", "--only", ",".join(agent_promises())]
+    return cmd
+
+
+def runner_env(agents: bool = False) -> dict:
     env = {k: v for k, v in os.environ.items() if k != "DATACORE_AGENT_EVALS"}
     env["DATACORE_ROOT"] = str(ROOT)
+    if agents:
+        env["DATACORE_AGENT_EVALS"] = "1"
     return env
 
 
@@ -172,10 +190,10 @@ def _first_line(el) -> str:
     return el.tag
 
 
-def run_board(want=None) -> dict:
+def run_board(want=None, agents: bool = False) -> dict:
     """promise_evals.py --json, plus {"failures": {pid: [{file, test, line}]}} for the reds
     that `want(pid)` says could be news (all reds when None), and {"eval_files": {pid: [file]}}."""
-    r = subprocess.run(runner_command(), cwd=ROOT, env=runner_env(), capture_output=True, text=True,
+    r = subprocess.run(runner_command(agents), cwd=ROOT, env=runner_env(agents), capture_output=True, text=True,
                        timeout=RUN_TIMEOUT_S)
     start = r.stdout.find("{")
     if start < 0:
@@ -210,10 +228,13 @@ def _rel(f: Path) -> str:
         return str(f)
 
 
-def unmet_needs() -> dict[str, list[str]]:
-    """{'<file>[::<test>]': [needs this host lacks]} -- as an ordinary run sees them."""
+def unmet_needs(agents: bool = False) -> dict[str, list[str]]:
+    """{'<file>[::<test>]': [needs this host lacks]} -- as an ordinary run sees them
+    (with `agents`, as the weekly agent board does: the `agent` need is met)."""
     import needs_gate
     env = {k: v for k, v in os.environ.items() if k not in ("PROMISE_EVALS_ALL", "DATACORE_AGENT_EVALS")}
+    if agents:
+        env["DATACORE_AGENT_EVALS"] = "1"
     return needs_gate.unmet_by_test(root=ROOT, env=env)
 
 
@@ -482,22 +503,25 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--no-send", action="store_true", help="print the message instead of sending it")
     ap.add_argument("--weekly-day", default="mon", choices=WEEKDAYS)
+    ap.add_argument("--agents", action="store_true",
+                    help="the weekly agent board: only promises with an agent eval, real model runs")
     args = ap.parse_args(argv)
     night = today()
-    state = Path(STATE_DIR)
+    state = Path(STATE_DIR) / "agents" if args.agents else Path(STATE_DIR)
+    label = "agent-evals" if args.agents else "promise-scoreboard"
     history = load_history(state, night) if state.exists() else []
     base = baseline_green()
 
     if not has_pytest():
-        print(f"promise-scoreboard: FAILED to run (no pytest for {sys.executable}: this host cannot run "
+        print(f"{label}: FAILED to run (no pytest for {sys.executable}: this host cannot run "
               f"the evals, so there is no board)")
         return 1
     try:
-        unmet = unmet_needs()
+        unmet = unmet_needs(agents=True) if args.agents else unmet_needs()
         lacking = {k.split("::", 1)[0] for k in unmet}
         files = promise_eval_files()
     except Exception as exc:  # noqa: BLE001 -- the contract line must say it failed
-        print(f"promise-scoreboard: FAILED to run ({type(exc).__name__}: {str(exc)[:200]})")
+        print(f"{label}: FAILED to run ({type(exc).__name__}: {str(exc)[:200]})")
         return 1
 
     def rerun(pid: str) -> bool:
@@ -517,10 +541,15 @@ def main(argv: list[str] | None = None) -> int:
         return judged.get("state") != RED
 
     try:
-        raw = run_board(rerun)
+        if args.agents:
+            import promise_evals
+            promise_evals.SUITE_TIMEOUT_S = max(promise_evals.SUITE_TIMEOUT_S, 5400)
+            raw = run_board(lambda pid: False, agents=True)
+        else:
+            raw = run_board(rerun)
         board = build_board(raw, unmet, promise_texts(), date=night)
     except Exception as exc:  # noqa: BLE001 -- the contract line must say it failed
-        print(f"promise-scoreboard: FAILED to run ({type(exc).__name__}: {str(exc)[:200]})")
+        print(f"{label}: FAILED to run ({type(exc).__name__}: {str(exc)[:200]})")
         return 1
     state.mkdir(parents=True, exist_ok=True)
     path = state / f"board-{night}.json"
@@ -530,8 +559,11 @@ def main(argv: list[str] | None = None) -> int:
         old.unlink(missing_ok=True)
 
     ch = changes(history, board, base)
-    weekly = WEEKDAYS[_date.fromisoformat(night).weekday()] == args.weekly_day
+    # The agent board runs once a week, so every run is the weekly summary.
+    weekly = args.agents or WEEKDAYS[_date.fromisoformat(night).weekday()] == args.weekly_day
     text = message(ch, board, weekly=weekly, pointer=f"{path} on {board['host']}")
+    if text and args.agents:
+        text = text.replace("Promise scoreboard,", "Agent evals (weekly, live model runs),", 1)
     if not history:
         # "Was green" means green on THIS host. The baseline is the workstation's;
         # compared with it, the overnight host's first run found 27 promises red
@@ -552,7 +584,7 @@ def main(argv: list[str] | None = None) -> int:
     for key in ("turned_red", "recovered", "newly_cnr"):
         if ch[key]:
             print(f"{key}: {', '.join(ch[key])}")
-    print(f"promise-scoreboard: {c.get(GREEN, 0)} green, {c.get(RED, 0)} red, {c.get(CNR, 0)} could not run here; "
+    print(f"{label}: {c.get(GREEN, 0)} green, {c.get(RED, 0)} red, {c.get(CNR, 0)} could not run here; "
           f"{len(ch['turned_red'])} turned red, {len(ch['recovered'])} recovered; "
           f"alert {outcome}")
     return rc
