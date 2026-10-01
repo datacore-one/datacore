@@ -1443,6 +1443,10 @@ jobs:
     schedule: "20 13 * * 0"
     cmd: "python3 ~/Data/.datacore/lib/promise_nightly.py --agents >> ~/.datacore/state/agent-evals.log 2>&1"
     on_fail: telegram
+    # A person, not a repair agent: an agent "repairing" this job would re-run
+    # paid model evals the owner scheduled weekly on purpose. Until the first
+    # Sunday run (2026-10-04) its artifacts do not exist, and that is reported.
+    delegate: false
     artifacts:
       - path: ~/.datacore/state/agent-evals.log
         check: last_line_regex
