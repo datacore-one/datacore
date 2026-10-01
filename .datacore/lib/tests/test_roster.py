@@ -72,3 +72,31 @@ def test_a_broken_registry_reads_as_empty_not_as_a_crash(tmp_path):
     p.write_text("principals: [not, a, mapping]\n")
     assert roster.owner(p) is None and roster.agents(p) == []
     assert roster.section("x", p) == {}
+
+
+# ── who answers for a machine (board D1, 2026-10-01) ─────────────────────────
+HOSTS = """principals:
+  boss: {kind: human, decision: final, hosts: [laptop]}
+  helper: {kind: agent, role: health practice, hosts: [laptop]}
+  cos: {kind: agent, role: chief of staff, hosts: [box]}
+  ops: {kind: agent, role: chief of operations, hosts: [overnight]}
+  intel: {kind: agent, hosts: [gateway]}
+  migration: {kind: migration, hosts: [laptop, box]}
+"""
+
+
+def test_the_agent_of_a_machine_is_the_agent_principal_that_lives_there(tmp_path):
+    p = tmp_path / "principals.yaml"; p.write_text(HOSTS)
+    assert roster.resident_agent("box", p) == "cos"
+    assert roster.resident_agent("overnight", p) == "ops"
+    assert roster.resident_agent("gateway", p) == "intel"
+    assert roster.resident_agent("nowhere", p) is None
+
+
+def test_a_persons_machine_has_no_resident_agent_even_with_an_agent_listed(tmp_path):
+    """The owner's machine is the owner's: an agent that also runs there (a
+    practice agent on the laptop) does not make it an agent's machine."""
+    p = tmp_path / "principals.yaml"; p.write_text(HOSTS)
+    assert roster.person_on("laptop", p) == "boss"
+    assert roster.resident_agent("laptop", p) is None
+    assert roster.person_on("box", p) is None

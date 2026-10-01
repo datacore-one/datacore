@@ -533,8 +533,14 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> 
                     if tid:
                         _rec.note_task(job_name, tid)
                 return
-            print(f"could NOT delegate {job_name} ({detail}); "
-                  f"escalating to the operator", file=sys.stderr)
+            if state == "owner":
+                # Board D1, 2026-10-01: the owner's machine gets no repair agent;
+                # the alert and, when it recurs, the task below are the owner's.
+                print(f"{job_name} is on the owner's machine ({detail}); no repair agent, "
+                      f"the operator is told and a recurring failure becomes a task", file=sys.stderr)
+            else:
+                print(f"could NOT delegate {job_name} ({detail}); "
+                      f"escalating to the operator", file=sys.stderr)
         if _record.get("recurring") and job is not None and not _record.get("task_id"):
             tid = _file_task(job, _record, failures)
             if tid:

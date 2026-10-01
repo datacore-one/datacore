@@ -32,6 +32,26 @@ if str(LIB / "jobs") not in sys.path:
 
 import fix_check  # noqa: E402
 
+#: Who lives where, for these tests (board D1, 2026-10-01): each machine's own
+#: agent repairs it, and a person's machine gets a task instead. Fake names: the
+#: install's real registry decides in production (INS-3).
+PRINCIPALS = """principals:
+  boss: {kind: human, decision: final, hosts: [mac]}
+  helper: {kind: agent, role: practice, hosts: [mac]}
+  cos: {kind: agent, role: chief of staff, hosts: [box]}
+  ops: {kind: agent, role: chief of operations, hosts: [nightshift]}
+  intel: {kind: agent, hosts: [hermes]}
+  comms: {kind: agent, hosts: [plur-claw]}
+"""
+
+
+@pytest.fixture(autouse=True)
+def _principals(tmp_path, monkeypatch):
+    import actor_identity
+    p = tmp_path / "principals-fixture.yaml"
+    p.write_text(PRINCIPALS)
+    monkeypatch.setattr(actor_identity, "PRINCIPALS", p)
+
 FIX_CHECK = LIB / "jobs" / "fix_check.py"
 
 
@@ -244,7 +264,8 @@ def test_a_job_whose_repository_cannot_be_named_is_refused_before_anything_is_wr
     import autofix
     monkeypatch.setattr(autofix, "contract_sha", lambda name, manifest: "abc")
     monkeypatch.setattr(autofix, "repo_for", lambda job, root: None)
-    state, why = autofix.delegate(_job("box-x", "box"), ["f"], {}, root=tmp_path, roster=_roster(tmp_path))
+    state, why = autofix.delegate(_job("box-x", "box"), ["f"], {}, root=tmp_path, roster=_roster(tmp_path),
+                                  assignee="miles")
     assert state == "refused" and "cannot name the repository" in why
     assert not (tmp_path / "2-datacore").exists(), "a refusal must write nothing"
 
@@ -272,7 +293,7 @@ def test_the_delegation_machinery_opts_out_in_the_real_manifest():
 
 # ── two stages when the repairer is elsewhere ─────────────────────────────────
 
-def _capture_delegation(monkeypatch, tmp_path, job):
+def _capture_delegation(monkeypatch, tmp_path, job, assignee=None):
     """Run delegate() against fakes for the ledger, the actor, the repo and the manifest."""
     import autofix
     import ledger.policy
@@ -290,25 +311,31 @@ def _capture_delegation(monkeypatch, tmp_path, job):
     from jobs import awake
     monkeypatch.setattr(awake, "always_on", lambda m, r=None: m != "mac")
     (tmp_path / "2-datacore" / ".datacore" / "events").mkdir(parents=True)
-    state, why = autofix.delegate(job, ["f"], {"first_failed": "2026-09-22"}, root=tmp_path, roster=roster)
+    state, why = autofix.delegate(job, ["f"], {"first_failed": "2026-09-22"}, root=tmp_path, roster=roster,
+                                  assignee=assignee)
     return state, why, captured
 
 
-def test_a_box_job_is_a_pull_request_for_miles_and_the_owner_merges(tmp_path, monkeypatch):
+def test_a_repairer_on_another_machine_opens_a_pull_request_and_the_owner_merges(tmp_path, monkeypatch):
     """Owner, 2026-09-25: code changes are PRs, never merged by an agent; no follow-up
-    item, because nothing lands until the owner merges and the morning re-check verifies."""
-    state, why, p = _capture_delegation(monkeypatch, tmp_path, _job("box-x", "box"))
+    item, because nothing lands until the owner merges and the morning re-check verifies.
+    Since board D1 this is only for a repairer named explicitly: by default the
+    failing machine's own agent repairs it, on that machine."""
+    state, why, p = _capture_delegation(monkeypatch, tmp_path, _job("box-x", "box"), assignee="miles")
     assert state == "delegated", why
     assert "--stage merged" in p["check"] and "--repo datacore-one/datacore" in p["check"] and f"--item {p['id']}" in p["check"]
     assert "do not merge" in p["body"] and "merge rights" not in p["body"]
     assert "then" not in p
 
 
-def test_a_mac_job_is_a_merge_with_no_follow_up(tmp_path, monkeypatch):
-    """A visitor pulls on wake; its contract passes by itself."""
+def test_a_mac_job_is_the_owners_and_no_agent_is_handed_it(tmp_path, monkeypatch):
+    """Board D1, 2026-10-01: the owner's machine gets no automatic repair; the
+    failure is a task for the owner (job_verify files it), and nothing is
+    written to the ledger."""
     state, why, p = _capture_delegation(monkeypatch, tmp_path, _job("mac-x", "mac"))
-    assert state == "delegated" and "--stage merged" in p["check"] and "then" not in p
-    assert "pulls on its own schedule" in p["body"]
+    assert state == "owner", why
+    assert "boss" in why and "task" in why
+    assert p == {}, "an item was written for a job on the owner's machine"
 
 
 def test_a_nightshift_job_is_still_one_stage(tmp_path, monkeypatch):
@@ -336,7 +363,8 @@ def test_an_agent_may_open_a_repair_pr_only_in_the_core_repository(tmp_path, mon
     monkeypatch.setattr(autofix, "contract_sha", lambda name, manifest: "abc")
     for repo in ("datacore-one/datacore-nightshift", "plur-ai/plur", "plur9/module-personal-finance"):
         monkeypatch.setattr(autofix, "repo_for", lambda job, root, r=repo: r)
-        state, why = autofix.delegate(_job("box-x", "box"), ["f"], {}, root=tmp_path, roster=_roster(tmp_path))
+        state, why = autofix.delegate(_job("box-x", "box"), ["f"], {}, root=tmp_path, roster=_roster(tmp_path),
+                                      assignee="miles")
         assert state == "refused" and repo in why and "owner's boundary" in why, repo
     assert not (tmp_path / "2-datacore").exists()
 
@@ -380,19 +408,23 @@ def test_a_pass_before_the_drop_does_not_count(tmp_path, monkeypatch):
 
 # ── who repairs is the install's own operations agent (INS-3) ─────────────────
 
-def test_the_default_repairer_is_the_installs_operations_agent(tmp_path, monkeypatch):
-    """No agent name ships: the default assignee is whoever principals.yaml
-    gives the role of chief of operations."""
-    import roster
-    monkeypatch.setattr(roster, "by_role", lambda role, path=None: "miles" if role == "chief of operations" else None)
-    state, why, p = _capture_delegation(monkeypatch, tmp_path, _job("box-x", "box"))
-    assert state == "delegated" and p["assignee"] == "miles", why
+@pytest.mark.parametrize("machine,agent", [
+    ("box", "cos"), ("nightshift", "ops"), ("hermes", "intel"), ("plur-claw", "comms")])
+def test_each_machine_is_repaired_by_its_own_agent_on_that_machine(tmp_path, monkeypatch, machine, agent):
+    """Board D1, 2026-10-01 ("each box should have own repair agent"): the
+    repairer is the agent principal that lives on the failing machine, from
+    principals.yaml hosts -- no name in code (INS-3) -- and the repair is one
+    stage: the ordinary verification on that machine is the check."""
+    roster = tmp_path / "infrastructure.yaml"
+    state, why, p = _capture_delegation(monkeypatch, tmp_path, _job(f"{machine}-x", machine))
+    assert state == "delegated", why
+    assert p["assignee"] == agent
+    assert "--stage" not in p["check"] and p["stage"] == "verify" and "then" not in p
 
 
-def test_with_no_operations_agent_declared_the_repair_is_refused(tmp_path, monkeypatch):
+def test_a_machine_no_agent_lives_on_is_refused_before_anything_is_written(tmp_path, monkeypatch):
     import autofix
-    import roster
-    monkeypatch.setattr(roster, "by_role", lambda role, path=None: None)
-    state, why = autofix.delegate(_job("box-x", "box"), ["f"], {}, root=tmp_path, roster=_roster(tmp_path))
-    assert state == "refused" and "chief of operations" in why
+    state, why = autofix.delegate(_job("elsewhere-x", "elsewhere"), ["f"], {}, root=tmp_path,
+                                  roster=_roster(tmp_path))
+    assert state == "refused" and "elsewhere" in why and "hosts" in why
     assert not (tmp_path / "2-datacore").exists(), "a refusal must write nothing"
