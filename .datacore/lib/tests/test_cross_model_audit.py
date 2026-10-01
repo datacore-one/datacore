@@ -799,6 +799,42 @@ def test_issues_are_filed_only_under_the_agents_own_account(sandbox, monkeypatch
         cma.run_nightly("tris", date(2026, 9, 30), issues=True)
 
 
+def test_a_night_whose_filing_was_refused_is_filed_later_without_auditing_again(sandbox, monkeypatch):
+    """2026-09-30/10-01: tris's and data's audits ran and pushed, then filing
+    stopped ("no github account in principals.yaml"). Once the registry is
+    fixed, `issues` files that night's existing, validated findings file under
+    the agent's own account -- no second model call, no new findings file."""
+    monkeypatch.setattr(cma, "rotation", lambda caps, night, agents=None: {a: "audits" for a in cma.AGENTS})
+    monkeypatch.setattr(cma, "call_model", lambda *a, **k: {"model": "m", "usd": 0.01, "text": _answer(
+        finding("AUD-3", ".datacore/lib/promise_evals.py:10"))})
+    out = cma.run_nightly("tris", date(2026, 9, 30))
+    before = out.read_text()
+    monkeypatch.setattr(cma, "call_model", lambda *a, **k: pytest.fail("filing a past night audited again"))
+    _gh_login(monkeypatch, "tris-account")
+    filed, committed = [], []
+
+    def fake_file(path, *, repo):
+        assert cma.write_time_errors(path) == [], "issues are filed only from a validated findings file"
+        filed.append(Path(path))
+        Path(path).with_name("tris.issues.yaml").write_text("issues: []\n")
+        return []
+    monkeypatch.setattr(cma, "file_issues", fake_file)
+    monkeypatch.setattr(cma, "issues_repo", lambda: "example-org/datacore")
+    monkeypatch.setattr(cma, "_commit", lambda paths, message: committed.append(list(paths)) or "ok")
+    assert cma.main(["issues", "--agent", "tris", "--night", "2026-09-30", "--commit"]) == 0
+    assert filed == [out] and out.read_text() == before, "the findings file is filed as it is, never rewritten"
+    assert committed == [[out.with_name("tris.issues.yaml")]], "only the issues record is committed"
+    _gh_login(monkeypatch, "the-owners-account")
+    with pytest.raises(SystemExit, match="tris-account"):
+        cma.main(["issues", "--agent", "tris", "--night", "2026-09-30"])
+    with pytest.raises(SystemExit, match="no findings file"):
+        cma.main(["issues", "--agent", "tris", "--night", "2026-09-29"])
+    out.write_text(before.replace("AUD-3", "AUD-4", 1))
+    _gh_login(monkeypatch, "tris-account")
+    with pytest.raises(SystemExit, match="not valid"):
+        cma.main(["issues", "--agent", "tris", "--night", "2026-09-30"])
+
+
 def test_without_issues_a_night_never_calls_github(sandbox, monkeypatch):
     monkeypatch.setattr(cma, "rotation", lambda caps, night, agents=None: {a: "audits" for a in cma.AGENTS})
     monkeypatch.setattr(cma, "call_model", lambda *a, **k: {"model": "m", "usd": 0.01, "text": "findings: []"})

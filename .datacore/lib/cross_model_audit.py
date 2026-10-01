@@ -1672,6 +1672,22 @@ def _file_night(agent: str, out: Path, *, commit: bool, sync: bool) -> None:
         raise SystemExit(f"cross_model_audit: issues: {failure}")
 
 
+def file_past_night(agent: str, night: date, *, commit: bool = False, sync: bool = False) -> Path:
+    """File the issues of a night already audited whose filing was refused
+    (e.g. the registry lacked the agent's GitHub account): the existing,
+    write-time-validated findings file as it is -- no model call, no rewrite."""
+    out = NIGHTLY / night.isoformat() / f"{agent}.yaml"
+    if sync:
+        sync_sources()
+    if not out.is_file():
+        raise SystemExit(f"cross_model_audit: issues: no findings file {out}")
+    errors = write_time_errors(out)
+    if errors:
+        raise SystemExit(f"cross_model_audit: issues: {out} is not valid, nothing filed: {errors[:3]}")
+    _file_night(agent, out, commit=commit, sync=sync)
+    return out
+
+
 # ── CLI ─────────────────────────────────────────────────────────────────────
 def _agent(a) -> str:
     agent = (a or os.environ.get("DATACORE_POLICY_PRINCIPAL") or "").strip().lower()
@@ -1710,6 +1726,11 @@ def main(argv=None) -> int:
     r.add_argument("--post", action="store_true")
     v = sub.add_parser("validate")
     v.add_argument("files", nargs="+", type=Path)
+    i = sub.add_parser("issues", help="file a past night's findings that were never filed")
+    i.add_argument("--agent")
+    i.add_argument("--night", type=date.fromisoformat, required=True)
+    i.add_argument("--commit", action="store_true", help="commit (and push) the issues record, and only it")
+    i.add_argument("--sync", action="store_true", help="as for nightly")
     ro = sub.add_parser("rotation")
     ro.add_argument("--night", type=date.fromisoformat, default=datetime.now(timezone.utc).date())
     a = ap.parse_args(argv)
@@ -1732,6 +1753,9 @@ def main(argv=None) -> int:
             print(f"{f}: {'valid' if not errs else '; '.join(errs)}")
             bad += bool(errs)
         return 1 if bad else 0
+    if a.cmd == "issues":
+        file_past_night(_agent(a.agent), a.night, commit=a.commit, sync=a.sync)
+        return 0
     if a.cmd == "rotation":
         for agent, cap in rotation(capabilities(), a.night).items():
             print(f"{agent:8} {AGENTS[agent]:9} {cap}")
