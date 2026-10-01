@@ -60,7 +60,7 @@ def test_a_closed_repair_task_survives_a_file_revert_and_projects_done(tmp_path,
     space = _phase1_space(tmp_path)
     na = space / "org" / "next_actions.org"
     monkeypatch.setattr(job_verify, "TASK_FILE", str(na))
-    monkeypatch.setattr(job_verify, "_default_actor", lambda: "winston")
+    monkeypatch.setattr(job_verify, "_default_actor", lambda: "jv-tester")
     snapshot = na.read_text()                       # the inbox guard's 05:00 copy
 
     assert job_verify._close_task(TID) is True
@@ -82,7 +82,7 @@ def test_a_closed_repair_task_survives_a_file_revert_and_projects_done(tmp_path,
 def test_closing_twice_is_harmless(tmp_path, monkeypatch):
     space = _phase1_space(tmp_path)
     monkeypatch.setattr(job_verify, "TASK_FILE", str(space / "org" / "next_actions.org"))
-    monkeypatch.setattr(job_verify, "_default_actor", lambda: "winston")
+    monkeypatch.setattr(job_verify, "_default_actor", lambda: "jv-tester")
     assert job_verify._close_task(TID) is True
     n = len(read_events(space))
     assert job_verify._close_task(TID) is True
