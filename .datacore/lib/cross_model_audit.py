@@ -1627,9 +1627,14 @@ def file_issues(findings_path, *, repo: str) -> list[dict]:
                                        f"(the filing account likely lacks triage access to {target})")
             except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
                 errors.append(f"finding {n} ({f.get('promise')} at {ev}) in {target}: {exc}")
-    _write_yaml(record, {"agent": agent, "model": doc.get("model"), "commit": doc.get("commit"),
-                         "night": doc.get("night"), "repo": repo, "issues": out,
-                         **({"errors": errors} if errors else {})},
+    # The record sits in the night's folder, where every YAML is checked as a
+    # findings file (AUD-7): it carries the same pins and the findings it tracks,
+    # and names the GitHub repository as `issues_repo` -- `repo` in that schema is
+    # a relative base path, and a slug there broke the 2026-09-29 record.
+    pins = {k: doc[k] for k in ("capability", "repo", "root", "commits") if doc.get(k) is not None}
+    _write_yaml(record, {"agent": agent, "model": doc.get("model"), **pins, "commit": doc.get("commit"),
+                         "night": doc.get("night"), "issues_repo": repo, "issues": out,
+                         **({"errors": errors} if errors else {}), "findings": findings},
                 "# The GitHub issues this night's findings are tracked by (AUD-1): one open\n"
                 "# audit-finding issue per problem, assigned to the chief of operations.\n")
     if errors:

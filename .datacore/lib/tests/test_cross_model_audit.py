@@ -859,3 +859,34 @@ def test_an_issue_github_stripped_of_its_label_or_assignee_is_reported_not_trust
         cma.file_issues(p, repo="example-org/datacore")
     rec = yaml.safe_load(p.with_name("data.issues.yaml").read_text())
     assert rec["issues"][0]["url"].endswith("/issues/9") and rec["errors"], rec
+
+
+def test_the_issues_record_beside_a_findings_file_is_itself_pinned_and_checkable(tmp_path, monkeypatch):
+    """AUD-7 checks every YAML in a night's folder; the issues record (AUD-1) sits
+    there too, so it must carry the same pin and the findings it tracks, and name
+    the GitHub repository under a key that is not the findings schema's `repo`
+    (a relative base path). 2026-09-29: `repo: datacore-one/datacore` moved the
+    base and the record failed as 'no capability / commit does not exist'."""
+    import roster
+    monkeypatch.setattr(roster, "by_role", lambda role, path=None: "miles")
+    monkeypatch.setattr(roster, "entries", lambda path=None: {"miles": {"github": "miles-account"}})
+    p = findings_file(tmp_path / "2026-09-30" / "miles.yaml", agent="miles", capability="c", commit=head_sha(),
+                      findings=[finding("TSK-2", ".datacore/lib/promise_evals.py:10")])
+
+    def fake_gh(args, input=None):
+        if args[:2] == ["issue", "create"]:
+            return subprocess.CompletedProcess(args, 0, "https://github.com/example-org/datacore/issues/7\n", "")
+        if args[:2] == ["issue", "view"]:
+            return subprocess.CompletedProcess(args, 0, json.dumps(
+                {"labels": [{"name": "audit-finding"}], "assignees": [{"login": "miles-account"}]}), "")
+        return subprocess.CompletedProcess(args, 0, "[]", "")
+    monkeypatch.setattr(cma, "_gh", fake_gh)
+    cma.file_issues(p, repo="example-org/datacore")
+    record = p.with_name("miles.issues.yaml")
+    assert cma.validate_findings(record, repo=ROOT) == [], "the issues record is not pinned and checkable"
+    rec = yaml.safe_load(record.read_text())
+    assert rec["issues_repo"] == "example-org/datacore" and len(rec["issues"]) == 1
+    empty = findings_file(tmp_path / "2026-10-01" / "miles.yaml", agent="miles", capability="c",
+                          commit=head_sha(), findings=[])
+    cma.file_issues(empty, repo="example-org/datacore")
+    assert cma.validate_findings(empty.with_name("miles.issues.yaml"), repo=ROOT) == []
