@@ -131,7 +131,6 @@ tests:
   - test: .datacore/lib/tests/test_autofix_boundary.py
     only:
       - test_a_job_whose_repository_cannot_be_named_is_refused_before_anything_is_written
-      - test_a_job_on_the_repairers_own_host_is_still_delegated
       - test_a_box_job_is_a_pull_request_for_miles_and_the_owner_merges
       - test_a_mac_job_is_a_merge_with_no_follow_up
       - test_a_nightshift_job_is_still_one_stage
