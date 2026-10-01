@@ -151,7 +151,7 @@ def delegate(job, failures: list[str], rec: dict, *, root: Path,
              roster: Path | None = None) -> tuple[str, str]:
     """Hand one failing job to `assignee`. Returns (state, detail).
 
-    state: delegated | refused | exists
+    state: delegated | refused | exists | owner (a person's machine: a task, not a repair)
 
     REFUSED, BEFORE ANYTHING IS WRITTEN, when the repair cannot be checked
     where it would run. The done-condition is fix_check on `job.machine`'s
@@ -170,13 +170,24 @@ def delegate(job, failures: list[str], rec: dict, *, root: Path,
     if not getattr(job, "delegate", True):
         return "refused", f"{job.name} opts out of delegation (delegate: false); a person owns it"
 
-    # The repairer is this install's operations agent, from its own registry;
-    # no agent's name ships in this file (INS-3).
+    # EACH MACHINE'S OWN AGENT REPAIRS IT (owner, board D1, 2026-10-01: "each box
+    # should have own repair agent"). Until then every repair went to the
+    # operations agent on nightshift: a box or mac job became a pull request he
+    # could not verify, and 0 of 122 repairs since 2026-09-21 succeeded -- the
+    # refusal of b781d0e ("only the repairer's own host") was replaced the same
+    # day by the two-stage PR path. The repairer is now the agent principal whose
+    # `hosts` lists the failing machine (principals.yaml; no name ships here,
+    # INS-3), so the repair runs where its check runs. A person's machine (the
+    # owner's workstation) gets no automatic repair: job_verify files a task.
     if assignee is None:
         import roster as _roster
-        assignee = _roster.by_role("chief of operations")
+        person = _roster.person_on(job.machine)
+        if person:
+            return "owner", (f"{job.name} runs on {job.machine}, {person}'s own machine; no agent "
+                             f"repairs it -- a task for {person}")
+        assignee = _roster.resident_agent(job.machine)
         if not assignee:
-            return "refused", ("no principal has the role 'chief of operations' in "
+            return "refused", (f"no agent principal lists {job.machine} under hosts in "
                                "principals.yaml; nobody to hand the repair to")
 
     manifest = LIB / "jobs" / "manifest.yaml"

@@ -62,6 +62,32 @@ def by_role(role: str, path: Path | None = None) -> str | None:
     return None
 
 
+def _hosts(entry: dict) -> list[str]:
+    hosts = entry.get("hosts") or []
+    return [str(h) for h in hosts] if isinstance(hosts, list) else []
+
+
+def person_on(host: str, path: Path | None = None) -> str | None:
+    """The person whose machine `host` is (a human principal listing it under
+    `hosts`), the owner first; None when no person works there."""
+    people = [(n, p) for n, p in _principals(path).items()
+              if p.get("kind") == "human" and host in _hosts(p)]
+    people.sort(key=lambda np: str(np[1].get("decision") or "").strip().lower() != "final")
+    return people[0][0] if people else None
+
+
+def resident_agent(host: str, path: Path | None = None) -> str | None:
+    """The agent that answers for machine `host`: the first agent principal
+    listing it under `hosts`. None on a person's machine -- an agent that also
+    runs there does not make it the agent's -- and when no agent lives there."""
+    if person_on(host, path):
+        return None
+    for name, p in _principals(path).items():
+        if p.get("kind") == "agent" and host in _hosts(p):
+            return name
+    return None
+
+
 def display(name: str, path: Path | None = None) -> str:
     """A principal's display name; the name itself when it has none."""
     return str((_principals(path).get(name) or {}).get("display") or name)
