@@ -328,6 +328,9 @@ node_modules/
 .datacore/lib/miles_delivery.*
 .datacore/lib/lens_analyze.py
 .datacore/lib/ws_chat_test.py
+# Since board D13 (2026-10-01) the chief-of-staff module owns ws_chat_probe.py;
+# its deploy links it here.
+.datacore/lib/ws_chat_probe.py
 # The model-driven jobs' git guard (chief-of-staff server/lib/agent-bin/),
 # shipped by that module's server/deploy.sh like the cos_* scripts. It sat
 # untracked and unignored on the chief-of-staff host after a hand copy (OPS-11).
