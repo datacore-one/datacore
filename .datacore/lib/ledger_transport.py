@@ -419,6 +419,33 @@ def split_waiting(space: Path, fresh=()) -> tuple[list[tuple[str, str]], list[tu
     return alert, handled
 
 
+#: The one record, per host, of which conflict tasks a person has been alerted
+#: about. The box's cos_sync (shell, same path) and the fleet sync both read
+#: and write it, so whichever meets a conflict second says "already reported"
+#: (2026-10-01: sync-conflict-2df1b09a1f01 alerted from both).
+ALERTED_DIR = ("~", ".datacore", "state", "sync-conflict-alerted")
+_CONFLICT_ID = re.compile(r"sync-conflict-[0-9a-f]{12}")
+
+
+def _alerted_marker(task: str) -> Path | None:
+    if not isinstance(task, str) or not _CONFLICT_ID.fullmatch(task):
+        return None
+    return Path(os.path.expanduser(os.path.join(*ALERTED_DIR))) / task
+
+
+def conflict_already_alerted(task: str) -> bool:
+    marker = _alerted_marker(task)
+    return marker is not None and marker.exists()
+
+
+def mark_conflict_alerted(task: str) -> None:
+    marker = _alerted_marker(task)
+    if marker is None:
+        return
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
+
+
 def _waiting(space: Path) -> list[tuple[str, str, bool]]:
     """[(path, task id, the task is open in this ledger)], see waiting_conflicts."""
     rc, out, _ = _git(space, "log", "--merges", "-F", f"--grep={CONFLICT_TRAILER}: ",

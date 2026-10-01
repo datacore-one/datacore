@@ -1023,8 +1023,28 @@ def main() -> int:
     # A conflict the sweep merged around (SYN-9): the rest of the space went
     # through, and a person has a task. Named every run until settled; only the
     # run that met it fails (alert once, then quiet -- owner, 2026-09-30).
+    # ONE ALERT PER CONFLICT ON THIS HOST, whichever sync meets it first. The
+    # box's cos_sync and this sweep share one marker per conflict task
+    # (ledger_transport.ALERTED_DIR): a conflict already alerted about is
+    # named here as reported, not failed again (2026-10-01: one inbox.org
+    # conflict alerted from both).
+    try:
+        from ledger_transport import conflict_already_alerted, mark_conflict_alerted
+    except Exception:  # noqa: BLE001 -- without the marker, alert as before
+        conflict_already_alerted = lambda task: False  # noqa: E731
+        mark_conflict_alerted = None
+    for r in results:
+        seen = [c for c in r.get('conflicts_waiting') or () if conflict_already_alerted(c[1])]
+        if seen:
+            r['conflicts_waiting'] = [c for c in r['conflicts_waiting'] if c not in seen]
+            r['conflicts_handled'] = list(r.get('conflicts_handled') or ()) + seen
     waiting = [r for r in results if r.get('conflicts_waiting')]
     handled = [r for r in results if r.get('conflicts_handled')]
+    if execute and mark_conflict_alerted is not None:
+        # This run fails on them, so the alert fires: they are reported now.
+        for r in waiting:
+            for _, task in r['conflicts_waiting']:
+                mark_conflict_alerted(task)
     if waiting or handled:
         print('Conflicts waiting for a person — the rest of each space went through:')
         for r in waiting:
