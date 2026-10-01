@@ -223,3 +223,34 @@ def test_retiring_one_managed_key_keeps_every_other_job_of_the_same_script():
     result = C.reconcile(winston + tris + check, {}, retire_keys=('box-audit-nightly-tris',))
     assert result == winston + check
     assert C.reconcile(result, {}, retire_keys=('box-audit-nightly-tris',)) == result
+
+
+# ── order is not a difference (board D5, 2026-10-01) ─────────────────────────
+# Two installers write one crontab: the host setup's entries and the jobs
+# manifest's. Each appends its own lines at the end, so whichever ran last owns
+# the tail and the other one's --verify read "missing, stale or duplicate" on
+# box and nightshift while every entry was present, correct and single.
+
+OTHER = '*/5 * * * * touch /state/heartbeat # datacore-job:box-heartbeat\n'
+
+
+def test_present_entries_followed_by_another_installers_line_verify(monkeypatch):
+    settled = C.reconcile('', ENTRY) + OTHER
+    monkeypatch.setattr(C, 'read_crontab', lambda: settled)
+    assert C.install(ENTRY, Path('/nonexistent-state'), verify=True)
+
+
+def test_install_does_not_rewrite_a_crontab_that_differs_only_in_order(tmp_path, monkeypatch):
+    settled = C.reconcile('', ENTRY) + OTHER
+    monkeypatch.setattr(C, 'read_crontab', lambda: settled)
+    monkeypatch.setattr(C.subprocess, 'run', lambda *a, **k: pytest.fail('rewrote a settled crontab'))
+    assert C.install(ENTRY, tmp_path / 'private')
+
+
+def test_order_tolerance_still_catches_stale_and_duplicate_entries(monkeypatch):
+    stale = LINE.replace('25 *', '30 *') + ' # datacore-job:phase1-cycle\n' + OTHER
+    monkeypatch.setattr(C, 'read_crontab', lambda: stale)
+    assert C.install(ENTRY, Path('/nonexistent-state'), verify=True) is False
+    twice = C.reconcile('', ENTRY) + OTHER + LINE + '\n'
+    monkeypatch.setattr(C, 'read_crontab', lambda: twice)
+    assert C.install(ENTRY, Path('/nonexistent-state'), verify=True) is False

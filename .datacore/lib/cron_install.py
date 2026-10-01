@@ -120,6 +120,14 @@ def reconcile(current: str, entries: dict[str, str], retire: tuple[str, ...] = (
     return output
 
 
+def settled(current: str, desired: str) -> bool:
+    """The same lines, in any order. Two installers share one crontab (the
+    host setup and the jobs manifest) and each appends its own entries at the
+    end, so position says only which ran last. Every missing, stale, duplicate
+    or retired entry still changes the multiset (board D5, 2026-10-01)."""
+    return sorted(current.splitlines()) == sorted(desired.splitlines())
+
+
 def read_crontab() -> str:
     result = subprocess.run(['crontab', '-l'], capture_output=True, text=True, timeout=15)
     if result.returncode == 0:
@@ -133,7 +141,7 @@ def install(entries: dict[str, str], state: Path, *, verify: bool = False, retir
             retire_keys: tuple[str, ...] = ()) -> bool:
     if verify:
         current = read_crontab()
-        return reconcile(current, entries, retire, retire_keys) == current
+        return settled(current, reconcile(current, entries, retire, retire_keys))
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     if state.is_symlink() or state.stat().st_mode & 0o077:
         raise RuntimeError('cron recovery directory must be private')
@@ -142,7 +150,7 @@ def install(entries: dict[str, str], state: Path, *, verify: bool = False, retir
         fcntl.flock(lock, fcntl.LOCK_EX)
         before = read_crontab()
         after = reconcile(before, entries, retire, retire_keys)
-        if after == before:
+        if settled(before, after):
             return True
         backup = state / (hashlib.sha256(before.encode()).hexdigest() + '.crontab')
         if not backup.exists():
