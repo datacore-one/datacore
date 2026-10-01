@@ -1094,6 +1094,13 @@ def env_consumers(changed, unit_dirs: dict | None = None) -> list[tuple[str, str
                     text = unit.read_text()
                 except OSError:
                     continue
+                # A oneshot reads its EnvironmentFile at its next start.
+                # Restarting a RUNNING one kills its in-flight work: on
+                # 2026-10-01 this restarted nightshift-overnight 24 minutes
+                # into a task.
+                if any(ln.replace(" ", "").strip() == "Type=oneshot"
+                       for ln in text.splitlines()):
+                    continue
                 for line in text.splitlines():
                     line = line.strip()
                     if not line.startswith("EnvironmentFile="):

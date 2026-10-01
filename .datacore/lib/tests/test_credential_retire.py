@@ -137,11 +137,11 @@ def test_cross_host_divergence_names_the_variable():
 
 def test_template_unit_is_named_by_its_instances(host, tmp_path):
     sys_dir = tmp_path / "etc-systemd"
-    _w(sys_dir / "alert@.service",
-       f"[Service]\nType=oneshot\nEnvironmentFile=-{host}/Data/.datacore/env/.env\n")
+    _w(sys_dir / "worker@.service",
+       f"[Service]\nType=simple\nEnvironmentFile=-{host}/Data/.datacore/env/.env\n")
     got = ca.env_consumers([host / "Data/.datacore/env/.env"],
                            unit_dirs={"user": [], "system": [sys_dir]})
-    assert got == [("system", "alert@*.service")]
+    assert got == [("system", "worker@*.service")]
 
 
 # ── cross-host parity skips host-scoped credentials ───────────────────────────
@@ -193,3 +193,22 @@ def test_cross_host_command_without_an_index_compares_everything(tmp_path, monke
     fps.write_text("winston WINSTON_BOT_TOKEN aaa\nmac WINSTON_BOT_TOKEN bbb\n")
     assert ca._cmd_cross_host(str(fps)) == 1
     assert "WINSTON_BOT_TOKEN differs" in capsys.readouterr().out
+
+
+# ── a oneshot unit is not restarted (2026-10-01) ──────────────────────────────
+#
+# try-restart on a RUNNING oneshot kills its in-flight work and starts it again.
+# On 2026-10-01 the Mac's distribution restarted nightshift-overnight.service 24
+# minutes into a task; the second start was refused by the git preflight over
+# the first one's unfinished changes. A oneshot reads its EnvironmentFile at its
+# next start, so a restart buys nothing and costs the run.
+
+def test_oneshot_unit_is_not_named_for_restart(host, tmp_path):
+    sys_dir = tmp_path / "etc-systemd"
+    env = f"EnvironmentFile=-{host}/Data/.datacore/env/.env\n"
+    _w(sys_dir / "overnight.service", "[Service]\nType=oneshot\n" + env)
+    _w(sys_dir / "daemon.service", "[Service]\nType=simple\n" + env)
+    _w(sys_dir / "plain.service", "[Service]\n" + env)
+    got = ca.env_consumers([host / "Data/.datacore/env/.env"],
+                           unit_dirs={"user": [], "system": [sys_dir]})
+    assert got == [("system", "daemon.service"), ("system", "plain.service")]
