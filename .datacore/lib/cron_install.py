@@ -77,6 +77,10 @@ def invocation(line: str, *, reject_compound: bool = False) -> tuple[str, ...] |
     # morning check and publish: the whole argument list is the job.
     if program == 'cross_model_audit.py':
         return (identity, ' '.join(args))
+    # The nightly scoreboard and the weekly agent board are one script; --agents
+    # is the difference (board D14, 2026-10-01).
+    if program == 'promise_nightly.py':
+        return (identity, ' '.join(args))
     if program == 'job_verify.py':
         return (identity, args[args.index('--machine') + 1] if '--machine' in args and args.index('--machine') + 1 < len(args) else '')
     return (identity,)

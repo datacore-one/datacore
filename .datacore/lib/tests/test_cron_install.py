@@ -254,3 +254,13 @@ def test_order_tolerance_still_catches_stale_and_duplicate_entries(monkeypatch):
     twice = C.reconcile('', ENTRY) + OTHER + LINE + '\n'
     monkeypatch.setattr(C, 'read_crontab', lambda: twice)
     assert C.install(ENTRY, Path('/nonexistent-state'), verify=True) is False
+
+
+def test_the_weekly_agent_board_does_not_replace_the_nightly_scoreboard():
+    """Both run promise_nightly.py; only --agents tells them apart. By the
+    executable alone, installing the weekly job dropped the nightly one (D14)."""
+    nightly = ('30 4 * * * python3 /h/Data/.datacore/lib/promise_nightly.py >> /s/promise-nightly.log 2>&1'
+               ' # datacore-job:nightshift-promise-scoreboard\n')
+    weekly = '20 13 * * 0 python3 /h/Data/.datacore/lib/promise_nightly.py --agents >> /s/agent-evals.log 2>&1'
+    out = C.reconcile(nightly, {'nightshift-agent-evals': weekly})
+    assert out.startswith(nightly) and out.count('promise_nightly.py') == 2
