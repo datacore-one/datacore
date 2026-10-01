@@ -581,3 +581,70 @@ def test_an_eval_that_cannot_be_imported_here_does_not_hide_the_rest_of_its_batc
     details = pn.failure_details(tmp_path, [bad, red], {})
     [(test, line)] = details[str(red)]
     assert test == "test_bad" and "a real failure" in line
+
+
+# ---- every test skipped (owner, 2026-10-01) --------------------------------------
+# AGT-11 on the owner's Mac: its only test skips with "this is the owner's
+# machine, not an agent's". promise_evals counts a skip as not passing, so the
+# board read red -- a test that did not run is "could not run here", with the
+# skip's own reason, never a regression.
+
+AGT_SKIP = "skipped: this is the owner's machine, not an agent's"
+
+
+def test_a_promise_whose_every_test_was_skipped_could_not_run_with_the_reason():
+    b = board(WED, {"AGT-11": "red"}, {"AGT-11": [fail("a.py", "test_agent_side", AGT_SKIP),
+                                                  fail("a.py", "test_other_side", AGT_SKIP)]})
+    e = b["promises"]["AGT-11"]
+    assert e["state"] == "could-not-run", e
+    assert "this is the owner's machine, not an agent's" in e["why"]
+
+
+def test_a_skip_beside_a_real_failure_stays_red():
+    b = board(WED, {"AGT-11": "red"}, {"AGT-11": [fail("a.py", "test_skipped", AGT_SKIP),
+                                                  fail("a.py", "test_bad", "AssertionError: wrong")]})
+    assert b["promises"]["AGT-11"]["state"] == "red"
+
+
+def test_skipped_tests_in_a_real_file_could_not_run_but_a_skip_beside_a_pass_does_not(tmp_path):
+    only = tmp_path / "test_promise_ZZ3_fixture.py"
+    only.write_text("import pytest\n\ndef test_a():\n    pytest.skip(\"this is the owner's machine, not an agent's\")\n")
+    mixed = tmp_path / "test_promise_ZZ4_fixture.py"
+    mixed.write_text("import pytest\n\ndef test_ok():\n    assert True\n\n"
+                     "def test_b():\n    pytest.skip('not here')\n")
+    details = pn.failure_details(tmp_path, [only, mixed], {})
+    fails = {pid: [fail(str(f), t, line) for t, line in details[str(f)]]
+             for pid, f in (("ZZ-3", only), ("ZZ-4", mixed))}
+    b = board(WED, {"ZZ-3": "red", "ZZ-4": "red"}, fails)
+    assert b["promises"]["ZZ-3"]["state"] == "could-not-run", b["promises"]["ZZ-3"]
+    assert "owner's machine" in b["promises"]["ZZ-3"]["why"]
+    assert b["promises"]["ZZ-4"]["state"] == "red", "a test that passed beside the skip: the promise is partly unrun"
+
+
+def test_a_red_recorded_from_skips_alone_is_rerun_and_becomes_could_not_run(tmp_path, monkeypatch):
+    """Boards written before this rule hold AGT-11 as red with a skip as its
+    reason; an already-red promise is not rerun, so it would stay red for good."""
+    path = ".datacore/lib/tests/test_promise_AGT11_x.py"
+    hist = [board("2026-09-29", {"AGT-11": "red"}, {"AGT-11": [fail(path, "test_a", AGT_SKIP)]})]
+    hist[0]["promises"]["AGT-11"]["state"] = "red"          # as the old rule recorded it
+
+    def fake(want=None):
+        r = raw({"AGT-11": "red"}, {"AGT-11": [fail(path, "test_a", AGT_SKIP)]}
+                if want is None or want("AGT-11") else {})
+        r["eval_files"] = {"AGT-11": [path]}
+        return r
+    state = tmp_path / "state"
+    state.mkdir()
+    for h in hist:
+        (state / f"board-{h['date']}.json").write_text(json.dumps(h))
+    monkeypatch.setattr(pn, "STATE_DIR", state)
+    monkeypatch.setattr(pn, "BASELINE", tmp_path / "none.json")
+    monkeypatch.setattr(pn, "run_board", fake)
+    monkeypatch.setattr(pn, "unmet_needs", lambda: {})
+    monkeypatch.setattr(pn, "promise_eval_files", lambda: {"AGT11": [path]})
+    monkeypatch.setattr(pn, "promise_texts", lambda: TEXTS)
+    monkeypatch.setattr(pn, "send_to_firm", lambda text: (True, "sent"))
+    monkeypatch.setattr(pn, "today", lambda: WED)
+    pn.main([])
+    b = json.loads((state / "board-2026-09-30.json").read_text())
+    assert b["promises"]["AGT-11"]["state"] == "could-not-run", b["promises"]["AGT-11"]

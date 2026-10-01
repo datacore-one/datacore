@@ -126,6 +126,7 @@ def failure_details(cwd: Path, files: list[Path], env_extra: dict) -> dict[str, 
         Path(xml).unlink(missing_ok=True)
     by_name = {f.name: f for f in files}
     reported: set[str] = set()
+    passed: dict[str, int] = {}
     for case in tree.iter("testcase"):
         parts = (case.get("classname") or "").split(".")
         fname = next((p + ".py" for p in parts if p + ".py" in by_name), None)
@@ -136,20 +137,34 @@ def failure_details(cwd: Path, files: list[Path], env_extra: dict) -> dict[str, 
         reported.add(fname)
         bad = [c for c in case if c.tag in ("failure", "error", "skipped")]
         if not bad:
+            passed[fname] = passed.get(fname, 0) + 1
             continue
         stem = fname[:-3]
         classes = parts[parts.index(stem) + 1:] if stem in parts else []
         test = "::".join([*classes, case.get("name", "")])
         out.setdefault(str(by_name[fname]), []).append((test, _first_line(bad[0])))
     for f in files:
+        # A file whose only trouble is skips, beside tests that passed, is not
+        # wholly unrun: say so, so the board does not read it as could-not-run.
+        got = out.get(str(f), [])
+        if got and passed.get(f.name) and all(line.startswith(SKIPPED) for _t, line in got):
+            got.append(("", f"{passed[f.name]} other test(s) in this file passed; only the skipped ones did not run"))
         if str(f) not in out:
             out[str(f)] = [("", "passed when run again for its failure line (flaky?)" if f.name in reported
                             else "pytest reported no test from this file (collection error or crash)")]
     return out
 
 
+SKIPPED = "skipped: "
+
+
+def _skips_only(fails: list[dict]) -> bool:
+    """Every recorded failure is a skip: the promise's tests did not run here."""
+    return bool(fails) and all(str(f.get("line") or "").startswith(SKIPPED) for f in fails)
+
+
 def _first_line(el) -> str:
-    prefix = "skipped: " if el.tag == "skipped" else ""
+    prefix = SKIPPED if el.tag == "skipped" else ""
     for text in (el.get("message") or "", el.text or ""):
         for line in text.splitlines():
             if line.strip():
@@ -257,6 +272,13 @@ def build_board(raw: dict, unmet: dict[str, list[str]], texts: dict[str, str], *
             if fails and all(n is not None for n in needs):
                 missing = sorted({x for n in needs for x in n})
                 entry.update(state=CNR, why="needs " + ", ".join(missing))
+            elif _skips_only(fails):
+                # Owner, 2026-10-01: a promise whose every test was skipped did
+                # not run here (AGT-11 on the owner's Mac: "this is the owner's
+                # machine, not an agent's"). It reads could-not-run, with the
+                # skip's own reason, never red.
+                reasons = sorted({f["line"][len(SKIPPED):] for f in fails})
+                entry.update(state=CNR, why="every test skipped: " + "; ".join(reasons))
         promises[pid] = entry
     counts: dict[str, int] = {}
     for e in promises.values():
@@ -488,9 +510,11 @@ def main(argv: list[str] | None = None) -> int:
             return True
         if any(f in lacking for f in files.get(_norm(pid), [])):
             return True
-        past = [h["promises"].get(pid, {}).get("state") for h in history]
-        judged = next((x for x in past if x in (GREEN, RED)), None)
-        return judged != RED
+        past = [h["promises"].get(pid, {}) for h in history]
+        judged = next((x for x in past if x.get("state") in (GREEN, RED)), {})
+        if judged.get("state") == RED and SKIPPED in str(judged.get("why") or ""):
+            return True   # recorded red from a skip by the old rule: judge it again
+        return judged.get("state") != RED
 
     try:
         raw = run_board(rerun)
