@@ -39,6 +39,8 @@ servers:
   server:
     role_label: always-on host
     # setup_profile: nightshift  # agent_host_setup.sh: nightshift | hermes | openclaw
+    # guards: [redaction, publish, memory, evals, guards, client]  # agent_host_setup.sh wires and
+    #   verifies these in ~/.claude/settings.json (install_redaction_guards.py names); the owner picks
     purpose: always-on host — scheduled jobs, briefing generation, delivery
     kind: vps
     ssh_alias: your-ssh-alias    # the alias in ~/.ssh/config, never an address
