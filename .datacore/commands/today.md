@@ -40,6 +40,27 @@ The briefing tells a story in three acts:
 - **Capacity-aware** — every recommendation adjusted to Oura readiness
 - **Future-extensible** — family, personal finance, health goals will plug in naturally
 
+### One generator
+
+The `## Daily Briefing` section has ONE generator: datacore-app's
+`cos_reasoning.generate()`. The box runs it every morning (cos_morning ->
+cos_generate, origin `box`); the app runs the same function as its fallback
+when no box briefing exists (origin `app-fallback`). chief-of-staff's
+`cos_journal.py` renders that artifact into the journal. /today never composes,
+edits or appends to the section.
+
+Why: two of the briefing's rules are code inside `generate()`, and a briefing a
+model writes from this file passes neither. A decision scheduled weeks ago, or
+one naming a release older than the shipped one, is stale and is never today's
+decision (it is listed under "Stale: close or reschedule"). A count of PRs to
+merge or review must equal the count in today's GitHub triage report, or the
+sentence is dropped. On 2026-10-01 a composed briefing asked the owner to
+decide a release that had already shipped and to merge "12 green PRs" when the
+triage named one.
+
+Steps 3-14 gather context for the conversation, the standup and the post-hooks;
+what they find does not go into the `## Daily Briefing` section.
+
 ### Quick Reference
 
 | Question | Answer |
@@ -55,7 +76,7 @@ The briefing tells a story in three acts:
 | Time | CEST | Job |
 |------|------|-----|
 | 05:30 | 07:30 | `/analyze-market-phase` — trading signals for briefing |
-| 06:00 | 08:00 | `/today` — morning briefing generation |
+| — | — | `/today` on nightshift: timer disabled since 2026-09-07; the box generates the briefing (see One generator) |
 
 ---
 
@@ -109,8 +130,11 @@ EXISTS and would have skipped the briefing entirely.
 6. Start interactive session
 
 **If STUB, NO_BRIEFING or NO_FILE:**
-Proceed with full briefing generation (step 3 onward). For STUB, step 16 replaces
-the section in place and says at the top that it replaces a withheld draft.
+Run Step 16 now: it puts the one generator's briefing into the journal (and
+generates it with `cos_reasoning.generate()` when today has none). Then continue
+with step 3 to gather context for the conversation. A STUB is the generator's
+own plain-facts fallback; Step 16 replaces it only with a newer artifact from
+the same generator, never with text composed here.
 
 ---
 
@@ -532,11 +556,18 @@ three — assuming a string raises `OSError: File name too long` on the third.
 
 ## Step 15: Generate Briefing
 
-Compose the briefing sections in this order. **Every section is adjusted to the
-capacity level from Oura.** The tone is a chief of staff speaking to their
-principal — direct, personal, occasionally coaching.
+Do not write the briefing here. The one generator (`cos_reasoning.generate()`,
+see One generator) already wrote it; Step 16 puts it in the journal. This step
+reads it back: open today's `## Daily Briefing`, and use what steps 3-14
+gathered to talk the owner through it. Where they disagree (a meeting the
+briefing lacks, a count that moved since it was generated), say so in the
+conversation and add it under `## Updates since briefing`; never edit the
+briefing section.
 
 ### Briefing Structure
+
+What the generator produces, for reading it. Its prompt lives in datacore-app
+`daemon/datacored/adapters/cos_reasoning.py`; change the structure there.
 
 The goal is **inbox zero across all inboxes** (email, GitHub, GTD org).
 Data processes everything proactively — archive noise, route to org/research,
@@ -640,6 +671,24 @@ Pattern sources: productivity, habit streaks, task trends, readiness correlation
 
 **Output location:** `0-personal/notes/journals/YYYY-MM-DD.md`
 
+The section comes from the one generator, rendered by chief-of-staff:
+
+```bash
+python3 .datacore/modules/chief-of-staff/server/lib/cos_journal.py
+```
+
+It renders today's artifact (`~/.datacore/cos/briefings/YYYY-MM-DD/app-briefing.json`,
+written by `cos_reasoning.generate()` on the box and synced, or by the app's
+fallback) into the journal, replacing the section in place. When it says there
+is no artifact for today, generate one with the same function, then run it again:
+
+```bash
+(cd 2-datacore/2-projects/datacore-app/daemon && .venv/bin/python -c "import asyncio, pathlib; from datacored.adapters import cos_reasoning as r; print(asyncio.run(r.generate(pathlib.Path.home() / 'Data'))['status'])")
+```
+
+If that does not print `ready`, the journal gets no briefing today: say so to
+the owner and name the error. Never write the section by hand.
+
 **The Daily Briefing ALWAYS goes at the top** (after frontmatter).
 
 It is ONE section: `## Daily Briefing` is the only H2 the briefing writes, and every
@@ -648,9 +697,9 @@ Proactive Suggestions, Data's Observation) is an H3 inside it, as in the Briefin
 Structure above. A part written as its own H2 is a second briefing beside the first
 (MEM-45). No other H2 goes above it — not `## Daily Summary`, not an update.
 
-**If file doesn't exist:** Create with frontmatter + briefing.
-**If file exists but no `## Daily Briefing`:** Insert after frontmatter.
-**If `## Daily Briefing` exists:** Replace in-place with fresh content.
+`cos_journal.py` does the placement: it creates the page when it is missing,
+inserts the section after the frontmatter, or replaces the existing section
+with the artifact's current content.
 
 The `## Command steps: /today (run …)` block that step 1 wrote is not part of the
 briefing: leave it where it is and never rewrite it by hand (only `tick` changes it).
@@ -813,7 +862,7 @@ today:
 
 ## Output
 
-- Content written directly to journal (no user confirmation needed)
+- The one generator's briefing in the journal via `cos_journal.py` (no user confirmation needed)
 - Journal opened in default editor for review
 - Brief console summary of top 3 priorities
 - Audio briefing sent to Telegram
