@@ -1002,7 +1002,7 @@ jobs:
 
   - name: nightshift-overnight
     machine: nightshift
-    schedule: "30 2 * * *"
+    schedule: "0 * * * *"   # systemd nightshift-overnight.timer, hourly (owner, 2026-10-02)
     cmd: "~/Data/.datacore/modules/nightshift/nightshift run"
     on_fail: telegram
     artifacts:
