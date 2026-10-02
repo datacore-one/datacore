@@ -114,8 +114,13 @@ def verify_chain(path: Path, registry_path: Path | None = None, strict: bool = F
     # authorised `ledger.void` that cancels an event of this one. Nothing else
     # excuses a failed check: the out-of-band exception list is retired.
     from .voids import for_events_dir
-    return errors + verify_events(parsed, registry_path=registry_path, strict=strict,
-                                  voids=for_events_dir(path.parent), log=path.stem)
+    chain_errors = errors + verify_events(parsed, registry_path=registry_path, strict=strict,
+                                          voids=for_events_dir(path.parent), log=path.stem)
+    # A truncated tail produces a shorter but internally perfect chain that
+    # verify_events cannot detect (LED-6, audit #229). check_not_rewound reads
+    # the seq witness written at append time; it is silent when no witness
+    # exists (a foreign log), so this never flags a cleanly-cloned log.
+    return chain_errors + check_not_rewound(path)
 
 
 def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = None,
