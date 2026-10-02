@@ -63,6 +63,9 @@ def probe(event: str, payload: dict, tool: str = "", settings: Path = SETTINGS,
     res = Outcome()
     with tempfile.TemporaryDirectory(prefix="hook-probe-") as tmp:
         tmp = os.path.realpath(state_dir or tmp)   # DATACORE_STATE must be an unaliased path
+        # A session already under way: PLUR's session guard refuses a session's first
+        # call once until its memory session starts, which would mask every rule here.
+        Path(tmp, "plur-session-promise-eval-probe").touch()
         env = {**os.environ, "HOME": tmp, "TMPDIR": tmp, "DATACORE_STATE": tmp,
                "CLAUDE_HOOK_EVENT_NAME": event}
         body = {"hook_event_name": event, "session_id": "promise-eval-probe",
