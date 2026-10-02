@@ -1,5 +1,17 @@
 """All bundled test suites use disposable state, including module tests."""
+import sys
+from pathlib import Path
+
 import pytest
+
+# lib/tests/conftest.py added lib to sys.path for lib-only tests (2026-09-11).
+# tests/ and modules/*/tests/ collect here too but had no conftest adding lib,
+# so `from yaml_safety import ...` (added 2026-09-15, commit 04496c32) fell
+# through to `yaml = None` inside spaces.py -- causing 197 test failures on
+# every PR opened after that date.  Add it once, here, for everything.
+_LIB = Path(__file__).resolve().parent / "lib"
+if str(_LIB) not in sys.path:
+    sys.path.insert(0, str(_LIB))
 
 
 @pytest.fixture(autouse=True)
