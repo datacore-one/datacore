@@ -85,6 +85,14 @@ ROSTER = LIB.parent / "registry" / "infrastructure.yaml"
 #: one an agent may merge into; tool_effects.yaml code.merge refuses the call.
 PR_REPOS = frozenset({"datacore-one/datacore"})
 
+#: How a repair item's check names its judge. ledger_claim runs the check in a
+#: worktree of the SPACE the item lives in (2-datacore on the box), a separate
+#: repository with no `.datacore/lib/`; the relative path never existed there,
+#: and every box repair dead-lettered on "can't open file" (winston, 2026-10-02).
+#: The checker is the installation's code, so it is named through the root the
+#: claim loop exports, resolved on whichever host runs the check.
+FIX_CHECK = '"${DATACORE_ROOT:-$HOME/Data}/.datacore/lib/jobs/fix_check.py"'
+
 
 def _servers(roster: Path | None) -> dict:
     import yaml
@@ -211,7 +219,7 @@ def delegate(job, failures: list[str], rec: dict, *, root: Path,
             return "exists", f"{iid} is already in the ledger"
     except Exception:  # noqa: BLE001 -- an unreadable ledger falls through to the old path
         pass
-    verify = (f"python3 .datacore/lib/jobs/fix_check.py --job {job.name} "
+    verify = (f"python3 {FIX_CHECK} --job {job.name} "
               f"--machine {job.machine} --contract-sha {sha}")
 
     # ONE STAGE OR TWO. The repairer can judge its own work only where the
@@ -233,7 +241,7 @@ def delegate(job, failures: list[str], rec: dict, *, root: Path,
             return "refused", (f"{job.name}'s producer lives in {repo}; an agent may open a repair PR only in "
                                f"{', '.join(sorted(PR_REPOS))} (owner's boundary, 2026-09-22); "
                                f"a person owns it")
-        check = (f"python3 .datacore/lib/jobs/fix_check.py --stage merged --job {job.name} "
+        check = (f"python3 {FIX_CHECK} --stage merged --job {job.name} "
                  f"--machine {job.machine} --contract-sha {sha} --item {iid} --repo {repo}")
         follower = actor_of(job.machine, roster)
         # No pull-and-verify follow-up: nothing is merged until the owner merges, and the
