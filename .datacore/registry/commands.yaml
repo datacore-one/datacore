@@ -1731,3 +1731,14 @@ module_commands:
     status: active
     source: .datacore/modules/comms/commands/brand-positioning.md
     module: comms
+
+  # Appended 2026-09-09 by command_registry_audit.py --fix.
+  # These files existed and were unreachable through the registry;
+  # an agent following the documented lookup path could not find them.
+  evals:
+    name: evals
+    description: Promise evals for any repo — scoreboard, triage of reds into owners, drafting new evals red, scaffolding a repo, and the CI baseline gate
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/dev/commands/evals.md
+    module: dev

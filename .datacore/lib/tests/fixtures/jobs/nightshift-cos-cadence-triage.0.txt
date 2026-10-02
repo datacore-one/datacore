@@ -1,0 +1,7 @@
+# fixture for nightshift-cos-cadence-triage artifact[0]
+# producer artifact: ~/Data/2-datacore/.datacore/reviews/cos-lastrun.json on nightshift
+# harvested: 2026-10-02
+# regex under test: "status": "complete"
+# represents: SUCCESS
+# ---
+"status": "complete"

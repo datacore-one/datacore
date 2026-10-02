@@ -216,14 +216,23 @@ def _effective(path):
         from jobs.manifest import effective_doc
     return effective_doc(path)
 
-def regex_checks() -> list[tuple[str, str, int, str, str]]:
-    doc = _effective(MANIFEST)
+def _checks_in(doc) -> list[tuple[str, str, int, str, str]]:
     out = []
     for j in doc["jobs"]:
         for i, a in enumerate(j.get("artifacts", [])):
             if a.get("check") in ("regex", "last_line_regex"):
                 out.append((j["name"], j["machine"], i, a["path"], a["arg"]))
     return out
+
+
+def regex_checks() -> list[tuple[str, str, int, str, str]]:
+    """The regex checks this install runs: manifest.local.yaml over the tracked list."""
+    return _checks_in(_effective(MANIFEST))
+
+
+def shipped_regex_checks() -> list[tuple[str, str, int, str, str]]:
+    """The regex checks of the tracked list alone -- what CI and a fresh install run."""
+    return _checks_in(yaml.safe_load(MANIFEST.read_text()) or {"jobs": []})
 
 
 # Rewrites a producer's OWN observed line to its success value. Used when the
@@ -306,7 +315,7 @@ def prune_orphans() -> list[pathlib.Path]:
     -- harvested from live state -- outlived them silently. Class 4, applied to
     the fixtures themselves.
     """
-    live = {f"{job}.{idx}.txt" for job, _m, idx, _p, _r in regex_checks()}
+    live = {f"{job}.{idx}.txt" for job, _m, idx, _p, _r in [*regex_checks(), *shipped_regex_checks()]}
     gone = [f for f in FIXTURES.glob("*.txt") if f.name not in live]
     for f in gone:
         f.unlink()

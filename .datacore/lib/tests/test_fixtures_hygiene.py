@@ -153,7 +153,7 @@ def test_quote_remote_forms():
 def test_every_fixture_has_a_live_regex_check():
     """A fixture nothing refreshes keeps whatever it last held, forever.
     Two 7.7 KB orphans survived a manifest reclassification this way."""
-    live = {f"{job}.{idx}.txt" for job, _m, idx, _p, _r in F.regex_checks()}
+    live = {f"{job}.{idx}.txt" for job, _m, idx, _p, _r in [*F.regex_checks(), *F.shipped_regex_checks()]}
     orphans = sorted(f.name for f in FIXTURES.glob("*.txt") if f.name not in live)
     assert not orphans, f"fixtures with no regex check in the manifest: {orphans}"
 
@@ -165,3 +165,17 @@ def test_prune_orphans_removes_only_orphans(tmp_path, monkeypatch):
     gone = F.prune_orphans()
     assert [g.name for g in gone] == ["gone.0.txt"]
     assert (tmp_path / "keep.0.txt").exists()
+
+
+def test_a_fixture_the_shipped_list_checks_is_not_an_orphan(tmp_path, monkeypatch):
+    """This install's manifest.local.yaml may replace a shipped job's regex check
+    with another kind. The shipped list still checks it -- CI runs that list --
+    so its fixture is live, and a harvest here must not delete it (2026-10-02:
+    a harvest on the Mac deleted the box's three audit fixtures this way)."""
+    monkeypatch.setattr(F, "FIXTURES", tmp_path)
+    monkeypatch.setattr(F, "regex_checks", lambda: [("local-only", "mac", 0, "p", "r")])
+    monkeypatch.setattr(F, "shipped_regex_checks", lambda: [("shipped", "box", 0, "p", "r")])
+    for n in ("local-only.0.txt", "shipped.0.txt", "gone.0.txt"):
+        (tmp_path / n).write_text("x")
+    assert [g.name for g in F.prune_orphans()] == ["gone.0.txt"]
+    assert (tmp_path / "shipped.0.txt").exists()
