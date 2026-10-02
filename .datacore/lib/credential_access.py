@@ -1077,16 +1077,40 @@ def _prune_file(path: Path, retired: set) -> list[str]:
     return sorted(set(removed))
 
 
-def env_consumers(changed, unit_dirs: dict | None = None) -> list[tuple[str, str]]:
-    """(scope, unit) for every systemd unit whose EnvironmentFile is a changed
-    file. Such a process read its credentials once, at start, and keeps them
-    until restarted; a cron that sources the file re-reads it on its next run."""
+def _is_oneshot(unit: Path, text: str) -> bool:
+    """Type=oneshot in the unit or in any of its drop-ins (last one wins)."""
+    kind = None
+    texts = [text]
+    for conf in sorted(unit.parent.glob(f"{unit.name}.d/*.conf")):
+        try:
+            texts.append(conf.read_text())
+        except OSError:
+            continue
+    for t in texts:
+        for ln in t.splitlines():
+            ln = ln.replace(" ", "").strip()
+            if ln.startswith("Type="):
+                kind = ln.partition("=")[2]
+    return kind == "oneshot"
+
+
+def env_consumers_split(changed, unit_dirs: dict | None = None
+                        ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """(restart, deferred): every systemd unit whose EnvironmentFile is a
+    changed file, split by whether a restart is safe.
+
+    A long-running daemon read its credentials once, at start, and keeps them
+    until restarted. A oneshot is a job: it reads the file at its next start,
+    and restarting a RUNNING one kills its in-flight work -- on 2026-10-01
+    `try-restart nightshift-overnight` killed two Fairdrive tasks 22 and 24
+    minutes in. So a oneshot is deferred, by name, never restarted. A cron that
+    sources the file re-reads it on its next run."""
     home = str(Path.home())
     targets = {os.path.realpath(str(p)) for p in changed}
     if unit_dirs is None:
         unit_dirs = {s: [Path(d.format(HOME=home)) for d in ds]
                      for s, ds in SYSTEMD_UNIT_DIRS.items()}
-    found = set()
+    restart, deferred = set(), set()
     for scope, dirs in unit_dirs.items():
         for d in dirs:
             for unit in sorted(Path(d).glob("*.service")):
@@ -1094,15 +1118,31 @@ def env_consumers(changed, unit_dirs: dict | None = None) -> list[tuple[str, str
                     text = unit.read_text()
                 except OSError:
                     continue
+                refs = []
                 for line in text.splitlines():
                     line = line.strip()
-                    if not line.startswith("EnvironmentFile="):
-                        continue
-                    for ref in line.partition("=")[2].split():
-                        ref = os.path.expanduser(ref.lstrip("-").replace("%h", home))
-                        if os.path.realpath(ref) in targets:
-                            found.add((scope, unit.name))
-    return sorted(found)
+                    if line.startswith("EnvironmentFile="):
+                        refs.extend(line.partition("=")[2].split())
+                hit = any(os.path.realpath(os.path.expanduser(
+                    r.lstrip("-").replace("%h", home))) in targets for r in refs)
+                if not hit:
+                    continue
+                if _is_oneshot(unit, text):
+                    deferred.add((scope, unit.name))
+                    continue
+                # A template (worker@.service) cannot be restarted by name --
+                # systemctl refuses it, root or not. Its instances can:
+                # `try-restart 'worker@*.service'` restarts the running ones.
+                name = unit.name
+                if name.endswith("@.service"):
+                    name = name[:-len("@.service")] + "@*.service"
+                restart.add((scope, name))
+    return sorted(restart), sorted(deferred)
+
+
+def env_consumers(changed, unit_dirs: dict | None = None) -> list[tuple[str, str]]:
+    """The units to restart: env_consumers_split's first half."""
+    return env_consumers_split(changed, unit_dirs)[0]
 
 
 def retire_absent(previous_keys, *, env_replaced: bool = True,
@@ -1130,8 +1170,9 @@ def retire_absent(previous_keys, *, env_replaced: bool = True,
                 attest("credential.retire", ref=str(path),
                        detail=f"{','.join(removed)} removed (names only)")
     changed = [p for p, _ in pruned] + ([assembled] if env_replaced else [])
+    restart, deferred = env_consumers_split(changed, unit_dirs) if changed else ([], [])
     return {"retired": retired, "pruned": pruned, "unwritable": unwritable,
-            "consumers": env_consumers(changed, unit_dirs) if changed else []}
+            "consumers": restart, "deferred": deferred}
 
 
 def _cmd_retire(previous_keys_file: str, env_replaced: bool) -> int:
@@ -1148,6 +1189,8 @@ def _cmd_retire(previous_keys_file: str, env_replaced: bool) -> int:
         print(f"  CANNOT REMOVE {', '.join(names)} from {path} (not writable; needs its owner)")
     for scope, unit in out["consumers"]:
         print(f"restart {scope} {unit}")
+    for scope, unit in out["deferred"]:
+        print(f"  deferred: {unit} is a oneshot job; it reads the new env at its next start, never restarted mid-run")
     return 1 if out["unwritable"] else 0
 
 
@@ -1176,12 +1219,28 @@ def host_fingerprints() -> dict[str, set]:
     return out
 
 
-def cross_host_divergence(per_host: dict) -> list[tuple[str, list]]:
+def host_scoped_vars(index: list[dict]) -> set[str]:
+    """Variables declared ONLY by index entries that name their hosts.
+
+    Such a credential is one machine's own (Winston's bot on the box), so a
+    different value elsewhere is a different credential, not drift. A variable
+    that any fleet-wide entry also declares stays compared."""
+    scoped, shared = set(), set()
+    for c in index:
+        names = {c.get("var_name")} | set(c.get("vars") or [])
+        (scoped if c.get("hosts") else shared).update(n for n in names if n)
+    return scoped - shared
+
+
+def cross_host_divergence(per_host: dict, skip=frozenset()) -> list[tuple[str, list]]:
     """[(VAR, [(host, fingerprint), ...])] for every variable whose value is not
-    the same on every host that holds it."""
+    the same on every host that holds it. Variables in `skip` (host-scoped
+    credentials) are not compared."""
     by_var: dict[str, list] = {}
     for host, fps in sorted(per_host.items()):
         for var, vals in fps.items():
+            if var in skip:
+                continue
             for v in sorted(vals):
                 by_var.setdefault(var, []).append((host, v))
     return [(var, rows) for var, rows in sorted(by_var.items())
@@ -1195,7 +1254,14 @@ def _cmd_cross_host(path: str) -> int:
         parts = line.split()
         if len(parts) == 3:
             per_host.setdefault(parts[0], {}).setdefault(parts[1], set()).add(parts[2])
-    div = cross_host_divergence(per_host)
+    try:
+        skip = host_scoped_vars(_index())
+    except Exception:  # noqa: BLE001 -- no index: compare everything
+        skip = set()
+    div = cross_host_divergence(per_host, skip=skip)
+    held = sorted({v for fps in per_host.values() for v in fps} & skip)
+    if held:
+        print(f"  not compared (host-scoped in the index): {', '.join(held)}")
     for var, rows in div:
         print(f"  *** {var} differs between machines: "
               + ", ".join(f"{h} {v}" for h, v in rows) + " ***")
