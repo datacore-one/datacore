@@ -200,7 +200,8 @@ def join_record_path() -> str:
     return os.path.join(state, "join.json")
 
 
-def _since_error(expanded: str, mtime: float, since: str) -> str | None:
+def _since_error(expanded: str, mtime: float, since: str, *, every: str | None = None,
+                 after: str | None = None, now: float | None = None) -> str | None:
     """A visitor's duty is judged in SESSION time: did it run for this session?
 
     `since: join` -- written at or after the last converged join began.
@@ -217,6 +218,21 @@ def _since_error(expanded: str, mtime: float, since: str) -> str | None:
             data = json.load(fh)
     except (OSError, ValueError) as exc:
         return f"{expanded}: since={since} is unprovable -- no join record at {record} ({exc})"
+    if every:
+        # A GATED duty (jobs.manifest.EVERY) is owed once per window, at the
+        # first presence inside it -- not once per arrival. Before the window
+        # opens, or while no join has converged inside it, nothing is owed yet:
+        # a journal waiting for 08:30 after a 07:00 arrival is not late.
+        from jobs.manifest import gate_window
+        start = gate_window(time.time() if now is None else now, every, after)
+        joined = data.get("joined_at")
+        if start is None or not isinstance(joined, (int, float)) or float(joined) < start:
+            return None
+        if mtime < start:
+            when = datetime.fromtimestamp(start).strftime("%Y-%m-%d %H:%M")
+            return (f"{expanded}: not written since its window opened ({when}, every {every}) "
+                    f"although this machine has been present since -- the duty has not run")
+        return None
     key = "joined_at" if since == "join" else "arrived_at"
     mark = data.get(key)
     if not isinstance(mark, (int, float)):
@@ -269,7 +285,9 @@ def run_check(artifact: Artifact, *, now: float | None = None,
             )
 
     if getattr(artifact, "since", None):
-        late = _since_error(expanded, st.st_mtime, artifact.since)
+        late = _since_error(expanded, st.st_mtime, artifact.since,
+                            every=getattr(artifact, "every", None),
+                            after=getattr(artifact, "after", None), now=now)
         if late:
             errors.append(late)
 

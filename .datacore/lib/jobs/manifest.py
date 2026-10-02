@@ -207,6 +207,27 @@ TRIGGERS = frozenset({"wake", "join", "arrival", "awake"})
 #: the last converged join (`join`) or the join that began this session
 #: (`arrival`), as recorded in the visitor's join.json.
 SINCE = frozenset({"join", "arrival"})
+#: An arrival duty that must not repeat every session (owner decision
+#: 2026-10-02). `every` is the period it runs at most once in; `after` the
+#: local hour before which its window has not opened. It runs at the first
+#: presence (join or tick) inside the window -- "the first arrival after its
+#: hour" -- and the verifier judges it by that window, not by the arrival.
+EVERY = frozenset({"day", "week", "month"})
+_HHMM = re.compile(r"([01]\d|2[0-3]):([0-5]\d)\Z")
+
+
+def gate_window(now: float, every: str, after: str | None) -> float | None:
+    """Start of the window `now` falls in (local time), or None when this
+    period's window has not opened yet (before its hour on its first day)."""
+    from datetime import datetime, timedelta
+    t = datetime.fromtimestamp(now)
+    h, m = (int(x) for x in (after or "00:00").split(":"))
+    start = t.replace(hour=h, minute=m, second=0, microsecond=0)
+    if every == "week":
+        start -= timedelta(days=t.weekday())
+    elif every == "month":
+        start = start.replace(day=1)
+    return start.timestamp() if now >= start.timestamp() else None
 
 # checks that must NOT carry an `arg`
 _NO_ARG_CHECKS = frozenset({"exists", "nonempty", "no_crash"})
@@ -227,6 +248,10 @@ class Artifact:
     max_age_hours: float | None = None
     arg: object = None
     since: str | None = None
+    #: The owning job's gate (EVERY / `after`), copied here so a `since` check
+    #: can judge a gated duty by its window.
+    every: str | None = None
+    after: str | None = None
 
 
 @dataclass
@@ -247,6 +272,9 @@ class Job:
     delegate: bool = True
     #: A visitor's session trigger (TRIGGERS); None on a resident.
     trigger: str | None = None
+    #: An arrival duty's gate (EVERY, local "HH:MM"); None when ungated.
+    every: str | None = None
+    after: str | None = None
 
 
 # ── the install's own jobs: manifest.local.yaml over the tracked list (INS-3) ──
@@ -478,8 +506,21 @@ def _build_job(raw: object, index: int, errors: list[str], seen_names: set[str],
         errors.append(f"{ref}: unknown trigger {trigger!r} "
                       f"(expected one of: {', '.join(sorted(TRIGGERS))})")
 
+    every, after = raw.get("every"), raw.get("after")
+    if after is not None and every is None:
+        every = "day"
+    if every is not None:
+        if every not in EVERY:
+            errors.append(f"{ref}: unknown every {every!r} (expected one of: {', '.join(sorted(EVERY))})")
+        if trigger != "arrival":
+            errors.append(f"{ref}: every/after gate an arrival duty only (trigger is {trigger!r})")
+    if after is not None and not (isinstance(after, str) and _HHMM.match(after)):
+        errors.append(f"{ref}: field 'after' must be a local time \"HH:MM\" (got {after!r})")
+
     if len(errors) != start:
         return None
+    for a in artifacts or []:
+        a.every, a.after = every, after
 
     return Job(
         name=name,
@@ -492,6 +533,8 @@ def _build_job(raw: object, index: int, errors: list[str], seen_names: set[str],
         require_synced_repos=list(require_synced_repos),
         delegate=delegate,
         trigger=trigger,
+        every=every,
+        after=after,
     )
 
 

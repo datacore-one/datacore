@@ -40,6 +40,10 @@ pulling the morning's briefing, probing its own config -- happens because a
 person arrived, so after a converged join this runs every manifest job for this
 machine whose `trigger` is `join`, and on the first join of a session those
 whose trigger is `arrival` too, each through the execution envelope (jobs/run.py).
+An arrival duty with a gate (`every: day|week|month`, `after: "HH:MM"`) runs at
+the first presence inside its window instead -- a join or, between joins, a
+tick -- so the morning journal opens at the first arrival after 08:30 and a
+monthly backup does not repeat every session (owner decision 2026-10-02).
 The record is written AFTER them, with `joined_at` taken before the cycle, so
 every duty artifact of this join is newer than the record that names it and a
 verifier reading mid-join still sees the previous record: a `since: join`
@@ -164,6 +168,32 @@ def duties(triggers: set[str], *, machine: str | None = None,
     return [j["name"] for j in sorted(mine, key=lambda j: order.get(j["trigger"], 9))]
 
 
+def gates(*, machine: str | None = None, manifest: Path | None = None) -> dict[str, tuple[str, str | None]]:
+    """This machine's GATED arrival duties: {name: (every, after)}. A gated duty
+    runs at the first presence inside its window (jobs.manifest.gate_window) --
+    "the first arrival after its hour" -- not at every arrival."""
+    if machine is None:
+        from actor_identity import this_actor
+        machine = this_actor()
+    from jobs.manifest import effective_doc
+    jobs = (effective_doc(manifest or MANIFEST) or {}).get("jobs") or []
+    return {j["name"]: (j.get("every") or "day", j.get("after")) for j in jobs
+            if j.get("machine") == machine and j.get("trigger") == "arrival"
+            and (j.get("every") or j.get("after"))}
+
+
+def _clock() -> float:
+    return time.time()
+
+
+def _gate_due(name: str, gate: tuple[str, str | None], last: dict, now: float) -> bool:
+    """Its window is open and it has not been started inside it."""
+    from jobs.manifest import gate_window
+    start = gate_window(now, *gate)
+    prev = last.get(name)
+    return start is not None and float((prev or {}).get("at") or 0) < start
+
+
 def run_duty(name: str) -> dict:
     """One duty through the envelope (jobs/run.py, which judges it with
     job_verify's own checks). Never raises."""
@@ -189,7 +219,31 @@ def run_duties(*, arrival: bool) -> dict:
     """Run each duty; record how it went, never raise. A duty's verdict is its
     own contract's business -- a red duty does not make the join unconverged,
     and the join's alarm stays about convergence only."""
-    out = {name: run_duty(name) for name in duties({"join", "arrival"} if arrival else {"join"})}
+    now, gated, last = _clock(), gates(), _load(DUTIES)
+    on_join = set(duties({"join"}))
+    todo = [n for n in duties({"join", "arrival"})
+            if (_gate_due(n, gated[n], last, now) if n in gated else arrival or n in on_join)]
+    out = {name: run_duty(name) for name in todo}
+    _remember(out)
+    return out
+
+
+def run_due_gated() -> dict:
+    """Between joins: run a gated duty whose window opened while a person is at
+    the machine (arrived 07:00, the 08:30 journal runs at the first tick after
+    08:30, not at the next join hours later). Never with the lid shut, never
+    before a join has converged, never beside a running join."""
+    from jobs import awake
+    if not _load(RECORD).get("joined_at") or awake.in_dark_wake():
+        return {}
+    now, last, gated = _clock(), _load(DUTIES), gates()
+    todo = [n for n, g in gated.items() if _gate_due(n, g, last, now)]
+    if not todo:
+        return {}
+    with _exclusive() as mine:
+        if not mine:
+            return {}
+        out = {name: run_duty(name) for name in todo}
     _remember(out)
     return out
 
@@ -205,9 +259,16 @@ def retry_failed(*, now: float | None = None) -> dict:
     trigger = {name: "join" for name in duties({"join"})}
     trigger.update({name: "arrival" for name in duties({"arrival"})})
     last = _load(DUTIES)
+    # A gated duty is retried only inside the window it failed in; outside it,
+    # the gate decides (a journal that failed yesterday waits for today's hour).
+    from jobs.manifest import gate_window
+    gated = gates()
+    def in_window(n: str) -> bool:
+        start = gate_window(now, *gated[n]) if n in gated else 0.0
+        return start is not None and float(last[n].get("at") or 0) >= start
     todo = [n for n, t in trigger.items()
             if isinstance(last.get(n), dict) and last[n].get("rc") != 0
-            and now - float(last[n].get("at") or 0) >= RETRY_S[t]]
+            and now - float(last[n].get("at") or 0) >= RETRY_S[t] and in_window(n)]
     if not todo:
         return {}
     with _exclusive() as mine:
@@ -354,6 +415,8 @@ def main() -> int:
             print(f"join: not due — {why}")
             for name, d in retry_failed().items():
                 print(f"  retried duty {name}: rc={d['rc']} {d['seconds']}s  {d['last']}")
+            for name, d in run_due_gated().items():
+                print(f"  duty {name} (its window opened): rc={d['rc']} {d['seconds']}s  {d['last']}")
             return 0
         print(f"join: due — {why}")
     elif not a.now:

@@ -144,7 +144,8 @@ def _artifact_path(raw: str) -> pathlib.Path:
 
 
 def _check_artifact(spec: dict, before: float | None,
-                    machine: str | None = None) -> tuple[bool, str]:
+                    machine: str | None = None, *, every: str | None = None,
+                    after: str | None = None) -> tuple[bool, str]:
     """Did this artifact end the run in an acceptable state?
 
     Acceptable means: it exists, AND either it advanced during this run or it
@@ -177,7 +178,7 @@ def _check_artifact(spec: dict, before: float | None,
     from jobs.manifest import Artifact
     errors = run_check(Artifact(path=spec["path"], check=spec.get("check", "exists"),
                                 max_age_hours=spec.get("max_age_hours"), arg=spec.get("arg"),
-                                since=spec.get("since")),
+                                since=spec.get("since"), every=every, after=after),
                        machine=machine)
     if errors:
         return False, errors[0]
@@ -283,7 +284,9 @@ def run(job: dict, dry: bool = False) -> int:
 
     failures = []
     for a in artifacts:
-        ok, detail = _check_artifact(a, before[a["path"]], job.get("machine"))
+        ok, detail = _check_artifact(a, before[a["path"]], job.get("machine"),
+                                     every=job.get("every") or ("day" if job.get("after") else None),
+                                     after=job.get("after"))
         print(f"  {'ok  ' if ok else 'FAIL'} {detail}")
         if not ok:
             failures.append(detail)

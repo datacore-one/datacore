@@ -1524,19 +1524,29 @@ jobs:
         arg: [date, counts, promises]
         max_age_hours: 26
   - name: mac-promise-scoreboard
+    scope: local
+    why_local: "judges the promises from this machine's own working copy and tools; every host runs its own scoreboard (owner, 2026-09-30)"
     machine: mac
-    schedule: "30 21 * * *"
+    # Owner decision 2026-10-02: the mac is a visitor; its duties run when the
+    # owner arrives, never on a clock.
+    # Once a day at the first presence, not at 21:30: its history compares one
+    # board per date, so it must not repeat every session. About 17 minutes.
+    trigger: arrival
+    every: day
+    schedule: "on arrival: visitor_join.py runs it at the first converged join or tick of each day (every: day)"
     cmd: "~/.pyenv/versions/3.11.1/bin/python3 ~/Data/.datacore/lib/promise_nightly.py >> ~/.datacore/state/promise-nightly.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: ~/.datacore/state/promise-nightly.log
         check: last_line_regex
         arg: '^promise-scoreboard: \d+ green, \d+ red, \d+ could not run here; \d+ turned red, \d+ recovered; alert (sent|none)$'
-        max_age_hours: 26
+        since: arrival
+        max_age_hours: 48  # awake hours: an arrival is the first join of a session; two days awake without one is a stalled join -- OPS-1
       - path: ~/.datacore/state/promise-scoreboard/latest.json
         check: json_has_keys
         arg: [date, counts, promises]
-        max_age_hours: 26
+        since: arrival
+        max_age_hours: 48  # awake hours: an arrival is the first join of a session; two days awake without one is a stalled join -- OPS-1
 
   # THE ESCALATION PATH FOR DELEGATED REPAIRS, and the reason withholding the
   # other alerts is safe. job_verify now hands a recurring failure to miles and
@@ -1708,14 +1718,18 @@ jobs:
     scope: local
     why_local: "copies this machine's own Claude transcripts"
     machine: mac
-    schedule: "0 0 * * *"
+    # Once a session, not at midnight (owner decision 2026-10-02: the mac is a
+    # visitor; its duties run when the owner arrives, never on a clock).
+    trigger: arrival
+    schedule: "on arrival: visitor_join.py runs it after the first converged join of a session"
     cmd: "~/Data/.datacore/lib/sync_traces.sh"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/sync-traces.last"
         check: regex
         arg: 'sync_traces: \d+ transcript'
-        max_age_hours: 26
+        since: arrival
+        max_age_hours: 48  # awake hours: an arrival is the first join of a session; two days awake without one is a stalled join -- OPS-1
 
   # The box runs mail triage and writes .datacore/state/mail/, which is gitignored,
   # so this hourly pull is the only route the results have to this machine's
@@ -1726,10 +1740,20 @@ jobs:
     scope: local
     why_local: "pulls the mail triage state onto this machine"
     machine: mac
-    schedule: "15 * * * *"
-    cmd: 'rsync -az "$(python3 ~/Data/.datacore/lib/jobs/manifest.py ssh-alias box)":~/Data/.datacore/state/mail/ ~/Data/.datacore/state/mail/'
+    # Owner decision 2026-10-02: the mac is a visitor; its duties run when the
+    # owner arrives, never on a clock.
+    trigger: join
+    schedule: "on join: visitor_join.py runs it after every converged join"
+    # The pull writes its own exit line: rsync keeps the box's mtimes, so
+    # audit.jsonl's age says when the box triaged, never whether this ran.
+    cmd: '{ rsync -az "$(python3 ~/Data/.datacore/lib/jobs/manifest.py ssh-alias box)":~/Data/.datacore/state/mail/ ~/Data/.datacore/state/mail/; rc=$?; echo "exit=$rc $(date)"; } >> ~/.datacore/state/mail-state-pull.log 2>&1; exit $rc'
     on_fail: telegram
     artifacts:
+      - path: "~/.datacore/state/mail-state-pull.log"
+        check: last_line_regex
+        arg: '^exit=0 '
+        since: join
+        max_age_hours: 8  # awake hours: joins run at least every 4 waking hours, so two missed joins (as mac-join) -- OPS-1
       - path: "~/Data/.datacore/state/mail/audit.jsonl"
         check: exists
         max_age_hours: 26
@@ -1744,64 +1768,88 @@ jobs:
     scope: local
     why_local: "pushes this machine's lens observations to the box's lens reader"
     machine: mac
-    schedule: "0 */6 * * *"
+    # Owner decision 2026-10-02: the mac is a visitor; its duties run when the
+    # owner arrives, never on a clock.
+    trigger: join
+    schedule: "on join: visitor_join.py runs it after every converged join"
     cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/lens-push.log -- python3 ~/Data/.datacore/lib/sqlite_push.py ~/.datacore/lens/observations.db box .datacore/lens/observations.db"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/lens-push.log"
         check: last_line_regex
         arg: '^sqlite_push: ok '
-        max_age_hours: 13
+        since: join
+        max_age_hours: 8  # awake hours: joins run at least every 4 waking hours, so two missed joins (as mac-join) -- OPS-1
 
   - name: mac-knowledge-backup
     scope: local
     why_local: "backs up this machine's knowledge index off the machine"
     machine: mac
-    schedule: "0 12 1 * *"
+    # Owner decision 2026-10-02: the mac is a visitor; its duties run when the
+    # owner arrives, never on a clock.
+    # Once a month at the first presence: a 2 GB push must not repeat every session.
+    trigger: arrival
+    every: month
+    schedule: "on arrival: visitor_join.py runs it at the first converged join or tick of each month (every: month)"
     cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/knowledge-backup.log -- python3 ~/Data/.datacore/lib/sqlite_push.py ~/Data/.datacore/knowledge.db nightshift backups/knowledge/knowledge.db"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/knowledge-backup.log"
         check: last_line_regex
         arg: '^sqlite_push: ok '
+        since: arrival
         max_age_hours: 745
 
   - name: mac-knowledge-personal-backup
     scope: local
     why_local: "backs up this machine's personal-space knowledge index off the machine"
     machine: mac
-    schedule: "10 12 1 * *"
+    # Owner decision 2026-10-02: the mac is a visitor; its duties run when the
+    # owner arrives, never on a clock.
+    # Once a month at the first presence: a 2 GB push must not repeat every session.
+    trigger: arrival
+    every: month
+    schedule: "on arrival: visitor_join.py runs it at the first converged join or tick of each month (every: month)"
     cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/knowledge-personal-backup.log -- python3 ~/Data/.datacore/lib/sqlite_push.py ~/Data/0-personal/.datacore/knowledge.db nightshift backups/knowledge/knowledge-personal.db"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/knowledge-personal-backup.log"
         check: last_line_regex
         arg: '^sqlite_push: ok '
+        since: arrival
         max_age_hours: 745
 
   - name: mac-recall-extract
     scope: local
     why_local: "reads this machine's own session transcripts"
     machine: mac
-    schedule: "5 0 * * *"
+    # Owner decision 2026-10-02: the mac is a visitor; its duties run when the
+    # owner arrives, never on a clock.
+    trigger: arrival
+    schedule: "on arrival: visitor_join.py runs it after the first converged join of a session"
     cmd: "/usr/bin/python3 ~/Data/.datacore/lib/extract_recall_events.py --since $(date -v-2d +%F) --quiet >> ~/.plur/observations/extract.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: "~/.plur/observations/extract.log"
         check: no_crash
-        max_age_hours: 26
+        since: arrival
+        max_age_hours: 48  # awake hours: an arrival is the first join of a session; two days awake without one is a stalled join -- OPS-1
 
   - name: mac-nlm-auth-sync
     scope: local
     why_local: "the NotebookLM login lives in this machine's browser"
     machine: mac
-    schedule: "5 * * * *"
+    # Owner decision 2026-10-02: the mac is a visitor; its duties run when the
+    # owner arrives, never on a clock.
+    trigger: join
+    schedule: "on join: visitor_join.py runs it after every converged join"
     cmd: "/opt/homebrew/bin/python3 ~/Data/.datacore/modules/research/lib/nlm_auth_sync.py sync >> ~/Data/.datacore/logs/nlm-auth-sync.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: "~/Data/.datacore/logs/nlm-auth-sync.log"
         check: no_crash
-        max_age_hours: 2
+        since: join
+        max_age_hours: 8  # awake hours: joins run at least every 4 waking hours, so two missed joins (as mac-join) -- OPS-1
 
   - name: mac-creds-sync
     scope: pinned
@@ -1854,14 +1902,18 @@ jobs:
     scope: local
     why_local: "publishes this machine's own ledger writes"
     machine: mac
-    schedule: "5 * * * *"
+    # Owner decision 2026-10-02: the mac is a visitor; its duties run when the
+    # owner arrives, never on a clock.
+    trigger: join
+    schedule: "on join: visitor_join.py runs it after every converged join"
     cmd: "DATACORE_ROOT=~/Data /opt/homebrew/bin/python3 ~/Data/.datacore/lib/ledger_publish_safe.py >> ~/.datacore/state/ledger-publish.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/ledger-publish.log"
         check: last_line_regex
         arg: 'run complete'
-        max_age_hours: 2
+        since: join
+        max_age_hours: 8  # awake hours: joins run at least every 4 waking hours, so two missed joins (as mac-join) -- OPS-1
 
   - name: mac-bench
     scope: pinned
@@ -1882,25 +1934,40 @@ jobs:
     scope: local
     why_local: "opens the briefing on this machine's screen"
     machine: mac
-    schedule: "launchd io.datacore.daily-briefing-open: weekdays 08:25"
+    # Owner decision 2026-10-02: the mac is a visitor; its duties run when the
+    # owner arrives, never on a clock.
+    # The first arrival after 08:25, once a day (was a launchd calendar, weekdays).
+    trigger: arrival
+    every: day
+    after: "08:25"
+    schedule: "on arrival: visitor_join.py runs it at the first converged join or tick once its window opens (every day, not before its after hour)"
     cmd: "~/Data/.datacore/lib/open_daily_briefing.sh"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/daily-briefing-open.log"
         check: no_crash
-        max_age_hours: 74   # Friday's run covers the weekend
+        since: arrival
+        max_age_hours: 48  # awake hours: an arrival is the first join of a session; two days awake without one is a stalled join -- OPS-1
 
   - name: mac-morning-journal
     scope: local
     why_local: "opens the journal on this machine"
     machine: mac
-    schedule: "launchd io.datacore.morning-journal: 08:30"
-    cmd: "/usr/bin/python3 ~/Data/.datacore/lib/morning_journal.py"
+    # Owner decision 2026-10-02: the mac is a visitor; its duties run when the
+    # owner arrives, never on a clock.
+    # The first arrival after 08:30, once a day. A run that finds no journal yet
+    # exits 1 and the join retries it two hours later (the old second shot).
+    trigger: arrival
+    every: day
+    after: "08:30"
+    schedule: "on arrival: visitor_join.py runs it at the first converged join or tick once its window opens (every day, not before its after hour)"
+    cmd: "/usr/bin/python3 ~/Data/.datacore/lib/morning_journal.py >> ~/.datacore/state/morning-journal.log 2>&1"
     on_fail: telegram
     artifacts:
-      - path: "/tmp/datacore-morning-journal.log"   # StandardOutPath; see mac-bench on /tmp
+      - path: "~/.datacore/state/morning-journal.log"   # was launchd's /tmp StandardOutPath
         check: no_crash
-        max_age_hours: 26
+        since: arrival
+        max_age_hours: 48  # awake hours: an arrival is the first join of a session; two days awake without one is a stalled join -- OPS-1
 
   - name: mac-session-learning
     scope: local
@@ -1918,20 +1985,31 @@ jobs:
     scope: local
     why_local: "the owner's morning smoke test, read on this machine"
     machine: mac
-    schedule: "launchd io.datacore.smoke: 08:40"
-    cmd: "python3 ~/Data/.datacore/lib/smoke.py"
+    # Owner decision 2026-10-02: the mac is a visitor; its duties run when the
+    # owner arrives, never on a clock.
+    # The first arrival after 08:40, once a day. Findings exit 1 and alert on
+    # their own; the contract is that the smoke ran and wrote its summary line.
+    trigger: arrival
+    every: day
+    after: "08:40"
+    schedule: "on arrival: visitor_join.py runs it at the first converged join or tick once its window opens (every day, not before its after hour)"
+    cmd: "python3 ~/Data/.datacore/lib/smoke.py >> ~/.datacore/state/smoke.log 2>&1"
+    exit_ok: [0, 1]
     on_fail: telegram
     artifacts:
-      - path: "/tmp/datacore-smoke.log"   # StandardOutPath; see mac-bench on /tmp
+      - path: "~/.datacore/state/smoke.log"   # was launchd's /tmp StandardOutPath
         check: last_line_regex
         arg: '^smoke \d{4}-\d{2}-\d{2}:'
-        max_age_hours: 26
+        since: arrival
+        max_age_hours: 48  # awake hours: an arrival is the first join of a session; two days awake without one is a stalled join -- OPS-1
 
   - name: mac-state-sync
     scope: local
     why_local: "pulls fleet state onto this machine"
     machine: mac
-    schedule: "launchd io.datacore.state-sync: every 300 s"
+    # A stream, not a duty: launchd re-runs it every 300 s, only while awake.
+    trigger: awake
+    schedule: "while awake: launchd StartInterval 300s stream (io.datacore.state-sync, RunAtLoad)"
     cmd: "/bin/bash ~/Data/.datacore/lib/sync_state_from_nightshift.sh"
     on_fail: telegram
     artifacts:
@@ -1943,19 +2021,28 @@ jobs:
     scope: local
     why_local: "the health data this machine's practice space owns"
     machine: mac
-    schedule: "launchd one.datacore.health.sync: 07:30"
-    cmd: 'python3 ~/Data/"$(python3 ~/Data/.datacore/lib/spaces.py role practice)"/2-projects/health-dashboard/scripts/backfill.py --source oura,withings'
+    # Owner decision 2026-10-02: the mac is a visitor; its duties run when the
+    # owner arrives, never on a clock.
+    # The first arrival after 07:30, once a day (the night's ring data is in by then).
+    trigger: arrival
+    every: day
+    after: "07:30"
+    schedule: "on arrival: visitor_join.py runs it at the first converged join or tick once its window opens (every day, not before its after hour)"
+    cmd: 'python3 ~/Data/"$(python3 ~/Data/.datacore/lib/spaces.py role practice)"/2-projects/health-dashboard/scripts/backfill.py --source oura,withings --start "$(date -v-3d +%Y-%m-%d)" >> ~/.datacore/health/sync.log 2>&1'
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/health/sync.log"
         check: no_crash
-        max_age_hours: 26
+        since: arrival
+        max_age_hours: 48  # awake hours: an arrival is the first join of a session; two days awake without one is a stalled join -- OPS-1
 
   - name: mac-practice-fragment
     scope: local
     why_local: "publishes this machine's practice fragment"
     machine: mac
-    schedule: "launchd one.datacore.practice.fragment: every 900 s"
+    # A stream, not a duty: launchd re-runs it every 900 s, only while awake.
+    trigger: awake
+    schedule: "while awake: launchd StartInterval 900s stream (one.datacore.practice.fragment, RunAtLoad)"
     cmd: 'python3 ~/Data/"$(python3 ~/Data/.datacore/lib/spaces.py role practice)"/2-projects/health-dashboard/scripts/publish_briefing.py --ingest'
     on_fail: telegram
     artifacts:

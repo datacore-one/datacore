@@ -1,0 +1,7 @@
+# fixture for mac-mail-state-pull artifact[0]
+# producer artifact: ~/.datacore/state/mail-state-pull.log on mac
+# harvested: 2026-10-03 (success line in the producer's own format)
+# regex under test: ^exit=0 
+# represents: SUCCESS
+# ---
+exit=0 sob.  3 okt. 2026 00:42:06 CEST
