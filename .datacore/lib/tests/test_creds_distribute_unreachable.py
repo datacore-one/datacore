@@ -69,3 +69,29 @@ def test_a_changed_delivery_defers_a_oneshot_job_and_restarts_nothing(tmp_path):
     assert "deferred: overnight.service" in out.stdout, out.stdout[-1200:]
     assert "restarted overnight.service" not in out.stdout
     assert "RESTART FAILED overnight.service" not in out.stdout
+
+
+# ── a delivery never dirties a machine's git checkout (main session, 2026-10-02) ──
+#
+# The box and the overnight machine get their code from git. Copying the Mac's
+# credential_access.py over their tracked copy left it modified, and the
+# overnight run's git preflight refused every run of the night of 2026-10-01.
+# A machine whose checkout tracks the file gets it by its own pull, not by copy.
+
+def test_a_file_the_machines_git_checkout_tracks_is_not_copied_over(tmp_path):
+    import subprocess as sp
+    f = Fleet(tmp_path)
+    f.central({"FIXTURE_API_KEY": "fixture-v1"})
+    data = tmp_path / "hosts" / "hosta" / "Data"
+    tracked = data / ".datacore" / "lib" / "credential_access.py"
+    tracked.parent.mkdir(parents=True, exist_ok=True)
+    tracked.write_text("# the version this machine's git checkout has\n")
+    git = ["git", "-C", str(data), "-c", "user.email=t@t", "-c", "user.name=t"]
+    sp.run(git + ["init", "-q"], check=True)
+    sp.run(git + ["add", ".datacore/lib/credential_access.py"], check=True)
+    sp.run(git + ["commit", "-qm", "base"], check=True)
+    out = f.distribute()
+    status = sp.run(git + ["status", "--porcelain", "--untracked-files=no", "--", ".datacore/lib"],
+                    capture_output=True, text=True).stdout
+    assert status == "", f"the delivery left the checkout modified:\n{status}\n{out.stdout[-800:]}"
+    assert tracked.read_text() == "# the version this machine's git checkout has\n"
