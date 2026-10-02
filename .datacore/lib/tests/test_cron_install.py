@@ -125,6 +125,10 @@ def test_real_host_installer_reconciles_and_verifies_fake_crontab(tmp_path):
     lib.joinpath('ledger_phase1_cycle.sh').write_text('#!/bin/sh\nexit 0\n')
     lib.joinpath('ledger_phase1_cycle.sh').chmod(0o755)
     shutil.copyfile(Path(C.__file__), lib / 'cron_install.py')
+    # Host setup wires the safety guard from the runner's own hooks (e9cc8c7).
+    (lib / 'hooks').mkdir()
+    for name in ('install_redaction_guards.py', 'tool_policy_guard.py'):
+        shutil.copyfile(Path(C.__file__).with_name('hooks') / name, lib / 'hooks' / name)
     bindir = tmp_path / 'bin'; bindir.mkdir()
     bindir.joinpath('python3').symlink_to(sys.executable)
     bindir.joinpath('systemctl').write_text('#!/bin/sh\nexit 0\n')
