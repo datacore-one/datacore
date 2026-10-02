@@ -250,6 +250,34 @@ if [ "$VERIFY_ONLY" = 0 ] && command -v claude >/dev/null 2>&1; then
     && log "safety guard wired in ~/.claude/settings.json (tool_policy_guard.py)" \
     || { log "FAIL could not wire the safety guard into ~/.claude/settings.json"; fail=1; }
 fi
+# Disclosure guards (redaction, publish, memory, evals, guards, client, space,
+# context): the roster says which this machine needs, servers.<host>.guards --
+# the owner's choice, never this script's. Before 2026-10-01 they reached a
+# machine only if someone ran install_redaction_guards.py there by hand.
+ROSTER_GUARDS="$(python3 - "$HOST" "$LIB" <<'PY'
+import sys, yaml
+host, lib = sys.argv[1], sys.argv[2]
+sys.path.insert(0, lib)
+from actor_identity import REGISTRY_DIR
+try:
+    d = yaml.safe_load(open(REGISTRY_DIR / "infrastructure.yaml")) or {}
+except OSError:
+    d = {}
+g = ((d.get("servers") or {}).get(host) or {}).get("guards")
+if g is None:
+    print("")
+elif isinstance(g, list) and g and all(isinstance(x, str) and x.strip() for x in g):
+    print(",".join(x.strip() for x in g))
+else:
+    print("!invalid")
+PY
+)"
+GUARD_ARGS=(--only "$ROSTER_GUARDS" --hooks-dir "$LIB/hooks")
+if [ "$VERIFY_ONLY" = 0 ] && [ -n "$ROSTER_GUARDS" ] && command -v claude >/dev/null 2>&1; then
+  _rg="$(python3 "$POLICY_INSTALLER" "${GUARD_ARGS[@]}" --create 2>&1)" \
+    && log "roster guards wired in ~/.claude/settings.json ($ROSTER_GUARDS)" \
+    || { log "FAIL could not wire the roster guards ($ROSTER_GUARDS): $(printf '%s' "$_rg" | tail -1)"; fail=1; }
+fi
 
 # lines this installer retires (superseded by one of the above)
 RETIRE=("/usr/local/bin/ledger-pull-data.sh")
@@ -285,6 +313,15 @@ if command -v claude >/dev/null 2>&1; then
     || { log "FAIL safety guard: ${_pg:-not wired}"; fail=1; }
 else
   log "--  safety guard: Claude Code is not installed here, no user settings to guard"
+fi
+if [ -z "$ROSTER_GUARDS" ]; then
+  log "--  roster names no disclosure guards for $HOST (servers.$HOST.guards); only the safety guard is required"
+elif ! command -v claude >/dev/null 2>&1; then
+  log "--  roster guards ($ROSTER_GUARDS): Claude Code is not installed here, no user settings to guard"
+else
+  _rg="$(python3 "$POLICY_INSTALLER" "${GUARD_ARGS[@]}" --verify 2>&1)" \
+    && log "OK  roster guards wired: $ROSTER_GUARDS (~/.claude/settings.json)" \
+    || { log "FAIL roster guards ($ROSTER_GUARDS): $(printf '%s' "${_rg:-not wired}" | tr '\n' ';')"; fail=1; }
 fi
 [ -x "$LIB/ledger_phase1_cycle.sh" ] && log "OK  runner lib present at $LIB" || { log "FAIL runner lib missing: $LIB"; fail=1; }
 # Current, not merely present: compare with origin/main as of the last fetch

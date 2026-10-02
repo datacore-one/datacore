@@ -60,8 +60,8 @@ suites:
     state: green
   - path: .datacore/skills/github-triage/tests
     reason: >
-      Passing locally (11). The nightly GitHub triage skill run by Miles on
-      nightshift; not yet costed against CI install time.
+      Passing locally (11). The nightly GitHub triage skill run by the overnight
+      agent; not yet costed against CI install time.
     reviewed: 2026-10-01
     state: green
   - path: .datacore/modules/lens/tests

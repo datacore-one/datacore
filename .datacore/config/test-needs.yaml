@@ -132,8 +132,6 @@ tests:
     only:
       - test_a_job_whose_repository_cannot_be_named_is_refused_before_anything_is_written
       - test_a_job_on_the_repairers_own_host_is_still_delegated
-      - test_a_box_job_is_a_pull_request_for_miles_and_the_owner_merges
-      - test_a_mac_job_is_a_merge_with_no_follow_up
       - test_a_nightshift_job_is_still_one_stage
       - test_an_agent_may_open_a_repair_pr_only_in_the_core_repository
     needs: [file:.datacore/registry/principals.yaml, file:.datacore/registry/infrastructure.yaml]
@@ -338,6 +336,10 @@ tests:
     only: [test_agent_does_not_reach_and_writes_it_up]
     needs: [agent]
     why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_AGT11_every_unattended_run_guarded.py
+    only: [test_a_real_unattended_run_is_stopped_from_discarding_work]
+    needs: [agent]
+    why: a real unattended claude -p run (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
   - test: .datacore/lib/tests/test_promise_MEM_02_irreversible_needs_trial_run.py
     only: [test_agent_shows_a_one_item_trial_before_mass_cancel]
     needs: [agent]

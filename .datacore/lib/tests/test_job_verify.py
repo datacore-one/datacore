@@ -817,3 +817,30 @@ def test_a_root_with_neither_still_names_the_root_path(tmp_path, monkeypatch):
     monkeypatch.setattr(job_verify, "__file__", str(tmp_path / "absent" / "job_verify.py"))
 
     assert job_verify._default_manifest_path() == tmp_path / ".datacore" / "lib" / "jobs" / "manifest.local.yaml"
+
+
+def test_a_job_on_the_owners_machine_is_a_task_for_the_owner_not_a_repair(tmp_path, monkeypatch, capsys):
+    """Board D1, 2026-10-01: no agent repairs the owner's machine. The failure
+    takes the operator's path -- the alert, and the task when it recurs -- and
+    says why, instead of reading as a delegation that failed."""
+    import jobs.recurrence as R
+    monkeypatch.setattr(R, "STATE", tmp_path / "rec.json")
+    artifact = tmp_path / "x.log"
+    manifest = _write_manifest(tmp_path, [_job("mac-x", "mac", str(artifact),
+                                              artifacts=[{"path": str(artifact), "check": "regex", "arg": "^OK$"}])])
+    space = _space(tmp_path)
+    monkeypatch.setenv("DATACORE_ACTOR", "test-actor")
+    sent, filed = [], []
+    monkeypatch.setattr(job_verify, "_send_telegram", lambda msg: sent.append(msg) or True)
+    monkeypatch.setattr(job_verify, "_file_task", lambda job, rec, failures: filed.append(job.name) or "org-task-1")
+    monkeypatch.setattr(job_verify, "_close_task", lambda tid: True)
+    monkeypatch.setattr(job_verify, "_delegate_repair",
+                        lambda job, failures, rec: ("owner", "mac-x runs on mac, boss's own machine"))
+    argv = ["--machine", "mac", "--manifest", str(manifest), "--space", str(space), "--alert", "telegram"]
+    for i in range(1, 4):
+        artifact.write_text(f"FAILED {i}")
+        os.utime(artifact, (1_700_000_000 + i * 100, 1_700_000_000 + i * 100))
+        assert _run_main(argv) == 1
+    err = capsys.readouterr().err
+    assert filed == ["mac-x"] and len(sent) == 1
+    assert "owner's machine" in err and "could NOT delegate" not in err

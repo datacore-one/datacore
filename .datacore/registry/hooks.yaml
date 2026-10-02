@@ -21,115 +21,393 @@
 version: "1.0.0"
 protocol: "DIP-0024"
 
+# scope: project (default) -- composed into .claude/settings.json by
+#   hooks_composer.py. scope: user -- wired into ~/.claude/settings.json by the
+#   installer named in installed_by (install_redaction_guards.py, configure-hooks.py,
+#   plur init, agent_host_setup.sh, or by hand); listed so this registry is complete,
+#   never composed into the project settings. lib/tests/test_hooks_registry_matches_wiring.py
+#   fails when a wired hook is missing here (canvas finding, 2026-10-01).
+#
 claude_code:
   SessionStart:
-    - matcher: startup
+    - matcher: "startup"
       type: command
-      command: "python3 ~/Data/.datacore/lib/session_bootstrap.py"
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/session_bootstrap.py"
       purpose: "Initialize session, clean stale state, output journal + candidates"
       declared_by: DIP-0019
-      priority: 100
+      priority: 10
       timeout: 10
-
-    - matcher: startup
+    - matcher: "startup"
       type: command
-      command: "python3 ~/Data/.datacore/lib/datacore_sync.py sync --quiet"
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/datacore_sync.py sync --quiet"
       purpose: "Sync knowledge database on session start"
       declared_by: DIP-0004
-      priority: 200
+      priority: 20
       timeout: 30
+    - type: command
+      command: "~/.plur/bin/plur-hook hook-session-remind"
+      purpose: "PLUR: remind to start the session"
+      scope: user
+      installed_by: "plur init"
+      timeout: 3
+    - type: command
+      command: "python3 ~/Data/.datacore/lib/context_merge.py check --fix --quiet"
+      purpose: "Rebuild a stale composed CLAUDE.md; report a hand-edited one"
+      scope: user
+      installed_by: "install_redaction_guards.py --only context"
+      timeout: 20
 
   UserPromptSubmit:
     - type: command
-      command: "python3 ~/Data/.datacore/lib/session_firstmsg.py"
-      purpose: "First message: inject engrams via PLUR CLI. Subsequent: skip (~1ms)."
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/session_firstmsg.py"
+      purpose: "First message: inject engrams via PLUR CLI. Subsequent: skip"
       declared_by: DIP-0019
-      priority: 100
-      timeout: 10
-
+      priority: 10
+      timeout: 5
     - type: command
-      command: "python3 ~/Data/.datacore/lib/session_time_guardian.py"
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/session_time_guardian.py"
       purpose: "Track session duration and prompt time awareness"
       declared_by: DIP-0019
-      priority: 200
+      priority: 20
+      timeout: 5
+    - type: command
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/hooks/command_suggest.py"
+      purpose: "Suggest a matching slash command for the prompt"
+      declared_by: DIP-0024
+      priority: 30
+      timeout: 5
+    - type: command
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/hooks/plur_inject_wrapper.py --unless-user-hook"
+      purpose: "Per-prompt PLUR engram injection (async); skipped when the user-level copy is wired"
+      declared_by: DIP-0019
+      priority: 40
+      timeout: 90
+      async: true
+    - type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/plur_inject_wrapper.py"
+      purpose: "Per-prompt PLUR engram injection (user level)"
+      scope: user
+      installed_by: "hand-wired"
+      timeout: 90
+      async: true
+    - type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/redaction_guard.py"
+      purpose: "Re-inject the redaction block every turn; demo mode (MEM-12/14)"
+      scope: user
+      installed_by: "install_redaction_guards.py --only redaction"
       timeout: 5
 
   PreToolUse:
-    - matcher: EnterPlanMode
+    - matcher: "EnterPlanMode"
       type: command
-      command: "python3 ~/Data/.datacore/lib/active_memory.py --event plan_mode"
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/active_memory.py --event plan_mode"
       purpose: "Full engram injection when entering plan mode"
       declared_by: DIP-0019
-      priority: 100
+      priority: 10
       timeout: 10
-
-    - matcher: Skill
+    - matcher: "Skill"
       type: command
-      command: "python3 ~/Data/.datacore/lib/active_memory.py --event skill"
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/active_memory.py --event skill"
       purpose: "Domain engrams based on skill name"
       declared_by: DIP-0019
-      priority: 200
+      priority: 20
       timeout: 10
-
-    - matcher: Agent
+    - matcher: "Skill"
       type: command
-      command: "python3 ~/Data/.datacore/lib/active_memory.py --event agent"
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/hooks/command_receipt.py"
+      purpose: "Record that a command or skill was invoked (receipt)"
+      declared_by: DIP-0024
+      priority: 30
+      timeout: 3
+    - matcher: "Agent"
+      type: command
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/active_memory.py --event agent"
       purpose: "Agent-scoped engrams for spawned agent"
       declared_by: DIP-0016
-      priority: 200
+      priority: 40
       timeout: 10
-
     - matcher: "Edit|Write"
       type: command
-      command: "python3 ~/Data/.datacore/lib/org_guard.py"
-      purpose: "Enforce org_workspace_adapter for org-mode files"
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/org_guard.py"
+      purpose: "Refuse raw edits of org/ task files; use org_workspace_adapter"
       declared_by: DIP-0009
-      priority: 300
+      priority: 50
       timeout: 5
-
-  PostToolUse:
     - matcher: "Edit|Write"
       type: command
-      command: "bash ~/Data/.datacore/hooks/org-date-fix.sh"
-      purpose: "Auto-fix org-mode date day-of-week after edits"
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/hooks/org_date_prewrite.py"
+      purpose: "Refuse a write whose org date has the wrong day name"
       declared_by: DIP-0009
-      priority: 100
+      priority: 60
+      timeout: 5
+    - matcher: "EnterPlanMode"
+      type: command
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/plur_cli.py --timeout 8 hook-inject --event plan_mode"
+      purpose: "PLUR hook-inject on plan mode"
+      declared_by: DIP-0019
+      priority: 70
       timeout: 10
-
-    # privacy_guard.py — Phase 3 (DIP-0002)
-    # Will validate no private content in .base.md files
-    # - matcher: "Write"
-    #   type: command
-    #   command: "python3 ~/Data/.datacore/lib/privacy_guard.py"
-    #   purpose: "Block private content in public layer (.base.md)"
-    #   declared_by: DIP-0002
-    #   priority: 300
+    - matcher: "Skill"
+      type: command
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/plur_cli.py --timeout 8 hook-inject --event skill"
+      purpose: "PLUR hook-inject on skill"
+      declared_by: DIP-0019
+      priority: 80
+      timeout: 10
+    - matcher: "Agent"
+      type: command
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/plur_cli.py --timeout 8 hook-inject --event agent"
+      purpose: "PLUR hook-inject on agent"
+      declared_by: DIP-0019
+      priority: 90
+      timeout: 10
+    - matcher: "Bash|Edit|Write|Agent"
+      type: command
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/hooks/plur_observe.py >/dev/null"
+      purpose: "Record tool calls for PLUR observation (pre)"
+      declared_by: plur
+      priority: 100
+      timeout: 3
+    - matcher: "Bash"
+      type: command
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/org_guard.py"
+      purpose: "Refuse raw edits of org/ task files; use org_workspace_adapter"
+      declared_by: DIP-0009
+      priority: 110
+      timeout: 5
+    - matcher: "Bash"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/restricted_hosts_guard.py"
+      purpose: "Refuse network git/ssh to restricted hosts (MEM-01)"
+      scope: user
+      installed_by: "hand-wired"
+    - matcher: "Edit|Write|MultiEdit"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/suggest_compact.py"
+      purpose: "Suggest compaction on long sessions"
+      scope: user
+      installed_by: "hand-wired"
+    - matcher: "Edit|Write|MultiEdit"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/org_date_prewrite.py"
+      purpose: "Refuse a write whose org date has the wrong day name"
+      scope: user
+      installed_by: "DIP-0009"
+    - matcher: "Edit|Write|MultiEdit"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/memory_guard.py"
+      purpose: "No name, amount, host or secret on a line of always-loaded auto-memory"
+      scope: user
+      installed_by: "install_redaction_guards.py --only memory"
+      timeout: 5
+    - matcher: "mcp__plur__plur_session_end"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/wrap_up_token_check.py"
+      purpose: "Token-cost gate before plur_session_end"
+      scope: user
+      installed_by: "hand-wired"
+    - matcher: "mcp__plur__plur_session_end"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/wrap_up_checklist_check.py"
+      purpose: "Wrap-up checklist before plur_session_end"
+      scope: user
+      installed_by: "hand-wired"
+    - matcher: "Skill|SlashCommand|Agent"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/command_recall_inject.py"
+      purpose: "Inject command-scoped engrams on Skill/SlashCommand/Agent (DIP-0029)"
+      scope: user
+      installed_by: "bootstrap/configure-hooks.py"
+      timeout: 3
+    - matcher: "Artifact|Bash"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/publish_guard.py"
+      purpose: "An Artifact publish, gist or deploy asks first (MEM-17)"
+      scope: user
+      installed_by: "install_redaction_guards.py --only publish"
+      timeout: 5
+    - matcher: "Edit|Write|MultiEdit|Bash"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/eval_guard.py"
+      purpose: "Changing an existing promise eval asks the owner first (MEM-30)"
+      scope: user
+      installed_by: "install_redaction_guards.py --only evals"
+      timeout: 5
+    - matcher: "Bash|Edit|Write|MultiEdit"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/config_protection.py"
+      purpose: "A guard cannot be unplugged, stubbed or bypassed in git (MEM-09)"
+      scope: user
+      installed_by: "install_redaction_guards.py --only guards"
+      timeout: 5
+    - matcher: "Bash|Edit|Write|Read|MultiEdit"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/space_policy_guard.py --client"
+      purpose: "Client guards: a client session stays inside; person docs ask (MEM-13/15)"
+      scope: user
+      installed_by: "install_redaction_guards.py --only client"
+      timeout: 5
+    - matcher: "*"
+      type: command
+      command: "~/.plur/bin/plur-hook hook-session-guard"
+      purpose: "PLUR session guard"
+      scope: user
+      installed_by: "plur init"
+      timeout: 3
+    - matcher: "*"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/injection_integrity_guard.py check"
+      purpose: "A truncated injection must be read before other tools run"
+      scope: user
+      installed_by: "install_redaction_guards.py --only redaction"
+      timeout: 5
+    - matcher: "*"
+      type: command
+      command: "python3 ~/.datacore/v2-runner/.datacore/lib/hooks/tool_policy_guard.py"
+      purpose: "Tool-policy guard before every tool call on an agent machine (AGT-11)"
+      scope: user
+      installed_by: "agent_host_setup.sh (install_redaction_guards.py --only policy)"
+      timeout: 8
 
   SubagentStart:
     - matcher: ".*"
       type: command
-      command: "python3 ~/Data/.datacore/lib/active_memory.py --event subagent"
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/active_memory.py --event subagent"
       purpose: "Inject agent-scoped engrams into subagent context"
       declared_by: DIP-0016
-      priority: 100
+      priority: 10
+      timeout: 10
+    - matcher: ".*"
+      type: command
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/plur_cli.py --timeout 8 hook-inject --event subagent"
+      purpose: "PLUR hook-inject into subagent"
+      declared_by: DIP-0019
+      priority: 20
       timeout: 10
 
   PostCompact:
     - matcher: "auto|manual"
       type: command
-      command: "python3 ~/Data/.datacore/lib/active_memory.py --event rehydrate"
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/active_memory.py --event rehydrate"
       purpose: "Re-inject critical engrams after context compaction"
       declared_by: DIP-0019
-      priority: 100
+      priority: 10
       timeout: 15
+    - matcher: "auto|manual"
+      type: command
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/plur_cli.py --timeout 13 hook-inject --rehydrate"
+      purpose: "PLUR re-injection after compaction"
+      declared_by: DIP-0019
+      priority: 20
+      timeout: 15
+
+  PostToolUse:
+    - matcher: "Skill|Bash"
+      type: command
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/hooks/ralph_loop_safety.py patch-session-id"
+      purpose: "Ralph loop: bind the loop to this session"
+      declared_by: ralph-loop
+      priority: 10
+      timeout: 3
+    - matcher: "Edit|Write"
+      type: command
+      command: "bash \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/hooks/org-date-fix.sh"
+      purpose: "Auto-fix org-mode date day-of-week after edits"
+      declared_by: DIP-0009
+      priority: 20
+      timeout: 10
+    - matcher: "Bash|Edit|Write|Agent"
+      type: command
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/hooks/plur_observe.py --post >/dev/null"
+      purpose: "Record tool results for PLUR observation (post)"
+      declared_by: plur
+      priority: 30
+      timeout: 3
+    - matcher: "Edit|Write|MultiEdit"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/org_date_hook.py"
+      purpose: "Fix org day names after a write"
+      scope: user
+      installed_by: "hand-wired"
+    - matcher: "Read|Bash|Grep|Glob"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/injection_integrity_guard.py clear"
+      purpose: "Clear the injection gate once the spilled file is read"
+      scope: user
+      installed_by: "install_redaction_guards.py --only redaction"
+      timeout: 5
+    - matcher: "mcp__plur__plur_session_start"
+      type: command
+      command: "~/.plur/bin/plur-hook hook-session-mark"
+      purpose: "PLUR: mark session started"
+      scope: user
+      installed_by: "plur init"
+      timeout: 3
+    - matcher: "mcp__plur__plur_session_start"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/injection_integrity_guard.py mark"
+      purpose: "Arm the injection gate after plur_session_start"
+      scope: user
+      installed_by: "install_redaction_guards.py --only redaction"
+      timeout: 5
 
   SessionEnd:
     - type: command
-      command: "python3 ~/Data/.datacore/lib/session_cleanup.py"
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/session_archive.py"
+      purpose: "Archive the session transcript at session end"
+      declared_by: DIP-0019
+      priority: 10
+      timeout: 60
+    - type: command
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/session_cleanup.py"
       purpose: "Clean up session state file"
       declared_by: DIP-0019
-      priority: 900
+      priority: 20
       timeout: 5
+    - type: command
+      command: "~/.plur/bin/plur-hook hook-session-end"
+      purpose: "PLUR: end the session"
+      scope: user
+      installed_by: "plur init"
+      timeout: 5
+
+  Stop:
+    - matcher: "*"
+      type: command
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/hooks/ralph_loop_safety.py stop-guard"
+      purpose: "Ralph loop: stop guard"
+      declared_by: ralph-loop
+      priority: 10
+      timeout: 3
+    - matcher: "*"
+      type: command
+      command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/plur_cli.py --timeout 2 hook-learn-check"
+      purpose: "Remind to capture learnings before stopping"
+      declared_by: DIP-0019
+      priority: 20
+      timeout: 3
+    - matcher: "*"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/desktop_notify.py"
+      purpose: "Desktop notification when Claude stops"
+      scope: user
+      installed_by: "hand-wired"
+      timeout: 5
+    - matcher: "*"
+      type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/cost_tracker.py"
+      purpose: "Record session cost when Claude stops"
+      scope: user
+      installed_by: "hand-wired"
+      timeout: 5
+
+  PostToolUseFailure:
+    - matcher: "mcp__*"
+      type: command
+      command: "CLAUDE_HOOK_EVENT_NAME=PostToolUseFailure python3 ~/Data/.datacore/lib/hooks/mcp_health_check.py"
+      purpose: "Report a failing MCP server after a tool failure"
+      scope: user
+      installed_by: "hand-wired"
 
 git:
   pre-commit:

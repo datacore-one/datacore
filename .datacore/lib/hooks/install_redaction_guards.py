@@ -62,6 +62,11 @@ Policy guard (2026-10-01, promises AGT-11 and INS-7, owner approved AGT-11 2026-
                           agent_host_setup.sh now wires and verifies it with
                           `--only policy --hooks-dir <runner lib>/hooks --create`.
 
+Per machine (2026-10-01): the roster's servers.<host>.guards names the guards a
+machine needs; agent_host_setup.sh --host X wires them with --only <those> and
+its --verify fails naming each one missing. Which guards a machine gets is the
+owner's entry in the roster, never the installer's default.
+
 Run:   python3 .datacore/lib/hooks/install_redaction_guards.py [--dry-run]
        ... --only policy --hooks-dir DIR [--create] [--verify]
 
