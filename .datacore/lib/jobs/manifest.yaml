@@ -978,7 +978,9 @@ jobs:
     cmd: "cd ~/Data && DATACORE_ROOT=~/Data /usr/bin/python3 ~/Data/.datacore/lib/morning_repair.py sweep"
     on_fail: telegram
     artifacts:
-      - path: "~/.datacore/state/morning-repair/{today}.json"
+      # Newest file, judged by age: `{today}` cannot exist between midnight and
+      # the 02:00 run, and job_verify runs hourly (false red nightly, 2026-10-02).
+      - path: "~/.datacore/state/morning-repair/*.json"
         check: json_has_keys
         arg: ["swept_at", "findings"]
         max_age_hours: 26
@@ -989,7 +991,8 @@ jobs:
     cmd: "cd ~/Data && DATACORE_ROOT=~/Data /usr/bin/python3 ~/Data/.datacore/lib/morning_repair.py recheck"
     on_fail: telegram
     artifacts:
-      - path: "~/.datacore/cos/fragments/{today}/repairs.json"
+      # Newest file, judged by age: `{today}` cannot exist before the 03:30 run.
+      - path: "~/.datacore/cos/fragments/*/repairs.json"
         check: json_has_keys
         arg: ["repaired", "still_failing"]
         max_age_hours: 26
