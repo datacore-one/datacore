@@ -1107,6 +1107,21 @@ jobs:
       - path: "~/.datacore/state/github-triage.log"
         check: nonempty
         max_age_hours: 26
+      # What the run PUBLISHES: one board per scope, committed to the personal
+      # space and synced to every machine. run_nightly.sh validates each board
+      # before it commits it, so a board here is a run that finished. The box's
+      # morning check (cos_verify_morning.check_github_triage) runs these
+      # ~/Data/ contracts against its synced copy; until 2026-10-02 it watched
+      # ~/.datacore/cos/github-triage.log, which nothing has written since
+      # 2026-09-08, and called a triage that had run dead.
+      - path: "~/Data/0-personal/content/reports/github-triage/{today}-public.board.json"
+        check: json_has_keys
+        arg: ["meta"]
+        max_age_hours: 26
+      - path: "~/Data/0-personal/content/reports/github-triage/{today}-enterprise.board.json"
+        check: json_has_keys
+        arg: ["meta"]
+        max_age_hours: 26
 
   # nightshift-inbox-process: RETIRED 2026-09-17 (its timer was disabled on the
   # overnight host; box-inbox runs the same /process-inbox workflow at 05:00).
