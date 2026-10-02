@@ -93,6 +93,14 @@ anything below that seems to say otherwise.
   keyword (`** TODO [NEEDS_REVIEW] blue thing w/ Marko??`). Do not file it in
   someday.org or next_actions.org. The owner reviews it. When someone is
   present you may ask instead; unanswered, it is marked the same way.
+- **Group heading** (a top-level heading with no state whose only content is
+  child entries and a `:PROPERTIES:` drawer — e.g. `* Continuation from wrap-up
+  2026-09-30 (...)` or a parked batch): it is a container, not an entry. Process
+  each child as an entry. When the last child has left, remove the empty group
+  heading in the same edit; an empty container left behind reads as an
+  unprocessed entry. A group that still holds a child (one marked
+  `[NEEDS_REVIEW]`, say) stays. A heading with body text of its own is an entry,
+  never a group.
 
 ## Clarify Step — the GTD discipline that's been missing
 
