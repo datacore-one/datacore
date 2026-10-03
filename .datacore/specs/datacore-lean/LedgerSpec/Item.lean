@@ -17,6 +17,14 @@ What is abstracted, and why that is safe for the properties below:
 * Events are already resolved to their item: an event naming no known item goes
   to `orphans` in Python and never reaches a handler (see `Fold.lean` for the
   frame property that makes per-item reasoning sound).
+
+**Reopen and archive (ledger upgrade Phase 4, 2026-10-04; modelled before the
+Python).** `item.archive` is a non-terminal hide: status `archived`, grant
+cleared, payload kept. `item.reopen` takes a dismissed or archived item back to
+`created` (owner, grant and closing stamp cleared; payload, conflicts and
+history kept). Everything else stays as it was: closed work reopens ONLY
+through an explicit `item.reopen` (`reopen_is_the_only_way_back`), and a
+dismissed item is frozen against every other event (`dismissed_frozen`).
 -/
 
 namespace LedgerSpec.Item
@@ -25,7 +33,7 @@ abbrev Actor := String
 abbrev Hash := String
 
 inductive Status
-  | created | claimed | completed | verified | dismissed
+  | created | claimed | completed | verified | dismissed | archived
   deriving DecidableEq, Repr
 
 structure Item (P : Type) where
@@ -49,6 +57,8 @@ inductive Kind (F : Type)
   | update (fields : F) (cond : Option Cond)
   | dismiss (cond : Option Cond)
   | ownerSet (owner : Option Actor)
+  | reopen
+  | archive
 
 structure Ev (F : Type) where
   actor : Actor
@@ -77,6 +87,11 @@ def dismissNow (i : Item P) (e : Ev F) : Item P :=
   { i with status := .dismissed, closedAt := some e.hlc }
 
 def clearGrant (i : Item P) : Item P := { i with grantedBy := none, grantedTo := none }
+
+/-- Dismissed or archived: hidden from the projection, revivable only by `reopen`. -/
+def Status.shelved : Status → Bool
+  | .dismissed | .archived => true
+  | _ => false
 
 /-- One application of the matching `_handle_*` (post-fix semantics). -/
 def step (o : Oracle P F) (i : Item P) (e : Ev F) : Item P :=
@@ -128,9 +143,15 @@ def step (o : Oracle P F) (i : Item P) (e : Ev F) : Item P :=
   | .dismiss none =>
     if i.status = .dismissed then i else dismissNow i e
   | .ownerSet ow =>
-    if i.status = .dismissed then i
+    if i.status = .dismissed ∨ i.status = .archived then i
     else if ow = i.owner then i
     else clearGrant { i with owner := ow }
+  | .reopen =>
+    if i.status.shelved then clearGrant { i with status := .created, owner := none, closedAt := none }
+    else i
+  | .archive =>
+    if i.status.shelved then i
+    else clearGrant { i with status := .archived, closedAt := some e.hlc }
 
 /-- The history line each handler writes, reduced to its verdict. -/
 inductive Note | applied | noop | conflict
@@ -161,19 +182,26 @@ def note (o : Oracle P F) (i : Item P) (e : Ev F) : Note :=
       if i.status = .dismissed ∧ resolve c i.conflicts = i.conflicts then .noop else .applied
     else .conflict
   | .dismiss none => if i.status = .dismissed then .noop else .applied
-  | .ownerSet ow => if i.status = .dismissed ∨ ow = i.owner then .noop else .applied
+  | .ownerSet ow =>
+    if i.status = .dismissed ∨ i.status = .archived ∨ ow = i.owner then .noop else .applied
+  | .reopen => if i.status.shelved then .applied else .noop
+  | .archive => if i.status.shelved then .noop else .applied
 
 /-! ## 1. Status moves only along the intended edges -/
 
 /-- The lifecycle graph from the `fold.py` docstring: created → claimed,
 claimed → created (release = un-claim), claimed → completed, completed →
-verified, anything → dismissed, plus staying put. Nothing else. -/
+verified, anything → dismissed or archived, dismissed or archived → created
+(reopen), plus staying put. Nothing else. -/
 def edge : Status → Status → Bool
   | .created,   .claimed   => true
   | .claimed,   .created   => true
   | .claimed,   .completed => true
   | .completed, .verified  => true
   | _,          .dismissed => true
+  | _,          .archived  => true
+  | .dismissed, .created   => true
+  | .archived,  .created   => true
   | s, t => s == t
 
 @[simp] theorem edge_refl (s : Status) : edge s s = true := by cases s <;> rfl
@@ -184,39 +212,55 @@ theorem step_edge (o : Oracle P F) (i : Item P) (e : Ev F) :
   unfold step
   split
   · simp
-  · cases e.kind <;> simp only <;> (repeat' split) <;> (try simp_all [dismissNow, clearGrant]) <;> decide
+  · cases e.kind <;> simp only <;> (repeat' split) <;> (try simp_all [dismissNow, clearGrant]) <;>
+      (cases hs : i.status <;> simp_all [edge, Status.shelved])
 
-/-- Closed work never reopens: once completed, verified or dismissed, no event
-returns an item to `created` or `claimed`. -/
+/-- Closed work: completed, verified, dismissed or archived. -/
 def Status.closed : Status → Bool
-  | .completed | .verified | .dismissed => true
+  | .completed | .verified | .dismissed | .archived => true
   | _ => false
 
-theorem edge_closed {s t : Status} (h : edge s t = true) (hs : s.closed = true) :
-    t.closed = true := by
-  cases s <;> cases t <;> simp_all [edge, Status.closed]
+/-- **Closed work reopens only through an explicit `item.reopen`** (Phase 4).
+Any event that takes a closed item back to an open status is a reopen, and the
+item was dismissed or archived (completed and verified work is never reopened). -/
+theorem reopen_is_the_only_way_back (o : Oracle P F) (i : Item P) (e : Ev F)
+    (hs : i.status.closed = true) (ht : (step o i e).status.closed = false) :
+    e.kind = .reopen ∧ i.status.shelved = true := by
+  revert ht
+  unfold step
+  split
+  · intro h; simp_all
+  · cases hk : e.kind <;> simp only <;> (repeat' split) <;>
+      simp_all [dismissNow, clearGrant, Status.closed, Status.shelved] <;>
+      (cases hi : i.status <;> simp_all [Status.closed, Status.shelved])
 
 def run (o : Oracle P F) (i : Item P) (es : List (Ev F)) : Item P := es.foldl (step o) i
 
-theorem run_closed (o : Oracle P F) (es : List (Ev F)) :
+/-- Without a reopen, closed work stays closed along any trace. -/
+theorem run_closed (o : Oracle P F) (es : List (Ev F)) (hno : ∀ e ∈ es, e.kind ≠ .reopen) :
     ∀ (i : Item P), i.status.closed = true → (run o i es).status.closed = true := by
   induction es with
   | nil => intro i h; exact h
-  | cons e es ih => intro i h; exact ih _ (edge_closed (step_edge o i e) h)
+  | cons e es ih =>
+    intro i h
+    apply ih (fun e' he' => hno e' (List.mem_cons_of_mem _ he'))
+    cases hc : (step o i e).status.closed
+    · exact absurd (reopen_is_the_only_way_back o i e h hc).1 (hno e (List.mem_cons_self ..))
+    · rfl
 
 /-! ## 2. Dismissal is terminal; history never lies -/
 
 /-- Status, owner, grant, closing stamp and payload are frozen once an item is
-dismissed. -/
+dismissed -- against every event except an explicit `item.reopen`. -/
 theorem dismissed_frozen (o : Oracle P F) (i : Item P) (e : Ev F)
-    (h : i.status = .dismissed) :
+    (h : i.status = .dismissed) (hr : e.kind ≠ .reopen) :
     let j := step o i e
     j.status = .dismissed ∧ j.owner = i.owner ∧ j.grantedBy = i.grantedBy ∧
       j.closedAt = i.closedAt ∧ j.payload = i.payload := by
   unfold step
   split
   · simp [h]
-  · cases e.kind <;> simp only <;> (repeat' split) <;> simp_all [clearGrant]
+  · cases hk : e.kind <;> simp only <;> (repeat' split) <;> simp_all [clearGrant, Status.shelved]
 
 /-- **Honest history (fixes finding 1).** Whenever the fold writes a "no-op"
 line, the item is exactly unchanged. Before the fix this failed on two
@@ -292,7 +336,7 @@ theorem completer_is_not_verifier (o : Oracle P F) (i : Item P) (e1 e2 : Ev F)
 stay put, be released back to `created`, or be dismissed. -/
 theorem conflict_gate (o : Oracle P F) (i : Item P) (e : Ev F) (h : i.conflicts ≠ []) :
     let t := (step o i e).status
-    t = i.status ∨ t = .created ∨ t = .dismissed := by
+    t = i.status ∨ t = .created ∨ t = .dismissed ∨ t = .archived := by
   unfold step
   split
   · simp
@@ -332,6 +376,33 @@ theorem regrant_after_release (o : Oracle Unit F) :
     j.owner = some "b" ∧ j.grantedBy = none ∧
       (step o j (ev "approver" .grant)).grantedTo = some "b" := by
   simp [run, step, fresh, ev, Kind.gated, clearGrant]
+
+/-! ## 5b. Reopen and archive -/
+
+/-- A reopened item is open again, unowned and ungranted, with its content and
+any retained conflicts exactly as they were. -/
+theorem reopen_revives (o : Oracle P F) (i : Item P) (e : Ev F)
+    (hs : i.status.shelved = true) (hk : e.kind = .reopen) :
+    let j := step o i e
+    j.status = .created ∧ j.owner = none ∧ j.grantedBy = none ∧ j.closedAt = none ∧
+      j.payload = i.payload ∧ j.conflicts = i.conflicts := by
+  simp [step, hk, Kind.gated, hs, clearGrant]
+
+/-- Archive is a hide, not a close: the content is kept, and a reopen brings the
+item back with it. -/
+theorem archive_is_revivable (o : Oracle P F) (i : Item P) (e r : Ev F)
+    (hs : i.status.shelved = false) (ha : e.kind = .archive) (hr : r.kind = .reopen) :
+    let j := step o i e
+    j.status = .archived ∧ j.payload = i.payload ∧
+      (step o j r).status = .created ∧ (step o j r).payload = i.payload := by
+  have harch : Status.archived.shelved = true := rfl
+  simp [step, ha, hr, Kind.gated, hs, clearGrant, harch]
+
+/-- A reopen of anything not dismissed or archived changes nothing (completed
+and verified work is never reopened). -/
+theorem reopen_of_open_work_is_noop (o : Oracle P F) (i : Item P) (e : Ev F)
+    (hs : i.status.shelved = false) (hk : e.kind = .reopen) : step o i e = i := by
+  simp [step, hk, Kind.gated, hs]
 
 /-! ## 6. Spend is conserved: it only accumulates -/
 
