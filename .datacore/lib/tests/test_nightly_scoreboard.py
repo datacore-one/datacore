@@ -305,6 +305,15 @@ def test_a_red_that_passes_on_the_second_run_says_so(tmp_path):
     assert details[str(f)] == [("", "passed when run again for its failure line (flaky?)")]
 
 
+def test_a_red_that_passes_when_run_again_names_what_the_first_run_said(tmp_path):
+    f = tmp_path / "test_promise_ZZ9_fixture.py"
+    f.write_text("def test_ok():\n    assert True\n")
+    first = {str(f): [("test_host", "AssertionError: nightshift: could not read (ssh hiccup)")]}
+    [(test, line)] = pn.failure_details(tmp_path, [f], {}, first=first)[str(f)]
+    assert test == "test_host"
+    assert "passed when run again" in line and "ssh hiccup" in line
+
+
 @pytest.mark.parametrize("line", [
     "subprocess.TimeoutExpired: Command '['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', 'box', 'crontab -l']' timed out",
     "AssertionError: machines not on current main: box: could not check (UNREACHABLE timeout)",
