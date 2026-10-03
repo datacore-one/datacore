@@ -124,8 +124,11 @@ def runner_env(agents: bool = False) -> dict:
     return env
 
 
-def failure_details(cwd: Path, files: list[Path], env_extra: dict) -> dict[str, list[tuple[str, str]]]:
-    """{file path: [(test name, first failure line)]} from one more pytest run."""
+def failure_details(cwd: Path, files: list[Path], env_extra: dict,
+                    first: dict | None = None) -> dict[str, list[tuple[str, str]]]:
+    """{file path: [(test name, first failure line)]} from one more pytest run.
+    `first` is what the scoreboard run itself recorded ({file path: [(test,
+    line)]}); a file that passes when run again is reported with that."""
     import promise_evals
     with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as fh:
         xml = fh.name
@@ -168,6 +171,10 @@ def failure_details(cwd: Path, files: list[Path], env_extra: dict) -> dict[str, 
         if got and passed.get(f.name) and all(line.startswith(SKIPPED) for _t, line in got):
             got.append(("", f"{passed[f.name]} other test(s) in this file passed; only the skipped ones did not run"))
         if str(f) not in out:
+            said = (first or {}).get(str(f)) if f.name in reported else None
+            if said:
+                out[str(f)] = [(t, f"passed when run again; the first run said: {line}") for t, line in said]
+                continue
             out[str(f)] = [("", "passed when run again for its failure line (flaky?)" if f.name in reported
                             else "pytest reported no test from this file (collection error or crash)")]
     return out
@@ -211,7 +218,9 @@ def run_board(want=None, agents: bool = False) -> dict:
     for name, cwd, _tdir, env in promise_evals.SUITES:
         batch = sorted(wanted.get(name, ()))
         for i in range(0, len(batch), promise_evals.CHUNK_FILES):
-            details.update(failure_details(cwd, batch[i:i + promise_evals.CHUNK_FILES], env))
+            details.update(failure_details(cwd, batch[i:i + promise_evals.CHUNK_FILES], env,
+                                           first={k: [tuple(x) for x in v]
+                                                  for k, v in (raw.get("first_failures") or {}).items()}))
     raw["failures"] = {pid: [{"file": _rel(f), "test": t, "line": line}
                              for _s, f in files.get(promise_evals.norm(pid), [])
                              for t, line in details.get(str(f), [])]

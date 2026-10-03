@@ -80,6 +80,18 @@ def eval_files() -> dict[str, list[tuple[str, Path]]]:
 
 
 AGENTS = False   # --agents: also run agent-behaviour evals (real model runs, pass^3)
+#: {eval file path: [(test, first failure line)]} from the run itself. The
+#: nightly reruns a red for its reason; when the rerun passes, this is the only
+#: record of why the run failed (MEM-51, 2026-10-03: "flaky?" with no cause).
+FIRST_FAILURES: dict[str, list[tuple[str, str]]] = {}
+
+
+def _first_line(el) -> str:
+    for text in (el.get("message") or "", el.text or ""):
+        for line in text.splitlines():
+            if line.strip():
+                return " ".join(line.split())[:300]
+    return el.tag
 
 
 def run_suite(cwd: Path, files: list[Path], env_extra: dict) -> dict[str, bool]:
@@ -104,11 +116,16 @@ def run_suite(cwd: Path, files: list[Path], env_extra: dict) -> dict[str, bool]:
     except (ET.ParseError, OSError):
         return result
     seen: dict[str, bool] = {}
+    by_name = {f.name: f for f in files}
     for case in tree.iter("testcase"):
         fname = (case.get("file") or case.get("classname", "").split(".")[-1] + ".py").split("/")[-1]
         bad = any(child.tag in ("failure", "error") for child in case)
         skipped = any(child.tag == "skipped" for child in case)
         seen[fname] = seen.get(fname, True) and not bad and not skipped
+        failed = next((c for c in case if c.tag in ("failure", "error")), None)
+        if failed is not None and fname in by_name:
+            FIRST_FAILURES.setdefault(str(by_name[fname]), []).append(
+                (case.get("name", ""), _first_line(failed)))
     for f in files:
         if f.name in seen:
             result[f.name] = seen[f.name]
@@ -184,7 +201,9 @@ def main() -> int:
     for v in status.values():
         counts[v.split()[0] if args.list else v] += 1
     if args.json:
-        print(json.dumps({"counts": counts, "promises": status}, indent=1))
+        print(json.dumps({"counts": counts, "promises": status,
+                          "first_failures": {f: [list(x) for x in v] for f, v in FIRST_FAILURES.items()}},
+                         indent=1))
     else:
         for pid, st in status.items():
             print(f"{st:10} {pid:10} {wanted[pid][:90]}")
