@@ -314,6 +314,24 @@ def _artifact_signature(job, *, now: float | None = None) -> str:
     return "|".join(parts)
 
 
+def _failure_detail(job, failures: list[str], n: int = 3, width: int = 240) -> str:
+    """Which machine, and what each failure actually was.
+
+    The direct alert (box and agent hosts) read "job.verify FAILED: <job> (N
+    failure(s))" and nothing else: no machine, no artifact, no reason -- the
+    failure strings went to stderr and a log nobody reads (owner, 2026-10-02:
+    "Errors should say what they are"). Bounded so one alert stays one screen.
+    """
+    machine = getattr(job, "machine", None) if job is not None else None
+    lines = [f"  - {f[:width]}" + ("..." if len(f) > width else "") for f in failures[:n]]
+    if len(failures) > n:
+        lines.append(f"  - and {len(failures) - n} more")
+    if not lines:
+        return ""
+    head = f"\non {machine}:" if machine else "\nfailures:"
+    return head + "\n" + "\n".join(lines)
+
+
 def _artifact_tail(job, n: int = 8) -> str:
     """The last `n` lines of each artifact, for an alert that must carry them."""
     out = []
@@ -558,6 +576,8 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> 
                   f"({_record.get('consecutive')}x); the cool-down is the day", file=sys.stderr)
             return
         _rec.note_alerted(job_name)
+    if mode in ("telegram", "command"):
+        message += _failure_detail(job, failures)
     if mode == "telegram":
         if not _send_telegram(message):
             print(f"alert: telegram unavailable, logged only ({job_name})", file=sys.stderr)

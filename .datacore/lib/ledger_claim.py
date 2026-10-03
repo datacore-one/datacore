@@ -344,11 +344,27 @@ def _isolated_check(space: Path, check: str) -> tuple[bool, str]:
     return rc == 0, sha
 
 
+#: How long one check may run before it is stopped and reported as timed out.
+CHECK_TIMEOUT_S = 120
+
+
 def _isolated_check_rc(space: Path, check: str) -> tuple[int, str]:
+    """(status, sha) -- see _isolated_check_explained, which this answers for."""
+    rc, sha, _why = _isolated_check_explained(space, check)
+    return rc, sha
+
+
+def _isolated_check_explained(space: Path, check: str) -> tuple[int, str, str]:
     """Check a fresh worktree of the committed result, not the agent's directory.
 
-    Returns (status, sha): 0 passed, WAITING_ON_OWNER when the check said so
-    (under the same isolation conditions as a pass), 1 for anything else.
+    Returns (status, sha, why): 0 passed, WAITING_ON_OWNER when the check said
+    so (under the same isolation conditions as a pass), 1 for anything else.
+    `why` is "" on a pass, otherwise one plain sentence (check_diagnosis) naming
+    the repository and commit the check ran in, the command, and the most likely
+    cause. ERRORS SAY WHAT THEY ARE (owner, 2026-10-02): the raw line "can't open
+    file '/tmp/check-xxxx/verify/.datacore/lib/jobs/fix_check.py'" named neither
+    the repository nor the reason, and was read as "an old snapshot" when the copy
+    was of a different repository that has no .datacore/lib at all.
 
     What this DOES buy, and it is worth having:
 
@@ -380,26 +396,30 @@ def _isolated_check_rc(space: Path, check: str) -> tuple[int, str]:
     same green.
     """
     import tempfile
+    from check_diagnosis import describe_repo, diagnose
+
+    def fail(why: str, sha: str = "") -> tuple[int, str, str]:
+        print(f"         -> {why}")
+        return 1, sha, why
+
     dirty: list[str] = []
     if not _artifact_tree_clean(space, dirty):
-        print("         -> check FAILED CLOSED: commit task changes before artifact verification; "
-              "existing index and files preserved"
-              + (f" (uncommitted: {', '.join(sorted(dirty)[:4])})" if dirty else ""))
-        return 1, ""
+        return fail(f"check FAILED CLOSED in {describe_repo(space)}: commit task changes before "
+                    "artifact verification; existing index and files preserved"
+                    + (f" (uncommitted: {', '.join(sorted(dirty)[:4])})" if dirty else ""))
     rc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=space,
                         capture_output=True, text=True)
     if rc.returncode != 0:
-        print("         -> check FAILED CLOSED: cannot resolve HEAD for isolation")
-        return 1, ""
+        return fail(f"check FAILED CLOSED: cannot resolve HEAD of {space} for isolation "
+                    f"({(rc.stderr or '').strip()[:120]})")
     head = rc.stdout.strip()
     with tempfile.TemporaryDirectory(prefix="check-") as tmp:
         wt = Path(tmp) / "verify"
         add = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "worktree", "add", "--detach", str(wt), head],
                              cwd=space, capture_output=True, text=True)
         if add.returncode != 0:
-            print(f"         -> check FAILED CLOSED: no isolated worktree "
-                  f"({(add.stderr or '').strip()[:90]})")
-            return 1, head
+            return fail(f"check FAILED CLOSED: could not make an isolated copy of "
+                        f"{describe_repo(space, head)} ({(add.stderr or '').strip()[:160]})", head)
         try:
             # THE CHECK'S OWN STDERR IS THE DIAGNOSIS, and it was thrown away.
             # A check runs against the COMMITTED tree, so every input it reads
@@ -408,32 +428,32 @@ def _isolated_check_rc(space: Path, check: str) -> tuple[int, str]:
             # "No such file or directory" no matter what the agent does.
             # Reported as "check failed" alone, that is indistinguishable from
             # a wrong answer, and it cost a full live round to tell apart.
-            proc = run_process(check, shell=True, cwd=str(wt),
-                               capture_output=True, timeout=120)
-            ok = proc.returncode == 0
-            if proc.returncode == WAITING_ON_OWNER:
-                pass  # its own words are printed by the caller's WAITING line
-            elif not ok:
-                # Decoded defensively: without `text=True` these are BYTES, and
-                # the first version of this concatenated them as str and raised
-                # TypeError mid-dispatch -- leaving the item claimed with no
-                # completion, which is the one state this file works hardest to
-                # avoid. A diagnostic that can crash the run is worse than no
-                # diagnostic.
-                def _text(v):
-                    if isinstance(v, bytes):
-                        return v.decode("utf-8", "replace")
-                    return v or ""
-                why = (_text(proc.stderr) + _text(proc.stdout)).strip().splitlines()
-                if why:
-                    print(f"         -> the check said: {why[-1][:180]}")
+            #
+            # And the stderr alone is not enough: it names a /tmp path, not the
+            # repository the copy is of, the commit, or why the file is absent.
+            # check_diagnosis says all of that in one sentence. It decodes the
+            # output defensively: without `text=True` these are BYTES, and a
+            # diagnostic that crashes mid-dispatch leaves the item claimed with
+            # no completion -- worse than no diagnostic.
+            try:
+                proc = run_process(check, shell=True, cwd=str(wt),
+                                   capture_output=True, timeout=CHECK_TIMEOUT_S)
+            except subprocess.TimeoutExpired:
+                return fail(diagnose(cmd=check, rc=None, cwd=wt, repo=space, sha=head,
+                                     timed_out=CHECK_TIMEOUT_S), head)
+            why = ""
+            if proc.returncode not in (0, WAITING_ON_OWNER):
+                # WAITING's own words are printed by the caller's WAITING line.
+                why = diagnose(cmd=check, rc=proc.returncode, cwd=wt, repo=space, sha=head,
+                               stderr=proc.stderr, stdout=proc.stdout)
             current = subprocess.run(["git", "rev-parse", "HEAD"], cwd=space, capture_output=True, text=True)
             intact = current.returncode == 0 and current.stdout.strip() == head and _artifact_tree_clean(space)
             if intact and proc.returncode in (0, WAITING_ON_OWNER):
-                return proc.returncode, head
-            return 1, head
-        except subprocess.TimeoutExpired:
-            return 1, head
+                return proc.returncode, head, ""
+            if not why:
+                why = (f"the check passed, but {describe_repo(space)} moved or gained uncommitted "
+                       f"changes while it ran (HEAD was {head[:10]}), so the pass cannot be trusted")
+            return fail(why, head)
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", str(wt)],
                            cwd=space, capture_output=True)
@@ -587,6 +607,10 @@ def main() -> int:
                         for i in state.items.values() for line in i.history
                         if line.endswith(" item.release: applied")}
     attempts: dict[str, int] = {}
+    #: The last attempt's error, carried into the give-up reason: "gave up after
+    #: 3 failed attempts" alone is what reached the owner, with the cause left
+    #: behind in the release events nobody reads (owner, 2026-10-02).
+    last_error: dict[str, str] = {}
     for ev in events:
         if ev.type == "item.release" and f"{ev.hlc} {ev.actor}" in applied_releases:
             payload = ev.payload or {}
@@ -596,6 +620,8 @@ def main() -> int:
             # than because the work was unsatisfiable -- see the release path.
             if iid and payload.get("kind") not in NOT_AN_ATTEMPT:
                 attempts[iid] = attempts.get(iid, 0) + 1
+                if payload.get("error"):
+                    last_error[iid] = str(payload["error"])
 
     # WAITING ON THE OWNER: the item's latest claim/release is a release of
     # kind `waiting_on_owner` -- the agent finished, a person has the next
@@ -627,7 +653,9 @@ def main() -> int:
         try:
             guarded_append(EventLog(space, args.actor), "item.dismiss",
                            {"id": item.id, "owner": args.actor, "kind": "dropped",
-                            "reason": f"gave up after {n} failed attempts"})
+                            "reason": f"gave up after {n} failed attempts"
+                                      + (f"; last: {last_error[item.id][:400]}"
+                                         if item.id in last_error else "")})
         except PolicyError as exc:
             print(f"DEADLETTER REFUSED  {title}\n         -> {exc}")
             continue
@@ -789,7 +817,7 @@ def main() -> int:
             # sniffing that prose for refusal markers both passed a failure as
             # DONE, because the model rephrases ("I can't" / "I could not").
             # Prose is not evidence. A check that passes is.
-            rc, sha = _isolated_check_rc(space, check)
+            rc, sha, check_why = _isolated_check_explained(space, check)
             passed = rc == 0
             if rc == WAITING_ON_OWNER:
                 EventLog(space, args.actor).append(
@@ -829,9 +857,10 @@ def main() -> int:
                 EventLog(space, args.actor).append(
                     "item.release", {"id": item.id, "owner": args.actor,
                                      "artifact_commit": sha,
-                                     "error": f"check failed: {check}"})
+                                     "error": f"check failed: {check_why or check}"[:1000]})
                 journal_lines.append(
-                    f"FAILED `{item.id[:12]}` {title[:60]} — check did not pass: `{check}`")
+                    f"FAILED `{item.id[:12]}` {title[:60]} — "
+                    + (check_why or f"check did not pass: `{check}`"))
                 print(f"FAILED   [{route}] {title[:70]}\n         -> check failed: {check}")
                 failed += 1
             continue

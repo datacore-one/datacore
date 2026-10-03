@@ -162,6 +162,36 @@ def check_repo_sync(repo_path: str) -> list[str]:
 EMPTY_RETRY_SECONDS = 3.0
 
 
+_EXIT_LINE = re.compile(r"^exit=-?\d+\b")
+
+
+def _run_printed(text: str, last: str, n: int = 3) -> str:
+    """What the failing run printed above its own `exit=N` verdict line.
+
+    An append-only `exit=$rc $(date)` log failed as "last line: 'exit=1 Fri
+    ...'" -- true, and no use: which instance failed and why are the lines the
+    run printed just above it (creds distribute: "✗ box: transfer failed
+    (...)"), and they were never quoted (owner, 2026-10-02: "Errors should say
+    what they are"). Only THIS run's lines: the search stops at the previous
+    run's exit line. Lines that say they failed are preferred over chatter.
+    """
+    if not _EXIT_LINE.match(last or ""):
+        return ""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    run: list[str] = []
+    for ln in reversed(lines[:-1]):
+        if _EXIT_LINE.match(ln):
+            break
+        run.append(ln)
+    run.reverse()
+    if not run:
+        return " -- the run printed nothing before its exit line"
+    bad = [ln for ln in run if re.search(r"✗|fail|error|refused|denied|not found|no such|"
+                                         r"timed? ?out|traceback|exception", ln, re.I)]
+    pick = (bad or run)[-n:]
+    return " -- the run printed: " + " | ".join(ln[:200] for ln in pick)
+
+
 def _read_text(path: str) -> tuple[str | None, str | None]:
     """Read `path` as utf-8 (replacing undecodable bytes). Never raises.
 
@@ -400,7 +430,8 @@ def run_check(artifact: Artifact, *, now: float | None = None,
             else:
                 if not matched:
                     said = f" -- last line: {last[:160]!r}" if last else " -- file is empty"
-                    errors.append(f"{expanded}: last line does not match {artifact.arg!r}{said}")
+                    errors.append(f"{expanded}: last line does not match {artifact.arg!r}{said}"
+                                  + _run_printed(text, last))
 
     elif check == "regex":
         text, read_error = _read_text(expanded)
