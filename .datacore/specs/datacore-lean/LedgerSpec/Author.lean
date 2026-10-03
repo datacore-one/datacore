@@ -61,36 +61,42 @@ def fold (r : Roster) (step : S → Ev B → S) (s : S) (evs : List (Ev B)) : S 
 theorem fold_ignores_unattested (r : Roster) (step : S → Ev B → S) (s : S)
     (evs : List (Ev B)) (e : Ev B) (h : ¬ attested r e) :
     fold r step s (evs ++ [e]) = fold r step s evs := by
-  sorry
+  simp [fold, List.foldl_append, gate, h]
 
 /-- Wherever it sits in the history, an unattested event changes nothing. -/
 theorem fold_ignores_unattested_anywhere (r : Roster) (step : S → Ev B → S) (s : S)
     (pre post : List (Ev B)) (e : Ev B) (h : ¬ attested r e) :
     fold r step s (pre ++ e :: post) = fold r step s (pre ++ post) := by
-  sorry
+  simp [fold, List.foldl_append, List.foldl_cons, gate, h]
 
 /-- The code's shape: drop the unattested events, then fold the rest with the
 unchanged step. -/
 theorem fold_eq_filter (r : Roster) (step : S → Ev B → S) (s : S) (evs : List (Ev B)) :
     fold r step s evs = (evs.filter fun e => decide (attested r e)).foldl step s := by
-  sorry
+  unfold fold
+  induction evs generalizing s with
+  | nil => rfl
+  | cons x xs ih =>
+    by_cases hx : attested r x
+    · simp [List.foldl_cons, gate, hx, ih]
+    · simp [List.foldl_cons, gate, hx, ih]
 
 /-- An impostor line -- a declared name in someone else's log -- has no effect. -/
 theorem impostor_ignored (r : Roster) (step : S → Ev B → S) (s : S)
     (evs : List (Ev B)) (e : Ev B) (h : e.log ≠ e.actor) :
     fold r step s (evs ++ [e]) = fold r step s evs := by
-  sorry
+  exact fold_ignores_unattested r step s evs e (fun ha => h ha.2)
 
 /-- An undeclared writer, even in its own log, has no effect. -/
 theorem undeclared_ignored (r : Roster) (step : S → Ev B → S) (s : S)
     (evs : List (Ev B)) (e : Ev B) (h : e.actor ∉ r) :
     fold r step s (evs ++ [e]) = fold r step s evs := by
-  sorry
+  exact fold_ignores_unattested r step s evs e (fun ha => h ha.1)
 
 /-- Non-vacuity: an attested event is applied exactly as the step says. -/
 theorem attested_takes_effect (r : Roster) (step : S → Ev B → S) (s : S)
     (evs : List (Ev B)) (e : Ev B) (h : attested r e) :
     fold r step s (evs ++ [e]) = step (fold r step s evs) e := by
-  sorry
+  simp [fold, List.foldl_append, gate, h]
 
 end LedgerSpec.Author
