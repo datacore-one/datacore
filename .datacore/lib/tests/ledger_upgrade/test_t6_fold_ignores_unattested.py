@@ -43,6 +43,10 @@ PROJECT = HERE.parents[2] / "specs" / "datacore-lean"
 TARGETS = HERE / "T6Targets.lean"
 ALLOWED = {"propext", "Classical.choice", "Quot.sound"}
 
+# This eval is about the roster itself, so it asks for the real fold roster
+# (resolved from the registry the fixture below writes), not a test default.
+pytestmark = pytest.mark.fold_roster
+
 REGISTRY = """\
 principals:
   owner:
