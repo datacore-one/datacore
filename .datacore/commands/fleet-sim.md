@@ -20,8 +20,20 @@ last run. Issue datacore-one/datacore #222.
 ```
 /fleet-sim            # 7 simulated nights (about an hour)
 /fleet-sim 2          # 2 nights (quick check after a fix)
-/fleet-sim selftest   # the simulator's own tests, in the container (a minute or two)
+/fleet-sim selftest   # the simulator's own tests, in the container (about ten minutes)
+/fleet-sim harsh      # 7 nights with the harsh faults on top (F13-F25), compressed to 2-hour steps
 ```
+
+`harsh` adds the faults of `HARSH_FAULTS` in fleet_week_sim.py to F1-F12, several
+at once: network throttling and loss (real `tc netem` on the container's
+loopback plus the stand-ins), partitions between pairs of machines, a machine
+down for hours mid-job, repeated reboots, out of memory mid-task (the process,
+and the whole run), a full disk, clock skew, GitHub unreachable, a rotated
+credential on one machine, a second writer in the overnight host's checkout,
+a slow and a rate-limited model. Run it as
+`python3 .datacore/lib/fleet_week_sim.py docker --days 7 --harsh --min-interval 7200`
+(about two hours). The report opens with what the owner would have had each
+night: was the delegated task completed, did the briefing and its audio go out.
 
 Not scheduled. The owner decides a cadence later; run it by hand.
 
@@ -71,6 +83,7 @@ Not scheduled. The owner decides a cadence later; run it by hand.
 ## Boundaries
 
 - Never edits a promise eval, never weakens a check, never touches the real
-  fleet: the container runs with `--network none`.
+  fleet: the container runs with `--network none`. Its two added capabilities
+  (NET_ADMIN for netem, SYS_ADMIN for the full-disk mounts) act inside it only.
 - Reads no credential (.env, secrets directory).
 - Do not schedule it (cron, launchd, nightshift) without the owner deciding the cadence.

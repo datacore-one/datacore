@@ -12,7 +12,7 @@ FROM python:3.11-slim-bookworm
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       git faketime rsync perl jq sqlite3 procps util-linux curl ca-certificates \
-      bash coreutils findutils grep sed gawk tar gzip xz-utils \
+      bash coreutils findutils grep sed gawk tar gzip xz-utils iproute2 \
  && rm -rf /var/lib/apt/lists/*
 
 # The install's own requirements (.datacore/lib/requirements.txt, core part)
@@ -20,7 +20,11 @@ RUN apt-get update \
 RUN pip install --no-cache-dir \
       "pyyaml>=6.0" "org-workspace==0.7.0" "cryptography>=50.0.0" "packaging>=24.0" \
       "markdown-it-py==4.2.0" requests \
-      pytest hypothesis pytest-mock pytest-asyncio
+      pytest hypothesis pytest-mock pytest-asyncio \
+      pydantic numpy soundfile
+# pydantic: the datacore-app daemon's briefing generator (a host-only checkout the
+# seed carries for the always-on host); numpy + soundfile: the morning audio's
+# TTS path, whose Kokoro model is the sim/py/kokoro_onnx.py stand-in.
 
 # Jobs name their interpreter by the path it has on each host.
 RUN ln -sf /usr/local/bin/python3 /usr/bin/python3 \
