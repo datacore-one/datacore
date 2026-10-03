@@ -55,6 +55,39 @@ _UNREACHABLE = (
 _UNREACHABLE_BARE = ("No route to host", "Network is unreachable", "Connection refused",
                      "Name or service not known", "Temporary failure in name resolution")
 _KILLED = (-9, 137)
+_ENOSPC = ("No space left on device", "Disk quota exceeded", "[Errno 28]")
+#: Below this much free space a disk is full for every practical purpose: git
+#: cannot write a pack, the ledger cannot append, python cannot write state.
+FULL_FREE_BYTES = 64 * 2**20
+
+
+def _this_host() -> str:
+    import socket
+    return ((os.environ.get("DATACORE_ACTOR") or "").strip()
+            or socket.gethostname().split(".")[0].lower() or "this host")
+
+
+def disk_full(path=None, said: str = "") -> str | None:
+    """'disk full on <host>, N% used (<mount>)' when the disk is full, else None.
+
+    Fleet sim 2026-10-03 (break 4): a full disk on the overnight host read as
+    "fetch failed (offline?)" and "projection could not be verified
+    (RuntimeError)". The owner was told the host was offline. The disk is
+    measured, and ENOSPC text in `said` counts as full even when it cannot be.
+    """
+    path = Path(path or Path.home())
+    while not path.exists() and path != path.parent:
+        path = path.parent
+    hit = any(marker in (said or "") for marker in _ENOSPC)
+    try:
+        import shutil
+        usage = shutil.disk_usage(path)
+    except OSError:
+        return f"disk full on {_this_host()} ({path}: No space left on device)" if hit else None
+    pct = round(100 * usage.used / usage.total) if usage.total else 100
+    if not hit and usage.free >= FULL_FREE_BYTES:
+        return None
+    return f"disk full on {_this_host()}, {pct}% used ({path}, {usage.free // 2**20} MB free)"
 
 
 def _text(v) -> str:
@@ -146,8 +179,8 @@ def cause(*, cmd: str, rc, cwd, repo, sha: str, stderr="", stdout="",
     for bare in _UNREACHABLE_BARE:
         if bare in both:
             return f"could not reach the remote host ({bare})"
-    if "No space left on device" in both or "Disk quota exceeded" in both:
-        return "the disk is full on this host (No space left on device)"
+    if any(marker in both for marker in _ENOSPC):
+        return (disk_full(cwd, both) or "the disk is full on this host") + " (No space left on device)"
     denied = _line_with(both, "Permission denied")
     if denied:
         return f"permission denied: {denied}"

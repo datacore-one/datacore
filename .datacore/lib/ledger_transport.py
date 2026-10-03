@@ -758,12 +758,21 @@ def converge(space: Path, *, root: Path | None = None) -> Result:
         return _converge_locked(space)
 
 
-def _fetch_reason(err: str) -> str:
+def _fetch_reason(err: str, space: Path | None = None) -> str:
     """Name the failure the operator has to act on.
 
     Ordered most-specific first: a denied key and an unknown host both mention
     the host, so matching on the host alone would swallow the auth case.
+    A FULL DISK FIRST (fleet sim 2026-10-03, break 4): git cannot write its
+    temporary pack, the fetch fails, and "offline?" sent the owner to look at
+    the network of a host whose disk was 100% used. Its reason carries neither
+    "offline" nor "fetch failed", so the sweep reads it as blocked.
     """
+    from check_diagnosis import disk_full
+    full = disk_full(space, err) if any(
+        m in (err or "") for m in ("No space left on device", "Disk quota exceeded")) else None
+    if full:
+        return f"{full}: git could not write"
     e = err.lower()
     if "permission denied" in e or "authentication failed" in e:
         # "check your key OR your route": a VPN or exit node can put a different
@@ -775,7 +784,13 @@ def _fetch_reason(err: str) -> str:
         return "host key not trusted"
     if "repository not found" in e or "does not appear to be a git repo" in e:
         return "remote repo missing"
-    return "fetch failed (offline?)"
+    # Keep git's own words: "offline?" alone is a guess, and a guess that reads
+    # like a diagnosis sends the reader to the wrong place.
+    lines = [l.strip() for l in (err or "").splitlines() if l.strip()]
+    fatal = [l for l in lines if l.startswith(("fatal:", "error:"))]
+    said = re.sub(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]*@", r"\1***@",
+                  (fatal or lines or [""])[0 if fatal else -1])[:200]
+    return "fetch failed (offline?)" + (f" -- git said: {said}" if said else "")
 
 
 #: A file this large is never shared (GitHub refuses 100 MB; the fleet's own
@@ -943,7 +958,7 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         # rejecting the Mac's ed25519 key mid-afternoon and all four Gitea
         # spaces reported `offline` — indistinguishable, in a sweep summary,
         # from a closed laptop lid.
-        return Result(False, _fetch_reason(err), {"stderr": err.strip()[:200]})
+        return Result(False, _fetch_reason(err, space), {"stderr": err.strip()[:200]})
     db = default_branch(space)
 
     # Never autosave a half-finished merge. A converge that reaches a repo
@@ -1245,7 +1260,7 @@ def _push_with_retry(space: Path, db: str) -> Result:
         # FAIL into the cycle's status, which is the false alarm the fetch-side
         # classification was written to end. The classifier reads the same
         # stderr and already answers correctly for both cases.
-        return Result(False, f"push {_fetch_reason(err)}",
+        return Result(False, f"push {_fetch_reason(err, space)}",
                       {"attempt": attempt, "stderr": err.strip()[:200]})
     return Result(False, f"push still rejected after {PUSH_ATTEMPTS} attempts",
                   {"hint": "remote is moving faster than we can converge"})
@@ -1349,7 +1364,7 @@ def sync_repo(repo: Path, quiet: bool = False, *, root: Path | None = None) -> s
         # no rule to apply. Defaulting silently is what DIP-0046 §1 forbids.
         outcome = "skipped"
     elif any(s in res.reason for s in ("auth denied", "host key", "repo missing",
-                                       "autosave refused")):
+                                       "autosave refused", "disk full on")):
         outcome = "blocked"
     elif "offline" in res.reason or "fetch failed" in res.reason:
         outcome = "offline"
@@ -1386,7 +1401,7 @@ def _code_update(repo: Path) -> str:
     dirty = bool(out.strip())
     rc, _, err = _git(repo, "fetch", "-q", "origin")
     if rc != 0:
-        reason = _fetch_reason(err)
+        reason = _fetch_reason(err, repo)
         return "offline" if "offline" in reason else "blocked"
     db = default_branch(repo)
     _, cur, _ = _git(repo, "branch", "--show-current")
