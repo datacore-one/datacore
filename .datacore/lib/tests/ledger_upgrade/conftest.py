@@ -23,4 +23,13 @@ for p in (str(LIB), str(HERE)):
         sys.path.insert(0, p)
 
 _ASKED = os.environ.get("LEDGER_UPGRADE_EVALS") == "1" or os.environ.get("PROMISE_EVALS_ALL") == "1"
-collect_ignore_glob = [] if _ASKED else ["test_*.py"]
+# Green rows are promoted into every run (so a regression fails CI); the rest
+# stay out of ordinary runs until their row turns green. Name a file here only
+# once its EVALS.yaml row is green.
+PROMOTED = {
+    "test_p0v_void_is_the_only_cancel.py",                       # P0-V
+    "test_t1_hand_written_line_refused_at_commit_and_push.py",   # T1
+    "test_t3_future_hlc_refused_flagged_not_followed.py",        # T3
+}
+collect_ignore_glob = [] if _ASKED else sorted(
+    p.name for p in HERE.glob("test_*.py") if p.name not in PROMOTED)
