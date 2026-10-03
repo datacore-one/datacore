@@ -145,6 +145,43 @@ def test_a_task_removed_on_one_side_and_untouched_on_the_other_is_removed(tmp_pa
     assert "edited here" in res.text
 
 
+INBOX_BASE = """#+TITLE: Inbox
+* Inbox
+** TODO Daily digest
+   :PROPERTIES:
+   :ID: cap-1
+   :END:
+** TODO Reply to the bank
+   :PROPERTIES:
+   :ID: cap-2
+   :END:
+** TODO Read the article
+   :PROPERTIES:
+   :ID: cap-3
+   :END:
+"""
+NEW_CAPTURE = "** TODO Review by hand\n   :PROPERTIES:\n   :ID: cap-new\n   :END:\n"
+
+
+@pytest.mark.parametrize("processed_on", ["theirs", "ours"])
+def test_tasks_processed_out_on_one_side_stay_out_when_the_other_appends_beside_them(tmp_path, processed_on):
+    """0-personal, 2026-10-03 05:25 UTC: the inbox processor on one host moved
+    twelve untouched captures out of inbox.org while the other host appended a
+    capture right after them. In the one hunk both sides changed, every task of
+    this host's side was kept, so the twelve came back; the merge then failed
+    its own check and kept this host's whole copy. Every processed capture was
+    back in the inbox AND in the file it had been moved to."""
+    processed = "#+TITLE: Inbox\n* Inbox\n"
+    appended = INBOX_BASE + NEW_CAPTURE
+    ours, theirs = (appended, processed) if processed_on == "theirs" else (processed, appended)
+
+    res = m.merge3(INBOX_BASE, ours, theirs)
+
+    assert res.how == m.HOW, res.how                   # merged by id, not the fallback
+    assert sorted(_parses(res.text, tmp_path)) == ["cap-new"], res.text
+    assert not res.needs_person, res.notes
+
+
 def test_a_task_removed_on_one_side_and_edited_on_the_other_is_kept(tmp_path):
     theirs = BASE.split("** TODO Call the bank")[0]
     ours = _with(BASE, "** TODO Call the bank", "** NEXT Call the bank")

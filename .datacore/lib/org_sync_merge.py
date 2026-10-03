@@ -357,6 +357,15 @@ def _resolve_hunk(h: dict[str, list[str]], blocks: dict[str, str]) -> tuple[str,
         return "".join(blocks[t] for t in h[side] if t.startswith("N:"))
     lines, ok = _merge_lines(text("base"), text("ours"), text("theirs"))
     mine = set(ids("ours"))
+    # A task one side removed from this stretch and the other left exactly as
+    # in base is removed (a processed inbox capture, a refile), as merge3 says
+    # for the whole file. Keeping every task of ours here brought back twelve
+    # processed captures in 0-personal on 2026-10-03 when the other host had
+    # only appended a capture beside them.
+    base_ids = ids("base")
+    removed = {iid for iid, t in base_ids.items()
+               if (iid not in ids("theirs") and ids("ours").get(iid) == t)
+               or (iid not in ids("ours") and ids("theirs").get(iid) == t)}
     out, placed = [], False
     for side in ("ours", "theirs"):
         for t in h[side]:
@@ -364,6 +373,8 @@ def _resolve_hunk(h: dict[str, list[str]], blocks: dict[str, str]) -> tuple[str,
                 if not placed:
                     out.append(lines)
                     placed = True
+            elif t[2:].rsplit(":", 1)[0] in removed:
+                continue
             elif side == "ours" or t[2:].rsplit(":", 1)[0] not in mine:
                 out.append(blocks[t])
     if not placed:
