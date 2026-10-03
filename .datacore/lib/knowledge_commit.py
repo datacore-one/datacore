@@ -148,6 +148,11 @@ def _git(repo: Path, *args: str, env=None, check=True, input_bytes=None) -> str:
         error = GitError('Git publication command failed; inspect local Git configuration and hooks')
         error.non_fast_forward = 'push' in args and any(
             marker in (r.stderr or b'') for marker in (b'non-fast-forward', b'fetch first', b'behind', b'stale info'))
+        # Carried, never in str(): a caller that keeps a PRIVATE local record
+        # can say what git said (nightshift's commit-failures log, fleet sim
+        # 2026-10-03 break 8). Log lines still get only the fixed text above.
+        error.command = str(args[0]) if args else ''
+        error.git_output = ((r.stderr or b'') + (r.stdout or b'')).decode('utf-8', errors='replace')[-4000:]
         raise error
     return (r.stdout or b'').decode('utf-8', errors='replace').strip()
 

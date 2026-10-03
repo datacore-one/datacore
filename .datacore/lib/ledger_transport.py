@@ -1109,10 +1109,15 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
     if rewrites:
         return _rewrite_refusal(db, f"origin/{db}", rewrites, autosaved)
     ok, err, resolved, kept = _merge(space, f"origin/{db}", keep_both=True)
+    unfiled: list[str] = []
     if kept:
         # SYN-9: the merge completed around the conflicted file(s); a person
         # gets one task each, and the rest of the space publishes below.
-        file_conflict_tasks(space, kept)
+        # A task that could not be filed SAYS WHY (fleet sim 2026-10-03,
+        # break 1): without a task the conflict stays an alert on every sync,
+        # and nothing said what had refused the task.
+        unfiled = [str(t) for t in (file_conflict_tasks(space, kept) or [])
+                   if str(t).startswith("no task filed")]
     if not ok:
         # Never reset, never rescue-branch, never discard. A conflict here
         # is genuine disagreement about content and belongs to a human; the
@@ -1178,12 +1183,21 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         if alert:
             parts.append("conflict waiting for a person: " + "; ".join(
                 f"{path} (merged around it, nothing lost; task {iid})" for path, iid in alert))
+        if unfiled:
+            parts.append("; ".join(sorted(set(unfiled))))
         if quiet:
             parts.append(quiet)
         # Not "synced" beside a conflict: that word reads as success (SYN-6).
+        # WENT THROUGH: everything but the named files is merged and on origin,
+        # and the tree is not mid-merge. Not ok in words (this is the alert),
+        # but a caller that works IN the space -- the overnight run, the
+        # phase-1 ingest -- may carry on there and leave the named files to
+        # their person (fleet sim 2026-10-03, break 1: one conflict stopped
+        # every overnight task in 2-datacore for three days).
         return Result(False, "; ".join(parts) + ("; the rest of the space went through"
                                                  if alert or handled else "; everything else synced"),
-                      {"branch": db, "autosaved": autosaved, "held_back": sorted(held_back),
+                      {"branch": db, "autosaved": autosaved, "went_through": True,
+                       "held_back": sorted(held_back),
                        "conflicts": [p for p, _ in alert], "conflicts_handled": handled,
                        "detail": hook_detail[:400], "pushed": pr.context.get("attempts", 1)})
     if handled:
@@ -1484,7 +1498,14 @@ def status_lines(root: Path) -> list[str]:
     return lines
 
 
-if __name__ == "__main__":
+def main(argv=None) -> int:
+    """The command line. A converge that cannot run still answers in JSON.
+
+    Every caller parses `"reason"` out of this output (cos_sync, the phase-1
+    cycle). A crash printed a traceback and no JSON, so the box alerted
+    "<space> sync blocked: unknown" for all ten spaces at once (fleet sim
+    2026-10-03, break 11). The cause is now the reason.
+    """
     import argparse
     ap = argparse.ArgumentParser(description="ledger transport")
     ap.add_argument("op", choices=["converge", "gaps", "classify", "sync", "status"])
@@ -1496,21 +1517,29 @@ if __name__ == "__main__":
                     help="converge: one line (space, ok/FAIL, reason) instead of JSON, for logs")
     ap.add_argument("--no-code", action="store_true",
                     help="sync: knowledge repos only, leave code repos alone")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
 
     if a.op == "sync":
-        raise SystemExit(sync_all(a.root, only=a.repo, quiet=a.quiet,
-                                  include_code=not a.no_code))
+        return sync_all(a.root, only=a.repo, quiet=a.quiet, include_code=not a.no_code)
     if a.op == "status":
         print("\n".join(status_lines(a.root)))
-        raise SystemExit(0)
+        return 0
     if a.space is None:
         ap.error(f"--space is required for {a.op}")
     fn = {"converge": converge, "gaps": gaps, "classify": classify}[a.op]
-    res = fn(a.space) if a.op == 'gaps' else fn(a.space, root=a.root)
+    try:
+        res = fn(a.space) if a.op == 'gaps' else fn(a.space, root=a.root)
+    except Exception as exc:  # noqa: BLE001 -- answer with the cause, never a bare traceback
+        said = " ".join(str(exc).split())[:300]
+        res = Result(False, f"{a.op} could not run: {type(exc).__name__}"
+                            + (f": {said}" if said else ""), {"crashed": type(exc).__name__})
     if a.line:
         print(converge_line(a.op, a.space, res))
-        raise SystemExit(0 if res.ok else 1)
+        return 0 if res.ok else 1
     print(json.dumps({"ok": res.ok, "reason": res.reason, "context": res.context},
                      indent=2, default=str))
-    raise SystemExit(0 if res.ok else 1)
+    return 0 if res.ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

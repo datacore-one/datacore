@@ -110,6 +110,15 @@ converge_one() {
     offline=$((offline + 1))
     return 0
   fi
+  # A CONFLICT MERGED AROUND IS ONE FILE, NOT THE SPACE (fleet sim 2026-10-03,
+  # break 1). The merge completed, everything else is on origin and the tree
+  # is not mid-merge, so this space is ingested and projected like any other.
+  # The named file waits for its person; the sync that met it alerts.
+  if grep -q '"went_through": true' "$log" 2>/dev/null; then
+    rm -f "$STATE/phase1-converge-$name.failed"
+    echo "converge $name: went through; waiting for a person: $(converge_reason "$log")"
+    return 0
+  fi
   echo "converge $name: FAILED: $(converge_reason "$log") (skipping this space; see $log)"
   converge_reason "$log" > "$STATE/phase1-converge-$name.failed"
   FAILED_SPACES="$FAILED_SPACES$name "

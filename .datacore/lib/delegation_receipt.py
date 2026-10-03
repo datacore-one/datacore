@@ -27,6 +27,53 @@ def publish(root, path, document):
     if Path(path) not in paths(root):
         raise ValueError('invalid delegation receipt destination')
     atomic_write_text_within(root, path, json.dumps(document, sort_keys=True) + '\n')
+    _commit(Path(path))
+
+
+def _commit(path: Path) -> None:
+    """Commit the receipt just written, alone, in its own repository. Never raises.
+
+    THE WRITER SAVES ITS OWN WORK (fleet sim 2026-10-03, break 9). The review
+    runs at 05:55 and left both receipts as uncommitted changes in the system
+    space; the overnight run at 06:00 found them, rescued them to a branch,
+    cleaned the checkout and alerted "Unsaved work rescued in 2-datacore" --
+    every morning, and the cleaned checkout no longer held the receipt the
+    review had just written. Only this file is committed (`--only`): anything
+    another writer has staged stays staged. If the commit cannot be made the
+    receipt still stands on disk, the next converge's autosave carries it,
+    and the reason is said on stderr.
+    """
+    import os
+    import subprocess
+    import sys
+    env = {k: v for k, v in os.environ.items()
+           if k not in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR')}
+
+    def git(*args):
+        return subprocess.run(['git', '-C', str(path.parent), *args], capture_output=True,
+                              text=True, timeout=60, env=env)
+    try:
+        top = git('rev-parse', '--show-toplevel')
+        if top.returncode:
+            return                                  # not in a checkout: nothing to commit
+        if git('check-ignore', '-q', '--', path.name).returncode == 0:
+            return                                  # ignored: a local record, by choice
+        rel = path.resolve().relative_to(Path(top.stdout.strip()).resolve()).as_posix()
+        from ledger_transport import _repo_lock
+        with _repo_lock(Path(top.stdout.strip())):
+            added = git('add', '--', path.name)
+            if added.returncode:
+                raise RuntimeError(added.stderr.strip() or 'git add failed')
+            if git('diff', '--cached', '--quiet', '--', path.name).returncode == 0:
+                return                              # unchanged since the last commit
+            done = git('commit', '-q', '--only', '-m', f'cos: delegation review receipt ({path.name})',
+                       '--', path.name)
+            if done.returncode:
+                raise RuntimeError((done.stderr or done.stdout).strip() or 'git commit failed')
+    except Exception as exc:  # noqa: BLE001 -- the receipt is written; saving it is best effort
+        said = ' '.join(str(exc).split())[:200]
+        print(f'delegation receipt {path.name} written but not committed '
+              f'({type(exc).__name__}: {said}); the next sync autosaves it', file=sys.stderr)
 
 
 def fresh_hours(root):
