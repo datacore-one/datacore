@@ -82,7 +82,7 @@ def test_malformed_hop_count_is_rejected(policy, hops):
 def test_daily_limit_counts_aliases_and_branch_logs(tmp_path, policy):
     space = tmp_path / "space"
     for actor in ["worker", "alias"]:
-        EventLog(space, actor, sign=False, log_name=actor + "-run").append("item.create", {"id": actor})
+        EventLog(space, actor, sign=False, log_name=actor + "-run-2026-09-10").append("item.create", {"id": actor})
     assert not claim_gate.check_create("worker", {"id": "extra"}, policy, space)[0]
 
 
@@ -96,7 +96,7 @@ def test_limits_use_principal_identity_for_run_aliases(tmp_path, policy):
 
 
 def test_budget_cannot_be_reduced_by_negative_spend_and_counts_run_logs(tmp_path):
-    log = EventLog(tmp_path, "worker", sign=False, log_name="worker-run")
+    log = EventLog(tmp_path, "worker", sign=False, log_name="worker-run-2026-09-10")
     log.append("spend.record", {"cents": 100})
     log.append("spend.record", {"cents": -1000})
     assert claim_gate.month_to_date_cents(tmp_path, ["worker"]) == 100
@@ -165,7 +165,7 @@ def test_simultaneous_claims_only_authorize_one_execution(tmp_path, policy):
     EventLog(tmp_path, 'human', sign=False).append('item.create', {'id': 'one'})
     def claim(number):
         try:
-            guarded_append(EventLog(tmp_path, 'worker', sign=False, log_name=f'run-{number}'),
+            guarded_append(EventLog(tmp_path, 'worker', sign=False, log_name=f'worker-run-2026-09-{10 + number:02d}'),
                 'item.claim', {'id': 'one'}, policy=policy)
             return True
         except PolicyError:

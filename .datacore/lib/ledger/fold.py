@@ -251,8 +251,9 @@ def attested(event: Event, roster: frozenset | None) -> bool:
     No signature conjunct yet (owner decision 1, 2026-09-26): it arrives with
     FDS-ID and only narrows this predicate.
     """
-    actor = event.actor
-    if log_writer(getattr(event, "log", None) or actor) != actor:
+    import actor_identity
+    actor = actor_identity.base_writer(event.actor)
+    if log_writer(getattr(event, "log", None) or event.actor) != actor:
         return False
     return roster is None or actor in roster
 

@@ -45,6 +45,21 @@ def _phase1_space(tmp_path):
     return space
 
 
+def _other_writer() -> str:
+    """A writer other than this host's that the fold's roster declares (T6:
+    an undeclared writer's events have no effect). A clean checkout declares
+    no principals, and any name is a writer there."""
+    import actor_identity
+    # The projector runs in a subprocess, which reads the real registry, so
+    # read it here too (the in-process test default turns the roster off).
+    roster = {actor_identity.base_writer(w) for n, p in actor_identity.principals().items()
+              for w in [n, *(p.get("writes_as") or [])]}
+    if not roster:
+        return "otherhost"
+    me = actor_identity.this_actor()
+    return sorted(w for w in roster if w != me)[0]
+
+
 def _project(tmp_path, space):
     return _run(PROJECT, "--root", tmp_path, "--space", space.name)
 
@@ -66,7 +81,7 @@ def test_add_into_generated_file_survives_a_concurrent_ledger_edit(tmp_path):
     from ledger.fold import fold
     from ledger.log import EventLog, read_events
     item = fold(read_events(space)).items[tid]
-    EventLog(space, "otherhost").append("item.update", conditional_payload(item, {"state": "WAITING"}, version=1))
+    EventLog(space, _other_writer()).append("item.update", conditional_payload(item, {"state": "WAITING"}, version=1))
 
     r = _project(tmp_path, space)
     assert r.returncode == 0 and "REFUSED" not in r.stdout, (
@@ -139,7 +154,7 @@ def test_a_refusal_report_names_the_item_but_no_task_content(tmp_path):
     from ledger.fold import fold
     from ledger.log import read_events
     item = fold(read_events(item_space)).items[tid]
-    EventLog(item_space, "otherhost").append("item.update", conditional_payload(item, {"state": "WAITING"}, version=1))
+    EventLog(item_space, _other_writer()).append("item.update", conditional_payload(item, {"state": "WAITING"}, version=1))
     r = _run(PROJECT, "--root", tmp_path / "second", "--all", "--json")
     (result,) = json.loads(r.stdout)["spaces"]
     assert result["status"] == "refused"
