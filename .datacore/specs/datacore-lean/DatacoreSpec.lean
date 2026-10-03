@@ -11,6 +11,7 @@ import DatacoreSpec.NightshiftGates
 import DatacoreSpec.NightshiftLifecycle
 import DatacoreSpec.OrgTools
 import DatacoreSpec.OrgTransaction
+import DatacoreSpec.Projector
 import DatacoreSpec.Publication
 import DatacoreSpec.Reconcile
 import DatacoreSpec.Research
