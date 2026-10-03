@@ -14,11 +14,29 @@ Owner decision: only Winston sends the audio briefing.
     schedules an audio producer outside the job manifest (crontab, systemd
     units, launchd).
 
-Seeded failure: a second manifest job on nightshift running
-today_orchestrator.py without --no-audio (the pre-2026-09-07 duplicate).
+What is NOT a second sender (owner decision 2026-10-03): the morning's own
+catch-up. `cos_morning_run.py catch-up` re-runs cos_morning.sh only when the
+04:00 run never finished, at most twice, and never once the voice message went
+out. It is excused only when all of these hold:
+  * the manifest declares it: a job whose cmd is the catch-up entry point, on
+    the same machine as the one audio job;
+  * its code refuses after audio: run here against a temporary state dir that
+    says today's voice briefing went out, it re-runs nothing, in every run state
+    (never started, crashed, machine restarted, finished), and it never re-runs
+    more than twice;
+  * in a crontab, the line carries that job's `# datacore-job:<name>` marker
+    AND runs the catch-up entry point itself. A marker on a line that runs
+    cos_morning.sh directly is still a second sender.
+
+Seeded failures: a second manifest job on nightshift running
+today_orchestrator.py without --no-audio (the pre-2026-09-07 duplicate); a
+crontab line running cos_morning.sh on another host; a catch-up on another
+machine; a catch-up whose code would re-run after audio went out.
 """
 from __future__ import annotations
 
+import importlib.util
+import json
 import re
 import subprocess
 import sys
@@ -33,6 +51,9 @@ DC = ROOT / ".datacore"
 MANIFEST = DC / "lib" / "jobs" / "manifest.yaml"
 PRODUCERS = re.compile(r"cos_morning\.sh|winston_audio\.sh|winston_speak")
 HOSTS = ("winston", "nightshift", "hermes", "plur-claw")
+CATCHUP_ENTRY = re.compile(r"cos_morning_run\.py\s+catch-up\b")
+MARKER = re.compile(r"#\s*datacore-job:([\w.-]+)")
+CATCHUP_CODE = DC / "modules" / "chief-of-staff" / "server" / "lib" / "cos_morning_run.py"
 
 
 def _nightshift_today_sends_audio() -> bool:
@@ -58,9 +79,123 @@ def _manifest() -> dict:
     return yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
 
 
+def catchup_jobs(manifest: dict) -> list[tuple[str, str]]:
+    """Manifest jobs that run the morning's catch-up (which can run cos_morning.sh again)."""
+    return [(j.get("name"), j.get("machine")) for j in manifest.get("jobs", []) or []
+            if CATCHUP_ENTRY.search(str(j.get("cmd", "")))]
+
+
+def catchup_refuses_after_audio(code: Path = CATCHUP_CODE) -> bool:
+    """Run the catch-up against a temporary state dir that says today's voice message went out.
+
+    It must re-run nothing in any run state, and never more than twice. Read
+    from the code, not from a comment: a catch-up that would send a second
+    voice message is a second sender.
+    """
+    import tempfile
+    from datetime import datetime, timezone
+    spec = importlib.util.spec_from_file_location("_mem46_catchup", code)
+    mr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mr)
+    now = datetime.now(timezone.utc).replace(hour=5, minute=30)
+    today = now.date().isoformat()
+    states = [{}, {"date": today, "started_at": f"{today}T04:00:04Z", "pid": 1, "boot_id": "a"},
+              {"date": today, "started_at": f"{today}T04:00:04Z", "pid": 1, "boot_id": "old"},
+              {"date": today, "started_at": f"{today}T04:00:04Z", "finished_at": f"{today}T04:09:00Z"}]
+    after_audio: list = []
+    without_audio: list = []
+    with tempfile.TemporaryDirectory() as tmp:
+        cos = Path(tmp)
+        mr.COS, mr._now = cos, (lambda: now)
+        mr.alert = lambda msg: None
+        mr.boot_id, mr.boot_time, mr.pid_alive = (lambda: "a"), (lambda: None), (lambda pid: False)
+        mr.run_morning = lambda: after_audio.append(1) or 0
+        for state in states:
+            (cos / "morning-run.json").write_text(json.dumps(state))
+            (cos / "audio-last-ok").write_text(f"{today}T04:07:00Z\n")
+            (cos / "morning-catchup.json").unlink(missing_ok=True)
+            mr.catch_up()
+        # Without audio, a run that never started is re-run -- at most twice. This also
+        # proves the harness reaches the re-run at all, so the pass above is not vacuous.
+        mr.run_morning = lambda: without_audio.append(1) or 0
+        (cos / "audio-last-ok").unlink()
+        (cos / "morning-run.json").write_text("{}")
+        (cos / "morning-catchup.json").unlink(missing_ok=True)
+        for _ in range(4):
+            mr.catch_up()
+    return not after_audio and 1 <= len(without_audio) <= 2
+
+
+def excused_catchups(manifest: dict, refuses: bool) -> set[str]:
+    """Names of catch-up jobs that are not a second sender (see the module docstring)."""
+    producers = audio_jobs(manifest)
+    if len(producers) != 1 or not refuses:
+        return set()
+    machine = producers[0][1]
+    return {name for name, m in catchup_jobs(manifest) if m == machine}
+
+
+def second_senders(lines: list[str], manifest: dict, refuses: bool) -> list[str]:
+    """Scheduled lines that could send a second voice message: all, minus excused catch-ups."""
+    ok = excused_catchups(manifest, refuses)
+    host = None
+    if ok:
+        machine = audio_jobs(manifest)[0][1]
+        sys.path.insert(0, str(DC / "lib"))
+        from jobs.manifest import ssh_alias
+        host = ssh_alias(machine) or machine
+    out = []
+    for line in lines:
+        m = MARKER.search(line)
+        if (m and m.group(1) in ok and line.startswith(f"{host}:")
+                and CATCHUP_ENTRY.search(line) and not PRODUCERS.search(line)):
+            continue
+        out.append(line)
+    return out
+
+
 def test_exactly_one_scheduled_audio_briefing_and_it_is_winstons():
-    jobs = audio_jobs(_manifest())
+    m = _manifest()
+    jobs = audio_jobs(m)
     assert len(jobs) == 1 and jobs[0][1] == "box", f"audio briefing producers in the manifest: {jobs}"
+    extra = [n for n, _ in catchup_jobs(m) if n not in excused_catchups(m, catchup_refuses_after_audio())]
+    assert not extra, f"catch-up jobs that could send a second voice message: {extra}"
+
+
+def test_the_catchup_code_refuses_once_audio_went_out():
+    assert catchup_refuses_after_audio()
+
+
+def test_a_catchup_that_would_rerun_after_audio_is_a_second_sender(tmp_path):
+    bad = tmp_path / "cos_morning_run.py"
+    bad.write_text(CATCHUP_CODE.read_text(encoding="utf-8").replace(
+        "if audio_day == today:", "if False and audio_day == today:"))
+    assert not catchup_refuses_after_audio(bad)
+    m = _manifest()
+    assert excused_catchups(m, refuses=False) == set()
+
+
+def test_a_catchup_on_another_machine_is_a_second_sender():
+    m = _manifest()
+    m["jobs"] = list(m["jobs"]) + [{"name": "ns-catchup", "machine": "nightshift",
+                                    "cmd": "python3 ~/Data/.datacore/modules/chief-of-staff/server/lib/cos_morning_run.py catch-up"}]
+    assert "ns-catchup" not in excused_catchups(m, refuses=True)
+
+
+def test_scan_excuses_only_the_declared_catchup_line():
+    m = _manifest()
+    real = ("winston: 30 4-8 * * * /usr/bin/python3 ~/Data/.datacore/modules/chief-of-staff/server/lib/"
+            "cos_morning_run.py catch-up >> ~/.datacore/cos/morning-catchup.log 2>&1 "
+            "# datacore-job:box-briefing-catchup")
+    seeded = [
+        "nightshift: 0 5 * * * ~/Data/.datacore/lib/cos_morning.sh",                         # a second sender
+        "winston: 0 6 * * * ~/Data/.datacore/lib/cos_morning.sh # datacore-job:box-briefing-catchup",  # marker abuse
+        "hermes: 30 4-8 * * * python3 ~/Data/.datacore/modules/chief-of-staff/server/lib/cos_morning_run.py catch-up",
+        real.replace("winston:", "nightshift:", 1),                                          # right marker, wrong host
+    ]
+    assert second_senders([real], m, refuses=True) == []
+    assert second_senders([real] + seeded, m, refuses=True) == seeded
+    assert second_senders([real], m, refuses=False) == [real]
 
 
 def test_detector_sees_a_second_producer():
@@ -102,4 +237,5 @@ def test_no_host_schedules_audio_outside_the_manifest():
                          capture_output=True, text=True, timeout=30)
     found += [f"mac: {l.strip()}" for l in mac.stdout.splitlines() if l.strip()]
     assert not unreachable, f"could not tell (unreachable): {unreachable}"
+    found = second_senders(found, _manifest(), catchup_refuses_after_audio())
     assert not found, f"audio producers scheduled outside the job manifest: {found}"
