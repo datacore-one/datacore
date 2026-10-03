@@ -47,11 +47,15 @@ jobs:
     on_fail: telegram
     artifacts:
       # One "<ts> <host> UP|DOWN <ip:port>" line per agent host per run
-      # (cos_fleet_probe.sh). The other direction of cos_uptime_probe: a
-      # host that is down cannot run its own contracts, so the box asks.
+      # (cos_fleet_probe.sh), then the run's verdict. The other direction of
+      # cos_uptime_probe: a host that is down cannot run its own contracts, so
+      # the box asks. The VERDICT is the contract (fleet sim 2026-10-03, F6):
+      # " UP " anywhere stayed green through a day-long outage because the
+      # other hosts answered. A promised-up host down past the grace makes the
+      # last line "fleet presence: RED -- <host> DOWN for Nh".
       - path: "~/.datacore/cos/fleet-probe.log"
-        check: regex
-        arg: " UP "
+        check: last_line_regex
+        arg: "fleet presence: ok"
         max_age_hours: 1
 
   - name: box-agent-outcomes
