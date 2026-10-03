@@ -76,6 +76,11 @@ EVENT_TYPES = frozenset(
         # ({log, seq, hash, reason}); verify accepts the voided event and fold
         # ignores it. See ledger.voids.
         "ledger.void",
+        # SIGNING-KEY ROTATION (owner decision 2026-10-03). A rebuilt host holds
+        # a new key; the owner approves it explicitly and the approval is this
+        # event, written by a writer other than the one rotated:
+        # {actor, old_key, new_key, valid_from, reason}. See keys.approve_rotation.
+        "key.rotate",
     }
 )
 

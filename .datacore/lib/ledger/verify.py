@@ -147,6 +147,7 @@ def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = 
             continue
         body = body_dict(event.seq, event.hlc, event.actor, event.type, event.payload, event.prev)
 
+        physical = None
         try:
             physical = int(event.hlc.split(".", 1)[0])
             if physical > horizon:
@@ -178,8 +179,9 @@ def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = 
 
         if event.sig != "":
             if (not voided
-                    and not verify_sig(event.actor, canonical_bytes(body), event.sig, registry_path=registry_path)):
-                errors.append(f"line {line_no}: {_signature_problem(event.actor, registry_path)}")
+                    and not verify_sig(event.actor, canonical_bytes(body), event.sig,
+                                       registry_path=registry_path, at_ms=physical)):
+                errors.append(f"line {line_no}: {_signature_problem(event.actor, registry_path, physical)}")
         elif strict:
             errors.append(f"line {line_no}: unsigned event")
 
@@ -198,20 +200,28 @@ def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = 
     return errors
 
 
-def _signature_problem(actor: str, registry_path: Path | None) -> str:
+def _signature_problem(actor: str, registry_path: Path | None, at_ms: int | None = None) -> str:
     """Why a signature did not verify, in words that separate the two causes.
 
     "unknown actor or invalid signature" could not tell a forged event from a
     rebuilt host whose new key was never registered (fleet sim 2026-10-03,
     break 12). Both phrasings keep the old words, which readers match on.
     """
-    from .keys import known_verify_key
+    from .keys import _iso, key_at, key_history, known_verify_key
     base = f"signature verification failed for actor {actor!r} (unknown actor or invalid signature)"
     if not known_verify_key(actor, registry_path):
         return f"{base}: no registered key for {actor!r}"
-    return (f"{base}: signed with a key that is not the key registered for {actor!r} -- a rotated or "
-            f"regenerated key (re-register it, or restore the old one on its host), or an edit by "
-            f"another writer")
+    history = key_history(actor)
+    expected = key_at(history, at_ms) if history else None
+    named = f" ({expected[:12]}... at this event's time)" if expected else ""
+    rotated = ""
+    if len(history) > 1:
+        rotated = " Registered keys: " + ", ".join(
+            f"{k[:12]}... from {_iso(t) or 'the start'}" for t, k in history) + "."
+    return (f"{base}: signed with a key that is not the key registered for {actor!r}{named} -- a rotated or "
+            f"regenerated key (the owner approves it: ledger_keys_collect.py --rotate {actor} "
+            f"--owner-approves; or restore the old one on its host), a retired key used after its "
+            f"rotation, or an edit by another writer.{rotated}")
 
 
 def _tail_seq(path: Path) -> int:
