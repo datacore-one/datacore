@@ -120,6 +120,8 @@ def _missing_file_cause(rel: str, repo, sha: str, install_root: Path) -> str:
         return (f"{rel} is a path in the installation ({install_root}), not in {name}; the check "
                 f"ran with {name} as its working directory, so it must name the installation's "
                 f"copy through ${{DATACORE_ROOT:-$HOME/Data}}")
+    if repo is None:
+        return f"{rel} does not exist on this host"
     return f"{rel} does not exist in {name}{f' at {sha[:10]}' if sha else ''} (it was never committed there)"
 
 
@@ -144,6 +146,11 @@ def cause(*, cmd: str, rc, cwd, repo, sha: str, stderr="", stdout="",
     for bare in _UNREACHABLE_BARE:
         if bare in both:
             return f"could not reach the remote host ({bare})"
+    if "No space left on device" in both or "Disk quota exceeded" in both:
+        return "the disk is full on this host (No space left on device)"
+    denied = _line_with(both, "Permission denied")
+    if denied:
+        return f"permission denied: {denied}"
     for rx in _MISSING_FILE:
         m = rx.search(err) or rx.search(out)
         if m:
@@ -176,3 +183,244 @@ def diagnose(*, cmd: str, rc, cwd, repo, sha: str, stderr="", stdout="",
     already = raw and raw in why
     return (f"the check could not pass in {place}: `{c}` -- {why}"
             + (f" (raw: {raw})" if raw and not already else ""))
+
+
+# ── Round 2 (2026-10-03): a model or agent run that failed ────────────────────
+#
+# Nightshift's "N Tasks Failed" alert carried `claude exited 1: <stderr>` cut to
+# 160 characters, often the CLI's usage banner; the chief-of-staff jobs said
+# "model exit 1" and the last line printed. Whether a PERSON was needed (a
+# login, a usage limit, no credit) or the TASK was the problem (too big for its
+# budget) was left to the reader. agent_failure() says which, in plain words.
+
+_PREFIX = re.compile(r"^\s*claude exited -?\d+:\s*")
+
+
+def _line_with(text: str, needle: str, *, case: bool = True) -> str:
+    """The first line containing `needle`, stripped, at most 200 characters."""
+    for ln in (text or "").splitlines():
+        if (needle in ln) if case else (needle.lower() in ln.lower()):
+            return _PREFIX.sub("", ln.strip())[:200]
+    return ""
+
+
+def raw_tail(text, n: int = 120) -> str:
+    """The end of `text` in at most `n` characters, cut at a word, '…' in front."""
+    words = " ".join(_text(text).split()).split(" ")
+    if not words or words == [""]:
+        return ""
+    out: list[str] = []
+    size = 0
+    for w in reversed(words):
+        if size + len(w) + (1 if out else 0) > n - 1:
+            break
+        out.append(w)
+        size += len(w) + (1 if len(out) > 1 else 0)
+    shown = " ".join(reversed(out))
+    return shown if len(out) == len(words) else "…" + shown
+
+
+_USAGE = ("usage limit", "hit your limit", "limit reached", "rate limit", "rate_limit",
+          "weekly limit", "out of extra usage", "quota exceeded", "exceeded your quota",
+          "quota exhausted", "http 429", "status 429")
+_CREDIT = ("http 402", "insufficient credit", "credit balance", "no credits remaining",
+           "billing", "payment required", "insufficient_quota")
+_LOGIN = ("oauth", "token has been revoked", "session expired", "api_key overrides",
+          "refused the session")
+_GIT = ("fatal: ", "CONFLICT (", "non-fast-forward", "fast-forward", "merge conflict",
+        "index.lock", "not a git repository", "pre-commit hook", "uncommitted changes",
+        "pull request not opened", "would be overwritten by", "divergent branches",
+        "[rejected]", "failed to push", "unmerged")
+_EVALUATOR = (
+    re.compile(r"(?:refused|rejected|vetoed) by (?:the )?(?:evaluator|reviewer)[: ]+[`'\"]?([\w.-]+)"),
+    re.compile(r"(?:evaluator|reviewer)[: ]+[`'\"]?([\w.-]+)[`'\"]? (?:refused|rejected|vetoed)"),
+)
+
+
+def agent_failure(text, rc=None) -> tuple[str, str]:
+    """(kind, plain sentence) for a model/agent run that failed.
+
+    Kinds: too_big, usage_limit, credit, login, out_of_memory, timeout, refused,
+    ledger_stop, git, provider, mcp, unreachable, write, internal, unknown_outcome,
+    handoff, other. Ordered so the cause a person must act on wins over noise.
+    """
+    raw = _text(text)
+    low = raw.lower()
+    try:
+        rc = int(rc) if rc is not None and str(rc).strip() != "" else None
+    except ValueError:
+        rc = None
+    m = re.match(r"\s*(?:[\w-]+: )?claude exited (-?\d+)", raw)
+    if rc is None and m:
+        rc = int(m.group(1))
+
+    if "stalelogerror" in low or "already wrote seq" in low:
+        return "ledger_stop", ("the ledger refused a stale log, so the work stopped; the owner "
+                               "repairs it (it is never retried)")
+    m = re.search(r"timed out after (\d+) min", low)
+    if "too big for its budget" in low or m or "timeoutexpired" in low:
+        mins = f"{m.group(1)}-minute " if m else ""
+        return "too_big", (f"too big for its {mins}time budget and was stopped; split it into "
+                           f"smaller steps (partial changes are possible, check them first)")
+    if any(k in low for k in _CREDIT):
+        line = _line_with(raw, "402") or _line_with(raw, "credit", case=False) or _line_with(raw, "billing", case=False)
+        return "credit", (f"the model provider account has no credit left ({line or 'payment required'}); "
+                          f"a person must top it up")
+    if any(k in low for k in _USAGE):
+        return "usage_limit", ("the Claude usage limit was reached; nothing more runs until it "
+                               "resets (waiting is the fix, not a retry)")
+    try:
+        from ops_markers import AUTH_FAILURE_MARKERS
+    except ImportError:  # a host without the core markers still names a login
+        AUTH_FAILURE_MARKERS = ("not logged in", "please run /login", "invalid api key",
+                                "authentication_error", "unauthorized")
+    hit = next((k for k in (*AUTH_FAILURE_MARKERS, *_LOGIN) if k in low), None)
+    if hit or re.search(r"\b401\b", low):
+        return "login", (f"the Claude login on this host stopped working ({hit or '401'}); someone "
+                         f"must log in again -- retrying cannot help")
+    if rc in (137, -9) or "memoryerror" in low or "out of memory" in low \
+            or "cannot allocate memory" in low or re.search(r"^killed$", low, re.M):
+        return "out_of_memory", ("it ran out of memory and was killed by the system "
+                                 + (f"(exit {rc})" if rc is not None else "(signal 9)"))
+    m = re.search(r"execution refused: (\w+)", low)
+    if m:
+        name = re.search(r"Execution refused: (\w+)", raw)
+        return "refused", (f"the execution gate refused to start it ({name.group(1) if name else m.group(1)}): "
+                           f"overnight work is paused, or the task is not cleared to run unattended")
+    if "co-signed grant" in low or "never_effects" in low or "[tool-policy]" in low \
+            or "policy.refusal" in low:
+        line = _line_with(raw, "co-signed grant") or _line_with(raw, "never_effects") \
+            or _line_with(raw, "[tool-policy]") or _line_with(raw, "policy.refusal")
+        return "refused", f"the tool policy refused one of its steps: {line[:160]}"
+    m = re.search(r"evaluation crashed \(([^)]*)\)?", raw)
+    if m:
+        return "refused", f"the evaluator panel crashed ({m.group(1)[:120]}); the output went to review"
+    for rx in _EVALUATOR:
+        m = rx.search(raw)
+        if m:
+            return "refused", f"the evaluator {m.group(1)} refused it: {_line_with(raw, m.group(1))[:160]}"
+    if "review gate gave no verdict" in low:
+        return "refused", "the review gate gave no verdict, so nothing was approved"
+    if "background agent" in low:
+        return "handoff", ("it handed the work to a background agent and returned no result; "
+                           "the work must run in the foreground")
+    for k in _GIT:
+        line = _line_with(raw, k)
+        if line:
+            return "git", f"a git problem: {line}"
+    m = re.search(r"API Error:? ?(5\d\d)|\b(529)\b|(overloaded)", raw, re.I)
+    if m:
+        code = m.group(1) or m.group(2) or ""
+        return "provider", (f"the Claude service was overloaded or failed"
+                            f"{f' (API Error {code})' if code else ''}; a later retry usually works")
+    m = re.search(r"MCP server[s]? [`'\"]?([\w.@/-]+?)[`'\"]?:? (?:failed to connect|is not connected|"
+                  r"not connected|disconnected|connection closed|failed)", raw, re.I)
+    if m:
+        return "mcp", f"a tool server it needs (MCP {m.group(1)}) was not connected"
+    for rx in _UNREACHABLE:
+        m = rx.search(raw)
+        if m:
+            why = m.group(2).strip() if m.lastindex and m.lastindex > 1 else ""
+            return "unreachable", (f"could not reach {m.group(1)}" + (f" ({why})" if why else "")
+                                   + " -- the host is down, asleep, or unreachable from here")
+    for bare in _UNREACHABLE_BARE:
+        if bare in raw:
+            return "unreachable", f"could not reach the remote host ({bare})"
+    if "timed out" in low or "timeout" in low:
+        return "timeout", "it timed out and was stopped (a hung call, or a service that did not answer)"
+    m = re.search(r"Output write failed: (\S+)", raw)
+    if m:
+        return "write", f"its result could not be saved ({m.group(1)})"
+    m = re.search(r"task raised (.+)", raw)
+    if m:
+        return "internal", f"nightshift itself failed on this task ({m.group(1)[:120]}); the run went on"
+    m = re.search(r"(?:outcome unknown|not acknowledged|acknowledgement failed)(?: \(([^)]*)\))?", raw)
+    if m:
+        return "unknown_outcome", ("the run ended without a clear result"
+                                   + (f" ({m.group(1)})" if m.group(1) else "")
+                                   + "; check what it changed before running it again")
+    last = _last_line(_PREFIX.sub("", raw.strip()) if "\n" not in raw.strip() else raw)
+    last = _PREFIX.sub("", last)
+    if last.strip("() ") in ("no stderr/stdout captured", ""):
+        last = ""
+    status = f"it exited {rc}" if rc is not None else "it failed"
+    return "other", status + (f"; the last thing it printed: {last}" if last else " and printed nothing")
+
+
+def explain_agent(text, rc=None, tail: int = 120) -> str:
+    """The plain cause, then the raw tail in brackets (cut at a word)."""
+    _, sentence = agent_failure(text, rc)
+    t = raw_tail(_PREFIX.sub("", _text(text).strip()), tail)
+    return sentence + (f" (raw: {t})" if t and t.lstrip("…") not in sentence else "")
+
+
+def send_failure(text) -> str:
+    """Why a Telegram send (winston_send) did not go through, in plain words."""
+    raw = _text(text)
+    low = raw.lower()
+    m = re.search(r"\b(\w+_(?:TOKEN|CHAT_ID))\b[^\n]*not set", raw)
+    if m or "not set" in low:
+        var = m.group(1) if m else "a setting"
+        return f"{var} is not set on this host, so the sender has nowhere to post"
+    m = re.search(r"http (\d{3})", low)
+    code = m.group(1) if m else ""
+    if code == "401":
+        return "Telegram rejected the bot token (HTTP 401): the token is wrong or was revoked"
+    if code == "400":
+        return ("Telegram refused the message (HTTP 400): most often a wrong chat id (chat not "
+                "found) or text it could not parse")
+    if code == "403":
+        return "the bot may not post in that chat (HTTP 403): it was blocked or removed from the group"
+    if code == "429":
+        return "Telegram rate-limited the bot (HTTP 429); a later send goes through"
+    if code:
+        return f"Telegram answered HTTP {code}"
+    if "wrong weekday" in low:
+        return "held back on purpose: a date in it names the wrong weekday"
+    if "empty input" in low:
+        return "there was nothing to send (the job produced no text)"
+    for bare in (*_UNREACHABLE_BARE, "urlopen error", "timed out"):
+        if bare.lower() in low:
+            return f"could not reach Telegram ({_line_with(raw, bare, case=False)[:160]})"
+    last = _last_line(raw)
+    return f"the sender failed: {last}" if last else "the sender failed and printed nothing"
+
+
+def _main(argv=None) -> int:
+    """CLI for the shell jobs. stdin is the run's output; one line on stdout.
+
+      check_diagnosis.py agent   --rc N [--tail 120]   a model/agent run
+      check_diagnosis.py send                          a Telegram send (winston_send)
+      check_diagnosis.py command --rc N --cmd CMD      any other command (tar, rsync, ...)
+    """
+    import argparse
+    import sys
+    ap = argparse.ArgumentParser(description=_main.__doc__)
+    ap.add_argument("mode", choices=("agent", "send", "command"))
+    ap.add_argument("--rc", default=None)
+    ap.add_argument("--cmd", default="")
+    ap.add_argument("--tail", type=int, default=120)
+    a = ap.parse_args(argv)
+    text = sys.stdin.read() if not sys.stdin.isatty() else ""
+    try:
+        rc = int(a.rc) if a.rc not in (None, "") else None
+    except ValueError:
+        rc = None
+    if a.mode == "agent":
+        out = explain_agent(text, rc, a.tail)
+    elif a.mode == "send":
+        out = send_failure(text)
+    else:
+        why = cause(cmd=a.cmd, rc=rc, cwd=".", repo=None, sha="", stderr=text).replace(
+            "; the check said: ", "; it printed: ")
+        prog = (a.cmd.split() or ["it"])[0].rsplit("/", 1)[-1]
+        if why.startswith("it exited"):
+            why = prog + why[2:]
+        t = raw_tail(text, a.tail)
+        out = why + (f" (raw: {t})" if t and t.lstrip("…") not in why else "")
+    print(" ".join(out.split()))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
