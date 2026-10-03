@@ -89,7 +89,9 @@ def tree_digest(top: Path) -> str:
 
 
 def _tracked_lib_files() -> list[str]:
-    out = subprocess.run(["git", "-C", str(REAL), "ls-files", ".datacore/lib"],
+    # Tracked files plus new, not-ignored ones: the working tree as it stands.
+    out = subprocess.run(["git", "-C", str(REAL), "ls-files", "--cached", "--others",
+                          "--exclude-standard", ".datacore/lib"],
                          capture_output=True, text=True, timeout=30, check=True).stdout
     return [f for f in out.splitlines() if "/tests/" not in f and "/__pycache__/" not in f]
 

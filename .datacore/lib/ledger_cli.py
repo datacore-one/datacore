@@ -11,6 +11,9 @@ Usage:
     python3 ledger_cli.py items --space <dir> [--status <s>] [--owner <o>]
     python3 ledger_cli.py balances --space <dir>
     python3 ledger_cli.py void --space <dir> --log <writer>.jsonl --seq <n> --reason '<why>' [--actor <a>]
+    python3 ledger_cli.py init --space <dir> --actor <name> [--email <git email>]
+    python3 ledger_cli.py principals add --actor <name> [--kind human|agent] [--email <git email>]
+    python3 ledger_cli.py doctor [--space <dir>]
 
 Stdout/stderr discipline: every command's DATA (the appended event's
 hash/hlc, the "OK ..." summary, item JSON lines, the balances object) goes
@@ -39,11 +42,19 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from ledger.fold import fold  # noqa: E402
-from ledger.index import build_index, items_by  # noqa: E402
-from ledger.log import TELEMETRY_DIR, EventLog, read_events  # noqa: E402
-from ledger.verify import check_not_rewound, verify_chain  # noqa: E402
-from ledger.policy import approval_payload_hash, guarded_append, load_policy
+try:
+    from ledger.fold import fold  # noqa: E402
+    from ledger.index import build_index, items_by  # noqa: E402
+    from ledger.log import TELEMETRY_DIR, EventLog, read_events  # noqa: E402
+    from ledger.verify import check_not_rewound, verify_chain  # noqa: E402
+    from ledger.policy import approval_payload_hash, guarded_append, load_policy
+    _MISSING = None
+except ImportError as _exc:  # a package is not installed: `doctor` names it (ledger upgrade I2)
+    _MISSING = _exc
+
+#: Subcommands that set an installation up or check it; they run without the
+#: ledger's packages, so they can say which one is missing (ledger_install.py).
+INSTALLERS = ("init", "doctor", "principals")
 
 
 def _default_actor() -> str:
@@ -242,6 +253,38 @@ def cmd_balances(args: argparse.Namespace) -> None:
     print(json.dumps(state.spend))
 
 
+def cmd_init(args: argparse.Namespace) -> None:
+    """Make a space ledger-ready for a person on this machine (profile A)."""
+    import ledger_install as inst
+    try:
+        for line in inst.init(Path(args.space), args.actor, email=args.email):
+            print(line)
+    except inst.InstallRefused as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(2)
+    print(f"next: python3 .datacore/lib/ledger_cli.py doctor --space {args.space}")
+
+
+def cmd_principals(args: argparse.Namespace) -> None:
+    import ledger_install as inst
+    try:
+        print(inst.add_principal(args.actor, kind=args.kind, email=args.email))
+    except inst.InstallRefused as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+
+def cmd_doctor(args: argparse.Namespace) -> None:
+    """Every missing prerequisite, each with its fix; exit 1 when any is missing."""
+    import ledger_install as inst
+    checks = inst.doctor(Path(args.space) if args.space else None)
+    for check in checks:
+        print(check.line())
+    gaps = [c for c in checks if c.ok is False]
+    print(f"{len(gaps)} missing" if gaps else "nothing missing")
+    sys.exit(1 if gaps else 0)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ledger_cli.py",
@@ -282,6 +325,21 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("balances", help="Fold events and print per-actor spend")
     p.add_argument("--space", required=True, help="Space directory root")
 
+    p = sub.add_parser("init", help="Make a space ledger-ready for a person on this machine")
+    p.add_argument("--space", required=True, help="Space directory root (created if missing)")
+    p.add_argument("--actor", required=True, help="The person writing from this machine (never guessed)")
+    p.add_argument("--email", default=None, help="Their git author email, bound by hash in principals.yaml")
+
+    p = sub.add_parser("principals", help="Declare a person in principals.yaml")
+    psub = p.add_subparsers(dest="principals_op", required=True)
+    pa = psub.add_parser("add", help="Add (or bind an email to) a principal")
+    pa.add_argument("--actor", required=True, help="Writer name (their log is <name>.jsonl)")
+    pa.add_argument("--kind", default="human", choices=("human", "agent"))
+    pa.add_argument("--email", default=None, help="A git author email, stored as a hash")
+
+    p = sub.add_parser("doctor", help="Name every missing prerequisite, each with its fix")
+    p.add_argument("--space", default=None, help="Also check this space")
+
     return parser
 
 
@@ -293,12 +351,19 @@ COMMANDS = {
     "void": cmd_void,
     "items": cmd_items,
     "balances": cmd_balances,
+    "init": cmd_init,
+    "principals": cmd_principals,
+    "doctor": cmd_doctor,
 }
 
 
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    if _MISSING is not None and args.command not in INSTALLERS:
+        print(f"error: the ledger cannot load ({_MISSING}); run "
+              "`python3 .datacore/lib/ledger_cli.py doctor` to see what to install", file=sys.stderr)
+        sys.exit(2)
     if args.command in WRITERS and not args.actor:
         try:
             args.actor = _default_actor()
