@@ -114,6 +114,28 @@ def _save_registry(registry_path: Path, data: dict) -> None:
     atomic_write_yaml(registry_path, data)
 
 
+class KeyMismatch(ValueError):
+    """This host's private key is not the key registered for its writer."""
+
+
+def _mismatch(actor: str, key_path: Path, have: str, registry_path: Path, registered: str) -> KeyMismatch:
+    """Say exactly what happened and what to do (fleet sim 2026-10-03, break 12).
+
+    It used to say "differs from its registered identity; restore the key or
+    rotate explicitly": no key file, no registry, no fingerprints, and no
+    command behind "rotate explicitly" (none exists).
+    """
+    return KeyMismatch(
+        f"ledger signing key for {actor!r} on this host ({key_path}, public key {have[:12]}...) is not "
+        f"the key registered for {actor!r} (its registered identity is {registered[:12]}... in "
+        f"{registry_path}). A regenerated key "
+        f"or a rebuilt host. Nothing was written to the ledger from this host; other writers are not "
+        f"affected. To fix: restore the original private key to {key_path} from this host's backup. "
+        f"If it is lost, the key must be rotated, which is the owner's call: register the new public "
+        f"key {have} for {actor!r} in {registry_path} and in principals.yaml verify_keys, commit both, "
+        f"and expect the writer's older events to need the old key to verify.")
+
+
 def ensure_keypair(
     actor: str,
     keys_dir: Path | None = None,
@@ -151,7 +173,7 @@ def ensure_keypair(
         verify_key_hex = private_key.public_key().public_bytes_raw().hex()
         registered = registry["actors"].get(actor)
         if registered is not None and registered != verify_key_hex:
-            raise ValueError(f"signing key for {actor!r} differs from its registered identity; restore the key or rotate explicitly")
+            raise _mismatch(actor, key_path, verify_key_hex, registry_path, str(registered))
         if not exists:
             atomic_write_text(key_path, private_key.private_bytes_raw().hex())
         registry["actors"][actor] = verify_key_hex

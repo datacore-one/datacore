@@ -179,10 +179,7 @@ def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = 
         if event.sig != "":
             if (not voided
                     and not verify_sig(event.actor, canonical_bytes(body), event.sig, registry_path=registry_path)):
-                errors.append(
-                    f"line {line_no}: signature verification failed for actor {event.actor!r} "
-                    "(unknown actor or invalid signature)"
-                )
+                errors.append(f"line {line_no}: {_signature_problem(event.actor, registry_path)}")
         elif strict:
             errors.append(f"line {line_no}: unsigned event")
 
@@ -199,6 +196,22 @@ def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = 
         expected_seq = event.seq + 1
 
     return errors
+
+
+def _signature_problem(actor: str, registry_path: Path | None) -> str:
+    """Why a signature did not verify, in words that separate the two causes.
+
+    "unknown actor or invalid signature" could not tell a forged event from a
+    rebuilt host whose new key was never registered (fleet sim 2026-10-03,
+    break 12). Both phrasings keep the old words, which readers match on.
+    """
+    from .keys import known_verify_key
+    base = f"signature verification failed for actor {actor!r} (unknown actor or invalid signature)"
+    if not known_verify_key(actor, registry_path):
+        return f"{base}: no registered key for {actor!r}"
+    return (f"{base}: signed with a key that is not the key registered for {actor!r} -- a rotated or "
+            f"regenerated key (re-register it, or restore the old one on its host), or an edit by "
+            f"another writer")
 
 
 def _tail_seq(path: Path) -> int:
