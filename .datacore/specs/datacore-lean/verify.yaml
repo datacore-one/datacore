@@ -32,7 +32,7 @@ models:
   - model: DatacoreSpec/Projector.lean
     covers: [.datacore/lib/ledger/projector.py, .datacore/lib/ledger/projection_state.py, .datacore/lib/ledger/genesis.py, .datacore/lib/ledger_ingest_org.py, .datacore/lib/ledger_project_org.py]
   - model: DatacoreSpec/LedgerSeal.lean
-    covers: [.datacore/lib/ledger/seal.py, .datacore/lib/ledger_seal.py, .datacore/lib/ledger_ingest_org.py, .datacore/lib/ledger_restore_prefix.py, .datacore/lib/ledger_dismiss_orphans.py, .datacore/lib/ledger_checkpoint.py, .datacore/lib/ledger/exceptions.py, .datacore/lib/ledger_invariants.py]
+    covers: [.datacore/lib/ledger/seal.py, .datacore/lib/ledger_seal.py, .datacore/lib/ledger_ingest_org.py, .datacore/lib/ledger_restore_prefix.py, .datacore/lib/ledger_dismiss_orphans.py, .datacore/lib/ledger_checkpoint.py, .datacore/lib/ledger_invariants.py]
   - model: DatacoreSpec/Credentials.lean
     covers: [.datacore/lib/creds.py, .datacore/lib/credential_access.py, .datacore/lib/env_utils.py, .datacore/lib/config_plane.py, .datacore/lib/model_routing.py]
   - model: DatacoreSpec/Guards.lean

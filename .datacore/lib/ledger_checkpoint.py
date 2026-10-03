@@ -282,7 +282,7 @@ def _restore(document, name):
     checkpoint must be obtained from the deployment's trusted backup source.
     """
     from ledger.events import body_dict, compute_hash, from_line
-    from ledger.exceptions import is_recorded
+    from ledger.voids import for_events_dir
     if (not isinstance(document, dict) or document.get('version') != 1
             or not isinstance(document.get('chains'), dict)
             or not isinstance(document.get('state_root'), str)
@@ -296,23 +296,26 @@ def _restore(document, name):
             if (not isinstance(filename, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*\.jsonl', filename)
                     or not isinstance(text, str) or not text.endswith('\n')):
                 raise ValueError('invalid saved chain')
+            (folder / filename).write_text(text, encoding='utf-8')
+        # A stored-hash mismatch is accepted only when an authorised in-ledger
+        # `ledger.void` in the SAVED chains names that exact event and pins the
+        # hash its body produces (owner decision 6: no side list of excuses).
+        # Refusing the whole space over one already-voided event left it with
+        # NO restore point, forever; any edit to it, and every other mismatch,
+        # still fails here.
+        voids = for_events_dir(folder)
+        for filename, text in document['chains'].items():
             previous = 'GENESIS'
+            stem = filename[:-len('.jsonl')]
             for sequence, line in enumerate(text.splitlines()):
                 event = from_line(line)
                 computed = compute_hash(body_dict(event.seq, event.hlc, event.actor,
                                                   event.type, event.payload, event.prev))
                 if event.seq != sequence or event.prev != previous:
                     raise ValueError('saved event chain fails integrity verification')
-                if event.hash != computed and not is_recorded(
-                        name, filename, event.seq, event.hash, computed):
-                    # Refusing the whole space over one already-written event
-                    # left it with NO restore point, forever -- the opposite of
-                    # what this check is for. A reviewed exception pins both
-                    # hashes, so it excuses only that event exactly as written;
-                    # any edit to it, and every other mismatch, still fails here.
+                if event.hash != computed and not voids.applies(stem, event, computed):
                     raise ValueError('saved event chain fails integrity verification')
                 previous = event.hash
-            (folder / filename).write_text(text, encoding='utf-8')
         restored = fold(read_events(scratch))
         if restored.state_root() != document['state_root']:
             raise StateRootMismatch('restored state differs from saved state root')
