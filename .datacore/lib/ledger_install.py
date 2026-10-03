@@ -32,6 +32,9 @@ from pathlib import Path
 
 LIB = Path(__file__).resolve().parent
 CLI = "python3 .datacore/lib/ledger_cli.py"
+#: Datacore's git hooks; their pre-commit and pre-push run the ledger write gate (LED-3).
+GITHOOKS = LIB.parent / "githooks"
+_HOOKS_KEY = "core." + "hooksPath"
 
 #: Packages the ledger imports, by import name -> install name.
 PACKAGES = {"yaml": "PyYAML", "cryptography": "cryptography"}
@@ -218,6 +221,29 @@ def add_principal(actor: str, *, kind: str = "human", email: str | None = None) 
 
 # ---------------------------------------------------------------- space
 
+def _git(repo: Path, *args: str):
+    import subprocess
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=30)
+
+
+def _is_checkout(space: Path) -> bool:
+    return (space / ".git").exists()
+
+
+def _has_hooks(space: Path) -> bool:
+    """Does this checkout already run a pre-commit hook (Datacore's or its own)?"""
+    configured = _git(space, "config", _HOOKS_KEY).stdout.strip()
+    if configured:
+        base = Path(configured) if Path(configured).is_absolute() else space / configured
+        if os.access(base / "pre-commit", os.X_OK):
+            return True
+    return (space / ".git" / "hooks" / "pre-commit").exists()
+
+
+def _gate_fix(space: Path) -> str:
+    return f"git -C {space} config {_HOOKS_KEY} {GITHOOKS}"
+
+
 def prepare_space(space: Path) -> list[str]:
     """Make `space` ledger-ready. Adds what is missing; changes nothing present."""
     from file_utils import atomic_write_text
@@ -240,6 +266,14 @@ def prepare_space(space: Path) -> list[str]:
         atomic_write_text(ignore, "\n".join(held + ["# machine-local ledger state (sequence marks, index)",
                                                     ".datacore/state/"]) + "\n")
         done.append("space: .datacore/state/ kept out of git (machine-local)")
+    # The write gate is the trust layer until signing (owner decision 7): a
+    # shared checkout runs Datacore's hooks, unless it already runs its own.
+    if _is_checkout(space) and not _has_hooks(space):
+        if os.access(GITHOOKS / "pre-commit", os.X_OK):
+            _git(space, "config", _HOOKS_KEY, str(GITHOOKS))
+            done.append(f"space: commits and pushes now pass the ledger write gate ({GITHOOKS})")
+        else:
+            done.append(f"space: the ledger write gate could not be wired -- {GITHOOKS} is missing")
     return done or [f"space: {space} was already ledger-ready"]
 
 
@@ -316,6 +350,12 @@ def doctor(space: Path | None) -> list[Check]:
                                 f"{CLI} init --space {space} --actor {who}"))
         else:
             checks.append(Check("space", True, f"{space} has a ledger"))
+        if _is_checkout(space):
+            gated = _has_hooks(space)
+            checks.append(Check("write gate", gated,
+                                f"{space} runs a pre-commit hook" if gated else
+                                f"commits in {space} skip the ledger write gate (no hooks configured)",
+                                _gate_fix(space)))
 
     if signing_on():
         key = Path.home() / ".datacore" / "keys" / f"{who}.key"
