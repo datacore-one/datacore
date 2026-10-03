@@ -600,6 +600,19 @@ def test_a_promise_whose_every_test_was_skipped_could_not_run_with_the_reason():
     assert "this is the owner's machine, not an agent's" in e["why"]
 
 
+def test_a_skip_beside_an_agent_eval_that_was_not_enabled_could_not_run():
+    """AGT-11 on the owner's Mac, 2026-10-03: one test skips (the owner's
+    machine), the other is the live agent eval, which fails by design when
+    agent evals are off. Neither ran here; the board read red."""
+    b = board(WED, {"AGT-11": "red"}, {"AGT-11": [
+        fail("a.py", "test_this_agent_machine_guards_every_shell_call", AGT_SKIP),
+        fail("a.py", "test_a_real_unattended_run_is_stopped_from_discarding_work",
+             "agent eval not run (set DATACORE_AGENT_EVALS=1)")]})
+    e = b["promises"]["AGT-11"]
+    assert e["state"] == "could-not-run", e
+    assert "owner's machine" in e["why"] and "agent" in e["why"]
+
+
 def test_a_skip_beside_a_real_failure_stays_red():
     b = board(WED, {"AGT-11": "red"}, {"AGT-11": [fail("a.py", "test_skipped", AGT_SKIP),
                                                   fail("a.py", "test_bad", "AssertionError: wrong")]})

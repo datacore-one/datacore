@@ -293,13 +293,17 @@ def build_board(raw: dict, unmet: dict[str, list[str]], texts: dict[str, str], *
             if fails and all(n is not None for n in needs):
                 missing = sorted({x for n in needs for x in n})
                 entry.update(state=CNR, why="needs " + ", ".join(missing))
-            elif _skips_only(fails):
+            elif _skips_only([f for f, n in zip(fails, needs) if n is None]):
                 # Owner, 2026-10-01: a promise whose every test was skipped did
                 # not run here (AGT-11 on the owner's Mac: "this is the owner's
                 # machine, not an agent's"). It reads could-not-run, with the
-                # skip's own reason, never red.
-                reasons = sorted({f["line"][len(SKIPPED):] for f in fails})
-                entry.update(state=CNR, why="every test skipped: " + "; ".join(reasons))
+                # skip's own reason, never red. A skip beside a test that only
+                # lacks a need here (AGT-11's live agent eval with agent evals
+                # off, 2026-10-03) did not run either.
+                reasons = sorted({f["line"][len(SKIPPED):] for f, n in zip(fails, needs) if n is None})
+                lacking = sorted({x for n in needs if n for x in n})
+                entry.update(state=CNR, why="every test skipped: " + "; ".join(reasons)
+                             + (f" (and needs {', '.join(lacking)})" if lacking else ""))
         promises[pid] = entry
     counts: dict[str, int] = {}
     for e in promises.values():
