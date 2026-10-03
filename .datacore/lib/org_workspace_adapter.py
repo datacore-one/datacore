@@ -114,6 +114,14 @@ def cmd_count(args):
             continue
         if node.todo and node.todo not in terminal:
             count += 1
+        elif (getattr(args, "top_level", False) and not node.todo and node.level == 1
+              and not list(node.children) and (node.heading or "").strip().lower() != "inbox"
+              and "[NEEDS_REVIEW]" not in (node.heading or "")):
+            # A stateless top-level heading with nothing under it: a bare
+            # capture, or a group heading whose last child has left (which the
+            # processor removes). Uncounted, a space holding only that read 0
+            # and was never processed (5-plur, 2026-10-03; INB-8).
+            count += 1
     return {"count": count, "files": args.files,
             "unit": "top-level captures" if getattr(args, "top_level", False)
                     else "headings"}
