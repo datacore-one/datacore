@@ -49,6 +49,10 @@ SUITES = [  # (name, cwd, test dir relative to cwd, extra env)
 ]
 for mod in sorted((ROOT / ".datacore" / "modules").glob("*/tests")):
     SUITES.append((f"module:{mod.parent.name}", mod.parent, "tests", {"DATACORE_ROOT": str(ROOT)}))
+# Evals kept apart from the code they judge (ledger upgrade step E3): one suite
+# per folder two levels under .datacore/evals/, e.g. evals/ledger-upgrade/phase4.
+for d in sorted((ROOT / ".datacore" / "evals").glob("*/*/")):
+    SUITES.append((f"evals:{d.parent.name}/{d.name}", d.parent, d.name, {}))
 
 _FILE = re.compile(r"^test_promise_([A-Za-z]+)_?(\d+)(?:_([0-9]+))?_")
 
