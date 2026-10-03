@@ -196,7 +196,7 @@ ledger, and no one voids their own events (owner decision 6).
 **Procedure.** Run by an authorised voider who is NOT the event's writer.
 
 ```bash
-grep -n '"seq": <n>,' ~/Data/<space>/.datacore/events/<writer>.jsonl | head -1
+grep -n '"seq":<n>,' ~/Data/<space>/.datacore/events/<writer>.jsonl | head -1
 python3 ~/Data/.datacore/lib/ledger_cli.py void --space ~/Data/<space> --log <writer>.jsonl --seq <n> --reason '<why it is wrong>'
 python3 ~/Data/.datacore/lib/ledger_cli.py verify --space ~/Data/<space>
 python3 ~/Data/.datacore/lib/ledger_transport.py status
@@ -216,14 +216,19 @@ FDS-ID identity). A lost key stops nothing: appends continue, and verify without
 `--strict` does not ask for signatures. A new key is generated on the writer's
 next signed append.
 
-**Procedure.** Confirm history still verifies, then collect the new public key so
-readers can check future signatures. `ledger_keys_collect.py` accepts a key only
-when it verifies that writer's signed events, so a replaced key is reported, not
-written; that report is the record of the rotation until FDS-ID lands.
+**Procedure.** Confirm history still verifies. A replaced key is registered only
+with the owner's explicit approval (core c618257): on the owner's workstation,
+not the writer's machine, `--rotate ... --owner-approves` records a `key.rotate`
+event (written by a writer other than the rotated one) and registers the new key
+from now on; the old key stays valid for the events it signed. Every other
+machine then adopts the recorded rotation with the same command, without a
+second event. Without `--owner-approves` nothing is written; a writer never
+approves its own key; an old key restored after a rotation is refused.
 
 ```bash
 python3 ~/Data/.datacore/lib/ledger_cli.py verify --space ~/Data/<space>
-python3 ~/Data/.datacore/lib/ledger_keys_collect.py --hosts <host>
+python3 ~/Data/.datacore/lib/ledger_keys_collect.py --rotate <writer> --hosts <writer's host> --owner-approves
+python3 ~/Data/.datacore/lib/ledger_keys_collect.py --rotate <writer> --owner-approves
 ```
 
 Do not run `verify --strict` as a health check while signing is off.
