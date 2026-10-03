@@ -192,6 +192,12 @@ def fold(events: list[Event]) -> LedgerState:
         if len(voids):
             events = [e for e in events if not voids.applies(getattr(e, "log", e.actor), e)]
 
+    # Only attested events exist for the fold (ledger-upgrade T6, proved in
+    # specs/datacore-lean LedgerSpec/Author.lean: fold_ignores_unattested,
+    # fold_eq_filter). Attested = a declared writer, in its own log.
+    roster = declared_writers()
+    events = [e for e in events if attested(e, roster)]
+
     for event in events:
         handler = _HANDLERS.get(event.type)
         if handler is not None:
@@ -201,6 +207,54 @@ def fold(events: list[Event]) -> LedgerState:
         # they don't affect item/ownership/spend state.
 
     return state
+
+
+def declared_writers() -> frozenset | None:
+    """Every writer the principal registry declares: each principal's name and
+    its `writes_as` aliases (run-branch suffixes removed), exactly the names
+    `actor_identity.principal_of` resolves.
+
+    None when this install declares no principals at all (no registry file):
+    then only the log binding below applies. An invalid or ambiguous registry
+    RAISES (ValueError): a broken file must neither authorise everyone nor
+    fold every space to nothing -- the caller stops, and nothing is projected.
+    Read at call time and cached on the file's stat by `actor_identity`, the
+    one input besides `events`, as the void resolution already does.
+    """
+    import actor_identity
+    ps = actor_identity.principals()
+    if not ps:
+        return None
+    names = set()
+    for name, p in ps.items():
+        names.add(actor_identity.base_writer(name))
+        names.update(actor_identity.base_writer(w) for w in (p.get("writes_as") or []) if isinstance(w, str))
+    return frozenset(names)
+
+
+def log_writer(log: str) -> str:
+    """The writer a log file belongs to: its stem without a telemetry suffix
+    (`mac.telemetry`, LED-8) or a run-branch suffix (`miles-run-2026-10-04`)."""
+    from .log import TELEMETRY_SUFFIX
+    import actor_identity
+    log = str(log or "")
+    if log.endswith(TELEMETRY_SUFFIX):
+        log = log[: -len(TELEMETRY_SUFFIX)]
+    return actor_identity.base_writer(log)
+
+
+def attested(event: Event, roster: frozenset | None) -> bool:
+    """T6: does this event count? Its `actor` must be the writer of the log it
+    was read from (`read_events` sets `event.log`; an in-memory event with no
+    log is its own writer's), and a declared writer when a roster exists.
+
+    No signature conjunct yet (owner decision 1, 2026-09-26): it arrives with
+    FDS-ID and only narrows this predicate.
+    """
+    actor = event.actor
+    if log_writer(getattr(event, "log", None) or actor) != actor:
+        return False
+    return roster is None or actor in roster
 
 
 def _note(item: ItemState, event: Event, outcome: str) -> None:

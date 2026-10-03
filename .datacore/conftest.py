@@ -69,6 +69,29 @@ def _isolated_ledger_keys(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _fold_roster_off_unless_asked(request, monkeypatch):
+    """The fold's authorship roster (T6) is not this installation's in a test.
+
+    `ledger.fold.declared_writers` reads the host's real principals.yaml, so on
+    a full install every fixture writer (alice, bob, writer, t ...) would be
+    an undeclared writer whose events the fold ignores, and on a clean checkout
+    (no registry) none would be. Neither is what a test of fold mechanics
+    means. Here the roster is off (None: only the actor-is-its-log binding
+    applies), the same answer a clean checkout gives. A test of authorship
+    itself opts in with `@pytest.mark.fold_roster`, and then the roster comes
+    from whatever `actor_identity.PRINCIPALS` the test points at.
+    """
+    if request.node.get_closest_marker("fold_roster"):
+        return
+    try:
+        from ledger import fold as _fold
+    except Exception:  # noqa: BLE001 -- suites that never import the ledger are unaffected
+        return
+    if hasattr(_fold, "declared_writers"):   # a module suite may import another checkout's lib
+        monkeypatch.setattr(_fold, "declared_writers", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _isolated_attestations(tmp_path_factory, monkeypatch):
     """No test may attest into a real space's ledger.
 
