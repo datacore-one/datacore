@@ -571,6 +571,13 @@ def _registry(root: Path) -> dict:
     p = root / ".datacore" / "registry" / "repositories.yaml"
     if not p.exists() and not p.is_symlink() and SHIPPED_REGISTRY.exists():
         p = SHIPPED_REGISTRY
+    # NO REGISTRY AT ALL IS AN EMPTY ONE (ledger upgrade Phase 3, audit C12). A
+    # team's install has none of this installation's tracked list; its spaces
+    # declare themselves by marker (classify, SPC-9). Refusing everything here
+    # meant the marker was never read. A file that exists and is invalid still
+    # refuses below, and a repo neither registered nor marked is still refused.
+    if not p.exists() and not p.is_symlink():
+        return {}
     try:
         with p.open('rb') as source:
             raw = source.read(1_048_577)
@@ -945,6 +952,13 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
     on the first end-to-end smoke test and had to be killed, which is a better
     place to find it than a nightly run.
     """
+    # ONE HOST, NO REMOTE (profile A, audit C12): there is nothing to converge
+    # with. Said as a mode, not reported as "fetch failed (offline?)" on every
+    # cycle forever; and nothing is touched -- no autosave commit, no fetch.
+    rc, _, _ = _git(space, "remote", "get-url", "origin")
+    if rc != 0:
+        return Result(True, "single host: no remote configured, nothing to converge (add an "
+                            "'origin' remote to share this space)", {"single_host": True})
     rc, _, err = _git(space, "fetch", "--prune", "origin")
     if rc != 0:
         # Offline is not an error state — it is a condition. Report it and
@@ -1368,7 +1382,9 @@ def sync_repo(repo: Path, quiet: bool = False, *, root: Path | None = None) -> s
     laptop reopens, blocked never does.
     """
     res = converge(Path(repo), root=root) if root is not None else converge(Path(repo))
-    if res.ok and res.context.get("conflicts_handled"):
+    if res.ok and res.context.get("single_host"):
+        outcome = "local"
+    elif res.ok and res.context.get("conflicts_handled"):
         # A conflict already reported, its task open: not a failure, not clean.
         outcome = "waiting"
     elif res.ok:
@@ -1429,6 +1445,17 @@ def _code_update(repo: Path) -> str:
     return "dirty" if dirty else "clean"
 
 
+def _repos(root: Path) -> dict:
+    """Registered repos plus the top-level spaces declared only by their marker
+    (SPC-9; see classify). What sync converges and status lists."""
+    registry = dict(_registry(root))
+    for path in sorted(p for p in root.iterdir() if p.is_dir() and not p.is_symlink()
+                       and p.name not in registry and (p / ".git").exists()
+                       and _marker_space(p, root)):
+        registry[path.name] = {"category": "knowledge", "via": "space marker"}
+    return registry
+
+
 def sync_outcomes(root: Path, only: str | None = None,
                   include_code: bool = True) -> list[tuple[str, str, str]]:
     """Every registered repo under `root`, converged or fast-forwarded.
@@ -1440,13 +1467,7 @@ def sync_outcomes(root: Path, only: str | None = None,
     never committed. Returns (name, category, outcome) per repo.
     """
     out: list[tuple[str, str, str]] = []
-    registry = dict(_registry(root))
-    # New spaces declared only by their marker (SPC-9): see classify().
-    for path in sorted(p for p in root.iterdir() if p.is_dir() and not p.is_symlink()
-                       and p.name not in registry and (p / ".git").exists()
-                       and _marker_space(p, root)):
-        registry[path.name] = {"category": "knowledge", "via": "space marker"}
-    for key, entry in registry.items():
+    for key, entry in _repos(root).items():
         path = root if key == "<root>" else root / key
         name = "<root>" if key == "<root>" else key
         if only and Path(key).name != only and key != only:
@@ -1483,7 +1504,7 @@ def sync_all(root: Path, only: str | None = None, quiet: bool = False,
 def status_lines(root: Path) -> list[str]:
     """One line per registered repo: branch, dirty count, ahead/behind. Touches nothing."""
     lines = []
-    for key, entry in _registry(root).items():
+    for key, entry in _repos(root).items():
         path = root if key == "<root>" else root / key
         if not (path / ".git").exists():
             continue
