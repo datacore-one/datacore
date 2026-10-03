@@ -61,3 +61,10 @@ def test_refusal_message_is_generated_from_the_policy_it_enforces():
     for category in ("adapters/", "schemas/", "lib/", "modules/*/tools/", "cos/*.example"):
         assert category in summary, category
     assert S.allowlist_summary([".datacore/lib/**"]) == "lib/"
+
+
+def test_evals_are_admitted_like_tests():
+    """Ledger upgrade step E3 (owner, 2026-10-04): evals live in .datacore/evals/."""
+    allow = S.DATACORE_NEW_FILE_ALLOW
+    assert any(S.single_level_match(".datacore/evals/ledger-upgrade/phase4/test_promise_TSK11_x.py", a) for a in allow)
+    assert not any(S.single_level_match(".datacore/evalsecrets/x.py", a) for a in allow)

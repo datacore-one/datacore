@@ -84,6 +84,9 @@ DATACORE_NEW_FILE_ALLOW = [
     ".datacore/adapters/**",
     ".datacore/config/**",
     ".datacore/tests/**",
+    # Evals, kept apart from the code they judge (ledger upgrade step E3;
+    # owner approved 2026-10-04). Same content class as tests/.
+    ".datacore/evals/**",
     ".datacore/skills/**",
     ".datacore/cos/*.example",
     # Retired agent/command definitions. Same content class as
