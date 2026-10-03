@@ -703,12 +703,38 @@ jobs:
       - path: "~/.datacore/cos/audio-last-ok"
         check: no_crash
         max_age_hours: 26
+      # WHICH SCRIPT WAS SPOKEN, not only that a voice message went out (fleet sim
+      # 2026-10-03, break 10): a plain read-out after two narration timeouts passed
+      # this job while cos_verify_morning.py:check_audio went red. Same rule as the
+      # morning check (winston_speak.py records the mode), so the two cannot disagree.
+      - path: "~/.datacore/cos/audio-script.json"
+        check: regex
+        arg: '"mode": "llm-native"'
+        max_age_hours: 26
     # cos_morning.sh:6 exports CLAUDE_CODE_OAUTH_TOKEN explicitly from
     # /etc/datacored.env -- cos_verify_morning.py's check_credentials exists
     # because a missing token is exactly the failure mode that has bitten
     # this job before (2026-07-28, per its docstring).
     required_env: ["CLAUDE_CODE_OAUTH_TOKEN"]
     on_fail: telegram
+
+  # The morning's catch-up (fleet sim 2026-10-03, break 2). A reboot 4 s into the
+  # 04:00 run left no briefing and no audio, and nothing re-ran it. Hourly inside
+  # the morning window, cos_morning_run.py re-runs a run that never finished,
+  # after telling The Firm group the host and the cause (restarted while it ran /
+  # process gone / never started); a finished run is never repeated. It runs from
+  # the module clone (no lib/ link needed) and is installed by
+  # cos-server-setup.sh's pipeline step. Its log keeps one verdict line per run.
+  - name: box-briefing-catchup
+    machine: box
+    schedule: "30 4-8 * * *"
+    cmd: "/usr/bin/python3 ~/Data/.datacore/modules/chief-of-staff/server/lib/cos_morning_run.py catch-up >> ~/.datacore/cos/morning-catchup.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/cos/morning-catchup.log"
+        check: last_line_regex
+        arg: 'morning catch-up: (done|running|re-run finished rc=0)'
+        max_age_hours: 26
 
   - name: box-inbox
     machine: box

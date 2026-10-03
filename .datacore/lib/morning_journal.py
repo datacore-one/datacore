@@ -182,7 +182,14 @@ def main() -> int:
         # Single daily shot (08:30) — a miss must be LOUD, not a log line.
         # Silent non-delivery is exactly what the 2026-07-29 post-mortem
         # was about.
-        msg = f"Morning briefing NOT delivered ({missing}) — check nightshift on the server"
+        # NAME THE HOST THAT OWNS IT (fleet sim 2026-10-03, break 2). The briefing
+        # has been the always-on host's job since 2026-09-08; "check nightshift"
+        # sent the owner to the wrong machine on a morning a reboot killed it.
+        # The cause is known only there: its catch-up alert says it.
+        host = _relay_host() or "the always-on host (roles.always_on)"
+        msg = (f"Morning briefing NOT delivered: today's journal page was not published. "
+               f"The briefing is made on {host} (job box-briefing); "
+               f"{host}'s own morning alert names the cause.")
         print(f"{today}: {msg}")
         alert(msg)
         return 1
