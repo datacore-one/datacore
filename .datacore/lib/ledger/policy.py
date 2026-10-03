@@ -462,7 +462,7 @@ def _guarded_append_locked(
         who = getattr(log, "actor", None) or ""
         if who != policy.approver:
             raise PolicyError(f"{type} refused for {who!r}: only the approver ({policy.approver}) may grant")
-    if type in ("item.dismiss", "item.release", "owner.set") and policy is not None and getattr(policy, "arbitration", None):
+    if type in ("item.dismiss", "item.release", "owner.set", "item.archive", "item.reopen") and policy is not None and getattr(policy, "arbitration", None):
         # Stage 5: closing, releasing or reassigning ANOTHER principal's item is
         # arbitration, and the order in the policy file decides who may.
         who = getattr(log, "actor", None) or ""

@@ -27,6 +27,12 @@ EVENT_TYPES = frozenset(
         "item.complete",
         "item.verify",
         "item.dismiss",
+        # Phase 4 (ledger upgrade, 2026-10-04; Lean LedgerSpec/Item.lean first).
+        # item.archive hides an item without closing it (delete, archive or
+        # refile out of a view); item.reopen brings a dismissed or archived item
+        # back to open -- the ONLY event that does.
+        "item.archive",
+        "item.reopen",
         # item.update carries CHANGED FIELDS for an existing item.
         # Without it the vocabulary can create an item and close it and
         # nothing in between, so a task rescheduled in org could never be

@@ -16,7 +16,13 @@ is recorded as a no-op in that item's history.
 `item.dismiss` is terminal: once an item's status is "dismissed", its
 status, owner, grant, closing stamp and content never change again --
 every later event addressed to it, including the `owner.set` admin
-override, is a no-op for those. Nothing can revive a dismissed item.
+override, is a no-op for those -- except `item.reopen`, the one explicit
+revival (ledger upgrade Phase 4; Lean Item.reopen_is_the_only_way_back).
+
+`item.archive` hides an item without closing it: status "archived", content
+kept, nothing can claim or reassign it, and `item.reopen` brings it back
+(Item.archive_is_revivable). The projector renders neither archived items nor
+anything outside its live and recently-closed statuses.
 
 The one exception is `edit_conflicts`, deliberately. A conditional edit that
 races a dismissal is refused and RECORDED as a conflict (the projector then
@@ -497,6 +503,8 @@ def closure_kind(item) -> str:
     """
     if item.status in ("completed", "verified"):
         return "done"
+    if item.status == "archived":
+        return "housekeeping"   # hidden, not finished and not given up
     if item.status != "dismissed":
         return "done"
 
@@ -532,6 +540,9 @@ def was_finished(item) -> bool:
 def _handle_owner_set(state: LedgerState, event: Event) -> None:
     item = _get_item_or_orphan(state, event)
     if item is None or _dismissed(state, event, item):
+        return
+    if item.status == "archived":
+        _note(item, event, "no-op (item archived)")
         return
     new_owner = event.payload.get("owner")
     # Reassignment voids the grant for the same reason release does; a
@@ -570,6 +581,45 @@ def _handle_spend(state: LedgerState, event: Event) -> None:
     state.spend[event.actor] = state.spend.get(event.actor, 0) + cents
 
 
+def _handle_reopen(state: LedgerState, event: Event) -> None:
+    """Bring a dismissed or archived item back to open (Lean Item.reopen_revives).
+
+    Owner, grant and closing stamp are cleared -- a reopened task is unclaimed
+    work again; its content, retained edit conflicts and history are kept.
+    Completed and verified work is never reopened (Item.reopen_of_open_work_is_noop).
+    """
+    item = _get_item_or_orphan(state, event)
+    if item is None:
+        return
+    if item.status not in ("dismissed", "archived"):
+        _note(item, event, f"no-op (reopen illegal from status={item.status})")
+        return
+    item.status = "created"
+    item.owner = None
+    item.granted_by = None
+    item.granted_at = None
+    item.closed_at = None
+    item.closed_reason = None
+    item.closed_kind = None
+    _note(item, event, "applied")
+
+
+def _handle_archive(state: LedgerState, event: Event) -> None:
+    """Hide an item without closing it (Lean Item.archive_is_revivable)."""
+    item = _get_item_or_orphan(state, event)
+    if item is None or _dismissed(state, event, item):
+        return
+    if item.status == "archived":
+        _note(item, event, "no-op (item archived)")
+        return
+    item.status = "archived"
+    item.closed_at = event.hlc
+    item.closed_reason = (event.payload or {}).get("reason")
+    item.granted_by = None
+    item.granted_at = None
+    _note(item, event, "applied")
+
+
 _HANDLERS = {
     "item.create": _handle_create,
     "item.claim": _handle_claim,
@@ -579,6 +629,8 @@ _HANDLERS = {
     "item.update": _handle_update,
     "item.verify": _handle_verify,
     "item.dismiss": _handle_dismiss,
+    "item.reopen": _handle_reopen,
+    "item.archive": _handle_archive,
     "owner.set": _handle_owner_set,
     "spend.record": _handle_spend,
 }
