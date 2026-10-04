@@ -79,3 +79,22 @@ def test_doctor_names_a_git_space_that_skips_the_gate(machine):
     assert not [c for c in inst.doctor(plain) if c.ok is False and "write gate" in c.name], \
         "a space that is not a git checkout was reported as missing the write gate"
 
+
+
+def test_a_first_verify_leaves_the_runtime_state_private(tmp_path, monkeypatch):
+    """On a fresh machine the first `verify` created ~/.datacore/state as 0755 (the
+    verified-marker cache), and every later converge then failed: "runtime state
+    directory must be private to its identity" (profile A runbook rehearsal,
+    2026-10-04). The state folder stays private to its user."""
+    import file_utils
+    from ledger.log import EventLog
+    from ledger.verify import verify_log
+    state = tmp_path / "home" / ".datacore" / "state"
+    monkeypatch.setenv("DATACORE_STATE", str(state))
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path / "Data"))
+    space = tmp_path / "Data" / "team"
+    EventLog(space, "alice", sign=False).append("item.create", {"id": "t-1", "title": "x"})
+    verify_log(space / ".datacore" / "events" / "alice.jsonl", incremental=True)
+    assert state.exists(), "the verified marker was not written; the case is not exercised"
+    assert not state.stat().st_mode & 0o077, f"verify left the state folder open: {oct(state.stat().st_mode & 0o777)}"
+    file_utils.private_state_directory("locks", data_root=tmp_path / "Data")

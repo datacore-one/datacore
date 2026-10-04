@@ -345,7 +345,11 @@ def _write_marker(path: Path, raw: bytes, lines: int, last: Event, context: str)
         return
     target = _marker_path(path)
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
+        # Private (0700), like every runtime state folder: a 0755 state folder
+        # made by the first verify on a fresh machine is refused by
+        # file_utils.private_state_directory, so every later converge failed.
+        _state_dir().mkdir(mode=0o700, parents=True, exist_ok=True)
+        target.parent.mkdir(mode=0o700, exist_ok=True)
         tmp = target.with_name(f"{target.stem}.{os.getpid()}.tmp")
         tmp.write_text(json.dumps({
             "version": VERIFIER_VERSION, "path": str(Path(path).absolute()), "size": size,
