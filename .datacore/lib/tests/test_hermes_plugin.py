@@ -271,6 +271,38 @@ def test_registration_wires_both_hooks_and_the_tool(as_tris):
     assert calls["tools"][0] == "datacore_whoami" and len(calls["tools"]) == 4
 
 
+def test_registered_tools_accept_the_hermes_calling_convention(as_tris, monkeypatch):
+    """Hermes calls a tool as handler(args_dict, **kwargs)
+    (hermes-agent tools/registry.py dispatch). Until 2026-10-04 every tool here
+    took keywords only, so on the box each call failed with "whoami_handler()
+    takes 0 positional arguments but 1 was given", or bound the whole args dict
+    to `id` / `space`. The tests above call the handlers by keyword and so never
+    saw it; this one calls them the way the runtime does."""
+    import json
+    tools = {}
+
+    class Ctx:
+        def register_hook(self, name, cb): pass
+        def register_tool(self, **kw): tools[kw["name"]] = kw["handler"]
+
+    hp.register(Ctx())
+    monkeypatch.setattr(hp, "_cos_questions", lambda: None)
+
+    def call(name, args):
+        return tools[name](args, task_id="t1")   # exactly as registry.dispatch does
+
+    d = json.loads(call("datacore_whoami", {}))
+    assert d["in_force"] is True and d["actor"] == "tris"
+    assert "not available on this host" in call("datacore_approvals_pending", {})
+    monkeypatch.setattr(hp, "_cos_questions", lambda: Path("/nonexistent"))
+    assert "authenticated human approval interface" in call(
+        "datacore_approval_decide", {"id": "a1", "decision": "approve"})
+    assert "must be 'approve' or 'dismiss'" in call(
+        "datacore_approval_decide", {"id": "a1", "decision": "maybe"})
+    assert "not a declared event type" in call(
+        "datacore_ledger_append", {"space": "2-plur", "type": "nope", "payload": {"id": "x"}})
+
+
 def test_registration_survives_a_runtime_that_rejects_the_tool(as_tris):
     class Ctx:
         def __init__(self): self.hooks = []

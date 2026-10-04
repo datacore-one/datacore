@@ -690,6 +690,15 @@ def install_press_forwarder(tx=None) -> bool:
     return True
 
 
+def _from_hermes(handler):
+    """Hermes calls a tool as handler(args_dict, **kwargs) (tools/registry.py
+    dispatch); the handlers here take the tool's arguments as keywords."""
+    def call(args=None, **_runtime):
+        return handler(**(args if isinstance(args, dict) else {}))
+    call.__wrapped__ = handler
+    return call
+
+
 def register(ctx) -> None:
     ctx.register_hook("pre_tool_call", pre_tool_call)
     ctx.register_hook("on_session_start", on_session_start)
@@ -705,7 +714,7 @@ def register(ctx) -> None:
     ):
         try:
             ctx.register_tool(name=name, toolset="datacore", schema=schema,
-                              handler=handler, description=desc, emoji=emoji)
+                              handler=_from_hermes(handler), description=desc, emoji=emoji)
         except Exception as exc:  # noqa: BLE001 — hooks matter more than any tool
             logger.warning("datacore: could not register %s (%s)", name, exc)
     try:
