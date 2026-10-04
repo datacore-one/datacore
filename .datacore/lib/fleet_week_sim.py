@@ -2163,6 +2163,12 @@ class Week:
             for ts in instants:
                 if ts > end:
                     break
+                low = disk_low([self.o.out, self.fleet.root], MIN_FREE_GB)
+                if low:
+                    print(f"[fleet-sim] stopped at {ts:%Y-%m-%d %H:%M}: {low}", flush=True)
+                    (self.o.out / "STOPPED.txt").write_text(f"stopped at simulated {ts.isoformat()}: {low}\n")
+                    end = ts
+                    break
                 self.faults.due(ts)
                 if ts in checks:
                     self.checkpoint(ts)
@@ -2505,11 +2511,45 @@ def run_week(opts: Options) -> dict:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Disk guard (Phase 5A, 2026-10-04)
+# ═════════════════════════════════════════════════════════════════════════════
+#: 2026-10-03: the 7-night rogue run filled the Mac's disk from ~14 GB free to
+#: 218 MB, Docker could not write its own metadata, and the container could be
+#: neither killed nor removed. The run now refuses to start, and stops itself
+#: cleanly, below this much free space on any disk it writes to.
+MIN_FREE_GB = 5.0
+DISK_POLL_SECONDS = 30
+
+
+def disk_low(paths, floor_gb: float = MIN_FREE_GB) -> str | None:
+    """A plain reason when any of `paths` has less than `floor_gb` free, else None."""
+    for p in paths:
+        p = Path(p)
+        probe = p if p.exists() else next((q for q in p.parents if q.exists()), Path("/"))
+        try:
+            free = shutil.disk_usage(probe).free / 1e9
+        except OSError:
+            continue
+        if free < floor_gb:
+            return (f"only {free:.1f} GB free on the disk holding {p} (the floor is {floor_gb:g} GB): "
+                    f"the simulator stops before it fills the disk -- free space, prune Docker "
+                    f"(docker system prune), or pass --min-free-gb")
+    return None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Command line
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _docker(args) -> int:
     src = LIB.parents[1]
+    floor = float(getattr(args, "min_free_gb", MIN_FREE_GB) or MIN_FREE_GB)
+    watched = [Path.home(), Path(args.workdir or tempfile.gettempdir()),
+               Path(args.out) if args.out else RUNS_ROOT]
+    low = disk_low(watched, floor)
+    if low:
+        print(f"[fleet-sim] not started: {low}", flush=True)
+        return 3
     base = Path(args.workdir or tempfile.mkdtemp(prefix="fleet-sim-")).resolve()
     seed = base / "seed"
     if args.out:
@@ -2519,6 +2559,7 @@ def _docker(args) -> int:
     else:
         out = default_out(RUNS_ROOT, args.days)
     out.mkdir(parents=True, exist_ok=True)
+    watched = [Path.home(), base, out]
     print(f"[fleet-sim] seed -> {seed}", flush=True)
     prepare(src, seed)
     if not args.no_build:
@@ -2542,12 +2583,30 @@ def _docker(args) -> int:
     # NET_ADMIN: tc netem on the container's own loopback (F13). SYS_ADMIN: the
     # tmpfs and overlay mounts of a full disk (F18). Both act inside the
     # container only; it still has no network (--network none).
-    cmd = ["docker", "run", "--rm", "--network", "none", "--cap-add", "NET_ADMIN", "--cap-add", "SYS_ADMIN",
+    name = f"fleet-sim-{os.getpid()}"
+    cmd = ["docker", "run", "--rm", "--name", name, "--network", "none", "--cap-add", "NET_ADMIN", "--cap-add", "SYS_ADMIN",
            "-e", "FLEET_SIM_SEED=/seed",
            "-w", "/seed/core-src/.datacore/lib",
            "-v", f"{seed}:/seed:ro", "-v", f"{out}:/out", IMAGE, *inner]
     print("[fleet-sim] " + " ".join(shlex.quote(c) for c in cmd), flush=True)
-    rc = subprocess.run(cmd).returncode
+    # Watched while it runs: below the floor the container is stopped and the
+    # run says why, instead of running the host out of disk.
+    proc = subprocess.Popen(cmd)
+    while True:
+        try:
+            rc = proc.wait(timeout=DISK_POLL_SECONDS)
+            break
+        except subprocess.TimeoutExpired:
+            low = disk_low(watched, floor)
+            if low:
+                print(f"[fleet-sim] stopped: {low}", flush=True)
+                subprocess.run(["docker", "kill", name], capture_output=True, text=True)
+                try:
+                    proc.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    pass
+                (out / "STOPPED.txt").write_text(f"stopped {dt.datetime.now(UTC).isoformat()}: {low}\n")
+                return 3
     print(f"[fleet-sim] output in {out}", flush=True)
     if not args.selftest and _is_run(out):
         prev = previous_run(out.parent, out)
@@ -2591,6 +2650,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--selftest", action="store_true", help="run the harness's own tests in the container")
     p.add_argument("--harsh", action="store_true", help="add HARSH_FAULTS (F13-F25) to the default week")
     p.add_argument("--rogue", action="store_true", help="run the rogue-agent family over a mild background")
+    p.add_argument("--min-free-gb", type=float, default=MIN_FREE_GB,
+                   help="stop below this much free disk (default %(default)s GB)")
     p = sub.add_parser("compare", help="compare a run's breaks with an earlier run's")
     p.add_argument("run", help="the run folder (holds report.json)")
     p.add_argument("--prev", help="the earlier run folder; default: the newest earlier run next to it")
