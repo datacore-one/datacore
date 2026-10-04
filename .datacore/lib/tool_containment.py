@@ -97,7 +97,7 @@ _ENV_DUMP_CODE = (
 )
 _PROC_ENVIRON = re.compile(r"/proc/[^/\s'\"]+/environ\b")
 _DELETERS = {"rm", "rmdir", "unlink", "shred", "srm", "trash", "trash-put", "truncate"}
-_TEMP_ROOTS = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders", "/dev/null")
+_TEMP_ROOTS = ("/tmp", "/private/tmp", "/dev/null")   # + the runtime's own TMPDIR
 _FILE_WRITERS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "write_file", "patch"}
 _INBOX = re.compile(r"(?:^|/)org/inbox\.org$")
 
@@ -359,6 +359,10 @@ def _delete_targets(argv: list[str], cwd: str | None) -> list[tuple[str, Path | 
     if name == "git":
         if "rm" not in args:
             return []
+        if "-C" in args[:args.index("rm")]:
+            where = args[args.index("-C") + 1]
+            moved = _resolve(where, cwd)
+            cwd = str(moved) if moved is not None else None
         args = args[args.index("rm") + 1:]
         name = "rm"
     if name == "find":
