@@ -103,3 +103,32 @@ def test_an_invalid_registry_still_refuses_and_an_unmarked_repo_is_still_refused
     res = lt.classify(marked, root)
     assert not res.ok and "invalid" in res.reason, f"an invalid registry did not refuse: {res}"
 
+
+
+def test_a_first_converge_publishes_into_an_empty_remote(root, tmp_path):
+    """A team's new remote has no branch yet. The first converge used to report
+    'merge conflict -- human needed' (found running the profile A runbook,
+    2026-10-04). An empty remote holds nothing to fork against or overwrite: the
+    first converge publishes the space. A remote that HAS branches but not this
+    one is not empty, and is never given a new default branch."""
+    sp = _space(root, "team", origin=None, hooks=tmp_path / "hooks")
+    bare = tmp_path / "empty.git"
+    subprocess.run(["git", "init", "-q", "--bare", "--initial-branch=main", str(bare)], check=True, timeout=60)
+    _git(sp, "remote", "add", "origin", str(bare))
+    res = lt.converge(sp, root=root)
+    assert res.ok and "conflict" not in res.reason, f"an empty remote was not published: {res.reason}"
+    assert "first publish" in res.reason, f"the first publish is not named: {res.reason}"
+    assert _git(bare, "rev-parse", "--verify", "-q", "refs/heads/main").returncode == 0, "nothing reached the remote"
+    assert lt.sync_repo(sp, quiet=True, root=root) == "clean"
+
+    other = _space(root, "other", origin=None, hooks=tmp_path / "hooks")
+    elsewhere = tmp_path / "elsewhere.git"
+    # Its HEAD names `main`, which does not exist there: no default is learnt from it.
+    subprocess.run(["git", "init", "-q", "--bare", "--initial-branch=main", str(elsewhere)], check=True, timeout=60)
+    _git(other, "remote", "add", "origin", str(elsewhere))
+    assert _git(other, "push", "-q", "origin", "main:trunk").returncode == 0
+    res = lt.converge(other, root=root)
+    assert not res.ok and "conflict" not in res.reason and "trunk" in res.reason, \
+        f"a remote without this branch was not named as such: {res.reason}"
+    assert _git(elsewhere, "rev-parse", "--verify", "-q", "refs/heads/main").returncode != 0, \
+        "converge pushed a new default branch into a remote that already had branches"

@@ -975,6 +975,28 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         return Result(False, _fetch_reason(err, space), {"stderr": err.strip()[:200]})
     db = default_branch(space)
 
+    # A REMOTE WITH NO BRANCH IS EMPTY, NOT IN CONFLICT (found running the
+    # profile A runbook, 2026-10-04: a team's first converge said "merge conflict
+    # -- human needed"). An empty remote holds nothing to fork against or
+    # overwrite, so the first converge publishes the committed branch. A remote
+    # that has branches, just not this one, is never given a new default branch.
+    rc, _, _ = _git(space, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{db}")
+    if rc != 0:
+        _, heads, _ = _git(space, "for-each-ref", "--format=%(refname:lstrip=3)", "refs/remotes/origin/")
+        others = [h for h in heads.split() if h and h != "HEAD"]
+        if others:
+            return Result(False, f"origin has no {db} branch (it has: {', '.join(others[:5])}); set this "
+                                 f"space's branch or the remote's default by hand, then converge",
+                          {"branch": db, "remote_branches": others[:20]})
+        _, cur, _ = _git(space, "branch", "--show-current")
+        if cur.strip() != db:
+            return Result(False, f"the remote is empty and this space is on {cur.strip() or 'no branch'}, "
+                                 f"not {db}: switch to {db}, then converge", {"branch": db})
+        rc, _, err = _git(space, "push", "-u", "origin", db)
+        if rc != 0:
+            return Result(False, _fetch_reason(err, space), {"branch": db, "stderr": err.strip()[:200]})
+        return Result(True, f"first publish: the remote was empty; pushed {db}", {"branch": db, "published": True})
+
     # Never autosave a half-finished merge. A converge that reaches a repo
     # whose previous merge stopped on a conflict — markers in the tree,
     # MERGE_HEAD in .git — would `add -A` the markers, commit them as an
