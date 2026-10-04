@@ -345,19 +345,25 @@ def _write_marker(path: Path, raw: bytes, lines: int, last: Event, context: str)
         return
     target = _marker_path(path)
     try:
-        # Private (0700), like every runtime state folder: a 0755 state folder
-        # made by the first verify on a fresh machine is refused by
-        # file_utils.private_state_directory, so every later converge failed.
-        _state_dir().mkdir(mode=0o700, parents=True, exist_ok=True)
-        target.parent.mkdir(mode=0o700, exist_ok=True)
+        # Runtime state by the same rules as all runtime state: every folder
+        # 0700, no alias, not in a Git repository or the data root. A 0755
+        # state folder made by the first verify on a fresh machine was refused
+        # by every later converge (found by the Phase 3 runbook rehearsal,
+        # first fixed in 03eec82).
+        from file_utils import private_state_directory
+        folder = private_state_directory("ledger-verified")
+        if folder != target.parent:
+            return
         tmp = target.with_name(f"{target.stem}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps({
-            "version": VERIFIER_VERSION, "path": str(Path(path).absolute()), "size": size,
-            "lines": lines, "prefix_sha256": hashlib.sha256(raw[:size]).hexdigest(),
-            "last_seq": last.seq, "last_hash": last.hash, "context": context}))
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps({
+                "version": VERIFIER_VERSION, "path": str(Path(path).absolute()), "size": size,
+                "lines": lines, "prefix_sha256": hashlib.sha256(raw[:size]).hexdigest(),
+                "last_seq": last.seq, "last_hash": last.hash, "context": context}))
         tmp.rename(target)
-    except OSError:
-        pass                      # an unwritable state dir only costs the next run a full verify
+    except (OSError, ValueError, ImportError):
+        pass                      # no private state here only costs the next run a full verify
 
 
 def verify_log(path: Path, registry_path: Path | None = None, strict: bool = False,
