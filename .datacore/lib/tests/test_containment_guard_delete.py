@@ -22,6 +22,10 @@ import tool_policy  # noqa: E402
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
     monkeypatch.setenv('DATACORE_STATE', str(tmp_path / 'state'))
+    # pytest's own temp folder is /tmp on Linux, which the guard treats as the
+    # task's scratch space; the fixture stands for ~/Data, so /tmp is moved aside.
+    import tool_containment
+    monkeypatch.setattr(tool_containment, '_TEMP_ROOTS', ('/nonexistent-temp-root',))
     data = tmp_path / 'Data'
     own = data / '3-fds'
     other = data / '1-datafund'
@@ -71,7 +75,7 @@ def test_a_delete_outside_the_workspace_is_refused(command, setup):
     ('rm -rf node_modules dist', 'worktree'),
     ('rm {worktree}/old.txt', 'own'),
     ('rm notes/draft.md', 'own'),
-    ('rm -rf /tmp/fairdrive-build', 'own'),
+    ('rm -rf /nonexistent-temp-root/fairdrive-build', 'own'),
     ('git rm -q docs/obsolete.md', 'worktree'),
     ('find . -name "*.pyc" -delete', 'worktree'),
     ('mv notes/a.md notes/b.md', 'own'),
