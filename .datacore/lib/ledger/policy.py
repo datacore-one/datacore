@@ -462,6 +462,22 @@ def _guarded_append_locked(
         who = getattr(log, "actor", None) or ""
         if who != policy.approver:
             raise PolicyError(f"{type} refused for {who!r}: only the approver ({policy.approver}) may grant")
+    if type == "item.release":
+        # ONLY THE CLAIMANT RELEASES (Phase 5A, 2026-10-04; rogue-agent fleet
+        # simulation F33). The fold has always ignored a release by anyone but
+        # the claim's holder; the write accepted it -- from an arbiter agent,
+        # or from another writer of the same principal -- so the log said
+        # "released" while the state said "claimed". Refused here, with any
+        # policy or none, so the record and the state agree. The owner frees a
+        # stuck claim through the reconcile tool, not by releasing it.
+        sd = space_dir or getattr(log, "space_dir", None)
+        if sd is not None:
+            from .fold import fold
+            held = fold(read_events(Path(sd))).items.get(payload.get("id"))
+            who = getattr(log, "actor", None) or ""
+            if held is not None and held.status == "claimed" and held.owner and held.owner != who:
+                raise PolicyError(f"item.release refused for {who!r}: the claim is {held.owner!r}'s, "
+                                  f"and only the claimant may release it")
     if type in ("item.dismiss", "item.release", "owner.set", "item.archive", "item.reopen") and policy is not None and getattr(policy, "arbitration", None):
         # Stage 5: closing, releasing or reassigning ANOTHER principal's item is
         # arbitration, and the order in the policy file decides who may.
