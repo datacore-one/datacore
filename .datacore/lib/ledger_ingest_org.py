@@ -410,6 +410,80 @@ def _dismiss_archived(space, ws, state, log, actor, dry_run) -> int:
 ORG_FILES = ("inbox.org", "next_actions.org")
 
 
+def _heading_blocks(text: str) -> list[tuple[int, int, str | None, str]]:
+    """(start line, end line, own :ID:, first line) for every heading, subtree included."""
+    import re
+    lines = text.split("\n")
+    out = []
+    for i, line in enumerate(lines):
+        m = re.match(r"^(\*+) ", line)
+        if not m:
+            continue
+        level, j, own, ident = len(m.group(1)), i + 1, True, None
+        while j < len(lines):
+            mm = re.match(r"^(\*+) ", lines[j])
+            if mm and len(mm.group(1)) <= level:
+                break
+            if mm:
+                own = False
+            hit = re.match(r"^\s*:ID:\s*(\S+)\s*$", lines[j])
+            if own and hit and ident is None:
+                ident = hit.group(1)
+            j += 1
+        out.append((i, j, ident, line))
+    return out
+
+
+def hold_duplicate_copies(space: Path) -> int:
+    """A copied subtree in a Phase-1 view is HELD in the inbox, never a space-wide stop.
+
+    One door in (owner decision 8, 2026-10-04). Yanking a task as a template
+    copies its :ID:, and the strict id check below refused the whole space for
+    it. Here, before that check, every later occurrence of an id in the
+    generated view is taken out of the view and held as one [NEEDS_REVIEW]
+    inbox entry carrying the copy; the occurrence that matches what the ledger
+    last wrote is the one kept. Only a view with a projection base (the
+    ledger's last write) is touched; an authored file still refuses.
+    """
+    import json
+    from collections import Counter
+    from org_transaction import watch_file, write_org_text
+    from ledger.projection_state import STATE, _block_text
+    from ledger.view_capture import Held, hold
+    target = space / "org" / ORG_FILES[1]
+    try:
+        if (space / ".datacore" / "ledger-phase").read_text().strip() != "1" or not target.exists():
+            return 0
+        base_text = json.loads((space / STATE).read_text(encoding="utf-8"))["text"]
+    except (OSError, ValueError, KeyError):
+        return 0
+    watch_file(target)
+    text = target.read_text(encoding="utf-8")
+    blocks = _heading_blocks(text)
+    counts = Counter(b[2] for b in blocks if b[2])
+    if not any(n > 1 for n in counts.values()):
+        return 0
+    lines = text.split("\n")
+    remove = []
+    for ident in (i for i, n in counts.items() if n > 1):
+        occurrences = [b for b in blocks if b[2] == ident]
+        original = " ".join(_block_text(base_text, ident).split())
+        keep = next((b for b in occurrences if " ".join("\n".join(lines[b[0]:b[1]]).split()) == original),
+                    occurrences[0])
+        remove += [b for b in occurrences if b is not keep]
+    remove.sort()
+    top = [b for b in remove if not any(o[0] < b[0] and b[1] <= o[1] for o in remove if o is not b)]
+    held = []
+    for start, end, ident, first in top:
+        held.append(Held(ident, "a copied subtree (a duplicate :ID: of an existing task)",
+                         first.lstrip("* "), "\n".join(lines[start:end])))
+    for start, end, _ident, _first in sorted(top, reverse=True):
+        del lines[start:end]
+    hold(space, held)
+    write_org_text(target, "\n".join(lines))
+    return len(held)
+
+
 @serialized
 def ensure_ids(space: Path, adapter: Path | None = None) -> str:
     """Prepare IDs with this runtime's adapter, preserving files on failure.
@@ -417,6 +491,7 @@ def ensure_ids(space: Path, adapter: Path | None = None) -> str:
     The optional historical argument may identify this adapter only. The data
     checkout is storage, not a source of executable runtime dependencies.
     """
+    hold_duplicate_copies(space)
     from argparse import Namespace
     import org_workspace_adapter
     installed = (LIB / 'org_workspace_adapter.py').resolve()

@@ -167,6 +167,191 @@ def guard_projection(space, current_text, proposed_text):
 
 
 def sync_generated(space, state, actor, dry_run=False):
+    """Take a view's edits in: one door in (owner decision 8, 2026-10-04).
+
+    With a projection base and no reviewed decision in flight, every edit to
+    the view is handled PER TASK and nothing stops the space: a plain change is
+    applied to the ledger now, an unclear one is held as one inbox entry
+    (`view_capture`), and the base advances so the view is regenerated and the
+    same edit is never taken twice. See `_sync_views`.
+
+    The strict path below (`_sync_strict`) is kept for the two callers that
+    rely on its refusals: a reviewed decision board (`reviewed_state`), whose
+    plan must not be re-interpreted, and a space with no base yet, whose first
+    projection requires agreement.
+    """
+    if _reviewed.get() is None and load_base(space) is not None:
+        return _sync_views(space, state, actor, dry_run)
+    return _sync_strict(space, state, actor, dry_run)
+
+
+def _block_text(text, identity):
+    """The heading whose own drawer carries `:ID: identity`, with its subtree."""
+    lines = text.split('\n')
+    for i, line in enumerate(lines):
+        m = re.match(r'^(\*+) ', line)
+        if not m:
+            continue
+        level, j, own, found = len(m.group(1)), i + 1, True, False
+        while j < len(lines):
+            mm = re.match(r'^(\*+) ', lines[j])
+            if mm and len(mm.group(1)) <= level:
+                break
+            if mm:
+                own = False
+            if own and re.match(rf'^\s*:ID:\s*{re.escape(identity)}\s*$', lines[j]):
+                found = True
+            j += 1
+        if found:
+            return '\n'.join(lines[i:j])
+    return ''
+
+
+#: More headings than this gone from a view at once is one entry, not many.
+_REMOVED_ONE_ENTRY = 5
+
+
+def _sync_views(space, state, actor, dry_run=False):
+    """Plain edits applied, unclear ones held once, the base advanced. Never raises for an edit."""
+    from .log import EventLog, read_events
+    from .fold import fold
+    from .edits import EditConflict
+    from .view_capture import Held, hold, archived_in
+    space = Path(space)
+    name = space.name
+    target = space / 'org/next_actions.org'
+    view = target.name
+    current_text = target.read_text(encoding='utf-8')
+    proposed = project(state, space=name, as_of=time.time()).text
+    try:
+        from ledger_project_org import _with_org_header
+        proposed = _with_org_header(space, target, proposed, remember=False)
+    except Exception:  # noqa: BLE001 - comparing the intermediate is the old behaviour
+        pass
+    strict = edit_strict(space)
+    base_doc = json.loads((space / STATE).read_text(encoding='utf-8'))['text']
+    current = snapshot(current_text, name)['items']
+    base = snapshot(base_doc, name)['items']
+    live = snapshot(proposed, name)['items']
+
+    held, plans, archives = [], [], []
+
+    def title_of(identity, fields=None):
+        item = state.items.get(identity)
+        return (fields or {}).get('title') or (item.title if item else '') or identity
+
+    for identity, fields in current.items():
+        item = state.items.get(identity)
+        if item is None:
+            held.append(Held(identity, 'a heading the ledger could not admit', title_of(identity, fields),
+                             _block_text(current_text, identity), view))
+            continue
+        before = base.get(identity) or live.get(identity)
+        local = changed_fields(fields, before or {}, strict=strict)
+        if not local:
+            continue
+        if 'created' in local:
+            held.append(Held(identity, 'its CREATED stamp was edited', title_of(identity, fields),
+                             _block_text(current_text, identity), view))
+            continue
+        remote = live.get(identity)
+        if remote is not None and identity in base:
+            try:
+                merged = merge_values(base[identity], fields, remote, strict=strict)
+            except EditConflict as exc:
+                held.append(Held(identity, f'clash with an edit already in the ledger ({exc})',
+                                 title_of(identity, fields), _block_text(current_text, identity), view))
+                continue
+            changed = changed_fields(merged, remote, strict=strict)
+        else:
+            changed = changed_fields(fields, remote or {}, strict=strict)
+        if changed:
+            plans.append((identity, dict(changed), fields.get('state')))
+
+    for identity in base:
+        if identity in current:
+            continue
+        item = state.items.get(identity)
+        if item is None or item.status == 'archived' or (item.status == 'dismissed' and identity not in live):
+            continue
+        if item.status != 'dismissed' and archived_in(space, identity):
+            archives.append(identity)
+        else:
+            held.append(Held(identity, 'heading removed from the view', title_of(identity, base[identity]),
+                             _block_text(base_doc, identity), view))
+    removed = [h for h in held if h.change == 'heading removed from the view']
+    if len(removed) > _REMOVED_ONE_ENTRY:
+        held = [h for h in held if h not in removed]
+        held.append(Held(removed[0].of, f'{len(removed)} headings removed from the view at once',
+                         f'{len(removed)} headings', '\n\n'.join(h.text for h in removed), view))
+
+    before_order = [i for i in base if i in current]
+    after_order = [i for i in current if i in base]
+    if before_order != after_order:
+        k = next(n for n, (x, y) in enumerate(zip(before_order, after_order)) if x != y)
+        moved = after_order[k]
+        held.append(Held(moved, 'headings reordered by hand (the ledger keeps no order)', title_of(moved),
+                         '\n'.join(f'{n + 1}. {title_of(i, current.get(i))}' for n, i in enumerate(after_order)), view))
+
+    summary = {'dismissed': 0, 'updated': 0, 'reopened': 0, 'archived': 0, 'held': len(held)}
+    if dry_run:
+        summary.update(updated=len(plans), archived=len(archives))
+        return {k: v for k, v in summary.items() if k in ('dismissed', 'updated') or v}
+    log = EventLog(space, actor)
+    version = 2 if strict else 1
+    for identity, changed, file_state in plans:
+        item = fold(read_events(space)).items[identity]
+        closed = item.status in ('dismissed', 'archived')
+        file_closed = file_state in ('DONE', 'CANCELLED')
+        kind = None
+        if closed and not file_closed:
+            log.append('item.reopen', {'id': identity, 'reason': f'reopened in {view}'})
+            summary['reopened'] += 1
+        elif closed:
+            # A note, a date or a retitle on a closed task: applied, and the task stays
+            # closed. Reopen, edit, close again with the same outcome; nothing is lost.
+            kind = 'done' if file_state == 'DONE' else 'dropped'
+            if item.status == 'dismissed' and 'state' not in changed:
+                kind = item.closed_kind or kind
+            changed.pop('state', None)
+            log.append('item.reopen', {'id': identity, 'reason': f'annotated after closing, in {view}'})
+        elif changed.get('state') in ('DONE', 'CANCELLED'):
+            kind = 'done' if changed.pop('state') == 'DONE' else 'dropped'
+        if changed:
+            item = fold(read_events(space)).items[identity]
+            log.append('item.update', conditional_payload(item, changed, version=version))
+            summary['updated'] += 1
+        if kind:
+            item = fold(read_events(space)).items[identity]
+            log.append('item.dismiss', conditional_payload(item, {
+                'kind': kind, 'reason': f'authored terminal transition in {view}'}, terminal=True, version=version))
+            summary['dismissed'] += 1
+    for identity in archives:
+        log.append('item.archive', {'id': identity, 'reason': f'archived out of {view} (found in an org archive file)'})
+        summary['archived'] += 1
+    hold(space, held)
+    _write_base(space, current_text)
+    # The strict path's contract is {'dismissed', 'updated'}; the new counters are
+    # reported only when they happened.
+    return {k: v for k, v in summary.items() if k in ('dismissed', 'updated') or v}
+
+
+def _write_base(space, text):
+    """Everything in `text` is now in the ledger or held in the inbox: it is the base."""
+    path = Path(space) / STATE
+    document = base_document(text)
+    import org_transaction
+    if org_transaction._current.get() is not None:
+        org_transaction.write_org_text(path, document)
+        return
+    import os
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix='.last-rendered.')
+    with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+        stream.write(document)
+    os.replace(tmp, path)
+
+
+def _sync_strict(space, state, actor, dry_run=False):
     """Plan all changes before emitting; stale unchanged projection fields are inert."""
     from .log import EventLog, read_events
     from .fold import fold

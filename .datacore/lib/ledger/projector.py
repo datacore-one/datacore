@@ -459,10 +459,11 @@ def project(state: LedgerState, *, space: str | None = None,
     user can see (title, date) would reorder the file whenever a task was
     renamed, producing diff noise that hides real change.
     """
-    if any(item.edit_conflicts for item in state.items.values()
-           if space is None or item.payload.get('space') in (None, space)):
-        from .edits import EditConflict
-        raise EditConflict('unresolved replicated edits; preserve the file and reconcile event conflicts')
+    # A retained edit conflict no longer refuses the whole file (owner decision 8,
+    # 2026-10-04: no edit stops a space). The conflicted item renders with the
+    # value the ledger accepted; the refused edit is still recorded on it
+    # (`edit_conflicts`) for ledger_resolve_conflict.py, and every other item
+    # renders as usual. (Lean: DatacoreSpec/Projector.lean, render_conflict_isolated.)
     # An ABSENT space means "this space", not "no space".
     #
     # This filter was `payload["space"] == space`, so an item whose payload
