@@ -37,6 +37,4 @@ _ASKED = os.environ.get("LEDGER_UPGRADE_EVALS") == "1" or os.environ.get("PROMIS
 collect_ignore_glob = [] if _ASKED else [
     f.name for f in HERE.glob("test_*.py") if f.name not in PROMOTED]
 
-pytest_plugins: list[str] = []
-
 from _verify_fixtures import sandbox_root  # noqa: E402,F401  (fixture)
