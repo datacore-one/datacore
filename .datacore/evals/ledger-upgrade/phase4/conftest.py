@@ -2,10 +2,10 @@
 
 "An ordinary edit to a task file never stops a space." The evals are promise
 evals: promise_gate.py collects them in an ordinary run only once TSK-11 is
-green in the committed baseline; the scoreboard (PROMISE_EVALS_ALL=1) always
-collects them. LEDGER_UPGRADE_EVALS=1 collects them too:
+green in the committed baseline (the gate in .datacore/conftest.py); the
+scoreboard switch always collects them:
 
-    LEDGER_UPGRADE_EVALS=1 pytest .datacore/evals/ledger-upgrade/phase4 -v
+    PROMISE_EVALS_ALL=1 pytest .datacore/evals/ledger-upgrade/phase4 -v
 
 The index, with each row's status and seeded failure, is
 `<system space>/1-tracks/dev/ledger-upgrade/EVALS.yaml`.
@@ -28,12 +28,6 @@ for p in (str(LIB), str(HERE)):
         sys.path.insert(0, p)
 
 
-
-def pytest_ignore_collect(collection_path, config):
-    if os.environ.get("LEDGER_UPGRADE_EVALS") == "1":
-        return None
-    import promise_gate
-    return True if promise_gate.should_ignore(Path(str(collection_path))) else None
 
 
 import _ledger_drill  # noqa: E402

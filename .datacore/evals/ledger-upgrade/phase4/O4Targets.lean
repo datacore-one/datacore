@@ -10,12 +10,22 @@ these statements are false. It is an EVAL: the implementer of Phase 4 changes th
 model (`DatacoreSpec/Projector.lean`) and proves the three named theorems there;
 this file changes only with the owner's approval.
 
+RE-STATED 2026-10-04 for owner decision 8 ("one door in"): an edit to a view is
+applied to the ledger when plain, and captured (held as an inbox entry) when
+unclear; either way it never blocks another item.
+
 Green when this file compiles with no error:
   (1) `render_idempotent`        rendering after fold is a fixed point, for every space;
   (2) `render_conflict_isolated` a recorded conflict never blocks rendering another item;
-  (3) `ingest_conflict_isolated` an edit that ingests on its own still ingests beside
-                                 any other item's edit;
+  (3) `ingest_conflict_isolated` whatever happens to one item's edit (applied, captured or
+                                 unclear), every other task the ledger already knows ends
+                                 up exactly as its own edit alone would leave it;
   (4) the bounded model check of (2) and (3) over every two-item space.
+
+(3) is about tasks the ledger already knows (`j ∈ l.map (·.id)`). The stage-1
+statement had no such hypothesis and was false for ANY design that admits new
+headings: for a brand-new heading `j`, "only j's edit" is the unchanged base,
+while the full file admits it.
 -/
 
 namespace O4
@@ -38,7 +48,7 @@ theorem isolated_render : ∀ (l : Ledger) (j : Item),
   render_conflict_isolated
 
 theorem isolated_ingest : ∀ (l : Ledger) (base file : File) (j : Nat) (l1 : Ledger),
-    distinctIds l = true → render l = some base →
+    distinctIds l = true → render l = some base → j ∈ l.map (·.id) →
     ingest base (onlyEdit base file j) l = some l1 →
     ∃ l2, ingest base file l = some l2 ∧ lookupI l2 j = lookupI l1 j :=
   ingest_conflict_isolated

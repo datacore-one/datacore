@@ -1,14 +1,15 @@
 """O3 (deterministic): task identities are stable by construction (audit B-F6, B-F12).
 
-Ledger upgrade Phase 4, eval O3 (PLAN.md), on a sandbox copy of a real Phase-1
-space:
+Promise TSK-11; ledger upgrade Phase 4, eval O3, RE-STATED 2026-10-04 for owner
+decision 8 ("one door in"), on a sandbox copy of a real Phase-1 space:
 
-  * COPY AS TEMPLATE RE-MINTS. A person yanks a task's subtree, :ID: included,
-    and pastes it below the original. After the cycles the original keeps its
-    id and its ledger item is untouched; the copy is a new live item with an id
-    the ledger had never seen; the file holds no duplicate id. (Today the cycle
-    refuses the whole space: "duplicate Org IDs require explicit identity
-    reconciliation".)
+  * A COPIED SUBTREE IS CAPTURED, NOT A STOP. A person yanks a task's subtree,
+    :ID: included, and pastes it below the original. After the cycles the space
+    has not stopped; the copy is held as exactly one [NEEDS_REVIEW] inbox entry
+    naming the original's id and carrying the copy; the original keeps its id
+    and its ledger item is untouched; the regenerated view holds no duplicate
+    id. (Before: the cycle refused the whole space, "duplicate Org IDs require
+    explicit identity reconciliation".)
   * NO CYCLE REGENERATES AN ID THE LEDGER KNOWS. Over several cycles with
     ordinary edits, every id the ledger knows that is in the file stays on the
     same task, and the org-workspace library default refuses a duplicate
@@ -21,12 +22,13 @@ import pytest
 import _ledger_drill as d
 
 
-def test_a_copied_subtree_is_reminted_and_the_original_keeps_its_id(sandbox):
+def test_a_copied_subtree_is_captured_and_the_original_keeps_its_id(sandbox):
     space = sandbox
     a = d.pick_items(space, 1)[0]
-    known_before = set(d.state(space).items)
     original = d.state(space).items[a]
     title, payload_before = original.payload.get("title"), dict(original.payload)
+    held0 = len(d.held_entries(space))
+    known_before = set(d.state(space).items)
 
     text = d.read(space)
     s, e = d.block(text, a)
@@ -38,14 +40,15 @@ def test_a_copied_subtree_is_reminted_and_the_original_keeps_its_id(sandbox):
     assert not stopped, f"copying a task as a template stopped the space: {stopped[0].reason}"
 
     ids = d.heading_order(d.read(space))
-    assert len(ids) == len(set(ids)), "the file still holds a duplicate id after the cycles"
+    assert len(ids) == len(set(ids)), "the regenerated view still holds a duplicate id"
     st = d.state(space)
     assert st.items[a].status != "dismissed" and st.items[a].payload.get("title") == title, \
         "the original task lost its identity or was closed"
     assert st.items[a].payload.get("org") == payload_before.get("org"), "the original's ledger item was rewritten"
-    fresh = [i for i in st.items.values()
-             if i.id not in known_before and (i.payload.get("title") or i.title) == title and i.status != "dismissed"]
-    assert len(fresh) == 1, f"expected one new live item for the copy with an id the ledger never saw; found {len(fresh)}"
+    assert set(st.items) == known_before, "the copy was admitted to the ledger instead of being held for review"
+    new = d.held_entries(space)[held0:]
+    assert len(new) == 1 and new[0]["of"] == a and new[0]["needs_review"] and title in new[0]["text"], \
+        f"the copy must be held as exactly one [NEEDS_REVIEW] inbox entry naming {a}; got {[(h['of'], h['change']) for h in new]}"
 
 
 def test_no_cycle_regenerates_an_id_the_ledger_knows(sandbox, tmp_path):

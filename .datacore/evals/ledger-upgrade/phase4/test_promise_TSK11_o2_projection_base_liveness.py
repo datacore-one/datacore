@@ -1,27 +1,32 @@
-"""O2 (deterministic): a human edit never stalls ingest (E-D1, audit E section 3.4).
+"""O2 (deterministic): a human edit to a view reaches the ledger, or is held once.
 
-Ledger upgrade Phase 4, eval O2 (PLAN.md). On a sandbox copy of a real Phase-1
-space, after a clean ingest and projection, a person saves one edit to the
-generated file that
+Promise TSK-11; ledger upgrade Phase 4, eval O2 (E-D1, audit E section 3.4),
+RE-STATED 2026-10-04 for owner decision 8 ("one door in"). On a sandbox copy of
+a real Phase-1 space, after a clean cycle, a person saves one edit to the view
+that
 
   * retitles one task,
   * adds a property to another,
   * swaps two tasks by hand, and
   * retitles a fifth task that an agent also retitles in the ledger.
 
-Then three more cycles run. Required:
+Then three cycles run. Required:
 
-  1. the projection base (last-rendered.json) advances within 2 cycles and is
-     stable after that -- the space is not stuck re-deriving the same state;
-  2. the one real conflict (the fifth task) is recorded EXACTLY ONCE, and no
-     later cycle records it again;
-  3. every non-conflicting human edit is in the ledger (title, property) or the
-     file (the hand order);
-  4. the sandbox ledger shows no new invariant finding.
+  1. no cycle stops the space;
+  2. the plain edits (the retitle, the property) are in the ledger within 2
+     cycles;
+  3. the swap is in the regenerated view, or held as exactly one inbox entry;
+  4. the clash is held as exactly ONE [NEEDS_REVIEW] inbox entry carrying the
+     human's title, recorded once and never again by later cycles, and the
+     agent's title stands in the ledger;
+  5. the view is regenerated within 2 cycles (it equals what the ledger last
+     wrote) and stays put after that;
+  6. the sandbox ledger shows no new broken invariant (the sandbox is not a git
+     repository, so "unforked" is could-not-tell on both sides and only broken
+     findings are compared).
 
 Seeded failure: "the refusal leaves the base un-advanced" (chaos drill scenario
-EDIT BETWEEN INGEST AND PROJECT) -- the conflict is then re-derived on every
-cycle and nothing else moves. That is today's behaviour, so this is red.
+EDIT BETWEEN INGEST AND PROJECT) -- nothing moves and nothing is held.
 """
 from __future__ import annotations
 
@@ -37,11 +42,6 @@ def _sha(text):
     return hashlib.sha256((text or "").encode()).hexdigest()[:12]
 
 
-def _conflicts_for(space, item):
-    """How many times a conflict on `item` is recorded: retained edit conflicts in the ledger."""
-    return len(d.state(space).items[item].edit_conflicts or {})
-
-
 def _invariants(root):
     import ledger_invariants
     buf = io.StringIO()
@@ -54,11 +54,12 @@ def _invariants(root):
     return sorted(f"{f['invariant']}:{f['detail']}" for f in doc.get("broken", []))
 
 
-def test_a_human_edit_advances_the_base_and_records_its_conflict_once(sandbox):
+def test_a_human_edit_reaches_the_ledger_or_is_held_exactly_once(sandbox):
     space = sandbox
     a, b, c, e_, x = d.pick_items(space, 5)
     findings_before = _invariants(space.parent)
     base0 = _sha(d.base_text(space))
+    held0 = len(d.held_entries(space))
 
     text = d.read(space)
     text = d.retitle(text, a, "Retitled in Emacs")
@@ -71,24 +72,36 @@ def test_a_human_edit_advances_the_base_and_records_its_conflict_once(sandbox):
     trail = []
     for n in (1, 2, 3):
         cyc = d.cycle(space)
-        trail.append({"cycle": n, "base": _sha(d.base_text(space)), "conflicts_on_x": _conflicts_for(space, x),
+        new = d.held_entries(space)[held0:]
+        trail.append({"cycle": n, "base": _sha(d.base_text(space)),
+                      "regenerated": d.read(space) == d.base_text(space),
+                      "held_for_x": sum(1 for h in new if h["of"] == x),
+                      "held_for_swap": sum(1 for h in new if h["of"] in (c, e_)),
                       "stopped": cyc.reason if cyc.stopped else None})
-    summary = "; ".join(f"cycle {t['cycle']}: base {t['base']}, conflicts recorded {t['conflicts_on_x']}, "
-                        f"{'STOPPED (' + t['stopped'] + ')' if t['stopped'] else 'ran'}" for t in trail)
+    summary = "; ".join(
+        f"cycle {t['cycle']}: base {t['base']}, view regenerated {t['regenerated']}, "
+        f"held for the clash {t['held_for_x']}, "
+        f"{'STOPPED (' + t['stopped'] + ')' if t['stopped'] else 'ran'}" for t in trail)
 
-    advanced_by_2 = trail[1]["base"] != base0
-    stable_after = trail[2]["base"] == trail[1]["base"]
-    assert advanced_by_2 and stable_after, f"the projection base did not advance within 2 cycles and settle — {summary}"
-
-    counts = [t["conflicts_on_x"] for t in trail]
-    assert counts == [1, 1, 1], f"the conflict on the doubly-edited task must be recorded exactly once, " \
-                                f"and stay once; recorded per cycle: {counts} — {summary}"
-
+    assert not any(t["stopped"] for t in trail), f"a cycle stopped the space — {summary}"
     st = d.state(space)
-    assert (st.items[a].payload.get("title")) == "Retitled in Emacs", "the hand retitle never reached the ledger"
+    assert st.items[a].payload.get("title") == "Retitled in Emacs", f"the hand retitle never reached the ledger — {summary}"
     props = (st.items[b].payload.get("org") or {}).get("properties") or {}
-    assert props.get("CONTEXT") == "@home", "the hand-added property never reached the ledger"
+    assert props.get("CONTEXT") == "@home", f"the hand-added property never reached the ledger — {summary}"
+
+    assert [t["held_for_x"] for t in trail] == [1, 1, 1], \
+        f"the clash must be held as exactly one inbox entry, recorded once and never again — {summary}"
+    entry = [h for h in d.held_entries(space)[held0:] if h["of"] == x][0]
+    assert entry["needs_review"] and "Retitled by the human" in entry["text"], \
+        "the held clash is not marked [NEEDS_REVIEW] or lost the human's title"
+    assert st.items[x].payload.get("title") == "Retitled by the agent", "the agent's edit did not stand"
+
     order = d.heading_order(d.read(space))
-    assert order.index(e_) < order.index(c), "the hand order was undone"
+    swap_kept = order.index(e_) < order.index(c)
+    assert swap_kept or trail[-1]["held_for_swap"] == 1, \
+        f"the hand swap was neither kept nor held once (held {trail[-1]['held_for_swap']})"
+
+    assert trail[1]["base"] != base0 and trail[1]["regenerated"] and trail[2]["regenerated"] \
+        and trail[2]["base"] == trail[1]["base"], f"the view was not regenerated within 2 cycles and settled — {summary}"
 
     assert _invariants(space.parent) == findings_before, "the cycles left a new ledger invariant finding"

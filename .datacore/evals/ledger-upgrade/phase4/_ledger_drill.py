@@ -311,3 +311,28 @@ def conflict_named(space: Path, item_id: str) -> bool:
         if item_id in chunk:
             return True
     return False
+
+
+# ── one door in (owner decision 8, 2026-10-04) ────────────────────────────────
+# An edit made to a view that is not applied to the ledger is HELD as one entry
+# in the space's inbox.org, carrying the task id (:VIEW_EDIT_OF:), what changed
+# (:VIEW_CHANGE:), the file (:VIEW_FILE:) and the human's text.
+
+def inbox_text(space: Path) -> str:
+    p = space / "org" / "inbox.org"
+    return p.read_text(encoding="utf-8") if p.exists() else ""
+
+
+def held_entries(space: Path) -> list[dict]:
+    """Every inbox entry that holds an edit made to a view: id, change, full text."""
+    text = inbox_text(space)
+    out = []
+    starts = [m.start() for m in re.finditer(r"^\* ", text, re.M)] + [len(text)]
+    for s, e in zip(starts, starts[1:]):
+        chunk = text[s:e]
+        m = re.search(r"^\s*:VIEW_EDIT_OF:\s*(\S+)\s*$", chunk, re.M)
+        if m:
+            change = re.search(r"^\s*:VIEW_CHANGE:\s*(.+?)\s*$", chunk, re.M)
+            out.append({"of": m.group(1), "change": change.group(1) if change else "",
+                        "text": chunk, "needs_review": "[NEEDS_REVIEW]" in chunk.split("\n", 1)[0]})
+    return out
