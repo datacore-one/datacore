@@ -24,6 +24,9 @@ from ledger.policy import Policy, PolicyError, guarded_append  # noqa: E402
 
 @pytest.fixture
 def space(tmp_path, monkeypatch):
+    # Each write below runs as the writer whose log it is (AGT-10 refuses a
+    # process writing another principal's log, e.g. on the overnight host).
+    monkeypatch.setenv('DATACORE_ACTOR', 'nightshift')
     reg = tmp_path / 'principals.yaml'
     reg.write_text('principals:\n  gregor: {kind: human, writes_as: [mac]}\n'
                    '  winston: {kind: agent, writes_as: [winston]}\n'
@@ -42,16 +45,18 @@ def space(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('thief', ['winston', 'data', 'miles'])
-def test_a_release_of_another_writers_claim_is_refused_at_write(space, thief):
+def test_a_release_of_another_writers_claim_is_refused_at_write(space, thief, monkeypatch):
     sd, pol = space
+    monkeypatch.setenv('DATACORE_ACTOR', thief)
     with pytest.raises(PolicyError, match='only the claimant'):
         guarded_append(EventLog(sd, thief), 'item.release', {'id': 't1', 'reason': 'mine now'},
                        policy=pol, space_dir=sd)
     assert fold(read_events(sd)).items['t1'].owner == 'nightshift'
 
 
-def test_the_fold_ignores_a_release_that_got_past_the_write(space):
+def test_the_fold_ignores_a_release_that_got_past_the_write(space, monkeypatch):
     sd, _ = space
+    monkeypatch.setenv('DATACORE_ACTOR', 'winston')
     EventLog(sd, 'winston').append('item.release', {'id': 't1', 'reason': 'forged'})
     item = fold(read_events(sd)).items['t1']
     assert item.status == 'claimed' and item.owner == 'nightshift'
@@ -65,8 +70,9 @@ def test_the_claimant_still_releases_its_own_claim(space):
     assert item.status == 'created' and item.owner is None
 
 
-def test_arbitration_still_lets_an_arbiter_dismiss(space):
+def test_arbitration_still_lets_an_arbiter_dismiss(space, monkeypatch):
     """Closing is arbitration and stays as it was; only release is the claimant's."""
     sd, pol = space
+    monkeypatch.setenv('DATACORE_ACTOR', 'winston')
     guarded_append(EventLog(sd, 'winston'), 'item.dismiss', {'id': 't1', 'kind': 'dropped', 'reason': 'x'},
                    policy=pol, space_dir=sd)
