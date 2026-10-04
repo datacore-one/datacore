@@ -128,13 +128,15 @@ def check_ledger(rep: Report, quick: bool) -> None:
     bad, slow = [], []
     for s in sp:
         rc, out = run([PY, str(LIB / "ledger_cli.py"), "verify", "--space", str(s)], 600)
-        if unlooked(rc, out):
+        # Exit 3: verify ran, but this machine cannot judge every event (a
+        # writer whose verify key it lacks) -- could not check, not broken (V5).
+        if unlooked(rc, out) or rc == 3:
             slow.append(s.name)
         elif rc != 0:
             bad.append(s.name)
     ok = len(sp) - len(bad) - len(slow)
     detail = f"{ok}/{len(sp)} verify" + (f"; broken: {', '.join(bad)}" if bad else "") \
-        + (f"; not checked (timeout/crash): {', '.join(slow)}" if slow else "")
+        + (f"; not checked (timeout/crash/no key here): {', '.join(slow)}" if slow else "")
     rep.add("0034", "hash chains", False if bad else (None if slow else True), detail)
 
     # Per-actor nonces: seq must be dense and unique WITHIN each writer's file.

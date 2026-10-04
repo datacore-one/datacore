@@ -126,20 +126,32 @@ def ledger_forks(repo: Path) -> list[str]:
     So the guard lives HERE, at the moment of creation, not only in a
     checker somewhere else on a schedule.
     """
-    from ledger.verify import verify_chain, check_not_rewound
+    # The one verifier (ledger.verify, Phase 2 V2): task logs AND the per-space
+    # telemetry logs (decision 3; both are published by a relay), judged as the
+    # CLI and the health check judge them. A problem this machine cannot judge
+    # (a writer whose verify key it lacks) is "could not be established",
+    # never "failed" (V5) -- the relay still holds back either way.
+    from ledger.log import TELEMETRY_DIR
+    from ledger.verify import _rewind_problems, verdict_of, verify_log
     bad = []
     events = Path(repo) / '.datacore' / 'events'
     if not events.is_dir():
         return bad
-    for f in sorted(events.glob('*.jsonl')):
+    telemetry = Path(repo) / '.datacore' / TELEMETRY_DIR
+    logs = [(f, f.name) for f in sorted(events.glob('*.jsonl'))]
+    if telemetry.is_dir():
+        logs += [(f, f'{TELEMETRY_DIR}/{f.name}') for f in sorted(telemetry.glob('*.jsonl'))]
+    for f, shown in logs:
         try:
             if f.is_symlink():
                 raise ValueError('symbolic ledger path')
-            errors = verify_chain(f) + check_not_rewound(f)
-            if errors:
-                bad.append(f'{f.name}: ledger integrity verification failed')
+            verdict = verdict_of(verify_log(f, incremental=True).problems + _rewind_problems(f))
+            if verdict == 'broken':
+                bad.append(f'{shown}: ledger integrity verification failed')
+            elif verdict == 'unknown':
+                bad.append(f'{shown}: ledger integrity could not be established')
         except (OSError, ValueError, TypeError, AttributeError, KeyError):
-            bad.append(f'{f.name}: ledger integrity could not be established')
+            bad.append(f'{shown}: ledger integrity could not be established')
     return bad
 
 

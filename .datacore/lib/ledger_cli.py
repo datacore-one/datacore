@@ -167,44 +167,38 @@ def _shown(path: Path) -> str:
 
 
 def cmd_verify(args: argparse.Namespace) -> None:
+    """Verify every log of a space: task logs, the per-space telemetry logs
+    (LED-8) and any log this machine wrote that is now gone (LED-2).
+
+    One verifier (ledger.verify.verify_space, Phase 2 V2): the health check,
+    the relay guard, the seal and the checkpoint give the same verdict.
+    Exit 0 sound, 1 broken (a fault in the data), 3 could not check on this
+    machine (e.g. a writer whose verify key it does not hold) -- never a pass,
+    never "broken" (V5). By default only what was appended since this
+    machine's last clean verify is judged; --full re-verifies everything.
+    """
+    from ledger.verify import verify_space
     space = _require_space(args.space)
     events_dir = space / ".datacore" / "events"
-    telemetry_dir = space / ".datacore" / TELEMETRY_DIR
-    files = []
-    missing = []
-    # Task logs and the per-space telemetry logs (LED-8) are both history.
-    # A log this machine wrote and that is now gone is lost history (LED-2):
-    # its witness names it, so it is checked even though no file is left.
-    for folder, witnesses in ((events_dir, space / ".datacore" / "state" / "seq-hwm"),
-                              (telemetry_dir, space / ".datacore" / "state" / "seq-hwm" / TELEMETRY_DIR)):
-        held = sorted(folder.glob("*.jsonl")) if folder.is_dir() else []
-        files += held
-        stems = {p.stem for p in held}
-        if witnesses.is_dir():
-            missing += sorted(folder / f"{w.stem}.jsonl" for w in witnesses.glob("*.seq")
-                              if w.stem not in stems)
+    report = verify_space(space, strict=args.strict, incremental=not args.full)
+    for log in report.logs:
+        for problem in log.problems:
+            print(f"{log.shown}: {problem.text}", file=sys.stderr)
 
-    had_errors = False
-    for path in files + missing:
-        for error in verify_chain(path, strict=args.strict):
-            print(f"{_shown(path)}: {error}", file=sys.stderr)
-            had_errors = True
-        # Truncation leaves a shorter but internally perfect chain, so it must
-        # be checked against an external witness rather than the chain itself.
-        for error in check_not_rewound(path):
-            print(f"{_shown(path)}: {error}", file=sys.stderr)
-            had_errors = True
-
-    if had_errors:
+    if report.verdict == "broken":
         sys.exit(1)
+    if report.verdict == "unknown":
+        print(f"COULD NOT CHECK {len(report.logs)} files: this machine cannot judge every event "
+              "(see above); that is not a fault in the data", file=sys.stderr)
+        sys.exit(3)
 
-    total_events = len(read_events(space))
+    files = sum(1 for log in report.logs if log.path.exists())
     # Voided records are named, never silent: a voided event is still in the
     # history, cancelled by an in-ledger ledger.void that says why.
     from ledger.voids import for_events_dir
     voided = len(for_events_dir(events_dir))
     note = f" ({voided} voided record(s))" if voided else ""
-    print(f"OK {len(files)} files {total_events} events{note}")
+    print(f"OK {files} files {report.events} events{note}")
 
 
 def cmd_stopped(args: argparse.Namespace) -> None:
@@ -306,6 +300,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("verify", help="Verify every writer's hash chain in a space")
     p.add_argument("--space", required=True, help="Space directory root")
     p.add_argument("--strict", action="store_true", help="Flag unsigned events as errors")
+    p.add_argument("--full", action="store_true",
+                   help="Re-verify all history (default: only what was appended since this machine's last clean verify)")
 
     p = sub.add_parser("stopped", help="List logs the ledger stopped (exit 3 when any)")
     p.add_argument("--space", required=True, help="Space directory root")

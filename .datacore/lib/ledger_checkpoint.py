@@ -215,6 +215,7 @@ def write(space: Path) -> Path:
     durably published in the recoverable filesystem transaction.
     """
     from ledger.events import to_line
+    from ledger.verify import verify_space
     events = read_events(space)
     state = fold(events)
     text = project(state, space=space.name).text
@@ -258,6 +259,14 @@ def write(space: Path) -> Path:
             raise ValueError('legacy checkpoint archive conflicts')
         if before_archive is None:
             write_org_text(archive, previous_org)
+    # A restore point is taken from a ledger the one verifier calls sound
+    # (Phase 2 V2). A damaged log reads as its clean prefix, so checking only
+    # the saved copy would call it fine; the previous checkpoint is kept.
+    live = verify_space(space)
+    if live.verdict == 'broken':
+        named = sorted({log.shown for log in live.logs if log.verdict == 'broken'})
+        raise ValueError(f'live ledger fails verification ({", ".join(named)}); '
+                         'previous checkpoint kept -- see: ledger_cli.py verify --space')
     # Test the saved representation before replacing the previous checkpoint.
     _restore(document, space.name)
     if superseded is not None:
@@ -281,8 +290,7 @@ def _restore(document, name):
     These are integrity checks, not independent signer authentication. The
     checkpoint must be obtained from the deployment's trusted backup source.
     """
-    from ledger.events import body_dict, compute_hash, from_line
-    from ledger.voids import for_events_dir
+    from ledger.verify import chain_problems
     if (not isinstance(document, dict) or document.get('version') != 1
             or not isinstance(document.get('chains'), dict)
             or not isinstance(document.get('state_root'), str)
@@ -297,26 +305,20 @@ def _restore(document, name):
                     or not isinstance(text, str) or not text.endswith('\n')):
                 raise ValueError('invalid saved chain')
             (folder / filename).write_text(text, encoding='utf-8')
-        # A stored-hash mismatch is accepted only when an authorised in-ledger
-        # `ledger.void` in the SAVED chains names that exact event and pins the
-        # hash its body produces (owner decision 6: no side list of excuses).
-        # Refusing the whole space over one already-voided event left it with
-        # NO restore point, forever; any edit to it, and every other mismatch,
-        # still fails here.
-        voids = for_events_dir(folder)
-        for filename, text in document['chains'].items():
-            previous = 'GENESIS'
-            stem = filename[:-len('.jsonl')]
-            for sequence, line in enumerate(text.splitlines()):
-                event = from_line(line)
-                computed = compute_hash(body_dict(event.seq, event.hlc, event.actor,
-                                                  event.type, event.payload, event.prev))
-                if event.seq != sequence or event.prev != previous:
-                    raise ValueError('saved event chain fails integrity verification')
-                if event.hash != computed and not voids.applies(stem, event, computed):
-                    raise ValueError('saved event chain fails integrity verification')
-                previous = event.hash
-        restored = fold(read_events(scratch))
+        # The one verifier (ledger.verify, Phase 2 V2): the saved chains are
+        # judged exactly as the CLI, the health check and the relay judge the
+        # live ones. A stored-hash mismatch is accepted only when an authorised
+        # in-ledger `ledger.void` in the SAVED chains names that exact event and
+        # pins the hash its body produces (owner decision 6: no side list of
+        # excuses); a signature that is not the writer's is refused here too.
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')            # a damaged saved line is refused below
+            events = read_events(scratch)
+        saved = sum(len(text.splitlines()) for text in document['chains'].values())
+        if len(events) != saved or chain_problems(events):
+            raise ValueError('saved event chain fails integrity verification')
+        restored = fold(events)
         if restored.state_root() != document['state_root']:
             raise StateRootMismatch('restored state differs from saved state root')
         return restored

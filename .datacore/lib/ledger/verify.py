@@ -21,19 +21,98 @@ reporting contract is different in two ways that matter here:
     every problem found", never "raise on the first bad line" -- so a
     malformed non-final line is likewise reported as an error string, not
     raised.
+
+ONE VERIFIER (ledger upgrade Phase 2, V2; audit A#7). Every consumer that asks
+"is this ledger sound?" -- the CLI, the health check, the relay guard, the seal,
+the checkpoint restore -- asks this module, and gets the same answer:
+
+  * `check_events` judges one chain EVENT BY EVENT (decision 7): each problem
+    names its line, and the events before it are not condemned.
+  * A problem is `certain` (a fault in the data) or not: a writer whose verify
+    key this machine does not hold cannot have its signatures judged HERE.
+    That is "could not tell" on this machine, never "broken" (V5) -- except in
+    strict mode, where an unverifiable signature is itself an error.
+  * `verify_log` / `verify_space` return reports with a verdict of
+    ok | broken | unknown; `chain_problems` does the same for an in-memory
+    event list (seal, checkpoint, prefix restore).
+  * INCREMENTAL (A#8): after a clean verify, a machine-local marker records how
+    far the log was verified (byte length, sha256 of those bytes, last seq and
+    hash, and a digest of everything the verdict depended on: verifier version,
+    keys, principals, voids). The next verify checks the prefix still hashes to
+    the same digest and judges only what was appended. `--full` (and the daily
+    job) re-verifies everything.
+
+`verify_chain` / `verify_events` keep their list-of-strings contract: every
+problem, certain or not, is returned, so the callers that fail closed on any
+problem (job attestations, claims) still do.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import time
 
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .events import Event, body_dict, canonical_bytes, compute_hash, from_line
 from .keys import verify as verify_sig
 
 GENESIS = "GENESIS"
+#: Bumped whenever a rule changes what a clean verdict means: every marker
+#: written by an older verifier is then ignored and the log re-verified in full.
+VERIFIER_VERSION = 2
+
+
+@dataclass(frozen=True)
+class Problem:
+    text: str                      # "line N: ..." -- the words every caller prints
+    line: int | None = None
+    certain: bool = True           # False: could not be judged on this machine
+    #: "clock" for a wrong or malformed hlc: flagged by verify (LED-7), never
+    #: followed by the fold, and never a reason to stop syncing (see chain_problems)
+    kind: str = "chain"
+
+
+@dataclass
+class LogReport:
+    path: Path
+    shown: str
+    events: int = 0
+    problems: list = field(default_factory=list)
+    #: lines taken as already verified from this machine's marker (0 = full verify)
+    trusted_lines: int = 0
+
+    @property
+    def verdict(self) -> str:
+        return verdict_of(self.problems)
+
+
+@dataclass
+class SpaceReport:
+    space: Path
+    logs: list = field(default_factory=list)
+
+    @property
+    def problems(self) -> list:
+        return [p for log in self.logs for p in log.problems]
+
+    @property
+    def verdict(self) -> str:
+        return verdict_of(self.problems)
+
+    @property
+    def events(self) -> int:
+        return sum(log.events for log in self.logs)
+
+
+def verdict_of(problems) -> str:
+    """ok | broken | unknown: one certain problem is broken; only uncertain ones, unknown."""
+    if any(p.certain for p in problems):
+        return "broken"
+    return "unknown" if problems else "ok"
 
 
 def verify_chain(path: Path, registry_path: Path | None = None, strict: bool = False) -> list[str]:
@@ -76,46 +155,7 @@ def verify_chain(path: Path, registry_path: Path | None = None, strict: bool = F
          it deliberately collapses both to `False`).
       5. (strict mode only) `sig == ""` is itself an error.
     """
-    path = Path(path)
-    errors: list[str] = []
-
-    try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        # Missing file, a directory, unreadable permissions, etc. -- verify
-        # is a diagnostic tool and must never raise on bad input; an
-        # unreadable path is itself just another problem to report.
-        return [f"cannot read {path}: {exc}"]
-
-    lines = raw.split(b"\n")
-    if lines and lines[-1] == b"":
-        # Trailing empty element from the final "\n" of a complete write.
-        lines.pop()
-
-    n = len(lines)
-    parsed: list[tuple[int, Event]] = []
-    for i, raw_line in enumerate(lines):
-        line_no = i + 1
-        is_last = i == n - 1
-        stripped = raw_line.strip()
-        if not stripped:
-            continue
-        try:
-            event = from_line(stripped.decode("utf-8"))
-        except Exception as exc:
-            if is_last:
-                errors.append(f"line {line_no}: torn trailing line ({exc})")
-            else:
-                errors.append(f"line {line_no}: malformed line ({exc})")
-            continue
-        parsed.append((line_no, event))
-
-    # In-ledger voids (ledger.voids): any log of the same space may hold the
-    # authorised `ledger.void` that cancels an event of this one. Nothing else
-    # excuses a failed check: the out-of-band exception list is retired.
-    from .voids import for_events_dir
-    return errors + verify_events(parsed, registry_path=registry_path, strict=strict,
-                                  voids=for_events_dir(path.parent), log=path.stem)
+    return [p.text for p in verify_log(path, registry_path=registry_path, strict=strict).problems]
 
 
 def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = None,
@@ -123,27 +163,79 @@ def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = 
                   voids=None, log: str | None = None) -> list[str]:
     """Verify one already-read chain without rereading a mutable source file.
 
-    Callers preserve chain order and supply record numbers. This shares the
-    diagnostic integrity rules with readers that need a consistent snapshot.
+    Callers preserve chain order and supply record numbers. Every problem,
+    certain or not, is returned (fail closed); see `check_events` for the
+    classified form.
+    """
+    return [p.text for p in check_events(parsed, registry_path=registry_path, strict=strict,
+                                         voids=voids, log=log)]
+
+
+#: (actor, sig, body hash, at_ms, key-file signatures) -> verified. A signature
+#: is judged once per process: the checkpoint restores the same chains it just
+#: saved, and the seal verifies the events the space verify already judged.
+_SIG_MEMO: dict = {}
+
+
+def _key_context(registry_path: Path | None) -> tuple:
+    from . import keys
+    reg = Path(registry_path or keys.DEFAULT_REGISTRY_PATH)
+    return (keys._stat_key(keys.principals_path()), keys._stat_key(reg), str(reg))
+
+
+def _signature_ok(event: Event, body: dict, computed: str, registry_path, at_ms, context) -> bool:
+    key = (event.actor, event.sig, computed, at_ms, context)
+    hit = _SIG_MEMO.get(key)
+    if hit is None:
+        hit = verify_sig(event.actor, canonical_bytes(body), event.sig,
+                         registry_path=registry_path, at_ms=at_ms)
+        if len(_SIG_MEMO) > 500_000:
+            _SIG_MEMO.clear()
+        _SIG_MEMO[key] = hit
+    return hit
+
+
+def _well_formed_sig(sig: str) -> bool:
+    """64 bytes of hex: the shape of every Ed25519 signature EventLog writes."""
+    if len(sig) != 128:
+        return False
+    try:
+        bytes.fromhex(sig)
+        return True
+    except ValueError:
+        return False
+
+
+def check_events(parsed: list[tuple[int, Event]], registry_path: Path | None = None,
+                 strict: bool = False, voids=None, log: str | None = None,
+                 expected_prev: str = GENESIS, expected_seq: int = 0) -> list[Problem]:
+    """Judge one chain event by event; every problem names its line.
 
     `voids` (a `ledger.voids.Voids` for the chain's space) and `log` (this
     chain's file stem): an event cancelled by an effective in-ledger void is
     accepted despite a failed hash or signature check -- its chain position
     (prev, seq) is still checked -- and a `ledger.void` in this chain that has
     no effect is reported.
+
+    `expected_prev` / `expected_seq`: where the chain resumes (an incremental
+    verify starts after the last event a marker vouches for).
     """
-    errors: list[str] = []
-    expected_prev = GENESIS
-    expected_seq = 0
+    from .keys import known_verify_key
+    problems: list[Problem] = []
     # A wrong clock is flagged, never followed (LED-7): the same tolerance the
     # writer uses to refuse such a stamp as its causal floor.
     from .log import FUTURE_TOLERANCE_MS
     horizon = int(time.time() * 1000) + FUTURE_TOLERANCE_MS
+    context = _key_context(registry_path)
+    no_key: dict = {}
     for line_no, event in parsed:
+        def bad(text: str, certain: bool = True, kind: str = "chain") -> None:
+            problems.append(Problem(f"line {line_no}: {text}", line_no, certain, kind))
+
         if (type(event.seq) is not int or event.seq < 0
                 or not all(isinstance(v, str) for v in (event.hlc, event.actor, event.type, event.prev, event.hash, event.sig))
                 or not isinstance(event.payload, dict)):
-            errors.append(f"line {line_no}: invalid event field types")
+            bad("invalid event field types")
             continue
         body = body_dict(event.seq, event.hlc, event.actor, event.type, event.payload, event.prev)
 
@@ -151,43 +243,44 @@ def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = 
         try:
             physical = int(event.hlc.split(".", 1)[0])
             if physical > horizon:
-                errors.append(f"line {line_no}: hlc {event.hlc!r} is "
-                              f"{(physical - horizon) // 60000 + FUTURE_TOLERANCE_MS // 60000} min "
-                              "in the future (wrong clock)")
+                bad(f"hlc {event.hlc!r} is "
+                    f"{(physical - horizon) // 60000 + FUTURE_TOLERANCE_MS // 60000} min "
+                    "in the future (wrong clock)", kind="clock")
         except ValueError:
-            errors.append(f"line {line_no}: malformed hlc {event.hlc!r}")
+            bad(f"malformed hlc {event.hlc!r}", kind="clock")
 
         computed = compute_hash(body)
         voided = bool(voids is not None and log is not None and voids.applies(log, event, computed))
         if voids is not None and log is not None and event.type == "ledger.void":
             why = voids.refusal_for(log, event.seq)
             if why:
-                errors.append(f"line {line_no}: {why}")
+                bad(why)
         if computed != event.hash and not voided:
-            errors.append(f"line {line_no}: hash mismatch")
+            bad("hash mismatch")
 
         if event.prev != expected_prev:
-            errors.append(
-                f"line {line_no}: broken prev linkage "
-                f"(expected prev={expected_prev!r}, got {event.prev!r})"
-            )
+            bad(f"broken prev linkage (expected prev={expected_prev!r}, got {event.prev!r})")
 
         if event.seq != expected_seq:
-            errors.append(
-                f"line {line_no}: seq gap (expected seq={expected_seq}, got {event.seq})"
-            )
+            bad(f"seq gap (expected seq={expected_seq}, got {event.seq})")
 
         if event.sig != "":
-            if (not voided
-                    and not verify_sig(event.actor, canonical_bytes(body), event.sig,
-                                       registry_path=registry_path, at_ms=physical)):
-                errors.append(f"line {line_no}: {_signature_problem(event.actor, registry_path, physical)}")
+            if not voided and not _signature_ok(event, body, computed, registry_path, physical, context):
+                if event.actor not in no_key:
+                    no_key[event.actor] = not known_verify_key(event.actor, registry_path)
+                # No verify key for this writer HERE: this machine cannot judge
+                # a well-formed signature (V5). A "signature" that is not even
+                # an Ed25519 signature (the 2026-09-25 forgery wrote its own
+                # hash there) is judged without any key: a fault in the data.
+                # Strict mode demands every signature be judged.
+                bad(_signature_problem(event.actor, registry_path, physical),
+                    certain=strict or not no_key[event.actor] or not _well_formed_sig(event.sig))
         elif strict:
-            errors.append(f"line {line_no}: unsigned event")
+            bad("unsigned event")
 
         damaged = getattr(event, "damaged_after", None)
         if damaged:
-            errors.append(f"line {line_no}: chain is incomplete: {damaged}")
+            bad(f"chain is incomplete: {damaged}")
 
         # Chain forward using the event's *stored* hash/seq, not a
         # recomputed one -- a wrong stored hash is already flagged by the
@@ -197,7 +290,207 @@ def verify_events(parsed: list[tuple[int, Event]], registry_path: Path | None = 
         expected_prev = event.hash
         expected_seq = event.seq + 1
 
-    return errors
+    return problems
+
+
+# ── one log ─────────────────────────────────────────────────────────────────
+
+def _state_dir() -> Path:
+    return Path(os.environ.get("DATACORE_STATE") or Path.home() / ".datacore" / "state")
+
+
+def _marker_path(path: Path) -> Path:
+    digest = hashlib.sha256(str(Path(path).absolute()).encode()).hexdigest()[:32]
+    return _state_dir() / "ledger-verified" / f"{digest}.json"
+
+
+def _file_digest(path: Path | None) -> str:
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest() if path else ""
+    except OSError:
+        return "unreadable"
+
+
+def _context_digest(registry_path, strict: bool, voids) -> str:
+    """Everything a clean verdict depended on besides the log's own bytes."""
+    from . import keys
+    effective = sorted((repr(k), repr(v)) for k, v in getattr(voids, "effective", {}).items())
+    refused = sorted((repr(k), repr(v)) for k, v in getattr(voids, "refused", {}).items())
+    parts = [str(VERIFIER_VERSION), str(bool(strict)),
+             _file_digest(keys.principals_path()),
+             _file_digest(Path(registry_path or keys.DEFAULT_REGISTRY_PATH)),
+             json.dumps([effective, refused])]
+    return hashlib.sha256("\x00".join(parts).encode()).hexdigest()
+
+
+def _read_marker(path: Path, raw: bytes, context: str) -> dict | None:
+    try:
+        m = json.loads(_marker_path(path).read_text())
+        size, lines = int(m["size"]), int(m["lines"])
+        if (m.get("version") != VERIFIER_VERSION or m.get("path") != str(Path(path).absolute())
+                or m.get("context") != context or not (0 < size <= len(raw)) or lines < 1
+                or raw[size - 1:size] != b"\n"
+                or hashlib.sha256(raw[:size]).hexdigest() != m["prefix_sha256"]):
+            return None
+        int(m["last_seq"]), str(m["last_hash"])
+        return m
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _write_marker(path: Path, raw: bytes, lines: int, last: Event, context: str) -> None:
+    """Record a clean verify. Machine-local and disposable: losing it costs one full verify."""
+    size = raw.rfind(b"\n") + 1
+    if size <= 0 or lines < 1:
+        return
+    target = _marker_path(path)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(f"{target.stem}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps({
+            "version": VERIFIER_VERSION, "path": str(Path(path).absolute()), "size": size,
+            "lines": lines, "prefix_sha256": hashlib.sha256(raw[:size]).hexdigest(),
+            "last_seq": last.seq, "last_hash": last.hash, "context": context}))
+        tmp.rename(target)
+    except OSError:
+        pass                      # an unwritable state dir only costs the next run a full verify
+
+
+def verify_log(path: Path, registry_path: Path | None = None, strict: bool = False,
+               incremental: bool = False, shown: str | None = None,
+               record: bool | None = None) -> LogReport:
+    """Verify one writer's log file: the classified form of `verify_chain`.
+
+    With `incremental`, a marker left by this machine's last clean verify lets
+    the verified prefix be confirmed by its digest instead of re-judged event by
+    event; only the lines appended since are judged. Any change to the prefix,
+    the keys, the principals, the space's voids or the verifier invalidates it.
+    `record` (default: `incremental`) leaves that marker after a clean verify,
+    so a full verify on a schedule seeds the fast path for everything else.
+    """
+    path = Path(path)
+    record = incremental if record is None else record
+    report = LogReport(path=path, shown=shown or path.name)
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        # Missing file, a directory, unreadable permissions, etc. -- verify
+        # is a diagnostic tool and must never raise on bad input. A log that
+        # cannot be read has not been judged: could not tell (a log this
+        # machine wrote and that is gone is reported by check_not_rewound).
+        report.problems.append(Problem(f"cannot read {path}: {exc}", None, certain=False))
+        return report
+
+    # In-ledger voids (ledger.voids): any log of the same space may hold the
+    # authorised `ledger.void` that cancels an event of this one. Nothing else
+    # excuses a failed check: the out-of-band exception list is retired.
+    from .voids import for_events_dir
+    voids = for_events_dir(path.parent)
+    context = _context_digest(registry_path, strict, voids) if (incremental or record) else ""
+    marker = _read_marker(path, raw, context) if incremental else None
+
+    offset, first_line, prev, seq = 0, 0, GENESIS, 0
+    if marker:
+        offset, first_line = int(marker["size"]), int(marker["lines"])
+        prev, seq = str(marker["last_hash"]), int(marker["last_seq"]) + 1
+        report.trusted_lines = first_line
+
+    lines = raw[offset:].split(b"\n")
+    if lines and lines[-1] == b"":
+        # Trailing empty element from the final "\n" of a complete write.
+        lines.pop()
+    n = len(lines)
+    parsed: list[tuple[int, Event]] = []
+    problems: list[Problem] = []
+    for i, raw_line in enumerate(lines):
+        line_no = first_line + i + 1
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        try:
+            event = from_line(stripped.decode("utf-8"))
+        except Exception as exc:
+            kind = "torn trailing line" if i == n - 1 else "malformed line"
+            problems.append(Problem(f"line {line_no}: {kind} ({exc})", line_no))
+            continue
+        parsed.append((line_no, event))
+
+    problems += check_events(parsed, registry_path=registry_path, strict=strict, voids=voids,
+                             log=path.stem, expected_prev=prev, expected_seq=seq)
+    report.problems = problems
+    report.events = (int(marker["last_seq"]) + 1 if marker else 0) + len(parsed)
+    if record and not problems and parsed:
+        _write_marker(path, raw, first_line + n, parsed[-1][1], context)
+    return report
+
+
+def space_logs(space: Path) -> list[tuple[Path, str]]:
+    """Every log of a space, as (path, how it is shown): task logs, the per-space
+    telemetry logs (decision 3: still history), and any log this machine wrote
+    that is now gone (its witness names it; LED-2)."""
+    from .log import TELEMETRY_DIR, witness_path
+    space = Path(space)
+    out: list[tuple[Path, str]] = []
+    for folder, prefix in ((space / ".datacore" / "events", ""),
+                           (space / ".datacore" / TELEMETRY_DIR, f"{TELEMETRY_DIR}/")):
+        held = sorted(folder.glob("*.jsonl")) if folder.is_dir() else []
+        out += [(p, prefix + p.name) for p in held]
+        stems = {p.stem for p in held}
+        marks = witness_path(folder / "x.jsonl").parent
+        if marks.is_dir():
+            out += [(folder / f"{w.stem}.jsonl", f"{prefix}{w.stem}.jsonl")
+                    for w in sorted(marks.glob("*.seq")) if w.stem not in stems]
+    return out
+
+
+def _rewind_problems(path: Path) -> list[Problem]:
+    out = []
+    for text in check_not_rewound(path):
+        # TRUNCATED / REWRITTEN / MISSING are facts about the data; a witness
+        # that cannot be read only means it could not be judged.
+        certain = text.startswith(("TRUNCATED:", "REWRITTEN:", "MISSING:"))
+        out.append(Problem(text, None, certain))
+    return out
+
+
+def verify_space(space: Path, registry_path: Path | None = None, strict: bool = False,
+                 incremental: bool = True, witnesses: bool = True) -> SpaceReport:
+    """Verify every log of a space -- the one verdict every consumer reports."""
+    report = SpaceReport(space=Path(space))
+    for path, shown in space_logs(space):
+        log = (verify_log(path, registry_path=registry_path, strict=strict,
+                          incremental=incremental, shown=shown, record=True)
+               if path.exists() else LogReport(path=path, shown=shown))
+        if witnesses:
+            log.problems += _rewind_problems(path)
+        report.logs.append(log)
+    return report
+
+
+def chain_problems(events: list[Event], registry_path: Path | None = None,
+                   strict: bool = False) -> list[str]:
+    """Certain problems in an in-memory event list, chain by chain (seal,
+    checkpoint restore, prefix restore). Voids are resolved from the list itself.
+
+    Only faults in the chain count here: a signature this machine has no key
+    for leaves these callers exactly where they were before signatures were
+    checked at all (a restore on a host without every key must still work),
+    and a wrong clock is verify's to flag (LED-7) -- one wrong clock never
+    stops conflict resolution, a prefix restore or a seal of the space.
+    """
+    from .voids import from_events
+    voids = from_events(events)
+    chains: dict = {}
+    for event in events:
+        chains.setdefault(getattr(event, "log", None) or event.actor, []).append(event)
+    out: list[str] = []
+    for name, chain in sorted(chains.items()):
+        chain.sort(key=lambda e: e.seq if type(e.seq) is int else -1)
+        for p in check_events(list(enumerate(chain, 1)), registry_path=registry_path,
+                              strict=strict, voids=voids, log=name):
+            if p.certain and p.kind != "clock":
+                out.append(f"{name}: {p.text}")
+    return out
 
 
 def _signature_problem(actor: str, registry_path: Path | None, at_ms: int | None = None) -> str:

@@ -46,7 +46,7 @@ for s in discover_spaces(Path(sys.argv[2])):
     if (s.path / ".datacore" / "events").is_dir():
         print(s.path)' "$LIB" "$DATACORE_ROOT" 2>"$verify_tmp.err")"
 disc_rc=$?
-n_ok=0; n_bad=0
+n_ok=0; n_bad=0; n_unk=0
 if [ "$disc_rc" -ne 0 ]; then
   { echo "  discovery: $(tail -1 "$verify_tmp.err" 2>/dev/null)"
     echo "FAIL could not discover the spaces under $DATACORE_ROOT (rc=$disc_rc)"; } > "$verify_tmp"
@@ -59,21 +59,34 @@ else
   while IFS= read -r sp; do
     [ -n "$sp" ] || continue
     name="$(basename "$sp")"
-    one="$("$PY" "$LIB/ledger_cli.py" verify --space "$sp" 2>&1)"
-    if [ $? -eq 0 ]; then
+    # --full: the daily pass re-judges all history, so a machine-local
+    # "verified up to here" marker never stands in for a check (Phase 2), and
+    # it leaves fresh markers that make every other verify of the day fast.
+    one="$("$PY" "$LIB/ledger_cli.py" verify --full --space "$sp" 2>&1)"
+    rc=$?
+    if [ $rc -eq 0 ]; then
       n_ok=$((n_ok + 1))
       echo "  $name: OK $(printf '%s\n' "$one" | grep -v '^[[:space:]]*$' | tail -1 | sed 's/^OK //')" >> "$verify_tmp"
+    elif [ $rc -eq 3 ]; then
+      # Could not check on this machine (e.g. a writer's verify key is not
+      # here): not a fault in the data, and never a pass (V5).
+      n_unk=$((n_unk + 1))
+      echo "  $name: COULD NOT CHECK on this machine" >> "$verify_tmp"
+      printf '%s\n' "$one" | head -20 | sed 's/^/    /' >> "$verify_tmp"
     else
       n_bad=$((n_bad + 1))
       echo "  $name: FAIL" >> "$verify_tmp"
       printf '%s\n' "$one" | head -20 | sed 's/^/    /' >> "$verify_tmp"
     fi
   done <<< "$spaces_list"
-  if [ "$n_bad" -eq 0 ]; then
-    echo "OK $n_ok space(s) verified" >> "$verify_tmp"
-  else
-    echo "FAIL $n_bad of $((n_ok + n_bad)) space(s) failed verification" >> "$verify_tmp"
+  if [ "$n_bad" -gt 0 ]; then
+    echo "FAIL $n_bad of $((n_ok + n_bad + n_unk)) space(s) failed verification" >> "$verify_tmp"
     verify_rc=1
+  elif [ "$n_unk" -gt 0 ]; then
+    echo "NOT CHECKED $n_unk of $((n_ok + n_unk)) space(s) could not be checked on this machine" >> "$verify_tmp"
+    verify_rc=3
+  else
+    echo "OK $n_ok space(s) verified" >> "$verify_tmp"
   fi
 fi
 rm -f "$verify_tmp.err"

@@ -274,10 +274,9 @@ def verify_seal(events: list[Event]) -> tuple[bool | None, str]:
     covered = _covered_events(events, seal)
     if _event_set_hash(covered) != seal.event_set_hash:
         return False, "SEAL MISMATCH: covered event set differs"
-    for event in covered:
-        body = body_dict(event.seq, event.hlc, event.actor, event.type, event.payload, event.prev)
-        if compute_hash(body) != event.hash:
-            return False, "SEAL MISMATCH: invalid event hash"
+    # Every covered event's hash was judged by _chain_issue above, through the
+    # one verifier: a second hash loop here refused seals covering an event an
+    # in-ledger void had cancelled (Phase 2 V2).
     recomputed = fold(covered).state_root()
     if recomputed == seal.state_root:
         n = sum(seal.watermarks.values()) + len(seal.watermarks)
@@ -368,15 +367,13 @@ def _event_set_hash(events):
 
 
 def _chain_issue(events):
-    """Validate complete chain prefixes, including earlier seal events."""
-    chains = {}
-    for event in events:
-        chains.setdefault(getattr(event, "log", None) or event.actor, []).append(event)
-    for chain in chains.values():
-        expected_seq, expected_prev = 0, "GENESIS"
-        for event in sorted(chain, key=lambda event: event.seq):
-            body = body_dict(event.seq, event.hlc, event.actor, event.type, event.payload, event.prev)
-            if event.seq != expected_seq or event.prev != expected_prev or compute_hash(body) != event.hash:
-                return True
-            expected_seq, expected_prev = event.seq + 1, event.hash
-    return False
+    """Validate complete chain prefixes, including earlier seal events.
+
+    Asks the one verifier (ledger.verify.chain_problems, Phase 2 V2; audit A#7):
+    in-ledger voids and signatures count here exactly as they do for the CLI,
+    the health check and the relay. Until 2026-10-04 this was its own loop
+    that ignored both, so a seal could certify a forged-signature event and
+    refused a space whose bad event had been voided.
+    """
+    from .verify import chain_problems
+    return bool(chain_problems(events))
