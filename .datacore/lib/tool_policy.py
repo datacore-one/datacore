@@ -536,6 +536,24 @@ def evaluate_hook(payload: dict, env=None, *, record: bool = True,
     tool_input = (payload or {}).get("tool_input") or {}
     try:
         ctx = context_from_env(env)
+        # A contained overnight task (Phase 5A, 2026-10-04): the per-task
+        # half -- environment dumps, hosts off its allowlist, deletes outside
+        # its workspace, writes into another space's inbox -- before the
+        # per-principal half below. Inactive unless the executor marked it.
+        import tool_containment
+        live_env = os.environ if env is None else env
+        if tool_containment.active(live_env):
+            cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
+            hit = tool_containment.check(tool_name, tool_input, live_env, cwd=cwd)
+            if hit is not None:
+                kind, what, reason = hit
+                tool_containment.note_refusal(ctx["task"], kind, what)
+                if record:
+                    record_refusal(Decision(False, {f"contain.{kind}"}, reason, "contain"),
+                                   principal=ctx["principal"], tool_name=tool_name,
+                                   space_dir=ctx["space"], task_id=ctx["task"],
+                                   detail=call_text(tool_input, tool_name)[:200])
+                return deny_output(reason)
         effects = effects if effects is not None else load_effects()
         decision = decide(ctx["principal"], tool_name, tool_input, ctx["granted"], effects, policy_path)
     except Exception as e:  # noqa: BLE001 — unavailable policy cannot authorize work
