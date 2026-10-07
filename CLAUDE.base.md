@@ -91,7 +91,11 @@ GitHub Issues are source of truth. `org/` routes AI work only. `1-tracks/` organ
 
 Slash commands (`/today`, `/research`, `/wrap-up`) are multi-phase workflows. Conversational commands work naturally — "process inbox", "weekly review", "sync repos".
 
-**Invoking commands via MCP (any harness):** When the user types a slash command (e.g. `/today`, `/tomorrow`, `/wrap-up`, `/continue`, `/process-inbox`), call `datacore_command_run` with the command name. It returns the full workflow instructions — execute each step using your available tools and write output to the specified location. Call `datacore_command_list` to discover available commands. Similarly, `datacore_agent_list` and `datacore_agent_run` load agent prompt templates for task routing. This works identically in any MCP-compatible harness.
+**Invoking commands via MCP (any harness):** A slash shortcut is optional. For `/today` or ordinary text such as "run Datacore today", call `datacore_command_run` with the command name and any user-supplied `arguments` (the workflow's `$ARGUMENTS`). Call `datacore_command_list` when the name is unclear. The loader returns canonical instructions, not a completed execution: follow its execution guidance and carry out the workflow with the current client's tools. Resolve installation-relative paths from the returned working directory while retaining the user's original project and space. Do not evaluate arguments as shell code.
+
+For numbered workflows, use `datacore_command_steps`: `status` for a handed-off `run_id` and space (including runs from earlier days), otherwise `resume`, and `start` only when no unfinished run exists. Verify work before ticking steps. Keep required but unavailable steps pending and report the missing capability. Native task checklists may mirror the journal; they do not replace it.
+
+**Switching harnesses:** Claude Code, Codex, OpenCode and Cursor share Datacore files and MCP state, not chat history. Use the existing `/continue --save` workflow to save unfinished work, then `/continue <topic>` in the next client; plain-text "run Datacore continue with arguments …" works too. Save the objective, command arguments, original project, space, run ID, artifacts, validation results, blockers and next action in the continuation task. Load agent procedures with `datacore_agent_run`; loading a prompt does not spawn an agent. Execute locally only when delegation is optional; report an unavailable required independent reviewer. Preserve authorization requirements when moving clients.
 
 ### Knowledge Base
 

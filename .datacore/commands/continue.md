@@ -175,6 +175,16 @@ Analyzing current session...
    transcript): say "not applicable here" and carry on; it is not a failure.
 
 1. **Summarize session context** — review conversation to extract:
+
+   **Cross-harness handoff:** Include the original project directory and space,
+   active command and arguments, checklist `run_id`, artifact paths, validation
+   results, blockers and next action. These belong in the continuation task's
+   CURRENT_STATUS / KEY_FILES / BOOTSTRAP fields, not only in chat history.
+   On resume, inspect `datacore_command_steps` with `op: status`, that `run_id`
+   and its `space` before acting; the run may belong to an earlier day. Continue
+   its pending steps without repeating verified completed actions. If an action
+   happened before its tick was saved, verify its artifact before repeating it.
+
    - What was being worked on
    - What was accomplished
    - What remains to be done
@@ -361,6 +371,12 @@ BOOTSTRAP CONTEXT
 ───────────────────────────────────────────────────
 
 [Display BOOTSTRAP property content from task]
+
+If the bootstrap records an active command run, inspect it with
+`datacore_command_steps` (`op: status`, saved `run_id` and `space`) before
+continuing. Load the saved command and arguments through `datacore_command_run`
+when needed. Reuse its checklist even if another harness or an earlier day
+started it; verify existing artifacts and execute only pending work.
 
 Context: [What was being worked on]
 Progress: [What was accomplished]

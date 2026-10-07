@@ -1,5 +1,54 @@
 # Using Datacore from Codex, Cursor and OpenCode
 
+## Run the same workflow in every client
+
+Claude Code, Codex, Cursor and OpenCode use the same Datacore MCP server and
+canonical command files. Native slash shortcuts are optional. In any client,
+you can ask:
+
+```text
+List the available Datacore commands.
+Run Datacore today.
+Run Datacore research with arguments: my research topic.
+Run Datacore continue with arguments: my project.
+```
+
+The agent calls `datacore_command_list` for discovery and
+`datacore_command_run({"command":"research","arguments":"my research topic"})`
+to load the workflow. It then executes the returned instructions. A successful
+load alone does not mean that the command ran. The `arguments` field carries
+the text that Claude command files call `$ARGUMENTS`; it is data, not shell code.
+
+All clients must point `DATACORE_PATH` at the same absolute Data directory.
+They must also have access to the required files, executables and MCP tools.
+If a workflow needs an unavailable capability, the agent reports the blocked
+step rather than marking it complete. Client-specific shortcuts may call this
+same loader; do not maintain separate copies of the workflow.
+
+## Move unfinished work to another client
+
+1. In the first client, say `Run Datacore continue with arguments: --save <topic>`.
+   This uses the existing continuation and wrap-up workflow, including its usual
+   approval requirements.
+2. The continuation task records the objective, original project and space,
+   command arguments, checklist run ID, artifacts, validation, blockers and next
+   action. Chat history stays in its original client.
+3. Open the same workspace in the next client and say
+   `Run Datacore continue with arguments: <topic>`.
+4. The new client loads the task and checks the saved run with
+   `datacore_command_steps({"op":"status","run_id":"<saved ID>","space":"<saved space>"})`.
+   An explicit run ID also finds runs from earlier days; `resume` without a date
+   searches today only. Continue pending work and verify existing artifacts
+   before repeating an action.
+
+Use one active executor per task when handing off. Separate tasks can run in
+different clients. A checklist records progress; it does not lock a task against
+two agents doing the same action simultaneously.
+
+The local setup below connects the clients. To verify execution, use an isolated
+workflow with an observable output and resume its saved run in another client;
+connection checks alone do not establish workflow compatibility.
+
 ## Find the two programs
 
 1. In a terminal, run:
@@ -27,9 +76,13 @@ command = "/absolute/path/to/plur-mcp"
 
 [mcp_servers.datacore]
 command = "/absolute/path/to/datacore-mcp"
+
+[mcp_servers.datacore.env]
+DATACORE_PATH = "/absolute/path/to/Data"
 ```
 
-4. Replace each `command` with the path `which` printed for that program.
+4. Replace each `command` with the path `which` printed for that program, and
+   `DATACORE_PATH` with the absolute path of your Data directory.
 5. Quit Codex and open it again.
 6. Run [Check the connection](#check-the-connection) in Codex.
    - Both results match. Codex is connected.
@@ -67,9 +120,19 @@ Cursor reads `.cursor/mcp.json` in the Data folder.
 5. Quit Cursor and open it again on the Data folder.
 6. Run [Check the connection](#check-the-connection) in Cursor. Use the same stop rule as Codex.
 
+For Cursor CLI, run `agent mcp enable datacore` and `agent mcp enable plur` in
+the Data directory if the servers are configured but not approved. Check
+`agent mcp list-tools datacore` for `datacore_command_run` and its `arguments`
+field. Server approval permits loading the server; individual tool actions
+still follow Cursor's approval settings. In headless tests, use the client's
+automatic review mode (`--auto-review`) when an action needs approval; do not
+mistake a rejected tool call for a missing Datacore command.
+
 ## OpenCode
 
-OpenCode reads `~/.config/opencode/opencode.jsonc`. It needs the `@plur-ai/opencode` plugin and both MCP servers.
+OpenCode reads `~/.config/opencode/opencode.jsonc`. Both MCP servers provide
+Datacore workflows and memory; the `@plur-ai/opencode` plugin adds PLUR lifecycle
+integration.
 
 1. Open `~/.config/opencode/opencode.jsonc`.
 2. Add `@plur-ai/opencode` to the `plugin` list. If the list already exists, append this entry. Do not remove other plugins.
@@ -87,13 +150,17 @@ OpenCode reads `~/.config/opencode/opencode.jsonc`. It needs the `@plur-ai/openc
     "datacore": {
       "type": "local",
       "command": ["/absolute/path/to/datacore-mcp"],
+      "environment": {
+        "DATACORE_PATH": "/absolute/path/to/Data"
+      },
       "enabled": true
     }
   }
 }
 ```
 
-4. Quit OpenCode and open it again.
+4. Set `DATACORE_PATH` to the absolute path of your Data directory. Quit OpenCode
+   and open it again.
 5. Run [Check the connection](#check-the-connection) in OpenCode. Use the same stop rule as Codex.
 
 ## Check the connection

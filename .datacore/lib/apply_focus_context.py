@@ -30,8 +30,15 @@ This project lives inside a Datacore space. Session lifecycle commands are avail
 - `/standup` — generate/post standup from recent team journals
 - `/today` — daily briefing (incremental if already generated)
 
-In a harness without these slash commands, call the `datacore_command_run` MCP
-tool with the command name (e.g. `wrap-up`) and follow the steps it returns.
+Native slash shortcuts are optional. For ordinary text such as "run Datacore
+continue for this project", call `datacore_command_run` with the command name
+and user-supplied `arguments`, then follow its instructions and execution guidance.
+Use `datacore_command_list` for discovery. Keep the original project and space
+when resolving scripts relative to the returned Datacore working directory.
+Resume a handed-off `run_id` using `datacore_command_steps` status and its space;
+otherwise resume before starting a new checklist. Save run ID, arguments,
+artifacts, validation results, blockers and next action in the existing
+continuation task. Chat history is not shared between harnesses.
 
 | Key | Value |
 |-----|-------|
