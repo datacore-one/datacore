@@ -58,6 +58,17 @@ suites:
     reason: Passing locally (24). Same as ventures/lib/tests; not yet costed against CI install time.
     reviewed: 2026-10-01
     state: green
+  - path: .datacore/evals/ledger-upgrade/phase4
+    reason: >
+      Promise TSK-11's evals (ledger upgrade O1-O4), written red before any code
+      on 2026-10-04. promise_gate.py hides them from an ordinary run until TSK-11
+      is green in the committed baseline, so until then the directory collects
+      nothing by design; run them with PROMISE_EVALS_ALL=1. suite_audit.py still
+      runs a `state: promise-gated` directory but does not count an empty run
+      there. What is not protected: nothing gates the ledger upgrade until the
+      promise turns green.
+    reviewed: 2026-10-05
+    state: promise-gated
   - path: .datacore/skills/github-triage/tests
     reason: >
       Passing locally (11). The nightly GitHub triage skill run by the overnight

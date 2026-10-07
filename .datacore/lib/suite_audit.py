@@ -60,10 +60,9 @@ def is_source(path: Path) -> bool:
 SERIAL_SUITES = ("modules/lens/tests",)
 
 
-def _declared_fixtures() -> list[str]:
+def _declared(state: str) -> list[str]:
     """Directories (relative to .datacore) that config/ungated-test-suites.yaml
-    declares `state: fixture`: a practice project kept as an eval fixture, whose
-    tests belong to that project and are never Datacore's own suite."""
+    declares with this `state`."""
     path = DATACORE / "config" / "ungated-test-suites.yaml"
     try:
         import yaml
@@ -73,9 +72,28 @@ def _declared_fixtures() -> list[str]:
     out = []
     for s in doc.get("suites") or []:
         p = str((s or {}).get("path") or "").strip().rstrip("/")
-        if (s or {}).get("state") == "fixture" and p.startswith(".datacore/"):
+        if (s or {}).get("state") == state and p.startswith(".datacore/"):
             out.append(p[len(".datacore/"):])
     return out
+
+
+def _declared_fixtures() -> list[str]:
+    """`state: fixture`: a practice project kept as an eval fixture, whose tests
+    belong to that project and are never Datacore's own suite."""
+    return _declared("fixture")
+
+
+def empty_suites(results) -> list:
+    """Suites that collected nothing, less those declared `state: promise-gated`.
+
+    A directory of promise evals is hidden by promise_gate.py until its promise
+    is green in the committed baseline, so collecting nothing there is the gate
+    working (TSK-11, 2026-10-04). It is still run: once the promise goes green
+    its evals collect, and a red one fails like any other test.
+    """
+    gated = _declared("promise-gated")
+    return [r for r in results
+            if r.empty and not any(r.suite == g or r.suite.startswith(g + "/") for g in gated)]
 
 
 def discover_suites() -> list[Path]:
@@ -331,6 +349,7 @@ def main() -> int:
         print(json.dumps([r.__dict__ for r in results], indent=2))
     else:
         accepted = accepted_failures()
+        counted_empty = empty_suites(results)
         n_accepted = 0
         unexplained = []
         for r in results:
@@ -338,8 +357,10 @@ def main() -> int:
             seen = [f for f in r.failures if _is_accepted(f, accepted)]
             n_accepted += len(seen)
             green = r.ok or (not r.empty and not live and r.passed > 0)
-            mark = "ok  " if green else ("----" if r.empty else "FAIL")
-            note = "  (no pytest tests collected)" if r.empty else ""
+            gated = r.empty and r not in counted_empty
+            mark = "ok  " if green else ("gate" if gated else "----" if r.empty else "FAIL")
+            note = ("  (promise-gated: evals hidden until the promise is green)" if gated
+                    else "  (no pytest tests collected)" if r.empty else "")
             print(f"  {mark} {r.suite:<52} {r.passed:5d} passed  {r.failed} failed  "
                   f"{r.errors} error  {r.skipped} skipped{note}")
             for f in live:
@@ -352,7 +373,7 @@ def main() -> int:
         tot_p = sum(r.passed for r in results)
         tot_f = sum(r.failed for r in results)
         tot_e = sum(r.errors for r in results)
-        empty = [r for r in results if r.empty]
+        empty = counted_empty
         n_live = tot_f - n_accepted
         # The summary line a job contract asserts on.
         #

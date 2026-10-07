@@ -757,6 +757,38 @@ def test_a_failed_push_is_named_the_way_a_failed_fetch_is(monkeypatch, stderr, e
     assert result.reason.startswith("push "), "it says which half of the transport failed"
 
 
+HOOK_LOST_RACE = (
+    "pre-push: BLOCKED — this push rewrites shared history on: main\n"
+    "  The remote tip is not an ancestor of what is pushed (a force-push, or work you have not fetched).\n"
+    "  Fetch, merge or rebase your own commits onto it.\n"
+    "error: failed to push some refs to 'github.com:example/space.git'\n")
+
+
+def test_a_push_the_pre_push_hook_blocks_as_unfetched_work_converges_and_retries(monkeypatch, tmp_path):
+    """A lost race, caught by the pre-push hook before the server could say
+    "non-fast-forward". Another host pushed between our fetch and our push, the
+    hook saw a remote tip that is not an ancestor and blocked, and git said only
+    "failed to push some refs". The retry looked for git's rejection words, so
+    1-datafund on nightshift reported "push fetch failed (offline?)" every hour
+    from 2026-10-04 and sat out the cycle. It is the same race: converge, retry."""
+    import ledger_transport as lt
+    pushes = []
+
+    def fake_git(space, *args, **kw):
+        if args[:1] == ("rev-parse",):
+            return 0, SHA, ""
+        pushes.append(args)
+        return (1, "", HOOK_LOST_RACE) if len(pushes) == 1 else (0, "", "")
+    monkeypatch.setattr(lt, "_git", fake_git)
+    monkeypatch.setattr(lt, "_publication_forks", lambda space, commit, db: [])
+    converged = []
+    monkeypatch.setattr(lt, "_converge_locked",
+                        lambda space, publish=True: converged.append(publish) or lt.Result(True, "merged", {}))
+    result = lt._push_with_retry(tmp_path, "main")
+    assert result.ok, result.reason
+    assert converged == [False] and len(pushes) == 2
+
+
 def test_an_offline_push_reads_as_offline_to_the_sweep(monkeypatch, tmp_path):
     """sync_repo turns the reason into the word the fleet sweep acts on."""
     import ledger_transport as lt

@@ -1296,7 +1296,13 @@ def _push_with_retry(space: Path, db: str) -> Result:
         if rc == 0:
             return Result(True, "pushed", {"attempts": attempt})
         low = err.lower()
-        if "non-fast-forward" in low or "fetch first" in low or "rejected" in low:
+        # The pre-push hook catches the same lost race before the server can:
+        # another host pushed since our fetch, so the remote tip is not an
+        # ancestor of ours, and git then says only "failed to push some refs".
+        # Converging makes it an ancestor; the fork gate above re-checks the
+        # merge on the next attempt (1-datafund, 2026-10-04..07).
+        lost_race = "remote tip is not an ancestor" in low
+        if "non-fast-forward" in low or "fetch first" in low or "rejected" in low or lost_race:
             c = _converge_locked(space, publish=False)
             if not c:
                 return Result(False, "push rejected and converge failed",

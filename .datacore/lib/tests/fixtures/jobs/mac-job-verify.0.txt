@@ -1,0 +1,7 @@
+# fixture for mac-job-verify artifact[0]
+# producer artifact: ~/.datacore/state/job_verify.log on mac
+# harvested: 2026-10-07 (the run header job_verify_notify.sh writes before each run)
+# regex under test: ^=== \d{4}-\d{2}-\d{2}T
+# ---
+=== 2026-08-10T15:36:34Z ===
+OK 3 jobs 3 artifacts

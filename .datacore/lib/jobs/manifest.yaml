@@ -1948,20 +1948,27 @@ jobs:
         since: join
         max_age_hours: 8  # awake hours: joins run at least every 4 waking hours, so two missed joins (as mac-join) -- OPS-1
 
-  - name: mac-bench
-    scope: pinned
-    why_pinned: "the benchmark project is checked out on this machine"
-    unpin_when: "datacore-bench runs in CI"
+  - name: mac-job-verify
+    scope: local
+    why_local: "judges this machine's own jobs"
     machine: mac
-    schedule: "launchd com.datacore.bench: Sunday 03:00"
-    cmd: '/bin/bash ~/Data/"$(python3 ~/Data/.datacore/lib/spaces.py role system)"/2-projects/datacore-bench/bench.sh'
+    # Owner decision 2026-10-07: the mac runs no clock-scheduled jobs at all.
+    # This was a */30 cron line no manifest job declared; on the join it judges
+    # this machine's jobs whenever the machine is actually present.
+    trigger: join
+    schedule: "on join: visitor_join.py runs it after every converged join"
+    cmd: "~/.datacore/v2-runner/.datacore/lib/job_verify_notify.sh --machine mac --manifest ~/.datacore/v2-runner/.datacore/lib/jobs/manifest.yaml"
+    exit_ok: [0, 1]   # 1 = it found failing jobs and relayed them; that is its job
     on_fail: telegram
     artifacts:
-      # The plist's StandardOutPath. /tmp is cleared by a reboot, so a reboot
-      # early in the week reads as a missing run until Sunday.
-      - path: "/tmp/datacore-bench-stdout.log"
-        check: no_crash
-        max_age_hours: 170
+      - path: "~/.datacore/state/job_verify.log"
+        check: regex
+        arg: '^=== \d{4}-\d{2}-\d{2}T'
+        since: join
+        max_age_hours: 8  # awake hours: joins run at least every 4 waking hours, so two missed joins (as mac-join) -- OPS-1
+
+  # mac-bench DELETED 2026-10-05 (owner: cancel every clocked job on the mac).
+  # Its launchd plist is renamed *.retired-visitor-2026-10-05.
 
   - name: mac-daily-briefing-open
     scope: local
@@ -2002,17 +2009,8 @@ jobs:
         since: arrival
         max_age_hours: 48  # awake hours: an arrival is the first join of a session; two days awake without one is a stalled join -- OPS-1
 
-  - name: mac-session-learning
-    scope: local
-    why_local: "extracts learning from this machine's sessions"
-    machine: mac
-    schedule: "launchd io.datacore.session-learning: 01:00"
-    cmd: "~/Data/.datacore/lib/session_learning_daily.sh"
-    on_fail: telegram
-    artifacts:
-      - path: "~/.datacore/state/session-learning.log"
-        check: no_crash
-        max_age_hours: 26
+  # mac-session-learning DELETED 2026-10-05 (owner: cancel every clocked job on
+  # the mac). Its launchd plist is renamed *.retired-visitor-2026-10-05.
 
   - name: mac-smoke
     scope: local
