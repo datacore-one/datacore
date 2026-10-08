@@ -17,6 +17,8 @@ import pathlib
 import re
 import sys
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 TODAY = ROOT / ".datacore" / "commands" / "today.md"
 NIGHTSHIFT_LIB = ROOT / ".datacore" / "modules" / "nightshift" / "lib"
@@ -30,6 +32,8 @@ def _step(n: int) -> str:
 
 
 def _market_phase_dir() -> str:
+    if not NIGHTSHIFT_LIB.is_dir():
+        pytest.skip("nightshift module not installed")
     sys.path.insert(0, str(NIGHTSHIFT_LIB))
     import market_phase_orchestrator as mpo
     return f"6-meridian/{mpo.REPORT_DIR.as_posix()}"

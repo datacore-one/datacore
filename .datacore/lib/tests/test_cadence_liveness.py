@@ -1,7 +1,10 @@
 """cadence_liveness counts commitments, not catalogues of parked ventures."""
 import importlib.util, pathlib, datetime
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parents[3]
+VENTURES_LIB = ROOT / ".datacore" / "modules" / "ventures" / "lib"
 spec = importlib.util.spec_from_file_location("cl", ROOT / ".datacore" / "lib" / "cadence_liveness.py")
 L = importlib.util.module_from_spec(spec); spec.loader.exec_module(L)
 
@@ -128,6 +131,8 @@ def test_executing_principals_are_those_the_registry_gives_an_executor(monkeypat
     assert cadence_liveness._executing() == {"ops"}
 
 
+@pytest.mark.skipif(not (VENTURES_LIB / "cadence_engine.py").exists(),
+                    reason="ventures module not installed")
 def test_a_continuous_cadence_is_a_bot_loop_listed_grey_never_a_missing_registration(tmp_path, monkeypatch):
     """every_4h / every_15min are a bot's own loop: the scheduler plans them for
     nobody (cadence_schedule.CONTINUOUS, CAD-1) and cadence_engine skips them.
