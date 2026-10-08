@@ -702,7 +702,7 @@ decision (Operations, Product, Engineering, Growth, Research, Communications) th
 this step used to express by *placing* the heading — the decision is the same, it is
 just recorded as data instead of as a file offset.
 
-> **v2: an org task is not a delegation.** `ledger_ingest_org.py` mirrors org tasks into the ledger on the 05:35 sweep, but a mirrored item carries an `org` block in its payload and `ledger_claim.py` skips exactly those: `pending = [i for i in claimable if not (i.payload or {}).get("org")]`. That filter is deliberate — it stopped agents working through a 342-item personal backlog unattended. The consequence: **a task written here can never be picked up by the fleet.** If the intent is "an agent should do this tonight", that is §6b delegation, not a task heading. Say which one you mean in the §10 report.
+> **An ordinary task is not authorization to execute.** The local structured adapter records captures in the ledger. The core `ledger_claim.py` dispatcher skips Org-backed items; Nightshift separately reads eligible `:AI:` work from the task views. If the intent is "an agent should do this tonight", use the explicit §6b delegation flow with execution criteria. Say which destination was chosen in the §10 report; do not duplicate an item across both executor routes.
 >
 > **This is also why inbox-only matters for the switch.** Under Phase 1, `next_actions.org` is a projection of the ledger and refuses direct writes; `inbox.org` stays the capture surface it is today. Routing every write through inbox.org means the flip changes where entries *land*, never whether this command works — and the `TARGET_*` properties are exactly what a ledger-first `/process-inbox` needs to emit an `item.create` without re-deriving intent.
 
@@ -746,6 +746,21 @@ DELEGATION OPPORTUNITIES (suggestions — opt in via §0e):
 - `delegate all` → add all suggestions
 - `delegate none` (default) → no AI tasks created
 - `delegate: <free text>` → add a user-composed AI task
+
+**Persist accepted work through the local MCP/adapter.** `gtd.add_task` accepts
+`body` and `properties` as well as title/tags/space. Include `SURFACE` and
+`DONE_WHEN` for executable work, plus `ROADMAP` when the space requires one.
+Keep source context and repository-relative artifact paths in the body; do not
+copy workstation absolute paths into instructions for another machine. These
+fields describe the work; they do not grant authority. Ordinary captures must
+not acquire `:AI:` tags without the user's explicit delegation.
+
+Return the task ID and `ledger_actor` from the adapter. Distinguish local capture
+from publication: after the normal session sync, report publication only when
+the transport acknowledges it; offline captures remain locally saved/pending.
+Nightshift reads eligible AI tasks from the ledger-derived Org view. The core
+ledger dispatcher is a separate route and intentionally skips Org-backed work.
+Do not create a second task to make both routes execute the same request.
 
 **Legacy prompt** (only when `wrap_up.inference_mode: off`):
 ```

@@ -22,6 +22,16 @@ TOOLS = ci.Tools(datacore_mcp="/bin/datacore-mcp", plur_mcp="/bin/plur-mcp",
                  plur_hook="/opt/plur/bin/plur-hook", python="/data/.datacore/venv/bin/python")
 
 
+def test_doctor_honours_arguments_and_initialization_handshake(tmp_path):
+    server = tmp_path / 'mcp.py'
+    server.write_text('import sys,json\nfor line in sys.stdin:\n m=json.loads(line)\n if "id" in m:\n  print(json.dumps({"jsonrpc":"2.0","id":m["id"],"result": {"tools":[{"name":"fixture"}]}}), flush=True)\n')
+    assert ci._tools_list(sys.executable, {}, tmp_path, [str(server)], timeout=5) == ['fixture']
+
+
+def test_doctor_silent_server_times_out(tmp_path):
+    assert ci._tools_list(sys.executable, {}, tmp_path, ['-c', 'import time; time.sleep(60)'], timeout=0.1) == []
+
+
 def test_mcp_entries_use_the_cursor_profile_and_explicit_paths():
     cfg = ci.merge_mcp({}, ROOT, TOOLS)
     dc = cfg["mcpServers"]["datacore"]

@@ -48,8 +48,8 @@ def _registry_dir(*, root: str | None = None, home: Path | None = None,
     directories away, and a config probe on 2026-09-19 found the same on
     nightshift and hermes. It is one defect, not three hosts' worth.
 
-    Candidates in order, first one that HAS the file:
-      1. $DATACORE_ROOT -- an explicit answer always wins.
+    An explicit $DATACORE_ROOT always wins, including an empty installation.
+    Without one, candidates are tried in order, first one that HAS the file:
       2. beside the code, for a single-tree install where they coincide.
       3. ~/Data, the documented default data root.
     Falling through to the first candidate keeps the old behaviour (and the
@@ -58,8 +58,13 @@ def _registry_dir(*, root: str | None = None, home: Path | None = None,
     """
     candidates = []
     declared = root if root is not None else os.environ.get("DATACORE_ROOT")
-    if declared:
-        candidates.append(Path(declared))
+    if declared is not None:
+        # An explicit installation is authoritative even before its first
+        # registry exists. Falling through here would read/write the developer
+        # installation's principals while bootstrapping an empty replica.
+        if not declared:
+            raise ValueError('DATACORE_ROOT must not be empty')
+        return Path(declared) / '.datacore/registry'
     candidates.append(code_root if code_root is not None else LIB.parent.parent)
     candidates.append((home or Path.home()) / "Data")
     for candidate in candidates:

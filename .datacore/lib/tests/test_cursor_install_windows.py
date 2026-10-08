@@ -93,3 +93,19 @@ def test_mcp_entry_runs_node_on_the_package_script(tmp_path):
 def test_mcp_entry_off_windows_is_the_command_itself():
     assert ci.mcp_entry("/usr/local/bin/datacore-mcp", node="/usr/bin/node", windows=False) \
         == {"command": "/usr/local/bin/datacore-mcp"}
+
+
+def test_wsl_config_passes_linux_paths_and_env_as_arguments(tmp_path):
+    root = tmp_path / 'Data with spaces'
+    root.mkdir()
+    tools = ci.Tools(datacore_mcp='/opt/fixture/bin/datacore-mcp',
+                     plur_mcp=None, plur_hook=None, python='/opt/fixture/Data/.datacore/venv/bin/python')
+    planned = ci.install(root, tools, dry_run=True, wsl_distribution='Ubuntu')
+    srv = planned[root / '.cursor/mcp.json']['mcpServers']['datacore']
+    assert srv['command'] == 'wsl.exe'
+    assert srv['args'][:5] == ['--distribution', 'Ubuntu', '--cd', str(root), '--exec']
+    assert f'DATACORE_PATH={root}' in srv['args']
+    assert '/opt/fixture/bin/datacore-mcp' == srv['args'][-1]
+    assert 'env' not in srv
+    hook = planned[root / '.cursor/hooks.json']['hooks']['preToolUse'][0]['command']
+    assert 'wsl.exe --distribution Ubuntu' in hook and 'adapters/cursor/hook.py' in hook

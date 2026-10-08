@@ -32,6 +32,8 @@ import shutil
 import subprocess
 import sys
 import time
+import queue
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -164,11 +166,36 @@ def _read(path: Path) -> dict:
     return data
 
 
-def install(root: Path, tools: Tools, dry_run: bool = False) -> dict[Path, dict]:
+def wsl_configs(mcp, hooks, root, distribution):
+    """Windows Cursor, local Linux MCP/guards. Run the installer inside WSL.
+
+    Argument arrays cross the Windows boundary without a shell. Linux commands
+    and environment belong inside WSL, not in the Windows process environment.
+    """
+    if not distribution or any(c in distribution for c in '\r\n\0'):
+        raise InstallError('a WSL distribution name is required')
+    prefix = ['wsl.exe', '--distribution', distribution, '--cd', str(root), '--exec']
+    for name in ('datacore', 'plur'):
+        server = mcp.get('mcpServers', {}).get(name)
+        if not server:
+            continue
+        command = ['/usr/bin/env', *[f'{k}={v}' for k, v in server.pop('env', {}).items()],
+                   server['command'], *server.get('args', [])]
+        server.update(command=prefix[0], args=prefix[1:] + command)
+    for entries in hooks.get('hooks', {}).values():
+        for entry in entries:
+            if _ours(entry):
+                entry['command'] = subprocess.list2cmdline(prefix + shlex.split(entry['command']))
+    return mcp, hooks
+
+
+def install(root: Path, tools: Tools, dry_run: bool = False, wsl_distribution: str | None = None) -> dict[Path, dict]:
     cursor = root / ".cursor"
     mcp_path, hooks_path = cursor / "mcp.json", cursor / "hooks.json"
     planned = {mcp_path: merge_mcp(_read(mcp_path), root, tools),
                hooks_path: merge_hooks(_read(hooks_path), root, tools)}
+    if wsl_distribution:
+        wsl_configs(planned[mcp_path], planned[hooks_path], root, wsl_distribution)
     if not dry_run:
         cursor.mkdir(exist_ok=True)
         for path, data in planned.items():
@@ -201,7 +228,7 @@ def approved_servers(root: Path, home: Path | None = None) -> set[str] | None:
 
 # --- doctor ---------------------------------------------------------------
 
-def _tools_list(command: str, env: dict, cwd: Path) -> list[str]:
+def _tools_list(command: str, env: dict, cwd: Path, args=None, timeout=30) -> list[str]:
     """Live MCP handshake; the tool names the server advertises."""
     msgs = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -209,25 +236,47 @@ def _tools_list(command: str, env: dict, cwd: Path) -> list[str]:
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
     ]
-    p = subprocess.Popen([command], cwd=cwd, env={**os.environ, **env}, text=True,
-                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     try:
-        for m in msgs:           # paced: a burst before initialize completes is dropped
-            p.stdin.write(json.dumps(m) + "\n"); p.stdin.flush(); time.sleep(2)
-        deadline = time.time() + 30
-        while time.time() < deadline:
-            line = p.stdout.readline()
-            if not line:
+        p = subprocess.Popen([command, *(args or [])], cwd=cwd, env={**os.environ, **env}, text=True,
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError:
+        return []
+    lines = queue.Queue()
+    def reader():
+        for line in p.stdout:
+            lines.put(line)
+        lines.put(None)
+    threading.Thread(target=reader, daemon=True).start()
+    deadline = time.monotonic() + timeout
+    def send(msg):
+        p.stdin.write(json.dumps(msg) + '\n')
+        p.stdin.flush()
+    try:
+        send(msgs[0])
+        initialized = False
+        while time.monotonic() < deadline:
+            try:
+                line = lines.get(timeout=max(0.001, deadline - time.monotonic()))
+            except queue.Empty:
+                return []
+            if line is None:
                 break
             try:
                 msg = json.loads(line)
             except ValueError:
                 continue
-            if msg.get("id") == 2:
+            if msg.get('id') == 1 and 'result' in msg and not initialized:
+                initialized = True
+                send(msgs[1])
+                send(msgs[2])
+            if msg.get("id") == 2 and 'result' in msg:
                 return [t["name"] for t in msg["result"]["tools"]]
+        return []
+    except (BrokenPipeError, OSError):
         return []
     finally:
         p.kill()
+        p.wait(timeout=5)
 
 
 def doctor(root: Path) -> int:
@@ -244,7 +293,7 @@ def doctor(root: Path) -> int:
         if not srv:
             results.append(("FAIL" if name == "datacore" else "n-a", f"mcp:{name}", "not registered"))
             continue
-        names = _tools_list(srv["command"], srv.get("env", {}), root)
+        names = _tools_list(srv["command"], srv.get("env", {}), root, srv.get('args'))
         total += len(names)
         state = "ok" if names else "FAIL"
         results.append((state, f"mcp:{name}", f"{len(names)} tools" if names else "no tools/list response"))
@@ -281,12 +330,15 @@ def main() -> int:
     ap.add_argument("command", nargs="?", default="install", choices=["install", "doctor"])
     ap.add_argument("--root", type=Path, default=None)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument('--wsl-distribution', help='Run inside WSL to generate wsl.exe launchers for Windows Cursor')
     args = ap.parse_args()
     root = (args.root or default_root()).resolve()
     if args.command == "doctor":
         return doctor(root)
     try:
-        planned = install(root, resolve_tools(root), dry_run=args.dry_run)
+        if WINDOWS:
+            raise InstallError('Datacore task storage requires POSIX locking. Run this installer inside WSL; see .datacore/docs/cos-nightshift-install.md.')
+        planned = install(root, resolve_tools(root), dry_run=args.dry_run, wsl_distribution=args.wsl_distribution)
     except InstallError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

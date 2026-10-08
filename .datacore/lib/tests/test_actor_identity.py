@@ -137,14 +137,24 @@ def test_an_explicit_data_root_wins(tmp_path):
                             code_root=tmp_path / "nocode") == reg
 
 
-def test_it_falls_back_to_the_documented_data_root(tmp_path):
+def test_it_falls_back_to_the_documented_data_root(tmp_path, monkeypatch):
     """The satellite case: code in one tree, registry in another."""
     home = tmp_path / "home"
     reg = home / "Data" / ".datacore" / "registry"
     reg.mkdir(parents=True)
     (reg / "principals.yaml").write_text("principals:\n  a: {writes_as: [a]}\n")
-    assert AI._registry_dir(root=str(tmp_path / "empty-runner"), home=home,
+    monkeypatch.delenv('DATACORE_ROOT', raising=False)
+    assert AI._registry_dir(home=home,
                             code_root=tmp_path / "nocode") == reg
+
+
+def test_empty_explicit_install_never_borrows_another_registry(tmp_path):
+    other = tmp_path / 'other/.datacore/registry'
+    other.mkdir(parents=True)
+    (other / 'principals.yaml').write_text('principals:\n  operator: {kind: human}\n')
+    selected = AI._registry_dir(root=str(tmp_path / 'fresh'), code_root=tmp_path / 'other')
+    assert selected == tmp_path / 'fresh/.datacore/registry'
+    assert not selected.exists()
 
 
 def test_with_no_registry_anywhere_it_keeps_the_old_answer(tmp_path):
