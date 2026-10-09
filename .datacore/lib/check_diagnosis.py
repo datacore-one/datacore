@@ -180,6 +180,12 @@ def cause(*, cmd: str, rc, cwd, repo, sha: str, stderr="", stdout="",
         if bare in both:
             return f"could not reach the remote host ({bare})"
     if any(marker in both for marker in _ENOSPC):
+        # rsync's receiver ran out of room: the full disk is the far end's, and
+        # measuring this one would name the wrong host (2026-10-09).
+        if "[receiver" in both or "receiver.c" in both:
+            m = re.search(r"\bto (?:[^@\s]+@)?([^\s:]+)", cmd or "")
+            return (f"disk full on the receiving host {m.group(1) if m else '(the remote end)'}"
+                    " (No space left on device)")
         return (disk_full(cwd, both) or "the disk is full on this host") + " (No space left on device)"
     denied = _line_with(both, "Permission denied")
     if denied:

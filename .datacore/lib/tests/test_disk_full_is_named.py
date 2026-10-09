@@ -81,6 +81,23 @@ def test_an_unclassified_fetch_failure_keeps_gits_own_words():
     assert "fetch failed" in reason and "github.com port 443" in reason, reason
 
 
+RSYNC_RECEIVER_FULL = (
+    'rsync: [receiver] write failed on "backups/plur-state-20261009.tar.gz": '
+    "No space left on device (28)\n"
+    "rsync error: error in file IO (code 11) at receiver.c(488) [receiver=3.2.7]\n"
+    "rsync: [sender] write error: Broken pipe (32)")
+
+
+def test_a_full_disk_on_the_receiving_end_names_the_receiver(monkeypatch, host, tmp_path):
+    """2026-10-09: the box's backup push filled nightshift's disk, and the alert said
+    'disk full on bridge, 72% used' -- the sender, which had 37G free."""
+    monkeypatch.setattr(shutil, "disk_usage", lambda p: ROOMY)
+    said = check_diagnosis.cause(cmd="rsync to gregor@100.101.159.42", rc=1, cwd=tmp_path,
+                                 repo=None, sha="", stderr=RSYNC_RECEIVER_FULL)
+    assert "100.101.159.42" in said and "disk full" in said, said
+    assert f"on {host}" not in said, said
+
+
 def _run_module():
     sys.path.insert(0, str(NS_LIB))
     import run  # noqa: WPS433

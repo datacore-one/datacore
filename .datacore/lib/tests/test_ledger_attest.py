@@ -184,3 +184,25 @@ def test_spaces_live_only_under_data(tmp_path, monkeypatch):
     (home / "Data" / "5-plur" / ".git").mkdir()
     (home / "spaces" / "5-plur" / ".git").mkdir()
     assert job_verify._attest_space().parent.name == "Data"
+
+
+def test_an_executor_writes_as_its_member_principal(tmp_path, monkeypatch):
+    """2026-10-09: the overnight run (actor `nightshift`) rescued unsaved files
+    in two spaces and both reports said "ledger record not written". The space's
+    members.yaml lists `miles`; principals.yaml declares miles
+    `writes_as: [miles, nightshift]`. The member check compared the raw writer
+    name, so every attest by the executor was dropped, silently, since LED-3.
+    A writer a member principal declares is that member. A stranger is not."""
+    import actor_identity, importlib, ledger_attest
+    importlib.reload(ledger_attest)
+    sp = tmp_path / "2-space"
+    (sp / ".datacore" / "events").mkdir(parents=True)
+    (sp / ".datacore" / "members.yaml").write_text("members:\n  - miles\n")
+    reg = tmp_path / "principals.yaml"
+    reg.write_text("principals:\n  miles:\n    kind: agent\n    writes_as: [miles, nightshift]\n")
+    monkeypatch.setattr(actor_identity, "PRINCIPALS", reg)
+    monkeypatch.setattr(ledger_attest, "_space", lambda space: sp)
+    monkeypatch.setattr(ledger_attest, "_actor", lambda: "nightshift")
+    assert ledger_attest.attest("git.rescue", ref="rescue/x", detail="1 file")
+    monkeypatch.setattr(ledger_attest, "_actor", lambda: "fixture")
+    assert ledger_attest.attest("git.rescue", ref="rescue/y", detail="1 file") is None

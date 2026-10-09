@@ -281,6 +281,21 @@ def _space_members(space: Path) -> list[str]:
     return mod.members(space)
 
 
+def _is_member(actor: str, declared: list[str]) -> bool:
+    """The actor, or the principal declaring it under `writes_as`, is a member.
+
+    The overnight executor writes as `nightshift`, a writer the principal
+    `miles` declares; members.yaml lists `miles`. Comparing the raw name dropped
+    every attest the run made (2026-10-09: two git.rescue records)."""
+    if actor in declared:
+        return True
+    try:
+        from actor_identity import principal_of
+    except ImportError:
+        return False
+    return principal_of(actor)[0] in declared
+
+
 def attest(kind: str, *, ref: str = "", detail: str = "",
            space: str | None = None, extra: dict | None = None) -> str | None:
     """Record an external action. Returns the event hash, or None on failure.
@@ -299,7 +314,7 @@ def attest(kind: str, *, ref: str = "", detail: str = "",
         # only the pre-push ownership guard stopped them. A space that declares
         # its members is the authority; one that declares none is not judged here.
         declared = _space_members(Path(target))
-        if declared and _actor() not in declared:
+        if declared and not _is_member(_actor(), declared):
             return None
         _ensure_ledger_importable()
         from ledger.log import EventLog
