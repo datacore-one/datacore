@@ -22,6 +22,10 @@ def _no_real_alerts(tmp_path_factory, monkeypatch):
     DATACORE_ALERT_COMMAND itself."""
     monkeypatch.setenv("DATACORE_ALERTS_FILE", str(tmp_path_factory.mktemp("no-alerts") / "alerts.yaml"))
     monkeypatch.delenv("DATACORE_ALERT_COMMAND", raising=False)
+    # Nor a fake lost one: the wrong-weekday eval's refused message landed in the
+    # box's real undelivered list each night, and the morning sweep reported it to
+    # the owner as an alert that reached nobody (2026-10-10 to 10-12).
+    monkeypatch.setenv("DATACORE_UNDELIVERED_LOG", str(tmp_path_factory.mktemp("no-alerts") / "undelivered-alerts.jsonl"))
 
 
 @pytest.fixture(autouse=True)
