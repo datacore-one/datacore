@@ -306,11 +306,47 @@ work is blocked.
 
 ## Step 8: Collect Nightshift Results
 
-Check all spaces for overnight execution:
+Overnight agent work comes out through **three channels**, and the briefing reports
+all three. On 2026-10-13 it read only the first, called the night "Nothing to do",
+and missed a sprint PR Miles opened, a teammate's rejection of it with two
+follow-up issues, and Miles' CI diagnosis on two dependency PRs.
+
+**1. The `:AI:` task queue** (the overnight runner):
 - DONE tasks with :NIGHTSHIFT_COMPLETED: property in past 24h
 - REVIEW tasks needing attention
 - Output files: `*/0-inbox/nightshift-*.md`
 - Summarize with quality scores
+
+**2. Venture cadences** (Miles, Data, Tris: scheduled jobs from each space's
+`venture.yaml`, e.g. pr-review, sprint-claim, sprint-rollover, blog-post). They
+never touch the `:AI:` queue. Each writes a run record:
+
+```bash
+ls */1-tracks/*/cadence-reports/*-$(date +%F).md */1-tracks/*/cadence-reports/*-$(date -v-1d +%F).md 2>/dev/null
+```
+
+Read each record's first section. Report what it did and anything it published
+or opened. A run that drafted, published or queued a decision is news; a clean
+skip is one word.
+
+**3. GitHub activity by agent accounts** (PRs opened, reviews, comments), and the
+humans' replies to it:
+
+```bash
+SINCE=$(date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+gh search prs --author miles-on-nightshift --updated ">=$SINCE" --json repository,number,title,state,url
+gh search prs --commenter miles-on-nightshift --updated ">=$SINCE" --json repository,number,title,url
+```
+
+For each agent PR, read its reviews (`gh pr view N -R repo --json reviews,comments`).
+A teammate's CHANGES_REQUESTED or a new issue filed against the agent's work leads
+the nightshift section: it means the agent's output was wrong, and that matters
+more than anything the agent says about itself.
+
+In the briefing, the Nightshift section has three lines in this order: what went
+wrong (rejected or reverted agent work), what agents shipped (PRs, posts, reports),
+and the task queue. "Nothing to do" from the runner is never the summary of the
+night unless channels 2 and 3 are empty too.
 
 ### Bot & Automated Commit Activity
 

@@ -11,9 +11,9 @@ evidence:
   min_bytes: 200
 ---
 
-> Runs every Monday (weekly cadence). Idempotent: if a sprint file with status
-> `planning` or `active` already exists for the current ISO week, the cadence
-> exits without writing anything.
+> Runs every Monday (weekly cadence). Idempotent: if this ISO week already has a
+> sprint in `planning` or `active`, or the previous sprint is not closed yet, the
+> cadence exits without drafting.
 
 ## Objective
 
@@ -21,108 +21,88 @@ Keep the PLUR Enterprise sprint train running without human bootstrapping:
 when a new ISO week starts with no sprint on the books, carry over unfinished
 work from the most recent sprint, draft the next sprint YAML in `planning`
 status, and queue a `sprint_go` decision for the principal. **This cadence
-NEVER activates a sprint** — activation is the principal's GO in the daily
-session (or the auto-default after the decision's `default_at` SLA passes,
-resolved by the decision pipeline, not by this cadence).
+NEVER activates a sprint** — activation is the principal's GO, never a default.
 
 ## Context
 
-- Sprint state of truth: `~/Data/5-plur/2-projects/enterprise/sprints/2026-W*.yaml`
-  (flat week files; `sprints/_archive/` is excluded — the flat glob never
-  descends into it; per-sprint artifact folders like `2026-W23-sprint2/` hold
-  canvas/retro docs)
-- Sprint YAML schema: see `sprints/2026-W25-sprint.yaml` (fields the dashboard
-  expects: sprint_id, project, status, cadence, dates, goal, okr_links,
-  backlog[], stretch, ceremonies, done_when, hitl_log, claims)
-- Heartbeat state: `~/Data/5-plur/.datacore/state/heartbeat.json`
-  (`decisions_pending` is a list of structured dicts — see step 4)
-- Decision schema: `PendingDecision` in
-  `~/Data/.datacore/modules/ventures/lib/state_writer.py`
+- **Read sprints from a fresh `origin/development`, never from the working
+  checkout.** The checkout on the agent host can be weeks stale: on 2026-10-13
+  this cadence copied `sprints/2026-W40-sprint.yaml`, a file deleted on
+  development on 2026-09-29, and ignored the active sprint.
+- Layout (`sprints/README.md`): `sprints/<sprint-id>/sprint.yaml`, id
+  `<year>-W<week>-enterprise-sprint<N>`. Old flat `sprints/<id>.yaml` files are
+  history; `sprints/_archive/` is excluded. Read both layouts, write only the
+  directory one.
+- Schema: `sprints/sprint.schema.json`; validate with
+  `python scripts/validate_sprint.py <file>`. A closed sprint needs
+  `dates.retro` and an explicit `carryover` list.
+- Keep `project: plur-ai/enterprise` and the predecessor's `miles_routing`
+  (overflow stays `plur-ai/enterprise`, never core).
 
 ## Steps
 
-1. **Check whether the current ISO week already has a live sprint** — compute
-   dates with code, never from memory, and never with naive datetimes:
+1. **Fetch and find the newest sprint on development.**
    ```bash
    ENTERPRISE=~/Data/5-plur/2-projects/enterprise
-   python3 - "$ENTERPRISE" <<'EOF'
-   import sys, glob, os
+   git -C "$ENTERPRISE" fetch -q origin
+   python3 - "$ENTERPRISE" <<'PY'
+   import subprocess, sys, yaml
    from datetime import datetime, timezone
-   import yaml
-
-   enterprise = sys.argv[1]
-   now = datetime.now(timezone.utc)
-   iso = now.isocalendar()
-   week_tag = f"{iso.year}-W{iso.week:02d}"   # e.g. 2026-W25
-
-   live = []
-   for path in glob.glob(os.path.join(enterprise, "sprints", "*-W*.yaml")):
-       data = yaml.safe_load(open(path)) or {}
-       if data.get("status") in ("planning", "active") and week_tag in os.path.basename(path):
-           live.append(path)
-   print(f"week={week_tag} live={live}")
-   sys.exit(0 if live else 1)
-   EOF
-   RC=$?
-   if [ $RC -eq 0 ]; then
-     echo "Sprint already exists for current ISO week (planning|active); cadence done"
-     exit 0
-   fi
+   repo = sys.argv[1]
+   files = subprocess.run(["git", "-C", repo, "ls-tree", "-r", "--name-only",
+                           "origin/development", "sprints/"],
+                          capture_output=True, text=True, check=True).stdout.split()
+   files = [f for f in files if f.endswith(".yaml") and "/_archive/" not in f
+            and (f.endswith("/sprint.yaml") or f.count("/") == 1)]
+   sprints = []
+   for f in files:
+       d = yaml.safe_load(subprocess.run(["git", "-C", repo, "show", f"origin/development:{f}"],
+                          capture_output=True, text=True, check=True).stdout) or {}
+       if d.get("sprint_id") and d.get("dates", {}).get("start"):
+           sprints.append((str(d["dates"]["start"]), f, d.get("status"), d["sprint_id"]))
+   sprints.sort()
+   iso = datetime.now(timezone.utc).isocalendar()
+   week = f"{iso.year}-W{iso.week:02d}"
+   print("week", week)
+   for s in sprints[-3:]: print(*s)
+   PY
    ```
+   Decide from the newest sprint (by `dates.start`), and stop at the first rule that applies:
+   - **This week already has a sprint** (its id starts with this week's tag) and it is `planning`
+     or `active` → exit: "already planned". Write the run record.
+   - **The newest sprint is still `active` or `review`** → do NOT draft. Its close
+     (status, `dates.retro`, `carryover`, retro) is the principal's call. Write the run
+     record saying "predecessor <id> not closed, nothing drafted", and add one line to
+     `5-plur/org/inbox.org` marked `[NEEDS_REVIEW]` asking the principal to close it.
+   - **The newest sprint is `closed` without a `carryover` list** → same: report it, draft nothing.
+   - Otherwise, draft from it (step 2).
 
-2. **Find the most recent sprint and collect carryover** — the newest
-   `sprints/*-W*.yaml` by week tag (flat files only; `_archive/` excluded).
-   Unfinished = backlog items whose `state` is NOT `done` and NOT `cancelled`.
-   For each carried item:
-   - keep `id` semantics by re-numbering into the new sprint (B1, B2, … in
-     original order), set `carries_from: <old_sprint_id>#<old_id>`
-   - reset `state: ready`, clear `claimed_by`, keep `org_id`, `ref`, `title`,
-     `owner_role`, `priority`, `effort_estimate`, `acceptance`
-   - update each item's `sprint_id:` to the new sprint id
+2. **Carry over from the predecessor's `carryover` list, not from guesses.**
+   Each item named in it is copied with its original id, scope, `acceptance`,
+   `org`/`org_id` and `ref`; set `carries_from: <old_sprint_id>#<id>`; keep
+   `state` (blocked stays blocked); clear claims only where the item was
+   agent-claimed and not started. Never re-add an item whose PR has merged.
+   Check each `ref` with `gh` before carrying it.
 
-3. **Draft the next sprint YAML** at `sprints/<year>-W<week>-sprint.yaml`:
-   - `sprint_id` = file stem (the dashboard matches on it)
-   - `status: planning` — **hard rule: this cadence never writes
-     `status: active`**
-   - `dates.start` = Monday of the current ISO week, `dates.end` = Sunday
-     (verify day names via `python3 ~/Data/.datacore/lib/date_utils.py dow <date>`)
-   - `goal:` = carry the previous sprint's goal prefixed with
-     `Carryover draft — refine at GO:` (the principal edits at activation)
-   - copy `ceremonies`, `facilitator`, `miles_routing`, `done_when` from the
-     previous sprint; `hitl_log: []`, `claims: []`, `stretch: []`
+3. **Write `sprints/<year>-W<week>-enterprise-sprint<N+1>/sprint.yaml`**, N from
+   the predecessor's id:
+   - `status: planning`. **This cadence never writes `status: active`.**
+   - `dates.start` is this week's Monday and `dates.end` its Sunday; verify both with
+     `python3 ~/Data/.datacore/lib/date_utils.py dow <date>`.
+   - `goal:` is the predecessor's, prefixed `Carryover draft, refine at GO:`.
+   - Copy `facilitator` and `miles_routing` (update `sprint_tag_filter`), and
+     `done_when`. Set `hitl_log` to one "Sprint GO" entry, not given; `claims: []`; `stretch: []`.
+   - **Update `sprints/README.md`:** add the planning row to the index and point
+     "Current sprint" at it.
+   - Run `python scripts/validate_sprint.py <new file>`; a failure means no PR.
 
-4. **Queue the GO decision** in heartbeat.json — **merge, never clobber**
-   (other writers' decisions must survive), and use tz-aware UTC timestamps:
-   ```bash
-   python3 - <<'EOF'
-   import json
-   from datetime import datetime, timedelta, timezone
-   from pathlib import Path
-
-   hb_path = Path.home() / "Data/5-plur/.datacore/state/heartbeat.json"
-   hb = json.loads(hb_path.read_text()) if hb_path.exists() else {}
-   pending = hb.get("decisions_pending") or []
-
-   now = datetime.now(timezone.utc)
-   sprint_id = "<NEW_SPRINT_ID>"   # filled in from step 3
-   decision_id = f"sprint-go-{sprint_id}"
-
-   if not any(isinstance(d, dict) and d.get("id") == decision_id for d in pending):
-       pending.append({
-           "id": decision_id,
-           "kind": "sprint_go",
-           "summary": f"Sprint {sprint_id} drafted in planning with carryover backlog — GO to activate?",
-           "default_action": "activate",
-           "default_at": (now + timedelta(hours=24)).isoformat(),
-       })
-   hb["decisions_pending"] = pending
-
-   tmp = hb_path.with_suffix(".json.tmp")
-   tmp.write_text(json.dumps(hb, indent=2, ensure_ascii=False) + "\n")
-   tmp.replace(hb_path)
-   print(f"queued decision {decision_id}")
-   EOF
-   ```
+4. **Queue the GO decision with no default.** Merge into
+   `~/Data/5-plur/.datacore/state/heartbeat.json` → `decisions_pending`
+   (read-merge-write, dedupe on id, tz-aware UTC):
+   `{"id": "sprint-go-<sprint_id>", "kind": "sprint_go", "summary": "...",
+   "default_action": "none"}`, with no `default_at`. A sprint never activates by
+   default: the principal declined auto-activation, and on 2026-10-13 a default
+   of `activate` was queued on a draft that was wrong.
 
 5. **Open a PR — never commit to `main` directly.**
 
@@ -154,7 +134,7 @@ resolved by the decision pipeline, not by this cadence).
    git fetch -q origin
    # Branch from development — main is the released record, not the working branch.
    git checkout -q -B "$BR" origin/development
-   git add sprints/
+   git add sprints/<new-sprint-dir>/sprint.yaml sprints/README.md
    git commit -q -m "chore(sprint): draft <sprint_id> (planning) + GO decision queued"
    git push -q -u origin "$BR"
    gh pr create --base development --head "$BR" \
@@ -168,14 +148,16 @@ resolved by the decision pipeline, not by this cadence).
 
 ## Output
 
-- New `sprints/<year>-W<week>-sprint.yaml` with `status: planning` and
-  carryover backlog (or a clean skip when a live sprint already exists)
-- One `sprint_go` entry appended to heartbeat.json `decisions_pending`
+- New `sprints/<year>-W<week>-enterprise-sprint<N>/sprint.yaml` in `planning`,
+  plus the index row, in one PR; or a clean exit naming the existing sprint or
+  the unclosed predecessor
+- One `sprint_go` entry with no default in heartbeat.json `decisions_pending`
 
 ## Success criteria
 
 One of:
 - Skipped cleanly — a `planning`/`active` sprint already exists for this week
+- Predecessor not closed: reported, one inbox line for the principal, nothing drafted
 - Drafted next sprint in `planning` + queued exactly one `sprint_go` decision
 
 ## Hard rules
@@ -186,8 +168,9 @@ One of:
   so a direct push is rejected — this rule tells you why, the platform enforces
   it. A push that unexpectedly *succeeds* means you are running as the wrong
   account: stop and report it.
-- **NEVER set `status: active`** — only the principal's GO (or the decision
-  pipeline's auto-default resolution) activates a sprint.
+- **NEVER set `status: active`**: only the principal's GO activates a sprint.
+- **NEVER draft while the predecessor is `active` or `review`**, and never close
+  a sprint yourself.
 - Never clobber `decisions_pending` — read-merge-write, dedupe on decision id.
 - Never write naive datetimes — every timestamp is tz-aware UTC ISO 8601.
 - Never type day-of-week names from memory — verify via date_utils.
