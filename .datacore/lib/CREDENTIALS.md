@@ -19,8 +19,10 @@ live, so the search order — not the credential — decided the outcome.
 ## Ask instead
 
 ```bash
-python3 ~/Data/.datacore/lib/creds.py get <id-or-VAR_NAME> --consumer <who-wants-it>
+creds get <id-or-VAR_NAME> --consumer <who-wants-it>
 ```
+
+Where `creds` is not on PATH, run `~/Data/.datacore/bin/creds`. Never spell it `python3 …/creds.py`.
 
 - resolves the **one** declared location, never guesses
 - prefers this host's own value (`local.env`) over a fleet-wide one

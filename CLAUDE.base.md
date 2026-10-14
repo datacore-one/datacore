@@ -141,11 +141,16 @@ search finds *a* value, and nothing about a found value says whether it is curre
 or abandoned. That is how duplicates accumulate and how "the credential is missing"
 gets reported about a credential that is present and working.
 
-Ask the broker instead:
+Ask the broker instead, with the `creds` command (on PATH; `.datacore/bin/creds` where it is not):
 
 ```bash
-python3 .datacore/lib/creds.py get <id-or-VAR_NAME> --consumer <who-wants-it>
+creds get <id-or-VAR_NAME> --consumer <who-wants-it>
 ```
+
+Always write it as `creds …` — when running it and in every command you hand the owner.
+Never spell it `python3 .datacore/lib/creds.py …` (owner, asked repeatedly; ENG-2026-10-08-051).
+After `creds add`, run `creds sync` yourself before `creds get` — a new value is not
+served until the env is reassembled.
 
 It resolves the ONE declared location, prefers this host's own value over a
 fleet-wide one, verifies against the provider before returning, and prints the
