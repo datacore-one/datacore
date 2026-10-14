@@ -1299,7 +1299,17 @@ class CredentialManager:
             print("Credential stored durably, but Git commit failed; review the retained changes before retrying.", file=sys.stderr)
             return 1
         print("Committed the credential store and index to the secrets repo")
-        print(f"\nNext: run 'creds sync' to assemble, then push to BlackPi")
+        # Assemble the env here: a value is not served by `get` until sync runs,
+        # and a printed "Next: run creds sync" was skipped often enough that the
+        # owner's first `get` failed on a credential just added (2026-10-14).
+        if not (secrets_dir / "scripts" / "sync.sh").exists():
+            print(f"\nNext: run 'creds sync' to assemble, then push to BlackPi")
+            return 0
+        if self.cmd_sync() != 0:
+            print("Credential committed, but 'creds sync' failed, so 'creds get' does not "
+                  "serve it yet. Fix the sync and run 'creds sync'.", file=sys.stderr)
+            return 1
+        print("Synced: 'creds get' serves it on this host. Other hosts: distribute.sh")
         return 0
 
     def _print_bootstrap(self):
