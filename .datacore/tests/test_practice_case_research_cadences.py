@@ -25,8 +25,10 @@ sys.path.insert(0, str(VENTURES_LIB))
 pytestmark = pytest.mark.skipif(not (SPACE / "venture.yaml").exists(), reason="installation-specific: no 9-practice venture")
 
 # stream -> frequency; S8 is on demand and never scheduled
-STREAMS = {"S6": "daily", "S1": "weekly", "S2": "weekly", "S3": "weekly",
+# S10 is the lead desk (2026-10-16): daily, after the streams; it is not a stream in the streams file
+STREAMS = {"S6": "daily", "S10": "daily", "S1": "weekly", "S2": "weekly", "S3": "weekly",
            "S4": "weekly", "S5": "weekly", "S7": "monthly"}
+DESKS = {"S10"}
 
 
 def _template(stream):
@@ -75,7 +77,7 @@ def test_the_streams_file_lives_in_the_practice_and_points_nowhere_private():
     text = cfg_path.read_text(encoding="utf-8")
     cfg = yaml.safe_load(text)
     assert isinstance(cfg.get("contact_email"), str) and "@" in cfg["contact_email"], "Unpaywall needs one"
-    assert set(cfg["streams"]) == set(STREAMS) | {"S8"}
+    assert set(cfg["streams"]) == set(STREAMS) - DESKS | {"S8"}
     assert "0-personal" not in text, "the streams file travels; nothing in it may point into the personal space"
 
 
