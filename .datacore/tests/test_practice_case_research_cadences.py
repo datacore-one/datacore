@@ -26,8 +26,9 @@ pytestmark = pytest.mark.skipif(not (SPACE / "venture.yaml").exists(), reason="i
 
 # stream -> frequency; S8 is on demand and never scheduled
 # S10 is the lead desk (2026-10-16): daily, after the streams; it is not a stream in the streams file
-STREAMS = {"S6": "daily", "S10": "daily", "S1": "weekly", "S2": "weekly", "S3": "weekly",
-           "S4": "weekly", "S5": "weekly", "S7": "monthly"}
+# S4 and S7 daily since 2026-10-16 (free sources only; tris's ceiling raised to 20)
+STREAMS = {"S6": "daily", "S10": "daily", "S4": "daily", "S7": "daily", "S1": "weekly", "S2": "weekly",
+           "S3": "weekly", "S5": "weekly"}
 DESKS = {"S10"}
 
 

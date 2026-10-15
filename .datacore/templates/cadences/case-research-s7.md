@@ -1,7 +1,7 @@
 ---
 cadence: case-research-s7
 role: research
-frequency: monthly
+frequency: daily
 # The Practice's research cell, stream S7: literature (Europe PMC, OpenAlex) for the queries in the
 # venture's streams file, screened by Gemini Flash when the broker has its key.
 # Deterministic plumbing: no agent turn. Owner decision 2026-10-15.
