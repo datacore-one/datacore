@@ -155,5 +155,19 @@ ventures:
         target: null
 
 # Spaces with no venture entry are dormant by bandwidth, not broken:
-# 3-fds, 4-forge, 7-megaphone, 8-firm, 9-practice, 0-personal.
+# 3-fds, 4-forge, 7-megaphone, 8-firm, 0-personal.
 # They get the basic reading in venture_coverage.py and no demand for documents.
+  practice:
+    space: 9-practice
+    standing: personal
+    why: >-
+      The health practice. A venture so its research streams run as Tris's
+      script cadences (owner, 2026-10-15); not a business, no revenue.
+    metrics:
+      - id: actionable-changes-week
+        name: Research digest changes the owner acted on, per week
+        source: manual
+        value: null
+        as_of: null
+        target: null
+
