@@ -1,6 +1,6 @@
 ---
 name: structural-integrity
-description: Maintenance agent that audits and maintains Datacore folder structure. Detects misplaced files, missing companions, orphaned references, naming violations, and Git LFS issues. Can report findings or attempt fixes.
+description: Maintenance agent that audits and maintains Datacore folder structure. Detects misplaced files, missing companions, orphaned references, naming violations, and binaries committed to git. Can report findings or attempt fixes.
 model: sonnet
 tools:
   - Read
@@ -31,13 +31,13 @@ Engrams encode learned behavioral patterns that improve task quality.
 **Always reference when:**
 - Auditing folder structure
 - Validating companion files
-- Checking Git LFS requirements
+- Checking that no binaries are committed to git (Datacore does not use Git LFS)
 - Detecting naming violations
 
 **Key decisions this DIP informs:**
 - Expected folder hierarchy
 - Companion file requirements
-- LFS-worthy file formats
+- Binary file types that must stay gitignored
 - Naming conventions (kebab-case)
 
 ### Quick Reference
@@ -46,7 +46,7 @@ Engrams encode learned behavioral patterns that improve task quality.
 |----------|--------|
 | Expected structure? | 0-inbox/, 1-tracks/, 3-knowledge/, 4-archive/ |
 | Companion required? | .key, .pptx, .psd, .ai files |
-| LFS threshold? | Files > 10MB |
+| Binaries in git? | Never — gitignored, companion committed; no Git LFS |
 | Naming convention? | kebab-case, no spaces |
 
 ### Related DIPs
@@ -65,7 +65,7 @@ Engrams encode learned behavioral patterns that improve task quality.
 ### Integration Points
 
 - **DIP-0015** - Primary reference for structure (spec pending)
-- **Git LFS** - Validates large file tracking
+- **.gitignore** - Binaries stay out of git; only tracked binaries are reported
 - **Nightshift** - Weekly scheduled audits
 - **Pre-commit hook** - Root-level enforcement for main repo
 
@@ -158,7 +158,7 @@ for r in results:
 
 **Check modes:**
 - `quick_mode=True`: folder structure, companions, inbox freshness (fast, ~2-5 seconds)
-- `quick_mode=False`: adds naming, LFS, empty folders (thorough, ~30-60 seconds)
+- `quick_mode=False`: adds naming, binaries in git, empty folders (thorough, ~30-60 seconds)
 
 ## What You Detect
 
@@ -172,7 +172,7 @@ for r in results:
 | **Missing indexes** | Folder without _index.md | ℹ️ Info |
 | **Naming violations** | CamelCase instead of kebab-case | ℹ️ Info |
 | **Unprocessed inbox** | Items in 0-inbox/ older than 7 days | ⚠️ Warning |
-| **Git LFS issues** | Large file (>10MB) not tracked by LFS | ❌ Error |
+| **Binary in git** | Binary file tracked by git (ignored files not reported) | ❌ Error |
 | **Broken wiki-links** | Links to non-existent files | ⚠️ Warning |
 | **Empty folders** | Folder with no content | ℹ️ Info |
 | **Duplicate files** | Same file in multiple locations | ⚠️ Warning |
@@ -294,11 +294,11 @@ This prevents space content from being committed to the main system repo while a
 **By Format:**
 - `.key`, `.pptx` → Must have companion .md
 - `.psd`, `.ai` → Must have companion .md
-- `.mp4`, `.mov` → Must be Git LFS tracked
+- `.mp4`, `.mov`, archives → Must be gitignored (never committed)
 
 **By Location:**
 - PDFs in root → Should be in semantic folder
-- Large files anywhere → Must be LFS tracked
+- Binaries anywhere → Must not be tracked by git
 
 ### 3. Companion Validation
 
@@ -317,17 +317,16 @@ find . -name "*.key" -o -name "*.pptx" -o -name "*.psd"
 find 0-inbox/ -mtime +7 -type f
 ```
 
-### 5. Git LFS Tracking
+### 5. Binaries in Git
+
+Datacore does not use Git LFS. Report only binaries that git actually tracks — gitignored files are fine.
 
 ```bash
-# Check .gitattributes for required patterns
-cat .gitattributes | grep -E "\.(key|pptx|psd|mp4|mov)"
-
-# Find large untracked files
-find . -size +10M -type f | while read f; do
-  git check-attr filter -- "$f"
-done
+# Binaries tracked by git in this space repo
+git ls-files | grep -E '\.(key|pptx|psd|ai|mp4|mov|mp3|wav|m4a|zip|tar\.gz|graffle|dmg)$'
 ```
+
+Fix: `git rm --cached <file>` and add the pattern to `.gitignore`. Never `git lfs migrate`.
 
 ### 6. Naming Convention
 
@@ -367,7 +366,7 @@ Summary:
 
 Quick Issues:
 ❌ 1-teamspace/pitch-deck.key - Missing companion
-❌ 0-personal/video.mp4 - Not LFS tracked
+❌ 0-personal/video.mp4 - Binary tracked by git
 ⚠️ 0-personal/0-inbox/ - 3 items older than 7 days
 
 Run with 'report' mode for full details.
@@ -386,10 +385,10 @@ Spaces Scanned: 3
 
 ### ❌ Errors (1)
 
-1. **Git LFS Missing**
+1. **Binary in Git**
    - File: `1-active/attachments/video.mp4`
    - Size: 45MB
-   - Fix: Add to .gitattributes, run `git lfs migrate`
+   - Fix: `git rm --cached` the file and add `*.mp4` to `.gitignore`
 
 ### ⚠️ Warnings (2)
 
@@ -424,7 +423,7 @@ Spaces Scanned: 3
 
 ## Recommended Actions
 
-1. [HIGH] Fix Git LFS tracking for large files
+1. [HIGH] Untrack binaries committed to git
 2. [HIGH] Create missing companions for presentations
 3. [MED] Process stale inbox items
 4. [LOW] Create missing _index.md files
@@ -441,11 +440,8 @@ Attempting fixes...
 ✅ Created companion: 1-teamspace/pitch-deck.md
    (Populated with metadata, needs content review)
 
-✅ Updated .gitattributes:
-   Added: *.mp4 filter=lfs diff=lfs merge=lfs -text
-
 ⏳ Requires user action:
-   Run: git lfs migrate import --include="*.mp4"
+   Untrack binary: git rm --cached 0-personal/video.mp4 (and add *.mp4 to .gitignore)
 
 ✅ Created _index.md: 0-personal/1-active/projects/_index.md
 
@@ -549,7 +545,7 @@ This agent enforces:
 
 | DIP | What It Checks |
 |-----|----------------|
-| **DIP-0015** | Folder hierarchy, companions, LFS tracking (spec pending) |
+| **DIP-0015** | Folder hierarchy, companions, no binaries in git |
 | **DIP-0014** | Tag format compliance |
 | **DIP-0002** | Layer file presence (.base.md, etc.) |
 

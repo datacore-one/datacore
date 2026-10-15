@@ -6,7 +6,7 @@ Implements the checks defined in DIP-0015 (Semantic Organization):
 - Companion file requirements
 - Inbox freshness
 - Naming conventions
-- Git LFS tracking
+- Binaries committed to git (no Git LFS)
 - Wiki-link integrity
 
 Usage:
@@ -36,7 +36,7 @@ import time
 class Issue:
     """Single structural integrity issue."""
     severity: Literal['error', 'warning', 'info']
-    check_type: str  # folder_structure, companion, inbox, naming, lfs, wiki_link
+    check_type: str  # folder_structure, companion, inbox, naming, binary_in_git, wiki_link
     path: Path
     message: str
     fix_suggestion: Optional[str] = None
@@ -106,10 +106,33 @@ PERSONAL_ALLOWED_DIRS = {
 }
 
 TEAM_ALLOWED_DIRS = {
-    'org', 'journal', 'today', 'docs', 'contacts',
+    'org', 'journal', 'today', 'notes', 'content',
     '0-inbox', '1-tracks', '2-projects', '3-knowledge', '4-outbox', '4-archive',
     '.datacore', '.claude', '.git',
 }
+
+# The space pre-commit hook is what actually enforces the root allowlist, so
+# its ALLOWED_FILES are read from the hook rather than kept as a second copy
+# here (the two copies disagreed and this checker flagged files commits accept).
+SPACE_HOOK = Path(__file__).resolve().parent.parent / 'hooks' / 'space-pre-commit'
+
+
+def _hook_allowed_files() -> Set[str]:
+    try:
+        match = re.search(r'^ALLOWED_FILES="([^"]*)"', SPACE_HOOK.read_text(), re.M)
+    except OSError:
+        return set()
+    return set(match.group(1).split()) if match else set()
+
+
+def _grandfathered(space_path: Path) -> Set[str]:
+    """Entries listed in <space>/.datacore/structure-allow: known drift the hook tolerates."""
+    allow = space_path / '.datacore' / 'structure-allow'
+    try:
+        lines = allow.read_text().splitlines()
+    except OSError:
+        return set()
+    return {l.strip() for l in lines if l.strip() and not l.lstrip().startswith('#')}
 
 ALLOWED_ROOT_FILES = {
     '.gitignore', '.gitattributes', '_index.md',
@@ -133,18 +156,16 @@ ALLOWED_ROOT_FILES = {
     'hypotheses.yaml',
     'roadmap.yaml',
     '.DS_Store',
-}
+} | _hook_allowed_files()
 
 # Hints for where unexpected folders likely belong
 ROGUE_FOLDER_HINTS = {
     'contacts': '3-knowledge/reference/people/',
-    'content': '1-tracks/comms/ or 4-outbox/',
     'research': '1-tracks/research/',
     'health': '1-active/health-longevity/ (personal)',
     'coach': '1-active/ (personal)',
     'code': '2-code/ or 2-projects/',
     'inbox': '0-inbox/',
-    'notes': 'journal/ or 3-knowledge/pages/',
     'products': '1-tracks/product/ or 2-projects/',
     'sales': '1-tracks/comms/ or 1-tracks/ops/',
     'reports': '1-tracks/ops/ or 3-knowledge/',
@@ -165,16 +186,15 @@ COMPANION_REQUIRED_EXTENSIONS = {
     '.zip', '.tar', '.tar.gz', '.dmg',
 }
 
-# Extensions that should use Git LFS
-LFS_EXTENSIONS = {
-    '.mp4', '.mov', '.m4a', '.wav', '.mp3',
-    '.key', '.pptx',
-    '.psd', '.ai', '.sketch', '.graffle',
-    '.zip', '.tar.gz',
-}
+# Binary types that must never be committed (DIP-0015 as amended 2026-10-16:
+# no Git LFS, binaries stay gitignored). PDFs and images are an open question
+# in the DIP, so they are not listed here; nor are office documents (XLSX is
+# AI-readable in DIP-0015, the same tier as PDFs).
+BINARY_EXTENSIONS = COMPANION_REQUIRED_EXTENSIONS | {'.pptx'}
 
-# Size threshold for LFS (10MB)
-LFS_SIZE_THRESHOLD = 10 * 1024 * 1024
+# Directories never walked: dependency trees and build output. Nested git
+# repositories are also skipped (see _walk) — they are checked as their own repos.
+PRUNE_DIRS = {'node_modules', '.git', '__pycache__', '.venv', 'venv', 'target', 'dist', 'build'}
 
 # Inbox freshness threshold (days)
 INBOX_FRESHNESS_DAYS = 7
@@ -198,7 +218,7 @@ class StructuralIntegrityChecker:
 
     Args:
         space_path: Path to the space (e.g., ~/Data/0-personal/)
-        quick_mode: If True, only run fast checks (skip LFS, wiki-links)
+        quick_mode: If True, only run fast checks (skip binaries-in-git, wiki-links)
         companion_mode: 'index' (default) uses _media-index.md, 'strict' uses 1:1 companions
     """
 
@@ -210,6 +230,26 @@ class StructuralIntegrityChecker:
         self.issues: List[Issue] = []
         self.space_type = self._detect_space_type()
         self.checks_run = 0
+
+    def _walk(self, pattern: str = '*', root: Optional[Path] = None):
+        """rglob() that skips PRUNE_DIRS and nested git repositories.
+
+        A space can hold project checkouts with hundreds of thousands of
+        dependency files (5-plur: ~1M), which made a full scan time out.
+        """
+        import fnmatch
+        base = root or self.space_path
+        for dirpath, dirnames, filenames in os.walk(base):
+            current = Path(dirpath)
+            keep = []
+            for d in dirnames:
+                if d in PRUNE_DIRS or (current / d / '.git').exists():
+                    continue
+                keep.append(d)
+            dirnames[:] = keep
+            for name in keep + filenames:
+                if fnmatch.fnmatch(name, pattern):
+                    yield current / name
 
     def _detect_space_type(self) -> Literal['personal', 'team']:
         """Detect if this is a personal or team space."""
@@ -233,7 +273,7 @@ class StructuralIntegrityChecker:
         if not self.quick_mode:
             self._check_naming_conventions()
             self._check_tracked_derived_files()
-            self._check_git_lfs()
+            self._check_binaries_in_git()
             self._check_empty_folders()
             self._check_wiki_links()
             self._check_duplicates()
@@ -289,8 +329,18 @@ class StructuralIntegrityChecker:
 
         # Check ALL top-level entries against allowlist (DIP-0015)
         allowed_dirs = PERSONAL_ALLOWED_DIRS if self.space_type == 'personal' else TEAM_ALLOWED_DIRS
+        grandfathered = _grandfathered(self.space_path)
         for item in self.space_path.iterdir():
             name = item.name
+            if name in grandfathered and name not in allowed_dirs and name not in ALLOWED_ROOT_FILES:
+                self.issues.append(Issue(
+                    severity='info',
+                    check_type='folder_structure',
+                    path=item,
+                    message=f"Known drift, grandfathered in .datacore/structure-allow: {name}",
+                    fix_suggestion="Move to its DIP-0015 location, then delete the line from .datacore/structure-allow",
+                ))
+                continue
             if item.is_dir():
                 if name not in allowed_dirs and not name.startswith('.'):
                     hint = ROGUE_FOLDER_HINTS.get(name, 'an appropriate location under 1-tracks/ or 3-knowledge/')
@@ -331,7 +381,7 @@ class StructuralIntegrityChecker:
 
         # Find all files needing companions
         for ext in COMPANION_REQUIRED_EXTENSIONS:
-            for file_path in self.space_path.rglob(f'*{ext}'):
+            for file_path in self._walk(f'*{ext}'):
                 # Skip hidden folders, .datacore, and node_modules
                 parts = file_path.relative_to(self.space_path).parts
                 if any(p.startswith('.') or p == 'node_modules' for p in parts):
@@ -357,7 +407,7 @@ class StructuralIntegrityChecker:
         folders_with_media: Dict[Path, int] = {}
 
         for ext in COMPANION_REQUIRED_EXTENSIONS:
-            for file_path in self.space_path.rglob(f'*{ext}'):
+            for file_path in self._walk(f'*{ext}'):
                 # Skip hidden folders, .datacore, and node_modules
                 rel_path = file_path.relative_to(self.space_path)
                 if any(p.startswith('.') or p == 'node_modules' for p in rel_path.parts):
@@ -410,7 +460,7 @@ class StructuralIntegrityChecker:
         oldest_item = None
         oldest_age = 0
 
-        for item in inbox_path.rglob('*'):
+        for item in self._walk('*', root=inbox_path):
             if item.is_file() and not item.name.startswith('.'):
                 mtime = datetime.fromtimestamp(item.stat().st_mtime)
                 if mtime < threshold:
@@ -439,7 +489,7 @@ class StructuralIntegrityChecker:
 
         violations = []
 
-        for item in self.space_path.rglob('*'):
+        for item in self._walk('*'):
             # Skip hidden folders and node_modules
             rel_path = item.relative_to(self.space_path)
             if any(p.startswith('.') or p == 'node_modules' for p in rel_path.parts):
@@ -537,78 +587,45 @@ class StructuralIntegrityChecker:
             ))
 
     # -------------------------------------------------------------------------
-    # Check: Git LFS
+    # Check: Binaries in Git
     # -------------------------------------------------------------------------
 
-    def _check_git_lfs(self):
-        """Check that large files and LFS-required types are tracked."""
+    def _check_binaries_in_git(self):
+        """Flag binaries git tracks (DIP-0015 as amended: no Git LFS, binaries gitignored).
+
+        Asks git for its index, so gitignored and untracked files are never
+        reported -- the old size scan flagged ignored transcripts and build output.
+        """
         self.checks_run += 1
-
-        # Check if this is a git repo
-        git_dir = self.space_path / '.git'
-        if not git_dir.exists():
-            # Check parent (might be submodule of Data root)
-            parent_git = self.space_path.parent / '.git'
-            if not parent_git.exists():
-                return  # Not a git repo
-
-        # Get tracked LFS patterns from .gitattributes
-        gitattributes = self.space_path / '.gitattributes'
-        tracked_patterns: Set[str] = set()
-        if gitattributes.exists():
-            for line in gitattributes.read_text().splitlines():
-                if 'filter=lfs' in line:
-                    pattern = line.split()[0]
-                    tracked_patterns.add(pattern)
-
-        # Check for files that should be LFS-tracked
-        missing_lfs = []
-        for ext in LFS_EXTENSIONS:
-            pattern = f'*{ext}'
-            if pattern not in tracked_patterns:
-                # Check if any files with this extension exist
-                files = list(self.space_path.rglob(f'*{ext}'))
-                if files:
-                    missing_lfs.append((ext, len(files)))
-
-        if missing_lfs:
-            extensions = ', '.join(ext for ext, _ in missing_lfs)
-            self.issues.append(Issue(
-                severity='warning',
-                check_type='lfs',
-                path=gitattributes if gitattributes.exists() else self.space_path,
-                message=f"LFS not configured for: {extensions}",
-                fix_suggestion="Add patterns to .gitattributes: *{ext} filter=lfs diff=lfs merge=lfs -text",
-                auto_fixable=True,
-            ))
-
-        # Check for large files not in LFS
         try:
             result = subprocess.run(
-                ['find', str(self.space_path), '-type', 'f', '-size', '+10M'],
+                ['git', '-C', str(self.space_path), 'ls-files', '-z'],
                 capture_output=True, text=True, timeout=30
             )
-            large_files = [Path(f) for f in result.stdout.strip().split('\n') if f]
-
-            for file_path in large_files:
-                # Skip .git and hidden folders
-                rel_path = file_path.relative_to(self.space_path)
-                if any(p.startswith('.') for p in rel_path.parts):
-                    continue
-
-                # Check if tracked by LFS
-                ext = file_path.suffix.lower()
-                if f'*{ext}' not in tracked_patterns:
-                    size_mb = file_path.stat().st_size / (1024 * 1024)
-                    self.issues.append(Issue(
-                        severity='warning',
-                        check_type='lfs',
-                        path=file_path,
-                        message=f"Large file ({size_mb:.1f}MB) not tracked by LFS: {file_path.name}",
-                        fix_suggestion=f"Add *{ext} to .gitattributes or run: git lfs track '*{ext}'",
-                    ))
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass  # Skip if find command fails
+            if result.returncode:
+                raise OSError('repository index unavailable')
+        except (subprocess.TimeoutExpired, OSError):
+            self.issues.append(Issue(
+                severity='error', check_type='binary_in_git_unverified', path=self.space_path,
+                message='Could not read the git index, so binaries in git were not checked.',
+                auto_fixable=False,
+            ))
+            return
+        for rel in filter(None, result.stdout.split('\0')):
+            lower = rel.lower()
+            if not any(lower.endswith(ext) for ext in BINARY_EXTENSIONS):
+                continue
+            path = self.space_path / rel
+            if not path.is_file():
+                continue
+            self.issues.append(Issue(
+                severity='error',
+                check_type='binary_in_git',
+                path=path,
+                message=f"Binary committed to git: {rel}",
+                fix_suggestion=f"git rm --cached '{rel}' and add its pattern to .gitignore (no Git LFS)",
+                auto_fixable=False,
+            ))
 
     # -------------------------------------------------------------------------
     # Check: Empty Folders
@@ -620,7 +637,7 @@ class StructuralIntegrityChecker:
 
         empty_folders = []
 
-        for folder in self.space_path.rglob('*'):
+        for folder in self._walk('*'):
             if not folder.is_dir():
                 continue
 
@@ -665,7 +682,7 @@ class StructuralIntegrityChecker:
 
         # Collect all valid link targets (markdown files without extension)
         valid_targets: Set[str] = set()
-        for md_file in self.space_path.rglob('*.md'):
+        for md_file in self._walk('*.md'):
             # Skip hidden folders and node_modules
             rel_path = md_file.relative_to(self.space_path)
             if any(p.startswith('.') or p == 'node_modules' for p in rel_path.parts):
@@ -679,7 +696,7 @@ class StructuralIntegrityChecker:
         wiki_link_pattern = re.compile(r'\[\[([^\]|]+)(?:\|[^\]]+)?\]\]')
         broken_links = []
 
-        for md_file in self.space_path.rglob('*.md'):
+        for md_file in self._walk('*.md'):
             rel_path = md_file.relative_to(self.space_path)
             if any(p.startswith('.') or p == 'node_modules' for p in rel_path.parts):
                 continue
@@ -728,7 +745,7 @@ class StructuralIntegrityChecker:
         hash_to_files: Dict[str, List[Path]] = {}
         MAX_SIZE = 10 * 1024 * 1024  # 10MB limit for hashing
 
-        for file_path in self.space_path.rglob('*'):
+        for file_path in self._walk('*'):
             if not file_path.is_file():
                 continue
 
@@ -825,7 +842,6 @@ class StructuralIntegrityFixer:
             'companion': self._fix_missing_companion,
             'media_index': self._fix_missing_media_index,
             'naming': self._fix_naming,
-            'lfs': self._fix_lfs,
             'empty_folder': self._fix_empty_folder,
         }
 
@@ -997,45 +1013,6 @@ TODO: Add summary of {source_name}
         result = re.sub(r'-+', '-', result.lower()).strip('-')
         return f"{result}{ext.lower()}"
 
-    def _fix_lfs(self, issue: Issue) -> FixResult:
-        """Add LFS tracking for file type."""
-        # Extract extension from message
-        if 'LFS not configured for:' in issue.message:
-            extensions = issue.message.split('LFS not configured for:')[1].strip()
-        else:
-            return FixResult(
-                issue=issue,
-                success=False,
-                action_taken="Cannot determine extension",
-                error="Could not parse extension from message"
-            )
-
-        gitattributes = self.space_path / '.gitattributes'
-
-        if self.dry_run:
-            return FixResult(
-                issue=issue,
-                success=True,
-                action_taken=f"Would add LFS tracking for: {extensions}"
-            )
-
-        # Append to .gitattributes
-        lines_to_add = []
-        for ext in extensions.split(','):
-            ext = ext.strip()
-            lines_to_add.append(f"*{ext} filter=lfs diff=lfs merge=lfs -text")
-
-        existing = gitattributes.read_text() if gitattributes.exists() else ""
-        if not existing.endswith('\n'):
-            existing += '\n'
-
-        gitattributes.write_text(existing + '\n'.join(lines_to_add) + '\n')
-        return FixResult(
-            issue=issue,
-            success=True,
-            action_taken=f"Added LFS tracking for: {extensions}"
-        )
-
     def _fix_empty_folder(self, issue: Issue) -> FixResult:
         """Remove empty folder."""
         if self.dry_run:
@@ -1100,10 +1077,12 @@ def format_summary(result: AuditResult) -> str:
         f"Space: {result.space} ({result.space_type})",
     ]
 
-    if result.passed:
-        lines.append(f"Status: ✅ PASSED ({result.checks_run} checks in {result.duration_ms}ms)")
-    else:
+    if not result.passed:
         lines.append(f"Status: ❌ ISSUES FOUND")
+    elif result.warnings:
+        lines.append(f"Status: ⚠️ WARNINGS FOUND ({result.checks_run} checks in {result.duration_ms}ms)")
+    else:
+        lines.append(f"Status: ✅ PASSED ({result.checks_run} checks in {result.duration_ms}ms)")
 
     lines.append(f"Errors: {len(result.errors)} | Warnings: {len(result.warnings)} | Info: {len(result.infos)}")
 

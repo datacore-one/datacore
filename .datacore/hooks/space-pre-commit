@@ -17,7 +17,10 @@
 #
 # Emergency bypass: git commit --no-verify
 
-ALLOWED_DIRS="org journal today 0-inbox 1-tracks 2-projects 3-knowledge 4-outbox 4-archive notes .datacore .claude .git .github"
+ALLOWED_DIRS="org journal today 0-inbox 1-tracks 2-projects 3-knowledge 4-outbox 4-archive notes content .datacore .claude .git .github"
+# DIP-0015 personal space layout: 1-active/ (focus areas) and 2-code/ (projects).
+# The DIP is the source of truth; team spaces do not get these.
+PERSONAL_DIRS="1-active 2-code"
 ALLOWED_FILES=".gitignore .gitattributes .gitmodules _index.md README.md CLAUDE.md CLAUDE.base.md CLAUDE.space.md CLAUDE.org.md CLAUDE.team.md CLAUDE.local.md SCAFFOLDING.md SCAFFOLDING.base.md SCAFFOLDING.space.md SCAFFOLDING.local.md venture.yaml hypotheses.yaml roadmap.yaml mail.yaml goals.yaml VISION.md CEO_BOOTSTRAP.md dashboard.md strategy.yaml .plur.yaml .DS_Store"
 
 # Per-space grandfathered entries (legacy dirs/files, one per line)
@@ -26,6 +29,9 @@ extra_allow=""
 if [ -n "$repo_root" ] && [ -f "$repo_root/.datacore/structure-allow" ]; then
   extra_allow=$(grep -v '^#' "$repo_root/.datacore/structure-allow" 2>/dev/null)
 fi
+case "$(basename "${repo_root:-.}")" in
+  0-*) ALLOWED_DIRS="$ALLOWED_DIRS $PERSONAL_DIRS" ;;
+esac
 
 # quotePath=false: git quotes a path with a non-ASCII byte ("3-knowledge/…/José-Andrés.md")
 # and the leading quote then reads as an unknown root directory. Four CRM

@@ -22,12 +22,12 @@ recall:
 - Validating folder hierarchy
 - Checking companion file requirements
 - Detecting naming violations
-- Auditing Git LFS tracking
+- Checking that no binaries are committed to git (Datacore does not use Git LFS)
 
 **Key decisions this DIP informs:**
 - Expected folder structure (0-inbox/, 1-tracks/, etc.)
 - Companion requirements for non-readable files
-- LFS threshold (>10MB)
+- Binaries stay gitignored (no Git LFS)
 - Naming convention (kebab-case)
 
 ### Quick Reference
@@ -36,7 +36,7 @@ recall:
 |----------|--------|
 | Expected structure? | 0-inbox/, 1-tracks/, 3-knowledge/, 4-archive/ |
 | Companion required? | .key, .pptx, .psd, .ai files |
-| LFS threshold? | Files > 10MB |
+| Binaries in git? | Never — gitignored, companion committed |
 | What DIPs govern this? | DIP-0015 (Semantic Org), DIP-0002 (Layers) |
 
 ### Agents This Command Invokes
@@ -75,7 +75,7 @@ Audit and maintain the organizational structure of Datacore.
 | Missing _index.md | ℹ️ Info |
 | Naming violations | ℹ️ Info |
 | Unprocessed inbox (>7 days) | ⚠️ Warning |
-| Git LFS issues | ❌ Error |
+| Binary tracked by git | ❌ Error |
 | Broken wiki-links | ⚠️ Warning |
 
 ## Examples

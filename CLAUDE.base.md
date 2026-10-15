@@ -84,7 +84,7 @@ GitHub Issues are source of truth. `org/` routes AI work only. `1-tracks/` organ
 
 ### Commands & Agents
 
-100+ agents and 40+ commands registered in `.datacore/registry/`. Don't memorize — look up:
+120+ agents and 110+ commands registered in `.datacore/registry/`. Don't memorize — look up:
 - `plur_recall_hybrid` — search by name or purpose
 - `datacore.modules.info <name>` — module capabilities, agents, commands
 - `.datacore/registry/agents.yaml` / `commands.yaml` — full registries
@@ -248,11 +248,13 @@ Detection: `python3 .datacore/lib/focus_mode.py detect`
 - Push only to a branch you made or one the owner named. Never force-push, rebase or otherwise rewrite shared history.
 - **A git problem is reported, not tidied.** When a pull, merge or push is blocked by changes you did not make, stop and say so. Never stash, `--autostash`, `reset`, `checkout <path>`, `restore` or `clean` to get past it, and never `stash drop`: those hide or discard another writer's work — on 2026-09-30 an automated job stashed five ledger events that way.
 
-> Detailed conventions are in engram memory (DIP pack, 747 engrams). Call `plur_recall_hybrid` for specifics.
+> Detailed conventions are in engram memory (DIP pack). Call `plur_recall_hybrid` for specifics.
 
 ## System Patterns (DIPs)
 
-Datacore Improvement Proposals define system patterns. 30+ DIPs cover: contribution model, layered context, tag taxonomy, agent registry, knowledge management, GTD workflow, nightshift execution, learning architecture, reliability, egress enforcement. Located in `.datacore/dips/` (own repo). Governance note: `Implemented`/`Accepted` status requires owner ratification — auto-generated DIPs stay `Draft` until reviewed.
+**DIPs are the source of truth.** When CLAUDE.md, engrams, hooks, checkers or command files disagree with a DIP, or a convention is in doubt, follow the DIP and fix the other side. If the DIP itself is wrong, propose an amendment for the owner to ratify — never diverge silently.
+
+Datacore Improvement Proposals define system patterns. 45+ DIPs cover: contribution model, layered context, tag taxonomy, agent registry, knowledge management, GTD workflow, nightshift execution, learning architecture, reliability, egress enforcement. Located in `.datacore/dips/` (own repo). Governance note: `Implemented`/`Accepted` status requires owner ratification — auto-generated DIPs stay `Draft` until reviewed.
 
 All DIP content is in engram memory (dips-v1 pack). Call `plur_recall_hybrid` for quick lookups.
 
@@ -288,7 +290,7 @@ When the user corrects a recalled fact: call `plur_learn` immediately, then `plu
   same turn, before you reply; the reply summarises it and names the path. A report
   that exists only in the chat is lost. **Where:** the space it is about, in
   `0-personal/content/reports/YYYY-MM-DD-<topic>-report.md` (GTD DIP), or in a team
-  space `<space>/1-tracks/<track>/reports/` (its structure check refuses `content/`); a
+  space `<space>/1-tracks/<track>/reports/` (`content/` there is for generated media, DIP-0015); a
   recurring report gets a subfolder (`content/reports/github-triage/`). Never `3-knowledge/pages/`
   (lasting reference only) and never a top-level `reports/`. Overnight agent output
   still lands in `0-inbox/` first (nightshift DIP).
