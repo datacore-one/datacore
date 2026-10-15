@@ -12,8 +12,14 @@ Per promise: right as written / change it (say how in the note) / not needed.
 Per capability, one extra row: is anything missing? Saving downloads
 <slug>.decisions.json; nothing is applied from here.
 
+Another product's promises work the same way: `--file` names one promises
+file, `--product` the product the page speaks of, `decide:` on a promise is
+shown as the open question, and `--scoreboard` (the JSON of the evals runner)
+puts each promise's eval result beside it.
+
 Usage:
     promise_board.py --folder 2-datacore/1-tracks/dev/datacore-upgrade
+    promise_board.py --file evals/promises.yaml --product PLUR --slug plur-promises --scoreboard board.json
 """
 from __future__ import annotations
 
@@ -30,11 +36,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from eval_catalog_board import write_board  # noqa: E402
 
 STATUS = {"holds": "Works today", "broken": "Broken today", "unknown": "Not checked yet"}
-OPTIONS = [
-    {"value": "right", "label": "Right", "consequence": "Evals are written behind it as it stands."},
-    {"value": "change", "label": "Change it", "consequence": "Say how in the note; evals follow your wording."},
-    {"value": "drop", "label": "Not needed", "consequence": "Datacore will not promise this."},
-]
+EVAL = {"green": "Eval passes today", "red": "Eval fails today", "no-eval": "No eval yet"}
+
+
+def options(product: str) -> list[dict]:
+    return [
+        {"value": "right", "label": "Right", "consequence": "Evals are written behind it as it stands."},
+        {"value": "change", "label": "Change it", "consequence": "Say how in the note; evals follow your wording."},
+        {"value": "drop", "label": "Not needed", "consequence": f"{product} will not promise this."},
+    ]
 MISSING = [
     {"value": "complete", "label": "Nothing missing", "consequence": "This capability's list is complete."},
     {"value": "add", "label": "Add something", "consequence": "Write the missing promise in the note."},
@@ -43,12 +53,21 @@ MISSING = [
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--folder", required=True, type=Path, help="folder holding promises/*.yaml")
-    ap.add_argument("--slug", default="datacore-promises")
-    ap.add_argument("--title", default="What Datacore promises")
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--folder", type=Path, help="folder holding promises/*.yaml")
+    src.add_argument("--file", type=Path, help="one promises file")
+    ap.add_argument("--product", default="Datacore")
+    ap.add_argument("--slug", default=None)
+    ap.add_argument("--title", default=None)
+    ap.add_argument("--scoreboard", type=Path, default=None, help="evals runner JSON (run.py --json)")
     args = ap.parse_args()
+    product = args.product
+    args.slug = args.slug or f"{product.lower()}-promises"
+    args.title = args.title or f"What {product} promises"
+    board = json.loads(args.scoreboard.read_text()) if args.scoreboard else {}
+    results, details = board.get("promises") or {}, board.get("details") or {}
 
-    files = sorted((args.folder / "promises").glob("*.yaml"))
+    files = [args.file] if args.file else sorted((args.folder / "promises").glob("*.yaml"))
     sections, counts = [], {"holds": 0, "broken": 0, "unknown": 0}
     for f in files:
         for cap in (yaml.safe_load(f.read_text(encoding="utf-8")) or {}).get("capabilities") or []:
@@ -56,12 +75,19 @@ def main() -> int:
             for p in cap.get("promises") or []:
                 today = str(p.get("today") or "unknown")
                 counts[today] = counts.get(today, 0) + 1
+                pid = str(p["id"])
+                context = [str(p.get("question") or p.get("decide") or "").strip()]
+                if pid in results:
+                    seen = str(details.get(pid) or "").strip().splitlines()
+                    context.append(EVAL.get(results[pid], results[pid]) + (f": {seen[0][:300]}" if seen else "."))
+                if p.get("evidence"):
+                    context.append(f"Evidence: {str(p['evidence']).strip()}")
                 rows.append({
-                    "id": str(p["id"]),
+                    "id": pid,
                     "area": STATUS.get(today, today),
                     "title": str(p["promise"]).strip(),
-                    "context": str(p.get("question") or ""),
-                    "options": OPTIONS,
+                    "context": " ".join(c for c in context if c) if (results or args.file) else context[0],
+                    "options": options(product),
                     "suggested": "right",
                 })
             order = {"Broken today": 0, "Not checked yet": 1, "Works today": 2}
@@ -83,7 +109,7 @@ def main() -> int:
         "slug": args.slug, "title": args.title,
         "eyebrow": "Evals first · step 1 of 3",
         "h1": args.title,
-        "lede": ("Everything Datacore should always do for you, written as promises. Mark each one "
+        "lede": (f"Everything {product} should always do for you, written as promises. Mark each one "
                  "right, change it, or drop it, and add what is missing. Every promise you keep gets "
                  "tests behind it, and this same list becomes the daily check that nothing regressed."),
         "asOf": datetime.now().strftime("%Y-%m-%d %H:%M"),
