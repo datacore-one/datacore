@@ -545,16 +545,15 @@ def _data_root() -> Path:
 
 
 def _registry(root: Path) -> dict:
-    """The repository registry: the root's own copy, else the one that ships
-    with this code tree.
+    """The repository registry: the root's own copy, else the copy beside this
+    code tree.
 
-    A host whose code lives outside its data root (hermes: the runner clone
-    holds the code, `~/Data` there is a plain directory of space clones) has no
-    `.datacore/registry` under `--root`. Until 2026-09-06 `sync` globbed the
-    spaces and classified each against the code tree's registry; the
-    registry-driven sync that replaced it read `root/.datacore/registry` only
-    and raised FileNotFoundError twice a day on hermes (datacore-fleet-sync,
-    from 18:10 UTC 2026-09-06) — a traceback where an outcome belonged."""
+    `repositories.yaml` is installation-private and gitignored; the tracked
+    `repositories.yaml.example` is only a template and is never read here. A
+    host whose code lives outside its data root (a separate runner clone, with
+    the data root a plain directory of space clones) has no
+    `.datacore/registry` under `--root`, so the copy beside the code is the
+    fallback rather than a traceback."""
     import yaml
 
     class UniqueKeysLoader(yaml.SafeLoader):

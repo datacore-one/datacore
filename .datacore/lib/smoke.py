@@ -5,7 +5,8 @@ Asserts INVARIANTS of the most likely end-to-end flows — existence,
 freshness, bounds, structure — never exact content, so non-deterministic
 AI output passes while a broken pipeline fails.
 
-Checks (see .datacore/registry/deliverables.yaml):
+Checks (see .datacore/registry/deliverables.yaml — gitignored; the tracked
+template is deliverables.yaml.example):
   journal          today's journal exists, has the briefing, is >5k chars
   journal_opened   the consumption marker — it was actually shown
   repos_health     space repos: not behind, ZERO stashes, tree not exploding

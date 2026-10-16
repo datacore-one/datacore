@@ -1,0 +1,56 @@
+# Ventures, their standing, and the few numbers that say whether they work.
+#
+# THIS IS THE TEMPLATE. The real file is `ventures.yaml`, which is gitignored
+# and never leaves the installation: it names your ventures, how you rank them
+# and their commercial numbers. Copy this file to `ventures.yaml` and fill it in
+# locally. Weekly planning reads it to show neglect, which a task list cannot:
+# neglect is an absence, and a list only holds what is present.
+#
+# Keep it SMALL: three or four numbers per venture. `source: manual` means a
+# human writes it; a manual number with a stale `as_of` is a guess. Leave a
+# value null rather than inventing a baseline.
+
+updated: 2026-01-01
+
+tiers:
+  primary:   [acme]
+  secondary: [widgets]
+  paused:    [sideproject]
+
+ventures:
+
+  acme:
+    space: 1-acme
+    standing: primary
+    why: The main bet. One sentence on why it matters.
+    metrics:
+      - id: weekly-active-users
+        name: Weekly active users
+        source: manual
+        value: null
+        as_of: null
+        target: null
+      - id: revenue-contracted
+        name: Contracted revenue
+        source: manual
+        value: null
+        as_of: null
+        target: null
+
+  widgets:
+    space: 2-widgets
+    standing: secondary
+    why: A smaller line that funds itself.
+    metrics:
+      - id: monthly-sales
+        name: Sales per month
+        source: manual
+        value: null
+        as_of: null
+        target: null
+
+  sideproject:
+    space: 3-sideproject
+    standing: paused
+    why: Paused, not neglected. Basic reading only.
+    metrics: []

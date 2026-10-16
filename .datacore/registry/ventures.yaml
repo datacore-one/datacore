@@ -41,16 +41,48 @@ ventures:
     why: The memory-layer bet. Enterprise is the revenue path.
     metrics:
       - id: npm-downloads-month
-        name: npm downloads per month (@plur-ai/mcp + cli)
-        source: "npm view @plur-ai/mcp"
-        value: 8617
-        as_of: 2026-09-03
+        name: npm downloads per month (@plur-ai/mcp + @plur-ai/cli)
+        source: >-
+          python3 -c 'import json, urllib.request; packages = ("@plur-ai/mcp", "@plur-ai/cli"); print(sum(json.load(urllib.request.urlopen("https://api.npmjs.org/downloads/point/last-month/" + p))["downloads"] for p in packages))'
+        value: 5315
+        as_of: 2026-09-30
+        target: null
+      - id: npm-downloads-month-mcp
+        name: npm downloads per month (@plur-ai/mcp)
+        source: "https://api.npmjs.org/downloads/point/last-month/@plur-ai/mcp"
+        value: 3539
+        as_of: 2026-09-30
+        target: null
+      - id: npm-downloads-month-cli
+        name: npm downloads per month (@plur-ai/cli)
+        source: "https://api.npmjs.org/downloads/point/last-month/@plur-ai/cli"
+        value: 1776
+        as_of: 2026-09-30
+        target: null
+      - id: npm-downloads-month-core
+        name: npm downloads per month (@plur-ai/core)
+        source: "https://api.npmjs.org/downloads/point/last-month/@plur-ai/core"
+        value: 3914
+        as_of: 2026-09-30
+        target: null
+      - id: npm-downloads-month-opencode
+        name: npm downloads per month (@plur-ai/opencode)
+        source: "https://api.npmjs.org/downloads/point/last-month/@plur-ai/opencode"
+        value: 344
+        as_of: 2026-09-30
+        target: null
+      - id: npm-downloads-month-total
+        name: npm downloads per month total (@plur-ai/mcp + @plur-ai/cli + @plur-ai/core + @plur-ai/opencode)
+        source: >-
+          python3 -c 'import json, urllib.request; packages = ("@plur-ai/mcp", "@plur-ai/cli", "@plur-ai/core", "@plur-ai/opencode"); print(sum(json.load(urllib.request.urlopen("https://api.npmjs.org/downloads/point/last-month/" + p))["downloads"] for p in packages))'
+        value: 9573
+        as_of: 2026-09-30
         target: null
       - id: github-stars
         name: GitHub stars (plur-ai/plur)
         source: "gh api repos/plur-ai/plur --jq .stargazers_count"
-        value: 245
-        as_of: 2026-09-03
+        value: 295
+        as_of: 2026-09-30
         target: null
       - id: enterprise-revenue-contracted
         name: Contracted enterprise revenue, EUR
@@ -154,9 +186,6 @@ ventures:
         as_of: null
         target: null
 
-# Spaces with no venture entry are dormant by bandwidth, not broken:
-# 3-fds, 4-forge, 7-megaphone, 8-firm, 0-personal.
-# They get the basic reading in venture_coverage.py and no demand for documents.
   practice:
     space: 9-practice
     standing: personal
@@ -171,3 +200,6 @@ ventures:
         as_of: null
         target: null
 
+# Spaces with no venture entry are dormant by bandwidth, not broken:
+# 3-fds, 4-forge, 7-megaphone, 8-firm, 0-personal.
+# They get the basic reading in venture_coverage.py and no demand for documents.

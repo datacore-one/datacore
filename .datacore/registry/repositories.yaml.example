@@ -1,0 +1,51 @@
+# Repository registry: every git checkout under the data root that the fleet
+# sync (ledger_transport.py, git_fleet_sync.py) and v2_verify.py manage.
+#
+# THIS IS THE TEMPLATE. The real file is `repositories.yaml`, which is
+# gitignored and never leaves the installation: it maps each of your spaces to
+# its private repository and the git host that serves it. Copy this file to
+# `repositories.yaml` and fill it in locally.
+#
+# With no `repositories.yaml` at all the registry is empty: spaces that carry a
+# space marker are still classified by the marker, and anything neither
+# registered nor marked is refused by name (ledger_transport._registry).
+#
+# Keys are paths relative to the data root (`<root>` is the root repo itself).
+# category: knowledge | agent-personal | code
+# host:     github | gitea (or any name your transport config knows)
+repositories:
+  <root>:
+    category: code
+    host: github
+    transport: git
+    repo: datacore
+  .datacore/dips:
+    category: code
+    host: github
+    transport: git
+    repo: datacore-dips
+  .datacore/modules/example-module:
+    category: code
+    host: github
+    transport: git
+    repo: datacore-example-module
+  0-personal:
+    category: knowledge
+    host: gitea
+    transport: git
+    repo: 0-personal
+  1-team:
+    category: knowledge
+    host: github
+    transport: git
+    repo: team-space
+  2-venture:
+    category: knowledge
+    host: gitea
+    transport: git
+    repo: 2-venture
+  agent-space:
+    category: agent-personal
+    host: github
+    transport: git
+    repo: agent-space

@@ -1,0 +1,33 @@
+# DIP-0033 §1 — Deliverable registry.
+# Every user-facing deliverable declares its producer, where the principal
+# consumes it, a deadline, the verifier that checks the OUTCOME there, and
+# the alert path a miss takes. A deliverable without a verifier is a spec
+# violation.
+#
+# THIS IS THE TEMPLATE. The real file is `deliverables.yaml`, which is
+# gitignored: it names your machines, their schedules and what each one
+# delivers. Copy this file to `deliverables.yaml` and fill it in locally.
+# Role names below: workstation (where you read), server (the chief-of-staff
+# host), executor (the overnight host).
+
+deliverables:
+  - id: morning-journal
+    producer: executor overnight run (03:15Z) + journal publish step
+    consumption_point: workstation — journal open in editor
+    deadline: "08:35 local"
+    verifier: .datacore/lib/morning_journal.py (08:30 local)
+    alert: desktop notification + non-zero exit
+
+  - id: morning-briefing-message
+    producer: server morning briefing job
+    consumption_point: chat message
+    deadline: "08:00Z (server verifier)"
+    verifier: server morning verifier
+    alert: chat alert
+
+  - id: overnight-task-results
+    producer: executor overnight batch → space repos + journals
+    consumption_point: workstation — review queue in the briefing
+    deadline: "smoke run 08:40 local"
+    verifier: .datacore/lib/smoke.py (repos_health, failed_units)
+    alert: desktop notification
