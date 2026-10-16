@@ -413,3 +413,7 @@ skills-lock.json
 # core repo on the overnight host refused two overnight runs on 2026-09-30.
 # Backups belong in ~/.datacore/state/config-backups/; this rule is the net.
 *.bak-*
+
+# Python tool caches
+.pytest_cache/
+.ruff_cache/

@@ -145,3 +145,51 @@ def test_hook_refuses_personal_folders_in_team_space(tmp_path):
     repo.mkdir()
     _git(repo, 'init', '-q')
     assert _hook(repo, ['1-active/x.md']).returncode != 0
+
+
+def test_gitignored_entries_at_space_root_are_not_drift(tmp_path):
+    """Files git ignores (an agent workspace, caches) are not content drift."""
+    space = _space(tmp_path, '2-team')
+    (space / '.gitignore').write_text('SOUL.md\nagent-cache/\n')
+    (space / 'SOUL.md').write_text('x')
+    (space / 'agent-cache').mkdir()
+    (space / 'STRAY.md').write_text('x')
+    checker = StructuralIntegrityChecker(space)
+    checker._check_folder_structure()
+    flagged = {i.path.name for i in checker.issues if i.severity == 'warning'}
+    assert 'SOUL.md' not in flagged
+    assert 'agent-cache' not in flagged
+    assert 'STRAY.md' in flagged, 'untracked, unignored files are still drift'
+
+
+def test_gitignored_entries_at_datacore_root_are_not_drift(tmp_path):
+    from structural_integrity import check_root_directory
+    root = tmp_path / 'Data'
+    root.mkdir()
+    _git(root, 'init', '-q')
+    (root / '.gitignore').write_text('.cursor/\nnode_modules/\n')
+    for d in ('.cursor', 'node_modules', 'stray-dir', '.ruff_cache'):
+        (root / d).mkdir()
+    result = check_root_directory(root)
+    flagged = {i.path.name for i in result.issues}
+    assert '.cursor' not in flagged
+    assert 'node_modules' not in flagged
+    assert 'stray-dir' in flagged
+    assert '.ruff_cache' in flagged, 'an unignored cache dir is real root drift'
+
+
+def test_root_check_reads_the_shared_root_allowlist(tmp_path):
+    """The root hook and CI share .datacore/config/root-allowlist.txt; the checker must too."""
+    from structural_integrity import check_root_directory
+    root = tmp_path / 'Data'
+    (root / '.datacore' / 'config').mkdir(parents=True)
+    _git(root, 'init', '-q')
+    (root / '.datacore' / 'config' / 'root-allowlist.txt').write_text('# policy docs\nPOLICY\\.md\n')
+    (root / 'POLICY.md').write_text('x')
+    (root / 'STRAY.md').write_text('x')
+    (root / '.plur').mkdir()
+    result = check_root_directory(root)
+    flagged = {i.path.name for i in result.issues}
+    assert 'POLICY.md' not in flagged
+    assert '.plur' not in flagged, 'the root hook allows .plur/'
+    assert 'STRAY.md' in flagged

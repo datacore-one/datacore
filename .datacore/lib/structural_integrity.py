@@ -134,6 +134,19 @@ def _grandfathered(space_path: Path) -> Set[str]:
         return set()
     return {l.strip() for l in lines if l.strip() and not l.lstrip().startswith('#')}
 
+
+def _git_ignored(repo: Path, names) -> Set[str]:
+    """Names of top-level entries git ignores in repo: tool state, not content drift."""
+    names = list(names)
+    if not names:
+        return set()
+    try:
+        out = subprocess.run(['git', '-C', str(repo), 'check-ignore', '--stdin'],
+                             input='\n'.join(names), capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return {l.strip().rstrip('/') for l in out.stdout.splitlines() if l.strip()}
+
 ALLOWED_ROOT_FILES = {
     '.gitignore', '.gitattributes', '_index.md',
     'CLAUDE.md', 'CLAUDE.base.md', 'CLAUDE.org.md',
@@ -330,8 +343,12 @@ class StructuralIntegrityChecker:
         # Check ALL top-level entries against allowlist (DIP-0015)
         allowed_dirs = PERSONAL_ALLOWED_DIRS if self.space_type == 'personal' else TEAM_ALLOWED_DIRS
         grandfathered = _grandfathered(self.space_path)
-        for item in self.space_path.iterdir():
+        entries = list(self.space_path.iterdir())
+        ignored = _git_ignored(self.space_path, [e.name for e in entries])
+        for item in entries:
             name = item.name
+            if name in ignored:
+                continue
             if name in grandfathered and name not in allowed_dirs and name not in ALLOWED_ROOT_FILES:
                 self.issues.append(Issue(
                     severity='info',
@@ -1186,10 +1203,22 @@ def check_root_directory(data_root: Path) -> AuditResult:
     start_time = time.time()
     issues = []
     # Root should only contain numbered space dirs and system files/dirs
-    root_allowed_dirs = {'.datacore', '.git', '.claude', '.lfs-cache', '.obsidian', '.github', '.superpowers', '.worktrees', 'docs', 'dips'}
+    # .plur matches ALLOWED_ROOT_DIRS in .datacore/hooks/pre-commit
+    root_allowed_dirs = {'.datacore', '.git', '.claude', '.lfs-cache', '.obsidian', '.github', '.plur', '.superpowers', '.worktrees', 'docs', 'dips'}
+    # The root hook and CI share this allowlist of anchored regex fragments
+    try:
+        fragments = [l.strip() for l in (data_root / '.datacore' / 'config' / 'root-allowlist.txt').read_text().splitlines()
+                     if l.strip() and not l.lstrip().startswith('#')]
+        shared_allowlist = re.compile('^(' + '|'.join(fragments) + ')$') if fragments else None
+    except (OSError, re.error):
+        shared_allowlist = None
     root_allowed_files = {'.gitignore', '.gitattributes', '.DS_Store', 'CLAUDE.md', 'CLAUDE.base.md', 'CLAUDE.org.md', 'CLAUDE.local.md', 'install.yaml', 'install.yaml.example', 'install.yaml.pm.example', 'datacore.lock.yaml', 'sync', 'README.md', 'LICENSE', 'CODEOWNERS', 'CHANGELOG.md', 'CONTRIBUTING.md', 'CODE_OF_CONDUCT.md', 'GETTING_STARTED.md', 'INSTALL.md', 'ROADMAP.md', 'SECURITY.md'}
-    for item in sorted(data_root.iterdir()):
+    entries = sorted(data_root.iterdir())
+    ignored = _git_ignored(data_root, [e.name for e in entries])
+    for item in entries:
         name = item.name
+        if name in ignored:
+            continue
         if name.startswith('.') and name in root_allowed_dirs:
             continue
         if item.is_dir():
@@ -1199,7 +1228,7 @@ def check_root_directory(data_root: Path) -> AuditResult:
                 continue
             issues.append(Issue(severity='warning', check_type='folder_structure', path=item, message=f"Unexpected directory at Datacore root: {name}/ — root should only contain numbered spaces and system dirs", fix_suggestion=f"Move {name}/ into the appropriate space or remove"))
         elif item.is_file():
-            if name in root_allowed_files:
+            if name in root_allowed_files or (shared_allowlist and shared_allowlist.match(name)):
                 continue
             if name.startswith('.'):
                 continue
