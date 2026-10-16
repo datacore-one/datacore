@@ -59,13 +59,7 @@ Datacore combines established methodologies with AI augmentation:
 
 ## Spaces
 
-| Space | Purpose | Key Projects |
-|-------|---------|-------------|
-| **0-personal** | GTD, PKM, personal projects | Trading, health tracking |
-| **1-datafund** | Fair data economy, data tokenization | Verity (data marketplace), Santorio, Dubai pilot |
-| **2-datacore** | AI second brain system development | datacore-mcp, org-workspace, datacore-bench |
-| **3-fds** | Fair Data Society — data sovereignty building blocks | Fairdrop, FDS-ID, DataEscrow (FDS MCP) |
-| **4-forge** | Autonomous digital product business | Etsy products, AI-generated goods |
+Spaces are numbered folders at the root: `0-personal/` for one person's GTD and PKM, and `[N]-[name]/` team or venture spaces. The list of this installation's spaces and what each is for lives in the private layer (`CLAUDE.local.md`), never here.
 
 Each space is a separate git repo with its own CLAUDE.md, org files, knowledge base, and journal. When working in a space, its CLAUDE.md loads automatically with space-specific context.
 
@@ -136,7 +130,7 @@ Use `datacore.modules.list` for installed modules, `datacore.modules.info <name>
 ## Credentials — NEVER search for them
 
 Do not grep `.env` files. Do not read another host's files or env (`ssh host cat …`).
-Do not read `~/.hermes/.env` or any other copy you happen to find. **Searching is what creates the problem**: a
+Do not read an agent's own env file or any other copy you happen to find. **Searching is what creates the problem**: a
 search finds *a* value, and nothing about a found value says whether it is current
 or abandoned. That is how duplicates accumulate and how "the credential is missing"
 gets reported about a credential that is present and working.
@@ -177,10 +171,8 @@ with `creds compare <id>` — the broker does the cross-host diff (fingerprints 
 ssh, read-only), so this is not "looking on another host". A `FAIL` from `get` or
 `doctor` is one host's copy: it names the other hosts the credential lives on. Until
 every host has been compared, say it cannot be told yet; never tell anyone to
-regenerate or rotate. A rotation may have reached only one machine. On 2026-07-08
-the @plur_ai X keys were rotated into one host's working tree and never committed; the canonical store served
-pre-rotation values for four months and a release published everywhere before failing
-to post. Sending someone to regenerate keys that are alive on another machine
+regenerate or rotate. A rotation may have reached only one machine, leaving the
+canonical store serving old values for months. Sending someone to regenerate keys that are alive on another machine
 destroys a working credential.
 
 Never print a secret value — compare truncated `sha256` instead. Rotation is the
