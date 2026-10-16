@@ -176,7 +176,10 @@ def sync_queue(ws, space: str, wanted: list[dict], apply: bool,
         pr = n.properties or {}
         nid = pr.get("ID") or ""
         if pr.get("SOURCE_ID") and pr.get("SPRINT") and nid.endswith("-q"):
-            have[nid] = n
+            # Keep plain values, not the NodeView: every write below bumps the
+            # file's generation and makes a held view stale (StaleNodeError
+            # on 2026-10-16, when one run both added and removed an entry).
+            have[nid] = (pr.get("SPRINT"), n.heading)
 
     added, removed, skipped_foreign = [], [], []
     for qid, w in want_by_qid.items():
@@ -197,7 +200,7 @@ def sync_queue(ws, space: str, wanted: list[dict], apply: bool,
                 ASSIGNEE=w["assignee"],
                 SURFACE=w["surface"],
             )
-    for qid, node in have.items():
+    for qid, (owner, heading) in have.items():
         if qid in want_by_qid:
             continue
         # ONLY remove an entry whose owning sprint we actually discovered.
@@ -208,13 +211,12 @@ def sync_queue(ws, space: str, wanted: list[dict], apply: bool,
         # any sprint I found" as "not in any sprint", which would have deleted
         # 22 live queue entries on the 20:04 run. A checkout that cannot see a
         # sprint has no standing to judge its work.
-        owner = (node.properties or {}).get("SPRINT")
         if seen_sprints is not None and owner and owner not in seen_sprints:
-            skipped_foreign.append((qid, node.heading[:52], owner))
+            skipped_foreign.append((qid, heading[:52], owner))
             continue
-        removed.append((qid, node.heading[:58]))
+        removed.append((qid, heading[:58]))
         if apply:
-            ws.remove_node(node)
+            ws.remove_node(ws.find_by_id(qid))
     return added, removed, skipped_foreign
 
 
