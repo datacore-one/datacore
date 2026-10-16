@@ -204,3 +204,23 @@ def test_required_top_level_folder_is_never_an_empty_folder_finding(tmp_path):
     empty = {i.path.name for i in checker.issues if i.check_type == 'empty_folder'}
     assert '0-inbox' not in empty
     assert 'stale' in empty, 'ordinary empty folders are still reported'
+
+
+def test_wiki_links_resolve_like_obsidian(tmp_path):
+    """Links whose target exists are not broken: headings, .md suffix, table-escaped
+    pipes, non-markdown files, folders, partial paths, and links inside code."""
+    space = _space(tmp_path, '1-team')
+    (space / '3-knowledge' / 'pages').mkdir(parents=True)
+    (space / '3-knowledge' / 'pages' / 'Alpha.md').write_text('x')
+    (space / '3-knowledge' / 'pages' / 'deck.pdf').write_text('x')
+    (space / '3-knowledge' / 'pages' / 'sub').mkdir()
+    (space / '3-knowledge' / 'pages' / 'sub' / 'Beta.md').write_text('x')
+    (space / 'org' / 'note.md').write_text(
+        '[[Alpha#Section]] [[Alpha.md]] |[[Alpha\\|alias]]| [[deck.pdf]] '
+        '[[3-knowledge/pages/sub]] [[pages/sub/Beta]] [[Alpha^block1]]\n'
+        '```\n[[Inside Fence]]\n```\n'
+        'inline `[[Inside Code]]` and [[Really Missing]]\n')
+    checker = StructuralIntegrityChecker(space)
+    checker._check_wiki_links()
+    broken = [i.message for i in checker.issues if i.check_type == 'wiki_link']
+    assert broken == ['Broken wiki-link: [[really missing]]'], broken

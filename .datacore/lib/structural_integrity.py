@@ -701,20 +701,31 @@ class StructuralIntegrityChecker:
         """Find broken wiki-links [[Target]] in markdown files."""
         self.checks_run += 1
 
-        # Collect all valid link targets (markdown files without extension)
+        # Collect all valid link targets, resolved the way Obsidian does: a note by
+        # name or path (no extension), any file by name or path, and folders.
         valid_targets: Set[str] = set()
-        for md_file in self._walk('*.md'):
+        valid_paths: Set[str] = set()
+        for path in self._walk('*'):
             # Skip hidden folders and node_modules
-            rel_path = md_file.relative_to(self.space_path)
+            rel_path = path.relative_to(self.space_path)
             if any(p.startswith('.') or p == 'node_modules' for p in rel_path.parts):
                 continue
-            # Add stem as valid target
-            valid_targets.add(md_file.stem.lower())
-            # Also add full relative path without extension
-            valid_targets.add(str(rel_path.with_suffix('')).lower())
+            rel = str(rel_path).lower()
+            valid_targets.add(path.name.lower())
+            valid_paths.add(rel)
+            if path.suffix == '.md':
+                valid_targets.add(path.stem.lower())
+                valid_paths.add(str(rel_path.with_suffix('')).lower())
+
+        def _resolves(target: str) -> bool:
+            if target in valid_targets or target in valid_paths:
+                return True
+            # Partial path: Obsidian matches the end of a longer path
+            return '/' in target and any(p.endswith('/' + target) for p in valid_paths)
 
         # Find all wiki-links and check if targets exist
         wiki_link_pattern = re.compile(r'\[\[([^\]|]+)(?:\|[^\]]+)?\]\]')
+        code_pattern = re.compile(r'```.*?```|`[^`\n]*`', re.DOTALL)
         broken_links = []
 
         for md_file in self._walk('*.md'):
@@ -723,14 +734,18 @@ class StructuralIntegrityChecker:
                 continue
 
             try:
-                content = md_file.read_text(errors='ignore')
+                content = code_pattern.sub('', md_file.read_text(errors='ignore'))
                 for match in wiki_link_pattern.finditer(content):
-                    target = match.group(1).strip().lower()
+                    raw = match.group(1).strip()
                     # Skip external links and anchors
-                    if target.startswith('http') or target.startswith('#'):
+                    if raw.lower().startswith('http') or raw.startswith('#'):
+                        continue
+                    # Drop #heading / ^block parts and a table-escaped pipe's backslash
+                    target = re.split(r'[#^]', raw.rstrip('\\'), maxsplit=1)[0].strip().rstrip('/').lower()
+                    if not target:
                         continue
                     # Check if target exists
-                    if target not in valid_targets:
+                    if not _resolves(target):
                         broken_links.append((md_file, target))
             except Exception:
                 pass  # Skip unreadable files
