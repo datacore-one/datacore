@@ -497,6 +497,38 @@ commands:
     related:
     - diagnostic
     - create-module
+  # Appended 2026-10-16 by registry reconciliation: core command files on disk
+  # with no registry entry. Descriptions copied from each file's frontmatter.
+  gan:
+    name: gan
+    description: Adversarial multi-agent build loop. Plan → Generate → Evaluate → iterate. Pairs with /office-hours for ideation and /plan-ceo-review for scope.
+    version: 0.1.0
+    status: active
+    source: .datacore/commands/gan.md
+  learn:
+    name: learn
+    description: learn command
+    version: 0.1.0
+    status: active
+    source: .datacore/commands/learn.md
+  opensource:
+    name: opensource
+    description: Prepare a project or module for open-source release. 3-phase pipeline - strip secrets, sanitize, package with docs.
+    version: 0.1.0
+    status: active
+    source: .datacore/commands/opensource.md
+  process-inbox:
+    name: process-inbox
+    description: process-inbox command
+    version: 0.1.0
+    status: active
+    source: .datacore/commands/process-inbox.md
+  sprint-start:
+    name: sprint-start
+    description: sprint-start command
+    version: 0.1.0
+    status: active
+    source: .datacore/commands/sprint-start.md
 module_commands:
   uk-ltd:
     name: UK Statutory Filings
@@ -1706,24 +1738,6 @@ module_commands:
   # Appended 2026-09-09 by command_registry_audit.py --fix.
   # These files existed and were unreachable through the registry;
   # an agent following the documented lookup path could not find them.
-  engage:
-    name: engage
-    description: X feed engagement — likes, follows, drafts replies and queues them for Telegram approval
-    version: 0.1.0
-    status: active
-    source: .datacore/modules/datacore-campaigns/commands/engage.md
-    module: datacore-campaigns
-  engagement:
-    name: engagement
-    description: X conversation engagement pipeline — discover threads, draft replies, approve/reject via Telegram
-    version: 0.1.0
-    status: active
-    source: .datacore/modules/datacore-campaigns/commands/engagement.md
-    module: datacore-campaigns
-
-  # Appended 2026-09-09 by command_registry_audit.py --fix.
-  # These files existed and were unreachable through the registry;
-  # an agent following the documented lookup path could not find them.
   brand-positioning:
     name: brand-positioning
     description: Create BrandScript, Tribe Profile, and voice guidelines for a venture
@@ -1742,3 +1756,236 @@ module_commands:
     status: active
     source: .datacore/modules/dev/commands/evals.md
     module: dev
+
+  # Appended 2026-10-16 by registry reconciliation: module command and skill
+  # files on disk with no entry pointing at them (matched by source path, not key —
+  # command_registry_audit.py matches by key, so another module's `today-hook`
+  # hid these). Skills carry type: skill. Descriptions from frontmatter.
+  gigs-today-hook:
+    name: today-hook
+    description: today-hook command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/gigs/commands/today-hook.md
+    module: gigs
+  gordon-today-hook:
+    name: today-hook
+    description: UNDOCUMENTED — today-hook.md has no description frontmatter
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/gordon/commands/today-hook.md
+    module: gordon
+  uk-ltd-today-hook:
+    name: UK Statutory Today Hook
+    description: Statutory filings that are close enough to matter, and nothing when none are
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/uk-ltd/commands/today-hook.md
+    module: uk-ltd
+  ventures-scaffolding-audit:
+    name: scaffolding-audit
+    description: scaffolding-audit command
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/ventures/commands/scaffolding-audit.md
+    module: ventures
+  comms:engage:
+    name: engage
+    description: Launch Chrome-based X feed engagement agent — likes, follows, reply drafts via Telegram
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/comms/skills/engage/SKILL.md
+    module: comms
+    type: skill
+  datacortex-datacortex:
+    name: datacortex
+    description: Knowledge graph visualization - explore, stats, find orphans, take snapshots
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/datacortex/skills/datacortex/SKILL.md
+    module: datacortex
+    type: skill
+  evals-status:
+    name: evals-status
+    description: Quick promise-eval scoreboard — green, red and no-eval counts, and the reds grouped by who acts (code bug, job, external release, owner, time, no eval, eval problem)
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/dev/skills/evals-status/SKILL.md
+    module: dev
+    type: skill
+  gigs:
+    name: gigs
+    description: Show upcoming shows by artists from your Spotify library, playing within reach
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/gigs/skills/gigs/SKILL.md
+    module: gigs
+    type: skill
+  gate:
+    name: gate
+    description: Quality gate runner. Executes gstack /review, /qa, and /cso in sequence
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/gstack/skills/gate/SKILL.md
+    module: gstack
+    type: skill
+  retro-dc:
+    name: retro-dc
+    description: Enriched retrospective. Wraps gstack /retro then captures shipping
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/gstack/skills/retro-dc/SKILL.md
+    module: gstack
+    type: skill
+  sprint:
+    name: sprint
+    description: Sprint orchestrator. Guides idea-to-ship workflow using gstack skills
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/gstack/skills/sprint/SKILL.md
+    module: gstack
+    type: skill
+  health-data-interpretation:
+    name: health-data-interpretation
+    description: Interpret health biometrics — Oura scores, HRV, lab results, body composition. Use personal baselines and population context.
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/health/skills/health-data-interpretation/SKILL.md
+    module: health
+    type: skill
+  privacy-aware-health-analysis:
+    name: privacy-aware-health-analysis
+    description: Handle health data with privacy controls — consent gates, redaction, local routing. Use targeted MCP tools instead of context dumps.
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/health/skills/privacy-aware-health-analysis/SKILL.md
+    module: health
+    type: skill
+  symptom-triage:
+    name: symptom-triage
+    description: Assess reported symptoms for urgency, consider biometric context, recommend next steps. Not a diagnosis tool.
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/health/skills/symptom-triage/SKILL.md
+    module: health
+    type: skill
+  image-generation-create-image:
+    name: create-image
+    description: Generate images via Midjourney or Gemini with prompt crafting and archive management
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/image-generation/skills/create-image/SKILL.md
+    module: image-generation
+    type: skill
+  meetings-my-questions:
+    name: my-questions
+    description: View open questions requiring input across all spaces and meetings
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/meetings/skills/my-questions/SKILL.md
+    module: meetings
+    type: skill
+  meetings-standup:
+    name: standup
+    description: Generate standup from journal and schedule for daily meetings
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/meetings/skills/standup/SKILL.md
+    module: meetings
+    type: skill
+  metacognition:
+    name: Metacognition
+    description: Thinking tools for introspective knowledge analysis — trace, connect, graduate, emerge, drift, challenge, ghost
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/metacognition/skills/metacognition/SKILL.md
+    module: metacognition
+    type: skill
+  news-news:
+    name: news
+    description: Display prioritized news headlines by category (crypto, macro, tech, geo)
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/news/skills/news/SKILL.md
+    module: news
+    type: skill
+  nightshift-nightshift-status:
+    name: nightshift-status
+    description: Check nightshift queue, recent executions, server status, and items needing review
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/nightshift/skills/nightshift-status/SKILL.md
+    module: nightshift
+    type: skill
+  outbox-archive-search:
+    name: archive-search
+    description: Search archived content on remote server without local clone
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/outbox/skills/archive-search/SKILL.md
+    module: outbox
+    type: skill
+  research-create-podcast:
+    name: create-podcast
+    description: Generate NotebookLM podcast from URLs or content
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/research/skills/create-podcast/SKILL.md
+    module: research
+    type: skill
+  research-research-status:
+    name: research-status
+    description: Check research queue counts, recent podcasts, knowledge base growth, and Readwise items
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/research/skills/research-status/SKILL.md
+    module: research
+    type: skill
+  slides-create-presentation:
+    name: create-presentation
+    description: Smart presentation creation wizard using Gamma.app or Gemini image composition
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/slides/skills/create-presentation/SKILL.md
+    module: slides
+    type: skill
+  slides-index-presentation:
+    name: index-presentation
+    description: Index slides from presentations for reuse in future decks
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/slides/skills/index-presentation/SKILL.md
+    module: slides
+    type: skill
+  slides-sync-gamma:
+    name: sync-gamma
+    description: Pull presentations from Gamma.app workspace to local storage
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/slides/skills/sync-gamma/SKILL.md
+    module: slides
+    type: skill
+  bot-performance:
+    name: bot-performance
+    description: Bot performance report — PnL per bot, aggregate vs 75k BZZ benchmark, paper trading status
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/trading/skills/bot-performance/SKILL.md
+    module: trading
+    type: skill
+  monthly-report:
+    name: monthly-report
+    description: Meridian monthly performance report — returns, Sharpe, drawdown, per-strategy attribution
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/trading/skills/monthly-report/SKILL.md
+    module: trading
+    type: skill
+  prediction-tracker:
+    name: prediction-tracker
+    description: Track, score, and review macro predictions across competing market theses
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/trading/skills/prediction-tracker/SKILL.md
+    module: trading
+    type: skill

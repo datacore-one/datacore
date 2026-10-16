@@ -3461,6 +3461,26 @@ module_agents:
     source: .datacore/modules/research/agents/research-orchestrator.md
     module: research
 
+  # --- appended 2026-10-16 (registry reconciliation) ---------------------
+  # Agent files on disk with no entry. Module overlay sharing a core name is
+  # keyed <name>@<module>, per the 2026-09-02 convention above.
+  # NOT registered: nightshift/agents/evaluator-critic-optimizer.md — an
+  # evaluator-* key in module_agents trips the post-archival invariant in
+  # test_registry_gc / test_evaluators_roster. Owner decision pending.
+  landing-generator@comms:
+    description: Comms module overlay of landing-generator — landing page copy, variants and deployment handoff for campaign execution (deploy via the dev module)
+    version: 1.0.0
+    source: .datacore/modules/comms/agents/landing-generator.md
+    module: comms
+    model: inherit
+    skills:
+    - landing-page-generation
+    - campaign-landing-copy
+    - ab-variant-generation
+    spawns: []
+    can_be_called_by:
+    - comms-executor
+
 knowledge_locations:
   gtd:
     description: GTD methodology and workflows

@@ -30,6 +30,10 @@ provides:
     - podcast-creator
   commands:
     - research-daily
+    - create-podcast
+    - nightshift-hook
+    - research-status
+    - today-hook
 
 dependencies:
   - core@>=1.0.0

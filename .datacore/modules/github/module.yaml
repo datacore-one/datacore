@@ -18,12 +18,13 @@ optional:
   - nightshift@>=0.2.0
 
 provides:
-  skills:
-    - triage-github
+  # triage-github is a command (commands/triage-github.md); there is no
+  # skills/triage-github/SKILL.md, so it is not declared as a skill (2026-10-16).
   agents:
     - github-responder
   commands:
     - triage-github
+    - today-hook
 
 settings:
   enabled:

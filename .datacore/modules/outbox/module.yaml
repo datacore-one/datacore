@@ -26,6 +26,7 @@ provides:
     - archive-indexer
   commands:
     - outbox
+    - archive-search
 
 dependencies:
   - core@>=1.0.0
