@@ -224,3 +224,15 @@ def test_wiki_links_resolve_like_obsidian(tmp_path):
     checker._check_wiki_links()
     broken = [i.message for i in checker.issues if i.check_type == 'wiki_link']
     assert broken == ['Broken wiki-link: [[really missing]]'], broken
+
+
+def test_hook_allows_tool_config_folders_and_license(tmp_path):
+    """DIP-0015 amendment: tool config dot-folders and a repo LICENSE belong at a space root."""
+    repo = tmp_path / '5-team'
+    repo.mkdir()
+    _git(repo, 'init', '-q')
+    r = _hook(repo, ['.obsidian/app.json', '.logseq/config.edn', '.plur/config.yaml',
+                     '.superpowers/x.md', '.gstack/x.json', 'LICENSE'])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _hook(repo, ['.random-tool/x.json']).returncode != 0
+
