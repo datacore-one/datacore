@@ -653,6 +653,8 @@ class StructuralIntegrityChecker:
         self.checks_run += 1
 
         empty_folders = []
+        # Top-level folders the structure check requires; removing one creates a new finding
+        required = PERSONAL_FOLDERS if self.space_type == 'personal' else TEAM_FOLDERS
 
         for folder in self._walk('*'):
             if not folder.is_dir():
@@ -661,6 +663,8 @@ class StructuralIntegrityChecker:
             # Skip hidden folders and node_modules
             rel_path = folder.relative_to(self.space_path)
             if any(p.startswith('.') or p == 'node_modules' for p in rel_path.parts):
+                continue
+            if len(rel_path.parts) == 1 and rel_path.parts[0] in required:
                 continue
 
             # Check if empty (ignoring hidden files and .DS_Store)

@@ -193,3 +193,14 @@ def test_root_check_reads_the_shared_root_allowlist(tmp_path):
     assert 'POLICY.md' not in flagged
     assert '.plur' not in flagged, 'the root hook allows .plur/'
     assert 'STRAY.md' in flagged
+
+
+def test_required_top_level_folder_is_never_an_empty_folder_finding(tmp_path):
+    """The structure check requires 0-inbox/; the empty-folder fixer must not delete it."""
+    space = _space(tmp_path, '4-team')
+    (space / '1-tracks' / 'stale').mkdir(parents=True)
+    checker = StructuralIntegrityChecker(space)
+    checker._check_empty_folders()
+    empty = {i.path.name for i in checker.issues if i.check_type == 'empty_folder'}
+    assert '0-inbox' not in empty
+    assert 'stale' in empty, 'ordinary empty folders are still reported'
