@@ -1377,12 +1377,12 @@ module_commands:
       when: deep content extraction needed
     reads:
       required:
-      - 1-datafund/.datacore/intel-targets.yaml
+      - .datacore/state/intel-targets.yaml
       contextual:
-      - 1-datafund/3-knowledge/reference/*.md
+      - '<space>/3-knowledge/reference/*.md'
     writes:
-    - 1-datafund/3-knowledge/reference/*.md
-    - 1-datafund/3-knowledge/zettel/*.md
+    - '<space>/3-knowledge/reference/*.md'
+    - '<space>/3-knowledge/zettel/*.md'
     - org/inbox.org
     references:
       dips: []
@@ -1456,34 +1456,6 @@ module_commands:
     related:
     - structural-integrity
     - promote
-
-  accounting:
-    name: Datafund Accounting
-    description: Read-only Datafund accounting — overview, payables, payment planning, spend analysis
-    version: 2.0.0
-    status: active
-    source: 1-datafund/.datacore/modules/datafund-finance/commands/accounting.md
-    module: datafund-finance
-    invokes:
-    - agent: accounting-sync
-      when: sync
-    - agent: accounting-overview
-      when: overview
-    - agent: pending-payments
-      when: payables
-    - agent: payment-planner
-      when: plan
-    - agent: spend-analyzer
-      when: analyze
-    - agent: invoice-classifier
-      when: classify
-    reads:
-      required: []
-    writes: []
-    references:
-      dips: []
-    related: []
-    trigger: accounting overview|accounting sync|accounting payables|datafund accounting
 
   # Appended 2026-09-09 by command_registry_audit.py --fix.
   # These files existed and were unreachable through the registry;

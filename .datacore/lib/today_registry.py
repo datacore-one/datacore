@@ -313,7 +313,8 @@ def agent_exists(name: str) -> bool:
     from nothing — the failure this whole contract exists to make impossible."""
     reg = DATACORE_ROOT / ".datacore" / "registry" / "agents.yaml"
     try:
-        data = yaml.safe_load(reg.read_text()) or {}
+        from registry_overlay import load_registry_file  # + the private agents.local.yaml
+        data = load_registry_file(reg) if reg.exists() else yaml.safe_load(reg.read_text()) or {}
     except Exception:      # noqa: BLE001 — an unreadable registry is reported by rule 4's caller
         return True
     for key in ("agents", "module_agents"):

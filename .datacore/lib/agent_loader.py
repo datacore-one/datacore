@@ -33,8 +33,8 @@ def load_registry() -> Dict[str, Any]:
     if not REGISTRY_PATH.exists():
         return {"agents": {}, "module_agents": {}}
 
-    with open(REGISTRY_PATH, 'r') as f:
-        return yaml.safe_load(f) or {}
+    from registry_overlay import load_registry_file  # + the private agents.local.yaml
+    return load_registry_file(REGISTRY_PATH)
 
 
 def get_agent_metadata(agent_id: str) -> Optional[Dict[str, Any]]:

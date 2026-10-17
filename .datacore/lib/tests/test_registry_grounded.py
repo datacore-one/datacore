@@ -26,6 +26,8 @@ from __future__ import annotations
 import pathlib
 import re
 
+import sys
+
 import pytest
 import yaml
 
@@ -34,7 +36,11 @@ REGISTRY = ROOT / ".datacore" / "registry" / "agents.yaml"
 
 
 def _registry() -> dict:
-    return yaml.safe_load(REGISTRY.read_text()) or {}
+    # The public registry plus the installation's private overlay
+    # (agents.local.yaml, gitignored): together they are what readers see.
+    sys.path.insert(0, str(ROOT / ".datacore" / "lib"))
+    from registry_overlay import load_registry_file
+    return load_registry_file(REGISTRY)
 
 
 def _entries() -> list[tuple[str, str, dict]]:
