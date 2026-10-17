@@ -64,8 +64,14 @@ def branch_exists(repo: Path, branch: str) -> bool:
     return rc == 0
 
 
-def create(source: Path, task_id: str, *, root: Path | None = None) -> Workspace:
-    """A private checkout on `agent/<task-id>`. Raises rather than degrading."""
+def create(source: Path, task_id: str, *, root: Path | None = None,
+           base_branch: str | None = None) -> Workspace:
+    """A private checkout on `agent/<task-id>`. Raises rather than degrading.
+
+    `base_branch` names the branch the work starts from (and the pull request will
+    target): the workspace starts at origin/<base>, fetched first. A base that
+    cannot be found refuses -- it is never replaced by the current HEAD.
+    """
     if not task_id or "/" in task_id or task_id.strip() != task_id:
         raise IsolationError(f"unusable task id for a branch name: {task_id!r}")
     # Subsequent executor Git commands run outside this helper. A per-command
@@ -88,8 +94,15 @@ def create(source: Path, task_id: str, *, root: Path | None = None) -> Workspace
     if path.exists():
         raise IsolationError(f"worktree path {path} already exists — refusing to reuse")
 
+    start: list[str] = []
+    if base_branch:
+        _git(source, "fetch", "-q", "origin", f"+refs/heads/{base_branch}:refs/remotes/origin/{base_branch}")
+        rc, _, _ = _git(source, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{base_branch}^{{commit}}")
+        if rc != 0:
+            raise IsolationError(f"base branch {base_branch} not found on origin -- refusing to start elsewhere")
+        start = ["--no-track", f"refs/remotes/origin/{base_branch}"]
     base.mkdir(parents=True, exist_ok=True)
-    rc, _, err = _git(source, "worktree", "add", "-b", branch, str(path))
+    rc, _, err = _git(source, "worktree", "add", "-b", branch, str(path), *start)
     if rc != 0:
         # No fallback. An un-isolated run is the thing being prevented.
         raise IsolationError(f"could not create worktree for {task_id}: {err.strip()[:200]}")
@@ -109,7 +122,8 @@ def task_root(source: Path, base: Path | None = None) -> Path:
     return (base or (Path.home() / ".datacore" / "worktrees")) / f"{resolved.name}-{digest}"
 
 
-def ensure(source: Path, task_id: str, *, root: Path | None = None) -> Workspace:
+def ensure(source: Path, task_id: str, *, root: Path | None = None,
+           base: str | None = None) -> Workspace:
     """The task's workspace for `source`: reuse it when it exists, else create it.
 
     The overnight executor tells an agent to open this before changing any code
@@ -125,6 +139,7 @@ def ensure(source: Path, task_id: str, *, root: Path | None = None) -> Workspace
         raise IsolationError(f"{source} is not a git repository")
     source = Path(top.strip()).resolve()
     branch = f"agent/{task_id}"
+    base_root_branch = base
     base = task_root(source, root)
     path = base / task_id
     if path.exists():
@@ -143,7 +158,7 @@ def ensure(source: Path, task_id: str, *, root: Path | None = None) -> Workspace
         if rc != 0:
             raise IsolationError(f"could not reopen {branch}: {err.strip()[:200]}")
         return Workspace(path=path, branch=branch, source=source)
-    return create(source, task_id, root=base)
+    return create(source, task_id, root=base, base_branch=base_root_branch)
 
 
 def cleanup(ws: Workspace, *, keep_branch_if_commits: bool = True) -> str:
@@ -184,18 +199,19 @@ if __name__ == "__main__":
     ap.add_argument("op", choices=["create", "ensure", "list", "prune"])
     ap.add_argument("--source", type=Path, default=Path.cwd())
     ap.add_argument("--task-id")
+    ap.add_argument("--base", help="branch to start from and target (default: current HEAD)")
     a = ap.parse_args()
 
     if a.op == "create":
         if not a.task_id:
             ap.error("--task-id required")
-        ws = create(a.source, a.task_id)
+        ws = create(a.source, a.task_id, base_branch=a.base)
         print(f"{ws.path}\t{ws.branch}")
     elif a.op == "ensure":
         if not a.task_id:
             ap.error("--task-id required")
         try:
-            ws = ensure(a.source, a.task_id)
+            ws = ensure(a.source, a.task_id, base=a.base)
         except IsolationError as exc:
             raise SystemExit(f"agent_workspace: {exc}")
         print(f"{ws.path}\t{ws.branch}")
