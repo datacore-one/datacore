@@ -47,7 +47,7 @@ The briefing tells a story in three acts:
 | Output location? | Personal space journal: `0-personal/notes/journals/YYYY-MM-DD.md` |
 | Nightshift outputs? | `*/0-inbox/nightshift-*.md` |
 | Calendar source? | Google Calendar — multiple accounts (from `settings.local.yaml`) |
-| Market phase? | Pre-computed by nightshift timer at 05:30 UTC → `6-meridian/reports/market-phase/market-phase-YYYY-MM-DD.md` |
+| Market phase? | Pre-computed by a timer on the executor host → `[N]-trading/reports/market-phase/market-phase-YYYY-MM-DD.md` (the trading space named in the registry) |
 | What DIPs govern this? | DIP-0009 (GTD), DIP-0011 (Nightshift) |
 
 ### Cron Schedule (nightshift server, UTC)
@@ -96,8 +96,8 @@ python3 .datacore/lib/briefing_state.py      # NO_FILE | NO_BRIEFING | STUB | EX
 ```
 
 `STUB` is a `## Daily Briefing` without its narrative sections (Good Morning,
-The World), e.g. Winston's fallback when its writer's draft was withheld
-(2026-09-30: only a raw "Facts" list). Checking for the heading alone called that
+The World), e.g. the chief-of-staff agent's fallback when its writer's draft was
+withheld (only a raw "Facts" list). Checking for the heading alone called that
 EXISTS and would have skipped the briefing entirely.
 
 **If EXISTS (incremental mode):**
@@ -125,8 +125,8 @@ python3 .datacore/lib/ledger_transport.py converge --space . # root repo
 
 **NEVER use `git stash`, `git pull --rebase`, or `--autostash`.** When an
 autostash pop conflicts, the stash is silently kept and the work is stranded
-invisibly — 10 orphaned stashes accumulated May–Jun 2026 (ENG-2026-0729-009)
-and 29 more blocked briefing delivery for three days (2026-08-03). This step
+invisibly — orphaned stashes have accumulated for weeks and blocked briefing
+delivery for days. This step
 itself used to say `pull --rebase --autostash` two lines under that warning.
 
 One transport does every repo (DIP-0046). It commits local work first —
@@ -275,11 +275,11 @@ gh api notifications --jq '.[] | select(.unread)' 2>/dev/null
 Then check sprint files against their PRs, for every space that has sprints:
 
 ```bash
-python3 .datacore/lib/sprint_files.py health --space 5-plur
+python3 .datacore/lib/sprint_files.py health --space <space>   # each space with sprints
 ```
 
-**The nightly GitHub triage board.** Miles runs the `github-triage` skill at
-03:30 UTC: public repos and the enterprise repo in separate runs. It commits
+**The nightly GitHub triage board.** The executor agent runs the `github-triage`
+skill overnight: public repos and private repos in separate runs. It commits
 `0-personal/content/reports/github-triage/<date>-<scope>.{md,board.json}`. For each board
 file dated today, render it locally and open it:
 
@@ -294,9 +294,9 @@ the nightly triage did not deliver and name the log
 (`~/.datacore/state/github-triage/<date>-<scope>.log` on the nightshift host).
 Never publish the board anywhere.
 
-**Never quote a sprint item's `state` as fact without this.** On 2026-09-25 the
-briefing named enterprise W23 B1/B2 as open go-live blockers "in review"; their
-PRs had merged 108 days earlier. `sprint_files` reads each repo's integration
+**Never quote a sprint item's `state` as fact without this.** A briefing once
+named sprint items as open blockers "in review" whose PRs had merged months
+earlier. `sprint_files` reads each repo's integration
 branch (not whatever is checked out), and names expired-but-active sprints,
 in-flight items in closed sprints, and in-flight items whose PR merged. An item
 it calls stale is finished work: say the sprint file is behind, not that the
@@ -307,9 +307,9 @@ work is blocked.
 ## Step 8: Collect Nightshift Results
 
 Overnight agent work comes out through **three channels**, and the briefing reports
-all three. On 2026-10-13 it read only the first, called the night "Nothing to do",
-and missed a sprint PR Miles opened, a teammate's rejection of it with two
-follow-up issues, and Miles' CI diagnosis on two dependency PRs.
+all three. Reading only the first once called the night "Nothing to do" and
+missed an agent's sprint PR, a teammate's rejection of it with follow-up issues,
+and the agent's CI diagnosis on dependency PRs.
 
 **1. The `:AI:` task queue** (the overnight runner):
 - DONE tasks with :NIGHTSHIFT_COMPLETED: property in past 24h
@@ -317,7 +317,7 @@ follow-up issues, and Miles' CI diagnosis on two dependency PRs.
 - Output files: `*/0-inbox/nightshift-*.md`
 - Summarize with quality scores
 
-**2. Venture cadences** (Miles, Data, Tris: scheduled jobs from each space's
+**2. Venture cadences** (the agents' scheduled jobs from each space's
 `venture.yaml`, e.g. pr-review, sprint-claim, sprint-rollover, blog-post). They
 never touch the `:AI:` queue. Each writes a run record:
 
@@ -334,8 +334,9 @@ humans' replies to it:
 
 ```bash
 SINCE=$(date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
-gh search prs --author miles-on-nightshift --updated ">=$SINCE" --json repository,number,title,state,url
-gh search prs --commenter miles-on-nightshift --updated ">=$SINCE" --json repository,number,title,url
+# <agent-account>: each agent GitHub account listed in registry/principals.yaml
+gh search prs --author <agent-account> --updated ">=$SINCE" --json repository,number,title,state,url
+gh search prs --commenter <agent-account> --updated ">=$SINCE" --json repository,number,title,url
 ```
 
 For each agent PR, read its reviews (`gh pr view N -R repo --json reviews,comments`).
@@ -354,7 +355,7 @@ Show what bots and automated processes committed across all spaces in the past 2
 This gives the user visibility into what changed while they weren't looking.
 
 ```bash
-# For each space directory (root, 0-personal, 1-* through 8-*):
+# For each space directory (root and every [0-9]-* space):
 git -C [space] log --since="24 hours ago" --oneline --all 2>/dev/null
 ```
 
@@ -362,8 +363,8 @@ Group commits by actor (nightshift, plur, bots) and by space. Present as a compa
 summary in the Spaces section, e.g.:
 
 ```
-**Overnight commits**: nightshift: 12 (0-personal: 6, 6-meridian: 4, 3-fds: 2) ·
-plur: 3 (5-plur: 2, 2-datacore: 1) · miles: 1 (8-firm)
+**Overnight commits**: nightshift: 12 (0-personal: 6, 3-trading: 4, 2-team: 2) ·
+bot: 3 (4-venture: 2, 2-team: 1) · executor: 1 (5-agents)
 ```
 
 Show the commit messages (abbreviated) so the user knows WHAT changed, not just counts.
@@ -476,10 +477,10 @@ python3 ~/.datacore/modules/trading/lib/gateio/today_summary.py --remote
 ```
 
 Also read the market phase analysis. The `nightshift-market-phase` timer on the
-nightshift host computes it at 05:30 UTC and publishes it to the meridian
-repo: `6-meridian/reports/market-phase/market-phase-YYYY-MM-DD.md` (today's
+executor host computes it early each morning and publishes it to the trading
+space repo: `[N]-trading/reports/market-phase/market-phase-YYYY-MM-DD.md` (today's
 date). It reaches the Mac with the normal repo sync; if it is not there, run
-`git -C 6-meridian pull --ff-only` once and look again. The timer is its own
+`git -C [N]-trading pull --ff-only` once and look again. The timer is its own
 job and does not wait for the nightshift task queue, so a paused queue is not
 a reason for it to be missing. Integrate signals and suggestions into the
 briefing's trading section.
@@ -727,7 +728,7 @@ For each module with `slot: post`:
 
 | Module | What it does |
 |--------|-------------|
-| voice-terminal | Write `_spoken.txt` only — **no audio send**; Winston is the sole audio sender |
+| voice-terminal | Write `_spoken.txt` only — **no audio send**; the chief-of-staff agent is the sole audio sender |
 | whatsapp | Push briefing notification to mobile |
 
 **Voice-terminal instructions:**
@@ -755,14 +756,12 @@ happens. Read the prompt and follow it.
      real pattern from today's report, concrete, never a generic aphorism); close.
    - Numbers as spoken words: "seventy-two", not "72".
    - End with "Your full report is on your desk" or variant.
-2. **Do NOT send audio.** Winston's morning pipeline is the only sender of the
-   audio briefing (owner, 2026-09-26: "keep only Winston's"; memory
-   ENG-2026-09-26-010; `voice-terminal/module.yaml`: `telegram_delivery: false`).
-   On the Mac, `speak_brief.py --telegram` sends through Miles's bot, so running it
-   here produces a second, wrong-sender briefing — which this step did on 2026-09-28
-   and 2026-09-29 because it still said "generate audio and send". If Winston's audio
-   did not arrive, say so in the briefing as a problem to fix; never cover for it
-   with a Mac send.
+2. **Do NOT send audio.** The chief-of-staff agent's morning pipeline is the only
+   sender of the audio briefing (`voice-terminal/module.yaml`:
+   `telegram_delivery: false`). On the workstation, `speak_brief.py --telegram`
+   sends through another agent's bot, so running it here produces a second,
+   wrong-sender briefing. If the chief-of-staff audio did not arrive, say so in the
+   briefing as a problem to fix; never cover for it with a workstation send.
 
 ---
 

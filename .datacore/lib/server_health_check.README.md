@@ -18,7 +18,7 @@ Weekly health check script that monitors system health and generates detailed ma
 
 2. **Git Repository Status**
    - Main Data repository
-   - All space repositories (0-personal, 1-datafund, 2-datacore, etc.)
+   - All space repositories (0-personal and every [N]-[name] space)
    - Uncommitted changes
    - Branch status
    - Ahead/behind remote tracking

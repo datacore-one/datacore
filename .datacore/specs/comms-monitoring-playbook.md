@@ -120,7 +120,7 @@ When a silence alert is triggered:
 
 1. **Alert Location:** Check today's journal in the relevant space:
    - Personal: `~/Data/0-personal/journal/YYYY-MM-DD.md`
-   - Datafund: `~/Data/1-datafund/journal/YYYY-MM-DD.md`
+   - Team space: `~/Data/[N]-team/journal/YYYY-MM-DD.md`
    - FDS: `~/Data/3-fds/journal/YYYY-MM-DD.md`
 
 2. **Alert Format:**

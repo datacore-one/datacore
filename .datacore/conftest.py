@@ -66,12 +66,11 @@ def _isolated_ledger_keys(tmp_path_factory, monkeypatch):
     `ledger.keys` resolves its key directory, its local registry and
     principals.yaml from DATACORE_ROOT at import -- the REAL ~/Data. So a test
     that signed with the default registry wrote its keys into the host's real
-    `.datacore/keys/`: nightshift's registry carries `actor1`, `fixture`,
+    `.datacore/keys/`: one host's registry carried `actor1`, `fixture`,
     `hosta`, `hostb`, `testactor`, `worker`, `writer` beside its genuine
     writers. And every signature check read the host's real principals.yaml,
-    which is why a test signing as `miles` began failing the moment proven keys
-    were given precedence (2026-09-17): the real `miles` key outranked the
-    test's. A test that needs principals sets DATACORE_ROOT on the module
+    which is why a test signing as a real agent name began failing the moment
+    proven keys were given precedence: the real key outranked the test's. A test that needs principals sets DATACORE_ROOT on the module
     itself, as the ones that exercise distribution already do.
     """
     try:
@@ -95,8 +94,8 @@ def _isolated_attestations(tmp_path_factory, monkeypatch):
     machine. attest() never raises and returns None on failure, so nothing in
     the test fails and nothing in the output says it happened.
 
-    Found on 2026-09-19 with 48 x.post/x.reply attestations sitting unpublished
-    in 1-datafund. Attestations are the evidence record for DIP-0047 egress:
+    Found with dozens of x.post/x.reply attestations sitting unpublished in a
+    team space. Attestations are the evidence record for DIP-0047 egress:
     false entries there are worse than missing ones, because the whole point is
     that the record can be trusted about what actually went out.
 

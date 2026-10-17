@@ -128,7 +128,7 @@ Or search for :continuation: tagged tasks.
 10. SOCIAL POSTS (draft for immediate posting)
 ───────────────────────────────────────────────────
 
-Personal X (@jssr):
+Personal X:
   PRs merged in June were my blockers.
 
 Project X:

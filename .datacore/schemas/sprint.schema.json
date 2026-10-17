@@ -43,7 +43,7 @@
     },
     "project": {
       "type": "string",
-      "description": "Datacore project path, e.g. 5-plur/2-projects/enterprise"
+      "description": "Datacore project path, e.g. [N]-team/2-projects/product"
     },
     "status": {
       "type": "string",

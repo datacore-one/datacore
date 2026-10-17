@@ -114,7 +114,7 @@ For each entity, record:
 - **relevance_description**: 1 sentence on why this entity matters
 - **relationship_to_author**: how the entity relates to the post author (founded, invested in, mentioned, etc.)
 - **confidence**: 0.0-1.0 (high > 0.8)
-- **space_relevance**: which spaces (0-personal, 1-datafund, 2-datacore, 3-fds) this entity is relevant to, with brief reason
+- **space_relevance**: which spaces (the `[0-9]-*` spaces of this installation) this entity is relevant to, with brief reason
 
 **Dedup check:** For each entity, use `datacore.search` to check if it already exists in CRM reference files. Note existing entries to avoid duplicates.
 
@@ -225,14 +225,14 @@ On approval (Y or edited plan):
 
 ## Entity Relevance Scoring
 
-Assess each entity's relevance per space:
+Assess each entity's relevance per space. Build the space list at run time: list
+the `[0-9]-*/` folders at the Datacore root and read each space's purpose from its
+`CLAUDE.md` (first heading and description). Do not assume a fixed set of spaces.
 
 | Space | Relevant When |
 |-------|--------------|
-| 0-personal | General interest, personal network, trading-related |
-| 1-datafund | Data economy, tokenization, RWA, DePIN, web3 data marketplaces |
-| 2-datacore | AI memory, PKM, second brain, AI tools, productivity AI, agents |
-| 3-fds | Data sovereignty, decentralized storage, privacy tech, Swarm ecosystem |
+| 0-personal | General interest, personal network |
+| `[N]-[name]` | The topics that space's `CLAUDE.md` says it covers |
 
 An entity can be relevant to multiple spaces. Route to the most specific space; only route to 0-personal as fallback.
 

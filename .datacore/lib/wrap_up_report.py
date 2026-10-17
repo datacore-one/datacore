@@ -290,7 +290,7 @@ def render(n: dict, mech: dict) -> str:
     # 10
     out += _section(SECTIONS[10])
     s = n["social"]
-    out += ["Personal X (@jssr):", f"  {s['personal_x']}", "",
+    out += ["Personal X:", f"  {s['personal_x']}", "",
             "Project X:", f"  {s['project_x']}", "",
             "LinkedIn:"] + [f"  {line}" if line else "" for line in str(s["linkedin"]).splitlines()]
 

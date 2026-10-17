@@ -37,9 +37,9 @@ case "$(basename "${repo_root:-.}")" in
 esac
 
 # quotePath=false: git quotes a path with a non-ASCII byte ("3-knowledge/…/José-Andrés.md")
-# and the leading quote then reads as an unknown root directory. Four CRM
-# people files refused every autosave on winston's 1-datafund on 2026-09-05,
-# and with it the whole fleet sync of that space.
+# and the leading quote then reads as an unknown root directory. A few CRM
+# people files once refused every autosave of a team space, and with it the
+# whole fleet sync of that space.
 staged=$(git -c core.quotePath=false diff --cached --name-only --diff-filter=ACM 2>/dev/null)
 [ -z "$staged" ] && exit 0
 
@@ -193,7 +193,7 @@ fi
 # the whole task pool, which is too slow for a commit and would teach people to
 # use --no-verify. Those belong on a cadence.
 # The hook runs INSIDE the space repo, so the staged path is `roadmap.yaml`,
-# not `5-plur/roadmap.yaml`. Matching the repo-relative form is the whole
+# not `[N]-space/roadmap.yaml`. Matching the repo-relative form is the whole
 # reason the first version of this check silently never fired.
 if git diff --cached --name-only | grep -q '^roadmap\.yaml$'; then
   _rv=""
@@ -220,11 +220,11 @@ fi
 # exists for the hand-added exception, which is the path that caused the drift.
 #
 # Same repo-relative rule as the roadmap check above: staged paths are
-# `org/next_actions.org`, never `5-plur/org/next_actions.org`.
+# `org/next_actions.org`, never `[N]-space/org/next_actions.org`.
 # ACM: a file staged for DELETION is not being committed — its working copy is
 # whatever is on disk (a Phase 1 flip untracks the generated file and leaves it
-# there), and gating that copy refused every flip commit of 2026-09-06 on a
-# task nobody was committing.
+# there), and gating that copy once refused every flip commit on a task
+# nobody was committing.
 _staged_org=$(git diff --cached --name-only --diff-filter=ACM | grep '^org/.*\.org$' || true)
 if [ -n "$_staged_org" ]; then
   _gate=""

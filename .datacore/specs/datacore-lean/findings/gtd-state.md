@@ -263,7 +263,7 @@ with a copy in a generated file, which covers the inbox.org / generated
 next_actions.org pair that shares ids by design, and cross-space groups that
 touch a generated file. Phase 0 (authored) pairs are still reassigned, as
 `test_dup_id_reassignment_mints_fresh_uuids_across_reruns` pins. Lean:
-`plan_skips_generated`, `plan_never_touches_generated`. The 6-meridian hold is
+`plan_skips_generated`, `plan_never_touches_generated`. The per-space hold is
 unchanged (not part of G4).
 
 **Decision G5 applied (repo only; release is out of bounds).** In

@@ -32,7 +32,7 @@ Fix:
 
 Proof: `seal_settled_monotone`. It assumes the reader's event set only grows and that seal HLCs are unique.
 
-Live impact: `ledger_seal.py status --all` gives the same output before and after. 8 spaces are `n-a` (legacy v1 seal), and 5-plur and 9-practice are `n-a` (no seal yet). All existing seals are by winston. No verdict flipped.
+Live impact: `ledger_seal.py status --all` gives the same output before and after. 8 spaces are `n-a` (legacy v1 seal), and two newer spaces are `n-a` (no seal yet). All existing seals are by one host. No verdict flipped.
 
 ## 3b. Sequencer authority (NEEDS-OWNER)
 Even after the fix, a seal by any writer that dominates the earlier seals becomes latest and verifies. The seal only reports "seal by X". Making non-sequencer seals inert would also make `emit --force` inert, so that is a policy choice. I did not change it.

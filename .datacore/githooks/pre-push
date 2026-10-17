@@ -32,8 +32,7 @@ fi
 
 # ---- Where the core scripts come from ---------------------------------------
 # From THIS hook's own checkout: the hook file lives in <checkout>/.datacore/githooks.
-# Until 2026-09-30 the default was $HOME/Data. On an agent's host (plur-claw,
-# hermes) the global hooks directory is the runner checkout's
+# The default used to be $HOME/Data. On an agent's host the global hooks directory is the runner checkout's
 # (~/.datacore/v2-runner) while ~/Data is the AGENT'S OWN space repo, with a
 # stale ownership guard and no ledger write gate. Every push there failed with
 # "can't open file .../Data/.datacore/lib/hooks/ledger_write_gate.py" and Data's
@@ -66,8 +65,8 @@ FALLBACK_PROTECTED="plur-ai/plur datacore-one/datacore datacore-one/datacore-dip
 # Capture the ref list once — both the policy check and git-lfs need it.
 # core.hooksPath routes ALL repos here, bypassing per-repo .git/hooks/ —
 # including the LFS pre-push hook. Without explicit chaining, new LFS
-# objects are never uploaded (3-fds silently accumulated 460 objects /
-# 824 MB unpushed by 2026-06-10 exactly this way).
+# objects are never uploaded (one space silently accumulated hundreds of
+# objects unpushed exactly this way).
 REFS_INPUT=$(cat)
 
 # ---- Shared history is never rewritten (MEM-10; owner decision 6) ----------
@@ -102,7 +101,7 @@ OWNERSHIP=$(require_core_file lib/hooks/log_ownership_guard.py) || exit 1
 # on macOS hands it PATH=/usr/bin:/bin, where python3 is the system 3.9 with no
 # PyYAML. The policy chain then could not run, the hook failed CLOSED, and every
 # push from a scheduled job on the Mac was blocked: ledger_publish_safe "held"
-# 1-datafund and 2-datacore every hour on 2026-09-17 -- while the same push from
+# space repos every hour -- while the same push from
 # a terminal, where python3 is a pyenv 3.11 with PyYAML, went straight through.
 # Failing closed was right; resolving the interpreter by PATH order was the bug.
 # Same probe order as runtime_shell.sh, with the one module this hook needs.
@@ -156,8 +155,8 @@ if [ -n "$REFS_INPUT" ]; then
                 # on the remote's default branch, exactly as the content scan
                 # below reasons. Full history was the fallback here, and it
                 # refused every new run branch of a repo whose past holds
-                # another actor's log edits (6-meridian, 2026-09-05: no run
-                # branch could be pushed, so no claim there ever held).
+                # another actor's log edits (in one space no run branch could
+                # be pushed, so no claim there ever held).
                 for candidate in "refs/remotes/${REMOTE}/main" "refs/remotes/${REMOTE}/master" "refs/remotes/${REMOTE}/develop"; do
                     if git rev-parse --quiet --verify "$candidate" >/dev/null 2>&1; then
                         OWN_BASE=$(git merge-base "$l_sha" "$candidate" 2>/dev/null || true)

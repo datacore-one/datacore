@@ -57,7 +57,7 @@ into the ventures module (it is the ventures module's job), expose a CLI, and
 have the daemon adapter import it. One implementation, two callers.
 
 ```bash
-python3 .datacore/lib/venture_scaffold.py --name "The Practice" \
+python3 .datacore/lib/venture_scaffold.py --name "Acme Widgets" \
     --stage discovery --template blank --dry-run
 ```
 
@@ -81,7 +81,7 @@ health for ventures that already load — runtime health, not setup completeness
 and it cannot run at all before stage 1 finishes.
 
 ```
-$ python3 .datacore/lib/venture_doctor.py --space 9-practice
+$ python3 .datacore/lib/venture_doctor.py --space 4-acme
   1  constitution   FAIL  no venture.yaml
   2  intent graph   n/a   (blocked by 1)
   ...
@@ -124,7 +124,7 @@ house rule forbids, or `--force`, which rewrites the whole file and discards the
 answers already given.
 
 ```bash
-python3 .datacore/lib/intent_node.py --space 9-practice \
+python3 .datacore/lib/intent_node.py --space 4-acme \
     --id north-star-sessions --set SUCCESS "..." --clear-tag DRAFT
 ```
 
@@ -155,7 +155,7 @@ condition never a date; `shipped: false` required on public claims).
 
 **Missing:** parameterisation. One line of real change.
 
-It hardcodes `ROADMAP = REPO / "5-plur" / "roadmap.yaml"` while its three sibling
+It hardcodes `ROADMAP` to one space's `roadmap.yaml` while its three sibling
 tools all accept `--space`/`ROADMAP_SPACE`. A second venture with a roadmap
 cannot be checked with it, so the wizard cannot tell the user whether the
 roadmap it just helped write is agent-executable.
@@ -166,7 +166,7 @@ roadmap it just helped write is agent-executable.
 `.datacore/lib/sprint_init.py`
 
 `sprint.schema.json` and `validate_sprint.py` exist only inside
-`5-plur/2-projects/enterprise/`. The fourteen required root keys, the
+one team space's project folder. The fourteen required root keys, the
 `planning|active|review|retro|closed` vocabulary, the rule that `dates.retro`
 and `carryover` become required at `closed` — all of it is correct and all of it
 is trapped in one project's `scripts/`.
@@ -197,7 +197,7 @@ that both did stage 4 have it in two different shapes.
 `<space>/.datacore/roles/<role>.md`. The base archetypes exist for all twelve
 roles; nothing writes the overlay. The wizard should ask the two questions that
 matter — what this role owns here, and what it must never do — and write the
-stub. PLUR's bizdev boundary ("qualifies prospects, it never contacts them") is
+stub. A bizdev boundary such as ("qualifies prospects, it never contacts them") is
 the example of why the second question is not optional.
 
 ---

@@ -572,7 +572,7 @@ entry costs the inbox processor one archive move.
 
 Step A already copied this session's full transcript and every subagent transcript to `.datacore/state/sessions/archive/<date>/<session-id>/` with `learning_status: pending`. The nightly sweep (`io.datacore.session-learning`, 05:20) reads the whole day's sessions in one batch and writes the engrams.
 
-**Why it moved.** Measured over 54 runs: learning inside wrap-up cost a median 405k output tokens and ~14 subagent transcripts per session, and returned 3.6 engrams — about 112k output tokens each. It also never terminated: 5-plur's classifier cursor sat at 2026-07-30 while four consecutive passes re-read the same files and appended another run note explaining why they weren't advancing it, and all 37 candidates it queued are *still* unreviewed because the `/today` step they were deferred to did not exist. Batching the day removes the per-session fixed cost, sees cross-session repetition that a single-session pass structurally cannot, and replaces the date cursor — the thing that stalled — with a per-session claim that cannot skip work.
+**Why it moved.** Measured over 54 runs: learning inside wrap-up cost a median 405k output tokens and ~14 subagent transcripts per session, and returned 3.6 engrams — about 112k output tokens each. It also never terminated: one space's classifier cursor sat on the same date while four consecutive passes re-read the same files and appended another run note explaining why they weren't advancing it, and all 37 candidates it queued are *still* unreviewed because the `/today` step they were deferred to did not exist. Batching the day removes the per-session fixed cost, sees cross-session repetition that a single-session pass structurally cannot, and replaces the date cursor — the thing that stalled — with a per-session claim that cannot skip work.
 
 **What still belongs in the session:** calling `plur_learn` the moment the user corrects you. That path produced essentially all of the engrams that actually landed. It is not affected by any of this.
 
@@ -894,7 +894,7 @@ Report the counts for all four in §10. "Nothing to push" and "I left 4 files
 behind" must never read the same.
 
 **Guards it inherits from the retired `./sync`, each bought with an incident:**
-- **Refuses to push from a non-default branch** unless `DATACORE_SYNC_ALLOW_BRANCH=1`. A warning alone let 610 commits pile up on a feature branch in 5-plur for two months — 52 zettels, every weekly content calendar since mid-June — pushed, but where nobody reads.
+- **Refuses to push from a non-default branch** unless `DATACORE_SYNC_ALLOW_BRANCH=1`. A warning alone let 610 commits pile up on a feature branch in one team space for two months — 52 zettels, every weekly content calendar since mid-June — pushed, but where nobody reads.
 - **A rejected commit never falls through to a push.** It reports `COMMIT REJECTED` instead of a run that looks clean.
 - **Names the push failure** rather than collapsing four causes into one message.
 - **Reports `preexisting_unpushed_commits`** — a push carries every earlier unpushed commit on the branch. That is git, not a choice, and pretending the push was fully scoped would be false.
@@ -1142,10 +1142,10 @@ python3 .datacore/modules/comms/lib/content_engine.py session-posts "SESSION_SUM
 
 Or if the script is unavailable, generate manually:
 
-**Personal X (@jssr)** — building in public, casual, what you worked on.
+**Personal X (the owner's account)** — building in public, casual, what you worked on.
 Max 280 chars. Specific, authentic.
 
-**Project X (@FairDataSociety or @plur_ai)** — what shipped or what's interesting
+**Project X (the project's account)** — what shipped or what's interesting
 to that community. Max 280 chars.
 
 **LinkedIn** — 150-300 words. Professional but authentic. Strong hook.
@@ -1384,7 +1384,7 @@ In addition to listing artifacts in the journal, append each artifact to the mon
 | 03-18 | Voice Terminal | project-doc | Comprehensive product spec | 0-personal/notes/pages/datacore-voice-terminal.md |
 | 03-18 | Voice Terminal | 3d-model | Blender model with components | 0-personal/notes/pages/datacore-voice-terminal.blend |
 | 03-18 | Voice Terminal | render | 40+ product concept renders | 0-personal/notes/pages/datacore-voice-terminal-render-v*.png |
-| 03-17 | FDS X Campaign | strategy | Campaign strategy v6 | 3-fds/1-tracks/comms/campaigns/.../campaign-strategy-v6.md |
+| 03-17 | X Campaign | strategy | Campaign strategy v6 | [N]-team/1-tracks/comms/campaigns/.../campaign-strategy-v6.md |
 ```
 
 **Artifact index rules:**
@@ -1407,7 +1407,7 @@ them. Flag only genuine gaps.
 
 ### 11. Postable Moment Detection (Build in Public)
 
-**Purpose:** Flag session moments worth sharing on X (@jssr). Show don't tell - short demos, absorptions, before/afters, surprising results.
+**Purpose:** Flag session moments worth sharing on X (the owner's account). Show don't tell - short demos, absorptions, before/afters, surprising results.
 
 Scan the session for:
 - **Framework absorptions** - read something, integrated it, shipped it (with timing)

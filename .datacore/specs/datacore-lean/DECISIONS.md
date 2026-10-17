@@ -20,7 +20,7 @@ safety or data impact.
 ## GTD / org
 11. **DIP-0009 transitions** (gtd-state): should the adapter refuse moves the v2.0 table forbids? The code allows 49 of them, including REVIEW→TODO/WAITING and DEFERRED→anything other than TODO. `gtd_decision_board` (someday path) and `delegation_gate` rely on some of these. Also: should DEFERRED→CANCELLED be allowed?
 12. "REVIEW exits are owner only": enforce it? If so, what identity counts as the owner?
-13. task_cleanup dup-ids: skip the inbox.org / generated next_actions.org pair that shares ids by design? Is the 6-meridian hold still needed?
+13. task_cleanup dup-ids: skip the inbox.org / generated next_actions.org pair that shares ids by design? Is the per-space hold still needed?
 14. org_workspace package (a separate repo): should `StateConfig.default()` drop QUEUED/WORKING/FAILED and move DEFERRED to the done class?
 15. nightshift_parser `_persist_task`: DONE/CANCELLED sends only `item.update`, the same defect already fixed in the adapter. Reuse `_ledger_emit_close`?
 16. org_transaction: should `write_org_text` refuse to overwrite a file that was not watched first? That enforces read-before-write and changes the API.

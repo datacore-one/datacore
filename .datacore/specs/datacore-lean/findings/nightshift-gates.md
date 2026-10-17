@@ -260,7 +260,7 @@ executor are modelled over one `executionGaps`; `gate_eq_executor` (every
 property combination, both roadmap cases), `gate_never_weaker`,
 `gate_never_stricter`; refutation `old_executor_weaker_than_gate` replaces
 `roadmap_clause_is_stricter`. Mutation: an executor that ignores the roadmap flag
-breaks `gate_eq_executor`. Impact: in 2-datacore and 5-plur (the spaces with a
+breaks `gate_eq_executor`. Impact: in two spaces (the spaces with a
 roadmap.yaml today) nightshift no longer selects :AI: tasks without ROADMAP.
 
 Tests: `lib/tests/test_decisions_nightshift_b.py` (N5, N7, N8 gate side),

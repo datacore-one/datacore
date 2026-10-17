@@ -66,7 +66,7 @@ Each space is a separate git repo with its own CLAUDE.md, org files, knowledge b
 ### Personal (0-personal/)
 
 - `org/inbox.org` — single capture point (sacred — always return to clean)
-- **Parked or deferred work never goes into a new side file** (`*-parked.org`, a "Parked" heading left in a queue file) — nobody processes those. Not-now items go to `someday.org`, the GTD list (in a ledger space, set them DEFERRED in place). Work that waits for the owner's decision — e.g. tasks taken out of a nightshift queue — stays in `org/inbox.org`, marked `[NEEDS_REVIEW]` (gtd-inbox-processor spec; owner, 2026-10-01).
+- **Parked or deferred work never goes into a new side file** (`*-parked.org`, a "Parked" heading left in a queue file) — nobody processes those. Not-now items go to `someday.org`, the GTD list (in a ledger space, set them DEFERRED in place). Work that waits for the owner's decision — e.g. tasks taken out of a nightshift queue — stays in `org/inbox.org`, marked `[NEEDS_REVIEW]` (gtd-inbox-processor spec).
 - `org/next_actions.org` — tasks with `:AI:` tags for overnight delegation
 - `notes/` — Obsidian PKM (journals, zettel, literature, pages)
 
@@ -142,7 +142,7 @@ creds get <id-or-VAR_NAME> --consumer <who-wants-it>
 ```
 
 Always write it as `creds …` — when running it and in every command you hand the owner.
-Never spell it `python3 .datacore/lib/creds.py …` (owner, asked repeatedly; ENG-2026-10-08-051).
+Never spell it `python3 .datacore/lib/creds.py …`.
 After `creds add`, run `creds sync` yourself before `creds get` — a new value is not
 served until the env is reassembled.
 
@@ -238,7 +238,7 @@ Detection: `python3 .datacore/lib/focus_mode.py detect`
 
 - **Commit with explicit paths:** `git commit -m "..." -- <your files>`. Never `git add <file> && git commit`, `git commit -a` or `git add .`: a bare commit takes everything already staged, and a change you did not make that is staged or edited in the working tree belongs to someone else. It stays pending exactly as you found it — not committed, not unstaged, not stashed.
 - Push only to a branch you made or one the owner named. Never force-push, rebase or otherwise rewrite shared history.
-- **A git problem is reported, not tidied.** When a pull, merge or push is blocked by changes you did not make, stop and say so. Never stash, `--autostash`, `reset`, `checkout <path>`, `restore` or `clean` to get past it, and never `stash drop`: those hide or discard another writer's work — on 2026-09-30 an automated job stashed five ledger events that way.
+- **A git problem is reported, not tidied.** When a pull, merge or push is blocked by changes you did not make, stop and say so. Never stash, `--autostash`, `reset`, `checkout <path>`, `restore` or `clean` to get past it, and never `stash drop`: those hide or discard another writer's work — an automated job once stashed ledger events that way.
 
 > Detailed conventions are in engram memory (DIP pack). Call `plur_recall_hybrid` for specifics.
 
@@ -343,11 +343,11 @@ Then the maintenance question: will this create burden disproportionate to its v
 If a task can be done in <20 lines of shell, do that first. Propose the module/system
 version only if the user explicitly asks.
 
-Rung 2 is the one that pays and the one that gets skipped. Measured 2026-09-08 on a
-four-way run of the same issue: the issue said in as many words that a relevant module
-already existed and should be coordinated with rather than duplicated. **Three of four
-runs never opened it**; one wrote 404 lines into a file the issue never mentioned. The
-run that climbed the ladder was the only one that found it. Wrong-target work costs
+Rung 2 is the one that pays and the one that gets skipped. In a multi-run comparison
+of the same issue, where the issue said in as many words that a relevant module
+already existed and should be coordinated with rather than duplicated, **most runs
+never opened it**, and one wrote hundreds of lines into a file the issue never
+mentioned. The run that climbed the ladder was the only one that found it. Wrong-target work costs
 twice — once to write, once for a human to reject.
 
 Adapted from ponytail (DietrichGebert/ponytail, MIT). The ladder is adopted; the
@@ -376,15 +376,15 @@ Three red lines, no exceptions: **judgment stays with the human**; **responsibil
 does not transfer** (anything whose failure you cannot afford is not handed over
 automatically); and a **self-rewriting loop needs stricter review, not looser**.
 
-Adapted from ECC's `loop-design-check` (affaan-m/ECC, MIT). Failure mode 2 was live
-here until 2026-09-08: nightshift graded its own work against its own tests, through a
-gate that returned "passed" on every path including failure.
+Adapted from ECC's `loop-design-check` (affaan-m/ECC, MIT). Failure mode 2 is not
+hypothetical: an overnight runner once graded its own work against its own tests,
+through a gate that returned "passed" on every path including failure.
 
 ### Size the work before dispatching it
 Ask whether the task fits the budget it is being given, and decompose it if not. An
 agent stopped mid-flight by a turn cap returns nothing, having spent everything.
-Measured 2026-09-08: four runs, 324 turns, a full day's compute budget, zero
-completions — every one of them cut off by a cap nobody had checked the task against. This is the largest single source
+Several runs can spend a full day's compute budget with zero completions — every one
+of them cut off by a cap nobody had checked the task against. This is the largest single source
 of waste and it costs nothing to avoid.
 
 ### Tool Selection Discipline

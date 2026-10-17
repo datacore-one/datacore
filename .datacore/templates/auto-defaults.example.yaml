@@ -12,7 +12,7 @@
 # Tone: defaults should embody "what's the safe action when nobody answers?"
 # For most ventures, safe = kill/rollback/throttle (cheap to undo).
 # For trading/capital ventures, safe = NO-ACTION (expensive to undo).
-# See 6-meridian/.datacore/roles/cio.md for the inverse pattern.
+# See a trading space's .datacore/roles/cio.md for the inverse pattern.
 
 falsified_hypothesis:
   description: "Hypothesis fails all gates at the configured sample size."

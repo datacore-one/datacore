@@ -1,12 +1,13 @@
 """/today must read the market-phase report and the news where their producers put them.
 
-2026-09-30: the market-phase job on nightshift ran at 05:31 UTC and published
-6-meridian/reports/market-phase/market-phase-2026-09-30.md, which was on the Mac
-by 07:04 UTC. /today step 11 still said to look in 0-personal/0-inbox/ (where the
-job wrote before it got its adapter on 2026-09-17), found nothing, and the
-briefing had no market phase.
+The market-phase job on the executor host published its report into the trading
+space (`[N]-trading/reports/market-phase/`), and it reached the workstation in
+time. /today step 11 still said to look in 0-personal/0-inbox/ (where the job
+wrote before it got its adapter), found nothing, and the briefing had no market
+phase. today.md names the trading space by placeholder; the installation's real
+slug comes from its registry.
 
-The same morning step 10 refreshed headlines.json correctly -- all 500 items
+Another morning step 10 refreshed headlines.json correctly -- all 500 items
 scored -- but the briefing read keys the store does not have (`score`,
 `ai_score`), got None for every item and reported the news as unscored. Step 10
 now reads through news_briefing.py, which knows the store's fields.
@@ -32,7 +33,7 @@ def _step(n: int) -> str:
 def _market_phase_dir() -> str:
     sys.path.insert(0, str(NIGHTSHIFT_LIB))
     import market_phase_orchestrator as mpo
-    return f"6-meridian/{mpo.REPORT_DIR.as_posix()}"
+    return f"[N]-trading/{mpo.REPORT_DIR.as_posix()}"
 
 
 def test_step_11_reads_the_market_phase_report_where_the_job_publishes_it():

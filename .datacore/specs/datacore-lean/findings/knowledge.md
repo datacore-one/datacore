@@ -42,7 +42,7 @@ text reaches the output.
 code wrote `CLAUDE.md`, and it was untracked and not ignored
 (`test_private_layer_is_not_written_where_git_would_track_it`).
 *Live impact:* none today. All four composed files with a local layer
-(`CLAUDE.md`, `2-datacore/`, `4-forge/`, `6-meridian/`) report
+(`CLAUDE.md` and several space folders) report
 `check-ignore` 0, so the fix changes no live rebuild.
 *Mutation:* with the guard removed (`newWrites := anyLayer`),
 `new_never_leaks` no longer proves.
