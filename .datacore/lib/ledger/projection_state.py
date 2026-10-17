@@ -83,8 +83,18 @@ def snapshot(text, space):
             # resolve that: one closed task stopped 0-personal's ingest on every
             # cycle (2026-09-16). A logbook with entries in it is data and is
             # compared as before.
-            from .projector import strip_empty_logbook
+            from .projector import _clean_title_and_tags, strip_empty_logbook
             payload['org']['body'] = strip_empty_logbook(body_text(node).rstrip())
+            # Read the heading as the projector will WRITE it. A tag block the
+            # parser cannot read (one hyphen voids it) stays inside the title
+            # with no tags; the projector splits it out and replaces the bad
+            # characters. Compared raw, the file and the ledger's rendering of
+            # an untouched item differ, and for an item the base has not seen
+            # yet the merge calls that a concurrent edit on every cycle.
+            title, tags = _clean_title_and_tags(payload['title'], payload['tags'])
+            if (title, tags) != (payload['title'], payload['tags']):
+                payload['effective_tags'] = sorted(set(payload['effective_tags']) | set(tags))
+                payload['title'], payload['tags'] = title, tags
             created = node.get_property('CREATED')
             if created:
                 created = re.sub(r'^\[(\d{4}-\d{2}-\d{2})(?: [A-Za-z]{3})?\]$', r'\1', str(created))
