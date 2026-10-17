@@ -249,3 +249,57 @@ def test_client_session_may_cd_into_the_client_space_and_commit(install, tmp_pat
     root, client = install["root"], install["client"]
     _run(_write(client / "notes.md", root), root, tmp_path)
     assert _run(_bash(f"cd {client} && git add notes.md && git commit -m 'x'", root), root, tmp_path) == {}
+
+
+# ── in-space work is not refused (task 5146fbf3, session f603bf9d) ────────────
+# The hook resolved relative paths against the session cwd instead of the
+# directory the command runs in (git -C, a leading cd), counted the session cwd
+# as a write target even when git -C pointed elsewhere, treated words in a
+# heredoc or a quoted search pattern as paths or as a write.
+
+def _rel(path: Path, root: Path) -> str:
+    return str(path.relative_to(root))
+
+
+@pytest.mark.parametrize("command", [
+    # relative paths, from the install root
+    lambda c, r: (f"git -C {_rel(c, r)} add org/inbox.org journal/2026-10-17.md && "
+                  f"git -C {_rel(c, r)} commit -m 'x' -- org/inbox.org journal/2026-10-17.md"),
+    # absolute paths, from the install root
+    lambda c, r: (f"git -C {c} add {c}/org/inbox.org && "
+                  f"git -C {c} commit -m 'x' -- {c}/org/inbox.org {c}/CLAUDE.space.md"),
+    # from inside the repo, after a cd
+    lambda c, r: f"cd {c} && git add org/inbox.org && git commit -m 'x' -- org/inbox.org",
+    # a heredoc whose text holds an apostrophe and quoted relative paths
+    lambda c, r: (f"cat >> {c}/journal/2026-10-17.md <<'EOF'\n"
+                  "The customer's audit: see 'org/inbox.org' and \"journal/x.md\".\nEOF"),
+    # a read-only search whose pattern holds a > sign
+    lambda c, r: f"grep -rn 'a -> b' {c}/journal | head -5",
+    lambda c, r: f"grep -rn \"token\" {_rel(c, r)}/org 2>/dev/null | head",
+])
+def test_client_session_in_space_commands_are_allowed(install, tmp_path, command):
+    root, client = install["root"], install["client"]
+    _run(_write(client / "notes.md", root), root, tmp_path)
+    out = _run(_bash(command(client, root), root), root, tmp_path)
+    assert out.get("permissionDecision") != "deny", out
+
+
+def test_client_session_in_space_commit_from_inside_the_repo(install, tmp_path):
+    root, client = install["root"], install["client"]
+    _run(_write(client / "notes.md", root), root, tmp_path)
+    out = _run(_bash("git add org/inbox.org && git commit -m \"the customer's notes\" -- org/inbox.org",
+                     client), root, tmp_path)
+    assert out.get("permissionDecision") != "deny", out
+
+
+@pytest.mark.parametrize("command", [
+    lambda c, t, r: f"git -C {t} add a.py && git -C {t} commit -m 'x' -- a.py",
+    lambda c, t, r: f"cd {c} && echo x > ../../../2-datacore/a.md",
+    lambda c, t, r: f"git -C {_rel(c, r)} status && echo x > {_rel(t, r)}/a.md",
+    lambda c, t, r: f"cat > {t}/a.md <<'EOF'\nThe customer's text\nEOF",
+])
+def test_client_session_write_outside_is_still_refused(install, tmp_path, command):
+    root, client, team = install["root"], install["client"], install["team"]
+    _run(_write(client / "notes.md", root), root, tmp_path)
+    out = _run(_bash(command(client, team, root), root), root, tmp_path)
+    assert out.get("permissionDecision") == "deny", out

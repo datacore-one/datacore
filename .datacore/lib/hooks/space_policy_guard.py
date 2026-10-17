@@ -226,22 +226,100 @@ def _space_of(path: Path):
     return _SPACE_CACHE[key]
 
 
-def _command_paths(command: str, cwd: str | None) -> list[Path]:
-    """Filesystem paths named in a shell command (absolute, ~, or containing a /)."""
-    out = []
-    for tok in _tokens(command):
-        tok = tok.lstrip("<>&|;(")
-        if "=" in tok and not tok.startswith(("/", "~", ".")):
-            tok = tok.split("=", 1)[1]
-        if not tok or "://" in tok or "/" not in tok and tok not in ("..", "~"):
-            continue
+_HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n(.*?)(?:\n\2[ \t]*(?=\n|$)|\Z)", re.S)
+_SEPARATORS = frozenset({"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"})
+_REDIRECTS = frozenset({">", ">>", "<", ">|", "&>", "&>>"})
+
+
+def _strip_heredocs(command: str) -> str:
+    """The command without heredoc bodies: their text is data, never paths or writes."""
+    return _HEREDOC.sub(lambda m: m.group(0)[: m.start(3) - m.start(0)].rstrip("\n"), command)
+
+
+def _unquoted(command: str) -> str:
+    """The command with quoted strings emptied (a search pattern or message is not a write)."""
+    return re.sub(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"", "''", command)
+
+
+def _shell_tokens(command: str) -> list[str]:
+    lex = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    try:
+        return list(lex)
+    except ValueError:
+        return _unquoted(command).split()
+
+
+def _shell_targets(command: str, cwd: str | None) -> tuple[list[Path], list[Path]]:
+    """(paths named, directories run in) for a shell command.
+
+    Each segment's relative paths resolve against the directory it runs in: a
+    ``git -C <dir>`` for that segment, else the directory of the last ``cd``,
+    else the session cwd. Heredoc bodies are skipped."""
+    tokens = _shell_tokens(_strip_heredocs(command))
+    here = Path(cwd) if cwd else None
+    paths: list[Path] = []
+    workdirs: list[Path] = []
+
+    def resolve(tok: str, base: Path | None) -> Path | None:
         p = Path(tok).expanduser()
-        if not p.is_absolute():
-            if not cwd:
+        if p.is_absolute():
+            return p
+        return base / p if base is not None else None
+
+    segments: list[list[str]] = [[]]
+    for tok in tokens:
+        if tok in _SEPARATORS:
+            segments.append([])
+        else:
+            segments[-1].append(tok)
+
+    for seg in filter(None, segments):
+        if seg[0] == "cd":
+            target = resolve(seg[1], here) if len(seg) > 1 else Path.home()
+            if target is not None:
+                here = target
+            continue
+        base = here
+        tool = Path(seg[0]).name
+        if tool == "git" and "-C" in seg[:-1]:
+            base = resolve(seg[seg.index("-C") + 1], here) or here
+        # The directory counts as a write target when the segment writes there:
+        # git/gh act on the repo they run in; a write naming a bare file lands in it.
+        bare, skip = False, False
+        for t in seg[1:]:
+            if skip or t.startswith((">", "<", "&")):  # a redirect, its target, a heredoc tag
+                skip = t in _REDIRECTS or t in ("<<", "<<-", "<<<")
                 continue
-            p = Path(cwd) / p
-        out.append(p)
-    return out
+            bare = bare or (not t.startswith("-") and "/" not in t and not t.isdigit())
+        if base is not None and _SHELL_WRITE.search(" ".join(t for t in seg if " " not in t)) and (
+                tool in ("git", "gh") or bare):
+            workdirs.append(base)
+        after_redirect = False
+        for tok in seg:
+            if tok in _REDIRECTS:
+                after_redirect = True
+                continue
+            if tok.startswith((">", "<", "&")) or tok.isdigit():
+                after_redirect = False
+                continue
+            redirect_target, after_redirect = after_redirect, False
+            if "=" in tok and not tok.startswith(("/", "~", ".")):
+                tok = tok.split("=", 1)[1]
+            if not tok or "://" in tok:
+                continue
+            if not redirect_target and "/" not in tok and tok not in ("..", "~"):
+                continue
+            p = resolve(tok, base)
+            if p is not None:
+                paths.append(p)
+    return paths, workdirs
+
+
+def _command_paths(command: str, cwd: str | None) -> list[Path]:
+    """Filesystem paths named in a shell command (absolute, ~, containing a /, or a
+    redirect target), each resolved against the directory its segment runs in."""
+    return _shell_targets(command, cwd)[0]
 
 
 def _shares_with(target, session) -> bool:
@@ -314,7 +392,6 @@ _SHELL_WRITE = re.compile(
     r"|\bgit\s+(?:-C\s+\S+\s+)*(?:add|commit|mv|rm|checkout|switch|reset|restore|stash|merge|"
     r"rebase|apply|am|cherry-pick|revert|tag|push|pull|clone|init)\b"
     r"|\bgh\s+\w+\s+(?:create|edit|comment|close|reopen|merge|delete|upload)\b")
-_LEADING_CD = re.compile(r"""^\s*cd\s+("[^"]+"|'[^']+'|[^\s;&|]+)\s*(?:&&|;)""")
 
 
 def _writes(tool: str, category: str, inp: dict) -> bool:
@@ -325,17 +402,10 @@ def _writes(tool: str, category: str, inp: dict) -> bool:
         return False
     if category == "network":
         return True
-    command = _HARMLESS_REDIRECT.sub(" ", str(inp.get("command") or ""))
+    command = _unquoted(_strip_heredocs(str(inp.get("command") or "")))
+    command = _HARMLESS_REDIRECT.sub(" ", command)
     return _SHELL_WRITE.search(command) is not None
 
-
-def _shell_workdir(command: str, cwd: str | None) -> Path | None:
-    """Where a shell command runs: the directory of a leading ``cd X &&``, else cwd."""
-    m = _LEADING_CD.match(command)
-    if m:
-        p = Path(m.group(1).strip("'\"")).expanduser()
-        return p if p.is_absolute() or not cwd else Path(cwd) / p
-    return Path(cwd) if cwd else None
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -453,8 +523,8 @@ def _main(client_only: bool = False) -> int:
     if _writes(tool, category, inp):
         where = [target]
         if tool == "Bash":
-            where = paths + [_shell_workdir(str(inp.get("command") or ""), cwd)]
-            where = [p for p in where if p is not None]
+            named, workdirs = _shell_targets(str(inp.get("command") or ""), cwd)
+            where = named + workdirs
         state = _session_state(str(payload.get("session_id") or ""))
         client = _session_client(state)
         touched = [s for s in map(_space_of, where) if s is not None and s.type == "client"]
