@@ -145,7 +145,7 @@ Caveats (NEEDS-OWNER, since a change would move fold results and state roots):
 `ledger_claim.main` uses them in place of `addressed_to`. The rules:
 - A declared writer (or an unregistered name) must be the exact actor
   (`base_writer` equality).
-- A name that is only a principal (for example `gregor`, who writes as `mac`)
+- A name that is only a principal (for example `owner`, who writes as `mac`)
   keeps today's behaviour only when that principal has exactly one writer.
 - Otherwise nobody dispatches the item, and it is reported as AMBIGUOUS.
 - A principal with no `writes_as` writes as itself.
@@ -171,7 +171,7 @@ Candidate 4c is closed.
   now dispatches as `nightshift`. New test `test_a_sibling_writer_skips_it_and_says_so`
   covers `miles` skipping and naming it. The module docstring notes L4.
 - Live impact (read-only fold of all spaces): 5 open delegated items, all
-  addressed to `miles` (1 in 2-datacore, 4 in 8-firm). Under L4 only a
+  addressed to `miles` (1 in one space, 4 in another). Under L4 only a
   dispatcher running as `miles` takes them. A dispatcher running as
   `nightshift` no longer does.
 - NOT changed (not owned): `delegation_drill.py` scenario

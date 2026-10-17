@@ -33,7 +33,7 @@ settings:
 
   username:
     description: "GitHub username to monitor mentions for"
-    default: "plur9"
+    default: ""   # required: set in module.local.yaml or GITHUB_TRIAGE_USERNAME
 
   scan_hours:
     description: "How far back to scan for activity (hours)"

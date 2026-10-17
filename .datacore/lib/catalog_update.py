@@ -12,6 +12,7 @@ Option A (2026-06-10): CATALOG.md is the published module registry —
 it must reflect reality, not hand-edits.
 """
 
+import os
 import re
 import subprocess
 import sys
@@ -24,10 +25,23 @@ DATA_DIR = Path(__file__).resolve().parents[2]
 CATALOG = DATA_DIR / '.datacore' / 'CATALOG.md'
 MODULES = DATA_DIR / '.datacore' / 'modules'
 START, END = '<!-- MODULES-TABLE:START -->', '<!-- MODULES-TABLE:END -->'
+# Modules that must not appear in this PUBLIC catalog (private repos, personal
+# accounts): `exclude:` list in the gitignored config/catalog.local.yaml, or the
+# comma-separated CATALOG_EXCLUDE env var.
+EXCLUDE_FILE = DATA_DIR / '.datacore' / 'config' / 'catalog.local.yaml'
+
+
+def excluded() -> set[str]:
+    names = {n.strip() for n in os.environ.get('CATALOG_EXCLUDE', '').split(',') if n.strip()}
+    if EXCLUDE_FILE.exists():
+        doc = yaml.safe_load(EXCLUDE_FILE.read_text(encoding='utf-8')) or {}
+        names |= {str(n) for n in (doc.get('exclude') or [])}
+    return names
 
 
 def module_rows() -> list[str]:
     rows = []
+    skip = excluded()
     for mdir in sorted(MODULES.iterdir()):
         myaml = mdir / 'module.yaml'
         if not myaml.exists():
@@ -37,6 +51,8 @@ def module_rows() -> list[str]:
         except yaml.YAMLError:
             meta = {}
         name = meta.get('name', mdir.name)
+        if name in skip or mdir.name in skip:
+            continue
         version = meta.get('version', '?')
         desc = str(meta.get('description', ''))[:80].replace('|', '/')
         remote = ''
@@ -53,9 +69,10 @@ def module_rows() -> list[str]:
                                  '--format=%ad', '--date=short'],
                                 capture_output=True, text=True)
             last = lr.stdout.strip()
-        host = ('local-only' if not remote
-                else 'Gitea' if '100.115' in remote or ':2222' in remote
-                else remote.split('/')[0])
+        if remote and 'github.com' not in r.stdout:
+            remote, host = '', 'self-hosted'   # never publish a private server's URL
+        else:
+            host = 'local-only' if not remote else remote.split('/')[0]
         rows.append(f"| {name} | {version} | {desc} | "
                     f"{remote or '—'} | {host} | {last or '—'} |")
     return rows

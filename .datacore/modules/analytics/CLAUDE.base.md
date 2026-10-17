@@ -4,7 +4,7 @@ Website analytics via PostHog — daily metrics across all projects.
 
 ## What It Does
 
-Adds a **Web Analytics** section to `/today` showing visitors, pageviews, sessions, and day-over-day change for each PostHog project (Datacore, PLUR, Datafund).
+Adds a **Web Analytics** section to `/today` showing visitors, pageviews, sessions, and day-over-day change for each configured PostHog project.
 
 ## How It Works
 
@@ -17,13 +17,10 @@ Adds a **Web Analytics** section to `/today` showing visitors, pageviews, sessio
 
 ## Projects Tracked
 
-| Project | ID | Sites |
-|---------|------|-------|
-| Datacore | 156062 | datacore.one, softwareofyou.com |
-| PLUR | 156064 | plur.ai |
-| Datafund | 156069 | datafund.io |
+The project list is per installation: `projects.local.json` in this module
+(gitignored, `{"Name": project_id}`) or `POSTHOG_PROJECTS="Name=id,Name=id"`.
+Without either, the script says so and exits 1.
 
-To add a project, edit `PROJECTS` dict in `lib/posthog_daily.py`.
 
 ## Files
 

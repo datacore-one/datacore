@@ -789,7 +789,7 @@ theorem sibling_refused {W : Type} (isWriter : W → Bool) (principalWriters : W
   unfold dispatchOk; simp [hw, hne]
 
 /-- Today's behaviour is kept for a principal-only name with exactly one writer
-(`gregor`, who writes as `mac`). -/
+(`owner`, who writes as `mac`). -/
 theorem single_writer_principal_kept {W : Type} (isWriter : W → Bool)
     (principalWriters : W → Option (List W)) (a w : W)
     (hn : isWriter a = false) (hp : principalWriters a = some [w]) :

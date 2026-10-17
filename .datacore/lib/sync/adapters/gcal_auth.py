@@ -6,12 +6,12 @@ Each account gets its own token file: google_calendar_token_{account}.json
 
 Usage:
     python gcal_auth.py setup                      # Setup default account
-    python gcal_auth.py setup --account datafund    # Setup named account
+    python gcal_auth.py setup --account work        # Setup named account
     python gcal_auth.py test                        # Test default
-    python gcal_auth.py test --account datafund     # Test named account
+    python gcal_auth.py test --account work         # Test named account
     python gcal_auth.py list                        # List events from default
-    python gcal_auth.py list --account datafund     # List events from named account
-    python gcal_auth.py calendars --account datafund
+    python gcal_auth.py list --account work         # List events from named account
+    python gcal_auth.py calendars --account work
 """
 
 import json

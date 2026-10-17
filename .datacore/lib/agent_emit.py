@@ -189,8 +189,8 @@ def emit_message(
     """Convenience wrapper for outbound messages from an agent.
 
     Examples:
-        emit_message("data", "telegram", "Replied to @gregor: ...",
-                     recipient="@gregor", message_id="123")
+        emit_message("data", "telegram", "Replied to @owner: ...",
+                     recipient="@owner", message_id="123")
         emit_message("data", "telegram", "Posted journal summary",
                      details={"chat_id": -100, "tokens": 250})
     """

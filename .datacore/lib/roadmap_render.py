@@ -1431,7 +1431,7 @@ def execution_html(r: dict) -> str:
     """Execution, read live from the org files at render time.
 
     Three questions, in the order a reader asks them: what is waiting on
-    Gregor, where is the work actually pointed, and what does the roadmap call
+    the owner, where is the work actually pointed, and what does the roadmap call
     current that nobody is working on.
     """
     import subprocess, collections

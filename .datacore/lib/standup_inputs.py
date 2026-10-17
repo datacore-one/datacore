@@ -19,8 +19,8 @@ it into the journal-entry-writer prompt.
 
 Usage:
     python3 .datacore/lib/standup_inputs.py \\
-        --space 1-datafund \\
-        --contributor plur9 \\
+        --space 1-team \\
+        --contributor <github-user> \\
         --accomplishments-file /tmp/accomplishments.txt \\
         [--continuation "Polish the spec"] \\
         [--blocker-threshold 3]

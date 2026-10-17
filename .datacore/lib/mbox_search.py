@@ -16,14 +16,14 @@ Usage
     python3 mbox_search.py accounts
 
     # Messages from a domain, newest first
-    python3 mbox_search.py search --account gregor@plur.si --from maha.si
+    python3 mbox_search.py search --account you@example.com --from vendor.example
 
     # Narrow by body keyword, and show the matching lines
-    python3 mbox_search.py search --account gregor@plur.si \
-        --from maha.si --body 'geslo|password' --context 2
+    python3 mbox_search.py search --account you@example.com \
+        --from vendor.example --body 'invoice|receipt' --context 2
 
     # Everything mentioning a term, across every account
-    python3 mbox_search.py search --body 'izvid' --limit 40
+    python3 mbox_search.py search --body 'report' --limit 40
 
 Matching is case-insensitive regex throughout. Bodies are decoded from
 base64/quoted-printable and charset-normalised before matching, because the
@@ -150,11 +150,11 @@ def _decode_header(raw: Optional[str]) -> str:
         decoded = raw
     # Collapse folded whitespace. Long filenames are split across physical lines
     # by RFC 2231 continuation, so a decoded filename can contain a literal
-    # newline: "Zavcer Gregor Lipoprotein A\n 27.7.23.pdf". That silently defeats
+    # newline: "Quarterly Statement Account Summary\n 2024.pdf". That silently defeats
     # any caller regex using `.` or anchoring with `$` — `.` does not cross a
     # newline — so an extension filter drops exactly the documents with the
     # longest, most descriptive names. It reported "22 attachments" and looked
-    # complete while omitting the omega-3 and Lipoprotein(a) reports.
+    # complete while omitting the two longest-named reports.
     return re.sub(r"\s+", " ", decoded).strip()
 
 

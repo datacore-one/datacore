@@ -44,6 +44,7 @@ def _setup(tmp_path):
     (bindir / "claude").chmod(0o755)
     env = dict(os.environ, DATA_DIR=str(data), CLAUDE_BIN=str(bindir / "claude"),
                STUB_LOG=str(tmp_path / "calls.log"), TRIAGE_NO_PUSH="1", TRIAGE_LOG_DIR=str(tmp_path / "logs"),
+               TRIAGE_OWNER="octo-owner", TRIAGE_ENTERPRISE_REPO="octo-org/private-repo",
                GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
     return data, personal, env
 
@@ -66,7 +67,7 @@ def test_two_separate_runs_readonly_gh_and_commit_only_outputs(tmp_path):
     assert "stray.txt" not in committed
     # The owner is named explicitly: on the nightshift host gh is logged in as the bot, not the owner.
     owners = set((tmp_path / "calls.log.owner").read_text().split()) - {"OWNER"}
-    assert owners == {"plur9"}
+    assert owners == {"octo-owner"}
 
 
 def test_sunday_is_a_full_sweep(tmp_path):
@@ -94,3 +95,23 @@ def test_the_output_folder_is_not_ignored_by_the_personal_space():
     r = subprocess.run(["git", "-C", str(personal), "check-ignore", "-q",
                         "content/reports/github-triage/2026-01-01-public.board.json"])
     assert r.returncode == 1, "0-personal's .gitignore ignores the triage output folder"
+
+
+def test_no_owner_configured_fails_clearly(tmp_path):
+    data, personal, env = _setup(tmp_path)
+    env.pop("TRIAGE_OWNER", None)
+    env.pop("GITHUB_TRIAGE_USERNAME", None)
+    r = subprocess.run(["bash", str(RUNNER), "--date", "2026-09-30"], capture_output=True, text=True, env=env)
+    assert r.returncode == 2
+    assert "TRIAGE_OWNER" in r.stderr
+    assert not (tmp_path / "calls.log").exists()
+
+
+def test_enterprise_repo_unset_is_reported_not_run(tmp_path):
+    data, personal, env = _setup(tmp_path)
+    env.pop("TRIAGE_ENTERPRISE_REPO", None)
+    r = subprocess.run(["bash", str(RUNNER), "--date", "2026-09-30"], capture_output=True, text=True, env=env)
+    assert r.returncode == 1
+    assert "enterprise NOT RUN" in r.stdout
+    calls = (tmp_path / "calls.log").read_text().splitlines()
+    assert [c.split()[0] for c in calls] == ["public"]

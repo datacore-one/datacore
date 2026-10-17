@@ -11,7 +11,7 @@ description: |
 
 # GitHub triage
 
-The method is the owner's 2026-09-11 triage prompt, kept verbatim in
+The method is the owner's triage prompt, kept verbatim in
 `reference/triage-prompt-2026-09-11.md`. **Read it in full and follow it.**
 This file only adds how the nightly run is scoped, bounded and delivered.
 
@@ -19,8 +19,9 @@ This file only adds how the nightly run is scoped, bounded and delivered.
 
 - `SCOPE` — `public` or `enterprise`. **Never both in one run.**
   - `public`: the relevant repositories under datacore-one, datafund,
-    fairDataSociety, plur-ai and plur9, **excluding `plur-ai/enterprise`**.
-  - `enterprise`: `plur-ai/enterprise` only. This run touches nothing public,
+    fairDataSociety, plur-ai and `OWNER`'s own account, **excluding
+    `ENTERPRISE_REPO`**.
+  - `enterprise`: `ENTERPRISE_REPO` only. This run touches nothing public,
     and its outputs never name a customer ("the customer", "an enterprise
     deployment").
 - `MODE` — `incremental` (Monday–Saturday) or `full` (Sunday).
@@ -33,6 +34,8 @@ This file only adds how the nightly run is scoped, bounded and delivered.
     describes. Deep-review at most 40 PRs, ranked by the prioritisation model.
 - `DATE` — the run date (YYYY-MM-DD), used in the output file names.
 - `OUT` — the output folder inside `0-personal/` (`content/reports/github-triage`).
+- `ENTERPRISE_REPO` — the private enterprise repository (`owner/repo`), set
+  per installation by the runner.
 - `OWNER` — the owner's GitHub login. "Me", "my PRs" and "waiting on me" in
   the reference prompt all mean this login.
 

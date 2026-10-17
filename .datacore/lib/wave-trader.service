@@ -1,6 +1,7 @@
 # WaveTrader systemd unit — TEMPLATE.
 #
-# Install: substitute <HOME> with the real home (e.g. /home/<account>) and copy to
+# Install: substitute <HOME> with the real home (e.g. /home/<account>) and <USER>
+# with the service account, then copy to
 #   /etc/systemd/system/wave-trader.service, then `systemctl daemon-reload`.
 #
 # PYTHONPATH note: the executor imports `datacore.ledger` (DIP-0047 order
@@ -15,7 +16,7 @@ StartLimitIntervalSec=300
 
 [Service]
 Type=simple
-User=gregor
+User=<USER>
 WorkingDirectory=<HOME>/Data/.datacore/modules/trading/lib/gateio
 Environment=PYTHONPATH=<HOME>/Data/.datacore/modules/trading/lib/gateio:<HOME>/Data/.datacore/lib
 # --shadow flag for paper-trading. Remove flag to go live.

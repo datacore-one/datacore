@@ -27,7 +27,7 @@ def _board(**over):
              "context": "Checks failing on the head commit.", "suggested": "fix",
              "options": [{"value": "fix", "label": "Fix the failing checks", "consequence": "Task created."},
                          {"value": "close", "label": "Close the PR", "consequence": "Closed after you apply."}],
-             "meta": ["From: plur9 · 2026-09-29", "https://github.com/plur-ai/plur/pull/1353"]},
+             "meta": ["From: octo-owner · 2026-09-29", "https://github.com/plur-ai/plur/pull/1353"]},
         ]}],
         "prefill": {},
     }

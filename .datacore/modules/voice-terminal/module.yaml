@@ -40,9 +40,9 @@ hooks:
          - End with "Your full report is on your desk" or a natural variant.
          - No markdown. No bullets. No emoji. Pure spoken text.
 
-      2. Do NOT send audio from here. Winston's morning pipeline is the only
-         sender of the audio briefing (owner, 2026-09-26: "keep only Winston's";
-         two producers sent it twice). The spoken text above is kept in the
+      2. Do NOT send audio from here. The chief-of-staff morning pipeline is
+         the only sender of the audio briefing (two producers once sent it
+         twice). The spoken text above is kept in the
          journal for reading and for local playback on request.
 
 settings:
@@ -52,10 +52,10 @@ settings:
   # Explicit consent to send briefing text to Google if local TTS fails.
   allow_cloud_tts: false
   tts_voice: "af_heart"
-  tts_speed: 1.12   # 1.0 read as plodding at ~145 wpm; 1.12 lands ~162 wpm (Gregor, 2026-08-31)
+  tts_speed: 1.12   # 1.0 read as plodding at ~145 wpm; 1.12 lands ~162 wpm
   language: "en"
-  brain: "local"  # local (Mac) or network (Blackpi IP)
-  telegram_delivery: false   # only Winston sends audio (owner, 2026-09-26)
+  brain: "local"  # local (this machine) or network (a self-hosted server on your network)
+  telegram_delivery: false   # the chief-of-staff pipeline is the only audio sender
 
 dependencies:
   - core

@@ -1416,8 +1416,8 @@ def unmanaged_service_processes(names=("hermes_cli.main gateway", "datacored"),
 
     A service-user migration leaves the OLD user's process running: it has no
     unit, logs nowhere, and keeps doing its job — a second Telegram consumer,
-    a second writer. On 2026-09-07 a gateway orphaned by the 2026-08-13
-    root->gregor move had been running 25 days in `user-0.slice`, and was
+    a second writer. Once, a gateway orphaned by a service-user
+    move (root -> the owner's account) had been running 25 days in `user-0.slice`, and was
     found only because someone went looking for a third poller."""
     procfs = procfs or Path("/proc")
     uid = os.getuid() if uid is None else uid
@@ -1455,7 +1455,7 @@ def unmanaged_service_processes(names=("hermes_cli.main gateway", "datacored"),
 def check_migration_leftovers(rep: Report) -> None:
     """The residue of a service-user move, as rows instead of incidents.
 
-    The 2026-08-13 root->gregor move left three things behind, each found
+    The service-user move (root -> the owner's account) left three things behind, each found
     separately and weeks apart: an orphaned gateway process, a `plur` symlink
     into root's home that the service user could not execute, and a deploy
     key. Three incidents, one cause. These two rows catch that cause."""

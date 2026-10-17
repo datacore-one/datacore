@@ -15,7 +15,7 @@ OUTPUT
     {
       "ts":              "2026-05-17T12:34:56.789Z",
       "session":         "b1c30f97-fc29-475a-b6ac-20c2242da634",
-      "session_project": "-Users-gregor-Data",
+      "session_project": "-Users-alice-Data",
       "source":          "tool" | "hook",
       "tool":            "mcp__plur__plur_recall_hybrid" | "hook_attachment",
       "query":           "first 200 chars of args.query or args.task",

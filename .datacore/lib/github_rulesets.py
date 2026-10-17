@@ -7,10 +7,10 @@ rulesets, and without this task those repos had detection only: every check
 lived on a client that an agent can reconfigure or a fresh clone never gets.
 
 WHAT IS DELIBERATELY NOT ENFORCED: pull requests. Space repos are written
-directly on `main` by nightshift, miles, data and winston — that is the design
+directly on `main` by the unattended agents — that is the design
 (DIP-0011 claim-by-push), not an oversight, and requiring review would stop
-every unattended actor. The operator has also said plainly that plur-space
-should carry no protection.
+every unattended actor. The operator can exclude a repository explicitly
+(`protect: false` in the local target list).
 
 What IS enforced is the pair of operations no legitimate actor performs and
 both of which destroy history irrecoverably:
@@ -31,20 +31,30 @@ import argparse
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 RULESET_NAME = "datacore-dip-0046"
 
 # Space repos, by remote. Deliberately explicit rather than derived: this
 # writes to github.com, and a glob that quietly grows is not what should
 # decide which repositories get their settings changed.
-TARGETS = [
-    ("datafund/datafund-space", True),
-    ("fairDataSociety/fds-space", True),
-    ("datacore-one/datacore-space", True),
-    ("plur9/the-firm-space", True),
-    # Excluded by explicit operator instruction, not by omission.
-    ("plur-ai/plur-space", False),
-]
+# The list is per installation and lives in the gitignored
+# config/github_rulesets.local.yaml:
+#
+#   targets:
+#     - {repo: "<org>/<team>-space", protect: true}
+#     - {repo: "<org>/<other>-space", protect: false}   # excluded on purpose
+#
+# Nothing configured means nothing is touched; the script says so.
+TARGETS_FILE = Path(__file__).resolve().parents[1] / "config" / "github_rulesets.local.yaml"
+
+
+def load_targets() -> list[tuple[str, bool]]:
+    if not TARGETS_FILE.exists():
+        return []
+    import yaml
+    doc = yaml.safe_load(TARGETS_FILE.read_text(encoding="utf-8")) or {}
+    return [(str(t["repo"]), bool(t.get("protect", True))) for t in doc.get("targets") or []]
 
 
 def gh(*args: str, body: dict | None = None) -> tuple[int, str]:
@@ -90,8 +100,12 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true")
     a = ap.parse_args()
 
+    targets = load_targets()
+    if not targets:
+        print(f"no targets configured: create {TARGETS_FILE}")
+        return 1
     applied = skipped = blocked = 0
-    for repo, wanted in TARGETS:
+    for repo, wanted in targets:
         if not wanted:
             print(f"  skip     {repo:<32} excluded by operator instruction")
             skipped += 1

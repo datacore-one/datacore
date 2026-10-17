@@ -9,7 +9,7 @@ Three scan types:
 Uses `gh` CLI for API access. Caches results in scan_cache.json.
 
 Usage:
-    python3 github_scanner.py --username plur9 --orgs datacore-one,plur-ai [--hours 24]
+    python3 github_scanner.py --username <github-user> --orgs <org1>,<org2> [--hours 24]
 
 Output: JSON to stdout with structured scan results.
 """
@@ -17,6 +17,7 @@ Output: JSON to stdout with structured scan results.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -382,12 +383,15 @@ def format_summary(scan: dict, org_to_spaces: dict[str, list[str]] = None) -> st
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Scan GitHub for activity")
-    parser.add_argument("--username", default="plur9")
+    parser.add_argument("--username", default=os.environ.get("GITHUB_TRIAGE_USERNAME") or None,
+                        help="GitHub user to scan for (default: $GITHUB_TRIAGE_USERNAME; required)")
     parser.add_argument("--orgs", required=True, help="Comma-separated org names")
     parser.add_argument("--hours", type=int, default=24)
     parser.add_argument("--cache", help="Path to scan_cache.json")
     parser.add_argument("--format", choices=["json", "markdown"], default="json")
     args = parser.parse_args()
+    if not args.username:
+        parser.error("no GitHub user: pass --username or set GITHUB_TRIAGE_USERNAME")
 
     orgs = [o.strip() for o in args.orgs.split(",")]
     cache_path = Path(args.cache) if args.cache else None

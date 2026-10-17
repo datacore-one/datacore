@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Nightly GitHub triage (Miles, nightshift host). Replaces triage_github.sh.
-# Owner decisions 2026-09-29: the 09-11 triage skill; public repos and the
+# Owner decisions: the triage skill; public repos and the
 # enterprise repo in SEPARATE runs; incremental Mon-Sat, full sweep Sunday;
 # claude -p on the subscription; read-only on GitHub (gh shim first on PATH);
 # outputs committed to the private personal space, board rendered on the Mac.
@@ -11,7 +11,14 @@ DATA_DIR="${DATA_DIR:-$HOME/Data}"
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 # The owner whose queue this is. On the nightshift host gh is logged in as the
 # bot account, so the owner is never inferred from `gh api user`.
-OWNER="${TRIAGE_OWNER:-${GITHUB_TRIAGE_USERNAME:-plur9}}"
+OWNER="${TRIAGE_OWNER:-${GITHUB_TRIAGE_USERNAME:-}}"
+if [ -z "$OWNER" ]; then
+  echo "[github-triage] no owner: set TRIAGE_OWNER or GITHUB_TRIAGE_USERNAME" >&2
+  exit 2
+fi
+# The private repository the enterprise run covers (owner/repo). Configured per
+# installation; without it the enterprise run is reported as not run.
+ENTERPRISE_REPO="${TRIAGE_ENTERPRISE_REPO:-}"
 DATE="$(date -u +%F)"
 [ "${1:-}" = "--date" ] && DATE="$2"
 DOW="$(python3 -c "import datetime,sys;print(datetime.date.fromisoformat(sys.argv[1]).isoweekday())" "$DATE")"
@@ -26,8 +33,11 @@ rc_all=0
 files=()
 for SCOPE in public enterprise; do
   log="$LOG_DIR/$DATE-$SCOPE.log"
+  if [ "$SCOPE" = enterprise ] && [ -z "$ENTERPRISE_REPO" ]; then
+    echo "[github-triage] enterprise NOT RUN (TRIAGE_ENTERPRISE_REPO unset)" | tee -a "$log"; rc_all=1; continue
+  fi
   echo "[github-triage] $SCOPE $MODE $DATE start $(date -u +%T)" | tee -a "$log"
-  prompt="Use the github-triage skill: read .datacore/skills/github-triage/SKILL.md and follow it exactly. SCOPE=$SCOPE MODE=$MODE DATE=$DATE OWNER=$OWNER OUT=$OUT_REL. Work only in $DATA_DIR."
+  prompt="Use the github-triage skill: read .datacore/skills/github-triage/SKILL.md and follow it exactly. SCOPE=$SCOPE MODE=$MODE DATE=$DATE OWNER=$OWNER ENTERPRISE_REPO=$ENTERPRISE_REPO OUT=$OUT_REL. Work only in $DATA_DIR."
   ( cd "$DATA_DIR" && printf '%s' "$prompt" | timeout "${TRIAGE_TIMEOUT:-5400}" "$CLAUDE_BIN" -p \
       --dangerously-skip-permissions --disallowedTools Task,Agent ) >> "$log" 2>&1
   rc=$?

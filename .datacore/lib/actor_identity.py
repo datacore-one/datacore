@@ -345,7 +345,7 @@ def dispatchable_by(actor: str, assignee: str | None, path: Path | None = None) 
       * the assignee is a declared writer -> only that writer (`base_writer`
                                             equality, so a run-branch log is the
                                             same writer);
-      * the assignee names a principal that is not itself a writer (`gregor`,
+      * the assignee names a principal that is not itself a writer (`owner`,
                                             who writes as `mac`) -> today's rule,
                                             only when that principal has exactly
                                             one writer; otherwise nobody, and

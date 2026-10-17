@@ -87,7 +87,7 @@ def find_transcript(session_id: str) -> Path | None:
 
     Deriving the project slug from cwd would be faster, but wrong the moment a
     session starts in a subdirectory (`.datacore/dips` becomes
-    `-Users-gregor-Data--datacore-dips`, with dots collapsed to dashes too).
+    `-Users-alice-Data--datacore-dips`, with dots collapsed to dashes too).
     A glob is cheap and cannot be wrong.
     """
     if not PROJECTS_DIR.is_dir():

@@ -131,8 +131,8 @@ def review_gate(repo: Path, branch: str) -> str:
     committing locally just strands the work. When a bypass list exists the
     remote is the better judge than we are: it knows which identity is actually
     pushing, and this process does not. `gh` here may be authenticated as a
-    different account than the SSH key that performs the push (on nightshift it
-    is: `gh` is plur9, the key is miles-on-nightshift), so any actor check we
+    different account than the SSH key that performs the push (on the executor
+    host it is: `gh` is the owner's account, the key is the agent's), so any actor check we
     did locally would be guessing. Let the push run — a permitted identity
     lands it, a gated one is rejected and reported as PUSH FAILED. Either way
     nothing unreviewed reaches a branch that forbids it.

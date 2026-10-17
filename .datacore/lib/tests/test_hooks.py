@@ -568,7 +568,7 @@ class TestLogOwnershipGuardAuthorship:
                                   text=True, **kw)
 
         g("init", "-q", "-b", "main")
-        g("config", "user.email", "gregor+miles@datafund.io")
+        g("config", "user.email", "alice+agent@example.com")
         g("config", "user.name", "Miles")
         (tmp_path / ".datacore" / "events").mkdir(parents=True, exist_ok=True)
         (tmp_path / ".datacore" / "events" / "miles.jsonl").write_text('{"a":1}\n')
@@ -596,7 +596,7 @@ class TestLogOwnershipGuardAuthorship:
         g("checkout", "-q", "-b", "wside", "base-ref")
         (tmp_path / ".datacore" / "events" / "winston.jsonl").write_text('{"w":1}\n')
         g("add", "-A")
-        g("-c", "user.email=gregor+winston@datafund.io",
+        g("-c", "user.email=alice+cos@example.com",
           "-c", "user.name=Winston (CoS)", "commit", "-q", "-m", "cos: local autosave")
         g("update-ref", "refs/remotes/origin/wside", "wside")   # what the fetch records
         g("checkout", "-q", "main")

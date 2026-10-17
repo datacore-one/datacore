@@ -382,7 +382,7 @@ are in `scratchpad/followups-sync/`.
   - A refusal is not recorded under a guessed hostname: it returns False, and
     the refusal itself stands.
   - An explicit actor (`executors/base.py` passes its own) is unaffected.
-  - This mac resolves `mac` from identity.env, principal `gregor`.
+  - This mac resolves `mac` from identity.env, principal `owner`.
   - Tests: `test_q2_principal_for_refuses_an_undeclared_host` and
     `test_q2_a_refusal_is_not_recorded_under_the_hostname` failed before the
     change. `test_q2_the_hook_denies_on_an_undeclared_host` passes.

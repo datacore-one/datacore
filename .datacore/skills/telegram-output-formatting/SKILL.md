@@ -1,7 +1,7 @@
 ---
 name: telegram-output-formatting
 description: >
-  How to format Telegram output for Gregor — short summaries with emoji titles,
+  How to format Telegram output for the owner — short summaries with emoji titles,
   bullet-point lists, and full reports committed to plur-space. Applies to every
   report, briefing, task summary, and intelligence output delivered in Telegram DMs.
 triggers:
@@ -80,11 +80,11 @@ Save full reports to: `<space>/journal/YYYY-MM-DD-topic.md`
 In The Firm group chat: even shorter. Phone screen, quick scan.
 See `the-firm-etiquette` for when to respond at all.
 
-In DM with Gregor: the rules above apply.
+In DM with the owner: the rules above apply.
 
 ## Why
 
-Gregor reads on a phone. The memo fits on one screen; the dossier
+The owner reads on a phone. The memo fits on one screen; the dossier
 lives in the file. Intelligence briefings that dump full analysis
 into chat are unreadable — the signal drowns in the noise.
 

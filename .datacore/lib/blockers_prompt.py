@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the blockers brief — the epics only Gregor can move.
+"""Generate the blockers brief — the epics only the owner can move.
 
 Reads `blocked_on: human` out of roadmap.yaml and writes a document meant to be
 pasted into a fresh session.

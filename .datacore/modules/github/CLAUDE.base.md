@@ -49,7 +49,7 @@ Every GitHub action creates an org-mode task with:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| username | plur9 | GitHub handle to monitor |
+| username | (none — required) | GitHub handle to monitor |
 | scan_hours | 24 | How far back to scan |
 | auto_task_create | true | Create GTD tasks automatically |
 | confidence_threshold | 80 | Min confidence for auto-fix |

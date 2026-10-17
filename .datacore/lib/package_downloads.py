@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """package_downloads.py — download history for our published packages, npm and PyPI.
 
-Why this exists: the seed deck quoted "8,617 installs a month" for one package, which says
+Why this exists: a pitch figure quoted one monthly install count for one package, which says
 nothing about whether the number is rising, what the total is, or how many packages there
 are. A monthly point figure is the least informative shape this data comes in.
 

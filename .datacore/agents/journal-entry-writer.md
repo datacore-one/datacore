@@ -295,7 +295,7 @@ sessions:
 > you are. Your entry is an ADDITION. Every step below is shaped so that the
 > bytes you did not write cannot move.
 >
-> On 2026-09-08 a `5-plur` journal lost 269 lines -- four unrelated sessions'
+> A team-space journal once lost hundreds of lines -- several unrelated sessions'
 > entries -- and the loss was pushed to the shared remote. Reproduction on
 > 2026-09-08 did NOT show this agent overwriting the file (two runs, one on a
 > 422-line 18-section journal: 29 insertions, 0 deletions, no heading lost), so
@@ -318,7 +318,7 @@ sessions:
 
    ---
 
-   ## @gregor — Topic
+   ## @owner — Topic
    ...
    ENTRY
    ```

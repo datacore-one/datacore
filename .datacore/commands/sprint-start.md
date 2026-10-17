@@ -26,8 +26,8 @@ recall:
 | Where's the sprint object? | `<project>/sprints/<sprint_id>.yaml` |
 | Where's the canvas? | `<project>/CANVAS.md` |
 | What flips status? | `claim.py` reading + writing the sprint.yaml `status:` field |
-| What triggers Miles? | The `sprint-claim` cadence in `cto.cadences.daily` (per `5-plur/venture.yaml`) |
-| Argument? | Optional `<project-path>`. Defaults to `5-plur/2-projects/enterprise/`. |
+| What triggers the executor agent? | The `sprint-claim` cadence in `cto.cadences.daily` (per the space's `venture.yaml`) |
+| Argument? | `<project-path>`, e.g. `[N]-team/2-projects/product/`. Falls back to `$DATACORE_SPRINT_PROJECT`; ask if neither is set. |
 
 ### Integration Points
 
@@ -57,11 +57,11 @@ The ceremony is intentionally a little theatrical. Sprint 1 of a multi-agent pro
 
 ### Step 1: Locate the active sprint
 
-Parse `$ARGUMENTS` for an optional project path. If absent, default to `5-plur/2-projects/enterprise/`.
+Parse `$ARGUMENTS` for a project path. If absent, use `$DATACORE_SPRINT_PROJECT`; if that is unset too, ask the user which project.
 
 Find the sprint file matching the current ISO week (or the most recent in `<project>/sprints/`):
 ```bash
-PROJECT="${1:-5-plur/2-projects/enterprise}"
+PROJECT="${1:-${DATACORE_SPRINT_PROJECT:?pass a project path, e.g. [N]-team/2-projects/product}}"
 SPRINT_FILE=$(ls -t "$PROJECT"/sprints/2026-W*-sprint*.yaml 2>/dev/null | head -1)
 ```
 
@@ -272,7 +272,7 @@ Replace `<N>` with the sprint number (extract from sprint_id, e.g. "2026-W20-spr
    │   NEXT                                                             │
    │     ⏳  First Miles cycle: ~next hour                              │
    │     📣  Daily standup: 09:00 +02 (data-on-claw → Telegram)         │
-   │     🎯  Retro: <retro_datetime> (data-on-laptop with plur9)        │
+   │     🎯  Retro: <retro_datetime> (data-on-laptop with the owner)    │
    │                                                                    │
    │   Miles is on watch. The Firm is open for business.               │
    │                                                                    │

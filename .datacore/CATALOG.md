@@ -256,8 +256,6 @@ let  | — | local-only | — |
 | grants | 1.0.0 | Grant proposal writing and management for EU/NGI and similar funding programs | datacore-one/module-grants | datacore-one | 2026-05-12 |
 | gstack | 0.1.0 | Sprint workflow integration powered by gstack (Garry Tan) -- persistent memory,  | datacore-one/datacore-gstack | datacore-one | 2026-05-12 |
 | gtd | 1.0.0 | Getting Things Done — task capture, inbox processing, and org-mode management | — | local-only | — |
-| health | 0.3.0 | Privacy-first, agent-driven health management system.
-Tracks biometrics, fitness | plur9/datacore-health | plur9 | 2026-06-10 |
 | image-generation | 0.2.0 | Unified image generation - Midjourney (via Apiframe API) and Gemini AI with prom | datacore-one/datacore-image-generation | datacore-one | 2026-05-17 |
 | lens | 0.1.0 | Behavioural observation, personalisation, and metacognition primitive
 for the Da | datacore-one/datacore-lens | datacore-one | 2026-05-12 |
@@ -273,7 +271,6 @@ Fetches RSS feeds, scores b | datacore-one/datacore-news | datacore-one | 2026-0
 | nightshift | 0.1.0 | Autonomous task execution system that processes :AI: tagged tasks
 with quality g | datacore-one/datacore-nightshift | datacore-one | 2026-06-10 |
 | outbox | 1.1.0 | Content routing out of active workspaces — archive, delivery, publish | — | local-only | — |
-| personal-finance | 0.1.0 | Personal cryptocurrency finance tracking - holdings, transactions, and loan reco | plur9/module-personal-finance | plur9 | 2026-05-12 |
 | research | 0.2.0 | Automated research processing system with NotebookLM podcast generation,
 industr | — | local-only | — |
 | slides | 1.0.0 | Visual content generation - presentations (Gamma.app) with AI-powered background | datacore-one/datacore-slides | datacore-one | 2026-06-05 |

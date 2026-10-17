@@ -36,6 +36,10 @@ python3 "$MODULE_DIR/lib/repo_discovery.py" \
     --data-dir "$DATA_DIR" > /dev/null 2>&1 || true
 
 # --- Step 2: Scan GitHub ---
+if [ -z "${GITHUB_TRIAGE_USERNAME:-}" ]; then
+    echo "$LOG_PREFIX GITHUB_TRIAGE_USERNAME is not set — no GitHub user to scan for."
+    exit 1
+fi
 ORGS=$(python3 -c "
 import json
 from pathlib import Path
@@ -59,7 +63,7 @@ echo "$LOG_PREFIX Scanning orgs: $ORGS"
 # (2026-07-19 .. 2026-08-10) behind "created: 0, errors: 0" and "Completed".
 SCAN_RC=0
 python3 "$MODULE_DIR/lib/github_scanner.py" \
-    --username "${GITHUB_TRIAGE_USERNAME:-plur9}" \
+    --username "$GITHUB_TRIAGE_USERNAME" \
     --orgs "$ORGS" \
     --hours 24 \
     --cache "$CACHE_DIR/scan_cache.json" \

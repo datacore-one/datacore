@@ -184,10 +184,10 @@ After clarify, route to one of these files:
 
 | Destination | When | Owner | Cadence |
 |---|---|---|---|
-| `[space]/org/next_actions.org` | You (human) execute it personally | gregor | active work |
+| `[space]/org/next_actions.org` | You (human) execute it personally | the owner | active work |
 | `0-personal/org/ai.org` | An always-on AI agent picks up, quick (<30 min) | Miles/CC subagents | realtime |
 | `0-personal/org/nightshift.org` | AI deliberation, deep/multi-step, batchable | overnight orchestrator | nightly 02:00 UTC |
-| `[space]/org/projects.org` | Multi-action outcome (the project itself, not the next-action) | gregor reviews weekly | weekly |
+| `[space]/org/projects.org` | Multi-action outcome (the project itself, not the next-action) | the owner reviews weekly | weekly |
 | `[space]/org/someday.org` | Parked, no clear next-action, aspirational | quarterly review | parked |
 | `[space]/org/research_learning.org` | Bare URL or content to consume (research-orchestrator picks up); a URL with the owner's comment is an action instead | research-orchestrator | nightly |
 | `~/Data/[space]/3-knowledge/pages/` | Pure reference, never an action | none | reference |

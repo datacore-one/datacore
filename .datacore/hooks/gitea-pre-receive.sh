@@ -40,7 +40,7 @@
 # Gitea reports the pushing ACCOUNT (GITEA_PUSHER_NAME), and every machine
 # pushes to this Gitea as the same account. The server therefore CANNOT tell
 # which actor wrote a log, and an ownership check against a machine name would
-# flag every legitimate push. Measured on deployment: actor=gregor while
+# flag every legitimate push. Measured on deployment: actor=<owner account> while
 # members.yaml lists genesis/mac/nightshift/winston.
 #
 # So the split is: the server enforces what it can see — that the pushing
