@@ -175,8 +175,10 @@ regenerate or rotate. A rotation may have reached only one machine, leaving the
 canonical store serving old values for months. Sending someone to regenerate keys that are alive on another machine
 destroys a working credential.
 
-Never print a secret value — compare truncated `sha256` instead. Rotation is the
-user's action: flag what needs rotating, do not rotate it.
+Never print a secret value — compare truncated `sha256` instead. Output that may
+carry one (configs, headers, env, curl -v, remote URLs) goes through
+`| python3 .datacore/lib/secret_redact.py`, never a hand-rolled sed mask. Rotation
+is the user's action: flag what needs rotating, do not rotate it.
 
 ## Conventions
 
