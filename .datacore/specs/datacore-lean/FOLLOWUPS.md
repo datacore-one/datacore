@@ -6,8 +6,6 @@ in `findings/`. What is left:
 
 ## Status after the follow-up board (2026-09-23, evening)
 
-**Security:** hermes's runner remote URL embeds a GitHub OAuth token for tris-on-hermes; it was printed in a session transcript and should be rotated, and the remote switched to a credential helper.
-
 Owner choices: `followups-2026-09-23.json`. Applied and pushed:
 datacore `2865806`, datacore-nightshift `887f3b7`, datacore-space `4fd68980`,
 0-personal `42e817985`, datacore-dips `69c9c16`, org-workspace `711f2fc`
