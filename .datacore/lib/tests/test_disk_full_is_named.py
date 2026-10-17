@@ -92,9 +92,9 @@ def test_a_full_disk_on_the_receiving_end_names_the_receiver(monkeypatch, host, 
     """2026-10-09: the box's backup push filled nightshift's disk, and the alert said
     'disk full on bridge, 72% used' -- the sender, which had 37G free."""
     monkeypatch.setattr(shutil, "disk_usage", lambda p: ROOMY)
-    said = check_diagnosis.cause(cmd="rsync to gregor@100.101.159.42", rc=1, cwd=tmp_path,
+    said = check_diagnosis.cause(cmd="rsync to user@100.64.0.20", rc=1, cwd=tmp_path,
                                  repo=None, sha="", stderr=RSYNC_RECEIVER_FULL)
-    assert "100.101.159.42" in said and "disk full" in said, said
+    assert "100.64.0.20" in said and "disk full" in said, said
     assert f"on {host}" not in said, said
 
 

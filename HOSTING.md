@@ -9,8 +9,8 @@ audit (80 repos, previously undocumented split). Machine-specific details
 | Repo class | Host | Visibility | Examples |
 |---|---|---|---|
 | **Public skeletons & specs** | GitHub `datacore-one` | PUBLIC | `datacore` (root), `datacore-dips`, `datacore-org` |
-| **Team spaces** | GitHub, owned by the team's org | PRIVATE | `datafund/datafund-space`, `fairDataSociety/fds-space`, `plur-ai/plur-space`, `datacore-one/datacore-space` |
-| **Personal space + ventures** | Self-hosted Gitea | PRIVATE | `0-personal`, `4-forge`, `6-meridian`, `7-megaphone`, venture project repos |
+| **Team spaces** | GitHub, owned by the team's org | PRIVATE | `<team-org>/<team>-space` |
+| **Personal space + ventures** | Self-hosted Gitea | PRIVATE | `0-personal`, `[N]-[venture]`, venture project repos |
 | **Modules** | GitHub `datacore-one` (`datacore-<name>` / `module-<name>`) | PRIVATE until released; PUBLIC when community-ready | `datacore-nightshift`, `module-grants` |
 | **Project repos** (inside `*/2-projects/`) | Follow the owning space's host | PRIVATE by default | team project → team org; personal/venture project → Gitea |
 | **Secrets** | Self-hosted Gitea only | PRIVATE | never on GitHub |

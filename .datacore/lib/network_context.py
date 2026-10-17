@@ -9,7 +9,7 @@ symptom.
 
 A fleet that cannot verify itself must say WHY in the artifact, in words that
 name the next action. "20 unverifiable" is a fact; "20 unverifiable — a
-full-tunnel VPN is capturing 192.168.1.0/24, which is where blackpi lives"
+full-tunnel VPN is capturing the LAN subnet the self-hosted git server lives on"
 is a fact someone can act on.
 
 Reports, never decides. Nothing here changes routing, and a VPN is never

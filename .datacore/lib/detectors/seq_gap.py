@@ -405,7 +405,7 @@ def main() -> int:
         print(f"\nseq-gap: {len(rows)} log(s), {len(gaps)} with unpublished events, "
               f"{len(errors)} error(s){unver_txt}{pend_txt}")
         # NAME THE CAUSE, IN THE ARTIFACT. "20 unverifiable" is a fact; "a
-        # full-tunnel VPN is capturing the subnet blackpi lives on" is a fact
+        # full-tunnel VPN is capturing the subnet the self-hosted git server lives on" is a fact
         # someone can act on. Three days of `mac-seq-gap` alerts said the
         # former and nobody could act on it.
         #

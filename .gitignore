@@ -295,9 +295,6 @@ org-workspace/
 # Mailmap (contains PII, handled by git filter-repo)
 .mailmap
 
-# 4-forge space (separate private repo)
-4-forge/
-
 # Lock file (contains private team repo SSH URLs)
 datacore.lock.yaml
 
@@ -307,20 +304,19 @@ node_modules/
 .context/
 .gstack/
 
-# Personal PLUR engram store — must NOT be tracked in this public repo (leak #34).
+# Personal PLUR engram store — must NOT be tracked in this public repo.
 # Engrams live in the local global store (~/.plur/engrams.yaml).
 .plur/engrams.yaml
 .datacore/modules/voice-terminal/models/
 
 # GitHub module runtime scan caches — machine-local state, not source.
-# Tracking these made every replica (cos-server) permanently dirty.
+# Tracking these made every replica permanently dirty.
 .datacore/modules/github/data/repos.json
 .datacore/modules/github/data/scan_cache.json
 
 # Machine-local operational scripts — private, never tracked here.
 # NOTE: `cos-*` (hyphen) is listed as well as `cos_*` (underscore): the
-# underscore-only pattern silently missed cos-server-setup.sh et al., which
-# slipped past this guardrail on 2026-08-27 (see datacore#56).
+# underscore-only pattern silently missed hyphenated setup scripts.
 .datacore/lib/cos_*
 .datacore/lib/cos-*
 .datacore/lib/winston_*
@@ -355,6 +351,15 @@ node_modules/
 # Only the sanitized *.example templates are tracked.
 .datacore/registry/principals.yaml
 .datacore/registry/infrastructure.yaml
+# Same rule: the venture portfolio, the space-to-private-repo map and the
+# per-machine delivery chain. Only the *.example templates are tracked.
+.datacore/registry/ventures.yaml
+.datacore/registry/repositories.yaml
+.datacore/registry/deliverables.yaml
+# Registry entries whose definitions live in private spaces or modules
+# (merged by .datacore/lib/registry_overlay.py).
+.datacore/registry/agents.local.yaml
+.datacore/registry/commands.local.yaml
 
 # session-local artifacts
 .datacore/logs/
@@ -385,14 +390,14 @@ skills-lock.json
 # failures while we route agents to write to the correct space.
 /reports/
 
-# Local virtualenvs and hand-copy backups must never be staged (winston 2026-09-04: `git add -A` staged 3,234 venv files)
+# Local virtualenvs and hand-copy backups must never be staged (`git add -A` once staged thousands of venv files)
 .venv*/
 *.scp-backup
 # per-machine signing key registry (public halves). Distribution is registry/principals.yaml verify_keys;
-# nightshift's run postprocess committed this file to its root run branch on 2026-09-06 and the push guard refused it.
+# a run postprocess once committed this file to a run branch and the push guard refused it.
 .datacore/keys/
 
-# Datacore lib virtualenv (winston 2026-09-09: 709 venv files staged via git add -A, same failure mode as 2026-09-04)
+# Datacore lib virtualenv (same `git add -A` failure mode as above)
 .datacore/venv/
 
 # Private per-space module state and retained migration originals.
@@ -404,9 +409,8 @@ skills-lock.json
 
 # The install's own job list (INS-5): the tracked manifest.yaml is the fleet's.
 .datacore/lib/jobs/manifest.local.yaml
-# A copy of that local file is as local as the file. On 2026-09-30 an agent's
-# backup (manifest.local.yaml.bak-20260930-cos) sat untracked in the core repo
-# on the nightshift host, and the git preflight refused both overnight runs for it.
+# A copy of that local file is as local as the file: an agent's untracked
+# backup of it once made the git preflight refuse the overnight runs.
 .datacore/lib/jobs/manifest.local.yaml.*
 
 # Dated backups (<file>.bak-<stamp>) are never source. One left untracked in the

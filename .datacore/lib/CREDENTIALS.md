@@ -8,8 +8,8 @@ that most need this rule are the ones on the other machines.
 
 ## Never search for a credential
 
-Do not grep `.env` files. Do not look on another host. Do not read `~/.hermes/.env`
-or any other copy you find.
+Do not grep `.env` files. Do not look on another host. Do not read another agent's
+own env file or any other copy you find.
 
 **Searching is what creates the problem.** A search finds *a* value, and nothing
 about a found value tells you whether it is current or abandoned. Measured on

@@ -33,14 +33,15 @@ version: 1
 # reading deploy.sh is not a deployment. Four effects are about files, and
 # name the file tools themselves: secret.search (Read/Grep of a secret store),
 # guard.disable (Edit/Write of a guard or of the settings wiring it),
-# ledger.forge (a hand-written line in an event log). 2026-09-26: until then
-# an agent could read ~/.hermes/.env or stub out its own guard unrefused.
+# ledger.forge (a hand-written line in an event log). Before these existed, an
+# agent could read another agent's own env file or stub out its own guard
+# unrefused.
 # Every tool that can reach the world, across the runtimes the fleet runs:
 # Claude Code / the SDK (Bash, WebFetch, mcp__*) and Hermes (terminal,
 # execute_code, write_file, patch, web_extract, browser_*, computer_use,
 # delegate_task, cronjob). A tool absent from this list is invisible to the
-# classifier, which is why Winston — a Hermes agent — was ungoverned until
-# 2026-09-07 while nightshift and Miles were not.
+# classifier, which is how an agent on the Hermes runtime once went ungoverned
+# while the Claude Code agents were governed.
 acting_tools: &acting
   ["Bash", "WebFetch", "mcp__*",
    "terminal", "execute_code", "write_file", "patch", "web_extract",
@@ -60,10 +61,11 @@ effects:
       - 'gmail/v1/users/[^/\s]+/(messages|drafts)/send'
       - 'api\.(sendgrid|mailgun|resend|postmarkapp|sparkpost)\.'
       - '\bgmail_send\b'
-  # A message to the owner's own chat (Winston's Telegram sender). Not e-mail
+  # A message to the owner's own chat (the chief-of-staff agent's Telegram
+  # sender). Not e-mail
   # and not public: agents may propose it, a grant releases it (AGT-1, MOD6).
   #
-  # OpenClaw's own senders (Data on plur-claw, owner decision 2026-09-30):
+  # OpenClaw's own senders (the OpenClaw agent, by owner decision):
   # `message` acts in a chat channel, `conversations_send` delivers to an
   # external conversation. The OpenClaw gate (openclaw_plugin/gate.py) names a
   # `message` call `openclaw_message.<action>` (no action = send), so only its
@@ -78,8 +80,8 @@ effects:
       - '^conversations_send$'
     patterns:
       - '\bwinston_send\.py\b'
-  # Speaking in public: a post, a tweet, a channel message. Mr Data's lane --
-  # never for the other agents, a grant for Data (AGT-1, 2026-09-27).
+  # Speaking in public: a post, a tweet, a channel message. One agent's lane --
+  # never for the others, and a grant even for that one (AGT-1).
   public.post:
     tools: *acting
     tool_patterns:
@@ -242,11 +244,11 @@ effects:
       # no shell redirect, in anyone's name
       - '"(file_path|path)":\s*"(?:[^"\\]|\\.)*\.datacore/(events|telemetry)/[^"/]+\.jsonl"'
       - '"command":\s*"(?:[^"\\]|\\.)*(>>?|\btee\b(\s+-a)?|\bsed\s+-i\b|\btruncate\b)(?:[^"\\]|\\.)*\.datacore/(events|telemetry)/[\w.-]+\.jsonl'
-      # nobody goes past the ledger (owner decision 2026-09-28): no override
+      # nobody goes past the ledger (owner decision): no override
       # flag (there is none left to honour, and setting one is the intent),
       # and no delete, move or rewrite of a sequence witness or stop record.
-      # 2026-09-27 an unattended job did `echo 2631 >`, `rm` and the override
-      # on the box and forked a log. Reading a mark stays open.
+      # An unattended job once did `echo N >`, `rm` and the override on a
+      # server and forked a log. Reading a mark stays open.
       - '"(command|code)":\s*"(?:[^"\\]|\\.)*DATACORE_HWM_OVERRIDE\s*='
       - '"(command|code)":\s*"(?:[^"\\]|\\.)*\b(environ|putenv|setenv)\b(?:[^"\\]|\\.){0,16}DATACORE_HWM_OVERRIDE'
       - '"(file_path|path|notebook_path)":\s*"(?:[^"\\]|\\.)*\.datacore/state/seq-hwm(/|")'
@@ -334,10 +336,10 @@ effects:
     patterns:
       - '"(file_path|path|notebook_path)":\s*"(?:[^"\\]|\\.)*/(test_promise_[^"/]*|agent_eval|_audit_contract|_inbox_job_harness)\.py"'
       - '"command":\s*"(?:[^"\\]|\\.)*(>(?!&)|\btee\b|\bsed\s+-i|\bperl\s+-\w*i|\bmv\b|\bcp\b|\brm\b|\bgit\s+(rm|mv|checkout)\b|\btruncate\b|\bchmod\b)(?:[^"\\]|\\.)*\b(test_promise_\w*|agent_eval|_audit_contract|_inbox_job_harness)\.py\b'
-  # ── agents never: uncommitted work belongs to other writers (2026-09-30) ──
-  # 05:12 UTC on the box, the nightly inbox job's agent ran `git stash` in the
-  # personal space to get a pull through; the stash swallowed five uncommitted
-  # events of Winston's log, the ledger (correctly) refused the rewound log and
+  # ── agents never: uncommitted work belongs to other writers ──
+  # A nightly inbox job's agent once ran `git stash` in the personal space to
+  # get a pull through; the stash swallowed five uncommitted events of another
+  # agent's log, the ledger (correctly) refused the rewound log and
   # the hash-chain check went red. In a ledger space the working tree holds
   # other writers' event logs, and the ledger's rule is "commit, never stash"
   # (ledger_transport.py). So no agent hides or discards uncommitted work, in
@@ -357,8 +359,8 @@ effects:
       - '\bgit(?:[ \t]+(?:-[Cc][ \t]+\S+|--?[\w-]+(?:=\S+)?))*[ \t]+switch\b[^\n;&|]*[ \t](?:-f|--force|--discard-changes)(?=[ \t"]|$)'
       # the same verbs as an argv list in code: subprocess.run(["git", "stash"])
       - '\\?["'']git\\?["''](?:\s*,\s*\\?["''][^"''\\]*\\?["''])*\s*,\s*\\?["''](?:stash|reset|restore|clean)\\?["'']'
-      # A pull, rebase or merge that stashes by itself (owner decision
-      # 2026-09-30, OPS-10): when the stash does not re-apply, the work stays
+      # A pull, rebase or merge that stashes by itself (owner decision,
+      # OPS-10): when the stash does not re-apply, the work stays
       # set aside -- the incident in one command. The flag, the one-call `-c`
       # config (a bare key means true), setting that config, and argv in code.
       # `--no-autostash` and `autoStash=false` stay open.

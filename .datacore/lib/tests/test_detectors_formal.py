@@ -179,7 +179,8 @@ def test_ic_legacy_count_baseline_still_reads(capsys):
 def _r5(monkeypatch, hits, hours):
     day = "2026-09-05"
     # one unrelated line keeps the journal "readable" when there are 0 hits
-    journal = "\n".join(["x daemon started"] + ["x 100.101.159.42 GET /health"] * hits)
+    journal = "\n".join(["x daemon started"] + ["x 100.64.0.20 GET /health"] * hits)
+    monkeypatch.setattr(RS, "PROBER_IP", "100.64.0.20")
     monkeypatch.setattr(RS, "_journal", lambda args: journal)
     return RS.r5_reachable(pathlib.Path("/nonexistent"), day,
                            now=dt.datetime.fromisoformat(day).timestamp() + hours * 3600)

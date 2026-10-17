@@ -196,7 +196,9 @@ def _fleet_sync_state(state: Path, now: float) -> tuple[bool, str]:
 
 
 #: The off-box prober's address, as it appears in the daemon's request log.
-PROBER_IP = os.environ.get("COS_PROBER_IP", "100.101.159.42")
+#: No default: the address is installation topology and lives in this host's
+#: env (COS_PROBER_IP), never in the public code. Unset, R5 says so.
+PROBER_IP = os.environ.get("COS_PROBER_IP", "")
 PROBE_MINUTES = int(os.environ.get("COS_PROBE_MINUTES", "15"))
 
 
@@ -213,6 +215,8 @@ def r5_reachable(state: Path, day: str, now: float | None = None) -> tuple[bool,
     if rows:
         up = sum(1 for l in rows if " UP " in l)
         return up / len(rows) >= 0.995, f"{up}/{len(rows)} probes UP (prober log)"
+    if not PROBER_IP:
+        return False, "no probe log here and COS_PROBER_IP is not configured — cannot count prober hits"
     out = _journal(["-u", "datacored", "--since", f"{day} 00:00"])
     if not out:
         return False, "no probe log here and the daemon journal is unreadable"

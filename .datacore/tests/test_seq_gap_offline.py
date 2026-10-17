@@ -15,7 +15,7 @@ import seq_gap as sg  # noqa: E402
 
 
 def test_offline_shapes_are_conditions():
-    for err in ("ssh: connect to host 100.115.67.71 port 2222: Operation timed out",
+    for err in ("ssh: connect to host 100.64.0.10 port 2222: Operation timed out",
                 "ssh: Could not resolve hostname gitea: nodename nor servname provided",
                 "fatal: unable to access ...: Could not connect to server",
                 ""):

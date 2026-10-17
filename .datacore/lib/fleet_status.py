@@ -1,19 +1,13 @@
 #!/usr/bin/env python3
 """What version is every machine running? One command, no guessing.
 
-Built after a component sat six weeks behind on one machine with nothing
-surfacing it, and after three wrong diagnoses in a single session that all had
-the same cause: ASSUMING how to reach a machine instead of reading it.
-
-  - Tris's repos were reported as "not git repos". They were git repos; ssh
-    lands on hermes as root, the repos are gregor-owned, and git refused them.
-  - The nightshift watchdog reported 15 phantom `origin/HEAD unset` failures
-    every 30 minutes for weeks. Same cause, under systemd with no HOME.
-  - A filesystem search for datacore-mcp found it on NO machine while Winston
-    was demonstrably running v1.6.0.
+Wrong diagnoses of a machine's state share one cause: ASSUMING how to reach
+it instead of reading it. When the ssh user and the user that owns the repos
+differ, git run as the ssh user refuses the repos ("not a git repo"), and a
+systemd unit with no HOME reports phantom failures.
 
 So this reads `registry/infrastructure.yaml -> servers.<name>.access`, which
-records ssh_user and service_user SEPARATELY because on hermes they differ.
+records ssh_user and service_user SEPARATELY because on some hosts they differ.
 Nothing here hardcodes a user or a path.
 
 A machine that cannot be reached is reported as unreachable, never skipped:
@@ -145,14 +139,14 @@ def probe(name: str, cfg: dict) -> dict:
     script = PROBE.replace("__DATA__", data).replace("__RUNNER__", runner or "")
 
     # BASE64 the script. Nesting quotes through ssh AND sudo -u is how the
-    # first version died on hermes — the only machine where the two users
-    # differ, i.e. the exact case this tool exists for. Encoding removes the
+    # first version died on a host where the two users differ, i.e. the exact
+    # case this tool exists for. Encoding removes the
     # entire quoting class rather than escaping it more carefully.
     import base64
     b64 = base64.b64encode(script.encode()).decode()
     inner = f"echo {b64} | base64 -d | bash"
     # Run AS THE SERVICE USER when it differs from the ssh user. Reading a
-    # gregor-owned repo as root produced every wrong answer this replaces.
+    # repo owned by another user produced every wrong answer this replaces.
     if svc and ssh_user and svc != ssh_user:
         inner = f"sudo -u {svc} bash -lc 'echo {b64} | base64 -d | bash'"
 
@@ -233,9 +227,9 @@ def main() -> int:
             print(f"  {r['machine']:<12} UNREACHABLE — {r.get('error','?')}")
             continue
         # "?" means THE PROBE COULD NOT TELL; "—" would say "not installed".
-        # Conflating those is the error that made me report Tris as having no
-        # MCP while it had 14 days of uptime: a failed lookup rendered as a
-        # finding. An unknown must look different from a known absence.
+        # Conflating those renders a failed lookup as a finding ("no MCP" on a
+        # machine that was running it). An unknown must look different from a
+        # known absence.
         vals = [r.get(c, "?") for c in cols]
         print(f"  {r['machine']:<12} {vals[0]:<9} {vals[1]:<9} {vals[2]:<7} "
               f"{vals[3]:<7} {vals[4]:<7} {vals[5]}")

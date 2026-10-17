@@ -116,6 +116,6 @@ Then a one-line confirmation of what was learned. Don't repeat the full statemen
 /learn [decided] [domain: cos.pricing] CoS entry tier should be €19, not €200 — €19 is the universal AI on-ramp
 → ENG-2026-0507-002 captured (type: behavioral, commitment: decided)
 
-/learn The blackpi RPi is at 192.168.1.25 LAN, 100.115.67.71 Tailscale
+/learn The home git server is at 192.0.2.25 LAN, 100.64.0.10 Tailscale
 → ENG-2026-0507-003 captured (type: terminological, domain: infrastructure)
 ```

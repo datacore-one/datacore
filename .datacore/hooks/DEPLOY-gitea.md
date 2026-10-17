@@ -84,7 +84,7 @@ repo at a time, starting with a space that is not `0-personal`.
 ## History
 
 Deployment was blocked for a day by what looked like Gitea rejecting the Mac's
-SSH key. It was not a key problem: blackpi's USB SSD had dropped off the bus,
+SSH key. It was not a key problem: the self-hosted git server's USB SSD had dropped off the bus,
 Gitea could not read its own database, and the symptom surfaced at the client as
 `Permission denied (publickey)`. A USB controller re-bind
 (`xhci_hcd` unbind/bind) brought the disk back, `fsck -n` passed clean, and the

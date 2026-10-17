@@ -1303,7 +1303,7 @@ class CredentialManager:
         # and a printed "Next: run creds sync" was skipped often enough that the
         # owner's first `get` failed on a credential just added (2026-10-14).
         if not (secrets_dir / "scripts" / "sync.sh").exists():
-            print(f"\nNext: run 'creds sync' to assemble, then push to BlackPi")
+            print(f"\nNext: run 'creds sync' to assemble, then push to the secrets host")
             return 0
         if self.cmd_sync() != 0:
             print("Credential committed, but 'creds sync' failed, so 'creds get' does not "
