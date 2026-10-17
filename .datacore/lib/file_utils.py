@@ -4,6 +4,8 @@
 All write operations use mkstemp + os.replace for crash safety.
 Advisory locking via fcntl.flock() prevents concurrent session corruption.
 """
+
+from __future__ import annotations
 import fcntl
 import json
 import os
