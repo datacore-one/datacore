@@ -229,6 +229,8 @@ def _space_of(path: Path):
 _HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n(.*?)(?:\n\2[ \t]*(?=\n|$)|\Z)", re.S)
 _SEPARATORS = frozenset({"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"})
 _REDIRECTS = frozenset({">", ">>", "<", ">|", "&>", "&>>"})
+_FILE_TOOLS = frozenset({"cp", "mv", "rm", "rmdir", "mkdir", "touch", "ln", "chmod",
+                         "rsync", "truncate", "install", "tee", "sed"})
 
 
 def _strip_heredocs(command: str) -> str:
@@ -250,16 +252,18 @@ def _shell_tokens(command: str) -> list[str]:
         return _unquoted(command).split()
 
 
-def _shell_targets(command: str, cwd: str | None) -> tuple[list[Path], list[Path]]:
-    """(paths named, directories run in) for a shell command.
+def _shell_targets(command: str, cwd: str | None) -> tuple[list[Path], list[Path], list[Path]]:
+    """(paths named, directories written in, paths named by writing segments).
 
     Each segment's relative paths resolve against the directory it runs in: a
     ``git -C <dir>`` for that segment, else the directory of the last ``cd``,
-    else the session cwd. Heredoc bodies are skipped."""
+    else the session cwd. Heredoc bodies are skipped. A segment that only reads
+    (a script it runs, a file it greps) adds nothing to the third list."""
     tokens = _shell_tokens(_strip_heredocs(command))
     here = Path(cwd) if cwd else None
     paths: list[Path] = []
     workdirs: list[Path] = []
+    written: list[Path] = []
 
     def resolve(tok: str, base: Path | None) -> Path | None:
         p = Path(tok).expanduser()
@@ -286,14 +290,24 @@ def _shell_targets(command: str, cwd: str | None) -> tuple[list[Path], list[Path
             base = resolve(seg[seg.index("-C") + 1], here) or here
         # The directory counts as a write target when the segment writes there:
         # git/gh act on the repo they run in; a write naming a bare file lands in it.
-        bare, skip = False, False
+        # A bare file is a redirect target or a file-changing tool's argument, never
+        # the text an echo prints.
+        args, targets, after = [], [], ""
         for t in seg[1:]:
-            if skip or t.startswith((">", "<", "&")):  # a redirect, its target, a heredoc tag
-                skip = t in _REDIRECTS or t in ("<<", "<<-", "<<<")
-                continue
-            bare = bare or (not t.startswith("-") and "/" not in t and not t.isdigit())
-        if base is not None and _SHELL_WRITE.search(" ".join(t for t in seg if " " not in t)) and (
-                tool in ("git", "gh") or bare):
+            if after:
+                (targets if after == "redirect" else []).append(t)
+                after = ""
+            elif t in _REDIRECTS:
+                after = "redirect"
+            elif t in ("<<", "<<-", "<<<"):
+                after = "tag"
+            elif not t.startswith((">", "<", "&")):
+                args.append(t)
+        bare = any(not t.startswith("-") and "/" not in t and not t.isdigit()
+                   for t in targets + (args if tool in _FILE_TOOLS else []))
+        writes = _SHELL_WRITE.search(
+            _HARMLESS_REDIRECT.sub(" ", " ".join(t for t in seg if " " not in t))) is not None
+        if base is not None and writes and (tool in ("git", "gh") or bare):
             workdirs.append(base)
         after_redirect = False
         for tok in seg:
@@ -313,7 +327,9 @@ def _shell_targets(command: str, cwd: str | None) -> tuple[list[Path], list[Path
             p = resolve(tok, base)
             if p is not None:
                 paths.append(p)
-    return paths, workdirs
+                if writes:
+                    written.append(p)
+    return paths, workdirs, written
 
 
 def _command_paths(command: str, cwd: str | None) -> list[Path]:
@@ -523,8 +539,8 @@ def _main(client_only: bool = False) -> int:
     if _writes(tool, category, inp):
         where = [target]
         if tool == "Bash":
-            named, workdirs = _shell_targets(str(inp.get("command") or ""), cwd)
-            where = named + workdirs
+            _, workdirs, written = _shell_targets(str(inp.get("command") or ""), cwd)
+            where = written + workdirs
         state = _session_state(str(payload.get("session_id") or ""))
         client = _session_client(state)
         touched = [s for s in map(_space_of, where) if s is not None and s.type == "client"]

@@ -303,3 +303,32 @@ def test_client_session_write_outside_is_still_refused(install, tmp_path, comman
     _run(_write(client / "notes.md", root), root, tmp_path)
     out = _run(_bash(command(client, team, root), root), root, tmp_path)
     assert out.get("permissionDecision") == "deny", out
+
+
+# ── only writing segments count (follow-up from session f603bf9d) ─────────────
+# A read-only segment that names an install-wide path (a script it runs, a file
+# it reads) is not a write outside the client space, even when another segment
+# of the same command writes inside it.
+
+@pytest.mark.parametrize("command", [
+    lambda c, t, r: (f"cd {c} && python3 {r}/.datacore/lib/context_merge.py rebuild --path . && "
+                     "git commit -m 'x' -- CLAUDE.base.md"),
+    lambda c, t, r: f"sed -n 1,5p {t}/a.md && echo x >> {c}/notes.md",
+])
+def test_client_session_reading_outside_while_writing_inside_is_allowed(install, tmp_path, command):
+    root, client, team = install["root"], install["client"], install["team"]
+    _run(_write(client / "notes.md", root), root, tmp_path)
+    out = _run(_bash(command(client, team, root), root), root, tmp_path)
+    assert out.get("permissionDecision") != "deny", out
+
+
+@pytest.mark.parametrize("command", [
+    lambda c, t, r: f"cp {c}/notes.md {t}/notes.md",
+    lambda c, t, r: f"sed -n 1,5p {c}/notes.md | tee {t}/copy.md",
+    lambda c, t, r: f"ls {c} && rm {t}/a.md",
+])
+def test_client_session_writing_segment_outside_is_refused(install, tmp_path, command):
+    root, client, team = install["root"], install["client"], install["team"]
+    _run(_write(client / "notes.md", root), root, tmp_path)
+    out = _run(_bash(command(client, team, root), root), root, tmp_path)
+    assert out.get("permissionDecision") == "deny", out
