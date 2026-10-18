@@ -60,7 +60,13 @@ from .events import EVENT_TYPES, HUB_EVENT_TYPES, OWNER_EVENT_TYPES, Event, cano
 #: The protocol a domain-bound event speaks. Events without a domain are protocol 1.
 PROTOCOL = 2
 #: Written only by a hub's grantor, in its own log.
-HUB_ONLY_TYPES = HUB_EVENT_TYPES | {"ledger.seal", "hub.fence"}
+HUB_ONLY_TYPES = HUB_EVENT_TYPES | {"ledger.seal", "hub.fence", "ledger.reject"}
+#: Refusals that make a signed, chained event a REJECTED PROPOSAL rather than
+#: the end of its log, once the grantor has recorded it (`ledger.reject`,
+#: audit finding 11). The fold gives such an event no effect: a hub-only type
+#: by a non-grantor is not a grantor's, an owner type by a non-owner is not
+#: the owner's record, an unknown type folds to nothing.
+PROPOSAL_CODES = frozenset({"hub_only_type", "owner_only", "unknown_type"})
 _HLC = re.compile(r"[0-9]{13}\.[0-9]{4}\.[a-z0-9][a-z0-9_-]*")
 GENESIS = "GENESIS"
 
@@ -137,7 +143,7 @@ def _physical(hlc: str) -> int | None:
 
 
 def check_event(event: Event, chain: str, prior: Event | None, auth: Authority, *,
-                now_ms: int, current_key: bool = False) -> None:
+                now_ms: int, current_key: bool = False, as_proposal: bool = False) -> None:
     """Raise `Refusal` unless `event` is admissible as the event after `prior` in `chain`.
 
     `current_key`: also require the signature to verify under the key the
@@ -152,14 +158,16 @@ def check_event(event: Event, chain: str, prior: Event | None, auth: Authority, 
             or not all(isinstance(v, str) for v in (event.hlc, event.actor, event.type, event.prev,
                                                      event.hash, event.sig, event.hub, event.domain))):
         raise Refusal("malformed", "invalid event field types")
-    if event.type not in EVENT_TYPES:
+    if event.type not in EVENT_TYPES and not as_proposal:
         raise Refusal("unknown_type", f"unknown event type {event.type!r}")
     if _writer_of(chain) != base_writer(event.actor):
         raise Refusal("foreign_log", f"{event.actor!r} may append only to its own log, not {chain!r}")
-    if event.type in HUB_ONLY_TYPES and not (event.actor in auth.grantors and chain == event.actor):
+    if event.type in HUB_ONLY_TYPES and not (event.actor in auth.grantors and chain == event.actor) \
+            and not as_proposal:
         raise Refusal("hub_only_type", f"{event.type} is written only by this space's grantor "
                                        f"({', '.join(sorted(auth.grantors))}), in its own log")
-    if event.type in OWNER_EVENT_TYPES and not (auth.owner and event.actor == auth.owner and chain == event.actor):
+    if event.type in OWNER_EVENT_TYPES and not (auth.owner and event.actor == auth.owner and chain == event.actor) \
+            and not as_proposal:
         raise Refusal("owner_only", f"{event.type} is written only by this space's owner, in its own log")
     ep = auth.epoch_of(event.actor) if chain == event.actor else None
     if ep is not None:
@@ -230,17 +238,25 @@ def _legacy_prefix(chain: str, events: list[Event], entry) -> int:
     return top + 1
 
 
-def admit_chain(chain: str, events: list[Event], auth: Authority, *, now_ms: int) -> tuple[int, str | None]:
+def admit_chain(chain: str, events: list[Event], auth: Authority, *, now_ms: int,
+                rejected=frozenset()) -> tuple[int, str | None]:
     """(how many leading events of `chain` are admitted, why the next is not -- or None).
 
-    `events` in seq order, as they lie in the log file."""
+    `events` in seq order, as they lie in the log file. `rejected`: the
+    (chain, seq, hash) the grantor recorded as rejected proposals; such an
+    event stays in the chain (no effect on state) instead of ending it."""
     n, prior = 0, None
     try:
         if chain in auth.legacy:
             n = _legacy_prefix(chain, events, auth.legacy[chain])
             prior = events[n - 1] if n else None
         for e in events[n:]:
-            check_event(e, chain, prior, auth, now_ms=now_ms)
+            try:
+                check_event(e, chain, prior, auth, now_ms=now_ms)
+            except Refusal as exc:
+                if exc.code not in PROPOSAL_CODES or (chain, e.seq, e.hash) not in rejected:
+                    raise
+                check_event(e, chain, prior, auth, now_ms=now_ms, as_proposal=True)
             n, prior = n + 1, e
     except Refusal as exc:
         where = events[n].seq if n < len(events) else "-"
@@ -255,10 +271,26 @@ def admit(events: list[Event], auth: Authority, *, now_ms: int) -> Admission:
         chains.setdefault(getattr(e, "log", None) or e.actor, []).append(e)
     keep: set[int] = set()
     refused: dict[str, str] = {}
-    for chain, chain_events in chains.items():
-        ordered = sorted(chain_events, key=lambda e: e.seq if type(e.seq) is int else -1)
-        n, why = admit_chain(chain, ordered, auth, now_ms=now_ms)
+    rejected: set = set()
+    # The grantors' logs first: their `ledger.reject` records decide which
+    # writer events are kept as rejected proposals (audit finding 11).
+    for chain in sorted(chains, key=lambda c: (c not in auth.grantors, c)):
+        ordered = sorted(chains[chain], key=lambda e: e.seq if type(e.seq) is int else -1)
+        n, why = admit_chain(chain, ordered, auth, now_ms=now_ms, rejected=frozenset(rejected))
         keep.update(id(e) for e in ordered[:n])
         if why:
             refused[chain] = why
+        if chain in auth.grantors:
+            rejected |= rejected_proposals(ordered[:n])
     return Admission([e for e in events if id(e) in keep], refused)
+
+
+def rejected_proposals(grantor_events) -> set:
+    """{(chain, seq, hash)} named by a grantor's admitted `ledger.reject` records."""
+    out = set()
+    for e in grantor_events:
+        ref = (e.payload or {}).get("event") if e.type == "ledger.reject" and isinstance(e.payload, dict) else None
+        if isinstance(ref, dict) and isinstance(ref.get("log"), str) and type(ref.get("seq")) is int \
+                and isinstance(ref.get("hash"), str):
+            out.add((ref["log"], ref["seq"], ref["hash"]))
+    return out

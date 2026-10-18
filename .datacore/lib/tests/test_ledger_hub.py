@@ -126,7 +126,7 @@ class Env:
             git_pull(self.hub_dir, space)
         return hubmod.HubWriter(space, actor, transport, keys_dir=self.keys_dir,
                                 registry_path=self.registry, state_dir=self.tmp / "wstate" / actor,
-                                clock=self.clock)
+                                clock=self.clock, policy=TEST_POLICY)
 
     def close(self):
         for h in self.hubs:
@@ -1237,7 +1237,8 @@ def _writer_in(env, space: Path, actor: str, transport) -> "hubmod.HubWriter":
         (d / ".datacore" / "events").mkdir(parents=True)
         git_pull(space, d)
     return hubmod.HubWriter(d, actor, transport, keys_dir=env.keys_dir, registry_path=env.registry,
-                            state_dir=env.tmp / "wstate" / f"{actor}-{space.name}", clock=env.clock)
+                            state_dir=env.tmp / "wstate" / f"{actor}-{space.name}", clock=env.clock,
+                            policy=TEST_POLICY)
 
 
 def _promote(env, space: Path, grantor: str, **kw):

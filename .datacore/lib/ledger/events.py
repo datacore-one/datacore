@@ -124,7 +124,12 @@ HUB_EVENT_TYPES = frozenset({"item.lease", "item.lease.renew", "item.lease.expir
 # `hub.fence` is the grantor's own statement that it stopped: written in its
 # log, it is the last event of its epoch that counts.
 OWNER_EVENT_TYPES = frozenset({"hub.enable", "hub.promote"})
-EVENT_TYPES = EVENT_TYPES | HUB_EVENT_TYPES | OWNER_EVENT_TYPES | {"hub.fence"}
+#
+# `ledger.reject` (audit finding 11): the grantor's record that a signed event
+# already in a writer's log is a REJECTED PROPOSAL -- kept so the chain stays
+# continuous, with no effect on state, until an authorised voider cancels it
+# with `ledger.void`. Nothing is deleted or re-signed.
+EVENT_TYPES = EVENT_TYPES | HUB_EVENT_TYPES | OWNER_EVENT_TYPES | {"hub.fence", "ledger.reject"}
 
 
 @dataclass

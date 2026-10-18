@@ -68,6 +68,17 @@ RULES THIS MODULE ENFORCES
   * After a restart the hub refuses, for one lease period, to re-grant an item
     whose lease expired unrenewed (`restart_grace`): its holder may have
     finished during the outage and not yet replayed.
+  * REPLAY AND REFUSED HISTORY (finding 11): appends are answered with a
+    hub-signed acknowledgment of the log's frontier, and `status` carries a
+    hub-signed frontier per log. A replaying writer checks its own event at
+    the hub's frontier is the head the hub names before it skips anything,
+    and stops on a different event (`diverged`). An event the hub refuses for
+    what it is (hub-only or unknown type, not authorized) that is already in
+    a writer's signed log is kept as a rejected proposal: stored so the chain
+    stays continuous, recorded by a signed `ledger.reject`, no effect on
+    state, cancellable only by `ledger.void`. Imports follow the event's own
+    log (`chain`), not its type. Seals carry the authoritative state root
+    (lease authority and policy), and receipts recompute it the same way.
   * The hub never verifies its own seal. Writers do (`receipt_check`), and any
     other host may (`seal.verify_seal`).
 
@@ -94,8 +105,8 @@ from typing import Callable
 
 from .events import EVENT_TYPES, Event, canonical_bytes, compute_hash, event_body, from_line, to_line
 from .events import OWNER_EVENT_TYPES
-from .hub_admission import (GENESIS, HUB_ONLY_TYPES, Authority, Epoch, Refusal, admit, admit_chain, check_event,
-                            signing_domain)
+from .hub_admission import (GENESIS, HUB_ONLY_TYPES, PROPOSAL_CODES, Authority, Epoch, Refusal, admit, admit_chain,
+                            check_event, rejected_proposals, signing_domain)
 from .log import HubSigningRequired  # noqa: F401 -- re-exported: the hub's refusal to write unsigned
 
 CONFIG = ".datacore/ledger-hub.json"
@@ -492,10 +503,21 @@ def _parse_file(path: Path) -> list[Event]:
     return _parse_log_bytes(raw, path)[0]
 
 
-def _target(space: Path, log_name: str, event: Event) -> tuple[Path, str]:
-    """The file a writer's event lives in, and the chain key readers use for it."""
+def _target(space: Path, log_name: str, event: Event, chain: str | None = None) -> tuple[Path, str]:
+    """The file a writer's event lives in, and the chain key readers use for it.
+
+    `chain` (the writer names the exact log the event lies in) decides; the
+    event's domain binds it, so a wrong one is refused at admission. Without
+    it, the event's type decides, as before -- which misplaces a telemetry-type
+    event that lies in a main log from before the split (finding 11)."""
     from .log import TELEMETRY_SUFFIX, is_telemetry, log_paths
     main, telemetry = log_paths(space, log_name)
+    if chain is not None:
+        if chain == log_name:
+            return main, log_name
+        if chain == log_name + TELEMETRY_SUFFIX:
+            return telemetry, chain
+        raise HubRefused("malformed", f"chain {chain!r} is not a log of {log_name!r}")
     if is_telemetry(event.type, event.payload):
         return telemetry, log_name + TELEMETRY_SUFFIX
     return main, log_name
@@ -610,6 +632,9 @@ class Hub:
         events = admit(read_events(self.space_dir), auth, now_ms=self.clock()).events
         return events, fold(events, lease_grantors=auth.lease_grantors(), policy=self.policy)
 
+    def _fold_kwargs(self, cfg: HubConfig) -> dict:
+        return {"lease_grantors": self._authority(cfg).lease_grantors(), "policy": self.policy}
+
     def refusals(self) -> dict:
         """{log: where and why it stops being admitted} -- for status and verify."""
         from .log import read_events
@@ -617,7 +642,16 @@ class Hub:
 
     # ── appends (first confirmation) ───────────────────────────────────────
     def append(self, submission: dict) -> dict:
-        """Accept one signed writer event: verify, chain, store, answer."""
+        """Accept one signed writer event: verify, chain, store, answer.
+
+        `submission`: {event, log, chain?, rejected_proposal?}. `chain` is the
+        exact log the event lies in (its domain names it), so an import follows
+        the event's own log rather than its type (audit finding 11).
+        `rejected_proposal: true` asks the hub to keep an event it would refuse
+        for what it IS (a hub-only or unknown type, or an unauthorized
+        transition) because it is already in the writer's signed log: it is
+        stored so the chain stays continuous, recorded by a signed
+        `ledger.reject`, and has no effect on state (status `rejected`)."""
         raw = submission.get("event", submission) if isinstance(submission, dict) else None
         if not isinstance(raw, dict):
             raise HubRefused("malformed", "expected {event: {...}, log?: name}")
@@ -625,19 +659,21 @@ class Hub:
             event = Event(**raw)
         except TypeError as exc:
             raise HubRefused("malformed", f"not an event: {exc}") from None
-        log_name = (submission.get("log") if isinstance(submission, dict) else None) or event.actor
+        sub = submission if isinstance(submission, dict) else {}
+        log_name = sub.get("log") or event.actor
+        proposal = sub.get("rejected_proposal") is True
         with self._mutex:
-            cfg = self._writable(grant=False)
-            self._check_submission(event, log_name, cfg)
+            cfg = self._writable(grant=proposal)          # only the grantor records a rejection
+            self._check_submission(event, log_name, cfg, proposal=proposal)
             if not event.sig:
                 # Network admission never admits legacy: unsigned history comes by
                 # git and counts only as the cutover manifest names it (finding 1).
                 raise HubRefused("unsigned", "the hub accepts only signed events (amendment D)")
             auth = self._authority(cfg)
-            path, chain = _target(self.space_dir, log_name, event)
+            path, chain = _target(self.space_dir, log_name, event, sub.get("chain"))
             from file_utils import fsync_directory
             from .log import CorruptLogError, _parse_log_bytes
-            if not path.exists() and self._onto(event, chain, [], cfg, auth) is not None:
+            if not path.exists() and self._onto(event, chain, [], cfg, auth, proposal) == "duplicate":
                 return self._receipt("duplicate", cfg, chain, event)   # unreachable: an empty chain
             # (A refusal onto a log the hub does not hold yet creates no file.)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -655,7 +691,8 @@ class Hub:
                         existing = _parse_log_bytes(raw, path)[0]
                     except CorruptLogError as exc:
                         raise HubRefused("bad_chain", str(exc)) from None
-                    if self._onto(event, chain, existing, cfg, auth) is not None:
+                    verdict = self._onto(event, chain, existing, cfg, auth, proposal)
+                    if verdict == "duplicate":
                         return self._receipt("duplicate", cfg, chain, event)
                     f.write((to_line(event) + "\n").encode("utf-8"))
                     f.flush()
@@ -663,13 +700,25 @@ class Hub:
                     fsync_directory(path.parent)
                 finally:
                     fcntl.flock(f, fcntl.LOCK_UN)
+            if verdict is not None:
+                code, why = verdict
+                self.log.append("ledger.reject", {
+                    "event": {"log": chain, "seq": event.seq, "hash": event.hash, "actor": event.actor,
+                              "type": event.type},
+                    "code": code, "reason": why})
+                return self._receipt("rejected", cfg, chain, event, reason=f"{code}: {why}")
             receipt = self._receipt("accepted", cfg, chain, event)
             self._record_conflicts(event)
             return receipt
 
-    def _onto(self, event: Event, chain: str, existing: list, cfg: HubConfig, auth: Authority) -> str | None:
+    def _onto(self, event: Event, chain: str, existing: list, cfg: HubConfig, auth: Authority,
+              proposal: bool = False):
         """May `event` be appended onto `existing` (the chain as the file holds it)?
-        "duplicate" when it is already there; raises HubRefused otherwise."""
+
+        "duplicate" when it is already there; None when it is an admissible,
+        authorized append; (code, why) when `proposal` and it is a signed,
+        chained event the hub keeps only as a rejected proposal. Raises
+        HubRefused otherwise."""
         by_seq = {e.seq: e for e in existing}
         if type(event.seq) is int and event.seq in by_seq:
             if by_seq[event.seq].hash == event.hash:
@@ -679,16 +728,35 @@ class Hub:
         if event.seq != expected:
             raise HubRefused("gap", f"{chain} expects seq {expected}; replay from there", expected=expected)
         now = self.clock()
-        _, why = admit_chain(chain, existing, auth, now_ms=now)
+        _, why = admit_chain(chain, existing, auth, now_ms=now, rejected=frozenset(self._rejected()))
         if why:
             raise HubRefused("chain_refused", f"{chain} is not admissible from {why}; "
                              "nothing more is accepted onto it")
+        prior = existing[-1] if existing else None
         try:
-            check_event(event, chain, existing[-1] if existing else None, auth, now_ms=now, current_key=True)
+            check_event(event, chain, prior, auth, now_ms=now, current_key=True)
         except Refusal as exc:
-            raise HubRefused(exc.code, exc.message) from None
-        self._authorize(event)
+            if not (proposal and exc.code in PROPOSAL_CODES):
+                raise HubRefused(exc.code, exc.message) from None
+            try:   # everything but what it IS must still hold: signed, chained, this domain
+                check_event(event, chain, prior, auth, now_ms=now, as_proposal=True)
+            except Refusal as inner:
+                raise HubRefused(inner.code, inner.message) from None
+            return (exc.code, exc.message)
+        try:
+            self._authorize(event)
+        except HubRefused as exc:
+            if proposal and exc.code == "not_authorized":
+                return (exc.code, exc.message)
+            raise
         return None
+
+    def _rejected(self) -> set:
+        """(chain, seq, hash) this space's grantors recorded as rejected proposals."""
+        from .log import read_events
+        auth = self._authority(self.config())
+        return rejected_proposals([e for e in read_events(self.space_dir)
+                                   if e.actor in auth.grantors and (getattr(e, "log", None) or e.actor) == e.actor])
 
     def _authorize(self, event: Event) -> None:
         """Authorship is not authorization (audit finding 12): the same rule the
@@ -700,12 +768,12 @@ class Hub:
         if why:
             raise HubRefused("not_authorized", why)
 
-    def _check_submission(self, event: Event, log_name: str, cfg: HubConfig) -> None:
+    def _check_submission(self, event: Event, log_name: str, cfg: HubConfig, *, proposal: bool = False) -> None:
         if not isinstance(log_name, str) or not _NAME.fullmatch(log_name):
             raise HubRefused("malformed", f"invalid log name {log_name!r}")
-        if event.type not in EVENT_TYPES:
+        if event.type not in EVENT_TYPES and not proposal:
             raise HubRefused("unknown_type", f"unknown event type {event.type!r}")
-        if event.type in HUB_ONLY_TYPES:
+        if event.type in HUB_ONLY_TYPES and not proposal:
             raise HubRefused("hub_only_type", f"{event.type} is written only by the hub")
         from actor_identity import base_writer
         if not isinstance(event.actor, str) or base_writer(log_name) != base_writer(event.actor):
@@ -715,8 +783,32 @@ class Hub:
         # Everything else -- signature, hub, domain, clock, chain -- is the one
         # admission rule (ledger.hub_admission.check_event), applied in `append`.
 
-    def _receipt(self, status: str, cfg: HubConfig, chain: str, event: Event) -> dict:
-        return {"status": status, "hub": cfg.hub_id, "log": chain, "seq": event.seq, "hash": event.hash}
+    def _receipt(self, status: str, cfg: HubConfig, chain: str, event: Event, **extra) -> dict:
+        """The append answer: a hub-signed statement of the writer log's frontier
+        after the append -- log, seq and head hash (amendment A; finding 11)."""
+        out = {"status": status, "hub": cfg.hub_id, "log": chain, "seq": event.seq, "hash": event.hash, **extra}
+        out["ack"] = self._signed({"kind": "append.ack", "space": cfg.space_id, "hub": cfg.hub_id, "log": chain,
+                                   "seq": event.seq, "head": event.hash, "status": status})
+        return out
+
+    def _signed(self, statement: dict) -> dict:
+        from .keys import sign
+        statement = {**statement, "signer": self.actor, "ts_ms": self.clock()}
+        return {**statement, "sig": sign(self.actor, canonical_bytes(statement), keys_dir=self.keys_dir)}
+
+    def frontiers(self) -> dict:
+        """A hub-signed statement of every log's frontier this hub holds
+        ({log: {seq, head}}): what a replaying writer compares its own log
+        with before it skips anything (audit finding 11)."""
+        cfg = self.config()
+        events, _ = self._state()
+        logs: dict = {}
+        for e in events:
+            chain = getattr(e, "log", None) or e.actor
+            if type(e.seq) is int and (chain not in logs or e.seq > logs[chain]["seq"]):
+                logs[chain] = {"seq": e.seq, "head": e.hash}
+        return self._signed({"kind": "frontier", "space": cfg.space_id, "hub": cfg.hub_id,
+                             "logs": dict(sorted(logs.items()))})
 
     def _record_conflicts(self, event: Event) -> None:
         """Make a conflict the fold found durable: one `item.lease.conflict` each."""
@@ -912,7 +1004,8 @@ class Hub:
                     raise HubRefused("behind_predecessor", f"this copy does not hold {pred.grantor}'s frontier "
                                      f"(seq {pred.fence_seq}) that the promotion names; pull it before sealing")
             try:
-                payload = build_seal_payload(events)
+                # The AUTHORITATIVE state (lease authority, policy): what readers verify.
+                payload = build_seal_payload(events, fold_kwargs=self._fold_kwargs(cfg))
             except ValueError as exc:
                 raise HubRefused("unsealable", str(exc)) from None
             last = next((e for e in reversed(events) if e.type == "ledger.seal" and e.actor == self.actor), None)
@@ -947,6 +1040,7 @@ class Hub:
             "active": cfg.grantor == self.actor and self._lock_fh is not None and not self.closed,
             "started_ms": self.started_ms, "now_ms": now,
             "watermarks": watermarks(events),
+            "frontiers": self.frontiers(),
             "leases": {iid: {"holder": it.lease_holder, "expires_ms": it.lease_expires_ms,
                              "live": lease_live(it, now)}
                        for iid, it in sorted(state.items.items()) if it.lease_holder is not None},
@@ -1073,6 +1167,11 @@ class HttpTransport:
 
 # ── the writer's side ───────────────────────────────────────────────────────
 
+#: Refusals of an event for what it IS: already in a signed writer log, such an
+#: event is kept by the hub as a rejected proposal (finding 11).
+REJECTABLE = PROPOSAL_CODES | {"not_authorized"}
+
+
 class HubWriter:
     """A writer in a hub space: local first, hub second, receipt third.
 
@@ -1083,12 +1182,17 @@ class HubWriter:
     """
 
     def __init__(self, space_dir, actor: str, transport, *, keys_dir=None, registry_path=None,
-                 state_dir=None, clock: Callable[[], int] | None = None, log_name: str | None = None):
+                 state_dir=None, clock: Callable[[], int] | None = None, log_name: str | None = None,
+                 policy=None):
         self.space_dir = Path(space_dir)
         cfg = load_config(self.space_dir)
         if cfg is None:
             raise HubRefused("hub_off", f"{self.space_dir} has not opted in to a hub ({CONFIG})")
         self.cfg, self.actor, self.transport = cfg, actor, transport
+        # The same explicit policy input the hub folds with: a receipt recomputes
+        # the AUTHORITATIVE sealed state (findings 11, 12). Read once, here.
+        from .hub_policy import PolicyInputs
+        self.policy = policy if isinstance(policy, PolicyInputs) else PolicyInputs.load(policy)
         self.keys_dir, self.registry_path = keys_dir, registry_path
         self.clock = clock or _wall_ms
         from .log import EventLog
@@ -1135,8 +1239,53 @@ class HubWriter:
             pass
 
     # ── appends ────────────────────────────────────────────────────────────
-    def _submission(self, e: Event) -> dict:
-        return {"event": _event_dict(e), "log": self.log.log_name}
+    def _submission(self, e: Event, chain: str | None = None, *, rejected: bool = False) -> dict:
+        """What is sent: the event, its log, and the EXACT chain it lies in."""
+        from .log import TELEMETRY_SUFFIX, is_telemetry
+        if chain is None:
+            chain = self.log.log_name + (TELEMETRY_SUFFIX if is_telemetry(e.type, e.payload) else "")
+        out = {"event": _event_dict(e), "log": self.log.log_name, "chain": chain}
+        if rejected:
+            out["rejected_proposal"] = True
+        return out
+
+    def _grantor(self) -> str:
+        return authority(self.space_dir, load_config(self.space_dir) or self.cfg, self.registry_path).active.grantor
+
+    def _check_statement(self, st, kind: str, code: str) -> dict:
+        """A hub-signed statement (append ack, frontier): signed by this space's
+        grantor with its current key, for this space and hub."""
+        from .keys import verify
+        cfg = load_config(self.space_dir) or self.cfg
+        if not isinstance(st, dict) or st.get("kind") != kind or st.get("space") != cfg.space_id \
+                or st.get("hub") != cfg.hub_id or st.get("signer") != self._grantor() \
+                or not isinstance(st.get("sig"), str):
+            raise HubRefused(code, f"the hub's {kind} is not a signed statement of this space's grantor")
+        body = canonical_bytes({k: v for k, v in st.items() if k != "sig"})
+        if not verify(st["signer"], body, st["sig"], registry_path=self.registry_path, at_ms=self.clock()):
+            raise HubRefused(code, f"the hub's {kind} signature does not verify")
+        return st
+
+    def _send(self, e: Event, chain: str | None = None) -> dict:
+        """Submit one local event. One the hub refuses for what it IS, already in
+        this signed log, is resubmitted as a rejected proposal so the chain stays
+        continuous (finding 11); the refusal is still raised to the caller."""
+        try:
+            receipt = self.transport.append(self._submission(e, chain))
+        except HubRefused as exc:
+            if exc.code not in REJECTABLE:
+                raise
+            receipt = self.transport.append(self._submission(e, chain, rejected=True))
+            self._check_ack(receipt, e)
+            receipt = {**receipt, "refusal": exc.as_dict()}
+            return receipt
+        self._check_ack(receipt, e)
+        return receipt
+
+    def _check_ack(self, receipt: dict, e: Event) -> None:
+        ack = self._check_statement((receipt or {}).get("ack"), "append.ack", "bad_ack")
+        if ack.get("seq") != e.seq or ack.get("head") != e.hash:
+            raise HubRefused("bad_ack", "the hub's acknowledgment names another frontier")
 
     def _attempt_for(self, item_id) -> dict | None:
         """The attempt this writer holds on `item_id`: its latest lease receipt."""
@@ -1153,13 +1302,20 @@ class HubWriter:
         A result or release on an item this writer holds a lease on names that
         lease's attempt and task-content hash (audit finding 9), unless the
         caller named them itself."""
+        if type in HUB_ONLY_TYPES or (type in OWNER_EVENT_TYPES and self.actor != (self.cfg.owner or None)):
+            # Known-invalid operations are refused BEFORE the local append
+            # (amendment B): a signed event in my log cannot be taken back.
+            raise HubRefused("hub_only_type", f"{type} is written only by the hub or the owner; not appended")
         if type in ("item.complete", "item.release") and isinstance(payload, dict) and "attempt" not in payload:
             held = self._attempt_for(payload.get("id"))
             if held:
                 payload = {**payload, **{k: v for k, v in held.items() if v}}
         event = self.log.append(type, payload, after=self._floor())
         try:
-            receipt = self.transport.append(self._submission(event))
+            receipt = self._send(event)
+            if receipt.get("refusal"):
+                r = receipt["refusal"]
+                raise HubRefused(r["code"], r.get("message", ""), kept_as="rejected proposal")
         except HubUnavailable:
             self._mark_outage()
             return event, None
@@ -1179,18 +1335,34 @@ class HubWriter:
         return [(name, _parse_file(self.log.path)), (name + TELEMETRY_SUFFIX, _parse_file(self.log.telemetry_path))]
 
     def replay(self) -> list[dict]:
-        """Send every local event the hub does not yet hold, oldest first."""
+        """Send every local event the hub does not yet hold, oldest first.
+
+        Nothing is skipped on the hub's word alone (finding 11): the hub's
+        frontier for each of my logs is a statement signed by the grantor, and
+        my own event at that seq must be exactly the head it names -- the hash
+        chain then proves the whole common prefix. A different event at the
+        same seq stops reconciliation (`diverged`, for the owner) and the
+        outage stays marked until every log has reconciled."""
         try:
-            held = self.transport.status().get("watermarks", {})
+            status = self.transport.status()
         except HubUnavailable:
             self._mark_outage()
             raise
+        frontier = self._check_statement(status.get("frontiers"), "frontier", "bad_frontier")
+        logs = frontier.get("logs") if isinstance(frontier.get("logs"), dict) else {}
         out = []
         for chain, events in self._local_chains():
-            mark = held.get(chain, -1)
+            held = logs.get(chain) or {"seq": -1, "head": GENESIS}
+            mine = {e.seq: e for e in events}
+            top = held.get("seq", -1)
+            if top >= 0 and (top not in mine or mine[top].hash != held.get("head")):
+                self._mark_outage()
+                raise HubRefused("diverged", f"the hub holds a different {chain} at seq {top} than this writer "
+                                 "signed; reconciliation of this log stops here and goes to the owner",
+                                 log=chain, seq=top)
             for e in events:
-                if e.seq > mark:
-                    out.append(self.transport.append(self._submission(e)))
+                if e.seq > top:
+                    out.append(self._send(e, chain))
         self._clear_outage()
         return out
 
@@ -1306,13 +1478,17 @@ class HubWriter:
             return result("failed")
         hub_actor = hub_actor or sauth.active.grantor
 
+        # The hub seals its AUTHORITATIVE state; recompute it with the same
+        # explicit inputs, over what admission lets in (findings 11, 12).
+        fold_kwargs = {"lease_grantors": sauth.lease_grantors(), "policy": self.policy}
+        admitted = admit(events, sauth, now_ms=self.clock()).events
         with as_sequencer(hub_actor):
             try:
-                seal = latest_seal(events)
+                seal = latest_seal(admitted)
             except ValueError as exc:
                 problems.append(f"unreadable seal: {exc}")
                 return result("failed")
-            verdict, detail = verify_seal(events) if seal is not None else (None, "no seal yet")
+            verdict, detail = verify_seal(admitted, fold_kwargs) if seal is not None else (None, "no seal yet")
         if seal is None:
             pending.append(f"no seal by {hub_actor} yet")
         elif verdict is False:
@@ -1374,8 +1550,7 @@ class HubWriter:
         # covered event that the authoritative fold turned into a lease
         # conflict or an owner-resolution case is not a confirmation.
         if seal is not None and verdict is True:
-            settled = fold([e for e in admit(events, sauth, now_ms=self.clock()).events if seal.includes(e)],
-                           lease_grantors=sauth.lease_grantors())
+            settled = fold([e for e in admitted if seal.includes(e)], **fold_kwargs)
             for it in settled.items.values():
                 for h in covered & (set(it.lease_conflicts) | set(it.lease_unresolved)):
                     why = it.lease_conflicts.get(h) or it.lease_unresolved.get(h)

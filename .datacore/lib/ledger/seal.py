@@ -242,8 +242,12 @@ def _self_consistent(events: list[Event]) -> list[tuple[str, int]]:
     return sorted(set(bad))
 
 
-def verify_seal(events: list[Event]) -> tuple[bool | None, str]:
+def verify_seal(events: list[Event], fold_kwargs: dict | None = None) -> tuple[bool | None, str]:
     """Recompute the sealed state and compare to the sequencer's claim.
+
+    `fold_kwargs`: the explicit authority a hub space folds with
+    (`lease_grantors`, `policy`; ledger.hub). A hub seals its AUTHORITATIVE
+    state, so a verifier recomputes it with the same inputs.
 
     Returns (None, reason) when there is nothing to check — an unsealed ledger
     is not a failing one. This is the check that makes a designated sequencer
@@ -297,7 +301,7 @@ def verify_seal(events: list[Event]) -> tuple[bool | None, str]:
     # Every covered event's hash was judged by _chain_issue above, through the
     # one verifier: a second hash loop here refused seals covering an event an
     # in-ledger void had cancelled (Phase 2 V2).
-    recomputed = fold(covered).state_root()
+    recomputed = fold(covered, **(fold_kwargs or {})).state_root()
     if recomputed == seal.state_root:
         n = sum(seal.watermarks.values()) + len(seal.watermarks)
         # COVERAGE IS NOT CORRECTNESS. A seal is internally consistent as long
@@ -358,7 +362,7 @@ def seal_regressions(events: list[Event], seal: Seal) -> list[str]:
     return out
 
 
-def build_seal_payload(events: list[Event]) -> dict:
+def build_seal_payload(events: list[Event], fold_kwargs: dict | None = None) -> dict:
     """What the sequencer appends. Excludes seals themselves, so a seal never
     seals a seal — that would make the root depend on sealing history rather
     than on the work, and two sequencer runs over identical work would differ.
@@ -370,7 +374,7 @@ def build_seal_payload(events: list[Event]) -> dict:
         "version": 2,
         "event_set_hash": _event_set_hash(work),
         "watermarks": watermarks(work),
-        "state_root": fold(work).state_root(),
+        "state_root": fold(work, **(fold_kwargs or {})).state_root(),
     }
 
 
