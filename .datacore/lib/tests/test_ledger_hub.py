@@ -1574,3 +1574,71 @@ def test_audit17_switching_a_space_on_is_gated_on_every_writer_declaring_support
     cfg = hubmod.enable(space, hub_id=HUB_ID, grantor=GRANTOR, owner=OWNER, keys_dir=env.keys_dir,
                         registry_path=env.registry)
     assert cfg.protocol == 2
+
+
+# ── finding 15: git stays the record and the fallback, under the own-log gate ─
+
+def _git_env(monkeypatch):
+    """A throwaway committer identity for the test repositories."""
+    for k, v in (("GIT_AUTHOR_NAME", "t"), ("GIT_AUTHOR_EMAIL", "t@example.invalid"),
+                 ("GIT_COMMITTER_NAME", "t"), ("GIT_COMMITTER_EMAIL", "t@example.invalid")):
+        monkeypatch.setenv(k, v)
+
+
+def _git(repo: Path, *args: str) -> str:
+    import subprocess
+    r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    assert r.returncode == 0, (args, r.stdout, r.stderr)
+    return r.stdout
+
+
+def _write_gate():
+    """The repository's own ledger write gate (.datacore/lib/hooks/ledger_write_gate.py)."""
+    import importlib.util
+    path = Path(hubmod.__file__).resolve().parents[1] / "hooks" / "ledger_write_gate.py"
+    spec = importlib.util.spec_from_file_location("ledger_write_gate_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _git_repo(repo: Path) -> str:
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "base")
+    return _git(repo, "rev-parse", "HEAD").strip()
+
+
+def test_audit15_a_writer_publishes_its_own_log_through_git_while_the_hub_is_down(env, monkeypatch):
+    ranges = _write_gate().ranges
+    _git_env(monkeypatch)
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    wa = env.writer("wa", t)
+    base = _git_repo(wa.space_dir)
+    t.down = True
+    wa.append("item.create", {"id": "t1", "title": "addressed work, hub down"})   # buffered locally
+    # Someone else's change sits in the same checkout; publishing must not take it.
+    (wa.space_dir / ".datacore" / "events" / "wb.jsonl").write_text("not wa's\n")
+    commit = wa.publish("ledger: wa while the hub is down")
+    assert _git(wa.space_dir, "show", "--name-only", "--format=", commit).split() == [".datacore/events/wa.jsonl"]
+    # The repository's own write gate (pre-commit / pre-push) accepts hub-space lines.
+    assert ranges(wa.space_dir, [f"{base}..{commit}"]) == []
+    assert "wb.jsonl" in _git(wa.space_dir, "status", "--porcelain")   # left exactly as found
+
+
+def test_audit15_the_hub_publishes_only_its_own_log(env, monkeypatch):
+    ranges = _write_gate().ranges
+    _git_env(monkeypatch)
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa = env.writer("own", t), env.writer("wa", t)
+    base = _git_repo(env.hub_dir)
+    owner.append("item.create", {"id": "t1", "title": "task"})       # lands in the hub's checkout too
+    wa.request_lease("t1")
+    hub.seal()
+    commit = hub.publish("ledger: hub grants and seal")
+    assert _git(env.hub_dir, "show", "--name-only", "--format=", commit).split() == [
+        f".datacore/events/{GRANTOR}.jsonl"]
+    assert ranges(env.hub_dir, [f"{base}..{commit}"]) == []
+    assert "own.jsonl" in _git(env.hub_dir, "status", "--porcelain")   # another writer's log: theirs to publish
