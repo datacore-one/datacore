@@ -544,3 +544,426 @@ def test_a_writer_whose_clock_is_behind_still_completes_after_its_lease(env, mon
     monkeypatch.setattr(hlc.time, "time", real)
     item = fold(read_events(env.hub_dir)).items["t1"]
     assert item.status == "completed" and item.owner == "wa", item.history
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# AUDIT FIXES, PART 1 (Codex audit 2026-10-18, findings 1, 2, 3, 5, 6, 7, 16, 18)
+#
+# Report: 2-datacore/1-tracks/engineering/reports/
+#         2026-10-18-dip-0034-amendment-codex-audit-report.md
+# Each test reproduces the audit's failure scenario and was seen failing
+# before the fix.
+# ════════════════════════════════════════════════════════════════════════════
+
+def _raw_event(seq: int, hlc: str, actor: str, type: str, payload: dict, prev: str, hub: str = "") -> Event:
+    """An UNSIGNED event with exactly the fields given (hash correct)."""
+    body = body_dict(seq, hlc, actor, type, payload, prev, hub=hub)
+    return Event(**body, hash=compute_hash(body), sig="")
+
+
+def _write_raw(space: Path, log: str, events: list[Event]) -> None:
+    path = space / ".datacore" / "events" / f"{log}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        for e in events:
+            f.write(to_line(e) + "\n")
+
+
+def _legacy_space(env, name: str, chain: list[tuple[str, str, dict]]) -> Path:
+    """A space whose `own` log holds unsigned events written BEFORE it opted in
+    to a hub; then the owner enables the hub (that writes the cutover manifest)."""
+    space = env.tmp / name
+    (space / ".datacore" / "events").mkdir(parents=True)
+    prev, out = "GENESIS", []
+    for seq, (hlc, type, payload) in enumerate(chain):
+        e = _raw_event(seq, hlc, "own", type, payload, prev)
+        out.append(e)
+        prev = e.hash
+    _write_raw(space, "own", out)
+    hubmod.enable(space, hub_id=HUB_ID, grantor=GRANTOR, lease_ttl_s=900)
+    return space
+
+
+def _space_id(space: Path) -> str:
+    """The space's immutable id from its hub config ("" before the field existed)."""
+    return getattr(hubmod.load_config(space), "space_id", "")
+
+
+def _real_ms() -> int:
+    import time as _t
+    return int(_t.time() * 1000)
+
+
+# ── finding 1: a timestamp never makes an event legacy ──────────────────────
+
+def test_audit1_backdated_unsigned_event_is_refused_over_the_network(env):
+    """Token holder, no key: a correctly hashed unsigned seq-0 `item.create` as
+    `victim`, stamped before the cutover. Network admission needs a signature."""
+    hub = env.hub()
+    old = "0000000000001.0000.victim"
+    for hub_field in ("", HUB_ID):
+        e = _raw_event(0, old, "victim", "item.create", {"id": "planted"}, "GENESIS", hub=hub_field)
+        with pytest.raises(hubmod.HubRefused) as exc:
+            hub.append({"event": json.loads(to_line(e))})
+        assert exc.value.code == "unsigned", exc.value
+    assert not (env.hub_dir / ".datacore" / "events" / "victim.jsonl").exists()
+
+
+def test_audit1_legacy_is_membership_in_the_cutover_manifest_not_a_timestamp(env):
+    """Events written before the space opted in stay valid unsigned -- because the
+    owner's cutover manifest names their log's head, not because of their stamp.
+    An unsigned event added to that log later (a git import), backdated before
+    the cutover, is not legacy and confers nothing."""
+    now = _real_ms()
+    space = _legacy_space(env, "legacy-space", [
+        (f"{now - 60_000:013d}.0000.own", "item.create", {"id": "old", "title": "before the hub"}),
+    ])
+    head = read_events(space)[-1]
+    planted = _raw_event(1, f"{now - 30_000:013d}.0000.own", "own", "item.create",
+                         {"id": "new", "title": "backdated"}, head.hash, hub=HUB_ID)
+    _write_raw(space, "own", [planted])
+    hub = env.hub(space=space, state="legacy")
+    req = lambda item: hubmod.sign_request("wa", "lease.request", {  # noqa: E731
+        "hub": HUB_ID, "space": _space_id(space), "item": item},
+        keys_dir=env.keys_dir, clock=env.clock)
+    from ledger.keys import ensure_keypair
+    ensure_keypair("wa", keys_dir=env.keys_dir, registry_path=env.registry)
+    assert hub.request_lease(req("old"))["status"] == "granted"
+    with pytest.raises(hubmod.HubRefused) as exc:
+        hub.request_lease(req("new"))
+    assert exc.value.code == "unknown_item"
+
+
+def test_audit1_an_edited_cutover_manifest_is_refused(env):
+    now = _real_ms()
+    space = _legacy_space(env, "manifest-space", [
+        (f"{now - 60_000:013d}.0000.own", "item.create", {"id": "old"})])
+    manifest = space / hubmod.CUTOVER_MANIFEST
+    data = json.loads(manifest.read_text())
+    data["logs"]["own"]["seq"] = 99
+    manifest.write_text(json.dumps(data))
+    with pytest.raises(hubmod.HubRefused) as exc:
+        env.hub(space=space, state="manifest")
+    assert exc.value.code == "bad_manifest"
+
+
+# ── finding 2: one admission rule for every path, hub authority only for the grantor ─
+
+def test_audit2_a_lease_an_ordinary_writer_wrote_and_git_imported_confers_nothing(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wb = env.writer("own", t), env.writer("wb", t)
+    owner.append("item.create", {"id": "t1", "title": "pool task"})
+    # wa writes a signed, hub-stamped lease into its OWN log and it arrives by
+    # git, not HTTP (simulated: written straight into the hub's checkout).
+    forged = EventLog(env.hub_dir, "wa", keys_dir=env.keys_dir, registry_path=env.registry, sign=True)
+    lease = forged.append("item.lease", {"id": "t1", "holder": "wa", "granted_ms": env.clock(),
+                                         "expires_ms": env.clock() + 900_000})
+    assert lease.hub == HUB_ID and lease.sig
+    assert "t1" not in hub.status()["leases"]
+    assert wb.request_lease("t1")["status"] == "granted"
+    # The same rule seals: the forged event is not in settled state.
+    sealed = hub.seal()["seal"]["payload"]
+    assert sealed["watermarks"].get("wa", -1) < lease.seq
+
+
+def test_audit2_an_event_signed_with_an_unknown_key_after_cutover_is_not_admitted(env):
+    hub = env.hub()
+    ghost = EventLog(env.hub_dir, "ghost", keys_dir=env.tmp / "ghost-keys",
+                     registry_path=env.tmp / "ghost-registry.yaml", sign=True)
+    ghost.append("item.create", {"id": "g", "title": "from a key nobody registered"})
+    t = hubmod.LocalTransport(hub)
+    wa = env.writer("wa", t)
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wa.request_lease("g")
+    assert exc.value.code == "unknown_item"
+
+
+def test_audit2_the_fold_honours_leases_only_from_the_grantors_it_is_given(env):
+    create = _raw_event(0, "1700000000000.0000.own", "own", "item.create", {"id": "t1"}, "GENESIS")
+    bad = _raw_event(0, "1700000000001.0000.wa", "wa", "item.lease",
+                     {"id": "t1", "holder": "wa", "granted_ms": 1, "expires_ms": 2}, "GENESIS", hub=HUB_ID)
+    item = fold([create, bad], lease_grantors={HUB_ID: {GRANTOR}}).items["t1"]
+    assert item.lease_holder is None and item.status == "created", item.history
+    good = _raw_event(0, "1700000000002.0000.hubd", GRANTOR, "item.lease",
+                      {"id": "t1", "holder": "wb", "granted_ms": 1, "expires_ms": 2}, "GENESIS", hub=HUB_ID)
+    assert fold([create, good], lease_grantors={HUB_ID: {GRANTOR}}).items["t1"].lease_holder == "wb"
+
+
+# ── finding 3: a receipt is confirmed, pending or failed -- never "ok" while pending ─
+
+def test_audit3_a_result_newer_than_the_seal_is_pending_not_ok(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa = env.writer("own", t), env.writer("wa", t)
+    owner.append("item.create", {"id": "t1", "title": "task"})
+    wa.request_lease("t1")
+    git = _published(env, hub, [owner, wa])
+    confirmed = wa.receipt_check(git, hub_actor=GRANTOR)
+    assert confirmed["status"] == "confirmed" and confirmed["ok"] is True, confirmed
+    done, _ = wa.append("item.complete", {"id": "t1", "result": "42"})   # after the seal
+    report = wa.receipt_check(git, hub_actor=GRANTOR)
+    assert report["status"] == "pending" and report["ok"] is False, report
+    # Asked about one operation, the answer is about that operation's events.
+    later = _published(env, hub, [owner, wa])
+    wa.append("item.update", {"id": "t1", "note": "after the second seal"})
+    assert wa.receipt_check(later, hub_actor=GRANTOR, required=[done.hash])["status"] == "confirmed"
+    assert wa.receipt_check(later, hub_actor=GRANTOR)["status"] == "pending"
+
+
+def test_audit3_a_seal_that_cannot_be_verified_is_not_a_confirmation(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa = env.writer("own", t), env.writer("wa", t)
+    owner.append("item.create", {"id": "t1", "title": "task"})
+    wa.request_lease("t1")
+    wa.append("item.complete", {"id": "t1"})
+    git = _published(env, hub, [owner, wa])
+    (git / ".datacore" / "events" / "own.jsonl").unlink()   # another writer's covered prefix is missing
+    report = wa.receipt_check(git, hub_actor=GRANTOR)
+    assert report["ok"] is False and report["status"] in ("pending", "failed"), report
+
+
+def test_audit3_no_seal_yet_is_pending_and_not_ok(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    wa = env.writer("wa", t)
+    wa.append("item.create", {"id": "t1", "title": "task"})
+    report = wa.receipt_check(env.hub_dir, hub_actor=GRANTOR)
+    assert report["status"] == "pending" and report["ok"] is False, report
+
+
+# ── finding 5: fresh requests need a current key; answers come from the grantor ─
+
+def _rotate_in_principals(env, actor: str, valid_from_ms: int) -> None:
+    """Record an owner-approved rotation of `actor` to a brand-new key, valid
+    from `valid_from_ms`; the old key stays valid for the past only."""
+    import ledger.keys as keys
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    old = keys._registry_actors(env.registry)[actor]
+    new = Ed25519PrivateKey.generate().public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
+    p = keys.principals_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(f"verify_keys:\n  {actor}: {new}\nverify_key_history:\n  {actor}:\n"
+                 f"    - key: {old}\n      valid_from: null\n"
+                 f"    - key: {new}\n      valid_from: {valid_from_ms}\n")
+
+
+def test_audit5_a_retired_key_cannot_sign_a_fresh_lease_request(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa = env.writer("own", t), env.writer("wa", t)
+    owner.append("item.create", {"id": "t1", "title": "task"})
+    # wa's key was rotated out before "now" on the hub's clock; wa still holds the old one.
+    _rotate_in_principals(env, "wa", env.clock() - 60_000)
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wa.request_lease("t1")
+    assert exc.value.code == "bad_signature"
+
+
+class _Forging(hubmod.LocalTransport):
+    """A compromised endpoint: answers lease requests with whatever `forge` returns."""
+
+    def __init__(self, hub, forge):
+        super().__init__(hub)
+        self.forge = forge
+
+    def request_lease(self, req):
+        return self.forge(req, super().request_lease)
+
+    def renew_lease(self, req):
+        return self.forge(req, super().renew_lease)
+
+
+def test_audit5_a_lease_answer_signed_by_another_writer_is_not_a_first_confirmation(env):
+    hub = env.hub()
+    owner = env.writer("own", hubmod.LocalTransport(hub))
+    owner.append("item.create", {"id": "t1", "title": "task"})
+    wb = env.writer("wb", hubmod.LocalTransport(hub))      # a registered writer, not the grantor
+    fake = wb.log.append("item.lease", {"id": "t1", "holder": "wa", "granted_ms": env.clock(),
+                                        "expires_ms": env.clock() + 900_000})
+    wa = env.writer("wa", _Forging(hub, lambda req, real: {
+        "status": "granted", "lease": json.loads(to_line(fake)), "log": "wb"}))
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wa.request_lease("t1")
+    assert exc.value.code == "bad_lease"
+    assert wa.receipts() == []
+
+
+def test_audit5_a_lease_answer_is_bound_to_its_request_nonce_and_type(env):
+    hub = env.hub()
+    owner = env.writer("own", hubmod.LocalTransport(hub))
+    owner.append("item.create", {"id": "t1", "title": "task"})
+    first: dict = {}
+
+    def replay_first(req, real):
+        if not first:
+            first.update(real(req))
+        return dict(first)
+
+    wa = env.writer("wa", _Forging(hub, replay_first))
+    assert wa.request_lease("t1")["status"] == "granted"
+    with pytest.raises(hubmod.HubRefused) as exc:           # same signed lease, a new request
+        wa.request_lease("t1")
+    assert exc.value.code == "bad_lease"
+    first["status"] = "renewed"
+    with pytest.raises(hubmod.HubRefused) as exc:           # a lease offered as a renewal
+        wa.renew_lease("t1")
+    assert exc.value.code == "bad_lease"
+    assert len(wa.receipts()) == 1
+
+
+# ── finding 6: signatures bind space, hub and log; renewals check the hub ──
+
+def _second_space(env, name: str = "space-b") -> Path:
+    space = env.tmp / name
+    (space / ".datacore" / "events").mkdir(parents=True)
+    hubmod.enable(space, hub_id=HUB_ID, grantor=GRANTOR, lease_ttl_s=900)
+    return space
+
+
+def test_audit6_a_signed_event_cannot_be_replayed_into_another_space_or_log(env):
+    hub_a = env.hub()
+    wa = env.writer("wa", hubmod.LocalTransport(hub_a))
+    spend, _ = wa.append("spend.record", {"amount": 5, "currency": "EUR"})
+    captured = json.loads(to_line(spend))
+    hub_b = env.hub(space=_second_space(env), state="state-b")
+    with pytest.raises(hubmod.HubRefused) as exc:
+        hub_b.append({"event": captured})                    # same hub id, other space
+    assert exc.value.code == "wrong_domain"
+    with pytest.raises(hubmod.HubRefused) as exc:
+        hub_a.append({"event": captured, "log": "wa-run-2026-10-18"})   # same writer, other log
+    assert exc.value.code == "wrong_domain"
+    assert not (env.hub_dir / ".datacore" / "events" / "wa-run-2026-10-18.jsonl").exists()
+
+
+def test_audit6_a_renewal_addressed_to_another_hub_is_refused(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa = env.writer("own", t), env.writer("wa", t)
+    owner.append("item.create", {"id": "t1", "title": "task"})
+    wa.request_lease("t1")
+    space_id = _space_id(env.hub_dir)
+    for body in ({"hub": "other-hub", "space": space_id, "item": "t1"},
+                 {"hub": HUB_ID, "space": "other-space", "item": "t1"}):
+        req = hubmod.sign_request("wa", "lease.renew", body, keys_dir=env.keys_dir, clock=env.clock)
+        with pytest.raises(hubmod.HubRefused) as exc:
+            hub.renew_lease(req)
+        assert exc.value.code in ("wrong_hub", "wrong_space"), exc.value
+
+
+def test_audit6_lease_receipts_are_kept_per_space_hub_and_log(env):
+    hub_a = env.hub()
+    t = hubmod.LocalTransport(hub_a)
+    owner, wa = env.writer("own", t), env.writer("wa", t)
+    owner.append("item.create", {"id": "t1", "title": "task"})
+    wa.request_lease("t1")
+    space_b = _second_space(env)
+    wa_b = hubmod.HubWriter(space_b, "wa", hubmod.LocalTransport(env.hub(space=space_b, state="state-b")),
+                            keys_dir=env.keys_dir, registry_path=env.registry,
+                            state_dir=env.tmp / "wstate" / "wa", clock=env.clock)
+    assert len(wa.receipts()) == 1
+    assert wa_b.receipts() == []
+
+
+# ── finding 7: clocks are judged at admission, never dropped ───────────────
+
+def test_audit7_malformed_future_and_backwards_clocks_are_refused_at_admission(env, monkeypatch):
+    import ledger.log as logmod
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    cases = {
+        "wc": lambda first: f"{env.clock() + 3600_000:013d}.0000.wc",            # an hour ahead of the hub
+        "wd": lambda first: "garbage.wd",                                         # not an HLC at all
+        "we": lambda first: f"{int(first.hlc.split('.')[0]) - 60_000:013d}.0000.we",   # behind its own last event
+    }
+    for actor, stamp_for in cases.items():
+        w = env.writer(actor, t)
+        first, receipt = w.append("item.create", {"id": f"{actor}-ok", "title": "a normal first event"})
+        assert receipt["status"] == "accepted"
+        stamp = stamp_for(first)
+        with monkeypatch.context() as m:
+            m.setattr(logmod, "tick", lambda a, floor=None: stamp)
+            with pytest.raises(hubmod.HubRefused) as exc:
+                w.append("item.create", {"id": f"{actor}-skewed", "title": stamp})
+        assert exc.value.code == "bad_clock", (stamp, exc.value)
+    items = fold(read_events(env.hub_dir)).items
+    assert not [i for i in items if i.endswith("-skewed")]
+
+
+def test_audit7_a_granted_lease_sorts_after_every_event_of_its_item(env):
+    """An item whose create is stamped ahead of a later event in the same legacy
+    log: the hub's causal floor (sibling tails) misses it, so without a floor
+    of its own the lease sorted BEFORE the create and folded as an orphan."""
+    now = _real_ms()
+    space = _legacy_space(env, "skew-space", [
+        (f"{now + 5 * 60_000:013d}.0000.own", "item.create", {"id": "t1", "title": "fast clock"}),
+        (f"{now - 60_000:013d}.0000.own", "item.update", {"id": "other", "note": "slow clock"}),
+    ])
+    hub = env.hub(space=space, state="skew")
+    from ledger.keys import ensure_keypair
+    ensure_keypair("wa", keys_dir=env.keys_dir, registry_path=env.registry)
+    req = hubmod.sign_request("wa", "lease.request", {
+        "hub": HUB_ID, "space": _space_id(space), "item": "t1"},
+        keys_dir=env.keys_dir, clock=env.clock)
+    assert hub.request_lease(req)["status"] == "granted"
+    item = fold(read_events(space)).items["t1"]
+    assert item.lease_holder == "wa" and item.status == "claimed", item.history
+
+
+# ── finding 16: the chain is validated under the same lock it is appended under ─
+
+def test_audit16_a_local_append_racing_the_hub_cannot_fork_the_chain(env, monkeypatch):
+    import ledger.verify as verify
+    hub = env.hub()
+    wa = env.writer("wa", hubmod.LocalTransport(hub))
+    wa.append("item.create", {"id": "a", "title": "first"})
+    pending = wa.log.append("item.create", {"id": "b", "title": "next, not yet submitted"})
+
+    real = verify.check_events
+    racer: dict = {}
+
+    def check_events(*args, **kwargs):
+        if "thread" not in racer:
+            # A cooperating local writer appends to the hub's copy of wa's log
+            # under its own file lock while the hub is validating.
+            local = EventLog(env.hub_dir, "wa", keys_dir=env.keys_dir, registry_path=env.registry, sign=True)
+            racer["thread"] = threading.Thread(target=lambda: local.append("item.create", {"id": "racer"}))
+            racer["thread"].start()
+            racer["thread"].join(timeout=1.0)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(verify, "check_events", check_events)
+    try:
+        hub.append(wa._submission(pending))
+    except hubmod.HubRefused:
+        pass                                    # refusing is fine; forking is not
+    racer["thread"].join()
+    monkeypatch.setattr(verify, "check_events", real)
+    chain = [from_line(ln) for ln in (env.hub_dir / ".datacore" / "events" / "wa.jsonl").read_text().splitlines()]
+    assert [e.seq for e in chain] == list(range(len(chain))), [(e.seq, e.payload) for e in chain]
+    assert all(b.prev == a.hash for a, b in zip(chain, chain[1:]))
+
+
+# ── finding 18: a seal is requested by a signed operator, never by the token ─
+
+def test_audit18_sealing_over_the_network_needs_a_signed_operator_request(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner = env.writer("own", t)
+    owner.append("item.create", {"id": "t1", "title": "task"})
+    space_id = _space_id(env.hub_dir)
+    body = {"hub": HUB_ID, "space": space_id}
+    with pytest.raises(hubmod.HubRefused) as exc:
+        hub.seal_request(None)
+    assert exc.value.code == "unsigned"
+    with pytest.raises(hubmod.HubRefused) as exc:
+        hub.seal_request(hubmod.sign_request("own", "seal.request", body, keys_dir=env.keys_dir, clock=env.clock))
+    assert exc.value.code == "not_operator"
+    ok = hub.seal_request(hubmod.sign_request(GRANTOR, "seal.request", body, keys_dir=env.keys_dir, clock=env.clock))
+    assert ok["status"] == "sealed"
+    again = hub.seal_request(hubmod.sign_request(GRANTOR, "seal.request", body, keys_dir=env.keys_dir, clock=env.clock))
+    assert again["status"] == "unchanged"           # nothing new: no second seal event
+    assert sum(1 for e in read_events(env.hub_dir) if e.type == "ledger.seal") == 1
