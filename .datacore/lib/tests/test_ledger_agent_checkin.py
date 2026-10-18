@@ -314,3 +314,44 @@ def test_dry_run_sends_nothing_and_leaves_the_state_alone(env, monkeypatch, caps
     assert rc == 0
     assert "WOULD SEND" in capsys.readouterr().out
     assert not sent.exists() and not env.state_file.exists()
+
+
+# ── 7. check-ins pass the hub's admission rule (ledger hub audit fixes) ─────
+
+def test_a_checkin_through_the_hub_is_signed_and_bound_to_this_space_and_log(env):
+    """Audit finding 6: a signed check-in names this space, hub and log in its
+    signed domain, so it cannot be replayed elsewhere."""
+    from ledger.hub_admission import signing_domain
+    env.checkin("data")
+    held = [e for e in read_events(env.hub_dir) if e.type == "agent.checkin"]
+    cfg = hubmod.load_config(env.hub_dir)
+    assert len(held) == 1 and held[0].sig
+    assert held[0].domain == signing_domain(cfg.space_id, HUB_ID, held[0].log or held[0].actor)
+
+
+def test_a_checkin_signed_for_another_space_is_not_counted_from_the_git_copy(env):
+    """The git fallback reads through the same admission as the hub (audit
+    finding 2): a validly signed check-in from ANOTHER space, copied into this
+    space's git copy, is not a check-in here."""
+    for a in AGENTS:
+        if a != "data":
+            env.checkin(a)
+    other = env.tmp / "other-hub-space"
+    (other / ".datacore" / "events").mkdir(parents=True)
+    hubmod.enable(other, hub_id=HUB_ID, grantor=GRANTOR, owner=OWNER, space_id="other-space",
+                  keys_dir=env.keys_dir, registry_path=env.registry)
+    writer_dir = env.tmp / "data-other-space"
+    (writer_dir / ".datacore" / "events").mkdir(parents=True)
+    git_pull(other, writer_dir)
+    r = checkin.send(writer_dir, agent="data", actor="data", interval_s=INTERVAL, host="data-host",
+                     transport=checkin.Offline(), keys_dir=env.keys_dir, registry_path=env.registry,
+                     state_dir=env.tmp / "wstate" / "data-other", clock=env.clock)
+    assert r["status"] == "buffered"
+    git_pull(env.hub_dir, env.box_dir)
+    tel = env.box_dir / ".datacore" / "telemetry"
+    tel.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(writer_dir / ".datacore" / "telemetry" / "data.jsonl", tel / "data.jsonl")
+    env.transport.down = True
+    result = env.run_check()
+    assert result["source"] == "git"
+    assert result["alerted"] == ["data"], result
