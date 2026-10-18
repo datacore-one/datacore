@@ -1165,3 +1165,39 @@ def test_audit9_a_renewal_after_expiry_is_refused_and_never_resurrects(env):
                       lease.hash, hub=HUB_ID)
     item = fold([create, lease, late], lease_grantors={HUB_ID: {GRANTOR}}).items["t2"]
     assert item.lease_expires_ms == 200, item.history
+
+
+# ── finding 8: leases are resolved first, by (epoch, grantor sequence) ──────
+
+def _grantor_lease(seq: int, hlc_ms: int, grantor: str, holder: str, attempt: str, granted: int,
+                   expires: int, epoch: int = 0) -> Event:
+    return _raw_event(seq, f"{hlc_ms:013d}.0000.{grantor}", grantor, "item.lease",
+                      {"id": "t1", "holder": holder, "attempt": attempt, "task_hash": "x", "epoch": epoch,
+                       "granted_ms": granted, "expires_ms": expires}, "x", hub=HUB_ID)
+
+
+def test_audit8_a_completion_applied_first_cannot_hide_the_earlier_lease(env):
+    """Seq 5 (granting wb) sorts before seq 3 (granting wa) because their HLCs
+    disagree with sequence order, and wb's completion is folded before seq 3 is
+    visited. The earlier lease still wins, and wb's completion is a conflict."""
+    create = _raw_event(0, "1700000000000.0000.own", "own", "item.create", {"id": "t1"}, "GENESIS")
+    later = _grantor_lease(5, 1_700_000_000_010, GRANTOR, "wb", "att-b", 1_000, 901_000)
+    done = _raw_event(0, "1700000000011.0000.wb", "wb", "item.complete",
+                      {"id": "t1", "attempt": "att-b", "task_hash": "x"}, "GENESIS")
+    earlier = _grantor_lease(3, 1_700_000_000_020, GRANTOR, "wa", "att-a", 500, 900_500)
+    for grantors in (None, {HUB_ID: {GRANTOR}}):
+        item = fold([create, later, done, earlier], lease_grantors=grantors).items["t1"]
+        assert item.lease_holder == "wa" and item.status == "claimed", item.history
+        assert later.hash in item.lease_conflicts and done.hash in item.lease_conflicts, item.lease_conflicts
+
+
+def test_audit8_disjoint_intervals_in_reverse_clock_order_are_not_an_overlap(env):
+    """After a promotion the two grantors have different clocks. A lease
+    [300, 400) from epoch 0 and a lease [100, 200) from epoch 1 do not overlap:
+    each must begin before the other ends."""
+    create = _raw_event(0, "1700000000000.0000.own", "own", "item.create", {"id": "t1"}, "GENESIS")
+    old = _grantor_lease(0, 1_700_000_000_001, GRANTOR, "wa", "att-a", 300, 400, epoch=0)
+    new = _grantor_lease(0, 1_700_000_000_002, "hubb", "wb", "att-b", 100, 200, epoch=1)
+    item = fold([create, old, new], lease_grantors={HUB_ID: {GRANTOR: 0, "hubb": 1}}).items["t1"]
+    assert not item.lease_conflicts, item.lease_conflicts
+    assert item.lease_holder == "wb", item.history
