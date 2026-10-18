@@ -52,7 +52,9 @@ cd "$S" || { echo "$(date -Is) dispatch rc=2 space missing: $S"; exit 2; }
 # submodule pointer, folds every origin/ledger/* ref back into the branch, and
 # tells offline apart from a rejected key. A bare pull here had none of that,
 # and this tick is the one that runs unattended on a satellite host.
-"$PY" "$RUNNER/.datacore/lib/ledger_transport.py" converge --space "$S" >/dev/null 2>&1 \
+# --actor: in scheduled push mode an agent's converge receives and leaves the
+# publishing to this host's slot job (config/push_slots.yaml).
+"$PY" "$RUNNER/.datacore/lib/ledger_transport.py" converge --space "$S" --actor "$ACTOR" >/dev/null 2>&1 \
   || echo "$(date -Is) dispatch converge-in: could not receive; claiming against the copy on disk"
 "$PY" "$RUNNER/.datacore/lib/ledger_claim.py" --space "$S" --actor "$ACTOR" --limit "$LIMIT" --execute
 rc=$?
@@ -78,7 +80,11 @@ if ! git diff --cached --quiet 2>/dev/null; then
   # Published on this writer's OWN ref: only this writer pushes there, so the
   # push cannot race. converge merges origin/ledger/* back into the branch on
   # every host, which is how these claims reach main.
-  git push -q origin "HEAD:refs/heads/ledger/$ACTOR" 2>&1 | tail -1
+  # In scheduled push mode the commit waits for this host's slot job. Only an
+  # explicit `deferred` holds it back; any other answer pushes as before.
+  if [ "$("$PY" "$RUNNER/.datacore/lib/ledger_transport.py" policy --actor "$ACTOR" 2>/dev/null)" != deferred ]; then
+    git push -q origin "HEAD:refs/heads/ledger/$ACTOR" 2>&1 | tail -1
+  fi
 fi
 echo "$(date -Is) dispatch rc=$rc actor=$ACTOR space=$(basename "$S")"
 exit $rc

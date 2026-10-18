@@ -750,17 +750,30 @@ def foreign_writer_logs(space: Path) -> list[tuple[str, str, str]]:
     return out
 
 
-def converge(space: Path, *, root: Path | None = None) -> Result:
-    """Apply the registered category at every entry point, including direct calls."""
+def converge(space: Path, *, root: Path | None = None, actor: str | None = None) -> Result:
+    """Apply the registered category at every entry point, including direct calls.
+
+    `actor` names the writer a loop converges for (the claim tick). On a host in
+    scheduled mode an agent's converge RECEIVES -- autosave, fetch, merge, the
+    same path as always -- and leaves publication to the host's slot job
+    (`publish_slot`). Without an actor, converge publishes as it always has.
+    """
     cat = classify(space, root)
     if not cat:
         return cat
     if cat.reason not in ('knowledge', 'agent-personal', 'code'):
         return Result(False, 'repository category does not permit synchronization', {})
+    receive_only = actor is not None and push_policy(actor) == "deferred"
     with _repo_lock(space):
         if cat.reason == 'code':
             outcome = _code_update(space)
             return Result(outcome == 'clean', f'code repository: {outcome}', {'outcome': outcome})
+        if receive_only:
+            res = _converge_locked(space, publish=False)
+            if not res:
+                return res
+            return Result(True, "received; publish deferred to this host's slot",
+                          {**res.context, "published": False, "deferred": "slot"})
         return _converge_locked(space)
 
 
@@ -1321,15 +1334,64 @@ def _push_with_retry(space: Path, db: str) -> Result:
                   {"hint": "remote is moving faster than we can converge"})
 
 
+PUSH_MODES = ("immediate", "scheduled")
+
+
+def push_mode() -> str:
+    """This host's push mode: `immediate` (every event pushes, the default) or
+    `scheduled` (agent events wait for the host's slot, see `publish_slot`).
+
+    Read like DATACORE_LEDGER_SIGN: the environment first, then the machine's
+    declaration in ~/.datacore/identity.env, because a cron or a unit rarely
+    exports it. Anything unset or unrecognised is `immediate`: a typo must
+    never hold events back on a host that did not mean to opt in.
+    """
+    value = os.environ.get("DATACORE_PUSH_MODE")
+    if value is None:
+        from ledger.log import _identity_file_value
+        value = _identity_file_value("DATACORE_PUSH_MODE")
+    value = (value or "").strip().lower()
+    return value if value in PUSH_MODES else "immediate"
+
+
+def push_policy(actor: str, *, urgent: bool = False) -> str:
+    """`now` or `deferred`: whether an event by `actor` pushes at once.
+
+    Deferred only when ALL hold: the host is in scheduled mode, the event is
+    not urgent, and the writer belongs to a principal declared `kind: agent`.
+    The owner's sessions, an urgent deliverable (the briefing, an answer the
+    owner is waiting on), and a writer nobody declared all push at once --
+    holding back an event by mistake costs more than one extra push.
+    """
+    if urgent or push_mode() != "scheduled":
+        return "now"
+    try:
+        from actor_identity import principal_of
+        _, entry = principal_of(actor)
+    except Exception:  # noqa: BLE001 -- a registry problem must not hold events back
+        return "now"
+    return "deferred" if str(entry.get("kind") or "") == "agent" else "now"
+
+
 def append(space: Path, actor: str, type: str, payload: dict,
-           *, push: bool = True, root: Path | None = None) -> Result:
+           *, push: bool = True, urgent: bool = False,
+           root: Path | None = None) -> Result:
     """Publish one fact.
 
     Order matters and is the point: the event is appended, committed, and only
     then pushed — and a FAILED PUSH IS REPORTED, never swallowed. The caller
     learns that the fact exists only on this disk, which is precisely what
     `git push … || true` hid while printing "synced clean".
+
+    On a host in scheduled mode an agent's event is committed and NOT pushed;
+    the host's slot job publishes it (`push_policy`, `publish_slot`). Pass
+    `urgent=True` for anything the owner is waiting on: it pushes at once.
     """
+    if push and push_policy(actor, urgent=urgent) == "deferred":
+        push = False
+        deferred_to = "slot"
+    else:
+        deferred_to = "caller"
     cat = classify(space, root)
     if not cat:
         return cat
@@ -1354,6 +1416,9 @@ def append(space: Path, actor: str, type: str, payload: dict,
             return Result(False, "commit failed", {"stderr": err.strip()[:200]})
 
         if not push:
+            if deferred_to == "slot":
+                return Result(True, "appended (push deferred to this host's slot)",
+                              {"event": event.hlc, "pushed": False, "deferred": "slot"})
             return Result(True, "appended (push deferred)",
                           {"event": event.hlc, "pushed": False})
         db = default_branch(space)
@@ -1528,6 +1593,77 @@ def sync_all(root: Path, only: str | None = None, quiet: bool = False,
     return 1 if bad else 0
 
 
+SLOTS_FILE = Path(__file__).resolve().parents[1] / "config" / "push_slots.yaml"
+
+
+def load_slots(path: Path | None = None) -> dict:
+    """The push-slot table, validated: every host's minutes in 0..59, one
+    window width, and NO two windows sharing a minute (mod 60). An overlapping
+    table is refused rather than run, because overlap is the race the table
+    exists to remove."""
+    import yaml
+    data = yaml.safe_load(Path(path or SLOTS_FILE).read_text(encoding="utf-8")) or {}
+    width = data.get("window_minutes")
+    hosts = data.get("hosts")
+    if not isinstance(width, int) or not 1 <= width <= 30:
+        raise ValueError("push slots: window_minutes must be an integer from 1 to 30")
+    if not isinstance(hosts, dict):
+        raise ValueError("push slots: hosts must be a mapping")
+    taken: dict[int, str] = {}
+    for host, minutes in hosts.items():
+        minutes = minutes or []
+        if (not isinstance(minutes, list)
+                or any(not isinstance(m, int) or not 0 <= m <= 59 for m in minutes)):
+            raise ValueError(f"push slots: {host}: minutes must be integers 0..59")
+        for start in minutes:
+            for m in range(start, start + width):
+                other = taken.get(m % 60)
+                if other is not None:
+                    raise ValueError(f"push slots overlap: {host} and {other} at :{m % 60:02d}")
+                taken[m % 60] = str(host)
+        hosts[host] = minutes
+    return {"window_minutes": width, "hosts": hosts}
+
+
+def in_slot(host: str, now, slots: dict) -> bool:
+    """Is `now` (a datetime) inside one of `host`'s windows?"""
+    width = slots["window_minutes"]
+    return any((now.minute - start) % 60 < width for start in slots["hosts"].get(host) or [])
+
+
+def publish_slot(root: Path, host: str, *, now=None, force: bool = False,
+                 slots_path: Path | None = None, quiet: bool = False) -> int:
+    """The per-host push job: publish this host's deferred commits, in its slot.
+
+    Outside the slot it does nothing and says so (exit 0, so a timer that fires
+    early is not an alarm); `force` publishes anyway. A host with no minutes
+    (the owner's workstation) pushes at once and has nothing to publish here.
+    The publication itself is the ordinary `sync` of knowledge repos: commit,
+    merge, never rebase, push with the fork gate. Code repos are left alone.
+    """
+    from datetime import datetime
+    now = now or datetime.now()
+    try:
+        slots = load_slots(slots_path)
+    except (OSError, ValueError) as exc:
+        print(f"publish-slot: slot table unusable: {exc}")
+        return 2
+    if host not in slots["hosts"]:
+        print(f"publish-slot: {host!r} has no row in the slot table; "
+              f"known: {', '.join(slots['hosts'])}")
+        return 2
+    minutes = slots["hosts"][host]
+    if not minutes and not force:
+        print(f"publish-slot: {host} has no slot -- it pushes at once")
+        return 0
+    if not force and not in_slot(host, now, slots):
+        shown = ", ".join(f":{m:02d}" for m in minutes)
+        print(f"publish-slot: {now:%H:%M} is outside {host}'s slot ({shown}, "
+              f"{slots['window_minutes']} min); nothing published")
+        return 0
+    return sync_all(root, quiet=quiet, include_code=False)
+
+
 def status_lines(root: Path) -> list[str]:
     """One line per registered repo: branch, dirty count, ahead/behind. Touches nothing."""
     lines = []
@@ -1556,7 +1692,16 @@ def main(argv=None) -> int:
     """
     import argparse
     ap = argparse.ArgumentParser(description="ledger transport")
-    ap.add_argument("op", choices=["converge", "gaps", "classify", "sync", "status"])
+    ap.add_argument("op", choices=["converge", "gaps", "classify", "sync", "status",
+                                   "publish-slot", "policy"])
+    ap.add_argument("--urgent", action="store_true",
+                    help="policy: the owner is waiting on this event")
+    ap.add_argument("--host", help="publish-slot: this host's row in config/push_slots.yaml")
+    ap.add_argument("--force", action="store_true",
+                    help="publish-slot: publish even outside the host's slot")
+    ap.add_argument("--at", help="publish-slot: HH:MM to judge the slot by (default: now)")
+    ap.add_argument("--actor", help="converge: the writer this loop converges for; in "
+                                    "scheduled mode an agent receives and does not push")
     ap.add_argument("--space", type=Path, help="required for all ops except sync")
     ap.add_argument("--repo", help="sync: limit to one space by directory name")
     ap.add_argument("--root", type=Path, default=_data_root())
@@ -1572,11 +1717,35 @@ def main(argv=None) -> int:
     if a.op == "status":
         print("\n".join(status_lines(a.root)))
         return 0
+    if a.op == "policy":
+        # `now` or `deferred` on stdout, for a shell caller to guard its push:
+        #   [ "$(ledger_transport.py policy --actor "$ACTOR")" = now ] && git push ...
+        if not a.actor:
+            ap.error("--actor is required for policy")
+        print(push_policy(a.actor, urgent=a.urgent))
+        return 0
+    if a.op == "publish-slot":
+        if not a.host:
+            ap.error("--host is required for publish-slot")
+        from datetime import datetime
+        now = None
+        if a.at:
+            try:
+                hh, mm = (int(x) for x in a.at.split(":"))
+                now = datetime.now().replace(hour=hh, minute=mm)
+            except ValueError:
+                ap.error("--at takes HH:MM")
+        return publish_slot(a.root, a.host, now=now, force=a.force, quiet=a.quiet)
     if a.space is None:
         ap.error(f"--space is required for {a.op}")
     fn = {"converge": converge, "gaps": gaps, "classify": classify}[a.op]
     try:
-        res = fn(a.space) if a.op == 'gaps' else fn(a.space, root=a.root)
+        if a.op == 'gaps':
+            res = fn(a.space)
+        elif a.op == 'converge' and a.actor:
+            res = fn(a.space, root=a.root, actor=a.actor)
+        else:
+            res = fn(a.space, root=a.root)
     except Exception as exc:  # noqa: BLE001 -- answer with the cause, never a bare traceback
         said = " ".join(str(exc).split())[:300]
         res = Result(False, f"{a.op} could not run: {type(exc).__name__}"

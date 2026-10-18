@@ -32,10 +32,12 @@ mkdir -p "$(dirname "$LOG")"
   # later cycle then refuses the whole space (fleet week sim fault F8, SYN-9).
   # converge completes the merge around the conflicted file, files one task
   # for it, and names it on this line every run until a person settles it.
-  DATACORE_ROOT="$ROOT" python3 "$ROOT/.datacore/lib/ledger_transport.py" converge --line --space "$SPACE" 2>&1 | tail -1
+  # --actor: on a host in scheduled mode (DATACORE_PUSH_MODE) an agent's tick
+  # receives here and its slot job publishes; in the default mode this pushes.
+  DATACORE_ROOT="$ROOT" python3 "$ROOT/.datacore/lib/ledger_transport.py" converge --line --space "$SPACE" --actor "$ACTOR" 2>&1 | tail -1
   # ANTHROPIC_API_KEY unset: with it set, claude -p bills the metered API
   # instead of the plan (the same rule cos_llm.sh applies).
   env -u ANTHROPIC_API_KEY DATACORE_ROOT="$ROOT" python3 "$ROOT/.datacore/lib/ledger_claim.py" \
     --space "$SPACE" --actor "$ACTOR" --limit "$LIMIT" --execute 2>&1
-  DATACORE_ROOT="$ROOT" python3 "$ROOT/.datacore/lib/ledger_transport.py" converge --line --space "$SPACE" 2>&1 | tail -1
+  DATACORE_ROOT="$ROOT" python3 "$ROOT/.datacore/lib/ledger_transport.py" converge --line --space "$SPACE" --actor "$ACTOR" 2>&1 | tail -1
 } >> "$LOG" 2>&1

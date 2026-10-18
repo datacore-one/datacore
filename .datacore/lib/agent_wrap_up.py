@@ -171,7 +171,7 @@ def write_journal(space: Path, agent: str, text: str, date: str,
 
 
 def wrap_up(data_dir: Path, agent: str, tier: str, summary: str,
-            entries: dict, dry_run: bool = False) -> dict:
+            entries: dict, dry_run: bool = False, urgent: bool = False) -> dict:
     now = datetime.now(timezone.utc)
     date, stamp = now.strftime('%Y-%m-%d'), now.strftime('%H:%M')
 
@@ -213,7 +213,11 @@ def wrap_up(data_dir: Path, agent: str, tier: str, summary: str,
             msg = (f"{agent}: session wrap-up {date} {stamp}\n\n"
                    f"{(text or '').strip()[:400]}\n")
             try:
-                r = commit_knowledge(space, split['knowledge'], msg, push=True)
+                # The agent decides nothing here: on a host in scheduled mode
+                # its commit waits for the slot job, unless `urgent` (work the
+                # owner is waiting on) -- knowledge_commit.resolve_push.
+                r = commit_knowledge(space, split['knowledge'], msg, push=True,
+                                     actor=agent, urgent=urgent)
                 entry['commit'] = r['commit'] or '(no change)'
             except Exception as e:                      # noqa: BLE001
                 entry['commit'] = f'FAILED: {e}'
@@ -233,6 +237,8 @@ def main() -> int:
     ap.add_argument('--entries', help='JSON file: {"1-myteam": "...", "0-personal": "..."}')
     ap.add_argument('--data-dir', default=str(Path.home() / 'Data'))
     ap.add_argument('--dry-run', action='store_true')
+    ap.add_argument('--urgent', action='store_true',
+                    help='the owner is waiting on this work: push at once even in scheduled mode')
     a = ap.parse_args()
 
     entries = {}
@@ -244,7 +250,7 @@ def main() -> int:
         return 2
 
     r = wrap_up(Path(a.data_dir).expanduser(), a.agent, a.tier,
-                a.summary, entries, dry_run=a.dry_run)
+                a.summary, entries, dry_run=a.dry_run, urgent=a.urgent)
 
     if not r['spaces']:
         print(f"{a.agent}: nothing to wrap up — no changes in any space.")

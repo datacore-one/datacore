@@ -104,12 +104,16 @@ fi
 # ── crons the contracts assume ──────────────────────────────────────────────
 # One line per job, keyed on a marker substring; a stale line with the same
 # marker is replaced, so a path change here reaches the crontab on the next run.
+# The hourly phase-1 cycle runs at a different minute on every host, each
+# outside every push window in config/push_slots.yaml (owner, 2026-10-18):
+# box :46, nightshift :15, hermes :35, plur-claw :05. All four used to fire at
+# :25 and converge into the same remotes at once. test_phase1_cycle_stagger.py.
 CRON_LINES=()
 CRON_KEYS=()
 case "$PROFILE" in
   nightshift)
     CRON_KEYS=(phase1-cycle bot-alive gate-check)
-    CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
+    CRON_LINES+=("15 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
     CRON_LINES+=("*/15 * * * * $LIB/unit_alive.sh datacore-telegram.service $STATE/${ACTOR}-bot.alive 2>>$STATE/${ACTOR}-bot.alive.err")
     CRON_LINES+=("40 8 * * * python3 $HOME/Data/.datacore/modules/nightshift/lib/gate_check.py >> $STATE/nightshift-gate.history 2>&1")
     ;;
@@ -119,7 +123,7 @@ case "$PROFILE" in
     # (DATACORE_ATTEST_SPACE) and the dispatcher used ~/spaces/5-plur: two copies
     # of the same writer log forked at seq 22 (found 2026-09-06). The dispatcher
     # now works in the same clone, and the hourly cycle converges it.
-    CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
+    CRON_LINES+=("05 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
     CRON_LINES+=("*/15 * * * * DISPATCH_SPACE=$HOME/Data/2-plur-space $LIB/ledger-claim-pull.sh >> $STATE/ledger-dispatch.log 2>&1")
     # plur-claw had contracts in the manifest and nothing running the verifier
     # (INS-7, 2026-09-26) -- the same gap hermes had until 2026-09-06.
@@ -131,7 +135,7 @@ case "$PROFILE" in
     CRON_KEYS=(phase1-cycle job-verify)
     # Tris keeps a 5-plur clone at ~/Data/2-plur; the hourly cycle converges it
     # so its verifier attestations and cadence commits leave the host within the hour.
-    CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
+    CRON_LINES+=("35 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
     # hermes had contracts in the manifest and nothing running the verifier
     # (found 2026-09-06): its rows read "not heard from" by construction.
     # --manifest: hermes has no ~/Data/.datacore/lib; the runner copy is the canonical one (test_runner_manifest_matches_canonical).

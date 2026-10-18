@@ -1,0 +1,21 @@
+# Push slots: when each host publishes its deferred commits.
+#
+# Read by `ledger_transport.py publish-slot --host <name>`. A host whose
+# DATACORE_PUSH_MODE is `scheduled` (env or ~/.datacore/identity.env) commits
+# agent events locally and publishes them only here. With the mode unset the
+# host pushes every event at once, exactly as before, and this table is unused.
+#
+# Each host gets two start minutes, 30 minutes apart; the job runs inside
+# [start, start + window_minutes). The loader refuses a table whose windows
+# overlap, so two hosts never push to one remote in the same minutes.
+#
+# The seq-gap detector waits 90 minutes before it calls a local-only event
+# unpublished, so a 30-minute cycle stays well inside its grace.
+window_minutes: 5
+hosts:
+  box: [0, 30]
+  nightshift: [10, 40]
+  hermes: [20, 50]
+  plur-claw: [25, 55]
+  # The owner's workstation: interactive sessions push at once. No slot.
+  mac: []
