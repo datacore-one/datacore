@@ -76,7 +76,8 @@ def migrate_ledger(space: Path, execute: bool) -> dict:
     from ledger.log import EventLog, read_events
 
     try:
-        state = fold(read_events(space))
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        state = authoritative_state(space)
     except Exception as exc:                      # noqa: BLE001
         return {'space': space.name, 'error': str(exc), 'swaps': {}}
 

@@ -347,7 +347,8 @@ class Drill:
         writer.append("item.create", {"id": "d1", "title": "A task", "tags": ["work"]})
 
         target = space / "org" / "next_actions.org"
-        rendered = project(fold(read_events(space)), space=space.name, as_of=0).text
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        rendered = project(authoritative_state(space), space=space.name, as_of=0).text
         target.write_text(rendered)
         # Establish the projection base. Without it the guard takes its earlier
         # "no base" path, and the scenario would quietly test something easier
@@ -520,7 +521,8 @@ class Drill:
         self.log(space, "drill").append("item.create", {"id": "n1", "title": "A task"})
 
         target = space / "org" / "next_actions.org"
-        rendered = project(fold(read_events(space)), space=space.name, as_of=0).text
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        rendered = project(authoritative_state(space), space=space.name, as_of=0).text
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(rendered)
         (space / STATE).parent.mkdir(parents=True, exist_ok=True)
@@ -533,7 +535,8 @@ class Drill:
         self.check("the drill authored an empty property value", n == 1)
         target.write_text(edited)
 
-        proposed = project(fold(read_events(space)), space=space.name, as_of=0).text
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        proposed = project(authoritative_state(space), space=space.name, as_of=0).text
         try:
             guard_projection(space, edited, proposed)
             drifted = False
@@ -541,9 +544,11 @@ class Drill:
             drifted = True
         self.check("an un-ingested authored field is REFUSED", drifted)
 
-        sync_generated(space, fold(read_events(space)), "drill")
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        sync_generated(space, authoritative_state(space), "drill")
 
-        after = project(fold(read_events(space)), space=space.name, as_of=0).text
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        after = project(authoritative_state(space), space=space.name, as_of=0).text
         try:
             guard_projection(space, target.read_text(), after)
             closed, reason = True, ""
@@ -578,7 +583,8 @@ class Drill:
             "id": "c1", "title": "Ship the release notes", "state": "NEXT"})
 
         target = space / "org" / "next_actions.org"
-        rendered = project(fold(read_events(space)), space=space.name, as_of=0).text
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        rendered = project(authoritative_state(space), space=space.name, as_of=0).text
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(rendered)
         (space / STATE).parent.mkdir(parents=True, exist_ok=True)
@@ -601,7 +607,8 @@ class Drill:
             ok, why = False, f"{type(exc).__name__}: {exc}"
         self.check("the closing ingest and the one after it both succeed", ok, why)
 
-        item = fold(read_events(space)).items.get("c1")
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        item = authoritative_state(space).items.get("c1")
         self.check("the item is closed in the ledger", item is not None and item.status == "dismissed",
                    getattr(item, "status", "missing"))
         title = (getattr(item, "payload", None) or {}).get("title")
@@ -650,7 +657,8 @@ class Drill:
                             "org": {"heading": "Captured follow-up", "level": 2}})
 
         # What the Phase-1 projector then writes over next_actions.org.
-        rendered = project(fold(read_events(space)), space=space.name, as_of=0).text
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        rendered = project(authoritative_state(space), space=space.name, as_of=0).text
         (space / "org" / "next_actions.org").write_text(rendered)
         self.check("the projection reproduces the captured id", tid in rendered,
                    "the scenario never built the collision it is about")
@@ -693,7 +701,8 @@ class Drill:
             ensure_ids(space)
             import_space(space, actor="drill")
             sync_state(space)
-            sync_generated(space, fold(read_events(space)), "drill")
+            from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+            sync_generated(space, authoritative_state(space), "drill")
             ok, why = True, ""
         except Exception as exc:  # noqa: BLE001
             ok, why = False, f"{type(exc).__name__}: {exc}"

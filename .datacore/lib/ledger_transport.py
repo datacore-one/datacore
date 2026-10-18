@@ -348,7 +348,8 @@ def file_conflict_tasks(space: Path, kept: list[dict]) -> list[str]:
     try:
         actor = this_actor()
         log = EventLog(space, actor)
-        known = fold(read_events(space)).items if (space / ".datacore" / "events").is_dir() else {}
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        known = authoritative_state(space).items if (space / ".datacore" / "events").is_dir() else {}
     except Exception as exc:  # noqa: BLE001 -- the report still names the file
         return [f"no task filed: {type(exc).__name__}: {exc}"[:200] for _ in kept]
     owner = roster.owner()
@@ -471,7 +472,8 @@ def _waiting(space: Path) -> list[tuple[str, str, bool]]:
     try:
         from ledger.fold import fold
         from ledger.log import read_events
-        items = fold(read_events(space)).items if (Path(space) / ".datacore" / "events").is_dir() else {}
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        items = authoritative_state(space).items if (Path(space) / ".datacore" / "events").is_dir() else {}
     except Exception:  # noqa: BLE001 -- an unreadable ledger cannot close anything
         items = {}
     closed = ("completed", "verified", "dismissed")

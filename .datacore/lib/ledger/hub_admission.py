@@ -161,6 +161,10 @@ class Epoch:
     #: once a successor's promotion names it. None: still active.
     fence_seq: int | None = None
     fence_head: str | None = None
+    #: This grantor's last seal as the successor's promotion names it
+    #: ({seq, hash} in this grantor's log). Every successor seal covers at
+    #: least what it covered (Codex re-audit, finding 4).
+    last_seal: tuple | None = None
 
 
 class Refusal(Exception):

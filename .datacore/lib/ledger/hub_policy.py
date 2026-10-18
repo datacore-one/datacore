@@ -31,6 +31,8 @@ recorded no-op in every copy. The rules are the existing policy's:
     (`approval_ref` to the approver's `approval.grant` bound to the exact
     content) when the effects need one or the item was approved before, and
     immutable creation-authority fields;
+  * `item.lease`: the holder passes the same execution rule as a claimant
+    (`may_execute`: assignee, never-effects, co-sign);
   * `item.complete` of a pool item: only under a lease;
   * `item.dismiss`, `item.release`, `owner.set`, `item.archive`,
     `item.reopen` of another principal's item: the arbitration order, when
@@ -54,7 +56,7 @@ from typing import Mapping
 #: Event types this module judges. Everything else is authorized by admission alone.
 GOVERNED = frozenset({"item.create", "item.update", "item.claim", "item.grant", "approval.grant",
                       "item.complete", "item.dismiss", "item.release", "owner.set", "item.archive",
-                      "item.reopen"})
+                      "item.reopen", "item.lease"})
 _ARBITRATED = frozenset({"item.dismiss", "item.release", "owner.set", "item.archive", "item.reopen"})
 _CREATION_AUTHORITY = ("requested_by", "hops", "root")
 
@@ -165,6 +167,22 @@ def _approval_problem(payload: dict, seen: Mapping, inputs: PolicyInputs) -> str
     return None
 
 
+def may_execute(actor: str, item, seen: Mapping, inputs: PolicyInputs) -> str | None:
+    """Why `actor` may not execute `item`, or None: the assignee rule, the
+    principal's never-effects and a still-valid co-sign. One rule for a claim
+    and for a lease (the hub asks it before granting, the fold on replay)."""
+    p = item.payload or {}
+    if not addressed(actor, p.get("assignee"), inputs):
+        return f"{item.id} is addressed to {p.get('assignee')!r}"
+    limits = inputs.limits.get(_principal(actor, inputs) or "", {})
+    never = set(p.get("effects") or []) & set(limits.get("never_effects") or [])
+    if never:
+        return f"{actor!r} may never perform {', '.join(sorted(never))}"
+    if _previously_approved(item) or _needs_cosign(actor, p, inputs):
+        return _approval_problem(p, seen, inputs)
+    return None
+
+
 def _previously_approved(item) -> bool:
     return bool((item.payload or {}).get("approval_ref"))
 
@@ -224,15 +242,15 @@ def authorize(event, state, seen: Mapping, inputs: PolicyInputs) -> str | None:
             return f"{item_id} is a pool item (role {p['role']!r}); it is taken only through a hub lease"
         if item.lease_ref is not None:
             return f"{item_id} has been leased; it is taken only through a hub lease"
-        if not addressed(actor, p.get("assignee"), inputs):
-            return f"{item_id} is addressed to {p.get('assignee')!r}"
-        limits = inputs.limits.get(_principal(actor, inputs) or "", {})
-        never = set(p.get("effects") or []) & set(limits.get("never_effects") or [])
-        if never:
-            return f"{actor!r} may never perform {', '.join(sorted(never))}"
-        if _previously_approved(item) or _needs_cosign(actor, p, inputs):
-            return _approval_problem(p, seen, inputs)
-        return None
+        return may_execute(actor, item, seen, inputs)
+
+    if t == "item.lease":
+        # A lease is the hub's grant of execution: the same execution policy
+        # as a claim, judged for the HOLDER (Codex re-audit, finding 12).
+        holder = payload.get("holder")
+        if not isinstance(holder, str) or not holder:
+            return None                  # the fold records an invalid lease itself
+        return may_execute(holder, item, seen, inputs)
 
     if t == "item.complete":
         if (item.payload or {}).get("role") and item.lease_ref is None:

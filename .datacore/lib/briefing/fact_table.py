@@ -166,7 +166,8 @@ def ledger_item_counts(ctx: AdapterCtx) -> dict[str, Fact]:
     if not events_dir.exists():
         return {}
 
-    state = fold(read_events(ctx.root))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(ctx.root)
     computed_at = _computed_at(ctx.now)
 
     counts: dict[str, int] = {}

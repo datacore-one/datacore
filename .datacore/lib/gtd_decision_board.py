@@ -296,7 +296,8 @@ def _authority(inputs, *, require_projection=False):
         mode = phase(space) if space is not None else 0
         current = {'space': str(space) if space else None, 'phase': mode}
         if mode == 1 and path == (space / ORG).resolve():
-            state = fold(read_events(space))
+            from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+            state = authoritative_state(space)
             if require_projection and any(item.edit_conflicts for item in state.items.values()):
                 raise ValueError('unresolved ledger conflicts must be reconciled before review')
             if require_projection:

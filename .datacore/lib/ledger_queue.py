@@ -147,7 +147,8 @@ def note_published(space: Path) -> list[str]:
     try:
         from ledger.fold import fold
         from ledger.log import read_events
-        items = fold(read_events(space)).items
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        items = authoritative_state(space).items
         titles = {t: str((getattr(items.get(t), "payload", None) or {}).get("title") or t) for t in out}
     except Exception:  # noqa: BLE001 -- ids are enough
         titles = {t: t for t in out}

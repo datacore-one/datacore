@@ -346,7 +346,8 @@ def _ledger_emit(file_path, event_type, payload):
             from ledger.fold import fold
             from ledger.log import read_events
             from ledger.projection_state import sync_generated
-            sync_generated(space, fold(read_events(space)), actor)
+            from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+            sync_generated(space, authoritative_state(space), actor)
         else:
             EventLog(space, actor).append(event_type, payload)
         return actor

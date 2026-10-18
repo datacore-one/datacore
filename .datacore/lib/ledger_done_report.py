@@ -90,7 +90,8 @@ def _spend_by_item(space: Path) -> dict[str, dict]:
 
 
 def closed_items(space: Path) -> list:
-    state = fold(read_events(space))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space)
     return [i for i in state.items.values() if i.status in CLOSED and _closed_dt(i)]
 
 
