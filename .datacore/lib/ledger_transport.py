@@ -1619,7 +1619,7 @@ def in_slot(host: str, now, slots: dict) -> bool:
 
 
 def publish_slot(root: Path, host: str, *, now=None, force: bool = False,
-                 slots_path: Path | None = None) -> int:
+                 slots_path: Path | None = None, quiet: bool = False) -> int:
     """The per-host push job: publish this host's deferred commits, in its slot.
 
     Outside the slot it does nothing and says so (exit 0, so a timer that fires
@@ -1648,7 +1648,7 @@ def publish_slot(root: Path, host: str, *, now=None, force: bool = False,
         print(f"publish-slot: {now:%H:%M} is outside {host}'s slot ({shown}, "
               f"{slots['window_minutes']} min); nothing published")
         return 0
-    return sync_all(root, quiet=True, include_code=False)
+    return sync_all(root, quiet=quiet, include_code=False)
 
 
 def status_lines(root: Path) -> list[str]:
@@ -1711,7 +1711,7 @@ def main(argv=None) -> int:
                 now = datetime.now().replace(hour=hh, minute=mm)
             except ValueError:
                 ap.error("--at takes HH:MM")
-        return publish_slot(a.root, a.host, now=now, force=a.force)
+        return publish_slot(a.root, a.host, now=now, force=a.force, quiet=a.quiet)
     if a.space is None:
         ap.error(f"--space is required for {a.op}")
     fn = {"converge": converge, "gaps": gaps, "classify": classify}[a.op]
