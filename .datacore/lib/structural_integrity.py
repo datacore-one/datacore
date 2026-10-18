@@ -84,7 +84,6 @@ PERSONAL_FOLDERS = {
     '1-active',
     '2-code',
     '3-knowledge',
-    '4-outbox',
     '4-archive',
 }
 
@@ -93,7 +92,6 @@ TEAM_FOLDERS = {
     '1-tracks',
     '2-projects',
     '3-knowledge',
-    '4-outbox',
     '4-archive',
 }
 
@@ -101,13 +99,13 @@ TEAM_FOLDERS = {
 # Anything not in these sets at the space root is flagged as unexpected.
 PERSONAL_ALLOWED_DIRS = {
     'org', 'journal', 'notes', 'content',
-    '0-inbox', '1-active', '2-code', '3-knowledge', '4-outbox', '4-archive',
+    '0-inbox', '1-active', '2-code', '3-knowledge', '4-archive',
     '.obsidian', '.datacore', '.claude', '.git', '.lfs-cache',
 }
 
 TEAM_ALLOWED_DIRS = {
     'org', 'journal', 'today', 'notes', 'content',
-    '0-inbox', '1-tracks', '2-projects', '3-knowledge', '4-outbox', '4-archive',
+    '0-inbox', '1-tracks', '2-projects', '3-knowledge', '4-archive',
     '.datacore', '.claude', '.git',
 }
 
@@ -310,8 +308,8 @@ class StructuralIntegrityChecker:
         self.checks_run += 1
 
         all_valid = PERSONAL_FOLDERS if self.space_type == 'personal' else TEAM_FOLDERS
-        # Core folders that should always exist (archive/outbox are optional)
-        required = {f for f in all_valid if f not in ('4-archive', '4-outbox')}
+        # Core folders that should always exist (the archive is optional)
+        required = {f for f in all_valid if f != '4-archive'}
         existing_numbered = set()
 
         for item in self.space_path.iterdir():
@@ -1236,7 +1234,10 @@ def check_root_directory(data_root: Path) -> AuditResult:
     ignored = _git_ignored(data_root, [e.name for e in entries])
     for item in entries:
         name = item.name
-        if name in ignored:
+        # An ignored dot-folder is a tool's config (.cursor, .hermes). An ignored
+        # visible folder is still drift: sessions started at the root left
+        # content/, node_modules/ and plans there unseen (owner, 2026-10-18).
+        if name in ignored and (name.startswith('.') or not item.is_dir()):
             continue
         if name.startswith('.') and name in root_allowed_dirs:
             continue

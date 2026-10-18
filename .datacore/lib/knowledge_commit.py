@@ -62,7 +62,7 @@ KNOWLEDGE_PREFIXES = (
     '0-inbox/',
     '1-tracks/',
     '3-knowledge/',
-    '4-outbox/',
+    '4-archive/',
     '.datacore/state/',
     '.datacore/learning/',
 )

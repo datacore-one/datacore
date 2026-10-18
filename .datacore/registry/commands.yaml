@@ -968,10 +968,10 @@ module_commands:
       - .datacore/settings.yaml
       - .datacore/dips/DIP-0017-outbox-archive-pattern.md
       contextual:
-      - '*/4-outbox/archive/**'
+      - '*/4-archive/**'
     writes:
     - '[space]-archive/**'
-    - '*/4-outbox/_index.md'
+    - '*/4-archive/_index.md'
     references:
       dips:
       - DIP-0017
