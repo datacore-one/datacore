@@ -1638,11 +1638,14 @@ class HubWriter:
 
     def _attempt_for(self, item_id) -> dict | None:
         """The attempt this writer holds on `item_id`: its latest lease receipt."""
-        for r in reversed(self.receipts()):
-            if r.get("item") == item_id:
-                p = (r.get("event") or {}).get("payload") or {}
-                if p.get("attempt"):
-                    return {"attempt": p["attempt"], "task_hash": p.get("task_hash")}
+        mine = [((r.get("event") or {}).get("payload") or {}) for r in self.receipts() if r.get("item") == item_id]
+        for p in reversed(mine):
+            if p.get("attempt"):
+                # A renewal names the attempt but not the task content: take the
+                # task hash from that attempt's own grant (a renewal is not a new pin).
+                pinned = next((q.get("task_hash") for q in mine
+                               if q.get("attempt") == p["attempt"] and q.get("task_hash")), None)
+                return {"attempt": p["attempt"], "task_hash": pinned}
         return None
 
     def append(self, type: str, payload: dict) -> tuple[Event, dict | None]:

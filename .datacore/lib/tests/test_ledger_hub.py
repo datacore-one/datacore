@@ -1115,6 +1115,23 @@ def test_audit9_a_lease_names_its_attempt_and_the_task_content_and_results_name_
     assert _hub_item(hub, "t1").status == "completed"
 
 
+def test_audit9_a_completion_after_a_renewal_keeps_the_attempts_task_hash(env):
+    """A renewal names the attempt but not the task content; the writer's
+    completion must still carry the task hash pinned by that attempt's grant."""
+    from ledger.fold import task_content_hash
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa = env.writer("own", t), env.writer("wa", t)
+    create, _ = owner.append("item.create", {"id": "t1", "title": "task"})
+    lease = _lease_payload(wa.request_lease("t1"))
+    wa.renew_lease("t1")
+    done, _ = wa.append("item.complete", {"id": "t1"})
+    assert done.payload["attempt"] == lease["attempt"]
+    assert done.payload["task_hash"] == task_content_hash(create.payload)
+    item = _hub_item(hub, "t1")
+    assert item.status == "completed", item.history
+
+
 def test_audit9_a_result_after_expiry_goes_to_owner_resolution_not_completion(env, monkeypatch):
     """A's lease expires and the hub records the expiry; A's result arrives
     afterwards, stamped by a slow clock so it sorts BEFORE the expiry. It is
