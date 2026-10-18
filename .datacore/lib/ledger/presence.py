@@ -20,8 +20,10 @@ unsigned, or edited after signing -- is skipped here. In a hub space the git
 copy is read through the hub's own admission rule first (`admitted_events`,
 ledger.hub_admission; audit findings 2 and 6): a check-in signed for another
 space, hub or log, or one past a refused event of its log, is not one here. What it does NOT prove:
-that the writer is the agent it names. Binding an agent name to one writer key
-is the principals registry's job and is not done here.
+that a check-in is the agent's own process rather than another one using its
+writer key. A check-in counts for an agent only when that agent is the
+principal its writer writes for (or, with no principal, the writer itself),
+and its time agrees with its envelope HLC (Codex re-audit, new defect 7).
 """
 from __future__ import annotations
 
@@ -39,6 +41,51 @@ def _valid(payload) -> bool:
             and bool(_NAME.fullmatch(payload["agent"]))
             and type(payload.get("interval_s")) is int and payload["interval_s"] > 0
             and type(payload.get("ts")) is int)
+
+
+#: How far a check-in's own time may lie from its envelope HLC, and ahead of
+#: the hub's clock (both stamped by the writer's one wall clock at append time).
+CLOCK_BOUND_MS = 10 * 60 * 1000
+
+
+def agent_of(actor: str) -> str:
+    """The agent a writer may check in as: the principal it writes for in the
+    registry, or -- for a writer that belongs to no principal -- its own base
+    name (Codex re-audit, new defect 7: a check-in named any agent)."""
+    from actor_identity import base_writer
+    try:
+        from actor_identity import principal_of
+        name, _ = principal_of(actor)
+    except (ImportError, ValueError):
+        name = None
+    return name or base_writer(actor)
+
+
+def payload_problem(actor: str, payload, now_ms: int | None = None) -> str | None:
+    """Why a check-in payload is not one `actor` may send now, or None."""
+    if not _valid(payload):
+        return "a check-in carries agent, interval_s (> 0) and ts"
+    if payload["agent"] != agent_of(actor):
+        return f"{actor!r} checks in as {agent_of(actor)!r}, not {payload['agent']!r}"
+    if now_ms is not None and payload["ts"] > now_ms + CLOCK_BOUND_MS:
+        return f"its time is {(payload['ts'] - now_ms) // 1000} s ahead of the clock"
+    return None
+
+
+def checkin_problem(e, now_ms: int | None = None) -> str | None:
+    """Why `e` does not count as a check-in (None: it does). Its agent is its
+    writer's, and its time agrees with its own envelope HLC and is not ahead of
+    `now_ms` (the hub's clock at the front door)."""
+    why = payload_problem(e.actor, e.payload, now_ms)
+    if why:
+        return why
+    try:
+        stamped = int(str(e.hlc).split(".", 1)[0])
+    except ValueError:
+        return "its hlc is unreadable"
+    if abs(e.payload["ts"] - stamped) > CLOCK_BOUND_MS:
+        return f"its time is {abs(e.payload['ts'] - stamped) // 1000} s from its own hlc"
+    return None
 
 
 def _signed(e, registry_path) -> bool:
@@ -59,11 +106,16 @@ def admitted_events(space_dir, now_ms: int, *, registry_path=None) -> list:
     from .hub import authority, load_config
     from .hub_admission import admit
     from .log import read_events
+    from .fold import _rejected_by_grantors
     events = read_events(space_dir)
     cfg = load_config(space_dir)
     if cfg is None:
         return events
-    return admit(events, authority(space_dir, cfg, registry_path), now_ms=now_ms).events
+    auth = authority(space_dir, cfg, registry_path)
+    admitted = admit(events, auth, now_ms=now_ms).events
+    # A check-in the hub refused and kept as a rejected proposal is not one.
+    rejected = _rejected_by_grantors(admitted, auth.lease_grantors())
+    return [e for e in admitted if e.hash not in rejected]
 
 
 def state_of(age_s: float, interval_s: int) -> str:
@@ -77,7 +129,10 @@ def state_of(age_s: float, interval_s: int) -> str:
 def presence(events, now_ms: int, *, agents=(), registry_path=None) -> dict[str, dict]:
     """{agent: {state, last_ts, age_s, interval_s, host, actor}} for every agent
     that checked in or is expected (`agents`). Newest verified check-in wins."""
-    candidates = sorted((e for e in events if e.type == CHECKIN_TYPE and _valid(e.payload)),
+    # Only a check-in whose agent is its writer's and whose time agrees with
+    # its own hlc counts (Codex re-audit, new defect 7).
+    candidates = sorted((e for e in events if e.type == CHECKIN_TYPE and _valid(e.payload)
+                         and checkin_problem(e) is None),
                         key=lambda e: (e.payload["ts"], e.hlc), reverse=True)
     latest: dict[str, object] = {}
     for e in candidates:
@@ -92,7 +147,15 @@ def presence(events, now_ms: int, *, agents=(), registry_path=None) -> dict[str,
                           "host": None, "actor": None}
             continue
         p = e.payload
-        age_s = max(0, now_ms - p["ts"]) // 1000
+        if p["ts"] > now_ms:
+            # NEGATIVE AGE IS AN ERROR, never clamped to "just now" (Codex
+            # re-audit, new defect 7): this reader's clock and the writer's disagree.
+            out[agent] = {"state": "error", "last_ts": p["ts"], "age_s": None, "interval_s": p["interval_s"],
+                          "host": p.get("host"), "actor": e.actor,
+                          "error": f"its last check-in is {(p['ts'] - now_ms) // 1000} s ahead of this "
+                                   "reader's clock"}
+            continue
+        age_s = (now_ms - p["ts"]) // 1000
         out[agent] = {"state": state_of(age_s, p["interval_s"]), "last_ts": p["ts"], "age_s": age_s,
                       "interval_s": p["interval_s"], "host": p.get("host"), "actor": e.actor}
     return out
@@ -114,6 +177,8 @@ def line(agent: str, p: dict) -> str:
     name = agent.capitalize()
     if p.get("last_ts") is None:
         return f"{name}: silent, never checked in"
+    if p["state"] == "error":
+        return f"{name}: error, {p.get('error') or 'its check-in time cannot be read'}"
     every = _span(p["interval_s"])
     ago = _span(p["age_s"])
     where = f" from {p['host']}" if p.get("host") else ""
