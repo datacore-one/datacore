@@ -1773,6 +1773,11 @@ def test_reaudit2_no_production_reader_folds_a_space_without_admission():
     offenders = [f"{p.relative_to(lib)}:{n}" for p in sorted(lib.rglob("*.py")) if "tests" not in p.parts
                  for n, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1)
                  if pattern.search(line)]
+    # ... and the two-line form: `events = read_events(space)` then `fold(events)`.
+    two = re.compile(r"(\w+)\s*=\s*read_events\([^\n]*\n(?:[^\n]*\n){0,2}?[^\n]*\bfold\(\s*\1\s*\)")
+    offenders += [f"{p.relative_to(lib)}: {m.group(0).splitlines()[-1].strip()}" for p in sorted(lib.rglob("*.py"))
+                  if "tests" not in p.parts
+                  for m in two.finditer(p.read_text(encoding="utf-8", errors="replace"))]
     assert offenders == [], offenders
 
 
