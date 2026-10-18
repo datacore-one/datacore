@@ -33,6 +33,19 @@ from ledger.log import EventLog, read_events
 
 HUB_ID = "hub-test-1"
 GRANTOR = "hubd"
+APPROVER = "boss"
+
+
+def _test_policy():
+    from ledger.hub_policy import PolicyInputs
+    return PolicyInputs(approver=APPROVER, cosign_effects=frozenset({"payment"}))
+
+
+TEST_POLICY = None      # set below, once ledger.hub_policy exists (tests are written first)
+try:
+    TEST_POLICY = _test_policy()
+except ImportError:
+    pass
 
 
 # ── fixtures ────────────────────────────────────────────────────────────────
@@ -92,9 +105,14 @@ class Env:
         self.hubs: list = []
 
     def hub(self, actor: str = GRANTOR, space: Path | None = None, *, eligibility=allow_any,
-            state: str = "state") -> "hubmod.Hub":
+            state: str = "state", policy=None) -> "hubmod.Hub":
+        # A fixed policy, not the installation's file: the hub's front door
+        # applies policy (audit finding 12), and a test must not depend on
+        # whatever approvals_policy.yaml this machine happens to carry.
+        policy = policy if policy is not None else TEST_POLICY
         h = hubmod.Hub(space or self.hub_dir, actor, keys_dir=self.keys_dir, registry_path=self.registry,
-                       state_dir=self.tmp / state / actor, clock=self.clock, eligibility=eligibility)
+                       state_dir=self.tmp / state / actor, clock=self.clock, eligibility=eligibility,
+                       **({"policy": policy} if policy is not None else {}))
         self.hubs.append(h)
         return h
 
@@ -973,3 +991,87 @@ def test_audit18_sealing_over_the_network_needs_a_signed_operator_request(env):
     again = hub.seal_request(hubmod.sign_request(GRANTOR, "seal.request", body, keys_dir=env.keys_dir, clock=env.clock))
     assert again["status"] == "unchanged"           # nothing new: no second seal event
     assert sum(1 for e in read_events(env.hub_dir) if e.type == "ledger.seal") == 1
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# AUDIT FIXES, PART 2 (Codex audit 2026-10-18, findings 4, 8, 9, 10, 11, 12, 15, 17)
+#
+# Each test reproduces the audit's failure scenario and was seen failing
+# before the fix.
+# ════════════════════════════════════════════════════════════════════════════
+
+def _hub_item(hub, item_id: str):
+    """The item as the hub's authoritative state has it (admission + policy + lease authority)."""
+    return hub._state()[1].items[item_id]
+
+
+def _git_writer(env, actor: str) -> EventLog:
+    """A writer whose events reach the hub by git, not HTTP (written straight into its checkout)."""
+    return EventLog(env.hub_dir, actor, keys_dir=env.keys_dir, registry_path=env.registry, sign=True)
+
+
+# ── finding 12: authorship is not authorization ─────────────────────────────
+
+def test_audit12_a_signed_claim_of_work_addressed_to_another_is_refused_and_confers_nothing(env):
+    hub = env.hub(eligibility=None)                      # the production assignee rule
+    t = hubmod.LocalTransport(hub)
+    owner, wa, wb = env.writer("own", t), env.writer("wa", t), env.writer("wb", t)
+    owner.append("item.create", {"id": "t1", "title": "for wb", "assignee": "wb"})
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wa.append("item.claim", {"id": "t1"})
+    assert exc.value.code == "not_authorized", exc.value
+    # The same claim arriving by git is a valid signed proposal, not a transition.
+    _git_writer(env, "wc").append("item.claim", {"id": "t1"})
+    item = _hub_item(hub, "t1")
+    assert item.status == "created" and item.owner is None, item.history
+    assert wb.request_lease("t1")["status"] == "granted"
+
+
+def test_audit12_a_pool_item_is_taken_and_completed_only_through_a_lease(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa = env.writer("own", t), env.writer("wa", t)
+    owner.append("item.create", {"id": "p1", "title": "pool work", "role": "researcher"})
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wa.append("item.claim", {"id": "p1"})
+    assert exc.value.code == "not_authorized", exc.value
+    rogue = _git_writer(env, "wc")
+    rogue.append("item.claim", {"id": "p1"})
+    rogue.append("item.complete", {"id": "p1"})
+    item = _hub_item(hub, "p1")
+    assert item.status == "created" and item.owner is None, item.history
+
+
+def test_audit12_only_the_approver_grants_and_cosign_is_checked_at_the_front_door(env):
+    from ledger.policy import approval_payload_hash
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa = env.writer("own", t), env.writer("wa", t)
+    owner.append("item.create", {"id": "t1", "title": "for wa", "assignee": "wa"})
+    wa.append("item.claim", {"id": "t1"})                 # addressed to wa: allowed
+    payment = {"id": "pay", "title": "pay the invoice", "effects": ["payment"]}
+
+    # A non-approver's grant, and a co-signed create without an approval.
+    for actor, type, payload in (("wr1", "item.grant", {"id": "t1"}),
+                                 ("wr2", "approval.grant", {"item": "pay",
+                                                            "payload_hash": approval_payload_hash(payment)}),
+                                 ("wr3", "item.create", payment)):
+        with pytest.raises(hubmod.HubRefused) as exc:
+            env.writer(actor, t).append(type, payload)
+        assert exc.value.code == "not_authorized", (type, exc.value)
+    # By git they are proposals with no effect.
+    rogue = _git_writer(env, "wc")
+    rogue.append("item.grant", {"id": "t1"})
+    rogue.append("item.create", {**payment, "id": "pay-git"})
+    _, state = hub._state()
+    assert state.items["t1"].granted_by is None, state.items["t1"].history
+    assert "pay-git" not in state.items
+
+    # The approver's grant and an approved create go through.
+    boss = env.writer(APPROVER, t)
+    boss.append("item.grant", {"id": "t1"})
+    grant, _ = boss.append("approval.grant", {"item": "pay", "payload_hash": approval_payload_hash(payment)})
+    env.writer("wr4", t).append("item.create", {**payment, "approval_ref": grant.hash})
+    _, state = hub._state()
+    assert state.items["t1"].granted_by == APPROVER
+    assert "pay" in state.items
