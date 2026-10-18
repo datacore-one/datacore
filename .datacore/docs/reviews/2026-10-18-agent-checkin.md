@@ -89,4 +89,20 @@ The presence checker was **not** run outside its tests.
 - Step 2 now needs an owner, and it needs every writer to declare support first:
   1. Run `python3 -m ledger.hub ready <space> --actor <writer>` on each writer's host.
   2. Then run `python3 -m ledger.hub enable <space> --hub-id <id> --grantor <hub writer> --owner <owner>`.
-- **Still open:** a fix on the role-pool branch (HubWriter loses the task hash after a lease renewal) is not on this branch. Check-ins do not take leases, so they are not affected.
+- *(Corrected 2026-10-18: the renewal task-hash fix is on `feat/ledger-hub`, 73a26f0 and 31eb47b, and merged into this branch. The earlier note saying it was missing was stale.)*
+
+## Audit fixes, part 3
+
+Source: the Codex re-audit of 2026-10-18 (`2-datacore/1-tracks/engineering/reports/2026-10-18-ledger-hub-codex-reaudit-report.md`), new defect 7, on top of the hub's part 3 (hub review note, items A–J).
+
+Commits (root `feat/agent-checkin`): 0803f52 (merge of the hub fixes), 16d221b (tests first), 516b595 (fix), 9236c2d and 37fd2bf (merges of the hub's follow-ups). datacore-app `feat/agent-checkin`: 17d0c39 (merge of the app hub branch; one conflict in the API test file, both appended tests kept).
+
+| Item | What was wrong | Fix | Tests (`test_ledger_agent_checkin.py`) |
+|---|---|---|---|
+| M (new 7) | A check-in whose payload time was a year ahead was reported ok with age zero, and it could name another agent | `presence.checkin_problem`: the agent must be the principal the writer writes for (or, with no principal, the writer itself), and the payload time within 10 minutes of the event's own HLC. The writer refuses anything else before appending (`bad_checkin`); the hub refuses it, also when the time is ahead of the hub's clock (`not_authorized`, so one already in a writer's log is kept as a rejected proposal); the git-copy read drops rejected proposals and applies the same rule. A last check-in ahead of the reader's clock is an `error` state with no age, never age zero | `test_reaudit_new7_a_checkin_from_the_future_or_for_another_agent_is_not_counted`, `test_reaudit_new7_a_checkin_ahead_of_the_readers_clock_is_an_error_not_age_zero` |
+
+**Test fixture changed:** every HLC stamp now follows the test clock (as the pool tests do), so a check-in's time can be checked against its own HLC, as on a real host. All existing tests pass unchanged with it.
+
+**Decision for the owner:** production agent names (miles, tris, data, winston) must equal the principal names their writers write for in `principals.yaml`, or each writer's own name. Not verified against the real registry; check it before enabling check-ins.
+
+**Test counts (seen in this session):** check-in + hub suites: 85 passed after the fix. `-k ledger` on this branch: 845 passed before (4342f22), 859 passed and 1 failed after (at 37fd2bf): `test_ledger_done_archive.py::test_process_death_during_archive_recovers_before_retry` failed once while three suites ran in parallel, and passed 3 of 3 times when rerun alone (timing under load; not investigated further). App `test_ledger_hub_api.py` + `test_ledger_tasks.py` with `DATACORE_ROOT` at this worktree: 19 passed, 1 failed (the same pre-existing settled-read failure as on the hub branch). The wider runs of `-k "ledger or presence or checkin"` also show 4 failures in `test_fleet_presence_red_once.py`, which fail the same way on 31eb47b (a missing fleet-probe script in the test home); not caused here.
