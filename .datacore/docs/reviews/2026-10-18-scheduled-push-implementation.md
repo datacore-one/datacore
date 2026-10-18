@@ -84,23 +84,23 @@ Production code only. Tests, the fleet simulator (`fleet_week_sim.py`, `sim/stan
 
 | # | Site | What pushes | Recommendation |
 |---|---|---|---|
-| 1 | `lib/ledger_transport.py` `append()` | one event per call | **Routed through the policy (this change).** No production caller uses it yet; see below. |
+| 1 | `lib/ledger_transport.py` `append()` | one event per call | **Routed (step 1).** No production caller uses it yet. |
 | 2 | `lib/ledger_transport.py` `_converge_locked` → `_push_with_retry` | every `converge` and `sync` | Keep. It is the publication the slot job uses. Callers outside the slot are rows 3 to 6. |
-| 3 | `lib/ledger_claim_run.sh` (converge before and after each claim tick) | claim and run events, per tick | **Next step:** in scheduled mode, make the trailing converge receive-only (`_converge_locked(publish=False)` exists) and let the slot publish. |
-| 4 | `lib/ledger_phase1_cycle.sh` (converge per space) | hourly cycle | Put its cron on the host's slot minutes; it then becomes the slot job. |
+| 3 | `lib/ledger_claim_run.sh` (converge before and after each claim tick) | claim and run events, per tick | **Routed (step 2).** Both converges pass `--actor "$ACTOR"`. |
+| 4 | `lib/ledger_phase1_cycle.sh` (converge per space) | hourly cycle | Slot-aligned schedule documented below; no code change. |
 | 5 | `lib/ledger-claim-pull.sh:81` `git push origin HEAD:ledger/$ACTOR` | satellite claim and completion | Defer through the policy (addressed tasks no longer race; see the design report). |
 | 6 | `modules/nightshift/lib/claim.py:455` (`commit_to_branch` push) | nightshift claim per task (5-plur: 18 a day) | Defer through the policy. |
 | 7 | `modules/nightshift/lib/run.py:767` `git push … db` | after a run | Defer. |
 | 8 | `modules/ventures/lib/cadence_run.py:431` | cadence records (6-meridian: 27 a day) | Defer. |
 | 9 | `modules/nightshift/lib/scoreboard.py:456` | scoreboard | Defer. |
 | 10 | `lib/ledger_publish_safe.py:157` | the Mac's machine-written ledger files | Keep immediate (owner workstation, no slot). |
-| 11 | `lib/git_fleet_sync.py:858` | the box's sync of trapped agent work | It is already a scheduled sync; align its cron to the box's slot. |
+| 11 | `lib/git_fleet_sync.py:858` | the box's sync of trapped agent work | Slot-aligned schedule documented below; no code change. |
 
 ### Content: journals, reports, knowledge
 
 | # | Site | Recommendation |
 |---|---|---|
-| 12 | `lib/knowledge_commit.py:92,109` (`commit_to_branch`, `commit_knowledge(push=)`), called by `agent_wrap_up.py:216` (`push=True`) and `publication_manifest.py:37` | Pass `push=(push_policy(actor) == "now")` from `agent_wrap_up`. Owner-facing deliverables pass `urgent`. |
+| 12 | `lib/knowledge_commit.py` `commit_knowledge`, `publication_manifest.py` `publish`, `agent_wrap_up.py` | **Routed (step 2)** through `resolve_push(push, actor, urgent=)`. |
 | 13 | `lib/gh_reconcile.py:333` | Defer. |
 | 14 | `lib/cross_model_audit.py:1301` | Defer. |
 | 15 | `skills/github-triage/run_nightly.sh:59` (via converge) | Nightly; leave, or run inside the slot. |
@@ -118,8 +118,106 @@ Production code only. Tests, the fleet simulator (`fleet_week_sim.py`, `sim/stan
 | `lib/plur_store_sync.py:581` | The memory store's own repository, not a space |
 | `modules/outbox/lib/archive_sync.py:339` (`git push origin HEAD \|\| true`) | Archive repository. It swallows a failed push, which is a separate defect worth fixing. |
 
-## What step 1 does not yet do
 
-- **On its own, opting in a host changes little today.** No production code calls `ledger_transport.append()`. The "ledger:" commits measured on 2026-10-18 come from converge autosaves (rows 2 to 4), the claim scripts (rows 5 and 6) and the cadence records (row 8). The policy is in place and tested; routing those callers through it is the next step. Row 3 is the largest single source.
-- `converge` called outside the slot by any loop still pushes. That is correct for the owner's sessions, but in scheduled mode it lets agent loops publish off-slot until row 3 is routed.
-- Not verified: behaviour on the real hosts, whether their timers fire on time, and the effect on merge-commit counts. The design report's 24-hour measurement settles those once a host opts in.
+## Step 2: the callers that generate the traffic
+
+### What changed
+
+| File | Change |
+|---|---|
+| `.datacore/lib/tests/test_scheduled_push_callers.py` | New. 17 tests. 11 of the first 13 failed before the code (the 2 that passed hold today's behaviour). The 4 tests for the `policy` command failed before it existed. |
+| `.datacore/lib/ledger_transport.py` | `converge(actor=)` and `converge --actor`. New command `policy --actor A [--urgent]`. |
+| `.datacore/lib/ledger_claim_run.sh` | Both converges of every tick pass `--actor "$ACTOR"`. |
+| `.datacore/lib/knowledge_commit.py` | `resolve_push(push, actor, urgent=)`. `commit_knowledge(..., actor=, urgent=)` reports `pushed`. CLI flags `--actor=NAME` and `--urgent`. |
+| `.datacore/lib/publication_manifest.py` | `publish(..., actor=None, urgent=False)`. With no actor, this host's declared writer decides. This covers the research module's call, which passes no actor, without editing that module. |
+| `.datacore/lib/agent_wrap_up.py` | Passes `actor=agent` and the new `--urgent` flag. |
+
+### How it behaves
+
+**Claim tick, scheduled mode, agent writer.** `converge` *receives*:
+- autosave, fetch, and merge, through `_converge_locked(publish=False)`, the same code `_push_with_retry` already uses;
+- never a thinner `git pull`;
+- the log line reads `received; publish deferred to this host's slot`.
+
+**Claim tick, any other case.** The owner, an undeclared writer, the default mode, or a converge that names no actor (the slot job, the hourly cycle, `sync`) publishes exactly as before.
+
+**Knowledge commit.**
+- An explicit `push=False` always wins.
+- In the default mode, `push` is returned unchanged, without even looking up the actor.
+- In scheduled mode, an agent's commit lands on the default branch locally and waits for the slot, unless it is `urgent`.
+
+**`policy` command.** `ledger_transport.py policy --actor A [--urgent]` prints `now` or `deferred`, so a shell script can guard its push in one line.
+
+### Tests after step 2 (run in the worktree, 2026-10-18)
+
+| Command | Result |
+|---|---|
+| `test_scheduled_push_callers.py`, before the code | 11 failed, 2 passed. The 4 `policy` tests, added later, failed 4 of 4 before the command existed. |
+| `test_scheduled_push.py` + `test_scheduled_push_callers.py`, after | 43 passed (26 + 17) |
+| New tests plus the 5 existing transport files plus every test file that touches `knowledge_commit`, `publication_manifest`, `agent_wrap_up` or `ledger_claim_run` (16 files) | 328 passed, 1 failed |
+| All of the above plus every test file that imports the transport (32 files) | 460 passed, 11 failed |
+
+The 11 failures are the same 11 that fail on unchanged `main` in a fresh worktree:
+- the shipped-registry test in `test_transport_foreign_writer.py`;
+- the 10 tests in `test_disk_full_is_named.py`, `test_local_mcp_server_handoff.py`, `test_sim_harsh_sync_fixes.py`, `test_sync_conflict_org_and_alerts.py` and `test_sync_conflict_alert_shared_marker.py`.
+
+No new failure appeared. One limit: the 16-file run happened before the `policy` command was added. The 32-file run came after it and includes all 16 files.
+
+### Hourly cycle and fleet sync: the slot-aligned schedule (documented, not deployed)
+
+The smaller honest change is documentation. A `--respect-slot` guard would let these jobs skip their own runs, but they also ingest and project, which must keep running. Moving their crons is deployment, so it is left for the owner.
+
+**One finding:** every host that runs `ledger_phase1_cycle.sh` is set to the **same minute, :25** (`agent_host_setup.sh:112,122,134`; `jobs/manifest.yaml:363,381`). That is a race of its own, every hour. One exception: the manifest notes that hermes's cron is disabled for now; what each host's live crontab holds was not checked. The box's fleet sync runs at 06:10 and 18:10 UTC, which falls in nightshift's slot.
+
+| Job | Now | Slot-aligned | Where it is set |
+|---|---|---|---|
+| phase-1 cycle, box | `25 * * * *` | `0 * * * *` | the box's crontab; `jobs/manifest.yaml:363` (schedule text) |
+| phase-1 cycle, nightshift | `25 * * * *` | `10 * * * *` | `agent_host_setup.sh:112`; `jobs/manifest.yaml:381` |
+| phase-1 cycle, hermes | `25 * * * *` | `20 * * * *` | `agent_host_setup.sh:134` |
+| phase-1 cycle, plur-claw | `25 * * * *` | `25 * * * *` (already its slot) | `agent_host_setup.sh:122` |
+| fleet sync, box | `06:10, 18:10 UTC` | `06:30, 18:30 UTC` | `install_fleet_sync_timer.sh:59,60` (`OnCalendar`); `jobs/manifest.yaml:529` |
+| publish-slot, each host | none | its two minutes from `push_slots.yaml` | new timer (examples above) |
+
+Each job then publishes inside its own host's window. Converge runs under the repo lock, so a cycle and the slot job on the same host serialise rather than race.
+
+### Follow-ups in the module repositories (not edited: separate repositories)
+
+Each item names the line that pushes and the change it needs. Python modules get the policy with `from ledger_transport import push_policy` and `from actor_identity import this_actor`. Both are importable wherever `.datacore/lib` is on the path, as it is for these modules.
+
+1. **`modules/ventures/lib/cadence_run.py:431`** (`rc, out = git("push", "-q")`; cadence records, 27 a day in 6-meridian). Insert before it:
+   `if push_policy(this_actor()) == "deferred": return "committed; the host's slot job publishes it"`
+2. **`modules/nightshift/lib/scoreboard.py:456`** (`_sh(['git', 'push'], cwd=firm)`). Change it to:
+   `if push_policy(this_actor()) == "now": _sh(['git', 'push'], cwd=firm)`
+3. **`modules/nightshift/lib/run.py:767`** (push of the default branch after merging an unfinished run branch). Wrap it the same way:
+   `if push_policy(this_actor()) == "now": subprocess.run(['git', 'push', '-q', _push_remote(repo), db], ...)`
+4. **`lib/ledger-claim-pull.sh:81`** (`git push -q origin "HEAD:refs/heads/ledger/$ACTOR"`). This file is in the root repository, not a module. It was left alone as instructed, and can be done on this branch. Change it to:
+   `[ "$(python3 "$ROOT/.datacore/lib/ledger_transport.py" policy --actor "$ACTOR")" = now ] && git push -q origin "HEAD:refs/heads/ledger/$ACTOR" 2>&1 | tail -1`
+   Low value: it pushes to the writer's own ref, which nobody else writes, so it never makes a merge on main.
+5. **`modules/nightshift/lib/claim.py:455`.** **Recommend leaving this one immediate.** The push *is* the claim: it publishes a claim candidate against the remote tip it was fetched from (`push_arguments(commit, ref)` with a snapshot check). Holding it back would let a second host claim the same task in the meantime, which is the 2026-09-18 double run. If it must defer anyway, the one-line form is the same guard as item 2, but the owner should decide that explicitly.
+
+### A separate bug, not touched
+
+`modules/outbox/lib/archive_sync.py:339` runs `git remote get-url origin >/dev/null 2>&1 && git push origin HEAD || true`. The `|| true` throws away a failed push, so the archive can report success while its commits exist only on this disk. The transport was written to end this pattern (`ledger_transport.py` docstring). It needs its own fix, which should report the push's result. It has nothing to do with scheduling.
+
+## What scheduled mode now covers / still does not
+
+**Covered: on a host with `DATACORE_PUSH_MODE=scheduled`, these wait for the slot:**
+- `ledger_transport.append()` by an agent;
+- both converges of every claim tick (`ledger_claim_run.sh`) for an agent actor;
+- agent wrap-up commits (`agent_wrap_up.py`), unless `--urgent`;
+- recorded publications (`PublicationManifest.publish`), including the research module's, when the host's writer is an agent;
+- `knowledge_commit.py` on the command line, with `--actor=`.
+
+**Still pushes at once in scheduled mode:**
+- The hourly cycle (`ledger_phase1_cycle.sh`) and the box's fleet sync. They converge with no actor, by design. Aligning their schedules (table above) makes them slot pushes.
+- The module call sites: cadence records, scoreboard, nightshift run merge, satellite claim ref (follow-ups 1 to 4), and the nightshift claim (5, recommended to stay immediate).
+- `gh_reconcile.py:333`, `cross_model_audit.py:1301`, `skills/github-triage/run_nightly.sh`. Each is one guard with `policy`/`push_policy`; they are not done here.
+- A converge into an **empty** remote. The "first publish" branch of `_converge_locked` pushes before the `publish` flag is read. It happens once per new space, so it was left as is.
+- Owner sessions, `urgent` work, writers not declared as agents, and every host in the default mode. All of these push at once, as intended.
+
+**Not verified:**
+- behaviour on the real hosts;
+- whether their timers fire inside the 5-minute windows;
+- the effect on merge-commit counts.
+
+The design report's 24-hour measurement after a host opts in settles all three. Nothing was installed and no host was contacted.
