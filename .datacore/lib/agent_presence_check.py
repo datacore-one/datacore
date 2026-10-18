@@ -56,9 +56,9 @@ def read(space_dir, *, agents, transport=None, now_ms: int | None = None,
             return transport.presence(tuple(agents))["agents"], "hub"
         except hubmod.HubUnavailable:
             pass
-    from ledger.log import read_events
     now = int(time.time() * 1000) if now_ms is None else now_ms
-    return presmod.presence(read_events(Path(space_dir)), now, agents=agents, registry_path=registry_path), "git"
+    return presmod.presence(presmod.admitted_events(Path(space_dir), now, registry_path=registry_path), now,
+                            agents=agents, registry_path=registry_path), "git"
 
 
 def _load(path: Path) -> dict:

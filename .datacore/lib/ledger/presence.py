@@ -16,7 +16,10 @@ briefing (`briefing_lines`).
 
 Only a check-in whose signature verifies for its writer counts: the hub
 refuses unsigned ones, and a line that reached the git copy some other way --
-unsigned, or edited after signing -- is skipped here. What it does NOT prove:
+unsigned, or edited after signing -- is skipped here. In a hub space the git
+copy is read through the hub's own admission rule first (`admitted_events`,
+ledger.hub_admission; audit findings 2 and 6): a check-in signed for another
+space, hub or log, or one past a refused event of its log, is not one here. What it does NOT prove:
 that the writer is the agent it names. Binding an agent name to one writer key
 is the principals registry's job and is not done here.
 """
@@ -46,6 +49,21 @@ def _signed(e, registry_path) -> bool:
         return bool(verify(e.actor, canonical_bytes(event_body(e)), e.sig, registry_path=registry_path))
     except Exception:  # noqa: BLE001 -- an unknown writer or a malformed sig is "not signed"
         return False
+
+
+def admitted_events(space_dir, now_ms: int, *, registry_path=None) -> list:
+    """The events of a space's git copy that the hub's admission rule admits.
+
+    A space without a hub has no admission rule; its events are read as they
+    are, and `presence` still checks each check-in's signature."""
+    from .hub import authority, load_config
+    from .hub_admission import admit
+    from .log import read_events
+    events = read_events(space_dir)
+    cfg = load_config(space_dir)
+    if cfg is None:
+        return events
+    return admit(events, authority(space_dir, cfg, registry_path), now_ms=now_ms).events
 
 
 def state_of(age_s: float, interval_s: int) -> str:
