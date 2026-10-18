@@ -32,7 +32,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 import test_ledger_role_pool as pool  # noqa: E402
-from test_ledger_hub import git_pull  # noqa: E402
+from test_ledger_hub import APPROVER as TEST_APPROVER, git_pull  # noqa: E402
 from test_ledger_role_pool import DONE, PoolEnv, pool_item, refused, submit_raw  # noqa: E402
 
 from ledger import hub as hubmod
@@ -236,3 +236,52 @@ def test_f14_a_submitted_pool_item_stays_in_the_org_projection_as_review():
     projector keeps it (as REVIEW) and the checkpoint renders it the same way."""
     from ledger.projector import LIVE_STATUSES
     assert "submitted" in LIVE_STATUSES
+
+
+# ── Codex re-audit of 2026-10-18 (report: 2-datacore/1-tracks/engineering/reports/
+#    2026-10-18-ledger-hub-codex-reaudit-report.md), new defects 5 and 6 ─────
+
+def test_reaudit_new5_a_live_attempt_keeps_its_class_role_and_review_whatever_the_task_says_later(env):
+    """Codex: a pool holder set itself as the assignee and completed without
+    independent review. The attempt pins what it was granted as."""
+    from ledger.log import EventLog
+    hub = env.start()
+    own, wa = env.writer("own"), env.writer("wa")
+    pool_item(own, "p1")
+    lease = wa.request_lease("p1")["lease"]["payload"]
+    assert lease["class"] == "pool" and lease["review"] is True, lease
+    # The holder cannot make its pool attempt addressed work, change its role
+    # or drop its DONE_WHEN while the attempt is live: over the network ...
+    for change in ({"assignee": "wa"}, {"role": "scout"}, {"done_when": ""}):
+        err = refused(wa.append, "item.update", {"id": "p1", **change})
+        assert err.code == "not_authorized", (change, err)
+    # ... nor by git.
+    EventLog(env.hub_dir, "wb", keys_dir=env.keys_dir, registry_path=env.registry, sign=True).append(
+        "item.update", {"id": "p1", "assignee": "wb"})
+    assert "assignee" not in hub_item(hub, "p1").payload
+    # Even when the owner's approver re-addresses the task, the live attempt
+    # keeps the obligations it was granted with: its completion is a submission.
+    boss = env.writer(TEST_APPROVER)
+    boss.append("item.update", {"id": "p1", "assignee": "wa"})
+    assert hub_item(hub, "p1").payload["assignee"] == "wa"
+    wa.append("item.complete", {"id": "p1", "result": "summary", "evidence": []})
+    item = hub_item(hub, "p1")
+    assert item.status == "submitted" and not pool_accepted(item), item.history
+
+
+def test_reaudit_new6_pool_preparation_reads_the_authoritative_state(env):
+    """Codex: the writer prepared a pool check from a plain fold, so a lease
+    nobody granted, published by git, decided what the check was bound to."""
+    from ledger.log import EventLog
+    env.start()
+    own, wb = env.writer("own"), env.writer("wb")
+    pool_item(own, "p1")
+    forger = EventLog(env.hub_dir, "wd", keys_dir=env.keys_dir, registry_path=env.registry, sign=True)
+    forger.append("item.lease", {"id": "p1", "holder": "wd", "attempt": "forged-attempt", "task_hash": "x",
+                                 "granted_ms": env.clock(), "expires_ms": env.clock() + 900_000})
+    forger.append("item.complete", {"id": "p1", "attempt": "forged-attempt", "task_hash": "x",
+                                    "result": "made up", "evidence": []})
+    git_pull(env.hub_dir, wb.space_dir)
+    assert fold(read_events(wb.space_dir)).items["p1"].submission is not None      # the bypass
+    prepared = wb._pool_prepare("item.verify", {"id": "p1", "check": DONE})
+    assert prepared.get("attempt") != "forged-attempt", prepared
