@@ -300,13 +300,15 @@ def test_hub_down_for_an_hour_loses_nothing_starts_no_double_run_and_replays(env
             wb.request_lease("t1")
 
     # The hub returns an hour later. wb asks BEFORE wa has replayed: wa's lease
-    # expired while nobody could renew it, so the restart grace refuses it.
+    # expired while nobody could renew it. Since audit finding 10 that is the
+    # recovery barrier (this hub restarted without its request state), not a
+    # fixed restart grace; either way nothing is granted.
     env.clock.advance(60)
     hub2 = env.hub(state="state2")
     t.hub, t.down = hub2, False
     with pytest.raises(hubmod.HubRefused) as exc:
         wb.request_lease("t1")
-    assert exc.value.code in ("restart_grace", "taken")
+    assert exc.value.code in ("restart_grace", "taken", "recovering", "uncertain_attempt")
 
     replayed = wa.replay()
     assert [r["status"] for r in replayed] == ["accepted"] * 3
@@ -1451,7 +1453,7 @@ def test_audit10_a_holder_offline_longer_than_a_lease_period_is_not_double_run(e
     Either way the item is not granted again until the holder reconciles."""
     for restart in (True, False):
         env.clock.advance(3600)
-        hub = env.hub(state=f"s10-{restart}")
+        hub = env.hub(state="s10")
         t = hubmod.LocalTransport(hub)
         owner, wa, wb = env.writer("own", t), env.writer("wa", t), env.writer("wb", t)
         item = f"t-{restart}"
@@ -1462,7 +1464,7 @@ def test_audit10_a_holder_offline_longer_than_a_lease_period_is_not_double_run(e
         wa.append("item.complete", {"id": item, "result": "done offline"})   # buffered
         if restart:
             hub.close()
-            hub = env.hub(state=f"s10-{restart}")                            # same persisted state
+            hub = env.hub(state="s10")                            # same persisted state
             t.hub = hub
         env.clock.advance(2 * 900)                                           # longer than one lease
         t.down = False
@@ -1498,6 +1500,8 @@ def test_audit10_a_lost_answer_is_retried_and_the_hub_returns_the_same_signed_gr
     wa = env.writer("wa", _LosesFirstAnswer(hub))
     with pytest.raises(hubmod.HubUnavailable):
         wa.request_lease("t1")
+    req = wa._pending("t1")
+    assert req is not None                               # kept, to be retried as is
     answer = wa.request_lease("t1")                      # the same signed request, retried
     assert answer["status"] == "granted", answer
     assert [e.payload["holder"] for e in leases_in(env.hub_dir)] == ["wa"]   # one grant, not two
@@ -1505,9 +1509,7 @@ def test_audit10_a_lost_answer_is_retried_and_the_hub_returns_the_same_signed_gr
     # A hub restarted on the same persisted state answers the retry the same way.
     hub.close()
     again = env.hub()
-    req = wa._pending("t1")
-    if req is not None:
-        assert again.request_lease(req)["lease"]["hash"] == answer["lease"]["hash"]
+    assert again.request_lease(req)["lease"]["hash"] == answer["lease"]["hash"]
 
 
 def test_audit10_a_restore_from_git_taken_before_a_grant_runs_the_recovery_barrier(env):

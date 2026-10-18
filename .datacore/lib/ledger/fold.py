@@ -950,7 +950,9 @@ def _handle_lease_expire(state: LedgerState, event: Event) -> None:
         return
     key = (event.payload or {}).get("attempt")
     if _current_attempt(item) == key:
-        item.lease_ref = {**item.lease_ref, "ended": True}
+        payload = event.payload or {}
+        item.lease_ref = {**item.lease_ref, "ended": True, "end_reason": payload.get("reason"),
+                          "ended_ms": payload.get("expired_ms")}
         if item.status == "claimed" and item.lease_holder is not None:
             item.lease_holder = item.lease_expires_ms = None
             item.status, item.owner = "created", None

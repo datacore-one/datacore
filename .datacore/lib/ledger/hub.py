@@ -65,9 +65,16 @@ RULES THIS MODULE ENFORCES
     wait (`fencing_wait`) until every old-epoch lease expired plus the clock
     uncertainty. Old-grantor events after the frontier are not admitted
     (`fenced`), and new seals must extend the frontier.
-  * After a restart the hub refuses, for one lease period, to re-grant an item
-    whose lease expired unrenewed (`restart_grace`): its holder may have
-    finished during the outage and not yet replayed.
+  * RECOVERY BARRIER, not a fixed restart grace (finding 10). Request-level
+    state -- nonces, the answers given, when each writer last reconciled --
+    is persisted in the hub's state dir, so a retried request gets the same
+    signed answer, after a restart too. A hub that lost it, or whose own log
+    lost grants it gave (a restore from before them), refuses every grant
+    (`recovering`) until writers present their stored grants (`reconcile`,
+    restored byte for byte) and, for lost state, the owner clears it. An
+    expired attempt is uncertain until its holder has reconciled after the
+    expiry: the item is not granted to anyone else before that
+    (`uncertain_attempt`), whether the hub restarted or not.
   * REPLAY AND REFUSED HISTORY (finding 11): appends are answered with a
     hub-signed acknowledgment of the log's frontier, and `status` carries a
     hub-signed frontier per log. A replaying writer checks its own event at
@@ -550,7 +557,6 @@ class Hub:
         self.started_ms = self.clock()
         self.closed = False
         self._mutex = threading.RLock()
-        self._nonces: dict[str, int] = {}
         from .log import EventLog
         self.log = EventLog(self.space_dir, actor, keys_dir=keys_dir, registry_path=registry_path,
                             sign=True, hub=cfg.hub_id)
@@ -567,6 +573,17 @@ class Hub:
         except OSError:
             fh.close()
             self._lock_fh = None
+        # REQUEST-LEVEL STATE IS NOT A PROJECTION (amendment A, H; finding 10):
+        # nonces, the answers given and when each writer last reconciled are
+        # persisted here, so a retry gets the same signed answer after a
+        # restart. A hub that has lost them runs the recovery barrier.
+        self._requests_path = state / f"{key}.requests.jsonl"
+        self._reconciled_path = state / f"{key}.reconciled.json"
+        self._answers: dict[str, dict] = {}
+        self._reconciled: dict[str, int] = {}
+        self.barrier: dict = {}
+        if self._lock_fh is not None:
+            self._load_request_state()
 
     # ── housekeeping ───────────────────────────────────────────────────────
     def close(self) -> None:
@@ -858,68 +875,261 @@ class Hub:
             raise HubRefused("wrong_hub", f"this is hub {cfg.hub_id!r}, not {req.get('hub')!r}")
         if req.get("space") != cfg.space_id:
             raise HubRefused("wrong_space", f"this is space {cfg.space_id!r}, not {req.get('space')!r}")
-        for n, t in list(self._nonces.items()):
-            if abs(now - t) > REQUEST_WINDOW_MS:
-                del self._nonces[n]
-        if nonce in self._nonces:
-            raise HubRefused("replayed_request", "this request was already answered")
-        self._nonces[nonce] = ts
         return actor
 
+    # ── request-level state: idempotent answers, reconciliation, barrier ───
+    def _load_request_state(self) -> None:
+        own = {e.seq: e for e in _parse_file(self.log.path)}
+        try:
+            lines = self._requests_path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            lines = None
+        for ln in lines or []:
+            try:
+                rec = json.loads(ln)
+                self._answers[rec["nonce"]] = rec
+            except (ValueError, KeyError, TypeError):
+                continue                          # a torn last line: the answer was never given
+        try:
+            self._reconciled = {str(k): int(v) for k, v in
+                                json.loads(self._reconciled_path.read_text(encoding="utf-8")).items()}
+        except (FileNotFoundError, ValueError, TypeError, AttributeError):
+            self._reconciled = {}
+        if lines is None and own:
+            self.barrier["state_lost"] = ("this hub's request state is missing while its log holds answers; "
+                                          "the owner clears recovery once every writer has reconciled")
+        else:
+            self._requests_path.touch()
+        missing = self._missing_own()
+        if missing:
+            self.barrier["own_log_behind"] = missing
+
+    def _missing_own(self) -> list:
+        """Grants this hub answered that its own log no longer holds (a restore
+        from a copy taken before them): [(seq, hash)]."""
+        own = {e.seq: e.hash for e in _parse_file(self.log.path)}
+        out = []
+        for rec in self._answers.values():
+            ev = (rec.get("answer") or {}).get("lease")
+            if isinstance(ev, dict) and ev.get("actor") == self.actor and own.get(ev.get("seq")) != ev.get("hash"):
+                out.append((ev.get("seq"), ev.get("hash")))
+        return sorted(set(out))
+
+    def _answered(self, req: dict):
+        """The stored answer to this exact request, or None when it is new.
+        The same nonce with another body is a replay, refused."""
+        rec = self._answers.get(req.get("nonce"))
+        if rec is None:
+            return None
+        if rec.get("digest") != request_digest(req):
+            raise HubRefused("replayed_request", "this request was already answered")
+        if "refusal" in rec:
+            r = rec["refusal"]
+            raise HubRefused(r["code"], r.get("message", ""), **{k: v for k, v in r.items()
+                                                                 if k not in ("code", "message")})
+        return rec["answer"]
+
+    def _remember(self, req: dict, *, answer: dict | None = None, refusal: HubError | None = None) -> None:
+        rec = {"nonce": req["nonce"], "digest": request_digest(req), "kind": req.get("kind"),
+               "ts_ms": self.clock()}
+        if refusal is not None:
+            rec["refusal"] = refusal.as_dict()
+        else:
+            rec["answer"] = answer
+        with open(self._requests_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, sort_keys=True) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        self._answers[rec["nonce"]] = rec
+
+    def _once(self, req: dict, kind: str, cfg: HubConfig, body: Callable[[str], dict]) -> dict:
+        """Verify, then answer `req` exactly once: a retry gets the stored answer."""
+        actor = self._verify_request(req, kind, cfg)
+        cached = self._answered(req)
+        if cached is not None:
+            return cached
+        try:
+            answer = body(actor)
+        except HubRefused as exc:
+            if exc.code not in ("locked", "not_active_hub"):
+                self._remember(req, refusal=exc)
+            raise
+        self._remember(req, answer=answer)
+        return answer
+
     def request_lease(self, req: dict) -> dict:
-        """Grant `req["item"]` to the signing actor if no live lease exists."""
-        from .fold import lease_live, task_content_hash
+        """Grant `req["item"]` to the signing actor if no live lease exists.
+        Answered once: a retried request gets the same signed answer (finding 10)."""
         with self._mutex:
             cfg = self._writable(grant=True)
-            actor = self._verify_request(req, "lease.request", cfg)
-            active = self._authority(cfg).active
-            item_id = req.get("item")
-            events, state = self._state()
-            item = state.items.get(item_id) if isinstance(item_id, str) else None
-            if item is None:
-                raise HubRefused("unknown_item", f"no item {item_id!r} in this space")
-            now = self.clock()
-            if item.status in ("completed", "verified", "dismissed", "archived"):
-                raise HubRefused("closed", f"{item_id} is {item.status}")
-            if active.not_before_ms is not None and now < active.not_before_ms:
-                raise HubRefused("fencing_wait", f"epoch {active.epoch} grants from {active.not_before_ms}: "
-                                 "every lease of the previous epoch must have expired, plus the clock uncertainty",
-                                 retry_after_ms=active.not_before_ms)
-            if item.lease_unresolved:
-                raise HubRefused("owner_resolution", f"{item_id} has a result that arrived after its lease "
-                                 "attempt ended; the owner decides before it is granted again",
-                                 events=sorted(item.lease_unresolved))
-            if lease_live(item, now):
-                if item.lease_holder == actor:
-                    return {"status": "held", "lease": dict(item.lease_ref or {}),
-                            "expires_ms": item.lease_expires_ms}
-                raise HubRefused("taken", f"{item_id} is leased to {item.lease_holder}",
-                                 holder=item.lease_holder, expires_ms=item.lease_expires_ms)
-            if item.lease_holder is not None and now < self.started_ms + cfg.lease_ttl_s * 1000:
-                raise HubRefused("restart_grace", f"{item_id}'s lease to {item.lease_holder} expired while "
-                                 "the hub was away; its holder may still replay a result",
-                                 holder=item.lease_holder, retry_after_ms=self.started_ms + cfg.lease_ttl_s * 1000)
-            if item.status != "created" and item.lease_holder is None:
-                raise HubRefused("claimed", f"{item_id} is {item.status} outside a lease (owner {item.owner})")
-            if item.edit_conflicts:
-                raise HubRefused("conflicted", f"{item_id} has unresolved edit conflicts")
-            why = self.eligibility(item, actor, state)
-            if why:
-                raise HubRefused("not_eligible", why)
-            # The answer sorts after every event of its item (audit finding 7),
-            # whatever the sibling logs' tails say.
-            floor = _item_floor(events, item_id)
-            # EXPIRY IS EXPLICIT (audit finding 9): the previous attempt ends by
-            # a signed event before anything is granted again.
-            if _open_attempt(item):
-                floor = self._expire(item, events, now, floor,
-                                     "released" if item.lease_holder is None else "expired").hlc
-            event = self.log.append("item.lease", {
-                "id": item_id, "holder": actor, "attempt": attempt_id(req),
-                "task_hash": task_content_hash(item.payload), "epoch": active.epoch,
-                "granted_ms": now, "expires_ms": now + cfg.lease_ttl_s * 1000,
-                "request": _request_ref(req)}, after=floor)
-            return {"status": "granted", "lease": _event_dict(event), "log": self.log.log_name}
+            return self._once(req, "lease.request", cfg, lambda actor: self._grant(req, actor, cfg))
+
+    def _grant(self, req: dict, actor: str, cfg: HubConfig) -> dict:
+        from actor_identity import base_writer
+        from .fold import lease_live, task_content_hash
+        active = self._authority(cfg).active
+        item_id = req.get("item")
+        events, state = self._state()
+        item = state.items.get(item_id) if isinstance(item_id, str) else None
+        if item is None:
+            raise HubRefused("unknown_item", f"no item {item_id!r} in this space")
+        now = self.clock()
+        if item.status in ("completed", "verified", "dismissed", "archived"):
+            raise HubRefused("closed", f"{item_id} is {item.status}")
+        if self.barrier:
+            # THE RECOVERY BARRIER (finding 10): after a restart that lost
+            # request state, or a restore that lost grants this hub gave,
+            # nothing is granted until the sources are reconciled.
+            raise HubRefused("recovering", "the hub is reconciling its log with the writers' logs and receipts "
+                             "before it grants again", barrier=sorted(self.barrier))
+        if active.not_before_ms is not None and now < active.not_before_ms:
+            raise HubRefused("fencing_wait", f"epoch {active.epoch} grants from {active.not_before_ms}: "
+                             "every lease of the previous epoch must have expired, plus the clock uncertainty",
+                             retry_after_ms=active.not_before_ms)
+        if item.lease_unresolved:
+            raise HubRefused("owner_resolution", f"{item_id} has a result that arrived after its lease "
+                             "attempt ended; the owner decides before it is granted again",
+                             events=sorted(item.lease_unresolved))
+        if lease_live(item, now):
+            if item.lease_holder == actor:
+                return {"status": "held", "lease": dict(item.lease_ref or {}),
+                        "expires_ms": item.lease_expires_ms}
+            raise HubRefused("taken", f"{item_id} is leased to {item.lease_holder}",
+                             holder=item.lease_holder, expires_ms=item.lease_expires_ms)
+        ref = item.lease_ref or {}
+        previous = ref.get("holder") or item.lease_holder
+        if ref and previous and base_writer(previous) != base_writer(actor):
+            # AN EXPIRED ATTEMPT IS UNCERTAIN until its holder has reconciled
+            # after the expiry (its results are in) or the owner resolved it.
+            # This replaces the fixed restart grace, which missed a holder away
+            # longer than one lease and a partition with no restart (finding 10).
+            if item.lease_holder is not None:
+                since = item.lease_expires_ms
+            elif ref.get("ended") and ref.get("end_reason") == "expired":
+                since = ref.get("ended_ms")
+            else:
+                since = None                          # released, or resolved by the owner
+            if since is not None and self._reconciled.get(base_writer(previous), -1) < since:
+                raise HubRefused("uncertain_attempt", f"{item_id}'s lease to {previous} expired while it may "
+                                 "still be working; it reconciles (replays) first, or the owner resolves it",
+                                 holder=previous)
+        if item.status != "created" and item.lease_holder is None:
+            raise HubRefused("claimed", f"{item_id} is {item.status} outside a lease (owner {item.owner})")
+        if item.edit_conflicts:
+            raise HubRefused("conflicted", f"{item_id} has unresolved edit conflicts")
+        why = self.eligibility(item, actor, state)
+        if why:
+            raise HubRefused("not_eligible", why)
+        # The answer sorts after every event of its item (audit finding 7),
+        # whatever the sibling logs' tails say.
+        floor = _item_floor(events, item_id)
+        # EXPIRY IS EXPLICIT (audit finding 9): the previous attempt ends by
+        # a signed event before anything is granted again.
+        if _open_attempt(item):
+            floor = self._expire(item, events, now, floor,
+                                 "released" if item.lease_holder is None else "expired").hlc
+        event = self.log.append("item.lease", {
+            "id": item_id, "holder": actor, "attempt": attempt_id(req),
+            "task_hash": task_content_hash(item.payload), "epoch": active.epoch,
+            "granted_ms": now, "expires_ms": now + cfg.lease_ttl_s * 1000,
+            "request": _request_ref(req)}, after=floor)
+        return {"status": "granted", "lease": _event_dict(event), "log": self.log.log_name}
+
+    def reconcile(self, req: dict) -> dict:
+        """A writer's side of the recovery barrier (finding 10): a signed request
+        carrying its per-log frontier and the hub-signed grants it stored.
+
+        * Each stored grant of THIS hub that its own log no longer holds (a
+          restore from before it) is restored, byte for byte, when it chains
+          onto the log's head; a different event at that seq is `diverged`.
+        * The writer's frontier must equal the hub's copy of its logs (it
+          replays first); otherwise `behind`.
+        * The writer is then reconciled as of now: its expired attempts are
+          no longer uncertain."""
+        from actor_identity import base_writer
+        from .keys import verify
+        with self._mutex:
+            cfg = self._writable(grant=False)
+            actor = self._verify_request(req, "reconcile", cfg)
+            cached = self._answered(req)
+            if cached is not None:
+                return cached
+            restored = []
+            for raw in sorted((r for r in req.get("leases") or [] if isinstance(r, dict)),
+                              key=lambda r: r.get("seq") if type(r.get("seq")) is int else -1):
+                try:
+                    ev = Event(**raw)
+                except TypeError:
+                    continue
+                if ev.actor != self.actor:
+                    continue
+                own = _parse_file(self.log.path)
+                held = {e.seq: e for e in own}
+                if ev.seq in held:
+                    if held[ev.seq].hash != ev.hash:
+                        raise HubRefused("diverged", f"{self.actor} seq {ev.seq} is a different event than the "
+                                         "grant the writer stored; this goes to the owner", seq=ev.seq)
+                    continue
+                head = own[-1] if own else None
+                if ev.seq != (head.seq + 1 if head else 0) or ev.prev != (head.hash if head else GENESIS):
+                    continue
+                if compute_hash(event_body(ev)) != ev.hash or not verify(
+                        self.actor, canonical_bytes(event_body(ev)), ev.sig, registry_path=self.registry_path,
+                        at_ms=_physical_ms(ev.hlc)):
+                    raise HubRefused("bad_lease", f"the stored grant at seq {ev.seq} is not this hub's signature")
+                self._restore_own(ev)
+                restored.append(ev.seq)
+            frontier = self.frontiers()["logs"]
+            for chain, mine in (req.get("frontier") or {}).items():
+                held = frontier.get(chain) or {"seq": -1, "head": GENESIS}
+                if not isinstance(mine, dict) or (mine.get("seq"), mine.get("head")) != (held["seq"], held["head"]):
+                    raise HubRefused("behind", f"the hub holds {chain} up to seq {held['seq']}; replay first",
+                                     log=chain, seq=held["seq"])
+            self._reconciled[base_writer(actor)] = self.clock()
+            from file_utils import atomic_write_text
+            atomic_write_text(self._reconciled_path, json.dumps(self._reconciled, sort_keys=True))
+            missing = self._missing_own()
+            if missing:
+                self.barrier["own_log_behind"] = missing
+            else:
+                self.barrier.pop("own_log_behind", None)
+            answer = {"status": "reconciled", "restored": restored, "barrier": sorted(self.barrier)}
+            self._remember(req, answer=answer)
+            return answer
+
+    def _restore_own(self, ev: Event) -> None:
+        """Put back a grant this hub signed and its log lost, byte for byte, under
+        the file lock -- never re-signed, never a new seq."""
+        from file_utils import fsync_directory
+        path = self.log.path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a+b") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                f.seek(0)
+                raw = f.read()
+                own = [from_line(ln) for ln in raw.decode("utf-8").splitlines() if ln.strip()]
+                head = own[-1] if own else None
+                if ev.seq != (head.seq + 1 if head else 0) or ev.prev != (head.hash if head else GENESIS):
+                    return
+                f.write((to_line(ev) + "\n").encode("utf-8"))
+                f.flush()
+                os.fsync(f.fileno())
+                fsync_directory(path.parent)
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+
+    def clear_recovery(self, req: dict) -> dict:
+        """The owner ends a `state_lost` barrier (signed `recovery.clear`), after
+        the writers have reconciled: the hub cannot know whom a lost answer went to."""
+        with self._mutex:
+            cfg = self._writable(grant=False)
+            actor = self._verify_request(req, "recovery.clear", cfg)
+            if actor != cfg.owner:
+                raise HubRefused("not_owner", f"only the space's owner ({cfg.owner}) clears recovery")
+            self.barrier.pop("state_lost", None)
+            self._requests_path.touch()
+            return {"status": "cleared", "barrier": sorted(self.barrier)}
 
     def _expire(self, item, events, now: int, floor, reason: str) -> Event:
         """Write `item.lease.expire` for `item`'s open attempt, with the holder-log
@@ -954,10 +1164,13 @@ class Hub:
 
     def renew_lease(self, req: dict) -> dict:
         """Extend the SAME live attempt; never resurrect an expired one (audit finding 9)."""
-        from .fold import lease_live
         with self._mutex:
             cfg = self._writable(grant=True)
-            actor = self._verify_request(req, "lease.renew", cfg)
+            return self._once(req, "lease.renew", cfg, lambda actor: self._renew(req, actor, cfg))
+
+    def _renew(self, req: dict, actor: str, cfg: HubConfig) -> dict:
+        from .fold import lease_live
+        if True:
             item_id = req.get("item")
             events, state = self._state()
             item = state.items.get(item_id) if isinstance(item_id, str) else None
@@ -1023,10 +1236,12 @@ class Hub:
                              "the API token is transport only")
         with self._mutex:
             cfg = self._writable(grant=True)
-            actor = self._verify_request(req, "seal.request", cfg)
-            if actor not in {cfg.grantor, *cfg.seal_operators}:
-                raise HubRefused("not_operator", f"{actor!r} is not a seal operator of this space")
-            return self.seal()
+
+            def body(actor):
+                if actor not in {self._authority(cfg).active.grantor, *cfg.seal_operators}:
+                    raise HubRefused("not_operator", f"{actor!r} is not a seal operator of this space")
+                return self.seal()
+            return self._once(req, "seal.request", cfg, body)
 
     # ── reports ────────────────────────────────────────────────────────────
     def status(self) -> dict:
@@ -1118,6 +1333,9 @@ class LocalTransport:
     def seal_request(self, req: dict) -> dict:
         return self._hub().seal_request(req)
 
+    def reconcile(self, req: dict) -> dict:
+        return self._hub().reconcile(req)
+
 
 class HttpTransport:
     """datacored's `/ledger/hub` API (stdlib urllib). Not exercised against a
@@ -1163,6 +1381,9 @@ class HttpTransport:
 
     def seal_request(self, req: dict) -> dict:
         return self._call("POST", self.prefix + "/seal", req)
+
+    def reconcile(self, req: dict) -> dict:
+        return self._call("POST", self.prefix + "/reconcile", req)
 
 
 # ── the writer's side ───────────────────────────────────────────────────────
@@ -1363,20 +1584,59 @@ class HubWriter:
             for e in events:
                 if e.seq > top:
                     out.append(self._send(e, chain))
+        self._reconcile()
         self._clear_outage()
         return out
 
+    def _reconcile(self) -> dict | None:
+        """The writer's half of the recovery barrier (finding 10): present my
+        per-log frontier and the hub-signed grants I stored."""
+        if not hasattr(self.transport, "reconcile"):
+            return None
+        frontier = {}
+        for chain, events in self._local_chains():
+            if events:
+                frontier[chain] = {"seq": events[-1].seq, "head": events[-1].hash}
+        leases = [r["event"] for r in self.receipts() if (r.get("event") or {}).get("type") == "item.lease"]
+        req = sign_request(self.actor, "reconcile", {"hub": self.cfg.hub_id, "space": self.cfg.space_id,
+                                                     "frontier": frontier, "leases": leases},
+                           keys_dir=self.keys_dir, clock=self.clock)
+        return self.transport.reconcile(req)
+
     # ── leases ─────────────────────────────────────────────────────────────
+    def _pending_path(self, kind: str, item_id: str) -> Path:
+        return self._receipts_path.parent / f"pending-{kind}-{hashlib.sha256(str(item_id).encode()).hexdigest()[:16]}.json"
+
+    def _pending(self, item_id: str, kind: str = "lease.request") -> dict | None:
+        """A request sent whose answer never arrived: retried as is, so the hub
+        returns the same signed answer (finding 10). None once answered or stale."""
+        try:
+            req = json.loads(self._pending_path(kind, item_id).read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            return None
+        if not isinstance(req, dict) or abs(self.clock() - int(req.get("ts_ms", 0))) > REQUEST_WINDOW_MS:
+            return None
+        return req
+
     def _ask(self, method: str, kind: str, item_id: str) -> dict:
-        body = {"hub": self.cfg.hub_id, "space": self.cfg.space_id, "item": item_id}
-        if kind == "lease.renew":
-            body["attempt"] = (self._attempt_for(item_id) or {}).get("attempt")
-        req = sign_request(self.actor, kind, body, keys_dir=self.keys_dir, clock=self.clock)
+        req = self._pending(item_id, kind)
+        if req is None:
+            body = {"hub": self.cfg.hub_id, "space": self.cfg.space_id, "item": item_id}
+            if kind == "lease.renew":
+                body["attempt"] = (self._attempt_for(item_id) or {}).get("attempt")
+            req = sign_request(self.actor, kind, body, keys_dir=self.keys_dir, clock=self.clock)
+        from file_utils import atomic_write_text
+        pending = self._pending_path(kind, item_id)
+        atomic_write_text(pending, json.dumps(req, sort_keys=True))
         try:
             answer = getattr(self.transport, method)(req)
         except HubUnavailable:
             self._mark_outage()
+            raise                                   # the request stays pending: retried as is
+        except HubRefused:
+            pending.unlink(missing_ok=True)
             raise
+        pending.unlink(missing_ok=True)
         if answer.get("status") in ("granted", "renewed"):
             expected = "item.lease" if kind == "lease.request" else "item.lease.renew"
             self._accept_lease(answer.get("lease"), item_id, req, expected)
