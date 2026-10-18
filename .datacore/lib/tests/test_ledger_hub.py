@@ -1344,3 +1344,99 @@ def test_audit4_a_config_edited_to_another_grantor_or_manifest_confers_nothing(e
     with pytest.raises(hubmod.HubRefused) as exc:
         env.hub(space=space, state="ry")
     assert exc.value.code == "bad_manifest"
+
+
+# ── finding 11: replay compares signed frontiers; refused events stay in the chain ─
+
+def _signed_into(env, writer, type: str, payload: dict, *, chain: str | None = None) -> Event:
+    """A correctly signed, domain-bound event appended by hand to `writer`'s MAIN log
+    file (for history the current writer library would route or refuse)."""
+    from ledger.hub_admission import signing_domain
+    from ledger.keys import sign
+    path = writer.log.path
+    lines = path.read_text().splitlines() if path.exists() else []
+    tail = from_line(lines[-1]) if lines else None
+    cfg = hubmod.load_config(writer.space_dir)
+    body = body_dict(tail.seq + 1 if tail else 0, f"{_real_ms():013d}.0000.{writer.actor}", writer.actor, type,
+                     payload, tail.hash if tail else "GENESIS", hub=cfg.hub_id,
+                     domain=signing_domain(cfg.space_id, cfg.hub_id, chain or writer.log.log_name))
+    e = Event(**body, hash=compute_hash(body), sig=sign(writer.actor, canonical_bytes(body), keys_dir=env.keys_dir))
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(to_line(e) + "\n")
+    return e
+
+
+class _Lying(hubmod.LocalTransport):
+    """An endpoint that overstates what the hub holds."""
+
+    def status(self):
+        st = dict(super().status())
+        st["watermarks"] = {k: v + 5 for k, v in st.get("watermarks", {}).items()}
+        st.pop("frontiers", None)
+        return st
+
+
+def test_audit11_replay_verifies_the_common_prefix_before_skipping_anything(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    wa = env.writer("wa", t)
+    for i in range(2):
+        wa.append("item.create", {"id": f"t{i}", "title": f"task {i}"})
+    # wa's log forks: a second copy of it (another machine, restored from the
+    # same backup) appends a different seq 2 and reaches the hub first.
+    twin_dir = env.tmp / "wa-twin-space"
+    shutil.copytree(wa.space_dir, twin_dir)
+    twin = hubmod.HubWriter(twin_dir, "wa", t, keys_dir=env.keys_dir, registry_path=env.registry,
+                            state_dir=env.tmp / "wstate" / "wa-twin", clock=env.clock)
+    twin.append("item.create", {"id": "t2-twin", "title": "the twin's seq 2"})
+    t.down = True
+    wa.append("item.create", {"id": "t2", "title": "wa's own seq 2"})
+    t.down = False
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wa.replay()                                      # used to skip seq 2 and clear the outage
+    assert exc.value.code == "diverged", exc.value
+    assert wa.outage() is not None                       # not reconciled: the outage stays
+    # An endpoint that overstates the hub's frontier cannot make the writer skip.
+    wb = env.writer("wb", t)
+    wb.append("item.create", {"id": "b0", "title": "first"})
+    t.down = True
+    wb.append("item.create", {"id": "b1", "title": "buffered"})
+    with pytest.raises(hubmod.HubRefused) as exc:
+        hubmod.HubWriter(wb.space_dir, "wb", _Lying(hub), keys_dir=env.keys_dir, registry_path=env.registry,
+                         state_dir=env.tmp / "wstate" / "wb", clock=env.clock).replay()
+    assert exc.value.code == "bad_frontier", exc.value
+
+
+def test_audit11_a_refused_event_already_in_the_writer_log_is_kept_as_a_rejected_proposal(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa = env.writer("own", t), env.writer("wa", t)
+    owner.append("item.create", {"id": "t1", "title": "task"})
+    git_pull(env.hub_dir, wa.space_dir)
+    t.down = True
+    wa.log.append("item.lease", {"id": "t1", "holder": "wa", "granted_ms": 0, "expires_ms": 1})   # signed, local
+    wa.append("item.create", {"id": "t2", "title": "after it"})
+    t.down = False
+    replayed = wa.replay()
+    assert [r["status"] for r in replayed] == ["rejected", "accepted"], replayed
+    rejects = [e for e in read_events(env.hub_dir) if e.type == "ledger.reject"]
+    assert len(rejects) == 1 and rejects[0].actor == GRANTOR
+    _, state = hub._state()
+    assert state.items["t1"].lease_holder is None and "t2" in state.items
+    # The chain is continuous and settles: the seal covers it, the writer's receipt confirms.
+    git = _published(env, hub, [owner, wa])
+    report = wa.receipt_check(git, hub_actor=GRANTOR)
+    assert report["status"] == "confirmed", report
+
+
+def test_audit11_a_telemetry_event_in_the_main_log_is_imported_into_the_main_log(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    wa = env.writer("wa", t)
+    wa.append("item.create", {"id": "t1", "title": "task"})
+    legacy = _signed_into(env, wa, "metric.attest", {"metric": "tokens", "value": 3})
+    wa.append("item.create", {"id": "t2", "title": "after it"})
+    wa.replay()
+    hub_main = [from_line(ln) for ln in (env.hub_dir / ".datacore" / "events" / "wa.jsonl").read_text().splitlines()]
+    assert legacy.hash in [e.hash for e in hub_main]
+    assert (env.hub_dir / ".datacore" / "events" / "wa.jsonl").read_bytes() == wa.log.path.read_bytes()
