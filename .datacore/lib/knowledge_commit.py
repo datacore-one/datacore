@@ -418,10 +418,10 @@ def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, 
             else:
                 publication.verified = True
     finally:
-        errors = []
+        errors, retired = [], []
         for path in reversed(created):
             try:
-                retire_worktree(repo, path)
+                retired.append(retire_worktree(repo, path).path)
             except RuntimeError as exc:
                 errors.append(str(exc))
         if errors:
@@ -429,6 +429,14 @@ def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, 
     if push:
         # A later local branch advance is not part of this publication.
         _push_commit(repo, branch, sha or base)
+        # Pushed: both checkouts are now copies. Reclaim them under the
+        # collector's proof; trouble leaves them, never fails a landed push.
+        try:
+            import publication_workspace_gc
+            for path in retired:
+                publication_workspace_gc.reclaim_worktree(repo, path)
+        except Exception:
+            pass
     return sha
 
 
