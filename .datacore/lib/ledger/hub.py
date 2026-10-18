@@ -41,11 +41,13 @@ RULES THIS MODULE ENFORCES
   * The hub never verifies its own seal. Writers do (`receipt_check`), and any
     other host may (`seal.verify_seal`).
 
-THE STEP-5 SLOT. `eligibility(item, actor, state) -> reason | None` decides
+ELIGIBILITY. `eligibility(item, actor, state) -> reason | None` decides
 whether `actor` may lease `item`. The default is the assignee rule: an item
 addressed to one exact writer is leasable by that writer only; an unaddressed
-item and a pool item (`role`) are refused. Roles, pool membership and daily
-budgets (amendment F) replace this hook; nothing else in the hub changes.
+item and a pool item (`role`) are refused. A space that opts in to pools
+(`enable_pools`, amendment F) uses `pool_rule` instead: items without a role
+keep the assignee rule; a pool item needs a DONE_WHEN and a live `member.role`
+in this hub's own log, and the role's daily `pool.budget` caps new leases.
 """
 
 from __future__ import annotations
@@ -62,12 +64,16 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable
 
-from .events import EVENT_TYPES, HUB_EVENT_TYPES, Event, canonical_bytes, event_body, from_line, to_line
+from .events import (EVENT_TYPES, HUB_EVENT_TYPES, POOL_EVENT_TYPES, Event, canonical_bytes, event_body,
+                     from_line, to_line)
 from .log import HubSigningRequired  # noqa: F401 -- re-exported: the hub's refusal to write unsigned
 
 CONFIG = ".datacore/ledger-hub.json"
 #: Types only a hub writes. A writer submitting one is refused.
-HUB_ONLY_TYPES = HUB_EVENT_TYPES | {"ledger.seal"}
+HUB_ONLY_TYPES = HUB_EVENT_TYPES | POOL_EVENT_TYPES | {"ledger.seal"}
+#: Role definitions (amendment F). A role recorded in a hub must be one of these.
+ROLES_DIR = Path(__file__).resolve().parents[2] / "templates" / "roles"
+_ROLE = re.compile(r"[a-z][a-z0-9_-]*(\.[a-z0-9_-]+)*")
 #: A signed request older or newer than this (hub clock) is refused.
 REQUEST_WINDOW_MS = 5 * 60 * 1000
 DEFAULT_LEASE_TTL_S = 900
@@ -111,6 +117,8 @@ class HubConfig:
     promoted_by: str = ""
     promoted_at: str = ""
     promote_reason: str = ""
+    #: Role pools (amendment F). Off unless the owner runs `enable_pools`.
+    pools: bool = False
 
 
 def load_config(space_dir) -> HubConfig | None:
@@ -133,6 +141,8 @@ def load_config(space_dir) -> HubConfig | None:
         raise ValueError(f"{path}: hub_id and grantor must be lowercase names")
     if type(cfg.lease_ttl_s) is not int or cfg.lease_ttl_s <= 0:
         raise ValueError(f"{path}: lease_ttl_s must be a positive integer")
+    if type(cfg.pools) is not bool:
+        raise ValueError(f"{path}: pools must be true or false")
     return cfg if cfg.enabled else None
 
 
@@ -183,6 +193,20 @@ def promote(space_dir, new_grantor: str, *, by: str, reason: str) -> HubConfig:
     return cfg
 
 
+def enable_pools(space_dir, on: bool = True) -> HubConfig:
+    """The owner opts a hub space in to role pools (amendment F), or back out.
+
+    Off by default. With pools off the hub keeps the assignee rule only, and
+    records no membership or budget. Commit the changed config.
+    """
+    cfg = load_config(space_dir)
+    if cfg is None:
+        raise HubRefused("hub_off", f"{space_dir} has no hub; pools need one (`enable` first)")
+    cfg = replace(cfg, pools=bool(on))
+    _write_config(space_dir, cfg)
+    return cfg
+
+
 # ── signed requests ─────────────────────────────────────────────────────────
 
 def _unsigned(req: dict) -> bytes:
@@ -226,6 +250,43 @@ def assignee_rule(item, actor: str, state) -> str | None:
     return None
 
 
+# ── role pools (amendment F) ─────────────────────────────────────────────────
+
+def known_role(role: str) -> bool:
+    """A role name defined in `.datacore/templates/roles/` (any name when that
+    directory is absent, e.g. in a stripped-down install)."""
+    if not isinstance(role, str) or not _ROLE.fullmatch(role):
+        return False
+    if not ROLES_DIR.is_dir():
+        return True
+    return (ROLES_DIR / f"{role}.base.md").exists() or (ROLES_DIR / f"{role}.md").exists()
+
+
+def pool_rule(item, actor: str, state, *, hub_id: str, grantor: str, now_ms: int) -> str | None:
+    """Eligibility in a space with pools on.
+
+    An item with no `role` is judged by the assignee rule exactly as before (an
+    unaddressed item is still not dispatched). A pool item names a role and no
+    assignee, carries a DONE_WHEN, and is leased only to an actor whose live
+    membership in THIS hub holds the role. The fold applies the same membership
+    rule to every lease (`fold._handle_lease`), so a grant that skips this check
+    does not become a lease anywhere. The daily budget is checked by the hub
+    after this (`budget_reached`), because it is about the day, not the actor.
+    """
+    from .fold import done_when_of, role_live
+    payload = getattr(item, "payload", None) or {}
+    role = payload.get("role")
+    if not role:
+        return assignee_rule(item, actor, state)
+    if payload.get("assignee"):
+        return "both an assignee and a role: address it to one writer or to a pool, not both"
+    if not done_when_of(payload):
+        return "a pool item needs a DONE_WHEN before anyone may lease it"
+    if not role_live(state, hub_id, grantor, actor, str(role), now_ms):
+        return f"{actor!r} holds no live membership of role {role!r} in hub {hub_id!r}"
+    return None
+
+
 # ── the hub ─────────────────────────────────────────────────────────────────
 
 def _event_dict(e: Event) -> dict:
@@ -264,7 +325,9 @@ class Hub:
         self.actor = actor
         self.keys_dir, self.registry_path = keys_dir, registry_path
         self.clock = clock or _wall_ms
-        self.eligibility: Eligibility = eligibility or assignee_rule
+        #: An explicit override, or None: the assignee rule, or `pool_rule`
+        #: when the space has opted in to pools (decided per request).
+        self.eligibility: Eligibility | None = eligibility
         self.started_ms = self.clock()
         self.closed = False
         self._mutex = threading.RLock()
@@ -359,8 +422,19 @@ class Hub:
                 code = ("bad_signature" if any("signature" in t for t in texts)
                         else "bad_hash" if any("hash mismatch" in t for t in texts) else "bad_chain")
                 raise HubRefused(code, "; ".join(texts))
+            not_counted = None
+            if cfg.pools and event.type in ("item.complete", "item.verify"):
+                # Accepted all the same: a signed fact refused here would strand
+                # the writer's chain behind it. The fold does not count it, and
+                # the receipt says so at once (HubWriter refuses before writing).
+                from .fold import pool_refusal
+                _, state = self._state()
+                item = state.items.get((event.payload or {}).get("id") or "")
+                not_counted = pool_refusal(item, event.type, event.actor) if item else None
             self._write_line(path, event)
             receipt = self._receipt("accepted", cfg, chain, event)
+            if not_counted:
+                receipt["not_counted"] = not_counted
             self._record_conflicts(event)
             return receipt
 
@@ -478,9 +552,23 @@ class Hub:
                 raise HubRefused("claimed", f"{item_id} is {item.status} outside a lease (owner {item.owner})")
             if item.edit_conflicts:
                 raise HubRefused("conflicted", f"{item_id} has unresolved edit conflicts")
-            why = self.eligibility(item, actor, state)
+            if self.eligibility is not None:
+                why = self.eligibility(item, actor, state)
+            elif cfg.pools:
+                why = pool_rule(item, actor, state, hub_id=cfg.hub_id, grantor=self.actor, now_ms=now)
+            else:
+                why = assignee_rule(item, actor, state)
             if why:
                 raise HubRefused("not_eligible", why)
+            role = (item.payload or {}).get("role")
+            if cfg.pools and role:
+                from .fold import pool_budget, pool_spent
+                cap = pool_budget(state, cfg.hub_id, self.actor, str(role))
+                spent = pool_spent(state, str(role), now)
+                if cap is not None and spent >= cap:
+                    raise HubRefused("budget_reached", f"the {role!r} pool has spent {spent} of its {cap} "
+                                     "cents today; no new leases until tomorrow (UTC)",
+                                     spent=spent, cap=cap)
             event = self.log.append("item.lease", {
                 "id": item_id, "holder": actor, "granted_ms": now,
                 "expires_ms": now + cfg.lease_ttl_s * 1000,
@@ -501,6 +589,47 @@ class Hub:
                 "id": item_id, "holder": actor, "renewed_ms": now, "expires_ms": now + cfg.lease_ttl_s * 1000,
                 "lease": {k: (item.lease_ref or {}).get(k) for k in ("log", "seq", "hash")}})
             return {"status": "renewed", "lease": _event_dict(event), "log": self.log.log_name}
+
+    # ── pool membership and budget (amendment F) ────────────────────────────
+    def _pool_writable(self) -> HubConfig:
+        cfg = self._writable(grant=True)
+        if not cfg.pools:
+            raise HubRefused("pools_off", f"{self.space_dir} has not opted in to pools (`enable_pools`)")
+        return cfg
+
+    def record_role(self, actor: str, role: str, *, from_ms: int | None = None,
+                    until_ms: int | None = None) -> dict:
+        """Record that `actor` holds `role` in this hub from `from_ms` until
+        `until_ms` (hub clock; None = from now / open-ended). A later record for
+        the same actor and role replaces it, so ending a membership early is a
+        record with `until_ms` set to now."""
+        with self._mutex:
+            self._pool_writable()
+            if not isinstance(actor, str) or not _NAME.fullmatch(actor):
+                raise HubRefused("malformed", f"invalid actor {actor!r}")
+            if not known_role(role):
+                raise HubRefused("unknown_role", f"{role!r} is not a role defined in {ROLES_DIR}")
+            start = self.clock() if from_ms is None else from_ms
+            for v in (start, until_ms):
+                if v is not None and (isinstance(v, bool) or not isinstance(v, int)):
+                    raise HubRefused("malformed", "from_ms and until_ms are integer milliseconds")
+            if until_ms is not None and until_ms < start:
+                raise HubRefused("malformed", "a membership cannot end before it starts")
+            event = self.log.append("member.role", {"actor": actor, "role": role,
+                                                    "from": start, "until": until_ms})
+            return {"status": "recorded", "event": _event_dict(event)}
+
+    def set_budget(self, role: str, cents_per_day: int) -> dict:
+        """The role pool's daily spending cap, in cents (0 closes the pool)."""
+        with self._mutex:
+            self._pool_writable()
+            if not known_role(role):
+                raise HubRefused("unknown_role", f"{role!r} is not a role defined in {ROLES_DIR}")
+            if isinstance(cents_per_day, bool) or not isinstance(cents_per_day, int) or cents_per_day < 0:
+                raise HubRefused("malformed", "cents_per_day is a non-negative integer")
+            event = self.log.append("pool.budget", {"role": role, "space": self.space_dir.name,
+                                                    "cents_per_day": cents_per_day})
+            return {"status": "recorded", "event": _event_dict(event)}
 
     # ── the second confirmation's raw material ─────────────────────────────
     def seal(self) -> dict:
@@ -686,6 +815,7 @@ class HubWriter:
 
     def append(self, type: str, payload: dict) -> tuple[Event, dict | None]:
         """Append locally, then submit. Returns (event, receipt or None if buffered)."""
+        self._pool_precheck(type, payload)
         event = self.log.append(type, payload, after=self._floor())
         try:
             receipt = self.transport.append(self._submission(event))
@@ -701,6 +831,24 @@ class HubWriter:
             return event, receipt
         self._clear_outage()
         return event, receipt
+
+    def _pool_precheck(self, type: str, payload: dict) -> None:
+        """Refuse, before anything is written, a pool completion or check the
+        fold would not count: the holder's own check, a completion without a
+        DONE_WHEN. Judged on this writer's copy of the log plus its own lease
+        receipts; what it cannot see the hub reports as `not_counted`."""
+        if not self.cfg.pools or type not in ("item.complete", "item.verify"):
+            return
+        from .fold import fold, pool_refusal
+        from .log import read_events
+        iid = (payload or {}).get("id")
+        item = fold(read_events(self.space_dir)).items.get(iid) if isinstance(iid, str) else None
+        why = pool_refusal(item, type, self.actor) if item is not None else None
+        if (not why and type == "item.verify" and (item is None or item.lease_holder is None)
+                and any(r.get("item") == iid for r in self.receipts())):
+            why = "own_check: the lease holder cannot check its own work; another actor must"
+        if why:
+            raise HubRefused(why.split(":", 1)[0], why)
 
     def _local_chains(self) -> list[tuple[str, list[Event]]]:
         from .log import TELEMETRY_SUFFIX
@@ -838,11 +986,16 @@ def main(argv=None) -> int:
     pr.add_argument("grantor")
     pr.add_argument("--by", required=True)
     pr.add_argument("--reason", required=True)
+    po = sub.add_parser("pools", help="opt a hub space in to (or out of) role pools (owner)")
+    po.add_argument("space")
+    po.add_argument("--off", action="store_true")
     sh = sub.add_parser("show", help="print a space's hub config")
     sh.add_argument("space")
     a = ap.parse_args(argv)
     if a.cmd == "enable":
         cfg = enable(a.space, hub_id=a.hub_id, grantor=a.grantor, lease_ttl_s=a.lease_ttl_s)
+    elif a.cmd == "pools":
+        cfg = enable_pools(a.space, on=not a.off)
     elif a.cmd == "promote":
         cfg = promote(a.space, a.grantor, by=a.by, reason=a.reason)
     else:

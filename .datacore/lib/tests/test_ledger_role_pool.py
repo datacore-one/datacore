@@ -22,6 +22,7 @@ Keys are generated in tmp dirs; the real ~/.datacore/keys is never touched.
 """
 from __future__ import annotations
 
+import sys
 import types
 from pathlib import Path
 
@@ -31,7 +32,8 @@ from ledger import hub as hubmod
 from ledger.events import Event, body_dict, compute_hash
 from ledger.fold import fold, pool_accepted, role_live
 from ledger.log import read_events
-from test_ledger_hub import GRANTOR, HUB_ID, Clock, allow_any, git_pull
+sys.path.insert(0, str(Path(__file__).parent))
+from test_ledger_hub import GRANTOR, HUB_ID, Clock, allow_any, git_pull  # noqa: E402
 
 DAY_MS = 24 * 3600 * 1000
 #: 2027-01-15T08:00:00Z -- far enough from midnight that a few hours do not cross it.
@@ -51,9 +53,14 @@ class PoolEnv:
         monkeypatch.delenv("DATACORE_SEQUENCER", raising=False)
         monkeypatch.delenv("DATACORE_LEDGER_SIGN", raising=False)
         self.clock = Clock(START)
-        # Every HLC stamp follows the test clock, so "the day" of a spend is the
-        # hub's day and a simulated midnight is a real one.
-        monkeypatch.setattr(hlc, "time", types.SimpleNamespace(time=lambda: self.clock() / 1000))
+        # Every HLC stamp (and the log's skew guard) follows the test clock, so
+        # "the day" of a spend is the hub's day and a simulated midnight is real.
+        import time as _time
+        import ledger.log as logmod
+        fake = types.SimpleNamespace(**{k: getattr(_time, k) for k in dir(_time) if not k.startswith("_")})
+        fake.time = lambda: self.clock() / 1000
+        monkeypatch.setattr(hlc, "time", fake)
+        monkeypatch.setattr(logmod, "time", fake)
         self.hub_dir = tmp / "hub-space"
         (self.hub_dir / ".datacore" / "events").mkdir(parents=True)
         hubmod.enable(self.hub_dir, hub_id=HUB_ID, grantor=GRANTOR, lease_ttl_s=900)
@@ -271,7 +278,8 @@ def test_completion_is_accepted_only_after_another_actors_check(env):
     item = env.item("p1")
     assert item.status == "completed" and not pool_accepted(item), item.history
 
-    # A different actor's check is what accepts it.
+    # A different actor's check is what accepts it (the checker reads the work first).
+    git_pull(env.hub_dir, wb.space_dir)
     wb.append("item.verify", {"id": "p1", "check": DONE})
     item = env.item("p1")
     assert item.status == "verified" and pool_accepted(item)
@@ -379,6 +387,7 @@ def test_worked_example_research_space(env):
     assert wa.request_lease("competitor-scan")["status"] == "granted"
     wa.append("spend.record", {"item": "competitor-scan", "cents": 120, "model": "test"})
     wa.append("item.complete", {"id": "competitor-scan", "result": "summary attached"})
+    git_pull(env.hub_dir, wb.space_dir)                                      # wb reads the result
     wb.append("item.verify", {"id": "competitor-scan", "check": DONE})
     state = fold(read_events(env.hub_dir))
     assert pool_accepted(state.items["competitor-scan"])

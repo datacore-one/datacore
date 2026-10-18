@@ -133,6 +133,14 @@ class LedgerState:
     items: dict[str, ItemState] = field(default_factory=dict)
     spend: dict[str, int] = field(default_factory=dict)
     orphans: list[str] = field(default_factory=list)
+    #: ROLE POOLS (amendment F). "hub|grantor|actor|role" -> {from, until}, from
+    #: `member.role` in a hub's own log; the latest record for a key wins.
+    members: dict[str, dict] = field(default_factory=dict)
+    #: "hub|grantor|role" -> {cents_per_day, space}, from `pool.budget`.
+    budgets: dict[str, dict] = field(default_factory=dict)
+    #: "role|YYYY-MM-DD" (UTC day of the spend's HLC) -> cents, from hub-stamped
+    #: `spend.record` events naming a pool item.
+    pool_spend: dict[str, int] = field(default_factory=dict)
 
     def state_root(self) -> str:
         """One hash over the WHOLE folded state — items, spend and orphans.
@@ -185,6 +193,11 @@ class LedgerState:
             h.update(canonical_bytes({"key": iid, "item": document}))
         h.update(canonical_bytes({"spend": dict(sorted(self.spend.items()))}))
         h.update(canonical_bytes({"orphans": sorted(self.orphans)}))
+        # Pool state enters the root only once it exists, so every space that
+        # never used pools keeps the roots its seals already name.
+        if self.members or self.budgets or self.pool_spend:
+            h.update(canonical_bytes({"pools": {"members": self.members, "budgets": self.budgets,
+                                                "spend": self.pool_spend}}))
         return h.hexdigest()
 
 
@@ -390,6 +403,10 @@ def _handle_complete(state: LedgerState, event: Event) -> None:
     if item.owner != event.actor:
         _note(item, event, f"no-op (not owner, owner={item.owner!r})")
         return
+    why = pool_refusal(item, event.type, event.actor)
+    if why:
+        _note(item, event, f"no-op ({why})")
+        return
     item.status = "completed"
     item.closed_at = event.hlc
     _note(item, event, "applied")
@@ -447,6 +464,10 @@ def _handle_verify(state: LedgerState, event: Event) -> None:
         return
     if item.status != "completed":
         _note(item, event, f"no-op (illegal transition from status={item.status})")
+        return
+    why = pool_refusal(item, event.type, event.actor)
+    if why:
+        _note(item, event, f"no-op ({why})")
         return
     # Separation of duties: the owner completed it (`_handle_complete`
     # requires owner == actor), so the owner verifying is the judge being the
@@ -604,6 +625,15 @@ def _handle_spend(state: LedgerState, event: Event) -> None:
         state.orphans.append(f"{event.hlc} spend.record invalid")
         return
     state.spend[event.actor] = state.spend.get(event.actor, 0) + cents
+    # A pool's daily spending: hub-stamped spend on an item that names a role.
+    # Unstamped (pre-hub) spend never counts, so old folds are unchanged.
+    item_id = event.payload.get("item")
+    item = state.items.get(item_id) if isinstance(item_id, str) and getattr(event, "hub", "") else None
+    role = (item.payload or {}).get("role") if item is not None else None
+    day = _utc_day(event.hlc) if role else None
+    if role and isinstance(role, str) and day:
+        key = f"{role}|{day}"
+        state.pool_spend[key] = state.pool_spend.get(key, 0) + cents
 
 
 def _handle_reopen(state: LedgerState, event: Event) -> None:
@@ -701,6 +731,19 @@ def _handle_lease(state: LedgerState, event: Event) -> None:
         return
     granted, expires = times
     ref = _lease_ref(event)
+    role = (item.payload or {}).get("role")
+    if role:
+        # A POOL ITEM (amendment F): leased only to a live member of the role in
+        # the granting hub's own membership, and only with a DONE_WHEN. The hub
+        # refuses such a grant; if one is written anyway it is a recorded
+        # conflict in every copy, never a lease.
+        if not isinstance(role, str) or not role_live(state, event.hub, event.actor, holder, role, granted):
+            _lease_conflict(item, event, f"lease to {holder!r}, who holds no live membership of role {role!r} "
+                                         f"in hub {event.hub!r}")
+            return
+        if not done_when_of(item.payload):
+            _lease_conflict(item, event, f"lease of a pool item with no DONE_WHEN to {holder!r}")
+            return
     if item.status in ("completed", "verified", "archived"):
         _note(item, event, f"no-op (lease illegal from status={item.status})")
         return
@@ -770,7 +813,109 @@ def _handle_lease_conflict(state: LedgerState, event: Event) -> None:
     _note(item, event, "recorded (lease conflict)")
 
 
+# ── ROLE POOLS (DIP-0034 October 2026 amendment, section F) ─────────────────
+#
+# Roles belong to membership, not to the actor: `member.role` in a hub's OWN log
+# says that actor holds that role in that hub for a window of hub-clock time.
+# Only a hub writes it (the hub refuses it from writers), and only a membership
+# recorded by the same hub log that granted a lease counts for that lease, so a
+# writer cannot make itself a member and one hub's members are not another's.
+
+def _utc_day(hlc: str) -> str | None:
+    """The UTC calendar day of an HLC stamp ("YYYY-MM-DD"), or None if unreadable."""
+    import time
+    try:
+        ms = int(str(hlc).split(".", 1)[0])
+        return time.strftime("%Y-%m-%d", time.gmtime(ms / 1000))
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def utc_day_ms(ms: int) -> str:
+    import time
+    return time.strftime("%Y-%m-%d", time.gmtime(ms / 1000))
+
+
+def done_when_of(payload: dict) -> str:
+    """An item's DONE_WHEN: `done_when` in its payload, or the org property."""
+    payload = payload or {}
+    dw = payload.get("done_when")
+    if not dw:
+        props = (payload.get("org") or {}).get("properties") if isinstance(payload.get("org"), dict) else None
+        dw = (props or {}).get("DONE_WHEN") if isinstance(props, dict) else None
+    return dw.strip() if isinstance(dw, str) else ""
+
+
+def is_pool_item(item) -> bool:
+    """A role-addressed item that a hub has leased (the only kind pool rules touch)."""
+    return bool((getattr(item, "payload", None) or {}).get("role")) and getattr(item, "lease_ref", None) is not None
+
+
+def pool_refusal(item, etype: str, actor: str) -> str | None:
+    """Why the fold will not count this completion or check of a pool item."""
+    if item is None or not is_pool_item(item):
+        return None
+    if etype == "item.complete" and not done_when_of(item.payload):
+        return "no_done_when: a pool item's completion needs a DONE_WHEN"
+    if etype == "item.verify" and actor == item.lease_holder:
+        return "own_check: the lease holder cannot check its own work; another actor must"
+    return None
+
+
+def pool_accepted(item) -> bool:
+    """A pool item's completion is accepted only once another actor checked it."""
+    return is_pool_item(item) and item.status == "verified"
+
+
+def role_live(state: LedgerState, hub: str, grantor: str, actor: str, role: str, at_ms: int) -> bool:
+    m = state.members.get(f"{hub}|{grantor}|{actor}|{role}")
+    if not m or not hub:
+        return False
+    return m["from"] <= at_ms and (m["until"] is None or at_ms < m["until"])
+
+
+def pool_budget(state: LedgerState, hub: str, grantor: str, role: str) -> int | None:
+    b = state.budgets.get(f"{hub}|{grantor}|{role}")
+    return None if b is None else b["cents_per_day"]
+
+
+def pool_spent(state: LedgerState, role: str, now_ms: int) -> int:
+    return state.pool_spend.get(f"{role}|{utc_day_ms(now_ms)}", 0)
+
+
+def _ms_or_none(v) -> tuple[bool, int | None]:
+    if v is None:
+        return True, None
+    if isinstance(v, bool) or not isinstance(v, int):
+        return False, None
+    return True, v
+
+
+def _handle_member_role(state: LedgerState, event: Event) -> None:
+    p = event.payload or {}
+    actor, role = p.get("actor"), p.get("role")
+    ok_from, start = _ms_or_none(p.get("from"))
+    ok_until, until = _ms_or_none(p.get("until"))
+    if (not getattr(event, "hub", "") or not isinstance(actor, str) or not actor
+            or not isinstance(role, str) or not role or not ok_from or not ok_until or start is None):
+        state.orphans.append(f"{event.hlc} member.role invalid")
+        return
+    state.members[f"{event.hub}|{event.actor}|{actor}|{role}"] = {"from": start, "until": until}
+
+
+def _handle_pool_budget(state: LedgerState, event: Event) -> None:
+    p = event.payload or {}
+    role, cap = p.get("role"), p.get("cents_per_day")
+    if (not getattr(event, "hub", "") or not isinstance(role, str) or not role
+            or isinstance(cap, bool) or not isinstance(cap, int) or cap < 0):
+        state.orphans.append(f"{event.hlc} pool.budget invalid")
+        return
+    state.budgets[f"{event.hub}|{event.actor}|{role}"] = {"cents_per_day": cap, "space": p.get("space")}
+
+
 _HANDLERS = {
+    "member.role": _handle_member_role,
+    "pool.budget": _handle_pool_budget,
     "item.lease": _handle_lease,
     "item.lease.renew": _handle_lease_renew,
     "item.lease.conflict": _handle_lease_conflict,

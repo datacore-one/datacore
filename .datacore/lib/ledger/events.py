@@ -106,6 +106,15 @@ EVENT_TYPES = frozenset(
 HUB_EVENT_TYPES = frozenset({"item.lease", "item.lease.renew", "item.lease.conflict"})
 EVENT_TYPES = EVENT_TYPES | HUB_EVENT_TYPES
 
+# ── ROLE POOLS (DIP-0034 October 2026 amendment, section F) ─────────────────
+# Membership facts in a hub's OWN log, written only by that hub:
+#   member.role  {actor, role, from, until}   -- the actor holds the role in this
+#                hub from `from` until `until` (hub-clock ms; until null = open)
+#   pool.budget  {role, space, cents_per_day} -- the role's daily spending cap
+# A writer submitting either is refused (ledger.hub HUB_ONLY_TYPES).
+POOL_EVENT_TYPES = frozenset({"member.role", "pool.budget"})
+EVENT_TYPES = EVENT_TYPES | POOL_EVENT_TYPES
+
 
 @dataclass
 class Event:
