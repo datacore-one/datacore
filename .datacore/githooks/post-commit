@@ -1,5 +1,8 @@
 #!/bin/sh
 # Global dispatcher: chain git-lfs post-commit for repos that use LFS.
 # (core.hooksPath bypasses per-repo .git/hooks, including LFS hooks.)
+# Agent receipts: queue this commit fingerprint when the provenance module is present and this repo is opted in on this machine (provenance_cli.py enable-commits). Never fails the commit: no network, output discarded.
+prov="$HOME/Data/.datacore/modules/provenance/lib/commit_hook.py"
+[ -f "$prov" ] && python3 "$prov" --if-enabled </dev/null >/dev/null 2>&1
 command -v git-lfs >/dev/null 2>&1 || exit 0
 git lfs post-commit "$@"
