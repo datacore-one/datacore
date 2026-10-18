@@ -263,3 +263,23 @@ def test_agent_wrap_up_cli_has_an_urgent_flag():
     p = subprocess.run([sys.executable, str(LIB / "agent_wrap_up.py"), "--help"],
                        capture_output=True, text=True, timeout=30)
     assert "--urgent" in p.stdout
+
+
+# ── 3. a policy answer for shell callers ───────────────────────────────────
+
+@pytest.mark.parametrize("mode, actor, urgent, expected", [
+    (None, "worker", False, "now"),
+    ("scheduled", "worker", False, "deferred"),
+    ("scheduled", "worker", True, "now"),
+    ("scheduled", "laptop", False, "now"),
+])
+def test_cli_policy_answers_now_or_deferred(fleet, mode, actor, urgent, expected):
+    """So a shell script (ledger-claim-pull.sh) can guard its push in one line."""
+    env = {k: v for k, v in os.environ.items() if k != "DATACORE_PUSH_MODE"}
+    if mode:
+        env["DATACORE_PUSH_MODE"] = mode
+    p = subprocess.run([sys.executable, str(LIB / "ledger_transport.py"), "policy",
+                        "--actor", actor, *(["--urgent"] if urgent else [])],
+                       capture_output=True, text=True, timeout=30, env=env)
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.strip() == expected

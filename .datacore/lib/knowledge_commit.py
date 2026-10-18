@@ -609,16 +609,39 @@ def _commit_selected(repo, branch, paths, message, push, append_only, reservatio
         raise GitError('publication failed; source data and recovery workspaces retained') from None
 
 
-def commit_knowledge(repo: Path, paths, message: str, push: bool = True) -> dict:
+def resolve_push(push: bool, actor: str | None = None, *, urgent: bool = False) -> bool:
+    """Whether a knowledge commit by `actor` pushes now.
+
+    An explicit push=False always wins. Otherwise the transport's policy
+    decides: on a host in scheduled mode (DATACORE_PUSH_MODE) an agent's commit
+    waits for the host's slot job, unless it is `urgent` (the briefing, an
+    answer the owner is waiting on). With no actor, this host's declared
+    writer is used. In the default mode this is always `push`.
+    """
+    if not push:
+        return False
+    from ledger_transport import push_mode, push_policy
+    if push_mode() != "scheduled":
+        return True                      # the default: nothing to resolve
+    if actor is None:
+        from actor_identity import this_actor
+        actor = this_actor()
+    return push_policy(actor, urgent=urgent) == "now"
+
+
+def commit_knowledge(repo: Path, paths, message: str, push: bool = True, *,
+                     actor: str | None = None, urgent: bool = False) -> dict:
     """Route each path to where it belongs, and land the knowledge half.
 
     Knowledge always goes to the default branch — no matter what HEAD is doing.
     Code is left alone: it belongs on whatever branch the agent is working on,
-    and merges via PR like it should.
+    and merges via PR like it should. Whether it is pushed now is
+    `resolve_push(push, actor, urgent=urgent)`; `pushed` in the result says.
     """
     repo = Path(repo)
     split = classify(paths)
     dflt = default_branch(repo)
+    push = resolve_push(push, actor, urgent=urgent)
 
     sha = ''
     if split['knowledge']:
@@ -631,6 +654,7 @@ def commit_knowledge(repo: Path, paths, message: str, push: bool = True) -> dict
         'knowledge': split['knowledge'],
         'code_left_alone': split['code'],
         'commit': sha,
+        'pushed': bool(sha) and push,
     }
 
 
@@ -638,11 +662,14 @@ def main() -> int:
     argv = [a for a in sys.argv[1:] if not a.startswith('--')]
     if len(argv) < 3:
         print(__doc__)
-        print("Usage: knowledge_commit.py <repo> <message> <path> [path...] [--no-push]")
+        print("Usage: knowledge_commit.py <repo> <message> <path> [path...] [--no-push] "
+              "[--actor=NAME] [--urgent]")
         return 2
 
     repo, message, paths = Path(argv[0]), argv[1], argv[2:]
-    r = commit_knowledge(repo, paths, message, push='--no-push' not in sys.argv)
+    actor = next((a.split('=', 1)[1] for a in sys.argv[1:] if a.startswith('--actor=')), None)
+    r = commit_knowledge(repo, paths, message, push='--no-push' not in sys.argv,
+                         actor=actor, urgent='--urgent' in sys.argv)
 
     print(f"{r['repo']}: HEAD={r['head']} -> knowledge landed on {r['default_branch']}")
     for p in r['knowledge']:

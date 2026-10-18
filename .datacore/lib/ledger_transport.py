@@ -750,17 +750,30 @@ def foreign_writer_logs(space: Path) -> list[tuple[str, str, str]]:
     return out
 
 
-def converge(space: Path, *, root: Path | None = None) -> Result:
-    """Apply the registered category at every entry point, including direct calls."""
+def converge(space: Path, *, root: Path | None = None, actor: str | None = None) -> Result:
+    """Apply the registered category at every entry point, including direct calls.
+
+    `actor` names the writer a loop converges for (the claim tick). On a host in
+    scheduled mode an agent's converge RECEIVES -- autosave, fetch, merge, the
+    same path as always -- and leaves publication to the host's slot job
+    (`publish_slot`). Without an actor, converge publishes as it always has.
+    """
     cat = classify(space, root)
     if not cat:
         return cat
     if cat.reason not in ('knowledge', 'agent-personal', 'code'):
         return Result(False, 'repository category does not permit synchronization', {})
+    receive_only = actor is not None and push_policy(actor) == "deferred"
     with _repo_lock(space):
         if cat.reason == 'code':
             outcome = _code_update(space)
             return Result(outcome == 'clean', f'code repository: {outcome}', {'outcome': outcome})
+        if receive_only:
+            res = _converge_locked(space, publish=False)
+            if not res:
+                return res
+            return Result(True, "received; publish deferred to this host's slot",
+                          {**res.context, "published": False, "deferred": "slot"})
         return _converge_locked(space)
 
 
@@ -1680,11 +1693,15 @@ def main(argv=None) -> int:
     import argparse
     ap = argparse.ArgumentParser(description="ledger transport")
     ap.add_argument("op", choices=["converge", "gaps", "classify", "sync", "status",
-                                   "publish-slot"])
+                                   "publish-slot", "policy"])
+    ap.add_argument("--urgent", action="store_true",
+                    help="policy: the owner is waiting on this event")
     ap.add_argument("--host", help="publish-slot: this host's row in config/push_slots.yaml")
     ap.add_argument("--force", action="store_true",
                     help="publish-slot: publish even outside the host's slot")
     ap.add_argument("--at", help="publish-slot: HH:MM to judge the slot by (default: now)")
+    ap.add_argument("--actor", help="converge: the writer this loop converges for; in "
+                                    "scheduled mode an agent receives and does not push")
     ap.add_argument("--space", type=Path, help="required for all ops except sync")
     ap.add_argument("--repo", help="sync: limit to one space by directory name")
     ap.add_argument("--root", type=Path, default=_data_root())
@@ -1699,6 +1716,13 @@ def main(argv=None) -> int:
         return sync_all(a.root, only=a.repo, quiet=a.quiet, include_code=not a.no_code)
     if a.op == "status":
         print("\n".join(status_lines(a.root)))
+        return 0
+    if a.op == "policy":
+        # `now` or `deferred` on stdout, for a shell caller to guard its push:
+        #   [ "$(ledger_transport.py policy --actor "$ACTOR")" = now ] && git push ...
+        if not a.actor:
+            ap.error("--actor is required for policy")
+        print(push_policy(a.actor, urgent=a.urgent))
         return 0
     if a.op == "publish-slot":
         if not a.host:
@@ -1716,7 +1740,12 @@ def main(argv=None) -> int:
         ap.error(f"--space is required for {a.op}")
     fn = {"converge": converge, "gaps": gaps, "classify": classify}[a.op]
     try:
-        res = fn(a.space) if a.op == 'gaps' else fn(a.space, root=a.root)
+        if a.op == 'gaps':
+            res = fn(a.space)
+        elif a.op == 'converge' and a.actor:
+            res = fn(a.space, root=a.root, actor=a.actor)
+        else:
+            res = fn(a.space, root=a.root)
     except Exception as exc:  # noqa: BLE001 -- answer with the cause, never a bare traceback
         said = " ".join(str(exc).split())[:300]
         res = Result(False, f"{a.op} could not run: {type(exc).__name__}"
