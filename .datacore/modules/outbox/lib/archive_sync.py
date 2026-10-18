@@ -261,7 +261,7 @@ class ServerArchiver:
             full_dir = f"{abs_repo}/{dest_dir}"
             self._ssh_command(f"mkdir -p {shlex.quote(full_dir)}")
 
-        # Copy main file using rsync (handles spaces in paths)
+        # Copy main file; True only when the server's sha256 matches
         full_dest = f"{abs_repo}/{item.archive_dest}"
         success, msg = self._rsync_file(item.source_path, full_dest)
         if not success:
@@ -277,23 +277,40 @@ class ServerArchiver:
         return True, "OK"
 
     def _rsync_file(self, local_path: Path, remote_abs_path: str) -> Tuple[bool, str]:
-        """Copy file to server via rsync.
+        """Copy a file to the server and confirm the server holds the same bytes.
 
-        -s (protect args) keeps the remote side from shell-interpreting the
-        path — spaces survive plain -a, but a NEWLINE in a filename broke the
-        remote command and failed nightshift-outbox nightly (observed
-        2026-07-29: a roam-export page with an embedded newline).
+        The caller deletes the local file when this returns True, so True means
+        the remote sha256 matched, not merely that a copy command exited 0.
+
+        Plain ssh with every path shell-quoted, not rsync: macOS ships openrsync,
+        which rejects `-s`, and the first real run on 2026-10-18 failed on every
+        file. Quoting keeps spaces and newlines in names intact (a roam-export
+        page with an embedded newline broke the remote command on 2026-07-29).
+        The file is written to a temporary name and renamed, so an interrupted
+        copy never sits at the real path. The hash reads stdin: with a filename
+        argument, sha256sum escapes odd names and prefixes the hash with `\\`.
         """
+        q = shlex.quote
+        part = f"{remote_abs_path}.part-archive"
+        cmd = (f"mkdir -p {q(os.path.dirname(remote_abs_path))} && cat > {q(part)} && "
+               f"mv -f {q(part)} {q(remote_abs_path)} && "
+               f"{{ sha256sum < {q(remote_abs_path)} 2>/dev/null || shasum -a 256 < {q(remote_abs_path)}; }}")
         try:
-            result = subprocess.run(
-                ["rsync", "-a", "-s", str(local_path), f"{self.host}:{remote_abs_path}"],
-                capture_output=True, text=True, timeout=120
-            )
-            return result.returncode == 0, result.stdout + result.stderr
+            with open(local_path, "rb") as fh:
+                result = subprocess.run(["ssh", self.host, cmd], stdin=fh,
+                                        capture_output=True, timeout=300)
         except subprocess.TimeoutExpired:
-            return False, "rsync timed out"
+            return False, "copy timed out"
         except Exception as e:
             return False, str(e)
+        out = result.stdout.decode(errors="replace")
+        if result.returncode != 0:
+            return False, (out + result.stderr.decode(errors="replace")).strip()
+        remote_sha = out.split()[0] if out.split() else ""
+        local_sha = hashlib.sha256(local_path.read_bytes()).hexdigest()
+        if remote_sha != local_sha:
+            return False, f"checksum mismatch after copy (local {local_sha[:12]}, server {remote_sha[:12] or 'none'})"
+        return True, "OK"
 
     def commit_changes(self, space: str, items: List[ArchiveItem]) -> Tuple[bool, str]:
         """Commit and push changes to archive repo."""
