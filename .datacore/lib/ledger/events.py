@@ -111,7 +111,11 @@ EVENT_TYPES = frozenset(
 # for: a captured event cannot be replayed into another space, another hub or
 # another of its writer's logs. Absent (protocol 1) on every older event, whose
 # bytes therefore do not change. ledger.hub_admission checks it.
-HUB_EVENT_TYPES = frozenset({"item.lease", "item.lease.renew", "item.lease.conflict"})
+#
+# item.lease.expire (audit finding 9) ends one lease attempt explicitly,
+# written by the grantor before any regrant; it records the holder-log
+# frontier the grantor held, so a result admitted after it is told apart.
+HUB_EVENT_TYPES = frozenset({"item.lease", "item.lease.renew", "item.lease.expire", "item.lease.conflict"})
 EVENT_TYPES = EVENT_TYPES | HUB_EVENT_TYPES
 
 

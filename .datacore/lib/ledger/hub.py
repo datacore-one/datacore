@@ -144,6 +144,9 @@ class HubConfig:
     previous_grantors: tuple = ()
     #: Who besides the grantor may request a seal over the network (finding 18).
     seal_operators: tuple = ()
+    #: The grantor's promotion epoch (0 at `enable`, +1 per `promote`). Leases
+    #: are ordered by (epoch, grantor-log seq) (audit finding 8).
+    epoch: int = 0
 
 
 def load_config(space_dir) -> HubConfig | None:
@@ -278,7 +281,7 @@ def promote(space_dir, new_grantor: str, *, by: str, reason: str) -> HubConfig:
     previous = tuple(dict.fromkeys((*cfg.previous_grantors, cfg.grantor)))
     previous = tuple(g for g in previous if g != new_grantor)
     cfg = replace(cfg, grantor=new_grantor, promoted_by=by, promoted_at=_iso_now(), promote_reason=reason,
-                  previous_grantors=previous)
+                  previous_grantors=previous, epoch=cfg.epoch + 1)
     _write_config(space_dir, cfg)
     return cfg
 
@@ -602,7 +605,7 @@ class Hub:
 
     def request_lease(self, req: dict) -> dict:
         """Grant `req["item"]` to the signing actor if no live lease exists."""
-        from .fold import lease_live
+        from .fold import lease_live, task_content_hash
         with self._mutex:
             cfg = self._writable(grant=True)
             actor = self._verify_request(req, "lease.request", cfg)
@@ -614,6 +617,10 @@ class Hub:
             now = self.clock()
             if item.status in ("completed", "verified", "dismissed", "archived"):
                 raise HubRefused("closed", f"{item_id} is {item.status}")
+            if item.lease_unresolved:
+                raise HubRefused("owner_resolution", f"{item_id} has a result that arrived after its lease "
+                                 "attempt ended; the owner decides before it is granted again",
+                                 events=sorted(item.lease_unresolved))
             if lease_live(item, now):
                 if item.lease_holder == actor:
                     return {"status": "held", "lease": dict(item.lease_ref or {}),
@@ -633,13 +640,53 @@ class Hub:
                 raise HubRefused("not_eligible", why)
             # The answer sorts after every event of its item (audit finding 7),
             # whatever the sibling logs' tails say.
+            floor = _item_floor(events, item_id)
+            # EXPIRY IS EXPLICIT (audit finding 9): the previous attempt ends by
+            # a signed event before anything is granted again.
+            if _open_attempt(item):
+                floor = self._expire(item, events, now, floor,
+                                     "released" if item.lease_holder is None else "expired").hlc
             event = self.log.append("item.lease", {
-                "id": item_id, "holder": actor, "granted_ms": now,
-                "expires_ms": now + cfg.lease_ttl_s * 1000,
-                "request": _request_ref(req)}, after=_item_floor(events, item_id))
+                "id": item_id, "holder": actor, "attempt": attempt_id(req),
+                "task_hash": task_content_hash(item.payload), "epoch": cfg.epoch,
+                "granted_ms": now, "expires_ms": now + cfg.lease_ttl_s * 1000,
+                "request": _request_ref(req)}, after=floor)
             return {"status": "granted", "lease": _event_dict(event), "log": self.log.log_name}
 
+    def _expire(self, item, events, now: int, floor, reason: str) -> Event:
+        """Write `item.lease.expire` for `item`'s open attempt, with the holder-log
+        frontier this hub holds: a result beyond it was admitted after the expiry."""
+        from actor_identity import base_writer
+        from .hub_admission import _writer_of
+        ref = item.lease_ref or {}
+        holder = ref.get("holder") or item.lease_holder or ""
+        frontier: dict = {}
+        for e in events:
+            chain = getattr(e, "log", None) or e.actor
+            if holder and _writer_of(chain) == base_writer(holder) and type(e.seq) is int:
+                frontier[chain] = max(frontier.get(chain, -1), e.seq)
+        return self.log.append("item.lease.expire", {
+            "id": item.id, "holder": holder, "attempt": ref.get("attempt"), "expired_ms": now,
+            "reason": reason, "frontier": dict(sorted(frontier.items())),
+            "lease": {k: ref.get(k) for k in ("log", "seq", "hash")}}, after=floor)
+
+    def expire_due(self) -> list[dict]:
+        """End every lease attempt whose expiry has passed (the hub's scheduled sweep).
+        Only expiry: granting again is a separate request."""
+        from .fold import lease_live
+        with self._mutex:
+            self._writable(grant=True)
+            events, state = self._state()
+            now = self.clock()
+            out = []
+            for item in sorted(state.items.values(), key=lambda i: i.id):
+                if item.lease_holder is not None and _open_attempt(item) and not lease_live(item, now):
+                    out.append(_event_dict(self._expire(item, events, now, _item_floor(events, item.id), "expired")))
+            return out
+
     def renew_lease(self, req: dict) -> dict:
+        """Extend the SAME live attempt; never resurrect an expired one (audit finding 9)."""
+        from .fold import lease_live
         with self._mutex:
             cfg = self._writable(grant=True)
             actor = self._verify_request(req, "lease.renew", cfg)
@@ -648,9 +695,17 @@ class Hub:
             item = state.items.get(item_id) if isinstance(item_id, str) else None
             if item is None or item.lease_holder != actor or item.status != "claimed":
                 raise HubRefused("not_holder", f"{actor} holds no lease on {item_id!r}")
+            current = (item.lease_ref or {}).get("attempt")
+            if current and req.get("attempt") != current:
+                raise HubRefused("wrong_attempt", f"the renewal names attempt {req.get('attempt')!r}; the live "
+                                 f"attempt on {item_id} is {current!r}")
             now = self.clock()
+            if not lease_live(item, now):
+                raise HubRefused("expired", f"the lease on {item_id} expired at {item.lease_expires_ms}; a renewal "
+                                 "does not resurrect it -- request a new lease")
             event = self.log.append("item.lease.renew", {
-                "id": item_id, "holder": actor, "renewed_ms": now, "expires_ms": now + cfg.lease_ttl_s * 1000,
+                "id": item_id, "holder": actor, "attempt": current, "renewed_ms": now,
+                "expires_ms": now + cfg.lease_ttl_s * 1000,
                 "lease": {k: (item.lease_ref or {}).get(k) for k in ("log", "seq", "hash")},
                 "request": _request_ref(req)}, after=_item_floor(events, item_id))
             return {"status": "renewed", "lease": _event_dict(event), "log": self.log.log_name}
@@ -728,9 +783,25 @@ class Hub:
         }
 
 
+def request_digest(req: dict) -> str:
+    """sha256 of the writer's FULL signed request (signature included)."""
+    return hashlib.sha256(canonical_bytes(req)).hexdigest()
+
+
+def attempt_id(req: dict) -> str:
+    """The immutable attempt id a grant answering `req` carries (audit finding 9)."""
+    return "att-" + request_digest(req)[:24]
+
+
 def _request_ref(req: dict) -> dict:
-    """What a hub answer records of the request it answers (bound by the writer, finding 5)."""
-    return {"kind": req["kind"], "nonce": req["nonce"], "ts_ms": req["ts_ms"]}
+    """What a hub answer records of the request it answers (bound by the writer, findings 5, 9)."""
+    return {"kind": req["kind"], "nonce": req["nonce"], "ts_ms": req["ts_ms"], "digest": request_digest(req)}
+
+
+def _open_attempt(item) -> bool:
+    """Has `item` a lease attempt that no `item.lease.expire` has ended yet?"""
+    ref = item.lease_ref or {}
+    return bool(ref.get("attempt")) and not ref.get("ended")
 
 
 def _item_floor(events, item_id: str) -> str | None:
@@ -881,8 +952,25 @@ class HubWriter:
     def _submission(self, e: Event) -> dict:
         return {"event": _event_dict(e), "log": self.log.log_name}
 
+    def _attempt_for(self, item_id) -> dict | None:
+        """The attempt this writer holds on `item_id`: its latest lease receipt."""
+        for r in reversed(self.receipts()):
+            if r.get("item") == item_id:
+                p = (r.get("event") or {}).get("payload") or {}
+                if p.get("attempt"):
+                    return {"attempt": p["attempt"], "task_hash": p.get("task_hash")}
+        return None
+
     def append(self, type: str, payload: dict) -> tuple[Event, dict | None]:
-        """Append locally, then submit. Returns (event, receipt or None if buffered)."""
+        """Append locally, then submit. Returns (event, receipt or None if buffered).
+
+        A result or release on an item this writer holds a lease on names that
+        lease's attempt and task-content hash (audit finding 9), unless the
+        caller named them itself."""
+        if type in ("item.complete", "item.release") and isinstance(payload, dict) and "attempt" not in payload:
+            held = self._attempt_for(payload.get("id"))
+            if held:
+                payload = {**payload, **{k: v for k, v in held.items() if v}}
         event = self.log.append(type, payload, after=self._floor())
         try:
             receipt = self.transport.append(self._submission(event))
@@ -922,9 +1010,10 @@ class HubWriter:
 
     # ── leases ─────────────────────────────────────────────────────────────
     def _ask(self, method: str, kind: str, item_id: str) -> dict:
-        req = sign_request(self.actor, kind, {"hub": self.cfg.hub_id, "space": self.cfg.space_id,
-                                              "item": item_id},
-                           keys_dir=self.keys_dir, clock=self.clock)
+        body = {"hub": self.cfg.hub_id, "space": self.cfg.space_id, "item": item_id}
+        if kind == "lease.renew":
+            body["attempt"] = (self._attempt_for(item_id) or {}).get("attempt")
+        req = sign_request(self.actor, kind, body, keys_dir=self.keys_dir, clock=self.clock)
         try:
             answer = getattr(self.transport, method)(req)
         except HubUnavailable:
@@ -966,8 +1055,12 @@ class HubWriter:
              "answer belongs to another space, hub or log"),
             (payload.get("id") == item_id and payload.get("holder") == self.actor,
              f"answer is not a lease on {item_id} to {self.actor}"),
-            (ref.get("nonce") == req["nonce"] and ref.get("kind") == req["kind"],
-             "answer does not answer this request (nonce)"),
+            (ref.get("nonce") == req["nonce"] and ref.get("kind") == req["kind"]
+             and ref.get("digest") == request_digest(req),
+             "answer does not answer this request (nonce, digest)"),
+            (payload.get("attempt") == (attempt_id(req) if expected_type == "item.lease" else req.get("attempt"))
+             and bool(payload.get("attempt")),
+             "answer names another lease attempt"),
             (compute_hash(event_body(e)) == e.hash, "answer's hash does not match its body"),
         ]
         for ok, why in checks:
