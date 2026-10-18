@@ -85,6 +85,12 @@ class PoolEnv:
         (install / "registry").mkdir(parents=True)
         (install / "registry" / "principals.yaml").write_text(PRINCIPALS)
         monkeypatch.setattr(actor_identity, "PRINCIPALS", install / "registry" / "principals.yaml")
+        # The policy's explicit inputs, with the writer -> principal map read
+        # from this tmp registry as production reads the real one: the
+        # independent check (amendment G, audit finding 14) compares principals.
+        from ledger.hub_policy import PolicyInputs, _registry_principals
+        self.policy = PolicyInputs(approver=TEST_POLICY.approver, cosign_effects=TEST_POLICY.cosign_effects,
+                                   principal_of=_registry_principals())
         self.roles_dir = install / "templates" / "roles"
         self.roles_dir.mkdir(parents=True)
         for role in ("researcher", "scout"):
@@ -112,7 +118,7 @@ class PoolEnv:
     def hub(self, *, eligibility=None, state: str = "state") -> "hubmod.Hub":
         h = hubmod.Hub(self.hub_dir, GRANTOR, keys_dir=self.keys_dir, registry_path=self.registry,
                        state_dir=self.tmp / state / GRANTOR, clock=self.clock, eligibility=eligibility,
-                       policy=TEST_POLICY)
+                       policy=self.policy)
         self.hubs.append(h)
         return h
 
@@ -127,7 +133,7 @@ class PoolEnv:
             (space / ".datacore" / "events").mkdir(parents=True)
             git_pull(self.hub_dir, space)
         return hubmod.HubWriter(space, actor, self.t, keys_dir=self.keys_dir, registry_path=self.registry,
-                                state_dir=self.tmp / "wstate" / actor, clock=self.clock, policy=TEST_POLICY)
+                                state_dir=self.tmp / "wstate" / actor, clock=self.clock, policy=self.policy)
 
     def item(self, iid: str):
         return fold(read_events(self.hub_dir)).items[iid]
@@ -278,7 +284,7 @@ def test_daily_budget_stops_new_leases_keeps_existing_ones_and_resets_next_day(e
     assert wb.renew_lease("p1")["status"] == "renewed"
     wb.append("spend.record", {"item": "p1", "cents": 50, "model": "test"})
     wb.append("item.complete", {"id": "p1"})
-    assert env.item("p1").status == "completed"
+    assert env.item("p1").status == "submitted"            # submitted for review (finding 14)
     assert env.item("p0").lease_holder == "wa"
 
     # Spending on addressed work does not count against the pool.
@@ -340,7 +346,7 @@ def test_completion_is_accepted_only_after_another_actors_check(env):
     wa.request_lease("p1")
     wa.append("item.complete", {"id": "p1", "result": "summary attached"})
     item = env.item("p1")
-    assert item.status == "completed" and not pool_accepted(item)            # done, not yet accepted
+    assert item.status == "submitted" and not pool_accepted(item)            # submitted for review, not accepted
 
     # The holder's own check is refused: the writer refuses before writing ...
     before = (wa.space_dir / ".datacore" / "events" / "wa.jsonl").read_bytes()
@@ -351,7 +357,7 @@ def test_completion_is_accepted_only_after_another_actors_check(env):
     err = refused(submit_raw, hub, wa, "item.verify", {"id": "p1"})
     assert err.code == "not_authorized" and "own_check" in err.message
     item = env.item("p1")
-    assert item.status == "completed" and not pool_accepted(item), item.history
+    assert item.status == "submitted" and not pool_accepted(item), item.history
 
     # A different agent's check is what accepts it (the checker reads the work first).
     git_pull(env.hub_dir, wb.space_dir)
