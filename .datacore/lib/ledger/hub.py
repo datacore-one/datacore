@@ -39,6 +39,13 @@ RULES THIS MODULE ENFORCES
     the hub already holds for its log; unsigned, wrongly signed, edited, forked,
     gapped, foreign-log, wrong-domain, badly clocked and hub-only appends are
     refused (D). The file lock is held from reading the chain to fsync (16).
+  * AUTHORSHIP IS NOT AUTHORIZATION (finding 12): an append must also be an
+    authorized transition under the existing policy (`ledger.hub_policy`:
+    assignee, approver, co-sign, pool items only through a lease,
+    arbitration). The hub refuses an unauthorized append (code
+    `not_authorized`, an answer only), and the fold it reads its state from
+    (`fold(..., policy=...)`) makes the same event a recorded no-op when it
+    arrives by git, a restore or a rebuild.
   * A fresh request (lease, renewal, seal) is signed with the writer's CURRENT
     key, names this hub and space, is inside the time window and is answered
     once (finding 5, 6). Sealing over the network takes a signed request from
@@ -347,7 +354,8 @@ class Hub:
     """One hub instance serving one space. Thread-safe within a process."""
 
     def __init__(self, space_dir, actor: str, *, keys_dir=None, registry_path=None, state_dir=None,
-                 clock: Callable[[], int] | None = None, eligibility: Eligibility | None = None):
+                 clock: Callable[[], int] | None = None, eligibility: Eligibility | None = None,
+                 policy=None):
         self.space_dir = Path(space_dir)
         cfg = load_config(self.space_dir)
         if cfg is None:
@@ -359,6 +367,12 @@ class Hub:
         load_manifest(self.space_dir, cfg)          # a hub over an edited manifest does not start
         self.clock = clock or _wall_ms
         self.eligibility: Eligibility = eligibility or assignee_rule
+        # Authorization's explicit input (audit finding 12), read ONCE here --
+        # never by the fold halfway through a replay. A `ledger.policy.Policy`
+        # is converted; None reads the installation's policy and registry.
+        from .hub_policy import PolicyInputs
+        self.policy = (policy if isinstance(policy, PolicyInputs)
+                       else PolicyInputs.load(policy))
         self.started_ms = self.clock()
         self.closed = False
         self._mutex = threading.RLock()
@@ -420,7 +434,7 @@ class Hub:
         from .log import read_events
         auth = self._authority(self.config())
         events = admit(read_events(self.space_dir), auth, now_ms=self.clock()).events
-        return events, fold(events, lease_grantors=auth.lease_grantors())
+        return events, fold(events, lease_grantors=auth.lease_grantors(), policy=self.policy)
 
     def refusals(self) -> dict:
         """{log: where and why it stops being admitted} -- for status and verify."""
@@ -499,7 +513,18 @@ class Hub:
             check_event(event, chain, existing[-1] if existing else None, auth, now_ms=now, current_key=True)
         except Refusal as exc:
             raise HubRefused(exc.code, exc.message) from None
+        self._authorize(event)
         return None
+
+    def _authorize(self, event: Event) -> None:
+        """Authorship is not authorization (audit finding 12): the same rule the
+        fold applies on replay (`hub_policy.authorize`), asked before anything
+        is stored. A refusal is an answer only."""
+        from .hub_policy import authorize
+        events, state = self._state()
+        why = authorize(event, state, {e.hash: e for e in events}, self.policy)
+        if why:
+            raise HubRefused("not_authorized", why)
 
     def _check_submission(self, event: Event, log_name: str, cfg: HubConfig) -> None:
         if not isinstance(log_name, str) or not _NAME.fullmatch(log_name):

@@ -188,7 +188,7 @@ class LedgerState:
         return h.hexdigest()
 
 
-def fold(events: list[Event], *, lease_grantors=None) -> LedgerState:
+def fold(events: list[Event], *, lease_grantors=None, policy=None) -> LedgerState:
     """Reduce `events` (already merged + hlc-sorted) into a `LedgerState`.
 
     Pure and order-preserving: does not sort, does not mutate `events` or
@@ -202,8 +202,19 @@ def fold(events: list[Event], *, lease_grantors=None) -> LedgerState:
     no-op. None keeps the structural rule alone ("has a hub field"); only a
     caller that has already filtered through ledger.hub_admission may rely on
     that.
+
+    `policy` (a `ledger.hub_policy.PolicyInputs`, audit finding 12): when
+    given, every governed event must also be an AUTHORIZED transition
+    (`hub_policy.authorize`: assignee, approver, co-sign, pool items only
+    through a lease, arbitration). An unauthorized one is a validly signed
+    proposal that changes nothing: a recorded no-op. Explicit input, read by
+    the caller before the fold starts; None keeps the fold as it was.
     """
     state = LedgerState()
+    seen: dict = {}
+    authorize = None
+    if policy is not None:
+        from .hub_policy import authorize
 
     # Events cancelled by an authorised in-ledger `ledger.void` do not exist for
     # the fold (LED-4). Resolving who may void reads the principal registry
@@ -223,6 +234,16 @@ def fold(events: list[Event], *, lease_grantors=None) -> LedgerState:
             if item is not None:
                 _note(item, event, f"no-op ({event.actor!r} is not a grantor of hub {getattr(event, 'hub', '')!r})")
             continue
+        if authorize is not None:
+            why = authorize(event, state, seen, policy)
+            if why:
+                item = state.items.get(_valid_item_id(event.payload if isinstance(event.payload, dict) else {}) or "")
+                if item is not None:
+                    _note(item, event, f"no-op (not authorized: {why})")
+                else:       # never silently dropped: a proposal without an item is listed
+                    state.orphans.append(f"{event.hlc} {event.type} not authorized")
+                continue
+            seen[event.hash] = event
         if handler is not None:
             handler(state, event)
         # Event types outside this fold's scope (metric.attest,
