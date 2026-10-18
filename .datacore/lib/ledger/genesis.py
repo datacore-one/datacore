@@ -315,7 +315,8 @@ def scan(space_dir: Path, org_file: Path | None = None) -> ScanResult:
     if not org_file.exists():
         return result
 
-    known = set(fold(read_events(space_dir)).items.keys())
+    from .hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    known = set(authoritative_state(space_dir).items.keys())
     sections: dict[str, dict] = {}
     try:
         phase1 = (space_dir / ".datacore" / "ledger-phase").read_text().strip() == "1"

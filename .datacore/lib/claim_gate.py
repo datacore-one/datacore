@@ -286,7 +286,8 @@ def check_override(actor: str, item_id: str | None, space_dir: Path, policy=None
     try:
         from ledger.fold import fold
         from ledger.log import read_events
-        state = fold(read_events(Path(space_dir)))
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        state = authoritative_state(Path(space_dir))
     except Exception as exc:  # noqa: BLE001
         return False, f"cannot establish item ownership ({type(exc).__name__})"
     item = state.items.get(item_id)

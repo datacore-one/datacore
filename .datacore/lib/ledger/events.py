@@ -123,7 +123,12 @@ HUB_EVENT_TYPES = frozenset({"item.lease", "item.lease.renew", "item.lease.expir
 # owner's own log; who grants is derived from them, never from a config file.
 # `hub.fence` is the grantor's own statement that it stopped: written in its
 # log, it is the last event of its epoch that counts.
-OWNER_EVENT_TYPES = frozenset({"hub.enable", "hub.promote"})
+#
+# `hub.resolve` (Codex re-audit, new defect 4): the owner's decision on an
+# expired lease attempt whose holder never came back to say what happened. It
+# frees the item for another grant; nothing else does but the holder's own
+# release or result naming the attempt.
+OWNER_EVENT_TYPES = frozenset({"hub.enable", "hub.promote", "hub.resolve"})
 #
 # `ledger.reject` (audit finding 11): the grantor's record that a signed event
 # already in a writer's log is a REJECTED PROPOSAL -- kept so the chain stays

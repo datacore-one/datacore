@@ -313,17 +313,26 @@ def test_hub_down_for_an_hour_loses_nothing_starts_no_double_run_and_replays(env
     replayed = wa.replay()
     assert [r["status"] for r in replayed] == ["accepted"] * 3
     assert wa.outage() is None
+    # Still nothing for wb: the restarted hub lost its request state, so the
+    # barrier holds until the owner clears it (Codex re-audit, new defect 3);
+    # then wa's completion, admitted after its lease ran out, is the owner's
+    # to decide (Codex re-audit, finding 9), not a completion.
     with pytest.raises(hubmod.HubRefused) as exc:
         wb.request_lease("t1")
-    assert exc.value.code == "closed"
+    assert exc.value.code == "recovering"
+    hub2.clear_recovery(hubmod.sign_request(OWNER, "recovery.clear", {"hub": HUB_ID, "space": _space_id(env.hub_dir)},
+                                            keys_dir=env.keys_dir, clock=env.clock))
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wb.request_lease("t1")
+    assert exc.value.code == "owner_resolution"
 
     # No event lost: the hub's copy of wa's log is wa's log, line for line.
     local = (wa.space_dir / ".datacore" / "events" / "wa.jsonl").read_bytes()
     assert (env.hub_dir / ".datacore" / "events" / "wa.jsonl").read_bytes() == local
-    # No double run: one lease, one completion, no conflict.
+    # No double run: one lease, one completion recorded (for the owner), no conflict.
     assert [e.payload["holder"] for e in leases_in(env.hub_dir)] == ["wa"]
     item = fold(read_events(env.hub_dir)).items["t1"]
-    assert item.status == "completed" and item.owner == "wa" and not item.lease_conflicts
+    assert item.status != "completed" and len(item.lease_unresolved) == 1 and not item.lease_conflicts
 
 
 # ── 3. the writer's own receipt ─────────────────────────────────────────────
@@ -1437,8 +1446,8 @@ def test_audit11_a_refused_event_already_in_the_writer_log_is_kept_as_a_rejected
     owner.append("item.create", {"id": "t1", "title": "task"})
     git_pull(env.hub_dir, wa.space_dir)
     t.down = True
-    wa.log.append("item.lease", {"id": "t1", "holder": "wa", "granted_ms": 0, "expires_ms": 1})   # signed, local
-    wa.append("item.create", {"id": "t2", "title": "after it"})
+    bad = wa.log.append("item.lease", {"id": "t1", "holder": "wa", "granted_ms": 0, "expires_ms": 1})  # signed, local
+    after, _ = wa.append("item.create", {"id": "t2", "title": "after it"})
     t.down = False
     replayed = wa.replay()
     assert [r["status"] for r in replayed] == ["rejected", "accepted"], replayed
@@ -1446,10 +1455,15 @@ def test_audit11_a_refused_event_already_in_the_writer_log_is_kept_as_a_rejected
     assert len(rejects) == 1 and rejects[0].actor == GRANTOR
     _, state = hub._state()
     assert state.items["t1"].lease_holder is None and "t2" in state.items
-    # The chain is continuous and settles: the seal covers it, the writer's receipt confirms.
+    # The chain is continuous and settles: the seal covers it, and the receipt
+    # for the event after the rejected one confirms. The rejected proposal is
+    # never a confirmation of itself (Codex re-audit, finding 3), so a receipt
+    # for every one of the writer's events fails on it.
     git = _published(env, hub, [owner, wa])
-    report = wa.receipt_check(git, hub_actor=GRANTOR)
+    report = wa.receipt_check(git, hub_actor=GRANTOR, required=[after.hash])
     assert report["status"] == "confirmed", report
+    report = wa.receipt_check(git, hub_actor=GRANTOR)
+    assert report["status"] == "failed" and any(bad.hash[:12] in p for p in report["problems"]), report
 
 
 def test_audit11_a_telemetry_event_in_the_main_log_is_imported_into_the_main_log(env):
@@ -1492,9 +1506,11 @@ def test_audit10_a_holder_offline_longer_than_a_lease_period_is_not_double_run(e
             wb.request_lease(item)
         assert exc.value.code == "uncertain_attempt", (restart, exc.value)
         wa.replay()                                                          # the holder reconciles
+        # Its completion was admitted after the lease ran out: the owner's to
+        # decide, never a completion (Codex re-audit, finding 9; was "closed").
         with pytest.raises(hubmod.HubRefused) as exc:
             wb.request_lease(item)
-        assert exc.value.code == "closed", (restart, exc.value)
+        assert exc.value.code == "owner_resolution", (restart, exc.value)
         hub.close()
 
 

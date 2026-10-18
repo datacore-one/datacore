@@ -228,7 +228,8 @@ def cmd_stopped(args: argparse.Namespace) -> None:
 
 def cmd_items(args: argparse.Namespace) -> None:
     space = _require_space(args.space)
-    state = fold(read_events(space))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space)
     db_path = space / ".datacore" / "state" / "ledger" / "index.db"
     build_index(state, db_path)
     for item in items_by(db_path, status=args.status, owner=args.owner):
@@ -243,7 +244,8 @@ def cmd_items(args: argparse.Namespace) -> None:
 
 def cmd_balances(args: argparse.Namespace) -> None:
     space = _require_space(args.space)
-    state = fold(read_events(space))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space)
     print(json.dumps(state.spend))
 
 

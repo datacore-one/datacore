@@ -439,7 +439,8 @@ def _guarded_append_locked(
     if type == "item.claim":
         from .fold import fold
         from claim_gate import check_claim
-        item = fold(read_events(space_dir)).items.get(payload.get("id"))
+        from .hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        item = authoritative_state(space_dir).items.get(payload.get("id"))
         if item is None or item.status != "created":
             raise PolicyError("item is missing or no longer available to claim")
         current_hash = approval_payload_hash(item.payload)
@@ -473,7 +474,8 @@ def _guarded_append_locked(
         sd = space_dir or getattr(log, "space_dir", None)
         if sd is not None:
             from .fold import fold
-            held = fold(read_events(Path(sd))).items.get(payload.get("id"))
+            from .hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+            held = authoritative_state(Path(sd)).items.get(payload.get("id"))
             who = getattr(log, "actor", None) or ""
             if held is not None and held.status == "claimed" and held.owner and held.owner != who:
                 raise PolicyError(f"item.release refused for {who!r}: the claim is {held.owner!r}'s, "
