@@ -13,6 +13,8 @@
 #                              validation + root allowlist)
 #   [0-9]-* space repos     -> .datacore/hooks/space-pre-commit (DIP-0015
 #                              allowlist + safety checks)
+#   [0-9]-*-archive repos   -> space-pre-commit, SAFETY_ONLY + ARCHIVE_STORE
+#                              (no allowlist, no conflict-marker rule)
 #   any other repo          -> space-pre-commit in SAFETY_ONLY mode
 #                              (conflict markers, *.local.md, credentials)
 #
@@ -47,6 +49,16 @@ case "$repo_root" in
       exec "$data_root/.datacore/hooks/pre-commit" "$@"
     fi
     exit 0
+    ;;
+  "$data_root"/[0-9]-*-archive)
+    # A space's archive repo (outbox processor, DIP-0017) is not a space: it
+    # keeps files verbatim under their 4-archive/ paths, old conflict markers
+    # included. The space allowlist and the marker rule do not apply; the
+    # credential and *.local.md rules do, since archive repos push offsite.
+    SAFETY_ONLY=1
+    ARCHIVE_STORE=1
+    export SAFETY_ONLY ARCHIVE_STORE
+    exec "$data_root/.datacore/hooks/space-pre-commit" "$@"
     ;;
   "$data_root"/[0-9]-*)
     # direct child space repos only (not nested project repos)
