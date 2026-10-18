@@ -221,3 +221,84 @@ Each item names the line that pushes and the change it needs. Python modules get
 - the effect on merge-commit counts.
 
 The design report's 24-hour measurement after a host opts in settles all three. Nothing was installed and no host was contacted.
+
+## Follow-ups (2026-10-18)
+
+The owner approved two follow-ups on 2026-10-18:
+- (a) stagger the hourly cycle;
+- (b) route the module pushes listed above through the push policy.
+
+Nothing has been pushed, merged or installed, and no host was contacted.
+
+### (a) The hourly phase-1 cycle: one minute per host, outside every push window
+
+This replaces the "slot-aligned" table above. The owner's rule: each host's cycle runs at its own minute, and that minute falls outside its own push slot and outside every other host's. The 5-minute windows start at :00, :10, :20, :25, :30, :40, :50 and :55. That leaves four free stretches: :05-:09, :15-:19, :35-:39 and :45-:49. Each host gets one of them.
+
+| Host | Was | Now | Defined in |
+|---|---|---|---|
+| plur-claw | `25 * * * *` | `05 * * * *` | `agent_host_setup.sh`, openclaw profile |
+| nightshift | `25 * * * *` | `15 * * * *` | `agent_host_setup.sh`, nightshift profile; contract text in `jobs/manifest.yaml` |
+| hermes | `25 * * * *` | `35 * * * *` | `agent_host_setup.sh`, hermes profile |
+| box | `25 * * * *` | `46 * * * *` | contract text in `jobs/manifest.yaml` only; the crontab exists only on the box |
+
+Why :46 for the box, rather than :05 or :45:
+- its hourly ingest at :00 takes the cycle lock;
+- its claim tick runs at :05 and :35;
+- its CoS sync runs at :45.
+
+Why :05 for plur-claw: its dispatcher runs every 15 minutes, and :05 sits between two runs.
+
+**The test** is `.datacore/lib/tests/test_phase1_cycle_stagger.py`. It reads the minutes from the installer and the manifest, and checks three things:
+- all four minutes are different;
+- none falls inside a window in `push_slots.yaml`;
+- the installer and the contract give nightshift the same minute.
+
+Before the change: 2 failed. After: 2 passed.
+
+**What Gregor changes on the hosts.** Nothing in this repository writes the box's crontab. A satellite gets its new line only when its installer runs again.
+- **box:** in `crontab -e`, change the minute of the `ledger_phase1_cycle.sh` line from `25` to `46`. Nothing else on the line changes.
+- **nightshift, plur-claw, hermes:** after the merge and a runner refresh, run `agent_host_setup.sh --host <name>`. It replaces the `phase1-cycle` line by its marker. The hand edit is the same one field: nightshift `15`, plur-claw `05`, hermes `35`.
+- **hermes:** the manifest says its cycle cron is disabled until its clones are renamed. Running the installer there would put the line back, so leave hermes off until the rename is done.
+- **Not changed:** the box's fleet sync at 06:10 and 18:10 UTC still lands in nightshift's slot. It was not part of this approval.
+
+### (b) The module pushes
+
+| # | Push site | Repository and branch | Change |
+|---|---|---|---|
+| 1 | `ventures/lib/cadence_run.py` `_commit_push` | datacore-ventures, `feat/scheduled-push-ventures` | Added `_push_deferred()`, which asks `ledger_transport.push_policy(this_actor())`. When the answer is "deferred", the record is committed and not pushed. The call returns `committed; this host's push slot publishes it`. |
+| 2 | `nightshift/lib/scoreboard.py` | datacore-nightshift, `feat/scheduled-push-nightshift` | Added `lib/push_gate.py` with `push_now()`. The scoreboard commits, then pushes only when `push_now()` is true. |
+| 3 | `nightshift/lib/run.py` `_merge_unfinished_run_branches` | none | **Not changed, because this code never runs.** Its last caller was removed in release c556862 (2026-09-15). It also calls `_push_remote`, which that release deleted, so any call would raise NameError. It should be removed separately. |
+| 4 | `lib/ledger-claim-pull.sh` | this repository, `feat/scheduled-push` | Its converge now passes `--actor "$ACTOR"`; before, it published in scheduled mode as well. The push to `ledger/<actor>` runs unless `ledger_transport.py policy` prints `deferred`. |
+| 5 | `nightshift/lib/claim.py:455` | none | Left immediate, as recommended above: that push is the claim. |
+
+**All three guards fail open.** A core without `push_policy`, a policy that raises, or an empty answer each mean "push as before". The live hosts run a core without the policy until this root branch merges. So if the module branches merge first, nothing changes.
+
+`venture_heartbeat.push_cadence_record` needs no module change. It calls `commit_knowledge(push=True)` with no actor, and step 2's `resolve_push` then applies the host's own writer.
+
+### Tests (run 2026-10-18)
+
+| Test | Before | After |
+|---|---|---|
+| root `test_phase1_cycle_stagger.py` | 2 failed | 2 passed |
+| root `test_claim_pull_scheduled_push.py` | 2 failed, 2 passed (the 2 that passed hold today's behaviour) | 4 passed |
+| root `test_claim_pull_publishes_only_its_own.py`, `test_scheduled_push.py`, `test_scheduled_push_callers.py` | — | 3 + 43 passed |
+| root, every test file that reads `jobs/manifest.yaml` or `agent_host_setup.sh` (28 files, promise evals excluded) | — | 490 passed, 1 failed, 14 skipped |
+| nightshift `tests/test_scheduled_push_gate.py` | collection error (no `push_gate` yet) | 7 passed |
+| nightshift `tests/`, whole suite, on `origin/main` and on the branch | `origin/main`: 16 failed, 832 passed | branch: 14 failed, 841 passed |
+| ventures `lib/tests/test_cadence_run_scheduled_push.py` | 1 failed, 3 passed (the 3 that passed hold today's behaviour) | 4 passed |
+| ventures `lib/tests`, whole suite, on `origin/main` and on the branch | `origin/main`: 73 failed, 316 passed, 9 errors | branch: 73 failed, 320 passed, 9 errors |
+
+Notes on the failures:
+- **The one root failure** is `test_jobs_grounded.py::test_runner_manifest_matches_canonical`. It compares the manifest with the runner copy installed on this Mac, which was byte-identical to the manifest before the edit. It passes again once the branch merges and the runner refreshes, so it is expected and not a regression.
+- **Nightshift:** every branch failure also fails on `origin/main`. The two `origin/main`-only failures (`test_model_output_admission`, `test_one_space_does_not_cost_the_night`) passed on the branch run. That looks flaky, but it is not verified.
+- **Ventures:** the same tests fail before and after; the 4 extra passes are the new file. The shared failures include the two existing `report` tests. On this Mac a global git hook (ledger-write-gate) refuses their fixture commit, with or without this change. The new test gives its fixture repository its own hooks directory.
+
+**End-to-end check.** I ran each guard against this branch's core, with the real principal registry and `DATACORE_PUSH_MODE=scheduled`:
+- `push_gate.push_now()` for `miles`: `False`;
+- `cadence_run._push_deferred()` for `tris`: `True`.
+
+With the mode set to `immediate`, both said push.
+
+**Not verified:**
+- that the slot job's `sync` covers plur-claw's dispatch space (`2-plur-space`), and so publishes the claims that `ledger-claim-pull.sh` now holds back;
+- how any of this behaves on a real host.
