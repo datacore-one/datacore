@@ -1441,3 +1441,92 @@ def test_audit11_a_telemetry_event_in_the_main_log_is_imported_into_the_main_log
     hub_main = [from_line(ln) for ln in (env.hub_dir / ".datacore" / "events" / "wa.jsonl").read_text().splitlines()]
     assert legacy.hash in [e.hash for e in hub_main]
     assert (env.hub_dir / ".datacore" / "events" / "wa.jsonl").read_bytes() == wa.log.path.read_bytes()
+
+
+# ── finding 10: a recovery barrier, not a fixed restart grace ──────────────
+
+def test_audit10_a_holder_offline_longer_than_a_lease_period_is_not_double_run(env):
+    """Two cases from the audit: the hub restarts and the holder stays away
+    longer than one lease period; and a partition with no restart at all.
+    Either way the item is not granted again until the holder reconciles."""
+    for restart in (True, False):
+        env.clock.advance(3600)
+        hub = env.hub(state=f"s10-{restart}")
+        t = hubmod.LocalTransport(hub)
+        owner, wa, wb = env.writer("own", t), env.writer("wa", t), env.writer("wb", t)
+        item = f"t-{restart}"
+        owner.append("item.create", {"id": item, "title": "task"})
+        git_pull(env.hub_dir, wa.space_dir)
+        assert wa.request_lease(item)["status"] == "granted"
+        t.down = True
+        wa.append("item.complete", {"id": item, "result": "done offline"})   # buffered
+        if restart:
+            hub.close()
+            hub = env.hub(state=f"s10-{restart}")                            # same persisted state
+            t.hub = hub
+        env.clock.advance(2 * 900)                                           # longer than one lease
+        t.down = False
+        with pytest.raises(hubmod.HubRefused) as exc:
+            wb.request_lease(item)
+        assert exc.value.code == "uncertain_attempt", (restart, exc.value)
+        wa.replay()                                                          # the holder reconciles
+        with pytest.raises(hubmod.HubRefused) as exc:
+            wb.request_lease(item)
+        assert exc.value.code == "closed", (restart, exc.value)
+        hub.close()
+
+
+class _LosesFirstAnswer(hubmod.LocalTransport):
+    """The request reaches the hub; its answer is lost on the way back, once."""
+
+    def __init__(self, hub):
+        super().__init__(hub)
+        self.lost = 0
+
+    def request_lease(self, req):
+        answer = super().request_lease(req)
+        if not self.lost:
+            self.lost += 1
+            raise hubmod.HubUnavailable("the answer was lost")
+        return answer
+
+
+def test_audit10_a_lost_answer_is_retried_and_the_hub_returns_the_same_signed_grant(env):
+    hub = env.hub()
+    owner = env.writer("own", hubmod.LocalTransport(hub))
+    owner.append("item.create", {"id": "t1", "title": "task"})
+    wa = env.writer("wa", _LosesFirstAnswer(hub))
+    with pytest.raises(hubmod.HubUnavailable):
+        wa.request_lease("t1")
+    answer = wa.request_lease("t1")                      # the same signed request, retried
+    assert answer["status"] == "granted", answer
+    assert [e.payload["holder"] for e in leases_in(env.hub_dir)] == ["wa"]   # one grant, not two
+    assert len(wa.receipts()) == 1
+    # A hub restarted on the same persisted state answers the retry the same way.
+    hub.close()
+    again = env.hub()
+    req = wa._pending("t1")
+    if req is not None:
+        assert again.request_lease(req)["lease"]["hash"] == answer["lease"]["hash"]
+
+
+def test_audit10_a_restore_from_git_taken_before_a_grant_runs_the_recovery_barrier(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa, wb = env.writer("own", t), env.writer("wa", t), env.writer("wb", t)
+    owner.append("item.create", {"id": "t1", "title": "task"})
+    hub_log = env.hub_dir / ".datacore" / "events" / f"{GRANTOR}.jsonl"
+    before = hub_log.read_bytes() if hub_log.exists() else b""
+    assert wa.request_lease("t1")["status"] == "granted"
+    hub.close()
+    hub_log.write_bytes(before)                          # the checkout restored from a copy before the grant
+    hub = env.hub()                                      # same persisted request state
+    t.hub = hub
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wb.request_lease("t1")
+    assert exc.value.code == "recovering", exc.value
+    wa.replay()                                          # wa presents the hub-signed grant it stored
+    assert [e.payload["holder"] for e in leases_in(env.hub_dir)] == ["wa"]
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wb.request_lease("t1")
+    assert exc.value.code == "taken", exc.value
