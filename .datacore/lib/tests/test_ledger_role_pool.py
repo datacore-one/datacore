@@ -1,27 +1,37 @@
-"""The first role pool on the hub (DIP-0034, October 2026 amendment, section F).
+"""Role pools on the hub (DIP-0034, October 2026 amendment, section F), as the
+owner decided on 2026-10-18:
 
-Written before the code (task 7727bbff). One block per DONE_WHEN line:
+  "The role is defined in the task. If the task isn't delegated to any agent
+   concretely, an available agent picks it up, loads the role description and
+   executes the task. This is not the main scenario; main is that most tasks
+   will be directly delegated."
 
-  1. a pool item carrying role=researcher is leased only to an actor whose live
-     membership in that hub holds the role (`member.role`: actor, role, from,
-     until); an actor without it, or whose membership expired, is refused -- in
-     the hub AND in the fold;
-  2. the daily budget (`pool.budget` for a role in a space, spending from the
-     existing `spend.record` events) stops NEW leases once reached; existing
-     leases are unaffected; the next day resets;
-  3. a pool item's completion needs a DONE_WHEN, and is accepted only after a
-     check (`item.verify`) by an actor other than the lease holder; the
-     holder's own check is refused;
-  4. the assignee rule stays the default: neither assignee nor role is still
-     not dispatched; addressed items behave exactly as before;
-  5. everything is off unless the space opts in to pools.
+This replaces the first build's membership model (`member.role` grants). The
+blocks below are the required behaviour:
+
+  1. a task addressed to a named agent is leased by that agent only (the
+     assignee rule, still the default); if it carries a role, the grant names
+     the role description to load;
+  2. an unaddressed task carrying role=<name> may be leased by ANY available
+     agent: a signed request from a writer whose principal is a registered
+     agent (`kind: agent` in principals.yaml), while the role's pool is under
+     its daily budget. No membership grant is needed. One lease at a time;
+  3. the grant names the role description, `.datacore/templates/roles/<role>.md`,
+     checked at lease time; a role with no template is refused (`unknown_role`);
+  4. an unaddressed task with no role is still not dispatched;
+  5. the daily budget still stops new leases; a pool task's completion needs a
+     DONE_WHEN and counts only after another actor's check;
+  6. everything is off unless the space opts in to pools; old state roots are
+     unchanged; `member.role` no longer exists.
 
 Plus a worked example: one research space with the researcher role.
 
-Keys are generated in tmp dirs; the real ~/.datacore/keys is never touched.
+Keys are generated in tmp dirs; the real ~/.datacore/keys, principals.yaml and
+role templates are never touched.
 """
 from __future__ import annotations
 
+import json
 import sys
 import types
 from pathlib import Path
@@ -29,8 +39,8 @@ from pathlib import Path
 import pytest
 
 from ledger import hub as hubmod
-from ledger.events import Event, body_dict, compute_hash
-from ledger.fold import fold, pool_accepted, role_live
+from ledger.events import EVENT_TYPES, Event, body_dict, compute_hash, to_line
+from ledger.fold import fold, pool_accepted
 from ledger.log import read_events
 sys.path.insert(0, str(Path(__file__).parent))
 from test_ledger_hub import GRANTOR, HUB_ID, Clock, allow_any, git_pull  # noqa: E402
@@ -39,10 +49,28 @@ DAY_MS = 24 * 3600 * 1000
 #: 2027-01-15T08:00:00Z -- far enough from midnight that a few hours do not cross it.
 START = 1_800_000_000_000
 DONE = "a sourced summary of three competitors is attached and a reviewer has read it"
+RESEARCHER = ".datacore/templates/roles/researcher.md"
+
+#: Agents wa, wb, wc; the owner writes as `own` and is a human; `wz` has a key
+#: but no principal.
+PRINCIPALS = """\
+version: 1
+principals:
+  owner:
+    kind: human
+    writes_as: [own]
+  wa:
+    kind: agent
+  wb:
+    kind: agent
+  wc:
+    kind: agent
+"""
 
 
 class PoolEnv:
     def __init__(self, tmp: Path, monkeypatch, *, pools: bool = True):
+        import actor_identity
         import ledger.hlc as hlc
         import ledger.keys as keys
         self.tmp = tmp
@@ -52,6 +80,16 @@ class PoolEnv:
         monkeypatch.setenv("DATACORE_ACTOR", "pooltest-host")
         monkeypatch.delenv("DATACORE_SEQUENCER", raising=False)
         monkeypatch.delenv("DATACORE_LEDGER_SIGN", raising=False)
+        # A tmp installation: its principals and its role descriptions.
+        install = tmp / "install" / ".datacore"
+        (install / "registry").mkdir(parents=True)
+        (install / "registry" / "principals.yaml").write_text(PRINCIPALS)
+        monkeypatch.setattr(actor_identity, "PRINCIPALS", install / "registry" / "principals.yaml")
+        self.roles_dir = install / "templates" / "roles"
+        self.roles_dir.mkdir(parents=True)
+        for role in ("researcher", "scout"):
+            (self.roles_dir / f"{role}.md").write_text(f"# {role}\n\nA fake role description for tests.\n")
+        monkeypatch.setattr(hubmod, "ROLES_DIR", self.roles_dir)
         self.clock = Clock(START)
         # Every HLC stamp (and the log's skew guard) follows the test clock, so
         # "the day" of a spend is the hub's day and a simulated midnight is real.
@@ -117,87 +155,107 @@ def refused(fn, *args) -> "hubmod.HubRefused":
     return exc.value
 
 
-# ── 1. role membership decides who may lease ────────────────────────────────
-
-def test_pool_item_is_leased_only_to_a_live_member_with_the_role(env):
-    hub = env.start()
-    own, member, outsider, other_role = env.writer("own"), env.writer("wa"), env.writer("wb"), env.writer("wc")
-    hub.record_role("wa", "researcher")
-    hub.record_role("wc", "scout")
-    pool_item(own, "p1")
-
-    assert refused(outsider.request_lease, "p1").code == "not_eligible"     # no membership
-    assert refused(other_role.request_lease, "p1").code == "not_eligible"   # a different role
-    assert member.request_lease("p1")["status"] == "granted"
-    item = env.item("p1")
-    assert item.lease_holder == "wa" and item.status == "claimed"
-    assert [e.payload["actor"] for e in read_events(env.hub_dir) if e.type == "member.role"] == ["wa", "wc"]
+def submit_raw(hub, writer, etype: str, payload: dict) -> dict:
+    """Append to the writer's own log and hand it to the hub, skipping the writer's pre-check."""
+    raw = writer.log.append(etype, payload)
+    return hub.append({"event": json.loads(to_line(raw)), "log": writer.actor})
 
 
-def test_a_membership_that_has_expired_or_not_started_is_refused(env):
+# ── 1. a task addressed to a named agent (the main scenario) ────────────────
+
+def test_an_addressed_task_is_leased_only_by_its_agent_and_names_its_role(env):
     hub = env.start()
     own, wa, wb = env.writer("own"), env.writer("wa"), env.writer("wb")
-    now = env.clock()
-    hub.record_role("wa", "researcher", until_ms=now + 60_000)
-    hub.record_role("wb", "researcher", from_ms=now + 3_600_000)
-    pool_item(own, "p1")
-    pool_item(own, "p2")
+    hub.set_budget("researcher", 0)                                          # a closed pool
+    own.append("item.create", {"id": "mine", "title": "addressed", "assignee": "wa", "role": "researcher"})
+    own.append("item.create", {"id": "plain", "title": "addressed, no role", "assignee": "wa"})
 
-    assert refused(wb.request_lease, "p1").code == "not_eligible"            # not started yet
-    env.clock.advance(120)
-    assert refused(wa.request_lease, "p1").code == "not_eligible"            # expired
-    env.clock.advance(3600)
-    assert wb.request_lease("p1")["status"] == "granted"                     # now live
-
-
-def test_the_fold_refuses_a_lease_to_an_actor_without_the_role(env):
-    """A hub that grants anyway (old code, a bug, a forged grantor) does not
-    make the lease real: every copy folds it to a recorded conflict."""
-    lax = env.start(eligibility=allow_any)
-    own, wa, wb = env.writer("own"), env.writer("wa"), env.writer("wb")
-    lax.record_role("wa", "researcher", until_ms=env.clock() + 60_000)
-    pool_item(own, "p1")
-    pool_item(own, "p2")
-
-    assert wb.request_lease("p1")["status"] == "granted"                     # the hub said yes ...
-    item = env.item("p1")
-    assert item.lease_holder is None and item.status == "created", item.history  # ... the fold says no
-    assert any("role" in why for why in item.lease_conflicts.values())
-
-    env.clock.advance(120)                                                   # wa's membership ends
-    assert wa.request_lease("p2")["status"] == "granted"
-    item = env.item("p2")
-    assert item.lease_holder is None and any("role" in w for w in item.lease_conflicts.values())
-
-    copy = env.tmp / "copy"
-    (copy / ".datacore" / "events").mkdir(parents=True)
-    git_pull(env.hub_dir, copy)
-    assert fold(read_events(copy)).state_root() == fold(read_events(env.hub_dir)).state_root()
+    assert refused(wb.request_lease, "mine").code == "not_eligible"          # another agent
+    grant = wa.request_lease("mine")
+    assert grant["status"] == "granted"                                      # the pool's budget is not its
+    assert grant["lease"]["payload"]["role"] == {"name": "researcher", "template": RESEARCHER}
+    assert wa.request_lease("plain")["status"] == "granted"
+    # Addressed work needs no DONE_WHEN and its own completion counts as before.
+    wa.append("item.complete", {"id": "mine"})
+    wa.append("item.complete", {"id": "plain"})
+    assert env.item("mine").status == "completed" and env.item("plain").status == "completed"
 
 
-def test_membership_is_recorded_only_by_the_hub_and_only_for_known_roles(env):
+# ── 2. an unaddressed task with a role: any available agent ─────────────────
+
+def test_any_registered_agent_may_lease_an_unaddressed_role_task_one_at_a_time(env):
     hub = env.start()
-    wa = env.writer("wa")
-    # A writer cannot grant itself a role: member.role and pool.budget are hub-only.
-    for etype, payload in (("member.role", {"actor": "wa", "role": "researcher"}),
-                           ("pool.budget", {"role": "researcher", "cents_per_day": 10**9})):
-        e = wa.log.append(etype, payload)
-        import json
-        from ledger.events import to_line
-        assert refused(hub.append, {"event": json.loads(to_line(e))}).code == "hub_only_type"
-    # Roles are the ones defined in .datacore/templates/roles/.
-    assert refused(hub.record_role, "wa", "astronaut").code == "unknown_role"
-    st = fold(read_events(env.hub_dir))
-    assert not role_live(st, HUB_ID, GRANTOR, "wa", "researcher", env.clock())
+    own, wa, wb, wc = env.writer("own"), env.writer("wa"), env.writer("wb"), env.writer("wc")
+    pool_item(own, "p1")
+    pool_item(own, "p2")
+    pool_item(own, "s1", role="scout")
+
+    grant = wa.request_lease("p1")                                           # no membership grant needed
+    assert grant["status"] == "granted"
+    assert grant["lease"]["payload"]["role"] == {"name": "researcher", "template": RESEARCHER}
+    assert refused(wb.request_lease, "p1").code == "taken"                   # one lease at a time
+    assert wb.request_lease("p2")["status"] == "granted"
+    assert wc.request_lease("s1")["status"] == "granted"                     # any role, any agent
+    assert env.item("p1").lease_holder == "wa" and env.item("p2").lease_holder == "wb"
+    assert not hasattr(hub, "record_role")
 
 
-# ── 2. the daily budget ─────────────────────────────────────────────────────
+def test_only_a_registered_agent_principal_is_available(env):
+    env.start()
+    own, wz = env.writer("own"), env.writer("wz")
+    pool_item(own, "p1")
+    err = refused(own.request_lease, "p1")                                   # a human principal
+    assert err.code == "not_eligible" and "agent" in err.message
+    err = refused(wz.request_lease, "p1")                                    # signed, but no principal
+    assert err.code == "not_eligible" and "agent" in err.message
+    assert env.item("p1").lease_holder is None
+
+
+# ── 3. the role description is named and must exist ─────────────────────────
+
+def test_a_role_without_a_template_is_refused_and_checked_at_lease_time(env):
+    env.start()
+    own, wa = env.writer("own"), env.writer("wa")
+    pool_item(own, "p1", role="astronaut")
+    own.append("item.create", {"id": "mine", "title": "addressed", "assignee": "wa", "role": "astronaut"})
+    pool_item(own, "bad", role="../../etc/passwd")
+    for iid in ("p1", "mine"):
+        err = refused(wa.request_lease, iid)
+        assert err.code == "unknown_role" and "astronaut" in err.message, (iid, err.code)
+    assert refused(wa.request_lease, "bad").code == "unknown_role"           # not a role name at all
+    # The template appears later: the next request finds it.
+    (env.roles_dir / "astronaut.md").write_text("# astronaut\n")
+    grant = wa.request_lease("p1")
+    assert grant["lease"]["payload"]["role"]["template"] == ".datacore/templates/roles/astronaut.md"
+
+
+def test_a_role_with_only_the_base_layer_names_the_base_file(env):
+    """Role templates are layered context: `<role>.md` is composed from
+    `<role>.base.md` (DIP-0002). Before the composed file is built, the grant
+    names the base layer, the file that exists."""
+    env.start()
+    own, wa = env.writer("own"), env.writer("wa")
+    (env.roles_dir / "dev.base.md").write_text("# dev\n")
+    pool_item(own, "d1", role="dev")
+    assert wa.request_lease("d1")["lease"]["payload"]["role"] == {
+        "name": "dev", "template": ".datacore/templates/roles/dev.base.md"}
+
+
+# ── 4. no assignee and no role: still not dispatched ────────────────────────
+
+def test_an_unaddressed_task_without_a_role_is_not_dispatched(env):
+    env.start()
+    own, wa = env.writer("own"), env.writer("wa")
+    own.append("item.create", {"id": "nobody", "title": "unaddressed", "done_when": DONE})
+    err = refused(wa.request_lease, "nobody")
+    assert err.code == "not_eligible" and "nobody" in err.message
+
+
+# ── 5. budget, DONE_WHEN and an independent check ───────────────────────────
 
 def test_daily_budget_stops_new_leases_keeps_existing_ones_and_resets_next_day(env):
     hub = env.start()
     own, wa, wb = env.writer("own"), env.writer("wa"), env.writer("wb")
-    for w in ("wa", "wb"):
-        hub.record_role(w, "researcher")
     hub.set_budget("researcher", 500)
     for i in range(4):
         pool_item(own, f"p{i}")
@@ -207,8 +265,9 @@ def test_daily_budget_stops_new_leases_keeps_existing_ones_and_resets_next_day(e
     assert wb.request_lease("p1")["status"] == "granted"                    # 300 < 500: still open
     wb.append("spend.record", {"item": "p1", "cents": 250, "model": "test"})
 
-    # 550 >= 500: the cap is reached. No NEW lease ...
+    # 550 >= 500: the cap is reached. No NEW lease, for any agent ...
     assert refused(wa.request_lease, "p2").code == "budget_reached"
+    assert refused(env.writer("wc").request_lease, "p2").code == "budget_reached"
     # ... but the existing leases carry on: renew, spend, complete.
     env.clock.advance(300)
     assert wb.renew_lease("p1")["status"] == "renewed"
@@ -217,8 +276,10 @@ def test_daily_budget_stops_new_leases_keeps_existing_ones_and_resets_next_day(e
     assert env.item("p1").status == "completed"
     assert env.item("p0").lease_holder == "wa"
 
-    # Spending on unpooled work does not count against the pool.
-    own.append("item.create", {"id": "solo", "title": "addressed", "assignee": "wa"})
+    # Spending on addressed work does not count against the pool.
+    own.append("item.create", {"id": "solo", "title": "addressed", "assignee": "wa", "role": "researcher"})
+    st = fold(read_events(env.hub_dir))
+    assert st.pool_spend == {"researcher|2027-01-15": 600}
     # The next UTC day resets the count.
     env.clock.advance(DAY_MS / 1000)
     assert wa.request_lease("p2")["status"] == "granted"
@@ -227,8 +288,6 @@ def test_daily_budget_stops_new_leases_keeps_existing_ones_and_resets_next_day(e
 def test_a_role_without_a_budget_is_not_capped_and_a_budget_is_per_role(env):
     hub = env.start()
     own, wa = env.writer("own"), env.writer("wa")
-    hub.record_role("wa", "researcher")
-    hub.record_role("wa", "scout")
     hub.set_budget("scout", 100)
     pool_item(own, "r1")
     pool_item(own, "s1", role="scout")
@@ -240,14 +299,12 @@ def test_a_role_without_a_budget_is_not_capped_and_a_budget_is_per_role(env):
     assert wa.request_lease("r1")["status"] == "granted"                     # researcher: no cap
     wa.append("spend.record", {"item": "r1", "cents": 10_000, "model": "test"})
     assert wa.request_lease("r2")["status"] == "granted"
+    assert refused(hub.set_budget, "astronaut", 100).code == "unknown_role"
 
 
-# ── 3. DONE_WHEN and an independent check ───────────────────────────────────
-
-def test_a_pool_item_without_done_when_is_not_leased(env):
-    hub = env.start()
+def test_an_unaddressed_role_task_without_done_when_is_not_leased(env):
+    env.start()
     own, wa = env.writer("own"), env.writer("wa")
-    hub.record_role("wa", "researcher")
     pool_item(own, "vague", done_when=None)
     pool_item(own, "org", done_when=None, org={"properties": {"DONE_WHEN": DONE}})
     err = refused(wa.request_lease, "vague")
@@ -255,10 +312,25 @@ def test_a_pool_item_without_done_when_is_not_leased(env):
     assert wa.request_lease("org")["status"] == "granted"                    # the org property counts
 
 
+def test_the_fold_refuses_a_lease_of_a_pool_task_without_done_when(env):
+    """A hub that grants anyway (an override, old code, a hand-written lease)
+    does not make the lease real: every copy folds it to a recorded conflict."""
+    env.start(eligibility=allow_any)
+    own, wa = env.writer("own"), env.writer("wa")
+    pool_item(own, "vague", done_when=None)
+    assert wa.request_lease("vague")["status"] == "granted"                  # the hub said yes ...
+    item = env.item("vague")
+    assert item.lease_holder is None and item.status == "created", item.history   # ... the fold says no
+    assert any("DONE_WHEN" in why for why in item.lease_conflicts.values())
+    copy = env.tmp / "copy"
+    (copy / ".datacore" / "events").mkdir(parents=True)
+    git_pull(env.hub_dir, copy)
+    assert fold(read_events(copy)).state_root() == fold(read_events(env.hub_dir)).state_root()
+
+
 def test_completion_is_accepted_only_after_another_actors_check(env):
     hub = env.start()
     own, wa, wb = env.writer("own"), env.writer("wa"), env.writer("wb")
-    hub.record_role("wa", "researcher")
     pool_item(own, "p1")
     wa.request_lease("p1")
     wa.append("item.complete", {"id": "p1", "result": "summary attached"})
@@ -270,15 +342,12 @@ def test_completion_is_accepted_only_after_another_actors_check(env):
     assert refused(wa.append, "item.verify", {"id": "p1"}).code == "own_check"
     assert (wa.space_dir / ".datacore" / "events" / "wa.jsonl").read_bytes() == before
     # ... and a raw holder check that reaches the hub anyway is not counted.
-    raw = wa.log.append("item.verify", {"id": "p1"})
-    import json
-    from ledger.events import to_line
-    receipt = hub.append({"event": json.loads(to_line(raw)), "log": "wa"})
+    receipt = submit_raw(hub, wa, "item.verify", {"id": "p1"})
     assert receipt["status"] == "accepted" and "own_check" in receipt.get("not_counted", "")
     item = env.item("p1")
     assert item.status == "completed" and not pool_accepted(item), item.history
 
-    # A different actor's check is what accepts it (the checker reads the work first).
+    # A different agent's check is what accepts it (the checker reads the work first).
     git_pull(env.hub_dir, wb.space_dir)
     wb.append("item.verify", {"id": "p1", "check": DONE})
     item = env.item("p1")
@@ -289,42 +358,18 @@ def test_the_fold_refuses_a_pool_completion_when_done_when_was_removed(env):
     """DONE_WHEN is needed at completion too, not only at the lease."""
     hub = env.start()
     own, wa = env.writer("own"), env.writer("wa")
-    hub.record_role("wa", "researcher")
     pool_item(own, "p1")
     wa.request_lease("p1")
     own.append("item.update", {"id": "p1", "done_when": ""})
     git_pull(env.hub_dir, wa.space_dir)
     assert refused(wa.append, "item.complete", {"id": "p1"}).code == "no_done_when"
-    raw = wa.log.append("item.complete", {"id": "p1"})
-    import json
-    from ledger.events import to_line
-    receipt = hub.append({"event": json.loads(to_line(raw)), "log": "wa"})
+    receipt = submit_raw(hub, wa, "item.complete", {"id": "p1"})
     assert "no_done_when" in receipt.get("not_counted", "")
     item = env.item("p1")
     assert item.status == "claimed" and any("DONE_WHEN" in h for h in item.history)
 
 
-# ── 4. the assignee rule is still the default ───────────────────────────────
-
-def test_with_pools_on_unaddressed_items_wait_and_addressed_items_are_unchanged(env):
-    hub = env.start()
-    own, wa, wb = env.writer("own"), env.writer("wa"), env.writer("wb")
-    hub.record_role("wa", "researcher")
-    hub.set_budget("researcher", 0)                                          # a closed pool
-    own.append("item.create", {"id": "nobody", "title": "unaddressed"})
-    own.append("item.create", {"id": "mine", "title": "addressed", "assignee": "wa"})
-    own.append("item.create", {"id": "both", "title": "both", "assignee": "wa", "role": "researcher",
-                               "done_when": DONE})
-    assert refused(wa.request_lease, "nobody").code == "not_eligible"
-    assert refused(wa.request_lease, "both").code == "not_eligible"
-    assert refused(wb.request_lease, "mine").code == "not_eligible"
-    # Addressed work needs no role, no DONE_WHEN and ignores the pool's budget.
-    assert wa.request_lease("mine")["status"] == "granted"
-    wa.append("item.complete", {"id": "mine"})
-    assert env.item("mine").status == "completed"
-
-
-# ── 5. off by default ───────────────────────────────────────────────────────
+# ── 6. off by default; old roots; no membership event ───────────────────────
 
 def test_pools_are_off_unless_the_space_opts_in(tmp_path, monkeypatch):
     e = PoolEnv(tmp_path, monkeypatch, pools=False)
@@ -332,7 +377,6 @@ def test_pools_are_off_unless_the_space_opts_in(tmp_path, monkeypatch):
         assert hubmod.load_config(e.hub_dir).pools is False
         hub = e.start()
         own, wa = e.writer("own"), e.writer("wa")
-        assert refused(hub.record_role, "wa", "researcher").code == "pools_off"
         assert refused(hub.set_budget, "researcher", 100).code == "pools_off"
         pool_item(own, "p1")
         err = refused(wa.request_lease, "p1")
@@ -348,8 +392,16 @@ def test_pools_are_off_unless_the_space_opts_in(tmp_path, monkeypatch):
         e.close()
 
 
+def test_membership_is_gone_and_the_budget_is_written_only_by_the_hub(env):
+    hub = env.start()
+    wa = env.writer("wa")
+    assert "member.role" not in EVENT_TYPES
+    e = wa.log.append("pool.budget", {"role": "researcher", "cents_per_day": 10**9})
+    assert refused(hub.append, {"event": json.loads(to_line(e))}).code == "hub_only_type"
+
+
 def test_folding_a_log_without_pool_events_hashes_as_before():
-    """Old logs never contained member.role / pool.budget / hub spend: the new
+    """Old logs never contained pool.budget or hub-stamped pool spend: the new
     state fields must not enter their state root."""
     def ev(seq, etype, payload, actor="own"):
         body = body_dict(seq, f"{1_700_000_000_000 + seq:013d}.0000.{actor}", actor, etype, payload, "x")
@@ -357,12 +409,11 @@ def test_folding_a_log_without_pool_events_hashes_as_before():
     events = [ev(0, "item.create", {"id": "t", "title": "x", "role": "researcher"}),
               ev(1, "spend.record", {"item": "t", "cents": 40})]
     st = fold(events)
-    assert st.members == {} and st.budgets == {} and st.pool_spend == {}
-    from dataclasses import fields
+    assert st.budgets == {} and st.pool_spend == {}
+    assert not hasattr(st, "members")
     from ledger.fold import LedgerState
     legacy = LedgerState(items=st.items, spend=st.spend, orphans=st.orphans)
     assert st.state_root() == legacy.state_root()
-    assert {f.name for f in fields(LedgerState)} >= {"items", "spend", "orphans"}
 
 
 # ── worked example: a research space with the researcher role ───────────────
@@ -371,20 +422,20 @@ def test_worked_example_research_space(env):
     """The whole loop for one space, as the owner would run it.
 
     Owner, once:   python3 -m ledger.hub enable <space> --hub-id research-hub --grantor hubd
-                   python3 -m ledger.hub pools <space> --on
-    Hub, as facts: record_role("wa", "researcher"); set_budget("researcher", 2_000)
-    Owner adds:    an item with role=researcher and a DONE_WHEN
-    Agent wa:      leases it, spends, completes
+                   python3 -m ledger.hub pools <space>
+    Hub, as fact:  set_budget("researcher", 2_000)
+    Owner adds:    an item with role=researcher, no assignee, and a DONE_WHEN
+    Agent wa:      leases it, is told to load the researcher description, spends, completes
     Agent wb:      checks it against the DONE_WHEN -> accepted
     """
     hub = env.start()
     own, wa, wb = env.writer("own"), env.writer("wa"), env.writer("wb")
-    hub.record_role("wa", "researcher", until_ms=env.clock() + 30 * DAY_MS)
     hub.set_budget("researcher", 2_000)
     own.append("item.create", {"id": "competitor-scan", "title": "Scan three competitors' pricing pages",
                                "role": "researcher", "done_when": DONE})
-    assert refused(wb.request_lease, "competitor-scan").code == "not_eligible"
-    assert wa.request_lease("competitor-scan")["status"] == "granted"
+    grant = wa.request_lease("competitor-scan")
+    assert grant["status"] == "granted" and grant["lease"]["payload"]["role"]["template"] == RESEARCHER
+    assert refused(wb.request_lease, "competitor-scan").code == "taken"
     wa.append("spend.record", {"item": "competitor-scan", "cents": 120, "model": "test"})
     wa.append("item.complete", {"id": "competitor-scan", "result": "summary attached"})
     git_pull(env.hub_dir, wb.space_dir)                                      # wb reads the result
