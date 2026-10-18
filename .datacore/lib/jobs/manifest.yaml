@@ -360,7 +360,7 @@ jobs:
 
   - name: box-phase1-cycle
     machine: box
-    schedule: "cron 25 * * * * on the box"
+    schedule: "cron 46 * * * * on the box"   # staggered off :25, outside every push slot (2026-10-18)
     cmd: "~/Data/.datacore/lib/ledger_phase1_cycle.sh"   # winston
     on_fail: telegram
     artifacts:
@@ -378,7 +378,7 @@ jobs:
 
   - name: nightshift-phase1-cycle
     machine: nightshift
-    schedule: "cron 25 * * * * on nightshift"
+    schedule: "cron 15 * * * * on nightshift"   # staggered off :25, outside every push slot (2026-10-18)
     cmd: "~/Data/.datacore/lib/ledger_phase1_cycle.sh"   # nightshift
     on_fail: telegram
     artifacts:
