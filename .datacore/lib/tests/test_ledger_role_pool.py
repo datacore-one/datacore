@@ -43,7 +43,7 @@ from ledger.events import EVENT_TYPES, Event, body_dict, compute_hash, to_line
 from ledger.fold import fold, pool_accepted
 from ledger.log import read_events
 sys.path.insert(0, str(Path(__file__).parent))
-from test_ledger_hub import GRANTOR, HUB_ID, Clock, allow_any, git_pull  # noqa: E402
+from test_ledger_hub import GRANTOR, HUB_ID, OWNER, TEST_POLICY, Clock, allow_any, git_pull  # noqa: E402
 
 DAY_MS = 24 * 3600 * 1000
 #: 2027-01-15T08:00:00Z -- far enough from midnight that a few hours do not cross it.
@@ -101,7 +101,8 @@ class PoolEnv:
         monkeypatch.setattr(logmod, "time", fake)
         self.hub_dir = tmp / "hub-space"
         (self.hub_dir / ".datacore" / "events").mkdir(parents=True)
-        hubmod.enable(self.hub_dir, hub_id=HUB_ID, grantor=GRANTOR, lease_ttl_s=900)
+        hubmod.enable(self.hub_dir, hub_id=HUB_ID, grantor=GRANTOR, lease_ttl_s=900, owner=OWNER,
+                      keys_dir=self.keys_dir, registry_path=self.registry)
         if pools:
             hubmod.enable_pools(self.hub_dir)
         self.hubs: list = []
@@ -110,7 +111,8 @@ class PoolEnv:
 
     def hub(self, *, eligibility=None, state: str = "state") -> "hubmod.Hub":
         h = hubmod.Hub(self.hub_dir, GRANTOR, keys_dir=self.keys_dir, registry_path=self.registry,
-                       state_dir=self.tmp / state / GRANTOR, clock=self.clock, eligibility=eligibility)
+                       state_dir=self.tmp / state / GRANTOR, clock=self.clock, eligibility=eligibility,
+                       policy=TEST_POLICY)
         self.hubs.append(h)
         return h
 
@@ -125,7 +127,7 @@ class PoolEnv:
             (space / ".datacore" / "events").mkdir(parents=True)
             git_pull(self.hub_dir, space)
         return hubmod.HubWriter(space, actor, self.t, keys_dir=self.keys_dir, registry_path=self.registry,
-                                state_dir=self.tmp / "wstate" / actor, clock=self.clock)
+                                state_dir=self.tmp / "wstate" / actor, clock=self.clock, policy=TEST_POLICY)
 
     def item(self, iid: str):
         return fold(read_events(self.hub_dir)).items[iid]
@@ -156,7 +158,10 @@ def refused(fn, *args) -> "hubmod.HubRefused":
 
 
 def submit_raw(hub, writer, etype: str, payload: dict) -> dict:
-    """Append to the writer's own log and hand it to the hub, skipping the writer's pre-check."""
+    """Append to the writer's own log and hand it to the hub, skipping the writer's
+    pre-check. A result names the writer's lease attempt, as HubWriter.append does."""
+    if etype in ("item.complete", "item.release"):
+        payload = {**payload, **{k: v for k, v in (writer._attempt_for(payload.get("id")) or {}).items() if v}}
     raw = writer.log.append(etype, payload)
     return hub.append({"event": json.loads(to_line(raw)), "log": writer.actor})
 
@@ -341,9 +346,10 @@ def test_completion_is_accepted_only_after_another_actors_check(env):
     before = (wa.space_dir / ".datacore" / "events" / "wa.jsonl").read_bytes()
     assert refused(wa.append, "item.verify", {"id": "p1"}).code == "own_check"
     assert (wa.space_dir / ".datacore" / "events" / "wa.jsonl").read_bytes() == before
-    # ... and a raw holder check that reaches the hub anyway is not counted.
-    receipt = submit_raw(hub, wa, "item.verify", {"id": "p1"})
-    assert receipt["status"] == "accepted" and "own_check" in receipt.get("not_counted", "")
+    # ... and a raw holder check that reaches the hub anyway is refused at the
+    # front door (the policy rule, hub_policy.authorize) and changes nothing.
+    err = refused(submit_raw, hub, wa, "item.verify", {"id": "p1"})
+    assert err.code == "not_authorized" and "own_check" in err.message
     item = env.item("p1")
     assert item.status == "completed" and not pool_accepted(item), item.history
 
@@ -363,9 +369,17 @@ def test_the_fold_refuses_a_pool_completion_when_done_when_was_removed(env):
     own.append("item.update", {"id": "p1", "done_when": ""})
     git_pull(env.hub_dir, wa.space_dir)
     assert refused(wa.append, "item.complete", {"id": "p1"}).code == "no_done_when"
-    receipt = submit_raw(hub, wa, "item.complete", {"id": "p1"})
-    assert "no_done_when" in receipt.get("not_counted", "")
+    err = refused(submit_raw, hub, wa, "item.complete", {"id": "p1"})
+    assert err.code == "not_authorized" and "no_done_when" in err.message
     item = env.item("p1")
+    assert item.status == "claimed"
+    # A copy that has the completion anyway (it came by git) folds it to nothing.
+    raw = wa.log.path
+    copy = env.tmp / "copy"
+    (copy / ".datacore" / "events").mkdir(parents=True)
+    git_pull(env.hub_dir, copy)
+    (copy / ".datacore" / "events" / raw.name).write_bytes(raw.read_bytes())
+    item = fold(read_events(copy)).items["p1"]
     assert item.status == "claimed" and any("DONE_WHEN" in h for h in item.history)
 
 
