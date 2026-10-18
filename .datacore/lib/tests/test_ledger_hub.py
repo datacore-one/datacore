@@ -1532,3 +1532,43 @@ def test_audit10_a_restore_from_git_taken_before_a_grant_runs_the_recovery_barri
     with pytest.raises(hubmod.HubRefused) as exc:
         wb.request_lease("t1")
     assert exc.value.code == "taken", exc.value
+
+
+# ── finding 17: a per-space protocol version every reader and writer must support ─
+
+def test_audit17_a_reader_or_writer_without_the_spaces_protocol_refuses_the_space(env, monkeypatch):
+    import ledger.hub_admission as adm
+    hub = env.hub()
+    wa = env.writer("wa", hubmod.LocalTransport(hub))
+    wa.append("item.create", {"id": "t1", "title": "task"})
+    assert hubmod.load_config(env.hub_dir).protocol == adm.PROTOCOL
+    records = [e for e in read_events(env.hub_dir) if e.type == "hub.enable"]
+    assert records and records[0].payload["protocol"] == adm.PROTOCOL
+    # A host whose code supports only the base envelope: it must refuse the
+    # space, not read it with a closed field list and mis-hash it.
+    monkeypatch.setattr(adm, "SUPPORTED_PROTOCOLS", frozenset({1}))
+    with pytest.raises(adm.ProtocolUnsupported):
+        read_events(env.hub_dir)
+    with pytest.raises(adm.ProtocolUnsupported):
+        EventLog(env.hub_dir, "wz", keys_dir=env.keys_dir, registry_path=env.registry, sign=True)
+
+
+def test_audit17_switching_a_space_on_is_gated_on_every_writer_declaring_support(env):
+    space = env.tmp / "mixed-space"
+    (space / ".datacore" / "events").mkdir(parents=True)
+    for actor in ("own", "wa"):
+        EventLog(space, actor, sign=False).append("item.create", {"id": f"{actor}-old", "title": "before"})
+    with pytest.raises(hubmod.HubRefused) as exc:
+        hubmod.enable(space, hub_id=HUB_ID, grantor=GRANTOR, owner=OWNER, keys_dir=env.keys_dir,
+                      registry_path=env.registry)
+    assert exc.value.code == "not_ready" and "own" in exc.value.message and "wa" in exc.value.message
+    assert hubmod.load_config(space) is None                 # nothing switched on
+    hubmod.declare_ready(space, "own", keys_dir=env.keys_dir, registry_path=env.registry)
+    with pytest.raises(hubmod.HubRefused) as exc:
+        hubmod.enable(space, hub_id=HUB_ID, grantor=GRANTOR, owner=OWNER, keys_dir=env.keys_dir,
+                      registry_path=env.registry)
+    assert exc.value.code == "not_ready" and "wa" in exc.value.message and "own" not in exc.value.message
+    hubmod.declare_ready(space, "wa", keys_dir=env.keys_dir, registry_path=env.registry)
+    cfg = hubmod.enable(space, hub_id=HUB_ID, grantor=GRANTOR, owner=OWNER, keys_dir=env.keys_dir,
+                        registry_path=env.registry)
+    assert cfg.protocol == 2
