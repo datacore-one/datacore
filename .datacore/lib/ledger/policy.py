@@ -582,9 +582,9 @@ def validate_approval(log: EventLog, payload: dict, policy: Policy, *, creating=
         )
 
     if getattr(log, "sign", False):
-        from .events import body_dict, canonical_bytes, compute_hash
+        from .events import canonical_bytes, compute_hash, event_body
         from .keys import verify
-        body = body_dict(grant.seq, grant.hlc, grant.actor, grant.type, grant.payload, grant.prev)
+        body = event_body(grant)
         if grant.hash != compute_hash(body) or not grant.sig or not verify(
                 grant.actor, canonical_bytes(body), grant.sig, registry_path=log.registry_path):
             raise PolicyError("approval grant signature could not be verified")

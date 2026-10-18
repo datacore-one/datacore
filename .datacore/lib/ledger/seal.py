@@ -44,10 +44,12 @@ by sealing. (Lean: DatacoreSpec/LedgerSeal.lean, `latest_is_sequencer`,
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
-from .events import Event, body_dict, canonical_bytes, compute_hash
+from .events import Event, body_dict, canonical_bytes, compute_hash, event_body
 from .fold import fold
 
 
@@ -86,14 +88,32 @@ def _roster_sequencer() -> str:
     return role("sequencer") or ""
 
 
+#: A reader checking a HUB space's seals names that hub's grantor explicitly
+#: (ledger.hub: the hub seals its space). Scoped to one `with` block, so it
+#: never changes whose seals the rest of the process believes.
+_SCOPED_SEQUENCER: ContextVar[str] = ContextVar("ledger_scoped_sequencer", default="")
+
+
+@contextmanager
+def as_sequencer(name: str):
+    """Within this block, `sequencer()` is `name` (a hub's grantor)."""
+    token = _SCOPED_SEQUENCER.set(name)
+    try:
+        yield
+    finally:
+        _SCOPED_SEQUENCER.reset(token)
+
+
 def sequencer() -> str:
-    """The designated sequencer, read at call time: `$DATACORE_SEQUENCER`, else
-    the roster's `roles.sequencer`, else none ("" -- no seal is believed).
+    """The designated sequencer, read at call time: an `as_sequencer` scope,
+    else `$DATACORE_SEQUENCER`, else the roster's `roles.sequencer`, else none
+    ("" -- no seal is believed).
 
     One definition for the writer (`ledger_seal.py emit`) and every reader, so
     the role that may seal and the role whose seals are believed cannot drift.
     """
-    return os.environ.get("DATACORE_SEQUENCER") or _roster_sequencer() or DEFAULT_SEQUENCER
+    return (_SCOPED_SEQUENCER.get() or os.environ.get("DATACORE_SEQUENCER") or _roster_sequencer()
+            or DEFAULT_SEQUENCER)
 
 
 def _seal_events(events: list[Event]) -> list[Event]:
@@ -361,7 +381,7 @@ def _covered_events(events, seal):
 def _event_set_hash(events):
     import hashlib
     rows = [{"log": getattr(e, "log", None) or e.actor, "seq": e.seq, "hash": e.hash,
-             "body": body_dict(e.seq, e.hlc, e.actor, e.type, e.payload, e.prev)} for e in events]
+             "body": event_body(e)} for e in events]
     rows.sort(key=lambda row: (row["log"], row["seq"], row["hash"]))
     return hashlib.sha256(canonical_bytes({"version": 2, "events": rows})).hexdigest()
 

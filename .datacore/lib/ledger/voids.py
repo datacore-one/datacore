@@ -42,7 +42,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .events import Event, body_dict, compute_hash, from_line
+from .events import Event, body_dict, compute_hash, event_body, from_line
 
 VOID_TYPE = "ledger.void"
 _HEX64 = re.compile(r"[0-9a-f]{64}")
@@ -61,7 +61,7 @@ def _writer(name: str) -> str:
 
 
 def body_hash(e: Event) -> str:
-    return compute_hash(body_dict(e.seq, e.hlc, e.actor, e.type, e.payload, e.prev))
+    return compute_hash(event_body(e))
 
 
 # ── authority ────────────────────────────────────────────────────────────────

@@ -116,6 +116,16 @@ class ItemState:
     granted_by: str | None = None
     granted_at: str | None = None
     edit_conflicts: dict[str, str] = field(default_factory=dict)
+    #: HUB LEASES (DIP-0034 October 2026 amendment B). The current holder, the
+    #: hub-clock expiry, and which lease event granted it ({hub, log, seq,
+    #: hash}). `lease_ref` stays set once an item has been leased: from then on
+    #: a completion by anyone but the current holder is a recorded conflict.
+    lease_holder: str | None = None
+    lease_expires_ms: int | None = None
+    lease_ref: dict | None = None
+    #: event hash -> why: overlapping leases (the later one loses) and
+    #: completions by an actor who did not hold the lease. Never a silent no-op.
+    lease_conflicts: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -167,6 +177,11 @@ class LedgerState:
             if document.get('granted_by') is None and document.get('granted_at') is None:
                 document.pop('granted_by', None)
                 document.pop('granted_at', None)
+            # Same rule for leases: a space that never leased hashes as before.
+            if (document.get('lease_ref') is None and document.get('lease_holder') is None
+                    and document.get('lease_expires_ms') is None and not document.get('lease_conflicts')):
+                for key in ('lease_holder', 'lease_expires_ms', 'lease_ref', 'lease_conflicts'):
+                    document.pop(key, None)
             h.update(canonical_bytes({"key": iid, "item": document}))
         h.update(canonical_bytes({"spend": dict(sorted(self.spend.items()))}))
         h.update(canonical_bytes({"orphans": sorted(self.orphans)}))
@@ -347,6 +362,10 @@ def _handle_release(state: LedgerState, event: Event) -> None:
         return
     item.owner = None
     item.status = "created"
+    # Releasing a lease returns the item to the pool; `lease_ref` stays, so a
+    # later completion by the released holder is still a recorded conflict.
+    item.lease_holder = None
+    item.lease_expires_ms = None
     # A grant authorises THIS claim's owner. Kept across a release it made the
     # next claimant read as granted, and refused that claimant a real grant as
     # "already granted". (Lean: Item.grant_belongs_to_claim.)
@@ -358,6 +377,12 @@ def _handle_release(state: LedgerState, event: Event) -> None:
 def _handle_complete(state: LedgerState, event: Event) -> None:
     item = _get_item_or_orphan(state, event)
     if item is None or _dismissed(state, event, item):
+        return
+    if item.lease_ref is not None and event.actor != item.lease_holder:
+        # A leased item: only the current holder completes it. Anyone else's
+        # completion is the double run the lease exists to expose (rule B).
+        _lease_conflict(item, event, f"completion by {event.actor!r}, who does not hold the lease "
+                                     f"(holder {item.lease_holder!r})")
         return
     if item.status != "claimed":
         _note(item, event, f"no-op (illegal transition from status={item.status})")
@@ -620,7 +645,135 @@ def _handle_archive(state: LedgerState, event: Event) -> None:
     _note(item, event, "applied")
 
 
+# ── HUB LEASES (DIP-0034 October 2026 amendment, section B) ─────────────────
+#
+# A lease is written only by a hub, which grants it only when no live lease
+# exists. Two overlapping leases therefore mean a partition or a mis-promoted
+# second hub, and the fold must give every copy the same answer without a
+# network: THE EARLIEST LEASE WINS -- by hub sequence number when both come
+# from one hub log, by HLC otherwise. The loser is recorded, never dropped.
+#
+# Times inside lease payloads (`granted_ms`, `expires_ms`) are the HUB's clock,
+# so overlap is judged on one clock. The fold has no "now": whether a lease is
+# live at a moment is `lease_live(item, now_ms)`, asked by the hub.
+
+def _lease_conflict(item: ItemState, event: Event, why: str) -> None:
+    item.lease_conflicts.setdefault(event.hash, why)
+    _note(item, event, f"conflict ({why})")
+
+
+def _lease_ref(event: Event) -> dict:
+    return {"hub": getattr(event, "hub", "") or "", "log": getattr(event, "log", None) or event.actor,
+            "seq": event.seq, "hash": event.hash, "hlc": event.hlc}
+
+
+def _earlier(a: dict, b: dict) -> bool:
+    """Is lease `a` earlier than lease `b`? Hub sequence within one hub log, else HLC."""
+    if a["hub"] and a["hub"] == b["hub"] and a["log"] == b["log"]:
+        return a["seq"] < b["seq"]
+    return a["hlc"] < b["hlc"]
+
+
+def _lease_times(payload: dict) -> tuple[int, int] | None:
+    granted, expires = payload.get("granted_ms"), payload.get("expires_ms")
+    if any(isinstance(v, bool) or not isinstance(v, int) for v in (granted, expires)) or expires < granted:
+        return None
+    return granted, expires
+
+
+def lease_live(item: ItemState, now_ms: int) -> bool:
+    """Does `item` carry a lease that is still live at `now_ms` (hub clock)?"""
+    return (item.lease_holder is not None and item.status == "claimed"
+            and item.lease_expires_ms is not None and now_ms < item.lease_expires_ms)
+
+
+def _handle_lease(state: LedgerState, event: Event) -> None:
+    item = _get_item_or_orphan(state, event)
+    if item is None or _dismissed(state, event, item):
+        return
+    payload = event.payload or {}
+    holder, times = payload.get("holder"), _lease_times(payload)
+    if not getattr(event, "hub", ""):
+        _note(item, event, "no-op (a lease is written only by a hub)")
+        return
+    if not isinstance(holder, str) or not holder or times is None:
+        _note(item, event, "no-op (invalid lease payload)")
+        return
+    granted, expires = times
+    ref = _lease_ref(event)
+    if item.status in ("completed", "verified", "archived"):
+        _note(item, event, f"no-op (lease illegal from status={item.status})")
+        return
+    if item.lease_holder is None:
+        if item.status != "created":
+            _note(item, event, f"no-op (claimed outside a lease, owner={item.owner!r})")
+            return
+        _take_lease(item, holder, expires, ref)
+        _note(item, event, f"applied (leased to {holder!r})")
+        return
+    current = item.lease_ref or {}
+    if granted >= (item.lease_expires_ms or 0):
+        # The previous lease expired unrenewed: the item went back to the pool.
+        _take_lease(item, holder, expires, ref)
+        _note(item, event, f"applied (leased to {holder!r}; previous lease expired)")
+        return
+    if _earlier(current, ref):
+        _lease_conflict(item, event, f"lease to {holder!r} overlaps the live lease held by "
+                                     f"{item.lease_holder!r}; the earliest lease wins")
+        return
+    # Arrived later in this list but is the earlier lease (only possible when
+    # list order disagrees with hub order): it wins, the current one is the loser.
+    item.lease_conflicts.setdefault(current.get("hash", ""), (
+        f"lease to {item.lease_holder!r} overlaps the earlier lease to {holder!r}; "
+        "the earliest lease wins"))
+    _take_lease(item, holder, expires, ref)
+    _note(item, event, f"applied (leased to {holder!r}; earlier than the overlapping lease)")
+
+
+def _take_lease(item: ItemState, holder: str, expires: int, ref: dict) -> None:
+    item.lease_holder, item.lease_expires_ms, item.lease_ref = holder, expires, ref
+    item.status, item.owner = "claimed", holder
+    item.granted_by = item.granted_at = None
+
+
+def _handle_lease_renew(state: LedgerState, event: Event) -> None:
+    item = _get_item_or_orphan(state, event)
+    if item is None or _dismissed(state, event, item):
+        return
+    payload = event.payload or {}
+    expires = payload.get("expires_ms")
+    if not getattr(event, "hub", ""):
+        _note(item, event, "no-op (a lease is renewed only by a hub)")
+        return
+    if isinstance(expires, bool) or not isinstance(expires, int):
+        _note(item, event, "no-op (invalid renewal payload)")
+        return
+    if item.lease_holder is None or payload.get("holder") != item.lease_holder or item.status != "claimed":
+        _note(item, event, f"no-op (not the current lease holder, holder={item.lease_holder!r})")
+        return
+    if expires > (item.lease_expires_ms or 0):
+        item.lease_expires_ms = expires
+    _note(item, event, "applied (lease renewed)")
+
+
+def _handle_lease_conflict(state: LedgerState, event: Event) -> None:
+    """The hub's durable record of a conflict the fold found: idempotent."""
+    item = _get_item_or_orphan(state, event)
+    if item is None:
+        return
+    ref = (event.payload or {}).get("event") or {}
+    key = ref.get("hash") if isinstance(ref, dict) else None
+    if not isinstance(key, str) or not key:
+        _note(item, event, "no-op (conflict names no event)")
+        return
+    item.lease_conflicts.setdefault(key, str((event.payload or {}).get("reason") or "recorded by the hub"))
+    _note(item, event, "recorded (lease conflict)")
+
+
 _HANDLERS = {
+    "item.lease": _handle_lease,
+    "item.lease.renew": _handle_lease_renew,
+    "item.lease.conflict": _handle_lease_conflict,
     "item.create": _handle_create,
     "item.claim": _handle_claim,
     "item.grant": _handle_grant,

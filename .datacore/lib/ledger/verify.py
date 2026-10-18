@@ -234,10 +234,12 @@ def check_events(parsed: list[tuple[int, Event]], registry_path: Path | None = N
 
         if (type(event.seq) is not int or event.seq < 0
                 or not all(isinstance(v, str) for v in (event.hlc, event.actor, event.type, event.prev, event.hash, event.sig))
+                or not isinstance(getattr(event, "hub", ""), str)
                 or not isinstance(event.payload, dict)):
             bad("invalid event field types")
             continue
-        body = body_dict(event.seq, event.hlc, event.actor, event.type, event.payload, event.prev)
+        body = body_dict(event.seq, event.hlc, event.actor, event.type, event.payload, event.prev,
+                         hub=getattr(event, "hub", ""))
 
         physical = None
         try:

@@ -91,6 +91,22 @@ EVENT_TYPES = frozenset(
 )
 
 
+# ── HUB (DIP-0034 October 2026 amendment, sections B and E) ─────────────────
+# Kept in one block so parallel additions to EVENT_TYPES above merge cleanly.
+#
+# Leases are written ONLY by the hub (ledger.hub): item.lease grants an item to
+# a holder until `expires_ms`, item.lease.renew extends it, and
+# item.lease.conflict makes a conflict the fold found durable and visible. The
+# fold rule (earliest hub sequence wins) is in ledger.fold.
+#
+# `hub` is an optional ENVELOPE field: a stable hub id, never a hostname. It is
+# part of the hashed and signed body when present and absent from both when not,
+# so every event written before it existed keeps its bytes, hash and signature
+# (invariant 6: readers ignore what is absent).
+HUB_EVENT_TYPES = frozenset({"item.lease", "item.lease.renew", "item.lease.conflict"})
+EVENT_TYPES = EVENT_TYPES | HUB_EVENT_TYPES
+
+
 @dataclass
 class Event:
     seq: int
@@ -101,15 +117,19 @@ class Event:
     prev: str
     hash: str
     sig: str
+    #: The hub this event belongs to ("" = none; see the HUB block above).
+    hub: str = ""
 
 
-def body_dict(seq: int, hlc: str, actor: str, type: str, payload: dict, prev: str) -> dict:
+def body_dict(seq: int, hlc: str, actor: str, type: str, payload: dict, prev: str,
+              hub: str = "") -> dict:
     """Assemble the hashable body of an event (everything but `hash`/`sig`).
 
     `prev` is included so `compute_hash` over this body chains to the prior
-    event -- that is the entire mechanism of the hash chain.
+    event -- that is the entire mechanism of the hash chain. `hub` enters the
+    body only when set, so an event without one hashes exactly as before.
     """
-    return {
+    body = {
         "seq": seq,
         "hlc": hlc,
         "actor": actor,
@@ -117,6 +137,17 @@ def body_dict(seq: int, hlc: str, actor: str, type: str, payload: dict, prev: st
         "payload": payload,
         "prev": prev,
     }
+    if hub:
+        body["hub"] = hub
+    return body
+
+
+def event_body(e) -> dict:
+    """The hashable body of an existing event (an `Event` or a parsed line dict)."""
+    if isinstance(e, dict):
+        return body_dict(e["seq"], e["hlc"], e["actor"], e["type"], e["payload"], e["prev"],
+                         hub=e.get("hub") or "")
+    return body_dict(e.seq, e.hlc, e.actor, e.type, e.payload, e.prev, hub=getattr(e, "hub", "") or "")
 
 
 def canonical_bytes(d: dict) -> bytes:
@@ -132,8 +163,14 @@ def compute_hash(body: dict) -> str:
 
 
 def to_line(e: Event) -> str:
-    """Serialize an Event to a single canonical-JSON line (no trailing newline)."""
-    return canonical_bytes(asdict(e)).decode("utf-8")
+    """Serialize an Event to a single canonical-JSON line (no trailing newline).
+
+    An event without a hub serializes exactly as it did before the field existed.
+    """
+    d = asdict(e)
+    if not d.get("hub"):
+        d.pop("hub", None)
+    return canonical_bytes(d).decode("utf-8")
 
 
 def from_line(s: str) -> Event:

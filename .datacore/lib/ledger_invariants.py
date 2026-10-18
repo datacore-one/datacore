@@ -94,7 +94,7 @@ def sweep(root: Path, quick: bool = False) -> list[Finding]:
                     break
                 if not quick:
                     body = body_dict(event.seq, event.hlc, event.actor, event.type,
-                                     event.payload, event.prev)
+                                     event.payload, event.prev, hub=event.hub or "")
                     if compute_hash(body) != event.hash:
                         findings.append(Finding("hashes", space.name,
                                                 f"{writer} seq {event.seq}: payload no longer "

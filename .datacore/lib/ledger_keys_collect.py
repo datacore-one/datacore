@@ -99,7 +99,8 @@ def signatures(root: Path) -> dict[str, list[tuple[dict, str]]]:
             if not event.get("sig"):
                 continue
             body = body_dict(event["seq"], event["hlc"], event["actor"],
-                             event["type"], event["payload"], event["prev"])
+                             event["type"], event["payload"], event["prev"],
+                             hub=event.get("hub") or "")
             # An event cancelled by an authorised in-ledger void (ledger.voids)
             # is not evidence about any key: counting a voided forgery made
             # every candidate key for its actor fail, forever.

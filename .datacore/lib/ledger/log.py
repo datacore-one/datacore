@@ -73,6 +73,10 @@ from file_utils import atomic_write_text, fsync_directory
 _VALID_ACTOR = re.compile(r"[a-z0-9][a-z0-9_-]*")
 
 
+class HubSigningRequired(RuntimeError):
+    """An unsigned append in a space served by a hub; nothing was written."""
+
+
 class StaleLogError(RuntimeError):
     """Raised when appending would reuse a seq because the log was rewound.
 
@@ -340,8 +344,17 @@ class EventLog:
         registry_path: Path | None = None,
         sign: bool | None = None,
         log_name: str | None = None,
+        hub: str | None = None,
     ) -> None:
         self.space_dir = Path(space_dir)
+        # THE HUB (DIP-0034 October 2026 amendment, D and E). `None` reads the
+        # space's opt-in (ledger.hub.load_config): a hub space stamps its hub id
+        # on every event and refuses to write unsigned. A space that has not
+        # opted in is untouched: no hub field, signing as before.
+        from .hub import load_config
+        cfg = load_config(self.space_dir)
+        self.hub_required = cfg is not None
+        self.hub = (cfg.hub_id if cfg is not None else "") if hub is None else hub
         self.actor = actor
         self.keys_dir = keys_dir
         self.registry_path = registry_path
@@ -401,7 +414,7 @@ class EventLog:
         """The file an event is appended to (LED-8: telemetry apart)."""
         return self.telemetry_path if is_telemetry(type, payload) else self.path
 
-    def append(self, type: str, payload: dict) -> Event:
+    def append(self, type: str, payload: dict, after: str | None = None) -> Event:
         """Append a new event of `type` with `payload`, chained to this
         writer's last event.
 
@@ -416,7 +429,16 @@ class EventLog:
             `.datacore/ledger-edit-protocol` does not enable (`EditConflict`).
             Where it says `2`, the edit is written as type-strict version 2
             (decision L7; see `ledger.edits`). The caller's dict is not mutated.
+          * an unsigned event in a space served by a hub (`HubSigningRequired`).
+
+        `after`: an HLC this event must sort after, beyond the causal floor read
+        from disk -- a writer passes the stamp of a hub lease it was granted but
+        has not yet pulled, so its completion can never fold before the lease.
         """
+        if self.hub_required and not self.sign:
+            raise HubSigningRequired(
+                f"{self.space_dir} is served by a hub: every writer signs (DIP-0034 amendment D). "
+                f"Turn signing on for {self.actor!r} (DATACORE_LEDGER_SIGN=1) before writing here.")
         if type not in EVENT_TYPES:
             raise ValueError(f"unknown event type: {type!r} (expected one of {sorted(EVENT_TYPES)})")
         # NO NaN, NO INFINITY (owner decision L8). json writes them as the
@@ -587,9 +609,11 @@ class EventLog:
                             continue
                         if floor is None or sibling_last_hlc > floor:
                             floor = sibling_last_hlc
+                if after and (floor is None or after > floor):
+                    floor = after
                 hlc_stamp = tick(self.actor, floor)
 
-                body = body_dict(seq, hlc_stamp, self.actor, type, payload, prev)
+                body = body_dict(seq, hlc_stamp, self.actor, type, payload, prev, hub=self.hub)
                 # Signing contract: sign the BODY, never the serialized line.
                 # Opt-in (Task 1.4b): unsigned events get sig="" and never
                 # touch key material.

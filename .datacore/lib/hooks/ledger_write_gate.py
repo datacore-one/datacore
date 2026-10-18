@@ -124,7 +124,8 @@ def check_change(path: str, old: bytes, new: bytes | None, now_ms: int | None = 
         if d["prev"] != prev_hash:
             errors.append(f"{path} line {n}: prev does not link to the previous event's hash")
         try:
-            body = body_dict(d["seq"], d["hlc"], d["actor"], d["type"], d["payload"], d["prev"])
+            body = body_dict(d["seq"], d["hlc"], d["actor"], d["type"], d["payload"], d["prev"],
+                             hub=d.get("hub") or "")
             if compute_hash(body) != d["hash"]:
                 errors.append(f"{path} line {n}: hash does not match the event body")
         except (TypeError, ValueError) as exc:
