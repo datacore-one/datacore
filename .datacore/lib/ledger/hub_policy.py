@@ -172,6 +172,25 @@ def _approval_problem(payload: dict, seen: Mapping, inputs: PolicyInputs) -> str
     return None
 
 
+def _attempt_obligations(item, merged: dict, actor: str, inputs: PolicyInputs) -> str | None:
+    """A live lease attempt keeps the obligations it was granted with (Codex
+    re-audit, new defect 5): who it is addressed to, its role and its DONE_WHEN
+    change only by the approver's act (the owner's re-approval), never by the
+    holder or another writer while the attempt runs."""
+    from .fold import done_when_of
+    ref = item.lease_ref or {}
+    if item.lease_holder is None or ref.get("ended") or _base(actor) == _base(inputs.approver):
+        return None
+    old = item.payload or {}
+    changed = [k for k in ("assignee", "role") if old.get(k) != merged.get(k)]
+    if done_when_of(old) != done_when_of(merged):
+        changed.append("DONE_WHEN")
+    if changed:
+        return (f"{item.id} has a live lease attempt; changing its {', '.join(changed)} needs the "
+                f"approver ({inputs.approver!r})")
+    return None
+
+
 def may_execute(actor: str, item, seen: Mapping, inputs: PolicyInputs) -> str | None:
     """Why `actor` may not execute `item`, or None: the assignee rule, the
     principal's never-effects and a still-valid co-sign. One rule for a claim
@@ -232,6 +251,9 @@ def authorize(event, state, seen: Mapping, inputs: PolicyInputs) -> str | None:
             merged = update_payload(item, payload)
         except (EditConflict, AttributeError, TypeError):
             return None                  # the fold records the edit conflict itself
+        why = _attempt_obligations(item, merged, actor, inputs)
+        if why:
+            return why
         why = _effects_problem(merged, inputs)
         if why:
             return why

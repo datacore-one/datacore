@@ -1495,7 +1495,12 @@ class Hub:
             "task_hash": task_content_hash(item.payload), "epoch": active.epoch,
             "granted_ms": now, "expires_ms": now + cfg.lease_ttl_s * 1000,
             "request": _request_ref(req),
-            **({"role": grant_role} if grant_role else {})}, after=floor)
+            **({"role": grant_role} if grant_role else {}),
+            # THE ATTEMPT PINS WHAT IT WAS GRANTED AS (Codex re-audit, new 5):
+            # pool or addressed work, and whether its completion needs an
+            # independent review. A later edit of the task cannot weaken it.
+            **({"class": "pool" if pool_role(item.payload) else "addressed",
+                "review": bool(pool_role(item.payload))} if cfg.pools else {})}, after=floor)
         return {"status": "granted", "lease": _event_dict(event), "log": self.log.log_name}
 
     def reconcile(self, req: dict) -> dict:
@@ -2117,11 +2122,14 @@ class HubWriter:
           (`not_authorized`)."""
         if not self.cfg.pools or type not in ("item.complete", "item.verify") or not isinstance(payload, dict):
             return payload
-        from .fold import fold, is_pool_item, result_digest
+        from .fold import is_pool_item, result_digest
         from .hub_policy import pool_review_problem
-        from .log import read_events
         iid = payload.get("id")
-        item = fold(read_events(self.space_dir)).items.get(iid) if isinstance(iid, str) else None
+        # The AUTHORITATIVE state (Codex re-audit, new 6): a lease nobody
+        # granted, published by git, must not decide what a check binds to.
+        state = authoritative_state(self.space_dir, registry_path=self.registry_path, policy=self.policy,
+                                    now_ms=self.clock())
+        item = state.items.get(iid) if isinstance(iid, str) else None
         if item is not None and is_pool_item(item):
             if type == "item.complete" and "result_digest" not in payload:
                 payload = {**payload, "result_digest": result_digest(payload)}

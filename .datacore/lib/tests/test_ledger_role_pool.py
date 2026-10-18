@@ -43,7 +43,7 @@ from ledger.events import EVENT_TYPES, Event, body_dict, compute_hash, to_line
 from ledger.fold import fold, pool_accepted
 from ledger.log import read_events
 sys.path.insert(0, str(Path(__file__).parent))
-from test_ledger_hub import GRANTOR, HUB_ID, OWNER, TEST_POLICY, Clock, allow_any, git_pull  # noqa: E402
+from test_ledger_hub import APPROVER, GRANTOR, HUB_ID, OWNER, TEST_POLICY, Clock, allow_any, git_pull  # noqa: E402
 
 DAY_MS = 24 * 3600 * 1000
 #: 2027-01-15T08:00:00Z -- far enough from midnight that a few hours do not cross it.
@@ -380,7 +380,10 @@ def test_the_fold_refuses_a_pool_completion_when_done_when_was_removed(env):
     own, wa = env.writer("own"), env.writer("wa")
     pool_item(own, "p1")
     wa.request_lease("p1")
-    own.append("item.update", {"id": "p1", "done_when": ""})
+    # Under a live attempt only the approver changes DONE_WHEN (Codex re-audit,
+    # new defect 5); the task's owner writer is refused, so the approver removes it.
+    assert refused(own.append, "item.update", {"id": "p1", "done_when": ""}).code == "not_authorized"
+    env.writer(APPROVER).append("item.update", {"id": "p1", "done_when": ""})
     git_pull(env.hub_dir, wa.space_dir)
     assert refused(wa.append, "item.complete", {"id": "p1"}).code == "no_done_when"
     err = refused(submit_raw, hub, wa, "item.complete", {"id": "p1"})

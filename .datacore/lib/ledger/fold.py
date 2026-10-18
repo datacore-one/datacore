@@ -960,6 +960,9 @@ def _lease_ref(event: Event, att: _Attempt | None = None) -> dict:
            "seq": event.seq, "hash": event.hash, "hlc": event.hlc}
     if att is not None and att.named:
         ref.update(attempt=att.key, task_hash=att.task_hash, epoch=att.epoch, holder=att.holder)
+    for key in ("class", "review"):
+        if key in (event.payload or {}):
+            ref[key] = event.payload[key]           # pinned to the attempt (Codex re-audit, new 5)
     role = (event.payload or {}).get("role")
     if isinstance(role, dict):
         # The role instructions this attempt was given, pinned by content hash
@@ -1182,8 +1185,16 @@ def pool_role(payload) -> str | None:
 
 
 def is_pool_item(item) -> bool:
-    """A pool item that a hub has leased (the only kind pool rules touch)."""
-    return bool(pool_role(getattr(item, "payload", None))) and getattr(item, "lease_ref", None) is not None
+    """A pool item that a hub has leased (the only kind pool rules touch).
+
+    The class the lease attempt PINNED decides when it names one (Codex
+    re-audit, new defect 5): a holder that re-addresses the task to itself
+    during its attempt does not turn submitted-for-review work into a plain
+    completion. Leases from before the pin keep the task's own fields."""
+    ref = getattr(item, "lease_ref", None)
+    if isinstance(ref, dict) and ref.get("class") in ("pool", "addressed"):
+        return ref["class"] == "pool"
+    return bool(pool_role(getattr(item, "payload", None))) and ref is not None
 
 
 def result_digest(payload) -> str:
