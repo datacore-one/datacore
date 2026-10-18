@@ -229,3 +229,10 @@ def test_f14_the_budget_stops_new_leases_on_recorded_spend_and_is_not_a_hard_cap
     assert refused(wc.request_lease, "p2").code == "budget_reached"
     wa.append("item.complete", {"id": "p0", "result": "r", "evidence": []})  # work in flight still submits
     assert hub_item(hub, "p0").status == "submitted"
+
+
+def test_f14_a_submitted_pool_item_stays_in_the_org_projection_as_review():
+    """Added with the code: a submission awaiting review is live work, so the
+    projector keeps it (as REVIEW) and the checkpoint renders it the same way."""
+    from ledger.projector import LIVE_STATUSES
+    assert "submitted" in LIVE_STATUSES

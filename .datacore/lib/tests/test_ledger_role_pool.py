@@ -157,6 +157,14 @@ def pool_item(owner, iid: str, *, role: str = "researcher", done_when: str | Non
     owner.append("item.create", payload)
 
 
+def granted_role(env, name: str, template: str) -> dict:
+    """What a grant names for a role: the description to load and, pinned to the
+    attempt, the content hash of that file (amendment G, audit finding 14)."""
+    import hashlib
+    data = (env.roles_dir / Path(template).name).read_bytes()
+    return {"name": name, "template": template, "sha256": hashlib.sha256(data).hexdigest()}
+
+
 def refused(fn, *args) -> "hubmod.HubRefused":
     with pytest.raises(hubmod.HubRefused) as exc:
         fn(*args)
@@ -184,7 +192,7 @@ def test_an_addressed_task_is_leased_only_by_its_agent_and_names_its_role(env):
     assert refused(wb.request_lease, "mine").code == "not_eligible"          # another agent
     grant = wa.request_lease("mine")
     assert grant["status"] == "granted"                                      # the pool's budget is not its
-    assert grant["lease"]["payload"]["role"] == {"name": "researcher", "template": RESEARCHER}
+    assert grant["lease"]["payload"]["role"] == granted_role(env, "researcher", RESEARCHER)
     assert wa.request_lease("plain")["status"] == "granted"
     # Addressed work needs no DONE_WHEN and its own completion counts as before.
     wa.append("item.complete", {"id": "mine"})
@@ -203,7 +211,7 @@ def test_any_registered_agent_may_lease_an_unaddressed_role_task_one_at_a_time(e
 
     grant = wa.request_lease("p1")                                           # no membership grant needed
     assert grant["status"] == "granted"
-    assert grant["lease"]["payload"]["role"] == {"name": "researcher", "template": RESEARCHER}
+    assert grant["lease"]["payload"]["role"] == granted_role(env, "researcher", RESEARCHER)
     assert refused(wb.request_lease, "p1").code == "taken"                   # one lease at a time
     assert wb.request_lease("p2")["status"] == "granted"
     assert wc.request_lease("s1")["status"] == "granted"                     # any role, any agent
@@ -248,8 +256,8 @@ def test_a_role_with_only_the_base_layer_names_the_base_file(env):
     own, wa = env.writer("own"), env.writer("wa")
     (env.roles_dir / "dev.base.md").write_text("# dev\n")
     pool_item(own, "d1", role="dev")
-    assert wa.request_lease("d1")["lease"]["payload"]["role"] == {
-        "name": "dev", "template": ".datacore/templates/roles/dev.base.md"}
+    assert wa.request_lease("d1")["lease"]["payload"]["role"] == granted_role(
+        env, "dev", ".datacore/templates/roles/dev.base.md")
 
 
 # ── 4. no assignee and no role: still not dispatched ────────────────────────

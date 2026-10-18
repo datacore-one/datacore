@@ -129,6 +129,11 @@ class ItemState:
     #: event hash -> why: results that arrived after the grantor ended their
     #: attempt (audit finding 9). Not completions; the owner decides.
     lease_unresolved: dict[str, str] = field(default_factory=dict)
+    #: ROLE POOLS (amendment G; audit finding 14). A pool item's completion is
+    #: a SUBMISSION FOR REVIEW: {attempt, task_hash, result_digest,
+    #: role_sha256, holder}. Status `submitted` until a check by another
+    #: execution identity, bound to exactly this, makes it `verified`.
+    submission: dict | None = None
 
 
 @dataclass
@@ -136,7 +141,7 @@ class LedgerState:
     items: dict[str, ItemState] = field(default_factory=dict)
     spend: dict[str, int] = field(default_factory=dict)
     orphans: list[str] = field(default_factory=list)
-    #: ROLE POOLS (amendment F). "hub|grantor|role" -> {cents_per_day, space}, from `pool.budget`.
+    #: ROLE POOLS (amendment G). "hub|grantor|role" -> {cents_per_day, space}, from `pool.budget`.
     budgets: dict[str, dict] = field(default_factory=dict)
     #: "role|YYYY-MM-DD" (UTC day of the spend's HLC) -> cents, from hub-stamped
     #: `spend.record` events naming a pool item (a role and no assignee).
@@ -192,6 +197,8 @@ class LedgerState:
                     document.pop(key, None)
             if not document.get('lease_unresolved'):
                 document.pop('lease_unresolved', None)
+            if document.get('submission') is None:
+                document.pop('submission', None)
             h.update(canonical_bytes({"key": iid, "item": document}))
         h.update(canonical_bytes({"spend": dict(sorted(self.spend.items()))}))
         h.update(canonical_bytes({"orphans": sorted(self.orphans)}))
@@ -447,9 +454,19 @@ def _handle_complete(state: LedgerState, event: Event) -> None:
     if item.owner != event.actor:
         _note(item, event, f"no-op (not owner, owner={item.owner!r})")
         return
-    why = pool_refusal(item, event.type, event.actor)
+    why = pool_refusal(item, event.type, event.actor, event.payload)
     if why:
         _note(item, event, f"no-op ({why})")
+        return
+    if is_pool_item(item):
+        # Submitted for review, not done (amendment G): it records what was
+        # submitted, under which attempt and which role instructions.
+        ref = item.lease_ref or {}
+        item.status = "submitted"
+        item.submission = {"attempt": ref.get("attempt"), "task_hash": ref.get("task_hash"),
+                           "result_digest": result_digest(event.payload),
+                           "role_sha256": (ref.get("role") or {}).get("sha256"), "holder": event.actor}
+        _note(item, event, "applied (submitted for review)")
         return
     item.status = "completed"
     item.closed_at = event.hlc
@@ -506,10 +523,10 @@ def _handle_verify(state: LedgerState, event: Event) -> None:
     item = _get_item_or_orphan(state, event)
     if item is None or _dismissed(state, event, item):
         return
-    if item.status != "completed":
+    if item.status != ("submitted" if is_pool_item(item) else "completed"):
         _note(item, event, f"no-op (illegal transition from status={item.status})")
         return
-    why = pool_refusal(item, event.type, event.actor)
+    why = pool_refusal(item, event.type, event.actor, event.payload)
     if why:
         _note(item, event, f"no-op ({why})")
         return
@@ -521,6 +538,8 @@ def _handle_verify(state: LedgerState, event: Event) -> None:
         _note(item, event, "no-op (completer cannot verify own work)")
         return
     item.status = "verified"
+    if item.submission is not None:
+        item.closed_at = event.hlc          # a pool item is done when the review accepts it
     _note(item, event, "applied")
 
 
@@ -617,7 +636,7 @@ def org_task_state(item):
         return None
     if item.status in ('verified', 'dismissed'):
         return 'DONE' if was_finished(item) else 'CANCELLED'
-    if item.status == 'completed':
+    if item.status in ('completed', 'submitted'):
         return 'REVIEW'
     return payload.get('state') or 'TODO'
 
@@ -887,6 +906,11 @@ def _lease_ref(event: Event, att: _Attempt | None = None) -> dict:
            "seq": event.seq, "hash": event.hash, "hlc": event.hlc}
     if att is not None and att.named:
         ref.update(attempt=att.key, task_hash=att.task_hash, epoch=att.epoch, holder=att.holder)
+    role = (event.payload or {}).get("role")
+    if isinstance(role, dict):
+        # The role instructions this attempt was given, pinned by content hash
+        # (amendment G): a later edit of the template is another attempt's.
+        ref["role"] = {k: role.get(k) for k in ("name", "template", "sha256")}
     return ref
 
 
@@ -931,7 +955,7 @@ def _handle_lease(state: LedgerState, event: Event) -> None:
         # with no DONE_WHEN is a recorded conflict in every copy, never a lease.
         _lease_conflict(item, event, f"lease of a pool item with no DONE_WHEN to {att.holder!r}")
         return
-    if item.status in ("completed", "verified", "archived"):
+    if item.status in ("completed", "submitted", "verified", "archived"):
         _note(item, event, f"no-op (lease illegal from status={item.status})")
         return
     if _current_attempt(item) == att.key:
@@ -1063,7 +1087,7 @@ def _handle_lease_conflict(state: LedgerState, event: Event) -> None:
     _note(item, event, "recorded (lease conflict)")
 
 
-# ── ROLE POOLS (DIP-0034 October 2026 amendment, section F) ─────────────────
+# ── ROLE POOLS (DIP-0034 October 2026 amendment, section G) ─────────────────
 #
 # The role is named in the task (owner decision, 2026-10-18). A task addressed
 # to an agent is that agent's, role or not. A task with a role and NO assignee
@@ -1108,19 +1132,47 @@ def is_pool_item(item) -> bool:
     return bool(pool_role(getattr(item, "payload", None))) and getattr(item, "lease_ref", None) is not None
 
 
-def pool_refusal(item, etype: str, actor: str) -> str | None:
-    """Why the fold will not count this completion or check of a pool item."""
+def result_digest(payload) -> str:
+    """The digest a pool submission records: sha256 over the canonical
+    {result, evidence} of the completion (amendment G)."""
+    import hashlib
+    from .events import canonical_bytes
+    p = payload if isinstance(payload, dict) else {}
+    return hashlib.sha256(canonical_bytes({"result": p.get("result"), "evidence": p.get("evidence")})).hexdigest()
+
+
+def pool_refusal(item, etype: str, actor: str, payload=None) -> str | None:
+    """Why the fold will not count this completion or check of a pool item.
+
+    "code: why". The fold sees writer names only; that the checker is another
+    EXECUTION IDENTITY (another principal) is `hub_policy.authorize`'s rule,
+    applied by the hub and by `fold(..., policy=)`."""
     if item is None or not is_pool_item(item):
         return None
-    if etype == "item.complete" and not done_when_of(item.payload):
-        return "no_done_when: a pool item's completion needs a DONE_WHEN"
-    if etype == "item.verify" and actor == item.lease_holder:
-        return "own_check: the lease holder cannot check its own work; another actor must"
+    p = payload if isinstance(payload, dict) else {}
+    if etype == "item.complete":
+        if not done_when_of(item.payload):
+            return "no_done_when: a pool item's completion needs a DONE_WHEN"
+        if "result_digest" in p and p["result_digest"] != result_digest(p):
+            return "bad_digest: the completion's result_digest does not match its result and evidence"
+        return None
+    if etype == "item.verify":
+        from actor_identity import base_writer
+        holder = (item.submission or {}).get("holder") or item.lease_holder
+        if holder and base_writer(actor) == base_writer(holder):
+            return "own_check: the lease holder cannot check its own work; another actor must"
+        sub = item.submission
+        if sub is not None:
+            for key in ("attempt", "task_hash", "result_digest"):
+                if p.get(key) != sub.get(key):
+                    what = "result digest" if key == "result_digest" else key.replace("_", " ")
+                    return (f"unbound: the check names another {what} than the submission it would accept "
+                            f"(submitted {key} {str(sub.get(key))[:16]})")
     return None
 
 
 def pool_accepted(item) -> bool:
-    """A pool item's completion is accepted only once another actor checked it."""
+    """A pool item is done only once another execution identity checked its submission."""
     return is_pool_item(item) and item.status == "verified"
 
 

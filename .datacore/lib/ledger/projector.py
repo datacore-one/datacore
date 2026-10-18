@@ -66,7 +66,9 @@ GENERATED_HEADER = (
 #: Until 2026-09-05 completed counted as closed and fell out of the projection
 #: after the retention day: 24 agent-finished tasks in 2-datacore had vanished
 #: from the human's list with nobody having signed them off.
-LIVE_STATUSES = ("created", "claimed", "granted", "completed")
+#: `submitted` is a pool item's completion awaiting its independent check
+#: (DIP-0034 amendment G): REVIEW too.
+LIVE_STATUSES = ("created", "claimed", "granted", "completed", "submitted")
 
 #: Statuses that mean the work is finished and signed off.
 CLOSED_STATUSES = ("verified", "dismissed")

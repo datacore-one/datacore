@@ -32,8 +32,11 @@ recorded no-op in every copy. The rules are the existing policy's:
     content) when the effects need one or the item was approved before, and
     immutable creation-authority fields;
   * `item.complete` of a pool item: only under a lease, and only with a
-    DONE_WHEN; `item.verify` of a pool item: never by its lease holder
-    (`fold.pool_refusal`, amendment G);
+    DONE_WHEN (it is a submission for review); `item.verify` of a pool item:
+    bound to the submission's attempt, task hash and result digest, and by an
+    INDEPENDENT EXECUTION IDENTITY -- a registered principal other than the
+    holder's, not merely another writer name (`pool_review_problem`,
+    amendment G, audit finding 14);
   * `item.dismiss`, `item.release`, `owner.set`, `item.archive`,
     `item.reopen` of another principal's item: the arbitration order, when
     the policy declares one (policy.py stage 5).
@@ -240,8 +243,7 @@ def authorize(event, state, seen: Mapping, inputs: PolicyInputs) -> str | None:
         if (item.payload or {}).get("role") and item.lease_ref is None:
             return f"{item_id} is a pool item; it is completed only under a hub lease"
     if t in ("item.complete", "item.verify"):
-        from .fold import pool_refusal
-        return pool_refusal(item, t, actor)
+        return pool_review_problem(item, t, actor, payload, inputs)
 
     if t in _ARBITRATED and inputs.arbitration and item.owner:
         owner_p = _principal(str(item.owner), inputs) or _base(str(item.owner))
@@ -250,4 +252,31 @@ def authorize(event, state, seen: Mapping, inputs: PolicyInputs) -> str | None:
         if owner_p != actor_p and not (actor_p in order and (
                 owner_p not in order or order.index(actor_p) < order.index(owner_p))):
             return f"{actor_p} may not override {owner_p}'s item (arbitration: {' > '.join(order)})"
+    return None
+
+
+def pool_review_problem(item, etype: str, actor: str, payload, inputs: PolicyInputs) -> str | None:
+    """Why this completion or check of a pool item is not authorized ("code: why"), or None.
+
+    The fold's own rule (`fold.pool_refusal`: DONE_WHEN, digest, binding, not
+    the holder's own writer) plus the one the fold cannot see without the
+    registry: the checker's EXECUTION IDENTITY. The registry identifies an
+    execution identity as a principal (principals.yaml: one entry per agent or
+    human, with every writer name it uses). A checker must belong to a
+    principal, and to another one than the holder's. What the registry does
+    not distinguish, and so this does not check: two separate RUNS of one
+    principal, or two principals sharing one process or host.
+    """
+    from .fold import is_pool_item, pool_refusal
+    why = pool_refusal(item, etype, actor, payload)
+    if why or etype != "item.verify" or not is_pool_item(item):
+        return why
+    holder = (item.submission or {}).get("holder") or item.lease_holder or ""
+    mine, theirs = _principal(actor, inputs), _principal(str(holder), inputs)
+    if mine is None:
+        return (f"not_independent: {actor!r} belongs to no registered principal, so its execution identity "
+                f"cannot be shown independent of the holder {holder!r}")
+    if mine == theirs:
+        return (f"not_independent: {actor!r} and the holder {holder!r} are one execution identity "
+                f"(principal {mine!r}); another principal must check")
     return None

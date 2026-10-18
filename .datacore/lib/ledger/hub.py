@@ -100,12 +100,29 @@ ELIGIBILITY. `eligibility(item, actor, state) -> reason | None` decides
 whether `actor` may lease `item`. The default is the assignee rule: an item
 addressed to one exact writer is leasable by that writer only; an unaddressed
 item and a pool item (`role`) are refused. A space that opts in to pools
-(`enable_pools`, amendment F) uses `pool_rule` instead. The role is named in
+(`enable_pools`, amendment G) uses `pool_rule` instead. The role is named in
 the task (owner decision 2026-10-18): an addressed task keeps the assignee
 rule; an unaddressed task with a role and a DONE_WHEN may be leased by any
 registered agent principal, while the role's daily `pool.budget` lasts. Either
 way a role in the task makes the grant name the role description to load
-(`.datacore/templates/roles/<role>.md`), and a role with none is refused.
+(`.datacore/templates/roles/<role>.md`) and pin its content hash to the
+attempt (`role.sha256`; `HubWriter.load_role` refuses a changed file), and a
+role with none is refused.
+
+POOL COMPLETION IS A SUBMISSION (amendment G; audit finding 14). The holder's
+`item.complete` of a pool item records a digest of its result and evidence
+and leaves the item `submitted`. Only an `item.verify` bound to that
+submission (attempt, task hash, result digest) by another EXECUTION IDENTITY
+-- a registered principal other than the holder's, per the registry, not
+merely another writer name -- makes it `verified`. The hub refuses anything
+else (`not_authorized`, `hub_policy.pool_review_problem`) and the fold with
+policy makes it a no-op. The registry cannot tell two runs of one principal
+apart; that is not checked.
+
+THE BUDGET IS A STOP-ON-RECORDED-SPEND THRESHOLD, not a hard cap: once the
+role's hub-stamped spend for the UTC day reaches `cents_per_day`, no NEW
+lease is granted. Work in flight, parallel leases and late (offline) spend
+can cross it. No reservations, no refunds; only the grantor sets it.
 """
 
 from __future__ import annotations
@@ -184,7 +201,7 @@ class HubConfig:
     promoted_by: str = ""
     promoted_at: str = ""
     promote_reason: str = ""
-    #: Role pools (amendment F). Off unless the owner runs `enable_pools`.
+    #: Role pools (amendment G). Off unless the owner runs `enable_pools`.
     pools: bool = False
     #: This space's immutable id, inside every event's signing domain (finding 6).
     space_id: str = ""
@@ -545,7 +562,7 @@ def promote(space_dir, new_grantor: str, *, by: str, reason: str, keys_dir=None,
 
 
 def enable_pools(space_dir, on: bool = True) -> HubConfig:
-    """The owner opts a hub space in to role pools (amendment F), or back out.
+    """The owner opts a hub space in to role pools (amendment G), or back out.
 
     Off by default. With pools off the hub keeps the assignee rule only, and
     records no budget. Commit the changed config.
@@ -588,7 +605,7 @@ def assignee_rule(item, actor: str, state) -> str | None:
     """
     payload = getattr(item, "payload", None) or {}
     if payload.get("role"):
-        return "pool items (role) are not enabled: roles, pools and budgets are amendment F"
+        return "pool items (role) are not enabled: roles, pools and budgets are amendment G"
     return _addressed(payload, actor)
 
 
@@ -605,7 +622,7 @@ def _addressed(payload: dict, actor: str) -> str | None:
     return None
 
 
-# ── role pools (amendment F) ─────────────────────────────────────────────────
+# ── role pools (amendment G) ─────────────────────────────────────────────────
 
 def role_template(role) -> str | None:
     """The role description an agent loads for `role`, as an installation-relative
@@ -618,6 +635,11 @@ def role_template(role) -> str | None:
         if (ROLES_DIR / name).is_file():
             return f"{ROLES_REL}/{name}"
     return None
+
+
+def role_template_sha256(template: str) -> str:
+    """sha256 of the role description `role_template` named (its file under ROLES_DIR)."""
+    return hashlib.sha256((ROLES_DIR / Path(template).name).read_bytes()).hexdigest()
 
 
 def registered_agent(actor: str) -> str | None:
@@ -1134,7 +1156,7 @@ class Hub:
         if item is None:
             raise HubRefused("unknown_item", f"no item {item_id!r} in this space")
         now = self.clock()
-        if item.status in ("completed", "verified", "dismissed", "archived"):
+        if item.status in ("completed", "submitted", "verified", "dismissed", "archived"):
             raise HubRefused("closed", f"{item_id} is {item.status}")
         if self.barrier:
             # THE RECOVERY BARRIER (finding 10): after a restart that lost
@@ -1192,7 +1214,9 @@ class Hub:
             if template is None:
                 raise HubRefused("unknown_role", f"{role!r} has no role description in {ROLES_REL}/ "
                                  f"({role}.md); add one or change the task's role")
-            grant_role = {"name": role, "template": template}
+            # The attempt pins the template's CONTENT (amendment G): the hash of
+            # the file the holder is told to load, as it is now.
+            grant_role = {"name": role, "template": template, "sha256": role_template_sha256(template)}
         from .fold import pool_role
         if cfg.pools and pool_role(item.payload):
             # The day's budget (amendment G): a stop-on-recorded-spend
@@ -1376,7 +1400,7 @@ class Hub:
                 "request": _request_ref(req)}, after=_item_floor(events, item_id))
             return {"status": "renewed", "lease": _event_dict(event), "log": self.log.log_name}
 
-    # ── pool budget (amendment F) ───────────────────────────────────────────
+    # ── pool budget (amendment G): a stop-on-recorded-spend threshold ───────
     def _pool_writable(self) -> HubConfig:
         cfg = self._writable(grant=True)
         if not cfg.pools:
@@ -1384,7 +1408,8 @@ class Hub:
         return cfg
 
     def set_budget(self, role: str, cents_per_day: int) -> dict:
-        """The role pool's daily spending cap, in cents (0 closes the pool)."""
+        """The role pool's daily threshold, in cents (0 closes the pool): new
+        leases stop once the day's recorded spend reaches it. Not a hard cap."""
         with self._mutex:
             self._pool_writable()
             if role_template(role) is None:
@@ -1772,7 +1797,7 @@ class HubWriter:
             held = self._attempt_for(payload.get("id"))
             if held:
                 payload = {**payload, **{k: v for k, v in held.items() if v}}
-        self._pool_precheck(type, payload)
+        payload = self._pool_prepare(type, payload)
         event = self.log.append(type, payload, after=self._floor())
         try:
             receipt = self._send(event)
@@ -1792,24 +1817,59 @@ class HubWriter:
         self._clear_outage()
         return event, receipt
 
-    def _pool_precheck(self, type: str, payload: dict) -> None:
-        """Refuse, before anything is written, a pool completion or check the
-        fold would not count: the holder's own check, a completion without a
-        DONE_WHEN. Judged on this writer's copy of the log plus its own lease
-        receipts; what it cannot see the hub refuses (`not_authorized`, the
-        same rule in `hub_policy.authorize`)."""
-        if not self.cfg.pools or type not in ("item.complete", "item.verify"):
-            return
-        from .fold import fold, pool_refusal
+    def _pool_prepare(self, type: str, payload: dict) -> dict:
+        """A pool completion or check, made explicit and judged before anything
+        is written (amendment G; audit finding 14).
+
+        * A completion records `result_digest` over its result and evidence:
+          it is a submission for review.
+        * A check names the attempt, task hash and result digest of the
+          submission it reviewed (as this writer's copy of the log shows it).
+        * Refused here, with nothing written: what the policy rule would refuse
+          (`hub_policy.pool_review_problem`: no DONE_WHEN, a bad digest, an
+          unbound check, the holder's own check, a checker of the holder's own
+          principal or of none). What this copy cannot see the hub refuses
+          (`not_authorized`)."""
+        if not self.cfg.pools or type not in ("item.complete", "item.verify") or not isinstance(payload, dict):
+            return payload
+        from .fold import fold, is_pool_item, result_digest
+        from .hub_policy import pool_review_problem
         from .log import read_events
-        iid = (payload or {}).get("id")
+        iid = payload.get("id")
         item = fold(read_events(self.space_dir)).items.get(iid) if isinstance(iid, str) else None
-        why = pool_refusal(item, type, self.actor) if item is not None else None
+        if item is not None and is_pool_item(item):
+            if type == "item.complete" and "result_digest" not in payload:
+                payload = {**payload, "result_digest": result_digest(payload)}
+            if type == "item.verify" and item.submission is not None:
+                payload = {**{k: item.submission.get(k) for k in ("attempt", "task_hash", "result_digest")},
+                           **payload}
+        why = pool_review_problem(item, type, self.actor, payload, self.policy) if item is not None else None
         if (not why and type == "item.verify" and (item is None or item.lease_holder is None)
                 and any(r.get("item") == iid for r in self.receipts())):
             why = "own_check: the lease holder cannot check its own work; another actor must"
         if why:
             raise HubRefused(why.split(":", 1)[0], why)
+        return payload
+
+    def load_role(self, item_id: str) -> str:
+        """The role description this writer's lease on `item_id` names, read
+        from this host's checkout and checked against the content hash the
+        attempt pinned (amendment G). `role_changed` when the file here is not
+        the one the lease named: the holder never executes other instructions
+        than its attempt was granted."""
+        for r in reversed(self.receipts()):
+            role = (((r.get("event") or {}).get("payload") or {}).get("role")) if r.get("item") == item_id else None
+            if isinstance(role, dict) and role.get("template"):
+                path = ROLES_DIR / Path(role["template"]).name
+                try:
+                    data = path.read_bytes()
+                except OSError:
+                    raise HubRefused("role_missing", f"{role['template']} is not on this host") from None
+                if hashlib.sha256(data).hexdigest() != role.get("sha256"):
+                    raise HubRefused("role_changed", f"{role['template']} is not the version this lease attempt "
+                                     "pinned; it was changed after the grant")
+                return data.decode("utf-8")
+        raise HubRefused("no_role", f"this writer holds no lease on {item_id!r} that names a role")
 
     def publish(self, message: str) -> str:
         """Commit this writer's own log files, nothing else (finding 15): the git

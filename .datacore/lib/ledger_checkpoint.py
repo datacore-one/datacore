@@ -191,7 +191,7 @@ def _fingerprint(state, space_filetags: set | None = None,
         # 0-personal as "altered" by a restore that preserved them exactly
         # (2026-08-30), the same false-alarm class as the timestamp and
         # filetag asymmetries above. A missing state MEANS TODO here.
-        rendered_state = "REVIEW" if item.status == "completed" else (p.get("state") or "TODO")
+        rendered_state = "REVIEW" if item.status in ("completed", "submitted") else (p.get("state") or "TODO")
         org = p.get('org') or {}
         created = org.get('created')
         genesis = p.get('genesis') or {}

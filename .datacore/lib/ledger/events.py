@@ -131,7 +131,7 @@ OWNER_EVENT_TYPES = frozenset({"hub.enable", "hub.promote"})
 # with `ledger.void`. Nothing is deleted or re-signed.
 EVENT_TYPES = EVENT_TYPES | HUB_EVENT_TYPES | OWNER_EVENT_TYPES | {"hub.fence", "ledger.reject"}
 
-# ── ROLE POOLS (DIP-0034 October 2026 amendment, section F) ─────────────────
+# ── ROLE POOLS (DIP-0034 October 2026 amendment, section G) ─────────────────
 # The role is named in the task (owner decision 2026-10-18); who may pick up an
 # unaddressed role task is decided by the hub, not by a membership record. The
 # one pool fact, in a hub's OWN log and written only by that hub:
