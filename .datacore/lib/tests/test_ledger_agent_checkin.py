@@ -35,6 +35,8 @@ from ledger import checkin, presence
 
 HUB_ID = "hub-checkin-test"
 GRANTOR = "hubd"
+#: The space's owner, who signs the hub.enable record (ledger hub audit finding 4).
+OWNER = "owner"
 AGENTS = ("miles", "tris", "data", "winston")
 INTERVAL = 1800          # every agent's heartbeat timer: 30 minutes
 CYCLE = 6 * 3600         # Winston's check
@@ -80,9 +82,13 @@ class Env:
         self.clock = Clock()
         self.hub_dir = tmp / "hub-space"
         (self.hub_dir / ".datacore" / "events").mkdir(parents=True)
-        hubmod.enable(self.hub_dir, hub_id=HUB_ID, grantor=GRANTOR)
+        hubmod.enable(self.hub_dir, hub_id=HUB_ID, grantor=GRANTOR, owner=OWNER,
+                      keys_dir=self.keys_dir, registry_path=self.registry)
+        # A fixed policy, not this machine's approvals_policy.yaml (finding 12).
+        from ledger.hub_policy import PolicyInputs
+        self.policy = PolicyInputs(approver="boss", cosign_effects=frozenset({"payment"}))
         self.hub = hubmod.Hub(self.hub_dir, GRANTOR, keys_dir=self.keys_dir, registry_path=self.registry,
-                              state_dir=tmp / "hubstate", clock=self.clock)
+                              state_dir=tmp / "hubstate", clock=self.clock, policy=self.policy)
         self.transport = hubmod.LocalTransport(self.hub)
         # Winston's machine: its own git copy of the space.
         self.box_dir = tmp / "box-space"

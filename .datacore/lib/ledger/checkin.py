@@ -42,7 +42,7 @@ class Offline:
     def _down(self, *_a, **_k):
         raise hubmod.HubUnavailable("no hub named for this writer")
 
-    append = request_lease = renew_lease = status = presence = _down
+    append = request_lease = renew_lease = status = presence = seal_request = reconcile = _down
 
 
 def broker_token(cred_id: str, consumer: str = CONSUMER) -> str:
