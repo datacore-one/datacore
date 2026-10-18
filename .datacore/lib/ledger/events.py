@@ -107,12 +107,12 @@ HUB_EVENT_TYPES = frozenset({"item.lease", "item.lease.renew", "item.lease.confl
 EVENT_TYPES = EVENT_TYPES | HUB_EVENT_TYPES
 
 # ── ROLE POOLS (DIP-0034 October 2026 amendment, section F) ─────────────────
-# Membership facts in a hub's OWN log, written only by that hub:
-#   member.role  {actor, role, from, until}   -- the actor holds the role in this
-#                hub from `from` until `until` (hub-clock ms; until null = open)
+# The role is named in the task (owner decision 2026-10-18); who may pick up an
+# unaddressed role task is decided by the hub, not by a membership record. The
+# one pool fact, in a hub's OWN log and written only by that hub:
 #   pool.budget  {role, space, cents_per_day} -- the role's daily spending cap
-# A writer submitting either is refused (ledger.hub HUB_ONLY_TYPES).
-POOL_EVENT_TYPES = frozenset({"member.role", "pool.budget"})
+# A writer submitting it is refused (ledger.hub HUB_ONLY_TYPES).
+POOL_EVENT_TYPES = frozenset({"pool.budget"})
 EVENT_TYPES = EVENT_TYPES | POOL_EVENT_TYPES
 
 

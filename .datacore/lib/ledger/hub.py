@@ -45,9 +45,12 @@ ELIGIBILITY. `eligibility(item, actor, state) -> reason | None` decides
 whether `actor` may lease `item`. The default is the assignee rule: an item
 addressed to one exact writer is leasable by that writer only; an unaddressed
 item and a pool item (`role`) are refused. A space that opts in to pools
-(`enable_pools`, amendment F) uses `pool_rule` instead: items without a role
-keep the assignee rule; a pool item needs a DONE_WHEN and a live `member.role`
-in this hub's own log, and the role's daily `pool.budget` caps new leases.
+(`enable_pools`, amendment F) uses `pool_rule` instead. The role is named in
+the task (owner decision 2026-10-18): an addressed task keeps the assignee
+rule; an unaddressed task with a role and a DONE_WHEN may be leased by any
+registered agent principal, while the role's daily `pool.budget` lasts. Either
+way a role in the task makes the grant name the role description to load
+(`.datacore/templates/roles/<role>.md`), and a role with none is refused.
 """
 
 from __future__ import annotations
@@ -71,8 +74,10 @@ from .log import HubSigningRequired  # noqa: F401 -- re-exported: the hub's refu
 CONFIG = ".datacore/ledger-hub.json"
 #: Types only a hub writes. A writer submitting one is refused.
 HUB_ONLY_TYPES = HUB_EVENT_TYPES | POOL_EVENT_TYPES | {"ledger.seal"}
-#: Role definitions (amendment F). A role recorded in a hub must be one of these.
+#: Role descriptions (amendment F): a task's role must have one here. The grant
+#: names it by its installation-relative path, ROLES_REL/<file>.
 ROLES_DIR = Path(__file__).resolve().parents[2] / "templates" / "roles"
+ROLES_REL = ".datacore/templates/roles"
 _ROLE = re.compile(r"[a-z][a-z0-9_-]*(\.[a-z0-9_-]+)*")
 #: A signed request older or newer than this (hub clock) is refused.
 REQUEST_WINDOW_MS = 5 * 60 * 1000
@@ -197,7 +202,7 @@ def enable_pools(space_dir, on: bool = True) -> HubConfig:
     """The owner opts a hub space in to role pools (amendment F), or back out.
 
     Off by default. With pools off the hub keeps the assignee rule only, and
-    records no membership or budget. Commit the changed config.
+    records no budget. Commit the changed config.
     """
     cfg = load_config(space_dir)
     if cfg is None:
@@ -229,7 +234,7 @@ def _wall_ms() -> int:
 # ── the default eligibility: the assignee rule ──────────────────────────────
 
 def assignee_rule(item, actor: str, state) -> str | None:
-    """Who may lease `item` until pools exist (amendment F is step 5).
+    """Who may lease `item` when the space has not opted in to pools.
 
     Same rule as the dispatcher (ledger_claim.py, owner decision L4): only the
     exact writer the item is addressed to. An item addressed to nobody is not
@@ -238,6 +243,10 @@ def assignee_rule(item, actor: str, state) -> str | None:
     payload = getattr(item, "payload", None) or {}
     if payload.get("role"):
         return "pool items (role) are not enabled: roles, pools and budgets are amendment F"
+    return _addressed(payload, actor)
+
+
+def _addressed(payload: dict, actor: str) -> str | None:
     assignee = payload.get("assignee")
     if not assignee:
         return "addressed to nobody: the assignee rule does not dispatch it"
@@ -252,39 +261,50 @@ def assignee_rule(item, actor: str, state) -> str | None:
 
 # ── role pools (amendment F) ─────────────────────────────────────────────────
 
-def known_role(role: str) -> bool:
-    """A role name defined in `.datacore/templates/roles/` (any name when that
-    directory is absent, e.g. in a stripped-down install)."""
+def role_template(role) -> str | None:
+    """The role description an agent loads for `role`, as an installation-relative
+    path, or None when there is none. `<role>.md` is the composed file; before
+    it is built (DIP-0002 layers) the `<role>.base.md` layer is the one that exists.
+    Looked up on every call, so a template added later is found."""
     if not isinstance(role, str) or not _ROLE.fullmatch(role):
-        return False
-    if not ROLES_DIR.is_dir():
-        return True
-    return (ROLES_DIR / f"{role}.base.md").exists() or (ROLES_DIR / f"{role}.md").exists()
-
-
-def pool_rule(item, actor: str, state, *, hub_id: str, grantor: str, now_ms: int) -> str | None:
-    """Eligibility in a space with pools on.
-
-    An item with no `role` is judged by the assignee rule exactly as before (an
-    unaddressed item is still not dispatched). A pool item names a role and no
-    assignee, carries a DONE_WHEN, and is leased only to an actor whose live
-    membership in THIS hub holds the role. The fold applies the same membership
-    rule to every lease (`fold._handle_lease`), so a grant that skips this check
-    does not become a lease anywhere. The daily budget is checked by the hub
-    after this (`budget_reached`), because it is about the day, not the actor.
-    """
-    from .fold import done_when_of, role_live
-    payload = getattr(item, "payload", None) or {}
-    role = payload.get("role")
-    if not role:
-        return assignee_rule(item, actor, state)
-    if payload.get("assignee"):
-        return "both an assignee and a role: address it to one writer or to a pool, not both"
-    if not done_when_of(payload):
-        return "a pool item needs a DONE_WHEN before anyone may lease it"
-    if not role_live(state, hub_id, grantor, actor, str(role), now_ms):
-        return f"{actor!r} holds no live membership of role {role!r} in hub {hub_id!r}"
+        return None
+    for name in (f"{role}.md", f"{role}.base.md"):
+        if (ROLES_DIR / name).is_file():
+            return f"{ROLES_REL}/{name}"
     return None
+
+
+def registered_agent(actor: str) -> str | None:
+    """None when `actor` writes for a principal of `kind: agent`; else why not."""
+    from actor_identity import principal_of
+    try:
+        name, entry = principal_of(actor)
+    except ValueError as exc:
+        return f"cannot tell whether {actor!r} is an agent: {exc}"
+    if not name:
+        return f"{actor!r} belongs to no registered principal; only an agent picks up a pool task"
+    if entry.get("kind") != "agent":
+        return f"{actor!r} writes for {name!r}, which is not an agent principal"
+    return None
+
+
+def pool_rule(item, actor: str, state) -> str | None:
+    """Eligibility in a space with pools on (owner decision 2026-10-18).
+
+    An addressed task keeps the assignee rule, role or not: the main scenario.
+    An unaddressed task with no role is still not dispatched. An unaddressed
+    task with a role is a pool task: it needs a DONE_WHEN, and any registered
+    agent principal may lease it (the request is already signed). The hub then
+    checks the role description and the day's budget (`request_lease`), and
+    one live lease per item is the hub's rule as for every item.
+    """
+    from .fold import done_when_of, pool_role
+    payload = getattr(item, "payload", None) or {}
+    if not pool_role(payload):
+        return _addressed(payload, actor)
+    if not done_when_of(payload):
+        return "a pool task needs a DONE_WHEN before anyone may lease it"
+    return registered_agent(actor)
 
 
 # ── the hub ─────────────────────────────────────────────────────────────────
@@ -555,13 +575,21 @@ class Hub:
             if self.eligibility is not None:
                 why = self.eligibility(item, actor, state)
             elif cfg.pools:
-                why = pool_rule(item, actor, state, hub_id=cfg.hub_id, grantor=self.actor, now_ms=now)
+                why = pool_rule(item, actor, state)
             else:
                 why = assignee_rule(item, actor, state)
             if why:
                 raise HubRefused("not_eligible", why)
             role = (item.payload or {}).get("role")
+            grant_role = None
             if cfg.pools and role:
+                template = role_template(role)
+                if template is None:
+                    raise HubRefused("unknown_role", f"{role!r} has no role description in {ROLES_REL}/ "
+                                     f"({role}.md); add one or change the task's role")
+                grant_role = {"name": role, "template": template}
+            from .fold import pool_role
+            if cfg.pools and pool_role(item.payload):
                 from .fold import pool_budget, pool_spent
                 cap = pool_budget(state, cfg.hub_id, self.actor, str(role))
                 spent = pool_spent(state, str(role), now)
@@ -569,10 +597,12 @@ class Hub:
                     raise HubRefused("budget_reached", f"the {role!r} pool has spent {spent} of its {cap} "
                                      "cents today; no new leases until tomorrow (UTC)",
                                      spent=spent, cap=cap)
-            event = self.log.append("item.lease", {
-                "id": item_id, "holder": actor, "granted_ms": now,
-                "expires_ms": now + cfg.lease_ttl_s * 1000,
-                "request": {"nonce": req["nonce"], "ts_ms": req["ts_ms"]}})
+            lease = {"id": item_id, "holder": actor, "granted_ms": now,
+                     "expires_ms": now + cfg.lease_ttl_s * 1000,
+                     "request": {"nonce": req["nonce"], "ts_ms": req["ts_ms"]}}
+            if grant_role:
+                lease["role"] = grant_role          # the description the holder loads
+            event = self.log.append("item.lease", lease)
             return {"status": "granted", "lease": _event_dict(event), "log": self.log.log_name}
 
     def renew_lease(self, req: dict) -> dict:
@@ -590,41 +620,19 @@ class Hub:
                 "lease": {k: (item.lease_ref or {}).get(k) for k in ("log", "seq", "hash")}})
             return {"status": "renewed", "lease": _event_dict(event), "log": self.log.log_name}
 
-    # ── pool membership and budget (amendment F) ────────────────────────────
+    # ── pool budget (amendment F) ───────────────────────────────────────────
     def _pool_writable(self) -> HubConfig:
         cfg = self._writable(grant=True)
         if not cfg.pools:
             raise HubRefused("pools_off", f"{self.space_dir} has not opted in to pools (`enable_pools`)")
         return cfg
 
-    def record_role(self, actor: str, role: str, *, from_ms: int | None = None,
-                    until_ms: int | None = None) -> dict:
-        """Record that `actor` holds `role` in this hub from `from_ms` until
-        `until_ms` (hub clock; None = from now / open-ended). A later record for
-        the same actor and role replaces it, so ending a membership early is a
-        record with `until_ms` set to now."""
-        with self._mutex:
-            self._pool_writable()
-            if not isinstance(actor, str) or not _NAME.fullmatch(actor):
-                raise HubRefused("malformed", f"invalid actor {actor!r}")
-            if not known_role(role):
-                raise HubRefused("unknown_role", f"{role!r} is not a role defined in {ROLES_DIR}")
-            start = self.clock() if from_ms is None else from_ms
-            for v in (start, until_ms):
-                if v is not None and (isinstance(v, bool) or not isinstance(v, int)):
-                    raise HubRefused("malformed", "from_ms and until_ms are integer milliseconds")
-            if until_ms is not None and until_ms < start:
-                raise HubRefused("malformed", "a membership cannot end before it starts")
-            event = self.log.append("member.role", {"actor": actor, "role": role,
-                                                    "from": start, "until": until_ms})
-            return {"status": "recorded", "event": _event_dict(event)}
-
     def set_budget(self, role: str, cents_per_day: int) -> dict:
         """The role pool's daily spending cap, in cents (0 closes the pool)."""
         with self._mutex:
             self._pool_writable()
-            if not known_role(role):
-                raise HubRefused("unknown_role", f"{role!r} is not a role defined in {ROLES_DIR}")
+            if role_template(role) is None:
+                raise HubRefused("unknown_role", f"{role!r} has no role description in {ROLES_REL}/")
             if isinstance(cents_per_day, bool) or not isinstance(cents_per_day, int) or cents_per_day < 0:
                 raise HubRefused("malformed", "cents_per_day is a non-negative integer")
             event = self.log.append("pool.budget", {"role": role, "space": self.space_dir.name,

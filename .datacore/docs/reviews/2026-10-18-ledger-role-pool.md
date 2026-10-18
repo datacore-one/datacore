@@ -1,82 +1,117 @@
 # Ledger role pool: build report (2026-10-18)
 
-The first role pool on the ledger hub. Spec: the DIP-0034 October 2026 amendment
-(a draft), section F ("Roles belong to membership, not to the actor"). Task 7727bbff.
+Role pools on the ledger hub. Spec: the DIP-0034 October 2026 amendment (a
+draft), section F. Task 7727bbff.
 
 - **Branch:** `feat/ledger-role-pool`, branched from `feat/ledger-hub` at 89bc63a
 - **Commits:**
-  - 064056e: the evals, committed while they still failed
-  - 461af42: the implementation
-  - one more commit adds this report
+  - 064056e, 461af42, d470b09: the first build (membership model), its tests and its report
+  - 01aea80: the tests for the owner's model, committed while they still failed
+  - one more commit: the code change and this report, rewritten
 - **Not pushed, not merged, not deployed.**
 
-## What was built
+## The model: the role is named in the task
+
+The first build gave roles to agents through a membership record
+(`member.role`) that the hub wrote into its own log. The owner replaced that
+the same day (Gregor, 2026-10-18):
+
+> "The role is defined in the task. If the task isn't delegated to any agent
+> concretely, an available agent picks it up, loads the role description and
+> executes the task. This is not the main scenario; main is that most tasks
+> will be directly delegated."
+
+The membership model is gone. The `member.role` event type, `Hub.record_role`,
+`fold.role_live` and the fold's membership state were deleted, not left unused:
+nothing else needed them. `pool.budget` stays.
+
+### Rules as implemented (in a space with pools on)
+
+- **A task addressed to a named agent** (`assignee`): only that agent may lease
+  it. This is the assignee rule, unchanged, and it is the main scenario.
+  - It may also carry a `role`. Then the grant names that role's description,
+    and a role with no description is refused (`unknown_role`).
+  - It needs no DONE_WHEN, is not capped by any pool's budget, and its own
+    completion counts as before.
+- **An unaddressed task with a role** (`role`, no `assignee`) is a pool task.
+  Any *available* agent may lease it. No membership is needed. Available means:
+  - the lease request is signed by the writer (the hub already refuses an
+    unsigned or wrongly signed request);
+  - the writer belongs to a principal in `principals.yaml` with `kind: agent`.
+    A human principal, or a writer with a key but no principal, is refused
+    (`not_eligible`);
+  - the role's pool is under its daily budget (`budget_reached` otherwise).
+  - The task needs a DONE_WHEN: the `done_when` field in the payload, or the
+    `org.properties.DONE_WHEN` property.
+  - One live lease per task, as for every hub item: a second agent gets `taken`.
+- **The role description.** When the task has a role, the signed lease event
+  carries `role: {name, template}`. `template` is the installation-relative
+  path the holder loads: `.datacore/templates/roles/<role>.md`. Before the
+  composed file is built from its layers (DIP-0002), the hub names
+  `<role>.base.md` instead, the file that exists. The hub looks the file up at
+  lease time, so a description added later is found on the next request. A role
+  with neither file, or a role that is not a plain role name (no paths), is
+  refused with `unknown_role`. `set_budget` uses the same lookup.
+- **An unaddressed task with no role** is still not dispatched (owner rule since
+  2026-09-23).
+- **The daily budget.** Spending is counted from `spend.record` events that carry
+  a hub stamp and name a pool task (`payload.item`), grouped by role and by the
+  UTC day of the timestamp. Once the day's total reaches `cents_per_day`, the
+  hub refuses new leases on that role's tasks. Existing leases carry on (renew,
+  spend, complete); a new UTC day starts from zero; a role with no budget has no
+  cap; spending on addressed tasks does not count.
+- **Completion and check.** A pool task's completion needs a DONE_WHEN, and
+  counts as accepted (`pool_accepted`) only once an actor other than the lease
+  holder appends an `item.verify`. The holder's own check is refused by
+  `HubWriter` before anything is written; if one reaches the hub anyway, the hub
+  accepts the line, marks the receipt `not_counted: own_check…`, and the fold
+  ignores it. A completion after the DONE_WHEN was removed is handled the same
+  way (`no_done_when`). The reason the hub accepts instead of rejecting: a
+  rejected line the writer already appended locally would leave a gap that
+  blocks every later append from that writer.
+- **In the fold**, a lease of a pool task with no DONE_WHEN is a recorded
+  conflict in every copy, never a lease.
+- **Off unless the space opts in** (`python3 -m ledger.hub pools <space>`). With
+  pools off, every task with a role is refused exactly as before, addressed or
+  not, and `set_budget` is refused (`pools_off`).
+
+### Where it lives
 
 | Piece | Where |
 |---|---|
-| `member.role` {actor, role, from, until} and `pool.budget` {role, space, cents_per_day}. Only a hub writes them; a writer that submits one is refused (`hub_only_type`). | `ledger/events.py` (`POOL_EVENT_TYPES`), `ledger/hub.py` (`HUB_ONLY_TYPES`) |
-| The opt-in: `HubConfig.pools`, off by default; `enable_pools(space, on=True)`; CLI `python3 -m ledger.hub pools <space> [--off]` | `ledger/hub.py` |
-| `Hub.record_role(actor, role, from_ms=, until_ms=)`, `Hub.set_budget(role, cents_per_day)`. The active grantor only; refused with `pools_off` when the space has not opted in, and with `unknown_role` when the role is not defined in `.datacore/templates/roles/` | `ledger/hub.py` |
-| `pool_rule`: the eligibility hook the hub left for this step. It is used only when pools are on and no explicit override is passed. | `ledger/hub.py` |
-| Budget gate in `request_lease`, refusal code `budget_reached` | `ledger/hub.py` |
-| Writer pre-check (`HubWriter._pool_precheck`): refuses a holder's own check (`own_check`) and a completion without a DONE_WHEN (`no_done_when`) before anything is written | `ledger/hub.py` |
-| Fold: the `members`, `budgets` and `pool_spend` state; the membership and DONE_WHEN rules on pool leases; the completion and check rules; and the helpers `role_live`, `pool_budget`, `pool_spent`, `pool_refusal`, `pool_accepted` and `done_when_of` | `ledger/fold.py` |
-
-### Rules as implemented
-
-- **Who may lease a pool item.** An item with a `role` and no `assignee` is a pool item. It is leased only if:
-  - it has a DONE_WHEN: the `done_when` field in the payload, or the `org.properties.DONE_WHEN` property;
-  - the requesting actor has a `member.role` for that role;
-  - that membership was recorded by **the same hub log that grants the lease** (same hub id, same grantor);
-  - the membership is live at the hub-clock moment of the grant, meaning `from <= t < until` (an empty `until` means it never ends).
-  - A later `member.role` for the same actor and role replaces the earlier one. Ending a membership early is a record whose `until` is now.
-- **The same rule holds in the fold.** A lease that breaks it folds to a recorded `lease_conflicts` entry and never becomes a lease. That covers a hub with an override, an older hub, or a hand-written lease. Every copy of the log reaches the same state root.
-- **The daily budget.** Spending is counted from `spend.record` events that carry a hub stamp and name a pool item (`payload.item`). Each is grouped by role and by the UTC day of its HLC timestamp. Once the day's total reaches `cents_per_day`, the hub refuses new leases with `budget_reached`. A cap of 0 closes the pool.
-  - Existing leases are untouched: they can still be renewed, recorded as spending and completed.
-  - A new UTC day starts again from zero.
-  - A role without a `pool.budget` has no cap.
-  - Spending on items that are not pool items never counts.
-- **Completion and check.** When the holder completes a leased pool item, its status becomes `completed`. It counts as accepted (`pool_accepted`) only once an actor other than the holder appends an `item.verify` and the status reaches `verified`.
-  - The holder's own `item.verify` is refused by `HubWriter` before anything is written.
-  - If such a check reaches the hub some other way, the hub accepts it and marks the receipt `not_counted: own_check…`. The fold ignores it.
-  - A completion of a pool item whose DONE_WHEN was removed is handled the same way, under `no_done_when`.
-- **The assignee rule stays the default.**
-  - An item with neither an assignee nor a role is still `not_eligible`.
-  - An item with both an assignee and a role is refused as ambiguous.
-  - Addressed items behave exactly as before: they need no role and no DONE_WHEN, and they ignore the pool budget.
-  - With pools off, a role item is refused exactly as before.
-
-### Design choice to review: the hub accepts a refused check instead of rejecting it
-
-The hub *accepts* the holder's own check and a completion without a DONE_WHEN, marking them `not_counted`, rather than rejecting the append. A writer appends to its own log first. If the hub rejected an event the writer had already appended locally, every later append from that writer would hit a gap at that point, and the writer could not recover without someone editing its log. So the refusal is enforced in three places, and none of them can strand a writer:
-
-1. at the writer, before the write;
-2. in the fold, which is the arbiter;
-3. in the hub's receipt.
+| `pool.budget` {role, space, cents_per_day}, written only by a hub (`hub_only_type` for a writer) | `ledger/events.py` (`POOL_EVENT_TYPES`), `ledger/hub.py` (`HUB_ONLY_TYPES`) |
+| Eligibility with pools on: `pool_rule`, `registered_agent`, `role_template` | `ledger/hub.py` |
+| The role description in the grant, `unknown_role`, `budget_reached` | `Hub.request_lease` in `ledger/hub.py` |
+| `Hub.set_budget`, `enable_pools`, CLI `pools` | `ledger/hub.py` |
+| Writer pre-check (`own_check`, `no_done_when`) | `HubWriter._pool_precheck` in `ledger/hub.py` |
+| `pool_role`, `is_pool_item`, `pool_refusal`, `pool_accepted`, `done_when_of`, budget and spend state | `ledger/fold.py` |
 
 ## Results (run in this worktree, 2026-10-18)
 
-The evals are in `.datacore/lib/tests/test_ledger_role_pool.py`: 13 tests.
+The evals are in `.datacore/lib/tests/test_ledger_role_pool.py`: 16 tests.
 
-- **Red first:** at 064056e the file failed to collect. It imports `pool_accepted` from `ledger.fold`, which did not exist yet.
-- **Test fixes after the red commit:** before the first green run I changed three things in the fixture, and no assertion was changed:
-  - added a `sys.path` entry so the file can import the hub test's fixtures;
-  - made the log's clock-skew guard follow the test clock, the same way the timestamp clock already did;
-  - made the checker in two tests pull the log before checking. Without that its check got a timestamp earlier than the completion it was checking.
+- **Red first:** at 01aea80, 14 of 16 failed against the membership code. The 2
+  that passed were the pools-off test and the test that an unaddressed task
+  without a role is refused, behaviour that did not change.
+- **Green:** after the code change, 16 passed.
+- **Ledger suites** (`python3 -m pytest -q tests/test_ledger_*.py`): **620
+  passed** (837 s). Before this rework: 617 passed. The difference is the 13 old
+  role-pool tests replaced by 16 new ones.
 
-| DONE_WHEN line | Tests | Result |
-|---|---|---|
-| 1. Leases go only to live role members, in the hub and in the fold | `test_pool_item_is_leased_only_to_a_live_member_with_the_role`, `test_a_membership_that_has_expired_or_not_started_is_refused`, `test_the_fold_refuses_a_lease_to_an_actor_without_the_role`, `test_membership_is_recorded_only_by_the_hub_and_only_for_known_roles` | pass |
-| 2. The budget stops new leases, existing ones carry on, the next day resets | `test_daily_budget_stops_new_leases_keeps_existing_ones_and_resets_next_day`, `test_a_role_without_a_budget_is_not_capped_and_a_budget_is_per_role` | pass |
-| 3. DONE_WHEN is required; only another actor's check accepts the work | `test_a_pool_item_without_done_when_is_not_leased`, `test_completion_is_accepted_only_after_another_actors_check`, `test_the_fold_refuses_a_pool_completion_when_done_when_was_removed` | pass |
-| 4. The assignee rule is still the default | `test_with_pools_on_unaddressed_items_wait_and_addressed_items_are_unchanged` | pass |
-| 5. Off by default; old state roots unchanged | `test_pools_are_off_unless_the_space_opts_in`, `test_folding_a_log_without_pool_events_hashes_as_before` | pass |
-| Worked example | `test_worked_example_research_space` | pass |
+| Required behaviour | Tests |
+|---|---|
+| An addressed task: only its agent; the grant names its role; budget does not apply | `test_an_addressed_task_is_leased_only_by_its_agent_and_names_its_role` |
+| An unaddressed role task: any registered agent, no grant needed, one lease at a time | `test_any_registered_agent_may_lease_an_unaddressed_role_task_one_at_a_time`, `test_only_a_registered_agent_principal_is_available` |
+| The role description is named and must exist, checked at lease time | `test_a_role_without_a_template_is_refused_and_checked_at_lease_time`, `test_a_role_with_only_the_base_layer_names_the_base_file` |
+| No assignee and no role: not dispatched | `test_an_unaddressed_task_without_a_role_is_not_dispatched` |
+| The daily budget | `test_daily_budget_stops_new_leases_keeps_existing_ones_and_resets_next_day`, `test_a_role_without_a_budget_is_not_capped_and_a_budget_is_per_role` |
+| DONE_WHEN and another actor's check | `test_an_unaddressed_role_task_without_done_when_is_not_leased`, `test_the_fold_refuses_a_lease_of_a_pool_task_without_done_when`, `test_completion_is_accepted_only_after_another_actors_check`, `test_the_fold_refuses_a_pool_completion_when_done_when_was_removed` |
+| Off by default; membership gone; old state roots unchanged | `test_pools_are_off_unless_the_space_opts_in`, `test_membership_is_gone_and_the_budget_is_written_only_by_the_hub`, `test_folding_a_log_without_pool_events_hashes_as_before` |
+| Worked example | `test_worked_example_research_space` |
 
-Other suites:
-
-- **Ledger suites** (`pytest tests/test_ledger*.py`, which includes the hub tests): **617 passed**. Before this change, at 89bc63a, the count was 604 passed; the difference is the 13 new tests.
-- **Wider run** (`-k "claim or projector or seal or briefing or hermes or done_report or cadence or write_gate"`): 479 passed, 1 failed. The failure is `test_cadence_liveness.py::test_a_continuous_cadence_is_a_bot_loop_listed_grey_never_a_missing_registration`. It fails the same way on a clean copy of 89bc63a, so it was already failing before this work.
+The tests run in a tmp installation: a tmp `principals.yaml` (agents `wa`, `wb`,
+`wc`; the owner as a human writing as `own`) and fake role descriptions. The
+real role templates, keys and principals are never read.
 
 ## Worked example: one research space with the researcher role
 
@@ -86,27 +121,58 @@ python3 -m ledger.hub pools <space>
 ```
 
 ```python
-hub.record_role("wa", "researcher", until_ms=now + 30 * DAY_MS)   # the hub's own log
 hub.set_budget("researcher", 2_000)                               # 20.00 a day
 owner.append("item.create", {"id": "competitor-scan", "title": "Scan three competitors' pricing pages",
                              "role": "researcher",
                              "done_when": "a sourced summary of three competitors is attached and a reviewer has read it"})
-wa.request_lease("competitor-scan")          # granted: wa is a live researcher
-wb.request_lease("competitor-scan")          # not_eligible: wb holds no researcher membership
+grant = wa.request_lease("competitor-scan")   # granted: wa is a registered agent
+grant["lease"]["payload"]["role"]             # {"name": "researcher", "template": ".datacore/templates/roles/researcher.md"}
+wb.request_lease("competitor-scan")           # taken: one lease at a time
 wa.append("spend.record", {"item": "competitor-scan", "cents": 120, "model": "..."})
 wa.append("item.complete", {"id": "competitor-scan"})
-wa.append("item.verify", ...)                # own_check: refused before writing
+wa.append("item.verify", ...)                 # own_check: refused before writing
 wb.append("item.verify", {"id": "competitor-scan", "check": "..."})   # accepted -> pool_accepted() is True
 ```
 
-This example runs as `test_worked_example_research_space`. No production space config was changed.
+This runs as `test_worked_example_research_space`. No production space config
+was changed.
 
-## Not verified, and limits
+## Limits, and what is not verified
 
-- **Recording roles and budgets from the command line.** Not built. `record_role` and `set_budget` are methods on the running hub, because they must be signed with the grantor's key. The command line covers only `pools`. Not verified: how the owner triggers them in production, whether through a datacored route or an owner command on the hub host.
-- **Promotion.** Memberships and budgets count only from the hub log that grants. After a `promote`, the new grantor has to record them again. Until it does, pool leasing refuses everyone. That fails safe, but it is a step to remember, and there is no test of it.
-- **The budget is enforced by the hub, not re-checked by the fold.** A spending record from a writer that was offline can arrive later with an earlier timestamp. Re-checking the budget in the fold would then cancel, after the fact, a lease the hub granted in good faith. So the fold records the spending, and only the hub applies the cap. Two hubs during a partition could therefore together grant past one day's cap. The double run would still be visible through the earliest-lease rule.
-- **The budget check runs before the work, not during it.** It counts what has already been recorded, so one lease granted just under the cap can still push the day's total over it.
-- **Signatures on pool events through git.** The fold accepts a `member.role` from whatever log names the granting hub as its writer. A forged one is caught only by strict signature verification (`verify_chain(strict=True)` after the cutover point). The fold itself does not check keys. That is the same trust model as `item.lease` today.
-- **HttpTransport and datacored routes for pools.** Not added. Not verified over a network; every test uses `LocalTransport`.
-- **Who may check.** The checker is not required to hold any role, only to be someone other than the holder. The spec does not say more.
+- **The fold cannot check who is an agent.** `principals.yaml` is a private file
+  on each host, and the fold must reach the same state from the same log on
+  every host. So "a registered agent principal" and "the role description
+  exists" are checked by the hub only. A hub with an override, an older hub, or
+  a hand-written lease can give a pool task to a human or for a role with no
+  description, and the fold will accept it. The fold still refuses a pool lease
+  with no DONE_WHEN. The first build's fold did check membership; that check is
+  what was given up with the membership record.
+- **The role description lives on the hub's host.** `ROLES_DIR` is the code
+  checkout the hub runs from. The holder is told a path, not the content; if
+  the holder's host has a different version of that file, or none, it loads
+  that. Not verified: whether the role templates are tracked and synced to every
+  agent host. In the main checkout today the composed `.md` files are untracked.
+- **"Available" means eligible, not idle.** The hub does not track how many tasks
+  an agent already holds; an agent can lease several pool tasks at once. The
+  owner's words "an available agent" may mean more than this. Not decided.
+- **No dispatcher picks pool tasks yet.** An agent must ask for the lease
+  itself. Not built: the loop that offers unaddressed role tasks to idle agents,
+  and the step where the agent loads the named description before it starts.
+- **Addressed tasks with a role need pools on.** With pools off, the default
+  assignee rule still refuses every task that carries a role, addressed or not,
+  because that rule predates roles. If the main scenario (addressed, with a
+  role) should work in every hub space, the default rule needs to change; that
+  is a decision for the owner.
+- **The budget is enforced by the hub, not re-checked by the fold.** A late
+  spending record from a writer that was offline would otherwise cancel, after
+  the fact, a lease granted in good faith. Two hubs during a partition could
+  together grant past one day's cap. The check runs before the work, so one
+  lease granted just under the cap can push the day over it.
+- **Setting a budget from the command line.** Not built. `set_budget` is a method
+  on the running hub, because the event must be signed with the grantor's key.
+  After a `promote`, the new grantor has to set budgets again; until then the
+  role has no cap. No test of that.
+- **HttpTransport and datacored routes for pools.** Not added, not verified over
+  a network. Every test uses `LocalTransport`.
+- **Who may check.** The checker must be someone other than the holder; it need
+  not be an agent or hold any role. The spec does not say more.
