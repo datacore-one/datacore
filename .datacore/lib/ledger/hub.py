@@ -52,10 +52,19 @@ RULES THIS MODULE ENFORCES
     a seal operator; the API token is transport only (finding 18).
   * A lease is granted only when no live lease exists, only by the ACTIVE hub
     (the grantor the space's config names), only to an eligible actor.
-  * No automatic failover (G): a second hub instance refuses to grant (code
+  * No automatic failover (H): a second hub instance refuses to grant (code
     `not_active_hub`) until the owner runs `promote`; a second process of the
     same hub on one host is locked out (`locked`). There is deliberately no
     code path that promotes by itself.
+  * WHO GRANTS IS IN THE LEDGER (finding 4): `enable` and `promote` are
+    owner-signed records (`hub.enable`, `hub.promote`) in the owner's log, and
+    `authority()` derives the grantor epochs, fences and the cutover manifest
+    from them; the config file is a cache. A promotion needs the old grantor
+    fenced (its own `hub.fence`, or the owner's attestation that it stopped),
+    names the predecessor's frontier and last seal, and makes the new grantor
+    wait (`fencing_wait`) until every old-epoch lease expired plus the clock
+    uncertainty. Old-grantor events after the frontier are not admitted
+    (`fenced`), and new seals must extend the frontier.
   * After a restart the hub refuses, for one lease period, to re-grant an item
     whose lease expired unrenewed (`restart_grace`): its holder may have
     finished during the outage and not yet replayed.
@@ -84,13 +93,20 @@ from pathlib import Path
 from typing import Callable
 
 from .events import EVENT_TYPES, Event, canonical_bytes, compute_hash, event_body, from_line, to_line
-from .hub_admission import HUB_ONLY_TYPES, Authority, Refusal, admit, admit_chain, check_event, signing_domain
+from .events import OWNER_EVENT_TYPES
+from .hub_admission import (GENESIS, HUB_ONLY_TYPES, Authority, Epoch, Refusal, admit, admit_chain, check_event,
+                            signing_domain)
 from .log import HubSigningRequired  # noqa: F401 -- re-exported: the hub's refusal to write unsigned
 
 CONFIG = ".datacore/ledger-hub.json"
 #: A signed request older or newer than this (hub clock) is refused.
 REQUEST_WINDOW_MS = 5 * 60 * 1000
 DEFAULT_LEASE_TTL_S = 900
+#: Bounded wall-clock uncertainty between two grantors' clocks, added to the
+#: last old-epoch lease expiry before a promoted grantor may grant (finding 4).
+#: A deployment parameter the owner sets at `enable`; this default is not a
+#: measured bound.
+DEFAULT_CLOCK_UNCERTAINTY_MS = 120_000
 _NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
 
 Eligibility = Callable[[object, str, object], "str | None"]
@@ -145,8 +161,12 @@ class HubConfig:
     #: Who besides the grantor may request a seal over the network (finding 18).
     seal_operators: tuple = ()
     #: The grantor's promotion epoch (0 at `enable`, +1 per `promote`). Leases
-    #: are ordered by (epoch, grantor-log seq) (audit finding 8).
+    #: are ordered by (epoch, grantor-log seq) (audit finding 8). A CACHE of the
+    #: owner's records (`owner_records`), which decide; never authority itself.
     epoch: int = 0
+    #: The space's owner: signs `hub.enable` and `hub.promote` (finding 4).
+    owner: str = ""
+    clock_uncertainty_ms: int = DEFAULT_CLOCK_UNCERTAINTY_MS
 
 
 def load_config(space_dir) -> HubConfig | None:
@@ -177,6 +197,8 @@ def load_config(space_dir) -> HubConfig | None:
         raise ValueError(f"{path}: space_id must be a lowercase name (re-run `enable`)")
     if type(cfg.lease_ttl_s) is not int or cfg.lease_ttl_s <= 0:
         raise ValueError(f"{path}: lease_ttl_s must be a positive integer")
+    if cfg.owner and not _NAME.fullmatch(cfg.owner):
+        raise ValueError(f"{path}: owner must be a lowercase name")
     return cfg if cfg.enabled else None
 
 
@@ -191,17 +213,25 @@ def _iso_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def enable(space_dir, *, hub_id: str, grantor: str, lease_ttl_s: int = DEFAULT_LEASE_TTL_S,
-           cutover_hlc: str | None = None, space_id: str | None = None) -> HubConfig:
+def enable(space_dir, *, hub_id: str, grantor: str, owner: str, lease_ttl_s: int = DEFAULT_LEASE_TTL_S,
+           cutover_hlc: str | None = None, space_id: str | None = None, keys_dir=None, registry_path=None,
+           clock_uncertainty_ms: int = DEFAULT_CLOCK_UNCERTAINTY_MS) -> HubConfig:
     """The owner opts a space in. `hub_id` is a stable name, not a hostname (E).
 
     Also the owner's approval of the cutover: it records the cutover manifest
     (`cutover_logs`), each log's highest seq and head hash as they stand now.
     That history, and only that history, stays valid unsigned (audit finding
     1). Enabling again keeps the manifest and the space id unchanged.
+
+    THE RECORD (audit finding 4, part-1 leftover): the manifest and the first
+    grantor are also an owner-signed `hub.enable` event in the owner's own log.
+    Admission takes them from that record; the config file is a cache, and a
+    config edited to another grantor or manifest confers nothing.
     """
-    if not _NAME.fullmatch(hub_id) or not _NAME.fullmatch(grantor):
-        raise ValueError("hub_id and grantor must be lowercase names")
+    if not _NAME.fullmatch(hub_id) or not _NAME.fullmatch(grantor) or not _NAME.fullmatch(owner or ""):
+        raise ValueError("hub_id, grantor and owner must be lowercase names")
+    if owner == grantor:
+        raise ValueError("the owner approves the hub; it is not the grantor")
     try:
         import actor_identity
         if hub_id == actor_identity.short_hostname():
@@ -221,9 +251,64 @@ def enable(space_dir, *, hub_id: str, grantor: str, lease_ttl_s: int = DEFAULT_L
     if not isinstance(logs, dict):
         logs = _current_heads(space_dir)
     cfg = HubConfig(hub_id=hub_id, grantor=grantor, lease_ttl_s=lease_ttl_s, cutover_hlc=cutover_hlc,
-                    space_id=space_id, cutover_logs=logs, cutover_sha256=_manifest_sha(logs))
+                    space_id=space_id, cutover_logs=logs, cutover_sha256=_manifest_sha(logs), owner=owner,
+                    clock_uncertainty_ms=clock_uncertainty_ms)
     _write_config(space_dir, cfg)
+    if not owner_records(space_dir, cfg, registry_path):
+        from .log import EventLog
+        EventLog(Path(space_dir), owner, keys_dir=keys_dir, registry_path=registry_path, sign=True).append(
+            "hub.enable", {"space": space_id, "hub": hub_id, "epoch": 0, "grantor": grantor, "manifest": logs,
+                           "manifest_sha256": cfg.cutover_sha256, "lease_ttl_s": lease_ttl_s,
+                           "clock_uncertainty_ms": clock_uncertainty_ms})
     return cfg
+
+
+def owner_records(space_dir, cfg: HubConfig, registry_path=None) -> list[Event]:
+    """The owner's signed `hub.enable` / `hub.promote` records for this space and
+    hub, in log order -- verified here: an intact chain, the owner's signature at
+    the event's time, this space's domain. A forged or broken record raises."""
+    from .keys import verify
+    from .log import read_events
+    if not cfg.owner:
+        return []
+    chain = sorted((e for e in read_events(Path(space_dir)) if (getattr(e, "log", None) or e.actor) == cfg.owner
+                    and type(e.seq) is int), key=lambda e: e.seq)
+    out, prev = [], GENESIS
+    for i, e in enumerate(chain):
+        if e.seq != i or e.prev != prev or compute_hash(event_body(e)) != e.hash:
+            break                                       # nothing after a break is the owner's
+        prev = e.hash
+        if e.type not in OWNER_EVENT_TYPES:
+            continue
+        payload = e.payload if isinstance(e.payload, dict) else {}
+        if payload.get("space") != cfg.space_id or payload.get("hub") != cfg.hub_id:
+            continue
+        if (e.actor != cfg.owner or e.hub != cfg.hub_id
+                or e.domain != signing_domain(cfg.space_id, cfg.hub_id, cfg.owner)
+                or not e.sig or not verify(e.actor, canonical_bytes(event_body(e)), e.sig,
+                                           registry_path=registry_path, at_ms=_physical_ms(e.hlc))):
+            raise HubRefused("bad_record", f"{cfg.owner} seq {e.seq}: a {e.type} that is not the owner's signed record")
+        out.append(e)
+    return out
+
+
+def epochs_of(records: list[Event]) -> tuple:
+    """The grantor epochs the owner's records define, oldest first."""
+    if not records or records[0].type != "hub.enable":
+        raise HubRefused("no_owner_record", "this space has no owner-signed hub.enable record; "
+                         "re-run `enable --owner` (the cutover is the owner's act, recorded in the ledger)")
+    eps = [Epoch(0, records[0].payload.get("grantor", ""))]
+    for r in records[1:]:
+        if r.type != "hub.promote":
+            continue
+        p = r.payload
+        if p.get("epoch") != len(eps) or p.get("previous") != eps[-1].grantor or not isinstance(p.get("grantor"), str):
+            raise HubRefused("bad_record", f"promotion record seq {r.seq} does not follow epoch {len(eps) - 1}")
+        frontier = ((p.get("predecessor") or {}).get("frontier") or {}).get(eps[-1].grantor) or {}
+        eps[-1] = replace(eps[-1], fence_seq=int(frontier.get("seq", -1)), fence_head=frontier.get("head"))
+        nb = p.get("not_before_ms")
+        eps.append(Epoch(p["epoch"], p["grantor"], not_before_ms=nb if type(nb) is int else None))
+    return tuple(eps)
 
 
 def _current_heads(space_dir) -> dict:
@@ -259,18 +344,46 @@ def load_manifest(space_dir, cfg: HubConfig) -> dict:
 
 
 def authority(space_dir, cfg: HubConfig, registry_path=None) -> Authority:
-    """The explicit input admission and the fold take, read once before replay."""
-    return Authority(space_id=cfg.space_id, hub_id=cfg.hub_id,
-                     grantors=frozenset({cfg.grantor, *cfg.previous_grantors}),
-                     legacy=load_manifest(space_dir, cfg), registry_path=registry_path)
+    """The explicit input admission and the fold take, read once before replay.
+
+    Who grants, in which epoch, up to which fence, and the cutover manifest
+    all come from the owner's signed records (audit finding 4), never from the
+    config file: a config that disagrees with them is refused (`bad_manifest`)
+    or ignored (its `grantor`)."""
+    legacy = load_manifest(space_dir, cfg)
+    records = owner_records(space_dir, cfg, registry_path)
+    eps = epochs_of(records)
+    enabled = records[0].payload
+    if enabled.get("manifest_sha256") != cfg.cutover_sha256 or enabled.get("manifest") != cfg.cutover_logs:
+        raise HubRefused("bad_manifest", f"{Path(space_dir) / CONFIG}: the cutover manifest is not the one "
+                         "the owner signed (hub.enable)")
+    return Authority(space_id=cfg.space_id, hub_id=cfg.hub_id, grantors=frozenset(ep.grantor for ep in eps),
+                     legacy=legacy, registry_path=registry_path, owner=cfg.owner, epochs=eps)
 
 
-def promote(space_dir, new_grantor: str, *, by: str, reason: str) -> HubConfig:
-    """The owner's one command that moves lease granting to another hub (G).
+def promote(space_dir, new_grantor: str, *, by: str, reason: str, keys_dir=None, registry_path=None,
+            attest_stopped: bool = False, clock: Callable[[], int] | None = None) -> HubConfig:
+    """The owner's one command that moves lease granting to another hub (H).
 
-    Explicit by design: nothing in this module calls it. Commit the changed
-    config so every copy of the space learns which hub grants.
+    Explicit by design: nothing in this module calls it. It is recorded in the
+    ledger as an owner-signed `hub.promote` naming the new grantor, the new
+    epoch, and the predecessor's fence, frontier and last seal (audit finding
+    4). Preconditions:
+
+      * the old grantor is FENCED: its own signed `hub.fence` (it stopped), or
+        -- when it cannot be reached -- `attest_stopped=True`, the owner's
+        statement that it is stopped, with the frontier the owner's copy
+        holds. Neither: refused (`unfenced`); leases stay paused, on purpose;
+      * the new grantor grants nothing before `not_before_ms`: the last expiry
+        of any old-epoch lease within the frontier (and, when only attested,
+        now plus one lease period) plus the clock uncertainty. A higher epoch
+        cannot stop an old holder already working; the wait can;
+      * events of the old grantor after the frontier are not admitted anywhere
+        the record is known, and every new seal extends the frontier.
+
+    Commit the owner's log and the config so every copy learns of it.
     """
+    from .log import EventLog, read_events
     cfg = load_config(space_dir)
     if cfg is None:
         raise HubRefused("hub_off", f"{space_dir} has no hub to promote")
@@ -278,10 +391,45 @@ def promote(space_dir, new_grantor: str, *, by: str, reason: str) -> HubConfig:
         raise ValueError("grantor must be a lowercase name")
     if not by or not reason:
         raise ValueError("a promotion names who ordered it and why")
-    previous = tuple(dict.fromkeys((*cfg.previous_grantors, cfg.grantor)))
-    previous = tuple(g for g in previous if g != new_grantor)
+    if by != cfg.owner:
+        raise HubRefused("not_owner", f"only the space's owner ({cfg.owner or 'none recorded'}) promotes")
+    auth = authority(space_dir, cfg, registry_path)
+    old = auth.active
+    if new_grantor in auth.grantors or new_grantor == cfg.owner:
+        raise ValueError("promote a new grantor name; a retired grantor or the owner is never promoted")
+    now = (clock or _wall_ms)()
+    chain = sorted((e for e in read_events(Path(space_dir)) if (getattr(e, "log", None) or e.actor) == old.grantor
+                    and type(e.seq) is int), key=lambda e: e.seq)
+    n, _ = admit_chain(old.grantor, chain, auth, now_ms=now)
+    admitted = chain[:n]
+    fence = next((e for e in admitted if e.type == "hub.fence" and (e.payload or {}).get("epoch") == old.epoch), None)
+    if fence is not None:
+        mode, last = "grantor", fence
+    elif attest_stopped:
+        mode, last = "owner-attested", (admitted[-1] if admitted else None)
+    else:
+        raise HubRefused("unfenced", f"{old.grantor} has not fenced itself (`hub fence`), and the owner has "
+                         "not attested that it is stopped: no promotion, leases stay paused")
+    upto = admitted[: admitted.index(last) + 1] if last is not None else []
+    expiries = [e.payload["expires_ms"] for e in upto if e.type in ("item.lease", "item.lease.renew")
+                and type((e.payload or {}).get("expires_ms")) is int]
+    if mode == "owner-attested":
+        expiries.append(now + cfg.lease_ttl_s * 1000)
+    seal = next((e for e in reversed(upto) if e.type == "ledger.seal"), None)
+    payload = {
+        "space": cfg.space_id, "hub": cfg.hub_id, "epoch": old.epoch + 1, "grantor": new_grantor,
+        "previous": old.grantor, "reason": reason,
+        "fence": {"mode": mode, "event": {"seq": fence.seq, "hash": fence.hash} if fence else None},
+        "predecessor": {
+            "frontier": {old.grantor: {"seq": last.seq if last else -1, "head": last.hash if last else GENESIS}},
+            "last_seal": {"seq": seal.seq, "hash": seal.hash} if seal else None},
+        "not_before_ms": (max(expiries) + cfg.clock_uncertainty_ms) if expiries else None,
+    }
+    EventLog(Path(space_dir), by, keys_dir=keys_dir, registry_path=registry_path, sign=True).append(
+        "hub.promote", payload)
+    previous = tuple(g for g in dict.fromkeys((*cfg.previous_grantors, cfg.grantor)) if g != new_grantor)
     cfg = replace(cfg, grantor=new_grantor, promoted_by=by, promoted_at=_iso_now(), promote_reason=reason,
-                  previous_grantors=previous, epoch=cfg.epoch + 1)
+                  previous_grantors=previous, epoch=old.epoch + 1)
     _write_config(space_dir, cfg)
     return cfg
 
@@ -367,7 +515,8 @@ class Hub:
             raise ValueError(f"invalid hub actor {actor!r}")
         self.actor = actor
         self.keys_dir, self.registry_path = keys_dir, registry_path
-        load_manifest(self.space_dir, cfg)          # a hub over an edited manifest does not start
+        # A hub over an edited manifest, or without the owner's signed records, does not start.
+        authority(self.space_dir, cfg, registry_path)
         self.clock = clock or _wall_ms
         self.eligibility: Eligibility = eligibility or assignee_rule
         # Authorization's explicit input (audit finding 12), read ONCE here --
@@ -420,11 +569,33 @@ class Hub:
         if self._lock_fh is None:
             raise HubRefused("locked", "another instance of this hub holds the lock on this host")
         cfg = self.config()
-        if grant and cfg.grantor != self.actor:
-            raise HubRefused("not_active_hub", f"this hub ({self.actor}) does not grant for this space; "
-                             f"{cfg.grantor} does. Moving that is the owner's `promote` command, never automatic",
-                             active=cfg.grantor)
+        if grant:
+            # WHO GRANTS is the owner's records, not the config (finding 4).
+            active = self._authority(cfg).active
+            if active.grantor != self.actor:
+                raise HubRefused("not_active_hub", f"this hub ({self.actor}) does not grant for this space; "
+                                 f"{active.grantor} does (epoch {active.epoch}). Moving that is the owner's "
+                                 "`promote` command, never automatic", active=active.grantor)
+            if self._fenced(active.epoch):
+                raise HubRefused("fenced", f"this hub ({self.actor}) fenced itself for epoch {active.epoch}; "
+                                 "it grants, renews and seals nothing more")
         return cfg
+
+    def _fenced(self, epoch: int) -> bool:
+        return any(e.type == "hub.fence" and (e.payload or {}).get("epoch") == epoch
+                   for e in _parse_file(self.log.path))
+
+    def fence(self, reason: str) -> dict:
+        """This grantor stops (finding 4): a signed `hub.fence`, the last event of
+        its epoch that counts. The owner's `promote` names it as the frontier."""
+        if not reason:
+            raise ValueError("a fence says why")
+        with self._mutex:
+            cfg = self._writable(grant=True)
+            epoch = self._authority(cfg).active.epoch
+            event = self.log.append("hub.fence", {"space": cfg.space_id, "hub": cfg.hub_id, "epoch": epoch,
+                                                  "reason": reason})
+            return _event_dict(event)
 
     def _authority(self, cfg: HubConfig) -> Authority:
         return authority(self.space_dir, cfg, self.registry_path)
@@ -609,6 +780,7 @@ class Hub:
         with self._mutex:
             cfg = self._writable(grant=True)
             actor = self._verify_request(req, "lease.request", cfg)
+            active = self._authority(cfg).active
             item_id = req.get("item")
             events, state = self._state()
             item = state.items.get(item_id) if isinstance(item_id, str) else None
@@ -617,6 +789,10 @@ class Hub:
             now = self.clock()
             if item.status in ("completed", "verified", "dismissed", "archived"):
                 raise HubRefused("closed", f"{item_id} is {item.status}")
+            if active.not_before_ms is not None and now < active.not_before_ms:
+                raise HubRefused("fencing_wait", f"epoch {active.epoch} grants from {active.not_before_ms}: "
+                                 "every lease of the previous epoch must have expired, plus the clock uncertainty",
+                                 retry_after_ms=active.not_before_ms)
             if item.lease_unresolved:
                 raise HubRefused("owner_resolution", f"{item_id} has a result that arrived after its lease "
                                  "attempt ended; the owner decides before it is granted again",
@@ -648,7 +824,7 @@ class Hub:
                                      "released" if item.lease_holder is None else "expired").hlc
             event = self.log.append("item.lease", {
                 "id": item_id, "holder": actor, "attempt": attempt_id(req),
-                "task_hash": task_content_hash(item.payload), "epoch": cfg.epoch,
+                "task_hash": task_content_hash(item.payload), "epoch": active.epoch,
                 "granted_ms": now, "expires_ms": now + cfg.lease_ttl_s * 1000,
                 "request": _request_ref(req)}, after=floor)
             return {"status": "granted", "lease": _event_dict(event), "log": self.log.log_name}
@@ -723,8 +899,18 @@ class Hub:
         """
         from .seal import build_seal_payload
         with self._mutex:
-            self._writable(grant=True)
+            cfg = self._writable(grant=True)
             events, _ = self._state()
+            eps = self._authority(cfg).epochs
+            if len(eps) > 1:
+                # Every new seal extends the predecessor's frontier (finding 4).
+                pred = eps[-2]
+                head = next((e for e in events if (getattr(e, "log", None) or e.actor) == pred.grantor
+                             and e.seq == pred.fence_seq), None)
+                if pred.fence_seq is not None and pred.fence_seq >= 0 and (
+                        head is None or head.hash != pred.fence_head):
+                    raise HubRefused("behind_predecessor", f"this copy does not hold {pred.grantor}'s frontier "
+                                     f"(seq {pred.fence_seq}) that the promotion names; pull it before sealing")
             try:
                 payload = build_seal_payload(events)
             except ValueError as exc:
@@ -1042,6 +1228,8 @@ class HubWriter:
         """
         from .keys import verify
         cfg = load_config(self.space_dir) or self.cfg
+        # The grantor this writer's copy of the OWNER'S RECORDS names (finding 4).
+        grantor = authority(self.space_dir, cfg, self.registry_path).active.grantor
         try:
             e = Event(**lease)
         except TypeError:
@@ -1050,7 +1238,7 @@ class HubWriter:
         ref = payload.get("request") if isinstance(payload.get("request"), dict) else {}
         checks = [
             (e.type == expected_type, f"answer is a {e.type!r}, not a {expected_type!r}"),
-            (e.actor == cfg.grantor, f"answer is signed by {e.actor!r}, not this space's grantor {cfg.grantor!r}"),
+            (e.actor == grantor, f"answer is signed by {e.actor!r}, not this space's grantor {grantor!r}"),
             (e.hub == cfg.hub_id and e.domain == signing_domain(cfg.space_id, cfg.hub_id, e.actor),
              "answer belongs to another space, hub or log"),
             (payload.get("id") == item_id and payload.get("holder") == self.actor,
@@ -1096,11 +1284,11 @@ class HubWriter:
         verified here: that `sealed_space` is the published commit (the caller
         passes the checkout it trusts).
         """
+        from .fold import fold
         from .keys import verify
         from .log import read_events
         from .seal import as_sequencer, latest_seal, verify_seal
         from .verify import check_events
-        hub_actor = hub_actor or (load_config(self.space_dir) or self.cfg).grantor
         events = read_events(Path(sealed_space))
         problems: list[str] = []
         pending: list[str] = []
@@ -1108,6 +1296,15 @@ class HubWriter:
 
         def result(status: str) -> dict:
             return {"status": status, "ok": status == "confirmed", "problems": problems, "pending": pending}
+
+        # Who grants and up to which fence, as the SEALED copy's owner records say (finding 4).
+        try:
+            scfg = load_config(Path(sealed_space)) or self.cfg
+            sauth = authority(Path(sealed_space), scfg, self.registry_path)
+        except (HubError, ValueError) as exc:
+            problems.append(f"the sealed copy's hub records do not verify: {exc}")
+            return result("failed")
+        hub_actor = hub_actor or sauth.active.grantor
 
         with as_sequencer(hub_actor):
             try:
@@ -1123,6 +1320,11 @@ class HubWriter:
         elif verdict is None:
             pending.append(f"the seal cannot be verified here yet: {detail}")
         marks = seal.watermarks if seal is not None else {}
+        sealer = sauth.epoch_of(hub_actor)
+        if seal is not None and sealer is not None and sealer.epoch > 0:
+            pred = sauth.epochs[sealer.epoch - 1]
+            if pred.fence_seq is not None and marks.get(pred.grantor, -1) < pred.fence_seq:
+                problems.append(f"the seal does not extend {pred.grantor}'s frontier (seq {pred.fence_seq})")
         sealed = {}
         for e in events:
             sealed.setdefault(getattr(e, "log", None) or e.actor, {})[e.seq] = e
@@ -1154,6 +1356,11 @@ class HubWriter:
         for r in self.receipts():
             lease = Event(**r["event"])
             mine_all.append(lease.hash)
+            ep = sauth.epoch_of(r["log"])
+            if ep is not None and ep.fence_seq is not None and lease.seq > ep.fence_seq:
+                problems.append(f"lease on {r['item']} (hub seq {lease.seq}) was granted after {r['log']} was "
+                                f"fenced at seq {ep.fence_seq}: it confers nothing")
+                continue
             s = sealed.get(r["log"], {}).get(lease.seq)
             if s is not None and (s.hash != lease.hash or to_line(s) != to_line(lease)):
                 problems.append(f"lease on {r['item']} (hub seq {lease.seq}) does not match the sealed log")
@@ -1163,6 +1370,16 @@ class HubWriter:
                 problems.append(f"lease on {r['item']} (hub seq {lease.seq}) is missing from the sealed log")
             else:
                 covered.add(lease.hash)
+        # THE SEALED DECISION MUST AUTHORIZE THE OPERATION (part-1 leftover): a
+        # covered event that the authoritative fold turned into a lease
+        # conflict or an owner-resolution case is not a confirmation.
+        if seal is not None and verdict is True:
+            settled = fold([e for e in admit(events, sauth, now_ms=self.clock()).events if seal.includes(e)],
+                           lease_grantors=sauth.lease_grantors())
+            for it in settled.items.values():
+                for h in covered & (set(it.lease_conflicts) | set(it.lease_unresolved)):
+                    why = it.lease_conflicts.get(h) or it.lease_unresolved.get(h)
+                    problems.append(f"{it.id}: the sealed decision does not authorize {h[:12]} ({why})")
         if problems:
             return result("failed")
         needed = set(mine_all) if required is None else set(required)
@@ -1207,19 +1424,35 @@ def main(argv=None) -> int:
     en.add_argument("space")
     en.add_argument("--hub-id", required=True)
     en.add_argument("--grantor", required=True)
+    en.add_argument("--owner", required=True, help="the owner who signs the hub.enable record")
     en.add_argument("--lease-ttl-s", type=int, default=DEFAULT_LEASE_TTL_S)
+    en.add_argument("--clock-uncertainty-ms", type=int, default=DEFAULT_CLOCK_UNCERTAINTY_MS)
     pr = sub.add_parser("promote", help="move lease granting to another hub (owner; never automatic)")
     pr.add_argument("space")
     pr.add_argument("grantor")
     pr.add_argument("--by", required=True)
     pr.add_argument("--reason", required=True)
+    pr.add_argument("--attest-stopped", action="store_true",
+                    help="the old grantor cannot fence itself; the owner states it is stopped")
+    fe = sub.add_parser("fence", help="this grantor stops granting (run on the old hub before a promotion)")
+    fe.add_argument("space")
+    fe.add_argument("--actor", required=True)
+    fe.add_argument("--reason", required=True)
     sh = sub.add_parser("show", help="print a space's hub config")
     sh.add_argument("space")
     a = ap.parse_args(argv)
     if a.cmd == "enable":
-        cfg = enable(a.space, hub_id=a.hub_id, grantor=a.grantor, lease_ttl_s=a.lease_ttl_s)
+        cfg = enable(a.space, hub_id=a.hub_id, grantor=a.grantor, owner=a.owner, lease_ttl_s=a.lease_ttl_s,
+                     clock_uncertainty_ms=a.clock_uncertainty_ms)
     elif a.cmd == "promote":
-        cfg = promote(a.space, a.grantor, by=a.by, reason=a.reason)
+        cfg = promote(a.space, a.grantor, by=a.by, reason=a.reason, attest_stopped=a.attest_stopped)
+    elif a.cmd == "fence":
+        hub = Hub(a.space, a.actor)
+        try:
+            print(json.dumps(hub.fence(a.reason), indent=2, sort_keys=True))
+        finally:
+            hub.close()
+        return 0
     else:
         cfg = load_config(a.space)
     print(json.dumps(asdict(cfg) if cfg else {"enabled": False}, indent=2, sort_keys=True))

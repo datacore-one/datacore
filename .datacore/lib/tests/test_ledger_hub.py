@@ -34,6 +34,8 @@ from ledger.log import EventLog, read_events
 HUB_ID = "hub-test-1"
 GRANTOR = "hubd"
 APPROVER = "boss"
+#: The space's owner: signs the hub.enable and hub.promote records (audit finding 4).
+OWNER = "owner"
 
 
 def _test_policy():
@@ -101,7 +103,8 @@ class Env:
         self.clock = Clock()
         self.hub_dir = tmp / "hub-space"
         (self.hub_dir / ".datacore" / "events").mkdir(parents=True)
-        hubmod.enable(self.hub_dir, hub_id=HUB_ID, grantor=GRANTOR, lease_ttl_s=900)
+        hubmod.enable(self.hub_dir, hub_id=HUB_ID, grantor=GRANTOR, lease_ttl_s=900, owner=OWNER,
+                      keys_dir=self.keys_dir, registry_path=self.registry)
         self.hubs: list = []
 
     def hub(self, actor: str = GRANTOR, space: Path | None = None, *, eligibility=allow_any,
@@ -198,7 +201,12 @@ def test_fold_rule_earliest_lease_wins_and_the_losers_completion_is_a_recorded_c
     b_dir = env.tmp / "hub-b-space"
     shutil.copytree(env.hub_dir, b_dir)
     (b_dir / ".datacore" / "events" / f"{GRANTOR}.jsonl").unlink()
-    hubmod.promote(b_dir, "hubb", by="owner", reason="test partition")
+    # Since audit finding 4 the promotion is the owner's signed record and the
+    # new grantor waits out every lease the old one could have granted. Only a
+    # wrong clock gets a second, overlapping grant out of it: the owner's clock
+    # here is an hour behind, so the wait has already passed on the hub's.
+    hubmod.promote(b_dir, "hubb", by=OWNER, reason="test partition", keys_dir=env.keys_dir,
+                   registry_path=env.registry, attest_stopped=True, clock=lambda: env.clock() - 3_600_000)
     hub_b = env.hub("hubb", b_dir)
     env.clock.advance(1)
     wb_dir = env.tmp / "wb-space"
@@ -511,12 +519,17 @@ def test_second_hub_refuses_to_grant_until_explicitly_promoted(env):
     twin_a.close()
 
     # The owner promotes the standby: one explicit command, recorded in the config.
-    cfg = hubmod.promote(standby_dir, "hubstandby", by="owner", reason="primary retired")
+    # Since audit finding 4: an owner-signed ledger record, after the owner
+    # attests the closed primary is stopped, and the standby waits out one
+    # lease period plus the clock uncertainty before it grants.
+    cfg = hubmod.promote(standby_dir, "hubstandby", by="owner", reason="primary retired", keys_dir=env.keys_dir,
+                         registry_path=env.registry, attest_stopped=True, clock=env.clock)
     assert cfg.grantor == "hubstandby" and cfg.promoted_by == "owner"
+    env.clock.advance(900 + 120)
     # The writer learns of the promotion the way every copy does: it pulls the
-    # committed config. Until then it refuses the new grantor's answers
-    # (audit finding 5: first answers are pinned to the grantor it knows).
-    shutil.copyfile(standby_dir / hubmod.CONFIG, wa.space_dir / hubmod.CONFIG)
+    # committed record and config. Until then it refuses the new grantor's
+    # answers (audit finding 5: first answers are pinned to the grantor it knows).
+    git_pull(standby_dir, wa.space_dir)
     assert wa_on_standby.request_lease("t1")["status"] == "granted"
 
 
@@ -604,7 +617,8 @@ def _legacy_space(env, name: str, chain: list[tuple[str, str, dict]]) -> Path:
         out.append(e)
         prev = e.hash
     _write_raw(space, "own", out)
-    hubmod.enable(space, hub_id=HUB_ID, grantor=GRANTOR, lease_ttl_s=900)
+    hubmod.enable(space, hub_id=HUB_ID, grantor=GRANTOR, lease_ttl_s=900, owner=OWNER,
+                  keys_dir=env.keys_dir, registry_path=env.registry)
     return space
 
 
@@ -642,7 +656,7 @@ def test_audit1_legacy_is_membership_in_the_cutover_manifest_not_a_timestamp(env
     space = _legacy_space(env, "legacy-space", [
         (f"{now - 60_000:013d}.0000.own", "item.create", {"id": "old", "title": "before the hub"}),
     ])
-    head = read_events(space)[-1]
+    head = [e for e in read_events(space) if e.actor == "own"][-1]
     planted = _raw_event(1, f"{now - 30_000:013d}.0000.own", "own", "item.create",
                          {"id": "new", "title": "backdated"}, head.hash, hub=HUB_ID)
     _write_raw(space, "own", [planted])
@@ -844,7 +858,8 @@ def test_audit5_a_lease_answer_is_bound_to_its_request_nonce_and_type(env):
 def _second_space(env, name: str = "space-b") -> Path:
     space = env.tmp / name
     (space / ".datacore" / "events").mkdir(parents=True)
-    hubmod.enable(space, hub_id=HUB_ID, grantor=GRANTOR, lease_ttl_s=900)
+    hubmod.enable(space, hub_id=HUB_ID, grantor=GRANTOR, lease_ttl_s=900, owner=OWNER,
+                  keys_dir=env.keys_dir, registry_path=env.registry)
     return space
 
 
@@ -1205,7 +1220,6 @@ def test_audit8_disjoint_intervals_in_reverse_clock_order_are_not_an_overlap(env
 
 # ── finding 4: promotion is an owner-signed ledger record that fences ──────
 
-OWNER = "own"
 
 
 def _owned(env, name: str) -> Path:

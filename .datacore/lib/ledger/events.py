@@ -116,7 +116,15 @@ EVENT_TYPES = frozenset(
 # written by the grantor before any regrant; it records the holder-log
 # frontier the grantor held, so a result admitted after it is told apart.
 HUB_EVENT_TYPES = frozenset({"item.lease", "item.lease.renew", "item.lease.expire", "item.lease.conflict"})
-EVENT_TYPES = EVENT_TYPES | HUB_EVENT_TYPES
+#
+# THE OWNER'S RECORDS (audit finding 4). `hub.enable` (epoch 0: the grantor,
+# the cutover manifest) and `hub.promote` (epoch n+1: the new grantor, the
+# predecessor's fence and frontier) are signed by the space's owner in the
+# owner's own log; who grants is derived from them, never from a config file.
+# `hub.fence` is the grantor's own statement that it stopped: written in its
+# log, it is the last event of its epoch that counts.
+OWNER_EVENT_TYPES = frozenset({"hub.enable", "hub.promote"})
+EVENT_TYPES = EVENT_TYPES | HUB_EVENT_TYPES | OWNER_EVENT_TYPES | {"hub.fence"}
 
 
 @dataclass

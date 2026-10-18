@@ -55,12 +55,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
 
-from .events import EVENT_TYPES, HUB_EVENT_TYPES, Event, canonical_bytes, compute_hash, event_body
+from .events import EVENT_TYPES, HUB_EVENT_TYPES, OWNER_EVENT_TYPES, Event, canonical_bytes, compute_hash, event_body
 
 #: The protocol a domain-bound event speaks. Events without a domain are protocol 1.
 PROTOCOL = 2
 #: Written only by a hub's grantor, in its own log.
-HUB_ONLY_TYPES = HUB_EVENT_TYPES | {"ledger.seal"}
+HUB_ONLY_TYPES = HUB_EVENT_TYPES | {"ledger.seal", "hub.fence"}
 _HLC = re.compile(r"[0-9]{13}\.[0-9]{4}\.[a-z0-9][a-z0-9_-]*")
 GENESIS = "GENESIS"
 
@@ -80,10 +80,38 @@ class Authority:
     #: The cutover manifest: {chain: (highest legacy seq, head hash)}.
     legacy: Mapping[str, tuple[int, str]] = field(default_factory=dict)
     registry_path: Path | None = None
+    #: The owner whose signed records (hub.enable, hub.promote) define the epochs.
+    owner: str = ""
+    #: One `Epoch` per grantor, oldest first (audit finding 4). Empty: one
+    #: epoch 0 for every grantor (spaces enabled before the records existed).
+    epochs: tuple = ()
 
     def lease_grantors(self) -> dict:
-        """The fold's explicit lease authority (ledger.fold.fold)."""
+        """The fold's explicit lease authority (ledger.fold.fold): {hub: {grantor: epoch}}."""
+        if self.epochs:
+            return {self.hub_id: {ep.grantor: ep.epoch for ep in self.epochs}}
         return {self.hub_id: self.grantors}
+
+    def epoch_of(self, grantor: str):
+        return next((ep for ep in self.epochs if ep.grantor == grantor), None)
+
+    @property
+    def active(self):
+        return self.epochs[-1] if self.epochs else None
+
+
+@dataclass(frozen=True)
+class Epoch:
+    """One grantor's term, from the owner's records."""
+    epoch: int
+    grantor: str
+    #: The new grantor grants nothing before this (its clock): every lease of
+    #: the previous epoch has expired, plus the clock uncertainty.
+    not_before_ms: int | None = None
+    #: The last seq of this grantor's log that counts (its fence frontier),
+    #: once a successor's promotion names it. None: still active.
+    fence_seq: int | None = None
+    fence_head: str | None = None
 
 
 class Refusal(Exception):
@@ -131,6 +159,25 @@ def check_event(event: Event, chain: str, prior: Event | None, auth: Authority, 
     if event.type in HUB_ONLY_TYPES and not (event.actor in auth.grantors and chain == event.actor):
         raise Refusal("hub_only_type", f"{event.type} is written only by this space's grantor "
                                        f"({', '.join(sorted(auth.grantors))}), in its own log")
+    if event.type in OWNER_EVENT_TYPES and not (auth.owner and event.actor == auth.owner and chain == event.actor):
+        raise Refusal("owner_only", f"{event.type} is written only by this space's owner, in its own log")
+    ep = auth.epoch_of(event.actor) if chain == event.actor else None
+    if ep is not None:
+        # FENCING (audit finding 4): once the owner's promotion names this
+        # grantor's frontier, nothing after it counts -- an isolated old hub
+        # that kept granting confers nothing anywhere the promotion is known.
+        if ep.fence_seq is not None and type(event.seq) is int and event.seq > ep.fence_seq:
+            raise Refusal("fenced", f"{event.actor} was succeeded at seq {ep.fence_seq} (epoch {ep.epoch}); "
+                                    f"seq {event.seq} is after its fence")
+        if ep.fence_seq is not None and event.seq == ep.fence_seq and ep.fence_head and event.hash != ep.fence_head:
+            raise Refusal("fenced", f"{event.actor} seq {event.seq} is not the frontier the promotion names")
+        if event.type == "item.lease" and isinstance(event.payload, dict):
+            if event.payload.get("epoch", 0) != ep.epoch:
+                raise Refusal("wrong_epoch", f"{event.actor} grants for epoch {ep.epoch}, not "
+                                             f"{event.payload.get('epoch')!r}")
+            granted = event.payload.get("granted_ms")
+            if ep.not_before_ms is not None and isinstance(granted, int) and granted < ep.not_before_ms:
+                raise Refusal("too_early", f"epoch {ep.epoch} may grant only from {ep.not_before_ms}")
     if not event.sig:
         raise Refusal("unsigned", "the hub accepts only signed events (amendment D)")
     problems = [p for p in check_events(
