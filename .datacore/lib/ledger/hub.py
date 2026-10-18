@@ -1320,6 +1320,12 @@ class Hub:
                 return self.seal()
             return self._once(req, "seal.request", cfg, body)
 
+    def publish(self, message: str) -> str:
+        """Commit this hub's OWN log (grants, expiries, seals) and nothing else
+        (finding 15). Other writers' logs in this checkout are theirs to publish."""
+        with self._mutex:
+            return publish_own_log(self.space_dir, [self.log.path, self.log.telemetry_path], message)
+
     # ── reports ────────────────────────────────────────────────────────────
     def status(self) -> dict:
         from .fold import lease_live
@@ -1363,6 +1369,34 @@ def request_digest(req: dict) -> str:
 def attempt_id(req: dict) -> str:
     """The immutable attempt id a grant answering `req` carries (audit finding 9)."""
     return "att-" + request_digest(req)[:24]
+
+
+def publish_own_log(space_dir, paths, message: str) -> str:
+    """Commit exactly `paths` -- the publisher's OWN log files -- and nothing
+    else; return the commit id (amendment H; audit finding 15).
+
+    Git stays the record and the fallback: while the hub is unreachable a
+    writer publishes its own signed log this way, and the hub publishes only
+    its own log (grants, expiries, seals). It never stages or commits another
+    writer's log, never pushes (the existing sync job does, under the
+    pre-push own-log gate), and the repository's hooks run as for any commit
+    (the ledger write gate checks every new line). A refusal by a hook is
+    reported, never bypassed (`publish_failed`)."""
+    import subprocess
+    space = Path(space_dir)
+    top = subprocess.run(["git", "-C", str(space), "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    if top.returncode != 0:
+        raise HubRefused("publish_failed", f"{space} is not in a git checkout")
+    repo = Path(top.stdout.strip())
+    rel = [str(Path(p).resolve().relative_to(repo.resolve())) for p in paths if Path(p).exists()]
+    if not rel:
+        raise HubRefused("nothing_to_publish", "this writer has no log to publish yet")
+    for cmd in (["add", "--", *rel], ["commit", "-q", "-m", message, "--", *rel]):
+        r = subprocess.run(["git", "-C", str(repo), *cmd], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise HubRefused("publish_failed", f"git {cmd[0]} refused: {(r.stderr or r.stdout).strip()[:500]}")
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True)
+    return head.stdout.strip()
 
 
 def _request_ref(req: dict) -> dict:
@@ -1626,6 +1660,11 @@ class HubWriter:
             return event, receipt
         self._clear_outage()
         return event, receipt
+
+    def publish(self, message: str) -> str:
+        """Commit this writer's own log files, nothing else (finding 15): the git
+        path addressed work takes while the hub is unreachable."""
+        return publish_own_log(self.space_dir, [self.log.path, self.log.telemetry_path], message)
 
     def _local_chains(self) -> list[tuple[str, list[Event]]]:
         from .log import TELEMETRY_SUFFIX
