@@ -107,6 +107,16 @@ HUB_EVENT_TYPES = frozenset({"item.lease", "item.lease.renew", "item.lease.confl
 EVENT_TYPES = EVENT_TYPES | HUB_EVENT_TYPES
 
 
+# ── AGENT CHECK-INS (task 53c26c5c, 2026-10-18) ─────────────────────────────
+# A host answering on port 22 is not an agent working: on 2026-10-18 the host
+# probe said Data's machine was up all morning while the agent was stuck. So
+# each agent says so itself: `agent.checkin` {agent, host, interval_s, ts}, a
+# signed writer event appended through the hub like any other. It is a routine
+# measurement, so it lives in the writer's telemetry log (ledger.log), and the
+# fold ignores it; presence is its own fold (ledger.presence).
+CHECKIN_TYPE = "agent.checkin"
+EVENT_TYPES = EVENT_TYPES | {CHECKIN_TYPE}
+
 @dataclass
 class Event:
     seq: int

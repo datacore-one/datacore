@@ -535,6 +535,15 @@ class Hub:
                        for iid, it in sorted(state.items.items()) if it.lease_holder is not None},
         }
 
+    def presence(self, agents=()) -> dict:
+        """Who is checking in (ledger.presence), by the hub's clock."""
+        from .presence import presence
+        cfg = self.config()
+        events, _ = self._state()
+        now = self.clock()
+        return {"hub": cfg.hub_id, "now_ms": now,
+                "agents": presence(events, now, agents=agents, registry_path=self.registry_path)}
+
     def snapshot(self) -> dict:
         """Everything the hub's answers depend on, and nothing process-local.
         A hub rebuilt from a copy of the log returns an equal snapshot."""
@@ -576,6 +585,9 @@ class LocalTransport:
 
     def status(self) -> dict:
         return self._hub().status()
+
+    def presence(self, agents=()) -> dict:
+        return self._hub().presence(agents)
 
 
 class HttpTransport:
@@ -619,6 +631,11 @@ class HttpTransport:
 
     def status(self) -> dict:
         return self._call("GET", self.prefix + "/status")
+
+    def presence(self, agents=()) -> dict:
+        import urllib.parse
+        query = "?" + urllib.parse.urlencode({"agents": ",".join(agents)}) if agents else ""
+        return self._call("GET", self.prefix + "/presence" + query)
 
 
 # ── the writer's side ───────────────────────────────────────────────────────

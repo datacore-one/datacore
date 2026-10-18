@@ -295,3 +295,16 @@ def test_the_briefing_reads_through_the_same_presence_read_as_the_check(env):
     lines, source = check.briefing(env.box_dir, agents=AGENTS, transport=env.transport,
                                    now_ms=env.clock(), registry_path=env.registry)
     assert source == "hub" and len(lines) == 4
+
+
+def test_dry_run_sends_nothing_and_leaves_the_state_alone(env, monkeypatch, capsys):
+    """Added after a manual smoke run of `check` on the workstation went out
+    through the real alert route: --dry-run is the safe way to look."""
+    sent = env.tmp / "sent.txt"
+    monkeypatch.setenv("DATACORE_ALERT_COMMAND", f"cat >> {sent}")
+    monkeypatch.delenv("DATACORE_HUB_URL", raising=False)
+    rc = check.main(["check", "--dry-run", "--space", str(env.box_dir), "--agents", "miles",
+                     "--state", str(env.state_file)])
+    assert rc == 0
+    assert "WOULD SEND" in capsys.readouterr().out
+    assert not sent.exists() and not env.state_file.exists()

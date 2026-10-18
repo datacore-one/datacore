@@ -103,7 +103,8 @@ FUTURE_TOLERANCE_MS = 10 * 60 * 1000
 # A signed cadence record (cadence.registration / cadence.run) is NOT a routine
 # measurement: it is the evidence a duty ran (CAD-3/CAD-4), read and checked
 # per writer log, so it stays in the task log beside the work it vouches for.
-TELEMETRY_TYPES = frozenset({"metric.attest", "artifact.attest"})
+# agent.checkin (ledger.presence) is one too: 48 a day per agent.
+TELEMETRY_TYPES = frozenset({"metric.attest", "artifact.attest", "agent.checkin"})
 DUTY_METRICS = frozenset({"cadence.registration", "cadence.run"})
 
 
