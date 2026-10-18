@@ -195,7 +195,7 @@ The pool now runs on the hub's admission and lease model:
 - In the fold, the hub's lease plan decides first (earliest lease wins). After that, a pool item with no DONE_WHEN is still a recorded lease conflict.
 - `pool.budget` is a hub-only type in `hub_admission`. Only the grantor writes it, in its own log.
 - The first build's "accept, but mark `not_counted`" is gone. A holder's own check, or a pool completion without a DONE_WHEN, is now refused at the front door by the policy rule (`not_authorized`, `hub_policy.authorize`). The fold run with policy turns the same event into a recorded no-op, and the writer still refuses it before writing. If the event is already in the writer's signed log, the hub keeps it as a rejected proposal (audit finding 11), so that writer's chain is not stranded.
-- A hub-side bug was found and fixed here: after a renewal, `HubWriter._attempt_for` lost the task hash, so a completion after a renewal folded to a lease conflict. **This fix is not on `feat/ledger-hub` or `feat/agent-checkin`.**
+- A hub-side bug was found here: after a renewal, `HubWriter._attempt_for` lost the task hash, so a completion after a renewal folded to a lease conflict. *(Corrected 2026-10-18: the fix is on `feat/ledger-hub`, 73a26f0 test and 31eb47b fix, and merged into this branch and `feat/agent-checkin`. The earlier sentence saying it was missing there was stale.)*
 
 ### Finding 14: what is implemented
 
@@ -242,3 +242,24 @@ The pool now runs on the hub's admission and lease model:
 - `hub_policy` refuses the old `item.claim` path for any item with a role, addressed or not. Such items are taken only through a lease.
 - Role templates are read from each host's code checkout. Whether they are tracked and synced to every agent host is **not verified**.
 - There are no HTTP routes for pools, and no dispatcher that offers pool tasks to idle agents.
+
+## Audit fixes, part 3
+
+Source: the Codex re-audit of 2026-10-18 (`2-datacore/1-tracks/engineering/reports/2026-10-18-ledger-hub-codex-reaudit-report.md`), new defects 5 and 6, on top of the hub's part 3 (see the hub review note, items A–J).
+
+Commits (root `feat/ledger-role-pool`): 395ff5f (merge of the hub fixes), f877aa9 (tests first, K and L), c6bf462 (fixes), 77df4ed and d4d62e3 (merges of the hub's two follow-ups). Merges are merge commits; nothing is pushed.
+
+| Item | What was wrong | Fix | Tests (`test_ledger_role_pool_review.py`) |
+|---|---|---|---|
+| K (new 5) | A pool holder set itself as the assignee and completed without independent review | A grant in a pool space pins the attempt's class (`pool` or `addressed`) and its review requirement beside the role it already pinned; `fold.is_pool_item` follows the pin, so a re-addressed task's completion is still a submission for review. While an attempt is live, only the policy's approver changes the task's assignee, role or DONE_WHEN (`hub_policy._attempt_obligations`, at the front door and in the fold) | `test_reaudit_new5_a_live_attempt_keeps_its_class_role_and_review_whatever_the_task_says_later` |
+| L (new 6) | `HubWriter._pool_prepare` folded without admission, so a lease nobody granted decided what a check was bound to | It reads `ledger.hub.authoritative_state` | `test_reaudit_new6_pool_preparation_reads_the_authoritative_state`; also the hub's source guard |
+
+Merge conflicts (395ff5f), resolved by keeping both sides: `LedgerState` carries the pool's budgets and spend and the hub's per-event outcomes; the grant checks the execution policy before the role pin and the budget; `hub_policy` governs both `item.verify` (pool review) and `item.lease`.
+
+**Existing test changed:** `test_ledger_role_pool.py::test_the_fold_refuses_a_pool_completion_when_done_when_was_removed` removed DONE_WHEN during a live attempt as the task's owner writer. K refuses that now; the test asserts the refusal and removes it as the approver instead. Its assertions about the completion are unchanged.
+
+**Decision for the owner:** "owner re-approval" for changing a live attempt's assignee, role or DONE_WHEN is implemented as the approvals policy's approver. Should it instead be the hub space's recorded owner?
+
+**Still open:** the budget currency and day boundary (finding 14), and everything listed as open in the hub note.
+
+**Test counts (seen in this session):** pool + review + hub suites: 92 passed after the fixes. `-k ledger` on this branch: 852 passed before (7c16bdd), 867 passed, 0 failed after (at d4d62e3).
