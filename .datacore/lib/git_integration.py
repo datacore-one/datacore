@@ -88,6 +88,14 @@ def integrate(repo: Path, source: str, destination_ref: str, *, command=None,
     arguments[-2] = origin
     git(worktree, *arguments, hooks=hooks)
     from worktree_lifecycle import retire_worktree
-    retire_worktree(repo, worktree)
+    retired = retire_worktree(repo, worktree)
     git(repo, 'update-ref', '-d', result_ref, result)
     git(repo, 'update-ref', '-d', base_ref, base)
+    # The merge is pushed, so this full checkout is now a copy. Reclaim it under
+    # the collector's proof; any trouble leaves it for the sweep, never fails
+    # a publication that has already landed.
+    try:
+        import publication_workspace_gc
+        publication_workspace_gc.reclaim_worktree(repo, retired.path)
+    except Exception:
+        pass
