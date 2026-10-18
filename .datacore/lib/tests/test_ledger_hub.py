@@ -313,17 +313,26 @@ def test_hub_down_for_an_hour_loses_nothing_starts_no_double_run_and_replays(env
     replayed = wa.replay()
     assert [r["status"] for r in replayed] == ["accepted"] * 3
     assert wa.outage() is None
+    # Still nothing for wb: the restarted hub lost its request state, so the
+    # barrier holds until the owner clears it (Codex re-audit, new defect 3);
+    # then wa's completion, admitted after its lease ran out, is the owner's
+    # to decide (Codex re-audit, finding 9), not a completion.
     with pytest.raises(hubmod.HubRefused) as exc:
         wb.request_lease("t1")
-    assert exc.value.code == "closed"
+    assert exc.value.code == "recovering"
+    hub2.clear_recovery(hubmod.sign_request(OWNER, "recovery.clear", {"hub": HUB_ID, "space": _space_id(env.hub_dir)},
+                                            keys_dir=env.keys_dir, clock=env.clock))
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wb.request_lease("t1")
+    assert exc.value.code == "owner_resolution"
 
     # No event lost: the hub's copy of wa's log is wa's log, line for line.
     local = (wa.space_dir / ".datacore" / "events" / "wa.jsonl").read_bytes()
     assert (env.hub_dir / ".datacore" / "events" / "wa.jsonl").read_bytes() == local
-    # No double run: one lease, one completion, no conflict.
+    # No double run: one lease, one completion recorded (for the owner), no conflict.
     assert [e.payload["holder"] for e in leases_in(env.hub_dir)] == ["wa"]
     item = fold(read_events(env.hub_dir)).items["t1"]
-    assert item.status == "completed" and item.owner == "wa" and not item.lease_conflicts
+    assert item.status != "completed" and len(item.lease_unresolved) == 1 and not item.lease_conflicts
 
 
 # ── 3. the writer's own receipt ─────────────────────────────────────────────
@@ -1370,7 +1379,8 @@ def test_audit4_a_config_edited_to_another_grantor_or_manifest_confers_nothing(e
 
 # ── finding 11: replay compares signed frontiers; refused events stay in the chain ─
 
-def _signed_into(env, writer, type: str, payload: dict, *, chain: str | None = None) -> Event:
+def _signed_into(env, writer, type: str, payload: dict, *, chain: str | None = None,
+                 hlc: str | None = None) -> Event:
     """A correctly signed, domain-bound event appended by hand to `writer`'s MAIN log
     file (for history the current writer library would route or refuse)."""
     from ledger.hub_admission import signing_domain
@@ -1379,7 +1389,7 @@ def _signed_into(env, writer, type: str, payload: dict, *, chain: str | None = N
     lines = path.read_text().splitlines() if path.exists() else []
     tail = from_line(lines[-1]) if lines else None
     cfg = hubmod.load_config(writer.space_dir)
-    body = body_dict(tail.seq + 1 if tail else 0, f"{_real_ms():013d}.0000.{writer.actor}", writer.actor, type,
+    body = body_dict(tail.seq + 1 if tail else 0, hlc or f"{_real_ms():013d}.0000.{writer.actor}", writer.actor, type,
                      payload, tail.hash if tail else "GENESIS", hub=cfg.hub_id,
                      domain=signing_domain(cfg.space_id, cfg.hub_id, chain or writer.log.log_name))
     e = Event(**body, hash=compute_hash(body), sig=sign(writer.actor, canonical_bytes(body), keys_dir=env.keys_dir))
@@ -1436,8 +1446,8 @@ def test_audit11_a_refused_event_already_in_the_writer_log_is_kept_as_a_rejected
     owner.append("item.create", {"id": "t1", "title": "task"})
     git_pull(env.hub_dir, wa.space_dir)
     t.down = True
-    wa.log.append("item.lease", {"id": "t1", "holder": "wa", "granted_ms": 0, "expires_ms": 1})   # signed, local
-    wa.append("item.create", {"id": "t2", "title": "after it"})
+    bad = wa.log.append("item.lease", {"id": "t1", "holder": "wa", "granted_ms": 0, "expires_ms": 1})  # signed, local
+    after, _ = wa.append("item.create", {"id": "t2", "title": "after it"})
     t.down = False
     replayed = wa.replay()
     assert [r["status"] for r in replayed] == ["rejected", "accepted"], replayed
@@ -1445,10 +1455,15 @@ def test_audit11_a_refused_event_already_in_the_writer_log_is_kept_as_a_rejected
     assert len(rejects) == 1 and rejects[0].actor == GRANTOR
     _, state = hub._state()
     assert state.items["t1"].lease_holder is None and "t2" in state.items
-    # The chain is continuous and settles: the seal covers it, the writer's receipt confirms.
+    # The chain is continuous and settles: the seal covers it, and the receipt
+    # for the event after the rejected one confirms. The rejected proposal is
+    # never a confirmation of itself (Codex re-audit, finding 3), so a receipt
+    # for every one of the writer's events fails on it.
     git = _published(env, hub, [owner, wa])
-    report = wa.receipt_check(git, hub_actor=GRANTOR)
+    report = wa.receipt_check(git, hub_actor=GRANTOR, required=[after.hash])
     assert report["status"] == "confirmed", report
+    report = wa.receipt_check(git, hub_actor=GRANTOR)
+    assert report["status"] == "failed" and any(bad.hash[:12] in p for p in report["problems"]), report
 
 
 def test_audit11_a_telemetry_event_in_the_main_log_is_imported_into_the_main_log(env):
@@ -1491,9 +1506,11 @@ def test_audit10_a_holder_offline_longer_than_a_lease_period_is_not_double_run(e
             wb.request_lease(item)
         assert exc.value.code == "uncertain_attempt", (restart, exc.value)
         wa.replay()                                                          # the holder reconciles
+        # Its completion was admitted after the lease ran out: the owner's to
+        # decide, never a completion (Codex re-audit, finding 9; was "closed").
         with pytest.raises(hubmod.HubRefused) as exc:
             wb.request_lease(item)
-        assert exc.value.code == "closed", (restart, exc.value)
+        assert exc.value.code == "owner_resolution", (restart, exc.value)
         hub.close()
 
 
@@ -1659,3 +1676,344 @@ def test_audit15_the_hub_publishes_only_its_own_log(env, monkeypatch):
         f".datacore/events/{GRANTOR}.jsonl"]
     assert ranges(env.hub_dir, [f"{base}..{commit}"]) == []
     assert "own.jsonl" in _git(env.hub_dir, "status", "--porcelain")   # another writer's log: theirs to publish
+
+
+# ── audit fixes, part 3: the Codex re-audit of 2026-10-18 ──────────────────
+# Report: 2-datacore/1-tracks/engineering/reports/2026-10-18-ledger-hub-codex-reaudit-report.md.
+# Each test reproduces the scenario Codex ran.
+
+def _last(writer) -> Event:
+    return from_line(writer.log.path.read_text().splitlines()[-1])
+
+
+def _tail(writer) -> dict:
+    e = _last(writer)
+    return {writer.log.log_name: {"seq": e.seq, "head": e.hash}}
+
+
+# A (finding 3): a receipt confirms an operation only when its transition took effect.
+
+def test_reaudit3_a_policy_rejected_claim_is_never_a_confirmed_receipt(env):
+    """Codex: a claim the policy refused returned `confirmed, ok: true` while
+    the item stayed unclaimed. Here over HTTP (kept as a rejected proposal)
+    and by git (folded to a no-op)."""
+    hub = env.hub(eligibility=None)
+    t = hubmod.LocalTransport(hub)
+    owner, wa = env.writer("own", t), env.writer("wa", t)
+    owner.append("item.create", {"id": "t1", "title": "for wb", "assignee": "wb"})
+    owner.append("item.create", {"id": "t2", "title": "for wb too", "assignee": "wb"})
+    git_pull(env.hub_dir, wa.space_dir)
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wa.append("item.claim", {"id": "t1"})
+    assert exc.value.code == "not_authorized"
+    over_http = _last(wa)
+    t.down = True
+    by_git, _ = wa.append("item.claim", {"id": "t2"})          # buffered, then published by git
+    git_pull(wa.space_dir, env.hub_dir)
+    t.down = False
+    git = _published(env, hub, [owner, wa])
+    _, state = hub._state()
+    assert state.items["t1"].owner is None and state.items["t2"].owner is None
+    for claim in (over_http, by_git):
+        report = wa.receipt_check(git, hub_actor=GRANTOR, required=[claim.hash])
+        assert report["status"] == "failed" and report["ok"] is False, report
+        assert any(claim.hash[:12] in p for p in report["problems"]), report
+    report = wa.receipt_check(git, hub_actor=GRANTOR)            # every event of mine
+    assert report["status"] == "failed" and report["ok"] is False, report
+
+
+def test_reaudit3_a_claim_that_changed_nothing_is_not_a_confirmed_receipt(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa, wb = env.writer("own", t), env.writer("wa", t), env.writer("wb", t)
+    owner.append("item.create", {"id": "t1", "title": "anyone's"})
+    git_pull(env.hub_dir, wa.space_dir)
+    wa.append("item.claim", {"id": "t1"})
+    git_pull(env.hub_dir, wb.space_dir)
+    late, _ = wb.append("item.claim", {"id": "t1"})               # authorized, but already claimed
+    git = _published(env, hub, [owner, wa, wb])
+    assert wa.receipt_check(git, hub_actor=GRANTOR)["status"] == "confirmed"
+    report = wb.receipt_check(git, hub_actor=GRANTOR, required=[late.hash])
+    assert report["status"] == "failed" and report["ok"] is False, report
+
+
+# B (finding 2): one authoritative state for every reader of a hub space.
+
+def test_reaudit2_every_reader_of_a_hub_space_gets_the_one_authoritative_state(env):
+    hub = env.hub(eligibility=None)
+    t = hubmod.LocalTransport(hub)
+    owner = env.writer("own", t)
+    owner.append("item.create", {"id": "t1", "title": "for wb", "assignee": "wb"})
+    owner.append("item.create", {"id": "t2", "title": "anyone's"})
+    _git_writer(env, "wc").append("item.claim", {"id": "t1"})                  # the policy refuses it
+    _git_writer(env, "wd").append("item.lease", {"id": "t2", "holder": "wd", "granted_ms": env.clock(),
+                                                 "expires_ms": env.clock() + 900_000})   # not a grantor
+    hub.seal()
+    kw = dict(registry_path=env.registry, policy=TEST_POLICY, now_ms=env.clock())
+    state = hubmod.authoritative_state(env.hub_dir, **kw)
+    assert state.items["t1"].owner is None and state.items["t2"].lease_holder is None
+    assert state.state_root() == hub._state()[1].state_root()
+    settled = hubmod.authoritative_state(env.hub_dir, settled=True, **kw)
+    assert settled.items["t1"].owner is None and settled.items["t2"].lease_holder is None
+    # A plain fold of the same files is exactly the bypass.
+    assert fold(read_events(env.hub_dir)).items["t1"].owner == "wc"
+    # A space without a hub keeps the old path.
+    plain = env.tmp / "plain-space"
+    EventLog(plain, "own", sign=False).append("item.create", {"id": "p1", "title": "plain"})
+    EventLog(plain, "wc", sign=False).append("item.claim", {"id": "p1"})
+    assert hubmod.authoritative_state(plain).state_root() == fold(read_events(plain)).state_root()
+
+
+def test_reaudit2_no_production_reader_folds_a_space_without_admission():
+    """Every production `fold(read_events(space))` could be a hub space read
+    around admission and policy; they go through `ledger.hub.authoritative_state`."""
+    import re
+    lib = Path(hubmod.__file__).resolve().parents[1]
+    pattern = re.compile(r"\bfold\(\s*read_events\(")
+    offenders = [f"{p.relative_to(lib)}:{n}" for p in sorted(lib.rglob("*.py")) if "tests" not in p.parts
+                 for n, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1)
+                 if pattern.search(line)]
+    assert offenders == [], offenders
+
+
+# C (new 1): a rejected proposal is a no-op on every replay, before policy.
+
+def test_reaudit_new1_a_rejected_backdated_claim_stays_a_no_op_on_every_replay(env):
+    """Codex: a claim refused at the front door, stamped before the item was
+    reassigned, became valid on replay (it ended owner=wa, assignee=wb)."""
+    hub = env.hub(eligibility=None)
+    t = hubmod.LocalTransport(hub)
+    owner, wa, wb = env.writer("own", t), env.writer("wa", t), env.writer("wb", t)
+    import time as _time
+    create, _ = owner.append("item.create", {"id": "t1", "title": "first for wa", "assignee": "wa"})
+    _time.sleep(0.05)
+    update, _ = owner.append("item.update", {"id": "t1", "assignee": "wb"})
+    git_pull(env.hub_dir, wa.space_dir)
+    physical = (int(create.hlc.split(".")[0]) + int(update.hlc.split(".")[0])) // 2   # between the two
+    claim = _signed_into(env, wa, "item.claim", {"id": "t1"}, hlc=f"{physical:013d}.0000.wa")
+    replayed = wa.replay()
+    assert [r["status"] for r in replayed] == ["rejected"], replayed
+    assert [e.payload["event"]["hash"] for e in read_events(env.hub_dir) if e.type == "ledger.reject"] == [claim.hash]
+    item = _hub_item(hub, "t1")
+    assert item.owner is None and item.status == "created" and item.payload["assignee"] == "wb", item.history
+    sealed = hub.seal()["seal"]["payload"]
+    assert sealed["state_root"] == hubmod.authoritative_state(
+        env.hub_dir, registry_path=env.registry, policy=TEST_POLICY, now_ms=env.clock()).state_root()
+    assert wb.request_lease("t1")["status"] == "granted"
+
+
+# D (new 2): a crash between storing a proposal and its rejection does not strand the chain.
+
+@pytest.mark.parametrize("crash", ["after_proposal", "after_reject"])
+def test_reaudit_new2_a_crash_between_a_proposal_and_its_rejection_does_not_strand_the_chain(env, monkeypatch,
+                                                                                            crash):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa = env.writer("own", t), env.writer("wa", t)
+    owner.append("item.create", {"id": "t1", "title": "task"})
+    git_pull(env.hub_dir, wa.space_dir)
+    wa.log.append("item.lease", {"id": "t1", "holder": "wa", "granted_ms": 0, "expires_ms": 1})  # signed, local
+
+    class Crash(Exception):
+        pass
+
+    real_append = hub.log.append
+
+    def dies(type, payload, **kw):
+        if type == "ledger.reject":
+            if crash == "after_reject":
+                real_append(type, payload, **kw)       # durable, but the answer never leaves
+            raise Crash("the hub process died here")
+        return real_append(type, payload, **kw)
+
+    monkeypatch.setattr(hub.log, "append", dies)
+    with pytest.raises(Crash):
+        wa.replay()
+    hub.close()
+    hub = env.hub()                                    # restarted on the same persisted state
+    t.hub = hub
+    wa.replay()
+    _, receipt = wa.append("item.create", {"id": "t2", "title": "after the crash"})
+    assert receipt and receipt["status"] == "accepted", receipt
+    rejects = [e for e in read_events(env.hub_dir) if e.type == "ledger.reject"]
+    assert len(rejects) == 1 and rejects[0].payload["event"]["seq"] == 0, rejects
+    _, state = hub._state()
+    assert state.items["t1"].lease_holder is None and "t2" in state.items
+    assert "wa" not in hub.refusals(), hub.refusals()
+
+
+# E (new 3): recovery-required is persisted, cleared only by the owner's transition.
+
+def test_reaudit_new3_a_lost_request_store_stays_recovering_after_a_refused_request_and_a_restart(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa, wb = env.writer("own", t), env.writer("wa", t), env.writer("wb", t)
+    owner.append("item.create", {"id": "t1", "title": "task"})
+    owner.append("item.create", {"id": "t2", "title": "task"})
+    assert wa.request_lease("t1")["status"] == "granted"
+    store = hub._requests_path
+    hub.close()
+    store.unlink()                                       # the request store is lost
+    hub = env.hub()
+    t.hub = hub
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wb.request_lease("t2")                           # refused, and the refusal is stored
+    assert exc.value.code == "recovering"
+    hub.close()
+    hub = env.hub()                                      # the store file exists again
+    t.hub = hub
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wb.request_lease("t2")
+    assert exc.value.code == "recovering", exc.value
+    # Only the owner's verified recovery transition clears it, and that survives a restart.
+    hub.clear_recovery(hubmod.sign_request(OWNER, "recovery.clear", {"hub": HUB_ID, "space": _space_id(env.hub_dir)},
+                                           keys_dir=env.keys_dir, clock=env.clock))
+    hub.close()
+    hub = env.hub()
+    t.hub = hub
+    assert wb.request_lease("t2")["status"] == "granted"
+
+
+# F (new 4): reconciling needs every required log and an explicit outcome per uncertain attempt.
+
+def test_reaudit_new4_an_empty_reconcile_does_not_unlock_an_uncertain_attempt(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa, wb = env.writer("own", t), env.writer("wa", t), env.writer("wb", t)
+    owner.append("item.create", {"id": "t1", "title": "task"})
+    owner.append("item.create", {"id": "t2", "title": "task"})
+    git_pull(env.hub_dir, wa.space_dir)
+    first = _lease_payload(wa.request_lease("t1"))["attempt"]
+    second = _lease_payload(wa.request_lease("t2"))["attempt"]
+    wa.append("item.update", {"id": "t1", "note": "working"})       # the hub holds a log of wa's
+    env.clock.advance(901)
+    hub.expire_due()
+
+    def reconcile(frontier):
+        return hub.reconcile(hubmod.sign_request("wa", "reconcile", {
+            "hub": HUB_ID, "space": _space_id(env.hub_dir), "frontier": frontier, "leases": []},
+            keys_dir=env.keys_dir, clock=env.clock))
+
+    with pytest.raises(hubmod.HubRefused) as exc:
+        reconcile({})                                    # Codex's case: an empty frontier, no leases
+    assert exc.value.code == "behind", exc.value
+    answer = reconcile(_tail(wa))
+    assert sorted(answer["unresolved"]) == sorted([first, second]), answer
+    for item in ("t1", "t2"):
+        with pytest.raises(hubmod.HubRefused) as exc:
+            wb.request_lease(item)
+        assert exc.value.code == "uncertain_attempt", (item, exc.value)
+    # The holder resolves one explicitly: it releases that attempt.
+    wa.append("item.release", {"id": "t1"})
+    assert wb.request_lease("t1")["status"] == "granted"
+    # A holder that never returns: only the owner's signed resolution frees the item.
+    hubmod.resolve_attempt(env.hub_dir, "t2", second, by=OWNER, reason="wa is gone; nothing ran",
+                           keys_dir=env.keys_dir, registry_path=env.registry)
+    assert wb.request_lease("t2")["status"] == "granted"
+
+
+# G (finding 9): a result admitted after the lease ran out is not a completion.
+
+def test_reaudit9_a_result_admitted_after_the_lease_ran_out_is_not_a_completion(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa, wb = env.writer("own", t), env.writer("wa", t), env.writer("wb", t)
+    owner.append("item.create", {"id": "t1", "title": "task"})
+    owner.append("item.create", {"id": "t2", "title": "task"})
+    wa.request_lease("t1")
+    env.clock.advance(901)                               # no sweep ran: no expiry event exists
+    _, receipt = wa.append("item.complete", {"id": "t1", "result": "late"})
+    assert receipt["status"] == "accepted"
+    item = _hub_item(hub, "t1")
+    assert item.status != "completed" and item.lease_unresolved, item.history
+    assert [e.payload["id"] for e in read_events(env.hub_dir) if e.type == "item.lease.expire"] == ["t1"]
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wb.request_lease("t1")
+    assert exc.value.code == "owner_resolution"
+    # A release names the task content its attempt pinned, like a completion.
+    lease = _lease_payload(wa.request_lease("t2"))
+    wa.append("item.release", {"id": "t2", "attempt": lease["attempt"], "task_hash": "0" * 64})
+    item = _hub_item(hub, "t2")
+    assert item.status == "claimed" and item.lease_holder == "wa", item.history
+
+
+# H (finding 12): a lease obeys the same execution policy as a claim.
+
+def test_reaudit12_a_lease_obeys_the_same_execution_policy_as_a_claim(env):
+    from ledger.hub_policy import PolicyInputs
+    policy = PolicyInputs(approver=APPROVER, cosign_effects=frozenset({"payment"}),
+                          known_effects=frozenset({"payment", "deploy"}), principal_of={"wa": "wa"},
+                          limits={"wa": {"never_effects": ["deploy"]}})
+    hub = env.hub(policy=policy)                         # the permissive pool hook: policy still applies
+    t = hubmod.LocalTransport(hub)
+    owner, wa, wb = env.writer("own", t), env.writer("wa", t), env.writer("wb", t)
+    owner.append("item.create", {"id": "d1", "title": "deploy it", "effects": ["deploy"]})
+    owner.append("item.create", {"id": "a1", "title": "for wb", "assignee": "wb"})
+    for item in ("d1", "a1"):
+        with pytest.raises(hubmod.HubRefused) as exc:
+            wa.request_lease(item)
+        assert exc.value.code == "not_authorized", (item, exc.value)
+    assert wb.request_lease("a1")["status"] == "granted"
+    # The fold agrees: a grantor's lease the policy would refuse confers nothing.
+    create = _raw_event(0, "1700000000000.0000.own", "own", "item.create",
+                        {"id": "d2", "title": "deploy", "effects": ["deploy"]}, "GENESIS")
+    lease = _raw_event(0, "1700000000001.0000.hubd", GRANTOR, "item.lease",
+                       {"id": "d2", "holder": "wa", "attempt": "a1", "task_hash": "x",
+                        "granted_ms": 100, "expires_ms": 200}, "GENESIS", hub=HUB_ID)
+    item = fold([create, lease], lease_grantors={HUB_ID: {GRANTOR}}, policy=policy).items["d2"]
+    assert item.lease_holder is None, item.history
+
+
+# I (finding 5): the first confirmation refuses an expired grant and another epoch.
+
+def test_reaudit5_a_first_confirmation_refuses_an_expired_grant_or_another_epoch(env):
+    hub = env.hub()
+    owner = env.writer("own", hubmod.LocalTransport(hub))
+    owner.append("item.create", {"id": "t1", "title": "task"})
+
+    def forged(changes):
+        def answer(req, real):              # genuinely signed by the grantor, in its own log
+            p = {"id": "t1", "holder": "wa", "attempt": hubmod.attempt_id(req), "task_hash": "x", "epoch": 0,
+                 "granted_ms": env.clock(), "expires_ms": env.clock() + 900_000,
+                 "request": hubmod._request_ref(req), **changes}
+            return {"status": "granted", "lease": json.loads(to_line(hub.log.append("item.lease", p))),
+                    "log": GRANTOR}
+        return answer
+
+    for changes in ({"epoch": 3},
+                    {"granted_ms": env.clock() - 2_000_000, "expires_ms": env.clock() - 1_000_000}):
+        wa = env.writer("wa", _Forging(hub, forged(changes)))
+        with pytest.raises(hubmod.HubRefused) as exc:
+            wa.request_lease("t1")
+        assert exc.value.code == "bad_lease", (changes, exc.value)
+        assert wa.receipts() == []
+
+
+# J (finding 4): a successor's seal covers everything its predecessor's last seal covered.
+
+def test_reaudit4_a_successor_seal_covers_every_prefix_the_predecessors_last_seal_covered(env):
+    from ledger.seal import build_seal_payload
+    space = _owned(env, "j-space")
+    hub_a = env.hub(space=space, state="ja")
+    ta = hubmod.LocalTransport(hub_a)
+    own, wa = _writer_in(env, space, OWNER, ta), _writer_in(env, space, "wa", ta)
+    own.append("item.create", {"id": "t1", "title": "one"})
+    wa.append("item.create", {"id": "w1", "title": "wa's settled work"})
+    assert hub_a.seal()["seal"]["payload"]["watermarks"]["wa"] == 0
+    hub_a.fence(reason="moving the hub")
+    _promote(env, space, "hubb")
+    lost = env.tmp / "j-space-without-wa"
+    shutil.copytree(space, lost)
+    (lost / ".datacore" / "events" / "wa.jsonl").unlink()     # a successor copy that lost wa's prefix
+    hub_b = env.hub("hubb", lost, state="jb")
+    with pytest.raises(hubmod.HubRefused) as exc:
+        hub_b.seal()
+    assert exc.value.code == "behind_predecessor", exc.value
+    # A dishonest successor seals anyway; another writer's receipt must not confirm on it.
+    wb = _writer_in(env, lost, "wb", hubmod.LocalTransport(hub_b))
+    wb.append("item.create", {"id": "b1", "title": "wb's work"})
+    events, _ = hub_b._state()
+    EventLog(lost, "hubb", keys_dir=env.keys_dir, registry_path=env.registry, sign=True).append(
+        "ledger.seal", build_seal_payload(events, fold_kwargs=hub_b._fold_kwargs(hubmod.load_config(lost))))
+    report = wb.receipt_check(lost, hub_actor="hubb")
+    assert report["status"] == "failed" and any("wa" in p for p in report["problems"]), report

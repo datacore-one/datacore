@@ -99,7 +99,8 @@ class Drill:
         gi.write_text(gi.read_text() + "org/next_actions.org\n")
         git(self.space, "rm", "-q", "--cached", "org/next_actions.org")
 
-        self.org.write_text(project(fold(read_events(self.space)), space=self.space.name).text)
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        self.org.write_text(project(authoritative_state(self.space), space=self.space.name).text)
         git(self.space, "add", "-A")
         git(self.space, "commit", "-qm", "drill: flip to Phase 1")
 

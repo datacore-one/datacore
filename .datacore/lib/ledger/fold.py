@@ -146,6 +146,13 @@ class LedgerState:
     #: "role|YYYY-MM-DD" (UTC day of the spend's HLC) -> cents, from hub-stamped
     #: `spend.record` events naming a pool item (a role and no assignee).
     pool_spend: dict[str, int] = field(default_factory=dict)
+    #: event hash -> what folding it did ("applied ...", "no-op (...)",
+    #: "conflict (...)", "recorded ...", "orphan"): the last note the event
+    #: left on its item. A receipt asks this whether ONE operation's intended
+    #: transition took effect (Codex re-audit, finding 3): a covered event that
+    #: folded to a no-op is not a confirmation. Derived from the same fold, so
+    #: deliberately outside `state_root` (it adds nothing a root must pin).
+    outcomes: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
 
     def state_root(self) -> str:
         """One hash over the WHOLE folded state — items, spend and orphans.
@@ -247,35 +254,76 @@ def fold(events: list[Event], *, lease_grantors=None, policy=None) -> LedgerStat
         if len(voids):
             events = [e for e in events if not voids.applies(getattr(e, "log", e.actor), e)]
 
+    # REJECTED PROPOSALS ARE NO-OPS (Codex re-audit, new defect 1). An event a
+    # grantor recorded as rejected (`ledger.reject`, audit finding 11) was
+    # refused at the front door; re-judging it on replay could make it valid
+    # (a claim backdated before a reassignment was). It is taken out before
+    # lease planning and policy, in every copy, from authenticated grantor
+    # events only -- so only when the caller passes the grantors.
+    rejected = _rejected_by_grantors(events, lease_grantors) if lease_grantors is not None else frozenset()
+
     # Leases are resolved before anything is applied (audit finding 8).
     if any(e.type in _PLANNED_TYPES for e in events):
-        state._lease_plan = _plan_leases(events, lease_grantors)
+        state._lease_plan = _plan_leases([e for e in events if e.hash not in rejected], lease_grantors)
 
     for event in events:
-        handler = _HANDLERS.get(event.type)
-        if (lease_grantors is not None and event.type in _LEASE_TYPES
-                and event.actor not in lease_grantors.get(getattr(event, "hub", "") or "", ())):
-            item = state.items.get(_valid_item_id(event.payload if isinstance(event.payload, dict) else {}) or "")
-            if item is not None:
-                _note(item, event, f"no-op ({event.actor!r} is not a grantor of hub {getattr(event, 'hub', '')!r})")
-            continue
-        if authorize is not None:
-            why = authorize(event, state, seen, policy)
-            if why:
-                item = state.items.get(_valid_item_id(event.payload if isinstance(event.payload, dict) else {}) or "")
-                if item is not None:
-                    _note(item, event, f"no-op (not authorized: {why})")
-                else:       # never silently dropped: a proposal without an item is listed
-                    state.orphans.append(f"{event.hlc} {event.type} not authorized")
-                continue
-            seen[event.hash] = event
-        if handler is not None:
-            handler(state, event)
-        # Event types outside this fold's scope (metric.attest,
-        # artifact.attest, policy.set, ...) are silently ignored here --
-        # they don't affect item/ownership/spend state.
+        item_id = _valid_item_id(event.payload if isinstance(event.payload, dict) else {})
+        before = state.items.get(item_id) if item_id else None
+        notes, orphans = (len(before.history) if before is not None else 0), len(state.orphans)
+        _step(state, event, seen, rejected, lease_grantors, authorize, policy)
+        after = state.items.get(item_id) if item_id else None
+        new = (after.history[notes:] if after is before else after.history) if after is not None else []
+        if new:
+            state.outcomes[event.hash] = new[-1].split(": ", 1)[1] if ": " in new[-1] else new[-1]
+        elif len(state.orphans) > orphans:
+            state.outcomes[event.hash] = "orphan"
 
     return state
+
+
+def _rejected_by_grantors(events, lease_grantors) -> frozenset:
+    """Hashes named by `ledger.reject` records a grantor wrote in its own log."""
+    out = set()
+    for e in events:
+        if e.type != "ledger.reject" or (getattr(e, "log", None) or e.actor) != e.actor:
+            continue
+        if e.actor not in lease_grantors.get(getattr(e, "hub", "") or "", ()):
+            continue
+        ref = (e.payload or {}).get("event") if isinstance(e.payload, dict) else None
+        if isinstance(ref, dict) and isinstance(ref.get("hash"), str):
+            out.add(ref["hash"])
+    return frozenset(out)
+
+
+def _step(state: LedgerState, event: Event, seen: dict, rejected, lease_grantors, authorize, policy) -> None:
+    """Fold one event: rejected proposal, lease authority, policy, then its handler."""
+    handler = _HANDLERS.get(event.type)
+    item = state.items.get(_valid_item_id(event.payload if isinstance(event.payload, dict) else {}) or "")
+    if event.hash in rejected:
+        if item is not None:
+            _note(item, event, "no-op (rejected proposal: the grantor refused it at the front door)")
+        else:
+            state.orphans.append(f"{event.hlc} {event.type} rejected proposal")
+        return
+    if (lease_grantors is not None and event.type in _LEASE_TYPES
+            and event.actor not in lease_grantors.get(getattr(event, "hub", "") or "", ())):
+        if item is not None:
+            _note(item, event, f"no-op ({event.actor!r} is not a grantor of hub {getattr(event, 'hub', '')!r})")
+        return
+    if authorize is not None:
+        why = authorize(event, state, seen, policy)
+        if why:
+            if item is not None:
+                _note(item, event, f"no-op (not authorized: {why})")
+            else:       # never silently dropped: a proposal without an item is listed
+                state.orphans.append(f"{event.hlc} {event.type} not authorized")
+            return
+        seen[event.hash] = event
+    if handler is not None:
+        handler(state, event)
+    # Event types outside this fold's scope (metric.attest,
+    # artifact.attest, policy.set, ...) are silently ignored here --
+    # they don't affect item/ownership/spend state.
 
 
 def _note(item: ItemState, event: Event, outcome: str) -> None:
@@ -423,6 +471,12 @@ def _handle_release(state: LedgerState, event: Event) -> None:
     if item.lease_ref is not None and (item.lease_ref or {}).get("attempt") and (
             (event.payload or {}).get("attempt") != item.lease_ref["attempt"]):
         _note(item, event, "no-op (release names another lease attempt)")
+        return
+    if (item.lease_ref or {}).get("task_hash") and (
+            (event.payload or {}).get("task_hash") != item.lease_ref["task_hash"]):
+        # Like a result, a release names the task content its attempt pinned
+        # (Codex re-audit, finding 9): one for other content releases nothing.
+        _note(item, event, "no-op (release names other task content than its lease pinned)")
         return
     item.owner = None
     item.status = "created"

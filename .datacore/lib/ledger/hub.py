@@ -432,7 +432,11 @@ def epochs_of(records: list[Event]) -> tuple:
         if p.get("epoch") != len(eps) or p.get("previous") != eps[-1].grantor or not isinstance(p.get("grantor"), str):
             raise HubRefused("bad_record", f"promotion record seq {r.seq} does not follow epoch {len(eps) - 1}")
         frontier = ((p.get("predecessor") or {}).get("frontier") or {}).get(eps[-1].grantor) or {}
-        eps[-1] = replace(eps[-1], fence_seq=int(frontier.get("seq", -1)), fence_head=frontier.get("head"))
+        seal = (p.get("predecessor") or {}).get("last_seal")
+        last_seal = ((seal["seq"], seal["hash"]) if isinstance(seal, dict) and type(seal.get("seq")) is int
+                     and isinstance(seal.get("hash"), str) else None)
+        eps[-1] = replace(eps[-1], fence_seq=int(frontier.get("seq", -1)), fence_head=frontier.get("head"),
+                          last_seal=last_seal)
         nb = p.get("not_before_ms")
         eps.append(Epoch(p["epoch"], p["grantor"], not_before_ms=nb if type(nb) is int else None))
     return tuple(eps)
@@ -486,6 +490,107 @@ def authority(space_dir, cfg: HubConfig, registry_path=None) -> Authority:
                          "the owner signed (hub.enable)")
     return Authority(space_id=cfg.space_id, hub_id=cfg.hub_id, grantors=frozenset(ep.grantor for ep in eps),
                      legacy=legacy, registry_path=registry_path, owner=cfg.owner, epochs=eps)
+
+
+# ── the one authoritative state of a hub space (Codex re-audit, finding 2) ──
+
+def authoritative_events(space_dir, events=None, *, registry_path=None, policy=None,
+                         now_ms: int | None = None) -> tuple[list, dict]:
+    """(the events a reader may fold, the fold's explicit inputs) for `space_dir`.
+
+    A space without a hub: every event and no inputs -- the old path, exactly.
+    A hub space: only what the one admission rule admits (signatures, domain,
+    clock, chain, grantor authority), folded with the lease grantors and the
+    policy, so a reader sees what the hub decided and nothing a writer merely
+    wrote. `events`: already read (`read_events(space_dir)`), else read here.
+    `policy`: a `PolicyInputs`, a `ledger.policy.Policy`, or None (this
+    installation's policy file and registry, read once, before the fold)."""
+    from .log import read_events
+    cfg = load_config(space_dir)
+    if events is None:
+        events = read_events(Path(space_dir))
+    if cfg is None:
+        return list(events), {}
+    from .hub_policy import PolicyInputs
+    auth = authority(space_dir, cfg, registry_path)
+    inputs = policy if isinstance(policy, PolicyInputs) else PolicyInputs.load(policy)
+    admitted = admit(list(events), auth, now_ms=_wall_ms() if now_ms is None else now_ms).events
+    return admitted, {"lease_grantors": auth.lease_grantors(), "policy": inputs, "_sealer": auth.active.grantor}
+
+
+def authoritative_state(space_dir, events=None, *, registry_path=None, policy=None, now_ms: int | None = None,
+                        settled: bool = False):
+    """THE state of a space for every reader that decides or displays (finding 2).
+
+    Every production fold of a space read from disk goes through here, so a hub
+    space is never folded around admission and policy (a dashboard, the app's
+    task list, the dispatcher and the org projection see the hub's decisions).
+    A space without a hub folds exactly as before.
+
+    `settled=True`: the state as of the latest seal (None when nothing is
+    sealed). In a hub space that is the active grantor's seal over admitted
+    events, verified with the same inputs; an unverified seal raises
+    `ValueError`, like `seal.settled_events`."""
+    from .fold import fold
+    admitted, kw = authoritative_events(space_dir, events, registry_path=registry_path, policy=policy,
+                                        now_ms=now_ms)
+    sealer = kw.pop("_sealer", None)
+    if not settled:
+        return fold(admitted, **kw)
+    from .seal import _covered_events, as_sequencer, latest_seal, settled as plain_settled, verify_seal
+    if sealer is None:
+        return plain_settled(admitted)
+    with as_sequencer(sealer):
+        seal = latest_seal(admitted)
+        if seal is None:
+            return None
+        ok, detail = verify_seal(admitted, kw)
+    if ok is not True:
+        raise ValueError("unverified settlement: " + detail)
+    return fold(_covered_events(admitted, seal), **kw)
+
+
+def predecessor_seal_marks(events, auth: Authority, grantor: str) -> tuple[dict, str | None]:
+    """({log: seq} the predecessor's last seal covered, problem) for `grantor`'s epoch.
+
+    A successor seal covers at least every writer prefix its predecessor's last
+    seal covered (Codex re-audit, finding 4), not only the predecessor's own
+    log: dropping another writer's settled prefix would un-settle it."""
+    ep = auth.epoch_of(grantor)
+    if ep is None or ep.epoch == 0:
+        return {}, None
+    pred = auth.epochs[ep.epoch - 1]
+    if pred.last_seal is None:
+        return {}, None
+    seq, digest = pred.last_seal
+    seal = next((e for e in events if (getattr(e, "log", None) or e.actor) == pred.grantor and e.seq == seq), None)
+    if seal is None or seal.hash != digest or seal.type != "ledger.seal":
+        return {}, (f"this copy does not hold {pred.grantor}'s last seal (seq {seq}) that the promotion names")
+    marks = (seal.payload or {}).get("watermarks")
+    if not isinstance(marks, dict):
+        return {}, f"{pred.grantor}'s last seal (seq {seq}) names no frontier"
+    return {str(k): int(v) for k, v in marks.items() if type(v) is int}, None
+
+
+def resolve_attempt(space_dir, item_id: str, attempt: str, *, by: str, reason: str, keys_dir=None,
+                    registry_path=None) -> dict:
+    """The owner decides an expired lease attempt whose holder never returned
+    (Codex re-audit, new defect 4): an owner-signed `hub.resolve` in the
+    owner's own log. It frees the item for another grant; it says nothing
+    about whether work ran (that is the owner's statement, `reason`).
+    Commit the owner's log so every copy learns of it."""
+    from .log import EventLog
+    cfg = load_config(space_dir)
+    if cfg is None:
+        raise HubRefused("hub_off", f"{space_dir} has no hub")
+    if by != cfg.owner:
+        raise HubRefused("not_owner", f"only the space's owner ({cfg.owner or 'none recorded'}) resolves an attempt")
+    if not item_id or not attempt or not reason:
+        raise ValueError("a resolution names the item, the attempt and why")
+    event = EventLog(Path(space_dir), by, keys_dir=keys_dir, registry_path=registry_path, sign=True).append(
+        "hub.resolve", {"space": cfg.space_id, "hub": cfg.hub_id, "id": item_id, "attempt": attempt,
+                        "reason": reason})
+    return _event_dict(event)
 
 
 def promote(space_dir, new_grantor: str, *, by: str, reason: str, keys_dir=None, registry_path=None,
@@ -761,11 +866,23 @@ class Hub:
         # restart. A hub that has lost them runs the recovery barrier.
         self._requests_path = state / f"{key}.requests.jsonl"
         self._reconciled_path = state / f"{key}.reconciled.json"
+        # Recovery-required is a persisted fact, never inferred from whether
+        # the request store exists (Codex re-audit, new defect 3): a refused
+        # request recreates the store, and a restart used to forget the barrier.
+        self._recovery_path = state / f"{key}.recovery.json"
+        # A rejection is intended durably BEFORE the proposal is stored (Codex
+        # re-audit, new defect 2), so a crash between the two is completed on
+        # the next start or the next duplicate, never left to strand the chain.
+        self._intents_path = state / f"{key}.reject-intents.json"
         self._answers: dict[str, dict] = {}
         self._reconciled: dict[str, int] = {}
         self.barrier: dict = {}
         if self._lock_fh is not None:
             self._load_request_state()
+            try:
+                self._complete_rejections()
+            except HubError:
+                pass                     # a standby records no rejections of its own
 
     # ── housekeeping ───────────────────────────────────────────────────────
     def close(self) -> None:
@@ -826,10 +943,11 @@ class Hub:
         (answers, status, snapshot, seal) goes through the one admission rule,
         whether an event came over HTTP or by git (audit finding 2)."""
         from .fold import fold
-        from .log import read_events
-        auth = self._authority(self.config())
-        events = admit(read_events(self.space_dir), auth, now_ms=self.clock()).events
-        return events, fold(events, lease_grantors=auth.lease_grantors(), policy=self.policy)
+        self.config()                                   # a space that opted out has no hub state
+        events, kw = authoritative_events(self.space_dir, registry_path=self.registry_path, policy=self.policy,
+                                          now_ms=self.clock())
+        kw.pop("_sealer", None)
+        return events, fold(events, **kw)
 
     def _fold_kwargs(self, cfg: HubConfig) -> dict:
         return {"lease_grantors": self._authority(cfg).lease_grantors(), "policy": self.policy}
@@ -868,6 +986,8 @@ class Hub:
                 # Network admission never admits legacy: unsigned history comes by
                 # git and counts only as the cutover manifest names it (finding 1).
                 raise HubRefused("unsigned", "the hub accepts only signed events (amendment D)")
+            if not proposal and event.type in ("item.complete", "item.release"):
+                self._expire_if_ran_out(event)
             auth = self._authority(cfg)
             path, chain = _target(self.space_dir, log_name, event, sub.get("chain"))
             from file_utils import fsync_directory
@@ -891,20 +1011,27 @@ class Hub:
                     except CorruptLogError as exc:
                         raise HubRefused("bad_chain", str(exc)) from None
                     verdict = self._onto(event, chain, existing, cfg, auth, proposal)
-                    if verdict == "duplicate":
-                        return self._receipt("duplicate", cfg, chain, event)
-                    f.write((to_line(event) + "\n").encode("utf-8"))
-                    f.flush()
-                    os.fsync(f.fileno())
-                    fsync_directory(path.parent)
+                    if verdict != "duplicate":
+                        if verdict is not None:
+                            self._intend_reject(path, chain, event, *verdict)   # durable first
+                        f.write((to_line(event) + "\n").encode("utf-8"))
+                        f.flush()
+                        os.fsync(f.fileno())
+                        fsync_directory(path.parent)
                 finally:
                     fcntl.flock(f, fcntl.LOCK_UN)
+            if verdict == "duplicate":
+                # A retry after a crash: finish a rejection the crash interrupted,
+                # and answer a kept proposal as what it is.
+                if proposal:
+                    self._complete_rejections()
+                if event.hash in {h for (_, _, h) in self._rejected()}:
+                    return self._receipt("rejected", cfg, chain, event, reason="kept as a rejected proposal")
+                return self._receipt("duplicate", cfg, chain, event)
             if verdict is not None:
                 code, why = verdict
-                self.log.append("ledger.reject", {
-                    "event": {"log": chain, "seq": event.seq, "hash": event.hash, "actor": event.actor,
-                              "type": event.type},
-                    "code": code, "reason": why})
+                self._record_reject(chain, {"seq": event.seq, "hash": event.hash, "actor": event.actor,
+                                            "type": event.type}, code, why)
                 return self._receipt("rejected", cfg, chain, event, reason=f"{code}: {why}")
             receipt = self._receipt("accepted", cfg, chain, event)
             self._record_conflicts(event)
@@ -949,6 +1076,64 @@ class Hub:
                 return (exc.code, exc.message)
             raise
         return None
+
+    def _expire_if_ran_out(self, event: Event) -> None:
+        """A result or release admitted after its lease ran out is not inside the
+        attempt, even when no sweep wrote the expiry yet (Codex re-audit,
+        finding 9): the grantor writes `item.lease.expire` first, with the
+        holder-log frontier it holds, so the fold sends the result to owner
+        resolution in every copy. Judged by the hub's clock at admission."""
+        from actor_identity import base_writer
+        item_id = (event.payload or {}).get("id") if isinstance(event.payload, dict) else None
+        if not isinstance(item_id, str):
+            return
+        try:
+            self._writable(grant=True)
+        except HubError:
+            return                                  # a standby writes no expiries
+        events, state = self._state()
+        item = state.items.get(item_id)
+        if item is None or item.lease_holder is None or not _open_attempt(item):
+            return
+        if base_writer(item.lease_holder) != base_writer(event.actor):
+            return
+        now = self.clock()
+        if item.lease_expires_ms is not None and now >= item.lease_expires_ms:
+            self._expire(item, events, now, _item_floor(events, item_id), "expired")
+
+    def _attempt_resolved(self, item, events, holder: str) -> bool:
+        """Has the expired attempt on `item` an explicit outcome (Codex re-audit,
+        new defect 4)? Its holder's release or result naming the attempt, or the
+        owner's signed `hub.resolve`. An empty reconcile is not one."""
+        from actor_identity import base_writer
+        ref = item.lease_ref or {}
+        attempt = ref.get("attempt") or ref.get("hash")
+        owner = self.config().owner
+        for e in events:
+            p = e.payload if isinstance(e.payload, dict) else {}
+            if p.get("id") != item.id or p.get("attempt") != attempt:
+                continue
+            if e.type in ("item.complete", "item.release") and base_writer(e.actor) == base_writer(holder):
+                return True
+            if e.type == "hub.resolve" and owner and e.actor == owner:
+                return True
+        return False
+
+    def _uncertain(self, state, events, holder: str, now: int) -> list:
+        """The attempts of `holder` that expired and have no explicit outcome yet."""
+        from actor_identity import base_writer
+        from .fold import lease_live
+        out = []
+        for item in sorted(state.items.values(), key=lambda i: i.id):
+            ref = item.lease_ref or {}
+            who = ref.get("holder") or item.lease_holder
+            if not ref or not who or base_writer(who) != base_writer(holder):
+                continue
+            expired = ((item.lease_holder is not None and not lease_live(item, now))
+                       or (ref.get("ended") and ref.get("end_reason") == "expired"))
+            if expired and not item.lease_unresolved and not self._attempt_resolved(item, events, who):
+                out.append(ref.get("attempt") or ref.get("hash"))
+        return out
 
     def _rejected(self) -> set:
         """(chain, seq, hash) this space's grantors recorded as rejected proposals."""
@@ -1077,14 +1262,73 @@ class Hub:
                                 json.loads(self._reconciled_path.read_text(encoding="utf-8")).items()}
         except (FileNotFoundError, ValueError, TypeError, AttributeError):
             self._reconciled = {}
+        try:
+            persisted = json.loads(self._recovery_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            persisted = {}
+        except ValueError:
+            persisted = {"state_lost": "the recovery record is unreadable; the owner clears recovery"}
+        if isinstance(persisted, dict):
+            self.barrier.update({str(k): v for k, v in persisted.items()})
         if lines is None and own:
             self.barrier["state_lost"] = ("this hub's request state is missing while its log holds answers; "
                                           "the owner clears recovery once every writer has reconciled")
-        else:
-            self._requests_path.touch()
+            self._persist_recovery()
+        self._requests_path.touch()
         missing = self._missing_own()
         if missing:
             self.barrier["own_log_behind"] = missing
+
+    def _persist_recovery(self) -> None:
+        """Write the owner-cleared part of the barrier (state_lost) durably."""
+        from file_utils import atomic_write_text
+        keep = {k: v for k, v in self.barrier.items() if k == "state_lost"}
+        atomic_write_text(self._recovery_path, json.dumps(keep, sort_keys=True))
+
+    # ── rejection intents (Codex re-audit, new defect 2) ──────────────────
+    def _intents(self) -> dict:
+        try:
+            data = json.loads(self._intents_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _write_intents(self, intents: dict) -> None:
+        from file_utils import atomic_write_text
+        atomic_write_text(self._intents_path, json.dumps(intents, sort_keys=True))
+
+    def _intend_reject(self, path: Path, chain: str, event: Event, code: str, why: str) -> None:
+        intents = self._intents()
+        intents[event.hash] = {"path": str(path), "chain": chain, "seq": event.seq, "hash": event.hash,
+                               "actor": event.actor, "type": event.type, "code": code, "reason": why}
+        self._write_intents(intents)
+
+    def _record_reject(self, chain: str, ref: dict, code: str, why: str) -> None:
+        self.log.append("ledger.reject", {
+            "event": {"log": chain, "seq": ref["seq"], "hash": ref["hash"], "actor": ref["actor"],
+                      "type": ref["type"]},
+            "code": code, "reason": why})
+        intents = self._intents()
+        if intents.pop(ref["hash"], None) is not None:
+            self._write_intents(intents)
+
+    def _complete_rejections(self) -> None:
+        """Finish every rejection intended before a crash: the proposal is in the
+        writer's log here and no `ledger.reject` names it yet -> record it now.
+        A proposal that never reached the file has nothing to reject."""
+        intents = self._intents()
+        if not intents:
+            return
+        self._writable(grant=True)
+        done = {h for (_, _, h) in self._rejected()}
+        for h, rec in sorted(intents.items()):
+            stored = {e.seq: e.hash for e in _parse_file(Path(rec.get("path", "")))}
+            if h not in done and stored.get(rec.get("seq")) == h:
+                self._record_reject(rec["chain"], rec, rec.get("code", "rejected"), rec.get("reason", ""))
+            else:
+                current = self._intents()
+                current.pop(h, None)
+                self._write_intents(current)
 
     def _missing_own(self) -> list:
         """Grants this hub answered that its own log no longer holds (a restore
@@ -1191,10 +1435,13 @@ class Hub:
                 since = ref.get("ended_ms")
             else:
                 since = None                          # released, or resolved by the owner
-            if since is not None and self._reconciled.get(base_writer(previous), -1) < since:
+            if since is not None and not self._attempt_resolved(item, events, previous):
+                # Reconciling alone resolves nothing (Codex re-audit, new defect 4):
+                # the attempt needs its holder's release or result naming it, or
+                # the owner's `hub.resolve`.
                 raise HubRefused("uncertain_attempt", f"{item_id}'s lease to {previous} expired while it may "
-                                 "still be working; it reconciles (replays) first, or the owner resolves it",
-                                 holder=previous)
+                                 "still be working; its holder releases or reports the attempt, or the owner "
+                                 "resolves it", holder=previous, attempt=ref.get("attempt") or ref.get("hash"))
         if item.status != "created" and item.lease_holder is None:
             raise HubRefused("claimed", f"{item_id} is {item.status} outside a lease (owner {item.owner})")
         if item.edit_conflicts:
@@ -1207,6 +1454,13 @@ class Hub:
             why = assignee_rule(item, actor, state)
         if why:
             raise HubRefused("not_eligible", why)
+        # A lease grants execution: the same execution policy as a claim
+        # (Codex re-audit, finding 12) -- assignee, never-effects, co-sign --
+        # whatever the eligibility hook says.
+        from .hub_policy import may_execute
+        why = may_execute(actor, item, {e.hash: e for e in events}, self.policy)
+        if why:
+            raise HubRefused("not_authorized", why)
         role = (item.payload or {}).get("role")
         grant_role = None
         if cfg.pools and role:
@@ -1288,12 +1542,29 @@ class Hub:
                     raise HubRefused("bad_lease", f"the stored grant at seq {ev.seq} is not this hub's signature")
                 self._restore_own(ev)
                 restored.append(ev.seq)
+            from .hub_admission import _writer_of
             frontier = self.frontiers()["logs"]
-            for chain, mine in (req.get("frontier") or {}).items():
-                held = frontier.get(chain) or {"seq": -1, "head": GENESIS}
+            presented = req.get("frontier") if isinstance(req.get("frontier"), dict) else None
+            if presented is None:
+                raise HubRefused("malformed", "a reconcile carries the writer's frontier per log")
+            # EVERY REQUIRED LOG (Codex re-audit, new defect 4): the holder's logs
+            # come from the hub's trusted state -- what it holds of this writer
+            # and what its expiry records name -- not from the request, so an
+            # empty or partial frontier cannot pass for a reconciliation.
+            events, state = self._state()
+            required = {c for c in frontier if _writer_of(c) == base_writer(actor)}
+            for e in events:
+                p = e.payload if isinstance(e.payload, dict) else {}
+                if e.type == "item.lease.expire" and isinstance(p.get("frontier"), dict) \
+                        and base_writer(str(p.get("holder") or "")) == base_writer(actor):
+                    required |= {str(c) for c in p["frontier"]}
+            none = {"seq": -1, "head": GENESIS}
+            for chain in sorted(required | set(presented)):
+                held, mine = frontier.get(chain) or none, presented.get(chain) or none
                 if not isinstance(mine, dict) or (mine.get("seq"), mine.get("head")) != (held["seq"], held["head"]):
-                    raise HubRefused("behind", f"the hub holds {chain} up to seq {held['seq']}; replay first",
-                                     log=chain, seq=held["seq"])
+                    raise HubRefused("behind", f"the hub holds {chain} up to seq {held['seq']}; this writer "
+                                     f"presented {mine.get('seq') if isinstance(mine, dict) else mine!r}: replay "
+                                     "first and present every log", log=chain, seq=held["seq"])
             self._reconciled[base_writer(actor)] = self.clock()
             from file_utils import atomic_write_text
             atomic_write_text(self._reconciled_path, json.dumps(self._reconciled, sort_keys=True))
@@ -1302,7 +1573,11 @@ class Hub:
                 self.barrier["own_log_behind"] = missing
             else:
                 self.barrier.pop("own_log_behind", None)
-            answer = {"status": "reconciled", "restored": restored, "barrier": sorted(self.barrier)}
+            # Matching frontiers settle nothing about an expired attempt: each one
+            # still needs an explicit outcome (release, result, owner).
+            unresolved = self._uncertain(state, events, actor, self.clock())
+            answer = {"status": "reconciled", "restored": restored, "barrier": sorted(self.barrier),
+                      "unresolved": unresolved}
             self._remember(req, answer=answer)
             return answer
 
@@ -1337,6 +1612,7 @@ class Hub:
             if actor != cfg.owner:
                 raise HubRefused("not_owner", f"only the space's owner ({cfg.owner}) clears recovery")
             self.barrier.pop("state_lost", None)
+            self._persist_recovery()
             self._requests_path.touch()
             return {"status": "cleared", "barrier": sorted(self.barrier)}
 
@@ -1450,6 +1726,15 @@ class Hub:
                 payload = build_seal_payload(events, fold_kwargs=self._fold_kwargs(cfg))
             except ValueError as exc:
                 raise HubRefused("unsealable", str(exc)) from None
+            # ... and covers every writer prefix the predecessor's last seal
+            # covered, not only the predecessor's own log (Codex re-audit, 4).
+            before, why = predecessor_seal_marks(events, self._authority(cfg), self.actor)
+            if why:
+                raise HubRefused("behind_predecessor", why + "; pull it before sealing")
+            short = sorted(log for log, top in before.items() if payload["watermarks"].get(log, -1) < top)
+            if short:
+                raise HubRefused("behind_predecessor", "this copy holds less than the predecessor's last seal "
+                                 f"settled for {', '.join(short)}; pull those logs before sealing", logs=short)
             last = next((e for e in reversed(events) if e.type == "ledger.seal" and e.actor == self.actor), None)
             if last is not None and last.payload == payload:
                 return {"status": "unchanged", "seal": _event_dict(last), "log": self.log.log_name}
@@ -1987,7 +2272,8 @@ class HubWriter:
         from .keys import verify
         cfg = load_config(self.space_dir) or self.cfg
         # The grantor this writer's copy of the OWNER'S RECORDS names (finding 4).
-        grantor = authority(self.space_dir, cfg, self.registry_path).active.grantor
+        active = authority(self.space_dir, cfg, self.registry_path).active
+        grantor = active.grantor
         try:
             e = Event(**lease)
         except TypeError:
@@ -2008,6 +2294,12 @@ class HubWriter:
              and bool(payload.get("attempt")),
              "answer names another lease attempt"),
             (compute_hash(event_body(e)) == e.hash, "answer's hash does not match its body"),
+            # A grant of another epoch, or one already over, is not a live
+            # grant (Codex re-audit, finding 5): nothing may start on it.
+            (expected_type != "item.lease" or payload.get("epoch") == active.epoch,
+             f"answer grants for epoch {payload.get('epoch')!r}, the active epoch is {active.epoch}"),
+            (type(payload.get("expires_ms")) is int and payload["expires_ms"] > self.clock(),
+             "answer is a grant that has already expired"),
         ]
         for ok, why in checks:
             if not ok:
@@ -2087,6 +2379,14 @@ class HubWriter:
             pred = sauth.epochs[sealer.epoch - 1]
             if pred.fence_seq is not None and marks.get(pred.grantor, -1) < pred.fence_seq:
                 problems.append(f"the seal does not extend {pred.grantor}'s frontier (seq {pred.fence_seq})")
+            # ... nor drop any writer prefix the predecessor's last seal settled
+            # (Codex re-audit, finding 4): that would un-settle another writer's work.
+            covered_before, why = predecessor_seal_marks(admitted, sauth, hub_actor)
+            if why:
+                pending.append(why)
+            for log, top in sorted(covered_before.items()):
+                if marks.get(log, -1) < top:
+                    problems.append(f"the seal drops {log} below seq {top}, which {pred.grantor}'s last seal settled")
         sealed = {}
         for e in events:
             sealed.setdefault(getattr(e, "log", None) or e.actor, {})[e.seq] = e
@@ -2135,15 +2435,24 @@ class HubWriter:
         # THE SEALED DECISION MUST AUTHORIZE THE OPERATION (part-1 leftover): a
         # covered event that the authoritative fold turned into a lease
         # conflict or an owner-resolution case is not a confirmation.
+        needed = set(mine_all) if required is None else set(required)
         if seal is not None and verdict is True:
             settled = fold([e for e in admitted if seal.includes(e)], **fold_kwargs)
             for it in settled.items.values():
                 for h in covered & (set(it.lease_conflicts) | set(it.lease_unresolved)):
                     why = it.lease_conflicts.get(h) or it.lease_unresolved.get(h)
                     problems.append(f"{it.id}: the sealed decision does not authorize {h[:12]} ({why})")
+            # OPERATION-SPECIFIC (Codex re-audit, finding 3): a required event the
+            # sealed authoritative state folded to anything but its intended
+            # transition -- a policy no-op, a rejected proposal, an illegal or
+            # duplicate step, an orphan -- is not a confirmation of it. Inclusion
+            # alone proved only that the hub stored what I signed.
+            for h in sorted(covered & needed):
+                outcome = settled.outcomes.get(h)
+                if outcome is not None and not outcome.startswith("applied"):
+                    problems.append(f"{h[:12]}: sealed, but it did not take effect ({outcome})")
         if problems:
             return result("failed")
-        needed = set(mine_all) if required is None else set(required)
         missing = sorted(needed - covered)
         if required is not None:
             pending.extend(f"required event {h[:12]} is not covered" for h in missing)

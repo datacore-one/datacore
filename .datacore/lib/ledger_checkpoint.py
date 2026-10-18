@@ -357,7 +357,8 @@ def round_trip(state, space_name: str, space_ft: set | None = None):
         (scratch / "org").mkdir()
         (scratch / "org" / "next_actions.org").write_text(fresh, encoding="utf-8")
         import_space(scratch, org_file=scratch / "org" / "next_actions.org")
-        restored = _fingerprint(fold(read_events(scratch)), space_ft, space=space_name)
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        restored = _fingerprint(authoritative_state(scratch), space_ft, space=space_name)
     return live, restored, fresh
 
 
@@ -393,7 +394,8 @@ def verify(space: Path) -> tuple[bool, str]:
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         return False, f'saved checkpoint cannot be restored ({type(exc).__name__})'
     detail = f'{len(restored.items)} item(s), including full payloads and history, restored from saved checkpoint'
-    if restored.state_root() != fold(read_events(space)).state_root():
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    if restored.state_root() != authoritative_state(space).state_root():
         detail += ' [valid older restore point; current ledger has changed — run: write]'
     return True, detail
 

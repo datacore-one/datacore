@@ -227,7 +227,8 @@ class Executor:
             from ledger.fold import fold
             from ledger.log import read_events
             from ledger.policy import load_policy, validate_approval, approval_payload_hash, PolicyError
-            task = fold(read_events(Path(self._space))).items.get(self._item)
+            from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+            task = authoritative_state(Path(self._space)).items.get(self._item)
             if task is None or task.status != "claimed" or task.owner != self._actor:
                 raise PolicyError("executor requires this actor's current claim")
             if task.edit_conflicts:
