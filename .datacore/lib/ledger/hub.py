@@ -26,9 +26,23 @@ THE PIECES
   * `enable`, `promote` -- the owner's two commands (`python3 -m ledger.hub`).
 
 RULES THIS MODULE ENFORCES
+  * ONE ADMISSION RULE (ledger.hub_admission) for every path an event takes
+    into the hub's state: the HTTP append, a git copy read from disk, a rebuild,
+    and what the hub seals. Post-cutover every event must be signed by its
+    writer with a key this machine holds (no key: not admitted), name this hub
+    and carry this space's signing domain (space, hub, log), have a sane clock,
+    and chain exactly; leases, renewals, lease conflicts and seals count only
+    from an authorised grantor. Legacy (valid unsigned) means membership in the
+    owner's cutover manifest (`HubConfig.cutover_logs`), never a timestamp (D; audit
+    2026-10-18, findings 1, 2, 6, 7).
   * Every append from a writer is signed by that writer and chains onto what
     the hub already holds for its log; unsigned, wrongly signed, edited, forked,
-    gapped, foreign-log and hub-only appends are refused (D).
+    gapped, foreign-log, wrong-domain, badly clocked and hub-only appends are
+    refused (D). The file lock is held from reading the chain to fsync (16).
+  * A fresh request (lease, renewal, seal) is signed with the writer's CURRENT
+    key, names this hub and space, is inside the time window and is answered
+    once (finding 5, 6). Sealing over the network takes a signed request from
+    a seal operator; the API token is transport only (finding 18).
   * A lease is granted only when no live lease exists, only by the ACTIVE hub
     (the grantor the space's config names), only to an eligible actor.
   * No automatic failover (G): a second hub instance refuses to grant (code
@@ -58,16 +72,15 @@ import re
 import secrets
 import threading
 import time
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
-from .events import EVENT_TYPES, HUB_EVENT_TYPES, Event, canonical_bytes, event_body, from_line, to_line
+from .events import EVENT_TYPES, Event, canonical_bytes, compute_hash, event_body, from_line, to_line
+from .hub_admission import HUB_ONLY_TYPES, Authority, Refusal, admit, admit_chain, check_event, signing_domain
 from .log import HubSigningRequired  # noqa: F401 -- re-exported: the hub's refusal to write unsigned
 
 CONFIG = ".datacore/ledger-hub.json"
-#: Types only a hub writes. A writer submitting one is refused.
-HUB_ONLY_TYPES = HUB_EVENT_TYPES | {"ledger.seal"}
 #: A signed request older or newer than this (hub clock) is refused.
 REQUEST_WINDOW_MS = 5 * 60 * 1000
 DEFAULT_LEASE_TTL_S = 900
@@ -105,12 +118,25 @@ class HubConfig:
     hub_id: str
     grantor: str
     lease_ttl_s: int = DEFAULT_LEASE_TTL_S
-    #: Events stamped before this HLC are legacy: valid unsigned (amendment D).
+    #: When the space opted in. Informational ONLY: a timestamp never makes an
+    #: event legacy (audit finding 1); the cutover manifest does.
     cutover_hlc: str = ""
     enabled: bool = True
     promoted_by: str = ""
     promoted_at: str = ""
     promote_reason: str = ""
+    #: This space's immutable id, inside every event's signing domain (finding 6).
+    space_id: str = ""
+    #: THE CUTOVER MANIFEST (audit finding 1): {log: {seq, head}} -- each log's
+    #: highest seq and head hash when the owner enabled the hub. That history,
+    #: and only that, is legacy (valid unsigned). Written once by `enable`, kept
+    #: by every later rewrite (`promote`), pinned by `cutover_sha256`.
+    cutover_logs: dict = field(default_factory=dict)
+    cutover_sha256: str = ""
+    #: Grantors this one succeeded (by `promote`): their leases still count.
+    previous_grantors: tuple = ()
+    #: Who besides the grantor may request a seal over the network (finding 18).
+    seal_operators: tuple = ()
 
 
 def load_config(space_dir) -> HubConfig | None:
@@ -128,9 +154,17 @@ def load_config(space_dir) -> HubConfig | None:
     if not isinstance(data, dict):
         raise ValueError(f"{path}: expected a JSON object")
     known = {k: data[k] for k in HubConfig.__dataclass_fields__ if k in data}
+    for k in ("previous_grantors", "seal_operators"):
+        if k in known:
+            if not isinstance(known[k], (list, tuple)) or not all(
+                    isinstance(v, str) and _NAME.fullmatch(v) for v in known[k]):
+                raise ValueError(f"{path}: {k} must be a list of lowercase names")
+            known[k] = tuple(known[k])
     cfg = HubConfig(**known)
     if not (_NAME.fullmatch(cfg.hub_id or "") and _NAME.fullmatch(cfg.grantor or "")):
         raise ValueError(f"{path}: hub_id and grantor must be lowercase names")
+    if not _NAME.fullmatch(cfg.space_id or ""):
+        raise ValueError(f"{path}: space_id must be a lowercase name (re-run `enable`)")
     if type(cfg.lease_ttl_s) is not int or cfg.lease_ttl_s <= 0:
         raise ValueError(f"{path}: lease_ttl_s must be a positive integer")
     return cfg if cfg.enabled else None
@@ -148,8 +182,14 @@ def _iso_now() -> str:
 
 
 def enable(space_dir, *, hub_id: str, grantor: str, lease_ttl_s: int = DEFAULT_LEASE_TTL_S,
-           cutover_hlc: str | None = None) -> HubConfig:
-    """The owner opts a space in. `hub_id` is a stable name, not a hostname (E)."""
+           cutover_hlc: str | None = None, space_id: str | None = None) -> HubConfig:
+    """The owner opts a space in. `hub_id` is a stable name, not a hostname (E).
+
+    Also the owner's approval of the cutover: it records the cutover manifest
+    (`cutover_logs`), each log's highest seq and head hash as they stand now.
+    That history, and only that history, stays valid unsigned (audit finding
+    1). Enabling again keeps the manifest and the space id unchanged.
+    """
     if not _NAME.fullmatch(hub_id) or not _NAME.fullmatch(grantor):
         raise ValueError("hub_id and grantor must be lowercase names")
     try:
@@ -160,9 +200,59 @@ def enable(space_dir, *, hub_id: str, grantor: str, lease_ttl_s: int = DEFAULT_L
         pass
     if cutover_hlc is None:
         cutover_hlc = f"{int(time.time() * 1000):013d}"
-    cfg = HubConfig(hub_id=hub_id, grantor=grantor, lease_ttl_s=lease_ttl_s, cutover_hlc=cutover_hlc)
+    try:
+        before = json.loads((Path(space_dir) / CONFIG).read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        before = {}
+    space_id = space_id or before.get("space_id") or secrets.token_hex(8)
+    if not _NAME.fullmatch(space_id):
+        raise ValueError("space_id must be a lowercase name")
+    logs = before.get("cutover_logs") if before.get("cutover_sha256") else None
+    if not isinstance(logs, dict):
+        logs = _current_heads(space_dir)
+    cfg = HubConfig(hub_id=hub_id, grantor=grantor, lease_ttl_s=lease_ttl_s, cutover_hlc=cutover_hlc,
+                    space_id=space_id, cutover_logs=logs, cutover_sha256=_manifest_sha(logs))
     _write_config(space_dir, cfg)
     return cfg
+
+
+def _current_heads(space_dir) -> dict:
+    from .log import read_events
+    heads: dict = {}
+    for e in read_events(Path(space_dir)):
+        chain = getattr(e, "log", None) or e.actor
+        if type(e.seq) is int and (chain not in heads or e.seq > heads[chain]["seq"]):
+            heads[chain] = {"seq": e.seq, "head": e.hash}
+    return dict(sorted(heads.items()))
+
+
+def _manifest_sha(logs: dict) -> str:
+    return hashlib.sha256(canonical_bytes({"version": 1, "logs": logs})).hexdigest()
+
+
+def load_manifest(space_dir, cfg: HubConfig) -> dict:
+    """{chain: (highest legacy seq, head hash)} from the cutover manifest.
+
+    Refuses (`bad_manifest`) when it is not the manifest `enable` recorded (its
+    sha256 no longer matches): legacy is decided by the owner's manifest or not
+    at all. NOT a cryptographic guarantee -- whoever can rewrite the config can
+    rewrite both; that needs the manifest signed or recorded in the ledger.
+    """
+    logs = cfg.cutover_logs
+    if not cfg.cutover_sha256 or not isinstance(logs, dict) or _manifest_sha(logs) != cfg.cutover_sha256:
+        raise HubRefused("bad_manifest", f"{Path(space_dir) / CONFIG}: the cutover manifest is not the one "
+                         "this space was enabled with")
+    try:
+        return {str(k): (int(v["seq"]), str(v["head"])) for k, v in logs.items()}
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise HubRefused("bad_manifest", f"{Path(space_dir) / CONFIG}: the cutover manifest does not parse") from None
+
+
+def authority(space_dir, cfg: HubConfig, registry_path=None) -> Authority:
+    """The explicit input admission and the fold take, read once before replay."""
+    return Authority(space_id=cfg.space_id, hub_id=cfg.hub_id,
+                     grantors=frozenset({cfg.grantor, *cfg.previous_grantors}),
+                     legacy=load_manifest(space_dir, cfg), registry_path=registry_path)
 
 
 def promote(space_dir, new_grantor: str, *, by: str, reason: str) -> HubConfig:
@@ -178,7 +268,10 @@ def promote(space_dir, new_grantor: str, *, by: str, reason: str) -> HubConfig:
         raise ValueError("grantor must be a lowercase name")
     if not by or not reason:
         raise ValueError("a promotion names who ordered it and why")
-    cfg = replace(cfg, grantor=new_grantor, promoted_by=by, promoted_at=_iso_now(), promote_reason=reason)
+    previous = tuple(dict.fromkeys((*cfg.previous_grantors, cfg.grantor)))
+    previous = tuple(g for g in previous if g != new_grantor)
+    cfg = replace(cfg, grantor=new_grantor, promoted_by=by, promoted_at=_iso_now(), promote_reason=reason,
+                  previous_grantors=previous)
     _write_config(space_dir, cfg)
     return cfg
 
@@ -263,6 +356,7 @@ class Hub:
             raise ValueError(f"invalid hub actor {actor!r}")
         self.actor = actor
         self.keys_dir, self.registry_path = keys_dir, registry_path
+        load_manifest(self.space_dir, cfg)          # a hub over an edited manifest does not start
         self.clock = clock or _wall_ms
         self.eligibility: Eligibility = eligibility or assignee_rule
         self.started_ms = self.clock()
@@ -315,11 +409,23 @@ class Hub:
                              active=cfg.grantor)
         return cfg
 
+    def _authority(self, cfg: HubConfig) -> Authority:
+        return authority(self.space_dir, cfg, self.registry_path)
+
     def _state(self):
+        """The admitted events and their fold: every reader of this hub's state
+        (answers, status, snapshot, seal) goes through the one admission rule,
+        whether an event came over HTTP or by git (audit finding 2)."""
         from .fold import fold
         from .log import read_events
-        events = read_events(self.space_dir)
-        return events, fold(events)
+        auth = self._authority(self.config())
+        events = admit(read_events(self.space_dir), auth, now_ms=self.clock()).events
+        return events, fold(events, lease_grantors=auth.lease_grantors())
+
+    def refusals(self) -> dict:
+        """{log: where and why it stops being admitted} -- for status and verify."""
+        from .log import read_events
+        return admit(read_events(self.space_dir), self._authority(self.config()), now_ms=self.clock()).refused
 
     # ── appends (first confirmation) ───────────────────────────────────────
     def append(self, submission: dict) -> dict:
@@ -335,34 +441,65 @@ class Hub:
         with self._mutex:
             cfg = self._writable(grant=False)
             self._check_submission(event, log_name, cfg)
-            path, chain = _target(self.space_dir, log_name, event)
-            existing = _parse_file(path)
-            by_seq = {e.seq: e for e in existing}
-            if type(event.seq) is int and event.seq in by_seq:
-                if by_seq[event.seq].hash == event.hash:
-                    return self._receipt("duplicate", cfg, chain, event)
-                raise HubRefused("fork", f"{chain} seq {event.seq} is already a different event")
-            expected = existing[-1].seq + 1 if existing else 0
-            if event.seq != expected:
-                raise HubRefused("gap", f"{chain} expects seq {expected}; replay from there", expected=expected)
-            legacy = bool(cfg.cutover_hlc) and event.hlc < cfg.cutover_hlc
-            if not event.sig and not legacy:
+            if not event.sig:
+                # Network admission never admits legacy: unsigned history comes by
+                # git and counts only as the cutover manifest names it (finding 1).
                 raise HubRefused("unsigned", "the hub accepts only signed events (amendment D)")
-            from .verify import GENESIS, check_events
-            problems = check_events([(expected + 1, event)], registry_path=self.registry_path,
-                                    strict=not legacy, log=chain,
-                                    expected_prev=existing[-1].hash if existing else GENESIS,
-                                    expected_seq=expected)
-            problems = [p for p in problems if p.kind != "clock"]
-            if problems:
-                texts = [p.text for p in problems]
-                code = ("bad_signature" if any("signature" in t for t in texts)
-                        else "bad_hash" if any("hash mismatch" in t for t in texts) else "bad_chain")
-                raise HubRefused(code, "; ".join(texts))
-            self._write_line(path, event)
+            auth = self._authority(cfg)
+            path, chain = _target(self.space_dir, log_name, event)
+            from file_utils import fsync_directory
+            from .log import CorruptLogError, _parse_log_bytes
+            if not path.exists() and self._onto(event, chain, [], cfg, auth) is not None:
+                return self._receipt("duplicate", cfg, chain, event)   # unreachable: an empty chain
+            # (A refusal onto a log the hub does not hold yet creates no file.)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # ONE LOCK from reading the chain to fsync (audit finding 16): the
+            # same flock every EventLog writer of this file takes, so a local
+            # append or an import cannot land between the check and the write.
+            with open(path, "a+b") as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                try:
+                    f.seek(0)
+                    raw = f.read()
+                    if raw and not raw.endswith(b"\n"):
+                        raise HubRefused("bad_chain", f"{path.name} ends in a torn line; not appending")
+                    try:
+                        existing = _parse_log_bytes(raw, path)[0]
+                    except CorruptLogError as exc:
+                        raise HubRefused("bad_chain", str(exc)) from None
+                    if self._onto(event, chain, existing, cfg, auth) is not None:
+                        return self._receipt("duplicate", cfg, chain, event)
+                    f.write((to_line(event) + "\n").encode("utf-8"))
+                    f.flush()
+                    os.fsync(f.fileno())
+                    fsync_directory(path.parent)
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)
             receipt = self._receipt("accepted", cfg, chain, event)
             self._record_conflicts(event)
             return receipt
+
+    def _onto(self, event: Event, chain: str, existing: list, cfg: HubConfig, auth: Authority) -> str | None:
+        """May `event` be appended onto `existing` (the chain as the file holds it)?
+        "duplicate" when it is already there; raises HubRefused otherwise."""
+        by_seq = {e.seq: e for e in existing}
+        if type(event.seq) is int and event.seq in by_seq:
+            if by_seq[event.seq].hash == event.hash:
+                return "duplicate"
+            raise HubRefused("fork", f"{chain} seq {event.seq} is already a different event")
+        expected = existing[-1].seq + 1 if existing else 0
+        if event.seq != expected:
+            raise HubRefused("gap", f"{chain} expects seq {expected}; replay from there", expected=expected)
+        now = self.clock()
+        _, why = admit_chain(chain, existing, auth, now_ms=now)
+        if why:
+            raise HubRefused("chain_refused", f"{chain} is not admissible from {why}; "
+                             "nothing more is accepted onto it")
+        try:
+            check_event(event, chain, existing[-1] if existing else None, auth, now_ms=now, current_key=True)
+        except Refusal as exc:
+            raise HubRefused(exc.code, exc.message) from None
+        return None
 
     def _check_submission(self, event: Event, log_name: str, cfg: HubConfig) -> None:
         if not isinstance(log_name, str) or not _NAME.fullmatch(log_name):
@@ -374,28 +511,10 @@ class Hub:
         from actor_identity import base_writer
         if not isinstance(event.actor, str) or base_writer(log_name) != base_writer(event.actor):
             raise HubRefused("foreign_log", f"{event.actor!r} may append only to its own log, not {log_name!r}")
-        if base_writer(event.actor) in {self.actor, cfg.grantor}:
+        if base_writer(event.actor) in {self.actor, cfg.grantor, *cfg.previous_grantors}:
             raise HubRefused("hub_log", "a hub's own log is written only by that hub")
-        legacy = bool(cfg.cutover_hlc) and isinstance(event.hlc, str) and event.hlc < cfg.cutover_hlc
-        if not legacy and event.hub != cfg.hub_id:
-            raise HubRefused("wrong_hub", f"event belongs to hub {event.hub!r}, this is {cfg.hub_id!r}")
-
-    def _write_line(self, path: Path, event: Event) -> None:
-        from file_utils import fsync_directory
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a+b") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            try:
-                f.seek(0)
-                raw = f.read()
-                if raw and not raw.endswith(b"\n"):
-                    raise HubRefused("bad_chain", f"{path.name} ends in a torn line; not appending")
-                f.write((to_line(event) + "\n").encode("utf-8"))
-                f.flush()
-                os.fsync(f.fileno())
-                fsync_directory(path.parent)
-            finally:
-                fcntl.flock(f, fcntl.LOCK_UN)
+        # Everything else -- signature, hub, domain, clock, chain -- is the one
+        # admission rule (ledger.hub_admission.check_event), applied in `append`.
 
     def _receipt(self, status: str, cfg: HubConfig, chain: str, event: Event) -> dict:
         return {"status": status, "hub": cfg.hub_id, "log": chain, "seq": event.seq, "hash": event.hash}
@@ -413,6 +532,7 @@ class Hub:
         item = state.items.get(item_id)
         if item is None or not item.lease_conflicts:
             return
+        floor = _item_floor(events, item_id)
         recorded = {(e.payload.get("event") or {}).get("hash") for e in events
                     if e.type == "item.lease.conflict" and e.actor == cfg.grantor
                     and isinstance(e.payload.get("event"), dict)}
@@ -421,13 +541,13 @@ class Hub:
             if h in recorded or h not in by_hash:
                 continue
             bad = by_hash[h]
-            self.log.append("item.lease.conflict", {
+            floor = self.log.append("item.lease.conflict", {
                 "id": item_id, "reason": why,
                 "event": {"log": getattr(bad, "log", None) or bad.actor, "seq": bad.seq, "hash": h,
-                          "actor": bad.actor, "type": bad.type}})
+                          "actor": bad.actor, "type": bad.type}}, after=floor).hlc
 
     # ── leases ─────────────────────────────────────────────────────────────
-    def _verify_request(self, req: dict, kind: str) -> str:
+    def _verify_request(self, req: dict, kind: str, cfg: HubConfig) -> str:
         from .keys import verify
         if not isinstance(req, dict) or req.get("kind") != kind:
             raise HubRefused("malformed", f"expected a signed {kind}")
@@ -435,11 +555,18 @@ class Hub:
         if not (isinstance(actor, str) and _NAME.fullmatch(actor) and isinstance(sig, str)
                 and type(ts) is int and isinstance(nonce, str) and nonce):
             raise HubRefused("malformed", f"a {kind} carries actor, ts_ms, nonce and sig")
-        if not verify(actor, _unsigned(req), sig, registry_path=self.registry_path):
-            raise HubRefused("bad_signature", f"the {kind} is not signed by {actor!r}")
         now = self.clock()
+        # A FRESH request is judged by the key the writer holds NOW (audit
+        # finding 5): a key rotated out stays valid for the history it signed,
+        # never for new requests.
+        if not verify(actor, _unsigned(req), sig, registry_path=self.registry_path, at_ms=now):
+            raise HubRefused("bad_signature", f"the {kind} is not signed with {actor!r}'s current key")
         if abs(now - ts) > REQUEST_WINDOW_MS:
             raise HubRefused("stale_request", f"the {kind} is {abs(now - ts) // 1000}s from the hub's clock")
+        if req.get("hub") != cfg.hub_id:
+            raise HubRefused("wrong_hub", f"this is hub {cfg.hub_id!r}, not {req.get('hub')!r}")
+        if req.get("space") != cfg.space_id:
+            raise HubRefused("wrong_space", f"this is space {cfg.space_id!r}, not {req.get('space')!r}")
         for n, t in list(self._nonces.items()):
             if abs(now - t) > REQUEST_WINDOW_MS:
                 del self._nonces[n]
@@ -453,11 +580,9 @@ class Hub:
         from .fold import lease_live
         with self._mutex:
             cfg = self._writable(grant=True)
-            actor = self._verify_request(req, "lease.request")
-            if req.get("hub") != cfg.hub_id:
-                raise HubRefused("wrong_hub", f"this is hub {cfg.hub_id!r}")
+            actor = self._verify_request(req, "lease.request", cfg)
             item_id = req.get("item")
-            _, state = self._state()
+            events, state = self._state()
             item = state.items.get(item_id) if isinstance(item_id, str) else None
             if item is None:
                 raise HubRefused("unknown_item", f"no item {item_id!r} in this space")
@@ -481,32 +606,41 @@ class Hub:
             why = self.eligibility(item, actor, state)
             if why:
                 raise HubRefused("not_eligible", why)
+            # The answer sorts after every event of its item (audit finding 7),
+            # whatever the sibling logs' tails say.
             event = self.log.append("item.lease", {
                 "id": item_id, "holder": actor, "granted_ms": now,
                 "expires_ms": now + cfg.lease_ttl_s * 1000,
-                "request": {"nonce": req["nonce"], "ts_ms": req["ts_ms"]}})
+                "request": _request_ref(req)}, after=_item_floor(events, item_id))
             return {"status": "granted", "lease": _event_dict(event), "log": self.log.log_name}
 
     def renew_lease(self, req: dict) -> dict:
         with self._mutex:
             cfg = self._writable(grant=True)
-            actor = self._verify_request(req, "lease.renew")
+            actor = self._verify_request(req, "lease.renew", cfg)
             item_id = req.get("item")
-            _, state = self._state()
+            events, state = self._state()
             item = state.items.get(item_id) if isinstance(item_id, str) else None
             if item is None or item.lease_holder != actor or item.status != "claimed":
                 raise HubRefused("not_holder", f"{actor} holds no lease on {item_id!r}")
             now = self.clock()
             event = self.log.append("item.lease.renew", {
                 "id": item_id, "holder": actor, "renewed_ms": now, "expires_ms": now + cfg.lease_ttl_s * 1000,
-                "lease": {k: (item.lease_ref or {}).get(k) for k in ("log", "seq", "hash")}})
+                "lease": {k: (item.lease_ref or {}).get(k) for k in ("log", "seq", "hash")},
+                "request": _request_ref(req)}, after=_item_floor(events, item_id))
             return {"status": "renewed", "lease": _event_dict(event), "log": self.log.log_name}
 
     # ── the second confirmation's raw material ─────────────────────────────
     def seal(self) -> dict:
-        """Seal the space as it stands (seal.py's shape). Publishing it is git's
-        job (commit the events directory on the hub's schedule). The hub never
-        checks its own seal."""
+        """Seal the space as it stands (seal.py's shape), over ADMITTED events
+        only. Publishing it is git's job (commit the events directory on the
+        hub's schedule). The hub never checks its own seal.
+
+        In-process callers (the hub's own scheduler) call this directly. Over
+        the network a seal is `seal_request`, signed by an operator. Idempotent:
+        when nothing changed since this hub's last seal, nothing is written
+        (`unchanged`), so repeated calls cannot grow the log (finding 18).
+        """
         from .seal import build_seal_payload
         with self._mutex:
             self._writable(grant=True)
@@ -515,8 +649,25 @@ class Hub:
                 payload = build_seal_payload(events)
             except ValueError as exc:
                 raise HubRefused("unsealable", str(exc)) from None
+            last = next((e for e in reversed(events) if e.type == "ledger.seal" and e.actor == self.actor), None)
+            if last is not None and last.payload == payload:
+                return {"status": "unchanged", "seal": _event_dict(last), "log": self.log.log_name}
             event = self.log.append("ledger.seal", payload)
             return {"status": "sealed", "seal": _event_dict(event), "log": self.log.log_name}
+
+    def seal_request(self, req: dict | None) -> dict:
+        """A seal asked for over the network: only by a signed request from the
+        grantor (its scheduler) or a configured seal operator. The API's bearer
+        token is transport; it never makes the hub sign anything (finding 18)."""
+        if not isinstance(req, dict) or not req.get("sig"):
+            raise HubRefused("unsigned", "a seal is asked for by a signed seal.request; "
+                             "the API token is transport only")
+        with self._mutex:
+            cfg = self._writable(grant=True)
+            actor = self._verify_request(req, "seal.request", cfg)
+            if actor not in {cfg.grantor, *cfg.seal_operators}:
+                raise HubRefused("not_operator", f"{actor!r} is not a seal operator of this space")
+            return self.seal()
 
     # ── reports ────────────────────────────────────────────────────────────
     def status(self) -> dict:
@@ -552,6 +703,17 @@ class Hub:
         }
 
 
+def _request_ref(req: dict) -> dict:
+    """What a hub answer records of the request it answers (bound by the writer, finding 5)."""
+    return {"kind": req["kind"], "nonce": req["nonce"], "ts_ms": req["ts_ms"]}
+
+
+def _item_floor(events, item_id: str) -> str | None:
+    """The latest HLC of any event about `item_id`: an answer about it sorts after."""
+    return max((e.hlc for e in events if isinstance(e.payload, dict) and e.payload.get("id") == item_id
+                and isinstance(e.hlc, str)), default=None)
+
+
 # ── transports ──────────────────────────────────────────────────────────────
 
 class LocalTransport:
@@ -576,6 +738,9 @@ class LocalTransport:
 
     def status(self) -> dict:
         return self._hub().status()
+
+    def seal_request(self, req: dict) -> dict:
+        return self._hub().seal_request(req)
 
 
 class HttpTransport:
@@ -620,6 +785,9 @@ class HttpTransport:
     def status(self) -> dict:
         return self._call("GET", self.prefix + "/status")
 
+    def seal_request(self, req: dict) -> dict:
+        return self._call("POST", self.prefix + "/seal", req)
+
 
 # ── the writer's side ───────────────────────────────────────────────────────
 
@@ -650,7 +818,11 @@ class HubWriter:
     # ── local state: receipts, floor, outage ───────────────────────────────
     @property
     def _receipts_path(self) -> Path:
-        return self.state_dir / "lease-receipts.jsonl"
+        """Per space, hub, log and actor (audit finding 6): one actor writing in
+        two spaces keeps two sets of lease receipts and two causal floors."""
+        d = self.state_dir / f"{self.cfg.space_id}.{self.cfg.hub_id}.{self.log.log_name}"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / "lease-receipts.jsonl"
 
     def receipts(self) -> list[dict]:
         try:
@@ -725,7 +897,8 @@ class HubWriter:
 
     # ── leases ─────────────────────────────────────────────────────────────
     def _ask(self, method: str, kind: str, item_id: str) -> dict:
-        req = sign_request(self.actor, kind, {"hub": self.cfg.hub_id, "item": item_id},
+        req = sign_request(self.actor, kind, {"hub": self.cfg.hub_id, "space": self.cfg.space_id,
+                                              "item": item_id},
                            keys_dir=self.keys_dir, clock=self.clock)
         try:
             answer = getattr(self.transport, method)(req)
@@ -733,7 +906,8 @@ class HubWriter:
             self._mark_outage()
             raise
         if answer.get("status") in ("granted", "renewed"):
-            self._accept_lease(answer["lease"], item_id)
+            expected = "item.lease" if kind == "lease.request" else "item.lease.renew"
+            self._accept_lease(answer.get("lease"), item_id, req, expected)
         return answer
 
     def request_lease(self, item_id: str) -> dict:
@@ -742,44 +916,95 @@ class HubWriter:
     def renew_lease(self, item_id: str) -> dict:
         return self._ask("renew_lease", "lease.renew", item_id)
 
-    def _accept_lease(self, lease: dict, item_id: str) -> None:
-        """First confirmation: check the hub's signed answer before relying on it."""
+    def _accept_lease(self, lease, item_id: str, req: dict, expected_type: str) -> None:
+        """First confirmation: check the hub's signed answer before relying on it.
+
+        The answer must be THE answer to THIS request (audit finding 5): an
+        `expected_type` event, signed with the current key of the grantor this
+        writer's copy of the space names, in that grantor's own log of this
+        space and hub, granting `item_id` to this writer, and recording this
+        request's nonce. Any registered writer's signature is not enough, and an
+        earlier genuine answer replayed for a new request is refused.
+        """
         from .keys import verify
-        e = Event(**lease)
-        if (e.hub != self.cfg.hub_id or (e.payload or {}).get("id") != item_id
-                or (e.payload or {}).get("holder") != self.actor
-                or not verify(e.actor, canonical_bytes(event_body(e)), e.sig, registry_path=self.registry_path)):
-            raise HubRefused("bad_lease", "the hub's lease answer does not verify; not starting")
+        cfg = load_config(self.space_dir) or self.cfg
+        try:
+            e = Event(**lease)
+        except TypeError:
+            raise HubRefused("bad_lease", "the hub's lease answer is not an event; not starting") from None
+        payload = e.payload if isinstance(e.payload, dict) else {}
+        ref = payload.get("request") if isinstance(payload.get("request"), dict) else {}
+        checks = [
+            (e.type == expected_type, f"answer is a {e.type!r}, not a {expected_type!r}"),
+            (e.actor == cfg.grantor, f"answer is signed by {e.actor!r}, not this space's grantor {cfg.grantor!r}"),
+            (e.hub == cfg.hub_id and e.domain == signing_domain(cfg.space_id, cfg.hub_id, e.actor),
+             "answer belongs to another space, hub or log"),
+            (payload.get("id") == item_id and payload.get("holder") == self.actor,
+             f"answer is not a lease on {item_id} to {self.actor}"),
+            (ref.get("nonce") == req["nonce"] and ref.get("kind") == req["kind"],
+             "answer does not answer this request (nonce)"),
+            (compute_hash(event_body(e)) == e.hash, "answer's hash does not match its body"),
+        ]
+        for ok, why in checks:
+            if not ok:
+                raise HubRefused("bad_lease", f"the hub's lease answer does not verify ({why}); not starting")
+        if not verify(e.actor, canonical_bytes(event_body(e)), e.sig, registry_path=self.registry_path,
+                      at_ms=self.clock()):
+            raise HubRefused("bad_lease", "the hub's lease answer is not signed with the grantor's current key; "
+                             "not starting")
         with open(self._receipts_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"item": item_id, "log": e.actor, "event": lease}, sort_keys=True) + "\n")
+            f.write(json.dumps({"item": item_id, "log": e.actor, "space": cfg.space_id, "hub": cfg.hub_id,
+                                "event": lease}, sort_keys=True) + "\n")
 
     # ── second confirmation ────────────────────────────────────────────────
-    def receipt_check(self, sealed_space, *, hub_actor: str | None = None) -> dict:
-        """Are MY events and MY leases in the sealed log exactly as signed?
+    def receipt_check(self, sealed_space, *, hub_actor: str | None = None, required=None) -> dict:
+        """Second confirmation: are MY events and MY leases in the sealed log exactly as signed?
 
-        `sealed_space`: a checkout of the space as published to git. Returns
-        {ok, problems, pending}; ok is None when nothing of mine is sealed yet.
+        `sealed_space`: a checkout of the space as published to git.
+        `required`: hashes of the events one operation needs settled (its lease,
+        its result, ...); default every event this writer wrote and every lease
+        it was granted.
+
+        Returns {status, ok, problems, pending} (audit finding 3):
+          * "confirmed" -- the seal verifies (`verify_seal` is True) and every
+            required event is covered by it, byte for byte as signed;
+          * "pending"   -- nothing is wrong yet, but something required is not
+            covered, there is no seal yet, or the seal cannot be judged here;
+          * "failed"    -- something differs, is missing or does not verify.
+        `ok` is True ONLY for "confirmed": pending is never permission.
+
         Independent of the hub by construction: it compares the sealed copy with
-        this writer's own log and its own record of the hub's answers.
+        this writer's own log and its own record of the hub's answers. Not
+        verified here: that `sealed_space` is the published commit (the caller
+        passes the checkout it trusts).
         """
         from .keys import verify
         from .log import read_events
         from .seal import as_sequencer, latest_seal, verify_seal
         from .verify import check_events
-        hub_actor = hub_actor or self.cfg.grantor
+        hub_actor = hub_actor or (load_config(self.space_dir) or self.cfg).grantor
         events = read_events(Path(sealed_space))
         problems: list[str] = []
         pending: list[str] = []
+        covered: set[str] = set()
+
+        def result(status: str) -> dict:
+            return {"status": status, "ok": status == "confirmed", "problems": problems, "pending": pending}
+
         with as_sequencer(hub_actor):
             try:
                 seal = latest_seal(events)
             except ValueError as exc:
-                return {"ok": False, "problems": [f"unreadable seal: {exc}"], "pending": []}
-            if seal is None:
-                return {"ok": None, "problems": [], "pending": [f"no seal by {hub_actor} yet"]}
-            ok, detail = verify_seal(events)
-        if ok is False:
+                problems.append(f"unreadable seal: {exc}")
+                return result("failed")
+            verdict, detail = verify_seal(events) if seal is not None else (None, "no seal yet")
+        if seal is None:
+            pending.append(f"no seal by {hub_actor} yet")
+        elif verdict is False:
             problems.append(f"the seal does not verify: {detail}")
+        elif verdict is None:
+            pending.append(f"the seal cannot be verified here yet: {detail}")
+        marks = seal.watermarks if seal is not None else {}
         sealed = {}
         for e in events:
             sealed.setdefault(getattr(e, "log", None) or e.actor, {})[e.seq] = e
@@ -788,38 +1013,70 @@ class HubWriter:
         for p in check_events(list(enumerate(hub_chain, 1)), registry_path=self.registry_path, strict=True):
             if p.kind != "clock":
                 problems.append(f"hub log {hub_actor}: {p.text}")
-        # My events, line for line, as I signed them.
+        # My events, line for line, as I signed them. A different event at my
+        # seq is a problem whether or not a seal covers it yet.
+        mine_all: list[str] = []
         for chain, mine in self._local_chains():
-            mark = seal.watermarks.get(chain, -1)
             copy = sealed.get(chain, {})
             for e in mine:
-                if e.seq > mark:
-                    pending.append(f"{chain} seq {e.seq} not sealed yet")
-                    continue
+                mine_all.append(e.hash)
                 s = copy.get(e.seq)
-                if s is None:
-                    problems.append(f"{chain} seq {e.seq}: missing from the sealed log")
-                elif to_line(s) != to_line(e):
+                if s is not None and to_line(s) != to_line(e):
                     problems.append(f"{chain} seq {e.seq}: differs from what I signed")
-                elif not verify(self.actor, canonical_bytes(event_body(s)), s.sig, registry_path=self.registry_path):
+                elif e.seq > marks.get(chain, -1):
+                    pending.append(f"{chain} seq {e.seq} not sealed yet")
+                elif s is None:
+                    problems.append(f"{chain} seq {e.seq}: missing from the sealed log")
+                elif not verify(self.actor, canonical_bytes(event_body(s)), s.sig, registry_path=self.registry_path,
+                                at_ms=_physical_ms(s.hlc)):
                     problems.append(f"{chain} seq {e.seq}: my signature does not verify in the sealed log")
+                else:
+                    covered.add(e.hash)
         # The leases the hub granted me, as it signed them at the first confirmation.
         for r in self.receipts():
             lease = Event(**r["event"])
-            mark = seal.watermarks.get(r["log"], -1)
-            if lease.seq > mark:
-                pending.append(f"lease on {r['item']} (hub seq {lease.seq}) not sealed yet")
-                continue
+            mine_all.append(lease.hash)
             s = sealed.get(r["log"], {}).get(lease.seq)
-            if s is None or s.hash != lease.hash or to_line(s) != to_line(lease):
+            if s is not None and (s.hash != lease.hash or to_line(s) != to_line(lease)):
                 problems.append(f"lease on {r['item']} (hub seq {lease.seq}) does not match the sealed log")
-        return {"ok": not problems, "problems": problems, "pending": pending}
+            elif lease.seq > marks.get(r["log"], -1):
+                pending.append(f"lease on {r['item']} (hub seq {lease.seq}) not sealed yet")
+            elif s is None:
+                problems.append(f"lease on {r['item']} (hub seq {lease.seq}) is missing from the sealed log")
+            else:
+                covered.add(lease.hash)
+        if problems:
+            return result("failed")
+        needed = set(mine_all) if required is None else set(required)
+        missing = sorted(needed - covered)
+        if required is not None:
+            pending.extend(f"required event {h[:12]} is not covered" for h in missing)
+        if seal is None or verdict is not True or missing:
+            return result("pending")
+        return result("confirmed")
 
 
-def strict_problems(events, cutover_hlc: str) -> list[str]:
-    """Unsigned events after a hub space's cutover (amendment D: strict from there on)."""
-    return [f"{getattr(e, 'log', None) or e.actor} seq {e.seq}: unsigned after cutover"
-            for e in events if not e.sig and (not cutover_hlc or e.hlc >= cutover_hlc)]
+def _physical_ms(hlc) -> int | None:
+    try:
+        return int(str(hlc).split(".", 1)[0])
+    except ValueError:
+        return None
+
+
+def strict_problems(space_dir, *, registry_path=None, now_ms: int | None = None) -> list[str]:
+    """Where each log of a hub space stops being admissible (amendment D).
+
+    The one admission rule (ledger.hub_admission): after the cutover manifest's
+    heads, every event is signed, domain-bound and chained. Not by timestamp
+    (audit finding 1). Empty for a space without a hub.
+    """
+    from .log import read_events
+    cfg = load_config(space_dir)
+    if cfg is None:
+        return []
+    auth = authority(space_dir, cfg, registry_path)
+    refused = admit(read_events(Path(space_dir)), auth, now_ms=_wall_ms() if now_ms is None else now_ms).refused
+    return [f"{chain} {why}" for chain, why in sorted(refused.items())]
 
 
 # ── the owner's commands ────────────────────────────────────────────────────

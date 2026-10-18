@@ -71,7 +71,7 @@ def rechain(events: list[dict]) -> list[dict]:
     out, prev = [], GENESIS
     for i, e in enumerate(events, start=0):
         body = body_dict(i, e["hlc"], e["actor"], e["type"], e.get("payload") or {}, prev,
-                         hub=e.get("hub") or "")
+                         hub=e.get("hub") or "", domain=e.get("domain") or "")
         h = compute_hash(body)
         # `sig` is part of the on-disk record, not of the hashed body. An
         # unsigned event carries "" — omitting the key entirely makes

@@ -1,0 +1,217 @@
+"""One admission rule for a hub space (DIP-0034 October amendment D; Codex audit
+2026-10-18, findings 1, 2, 6 and 7).
+
+WHY ONE RULE. The hub used to check an event only when it arrived over HTTP.
+The same event arriving by git, a restore or a rebuild went straight into the
+fold, and the fold's only test for "written by a hub" was a non-empty `hub`
+field -- which every writer in a hub space stamps. So an ordinary writer could
+write itself a lease, publish it by git, and every rebuild would honour it
+(finding 2). And "legacy, valid unsigned" was decided by comparing the event's
+OWN timestamp with the cutover, so anyone could backdate an unsigned event past
+the signing rule (finding 1).
+
+Now every path asks this module the same question about the same event:
+
+  * `check_event`  -- one post-cutover event against the event before it in its
+                      log (HTTP append, and each step of `admit`);
+  * `admit_chain`  -- one log, read from disk: the legacy prefix the cutover
+                      manifest names, then every later event through
+                      `check_event`. The first refused event ends what is
+                      admitted of that log (fail closed: nothing after a bad
+                      event can be trusted to chain onto it);
+  * `admit`        -- a whole space (the hub's state, a rebuild from git, what
+                      the hub seals).
+
+THE RULE FOR A POST-CUTOVER EVENT
+  1. well-formed fields and a known type;
+  2. its log belongs to its writer (`base_writer`), and hub-only types
+     (leases, renewals, lease conflicts, seals) only from an authorised grantor
+     in that grantor's own log -- an ordinary signature confers no hub role;
+  3. signed, chained exactly onto the previous event (seq, prev, hash), and the
+     signature verifies against a key this machine holds for the writer at the
+     event's time. No key here means NOT admitted (strict; post-cutover never
+     fails open);
+  4. the event names this hub and carries this space's signing domain
+     (`signing_domain`: protocol, space id, hub id, log), so a signed event
+     captured in another space, hub or log is refused;
+  5. a well-formed HLC, not beyond `now_ms` + the writer's own future tolerance,
+     and after the previous event in its own log.
+
+LEGACY is membership in the owner's cutover manifest (`Authority.legacy`: per
+log, the highest seq and head hash at cutover). A legacy prefix is admitted
+only when this copy holds it in full and it hashes, links and ends exactly at
+the manifest's head; a timestamp never makes anything legacy. Network
+admission never admits legacy at all: it needs a valid signature (the hub's
+HTTP append refuses unsigned events before asking this module).
+
+PURE. No clock read (`now_ms` is an input), no config read (`Authority` is an
+input): the caller decides who the grantors are BEFORE replay starts.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Mapping
+
+from .events import EVENT_TYPES, HUB_EVENT_TYPES, Event, canonical_bytes, compute_hash, event_body
+
+#: The protocol a domain-bound event speaks. Events without a domain are protocol 1.
+PROTOCOL = 2
+#: Written only by a hub's grantor, in its own log.
+HUB_ONLY_TYPES = HUB_EVENT_TYPES | {"ledger.seal"}
+_HLC = re.compile(r"[0-9]{13}\.[0-9]{4}\.[a-z0-9][a-z0-9_-]*")
+GENESIS = "GENESIS"
+
+
+def signing_domain(space_id: str, hub_id: str, chain: str) -> str:
+    """The domain an event in `chain` of this space and hub signs over."""
+    return f"ledger/{PROTOCOL} space={space_id} hub={hub_id} log={chain}"
+
+
+@dataclass(frozen=True)
+class Authority:
+    """Everything admission depends on besides the events: explicit input."""
+    space_id: str
+    hub_id: str
+    #: Actors whose hub-only events count (the grantor and any it succeeded).
+    grantors: frozenset
+    #: The cutover manifest: {chain: (highest legacy seq, head hash)}.
+    legacy: Mapping[str, tuple[int, str]] = field(default_factory=dict)
+    registry_path: Path | None = None
+
+    def lease_grantors(self) -> dict:
+        """The fold's explicit lease authority (ledger.fold.fold)."""
+        return {self.hub_id: self.grantors}
+
+
+class Refusal(Exception):
+    def __init__(self, code: str, message: str):
+        super().__init__(f"{code}: {message}")
+        self.code, self.message = code, message
+
+
+@dataclass
+class Admission:
+    events: list            # admitted, in input order
+    refused: dict           # {chain: "seq N: code: message"} -- where each log stops
+
+
+def _writer_of(chain: str) -> str:
+    from actor_identity import base_writer
+    from .log import TELEMETRY_SUFFIX
+    return base_writer(chain[: -len(TELEMETRY_SUFFIX)] if chain.endswith(TELEMETRY_SUFFIX) else chain)
+
+
+def _physical(hlc: str) -> int | None:
+    return int(hlc.split(".", 1)[0]) if isinstance(hlc, str) and _HLC.fullmatch(hlc) else None
+
+
+def check_event(event: Event, chain: str, prior: Event | None, auth: Authority, *,
+                now_ms: int, current_key: bool = False) -> None:
+    """Raise `Refusal` unless `event` is admissible as the event after `prior` in `chain`.
+
+    `current_key`: also require the signature to verify under the key the
+    writer holds NOW (`now_ms`), not only at the event's own time -- the network
+    front door's rule, so a key rotated out cannot sign new events by
+    backdating them (finding 5).
+    """
+    from .log import FUTURE_TOLERANCE_MS
+    from .verify import check_events
+    from actor_identity import base_writer
+    if (type(event.seq) is not int or event.seq < 0 or not isinstance(event.payload, dict)
+            or not all(isinstance(v, str) for v in (event.hlc, event.actor, event.type, event.prev,
+                                                     event.hash, event.sig, event.hub, event.domain))):
+        raise Refusal("malformed", "invalid event field types")
+    if event.type not in EVENT_TYPES:
+        raise Refusal("unknown_type", f"unknown event type {event.type!r}")
+    if _writer_of(chain) != base_writer(event.actor):
+        raise Refusal("foreign_log", f"{event.actor!r} may append only to its own log, not {chain!r}")
+    if event.type in HUB_ONLY_TYPES and not (event.actor in auth.grantors and chain == event.actor):
+        raise Refusal("hub_only_type", f"{event.type} is written only by this space's grantor "
+                                       f"({', '.join(sorted(auth.grantors))}), in its own log")
+    if not event.sig:
+        raise Refusal("unsigned", "the hub accepts only signed events (amendment D)")
+    problems = [p for p in check_events(
+        [(event.seq + 1, event)], registry_path=auth.registry_path, strict=True, log=chain,
+        expected_prev=prior.hash if prior is not None else GENESIS,
+        expected_seq=prior.seq + 1 if prior is not None else 0) if p.kind != "clock"]
+    if problems:
+        texts = [p.text for p in problems]
+        code = ("bad_signature" if any("signature" in t for t in texts)
+                else "bad_hash" if any("hash mismatch" in t for t in texts) else "bad_chain")
+        raise Refusal(code, "; ".join(texts))
+    if event.hub != auth.hub_id:
+        raise Refusal("wrong_hub", f"event belongs to hub {event.hub!r}, this is {auth.hub_id!r}")
+    expected_domain = signing_domain(auth.space_id, auth.hub_id, chain)
+    if event.domain != expected_domain:
+        raise Refusal("wrong_domain", f"event was signed for {event.domain or 'no domain'!r}, "
+                                      f"not {expected_domain!r}")
+    physical = _physical(event.hlc)
+    if physical is None:
+        raise Refusal("bad_clock", f"malformed hlc {event.hlc!r}")
+    if physical > now_ms + FUTURE_TOLERANCE_MS:
+        raise Refusal("bad_clock", f"hlc {event.hlc!r} is {(physical - now_ms) // 60000} min ahead of "
+                                   "the hub's clock (wrong clock)")
+    if prior is not None and not (event.hlc > prior.hlc):
+        raise Refusal("bad_clock", f"hlc {event.hlc!r} does not follow {chain}'s previous event "
+                                   f"({prior.hlc!r})")
+    if current_key:
+        from .keys import verify
+        if not verify(event.actor, canonical_bytes(event_body(event)), event.sig,
+                      registry_path=auth.registry_path, at_ms=now_ms):
+            raise Refusal("bad_signature", f"{event.actor!r} signed with a key that is not its current key")
+
+
+def _legacy_prefix(chain: str, events: list[Event], entry) -> int:
+    """How many leading events of `chain` the cutover manifest admits (raises if it does not match)."""
+    try:
+        top, head = int(entry[0]), str(entry[1])
+    except (TypeError, ValueError, IndexError):
+        raise Refusal("bad_manifest", f"unreadable cutover entry for {chain}") from None
+    if len(events) <= top:
+        raise Refusal("not_legacy", f"the cutover manifest names {chain} up to seq {top}; this copy "
+                                    f"holds {len(events)} event(s)")
+    prev = GENESIS
+    for i, e in enumerate(events[: top + 1]):
+        if e.seq != i or e.prev != prev or compute_hash(event_body(e)) != e.hash:
+            raise Refusal("not_legacy", f"{chain} seq {i} is not the history the cutover manifest names")
+        prev = e.hash
+    if prev != head:
+        raise Refusal("not_legacy", f"{chain} seq {top} is not the head the cutover manifest names")
+    return top + 1
+
+
+def admit_chain(chain: str, events: list[Event], auth: Authority, *, now_ms: int) -> tuple[int, str | None]:
+    """(how many leading events of `chain` are admitted, why the next is not -- or None).
+
+    `events` in seq order, as they lie in the log file."""
+    n, prior = 0, None
+    try:
+        if chain in auth.legacy:
+            n = _legacy_prefix(chain, events, auth.legacy[chain])
+            prior = events[n - 1] if n else None
+        for e in events[n:]:
+            check_event(e, chain, prior, auth, now_ms=now_ms)
+            n, prior = n + 1, e
+    except Refusal as exc:
+        where = events[n].seq if n < len(events) else "-"
+        return n, f"seq {where}: {exc.code}: {exc.message}"
+    return n, None
+
+
+def admit(events: list[Event], auth: Authority, *, now_ms: int) -> Admission:
+    """The admissible part of a whole space's events (as `read_events` returns them)."""
+    chains: dict[str, list[Event]] = {}
+    for e in events:
+        chains.setdefault(getattr(e, "log", None) or e.actor, []).append(e)
+    keep: set[int] = set()
+    refused: dict[str, str] = {}
+    for chain, chain_events in chains.items():
+        ordered = sorted(chain_events, key=lambda e: e.seq if type(e.seq) is int else -1)
+        n, why = admit_chain(chain, ordered, auth, now_ms=now_ms)
+        keep.update(id(e) for e in ordered[:n])
+        if why:
+            refused[chain] = why
+    return Admission([e for e in events if id(e) in keep], refused)

@@ -355,6 +355,9 @@ class EventLog:
         cfg = load_config(self.space_dir)
         self.hub_required = cfg is not None
         self.hub = (cfg.hub_id if cfg is not None else "") if hub is None else hub
+        # The signing domain (audit finding 6): in a hub space every event names
+        # its space, hub and log inside the signed body. Outside one, none.
+        self._space_id = cfg.space_id if cfg is not None and self.hub == cfg.hub_id else ""
         self.actor = actor
         self.keys_dir = keys_dir
         self.registry_path = registry_path
@@ -413,6 +416,14 @@ class EventLog:
     def path_for(self, type: str, payload=None) -> Path:
         """The file an event is appended to (LED-8: telemetry apart)."""
         return self.telemetry_path if is_telemetry(type, payload) else self.path
+
+    def domain_for(self, type: str, payload=None) -> str:
+        """The signing domain an event of `type` gets here ("" outside a hub space)."""
+        if not self._space_id:
+            return ""
+        from .hub_admission import signing_domain
+        chain = self.log_name + (TELEMETRY_SUFFIX if is_telemetry(type, payload) else "")
+        return signing_domain(self._space_id, self.hub, chain)
 
     def append(self, type: str, payload: dict, after: str | None = None) -> Event:
         """Append a new event of `type` with `payload`, chained to this
@@ -613,7 +624,8 @@ class EventLog:
                     floor = after
                 hlc_stamp = tick(self.actor, floor)
 
-                body = body_dict(seq, hlc_stamp, self.actor, type, payload, prev, hub=self.hub)
+                body = body_dict(seq, hlc_stamp, self.actor, type, payload, prev, hub=self.hub,
+                                 domain=self.domain_for(type, payload))
                 # Signing contract: sign the BODY, never the serialized line.
                 # Opt-in (Task 1.4b): unsigned events get sig="" and never
                 # touch key material.

@@ -188,12 +188,20 @@ class LedgerState:
         return h.hexdigest()
 
 
-def fold(events: list[Event]) -> LedgerState:
+def fold(events: list[Event], *, lease_grantors=None) -> LedgerState:
     """Reduce `events` (already merged + hlc-sorted) into a `LedgerState`.
 
     Pure and order-preserving: does not sort, does not mutate `events` or
     any `Event`/payload within it, and produces byte-for-byte identical
     output for identical input on every call.
+
+    `lease_grantors` ({hub id: actors}, audit finding 2): who may grant,
+    renew and record lease conflicts for each hub, passed in by a caller that
+    authenticated it (ledger.hub reads it from the space's hub config before
+    the fold starts, never during it). A lease event by anyone else is a
+    no-op. None keeps the structural rule alone ("has a hub field"); only a
+    caller that has already filtered through ledger.hub_admission may rely on
+    that.
     """
     state = LedgerState()
 
@@ -209,6 +217,12 @@ def fold(events: list[Event]) -> LedgerState:
 
     for event in events:
         handler = _HANDLERS.get(event.type)
+        if (lease_grantors is not None and event.type in _LEASE_TYPES
+                and event.actor not in lease_grantors.get(getattr(event, "hub", "") or "", ())):
+            item = state.items.get(_valid_item_id(event.payload if isinstance(event.payload, dict) else {}) or "")
+            if item is not None:
+                _note(item, event, f"no-op ({event.actor!r} is not a grantor of hub {getattr(event, 'hub', '')!r})")
+            continue
         if handler is not None:
             handler(state, event)
         # Event types outside this fold's scope (metric.attest,
@@ -769,6 +783,8 @@ def _handle_lease_conflict(state: LedgerState, event: Event) -> None:
     item.lease_conflicts.setdefault(key, str((event.payload or {}).get("reason") or "recorded by the hub"))
     _note(item, event, "recorded (lease conflict)")
 
+
+_LEASE_TYPES = frozenset({"item.lease", "item.lease.renew", "item.lease.conflict"})
 
 _HANDLERS = {
     "item.lease": _handle_lease,

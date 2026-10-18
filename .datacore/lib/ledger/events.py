@@ -103,6 +103,14 @@ EVENT_TYPES = frozenset(
 # part of the hashed and signed body when present and absent from both when not,
 # so every event written before it existed keeps its bytes, hash and signature
 # (invariant 6: readers ignore what is absent).
+#
+# `domain` (audit finding 6, 2026-10-18) is the same kind of optional envelope
+# field: `ledger/2 space=<id> hub=<id> log=<chain>`, stamped by every writer
+# in a hub space. It is inside the hashed and signed body, so a signature binds
+# the protocol version, the space, the hub and the exact log it was written
+# for: a captured event cannot be replayed into another space, another hub or
+# another of its writer's logs. Absent (protocol 1) on every older event, whose
+# bytes therefore do not change. ledger.hub_admission checks it.
 HUB_EVENT_TYPES = frozenset({"item.lease", "item.lease.renew", "item.lease.conflict"})
 EVENT_TYPES = EVENT_TYPES | HUB_EVENT_TYPES
 
@@ -119,10 +127,12 @@ class Event:
     sig: str
     #: The hub this event belongs to ("" = none; see the HUB block above).
     hub: str = ""
+    #: The signing domain ("" = protocol 1, none; see the HUB block above).
+    domain: str = ""
 
 
 def body_dict(seq: int, hlc: str, actor: str, type: str, payload: dict, prev: str,
-              hub: str = "") -> dict:
+              hub: str = "", domain: str = "") -> dict:
     """Assemble the hashable body of an event (everything but `hash`/`sig`).
 
     `prev` is included so `compute_hash` over this body chains to the prior
@@ -139,6 +149,8 @@ def body_dict(seq: int, hlc: str, actor: str, type: str, payload: dict, prev: st
     }
     if hub:
         body["hub"] = hub
+    if domain:
+        body["domain"] = domain
     return body
 
 
@@ -146,8 +158,9 @@ def event_body(e) -> dict:
     """The hashable body of an existing event (an `Event` or a parsed line dict)."""
     if isinstance(e, dict):
         return body_dict(e["seq"], e["hlc"], e["actor"], e["type"], e["payload"], e["prev"],
-                         hub=e.get("hub") or "")
-    return body_dict(e.seq, e.hlc, e.actor, e.type, e.payload, e.prev, hub=getattr(e, "hub", "") or "")
+                         hub=e.get("hub") or "", domain=e.get("domain") or "")
+    return body_dict(e.seq, e.hlc, e.actor, e.type, e.payload, e.prev, hub=getattr(e, "hub", "") or "",
+                     domain=getattr(e, "domain", "") or "")
 
 
 def canonical_bytes(d: dict) -> bytes:
@@ -168,8 +181,9 @@ def to_line(e: Event) -> str:
     An event without a hub serializes exactly as it did before the field existed.
     """
     d = asdict(e)
-    if not d.get("hub"):
-        d.pop("hub", None)
+    for optional in ("hub", "domain"):
+        if not d.get(optional):
+            d.pop(optional, None)
     return canonical_bytes(d).decode("utf-8")
 
 

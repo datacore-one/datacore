@@ -325,15 +325,17 @@ def _rewrite(path: Path, actor: str, keys_dir: Path, edit) -> None:
 
 
 def _reseal(env, git: Path) -> None:
-    """Drop the old seal and seal the tampered log again with the hub's key."""
+    """Drop the old seal and seal the tampered log again with the hub's key.
+
+    The dishonest hub seals directly with its key. It cannot use the honest
+    `Hub.seal`: since audit finding 2 that refuses to admit -- and so to seal --
+    a writer event whose signature no longer verifies."""
+    from ledger.seal import build_seal_payload
     hub_log = git / ".datacore" / "events" / f"{GRANTOR}.jsonl"
     lines = [ln for ln in hub_log.read_text().splitlines() if from_line(ln).type != "ledger.seal"]
     hub_log.write_text("\n".join(lines) + "\n")
-    shutil.rmtree(env.tmp / "reseal-state", ignore_errors=True)
-    h = hubmod.Hub(git, GRANTOR, keys_dir=env.keys_dir, registry_path=env.registry,
-                   state_dir=env.tmp / "reseal-state", clock=env.clock, eligibility=allow_any)
-    h.seal()
-    h.close()
+    EventLog(git, GRANTOR, keys_dir=env.keys_dir, registry_path=env.registry, sign=True).append(
+        "ledger.seal", build_seal_payload(read_events(git)))
 
 
 def test_tampered_hub_entry_fails_the_writers_receipt_check(env):
@@ -493,6 +495,10 @@ def test_second_hub_refuses_to_grant_until_explicitly_promoted(env):
     # The owner promotes the standby: one explicit command, recorded in the config.
     cfg = hubmod.promote(standby_dir, "hubstandby", by="owner", reason="primary retired")
     assert cfg.grantor == "hubstandby" and cfg.promoted_by == "owner"
+    # The writer learns of the promotion the way every copy does: it pulls the
+    # committed config. Until then it refuses the new grantor's answers
+    # (audit finding 5: first answers are pinned to the grantor it knows).
+    shutil.copyfile(standby_dir / hubmod.CONFIG, wa.space_dir / hubmod.CONFIG)
     assert wa_on_standby.request_lease("t1")["status"] == "granted"
 
 
@@ -638,10 +644,10 @@ def test_audit1_an_edited_cutover_manifest_is_refused(env):
     now = _real_ms()
     space = _legacy_space(env, "manifest-space", [
         (f"{now - 60_000:013d}.0000.own", "item.create", {"id": "old"})])
-    manifest = space / hubmod.CUTOVER_MANIFEST
-    data = json.loads(manifest.read_text())
-    data["logs"]["own"]["seq"] = 99
-    manifest.write_text(json.dumps(data))
+    config = space / hubmod.CONFIG
+    data = json.loads(config.read_text())
+    data["cutover_logs"]["own"]["seq"] = 99            # claim more history as legacy
+    config.write_text(json.dumps(data))
     with pytest.raises(hubmod.HubRefused) as exc:
         env.hub(space=space, state="manifest")
     assert exc.value.code == "bad_manifest"
