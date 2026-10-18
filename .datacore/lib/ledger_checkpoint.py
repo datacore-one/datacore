@@ -217,7 +217,8 @@ def write(space: Path) -> Path:
     from ledger.events import to_line
     from ledger.verify import verify_space
     events = read_events(space)
-    state = fold(events)
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space, events)    # the snapshot below still keeps every event
     text = project(state, space=space.name).text
     dest, snapshot_path = checkpoint_paths(space)
     chains = {}

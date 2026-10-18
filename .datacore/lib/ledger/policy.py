@@ -400,7 +400,8 @@ def _guarded_append_locked(
     if type in {"item.claim", "item.update"}:
         from .fold import fold
         events = read_events(space_dir)
-        item = fold(events).items.get(payload.get("id"))
+        from .hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        item = authoritative_state(space_dir, events).items.get(payload.get("id"))
         if item is None:
             raise PolicyError("item does not exist")
         if item.edit_conflicts:
