@@ -516,7 +516,8 @@ def main() -> int:
 
     space = args.space.resolve()
     events = read_events(space)
-    state = fold(events)
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space, events)
     claimable = [i for i in state.items.values() if i.status == CLAIMABLE]
 
     # A genesis-imported GTD task is a MIRROR of an org heading, not a work
