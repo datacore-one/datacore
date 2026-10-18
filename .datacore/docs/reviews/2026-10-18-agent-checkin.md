@@ -47,3 +47,46 @@ A manual smoke run of `agent_presence_check.py check` on the workstation, agains
 5. Add one line to each agent's existing heartbeat timer: `python3 -m ledger.checkin --space … --agent <miles|tris|data|winston> --interval <its heartbeat seconds> --hub-url … --token-id …`.
 6. On Winston's host, install `agent-presence-check.service` / `.timer` (or the cron line in the service file), filling in `<space>`. Run it once with `--dry-run` first.
 7. Add the briefing row to `system-pulse.md` (above).
+
+## Update: merged with the hub's audit fixes (2026-10-18)
+
+`feat/agent-checkin` was built on `feat/ledger-hub` (a497b76), not on the role pool. So the hub branch is the parent that was merged in. **This branch does not contain `feat/ledger-role-pool`.** Nothing is pushed.
+
+| Repo | Commit | What |
+|---|---|---|
+| root | 1f4984c | Merge of `feat/ledger-hub` at 3943110 |
+| root | c279183 | Tests first: admission on the git path (red: 1 failed) |
+| root | b14a10d | The git fallback reads through the hub's admission rule |
+| app | aa52c00 | Merge of app `feat/ledger-hub` at 31b511c |
+
+**How the conflicts were resolved.** In each conflict, both sides had added code, and both sides were kept:
+
+- root `ledger/hub.py`: `presence` on `LocalTransport` and `HttpTransport`, next to the hub's `seal_request` and `reconcile`;
+- app `api/ledger_hub.py`: the route list in the docstring;
+- app `tests/test_ledger_hub_api.py`: the presence test, next to the seal and reconcile tests.
+
+The `Offline` transport in `ledger/checkin.py` now also answers `seal_request` and `reconcile` as "unreachable".
+
+**Check-ins pass the new admission.** Through the hub, a check-in is a signed `HubWriter` append. Its signed domain names this space, hub and log (audit finding 6). When the hub is down, the check reads the git copy through `ledger.presence.admitted_events`, the same admission rule the hub uses (findings 2 and 6). A check-in signed for another space, copied into this space's git copy, is no longer counted. A space without a hub is read as before, with a signature check on each check-in. `--dry-run` is unchanged and still tested.
+
+**Tests changed:** the fixture enables the hub with an owner (finding 4) and gives the hub fixed policy inputs (finding 12). No assertion was changed. Two tests were added:
+
+- `test_a_checkin_through_the_hub_is_signed_and_bound_to_this_space_and_log`;
+- `test_a_checkin_signed_for_another_space_is_not_counted_from_the_git_copy`.
+
+**Counts (seen in this session):**
+
+| Suite | Result |
+|---|---|
+| `tests/test_ledger_agent_checkin.py` | 16 passed |
+| `python3 -m pytest .datacore/lib/tests -k ledger -q` | 844 passed, 0 failed, 6277 deselected (hub baseline 828 + 16) |
+| app `daemon/tests/test_ledger_hub_api.py` with `DATACORE_ROOT=<this worktree>` | 6 passed |
+
+The presence checker was **not** run outside its tests.
+
+**Owner steps, corrected for the hub's audit fixes.**
+
+- Step 2 now needs an owner, and it needs every writer to declare support first:
+  1. Run `python3 -m ledger.hub ready <space> --actor <writer>` on each writer's host.
+  2. Then run `python3 -m ledger.hub enable <space> --hub-id <id> --grantor <hub writer> --owner <owner>`.
+- **Still open:** a fix on the role-pool branch (HubWriter loses the task hash after a lease renewal) is not on this branch. Check-ins do not take leases, so they are not affected.
