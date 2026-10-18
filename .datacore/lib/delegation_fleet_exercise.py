@@ -73,7 +73,7 @@ SOURCE = "org/next_actions.org"
 
 
 def _input_path(to: str) -> str:
-    return f"4-outbox/delegation-drill/input-{to}.txt"
+    return f"4-archive/delegation-drill/input-{to}.txt"
 
 
 def _task(to: str) -> tuple[str, str]:
@@ -92,7 +92,7 @@ def _task(to: str) -> tuple[str, str]:
     neither does the wrong number.
     """
     src = _input_path(to)
-    out = f"4-outbox/delegation-drill/{to}-linecount.txt"
+    out = f"4-archive/delegation-drill/{to}-linecount.txt"
     title = f"count the lines of {src} and write only that number into {out}"
     check = (f'test -f {out} && test "$(wc -l < {src} | tr -d " ")" '
              f'= "$(tr -d "[:space:]" < {out})"')

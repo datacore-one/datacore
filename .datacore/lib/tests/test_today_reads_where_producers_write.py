@@ -42,6 +42,16 @@ def test_step_11_reads_the_market_phase_report_where_the_job_publishes_it():
     assert "0-personal/0-inbox" not in step
 
 
+def test_step_11_includes_inbox_reports_then_files_them():
+    """Owner decision 2026-10-18: trading reports wait in 0-inbox/reports/, the
+    briefing includes them, and only then are they filed."""
+    step = _step(11)
+    lst, fil = step.find("inbox_reports.py list"), step.find("inbox_reports.py file")
+    assert lst != -1 and fil != -1, "step 11 lists and files the inbox reports"
+    assert lst < fil, "filing comes after the briefing has read them"
+    assert "1-tracks/trading/reports" in step
+
+
 def test_step_11_says_plainly_when_the_report_is_missing():
     step = _step(11)
     assert "nightshift-market-phase" in step  # where to look for why

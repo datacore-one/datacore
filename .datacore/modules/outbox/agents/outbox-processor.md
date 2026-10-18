@@ -1,6 +1,6 @@
 # Agent: outbox-processor
 
-Routes content from `4-outbox/` to destinations (archive, delivery, publish, dispose).
+Routes content from `4-archive/` to destinations (archive, delivery, publish, dispose).
 
 ## Metadata
 
@@ -36,7 +36,7 @@ This section helps you understand when and how to apply your capabilities.
 - Manual agent invocation via Task tool
 
 **Key decisions this agent makes:**
-- Which files in `4-outbox/archive/` are ready to route
+- Which files in `4-archive/` are ready to route
 - Semantic path preservation when moving to archive repo
 - Companion file handling (move together with source)
 - Index updates in both source and destination
@@ -45,7 +45,7 @@ This section helps you understand when and how to apply your capabilities.
 
 | Question | Answer |
 |----------|--------|
-| Where do I read from? | `*/4-outbox/archive/` in all spaces |
+| Where do I read from? | `*/4-archive/` in all spaces |
 | Where do I write to? | Archive repos on server (or local) |
 | What config do I need? | `.datacore/settings.yaml` → `outbox` section |
 | What about companions? | Always move with source file |
@@ -89,8 +89,8 @@ triggers:
 reads:
   required:
     - ".datacore/settings.yaml"
-    - "*/4-outbox/archive/"
-    - "*/4-outbox/_routing.yaml"
+    - "*/4-archive/"
+    - "*/4-archive/_routing.yaml"
   contextual: []
 ```
 
@@ -98,8 +98,8 @@ reads:
 
 ```yaml
 writes:
-  - "*/4-outbox/archive/*"          # Removes processed files
-  - "*/4-outbox/_index.md"          # Updates outbox index
+  - "*/4-archive/*"          # Removes processed files
+  - "*/4-archive/_index.md"          # Updates outbox index
   - "[archive-repo]/*"              # Adds archived content
   - "[archive-repo]/_index.md"      # Updates archive index
 ```
@@ -134,12 +134,12 @@ can_be_called_by:
    └── Validate server connectivity (if server mode)
 
 2. DISCOVER SPACES
-   ├── Find all */4-outbox/archive/ directories
+   ├── Find all */4-archive/ directories
    ├── Filter to spaces with content to process
    └── Report discovered items count
 
 3. FOR EACH SPACE:
-   ├── List files in 4-outbox/archive/
+   ├── List files in 4-archive/
    ├── For each file:
    │   ├── Determine semantic destination path
    │   ├── Check for companion file (.companion.md)
@@ -154,7 +154,7 @@ can_be_called_by:
    ├── Move file(s) to archive repo
    ├── Update archive _index.md (add entry)
    ├── Update source _index.md (remove entry)
-   ├── Remove from 4-outbox/archive/
+   ├── Remove from 4-archive/
    └── Stage changes
 
 5. COMMIT AND PUSH
@@ -172,10 +172,10 @@ can_be_called_by:
 Files maintain their semantic location within the archive:
 
 ```
-Source: 0-personal/4-outbox/archive/3-knowledge/literature/Old-Paper.md
+Source: 0-personal/4-archive/3-knowledge/literature/Old-Paper.md
 Target: 0-personal-archive/3-knowledge/literature/Old-Paper.md
 
-Source: 1-teamspace/4-outbox/archive/1-tracks/legal/contracts/Acme-2018.pdf
+Source: 1-teamspace/4-archive/1-tracks/legal/contracts/Acme-2018.pdf
 Target: 1-teamspace-archive/1-tracks/legal/contracts/Acme-2018.pdf
 ```
 
@@ -185,8 +185,8 @@ If a file has a companion (`.companion.md`), both move together:
 
 ```
 Source files:
-  4-outbox/archive/report.pdf
-  4-outbox/archive/report.pdf.companion.md
+  4-archive/report.pdf
+  4-archive/report.pdf.companion.md
 
 Archive destination:
   [archive-repo]/report.pdf
@@ -197,7 +197,7 @@ Archive destination:
 
 **Source index removal:**
 ```markdown
-<!-- In 4-outbox/_index.md, remove: -->
+<!-- In 4-archive/_index.md, remove: -->
 - [ ] `archive/3-knowledge/literature/Old-Paper.md` - Ready for archive
 ```
 

@@ -79,12 +79,12 @@ def _task(target: str, day: str) -> tuple[str, str, str]:
     and anything not in git is simply not there. That cost a live round to
     learn on 2026-09-18, when the task counted a generated, gitignored file.
 
-    The artifact lives under `4-outbox`, which DIP-0015's structure hook
+    The artifact lives under `4-archive`, which DIP-0015's structure hook
     permits; a top-level directory would be refused at commit time and no
     agent could ever satisfy the check.
     """
-    src = f"4-outbox/{MARK}/input-{day}.txt"
-    out = f"4-outbox/{MARK}/count-{day}.txt"
+    src = f"4-archive/{MARK}/input-{day}.txt"
+    out = f"4-archive/{MARK}/count-{day}.txt"
     title = f"count the lines of {src} and write only that number into {out}"
     check = (f'test -f {out} && test "$(wc -l < {src} | tr -d " ")" '
              f'= "$(tr -d "[:space:]" < {out})"')

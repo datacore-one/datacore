@@ -17,7 +17,7 @@
 #
 # Emergency bypass: git commit --no-verify
 
-ALLOWED_DIRS="org journal today 0-inbox 1-tracks 2-projects 3-knowledge 4-outbox 4-archive notes content .datacore .claude .git .github"
+ALLOWED_DIRS="org journal today 0-inbox 1-tracks 2-projects 3-knowledge 4-archive notes content .datacore .claude .git .github"
 # DIP-0015 amendment: tool config folders an editor or agent keeps at a space root.
 TOOL_DIRS=".obsidian .logseq .superpowers .gstack .plur"
 ALLOWED_DIRS="$ALLOWED_DIRS $TOOL_DIRS"

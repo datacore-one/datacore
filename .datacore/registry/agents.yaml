@@ -109,7 +109,6 @@ profiles:
           activity_window: 24h
           exclude:
           - 4-archive
-          - 4-outbox
       post:
       - inherit: defaults
       - type: journal-append
@@ -2267,12 +2266,12 @@ module_agents:
     reads:
       required:
       - .datacore/settings.yaml
-      - '*/4-outbox/archive/'
-      - '*/4-outbox/_routing.yaml'
+      - '*/4-archive/'
+      - '*/4-archive/_routing.yaml'
       contextual: []
     writes:
-    - '*/4-outbox/archive/*'
-    - '*/4-outbox/_index.md'
+    - '*/4-archive/*'
+    - '*/4-archive/_index.md'
     - '[archive-repo]/*'
     - '[archive-repo]/_index.md'
     references:

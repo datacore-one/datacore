@@ -68,7 +68,7 @@ nightshift:
 hooks:
   post_install: |
     echo "Outbox module installed."
-    echo "Content in 4-outbox/archive/ will be routed to archive repos."
+    echo "Content in 4-archive/ will be routed to archive repos."
 
 # DIP-0022 context
 context:

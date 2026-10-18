@@ -162,20 +162,35 @@ def test_gitignored_entries_at_space_root_are_not_drift(tmp_path):
     assert 'STRAY.md' in flagged, 'untracked, unignored files are still drift'
 
 
-def test_gitignored_entries_at_datacore_root_are_not_drift(tmp_path):
+def test_gitignored_tool_dirs_at_datacore_root_are_not_drift(tmp_path):
     from structural_integrity import check_root_directory
     root = tmp_path / 'Data'
     root.mkdir()
     _git(root, 'init', '-q')
-    (root / '.gitignore').write_text('.cursor/\nnode_modules/\n')
-    for d in ('.cursor', 'node_modules', 'stray-dir', '.ruff_cache'):
+    (root / '.gitignore').write_text('.cursor/\n')
+    for d in ('.cursor', 'stray-dir', '.ruff_cache'):
         (root / d).mkdir()
     result = check_root_directory(root)
     flagged = {i.path.name for i in result.issues}
     assert '.cursor' not in flagged
-    assert 'node_modules' not in flagged
     assert 'stray-dir' in flagged
     assert '.ruff_cache' in flagged, 'an unignored cache dir is real root drift'
+
+
+def test_a_gitignored_visible_folder_at_datacore_root_is_still_drift(tmp_path):
+    """Sessions started at ~/Data dropped content/, node_modules/ and plans there;
+    the root repo ignores them, so skipping ignored names hid them for months
+    (owner decision 2026-10-18: flag any new root folder)."""
+    from structural_integrity import check_root_directory
+    root = tmp_path / 'Data'
+    root.mkdir()
+    _git(root, 'init', '-q')
+    (root / '.gitignore').write_text('content/\nnode_modules/\ndocs/\n')
+    for d in ('content', 'node_modules', 'docs'):
+        (root / d).mkdir()
+    flagged = {i.path.name for i in check_root_directory(root).issues}
+    assert {'content', 'node_modules'} <= flagged
+    assert 'docs' not in flagged, 'docs/ is allowed at the root'
 
 
 def test_root_check_reads_the_shared_root_allowlist(tmp_path):

@@ -47,7 +47,7 @@ The briefing tells a story in three acts:
 | Output location? | Personal space journal: `0-personal/notes/journals/YYYY-MM-DD.md` |
 | Nightshift outputs? | `*/0-inbox/nightshift-*.md` |
 | Calendar source? | Google Calendar — multiple accounts (from `settings.local.yaml`) |
-| Market phase? | Pre-computed by a timer on the executor host → `[N]-trading/reports/market-phase/market-phase-YYYY-MM-DD.md` (the trading space named in the registry) |
+| Market phase? | Pre-computed by a timer on the executor host → `[N]-trading/0-inbox/reports/market-phase/market-phase-YYYY-MM-DD.md` (the trading space named in the registry); filed to `1-tracks/trading/reports/` after the briefing |
 | What DIPs govern this? | DIP-0009 (GTD), DIP-0011 (Nightshift) |
 
 ### Cron Schedule (nightshift server, UTC)
@@ -476,14 +476,30 @@ If trading module installed:
 python3 ~/.datacore/modules/trading/lib/gateio/today_summary.py --remote
 ```
 
-Also read the market phase analysis. The `nightshift-market-phase` timer on the
-executor host computes it early each morning and publishes it to the trading
-space repo: `[N]-trading/reports/market-phase/market-phase-YYYY-MM-DD.md` (today's
-date). It reaches the Mac with the normal repo sync; if it is not there, run
-`git -C [N]-trading pull --ff-only` once and look again. The timer is its own
-job and does not wait for the nightshift task queue, so a paused queue is not
-a reason for it to be missing. Integrate signals and suggestions into the
-briefing's trading section.
+Also read the reports waiting in the trading space's inbox. Trading reports
+arrive in `[N]-trading/0-inbox/reports/`, are included in this briefing, and are
+then filed (owner decision 2026-10-18):
+
+```bash
+python3 .datacore/lib/inbox_reports.py list --space [N]-trading
+```
+
+The market phase analysis is one of them. The `nightshift-market-phase` timer on
+the executor host computes it early each morning and publishes it to the trading
+space repo: `[N]-trading/0-inbox/reports/market-phase/market-phase-YYYY-MM-DD.md`
+(today's date). It reaches the Mac with the normal repo sync; if it is not
+there, run `git -C [N]-trading pull --ff-only` once and look again. The timer is
+its own job and does not wait for the nightshift task queue, so a paused queue
+is not a reason for it to be missing. Integrate signals and suggestions into
+the briefing's trading section, and give every other listed report a line in
+that section: what it is and what it says.
+
+Once the briefing is written to the journal, file exactly the reports you
+listed (a report that arrived meanwhile waits for tomorrow):
+
+```bash
+python3 .datacore/lib/inbox_reports.py file --space [N]-trading --to 1-tracks/trading/reports <each listed path>
+```
 
 If there is still no report for today, write that in the trading section:
 "No market-phase report for today yet." Add the reason when you can find it:
