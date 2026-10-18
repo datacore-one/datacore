@@ -332,12 +332,14 @@ class ServerArchiver:
         if not success and "nothing to commit" not in msg:
             return False, f"Git commit failed: {msg}"
 
-        # Push if a remote is configured; a failed push leaves the commit
-        # local for the next run rather than failing the archive operation
-        self._ssh_command(
+        # Push if a remote is configured. A failed push keeps the commit on
+        # the server but is reported, so a stuck archive does not look healthy.
+        success, msg = self._ssh_command(
             f"cd {shlex.quote(abs_repo)} && "
-            f"git remote get-url origin >/dev/null 2>&1 && git push origin HEAD || true"
+            f"if git remote get-url origin >/dev/null 2>&1; then git push origin HEAD; fi"
         )
+        if not success:
+            return False, f"Git push failed: {msg}"
 
         return True, "OK"
 
