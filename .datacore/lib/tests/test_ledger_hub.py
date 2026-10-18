@@ -1201,3 +1201,132 @@ def test_audit8_disjoint_intervals_in_reverse_clock_order_are_not_an_overlap(env
     item = fold([create, old, new], lease_grantors={HUB_ID: {GRANTOR: 0, "hubb": 1}}).items["t1"]
     assert not item.lease_conflicts, item.lease_conflicts
     assert item.lease_holder == "wb", item.history
+
+
+# ── finding 4: promotion is an owner-signed ledger record that fences ──────
+
+OWNER = "own"
+
+
+def _owned(env, name: str) -> Path:
+    """A hub space whose opt-in (and cutover manifest) is an owner-signed ledger event."""
+    space = env.tmp / name
+    (space / ".datacore" / "events").mkdir(parents=True)
+    hubmod.enable(space, hub_id=HUB_ID, grantor=GRANTOR, lease_ttl_s=900, owner=OWNER,
+                  keys_dir=env.keys_dir, registry_path=env.registry)
+    return space
+
+
+def _writer_in(env, space: Path, actor: str, transport) -> "hubmod.HubWriter":
+    d = env.tmp / f"{actor}-in-{space.name}"
+    if not d.exists():
+        (d / ".datacore" / "events").mkdir(parents=True)
+        git_pull(space, d)
+    return hubmod.HubWriter(d, actor, transport, keys_dir=env.keys_dir, registry_path=env.registry,
+                            state_dir=env.tmp / "wstate" / f"{actor}-{space.name}", clock=env.clock)
+
+
+def _promote(env, space: Path, grantor: str, **kw):
+    return hubmod.promote(space, grantor, by=OWNER, reason="test promotion", keys_dir=env.keys_dir,
+                          registry_path=env.registry, **kw)
+
+
+def test_audit4_promotion_is_an_owner_signed_record_that_fences_the_old_grantor(env):
+    space = _owned(env, "p-space")
+    hub_a = env.hub(space=space, state="pa")
+    ta = hubmod.LocalTransport(hub_a)
+    own, wa = _writer_in(env, space, OWNER, ta), _writer_in(env, space, "wa", ta)
+    own.append("item.create", {"id": "t1", "title": "one"})
+    own.append("item.create", {"id": "t2", "title": "two"})
+    assert wa.request_lease("t1")["status"] == "granted"
+
+    # No fence, no promotion: availability is traded for safety.
+    with pytest.raises(hubmod.HubRefused) as exc:
+        _promote(env, space, "hubb")
+    assert exc.value.code == "unfenced"
+    fence = hub_a.fence(reason="the owner is moving the hub")
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wa.request_lease("t2")
+    assert exc.value.code == "fenced"
+
+    _promote(env, space, "hubb")
+    records = [e for e in read_events(space) if e.type == "hub.promote"]
+    assert len(records) == 1 and records[0].actor == OWNER and records[0].sig, records
+    p = records[0].payload
+    assert p["epoch"] == 1 and p["grantor"] == "hubb" and p["previous"] == GRANTOR
+    assert p["predecessor"]["frontier"][GRANTOR]["head"] == fence["hash"]
+
+    # The new grantor waits until every lease of the old epoch has expired, plus the clock uncertainty.
+    hub_b = env.hub("hubb", space, state="pb")
+    wb = _writer_in(env, space, "wb", hubmod.LocalTransport(hub_b))
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wb.request_lease("t2")
+    assert exc.value.code == "fencing_wait"
+    env.clock.advance(900 + 3600)
+    assert wb.request_lease("t2")["status"] == "granted"
+
+    # Every new seal extends the predecessor's frontier.
+    sealed = hub_b.seal()["seal"]["payload"]
+    assert sealed["watermarks"][GRANTOR] >= fence["seq"]
+    lost = env.tmp / "p-space-without-old-log"
+    shutil.copytree(space, lost)
+    (lost / ".datacore" / "events" / f"{GRANTOR}.jsonl").unlink()
+    with pytest.raises(hubmod.HubRefused) as exc:
+        env.hub("hubb", lost, state="pb2").seal()
+    assert exc.value.code == "behind_predecessor"
+
+
+def test_audit4_an_old_grantor_that_keeps_granting_after_promotion_confers_nothing(env):
+    space = _owned(env, "q-space")
+    hub_a = env.hub(space=space, state="qa")
+    ta = hubmod.LocalTransport(hub_a)
+    own = _writer_in(env, space, OWNER, ta)
+    own.append("item.create", {"id": "t1", "title": "one"})
+    owner_copy = env.tmp / "owner-copy"
+    shutil.copytree(space, owner_copy)                 # the owner, cut off from hub A
+
+    wb = _writer_in(env, space, "wb", ta)
+    assert wb.request_lease("t1")["status"] == "granted"   # A, still running, grants
+
+    _promote(env, owner_copy, "hubb", attest_stopped=True)
+    hub_b = env.hub("hubb", owner_copy, state="qb")
+    git_pull(space, owner_copy)                          # the partition heals
+    assert _hub_item(hub_b, "t1").lease_holder is None   # A's grant after the fence frontier counts for nothing
+    assert "fenced" in hub_b.refusals().get(GRANTOR, ""), hub_b.refusals()
+    env.clock.advance(900 + 3600)
+    hub_b.seal()
+    report = wb.receipt_check(owner_copy, hub_actor="hubb")
+    assert report["status"] == "failed", report
+
+    git_pull(owner_copy, space)                          # A learns of the promotion
+    from ledger.keys import ensure_keypair
+    ensure_keypair("wa", keys_dir=env.keys_dir, registry_path=env.registry)
+    with pytest.raises(hubmod.HubRefused) as exc:
+        hub_a.request_lease(hubmod.sign_request("wa", "lease.request", {
+            "hub": HUB_ID, "space": _space_id(space), "item": "t1"}, keys_dir=env.keys_dir, clock=env.clock))
+    assert exc.value.code == "not_active_hub"
+
+
+def test_audit4_a_config_edited_to_another_grantor_or_manifest_confers_nothing(env):
+    space = _owned(env, "r-space")
+    config = space / hubmod.CONFIG
+    original = config.read_text()
+    data = json.loads(original)
+    data["grantor"], data["previous_grantors"] = "hubx", [GRANTOR]   # no owner-signed promotion
+    config.write_text(json.dumps(data))
+    from ledger.keys import ensure_keypair
+    ensure_keypair("wa", keys_dir=env.keys_dir, registry_path=env.registry)
+    hub_x = env.hub("hubx", space, state="rx")
+    with pytest.raises(hubmod.HubRefused) as exc:
+        hub_x.request_lease(hubmod.sign_request("wa", "lease.request", {
+            "hub": HUB_ID, "space": _space_id(space), "item": "t1"}, keys_dir=env.keys_dir, clock=env.clock))
+    assert exc.value.code == "not_active_hub"
+    hub_x.close()
+    # A manifest edited WITH a recomputed sha256 is still not the owner's.
+    data = json.loads(original)
+    data["cutover_logs"]["planted"] = {"seq": 0, "head": "0" * 64}
+    data["cutover_sha256"] = hubmod._manifest_sha(data["cutover_logs"])
+    config.write_text(json.dumps(data))
+    with pytest.raises(hubmod.HubRefused) as exc:
+        env.hub(space=space, state="ry")
+    assert exc.value.code == "bad_manifest"
