@@ -351,7 +351,8 @@ def repairs(root: Path) -> list[dict]:
     space = _space(root)
     try:
         events = read_events(space)
-        state = fold(events)
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        state = authoritative_state(space, events)
     except Exception:  # noqa: BLE001 -- an unreadable ledger is not an escalation
         return []
     # WAITING FOR YOU (NS-9): the repairer finished and released the item as
