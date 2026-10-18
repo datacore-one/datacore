@@ -176,3 +176,69 @@ was changed.
   a network. Every test uses `LocalTransport`.
 - **Who may check.** The checker must be someone other than the holder; it need
   not be an agent or hold any role. The spec does not say more.
+
+## Update: merged with the hub's audit fixes, and audit finding 14 (2026-10-18)
+
+Commits on `feat/ledger-role-pool` (nothing pushed):
+
+| Commit | What |
+|---|---|
+| 7307465 | Merge of `feat/ledger-hub` at 3943110 (audit fixes, parts 1 and 2) |
+| cd1564c | Tests first for audit finding 14 (red: 7 failed, 15 passed) |
+| 964b039 | Code for finding 14 |
+
+### The merge
+
+The pool now runs on the hub's admission and lease model:
+
+- Leases come from the hub's `_grant`. A grant names an attempt, the task-content hash and the epoch. When the task has a role, it also names `role` {name, template, sha256}. Pool eligibility (`pool_rule`), the role-description check and the budget check sit inside `_grant`.
+- In the fold, the hub's lease plan decides first (earliest lease wins). After that, a pool item with no DONE_WHEN is still a recorded lease conflict.
+- `pool.budget` is a hub-only type in `hub_admission`. Only the grantor writes it, in its own log.
+- The first build's "accept, but mark `not_counted`" is gone. A holder's own check, or a pool completion without a DONE_WHEN, is now refused at the front door by the policy rule (`not_authorized`, `hub_policy.authorize`). The fold run with policy turns the same event into a recorded no-op, and the writer still refuses it before writing. If the event is already in the writer's signed log, the hub keeps it as a rejected proposal (audit finding 11), so that writer's chain is not stranded.
+- A hub-side bug was found and fixed here: after a renewal, `HubWriter._attempt_for` lost the task hash, so a completion after a renewal folded to a lease conflict. **This fix is not on `feat/ledger-hub` or `feat/agent-checkin`.**
+
+### Finding 14: what is implemented
+
+| Requirement (amendment G) | Implementation | Tests (`test_ledger_role_pool_review.py`) |
+|---|---|---|
+| The grant refuses a pool task without a DONE_WHEN | `pool_rule`; whitespace counts as none | `test_f14_the_grant_refuses_a_pool_task_without_done_when_on_the_production_path` (also passed before the code) |
+| The role template version is pinned to the attempt | The grant's `role.sha256` is the hash of the file's contents. The folded `lease_ref.role` keeps it. `HubWriter.load_role` refuses a file that has changed (`role_changed`). A new attempt pins the file as it is then | `test_f14_the_lease_pins_the_role_templates_content_hash_to_the_attempt` |
+| A completion means "submitted for review", with a digest of result and evidence | Status `submitted` (org REVIEW). `ItemState.submission` = {attempt, task_hash, result_digest, role_sha256, holder}. A digest that does not match is refused. A submitted item is never leased again | `test_f14_a_pool_completion_is_submitted_for_review_with_a_digest_of_result_and_evidence`, `test_f14_a_submitted_pool_item_stays_in_the_org_projection_as_review` |
+| The item is done only after a check by an independent execution identity | `item.verify` must be bound to the submission (attempt, task hash, result digest). Its writer must belong to a registered principal, and not the holder's (`hub_policy.pool_review_problem`). The rule is applied by the writer, by the hub, and by the fold with policy | `test_f14_only_another_execution_identity_accepts_the_submission`, `test_f14_a_same_identity_check_imported_by_git_is_a_no_op_on_replay` |
+| Budget | This already existed on the branch. It stays as a **stop-on-recorded-spend threshold, not a hard cap**. Work in flight, parallel leases and late spend can cross it | `test_f14_the_budget_stops_new_leases_on_recorded_spend_and_is_not_a_hard_cap` |
+| Production eligibility path | Every pool and finding-14 test uses `eligibility=None` (`pool_rule`), with policy inputs read from the tmp registry. One older test uses `allow_any` on purpose: it shows the fold refusing a bad hub's grant. It does not claim the feature | all |
+
+**What "independent execution identity" means here.** The registry (`principals.yaml`) identifies an execution identity as a principal: one entry per agent or human, with every writer name it uses. The rule therefore compares principals, not writer names, so `wa2` (a writer name of principal `wa`) cannot check `wa`'s work. **The registry cannot tell apart two separate runs of one principal, or two principals sharing a process or host.** That is not checked. A human principal counts as independent. The amendment says "a different agent"; whether a human review is acceptable is for the owner to decide. A plain `fold()` without policy can only see writer names.
+
+**The budget's semantics as implemented** (the amendment says these must be settled):
+
+- The day is the UTC day of the spend's HLC.
+- The unit is cents of an unspecified currency.
+- Spend counts toward a role only when it is a hub-stamped `spend.record` naming a pool item.
+- Only the grantor can set the threshold (`set_budget`).
+- There are no reservations and no refunds.
+- Late spend counts on its own HLC day.
+
+### Tests changed, and why
+
+- Merge: the fixture enables the hub with an owner and uses the fixed policy inputs. `submit_raw` names the lease attempt, as `HubWriter.append` does. Two tests now expect `not_authorized` at the front door instead of an accepted line marked `not_counted`; one of them also checks that a git copy folds the completion to nothing.
+- Finding 14: the fixture's policy now carries the writer-to-principal map from its tmp registry. Two tests expect `submitted` where they expected `completed`, because a pool completion now means something different. Three tests compare the grant's role with `granted_role()`, which includes the new `sha256`.
+
+### Counts (seen in this session)
+
+`python3 -m pytest .datacore/lib/tests -k ledger -q`:
+
+| After | Result |
+|---|---|
+| The merge | 844 passed (828 hub baseline + 16 pool tests) |
+| Finding 14 | 851 passed, 0 failed, 6277 deselected |
+
+### Still open
+
+- DIP-0034 section G still says "Not implemented". The DIP was not edited; the owner amends it.
+- Acceptance case 12 (independent clocks, real git) is **not verified**.
+- No route sends rejected work back. A submitted item cannot be re-leased, and no event returns it to the pool or to its holder.
+- The `pools` switch is a config field. Unlike `hub.enable` and `hub.promote`, it is not an owner-signed ledger record.
+- `hub_policy` refuses the old `item.claim` path for any item with a role, addressed or not. Such items are taken only through a lease.
+- Role templates are read from each host's code checkout. Whether they are tracked and synced to every agent host is **not verified**.
+- There are no HTTP routes for pools, and no dispatcher that offers pool tasks to idle agents.
