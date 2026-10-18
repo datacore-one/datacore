@@ -473,17 +473,23 @@ def authoritative_events(space_dir, events=None, *, registry_path=None, policy=N
     wrote. `events`: already read (`read_events(space_dir)`), else read here.
     `policy`: a `PolicyInputs`, a `ledger.policy.Policy`, or None (this
     installation's policy file and registry, read once, before the fold)."""
+    admitted, kw, _ = _authoritative(space_dir, events, registry_path=registry_path, policy=policy, now_ms=now_ms)
+    return admitted, kw
+
+
+def _authoritative(space_dir, events, *, registry_path, policy, now_ms):
+    """(admitted events, fold inputs, the sealer whose seals count -- None without a hub)."""
     from .log import read_events
     cfg = load_config(space_dir)
     if events is None:
         events = read_events(Path(space_dir))
     if cfg is None:
-        return list(events), {}
+        return list(events), {}, None
     from .hub_policy import PolicyInputs
     auth = authority(space_dir, cfg, registry_path)
     inputs = policy if isinstance(policy, PolicyInputs) else PolicyInputs.load(policy)
     admitted = admit(list(events), auth, now_ms=_wall_ms() if now_ms is None else now_ms).events
-    return admitted, {"lease_grantors": auth.lease_grantors(), "policy": inputs, "_sealer": auth.active.grantor}
+    return admitted, {"lease_grantors": auth.lease_grantors(), "policy": inputs}, auth.active.grantor
 
 
 def authoritative_state(space_dir, events=None, *, registry_path=None, policy=None, now_ms: int | None = None,
@@ -500,9 +506,8 @@ def authoritative_state(space_dir, events=None, *, registry_path=None, policy=No
     events, verified with the same inputs; an unverified seal raises
     `ValueError`, like `seal.settled_events`."""
     from .fold import fold
-    admitted, kw = authoritative_events(space_dir, events, registry_path=registry_path, policy=policy,
-                                        now_ms=now_ms)
-    sealer = kw.pop("_sealer", None)
+    admitted, kw, sealer = _authoritative(space_dir, events, registry_path=registry_path, policy=policy,
+                                          now_ms=now_ms)
     if not settled:
         return fold(admitted, **kw)
     from .seal import _covered_events, as_sequencer, latest_seal, settled as plain_settled, verify_seal
@@ -841,7 +846,6 @@ class Hub:
         self.config()                                   # a space that opted out has no hub state
         events, kw = authoritative_events(self.space_dir, registry_path=self.registry_path, policy=self.policy,
                                           now_ms=self.clock())
-        kw.pop("_sealer", None)
         return events, fold(events, **kw)
 
     def _fold_kwargs(self, cfg: HubConfig) -> dict:
