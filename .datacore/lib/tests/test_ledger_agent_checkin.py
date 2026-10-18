@@ -80,6 +80,17 @@ class Env:
         monkeypatch.delenv("DATACORE_SEQUENCER", raising=False)
         monkeypatch.delenv("DATACORE_LEDGER_SIGN", raising=False)
         self.clock = Clock()
+        # Every HLC stamp follows the simulated clock, as a real host's do its
+        # wall clock: a check-in's time is checked against its own envelope HLC
+        # (Codex re-audit of the ledger hub, new defect 7).
+        import types
+        import time as _time
+        import ledger.hlc as hlc
+        import ledger.log as logmod
+        fake = types.SimpleNamespace(**{k: getattr(_time, k) for k in dir(_time) if not k.startswith("_")})
+        fake.time = lambda: self.clock() / 1000
+        monkeypatch.setattr(hlc, "time", fake)
+        monkeypatch.setattr(logmod, "time", fake)
         self.hub_dir = tmp / "hub-space"
         (self.hub_dir / ".datacore" / "events").mkdir(parents=True)
         hubmod.enable(self.hub_dir, hub_id=HUB_ID, grantor=GRANTOR, owner=OWNER,
@@ -355,3 +366,49 @@ def test_a_checkin_signed_for_another_space_is_not_counted_from_the_git_copy(env
     result = env.run_check()
     assert result["source"] == "git"
     assert result["alerted"] == ["data"], result
+
+
+# ── 8. a check-in's time and agent are bound (Codex re-audit, new defect 7) ──
+
+YEAR_MS = 365 * 24 * 3600 * 1000
+
+
+def test_reaudit_new7_a_checkin_from_the_future_or_for_another_agent_is_not_counted(env):
+    """Codex: a check-in whose payload time was a year ahead was reported ok,
+    age zero, and it could name another agent than its writer's."""
+    for a in ("miles", "tris"):
+        env.checkin(a)
+    w = hubmod.HubWriter(env.space_of("data"), "data", env.transport, keys_dir=env.keys_dir,
+                         registry_path=env.registry, state_dir=env.tmp / "wstate" / "data", clock=env.clock)
+    future = {"agent": "data", "host": "data-host", "interval_s": INTERVAL, "ts": env.clock() + YEAR_MS}
+    other = {"agent": "miles", "host": "data-host", "interval_s": INTERVAL, "ts": env.clock()}
+    # The writer refuses both before anything is written ...
+    for payload in (future, other):
+        with pytest.raises(hubmod.HubRefused):
+            w.append("agent.checkin", payload)
+    assert not w.log.telemetry_path.exists()
+    # ... the hub refuses them when they arrive anyway (kept as rejected proposals) ...
+    for payload in (future, other):
+        receipt = w._send(w.log.append("agent.checkin", payload))
+        assert receipt["status"] == "rejected", receipt
+    # ... and a git copy that has them, or got them by another route, does not count them.
+    EventLog(env.hub_dir, "winston", keys_dir=env.keys_dir, registry_path=env.registry, sign=True).append(
+        "agent.checkin", {"agent": "tris", "host": "winston-host", "interval_s": INTERVAL, "ts": env.clock()})
+    EventLog(env.hub_dir, "tris", keys_dir=env.keys_dir, registry_path=env.registry, sign=True).append(
+        "agent.checkin", {"agent": "tris", "host": "tris-host", "interval_s": INTERVAL,
+                          "ts": env.clock() + YEAR_MS})
+    env.clock.advance(3 * 3600)                 # the honest check-ins are now old
+    git_pull(env.hub_dir, env.box_dir)
+    p = presence.presence(presence.admitted_events(env.box_dir, env.clock(), registry_path=env.registry),
+                          env.clock(), agents=AGENTS, registry_path=env.registry)
+    assert p["data"]["state"] == "silent", p["data"]
+    assert p["miles"]["state"] == "silent" and p["tris"]["state"] == "silent", p
+    assert env.hub.presence(agents=AGENTS)["agents"]["tris"]["state"] == "silent"
+
+
+def test_reaudit_new7_a_checkin_ahead_of_the_readers_clock_is_an_error_not_age_zero(env):
+    env.checkin("data")
+    p = presence.presence(read_events(env.hub_dir), env.clock() - 60_000, agents=("data",),
+                          registry_path=env.registry)
+    assert p["data"]["state"] == "error" and p["data"]["age_s"] is None, p["data"]
+    assert "ahead" in presence.line("data", p["data"])
