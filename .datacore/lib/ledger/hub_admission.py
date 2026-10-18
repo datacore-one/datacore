@@ -59,6 +59,49 @@ from .events import EVENT_TYPES, HUB_EVENT_TYPES, OWNER_EVENT_TYPES, Event, cano
 
 #: The protocol a domain-bound event speaks. Events without a domain are protocol 1.
 PROTOCOL = 2
+#: Every protocol THIS code reads and writes correctly (audit finding 17). A
+#: hub space declares its protocol; a host whose code lacks it refuses the
+#: space (`ProtocolUnsupported`) rather than reading the envelope with a
+#: closed field list and mis-hashing it.
+SUPPORTED_PROTOCOLS = frozenset({1, 2})
+
+
+class ProtocolUnsupported(RuntimeError):
+    """This host's code does not support the protocol the space declares."""
+
+
+def require_protocol(declared, where: str = "this space") -> None:
+    if type(declared) is not int or declared not in SUPPORTED_PROTOCOLS:
+        raise ProtocolUnsupported(
+            f"{where} declares ledger protocol {declared!r}; this host supports "
+            f"{sorted(SUPPORTED_PROTOCOLS)}. Upgrade this host before it reads or writes the space "
+            "(DIP-0034 amendment I: every reader and writer must support the space's protocol)")
+
+
+_PROTOCOL_CACHE: dict = {}
+
+
+def check_space_protocol(space_dir) -> None:
+    """Refuse a hub space whose declared protocol this code does not support.
+    Cheap enough for every read: the config is parsed once per change."""
+    import json
+    path = Path(space_dir) / ".datacore" / "ledger-hub.json"
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    declared = _PROTOCOL_CACHE.get(key)
+    if declared is None:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return                     # load_config reports a broken config to writers
+        declared = data.get("protocol", PROTOCOL) if isinstance(data, dict) else PROTOCOL
+        if isinstance(data, dict) and data.get("enabled") is False:
+            declared = 1
+        _PROTOCOL_CACHE[key] = declared
+    require_protocol(declared, str(path.parent.parent))
 #: Written only by a hub's grantor, in its own log.
 HUB_ONLY_TYPES = HUB_EVENT_TYPES | {"ledger.seal", "hub.fence", "ledger.reject"}
 #: Refusals that make a signed, chained event a REJECTED PROPOSAL rather than

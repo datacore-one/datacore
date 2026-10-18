@@ -732,6 +732,10 @@ def read_events(space_dir: Path) -> list[Event]:
     policy for the WHOLE space (LED-7, audit A#15). Nothing is repaired: the
     damage stays for verify_chain to report and an operator to address.
     """
+    # A hub space this host's code does not support is refused, never mis-read
+    # (DIP-0034 amendment I; audit finding 17).
+    from .hub_admission import check_space_protocol
+    check_space_protocol(space_dir)
     events_dir = Path(space_dir) / ".datacore" / "events"
     telemetry_dir = Path(space_dir) / ".datacore" / TELEMETRY_DIR
     events: list[Event] = []

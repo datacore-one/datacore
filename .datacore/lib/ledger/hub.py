@@ -86,6 +86,13 @@ RULES THIS MODULE ENFORCES
     state, cancellable only by `ledger.void`. Imports follow the event's own
     log (`chain`), not its type. Seals carry the authoritative state root
     (lease authority and policy), and receipts recompute it the same way.
+  * ONE PROTOCOL PER SPACE (finding 17): a hub space declares its ledger
+    protocol (config and the owner's `hub.enable`). Every reader
+    (`read_events`) and writer (`EventLog`, `load_config`) of this code
+    refuses a space whose protocol it does not support
+    (`ProtocolUnsupported`), and `enable` refuses a space until every writer
+    of it has declared support from its own host (`declare_ready`, signed
+    and bound to its log's head; code `not_ready`).
   * The hub never verifies its own seal. Writers do (`receipt_check`), and any
     other host may (`seal.verify_seal`).
 
@@ -112,7 +119,7 @@ from typing import Callable
 
 from .events import EVENT_TYPES, Event, canonical_bytes, compute_hash, event_body, from_line, to_line
 from .events import OWNER_EVENT_TYPES
-from .hub_admission import (GENESIS, HUB_ONLY_TYPES, PROPOSAL_CODES, Authority, Epoch, Refusal, admit, admit_chain,
+from .hub_admission import (GENESIS, HUB_ONLY_TYPES, PROPOSAL_CODES, PROTOCOL, Authority, Epoch, Refusal, admit, admit_chain,
                             check_event, rejected_proposals, signing_domain)
 from .log import HubSigningRequired  # noqa: F401 -- re-exported: the hub's refusal to write unsigned
 
@@ -184,6 +191,9 @@ class HubConfig:
     epoch: int = 0
     #: The space's owner: signs `hub.enable` and `hub.promote` (finding 4).
     owner: str = ""
+    #: The ledger protocol this space speaks (amendment I; finding 17). Every
+    #: reader and writer must support it; see `declare_ready`.
+    protocol: int = 2
     clock_uncertainty_ms: int = DEFAULT_CLOCK_UNCERTAINTY_MS
 
 
@@ -209,6 +219,9 @@ def load_config(space_dir) -> HubConfig | None:
                 raise ValueError(f"{path}: {k} must be a list of lowercase names")
             known[k] = tuple(known[k])
     cfg = HubConfig(**known)
+    if cfg.enabled:
+        from .hub_admission import require_protocol
+        require_protocol(cfg.protocol, str(space_dir))
     if not (_NAME.fullmatch(cfg.hub_id or "") and _NAME.fullmatch(cfg.grantor or "")):
         raise ValueError(f"{path}: hub_id and grantor must be lowercase names")
     if not _NAME.fullmatch(cfg.space_id or ""):
@@ -268,17 +281,81 @@ def enable(space_dir, *, hub_id: str, grantor: str, owner: str, lease_ttl_s: int
     logs = before.get("cutover_logs") if before.get("cutover_sha256") else None
     if not isinstance(logs, dict):
         logs = _current_heads(space_dir)
+        # A MIXED-VERSION SPACE IS NOT SWITCHED ON (finding 17): every writer of
+        # the space has declared, from its own host, that its code speaks this
+        # protocol (`declare_ready`), bound to its log's current history.
+        missing = _not_ready(space_dir, logs, registry_path)
+        if missing:
+            raise HubRefused("not_ready", "these writers have not declared support for ledger protocol "
+                             f"{PROTOCOL}: {', '.join(missing)} (run `python3 -m ledger.hub ready` on each "
+                             "writer's host)", writers=missing)
     cfg = HubConfig(hub_id=hub_id, grantor=grantor, lease_ttl_s=lease_ttl_s, cutover_hlc=cutover_hlc,
                     space_id=space_id, cutover_logs=logs, cutover_sha256=_manifest_sha(logs), owner=owner,
-                    clock_uncertainty_ms=clock_uncertainty_ms)
+                    clock_uncertainty_ms=clock_uncertainty_ms, protocol=PROTOCOL)
     _write_config(space_dir, cfg)
     if not owner_records(space_dir, cfg, registry_path):
         from .log import EventLog
         EventLog(Path(space_dir), owner, keys_dir=keys_dir, registry_path=registry_path, sign=True).append(
             "hub.enable", {"space": space_id, "hub": hub_id, "epoch": 0, "grantor": grantor, "manifest": logs,
                            "manifest_sha256": cfg.cutover_sha256, "lease_ttl_s": lease_ttl_s,
-                           "clock_uncertainty_ms": clock_uncertainty_ms})
+                           "clock_uncertainty_ms": clock_uncertainty_ms, "protocol": PROTOCOL})
     return cfg
+
+
+READY_DIR = ".datacore/hub-ready"
+
+
+def declare_ready(space_dir, actor: str, *, keys_dir=None, registry_path=None) -> dict:
+    """A writer's host states that its code speaks this protocol (finding 17).
+
+    Run on each writer's own host before the owner enables the hub. The
+    statement is signed with the writer's ledger key and bound to its log's
+    current head, so it cannot be copied into another space or written on
+    another writer's behalf."""
+    from file_utils import atomic_write_text
+    from .hub_admission import SUPPORTED_PROTOCOLS
+    from .keys import ensure_keypair, sign
+    from .log import read_events
+    if not _NAME.fullmatch(actor):
+        raise ValueError("actor must be a lowercase name")
+    ensure_keypair(actor, keys_dir=keys_dir, registry_path=registry_path)
+    mine = sorted((e for e in read_events(Path(space_dir)) if (getattr(e, "log", None) or e.actor) == actor
+                   and type(e.seq) is int), key=lambda e: e.seq)
+    st = {"kind": "protocol.ready", "actor": actor, "protocols": sorted(SUPPORTED_PROTOCOLS),
+          "seq": mine[-1].seq if mine else -1, "head": mine[-1].hash if mine else GENESIS, "ts_ms": _wall_ms()}
+    st["sig"] = sign(actor, canonical_bytes(st), keys_dir=keys_dir)
+    path = Path(space_dir) / READY_DIR / f"{actor}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, json.dumps(st, indent=2, sort_keys=True) + "\n")
+    return st
+
+
+def _not_ready(space_dir, logs: dict, registry_path=None) -> list:
+    """The writers of `logs` without a valid readiness statement for PROTOCOL."""
+    from actor_identity import base_writer
+    from .hub_admission import _writer_of
+    from .keys import verify
+    from .log import read_events
+    by_chain: dict = {}
+    for e in read_events(Path(space_dir)):
+        by_chain.setdefault(getattr(e, "log", None) or e.actor, {})[e.seq] = e
+    missing = []
+    for writer in sorted({base_writer(_writer_of(c)) for c in logs}):
+        try:
+            st = json.loads((Path(space_dir) / READY_DIR / f"{writer}.json").read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            missing.append(writer)
+            continue
+        body = canonical_bytes({k: v for k, v in st.items() if k != "sig"}) if isinstance(st, dict) else b""
+        at = (by_chain.get(writer) or {}).get(st.get("seq")) if isinstance(st, dict) else None
+        ok = (isinstance(st, dict) and st.get("kind") == "protocol.ready" and st.get("actor") == writer
+              and PROTOCOL in (st.get("protocols") or [])
+              and (st.get("seq") == -1 or (at is not None and at.hash == st.get("head")))
+              and isinstance(st.get("sig"), str)
+              and verify(writer, body, st["sig"], registry_path=registry_path))
+        if not ok:
+            missing.append(writer)
+    return missing
 
 
 def owner_records(space_dir, cfg: HubConfig, registry_path=None) -> list[Event]:
@@ -1869,6 +1946,9 @@ def main(argv=None) -> int:
     pr.add_argument("--reason", required=True)
     pr.add_argument("--attest-stopped", action="store_true",
                     help="the old grantor cannot fence itself; the owner states it is stopped")
+    rd = sub.add_parser("ready", help="this writer's host speaks the hub protocol (run before `enable`)")
+    rd.add_argument("space")
+    rd.add_argument("--actor", required=True)
     fe = sub.add_parser("fence", help="this grantor stops granting (run on the old hub before a promotion)")
     fe.add_argument("space")
     fe.add_argument("--actor", required=True)
@@ -1881,6 +1961,9 @@ def main(argv=None) -> int:
                      clock_uncertainty_ms=a.clock_uncertainty_ms)
     elif a.cmd == "promote":
         cfg = promote(a.space, a.grantor, by=a.by, reason=a.reason, attest_stopped=a.attest_stopped)
+    elif a.cmd == "ready":
+        print(json.dumps(declare_ready(a.space, a.actor), indent=2, sort_keys=True))
+        return 0
     elif a.cmd == "fence":
         hub = Hub(a.space, a.actor)
         try:

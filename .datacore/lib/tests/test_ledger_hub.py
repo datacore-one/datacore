@@ -619,6 +619,8 @@ def _legacy_space(env, name: str, chain: list[tuple[str, str, dict]]) -> Path:
         out.append(e)
         prev = e.hash
     _write_raw(space, "own", out)
+    # Every writer of a space declares protocol support before it is switched on (finding 17).
+    hubmod.declare_ready(space, "own", keys_dir=env.keys_dir, registry_path=env.registry)
     hubmod.enable(space, hub_id=HUB_ID, grantor=GRANTOR, lease_ttl_s=900, owner=OWNER,
                   keys_dir=env.keys_dir, registry_path=env.registry)
     return space
