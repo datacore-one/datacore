@@ -1075,3 +1075,93 @@ def test_audit12_only_the_approver_grants_and_cosign_is_checked_at_the_front_doo
     _, state = hub._state()
     assert state.items["t1"].granted_by == APPROVER
     assert "pay" in state.items
+
+
+# ── finding 9: every lease operation names its attempt ─────────────────────
+
+def _lease_payload(answer: dict) -> dict:
+    return answer["lease"]["payload"]
+
+
+def test_audit9_a_lease_names_its_attempt_and_the_task_content_and_results_name_them_too(env):
+    from ledger.fold import task_content_hash
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa = env.writer("own", t), env.writer("wa", t)
+    create, _ = owner.append("item.create", {"id": "t1", "title": "task"})
+    lease = _lease_payload(wa.request_lease("t1"))
+    assert lease["attempt"] and lease["task_hash"] == task_content_hash(create.payload)
+    done, _ = wa.append("item.complete", {"id": "t1"})
+    assert done.payload["attempt"] == lease["attempt"] and done.payload["task_hash"] == lease["task_hash"]
+    assert _hub_item(hub, "t1").status == "completed"
+
+
+def test_audit9_a_result_after_expiry_goes_to_owner_resolution_not_completion(env, monkeypatch):
+    """A's lease expires and the hub records the expiry; A's result arrives
+    afterwards, stamped by a slow clock so it sorts BEFORE the expiry. It is
+    recorded and marks the item for the owner; it completes nothing."""
+    import time as _time
+    import ledger.hlc as hlc
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa, wb = env.writer("own", t), env.writer("wa", t), env.writer("wb", t)
+    owner.append("item.create", {"id": "t1", "title": "task"})
+    wa.request_lease("t1")
+    env.clock.advance(901)
+    expired = hub.expire_due()
+    assert [e["payload"]["id"] for e in expired] == ["t1"]
+    real = _time.time
+    monkeypatch.setattr(hlc.time, "time", lambda: real() - 30)
+    _, receipt = wa.append("item.complete", {"id": "t1", "result": "late"})
+    monkeypatch.setattr(hlc.time, "time", real)
+    assert receipt["status"] == "accepted"           # recorded ...
+    item = _hub_item(hub, "t1")
+    assert item.status != "completed", item.history   # ... but not a completion
+    assert item.lease_unresolved, item.history
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wb.request_lease("t1")
+    assert exc.value.code == "owner_resolution"
+
+
+def test_audit9_a_stale_result_or_renewal_from_an_old_attempt_has_no_effect(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa = env.writer("own", t), env.writer("wa", t)
+    owner.append("item.create", {"id": "t1", "title": "task"})
+    first = _lease_payload(wa.request_lease("t1"))
+    wa.append("item.release", {"id": "t1"})
+    second = _lease_payload(wa.request_lease("t1"))
+    assert second["attempt"] != first["attempt"]
+    # A delayed result and a renewal from the first attempt.
+    wa.append("item.complete", {"id": "t1", "attempt": first["attempt"], "task_hash": first["task_hash"]})
+    assert _hub_item(hub, "t1").status == "claimed", _hub_item(hub, "t1").history
+    old = hubmod.sign_request("wa", "lease.renew", {"hub": HUB_ID, "space": _space_id(env.hub_dir),
+                                                     "item": "t1", "attempt": first["attempt"]},
+                              keys_dir=env.keys_dir, clock=env.clock)
+    with pytest.raises(hubmod.HubRefused) as exc:
+        hub.renew_lease(old)
+    assert exc.value.code == "wrong_attempt"
+    wa.append("item.complete", {"id": "t1"})          # the current attempt
+    assert _hub_item(hub, "t1").status == "completed"
+
+
+def test_audit9_a_renewal_after_expiry_is_refused_and_never_resurrects(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    owner, wa = env.writer("own", t), env.writer("wa", t)
+    owner.append("item.create", {"id": "t1", "title": "task"})
+    wa.request_lease("t1")
+    env.clock.advance(901)
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wa.renew_lease("t1")
+    assert exc.value.code == "expired"
+    # The fold agrees, whoever wrote it: a renewal after its attempt ended changes nothing.
+    create = _raw_event(0, "1700000000000.0000.own", "own", "item.create", {"id": "t2"}, "GENESIS")
+    lease = _raw_event(0, "1700000000001.0000.hubd", GRANTOR, "item.lease",
+                       {"id": "t2", "holder": "wa", "attempt": "a1", "task_hash": "x",
+                        "granted_ms": 100, "expires_ms": 200}, "GENESIS", hub=HUB_ID)
+    late = _raw_event(1, "1700000000002.0000.hubd", GRANTOR, "item.lease.renew",
+                      {"id": "t2", "holder": "wa", "attempt": "a1", "renewed_ms": 250, "expires_ms": 1250},
+                      lease.hash, hub=HUB_ID)
+    item = fold([create, lease, late], lease_grantors={HUB_ID: {GRANTOR}}).items["t2"]
+    assert item.lease_expires_ms == 200, item.history
