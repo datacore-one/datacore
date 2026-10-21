@@ -42,7 +42,8 @@ recorded no-op in every copy. The rules are the existing policy's:
     the item's creator, its current owner or its current assignee, or by an
     actor taking an item it may already execute (`may_execute`); an
     `owner.set` names an owner that may execute the item, unless the
-    approver makes it.
+    approver makes it; an `item.create` that carries `owner` names the
+    creator itself, addressed by the assignment, unless the approver makes it.
 
 EXPLICIT INPUT. `PolicyInputs` is built once, before replay, from the policy
 file and the principal registry (`PolicyInputs.load`); the fold never reads
@@ -247,6 +248,14 @@ def authorize(event, state, seen: Mapping, inputs: PolicyInputs) -> str | None:
         why = _effects_problem(payload, inputs)
         if why:
             return why
+        owner = payload.get("owner")
+        if owner and not _same(actor, inputs.approver, inputs):
+            # The fold takes `owner` straight from the creation, so it is an
+            # ownership change too: the creator may own only what it could
+            # claim; naming anyone else is the approver's override.
+            if not _same(actor, owner, inputs) or not addressed(str(owner), payload.get("assignee"), inputs):
+                return (f"item.create with owner {owner!r} refused: a creation's owner is its creator, "
+                        f"addressed by the assignment (assignee {payload.get('assignee')!r})")
         if _needs_cosign(actor, payload, inputs):
             return _approval_problem(payload, seen, inputs)
         return None
