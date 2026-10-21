@@ -1000,10 +1000,17 @@ class Hub:
         if item.lease_expires_ms is not None and now >= item.lease_expires_ms:
             self._expire(item, events, now, _item_floor(events, item_id), "expired")
 
-    def _attempt_resolved(self, item, events, holder: str) -> bool:
+    def _attempt_resolved(self, item, events, holder: str, state) -> bool:
         """Has the expired attempt on `item` an explicit outcome (Codex re-audit,
         new defect 4)? Its holder's release or result naming the attempt, or the
-        owner's signed `hub.resolve`. An empty reconcile is not one."""
+        owner's signed `hub.resolve`. An empty reconcile is not one.
+
+        The holder's event counts only when it is EFFECTIVE (round-3 verdict,
+        invalid_resolution): it names the task content the attempt pinned
+        (S:1151), and the fold neither refused it (a rejected or unauthorized
+        proposal) nor made it a lease conflict. A release after the expiry
+        folds as "not owner" -- the expiry already returned the item -- and
+        still reports the attempt; one naming other content resolves nothing."""
         from actor_identity import base_writer
         ref = item.lease_ref or {}
         attempt = ref.get("attempt") or ref.get("hash")
@@ -1013,6 +1020,10 @@ class Hub:
             if p.get("id") != item.id or p.get("attempt") != attempt:
                 continue
             if e.type in ("item.complete", "item.release") and base_writer(e.actor) == base_writer(holder):
+                if ref.get("task_hash") and p.get("task_hash") != ref["task_hash"]:
+                    continue
+                if state.outcomes.get(e.hash, "").startswith(_INEFFECTIVE):
+                    continue
                 return True
             if e.type == "hub.resolve" and owner and e.actor == owner:
                 return True
@@ -1030,7 +1041,7 @@ class Hub:
                 continue
             expired = ((item.lease_holder is not None and not lease_live(item, now))
                        or (ref.get("ended") and ref.get("end_reason") == "expired"))
-            if expired and not item.lease_unresolved and not self._attempt_resolved(item, events, who):
+            if expired and not item.lease_unresolved and not self._attempt_resolved(item, events, who, state):
                 out.append(ref.get("attempt") or ref.get("hash"))
         return out
 
@@ -1334,7 +1345,7 @@ class Hub:
                 since = ref.get("ended_ms")
             else:
                 since = None                          # released, or resolved by the owner
-            if since is not None and not self._attempt_resolved(item, events, previous):
+            if since is not None and not self._attempt_resolved(item, events, previous, state):
                 # Reconciling alone resolves nothing (Codex re-audit, new defect 4):
                 # the attempt needs its holder's release or result naming it, or
                 # the owner's `hub.resolve`.
@@ -2256,6 +2267,11 @@ class HubWriter:
         if seal is None or verdict is not True or missing:
             return result("pending")
         return result("confirmed")
+
+
+#: Fold outcomes of a holder's result or release that do not report its attempt:
+#: refused at the front door, or a lease conflict (Hub._attempt_resolved).
+_INEFFECTIVE = ("conflict", "no-op (rejected proposal", "no-op (not authorized")
 
 
 def _physical_ms(hlc) -> int | None:
