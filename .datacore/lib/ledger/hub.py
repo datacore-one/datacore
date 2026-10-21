@@ -1191,7 +1191,7 @@ class Hub:
             persisted = {"state_lost": "the recovery record is unreadable; the owner clears recovery"}
         if isinstance(persisted, dict):
             self.barrier.update({str(k): v for k, v in persisted.items()})
-        if lines is None and own:
+        if lines is None and (own or self._served_here()):
             self.barrier["state_lost"] = ("this hub's request state is missing while its log holds answers; "
                                           "the owner clears recovery once every writer has reconciled")
             self._persist_recovery()
@@ -1199,6 +1199,37 @@ class Hub:
         missing = self._missing_own()
         if missing:
             self.barrier["own_log_behind"] = missing
+
+    def _served_here(self) -> bool:
+        """Has this grantor's epoch already served the space (round-3 verdict,
+        lost_both)? A restore taken before its first grant may hold no event of
+        this hub's own log, yet show signed events it admitted: any event
+        stamped with this hub, besides the owner's records, after the record
+        that made this actor the grantor. A genuine first start (enable or
+        promotion) has none; a hub without its private state that sees them
+        is not starting clean and runs the barrier."""
+        from .hlc import parse as parse_hlc
+        from .log import read_events
+        cfg = load_config(self.space_dir)
+        if cfg is None:
+            return False
+        try:
+            records = owner_records(self.space_dir, cfg, self.registry_path)
+            floor = next((parse_hlc(r.hlc)[:2] for r in reversed(records)
+                          if (r.payload or {}).get("grantor") == self.actor), None)
+        except (HubError, ValueError):
+            return False
+        if floor is None:
+            return False                                  # not a grantor of this space: grants nothing
+        for e in read_events(self.space_dir):
+            if e.hub != cfg.hub_id or e.type in OWNER_EVENT_TYPES:
+                continue
+            try:
+                if parse_hlc(e.hlc)[:2] > floor:
+                    return True
+            except (ValueError, TypeError, AttributeError):
+                continue
+        return False
 
     def _persist_recovery(self) -> None:
         """Write the owner-cleared part of the barrier (state_lost) durably."""
