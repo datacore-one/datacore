@@ -885,7 +885,9 @@ class Hub:
                 # Network admission never admits legacy: unsigned history comes by
                 # git and counts only as the cutover manifest names it (finding 1).
                 raise HubRefused("unsigned", "the hub accepts only signed events (amendment D)")
-            if not proposal and event.type in ("item.complete", "item.release"):
+            if event.type in ("item.complete", "item.release"):
+                # Whatever the submission's flags say (round 4, proposal_late):
+                # the rejected-proposal flag never lets a result skip expiry.
                 self._expire_if_ran_out(event)
             auth = self._authority(cfg)
             path, chain = _target(self.space_dir, log_name, event, sub.get("chain"))
