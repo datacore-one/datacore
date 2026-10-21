@@ -1132,7 +1132,7 @@ class Hub:
                           "actor": bad.actor, "type": bad.type}}, after=floor).hlc
 
     # ── leases ─────────────────────────────────────────────────────────────
-    def _verify_request(self, req: dict, kind: str, cfg: HubConfig) -> str:
+    def _verify_request(self, req: dict, kind: str, cfg: HubConfig, *, replay: bool = False) -> str:
         from .keys import verify
         if not isinstance(req, dict) or req.get("kind") != kind:
             raise HubRefused("malformed", f"expected a signed {kind}")
@@ -1146,7 +1146,10 @@ class Hub:
         # never for new requests.
         if not verify(actor, _unsigned(req), sig, registry_path=self.registry_path, at_ms=now):
             raise HubRefused("bad_signature", f"the {kind} is not signed with {actor!r}'s current key")
-        if abs(now - ts) > REQUEST_WINDOW_MS:
+        # An EXACT retry of an answered request (same nonce, same digest) is
+        # not a fresh request: it gets its stored answer however late it comes
+        # (round-3 verdict, stale_retry). Freshness bounds only new requests.
+        if not replay and abs(now - ts) > REQUEST_WINDOW_MS:
             raise HubRefused("stale_request", f"the {kind} is {abs(now - ts) // 1000}s from the hub's clock")
         if req.get("hub") != cfg.hub_id:
             raise HubRefused("wrong_hub", f"this is hub {cfg.hub_id!r}, not {req.get('hub')!r}")
@@ -1280,7 +1283,9 @@ class Hub:
 
     def _once(self, req: dict, kind: str, cfg: HubConfig, body: Callable[[str], dict]) -> dict:
         """Verify, then answer `req` exactly once: a retry gets the stored answer."""
-        actor = self._verify_request(req, kind, cfg)
+        rec = self._answers.get(req.get("nonce")) if isinstance(req, dict) else None
+        replay = rec is not None and rec.get("digest") == request_digest(req)
+        actor = self._verify_request(req, kind, cfg, replay=replay)
         cached = self._answered(req)
         if cached is not None:
             return cached
