@@ -52,7 +52,7 @@ sys.path.insert(0, str(LIB))
 
 from ledger.fold import fold  # noqa: E402
 from ledger.genesis import import_space  # noqa: E402
-from ledger.log import read_events  # noqa: E402
+from ledger.log import TELEMETRY_SUFFIX, read_events  # noqa: E402
 from ledger.projector import _clean_title_and_tags, _org_stamp, project, projected_items  # noqa: E402
 
 # The projector's own notion of live. Since 2026-09-06 `completed` is live
@@ -220,8 +220,13 @@ def write(space: Path) -> Path:
     state = fold(events)
     text = project(state, space=space.name).text
     dest, snapshot_path = checkpoint_paths(space)
+    # Telemetry chains stay out (LED-8): the fold ignores them and git already
+    # tracks .datacore/telemetry/ itself. Copying them made 1-datafund's
+    # snapshot 101 MB (2026-10-21), past what sync will share.
     chains = {}
     for event in events:
+        if event.log.endswith(TELEMETRY_SUFFIX):
+            continue
         chains.setdefault(event.log + '.jsonl', []).append(event)
     chains = {name: ''.join(to_line(event) + '\n' for event in sorted(chain, key=lambda e: e.seq))
               for name, chain in chains.items()}
@@ -247,6 +252,8 @@ def write(space: Path) -> Path:
         # Append-only history cannot shrink. A lost/rewound live log must not
         # replace the last good backup with the damaged state.
         for filename, old_chain in previous['chains'].items():
+            if filename.endswith(TELEMETRY_SUFFIX + '.jsonl'):
+                continue            # written before telemetry was left out
             if not chains.get(filename, '').startswith(old_chain):
                 raise ValueError('live ledger lost or replaced saved history; refusing checkpoint replacement')
     elif previous_org is not None or legacy_org is not None:
