@@ -903,7 +903,7 @@ class Hub:
             path, chain = _target(self.space_dir, log_name, event, sub.get("chain"))
             late = self._sealed_late([event])
             from file_utils import fsync_directory
-            from .log import CorruptLogError, _parse_log_bytes
+            from .log import CorruptLogError, StaleLogError, _parse_log_bytes, advance_witness, check_not_stopped
             if not path.exists() and self._onto(event, chain, [], cfg, auth, proposal) == "duplicate":
                 return self._receipt("duplicate", cfg, chain, event)   # unreachable: an empty chain
             # (A refusal onto a log the hub does not hold yet creates no file.)
@@ -926,12 +926,20 @@ class Hub:
                     if verdict is None and event.hash in late:
                         verdict = ("sealed_late", late[event.hash])
                     if verdict != "duplicate":
+                        # THE SAME REWIND GUARD AS EVERY WRITER (round-3 verdict,
+                        # ignored_stop_witness): nothing is appended onto a log
+                        # whose stop record binds or whose witness is ahead of it.
+                        try:
+                            witness = check_not_stopped(path, existing[-1].seq if existing else -1)
+                        except (StaleLogError, CorruptLogError) as exc:
+                            raise HubRefused("stale_log", str(exc)) from None
                         if verdict is not None:
                             self._intend_reject(path, chain, event, *verdict)   # durable first
                         f.write((to_line(event) + "\n").encode("utf-8"))
                         f.flush()
                         os.fsync(f.fileno())
                         fsync_directory(path.parent)
+                        advance_witness(witness, event.seq, event.hash)
                 finally:
                     fcntl.flock(f, fcntl.LOCK_UN)
             if verdict == "duplicate":
@@ -1017,10 +1025,17 @@ class Hub:
         if item.lease_expires_ms is not None and now >= item.lease_expires_ms:
             self._expire(item, events, now, _item_floor(events, item_id), "expired")
 
-    def _attempt_resolved(self, item, events, holder: str) -> bool:
+    def _attempt_resolved(self, item, events, holder: str, state) -> bool:
         """Has the expired attempt on `item` an explicit outcome (Codex re-audit,
         new defect 4)? Its holder's release or result naming the attempt, or the
-        owner's signed `hub.resolve`. An empty reconcile is not one."""
+        owner's signed `hub.resolve`. An empty reconcile is not one.
+
+        The holder's event counts only when it is EFFECTIVE (round-3 verdict,
+        invalid_resolution): it names the task content the attempt pinned
+        (S:1151), and the fold neither refused it (a rejected or unauthorized
+        proposal) nor made it a lease conflict. A release after the expiry
+        folds as "not owner" -- the expiry already returned the item -- and
+        still reports the attempt; one naming other content resolves nothing."""
         from actor_identity import base_writer
         ref = item.lease_ref or {}
         attempt = ref.get("attempt") or ref.get("hash")
@@ -1030,6 +1045,10 @@ class Hub:
             if p.get("id") != item.id or p.get("attempt") != attempt:
                 continue
             if e.type in ("item.complete", "item.release") and base_writer(e.actor) == base_writer(holder):
+                if ref.get("task_hash") and p.get("task_hash") != ref["task_hash"]:
+                    continue
+                if state.outcomes.get(e.hash, "").startswith(_INEFFECTIVE):
+                    continue
                 return True
             if e.type == "hub.resolve" and owner and e.actor == owner:
                 return True
@@ -1047,7 +1066,7 @@ class Hub:
                 continue
             expired = ((item.lease_holder is not None and not lease_live(item, now))
                        or (ref.get("ended") and ref.get("end_reason") == "expired"))
-            if expired and not item.lease_unresolved and not self._attempt_resolved(item, events, who):
+            if expired and not item.lease_unresolved and not self._attempt_resolved(item, events, who, state):
                 out.append(ref.get("attempt") or ref.get("hash"))
         return out
 
@@ -1138,7 +1157,7 @@ class Hub:
                           "actor": bad.actor, "type": bad.type}}, after=floor).hlc
 
     # ── leases ─────────────────────────────────────────────────────────────
-    def _verify_request(self, req: dict, kind: str, cfg: HubConfig) -> str:
+    def _verify_request(self, req: dict, kind: str, cfg: HubConfig, *, replay: bool = False) -> str:
         from .keys import verify
         if not isinstance(req, dict) or req.get("kind") != kind:
             raise HubRefused("malformed", f"expected a signed {kind}")
@@ -1152,7 +1171,10 @@ class Hub:
         # never for new requests.
         if not verify(actor, _unsigned(req), sig, registry_path=self.registry_path, at_ms=now):
             raise HubRefused("bad_signature", f"the {kind} is not signed with {actor!r}'s current key")
-        if abs(now - ts) > REQUEST_WINDOW_MS:
+        # An EXACT retry of an answered request (same nonce, same digest) is
+        # not a fresh request: it gets its stored answer however late it comes
+        # (round-3 verdict, stale_retry). Freshness bounds only new requests.
+        if not replay and abs(now - ts) > REQUEST_WINDOW_MS:
             raise HubRefused("stale_request", f"the {kind} is {abs(now - ts) // 1000}s from the hub's clock")
         if req.get("hub") != cfg.hub_id:
             raise HubRefused("wrong_hub", f"this is hub {cfg.hub_id!r}, not {req.get('hub')!r}")
@@ -1186,7 +1208,7 @@ class Hub:
             persisted = {"state_lost": "the recovery record is unreadable; the owner clears recovery"}
         if isinstance(persisted, dict):
             self.barrier.update({str(k): v for k, v in persisted.items()})
-        if lines is None and own:
+        if lines is None and (own or self._served_here()):
             self.barrier["state_lost"] = ("this hub's request state is missing while its log holds answers; "
                                           "the owner clears recovery once every writer has reconciled")
             self._persist_recovery()
@@ -1194,6 +1216,37 @@ class Hub:
         missing = self._missing_own()
         if missing:
             self.barrier["own_log_behind"] = missing
+
+    def _served_here(self) -> bool:
+        """Has this grantor's epoch already served the space (round-3 verdict,
+        lost_both)? A restore taken before its first grant may hold no event of
+        this hub's own log, yet show signed events it admitted: any event
+        stamped with this hub, besides the owner's records, after the record
+        that made this actor the grantor. A genuine first start (enable or
+        promotion) has none; a hub without its private state that sees them
+        is not starting clean and runs the barrier."""
+        from .hlc import parse as parse_hlc
+        from .log import read_events
+        cfg = load_config(self.space_dir)
+        if cfg is None:
+            return False
+        try:
+            records = owner_records(self.space_dir, cfg, self.registry_path)
+            floor = next((parse_hlc(r.hlc)[:2] for r in reversed(records)
+                          if (r.payload or {}).get("grantor") == self.actor), None)
+        except (HubError, ValueError):
+            return False
+        if floor is None:
+            return False                                  # not a grantor of this space: grants nothing
+        for e in read_events(self.space_dir):
+            if e.hub != cfg.hub_id or e.type in OWNER_EVENT_TYPES:
+                continue
+            try:
+                if parse_hlc(e.hlc)[:2] > floor:
+                    return True
+            except (ValueError, TypeError, AttributeError):
+                continue
+        return False
 
     def _persist_recovery(self) -> None:
         """Write the owner-cleared part of the barrier (state_lost) durably."""
@@ -1286,7 +1339,9 @@ class Hub:
 
     def _once(self, req: dict, kind: str, cfg: HubConfig, body: Callable[[str], dict]) -> dict:
         """Verify, then answer `req` exactly once: a retry gets the stored answer."""
-        actor = self._verify_request(req, kind, cfg)
+        rec = self._answers.get(req.get("nonce")) if isinstance(req, dict) else None
+        replay = rec is not None and rec.get("digest") == request_digest(req)
+        actor = self._verify_request(req, kind, cfg, replay=replay)
         cached = self._answered(req)
         if cached is not None:
             return cached
@@ -1351,7 +1406,7 @@ class Hub:
                 since = ref.get("ended_ms")
             else:
                 since = None                          # released, or resolved by the owner
-            if since is not None and not self._attempt_resolved(item, events, previous):
+            if since is not None and not self._attempt_resolved(item, events, previous, state):
                 # Reconciling alone resolves nothing (Codex re-audit, new defect 4):
                 # the attempt needs its holder's release or result naming it, or
                 # the owner's `hub.resolve`.
@@ -2376,6 +2431,11 @@ class HubWriter:
         if seal is None or verdict is not True or missing:
             return result("pending")
         return result("confirmed")
+
+
+#: Fold outcomes of a holder's result or release that do not report its attempt:
+#: refused at the front door, or a lease conflict (Hub._attempt_resolved).
+_INEFFECTIVE = ("conflict", "no-op (rejected proposal", "no-op (not authorized")
 
 
 def _physical_ms(hlc) -> int | None:

@@ -190,6 +190,72 @@ def stale_message(path: Path, tail_seq: int, hwm: int | None, since: str = "") -
             f"log, by the documented procedure: {RECOVERY_DOC}")
 
 
+def check_not_stopped(path: Path, tail_seq: int) -> Path:
+    """The rewind guard of one log file, before anything is appended to it.
+
+    Refuses (StaleLogError) while its stop record binds, or when the file's
+    tail is behind the seq this machine already wrote there (recording the
+    stop). Returns the witness path, advanced by `advance_witness` once the
+    event is on disk. Shared by EventLog.append and the hub's append (round-3
+    verdict, ignored_stop_witness): nobody appends past a stopped log."""
+    hwm_path = witness_path(path)
+    hwm = -1
+    try:
+        hwm = int(hwm_path.read_text().strip())
+        if hwm < 0:
+            raise ValueError("negative high-water mark")
+    except FileNotFoundError:
+        pass
+    except ValueError as exc:
+        # No flag reopens this (owner decision 2026-09-28): a
+        # witness that cannot be read cannot say whether history
+        # was rewound, and only the owner decides that.
+        raise CorruptLogError("invalid sequence witness; stop, alert the owner, and "
+                              f"leave it for the owner's repair ({RECOVERY_DOC})") from exc
+    # THE STOP RECORD. Nobody goes past the ledger (owner decision
+    # 2026-09-28). On 2026-09-27 an unattended job met this refusal,
+    # deleted the witness, set the then-existing override flag, and
+    # forked Winston's log -- following the exits this very message
+    # used to name. So the refusal writes a record beside the
+    # witness that keeps refusing whatever happens to the witness,
+    # and there is no flag. It lifts itself only when the log has
+    # genuinely caught up (a converge brought the events back);
+    # otherwise the owner moves it aside by recovery.md.
+    stop = read_stop(path)
+    if stop is not None:
+        bound = stop["hwm"]
+        if bound is None or tail_seq < bound:
+            raise StaleLogError(stale_message(path, tail_seq, bound, str(stop.get("at", ""))))
+        try:
+            stop_path(path).unlink()
+        except OSError:
+            pass
+    if tail_seq < hwm:
+        _record_stop(path, tail_seq, hwm)
+        raise StaleLogError(stale_message(path, tail_seq, hwm))
+    return hwm_path
+
+
+def advance_witness(hwm_path: Path, seq: int, event_hash: str) -> None:
+    """Record the seq (and hash) just written to a log, AFTER it is on disk."""
+    try:
+        hwm_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(hwm_path, str(seq))
+        # WITNESS THE HASH, NOT ONLY THE SEQ (LED-2). A seq mark
+        # catches a cut tail; it cannot see an old event edited
+        # and every later hash recomputed (audit A#2), because
+        # that forged chain is exactly as long. The hash this
+        # machine wrote at `seq` can: `check_not_rewound` compares
+        # it with the log's event at that seq. "<seq> <hash>", so
+        # a crash between the two writes leaves a witness that is
+        # still true about its own seq.
+        atomic_write_text(hwm_path.with_suffix(".hash"), f"{seq} {event_hash}")
+    except OSError as exc:
+        # The event is already durable. Report degraded rewind
+        # detection without pretending the event itself failed.
+        warnings.warn(f"event committed but sequence witness update failed ({exc.__class__.__name__})", RuntimeWarning)
+
+
 class CorruptLogWarning(UserWarning):
     """One writer's log is damaged; its events from the bad line on are withheld."""
 
@@ -533,42 +599,8 @@ class EventLog:
                 # been rewound?", and a branch-scoped log is a different file
                 # with its own seq run starting at 1 — under an actor-keyed
                 # mark its first append looks like a rewind of the shared log.
-                hwm_path = witness_path(path)
-                hwm = -1
-                try:
-                    hwm = int(hwm_path.read_text().strip())
-                    if hwm < 0:
-                        raise ValueError("negative high-water mark")
-                except FileNotFoundError:
-                    pass
-                except ValueError as exc:
-                    # No flag reopens this (owner decision 2026-09-28): a
-                    # witness that cannot be read cannot say whether history
-                    # was rewound, and only the owner decides that.
-                    raise CorruptLogError("invalid sequence witness; stop, alert the owner, and "
-                                          f"leave it for the owner's repair ({RECOVERY_DOC})") from exc
                 tail_seq = last.seq if last is not None else -1
-                # THE STOP RECORD. Nobody goes past the ledger (owner decision
-                # 2026-09-28). On 2026-09-27 an unattended job met this refusal,
-                # deleted the witness, set the then-existing override flag, and
-                # forked Winston's log -- following the exits this very message
-                # used to name. So the refusal writes a record beside the
-                # witness that keeps refusing whatever happens to the witness,
-                # and there is no flag. It lifts itself only when the log has
-                # genuinely caught up (a converge brought the events back);
-                # otherwise the owner moves it aside by recovery.md.
-                stop = read_stop(path)
-                if stop is not None:
-                    bound = stop["hwm"]
-                    if bound is None or tail_seq < bound:
-                        raise StaleLogError(stale_message(path, tail_seq, bound, str(stop.get("at", ""))))
-                    try:
-                        stop_path(path).unlink()
-                    except OSError:
-                        pass
-                if tail_seq < hwm:
-                    _record_stop(path, tail_seq, hwm)
-                    raise StaleLogError(stale_message(path, tail_seq, hwm))
+                hwm_path = check_not_stopped(path, tail_seq)
 
                 if last is None:
                     seq, prev = 0, "GENESIS"
@@ -642,22 +674,7 @@ class EventLog:
                 # blocking a legitimate retry. Failure to write it is never
                 # fatal: the guard is a safety net, and losing the net must not
                 # stop the work.
-                try:
-                    hwm_path.parent.mkdir(parents=True, exist_ok=True)
-                    atomic_write_text(hwm_path, str(seq))
-                    # WITNESS THE HASH, NOT ONLY THE SEQ (LED-2). A seq mark
-                    # catches a cut tail; it cannot see an old event edited
-                    # and every later hash recomputed (audit A#2), because
-                    # that forged chain is exactly as long. The hash this
-                    # machine wrote at `seq` can: `check_not_rewound` compares
-                    # it with the log's event at that seq. "<seq> <hash>", so
-                    # a crash between the two writes leaves a witness that is
-                    # still true about its own seq.
-                    atomic_write_text(hwm_path.with_suffix(".hash"), f"{seq} {event_hash}")
-                except OSError as exc:
-                    # The event is already durable. Report degraded rewind
-                    # detection without pretending the event itself failed.
-                    warnings.warn(f"event committed but sequence witness update failed ({exc.__class__.__name__})", RuntimeWarning)
+                advance_witness(hwm_path, seq, event_hash)
                 return event
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)

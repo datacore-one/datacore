@@ -2425,3 +2425,109 @@ def test_r4_decision_gates_never_read_raw_events():
             (isinstance(n.func, ast.Name) and n.func.id.lstrip("_") in ("read_events", "read"))
             or (isinstance(n.func, ast.Attribute) and n.func.attr == "read_events"))]
         assert calls == [], (rel, calls)
+
+
+# ── round 4: recovery (Codex round-3 verdict, High/Medium findings) ─────────
+
+# K (invalid_resolution): only an EFFECTIVE result or release resolves an uncertain attempt.
+
+def test_round4_a_release_the_fold_ignores_does_not_resolve_an_uncertain_attempt(env):
+    hub = env.hub(eligibility=None)                      # production assignee eligibility
+    t = hubmod.LocalTransport(hub)
+    own, wa, wb = env.writer("own", t), env.writer("wa", t), env.writer("wb", t)
+    own.append("item.create", {"id": "t", "assignee": "wa"})
+    lease = _lease_payload(wa.request_lease("t"))
+    env.clock.advance(901)
+    hub.expire_due()
+    own.append("item.update", {"id": "t", "assignee": "wb"})
+    with pytest.raises(hubmod.HubRefused) as exc:
+        wb.request_lease("t")
+    assert exc.value.code == "uncertain_attempt", exc.value
+    # The right attempt, the WRONG task content: the fold makes it a no-op.
+    bad = _signed_into(env, wa, "item.release", {"id": "t", "attempt": lease["attempt"], "task_hash": "wrong"})
+    hub.append(wa._submission(bad))
+    assert hub._state()[1].outcomes[bad.hash].startswith("no-op"), hub._state()[1].outcomes[bad.hash]
+    fresh = hubmod.sign_request("wb", "lease.request", {"space": _space_id(env.hub_dir), "hub": HUB_ID, "item": "t"},
+                                keys_dir=env.keys_dir, clock=env.clock)
+    with pytest.raises(hubmod.HubRefused) as exc:
+        hub.request_lease(fresh)
+    assert exc.value.code == "uncertain_attempt", exc.value
+    # Only the owner's signed resolution (or an effective result) frees it now.
+    hubmod.resolve_attempt(env.hub_dir, "t", lease["attempt"], by=OWNER, reason="wa's release named other content",
+                           keys_dir=env.keys_dir, registry_path=env.registry)
+    again = hubmod.sign_request("wb", "lease.request", {"space": _space_id(env.hub_dir), "hub": HUB_ID, "item": "t"},
+                                keys_dir=env.keys_dir, clock=env.clock)
+    assert hub.request_lease(again)["status"] == "granted"
+
+
+# L (lost_both): a space restored from before a grant AND lost private state is not a first start.
+
+def test_round4_a_restore_from_before_a_grant_with_lost_private_state_runs_the_barrier(env):
+    hub = env.hub(eligibility=None)
+    assert not hub.barrier                                # a genuine first start has no barrier
+    t = hubmod.LocalTransport(hub)
+    own, wa = env.writer("own", t), env.writer("wa", t)
+    own.append("item.create", {"id": "t", "assignee": "wa"})
+    stale = env.tmp / "stale-restore"
+    git_pull(env.hub_dir, stale)                         # a copy taken before the grant
+    first = _lease_payload(wa.request_lease("t"))
+    hub.close()
+    restored = env.hub(space=stale, state="new-private-state", eligibility=None)
+    assert "state_lost" in restored.barrier, restored.barrier
+    again = env.writer("wa", hubmod.LocalTransport(restored))
+    with pytest.raises(hubmod.HubRefused) as exc:
+        again.request_lease("t")
+    assert exc.value.code == "recovering", exc.value
+    assert first["expires_ms"] > env.clock()             # the first attempt may still be running
+    # The owner's signed recovery transition is the only way out.
+    restored.clear_recovery(hubmod.sign_request(OWNER, "recovery.clear", {"hub": HUB_ID, "space": _space_id(stale)},
+                                                keys_dir=env.keys_dir, clock=env.clock))
+    assert "state_lost" not in restored.barrier
+
+
+# M (stale_retry): an exact retry of an answered request gets its answer, however late.
+
+def test_round4_an_exact_retry_after_the_request_window_gets_the_original_answer(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    own = env.writer("own", t)
+    env.writer("wa", t)                                  # wa's key
+    own.append("item.create", {"id": "t", "assignee": "wa"})
+    own.append("item.create", {"id": "u", "assignee": "wa"})
+    body = {"space": _space_id(env.hub_dir), "hub": HUB_ID}
+    req = hubmod.sign_request("wa", "lease.request", {**body, "item": "t"}, keys_dir=env.keys_dir, clock=env.clock)
+    unsent = hubmod.sign_request("wa", "lease.request", {**body, "item": "u"}, keys_dir=env.keys_dir, clock=env.clock)
+    first = hub.request_lease(req)
+    assert first["status"] == "granted"
+    env.clock.advance(301)
+    assert first["lease"]["payload"]["expires_ms"] > env.clock()
+    assert hub.request_lease(req) == first               # idempotent: the same signed answer
+    with pytest.raises(hubmod.HubRefused) as exc:
+        hub.request_lease(unsent)                        # a NEW request keeps the freshness rule
+    assert exc.value.code == "stale_request", exc.value
+
+
+# N (ignored_stop_witness): the hub honours a writer log's stop record and rewind witness.
+
+def test_round4_the_hub_appends_nothing_onto_a_stopped_or_rewound_log(env):
+    from ledger.log import stop_path, witness_path
+    hub = env.hub()
+    own = env.writer("own", hubmod.LocalTransport(hub))
+    own.append("item.create", {"id": "t"})
+    target = env.hub_dir / ".datacore" / "events" / "own.jsonl"
+    before = target.read_bytes()
+    marker = stop_path(target)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("owner must clear this stopped log\n")
+    e = _signed_into(env, own, "item.update", {"id": "t", "title": "past the stop"})
+    with pytest.raises(hubmod.HubRefused) as exc:
+        hub.append(own._submission(e))
+    assert exc.value.code == "stale_log", exc.value
+    assert marker.exists() and target.read_bytes() == before
+    # A rewound log (its witness is ahead of the file) is stopped too, and the stop is recorded.
+    marker.unlink()
+    witness_path(target).write_text("7")
+    with pytest.raises(hubmod.HubRefused) as exc:
+        hub.append(own._submission(e))
+    assert exc.value.code == "stale_log", exc.value
+    assert marker.exists() and target.read_bytes() == before
