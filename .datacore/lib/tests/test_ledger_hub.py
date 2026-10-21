@@ -2022,3 +2022,96 @@ def test_reaudit4_a_successor_seal_covers_every_prefix_the_predecessors_last_sea
         "ledger.seal", build_seal_payload(events, fold_kwargs=hub_b._fold_kwargs(hubmod.load_config(lost))))
     report = wb.receipt_check(lost, hub_actor="hubb")
     assert report["status"] == "failed" and any("wa" in p for p in report["problems"]), report
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# ROUND 4: ownership paths (Codex round-3 verdict 2026-10-19, `reassign` and
+# `owner_override`). Written before the fix and seen failing.
+# ════════════════════════════════════════════════════════════════════════════
+
+def _arbitrated_policy():
+    from ledger.hub_policy import PolicyInputs
+    return PolicyInputs(approver=APPROVER, cosign_effects=frozenset(), arbitration=("owner", "wb", "wa"))
+
+
+def test_r4_an_agent_may_not_reassign_someone_elses_task_to_itself(env):
+    """`reassign`: wa's claim on wb's task is refused, so wa must not be able to
+    rewrite the assignee to itself and then claim. Changing `assignee` is an
+    ownership change and passes the same authority as granting the task."""
+    hub = env.hub(policy=_arbitrated_policy())
+    t = hubmod.LocalTransport(hub)
+    own, wa = env.writer("own", t), env.writer("wa", t)
+    own.append("item.create", {"id": "t1", "title": "for wb", "assignee": "wb"})
+    with pytest.raises(hubmod.HubRefused):
+        wa.append("item.claim", {"id": "t1"})
+    with pytest.raises(hubmod.HubRefused):
+        wa.append("item.update", {"id": "t1", "assignee": "wa"})
+    with pytest.raises(hubmod.HubRefused):
+        wa.append("item.claim", {"id": "t1"})
+    item = _hub_item(hub, "t1")
+    assert item.owner is None and item.payload["assignee"] == "wb", item.history
+
+
+def test_r4_a_reassignment_that_arrives_by_git_is_a_no_op_on_replay(env):
+    """The same edit signed straight into wa's log and published by git: the fold
+    applies the same rule, so no copy of the log sees wa as the assignee."""
+    hub = env.hub(policy=_arbitrated_policy())
+    t = hubmod.LocalTransport(hub)
+    own, wa = env.writer("own", t), env.writer("wa", t)
+    own.append("item.create", {"id": "t1", "title": "for wb", "assignee": "wb"})
+    git_pull(env.hub_dir, wa.space_dir)
+    _signed_into(env, wa, "item.update", {"id": "t1", "assignee": "wa"})
+    git_pull(wa.space_dir, env.hub_dir)
+    item = _hub_item(hub, "t1")
+    assert item.payload["assignee"] == "wb", item.history
+    assert any("not authorized" in h for h in item.history), item.history
+
+
+def test_r4_the_creator_and_the_approver_may_still_reassign(env):
+    """Boundary: the rule does not freeze assignment. The task's creator and the
+    approver reassign; the new assignee then claims normally."""
+    hub = env.hub(policy=_arbitrated_policy())
+    t = hubmod.LocalTransport(hub)
+    own, boss, wa = env.writer("own", t), env.writer(APPROVER, t), env.writer("wa", t)
+    own.append("item.create", {"id": "t1", "title": "for wb", "assignee": "wb"})
+    own.append("item.create", {"id": "t2", "title": "for wb too", "assignee": "wb"})
+    own.append("item.update", {"id": "t1", "assignee": "wa"})
+    boss.append("item.update", {"id": "t2", "assignee": "wa"})
+    wa.append("item.claim", {"id": "t1"})
+    assert _hub_item(hub, "t1").owner == "wa"
+    assert _hub_item(hub, "t2").payload["assignee"] == "wa"
+    # ... and the current assignee may hand its own task on.
+    wb = env.writer("wb", t)
+    own.append("item.create", {"id": "t3", "title": "wb's", "assignee": "wb"})
+    wb.append("item.update", {"id": "t3", "assignee": "wa"})
+    assert _hub_item(hub, "t3").payload["assignee"] == "wa"
+
+
+def test_r4_owner_set_on_an_unowned_task_respects_its_assignment(env):
+    """`owner_override`: on an unowned task assigned to wb, wa's owner.set {owner: wa}
+    was accepted (arbitration looked only at an already-populated owner)."""
+    hub = env.hub(policy=_arbitrated_policy())
+    t = hubmod.LocalTransport(hub)
+    own, wa = env.writer("own", t), env.writer("wa", t)
+    own.append("item.create", {"id": "t1", "title": "for wb", "assignee": "wb"})
+    with pytest.raises(hubmod.HubRefused):
+        wa.append("owner.set", {"id": "t1", "owner": "wa"})
+    git_pull(env.hub_dir, wa.space_dir)
+    _signed_into(env, wa, "owner.set", {"id": "t1", "owner": "wa"})     # and by git
+    git_pull(wa.space_dir, env.hub_dir)
+    item = _hub_item(hub, "t1")
+    assert item.owner is None and item.payload["assignee"] == "wb", item.history
+
+
+def test_r4_owner_set_by_the_approver_or_to_the_assignee_is_still_allowed(env):
+    """Boundary: owner.set stays the approver's override, and setting the owner to
+    a principal the task is addressed to is a claim's equivalent."""
+    hub = env.hub(policy=_arbitrated_policy())
+    t = hubmod.LocalTransport(hub)
+    own, boss, wb = env.writer("own", t), env.writer(APPROVER, t), env.writer("wb", t)
+    own.append("item.create", {"id": "t1", "title": "for wb", "assignee": "wb"})
+    own.append("item.create", {"id": "t2", "title": "for wb", "assignee": "wb"})
+    wb.append("owner.set", {"id": "t1", "owner": "wb"})
+    boss.append("owner.set", {"id": "t2", "owner": "wa"})
+    assert _hub_item(hub, "t1").owner == "wb"
+    assert _hub_item(hub, "t2").owner == "wa"
