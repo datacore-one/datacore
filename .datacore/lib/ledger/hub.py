@@ -890,7 +890,7 @@ class Hub:
             auth = self._authority(cfg)
             path, chain = _target(self.space_dir, log_name, event, sub.get("chain"))
             from file_utils import fsync_directory
-            from .log import CorruptLogError, _parse_log_bytes
+            from .log import CorruptLogError, StaleLogError, _parse_log_bytes, advance_witness, check_not_stopped
             if not path.exists() and self._onto(event, chain, [], cfg, auth, proposal) == "duplicate":
                 return self._receipt("duplicate", cfg, chain, event)   # unreachable: an empty chain
             # (A refusal onto a log the hub does not hold yet creates no file.)
@@ -911,12 +911,20 @@ class Hub:
                         raise HubRefused("bad_chain", str(exc)) from None
                     verdict = self._onto(event, chain, existing, cfg, auth, proposal)
                     if verdict != "duplicate":
+                        # THE SAME REWIND GUARD AS EVERY WRITER (round-3 verdict,
+                        # ignored_stop_witness): nothing is appended onto a log
+                        # whose stop record binds or whose witness is ahead of it.
+                        try:
+                            witness = check_not_stopped(path, existing[-1].seq if existing else -1)
+                        except (StaleLogError, CorruptLogError) as exc:
+                            raise HubRefused("stale_log", str(exc)) from None
                         if verdict is not None:
                             self._intend_reject(path, chain, event, *verdict)   # durable first
                         f.write((to_line(event) + "\n").encode("utf-8"))
                         f.flush()
                         os.fsync(f.fileno())
                         fsync_directory(path.parent)
+                        advance_witness(witness, event.seq, event.hash)
                 finally:
                     fcntl.flock(f, fcntl.LOCK_UN)
             if verdict == "duplicate":
