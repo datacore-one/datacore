@@ -134,6 +134,11 @@ class ItemState:
     #: role_sha256, holder}. Status `submitted` until a check by another
     #: execution identity, bound to exactly this, makes it `verified`.
     submission: dict | None = None
+    #: POOL WORK STAYS POOL WORK (Codex round-3 verdict, `pool_release_reclassify`).
+    #: Set when the item is created as a pool task or leased as one, never
+    #: cleared: whoever it is addressed to later, its completion is a
+    #: submission for an independent check.
+    pool_work: bool = False
 
 
 @dataclass
@@ -206,6 +211,8 @@ class LedgerState:
                 document.pop('lease_unresolved', None)
             if document.get('submission') is None:
                 document.pop('submission', None)
+            if not document.get('pool_work'):
+                document.pop('pool_work', None)
             h.update(canonical_bytes({"key": iid, "item": document}))
         h.update(canonical_bytes({"spend": dict(sorted(self.spend.items()))}))
         h.update(canonical_bytes({"orphans": sorted(self.orphans)}))
@@ -406,6 +413,7 @@ def _handle_create(state: LedgerState, event: Event) -> None:
         owner=payload.get("owner"),
         status="created",
         payload=dict(payload),
+        pool_work=bool(pool_role(payload)),
     )
     _note(item, event, "applied")
     state.items[item_id] = item
@@ -1023,6 +1031,7 @@ def _handle_lease(state: LedgerState, event: Event) -> None:
         return
     previous = item.lease_holder
     _take_lease(item, att.holder, payload["expires_ms"], _lease_ref(event, att))
+    item.pool_work = is_pool_item(item)
     _note(item, event, f"applied (leased to {att.holder!r}" + (
         f"; the previous attempt held by {previous!r} had ended)" if previous else ")"))
 
@@ -1190,8 +1199,14 @@ def is_pool_item(item) -> bool:
     The class the lease attempt PINNED decides when it names one (Codex
     re-audit, new defect 5): a holder that re-addresses the task to itself
     during its attempt does not turn submitted-for-review work into a plain
-    completion. Leases from before the pin keep the task's own fields."""
+    completion. Leases from before the pin keep the task's own fields.
+
+    Pool work stays pool work (Codex round-3 verdict, `pool_release_reclassify`):
+    once created or leased as a pool task, a later re-addressing -- and so an
+    `addressed` attempt -- does not make its completion a plain one."""
     ref = getattr(item, "lease_ref", None)
+    if ref is not None and getattr(item, "pool_work", False):
+        return True
     if isinstance(ref, dict) and ref.get("class") in ("pool", "addressed"):
         return ref["class"] == "pool"
     return bool(pool_role(getattr(item, "payload", None))) and ref is not None

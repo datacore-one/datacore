@@ -285,3 +285,103 @@ def test_reaudit_new6_pool_preparation_reads_the_authoritative_state(env):
     assert fold(read_events(wb.space_dir)).items["p1"].submission is not None      # the bypass
     prepared = wb._pool_prepare("item.verify", {"id": "p1", "check": DONE})
     assert prepared.get("attempt") != "forged-attempt", prepared
+
+
+# ── Codex round-3 verdict (report: 2-datacore/1-tracks/engineering/reports/
+#    2026-10-19-ledger-hub-round3-codex-verdict.md), defect 6 and Follow-up 5 ─
+#
+# Once a task has been pool work (created as a pool task, or leased as one),
+# it stays pool work for review: any completion goes through submitted ->
+# independent check -> verified, whoever it is addressed to later. An agent
+# cannot turn pool work into addressed work for itself.
+
+def test_round3_pool_release_reclassify_is_refused_and_the_next_lease_stays_pool_work(env):
+    """Codex `pool_release_reclassify`: wa leased a pool task, released it,
+    set itself as the assignee, got an `addressed` lease and completed with no
+    review submission."""
+    hub = env.start()
+    own, wa = env.writer("own"), env.writer("wa")
+    pool_item(own, "t")
+    assert wa.request_lease("t")["lease"]["payload"]["class"] == "pool"
+    wa.append("item.release", {"id": "t"})
+    # The agent cannot address the pool task to itself ...
+    err = refused(wa.append, "item.update", {"id": "t", "assignee": "wa"})
+    assert err.code == "not_authorized", err
+    # ... nor slip the edit in by git.
+    from ledger.log import EventLog
+    EventLog(env.hub_dir, "wa", keys_dir=env.keys_dir, registry_path=env.registry, sign=True).append(
+        "item.update", {"id": "t", "assignee": "wa"})
+    assert "assignee" not in hub_item(hub, "t").payload
+    # Its next lease is pool work again, and its completion is a submission.
+    lease = wa.request_lease("t")["lease"]["payload"]
+    assert lease["class"] == "pool" and lease["review"] is True, lease
+    git_pull(env.hub_dir, wa.space_dir)
+    wa.append("item.complete", {"id": "t", "result": "unreviewed", "evidence": []})
+    item = hub_item(hub, "t")
+    assert item.status == "submitted" and item.submission is not None and not pool_accepted(item)
+
+
+def test_round3_pool_work_addressed_by_its_creator_still_needs_the_independent_review(env):
+    """The legitimate path: the creator (or the approver) may address a pool
+    task to a named agent, after a lease or before any; the review stays."""
+    hub = env.start()
+    own, wa, wb = env.writer("own"), env.writer("wa"), env.writer("wb")
+    boss = env.writer(TEST_APPROVER)
+    pool_item(own, "leased")
+    pool_item(own, "fresh")
+    wb.request_lease("leased")
+    wb.append("item.release", {"id": "leased"})
+    git_pull(env.hub_dir, own.space_dir)                                # the creator has read the release
+    own.append("item.update", {"id": "leased", "assignee": "wa"})       # the creator re-addresses it
+    git_pull(env.hub_dir, boss.space_dir)
+    boss.append("item.update", {"id": "fresh", "assignee": "wa"})       # the approver, before any lease
+    for iid in ("leased", "fresh"):
+        assert hub_item(hub, iid).payload.get("assignee") == "wa", hub_item(hub, iid).history
+        assert refused(wb.request_lease, iid).code == "not_eligible"    # addressed: only wa may lease it
+        lease = wa.request_lease(iid)["lease"]["payload"]
+        assert lease["class"] == "pool" and lease["review"] is True, (iid, lease)
+        git_pull(env.hub_dir, wa.space_dir)
+        wa.append("item.complete", {"id": iid, "result": "done", "evidence": []})
+        assert hub_item(hub, iid).status == "submitted", hub_item(hub, iid).history
+        git_pull(env.hub_dir, wb.space_dir)
+        wb.append("item.verify", {"id": iid, "check": DONE})            # another principal's check
+        item = hub_item(hub, iid)
+        assert item.status == "verified" and pool_accepted(item), item.history
+
+
+def test_round3_pool_work_with_its_role_removed_is_still_taken_only_through_a_lease(env):
+    """A creator that strips the role and addresses the task cannot open a
+    plain-claim path around the review either."""
+    hub = env.start()
+    own, wa = env.writer("own"), env.writer("wa")
+    pool_item(own, "p1")
+    own.append("item.update", {"id": "p1", "role": None, "assignee": "wa"})
+    err = refused(submit_raw, hub, wa, "item.claim", {"id": "p1"})
+    assert err.code == "not_authorized" and "lease" in err.message, err
+    assert hub_item(hub, "p1").status == "created"
+
+
+def test_round3_owner_set_cannot_give_an_agent_pool_work_outside_a_lease(env):
+    """`owner.set` names an owner without a lease. On pool work the owner is
+    the hub's lease holder: an agent (or the creator) cannot set one, and an
+    owner the approver sets still cannot complete without a lease and review."""
+    hub = env.start()
+    own, wa = env.writer("own"), env.writer("wa")
+    boss = env.writer(TEST_APPROVER)
+    pool_item(own, "p1")
+    for w in (wa, own):
+        err = refused(w.append, "owner.set", {"id": "p1", "owner": "wa"})
+        assert err.code == "not_authorized", (w.actor, err)
+    assert hub_item(hub, "p1").owner is None
+    git_pull(env.hub_dir, boss.space_dir)
+    boss.append("owner.set", {"id": "p1", "owner": "wa"})               # the admin override
+    assert hub_item(hub, "p1").owner == "wa"
+    err = refused(submit_raw, hub, wa, "item.complete", {"id": "p1", "result": "r", "evidence": []})
+    assert err.code == "not_authorized", err
+    assert hub_item(hub, "p1").status == "created"
+    # It is still leased as pool work, and its completion is a submission.
+    lease = wa.request_lease("p1")["lease"]["payload"]
+    assert lease["class"] == "pool" and lease["review"] is True
+    git_pull(env.hub_dir, wa.space_dir)
+    wa.append("item.complete", {"id": "p1", "result": "r", "evidence": []})
+    assert hub_item(hub, "p1").status == "submitted"

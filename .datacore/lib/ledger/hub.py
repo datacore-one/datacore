@@ -1566,6 +1566,7 @@ class Hub:
         if _open_attempt(item):
             floor = self._expire(item, events, now, floor,
                                  "released" if item.lease_holder is None else "expired").hlc
+        pooled = bool(pool_role(item.payload)) or item.pool_work
         event = self.log.append("item.lease", {
             "id": item_id, "holder": actor, "attempt": attempt_id(req),
             "task_hash": task_content_hash(item.payload), "epoch": active.epoch,
@@ -1575,8 +1576,10 @@ class Hub:
             # THE ATTEMPT PINS WHAT IT WAS GRANTED AS (Codex re-audit, new 5):
             # pool or addressed work, and whether its completion needs an
             # independent review. A later edit of the task cannot weaken it.
-            **({"class": "pool" if pool_role(item.payload) else "addressed",
-                "review": bool(pool_role(item.payload))} if cfg.pools else {})}, after=floor)
+            # Pool work stays pool work, whoever it is addressed to now
+            # (Codex round-3 verdict, `pool_release_reclassify`).
+            **({"class": "pool" if pooled else "addressed", "review": pooled} if cfg.pools else {})},
+            after=floor)
         return {"status": "granted", "lease": _event_dict(event), "log": self.log.log_name}
 
     def reconcile(self, req: dict) -> dict:

@@ -295,6 +295,14 @@ def authorize(event, state, seen: Mapping, inputs: PolicyInputs) -> str | None:
         why = _effects_problem(merged, inputs)
         if why:
             return why
+        if getattr(item, "pool_work", False) and any(
+                merged.get(k) != (item.payload or {}).get(k) for k in ("assignee", "role")) and not (
+                _same(actor, inputs.approver, inputs) or _same(actor, _creator(item), inputs)):
+            # POOL WORK STAYS POOL WORK (Codex round-3 verdict,
+            # `pool_release_reclassify`): only the approver or the task's
+            # creator addresses a pool task to an agent or changes its role.
+            return (f"{item_id} is pool work; only the approver ({inputs.approver!r}) or its creator "
+                    "may address it to an agent or change its role")
         if merged.get("assignee") != (item.payload or {}).get("assignee"):
             why = _reassign_problem(actor, item, merged.get("assignee"), seen, inputs)
             if why:
@@ -307,8 +315,8 @@ def authorize(event, state, seen: Mapping, inputs: PolicyInputs) -> str | None:
 
     if t == "item.claim":
         p = item.payload or {}
-        if p.get("role"):
-            return f"{item_id} is a pool item (role {p['role']!r}); it is taken only through a hub lease"
+        if p.get("role") or getattr(item, "pool_work", False):
+            return f"{item_id} is a pool item (role {p.get('role')!r}); it is taken only through a hub lease"
         if item.lease_ref is not None:
             return f"{item_id} has been leased; it is taken only through a hub lease"
         return may_execute(actor, item, seen, inputs)
@@ -322,7 +330,7 @@ def authorize(event, state, seen: Mapping, inputs: PolicyInputs) -> str | None:
         return may_execute(holder, item, seen, inputs)
 
     if t == "item.complete":
-        if (item.payload or {}).get("role") and item.lease_ref is None:
+        if ((item.payload or {}).get("role") or getattr(item, "pool_work", False)) and item.lease_ref is None:
             return f"{item_id} is a pool item; it is completed only under a hub lease"
     if t in ("item.complete", "item.verify"):
         return pool_review_problem(item, t, actor, payload, inputs)
@@ -332,6 +340,10 @@ def authorize(event, state, seen: Mapping, inputs: PolicyInputs) -> str | None:
         # (Codex round-3 verdict, `owner_override`), unless the approver --
         # the admin override -- sets it. Clearing the owner is arbitration only.
         new_owner = payload.get("owner")
+        if getattr(item, "pool_work", False) and not _same(actor, inputs.approver, inputs):
+            # The owner of pool work is the hub's lease holder; only the
+            # approver's admin override sets it otherwise (Codex round-3 verdict).
+            return f"owner.set on {item_id} refused: it is pool work, owned only through a hub lease"
         if new_owner and not _same(actor, inputs.approver, inputs):
             why = may_execute(str(new_owner), item, seen, inputs)
             if why:
