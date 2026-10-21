@@ -774,11 +774,21 @@ class Hub:
         # re-audit, new defect 2), so a crash between the two is completed on
         # the next start or the next duplicate, never left to strand the chain.
         self._intents_path = state / f"{key}.reject-intents.json"
+        # WHAT THIS HUB HAS JUDGED (round 4, imported_late_result): per log, the
+        # highest seq it admitted by append or first saw in a sweep. An event
+        # beyond it reached the hub by git and was never judged against its
+        # lease; an expiry's frontier never vouches for it.
+        self._judged_path = state / f"{key}.judged.json"
         self._answers: dict[str, dict] = {}
         self._reconciled: dict[str, int] = {}
         self.barrier: dict = {}
         if self._lock_fh is not None:
             self._load_request_state()
+            if not self._judged_path.exists():
+                # A hub that never judged anything here: what it holds now is
+                # its starting point (it cannot know when those events arrived).
+                from .log import read_events
+                self._mark_judged(read_events(self.space_dir))
             try:
                 self._complete_rejections()
             except HubError:
@@ -930,10 +940,12 @@ class Hub:
                     return self._receipt("rejected", cfg, chain, event, reason="kept as a rejected proposal")
                 return self._receipt("duplicate", cfg, chain, event)
             if verdict is not None:
+                self._mark_judged([event], chain)
                 code, why = verdict
                 self._record_reject(chain, {"seq": event.seq, "hash": event.hash, "actor": event.actor,
                                             "type": event.type}, code, why)
                 return self._receipt("rejected", cfg, chain, event, reason=f"{code}: {why}")
+            self._mark_judged([event], chain)
             receipt = self._receipt("accepted", cfg, chain, event)
             self._record_conflicts(event)
             return receipt
@@ -1498,14 +1510,56 @@ class Hub:
         ref = item.lease_ref or {}
         holder = ref.get("holder") or item.lease_holder or ""
         frontier: dict = {}
+        judged = self._judged()
         for e in events:
             chain = getattr(e, "log", None) or e.actor
             if holder and _writer_of(chain) == base_writer(holder) and type(e.seq) is int:
-                frontier[chain] = max(frontier.get(chain, -1), e.seq)
+                frontier[chain] = min(max(frontier.get(chain, -1), e.seq), judged.get(chain, -1))
         return self.log.append("item.lease.expire", {
             "id": item.id, "holder": holder, "attempt": ref.get("attempt"), "expired_ms": now,
             "reason": reason, "frontier": dict(sorted(frontier.items())),
             "lease": {k: ref.get(k) for k in ("log", "seq", "hash")}}, after=floor)
+
+    def _judged(self) -> dict:
+        try:
+            data = json.loads(self._judged_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            return {}
+        return {str(k): v for k, v in data.items() if type(v) is int} if isinstance(data, dict) else {}
+
+    def _mark_judged(self, events, chain: str | None = None) -> None:
+        from file_utils import atomic_write_text
+        marks = self._judged()
+        for e in events:
+            log = chain or getattr(e, "log", None) or e.actor
+            if type(e.seq) is int and e.seq > marks.get(log, -1):
+                marks[log] = e.seq
+        atomic_write_text(self._judged_path, json.dumps(marks, sort_keys=True))
+
+    def _judge_arrivals(self) -> None:
+        """Judge what reached this hub by git since it last looked (round 4,
+        imported_late_result), by the same rule as `append`: a holder's result
+        for an attempt whose lease has run out by the hub's clock is late, so
+        the expiry is written first and its frontier stops before that result
+        (owner resolution in every copy). One the hub first sees while the
+        lease is live is simply judged in time."""
+        from actor_identity import base_writer
+        events, state = self._state()
+        judged, now = self._judged(), self.clock()
+        for item in sorted(state.items.values(), key=lambda i: i.id):
+            ref = item.lease_ref or {}
+            holder = ref.get("holder") or item.lease_holder
+            if (not holder or not _open_attempt(item) or item.lease_expires_ms is None
+                    or now < item.lease_expires_ms):
+                continue
+            unjudged = [e for e in events if e.type in ("item.complete", "item.release")
+                        and isinstance(e.payload, dict) and e.payload.get("id") == item.id
+                        and e.payload.get("attempt") == ref.get("attempt")
+                        and base_writer(e.actor) == base_writer(holder) and type(e.seq) is int
+                        and e.seq > judged.get(getattr(e, "log", None) or e.actor, -1)]
+            if unjudged:
+                self._expire(item, events, now, _item_floor(events, item.id), "expired")
+        self._mark_judged(events)
 
     def expire_due(self) -> list[dict]:
         """End every lease attempt whose expiry has passed (the hub's scheduled sweep).
@@ -1513,6 +1567,7 @@ class Hub:
         from .fold import lease_live
         with self._mutex:
             self._writable(grant=True)
+            self._judge_arrivals()
             events, state = self._state()
             now = self.clock()
             out = []
@@ -1564,6 +1619,7 @@ class Hub:
         from .seal import build_seal_payload
         with self._mutex:
             cfg = self._writable(grant=True)
+            self._judge_arrivals()
             events, _ = self._state()
             eps = self._authority(cfg).epochs
             if len(eps) > 1:
