@@ -2234,7 +2234,20 @@ class HubWriter:
         # conflict or an owner-resolution case is not a confirmation.
         needed = set(mine_all) if required is None else set(required)
         if seal is not None and verdict is True:
-            settled = fold([e for e in admitted if seal.includes(e)], **fold_kwargs)
+            sealed_events = [e for e in admitted if seal.includes(e)]
+            settled = fold(sealed_events, **fold_kwargs)
+            # A VOIDED EVENT HAS NO EFFECT (round 4, void_receipt): the fold drops
+            # it, so it has no outcome at all -- which is not "applied".
+            from .voids import from_events
+            voids = from_events(sealed_events)
+            by_hash = {e.hash: e for e in sealed_events}
+            for h in sorted(covered & needed):
+                e = by_hash.get(h)
+                if e is not None and voids.applies(getattr(e, "log", None) or e.actor, e):
+                    problems.append(f"{h[:12]}: sealed, but voided -- it has no effect")
+                elif (e is not None and settled.outcomes.get(h) is None and isinstance(e.payload, dict)
+                        and isinstance(e.payload.get("id"), str) and e.type.startswith("item.")):
+                    problems.append(f"{h[:12]}: sealed, but the sealed state records no effect of it")
             for it in settled.items.values():
                 for h in covered & (set(it.lease_conflicts) | set(it.lease_unresolved)):
                     why = it.lease_conflicts.get(h) or it.lease_unresolved.get(h)
