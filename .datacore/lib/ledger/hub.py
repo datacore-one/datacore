@@ -774,11 +774,21 @@ class Hub:
         # re-audit, new defect 2), so a crash between the two is completed on
         # the next start or the next duplicate, never left to strand the chain.
         self._intents_path = state / f"{key}.reject-intents.json"
+        # WHAT THIS HUB HAS JUDGED (round 4, imported_late_result): per log, the
+        # highest seq it admitted by append or first saw in a sweep. An event
+        # beyond it reached the hub by git and was never judged against its
+        # lease; an expiry's frontier never vouches for it.
+        self._judged_path = state / f"{key}.judged.json"
         self._answers: dict[str, dict] = {}
         self._reconciled: dict[str, int] = {}
         self.barrier: dict = {}
         if self._lock_fh is not None:
             self._load_request_state()
+            if not self._judged_path.exists():
+                # A hub that never judged anything here: what it holds now is
+                # its starting point (it cannot know when those events arrived).
+                from .log import read_events
+                self._mark_judged(read_events(self.space_dir))
             try:
                 self._complete_rejections()
             except HubError:
@@ -885,10 +895,13 @@ class Hub:
                 # Network admission never admits legacy: unsigned history comes by
                 # git and counts only as the cutover manifest names it (finding 1).
                 raise HubRefused("unsigned", "the hub accepts only signed events (amendment D)")
-            if not proposal and event.type in ("item.complete", "item.release"):
+            if event.type in ("item.complete", "item.release"):
+                # Whatever the submission's flags say (round 4, proposal_late):
+                # the rejected-proposal flag never lets a result skip expiry.
                 self._expire_if_ran_out(event)
             auth = self._authority(cfg)
             path, chain = _target(self.space_dir, log_name, event, sub.get("chain"))
+            late = self._sealed_late([event])
             from file_utils import fsync_directory
             from .log import CorruptLogError, _parse_log_bytes
             if not path.exists() and self._onto(event, chain, [], cfg, auth, proposal) == "duplicate":
@@ -910,6 +923,8 @@ class Hub:
                     except CorruptLogError as exc:
                         raise HubRefused("bad_chain", str(exc)) from None
                     verdict = self._onto(event, chain, existing, cfg, auth, proposal)
+                    if verdict is None and event.hash in late:
+                        verdict = ("sealed_late", late[event.hash])
                     if verdict != "duplicate":
                         if verdict is not None:
                             self._intend_reject(path, chain, event, *verdict)   # durable first
@@ -928,10 +943,12 @@ class Hub:
                     return self._receipt("rejected", cfg, chain, event, reason="kept as a rejected proposal")
                 return self._receipt("duplicate", cfg, chain, event)
             if verdict is not None:
+                self._mark_judged([event], chain)
                 code, why = verdict
                 self._record_reject(chain, {"seq": event.seq, "hash": event.hash, "actor": event.actor,
                                             "type": event.type}, code, why)
                 return self._receipt("rejected", cfg, chain, event, reason=f"{code}: {why}")
+            self._mark_judged([event], chain)
             receipt = self._receipt("accepted", cfg, chain, event)
             self._record_conflicts(event)
             return receipt
@@ -1496,14 +1513,101 @@ class Hub:
         ref = item.lease_ref or {}
         holder = ref.get("holder") or item.lease_holder or ""
         frontier: dict = {}
+        judged = self._judged()
         for e in events:
             chain = getattr(e, "log", None) or e.actor
             if holder and _writer_of(chain) == base_writer(holder) and type(e.seq) is int:
-                frontier[chain] = max(frontier.get(chain, -1), e.seq)
+                frontier[chain] = min(max(frontier.get(chain, -1), e.seq), judged.get(chain, -1))
         return self.log.append("item.lease.expire", {
             "id": item.id, "holder": holder, "attempt": ref.get("attempt"), "expired_ms": now,
             "reason": reason, "frontier": dict(sorted(frontier.items())),
             "lease": {k: ref.get(k) for k in ("log", "seq", "hash")}}, after=floor)
+
+    def _sealed_late(self, candidates, events=None, state=None) -> dict:
+        """{hash: why} for each candidate that would reorder a SEALED decision
+        (round 4, sealed_ownership): not covered by this grantor's latest seal,
+        yet stamped before a sealed event about the same item. Folded in HLC
+        order it could change what was sealed (who claimed first), and a
+        sealed decision is final -- so the grantor keeps it as a rejected
+        proposal, a no-op in every copy. Later-stamped work is not touched."""
+        from .seal import as_sequencer, latest_seal
+        try:
+            self._writable(grant=True)
+        except HubError:
+            return {}                               # a standby rejects nothing
+        if events is None:
+            events, state = self._state()
+        try:
+            with as_sequencer(self.actor):
+                seal = latest_seal(events)
+        except ValueError:
+            return {}
+        if seal is None:
+            return {}
+        top: dict = {}
+        for e in events:
+            item = e.payload.get("id") if isinstance(e.payload, dict) else None
+            if e.type != "ledger.seal" and isinstance(item, str) and isinstance(e.hlc, str) and seal.includes(e):
+                top[item] = max(top.get(item, ""), e.hlc)
+        out = {}
+        for e in candidates:
+            item = e.payload.get("id") if isinstance(e.payload, dict) else None
+            if (isinstance(item, str) and isinstance(e.hlc, str) and not seal.includes(e)
+                    and e.hlc < top.get(item, "")):
+                out[e.hash] = (f"stamped {e.hlc}, before {item}'s sealed history (sealed up to {top[item]}); "
+                               "a sealed decision is final")
+        return out
+
+    def _reject_sealed_late(self) -> None:
+        """The same rule for what reached the hub by git: rejected before sealing."""
+        events, state = self._state()
+        rejected = {h for (_, _, h) in self._rejected()}
+        unsealed = [e for e in events if e.hash not in rejected and e.actor != self.actor]
+        for h, why in sorted(self._sealed_late(unsealed, events, state).items()):
+            e = next(x for x in unsealed if x.hash == h)
+            self._record_reject(getattr(e, "log", None) or e.actor,
+                                {"seq": e.seq, "hash": e.hash, "actor": e.actor, "type": e.type}, "sealed_late", why)
+
+    def _judged(self) -> dict:
+        try:
+            data = json.loads(self._judged_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            return {}
+        return {str(k): v for k, v in data.items() if type(v) is int} if isinstance(data, dict) else {}
+
+    def _mark_judged(self, events, chain: str | None = None) -> None:
+        from file_utils import atomic_write_text
+        marks = self._judged()
+        for e in events:
+            log = chain or getattr(e, "log", None) or e.actor
+            if type(e.seq) is int and e.seq > marks.get(log, -1):
+                marks[log] = e.seq
+        atomic_write_text(self._judged_path, json.dumps(marks, sort_keys=True))
+
+    def _judge_arrivals(self) -> None:
+        """Judge what reached this hub by git since it last looked (round 4,
+        imported_late_result), by the same rule as `append`: a holder's result
+        for an attempt whose lease has run out by the hub's clock is late, so
+        the expiry is written first and its frontier stops before that result
+        (owner resolution in every copy). One the hub first sees while the
+        lease is live is simply judged in time."""
+        from actor_identity import base_writer
+        events, state = self._state()
+        judged, now = self._judged(), self.clock()
+        for item in sorted(state.items.values(), key=lambda i: i.id):
+            ref = item.lease_ref or {}
+            holder = ref.get("holder") or item.lease_holder
+            if (not holder or not _open_attempt(item) or item.lease_expires_ms is None
+                    or now < item.lease_expires_ms):
+                continue
+            unjudged = [e for e in events if e.type in ("item.complete", "item.release")
+                        and isinstance(e.payload, dict) and e.payload.get("id") == item.id
+                        and e.payload.get("attempt") == ref.get("attempt")
+                        and base_writer(e.actor) == base_writer(holder) and type(e.seq) is int
+                        and e.seq > judged.get(getattr(e, "log", None) or e.actor, -1)]
+            if unjudged:
+                self._expire(item, events, now, _item_floor(events, item.id), "expired")
+        self._mark_judged(events)
 
     def expire_due(self) -> list[dict]:
         """End every lease attempt whose expiry has passed (the hub's scheduled sweep).
@@ -1511,6 +1615,7 @@ class Hub:
         from .fold import lease_live
         with self._mutex:
             self._writable(grant=True)
+            self._judge_arrivals()
             events, state = self._state()
             now = self.clock()
             out = []
@@ -1562,6 +1667,8 @@ class Hub:
         from .seal import build_seal_payload
         with self._mutex:
             cfg = self._writable(grant=True)
+            self._judge_arrivals()
+            self._reject_sealed_late()
             events, _ = self._state()
             eps = self._authority(cfg).epochs
             if len(eps) > 1:
@@ -2234,7 +2341,20 @@ class HubWriter:
         # conflict or an owner-resolution case is not a confirmation.
         needed = set(mine_all) if required is None else set(required)
         if seal is not None and verdict is True:
-            settled = fold([e for e in admitted if seal.includes(e)], **fold_kwargs)
+            sealed_events = [e for e in admitted if seal.includes(e)]
+            settled = fold(sealed_events, **fold_kwargs)
+            # A VOIDED EVENT HAS NO EFFECT (round 4, void_receipt): the fold drops
+            # it, so it has no outcome at all -- which is not "applied".
+            from .voids import from_events
+            voids = from_events(sealed_events)
+            by_hash = {e.hash: e for e in sealed_events}
+            for h in sorted(covered & needed):
+                e = by_hash.get(h)
+                if e is not None and voids.applies(getattr(e, "log", None) or e.actor, e):
+                    problems.append(f"{h[:12]}: sealed, but voided -- it has no effect")
+                elif (e is not None and settled.outcomes.get(h) is None and isinstance(e.payload, dict)
+                        and isinstance(e.payload.get("id"), str) and e.type.startswith("item.")):
+                    problems.append(f"{h[:12]}: sealed, but the sealed state records no effect of it")
             for it in settled.items.values():
                 for h in covered & (set(it.lease_conflicts) | set(it.lease_unresolved)):
                     why = it.lease_conflicts.get(h) or it.lease_unresolved.get(h)

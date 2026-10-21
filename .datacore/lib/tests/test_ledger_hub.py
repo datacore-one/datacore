@@ -2022,3 +2022,122 @@ def test_reaudit4_a_successor_seal_covers_every_prefix_the_predecessors_last_sea
         "ledger.seal", build_seal_payload(events, fold_kwargs=hub_b._fold_kwargs(hubmod.load_config(lost))))
     report = wb.receipt_check(lost, hub_actor="hubb")
     assert report["status"] == "failed" and any("wa" in p for p in report["problems"]), report
+
+
+# ── round 4: a receipt confirms only an effect that stands and is final ─────
+# (Codex round-3 verdict: void_receipt, proposal_late, imported_late_result,
+# sealed_ownership.) A "confirmed" receipt never later becomes "failed".
+
+def _with_principals(env, monkeypatch):
+    """A principal registry in which the owner may void (voids read it)."""
+    import actor_identity
+    registry = env.tmp / "principals.yaml"
+    registry.write_text("principals:\n  owner: {kind: human}\n  own: {kind: human}\n"
+                        "  wa: {kind: agent}\n  wb: {kind: agent}\n")
+    monkeypatch.setattr(actor_identity, "PRINCIPALS", registry)
+
+
+def test_round4_a_voided_completion_is_never_a_confirmed_receipt(env, monkeypatch):
+    _with_principals(env, monkeypatch)
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    own, wa = env.writer("own", t), env.writer("wa", t)
+    own.append("item.create", {"id": "t", "assignee": "wa"})
+    wa.append("item.claim", {"id": "t"})
+    done, _ = wa.append("item.complete", {"id": "t"})
+    own.append("ledger.void", {"log": "wa", "seq": done.seq, "hash": done.hash, "reason": "completion withdrawn"})
+    published = _published(env, hub, [wa, own])
+    assert hub._state()[1].items["t"].status == "claimed"      # the void took the effect away
+    report = wa.receipt_check(published, required=[done.hash])
+    assert report["status"] == "failed" and not report["ok"], report
+
+
+def test_round4_the_rejected_proposal_flag_never_skips_the_late_result_rule(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    own, wa = env.writer("own", t), env.writer("wa", t)
+    own.append("item.create", {"id": "t", "assignee": "wa"})
+    grant = wa.request_lease("t")["lease"]["payload"]
+    env.clock.advance(901)
+    done = _signed_into(env, wa, "item.complete", {"id": "t", "attempt": grant["attempt"],
+                                                   "task_hash": grant["task_hash"]})
+    hub.append(wa._submission(done, rejected=True))
+    item = _hub_item(hub, "t")
+    assert item.status != "completed", item.history
+    assert done.hash in item.lease_unresolved, item.history
+    report = wa.receipt_check(_published(env, hub, [wa, own]), required=[done.hash])
+    assert report["status"] != "confirmed" and not report["ok"], report
+
+
+def test_round4_a_late_result_imported_by_git_is_not_a_completion(env):
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    own, wa = env.writer("own", t), env.writer("wa", t)
+    own.append("item.create", {"id": "t", "assignee": "wa"})
+    grant = wa.request_lease("t")["lease"]["payload"]
+    env.clock.advance(901)
+    done = _signed_into(env, wa, "item.complete", {"id": "t", "attempt": grant["attempt"],
+                                                   "task_hash": grant["task_hash"]})
+    git_pull(wa.space_dir, env.hub_dir)                  # reaches the hub by git, not by append
+    published = _published(env, hub, [own, wa])
+    item = _hub_item(hub, "t")
+    assert item.status != "completed", item.history
+    assert done.hash in item.lease_unresolved, item.history
+    report = wa.receipt_check(published, required=[done.hash])
+    assert report["status"] != "confirmed" and not report["ok"], report
+
+
+def test_round4_an_imported_result_that_was_in_time_still_completes(env):
+    """The boundary of the rule above: a result the hub first sees while its
+    lease is still live completes, whichever path brought it."""
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    own, wa = env.writer("own", t), env.writer("wa", t)
+    own.append("item.create", {"id": "t", "assignee": "wa"})
+    grant = wa.request_lease("t")["lease"]["payload"]
+    env.clock.advance(60)
+    done = _signed_into(env, wa, "item.complete", {"id": "t", "attempt": grant["attempt"],
+                                                   "task_hash": grant["task_hash"]})
+    git_pull(wa.space_dir, env.hub_dir)
+    hub.seal()                                           # the hub judges it while the lease is live
+    env.clock.advance(901)
+    published = _published(env, hub, [own, wa])
+    assert _hub_item(hub, "t").status == "completed"
+    assert wa.receipt_check(published, required=[done.hash])["status"] == "confirmed"
+
+
+def test_round4_a_confirmed_claim_is_final_when_an_earlier_stamped_claim_arrives_later(env):
+    import time as _time
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    own, wa, wb = [env.writer(a, t) for a in ("own", "wa", "wb")]
+    base = int(_time.time() * 1000)
+    create = _signed_into(env, own, "item.create", {"id": "t"}, hlc=f"{base:013d}.0000.own")
+    hub.append(own._submission(create))
+    a = _signed_into(env, wa, "item.claim", {"id": "t"}, hlc=f"{base + 200:013d}.0000.wa")
+    hub.append(wa._submission(a))
+    before = wa.receipt_check(_published(env, hub, [wa]), required=[a.hash])
+    assert before["status"] == "confirmed", before
+    b = _signed_into(env, wb, "item.claim", {"id": "t"}, hlc=f"{base + 100:013d}.0000.wb")
+    hub.append(wb._submission(b))
+    after = wa.receipt_check(_published(env, hub, [wa, wb]), required=[a.hash])
+    assert after["status"] == "confirmed", after
+    assert _hub_item(hub, "t").owner == "wa"
+    assert wb.receipt_check(_published(env, hub, [wa, wb]), required=[b.hash])["status"] == "failed"
+
+
+def test_round4_a_sealed_claim_is_final_when_the_earlier_claim_arrives_by_git(env):
+    import time as _time
+    hub = env.hub()
+    t = hubmod.LocalTransport(hub)
+    own, wa, wb = [env.writer(a, t) for a in ("own", "wa", "wb")]
+    base = int(_time.time() * 1000)
+    hub.append(own._submission(_signed_into(env, own, "item.create", {"id": "t"}, hlc=f"{base:013d}.0000.own")))
+    a = _signed_into(env, wa, "item.claim", {"id": "t"}, hlc=f"{base + 200:013d}.0000.wa")
+    hub.append(wa._submission(a))
+    assert wa.receipt_check(_published(env, hub, [wa]), required=[a.hash])["status"] == "confirmed"
+    _signed_into(env, wb, "item.claim", {"id": "t"}, hlc=f"{base + 100:013d}.0000.wb")
+    git_pull(wb.space_dir, env.hub_dir)
+    after = wa.receipt_check(_published(env, hub, [wa, wb]), required=[a.hash])
+    assert after["status"] == "confirmed", after
+    assert _hub_item(hub, "t").owner == "wa"
