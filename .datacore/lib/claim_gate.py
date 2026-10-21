@@ -124,10 +124,13 @@ def creates_today(space_dir: Path | None, actor: str, today: dt.date | None = No
     """
     if not space_dir:
         return 0
-    from ledger.log import read_events
+    # Admitted events only: in a hub space a forged or tampered row is not a
+    # create (Codex round-3 verdict, raw_gate_readers). No hub: every event.
+    from ledger.hub import authoritative_events
     principal, _ = principal_of(actor)
     today = today or dt.datetime.now(dt.timezone.utc).date()
-    return sum(1 for event in read_events(space_dir)
+    events, _kw = authoritative_events(Path(space_dir))
+    return sum(1 for event in events
                if principal_of(event.actor)[0] == principal and event.type == "item.create"
                and _event_date(event) == today)
 
@@ -149,11 +152,11 @@ def parent_hops(space_dir: Path | None, after) -> int | None:
     """
     if not space_dir or not isinstance(after, str) or not after:
         return None
-    from ledger.log import read_events
-    for event in read_events(Path(space_dir)):
-        if event.type == "item.create" and (event.payload or {}).get("id") == after:
-            return recorded_hops(event.payload)
-    return None
+    # The item as the space's authoritative state has it (Codex round-3
+    # verdict, raw_gate_readers): a forged create names no item.
+    from ledger.hub import authoritative_state
+    item = authoritative_state(Path(space_dir)).items.get(after)
+    return None if item is None else recorded_hops(item.payload)
 
 
 def check_create(actor: str, payload: dict | None, policy=None, space_dir: Path | None = None,
@@ -220,15 +223,18 @@ def month_to_date_cents(space_dir: Path | None, writers: list[str], today: dt.da
     """Use the canonical spend fold across every chain owned by these writers."""
     if not space_dir:
         return 0
-    from ledger.log import read_events
     from ledger.fold import fold
+    from ledger.hub import authoritative_events
     from actor_identity import base_writer
     principals = {principal_of(writer)[0] or base_writer(writer) for writer in writers}
     today = today or dt.datetime.now(dt.timezone.utc).date()
-    events = [event for event in read_events(space_dir)
+    # Admitted spend only (Codex round-3 verdict, spend_reader): a tampered
+    # row in a hub space is not money spent. No hub: every event, as before.
+    admitted, kw = authoritative_events(Path(space_dir))
+    events = [event for event in admitted
               if (principal_of(event.actor)[0] or base_writer(event.actor)) in principals and event.type == "spend.record"
               and (_event_date(event).year, _event_date(event).month) == (today.year, today.month)]
-    return sum(fold(events).spend.values())
+    return sum(fold(events, **kw).spend.values())
 
 
 def check_budget(actor: str, space_dir: Path | None = None, today: dt.date | None = None) -> tuple[bool, str]:
