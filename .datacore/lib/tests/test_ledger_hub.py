@@ -2141,3 +2141,287 @@ def test_round4_a_sealed_claim_is_final_when_the_earlier_claim_arrives_by_git(en
     after = wa.receipt_check(_published(env, hub, [wa, wb]), required=[a.hash])
     assert after["status"] == "confirmed", after
     assert _hub_item(hub, "t").owner == "wa"
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# ROUND 4: ownership paths (Codex round-3 verdict 2026-10-19, `reassign` and
+# `owner_override`). Written before the fix and seen failing.
+# ════════════════════════════════════════════════════════════════════════════
+
+def _arbitrated_policy():
+    from ledger.hub_policy import PolicyInputs
+    return PolicyInputs(approver=APPROVER, cosign_effects=frozenset(), arbitration=("owner", "wb", "wa"))
+
+
+def test_r4_an_agent_may_not_reassign_someone_elses_task_to_itself(env):
+    """`reassign`: wa's claim on wb's task is refused, so wa must not be able to
+    rewrite the assignee to itself and then claim. Changing `assignee` is an
+    ownership change and passes the same authority as granting the task."""
+    hub = env.hub(policy=_arbitrated_policy())
+    t = hubmod.LocalTransport(hub)
+    own, wa = env.writer("own", t), env.writer("wa", t)
+    own.append("item.create", {"id": "t1", "title": "for wb", "assignee": "wb"})
+    with pytest.raises(hubmod.HubRefused):
+        wa.append("item.claim", {"id": "t1"})
+    with pytest.raises(hubmod.HubRefused):
+        wa.append("item.update", {"id": "t1", "assignee": "wa"})
+    with pytest.raises(hubmod.HubRefused):
+        wa.append("item.claim", {"id": "t1"})
+    item = _hub_item(hub, "t1")
+    assert item.owner is None and item.payload["assignee"] == "wb", item.history
+
+
+def test_r4_a_reassignment_that_arrives_by_git_is_a_no_op_on_replay(env):
+    """The same edit signed straight into wa's log and published by git: the fold
+    applies the same rule, so no copy of the log sees wa as the assignee."""
+    hub = env.hub(policy=_arbitrated_policy())
+    t = hubmod.LocalTransport(hub)
+    own, wa = env.writer("own", t), env.writer("wa", t)
+    own.append("item.create", {"id": "t1", "title": "for wb", "assignee": "wb"})
+    git_pull(env.hub_dir, wa.space_dir)
+    _signed_into(env, wa, "item.update", {"id": "t1", "assignee": "wa"})
+    git_pull(wa.space_dir, env.hub_dir)
+    item = _hub_item(hub, "t1")
+    assert item.payload["assignee"] == "wb", item.history
+    assert any("not authorized" in h for h in item.history), item.history
+
+
+def test_r4_the_creator_and_the_approver_may_still_reassign(env):
+    """Boundary: the rule does not freeze assignment. The task's creator and the
+    approver reassign; the new assignee then claims normally."""
+    hub = env.hub(policy=_arbitrated_policy())
+    t = hubmod.LocalTransport(hub)
+    own, boss, wa = env.writer("own", t), env.writer(APPROVER, t), env.writer("wa", t)
+    own.append("item.create", {"id": "t1", "title": "for wb", "assignee": "wb"})
+    own.append("item.create", {"id": "t2", "title": "for wb too", "assignee": "wb"})
+    own.append("item.update", {"id": "t1", "assignee": "wa"})
+    boss.append("item.update", {"id": "t2", "assignee": "wa"})
+    wa.append("item.claim", {"id": "t1"})
+    assert _hub_item(hub, "t1").owner == "wa"
+    assert _hub_item(hub, "t2").payload["assignee"] == "wa"
+    # ... and the current assignee may hand its own task on.
+    wb = env.writer("wb", t)
+    own.append("item.create", {"id": "t3", "title": "wb's", "assignee": "wb"})
+    wb.append("item.update", {"id": "t3", "assignee": "wa"})
+    assert _hub_item(hub, "t3").payload["assignee"] == "wa"
+
+
+def test_r4_owner_set_on_an_unowned_task_respects_its_assignment(env):
+    """`owner_override`: on an unowned task assigned to wb, wa's owner.set {owner: wa}
+    was accepted (arbitration looked only at an already-populated owner)."""
+    hub = env.hub(policy=_arbitrated_policy())
+    t = hubmod.LocalTransport(hub)
+    own, wa = env.writer("own", t), env.writer("wa", t)
+    own.append("item.create", {"id": "t1", "title": "for wb", "assignee": "wb"})
+    with pytest.raises(hubmod.HubRefused):
+        wa.append("owner.set", {"id": "t1", "owner": "wa"})
+    git_pull(env.hub_dir, wa.space_dir)
+    _signed_into(env, wa, "owner.set", {"id": "t1", "owner": "wa"})     # and by git
+    git_pull(wa.space_dir, env.hub_dir)
+    item = _hub_item(hub, "t1")
+    assert item.owner is None and item.payload["assignee"] == "wb", item.history
+
+
+def test_r4_owner_set_by_the_approver_or_to_the_assignee_is_still_allowed(env):
+    """Boundary: owner.set stays the approver's override, and setting the owner to
+    a principal the task is addressed to is a claim's equivalent."""
+    hub = env.hub(policy=_arbitrated_policy())
+    t = hubmod.LocalTransport(hub)
+    own, boss, wb = env.writer("own", t), env.writer(APPROVER, t), env.writer("wb", t)
+    own.append("item.create", {"id": "t1", "title": "for wb", "assignee": "wb"})
+    own.append("item.create", {"id": "t2", "title": "for wb", "assignee": "wb"})
+    wb.append("owner.set", {"id": "t1", "owner": "wb"})
+    boss.append("owner.set", {"id": "t2", "owner": "wa"})
+    assert _hub_item(hub, "t1").owner == "wb"
+    assert _hub_item(hub, "t2").owner == "wa"
+
+
+# ── round 4: decision readers go through admission (`spend_reader`,
+#    `raw_gate_readers`, `autofix_reader`) ──────────────────────────────────
+
+def _default_keys(env, monkeypatch):
+    """Production readers take no key arguments: point the defaults at the env."""
+    import ledger.keys as keys
+    monkeypatch.setattr(keys, "DEFAULT_KEYS_DIR", env.keys_dir)
+    monkeypatch.setattr(keys, "DEFAULT_REGISTRY_PATH", env.registry)
+
+
+def _tampered(env, type: str, payload: dict, key: str, value) -> None:
+    """wa signs `type` into the hub space, then the row is edited without rehashing:
+    parseable, but no admission rule accepts it."""
+    log = EventLog(env.hub_dir, "wa", sign=True, keys_dir=env.keys_dir, registry_path=env.registry)
+    log.append(type, payload)
+    path = log.path if log.path.exists() else log.telemetry_path
+    row = json.loads(path.read_text().strip())
+    row["payload"][key] = value
+    path.write_text(json.dumps(row) + "\n")
+
+
+def test_r4_month_to_date_spend_counts_only_admitted_spend(env, monkeypatch):
+    from claim_gate import month_to_date_cents
+    _default_keys(env, monkeypatch)
+    hub = env.hub()
+    _tampered(env, "spend.record", {"cents": 50000}, "cents", 999999)
+    assert sum(hub._state()[1].spend.values()) == 0
+    assert month_to_date_cents(env.hub_dir, ["wa"]) == 0
+
+
+def test_r4_creates_today_and_parent_hops_read_only_admitted_items(env, monkeypatch):
+    from claim_gate import creates_today, parent_hops
+    _default_keys(env, monkeypatch)
+    hub = env.hub()
+    _tampered(env, "item.create", {"id": "forged", "hops": 1}, "hops", 99)
+    assert "forged" not in hub._state()[1].items
+    assert creates_today(env.hub_dir, "wa") == 0
+    assert parent_hops(env.hub_dir, "forged") is None
+
+
+def test_r4_claim_gate_readers_keep_the_plain_path_without_a_hub(tmp_path):
+    """Boundary: a space without a hub reads exactly as before."""
+    from claim_gate import creates_today, month_to_date_cents, parent_hops
+    plain = tmp_path / "plain"
+    EventLog(plain, "wa", sign=False).append("item.create", {"id": "p1", "hops": 2})
+    EventLog(plain, "wa", sign=False).append("spend.record", {"cents": 120})
+    assert creates_today(plain, "wa") == 1
+    assert parent_hops(plain, "p1") == 2
+    assert month_to_date_cents(plain, ["wa"]) == 120
+
+
+def test_r4_autofix_does_not_treat_an_inadmissible_item_as_an_existing_repair(env, monkeypatch):
+    import time
+    from types import SimpleNamespace
+    from jobs import autofix
+    _default_keys(env, monkeypatch)
+    hub = env.hub()
+    iid = f"{autofix.MARK}-audit-job-{time.strftime('%Y%m%d', time.gmtime())}"
+    _tampered(env, "item.create", {"id": iid, "title": "original"}, "title", "tampered")
+    assert iid not in hub._state()[1].items
+    monkeypatch.setattr(autofix, "_space", lambda root: env.hub_dir)
+    monkeypatch.setattr(autofix, "contract_sha", lambda *a: "fixture-contract")
+    job = SimpleNamespace(name="audit-job", machine="fixture", delegate=True)
+    state, detail = autofix.delegate(job, ["failed"], {"first_failed": "now"}, root=env.tmp,
+                                     assignee="wa", dry=True)
+    assert state != "exists", detail
+
+
+def _raw_folds(path: Path, lib: Path) -> list[str]:
+    """Calls of `fold` (any alias) on events read with `read_events` (any alias),
+    directly or through names assigned from them, in one function or at module
+    level -- unless the value went through the admission path first."""
+    import ast
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    admission = {"authoritative_state", "authoritative_events", "_authoritative", "admit"}
+
+    def bound(name: str) -> set:
+        out = {name}
+        for n in ast.walk(tree):
+            if isinstance(n, ast.ImportFrom):
+                out |= {a.asname or a.name for a in n.names if a.name == name}
+        return out
+
+    folds, reads = bound("fold"), bound("read_events")
+
+    def called(expr, names):
+        return [c for c in ast.walk(expr) if isinstance(c, ast.Call) and (
+            (isinstance(c.func, ast.Name) and c.func.id in names)
+            or (isinstance(c.func, ast.Attribute) and c.func.attr in names))]
+
+    def body_nodes(scope):
+        """Nodes of `scope`, not of the functions nested in it (they are scopes of their own)."""
+        stack = list(ast.iter_child_nodes(scope))
+        while stack:
+            n = stack.pop()
+            yield n
+            if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                stack.extend(ast.iter_child_nodes(n))
+
+    found = []
+    scopes = [tree] + [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    for scope in scopes:
+        nodes = list(body_nodes(scope))
+        raw: set = set()
+
+        def tainted(expr):
+            if called(expr, admission):
+                return False
+            # A comprehension's own loop variable is local to it: `[e for e in admitted]`
+            # is as clean as `admitted`, whatever `e` names elsewhere in the function.
+            local = {n.id for c in ast.walk(expr) if isinstance(c, ast.comprehension)
+                     for n in ast.walk(c.target) if isinstance(n, ast.Name)}
+            return bool(called(expr, reads)) or any(isinstance(n, ast.Name) and n.id in raw - local
+                                                    for n in ast.walk(expr))
+
+        assigns = [n for n in nodes if isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.For))]
+        changed = True
+        while changed:
+            changed = False
+            for a in assigns:
+                value = a.iter if isinstance(a, ast.For) else a.value
+                if value is None or not tainted(value):
+                    continue
+                targets = [a.target] if not isinstance(a, ast.Assign) else a.targets
+                for t in targets:
+                    for n in ast.walk(t):
+                        if isinstance(n, ast.Name) and n.id not in raw:
+                            raw.add(n.id)
+                            changed = True
+        for n in nodes:
+            if isinstance(n, ast.Call) and n in called(n, folds)[:1] and any(
+                    tainted(x) for x in list(n.args) + [k.value for k in n.keywords]):
+                found.append(f"{path.relative_to(lib)}:{n.lineno}")
+    return found
+
+
+#: Folds of raw events that are not a read of a live space, each with why.
+_RAW_FOLD_ALLOWED = {
+    # restore() folds the chains SAVED in a checkpoint document into a scratch
+    # directory (no hub config there) and compares the result with the root
+    # the document recorded; a mismatch refuses the restore.
+    "ledger_checkpoint.py",
+}
+
+
+def test_r4_no_production_module_folds_raw_events_in_any_shape():
+    """Codex round 3: the line-regex guard missed aliased shapes such as
+    `_fold(_read_events(space))` and folds of a filtered comprehension. This one
+    reads the code (AST): any fold of what read_events returned, under any
+    alias or through any name, outside the admission path, fails."""
+    lib = Path(hubmod.__file__).resolve().parents[1]
+    offenders = [hit for p in sorted(lib.rglob("*.py")) if "tests" not in p.parts
+                 and str(p.relative_to(lib)) not in _RAW_FOLD_ALLOWED for hit in _raw_folds(p, lib)]
+    assert offenders == [], offenders
+
+
+def test_r4_the_shape_guard_catches_the_shapes_codex_named(tmp_path):
+    """The guard is itself tested: each shape below is a bypass it must report."""
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    shapes = {
+        "aliased.py": "from ledger.fold import fold as _fold\nfrom ledger.log import read_events as _read_events\n"
+                      "def f(space):\n    return _fold(_read_events(space)).items\n",
+        "filtered.py": "from ledger.fold import fold\nfrom ledger.log import read_events\n"
+                       "def f(space):\n    events = [e for e in read_events(space) if e.type == 'spend.record']\n"
+                       "    return sum(fold(events).spend.values())\n",
+        "admitted.py": "from ledger.fold import fold\nfrom ledger.log import read_events\n"
+                       "from ledger.hub import authoritative_events\n"
+                       "def f(space):\n    events, kw = authoritative_events(space, read_events(space))\n"
+                       "    return fold(events, **kw)\n",
+    }
+    for name, text in shapes.items():
+        (lib / name).write_text(text)
+    hits = {name: _raw_folds(lib / name, lib) for name in shapes}
+    assert hits["aliased.py"] and hits["filtered.py"], hits
+    assert hits["admitted.py"] == [], hits
+
+
+def test_r4_decision_gates_never_read_raw_events():
+    """creates_today and parent_hops never folded: they scanned raw rows. The
+    claim and repair gates take events only from the admission path."""
+    import ast
+    lib = Path(hubmod.__file__).resolve().parents[1]
+    for rel in ("claim_gate.py", "jobs/autofix.py"):
+        tree = ast.parse((lib / rel).read_text(encoding="utf-8"))
+        calls = [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Call) and (
+            (isinstance(n.func, ast.Name) and n.func.id.lstrip("_") in ("read_events", "read"))
+            or (isinstance(n.func, ast.Attribute) and n.func.attr == "read_events"))]
+        assert calls == [], (rel, calls)
