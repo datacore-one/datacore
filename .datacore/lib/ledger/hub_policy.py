@@ -36,7 +36,13 @@ recorded no-op in every copy. The rules are the existing policy's:
   * `item.complete` of a pool item: only under a lease;
   * `item.dismiss`, `item.release`, `owner.set`, `item.archive`,
     `item.reopen` of another principal's item: the arbitration order, when
-    the policy declares one (policy.py stage 5).
+    the policy declares one (policy.py stage 5);
+  * OWNERSHIP CHANGES (Codex round-3 verdict, `reassign`, `owner_override`):
+    an `item.update` that changes `assignee` is made only by the approver,
+    the item's creator, its current owner or its current assignee, or by an
+    actor taking an item it may already execute (`may_execute`); an
+    `owner.set` names an owner that may execute the item, unless the
+    approver makes it.
 
 EXPLICIT INPUT. `PolicyInputs` is built once, before replay, from the policy
 file and the principal registry (`PolicyInputs.load`); the fold never reads
@@ -183,6 +189,38 @@ def may_execute(actor: str, item, seen: Mapping, inputs: PolicyInputs) -> str | 
     return None
 
 
+def _creator(item) -> str | None:
+    """Who created `item`: the fold's own record of the applied `item.create`
+    (`_note`: "<hlc> <actor> <type>: <outcome>"), the same in every copy."""
+    for line in item.history or ():
+        parts = line.split(" ", 3)
+        if len(parts) == 4 and parts[2] == "item.create:" and parts[3] == "applied":
+            return parts[1]
+    return None
+
+
+def _same(a, b, inputs: PolicyInputs) -> bool:
+    """Same writer or same principal."""
+    return bool(a) and bool(b) and addressed(str(a), str(b), inputs)
+
+
+def _reassign_problem(actor: str, item, new_assignee, seen: Mapping, inputs: PolicyInputs) -> str | None:
+    """Why `actor` may not change `item`'s assignee to `new_assignee`, or None.
+
+    Assignment decides who may execute, so changing it is an ownership change
+    (Codex round-3 verdict, `reassign`): the approver, the creator, the current
+    owner and the current assignee may hand the item on; anyone else may only
+    take an item it could already claim."""
+    p = item.payload or {}
+    if (_same(actor, inputs.approver, inputs) or _same(actor, _creator(item), inputs)
+            or _same(actor, item.owner, inputs) or _same(actor, p.get("assignee"), inputs)):
+        return None
+    if new_assignee and _same(actor, new_assignee, inputs) and may_execute(actor, item, seen, inputs) is None:
+        return None
+    return (f"{actor!r} may not reassign {item.id} (assigned to {p.get('assignee')!r}): only the approver, "
+            f"its creator, owner or assignee may")
+
+
 def _previously_approved(item) -> bool:
     return bool((item.payload or {}).get("approval_ref"))
 
@@ -230,6 +268,10 @@ def authorize(event, state, seen: Mapping, inputs: PolicyInputs) -> str | None:
         why = _effects_problem(merged, inputs)
         if why:
             return why
+        if merged.get("assignee") != (item.payload or {}).get("assignee"):
+            why = _reassign_problem(actor, item, merged.get("assignee"), seen, inputs)
+            if why:
+                return why
         if _previously_approved(item) or _needs_cosign(actor, merged, inputs):
             # Approved once, approved for good: edited content needs a grant
             # bound to the edited content (policy.py, claim_keeps_approval).
@@ -256,6 +298,16 @@ def authorize(event, state, seen: Mapping, inputs: PolicyInputs) -> str | None:
         if (item.payload or {}).get("role") and item.lease_ref is None:
             return f"{item_id} is a pool item; it is completed only under a hub lease"
         return None
+
+    if t == "owner.set":
+        # An owner is who executes: the new owner passes the claim's rule
+        # (Codex round-3 verdict, `owner_override`), unless the approver --
+        # the admin override -- sets it. Clearing the owner is arbitration only.
+        new_owner = payload.get("owner")
+        if new_owner and not _same(actor, inputs.approver, inputs):
+            why = may_execute(str(new_owner), item, seen, inputs)
+            if why:
+                return f"owner.set to {new_owner!r} refused: {why}"
 
     if t in _ARBITRATED and inputs.arbitration and item.owner:
         owner_p = _principal(str(item.owner), inputs) or _base(str(item.owner))
