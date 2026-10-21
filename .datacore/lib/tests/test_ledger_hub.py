@@ -2236,6 +2236,60 @@ def test_r4_owner_set_by_the_approver_or_to_the_assignee_is_still_allowed(env):
     assert _hub_item(hub, "t2").owner == "wa"
 
 
+def test_r4_create_may_not_hand_ownership_around_the_owner_rules(env):
+    """`item.create` may carry `owner` (fold `_handle_create`), and the hub did not
+    check it. "Assigned to wb, owned by wa" put wa in charge of a task addressed to
+    wb -- the owner.set that would do the same is refused -- and as owner wa could
+    then reassign the task to itself and claim it. Creating with owner=wb made wb
+    owner without claiming. A creation's owner is the creator itself, eligible
+    under the assignment, unless the approver creates it."""
+    hub = env.hub(policy=_arbitrated_policy())
+    t = hubmod.LocalTransport(hub)
+    own, wa = env.writer("own", t), env.writer("wa", t)
+    with pytest.raises(hubmod.HubRefused):
+        own.append("item.create", {"id": "t1", "title": "for wb", "assignee": "wb", "owner": "wa"})
+    with pytest.raises(hubmod.HubRefused):
+        wa.append("item.create", {"id": "t2", "title": "for wb", "assignee": "wb", "owner": "wa"})
+    with pytest.raises(hubmod.HubRefused):
+        wa.append("item.create", {"id": "t3", "title": "wb's now", "owner": "wb"})
+    # ... and by git: on replay the creation is a recorded no-op, so wa never
+    # owns t1 and cannot use ownership to reassign it to itself and claim.
+    git_pull(env.hub_dir, wa.space_dir)
+    _signed_into(env, wa, "item.create", {"id": "t1", "title": "for wb", "assignee": "wb", "owner": "wa"})
+    git_pull(wa.space_dir, env.hub_dir)
+    assert "t1" not in hub._state()[1].items or _hub_item(hub, "t1").owner is None
+    for type, payload in (("item.update", {"id": "t1", "assignee": "wa"}), ("item.claim", {"id": "t1"})):
+        try:
+            wa.append(type, payload)
+        except hubmod.HubRefused:
+            pass
+    items = hub._state()[1].items
+    assert "t1" not in items or items["t1"].owner is None, items["t1"].history
+    assert "t2" not in items and "t3" not in items
+
+
+def test_r4_create_with_an_owner_still_works_for_the_creator_and_the_approver(env):
+    """Boundary: a creator may own what it may execute, the approver may create a
+    task owned by anyone, and re-creating an existing id changes nothing."""
+    hub = env.hub(policy=_arbitrated_policy())
+    t = hubmod.LocalTransport(hub)
+    boss, wa = env.writer(APPROVER, t), env.writer("wa", t)
+    wa.append("item.create", {"id": "t1", "title": "mine", "owner": "wa"})
+    wa.append("item.create", {"id": "t2", "title": "mine", "assignee": "wa", "owner": "wa"})
+    boss.append("item.create", {"id": "t3", "title": "for wb", "assignee": "wb", "owner": "wa"})
+    assert _hub_item(hub, "t1").owner == "wa"
+    assert _hub_item(hub, "t2").owner == "wa"
+    assert _hub_item(hub, "t3").owner == "wa"
+    own = env.writer("own", t)
+    own.append("item.create", {"id": "t4", "title": "for wb", "assignee": "wb"})
+    try:
+        wa.append("item.create", {"id": "t4", "title": "taken", "owner": "wa"})
+    except hubmod.HubRefused:
+        pass
+    item = _hub_item(hub, "t4")
+    assert item.owner is None and item.payload["assignee"] == "wb", item.history
+
+
 # ── round 4: decision readers go through admission (`spend_reader`,
 #    `raw_gate_readers`, `autofix_reader`) ──────────────────────────────────
 
