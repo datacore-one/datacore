@@ -901,6 +901,7 @@ class Hub:
                 self._expire_if_ran_out(event)
             auth = self._authority(cfg)
             path, chain = _target(self.space_dir, log_name, event, sub.get("chain"))
+            late = self._sealed_late([event])
             from file_utils import fsync_directory
             from .log import CorruptLogError, _parse_log_bytes
             if not path.exists() and self._onto(event, chain, [], cfg, auth, proposal) == "duplicate":
@@ -922,6 +923,8 @@ class Hub:
                     except CorruptLogError as exc:
                         raise HubRefused("bad_chain", str(exc)) from None
                     verdict = self._onto(event, chain, existing, cfg, auth, proposal)
+                    if verdict is None and event.hash in late:
+                        verdict = ("sealed_late", late[event.hash])
                     if verdict != "duplicate":
                         if verdict is not None:
                             self._intend_reject(path, chain, event, *verdict)   # durable first
@@ -1520,6 +1523,51 @@ class Hub:
             "reason": reason, "frontier": dict(sorted(frontier.items())),
             "lease": {k: ref.get(k) for k in ("log", "seq", "hash")}}, after=floor)
 
+    def _sealed_late(self, candidates, events=None, state=None) -> dict:
+        """{hash: why} for each candidate that would reorder a SEALED decision
+        (round 4, sealed_ownership): not covered by this grantor's latest seal,
+        yet stamped before a sealed event about the same item. Folded in HLC
+        order it could change what was sealed (who claimed first), and a
+        sealed decision is final -- so the grantor keeps it as a rejected
+        proposal, a no-op in every copy. Later-stamped work is not touched."""
+        from .seal import as_sequencer, latest_seal
+        try:
+            self._writable(grant=True)
+        except HubError:
+            return {}                               # a standby rejects nothing
+        if events is None:
+            events, state = self._state()
+        try:
+            with as_sequencer(self.actor):
+                seal = latest_seal(events)
+        except ValueError:
+            return {}
+        if seal is None:
+            return {}
+        top: dict = {}
+        for e in events:
+            item = e.payload.get("id") if isinstance(e.payload, dict) else None
+            if e.type != "ledger.seal" and isinstance(item, str) and isinstance(e.hlc, str) and seal.includes(e):
+                top[item] = max(top.get(item, ""), e.hlc)
+        out = {}
+        for e in candidates:
+            item = e.payload.get("id") if isinstance(e.payload, dict) else None
+            if (isinstance(item, str) and isinstance(e.hlc, str) and not seal.includes(e)
+                    and e.hlc < top.get(item, "")):
+                out[e.hash] = (f"stamped {e.hlc}, before {item}'s sealed history (sealed up to {top[item]}); "
+                               "a sealed decision is final")
+        return out
+
+    def _reject_sealed_late(self) -> None:
+        """The same rule for what reached the hub by git: rejected before sealing."""
+        events, state = self._state()
+        rejected = {h for (_, _, h) in self._rejected()}
+        unsealed = [e for e in events if e.hash not in rejected and e.actor != self.actor]
+        for h, why in sorted(self._sealed_late(unsealed, events, state).items()):
+            e = next(x for x in unsealed if x.hash == h)
+            self._record_reject(getattr(e, "log", None) or e.actor,
+                                {"seq": e.seq, "hash": e.hash, "actor": e.actor, "type": e.type}, "sealed_late", why)
+
     def _judged(self) -> dict:
         try:
             data = json.loads(self._judged_path.read_text(encoding="utf-8"))
@@ -1620,6 +1668,7 @@ class Hub:
         with self._mutex:
             cfg = self._writable(grant=True)
             self._judge_arrivals()
+            self._reject_sealed_late()
             events, _ = self._state()
             eps = self._authority(cfg).epochs
             if len(eps) > 1:
