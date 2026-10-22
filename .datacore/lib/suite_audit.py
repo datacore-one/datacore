@@ -41,6 +41,9 @@ NOT_SOURCE = (
 
 def is_source(path: Path) -> bool:
     s = f"/{path.as_posix()}/"
+    # .datacore/state/ is gitignored runtime state; it can hold backup checkouts.
+    if s.startswith("/state/"):
+        return False
     return not any(x in s for x in NOT_SOURCE)
 
 
