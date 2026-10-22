@@ -1094,12 +1094,68 @@ class CredentialManager:
             return 1
 
         import subprocess
+        # Commit before sync.sh pulls, push after: an edit made in a store file
+        # used to be assembled here and reach no other host, and `creds add`
+        # committed without pushing (the Mac was 12 commits ahead, 2026-10-22).
+        committed = self._commit_store_edits(secrets_dir)
         cmd = [str(sync_script)]
         if instance:
             cmd.append(instance)
 
         result = subprocess.run(cmd, cwd=str(secrets_dir))
-        return result.returncode
+        if result.returncode != 0:
+            return result.returncode
+        return self._push_store(secrets_dir, committed)
+
+    STORE_PATTERNS = ("global.env", "credential-index.yaml", "spaces/*.env",
+                      "projects/*.env", "projects/*/*.env", "instances/*.yaml")
+
+    def _git_secrets(self, secrets_dir: Path, *args, timeout: int = 30):
+        import subprocess
+        return subprocess.run(["git", "-C", str(secrets_dir), *args], capture_output=True,
+                              text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+
+    def _commit_store_edits(self, secrets_dir: Path) -> list[str]:
+        """Commit changed store files by explicit path. Names only, never values."""
+        from fnmatch import fnmatch
+        st = self._git_secrets(secrets_dir, "status", "--porcelain", "--untracked-files=all")
+        if st.returncode != 0:
+            return []
+        paths = sorted({line[3:].split(" -> ")[-1].strip('"') for line in st.stdout.splitlines()})
+        paths = [p for p in paths
+                 if any(fnmatch(p, pat) and p.count("/") == pat.count("/") for pat in self.STORE_PATTERNS)]
+        if not paths:
+            return []
+        msg = (f"sync: store edits from {self._instance_label(secrets_dir)}\n\n"
+               + "\n".join(f"- {p}" for p in paths))
+        add = self._git_secrets(secrets_dir, "add", "--", *paths)
+        commit = self._git_secrets(secrets_dir, "commit", "--only", "-m", msg, "--", *paths)
+        if add.returncode or commit.returncode:
+            print("WARNING: could not commit store edits; they stay local and reach no "
+                  "other host: " + ", ".join(paths), file=sys.stderr)
+            return []
+        print(f"Committed store edits: {', '.join(paths)}")
+        return paths
+
+    def _instance_label(self, secrets_dir: Path) -> str:
+        f = secrets_dir / ".instance"
+        return f.read_text().strip() if f.exists() else "this host"
+
+    def _push_store(self, secrets_dir: Path, committed: list[str]) -> int:
+        """Push when this host is ahead of central. A failure is loud and non-zero."""
+        ahead = self._git_secrets(secrets_dir, "rev-list", "--count", "origin/main..HEAD")
+        if ahead.returncode != 0 or ahead.stdout.strip() in ("", "0"):
+            return 0
+        push = self._git_secrets(secrets_dir, "push", "--quiet", "origin", "HEAD:main")
+        if push.returncode != 0:
+            print(f"ERROR: secrets push FAILED — {ahead.stdout.strip()} commit(s) stay on this host "
+                  "and other hosts keep the old values. Resolve and rerun 'creds sync'.",
+                  file=sys.stderr)
+            for line in push.stderr.splitlines()[-3:]:
+                print(f"  git: {line}", file=sys.stderr)
+            return 1
+        print(f"Pushed {ahead.stdout.strip()} commit(s) to the secrets central repo")
+        return 0
 
     def _bootstrap_rotation(self, rotation: RotationIndex, env_path: Path) -> int:
         """Parse .env and create rotation entries from known patterns."""
