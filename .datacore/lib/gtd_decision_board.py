@@ -65,6 +65,9 @@ SECTIONS = [
     ("waiting", "T", "Waiting on others", "What you are waiting on, and for how long."),
     ("review", "R", "Waiting for your review",
      "Marked REVIEW: agent output or work waiting for your sign-off."),
+    ("autopass", "A", "Passes by your review rules",
+     "Your review rules let these pass: tests are green and a second model family agreed. "
+     "They are pre-set to Accept; change any you want to see again."),
     ("projects", "P", "Projects", "Open items in your projects file."),
     ("backlog", "B", "Old backlog", "TODO items open more than 30 days and never started."),
 ]
@@ -142,7 +145,7 @@ def _option(section, key, nxt, when):
         return f"Check again on {_fmt(when)}", f"Stays WAITING, with a check date of {_fmt(when)}."
     if section == "waiting" and key == "done":
         return "Got it", "Marked DONE: what you waited for arrived."
-    if section == "review" and key == "next":
+    if section in ("review", "autopass") and key == "next":
         return "Rework it", "Back to NEXT on your own list."
     table = {
         "next": ("Do next", "Marked NEXT in its current file; its old scheduled date is cleared."),
@@ -373,6 +376,9 @@ def build(args):
             section, ctx, keys, rec, when = c
             oid = d["id"]
             ov = overrides.get(oid or "", {})
+            # A caller may move a REVIEW row into the rule-passed section only.
+            if section == "review" and ov.get("section") == "autopass":
+                section = "autopass"
             keys = list(ov.get("options") or keys)
             rec = ov.get("rec", rec)
             if rec not in keys:
@@ -398,7 +404,9 @@ def build(args):
             meta += [f"{it['age']} days old" if it["age"] is not None else "age unknown"]
             if oid:
                 meta.append(oid)
-            raw[section].append({
+            meta += [red(str(m)) for m in (ov.get("meta") or [])]
+            extra = {"links": [{"text": red(str(l["text"])), "url": str(l["url"])} for l in ov["links"]]} if ov.get("links") else {}
+            raw[section].append({**extra,
                 "area": red(_area(node, path.stem)),
                 "title": red(d["heading"]),
                 "context": red(ov["why"] + " " + ctx if ov.get("why") else ctx),
@@ -723,7 +731,7 @@ def main():
     b.add_argument("--slug", required=True)
     b.add_argument("--title", required=True)
     b.add_argument("--week", help="JSON with sections that sit above the task list")
-    b.add_argument("--overrides", help="JSON {org-id: {rec, options, why, labels, consequences, defer}}")
+    b.add_argument("--overrides", help="JSON {org-id: {rec, options, why, labels, consequences, defer, meta, links, section}}; section may only move a REVIEW row to 'autopass'")
     b.add_argument("--redact", action="append", help="term replaced with 'the customer' (repeatable)")
     b.add_argument("--prefill", help="a saved <slug>.decisions.json, to revise a board")
     b.add_argument("--states", nargs="+", help="only these org states (e.g. WAITING)")
