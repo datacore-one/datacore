@@ -1545,9 +1545,30 @@ class Hub:
                     self._record_reject(e.actor, ref, *problem)
                     continue
                 self._note_admissions(events)
-                frontier = {chain: top["seq"] for chain, top in _current_heads(self.space_dir).items()}
                 self.log.append("ledger.admit", {"event": {"log": e.actor, **ref}, "kind": POLICY_ADMIT_KIND,
-                                                 "frontier": frontier, "admitted_ms": self.clock()})
+                                                 "frontier": self._policy_frontier(events, auth),
+                                                 "admitted_ms": self.clock()})
+
+    def _policy_frontier(self, events, auth) -> dict:
+        """{log: seq} below which events keep the earlier policy: what this hub
+        holds now, and never less than any grantor seal it holds covered, nor
+        the cutover manifest (the Lean model's finding, round 8: a hub that
+        lost a sealed log -- a restore, a promoted grantor on a partial copy --
+        must not let a policy change re-judge that sealed history when the log
+        comes back)."""
+        frontier = {chain: top["seq"] for chain, top in _current_heads(self.space_dir).items()}
+        for chain, (seq, _) in (auth.legacy or {}).items():
+            frontier[chain] = max(frontier.get(chain, -1), seq)
+        for s in events:
+            if s.type != "ledger.seal" or s.actor not in auth.grantors or not isinstance(s.payload, dict):
+                continue
+            for chain, seq in (s.payload.get("watermarks") or {}).items():
+                if isinstance(chain, str) and type(seq) is int:
+                    frontier[chain] = max(frontier.get(chain, -1), seq)
+        for chain, seq in predecessor_seal_marks(events, auth, self.actor)[0].items():
+            if type(seq) is int:
+                frontier[chain] = max(frontier.get(chain, -1), seq)
+        return dict(sorted(frontier.items()))
 
     def _authorize(self, event: Event) -> None:
         """Authorship is not authorization (audit finding 12): the same rule the

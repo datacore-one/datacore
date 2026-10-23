@@ -63,7 +63,7 @@ def _activate(env, space):
     for w in ("own", "wa"):
         H.declare_ready(space, w, keys_dir=env.keys_dir, registry_path=env.registry)
     H.enable(space, hub_id=T.HUB_ID, grantor=T.GRANTOR, lease_ttl_s=900, owner=T.OWNER,
-             keys_dir=env.keys_dir, registry_path=env.registry)
+             keys_dir=env.keys_dir, registry_path=env.registry, policy=T.TEST_POLICY)
 
 
 def _view(state):
