@@ -539,11 +539,20 @@ def test_r6_n4_the_job_health_reader_never_uses_a_reversed_attestation(env, monk
     import actor_identity
     import job_attestations
     import ledger.keys as keys
+    from ledger import finality
+    # Round 7 (owner): an attestation is a control record and is never
+    # reversible -- the reversal is refused at write. The reader's guarantee
+    # is kept by widening the allow-list for this test only: whatever that
+    # list says, the job-health reader never uses a reversed record.
     h, own, wa, owner, done = _confirmed(env, monkeypatch)
     monkeypatch.setattr(keys, "DEFAULT_REGISTRY_PATH", env.registry)
     e, _ = wa.append("metric.attest", {"metric": "job.verify", "job": "critical-job", "ok": True, "failures": []})
     target = next(x for x in h._state()[0] if x.hash == e.hash)
-    v, _ = owner.append("ledger.void", dict(_void(e), log=target.log))
+    with pytest.raises(H.HubRefused) as refused:
+        owner.append("ledger.void", dict(_void(e), log=target.log))
+    assert refused.value.code == "not_reversible"
+    monkeypatch.setattr(finality, "REVERSIBLE_TYPES", finality.REVERSIBLE_TYPES | {"metric.attest"})
+    v, _ = owner.append("ledger.void", dict(_void(e), log=target.log, reason="widened allow-list (test only)"))
     published = T._published(env, h, [own, wa, owner])
     assert owner.receipt_check(published, required=[v.hash])["status"] == "confirmed"
     got = job_attestations.latest_jobs(published, env.clock() / 1000, registry=Path(actor_identity.PRINCIPALS))

@@ -570,7 +570,13 @@ def validate_approval(log: EventLog, payload: dict, policy: Policy, *, creating=
 
     from .hub import authoritative_events
     # A hub space: a grant counts only as admission lets it in (round 6).
-    events, _ = authoritative_events(space_dir, read_events(space_dir))
+    events, kw = authoritative_events(space_dir, read_events(space_dir))
+    # ... and through the ONE correction rule (Codex final audit, F5): a
+    # rejected or reversed grant authorises nothing. (An approval is a control
+    # record and is never reversible, owner round 7; the filter keeps this
+    # reader in step with `ledger.finality` whatever its allow-list says.)
+    from .finality import effective_events
+    events = effective_events(events, kw)
 
     grant = next((e for e in events if e.hash == approval_ref), None)
     if grant is None:
