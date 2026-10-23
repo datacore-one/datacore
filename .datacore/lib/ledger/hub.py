@@ -289,6 +289,10 @@ def enable(space_dir, *, hub_id: str, grantor: str, owner: str, lease_ttl_s: int
             raise HubRefused("not_ready", "these writers have not declared support for ledger protocol "
                              f"{PROTOCOL}: {', '.join(missing)} (run `python3 -m ledger.hub ready` on each "
                              "writer's host)", writers=missing)
+    reversals = None
+    if not before.get("cutover_sha256"):
+        from .log import read_events
+        reversals = activation_reversals(read_events(Path(space_dir)))
     cfg = HubConfig(hub_id=hub_id, grantor=grantor, lease_ttl_s=lease_ttl_s, cutover_hlc=cutover_hlc,
                     space_id=space_id, cutover_logs=logs, cutover_sha256=_manifest_sha(logs), owner=owner,
                     clock_uncertainty_ms=clock_uncertainty_ms, protocol=PROTOCOL)
@@ -298,7 +302,8 @@ def enable(space_dir, *, hub_id: str, grantor: str, owner: str, lease_ttl_s: int
         EventLog(Path(space_dir), owner, keys_dir=keys_dir, registry_path=registry_path, sign=True).append(
             "hub.enable", {"space": space_id, "hub": hub_id, "epoch": 0, "grantor": grantor, "manifest": logs,
                            "manifest_sha256": cfg.cutover_sha256, "lease_ttl_s": lease_ttl_s,
-                           "clock_uncertainty_ms": clock_uncertainty_ms, "protocol": PROTOCOL})
+                           "clock_uncertainty_ms": clock_uncertainty_ms, "protocol": PROTOCOL,
+                           "legacy_reversals": reversals or []})
     return cfg
 
 
@@ -457,7 +462,40 @@ def authority(space_dir, cfg: HubConfig, registry_path=None) -> Authority:
         raise HubRefused("bad_manifest", f"{Path(space_dir) / CONFIG}: the cutover manifest is not the one "
                          "the owner signed (hub.enable)")
     return Authority(space_id=cfg.space_id, hub_id=cfg.hub_id, grantors=frozenset(ep.grantor for ep in eps),
-                     legacy=legacy, registry_path=registry_path, owner=cfg.owner, epochs=eps)
+                     legacy=legacy, registry_path=registry_path, owner=cfg.owner, epochs=eps,
+                     legacy_reversals=_legacy_reversals(enabled.get("legacy_reversals")))
+
+
+def _legacy_reversals(raw) -> tuple:
+    """The activation record's reversals, validated (malformed entries count for nothing)."""
+    out = []
+    for r in raw if isinstance(raw, list) else []:
+        if not isinstance(r, dict):
+            continue
+        refs = [r.get("void"), r.get("target")]
+        if all(isinstance(x, dict) and isinstance(x.get("log"), str) and type(x.get("seq")) is int
+               and isinstance(x.get("hash"), str) for x in refs) and (
+                r.get("body_sha256") is None or isinstance(r.get("body_sha256"), str)):
+            out.append({"void": dict(r["void"]), "target": dict(r["target"]), "body_sha256": r.get("body_sha256")})
+    return tuple(out)
+
+
+def activation_reversals(events) -> list:
+    """The reversals in effect NOW by the old rule (principal registry, no
+    window), as the owner's activation record freezes them: each keeps its
+    effect after the space moves to the hub, whatever the registry says later."""
+    from .finality import resolve
+    from .voids import VOID_TYPE, _target, log_stem
+    effective = resolve(list(events)).voids.effective
+    out = []
+    for v in events:
+        t = _target(v.payload) if v.type == VOID_TYPE else None
+        if not t or isinstance(t, str) or t[0] not in effective:
+            continue
+        (log, seq, digest), _ = t
+        out.append({"void": {"log": log_stem(getattr(v, "log", None) or v.actor), "seq": v.seq, "hash": v.hash},
+                    "target": {"log": log, "seq": seq, "hash": digest}, "body_sha256": effective[t[0]]})
+    return sorted(out, key=lambda r: (r["void"]["log"], r["void"]["seq"]))
 
 
 # ── the one authoritative state of a hub space (Codex re-audit, finding 2) ──
@@ -557,7 +595,8 @@ def incidents(space_dir, events=None, *, registry_path=None, policy=None) -> lis
     from .finality import original, resolve
     from .voids import COMPENSATE_TYPE, log_stem
     admitted, kw = authoritative_events(space_dir, events, registry_path=registry_path, policy=policy)
-    fin = resolve(admitted, lease_grantors=kw.get("lease_grantors"), reversers=kw.get("reversers"))
+    fin = resolve(admitted, lease_grantors=kw.get("lease_grantors"), reversers=kw.get("reversers"),
+                  legacy_reversals=kw.get("legacy_reversals"))
     out = []
     for c in admitted:
         if c.type != COMPENSATE_TYPE or not fin.outcomes.get(c.hash, "").startswith("applied"):
@@ -1790,8 +1829,12 @@ class Hub:
         cfg = self.config()
         events, _ = self._state()
         self._note_admissions(events)
-        grantors = self._authority(cfg).grantors
+        auth = self._authority(cfg)
+        grantors = auth.grantors
         decided = {h for (_, _, h) in self._rejected()}
+        # Reversals from before activation are the activation record's, not the window's.
+        decided |= {e.hash for e in events if (getattr(e, "log", None) or e.actor) in auth.legacy
+                    and type(e.seq) is int and e.seq <= auth.legacy[getattr(e, "log", None) or e.actor][0]}
         decided |= {(e.payload.get("event") or {}).get("hash") for e in events
                     if e.type == "ledger.admit" and e.actor in grantors and isinstance(e.payload, dict)
                     and isinstance(e.payload.get("event"), dict)}

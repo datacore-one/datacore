@@ -405,6 +405,9 @@ def _chain_issue(events, fold_kwargs=None):
         # signed, domain-bound, chained -- so no void excuses anything, and
         # the local principal registry can never make a recorded reversal
         # read as a broken chain (and a confirmed seal as a mismatch).
+        from .finality import resolve
         from .voids import Voids
-        return bool(chain_problems(events, voids=Voids()))
+        fin = resolve(events, lease_grantors=fold_kwargs.get("lease_grantors"),
+                      reversers=fold_kwargs.get("reversers"), legacy_reversals=fold_kwargs.get("legacy_reversals"))
+        return bool(chain_problems(events, voids=Voids(effective=dict(fin.voids.effective))))
     return bool(chain_problems(events))

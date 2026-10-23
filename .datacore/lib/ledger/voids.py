@@ -330,7 +330,8 @@ def _hub_space_voids(events_dir: Path, registry_path=None):
         from .finality import resolve as resolve_finality
         from .hub import authoritative_events
         events, kw = authoritative_events(space, registry_path=registry_path)
-        fin = resolve_finality(events, lease_grantors=kw.get("lease_grantors"), reversers=kw.get("reversers"))
+        fin = resolve_finality(events, lease_grantors=kw.get("lease_grantors"), reversers=kw.get("reversers"),
+                               legacy_reversals=kw.get("legacy_reversals"))
     except Exception:  # noqa: BLE001 -- no verified authority: nothing is excused
         return Voids()
     return Voids(effective=dict(fin.voids.effective))

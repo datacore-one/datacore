@@ -2592,6 +2592,10 @@ _RAW_FOLD_ALLOWED = {
     # directory (no hub config there) and compares the result with the root
     # the document recorded; a mismatch refuses the restore.
     "ledger_checkpoint.py",
+    # The activation dry run (round 6) folds a space the way every reader
+    # sees it TODAY (no hub yet) to compare with the would-be hub state; it
+    # writes nothing and decides nothing.
+    "ledger/activation.py",
 }
 
 

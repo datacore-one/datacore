@@ -75,8 +75,12 @@ def _ref(p) -> tuple | None:
     return (log_stem(p.get("log")), p.get("seq"), p.get("hash")) if isinstance(p, dict) else None
 
 
-def resolve(events: list[Event], *, lease_grantors=None, reversers=None) -> Finality:
-    """THE correction rule. `lease_grantors` None: a space without a hub."""
+def resolve(events: list[Event], *, lease_grantors=None, reversers=None, legacy_reversals=None) -> Finality:
+    """THE correction rule. `lease_grantors` None: a space without a hub.
+
+    `legacy_reversals`: the reversals the owner's activation record
+    (`hub.enable`) froze -- in effect by the old rule when the space moved to
+    the hub. Each keeps its effect; nothing later can add one."""
     if lease_grantors is None:
         if not any(e.type == VOID_TYPE for e in events):
             return Finality()
@@ -98,8 +102,20 @@ def resolve(events: list[Event], *, lease_grantors=None, reversers=None) -> Fina
     owners = frozenset(_writer(r) for r in (reversers or ()))
     outcomes: dict = {}
     pending = []
+    legacy_voids = {(log_stem((r.get("void") or {}).get("log")), (r.get("void") or {}).get("seq"),
+                     (r.get("void") or {}).get("hash")) for r in (legacy_reversals or ())}
+    legacy_effect = {}
+    held = {(log_stem(getattr(e, "log", None) or e.actor), e.seq, e.hash) for e in events}
+    for r in legacy_reversals or ():
+        t = r.get("target") or {}
+        key = (log_stem(t.get("log")), t.get("seq"), t.get("hash"))
+        if key in held:
+            legacy_effect[key] = r.get("body_sha256")
     for e in events:
         if e.type not in CORRECTION_TYPES:
+            continue
+        if (log_stem(getattr(e, "log", None) or e.actor), e.seq, e.hash) in legacy_voids:
+            outcomes[e.hash] = "applied (a reversal from before activation: the owner's hub.enable record keeps it)"
             continue
         rec = admitted.get(e.hash)
         if e.hash in rejected:
@@ -131,8 +147,8 @@ def resolve(events: list[Event], *, lease_grantors=None, reversers=None) -> Fina
             outcomes[v.hash] = f"applied (reversal of {log_stem(p.get('log'))} seq {p.get('seq')})"
     # A hub space reports nothing as a chain problem: a correction without
     # effect is a recorded no-op (its outcome), never a broken log.
-    return Finality(rejected=rejected, voids=Voids(effective=dict(voids.effective)), admitted=admitted,
-                    outcomes=outcomes)
+    return Finality(rejected=rejected, voids=Voids(effective={**legacy_effect, **voids.effective}),
+                    admitted=admitted, outcomes=outcomes)
 
 
 # ── the hub's decision, at admission, by its own clock ──────────────────────

@@ -204,7 +204,8 @@ class LedgerState:
         return h.hexdigest()
 
 
-def fold(events: list[Event], *, lease_grantors=None, policy=None, reversers=None) -> LedgerState:
+def fold(events: list[Event], *, lease_grantors=None, policy=None, reversers=None,
+         legacy_reversals=None) -> LedgerState:
     """Reduce `events` (already merged + hlc-sorted) into a `LedgerState`.
 
     Pure and order-preserving: does not sort, does not mutate `events` or
@@ -239,7 +240,8 @@ def fold(events: list[Event], *, lease_grantors=None, policy=None, reversers=Non
     # never the principal registry or a writer's timestamp; a space without a
     # hub keeps the old rule (LED-4). Reversed events do not exist for the fold.
     from . import finality
-    fin = finality.resolve(events, lease_grantors=lease_grantors, reversers=reversers)
+    fin = finality.resolve(events, lease_grantors=lease_grantors, reversers=reversers,
+                           legacy_reversals=legacy_reversals)
     state.finality = fin
     if len(fin.voids):
         events = [e for e in events if not fin.voids.applies(getattr(e, "log", e.actor), e)]
