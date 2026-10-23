@@ -17,6 +17,8 @@ models:
     covers: [.datacore/lib/ledger/verify.py, .datacore/lib/ledger/fork.py, .datacore/lib/resolve_ledger_conflicts.py]
   - model: LedgerSpec/Author.lean
     covers: [.datacore/lib/ledger/fold.py, .datacore/lib/ledger/log.py]
+  - model: LedgerSpec/HubFinality.lean
+    covers: [.datacore/lib/ledger/hub.py, .datacore/lib/ledger/hub_admission.py, .datacore/lib/ledger/hub_policy.py, .datacore/lib/ledger/finality.py, .datacore/lib/ledger/fold.py]
   - model: DatacoreSpec/GtdState.lean
     covers: [.datacore/lib/org_workspace_adapter.py, .datacore/lib/dedup_tasks.py, .datacore/lib/task_cleanup.py]
   - model: DatacoreSpec/OrgTransaction.lean
