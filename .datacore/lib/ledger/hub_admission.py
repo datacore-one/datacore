@@ -103,8 +103,8 @@ def check_space_protocol(space_dir) -> None:
         _PROTOCOL_CACHE[key] = declared
     require_protocol(declared, str(path.parent.parent))
 #: Written only by a hub's grantor, in its own log (`pool.budget`: the role
-#: pool's daily threshold, amendment G).
-HUB_ONLY_TYPES = HUB_EVENT_TYPES | POOL_EVENT_TYPES | {"ledger.seal", "hub.fence", "ledger.reject"}
+#: pool's daily threshold, amendment G; `hub.start`: round 5, amendment 7).
+HUB_ONLY_TYPES = HUB_EVENT_TYPES | POOL_EVENT_TYPES | {"ledger.seal", "hub.fence", "hub.start", "ledger.reject"}
 #: Refusals that make a signed, chained event a REJECTED PROPOSAL rather than
 #: the end of its log, once the grantor has recorded it (`ledger.reject`,
 #: audit finding 11). The fold gives such an event no effect: a hub-only type

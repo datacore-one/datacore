@@ -134,7 +134,22 @@ OWNER_EVENT_TYPES = frozenset({"hub.enable", "hub.promote", "hub.resolve"})
 # already in a writer's log is a REJECTED PROPOSAL -- kept so the chain stays
 # continuous, with no effect on state, until an authorised voider cancels it
 # with `ledger.void`. Nothing is deleted or re-signed.
-EVENT_TYPES = EVENT_TYPES | HUB_EVENT_TYPES | OWNER_EVENT_TYPES | {"hub.fence", "ledger.reject"}
+#
+# `hub.start` (round 5, amendment 7): the grantor's own statement, in its own
+# log, that it began serving this space for an epoch. Written durably before
+# its first answer, so a copy of the space taken at any later moment shows
+# that this grantor has served, whatever the writers' clocks say: a hub
+# without its private state that finds it runs the owner-cleared barrier, and
+# a genuine first start (none there) does not. Folds to nothing.
+#
+# `ledger.compensate` (round 5, owner decision 2026-10-23): a FORWARD correction
+# of an event a seal already covers. A sealed outcome never changes, so an
+# error found after the seal is not reversed: this record points to the
+# original (log, seq, hash) with a reason, and carries its own receipt; the
+# original stays confirmed. The fold gives it no effect on item state; an
+# effect in the world is a new action recorded as its own event.
+EVENT_TYPES = EVENT_TYPES | HUB_EVENT_TYPES | OWNER_EVENT_TYPES | {"hub.fence", "hub.start", "ledger.reject",
+                                                                   "ledger.compensate"}
 
 # ── ROLE POOLS (DIP-0034 October 2026 amendment, section G) ─────────────────
 # The role is named in the task (owner decision 2026-10-18); who may pick up an
