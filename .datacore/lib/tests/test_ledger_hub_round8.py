@@ -301,3 +301,14 @@ def test_r8_f8_3_an_unadmitted_line_never_moves_the_policy_frontier(penv):
     h.seal()
     assert "forbidden" not in h._state()[1].items
     assert wa.receipt_check(e.hub_dir, required=[new.hash])["status"] != "confirmed"
+
+
+def test_r8_writer_pre_checks_ask_the_ledgers_policy(penv):
+    """The round-8 audit's residual: a writer-side pre-check must judge by the
+    policy the hub will apply (the ledger's latest version), not its own file."""
+    env = penv
+    h = env.hub()
+    assert H.policy_in_force(env.hub_dir, registry_path=env.registry, policy=CHANGED) == INITIAL
+    _set_policy(env, CHANGED)
+    h.seal()
+    assert H.policy_in_force(env.hub_dir, registry_path=env.registry, policy=INITIAL) == CHANGED
