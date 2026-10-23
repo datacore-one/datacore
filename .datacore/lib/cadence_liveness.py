@@ -238,6 +238,12 @@ def scheduled_state(space: Path, venture: str, owner: str, role: str, freq: str,
     if (last.get("result") in ("blocked", "quota") and ends and (now - ends[-1][0]) <= limit
             and streak is not None and (now - streak) <= limit + window):
         return ("amber", 0, f"{last['result']}: {last.get('reason', '')[:80]}")
+    if last.get("result") in ("blocked", "quota") and streak is not None and (now - ends[-1][0]) > limit:
+        # The last stop is old and nothing was recorded since: the runs since failed
+        # before any record (a ledger refusal stops them at the first write), so
+        # "waiting on quota" would claim a usage limit nobody saw (W2, 2026-10-23).
+        return ("red", days, f"late: no run recorded since {ends[-1][0].date().isoformat()} "
+                             f"(the last recorded run: {last['result']}): {owner}")
     if last.get("result") in ("blocked", "quota") and streak is not None:
         return ("red", days, f"late: waiting on {last['result']} for {(now - streak).days} day(s), "
                              f"no real run: {owner}")
