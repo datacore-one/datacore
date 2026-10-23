@@ -51,12 +51,12 @@ def space(tmp_path):
     subprocess.run([*g, "config", "core.hooksPath", str(root / ".datacore" / "githooks")],
                    cwd=repo, check=True, env=env)
 
-    def commit(files: dict) -> subprocess.CompletedProcess:
+    def commit(files: dict, extra_env: dict | None = None) -> subprocess.CompletedProcess:
         for name, text in files.items():
             (repo / name).parent.mkdir(parents=True, exist_ok=True)
             (repo / name).write_text(text)
         subprocess.run([*g, "add", "--", *files], cwd=repo, check=True, env=env)
-        return subprocess.run([*g, "commit", "-q", "-m", "x"], cwd=repo, env=env,
+        return subprocess.run([*g, "commit", "-q", "-m", "x"], cwd=repo, env={**env, **(extra_env or {})},
                               capture_output=True, text=True)
 
     def landed(name: str) -> bool:
@@ -101,3 +101,18 @@ def test_other_yaml_files_are_not_this_gates_business(space):
     commit, landed = space
     r = commit({"content/notes.yaml": BROKEN_QUOTES})
     assert r.returncode == 0, (r.stdout + r.stderr)[-600:]
+
+
+def test_a_board_is_checked_on_a_host_without_pydantic(space, tmp_path):
+    """Two agent hosts have PyYAML but not pydantic; one of them writes boards."""
+    commit, landed = space
+    blocker = tmp_path / "no-pydantic" / "pydantic"
+    blocker.mkdir(parents=True)
+    (blocker / "__init__.py").write_text("raise ModuleNotFoundError(\"No module named 'pydantic'\")\n")
+    without = {"PYTHONPATH": str(blocker.parent)}
+    r = commit({"hypotheses.yaml": UNKNOWN_LANE}, without)
+    assert r.returncode != 0 and "active_candidate" in r.stderr, r.stderr[-600:]
+    assert "cannot load" not in r.stderr
+    r = commit({"hypotheses.yaml": GOOD}, without)
+    assert r.returncode == 0, (r.stdout + r.stderr)[-600:]
+    assert landed("hypotheses.yaml")
