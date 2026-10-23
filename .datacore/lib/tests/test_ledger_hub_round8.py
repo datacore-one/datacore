@@ -190,3 +190,27 @@ def test_r8_status_reports_a_policy_file_that_differs_from_the_ledger(penv):
     h.close()
     h = env.hub(policy=INITIAL)
     assert h.status()["policy"]["recorded_matches_configured"] is True
+
+
+# ── the Lean model's finding (HubFinality.policy_frontier, round 8) ─────────
+
+def test_r8_a_policy_admitted_while_a_sealed_log_is_missing_never_rejudges_it(penv):
+    """A hub that holds less than an earlier seal covered (a restore that lost
+    a writer's log) must not record a policy frontier below that sealed event:
+    when the log comes back, the sealed creation keeps its outcome."""
+    import shutil
+    env = penv
+    h = env.hub()
+    own = env.writer("own", H.LocalTransport(h))
+    event, _ = own.append("item.create", {"id": "t", "effects": ["publish"]})
+    h.seal()
+    assert _status(own, env, event) == "confirmed"
+    log = env.hub_dir / ".datacore" / "events" / "own.jsonl"
+    saved = env.tmp / "own.jsonl.bak"
+    shutil.move(log, saved)                     # a restore that lost own's log
+    _set_policy(env, CHANGED)
+    h._judge_policies()
+    shutil.move(saved, log)                     # the log comes back
+    h.seal()
+    assert _status(own, env, event) == "confirmed", "a policy change re-judged a sealed creation"
+    assert "t" in h._state()[1].items
