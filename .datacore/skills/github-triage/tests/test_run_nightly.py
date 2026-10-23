@@ -45,6 +45,9 @@ def _setup(tmp_path):
     env = dict(os.environ, DATA_DIR=str(data), CLAUDE_BIN=str(bindir / "claude"),
                STUB_LOG=str(tmp_path / "calls.log"), TRIAGE_NO_PUSH="1", TRIAGE_LOG_DIR=str(tmp_path / "logs"),
                TRIAGE_OWNER="octo-owner", TRIAGE_ENTERPRISE_REPO="octo-org/private-repo",
+               # The machine's canonical env file is read when a setting is unset:
+               # point it at a file that does not exist so the host's own never leaks in.
+               DATACORE_ENV_FILE=str(tmp_path / "no-such-datacore.env"),
                GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
     return data, personal, env
 
@@ -115,3 +118,33 @@ def test_enterprise_repo_unset_is_reported_not_run(tmp_path):
     assert "enterprise NOT RUN" in r.stdout
     calls = (tmp_path / "calls.log").read_text().splitlines()
     assert [c.split()[0] for c in calls] == ["public"]
+
+
+def test_owner_and_enterprise_repo_come_from_the_machine_env_file(tmp_path):
+    # 2026-10-18..23: the owner default left the public code and no host set the
+    # variable in the job's environment, so every nightly run stopped at "no owner"
+    # and the boards went stale. The settings live in the machine's one env file.
+    data, personal, env = _setup(tmp_path)
+    env.pop("TRIAGE_OWNER", None)
+    env.pop("GITHUB_TRIAGE_USERNAME", None)
+    env.pop("TRIAGE_ENTERPRISE_REPO", None)
+    envfile = tmp_path / "datacore.env"
+    envfile.write_text("GITHUB_TRIAGE_USERNAME=octo-owner\nTRIAGE_ENTERPRISE_REPO=octo-org/private-repo\n")
+    env["DATACORE_ENV_FILE"] = str(envfile)
+    r = subprocess.run(["bash", str(RUNNER), "--date", "2026-09-30"], capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = (tmp_path / "calls.log").read_text().splitlines()
+    assert [c.split()[0] for c in calls] == ["public", "enterprise"]
+    owners = set((tmp_path / "calls.log.owner").read_text().split()) - {"OWNER"}
+    assert owners == {"octo-owner"}
+
+
+def test_the_process_environment_wins_over_the_env_file(tmp_path):
+    data, personal, env = _setup(tmp_path)
+    envfile = tmp_path / "datacore.env"
+    envfile.write_text("TRIAGE_OWNER=someone-else\n")
+    env["DATACORE_ENV_FILE"] = str(envfile)
+    r = subprocess.run(["bash", str(RUNNER), "--date", "2026-09-30"], capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    owners = set((tmp_path / "calls.log.owner").read_text().split()) - {"OWNER"}
+    assert owners == {"octo-owner"}
