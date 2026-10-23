@@ -3,3 +3,4 @@ import LedgerSpec.Item
 import LedgerSpec.Converge
 import LedgerSpec.Chain
 import LedgerSpec.Author
+import LedgerSpec.HubFinality
