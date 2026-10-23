@@ -93,11 +93,12 @@ class Env:
         monkeypatch.setattr(logmod, "time", fake)
         self.hub_dir = tmp / "hub-space"
         (self.hub_dir / ".datacore" / "events").mkdir(parents=True)
-        hubmod.enable(self.hub_dir, hub_id=HUB_ID, grantor=GRANTOR, owner=OWNER,
-                      keys_dir=self.keys_dir, registry_path=self.registry)
-        # A fixed policy, not this machine's approvals_policy.yaml (finding 12).
+        # A fixed policy, not this machine's approvals_policy.yaml (finding 12),
+        # recorded in the owner's hub.enable (round 8, owner decision 1).
         from ledger.hub_policy import PolicyInputs
         self.policy = PolicyInputs(approver="boss", cosign_effects=frozenset({"payment"}))
+        hubmod.enable(self.hub_dir, hub_id=HUB_ID, grantor=GRANTOR, owner=OWNER,
+                      keys_dir=self.keys_dir, registry_path=self.registry, policy=self.policy)
         self.hub = hubmod.Hub(self.hub_dir, GRANTOR, keys_dir=self.keys_dir, registry_path=self.registry,
                               state_dir=tmp / "hubstate", clock=self.clock, policy=self.policy)
         self.transport = hubmod.LocalTransport(self.hub)

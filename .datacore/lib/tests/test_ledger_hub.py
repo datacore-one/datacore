@@ -103,16 +103,29 @@ class Env:
         self.clock = Clock()
         self.hub_dir = tmp / "hub-space"
         (self.hub_dir / ".datacore" / "events").mkdir(parents=True)
+        # The policy in force at activation is the owner's record (round 8,
+        # owner decision 1): the same fixed policy the hubs and writers use.
         hubmod.enable(self.hub_dir, hub_id=HUB_ID, grantor=GRANTOR, lease_ttl_s=900, owner=OWNER,
-                      keys_dir=self.keys_dir, registry_path=self.registry)
+                      keys_dir=self.keys_dir, registry_path=self.registry,
+                      **({"policy": TEST_POLICY} if TEST_POLICY is not None else {}))
+        self.recorded_policy = TEST_POLICY
         self.hubs: list = []
 
     def hub(self, actor: str = GRANTOR, space: Path | None = None, *, eligibility=allow_any,
-            state: str = "state", policy=None) -> "hubmod.Hub":
+            state: str = "state", policy=None, record_policy: bool = True) -> "hubmod.Hub":
         # A fixed policy, not the installation's file: the hub's front door
         # applies policy (audit finding 12), and a test must not depend on
         # whatever approvals_policy.yaml this machine happens to carry.
         policy = policy if policy is not None else TEST_POLICY
+        # In a hub space the policy is the ledger's record (round 8, owner
+        # decision 1): a test that runs its hub under another policy has the
+        # owner record that change first. `record_policy=False` starts the hub
+        # with a policy nobody recorded (an edited policy file).
+        if (record_policy and policy is not None and space in (None, self.hub_dir)
+                and policy != self.recorded_policy):
+            hubmod.set_policy(self.hub_dir, policy, by=OWNER, reason="test: the hub runs under this policy",
+                              keys_dir=self.keys_dir, registry_path=self.registry)
+            self.recorded_policy = policy
         h = hubmod.Hub(space or self.hub_dir, actor, keys_dir=self.keys_dir, registry_path=self.registry,
                        state_dir=self.tmp / state / actor, clock=self.clock, eligibility=eligibility,
                        **({"policy": policy} if policy is not None else {}))
