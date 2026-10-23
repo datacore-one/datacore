@@ -40,10 +40,15 @@ Theorems, each linked to its promise eval:
 FINDING (`policy_frontier_counterexample`, replayed as
 r8/lean-findings/test_lean_finding_policy_frontier.py): LED-10 needs every
 policy version admitted after a seal to carry a frontier past every sealed
-event (`FrontierCovers`). The code at 54e3bdf9 takes the frontier from the
-hub's CURRENT heads, so a hub that holds less than an earlier seal covered
-(a restore that lost a log, a promoted grantor on a partial copy) admits a
-version that later re-judges a sealed event.
+event (`FrontierCovers`). The code at 54e3bdf9 took the frontier from the
+hub's CURRENT heads, so a hub that held less than an earlier seal covered
+(a restore that lost a log, a promoted grantor on a partial copy) admitted a
+version that later re-judged a sealed event. FIXED in 60b531a1/10207233
+(`Hub._policy_frontier` over admitted heads, `_missing_sealed_history`
+deferral, seals never shrink); `policy_version_forward_exact` proves a version
+applies exactly to what the hub had not admitted; `policy_frontier_covers_sealed` proves the new rule
+discharges `FrontierCovers`, and `LED10_confirmed_never_changes_frontier_rule`
+is LED-10 on that rule.
 -/
 
 namespace LedgerSpec.HubFinality
@@ -344,6 +349,126 @@ theorem policy_frontier_counterexample :
     let st : Nat → List Ev → Ev → Nat := fun p _ _ => p
     outcome 2 dec 0 st [e, rec1] e ≠ outcome 2 dec 0 st [e] e := by
   decide
+
+/-! ### The frontier rule (rounds 8b-8c, `Hub._policy_frontier`, `_missing_sealed_history`)
+
+Per log, in counts (seq + 1): the most of what the hub has ADMITTED (`held`,
+`_admitted_heads`, never a raw line), every grantor seal's watermark it holds,
+the floor of every earlier epoch's last seal (`predecessor_seal_marks`) and the
+cutover manifest. And the hub admits no policy change while its admitted head
+of any log is below a seal or floor mark (`_judge_policies` defers). -/
+
+/-- The highest mark of `seals` for log `l`. -/
+def sealMax (seals : List (Nat → Nat)) (l : Nat) : Nat := seals.foldr (fun W m => max (W l) m) 0
+
+def policyFrontier (held : Nat → Nat) (seals : List (Nat → Nat)) (floor legacy : Nat → Nat) : Nat → Nat :=
+  fun l => max (max (held l) (sealMax seals l)) (max (floor l) (legacy l))
+
+theorem le_sealMax {seals : List (Nat → Nat)} {W : Nat → Nat} (h : W ∈ seals) (l : Nat) :
+    W l ≤ sealMax seals l := by
+  induction seals with
+  | nil => cases h
+  | cons V rest ih =>
+    simp only [sealMax, List.foldr_cons] at *
+    cases h with
+    | head => exact Nat.le_max_left _ _
+    | tail _ hm => exact Nat.le_trans (ih hm) (Nat.le_max_right _ _)
+
+theorem sealMax_le {seals : List (Nat → Nat)} {l c : Nat} (h : ∀ W ∈ seals, W l ≤ c) :
+    sealMax seals l ≤ c := by
+  induction seals with
+  | nil => exact Nat.zero_le _
+  | cons V rest ih =>
+    simp only [sealMax, List.foldr_cons] at *
+    exact Nat.max_le.2 ⟨h V (List.mem_cons_self ..), ih (fun W hW => h W (List.mem_cons_of_mem _ hW))⟩
+
+/-- The deferral (`_missing_sealed_history` is None): the admitted head of
+every log reaches every seal mark and every promotion floor. -/
+def NothingMissing (held : Nat → Nat) (seals : List (Nat → Nat)) (floor : Nat → Nat) : Prop :=
+  (∀ W ∈ seals, ∀ l, W l ≤ held l) ∧ (∀ l, floor l ≤ held l)
+
+/-- When the hub admits a version, it applies EXACTLY to the events the hub had
+not admitted yet: forward only, never back over admitted (or sealed) history,
+never short of an event admitted later. Needs the admitted base and the
+deferral. (`hleg`: the cutover manifest's history is admitted.) -/
+theorem policy_version_forward_exact (held floor legacy : Nat → Nat) (seals : List (Nat → Nat))
+    (hdefer : NothingMissing held seals floor) (hleg : ∀ l, legacy l ≤ held l) (e : Ev) :
+    policyFrontier held seals floor legacy e.log ≤ e.seq ↔ held e.log ≤ e.seq := by
+  have hs : sealMax seals e.log ≤ held e.log := sealMax_le (fun W hW => hdefer.1 W hW e.log)
+  have hf := hdefer.2 e.log
+  have hl := hleg e.log
+  have : policyFrontier held seals floor legacy e.log = held e.log := by
+    unfold policyFrontier
+    rw [Nat.max_eq_left hs, Nat.max_eq_left (Nat.max_le.2 ⟨Nat.le_trans hf (Nat.le_refl _), hl⟩)]
+  rw [this]
+
+/-- The rule discharges `FrontierCovers`: a version admitted after a seal lies
+past every event that seal covers, when the admitting hub holds a seal at least
+as far (any later seal of the chain) or its promotion floor reaches it. -/
+theorem policy_frontier_covers_sealed (held floor legacy : Nat → Nat) (seals : List (Nat → Nat))
+    (W1 : Nat → Nat) (e : Ev) (hc : covers W1 e = true)
+    (hknown : (∃ W ∈ seals, ∀ l, W1 l ≤ W l) ∨ (∀ l, W1 l ≤ floor l)) :
+    e.seq < policyFrontier held seals floor legacy e.log := by
+  have he : e.seq < W1 e.log := of_decide_eq_true hc
+  unfold policyFrontier
+  cases hknown with
+  | inl h =>
+    obtain ⟨W, hW, hle⟩ := h
+    exact Nat.lt_of_lt_of_le he (Nat.le_trans (hle _) (Nat.le_trans (le_sealMax hW _)
+      (Nat.le_trans (Nat.le_max_right _ _) (Nat.le_max_left _ _))))
+  | inr h =>
+    exact Nat.lt_of_lt_of_le he (Nat.le_trans (h _) (Nat.le_trans (Nat.le_max_left _ _)
+      (Nat.le_max_right _ _)))
+
+/-- With the deferral, the admitted heads alone already lie past sealed
+history: the two guards are independent. -/
+theorem deferred_heads_cover_sealed (held floor : Nat → Nat) (seals : List (Nat → Nat))
+    (hdefer : NothingMissing held seals floor) (W1 : Nat → Nat) (e : Ev) (hc : covers W1 e = true)
+    (hknown : (∃ W ∈ seals, ∀ l, W1 l ≤ W l) ∨ (∀ l, W1 l ≤ floor l)) :
+    e.seq < held e.log := by
+  have he : e.seq < W1 e.log := of_decide_eq_true hc
+  cases hknown with
+  | inl h =>
+    obtain ⟨W, hW, hle⟩ := h
+    exact Nat.lt_of_lt_of_le he (Nat.le_trans (hle _) (hdefer.1 W hW _))
+  | inr h => exact Nat.lt_of_lt_of_le he (Nat.le_trans (h _) (hdefer.2 _))
+
+/-- Mutation F1, refuted outright: a frontier from RAW heads (an unadmitted
+line past a chain break, round-8 audit F8-3) lies past an event the hub admits
+later, which then keeps the old policy. -/
+theorem raw_heads_frontier_not_forward :
+    ¬ (policyFrontier (fun _ => 1) [] (fun _ => 0) (fun _ => 0) 0 ≤ 0 ↔ (0 : Nat) ≤ 0) := by
+  decide
+
+/-- The finding, on the rule the fix replaced (the held heads alone, no
+deferral): a hub holding none of `e`'s log records a frontier at or below `e`
+although a seal covers it. -/
+theorem held_heads_frontier_misses_sealed :
+    ∃ (W1 : Nat → Nat) (e : Ev), covers W1 e = true ∧ ¬ e.seq < (fun _ => 0 : Nat → Nat) e.log :=
+  ⟨fun _ => 1, ⟨0, 0, 0, 0, 0, "item.create", 0⟩, by decide, by decide⟩
+
+/-- LED-10 on the code's frontier rule: `FrontierCovers` is discharged by
+`policy_frontier_covers_sealed`. Eval:
+`.datacore/lib/tests/test_promise_LED10_confirmed_never_changes.py`. -/
+theorem LED10_confirmed_never_changes_frontier_rule (W1 W2 top : Nat → Nat) (A1 R2 : List Ev) (e : Ev)
+    (he : e ∈ A1) (hc : covers W1 e = true)
+    (hpre : ∀ x, covers W1 x = true → (x ∈ R2 ↔ x ∈ A1))
+    (hW : ∀ l, W1 l ≤ W2 l)
+    (htop : ∀ x ∈ A1, covers W1 x = true → x.hlc ≤ top x.item)
+    (hkey : ∀ x y : Ev, x.hlc < y.hlc → x.key < y.key)
+    (i1 : KeyInj (covered W1 A1))
+    (i2 : KeyInj (covered W2 (R2.filter (fun x => !late W1 top x))))
+    (hrule : ∀ x ∈ R2.filter (fun x => !late W1 top x), covers W1 x = false → ∀ v, dec x = some v →
+      ∃ held floor legacy seals, v.1 = policyFrontier held seals floor legacy ∧
+        ((∃ W ∈ seals, ∀ l, W1 l ≤ W l) ∨ (∀ l, W1 l ≤ floor l))) :
+    e ∈ covered W2 (R2.filter (fun x => !late W1 top x)) ∧
+    outcome N dec p0 step (covered W2 (R2.filter (fun x => !late W1 top x))) e =
+      outcome N dec p0 step (covered W1 A1) e := by
+  apply LED10_confirmed_never_changes N dec p0 step W1 W2 top A1 R2 e he hc hpre hW htop hkey i1 i2
+  intro x hx cx v hd
+  obtain ⟨held, floor, legacy, seals, hv, hk⟩ := hrule x hx cx v hd
+  rw [hv]
+  exact policy_frontier_covers_sealed held floor legacy seals W1 e hc hk
 
 end Final
 
