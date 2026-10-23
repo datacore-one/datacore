@@ -128,7 +128,7 @@ HUB_EVENT_TYPES = frozenset({"item.lease", "item.lease.renew", "item.lease.expir
 # expired lease attempt whose holder never came back to say what happened. It
 # frees the item for another grant; nothing else does but the holder's own
 # release or result naming the attempt.
-OWNER_EVENT_TYPES = frozenset({"hub.enable", "hub.promote", "hub.resolve"})
+OWNER_EVENT_TYPES = frozenset({"hub.enable", "hub.promote", "hub.resolve", "policy.set"})
 #
 # `ledger.reject` (audit finding 11): the grantor's record that a signed event
 # already in a writer's log is a REJECTED PROPOSAL -- kept so the chain stays
