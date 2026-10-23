@@ -316,13 +316,13 @@ def test_r8_writer_pre_checks_ask_the_ledgers_policy(penv):
 
 # ── the round-8 targeted re-check (Codex, test_r8_recheck.py), turned around ─
 
-@pytest.mark.parametrize("lost", ["grantor-only"])
+@pytest.mark.parametrize("lost", ["grantor-and-writer", "grantor-only"])
 def test_r8e_an_attested_promotion_needs_the_predecessors_log(penv, lost):
     """A promotion the owner attests from a copy that lacks the stopped
     grantor's log would name no last seal and cut its sealed history off for
-    good; it is refused until the log is restored. (A copy that lost the
-    grantor's log AND every log it served holds no trace of the service; that
-    case rests on the owner's attestation and is reported, not tested.)"""
+    good; it is refused until the log is restored. A copy that lost the
+    grantor's log AND every log it served holds no trace of the service: the
+    owner must then say explicitly that it never served (`never_served`)."""
     e = penv
     first = e.hub()
     own = e.writer("own", H.LocalTransport(first))
