@@ -144,6 +144,19 @@ def restore(space: Path, actor: str, rev: str, apply: bool) -> int:
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
+def _new_problems(prefix, events):
+    """(problems the extension adds, problems the current log already has).
+
+    The current log is what every append since has chained onto; a fault in
+    it is not this restore's to judge, and refusing on it made a restore
+    impossible (6-meridian, 2026-10-23: two events signed by a key no machine
+    still holds). A fault the extension brings still refuses.
+    """
+    from ledger.verify import chain_problems
+    old = chain_problems(prefix)
+    return [p for p in chain_problems(events) if p not in old], old
+
+
 def _restore_locked(f, space, actor, path, recovered, apply, from_line, _chain_issue) -> int:
     f.seek(0)
     raw = f.read()
@@ -156,10 +169,17 @@ def _restore_locked(f, space, actor, path, recovered, apply, from_line, _chain_i
         print('nothing to restore; the logs are identical')
         return 0
     events = [from_line(line) for line in recovered.splitlines() if line.strip()]
-    issue = _chain_issue(events)
-    if issue:
-        print(f'REFUSED — the recovered chain does not verify: {issue}')
-        return 1
+    prefix = [from_line(line) for line in current.splitlines() if line.strip()]
+    if _chain_issue(events):
+        new, old = _new_problems(prefix, events)
+        if new:
+            print('REFUSED — the recovered chain does not verify:')
+            for text in new:
+                print(f'  {text}')
+            return 1
+        print('  already in the current log, not added by this restore (fix separately):')
+        for text in old:
+            print(f'    {text}')
 
     added = [e.seq for e in events[len(current.splitlines()):]]
     print(f'{space.name}/{actor}: {len(current.splitlines())} -> {len(events)} events')
@@ -182,7 +202,7 @@ def _restore_locked(f, space, actor, path, recovered, apply, from_line, _chain_i
     _put(recovered.encode('utf-8'))
     f.seek(0)
     after = [from_line(l) for l in f.read().decode('utf-8').splitlines() if l.strip()]
-    if _chain_issue(after):
+    if _chain_issue(after) and _new_problems(prefix, after)[0]:
         _put(raw)
         print('  post-write chain broken — ORIGINAL RESTORED, nothing changed')
         return 1
