@@ -152,6 +152,12 @@ def cmd_void(args: argparse.Namespace) -> None:
     if target is None:
         print(f"error: no event seq {args.seq} in {path}", file=sys.stderr)
         sys.exit(1)
+    from ledger.finality import reversible
+    from ledger.hub import load_config
+    if load_config(space) is not None and not reversible(target.type):   # a hub space (owner, round 7)
+        print(f"error: {target.type} is a control record and is never reversible (owner, round 7); "
+              "correct it with a new forward record", file=sys.stderr)
+        sys.exit(1)
     why = refusal(actor, stem)
     if why:
         print(f"error: {why}; a void by this actor would have no effect", file=sys.stderr)

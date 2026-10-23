@@ -336,7 +336,9 @@ def _hub_space_voids(events_dir: Path, registry_path=None):
         # a space whose logs carry a signed hub.enable but no config excuses
         # nothing -- never the old rule.
         files = sorted(events_dir.glob("*.jsonl")) if events_dir.is_dir() else []
-        if not any(b'"hub.enable"' in _read_or_empty(p) for p in files):
+        # A JSON escape spells the type in other bytes (round-7 audit): any
+        # escaped line is parsed rather than trusted to the byte filter.
+        if not any(b'"hub.enable"' in raw or b"\\u" in raw for raw in map(_read_or_empty, files)):
             return None
         try:
             from .hub import require_config_or_no_hub
