@@ -233,112 +233,79 @@ def load_config(space_dir) -> HubConfig | None:
     return cfg if cfg.enabled else None
 
 
-def _manifest_heads(payload) -> list:
-    """[(log, seq, head)] a `hub.enable` manifest names (malformed entries ignored)."""
-    manifest = payload.get("manifest") if isinstance(payload, dict) else None
-    if not isinstance(manifest, dict):
-        return []
-    return [(str(log), h["seq"], h["head"]) for log, h in manifest.items()
-            if isinstance(h, dict) and type(h.get("seq")) is int and h["seq"] >= 0 and isinstance(h.get("head"), str)]
+def hub_evidence(events) -> list:
+    """The events that show a space has been moved to a hub: an activation
+    record (`hub.enable`) or any event stamped with a hub -- signed or not.
 
-
-def _activation_counts(e, events, held, registry_path) -> bool:
-    """Does `hub.enable` record `e` show that THIS space moved to a hub?
-
-    * Signed and domain-bound to the space and hub it names.
-    * BOUND TO THIS SPACE: its cutover manifest names a log head this copy
-      holds exactly; or, for a space enabled EMPTY (no head to name), no
-      other event here is stamped before it -- a record carried into a plain
-      space with older history is not this space's (round-7 audit R6). A
-      genuine empty-space activation still counts (re-check N1).
-    * Its signature verifies; or it cannot be checked because there is no
-      key registry on this host (a lost registry must not reopen the plain
-      fold, R3). A key that refuses it, or an actor a readable registry does
-      not know, proves nothing (re-check N4)."""
-    from .keys import DEFAULT_REGISTRY_PATH, _registry_actors, key_history, verify
-    if getattr(e, "type", None) != "hub.enable" or not isinstance(getattr(e, "sig", None), str) or not e.sig:
-        return False
-    p = e.payload if isinstance(e.payload, dict) else {}
-    space, hub = p.get("space"), p.get("hub")
-    if not (isinstance(space, str) and isinstance(hub, str) and e.hub == hub):
-        return False
-    if e.domain != signing_domain(space, hub, getattr(e, "log", None) or e.actor):
-        return False
-    heads = _manifest_heads(p)
-    if heads:
-        if not any(x in held for x in heads):
-            return False
-    elif any(x is not e and isinstance(x.hlc, str) and isinstance(e.hlc, str) and x.hlc < e.hlc for x in events):
-        return False
-    try:
-        ok = bool(verify(e.actor, canonical_bytes(event_body(e)), e.sig, registry_path=registry_path,
-                         at_ms=_physical_ms(e.hlc)))
-    except Exception:  # noqa: BLE001 -- cannot be checked here
-        ok = False
-    if ok:
-        return True
-    reg = Path(registry_path) if registry_path else DEFAULT_REGISTRY_PATH
-    try:
-        known = bool(key_history(e.actor)) or bool(_registry_actors(reg).get(e.actor))
-    except Exception:  # noqa: BLE001
-        known = False
-    return not known and not reg.exists()
+    DELIBERATELY COARSE, AND FAIL-CLOSED (round-7 audit and re-checks). It is
+    read only when the hub config is MISSING; the config is a cache of the
+    owner's record, and losing it is never proof that the space did not
+    move. Every finer rule tried -- binding the record to this space,
+    verifying its signature, trusting a key registry -- turned some recovery
+    state (an empty-space activation, a partial registry, an imported older
+    event, a JSON re-encoding) back into a plain read of a hub space. So any
+    such record counts. The cost is availability only: a record forged or
+    copied into a plain space makes it unreadable until the owner removes
+    it, and the refusal says why."""
+    return [e for e in events if getattr(e, "type", None) == "hub.enable" or getattr(e, "hub", "")]
 
 
 def signed_hub_records(events, registry_path=None) -> list:
-    """The `hub.enable` records in `events` that show THIS space moved to a hub
-    (`_activation_counts`). Read when the config is MISSING (Codex final
-    audit, F2): the config is a cache of what the owner recorded, and losing
-    it is not proof that the space never moved to the hub. A bare unsigned
-    line of that type blocks nothing."""
-    events = list(events)
-    held = {(getattr(x, "log", None) or x.actor, x.seq, x.hash) for x in events}
-    return [e for e in events if getattr(e, "type", None) == "hub.enable"
-            and _activation_counts(e, events, held, registry_path)]
+    """Kept for callers of round 7: the same coarse evidence (`hub_evidence`)."""
+    return hub_evidence(events)
 
 
-_TYPE_ESCAPED = re.compile(rb'"type":"[^"]*\\')
-_RECORDS_CACHE: dict = {}
+_FILE_EVIDENCE: dict = {}
+
+
+def _file_has_evidence(path: Path) -> bool:
+    """Does one log file hold hub evidence? Parses only lines that could: any
+    JSON spelling of `hub.enable` or of a `hub` field holds the letters
+    "hub" or a backslash escape. Cached on the file's size and time."""
+    try:
+        st = path.stat()
+    except OSError:
+        return False
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    if key in _FILE_EVIDENCE:
+        return _FILE_EVIDENCE[key]
+    found = False
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        raw = b""
+    if b"hub" in raw or b"\\" in raw:
+        for line in raw.splitlines():
+            if b"hub" not in line and b"\\" not in line:
+                continue
+            try:
+                obj = json.loads(line)
+            except (ValueError, UnicodeDecodeError):
+                continue
+            if isinstance(obj, dict) and (obj.get("type") == "hub.enable" or obj.get("hub")):
+                found = True
+                break
+    if len(_FILE_EVIDENCE) > 4096:
+        _FILE_EVIDENCE.clear()
+    _FILE_EVIDENCE[key] = found
+    return found
 
 
 def records_a_hub(space_dir, registry_path=None) -> bool:
-    """`signed_hub_records` for a space read from disk, cheaply: a log file is
-    parsed only when its bytes could hold such a record (the type spelled
-    out, or any type written with a JSON escape -- canonical lines never
-    escape it), and the answer is cached on every file's size and time. For
-    writers and the generic void reader, which run on every append/verify."""
-    d = Path(space_dir) / ".datacore" / "events"
-    files = sorted(d.glob("*.jsonl")) if d.is_dir() else []
-    try:
-        sig = tuple((f.name, f.stat().st_size, f.stat().st_mtime_ns) for f in files)
-    except OSError:
-        sig = None
-    key = (str(d), str(registry_path), sig)
-    if sig is not None and key in _RECORDS_CACHE:
-        return _RECORDS_CACHE[key]
-    candidate = False
-    for f in files:
-        try:
-            raw = f.read_bytes()
-        except OSError:
-            continue
-        if b"hub.enable" in raw or _TYPE_ESCAPED.search(raw):
-            candidate = True
-            break
-    answer = False
-    if candidate:
-        from .log import read_events
-        answer = bool(signed_hub_records(read_events(Path(space_dir)), registry_path))
-    if sig is not None:
-        if len(_RECORDS_CACHE) > 64:
-            _RECORDS_CACHE.clear()
-        _RECORDS_CACHE[key] = answer
-    return answer
+    """`hub_evidence` for a space read from disk, cheaply (per-file cache on
+    size and time; only candidate lines parsed). For writers and the generic
+    void reader, which run on every append and every verify."""
+    root = Path(space_dir) / ".datacore"
+    for sub in ("events", "telemetry"):
+        d = root / sub
+        if d.is_dir() and any(_file_has_evidence(f) for f in sorted(d.glob("*.jsonl"))):
+            return True
+    return False
 
 
 def require_config_or_no_hub(space_dir, events=None, registry_path=None) -> HubConfig | None:
-    """The space's hub config; None only for a space whose logs carry no
-    signed `hub.enable`. A space whose ledger records the move to the hub but
+    """The space's hub config; None only for a space whose logs hold no hub
+    evidence (`hub_evidence`). A space whose ledger records the move to the hub but
     whose config is missing is read FAIL-CLOSED (`HubUnavailable`): never
     plain-folded around admission (Codex final audit, F2)."""
     cfg = load_config(space_dir)
@@ -347,11 +314,12 @@ def require_config_or_no_hub(space_dir, events=None, registry_path=None) -> HubC
     if events is None:
         from .log import read_events
         events = read_events(Path(space_dir))
-    if signed_hub_records(events, registry_path):
+    if hub_evidence(events):
         raise HubUnavailable(
-            f"{space_dir}: the ledger records an owner-signed hub.enable but the hub config ({CONFIG}) is "
-            "missing; refusing to read the space without admission -- restore the config (re-run `enable` "
-            "from the owner's record) before reading", reason="hub_config_missing")
+            f"{space_dir}: the ledger holds a hub activation record or hub-stamped events but the hub config "
+            f"({CONFIG}) is missing; refusing to read the space without admission -- restore the config "
+            "(re-run `enable` from the owner's record), or remove a record that does not belong here",
+            reason="hub_config_missing")
     return cfg
 
 
