@@ -3057,7 +3057,11 @@ class HubWriter:
             if type == "item.verify" and item.submission is not None:
                 payload = {**{k: item.submission.get(k) for k in ("attempt", "task_hash", "result_digest")},
                            **payload}
-        why = pool_review_problem(item, type, self.actor, payload, self.policy) if item is not None else None
+        # The policy the hub will judge it by: the ledger's latest version
+        # (round 8, owner decision 1), never this writer's policy file.
+        in_force = policy_in_force(self.space_dir, registry_path=self.registry_path, policy=self.policy,
+                                   now_ms=self.clock())
+        why = pool_review_problem(item, type, self.actor, payload, in_force) if item is not None else None
         if (not why and type == "item.verify" and (item is None or item.lease_holder is None)
                 and any(r.get("item") == iid for r in self.receipts())):
             why = "own_check: the lease holder cannot check its own work; another actor must"

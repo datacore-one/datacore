@@ -385,3 +385,20 @@ def test_round3_owner_set_cannot_give_an_agent_pool_work_outside_a_lease(env):
     git_pull(env.hub_dir, wa.space_dir)
     wa.append("item.complete", {"id": "p1", "result": "r", "evidence": []})
     assert hub_item(hub, "p1").status == "submitted"
+
+
+def test_round8_the_writer_pre_check_judges_by_the_ledgers_policy(env):
+    """Round-8 audit residual: the writer's pool pre-check used its own policy
+    input. A reviewer whose local policy lacks the principal map (its file
+    differs from the owner's record) must still be judged by the ledger's
+    policy: an independent principal's check is not refused before writing."""
+    from ledger.hub_policy import PolicyInputs
+    hub = env.start()
+    own, wa, wb = (env.writer(a) for a in ("own", "wa", "wb"))
+    pool_item(own, "p1")
+    wa.request_lease("p1")
+    wa.append("item.complete", {"id": "p1", "result": "summary", "evidence": ["notes.md"]})
+    git_pull(env.hub_dir, wb.space_dir)
+    wb.policy = PolicyInputs(approver=env.policy.approver, cosign_effects=env.policy.cosign_effects)
+    prepared = wb._pool_prepare("item.verify", {"id": "p1", "check": DONE})
+    assert prepared.get("attempt"), prepared
