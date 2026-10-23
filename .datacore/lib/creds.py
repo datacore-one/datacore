@@ -1238,8 +1238,12 @@ class CredentialManager:
     def cmd_add(self, cred_id: str, var_name: str = None, value: str = None,
                 scope: str = None, space: str = None, project: str = None,
                 tier: str = None, category: str = None, provider: str = None,
-                description: str = None) -> int:
-        """Add a credential to the secrets repo and index."""
+                description: str = None, existing: bool = False) -> int:
+        """Add a credential to the secrets repo and index.
+
+        existing=True indexes a variable already in the target store: no value
+        is asked for or written, and the value is never read or printed.
+        """
         secrets_dir = self.data_dir / ".datacore" / "secrets"
         if not secrets_dir.exists():
             print("Secrets repo not found at .datacore/secrets/")
@@ -1268,7 +1272,11 @@ class CredentialManager:
             print("Did you pass the secret to --var instead of --value?")
             return 1
 
-        if not value:
+        if existing:
+            if value:
+                print("Refusing: --existing indexes a value already in the store; do not pass --value.")
+                return 1
+        elif not value:
             import getpass
             value = getpass.getpass(f"Value for {var_name}: ")
             if not value:
@@ -1339,11 +1347,14 @@ class CredentialManager:
             entry["project"] = project
         from credential_store import add_credential
         try:
-            env_file, index_file = add_credential(secrets_dir, env_file, entry, value)
+            env_file, index_file = add_credential(secrets_dir, env_file, entry, None if existing else value)
         except (OSError, ValueError, yaml.YAMLError) as exc:
             print(f"Credential addition refused ({type(exc).__name__}); existing data preserved.", file=sys.stderr)
             return 1
-        print(f"Added {var_name} to {env_file.relative_to(secrets_dir)} and the canonical index")
+        if existing:
+            print(f"Indexed {var_name} from {env_file.relative_to(secrets_dir)}; the store is unchanged")
+        else:
+            print(f"Added {var_name} to {env_file.relative_to(secrets_dir)} and the canonical index")
 
         import subprocess
         files = [str(path.relative_to(secrets_dir.resolve())) for path in (env_file, index_file)]
@@ -1456,6 +1467,8 @@ def main():
     add_p.add_argument("--category", help="Category")
     add_p.add_argument("--provider", help="Provider name")
     add_p.add_argument("--description", help="Description")
+    add_p.add_argument("--existing", action="store_true",
+                       help="Index a variable already in the target store; no value is asked for or written")
 
     # sync
     get_p = subparsers.add_parser(
@@ -1508,7 +1521,7 @@ def main():
             cred_id=args.id, var_name=args.var_name, value=args.value,
             scope=args.scope, space=args.space, project=args.project,
             tier=args.tier, category=args.category, provider=args.provider,
-            description=args.description)
+            description=args.description, existing=args.existing)
     elif args.command == "get":
         return mgr.cmd_get(args.credential, consumer=args.consumer,
                            no_verify=args.no_verify, strict=args.strict)
