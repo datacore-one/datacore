@@ -52,9 +52,29 @@ recorded no-op in every copy. The rules are the existing policy's:
 
 EXPLICIT INPUT. `PolicyInputs` is built once, before replay, from the policy
 file and the principal registry (`PolicyInputs.load`); the fold never reads
-either. NOT YET AS OF EACH EVENT'S TIME: the ledger has no versioned policy
-record (`policy.set` has no fold semantics), so a replay judges every event by
-the policy as it stands when the replay starts. Also not applied here, because
+either.
+
+POLICY VERSIONS (owner decision 1, round 8; closes the round-7 audit's R10).
+In a hub space the policy is not the file: it is the ledger's own record.
+Every policy change is a ledger record signed by the owner, and each event is
+judged by the policy in force when the hub admitted it, so a later policy
+change never changes an earlier outcome.
+  * The owner's `hub.enable` records the policy in force at activation
+    (`PolicyInputs.to_record`, principal map included). Everything before
+    the first recorded change -- pre-activation history too -- is judged by it.
+  * A change is an owner-signed `policy.set` in the owner's log (an owner
+    record: only the owner's chain may hold one). It takes effect only when
+    the active grantor admits it: the grantor's `ledger.admit` (kind
+    "policy") records the FRONTIER, each log's highest seq the hub held at
+    that moment. An event at or below the frontier of its log was admitted
+    under the earlier policy; an event above it -- including one that
+    reaches the hub by git later -- under the new one.
+  * `PolicyLedger` carries the activation policy and the owner into the fold;
+    `PolicyLedger.versions(events, ...)` derives the versions from the
+    events alone, the same on every replica. The policy file a hub or reader
+    was started with is ignored in a hub space (the hub reports a difference
+    in `status`).
+Also not applied here, because
 they read mutable disk state the fold cannot take as input: the per-principal
 delegation allowlist, hop limit and daily creation cap (`claim_gate.check_create`)
 and the monthly budget (`claim_gate.check_budget`). Both remain open.
@@ -62,7 +82,7 @@ and the monthly budget (`claim_gate.check_budget`). Both remain open.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Mapping
 
 #: Event types this module judges. Everything else is authorized by admission alone.
@@ -105,6 +125,63 @@ class PolicyInputs:
     @property
     def vocabulary(self) -> frozenset:
         return self.known_effects if self.known_effects is not None else self.cosign_effects
+
+    def to_record(self) -> dict:
+        """The policy as a ledger record body (JSON, canonical order): what the
+        owner signs in `hub.enable` and `policy.set`."""
+        out = {}
+        for f in fields(self):
+            v = getattr(self, f.name)
+            if isinstance(v, (frozenset, set)):
+                v = sorted(v)
+            elif isinstance(v, tuple):
+                v = list(v)
+            elif isinstance(v, Mapping):
+                v = {str(k): (dict(x) if isinstance(x, Mapping) else x) for k, x in sorted(v.items())}
+            out[f.name] = v
+        return {"version": 1, "inputs": out}
+
+    @classmethod
+    def from_record(cls, record) -> "PolicyInputs":
+        """The inverse of `to_record`. Raises ValueError for anything malformed
+        (a malformed policy record is never read as "no policy")."""
+        if not isinstance(record, dict) or record.get("version") != 1 or not isinstance(record.get("inputs"), dict):
+            raise ValueError("not a version-1 policy record")
+        raw = record["inputs"]
+        known = {f.name: f for f in fields(cls)}
+        if set(raw) - set(known):
+            raise ValueError(f"unknown policy fields {sorted(set(raw) - set(known))}")
+        if not isinstance(raw.get("approver"), str) or not raw["approver"]:
+            raise ValueError("a policy names its approver")
+        kw: dict = {"approver": raw["approver"]}
+        for name in ("cosign_effects", "known_effects"):
+            if name not in raw:
+                continue
+            v = raw[name]
+            if v is None and name == "known_effects":
+                kw[name] = None
+            elif isinstance(v, list) and all(isinstance(x, str) for x in v):
+                kw[name] = frozenset(v)
+            else:
+                raise ValueError(f"policy field {name} must be a list of names")
+        if "cosign_effects" not in kw:
+            raise ValueError("a policy names its co-sign effects")
+        if "arbitration" in raw:
+            v = raw["arbitration"]
+            if not isinstance(v, list) or any(not isinstance(x, str) for x in v):
+                raise ValueError("policy field arbitration must be a list of names")
+            kw["arbitration"] = tuple(v)
+        if "principal_of" in raw:
+            v = raw["principal_of"]
+            if not isinstance(v, dict) or any(not isinstance(k, str) or not isinstance(x, str) for k, x in v.items()):
+                raise ValueError("policy field principal_of must map writer names to principals")
+            kw["principal_of"] = dict(v)
+        if "limits" in raw:
+            v = raw["limits"]
+            if not isinstance(v, dict) or any(not isinstance(k, str) or not isinstance(x, dict) for k, x in v.items()):
+                raise ValueError("policy field limits must map principals to limits")
+            kw["limits"] = {k: dict(x) for k, x in v.items()}
+        return cls(**kw)
 
 
 def _registry_principals() -> dict:
@@ -393,3 +470,94 @@ def pool_review_problem(item, etype: str, actor: str, payload, inputs: PolicyInp
         return (f"not_independent: {actor!r} and the holder {holder!r} are one execution identity "
                 f"(principal {mine!r}); another principal must check")
     return None
+
+# ── policy versions (owner decision 1, round 8) ─────────────────────────────
+
+POLICY_TYPE = "policy.set"
+POLICY_ADMIT_KIND = "policy"
+
+
+@dataclass(frozen=True)
+class PolicyLedger:
+    """The fold's policy input for a hub space: the activation policy (from
+    the owner's `hub.enable`) and the owner, from which the versions are
+    derived out of the events themselves (`versions`)."""
+    initial: PolicyInputs
+    owner: str
+
+    def versions(self, events, lease_grantors=None) -> "PolicyVersions":
+        """The policy versions these events record, oldest first.
+
+        A version counts only when (a) the owner's own chain holds a
+        `policy.set` with a valid policy record, and (b) a grantor of the hub
+        it names admitted it with a `ledger.admit` (kind "policy") naming its
+        log, seq and hash and carrying the frontier, and no grantor rejected
+        it. Decided from the events alone: no file, no clock."""
+        from .finality import ADMIT_TYPE, REJECT_TYPE
+        grantors: dict = {}
+        for hub, actors in (lease_grantors or {}).items():
+            grantors[hub] = dict(actors) if isinstance(actors, Mapping) else {a: 0 for a in actors}
+        owner = _base(self.owner) if self.owner else ""
+        records = {}
+        for e in events:
+            chain = getattr(e, "log", None) or e.actor
+            if (e.type == POLICY_TYPE and owner and chain == e.actor and _base(e.actor) == owner
+                    and isinstance(e.payload, dict)):
+                records[e.hash] = e
+        if not records:
+            return PolicyVersions(((None, self.initial),))
+        rejected, admits = set(), []
+        for e in events:
+            if e.type not in (ADMIT_TYPE, REJECT_TYPE):
+                continue
+            hub = getattr(e, "hub", "") or ""
+            if (getattr(e, "log", None) or e.actor) != e.actor or e.actor not in grantors.get(hub, {}):
+                continue
+            p = e.payload if isinstance(e.payload, dict) else {}
+            ref = p.get("event") if isinstance(p.get("event"), dict) else {}
+            if ref.get("hash") not in records:
+                continue
+            if e.type == REJECT_TYPE:
+                rejected.add(ref["hash"])
+            elif p.get("kind") == POLICY_ADMIT_KIND:
+                admits.append((grantors[hub][e.actor], e.seq if type(e.seq) is int else -1, e, ref))
+        out = [(None, self.initial)]
+        done = set()
+        for _, _, a, ref in sorted(admits, key=lambda x: (x[0], x[1])):
+            rec = records[ref["hash"]]
+            if ref["hash"] in done or ref["hash"] in rejected or ref.get("seq") != rec.seq \
+                    or ref.get("log") != rec.actor:
+                continue
+            frontier = a.payload.get("frontier")
+            if not isinstance(frontier, dict) or any(not isinstance(k, str) or type(v) is not int
+                                                     for k, v in frontier.items()):
+                continue
+            try:
+                inputs = PolicyInputs.from_record(rec.payload.get("policy"))
+            except (ValueError, TypeError):
+                continue
+            done.add(ref["hash"])
+            out.append((dict(frontier), inputs))
+        return PolicyVersions(tuple(out))
+
+
+@dataclass(frozen=True)
+class PolicyVersions:
+    """((frontier or None, PolicyInputs), ...), oldest first."""
+    versions: tuple
+
+    def for_event(self, event) -> PolicyInputs:
+        """The policy in force when the hub admitted `event`: the latest version
+        whose frontier lies below the event's position in its log."""
+        chain = getattr(event, "log", None) or event.actor
+        seq = event.seq if type(event.seq) is int else None
+        for frontier, inputs in reversed(self.versions):
+            if frontier is None:
+                return inputs
+            if seq is not None and seq > frontier.get(chain, -1):
+                return inputs
+        return self.versions[0][1]
+
+    @property
+    def latest(self) -> PolicyInputs:
+        return self.versions[-1][1]

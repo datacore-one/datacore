@@ -373,7 +373,7 @@ def _iso_now() -> str:
 
 def enable(space_dir, *, hub_id: str, grantor: str, owner: str, lease_ttl_s: int = DEFAULT_LEASE_TTL_S,
            cutover_hlc: str | None = None, space_id: str | None = None, keys_dir=None, registry_path=None,
-           clock_uncertainty_ms: int = DEFAULT_CLOCK_UNCERTAINTY_MS) -> HubConfig:
+           clock_uncertainty_ms: int = DEFAULT_CLOCK_UNCERTAINTY_MS, policy=None) -> HubConfig:
     """The owner opts a space in. `hub_id` is a stable name, not a hostname (E).
 
     Also the owner's approval of the cutover: it records the cutover manifest
@@ -385,6 +385,11 @@ def enable(space_dir, *, hub_id: str, grantor: str, owner: str, lease_ttl_s: int
     grantor are also an owner-signed `hub.enable` event in the owner's own log.
     Admission takes them from that record; the config file is a cache, and a
     config edited to another grantor or manifest confers nothing.
+
+    THE POLICY IN FORCE AT ACTIVATION (owner decision 1, round 8) is recorded
+    in the same record (`policy`: a `PolicyInputs`, a `ledger.policy.Policy`,
+    or None for this installation's policy file and principal registry, read
+    now). Every later change is the owner's `set_policy`.
     """
     if not _NAME.fullmatch(hub_id) or not _NAME.fullmatch(grantor) or not _NAME.fullmatch(owner or ""):
         raise ValueError("hub_id, grantor and owner must be lowercase names")
@@ -420,6 +425,8 @@ def enable(space_dir, *, hub_id: str, grantor: str, owner: str, lease_ttl_s: int
     if not before.get("cutover_sha256"):
         from .log import read_events
         reversals = activation_reversals(read_events(Path(space_dir)))
+    from .hub_policy import PolicyInputs
+    inputs = policy if isinstance(policy, PolicyInputs) else PolicyInputs.load(policy)
     cfg = HubConfig(hub_id=hub_id, grantor=grantor, lease_ttl_s=lease_ttl_s, cutover_hlc=cutover_hlc,
                     space_id=space_id, cutover_logs=logs, cutover_sha256=_manifest_sha(logs), owner=owner,
                     clock_uncertainty_ms=clock_uncertainty_ms, protocol=PROTOCOL)
@@ -430,8 +437,30 @@ def enable(space_dir, *, hub_id: str, grantor: str, owner: str, lease_ttl_s: int
             "hub.enable", {"space": space_id, "hub": hub_id, "epoch": 0, "grantor": grantor, "manifest": logs,
                            "manifest_sha256": cfg.cutover_sha256, "lease_ttl_s": lease_ttl_s,
                            "clock_uncertainty_ms": clock_uncertainty_ms, "protocol": PROTOCOL,
-                           "legacy_reversals": reversals or []})
+                           "legacy_reversals": reversals or [], "policy": inputs.to_record()})
     return cfg
+
+
+def set_policy(space_dir, policy, *, by: str, reason: str, keys_dir=None, registry_path=None) -> Event:
+    """The owner changes the policy (owner decision 1, round 8): an owner-signed
+    `policy.set` in the owner's log. It takes effect when the active grantor
+    admits it (`Hub._judge_policies`, a `ledger.admit` recording the frontier):
+    every event the hub admitted before is judged by the earlier policy for
+    good, every later one by this. `policy`: a `PolicyInputs` or a
+    `ledger.policy.Policy` (None: this installation's file and registry, now)."""
+    from .hub_policy import POLICY_TYPE, PolicyInputs
+    from .log import EventLog
+    if not reason or not str(reason).strip():
+        raise ValueError("a policy change says why")
+    cfg = load_config(space_dir)
+    if cfg is None:
+        raise HubRefused("hub_off", f"{space_dir} has not opted in to a hub ({CONFIG})")
+    if by != cfg.owner:
+        raise HubRefused("not_authorized", f"only the space's owner ({cfg.owner}) changes its policy")
+    authority(space_dir, cfg, registry_path)             # the owner's records verify
+    inputs = policy if isinstance(policy, PolicyInputs) else PolicyInputs.load(policy)
+    return EventLog(Path(space_dir), by, keys_dir=keys_dir, registry_path=registry_path, sign=True).append(
+        POLICY_TYPE, {"space": cfg.space_id, "hub": cfg.hub_id, "policy": inputs.to_record(), "reason": str(reason)})
 
 
 READY_DIR = ".datacore/hub-ready"
@@ -588,9 +617,19 @@ def authority(space_dir, cfg: HubConfig, registry_path=None) -> Authority:
     if enabled.get("manifest_sha256") != cfg.cutover_sha256 or enabled.get("manifest") != cfg.cutover_logs:
         raise HubRefused("bad_manifest", f"{Path(space_dir) / CONFIG}: the cutover manifest is not the one "
                          "the owner signed (hub.enable)")
+    from .hub_policy import PolicyInputs
+    try:
+        initial = PolicyInputs.from_record(enabled.get("policy"))
+    except (ValueError, TypeError):
+        # POLICY VERSIONS (owner decision 1, round 8): a hub space is judged by
+        # the policy its owner recorded, never by a file that may have changed
+        # since. An activation record without one is not read around it.
+        raise HubRefused("no_policy_record", "the owner's hub.enable records no valid policy; this space "
+                         "cannot be judged by the policy in force at activation (re-activate with a policy "
+                         "record)") from None
     return Authority(space_id=cfg.space_id, hub_id=cfg.hub_id, grantors=frozenset(ep.grantor for ep in eps),
                      legacy=legacy, registry_path=registry_path, owner=cfg.owner, epochs=eps,
-                     legacy_reversals=_legacy_reversals(enabled.get("legacy_reversals")))
+                     legacy_reversals=_legacy_reversals(enabled.get("legacy_reversals")), policy=initial)
 
 
 def _legacy_reversals(raw) -> tuple:
@@ -1109,6 +1148,10 @@ class Hub:
                 self._complete_rejections()
             except HubError:
                 pass                     # a standby records no rejections of its own
+            try:
+                self._judge_policies()   # an owner policy change waiting for this grantor
+            except HubError:
+                pass
 
     # ── housekeeping ───────────────────────────────────────────────────────
     def close(self) -> None:
@@ -1426,13 +1469,93 @@ class Hub:
             out |= rejected_proposals(chain[:n])
         return out
 
+    # ── policy versions (owner decision 1, round 8) ────────────────────────
+    def _policy_versions(self, events=None):
+        """The policy versions this space's ledger records (None: an Authority
+        without an activation policy, which cannot happen for a hub space read
+        through `authority`)."""
+        from .hub_policy import PolicyLedger
+        cfg = self.config()
+        if events is None:
+            events, _ = authoritative_events(self.space_dir, registry_path=self.registry_path,
+                                             policy=self.policy, now_ms=self.clock())
+        kw = self._authority(cfg).fold_inputs(self.policy)
+        pol = kw.get("policy")
+        return pol.versions(events, kw.get("lease_grantors")) if isinstance(pol, PolicyLedger) else None
+
+    def _owner_changed_policy(self, cfg: HubConfig) -> bool:
+        """Cheap pre-check: does the owner's log hold any `policy.set` at all?
+        (Without one, the activation policy is in force; nothing to derive.)"""
+        try:
+            raw = (self.space_dir / ".datacore" / "events" / f"{cfg.owner}.jsonl").read_bytes()
+        except OSError:
+            return False
+        return b"policy.set" in raw or b"\\" in raw
+
+    def _policy_now(self):
+        """The policy the front door judges a new event by: the latest version
+        the ledger records, after admitting any owner change waiting for it."""
+        cfg = self.config()
+        if not self._owner_changed_policy(cfg):
+            initial = self._authority(cfg).policy
+            return initial if initial is not None else self.policy
+        self._judge_policies()
+        versions = self._policy_versions()
+        return versions.latest if versions is not None else self.policy
+
+    def _judge_policies(self) -> None:
+        """Admit (or reject) each owner `policy.set` this hub has not decided yet.
+
+        The admission is the moment the change takes effect: the grantor's
+        `ledger.admit` (kind "policy") records the frontier -- each log's
+        highest seq this hub holds now. Everything at or below it was admitted
+        under the earlier policy and keeps that judgment for good."""
+        from .hub_policy import POLICY_ADMIT_KIND, POLICY_TYPE, PolicyInputs
+        with self._mutex:
+            if not self._active_grantor():
+                return
+            cfg = self.config()
+            if not self._owner_changed_policy(cfg):
+                return
+            auth = self._authority(cfg)
+            events, _ = authoritative_events(self.space_dir, registry_path=self.registry_path, policy=self.policy,
+                                             now_ms=self.clock())
+            pending = [e for e in events if e.type == POLICY_TYPE and auth.owner and e.actor == auth.owner
+                       and (getattr(e, "log", None) or e.actor) == e.actor]
+            if not pending:
+                return
+            decided = {h for (_, _, h) in self._rejected()}
+            decided |= {(e.payload.get("event") or {}).get("hash") for e in events
+                        if e.type == "ledger.admit" and e.actor in auth.grantors and isinstance(e.payload, dict)
+                        and isinstance(e.payload.get("event"), dict)}
+            for e in sorted(pending, key=lambda x: x.seq if type(x.seq) is int else -1):
+                if e.hash in decided:
+                    continue
+                ref = {"seq": e.seq, "hash": e.hash, "actor": e.actor, "type": e.type}
+                p = e.payload if isinstance(e.payload, dict) else {}
+                problem = None
+                if p.get("space") != cfg.space_id or p.get("hub") != cfg.hub_id:
+                    problem = ("bad_policy", "the policy record names another space or hub")
+                else:
+                    try:
+                        PolicyInputs.from_record(p.get("policy"))
+                    except (ValueError, TypeError) as exc:
+                        problem = ("bad_policy", f"the policy record does not parse: {exc}")
+                if problem is not None:
+                    self._record_reject(e.actor, ref, *problem)
+                    continue
+                self._note_admissions(events)
+                frontier = {chain: top["seq"] for chain, top in _current_heads(self.space_dir).items()}
+                self.log.append("ledger.admit", {"event": {"log": e.actor, **ref}, "kind": POLICY_ADMIT_KIND,
+                                                 "frontier": frontier, "admitted_ms": self.clock()})
+
     def _authorize(self, event: Event) -> None:
         """Authorship is not authorization (audit finding 12): the same rule the
         fold applies on replay (`hub_policy.authorize`), asked before anything
         is stored. A refusal is an answer only."""
         from .hub_policy import authorize
         events, state = self._state()
-        why = authorize(event, state, {e.hash: e for e in events}, self.policy)
+        why = authorize(event, state, {e.hash: e for e in events}, self._policy_now())
         if why:
             raise HubRefused("not_authorized", why)
 
@@ -1815,7 +1938,7 @@ class Hub:
         # (Codex re-audit, finding 12) -- assignee, never-effects, co-sign --
         # whatever the eligibility hook says.
         from .hub_policy import may_execute
-        why = may_execute(actor, item, {e.hash: e for e in events}, self.policy)
+        why = may_execute(actor, item, {e.hash: e for e in events}, self._policy_now())
         if why:
             raise HubRefused("not_authorized", why)
         role = (item.payload or {}).get("role")
@@ -2383,6 +2506,7 @@ class Hub:
         from .seal import build_seal_payload
         with self._mutex:
             cfg = self._writable(grant=True)
+            self._judge_policies()
             self._judge_arrivals()
             self._reject_sealed_late()
             self._judge_corrections()
@@ -2477,7 +2601,18 @@ class Hub:
             "leases": {iid: {"holder": it.lease_holder, "expires_ms": it.lease_expires_ms,
                              "live": lease_live(it, now)}
                        for iid, it in sorted(state.items.items()) if it.lease_holder is not None},
+            "policy": self._policy_status(events),
         }
+
+    def _policy_status(self, events) -> dict:
+        """Which policy is in force (the ledger's) and whether the policy this
+        hub was started with differs from it: a policy file edited without the
+        owner's `policy.set` changes nothing, and is reported here."""
+        versions = self._policy_versions(events)
+        if versions is None:
+            return {"versions": 0, "recorded_matches_configured": None}
+        return {"versions": len(versions.versions),
+                "recorded_matches_configured": versions.latest == self.policy}
 
     def snapshot(self) -> dict:
         """Everything the hub's answers depend on, and nothing process-local.
@@ -3255,6 +3390,11 @@ def main(argv=None) -> int:
     fe.add_argument("space")
     fe.add_argument("--actor", required=True)
     fe.add_argument("--reason", required=True)
+    po = sub.add_parser("set-policy", help="record a policy change, read from this installation's policy "
+                        "file and registry now (owner; takes effect when the grantor admits it)")
+    po.add_argument("space")
+    po.add_argument("--by", required=True)
+    po.add_argument("--reason", required=True)
     sh = sub.add_parser("show", help="print a space's hub config")
     sh.add_argument("space")
     a = ap.parse_args(argv)
@@ -3267,6 +3407,9 @@ def main(argv=None) -> int:
         cfg = promote(a.space, a.grantor, by=a.by, reason=a.reason, attest_stopped=a.attest_stopped)
     elif a.cmd == "ready":
         print(json.dumps(declare_ready(a.space, a.actor), indent=2, sort_keys=True))
+        return 0
+    elif a.cmd == "set-policy":
+        print(json.dumps(_event_dict(set_policy(a.space, None, by=a.by, reason=a.reason)), indent=2, sort_keys=True))
         return 0
     elif a.cmd == "fence":
         hub = Hub(a.space, a.actor)

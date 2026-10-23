@@ -108,7 +108,7 @@ class PoolEnv:
         self.hub_dir = tmp / "hub-space"
         (self.hub_dir / ".datacore" / "events").mkdir(parents=True)
         hubmod.enable(self.hub_dir, hub_id=HUB_ID, grantor=GRANTOR, lease_ttl_s=900, owner=OWNER,
-                      keys_dir=self.keys_dir, registry_path=self.registry)
+                      keys_dir=self.keys_dir, registry_path=self.registry, policy=self.policy)
         if pools:
             hubmod.enable_pools(self.hub_dir)
         self.hubs: list = []

@@ -143,6 +143,12 @@ class Authority:
     #: `hub.enable`. Each keeps its effect for good; every later reversal
     #: follows the correction window. ({"void", "target", "body_sha256"} dicts.)
     legacy_reversals: tuple = ()
+    #: THE ACTIVATION POLICY (owner decision 1, round 8): the `PolicyInputs`
+    #: the owner's `hub.enable` records. When set, every reader folds with the
+    #: policy versions the ledger records (`hub_policy.PolicyLedger`), never
+    #: with the policy file it was started with. None: an Authority built by
+    #: hand (the activation dry run), which folds with the policy it is given.
+    policy: object = None
 
     def lease_grantors(self) -> dict:
         """The fold's explicit lease authority (ledger.fold.fold): {hub: {grantor: epoch}}."""
@@ -160,6 +166,9 @@ class Authority:
         """The fold's explicit inputs for this space: lease authority, policy,
         who may reverse, and the reversals the activation record keeps. Every
         reader of a hub space folds with these."""
+        if self.policy is not None:
+            from .hub_policy import PolicyLedger
+            policy = PolicyLedger(self.policy, self.owner)
         return {"lease_grantors": self.lease_grantors(), "policy": policy, "reversers": self.reversers(),
                 "legacy_reversals": self.legacy_reversals}
 

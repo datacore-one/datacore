@@ -253,7 +253,9 @@ def fold(events: list[Event], *, lease_grantors=None, policy=None, reversers=Non
     caller that has already filtered through ledger.hub_admission may rely on
     that.
 
-    `policy` (a `ledger.hub_policy.PolicyInputs`, audit finding 12): when
+    `policy` (a `ledger.hub_policy.PolicyInputs`, audit finding 12, or a
+    `PolicyLedger` in a hub space: the policy versions the ledger records,
+    owner decision 1 of round 8): when
     given, every governed event must also be an AUTHORIZED transition
     (`hub_policy.authorize`: assignee, approver, co-sign, pool items only
     through a lease, arbitration). An unauthorized one is a validly signed
@@ -263,8 +265,14 @@ def fold(events: list[Event], *, lease_grantors=None, policy=None, reversers=Non
     state = LedgerState()
     seen: dict = {}
     authorize = None
+    versions = None
     if policy is not None:
-        from .hub_policy import authorize
+        from .hub_policy import PolicyLedger, authorize
+        if isinstance(policy, PolicyLedger):
+            # POLICY VERSIONS (owner decision 1, round 8): each event is judged
+            # by the policy in force when the hub admitted it, derived from the
+            # owner's and the grantor's records in these events alone.
+            versions = policy.versions(events, lease_grantors)
 
     # WHICH CORRECTIONS TAKE EFFECT is ONE rule for every reader (round 6,
     # Codex round 5 C3): `ledger.finality.resolve`. In a hub space (the caller
@@ -295,7 +303,8 @@ def fold(events: list[Event], *, lease_grantors=None, policy=None, reversers=Non
         item_id = _valid_item_id(event.payload if isinstance(event.payload, dict) else {})
         before = state.items.get(item_id) if item_id else None
         notes, orphans = (len(before.history) if before is not None else 0), len(state.orphans)
-        _step(state, event, seen, rejected, lease_grantors, authorize, policy)
+        _step(state, event, seen, rejected, lease_grantors, authorize,
+              versions.for_event(event) if versions is not None else policy)
         after = state.items.get(item_id) if item_id else None
         new = (after.history[notes:] if after is before else after.history) if after is not None else []
         if new:
