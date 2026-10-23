@@ -56,6 +56,40 @@ def _slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:60]
 
 
+#: FAULTS NO AGENT CAN REPAIR, in one table (W2, 2026-10-23). The briefing said "in
+#: repair: miles is on it" for a rewound ledger log (only the owner repairs it, by
+#: recovery.md) and for a venture heartbeat refusing an invalid hypothesis board for
+#: 21 days. A finding in one of these classes is never handed out as a repair and
+#: never says "in repair". `diag` is the kind check_diagnosis.agent_failure gives the
+#: finding's text; `markers` are further lowercase phrases. First match wins, so the
+#: cause a person must act on is listed before the usage limit.
+FAULT_CLASSES: dict[str, dict] = {
+    "stale-log": {"diag": "ledger_stop", "markers": ("stalelogerror", "already wrote seq"), "owner": True,
+                  "needs": "needs the owner: the ledger refused a rewound log; only the owner repairs it "
+                           "(recovery.md, stale log)"},
+    "venture-data": {"diag": None, "owner": True,
+                     "markers": ("sense_error", "invalid hypothesis board", "hypotheses.yaml",
+                                 "venture.yaml is rejected", "venture.yaml unreadable"),
+                     "needs": "needs the owner: a venture's own files are invalid and the heartbeat "
+                              "will not touch them"},
+    "login": {"diag": "login", "markers": ("credential", "invalid api key"), "owner": True,
+              "needs": "needs the owner: a login or credential stopped working; retrying cannot help"},
+    "credit": {"diag": "credit", "markers": (), "owner": True,
+               "needs": "needs the owner: the provider account has no credit left"},
+    "usage-limit": {"diag": "usage_limit", "markers": ("waiting on quota",), "owner": False,
+                    "needs": "waiting on the usage limit: nothing runs until it resets (not a repair)"},
+}
+
+
+def fault_class(f: dict) -> str:
+    """The FAULT_CLASSES row a finding's own words name, or '' for an ordinary fault."""
+    from check_diagnosis import agent_failure
+    text = " ".join(str(f.get(k) or "") for k in ("title", "evidence", "evidence_now"))
+    low, diag = text.lower(), agent_failure(text)[0]
+    return next((c for c, row in FAULT_CLASSES.items()
+                 if diag == row["diag"] or any(m in low for m in row["markers"])), "")
+
+
 # ---- collectors: each returns findings {id, kind, title, evidence} -------------------
 
 def v2_checklist(run: bool = True) -> list[dict]:
@@ -213,8 +247,33 @@ def undelivered() -> list[dict]:
     return out
 
 
+#: Heartbeat outcomes that never clear by themselves: the venture's own data is refused.
+#: A timeout or a usage limit clears on a later tick and is not a finding here.
+_HEARTBEAT_DATA_ERRORS = ("sense_error", "capture_error")
+
+
+def venture_heartbeats() -> list[dict]:
+    """Ventures whose heartbeat refuses their own data (W2). The scoreboard printed a
+    heartbeat parse error for ten days and nothing alerted: printed is not reported."""
+    out = []
+    for p in sorted(ROOT.glob("[0-9]-*/.datacore/state/heartbeat.json")):
+        try:
+            hb = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(hb, dict) or hb.get("last_status") != "error" \
+                or hb.get("last_error") not in _HEARTBEAT_DATA_ERRORS:
+            continue
+        v = str(hb.get("venture") or p.parents[2].name)
+        out.append({"id": f"heartbeat-{_slug(v)}", "kind": "heartbeat",
+                    "title": f"venture heartbeat {v} failed: {hb['last_error']}",
+                    "evidence": f"last tick {hb.get('last_fire', '?')}: {hb['last_error']}"})
+    return out
+
+
 def findings(run_v2: bool = True) -> list[dict]:
-    return v2_checklist(run_v2) + failed_units() + red_cadences() + mail_triage() + escalations() + undelivered()
+    return (v2_checklist(run_v2) + failed_units() + red_cadences() + mail_triage() + escalations()
+            + undelivered() + venture_heartbeats())
 
 
 # ---- remediation, delegation, reporting ------------------------------------------------
@@ -301,7 +360,9 @@ def sweep() -> int:
     still = {f["id"] for f in findings(run_v2=any(f["kind"] == "v2" for f in found))}
     for f in found:
         f["cleared_by_sweep"] = f["id"] not in still
-        if f["id"] in still and f["kind"] == "escalation":
+        if f["id"] in still and fault_class(f):
+            f["fault"], f["item"] = fault_class(f), ""   # the owner's, or waiting: never a repair
+        elif f["id"] in still and f["kind"] == "escalation":
             f["item"] = ""          # miles already gave up; handing it back is a loop, not a repair
         elif f["id"] in still and f["kind"] == "delivery" and not f.get("code"):
             f["item"] = ""          # a refused token or missing group id needs a person, not a code repair
@@ -347,6 +408,10 @@ def _needs(f: dict) -> str:
     """What the owner has to do, from evidence -- never a pull request that does not exist (MSG-8)."""
     if f.get("could_not_tell"):
         return "could not tell: its check could not run at 03:30"
+    if fault_class(f):
+        return FAULT_CLASSES[fault_class(f)]["needs"]
+    if f.get("item") and _dead_lettered(f["item"]):
+        return "needs the owner: the repair was given up after three failed attempts"
     if f.get("item"):
         who = f.get("assignee") or _repairer() or "the chief of operations"
         asked, url = _pull_request(f["item"])
@@ -392,10 +457,41 @@ def _in_repair_since_yesterday(fid: str, day: str) -> bool:
     return any(o.get("id") == fid and o.get("item") for o in old)
 
 
+def nights_red(fid: str, day: str) -> int:
+    """How many nights in a row before `day` the sweep found this still failing: what
+    the sweep itself has seen, so >= 1 means red for more than 24 hours."""
+    from datetime import timedelta
+    n, d = 0, date.fromisoformat(day)
+    while n < 400:
+        try:
+            old = json.loads((STATE / f"{(d - timedelta(days=n + 1)).isoformat()}.json").read_text())["findings"]
+        except (OSError, ValueError, KeyError, TypeError):
+            break
+        if not any(isinstance(o, dict) and o.get("id") == fid and not o.get("cleared_by_sweep") for o in old):
+            break
+        n += 1
+    return n
+
+
+def days_red(f: dict, day: str) -> int:
+    """Whole days this finding has been red: the nights the sweep saw it, or a
+    cadence's own days late, whichever is longer."""
+    n = nights_red(f["id"], day)
+    m = re.match(r"(\d+) day\(s\) late", str(f.get("evidence") or ""))
+    return max(n, int(m.group(1)) if m else 0)
+
+
 def _page_owner(f: dict, day: str) -> bool:
     """DIP-0050, CAD-6/AGT-8: the owner hears only what needs a person -- no repair item,
     or a repair that failed three times or has taken 24 hours. A repair handed over at
-    02:00 is not news at 03:30."""
+    02:00 is not news at 03:30. Anything the sweep has seen red for more than 24 hours
+    is (W2), whoever holds it; a usage limit younger than that is waited out, not paged.
+    Measured by the sweep's own nights, not a cadence's days late: a duty handed to its
+    agent tonight gets its night (CAD-6)."""
+    if nights_red(f["id"], day) >= 1:
+        return True
+    if fault_class(f) == "usage-limit":
+        return False
     if not f.get("item"):
         return True
     return _dead_lettered(f["item"]) or _in_repair_since_yesterday(f["id"], day)
@@ -424,6 +520,10 @@ def recheck() -> int:
     failing += unknown
     failing += [f for f in swept if f["kind"] == "self"]
     failing += [f for fid, f in now.items() if fid not in {s["id"] for s in swept}]  # new since 02:00
+    # ONE RED LIST, OLDEST FIRST (W2): what has been red longest is what was missed.
+    for f in failing:
+        f["days_red"] = days_red(f, day)
+    failing.sort(key=lambda f: -f["days_red"])
     out = FRAGMENTS / day / "repairs.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({
@@ -431,16 +531,27 @@ def recheck() -> int:
         "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "repaired": [{"title": f["title"], "how": f.get("tried") or f.get("item") or "cleared"} for f in repaired],
         "still_failing": [{"title": f["title"], "evidence": f.get("evidence_now") or f.get("evidence", ""),
-                           "item": f.get("item", ""), "needs": _needs(f)} for f in failing],
+                           "item": f.get("item", ""), "needs": _needs(f), "days_red": f["days_red"]}
+                          for f in failing],
     }, indent=1))
-    page = [f for f in failing if _page_owner(f, day)]
+    # ONE ALERT PER DAY (W2): a re-run of the re-check does not page again for what
+    # this day's alert already named. Not *.json: the job contract reads those.
+    sent_file = STATE / f"{day}.alerted"
+    try:
+        sent_ids = set(json.loads(sent_file.read_text()))
+    except (OSError, ValueError, TypeError):
+        sent_ids = set()
+    page = [f for f in failing if _page_owner(f, day) and f["id"] not in sent_ids]
     if page:
+        STATE.mkdir(parents=True, exist_ok=True)
+        sent_file.write_text(json.dumps(sorted(sent_ids | {f["id"] for f in page})))
         # MEM-66 (owner 2026-09-27): the group gets a summary with the count; the full
         # list of every still-failing item lives in repairs.json, which the briefing reads.
         in_repair = len(failing) - len(page)
         _alert_group(f"Morning repair, 03:30 UTC: {len(failing)} still failing, {len(page)} need a person"
                      + (f", {in_repair} in repair" if in_repair else "")
-                     + ": " + "; ".join(f["title"] for f in page[:3])
+                     + ": " + "; ".join(f["title"] + (f" (red {f['days_red']} day(s))" if f["days_red"] else "")
+                                        for f in page[:3])
                      + (f"; and {len(page) - 3} more" if len(page) > 3 else "")
                      + ". The full list is in the morning briefing.")
     print(f"morning_repair recheck: {len(repaired)} repaired, {len(failing)} still failing "
