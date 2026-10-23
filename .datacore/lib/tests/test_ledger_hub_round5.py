@@ -261,10 +261,12 @@ def test_r5_a_reversal_after_the_seal_imported_is_ignored_the_same_on_a_replica(
 
 
 def test_r5_a_reversal_past_the_maximum_age_is_refused_even_before_a_late_seal(env, monkeypatch):
+    # Round 6 (owner decision H1): the age is measured on the HUB's clock, from
+    # the hub's admission of the reversed event -- not from the writers' HLCs.
     from ledger.voids import REVERSAL_MAX_AGE_MS
     h, own, wa, owner, done = _confirmed(env, monkeypatch)      # no seal yet: the seal is late
-    ms = int(done.hlc.split(".")[0]) + REVERSAL_MAX_AGE_MS + 1000
-    v = T._signed_into(env, owner, "ledger.void", _void(done), hlc=f"{ms:013d}.0000.{T.OWNER}")
+    env.clock.advance(REVERSAL_MAX_AGE_MS / 1000 + 1)
+    v = T._signed_into(env, owner, "ledger.void", _void(done))
     with pytest.raises(H.HubRefused) as exc:
         h.append(owner._submission(v))
     assert exc.value.code == "reversal_closed", exc.value
@@ -279,8 +281,8 @@ def test_r5_a_reversal_past_the_maximum_age_is_refused_even_before_a_late_seal(e
 def test_r5_a_reversal_just_inside_the_maximum_age_still_works(env, monkeypatch):
     from ledger.voids import REVERSAL_MAX_AGE_MS
     h, own, wa, owner, done = _confirmed(env, monkeypatch)
-    ms = int(done.hlc.split(".")[0]) + REVERSAL_MAX_AGE_MS - 1000
-    v = T._signed_into(env, owner, "ledger.void", _void(done), hlc=f"{ms:013d}.0000.{T.OWNER}")
+    env.clock.advance(REVERSAL_MAX_AGE_MS / 1000 - 1)
+    v = T._signed_into(env, owner, "ledger.void", _void(done))
     assert h.append(owner._submission(v))["status"] == "accepted"
     assert h._state()[1].items["t"].status == "claimed"
 

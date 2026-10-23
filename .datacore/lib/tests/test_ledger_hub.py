@@ -2045,8 +2045,11 @@ def test_round4_a_voided_completion_is_never_a_confirmed_receipt(env, monkeypatc
     own.append("item.create", {"id": "t", "assignee": "wa"})
     wa.append("item.claim", {"id": "t"})
     done, _ = wa.append("item.complete", {"id": "t"})
-    own.append("ledger.void", {"log": "wa", "seq": done.seq, "hash": done.hash, "reason": "completion withdrawn"})
-    published = _published(env, hub, [wa, own])
+    # Round 6 (owner decision C5): in a hub space only the owner the owner's
+    # records name reverses; a human principal of the registry no longer does.
+    owner = env.writer(OWNER, t)
+    owner.append("ledger.void", {"log": "wa", "seq": done.seq, "hash": done.hash, "reason": "completion withdrawn"})
+    published = _published(env, hub, [wa, own, owner])
     assert hub._state()[1].items["t"].status == "claimed"      # the void took the effect away
     report = wa.receipt_check(published, required=[done.hash])
     assert report["status"] == "failed" and not report["ok"], report
@@ -2589,6 +2592,10 @@ _RAW_FOLD_ALLOWED = {
     # directory (no hub config there) and compares the result with the root
     # the document recorded; a mismatch refuses the restore.
     "ledger_checkpoint.py",
+    # The activation dry run (round 6) folds a space the way every reader
+    # sees it TODAY (no hub yet) to compare with the would-be hub state; it
+    # writes nothing and decides nothing.
+    "ledger/activation.py",
 }
 
 
