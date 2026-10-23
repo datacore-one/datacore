@@ -103,7 +103,7 @@ def check_space_protocol(space_dir) -> None:
         _PROTOCOL_CACHE[key] = declared
     require_protocol(declared, str(path.parent.parent))
 #: Written only by a hub's grantor, in its own log.
-HUB_ONLY_TYPES = HUB_EVENT_TYPES | {"ledger.seal", "hub.fence", "hub.start", "ledger.reject"}
+HUB_ONLY_TYPES = HUB_EVENT_TYPES | {"ledger.seal", "hub.fence", "hub.start", "ledger.reject", "ledger.admit"}
 #: Refusals that make a signed, chained event a REJECTED PROPOSAL rather than
 #: the end of its log, once the grantor has recorded it (`ledger.reject`,
 #: audit finding 11). The fold gives such an event no effect: a hub-only type
@@ -134,12 +134,39 @@ class Authority:
     #: One `Epoch` per grantor, oldest first (audit finding 4). Empty: one
     #: epoch 0 for every grantor (spaces enabled before the records existed).
     epochs: tuple = ()
+    #: THE ACTIVATION RECORD'S REVERSALS (round 6, owner: every space moves to
+    #: the hub at once): the reversals that were in effect, by the old rule,
+    #: when the owner activated the space -- frozen in the owner-signed
+    #: `hub.enable`. Each keeps its effect for good; every later reversal
+    #: follows the correction window. ({"void", "target", "body_sha256"} dicts.)
+    legacy_reversals: tuple = ()
 
     def lease_grantors(self) -> dict:
         """The fold's explicit lease authority (ledger.fold.fold): {hub: {grantor: epoch}}."""
         if self.epochs:
             return {self.hub_id: {ep.grantor: ep.epoch for ep in self.epochs}}
         return {self.hub_id: self.grantors}
+
+    def reversers(self) -> frozenset:
+        """Who may reverse in this space (round 6, owner decision C5): the owner
+        the owner's own signed records name -- read from the ledger, never
+        from the local principal registry."""
+        return frozenset({self.owner}) if self.owner else frozenset()
+
+    def fold_inputs(self, policy) -> dict:
+        """The fold's explicit inputs for this space: lease authority, policy,
+        who may reverse, and the reversals the activation record keeps. Every
+        reader of a hub space folds with these."""
+        return {"lease_grantors": self.lease_grantors(), "policy": policy, "reversers": self.reversers(),
+                "legacy_reversals": self.legacy_reversals}
+
+    def excused(self) -> dict:
+        """{(log, seq, stored hash): body pin} the activation record's reversals cancel."""
+        out = {}
+        for r in self.legacy_reversals:
+            t = r.get("target") or {}
+            out[(str(t.get("log")), t.get("seq"), t.get("hash"))] = r.get("body_sha256")
+        return out
 
     def epoch_of(self, grantor: str):
         return next((ep for ep in self.epochs if ep.grantor == grantor), None)
@@ -266,7 +293,7 @@ def check_event(event: Event, chain: str, prior: Event | None, auth: Authority, 
             raise Refusal("bad_signature", f"{event.actor!r} signed with a key that is not its current key")
 
 
-def _legacy_prefix(chain: str, events: list[Event], entry) -> int:
+def _legacy_prefix(chain: str, events: list[Event], entry, excused=None) -> int:
     """How many leading events of `chain` the cutover manifest admits (raises if it does not match)."""
     try:
         top, head = int(entry[0]), str(entry[1])
@@ -276,8 +303,15 @@ def _legacy_prefix(chain: str, events: list[Event], entry) -> int:
         raise Refusal("not_legacy", f"the cutover manifest names {chain} up to seq {top}; this copy "
                                     f"holds {len(events)} event(s)")
     prev = GENESIS
+    excused = excused or {}
     for i, e in enumerate(events[: top + 1]):
-        if e.seq != i or e.prev != prev or compute_hash(event_body(e)) != e.hash:
+        computed = compute_hash(event_body(e))
+        # A pre-activation event a pre-activation reversal cancelled (the old
+        # cleanup of bad events) stays in the chain by its stored hash, as the
+        # old rule kept it; only that exact body is excused (round 6).
+        key = (chain, e.seq, e.hash)
+        intact = computed == e.hash or (key in excused and excused[key] == computed)
+        if e.seq != i or e.prev != prev or not intact:
             raise Refusal("not_legacy", f"{chain} seq {i} is not the history the cutover manifest names")
         prev = e.hash
     if prev != head:
@@ -295,7 +329,7 @@ def admit_chain(chain: str, events: list[Event], auth: Authority, *, now_ms: int
     n, prior = 0, None
     try:
         if chain in auth.legacy:
-            n = _legacy_prefix(chain, events, auth.legacy[chain])
+            n = _legacy_prefix(chain, events, auth.legacy[chain], auth.excused())
             prior = events[n - 1] if n else None
         for e in events[n:]:
             try:

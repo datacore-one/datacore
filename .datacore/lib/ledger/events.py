@@ -148,8 +148,15 @@ OWNER_EVENT_TYPES = frozenset({"hub.enable", "hub.promote", "hub.resolve"})
 # original (log, seq, hash) with a reason, and carries its own receipt; the
 # original stays confirmed. The fold gives it no effect on item state; an
 # effect in the world is a new action recorded as its own event.
+#
+# `ledger.admit` (round 6): the grantor's record that it admitted a correction
+# -- a reversal (`ledger.void`) inside the correction window by the hub's own
+# clock, or a valid `ledger.compensate` -- naming it, its original and the
+# hub's admission times. In a hub space a correction takes effect only when a
+# grantor's `ledger.admit` names it and no `ledger.reject` does
+# (ledger.finality), so every replica decides it from the same records.
 EVENT_TYPES = EVENT_TYPES | HUB_EVENT_TYPES | OWNER_EVENT_TYPES | {"hub.fence", "hub.start", "ledger.reject",
-                                                                   "ledger.compensate"}
+                                                                   "ledger.compensate", "ledger.admit"}
 
 
 # ── AGENT CHECK-INS (task 53c26c5c, 2026-10-18) ─────────────────────────────

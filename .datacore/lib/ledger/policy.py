@@ -399,8 +399,9 @@ def _guarded_append_locked(
     previously_approved = False
     if type in {"item.claim", "item.update"}:
         from .fold import fold
-        events = read_events(space_dir)
-        from .hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        from .hub import authoritative_events, authoritative_state  # hub spaces: admission + policy
+        # The approval scan below reads the same admitted events (round 6).
+        events, _ = authoritative_events(space_dir, read_events(space_dir))
         item = authoritative_state(space_dir, events).items.get(payload.get("id"))
         if item is None:
             raise PolicyError("item does not exist")
@@ -567,7 +568,9 @@ def validate_approval(log: EventLog, payload: dict, policy: Policy, *, creating=
             "cosign but payload is missing 'approval_ref'"
         )
 
-    events = read_events(space_dir)
+    from .hub import authoritative_events
+    # A hub space: a grant counts only as admission lets it in (round 6).
+    events, _ = authoritative_events(space_dir, read_events(space_dir))
 
     grant = next((e for e in events if e.hash == approval_ref), None)
     if grant is None:
