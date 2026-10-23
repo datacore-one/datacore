@@ -397,3 +397,66 @@ def test_r7b_a_hub_record_in_a_plain_space_stops_writes_too(env, marker):
         _put(plain, next(e for e in read_events(env.hub_dir) if e.type == "hub.enable"))
     with pytest.raises(HubSigningRequired):
         log.append("item.update", {"id": "local", "title": "normal update"})
+
+
+def test_r7b_a_carriage_return_inside_a_record_does_not_hide_it(env):
+    """Round-7 re-check 3 (D3): the evidence scan splits lines exactly as the
+    event reader does (LF only), so JSON whitespace such as CR inside the
+    activation record cannot split it into unparsable fragments."""
+    import shutil
+    from ledger import voids
+    from ledger.log import HubSigningRequired
+    env.hub()
+    replica = _replica(env, env.hub_dir)
+    (replica / H.CONFIG).unlink()
+    owner_log = replica / ".datacore/events" / f"{T.OWNER}.jsonl"
+    for f in (replica / ".datacore/events").glob("*.jsonl"):
+        if f != owner_log:
+            f.unlink()
+    shutil.rmtree(replica / ".datacore/telemetry", ignore_errors=True)
+    lines = owner_log.read_bytes().split(b"\n")
+    owner_log.write_bytes(lines[0].replace(b'"type":"hub.enable"', b'"type":\r"hub.enable"')
+                          .replace(b'"hub":"', b'"hub":\r"') + b"\n")
+    assert [e.type for e in read_events(replica)] == ["hub.enable"]
+    assert H.records_a_hub(replica)
+    with pytest.raises(HubSigningRequired):
+        EventLog(replica, "wb", sign=False).append("item.claim", {"id": "t"})
+    assert voids._hub_space_voids(replica / ".datacore" / "events", registry_path=env.registry) is not None
+
+
+def test_r7b_the_evidence_cache_sees_a_same_size_rewrite(env):
+    """Re-check 3 (D4): a rewrite to the same size with the old mtime is not
+    served from the cache (the key includes the inode change time)."""
+    import os
+    plain = _plain_space_with_older_history(env, "plain-cache")
+    path = plain / ".datacore/events/wa.jsonl"
+    assert not H.records_a_hub(plain)
+    st = path.stat()
+    text = path.read_text()
+    swapped = text.replace('"type":"item.create"', '"type":"hub.enable" ')
+    assert len(swapped) == len(text) and swapped != text
+    path.write_text(swapped)
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert path.stat().st_size == st.st_size and path.stat().st_mtime_ns == st.st_mtime_ns
+    assert H.records_a_hub(plain)
+
+
+def test_r7b_a_damaged_line_before_the_activation_record_does_not_hide_it(env):
+    """Re-check 3: a corrupt first line withholds the rest of the owner's log
+    from the event reader (one bad record never stops the space); the
+    missing-config rule reads the raw logs too, so the hub is still seen."""
+    import warnings
+    p = env.hub_dir / ".datacore/events" / f"{T.OWNER}.jsonl"
+    genuine = p.read_bytes()
+    stage = env.tmp / "plain-source"
+    for e in [EventLog(stage, "wa", sign=False).append("item.create", {"id": "t"}),
+              EventLog(stage, "wb", sign=False).append("item.claim", {"id": "t"})]:
+        _put(env.hub_dir, e)
+    p.write_bytes(b"{}\n" + genuine)
+    (env.hub_dir / H.CONFIG).unlink()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(H.HubUnavailable):
+            H.authoritative_state(env.hub_dir, registry_path=env.registry, policy=T.TEST_POLICY)
+        with pytest.raises(H.HubUnavailable):
+            H.strict_problems(env.hub_dir, registry_path=env.registry)

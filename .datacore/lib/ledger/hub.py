@@ -293,12 +293,15 @@ _FILE_EVIDENCE: dict = {}
 def _file_has_evidence(path: Path) -> bool:
     """Does one log file hold hub evidence? Parses only lines that could: any
     JSON spelling of `hub.enable` or of a `hub` field holds the letters
-    "hub" or a backslash escape. Cached on the file's size and time."""
+    "hub" or a backslash escape. Lines are split on LF only, as the event
+    reader splits them. Cached on the file's inode, size and times."""
     try:
         st = path.stat()
     except OSError:
         return False
-    key = (str(path), st.st_size, st.st_mtime_ns)
+    # The inode change time too (re-check 3, D4): it moves on every write and
+    # cannot be set back, unlike the modification time.
+    key = (str(path), st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
     if key in _FILE_EVIDENCE:
         return _FILE_EVIDENCE[key]
     found = False
@@ -307,7 +310,7 @@ def _file_has_evidence(path: Path) -> bool:
     except OSError:
         raw = b""
     if b"hub" in raw or b"\\" in raw:
-        for line in raw.splitlines():
+        for line in raw.split(b"\n"):        # exactly as the event reader splits (re-check 3, D3)
             if b"hub" not in line and b"\\" not in line:
                 continue
             try:
@@ -346,7 +349,9 @@ def require_config_or_no_hub(space_dir, events=None, registry_path=None) -> HubC
     if events is None:
         from .log import read_events
         events = read_events(Path(space_dir))
-    if hub_evidence(events):
+    # The raw logs too (re-check 3): a damaged line withholds the rest of its
+    # log from the event reader, which must not hide the activation record.
+    if hub_evidence(events) or records_a_hub(space_dir, registry_path):
         raise HubUnavailable(
             f"{space_dir}: the ledger holds a hub activation record or hub-stamped events but the hub config "
             f"({CONFIG}) is missing; refusing to read the space without admission -- restore the config "
