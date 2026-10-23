@@ -88,7 +88,12 @@ def _held_target(space_dir: Path, payload) -> "Event | None":
     from .voids import log_stem
     stem = log_stem(payload["log"])
     root = Path(space_dir) / ".datacore"
-    for path in [root / "events" / f"{stem}.jsonl", *sorted((root / "telemetry").glob(f"{stem}*.jsonl"))]:
+    # A telemetry log reads as "<writer>.telemetry" but lives in
+    # telemetry/<writer>.jsonl (round-7 re-check D5).
+    paths = [root / "events" / f"{stem}.jsonl"]
+    if stem.endswith(TELEMETRY_SUFFIX):
+        paths.append(root / "telemetry" / f"{stem[:-len(TELEMETRY_SUFFIX)]}.jsonl")
+    for path in paths:
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
         except OSError:
@@ -545,6 +550,11 @@ class EventLog:
             raise HubSigningRequired(
                 f"{self.space_dir} is served by a hub: every writer signs (DIP-0034 amendment D). "
                 f"Turn signing on for {self.actor!r} (DATACORE_LEDGER_SIGN=1) before writing here.")
+        if self.hub_required and not (self.space_dir / ".datacore" / "ledger-hub.json").exists():
+            # A writer made while the config existed (round-7 re-check D7):
+            # its config has since been lost; it writes nothing more.
+            raise HubSigningRequired(f"{self.space_dir}: the hub config has gone missing since this writer "
+                                     "was opened; restore it before writing")
         if not self.hub_required:
             # The config is a cache of the owner's record (round-7 audit): a
             # space whose logs record the move to a hub but whose config is

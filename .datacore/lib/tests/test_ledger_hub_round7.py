@@ -128,16 +128,21 @@ def test_r7_logs_only_rebuild_refuses_the_decision_readers(env, monkeypatch):
         keys.recorded_rotations(replica, "wa")
 
 
-def test_r7_an_unsigned_hub_enable_in_a_plain_space_does_not_block_reads(tmp_path):
-    """Fail-closed is decided by a SIGNED owner record; a bare line of that
-    type in a space without a hub changes nothing (no denial by forgery)."""
+def test_r7_any_hub_record_in_a_space_without_config_is_read_fail_closed(tmp_path):
+    """Fail-closed is deliberately coarse (round-7 re-checks): an activation
+    record, signed or not, in a space without a hub config makes readers
+    refuse with the reason, never plain-fold. A space with no such record
+    reads as before."""
     from ledger.log import EventLog
     space = tmp_path / "plain"
     (space / ".datacore" / "events").mkdir(parents=True)
     log = EventLog(space, "own", sign=False)
     log.append("item.create", {"id": "t"})
-    log.append("hub.enable", {"space": "x", "hub": "y", "epoch": 0, "grantor": "g"})
     assert H.authoritative_state(space).items["t"].status == "created"
+    log.append("hub.enable", {"space": "x", "hub": "y", "epoch": 0, "grantor": "g"})
+    with pytest.raises(H.HubUnavailable) as exc:
+        H.authoritative_state(space)
+    assert "remove a record that does not belong here" in str(exc.value)
 
 
 # ── control records are never reversible (owner, round 7) ──────────────────
