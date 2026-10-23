@@ -233,6 +233,54 @@ def load_config(space_dir) -> HubConfig | None:
     return cfg if cfg.enabled else None
 
 
+def signed_hub_records(events, registry_path=None) -> list:
+    """The `hub.enable` records in `events` that carry a valid signature by
+    their writer, bound to the space and hub they name (their signing domain).
+
+    Read when the config is MISSING (Codex final audit, F2): the config is a
+    cache of what the owner recorded, and losing it is not proof that the
+    space never moved to the hub. A bare unsigned line of that type proves
+    nothing and blocks nothing (no denial by forgery)."""
+    from .keys import verify
+    out = []
+    for e in events:
+        if getattr(e, "type", None) != "hub.enable" or not getattr(e, "sig", ""):
+            continue
+        p = e.payload if isinstance(e.payload, dict) else {}
+        space, hub = p.get("space"), p.get("hub")
+        if not (isinstance(space, str) and isinstance(hub, str) and e.hub == hub):
+            continue
+        if e.domain != signing_domain(space, hub, getattr(e, "log", None) or e.actor):
+            continue
+        try:
+            ok = verify(e.actor, canonical_bytes(event_body(e)), e.sig, registry_path=registry_path,
+                        at_ms=_physical_ms(e.hlc))
+        except Exception:  # noqa: BLE001 -- an unverifiable record is no record
+            ok = False
+        if ok:
+            out.append(e)
+    return out
+
+
+def require_config_or_no_hub(space_dir, events=None, registry_path=None) -> HubConfig | None:
+    """The space's hub config; None only for a space whose logs carry no
+    signed `hub.enable`. A space whose ledger records the move to the hub but
+    whose config is missing is read FAIL-CLOSED (`HubUnavailable`): never
+    plain-folded around admission (Codex final audit, F2)."""
+    cfg = load_config(space_dir)
+    if cfg is not None:
+        return cfg
+    if events is None:
+        from .log import read_events
+        events = read_events(Path(space_dir))
+    if signed_hub_records(events, registry_path):
+        raise HubUnavailable(
+            f"{space_dir}: the ledger records an owner-signed hub.enable but the hub config ({CONFIG}) is "
+            "missing; refusing to read the space without admission -- restore the config (re-run `enable` "
+            "from the owner's record) before reading", reason="hub_config_missing")
+    return cfg
+
+
 def _write_config(space_dir, cfg: HubConfig) -> None:
     from file_utils import atomic_write_text
     path = Path(space_dir) / CONFIG
@@ -518,9 +566,9 @@ def authoritative_events(space_dir, events=None, *, registry_path=None, policy=N
 def _authoritative(space_dir, events, *, registry_path, policy, now_ms):
     """(admitted events, fold inputs, the sealer whose seals count -- None without a hub)."""
     from .log import read_events
-    cfg = load_config(space_dir)
     if events is None:
         events = read_events(Path(space_dir))
+    cfg = require_config_or_no_hub(space_dir, events, registry_path)
     if cfg is None:
         return list(events), {}, None
     from .hub_policy import PolicyInputs
@@ -1775,30 +1823,46 @@ class Hub:
         yet stamped before a sealed event about the same item. Folded in HLC
         order it could change what was sealed (who claimed first), and a
         sealed decision is final -- so the grantor keeps it as a rejected
-        proposal, a no-op in every copy. Later-stamped work is not touched."""
+        proposal, a no-op in every copy. Later-stamped work is not touched.
+
+        THE SEALS OF EVERY GRANTOR IN THE CHAIN (Codex final audit, F1): the
+        active grantor and every predecessor the owner's records name. A
+        promoted grantor has no seal of its own yet; reading only its own let
+        an earlier-stamped claim, delivered between the promotion and the new
+        grantor's first seal, reorder (and fail) a claim its predecessor had
+        sealed as confirmed. Sealed means final whoever sealed it."""
         from .seal import as_sequencer, latest_seal
         try:
-            self._writable(grant=True)
+            cfg = self._writable(grant=True)
         except HubError:
             return {}                               # a standby rejects nothing
         if events is None:
             events, state = self._state()
-        try:
-            with as_sequencer(self.actor):
-                seal = latest_seal(events)
-        except ValueError:
+        grantors = sorted(self._authority(cfg).grantors | {self.actor})
+        seals = []
+        for g in grantors:
+            try:
+                with as_sequencer(g):
+                    seal = latest_seal(events)
+            except ValueError:
+                continue
+            if seal is not None:
+                seals.append(seal)
+        if not seals:
             return {}
-        if seal is None:
-            return {}
+
+        def sealed_by_any(e):
+            return any(seal.includes(e) for seal in seals)
+
         top: dict = {}
         for e in events:
             item = e.payload.get("id") if isinstance(e.payload, dict) else None
-            if e.type != "ledger.seal" and isinstance(item, str) and isinstance(e.hlc, str) and seal.includes(e):
+            if e.type != "ledger.seal" and isinstance(item, str) and isinstance(e.hlc, str) and sealed_by_any(e):
                 top[item] = max(top.get(item, ""), e.hlc)
         out = {}
         for e in candidates:
             item = e.payload.get("id") if isinstance(e.payload, dict) else None
-            if (isinstance(item, str) and isinstance(e.hlc, str) and not seal.includes(e)
+            if (isinstance(item, str) and isinstance(e.hlc, str) and not sealed_by_any(e)
                     and e.hlc < top.get(item, "")):
                 out[e.hash] = (f"stamped {e.hlc}, before {item}'s sealed history (sealed up to {top[item]}); "
                                "a sealed decision is final")
@@ -2519,6 +2583,17 @@ class HubWriter:
             why = payload_problem(self.actor, payload, self.clock())
             if why:
                 raise HubRefused("bad_checkin", f"not a check-in: {why}; not appended")
+        if type == "ledger.void":
+            # CONTROL RECORDS ARE NEVER REVERSIBLE (owner, round 7): refused
+            # before the local append when this copy holds the target, so no
+            # signed reversal of one ever enters my log. (The hub refuses it
+            # too, and the fold gives one that arrives anyway no effect.)
+            from .finality import original, reversible
+            from .log import read_events
+            target = original(read_events(self.space_dir), payload)
+            if target is not None and not reversible(target.type):
+                raise HubRefused("not_reversible", f"{target.type} is a control record and is never reversible; "
+                                 "correct it with a new forward record; not appended")
         if type in ("item.complete", "item.release") and isinstance(payload, dict) and "attempt" not in payload:
             held = self._attempt_for(payload.get("id"))
             if held:
@@ -2886,11 +2961,12 @@ def strict_problems(space_dir, *, registry_path=None, now_ms: int | None = None)
     (audit finding 1). Empty for a space without a hub.
     """
     from .log import read_events
-    cfg = load_config(space_dir)
+    events = read_events(Path(space_dir))
+    cfg = require_config_or_no_hub(space_dir, events, registry_path)
     if cfg is None:
         return []
     auth = authority(space_dir, cfg, registry_path)
-    refused = admit(read_events(Path(space_dir)), auth, now_ms=_wall_ms() if now_ms is None else now_ms).refused
+    refused = admit(events, auth, now_ms=_wall_ms() if now_ms is None else now_ms).refused
     return [f"{chain} {why}" for chain, why in sorted(refused.items())]
 
 

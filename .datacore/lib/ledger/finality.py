@@ -30,6 +30,13 @@ answer on every replica, as a chain's state function would.
 The DECISION itself (`reversal_problem`, `compensation_problem`) is made by
 the hub at admission, by its own clock, and nowhere else.
 
+CONTROL RECORDS ARE NEVER REVERSIBLE (owner, round 7). `REVERSIBLE_TYPES` is
+the one closed allow-list: ordinary item events only. A reversal naming
+anything else is refused at write (`not_reversible`) and is a no-op in the
+fold even if some grantor's record admitted it -- decided from the target's
+type, the same on every replica. (The reversals the activation record froze
+keep their effect whatever they named: they are history, not new decisions.)
+
 SPACES WITHOUT A HUB keep the old rule exactly (owner, 2026-10-23): a void by
 an authorised principal of the registry, no window (`ledger.voids`).
 """
@@ -45,6 +52,29 @@ from .voids import (COMPENSATE_TYPE, REVERSAL_MAX_AGE_MS, VOID_TYPE, Voids, _tar
 ADMIT_TYPE = "ledger.admit"
 REJECT_TYPE = "ledger.reject"
 CORRECTION_TYPES = frozenset({VOID_TYPE, COMPENSATE_TYPE})
+
+#: THE ONE ALLOW-LIST OF REVERSIBLE EVENT TYPES (owner, round 7: control
+#: records are never reversible). Only ordinary item (task) events may be
+#: reversed, and only inside the correction window. Everything else is a
+#: CONTROL RECORD and is corrected only by a new forward record: admission
+#: decisions (`ledger.admit` / `ledger.reject`), seals, corrections themselves
+#: (`ledger.void`, `ledger.compensate`), the owner's and the hub's records
+#: (`hub.*`), key rotations and revocations, approvals (`approval.grant`),
+#: ownership authority (`owner.set`), execution grants and leases
+#: (`item.grant`, `item.lease*`), reviews that gate acceptance
+#: (`item.verify`), budgets and spend, check-ins, attestations, and any type
+#: not named here -- including types added later. A reversal naming one is
+#: refused at write time (`not_reversible`) and, if it arrives by import, has
+#: no effect in the fold, whatever any admission record says.
+REVERSIBLE_TYPES = frozenset({
+    "item.create", "item.update", "item.claim", "item.release", "item.complete",
+    "item.dismiss", "item.reopen", "item.archive", "item.clock.start", "item.clock.stop",
+})
+
+
+def reversible(event_type) -> bool:
+    """May an event of this type be reversed (inside the window)? One answer, here."""
+    return event_type in REVERSIBLE_TYPES
 
 
 @dataclass
@@ -143,6 +173,19 @@ def resolve(events: list[Event], *, lease_grantors=None, reversers=None, legacy_
         else:
             kept.append(v)
     pending = kept
+    # CONTROL RECORDS ARE NEVER REVERSIBLE (owner, round 7). Decided from the
+    # target's type alone -- the same on every replica, whatever an admission
+    # record says: a reversal naming a control record is a recorded no-op.
+    kept = []
+    for v in pending:
+        t = _target(v.payload)
+        target = index.get(t[0][:2]) if not isinstance(t, str) else None
+        if target is not None and not reversible(target.type):
+            outcomes[v.hash] = (f"no-op (names a {target.type} record: control records are never reversible; "
+                                "correct one with a new forward record)")
+        else:
+            kept.append(v)
+    pending = kept
 
     def authority(v: Event, target_log: str):
         if _writer(v.actor) not in owners:
@@ -222,6 +265,10 @@ def reversal_problem(v: Event, events: list[Event], *, owner: str, sealers, admi
     target = original(events, v.payload)
     if target is None:
         return "malformed", "the reversal names no event this space holds (log, seq, hash)"
+    if not reversible(target.type):
+        return "not_reversible", (f"{target.type} is a control record and is never reversible (owner, round 7); "
+                                  "correct it with a new forward record (a new rotation, a revocation, a new "
+                                  "admission decision, ...)")
     if _writer(target.actor) == _writer(v.actor):
         return "not_authorized", f"{v.actor!r} may not reverse its own event"
     (log, seq, _), pin = t
