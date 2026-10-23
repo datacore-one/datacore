@@ -63,6 +63,9 @@ class Seal:
     sequencer: str
     version: int = 1
     event_set_hash: str = ""
+    #: The root rule (round 6, H3): True -- `pool_work` is hashed whenever set.
+    #: A seal that names none was made before pools, with the older rule.
+    pool_root: bool = False
 
     def includes(self, event: Event) -> bool:
         key = (getattr(event, "log", None) or event.actor) if self.version == 2 else event.actor
@@ -178,6 +181,7 @@ def latest_seal(events: list[Event]) -> Seal | None:
         sequencer=newest.actor,
         version=p.get("version", 1),
         event_set_hash=p.get("event_set_hash", ""),
+        pool_root=p.get("pool_root") is True,
     )
 
 
@@ -301,7 +305,13 @@ def verify_seal(events: list[Event], fold_kwargs: dict | None = None) -> tuple[b
     # Every covered event's hash was judged by _chain_issue above, through the
     # one verifier: a second hash loop here refused seals covering an event an
     # in-ledger void had cancelled (Phase 2 V2).
-    recomputed = fold(covered, **(fold_kwargs or {})).state_root()
+    # THE ROOT RULE IS THE SEAL'S OWN (round 6, H3), and it only moves forward:
+    # once a seal hashed pool state, a later one that does not is refused.
+    if not seal.pool_root and any(e.hlc < seal.hlc and (e.payload or {}).get("pool_root") is True
+                                  for e in _seal_events(events)):
+        return False, ("SEAL DOWNGRADE: an earlier seal used the pool root rule (pool_root); this one "
+                       "does not -- a root rule only moves forward")
+    recomputed = fold(covered, **(fold_kwargs or {})).state_root(pool_root=seal.pool_root)
     if recomputed == seal.state_root:
         n = sum(seal.watermarks.values()) + len(seal.watermarks)
         # COVERAGE IS NOT CORRECTNESS. A seal is internally consistent as long
@@ -375,6 +385,8 @@ def build_seal_payload(events: list[Event], fold_kwargs: dict | None = None) -> 
         "event_set_hash": _event_set_hash(work),
         "watermarks": watermarks(work),
         "state_root": fold(work, **(fold_kwargs or {})).state_root(),
+        # The root rule this seal was made with (round 6, H3).
+        "pool_root": True,
     }
 
 

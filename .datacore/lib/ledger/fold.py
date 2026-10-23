@@ -163,8 +163,14 @@ class LedgerState:
     #: never re-derive it. Outside `state_root`, like `outcomes`.
     finality: object = field(default=None, repr=False, compare=False)
 
-    def state_root(self) -> str:
+    def state_root(self, pool_root: bool = True) -> str:
         """One hash over the WHOLE folded state — items, spend and orphans.
+
+        `pool_root` (round 6, Codex round 5 H3): the root rule. True (what
+        this code seals with, named in the seal as `pool_root`) hashes
+        `pool_work` whenever it is set, so two states a decision tells apart
+        never share a root. False is the rule a seal made before pools was
+        made with (no such field); it is used only to verify such a seal.
 
         Two machines answer "do we agree?" by comparing this instead of
         replaying two logs. All three fields participate deliberately: hashing
@@ -206,12 +212,9 @@ class LedgerState:
             if document.get('granted_by') is None and document.get('granted_at') is None:
                 document.pop('granted_by', None)
                 document.pop('granted_at', None)
-            # `pool_work` counts only once the item has been leased (round 5,
-            # amendment 9): before pools a role-only task could be created but
-            # never leased, so an unleased item hashes as an older seal saw it,
-            # in a space with pools off or on. The field itself stays on the
-            # item, so pool work created as such keeps its review rules.
-            if document.get('lease_ref') is None:
+            # The pre-pool root rule (a seal that names no `pool_root`) had no
+            # such field; the pool rule hashes it whenever it is set.
+            if not pool_root:
                 document['pool_work'] = False
             # Same rule for leases: a space that never leased hashes as before.
             if (document.get('lease_ref') is None and document.get('lease_holder') is None
