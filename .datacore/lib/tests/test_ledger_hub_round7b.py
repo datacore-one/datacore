@@ -170,3 +170,33 @@ def test_r7b_a_reversed_release_does_not_resolve_an_uncertain_attempt(env):
     h.expire_due()
     events, state = h._state()
     assert not h._attempt_resolved(state.items["t"], events, "wa", state)
+
+
+def test_r7b_an_answered_request_is_retried_as_is_after_the_freshness_window(env):
+    """J8 end to end (round-7 audit, R9): a writer whose answer was lost
+    retries the SAME request however late, and gets the hub's stored answer."""
+    h = env.hub()
+    own = env.writer("own", H.LocalTransport(h))
+    own.append("item.create", {"id": "t"})
+    wa = env.writer("wa", T._LosesFirstAnswer(h))
+    with pytest.raises(H.HubUnavailable):
+        wa.request_lease("t")
+    env.clock.advance(H.REQUEST_WINDOW_MS / 1000 + 1)
+    answer = wa.request_lease("t")
+    assert answer["status"] == "granted", answer
+    assert wa.receipts(), "the writer kept no receipt of the grant it was given"
+
+
+def test_r7b_an_unanswered_stale_request_is_replaced_by_a_fresh_one(env):
+    """A pending request the hub never answered and that has gone stale is
+    refused by the hub; the writer then asks afresh, once."""
+    import json
+    h = env.hub()
+    own = env.writer("own", H.LocalTransport(h))
+    own.append("item.create", {"id": "t"})
+    wa = env.writer("wa", H.LocalTransport(h))
+    req = H.sign_request("wa", "lease.request", {"hub": wa.cfg.hub_id, "space": wa.cfg.space_id, "item": "t"},
+                         keys_dir=env.keys_dir, clock=env.clock)
+    wa._pending_path("lease.request", "t").write_text(json.dumps(req, sort_keys=True))
+    env.clock.advance(H.REQUEST_WINDOW_MS / 1000 + 1)
+    assert wa.request_lease("t")["status"] == "granted"
