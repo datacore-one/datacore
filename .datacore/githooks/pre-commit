@@ -37,6 +37,13 @@ if [ ! -f "$ledger_gate" ]; then
 fi
 command -v python3 >/dev/null 2>&1 || { echo "pre-commit: BLOCKED — no python3 on PATH, so the ledger write gate cannot run" >&2; exit 1; }
 python3 "$ledger_gate" --repo "$repo_root" --staged || exit 1
+# A venture's hypotheses board lands only if the heartbeat can read it (2026-10-23:
+# one invalid-YAML board and one unknown lane each stopped a venture for weeks).
+# Exits at once when no board is staged; refuses when it cannot check one.
+hyp_gate="$data_root/.datacore/lib/hooks/hypotheses_write_gate.py"
+if [ -f "$hyp_gate" ]; then
+  python3 "$hyp_gate" --repo "$repo_root" --root "$data_root" --staged || exit 1
+fi
 # An overnight task never commits onto a default branch of code (2026-09-27, 93f3879 on
 # the root's main). Only under NIGHTSHIFT_RUN=1; fails CLOSED if the guard cannot run.
 if [ "${NIGHTSHIFT_RUN:-}" = "1" ]; then
