@@ -257,6 +257,11 @@ def _note_pass(job_name: str) -> None:
     if _NO_EMIT:
         return
     rec = _rec.record(job_name, failed=False)
+    try:
+        from jobs.autofix import clear_escalation
+        clear_escalation(job_name)      # a later, different failure is news again
+    except Exception:  # noqa: BLE001 -- bookkeeping must not stop verification
+        pass
     # Decision N7 (2026-09-23): a reset that could not be locked or saved is
     # warned loudly -- in the verifier's own report, not only on stderr.
     if isinstance(rec, dict) and rec.get("warning"):
@@ -375,6 +380,18 @@ def _delegate_repair(job, failures: list[str], rec: dict) -> tuple[str, str]:
         return delegate(job, failures, rec, root=DATACORE_ROOT)
     except Exception as exc:  # noqa: BLE001 -- verification must not break on this
         return "refused", f"{type(exc).__name__}: {exc}"
+
+
+def _escalate_once(job_name: str, detail: str) -> bool:
+    """True the first time this job's current escalation reaches the owner."""
+    try:
+        from jobs.autofix import escalate_once
+    except Exception:  # noqa: BLE001 -- cannot tell: say it rather than lose it
+        return True
+    # Keyed by the reason minus its numbers' noise: the class and fingerprint.
+    import re as _re
+    key = _re.sub(r"\d+ repair attempts", "N repair attempts", detail)
+    return escalate_once(job_name, key)
 
 
 def _file_task(job, rec: dict, failures: list[str]) -> str | None:
@@ -550,6 +567,38 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> 
                     tid = _file_task(job, _record, failures)
                     if tid:
                         _rec.note_task(job_name, tid)
+                return
+            if state == "paused":
+                # The model usage limit: the dispatcher reported it once and
+                # paused; another repair would spend nothing but the wait.
+                print(f"repairs paused for {job_name} ({detail}); operator not alerted",
+                      file=sys.stderr)
+                return
+            if state == "escalate":
+                # A host-state fault, or the breaker is open (W1): no agent can
+                # fix it, so the owner hears ONCE per job and fingerprint, with
+                # the real failure, and the recurring task below is the record.
+                if _record.get("recurring") and not _record.get("task_id"):
+                    tid = _file_task(job, _record, failures)
+                    if tid:
+                        _rec.note_task(job_name, tid)
+                if not _escalate_once(job_name, detail):
+                    print(f"alert withheld: {job_name} was already escalated to the owner "
+                          f"({detail[:120]})", file=sys.stderr)
+                    return
+                _rec.note_alerted(job_name)
+                message = f"job.verify NEEDS THE OWNER: {detail}"
+                if mode in ("telegram", "command"):
+                    message += _failure_detail(job, failures)
+                if mode == "telegram":
+                    if not _send_telegram(message):
+                        print(f"alert: telegram unavailable, logged only ({job_name})", file=sys.stderr)
+                elif mode == "command":
+                    if not _send_command(message):
+                        print(f"alert: no working alert command, logged only ({job_name}): {message}",
+                              file=sys.stderr)
+                else:
+                    print(f"alert: {message}", file=sys.stderr)
                 return
             if state == "owner":
                 # Board D1, 2026-10-01: the owner's machine gets no repair agent;

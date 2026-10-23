@@ -71,7 +71,35 @@ MAX_ATTEMPTS = 3
 #: counted, and later ticks re-run only its CHECK until the owner has acted.
 WAITING_ON_OWNER = 3
 #: Release kinds that are not an attempt at the task (see the dead-letter count).
-NOT_AN_ATTEMPT = ("infrastructure", "waiting_on_owner")
+#: `usage_limit`: the model allowance ran out (W1) -- the budget, not the task.
+NOT_AN_ATTEMPT = ("infrastructure", "waiting_on_owner", "usage_limit")
+
+
+def _task_text(title: str, payload: dict, last_error: str = "") -> str:
+    """What the agent is told: the title, the item's body, the last failure.
+
+    The prompt used to be the title alone. For a repair that is "Repair X:
+    failing on box since ..." -- the job's real error, carried in the item's
+    body by autofix, never reached the agent, and its retries saw only the
+    check's one-line verdict (W1, 2026-10-23)."""
+    body = str((payload or {}).get("body") or "").strip()
+    parts = [title] + ([body] if body else [])
+    if last_error:
+        parts.append(f"The previous attempt failed: {last_error[:600]}")
+    return "\n\n".join(parts)
+
+
+def _outcome(payload: dict, outcome: str, detail: str = "", actor: str = "") -> None:
+    """A repair item's outcome becomes a learning candidate (autofix). Never raises."""
+    if not ((payload or {}).get("autofix") or str((payload or {}).get("id", "")).startswith("autofix")):
+        return
+    try:
+        from jobs.autofix import record_outcome
+        record_outcome(payload, outcome, detail, actor=actor)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 TIMEOUT = 600
 
 # Phrases that mean the agent declined or was prevented, in a run that exits 0
@@ -660,6 +688,7 @@ def main() -> int:
             print(f"DEADLETTER REFUSED  {title}\n         -> {exc}")
             continue
         print(f"DEADLETTER  {title}\n         -> {n} failed attempts; dismissed")
+        _outcome(item.payload or {}, "gave_up", last_error.get(item.id, ""), args.actor)
     pending = [i for i in pending if attempts.get(i.id, 0) < MAX_ATTEMPTS]
     pending.sort(key=lambda i: i.id)
 
@@ -805,7 +834,8 @@ def main() -> int:
             print(f"REFUSED  {title[:70]}: {exc}")
             refused += 1
             continue
-        ok, detail, meta = run_task(title, route, space, item.id, actor=args.actor)
+        ok, detail, meta = run_task(_task_text(title, item.payload or {}, last_error.get(item.id, "")),
+                                    route, space, item.id, actor=args.actor)
         if ok:
             claim_backoff.clear(args.actor)
         if ok and check:
@@ -829,6 +859,7 @@ def main() -> int:
                     f"WAITING `{item.id[:12]}` {title[:60]} — done by {args.actor}; waiting for you")
                 print(f"WAITING  [{route}] {title[:70]}\n         -> waiting for you: the agent's part "
                       f"is done and the owner has the next move; not an attempt")
+                _outcome(item.payload or {}, "waiting", "", args.actor)
                 waiting_n += 1
                 continue
             if passed:
@@ -850,6 +881,7 @@ def main() -> int:
                       f"@ {sha[:10]} ({meta.get('cost_cents', '?')}c, "
                       f"{meta.get('duration_s', '?')}s)")
                 dispatched += 1
+                _outcome(item.payload or {}, "fixed", "", args.actor)
                 chained, note = chain_follow_up(space, args.actor, item.payload or {})
                 if note:
                     print(f"         -> {note}")
@@ -862,6 +894,7 @@ def main() -> int:
                     f"FAILED `{item.id[:12]}` {title[:60]} — "
                     + (check_why or f"check did not pass: `{check}`"))
                 print(f"FAILED   [{route}] {title[:70]}\n         -> check failed: {check}")
+                _outcome(item.payload or {}, "failed", check_why or f"check did not pass: {check}", args.actor)
                 failed += 1
             continue
         if ok:
@@ -885,10 +918,27 @@ def main() -> int:
             # because one machine was sick. An infrastructure release is marked
             # so the counter can skip it; the item stays available for the host
             # when it recovers.
+            # A USAGE LIMIT IS THE BUDGET, NOT THE TASK (W1). Released as its own
+            # kind, never counted towards the dead-letter, and the host pauses:
+            # on 2026-10-21 about 60 repair attempts were spent against "You've
+            # hit your weekly limit", each counted as a failed repair.
+            usage = claim_backoff.is_usage_limit(detail)
             infra = _infrastructure_failure(detail)
+            kind = "usage_limit" if usage else ("infrastructure" if infra else None)
             EventLog(space, args.actor).append(
                 "item.release", {"id": item.id, "owner": args.actor, "error": detail[:300],
-                                 **({"kind": "infrastructure"} if infra else {})})
+                                 **({"kind": kind} if kind else {})})
+            _outcome(item.payload or {}, "paused" if usage else "failed", detail, args.actor)
+            if usage:
+                journal_lines.append(f"PAUSED `{item.id[:12]}` {title[:60]} — the model usage limit "
+                                     f"was reached: {detail[:110]}")
+                print(f"PAUSED   [{route}] {title[:70]}\n         -> usage limit reached: claiming paused "
+                      f"on this host; the item stays queued and is not counted as an attempt")
+                if claim_backoff.record_failure(args.actor, detail):
+                    journal_lines.append(
+                        f"ACTION NEEDED — `{args.actor}` reached the model usage limit; claiming "
+                        f"paused, one retry every {int(claim_backoff.PROBE_AFTER.total_seconds() // 3600)}h.")
+                break
             journal_lines.append(
                 f"FAILED `{item.id[:12]}` {title[:60]} — {detail[:110]}")
             print(f"FAILED   [{route}] {title[:70]}\n         -> {detail[:150]}")
