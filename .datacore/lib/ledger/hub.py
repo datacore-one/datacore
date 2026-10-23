@@ -489,7 +489,7 @@ def _authoritative(space_dir, events, *, registry_path, policy, now_ms):
     auth = authority(space_dir, cfg, registry_path)
     inputs = policy if isinstance(policy, PolicyInputs) else PolicyInputs.load(policy)
     admitted = admit(list(events), auth, now_ms=_wall_ms() if now_ms is None else now_ms).events
-    return admitted, {"lease_grantors": auth.lease_grantors(), "policy": inputs}, auth.active.grantor
+    return admitted, auth.fold_inputs(inputs), auth.active.grantor
 
 
 def authoritative_state(space_dir, events=None, *, registry_path=None, policy=None, now_ms: int | None = None,
@@ -546,23 +546,26 @@ _GATE = ("a write gate for {type} should have refused this event before it was a
 
 
 def incidents(space_dir, events=None, *, registry_path=None, policy=None) -> list[dict]:
-    """One incident per forward correction (`ledger.compensate`) the copy admits
-    (owner decision 2026-10-23: no reversal after a seal; an error found after
-    it is corrected by a new event that points to the original, and the
-    original stays as sealed). Decided only from the copy's own records, the
-    same on every replica. Each names the write gate that should have stopped
-    the original."""
+    """One incident per forward correction (`ledger.compensate`) that took
+    effect (owner decision 2026-10-23: no reversal after a seal; an error found
+    after it is corrected by a new event that points to the original, and the
+    original stays as sealed). Decided by the one correction rule
+    (`ledger.finality`): only a correction the grantor admitted -- authorised,
+    naming a sealed original -- is an incident; an invalid one is a rejected
+    proposal and names no gate. The same on every replica. Each names the
+    write gate that should have stopped the original."""
+    from .finality import original, resolve
     from .voids import COMPENSATE_TYPE, log_stem
-    admitted, _kw = authoritative_events(space_dir, events, registry_path=registry_path, policy=policy)
-    index = {(log_stem(getattr(e, "log", None) or e.actor), e.seq): e for e in admitted}
+    admitted, kw = authoritative_events(space_dir, events, registry_path=registry_path, policy=policy)
+    fin = resolve(admitted, lease_grantors=kw.get("lease_grantors"), reversers=kw.get("reversers"))
     out = []
     for c in admitted:
-        if c.type != COMPENSATE_TYPE or not isinstance(c.payload, dict):
+        if c.type != COMPENSATE_TYPE or not fin.outcomes.get(c.hash, "").startswith("applied"):
+            continue
+        orig = original(admitted, c.payload)
+        if orig is None:
             continue
         p = c.payload
-        orig = index.get((log_stem(str(p.get("log") or "")), p.get("seq")))
-        if orig is None or orig.hash != p.get("hash"):
-            continue
         out.append({"kind": "correction_after_seal", "original": orig.hash, "type": orig.type,
                     "log": log_stem(str(p.get("log"))), "correction": c.hash, "by": c.actor,
                     "reason": p.get("reason"), "gate": _GATE.format(type=orig.type)})
@@ -734,6 +737,13 @@ def _event_dict(e: Event) -> dict:
     return json.loads(to_line(e))
 
 
+def _logged(e: Event, chain: str) -> Event:
+    """A copy of `e` that knows the log it lies in (as `read_events` marks it)."""
+    out = replace(e)
+    out.log = chain
+    return out
+
+
 def _parse_file(path: Path) -> list[Event]:
     from .log import _parse_log_bytes
     try:
@@ -830,14 +840,21 @@ class Hub:
         # the original. Derived from the ledger's own records, so losing it
         # loses nothing.
         self._incidents_path = state / f"{key}.incidents.jsonl"
+        # WHEN THIS HUB ADMITTED EACH EVENT (round 6, owner decision H1): its own
+        # clock, at the append or when it first saw an event that came by git.
+        # The correction window is judged by these times, never by a writer's
+        # timestamp. Kept only for events no seal covers yet (a sealed event
+        # is past the window anyway). A missing or unreadable record, or a new
+        # epoch, makes every event already held "time unknown": its window is
+        # never shown open (refused, not guessed).
+        self._admitted_path = state / f"{key}.admitted.json"
         self._answers: dict[str, dict] = {}
         self._reconciled: dict[str, int] = {}
         self.barrier: dict = {}
         if self._lock_fh is not None:
-            served = bool(_parse_file(self.log.path))
             self._load_request_state()
-            if not self._judged_path.exists():
-                self._restore_judged(served)
+            if self._read_judged() is None:
+                self._restore_judged()
             self._mark_started()
             try:
                 self._complete_rejections()
@@ -910,7 +927,7 @@ class Hub:
         return events, fold(events, **kw)
 
     def _fold_kwargs(self, cfg: HubConfig) -> dict:
-        return {"lease_grantors": self._authority(cfg).lease_grantors(), "policy": self.policy}
+        return self._authority(cfg).fold_inputs(self.policy)
 
     def refusals(self) -> dict:
         """{log: where and why it stops being admitted} -- for status and verify."""
@@ -952,14 +969,22 @@ class Hub:
                 self._expire_if_ran_out(event)
             auth = self._authority(cfg)
             path, chain = _target(self.space_dir, log_name, event, sub.get("chain"))
-            if event.type == "ledger.compensate" and not proposal:
-                self._check_compensate(event, cfg)
             late = self._sealed_late([event])
-            closed = self._closed_reversals([event])
-            if event.hash in closed and not proposal:
-                # THE CORRECTION WINDOW (round 5): a reversal after the seal that
-                # covers its target, or past the maximum age, is refused here.
-                raise HubRefused("reversal_closed", closed[event.hash])
+            # CORRECTIONS (round 6): the active grantor decides a reversal or a
+            # forward correction ONCE, here, by the one rule (ledger.finality)
+            # and its own clock -- the window runs on admission times (H1), the
+            # reverser is the owner the owner's records name (C5), a forward
+            # correction names a sealed original by an authorised writer (C4)
+            # -- and records the decision (`ledger.admit` / `ledger.reject`).
+            # A standby stores; the grantor judges what it later sees.
+            correction = event.type in _CORRECTIONS and self._active_grantor()
+            problem = None
+            if correction:
+                held, _ = self._state()
+                self._note_admissions(held)
+                problem = self._correction_problem(event, held, cfg)
+                if problem is not None and not proposal:
+                    raise HubRefused(*problem)
             from file_utils import fsync_directory
             from .log import CorruptLogError, StaleLogError, _parse_log_bytes, advance_witness, check_not_stopped
             if not path.exists() and self._onto(event, chain, [], cfg, auth, proposal) == "duplicate":
@@ -983,8 +1008,8 @@ class Hub:
                     verdict = self._onto(event, chain, existing, cfg, auth, proposal)
                     if verdict is None and event.hash in late:
                         verdict = ("sealed_late", late[event.hash])
-                    if verdict is None and event.hash in closed:
-                        verdict = ("reversal_closed", closed[event.hash])
+                    if verdict is None and problem is not None:
+                        verdict = problem
                     if verdict != "duplicate":
                         # THE SAME REWIND GUARD AS EVERY WRITER (round-3 verdict,
                         # ignored_stop_witness): nothing is appended onto a log
@@ -1010,6 +1035,7 @@ class Hub:
                 if event.hash in {h for (_, _, h) in self._rejected()}:
                     return self._receipt("rejected", cfg, chain, event, reason="kept as a rejected proposal")
                 return self._receipt("duplicate", cfg, chain, event)
+            self._note_admissions([_logged(event, chain)], now=self.clock())
             if verdict is not None:
                 self._mark_judged([event], chain, contiguous=True)
                 code, why = verdict
@@ -1017,6 +1043,8 @@ class Hub:
                                             "type": event.type}, code, why)
                 return self._receipt("rejected", cfg, chain, event, reason=f"{code}: {why}")
             self._mark_judged([event], chain, contiguous=True)
+            if correction:
+                self._admit_correction(event, chain)
             receipt = self._receipt("accepted", cfg, chain, event)
             self._record_conflicts(event)
             return receipt
@@ -1131,11 +1159,17 @@ class Hub:
         return out
 
     def _rejected(self) -> set:
-        """(chain, seq, hash) this space's grantors recorded as rejected proposals."""
-        from .log import read_events
+        """(chain, seq, hash) this space's grantors recorded as rejected proposals
+        -- from the ADMITTED part of each grantor's own log only, so a line
+        nobody signed in a grantor's file rejects nothing."""
         auth = self._authority(self.config())
-        return rejected_proposals([e for e in read_events(self.space_dir)
-                                   if e.actor in auth.grantors and (getattr(e, "log", None) or e.actor) == e.actor])
+        out: set = set()
+        for g in sorted(auth.grantors):
+            chain = sorted(_parse_file(self.log.path.parent / f"{g}.jsonl"),
+                           key=lambda e: e.seq if type(e.seq) is int else -1)
+            n, _ = admit_chain(g, chain, auth, now_ms=self.clock())
+            out |= rejected_proposals(chain[:n])
+        return out
 
     def _authorize(self, event: Event) -> None:
         """Authorship is not authorization (audit finding 12): the same rule the
@@ -1303,31 +1337,47 @@ class Hub:
         self.log.append("hub.start", {"space": cfg.space_id, "hub": cfg.hub_id, "epoch": active.epoch,
                                       "started_ms": self.clock()})
 
-    def _restore_judged(self, served: bool) -> None:
-        """The judged-arrivals record is missing (amendment 2, durable evidence).
+    def _restore_judged(self) -> None:
+        """The judged-arrivals record is missing or unreadable (amendment 2,
+        durable evidence; Codex round 5 C1, C2).
 
-        A hub that never served here may take what it holds as its starting
-        point: nothing it holds was judged by it, and nothing will be judged
-        late against a lease it never granted. A hub that HAS served rebuilds
-        the record only from durable evidence of its judgment: what its own
-        latest seal covers, since it judges every arrival before it seals
-        (Codex round 4: rebuilding from the files on disk made late work
-        timely). Everything beyond that is judged again, at the next sweep or
-        seal, by the late-result rule."""
-        from .log import read_events
-        events = read_events(self.space_dir)
-        if not served:
-            self._mark_judged(events)
-            return
-        from .seal import as_sequencer, latest_seal
-        try:
-            with as_sequencer(self.actor):
-                seal = latest_seal([e for e in events if (getattr(e, "log", None) or e.actor) == self.actor])
-        except ValueError:
-            seal = None
+        Rebuilt only from durable evidence of judgment: what this space's
+        grantors' admitted seals cover -- a grantor judges every arrival before
+        it seals. Never from the files on disk: a hub that never served here
+        (a fresh start, a promoted successor) holds events a predecessor never
+        judged, and late work against a predecessor's lease is still late
+        (C2). Everything beyond the seals is judged again, at the next sweep
+        or seal, by the late-result rule; what a seal covers stays judged (C1)."""
         from file_utils import atomic_write_text
-        marks = dict(seal.watermarks) if seal is not None else {}
-        atomic_write_text(self._judged_path, json.dumps(marks, sort_keys=True))
+        try:
+            events, _ = self._state()
+            marks = self._sealed_marks(events)
+        except (HubError, ValueError):
+            marks = {}
+        atomic_write_text(self._judged_path, json.dumps({"prefix": marks, "extra": {}}, sort_keys=True))
+
+    def _sealed_marks(self, events) -> dict:
+        """{log: highest seq} any admitted seal of this space's grantors covers."""
+        grantors = self._authority(self.config()).grantors
+        out: dict = {}
+        for e in events:
+            wm = (e.payload or {}).get("watermarks") if e.type == "ledger.seal" and e.actor in grantors \
+                and (getattr(e, "log", None) or e.actor) == e.actor and isinstance(e.payload, dict) else None
+            if isinstance(wm, dict) and e.payload.get("version") == 2:
+                for k, v in wm.items():
+                    if isinstance(k, str) and type(v) is int and v > out.get(k, -1):
+                        out[k] = v
+        return out
+
+    def _active_grantor(self) -> bool:
+        """Is this instance the space's active, unfenced grantor (it judges)?"""
+        if self._lock_fh is None or self.closed:
+            return False
+        try:
+            active = self._authority(self.config()).active
+        except HubError:
+            return False
+        return active.grantor == self.actor and not self._fenced(active.epoch)
 
     def _persist_recovery(self) -> None:
         """Write the owner-cleared part of the barrier (state_lost) durably."""
@@ -1649,11 +1699,23 @@ class Hub:
         ref = item.lease_ref or {}
         holder = ref.get("holder") or item.lease_holder or ""
         frontier: dict = {}
-        judged = self._judged()
+        view, sealed = self._judged_view(), self._sealed_marks(events)
+        # The frontier stops before the first result of THIS attempt nobody
+        # judged in time (it reached the hub by git after the lease ran out);
+        # a result this hub judged at its append, or that a seal covers, is
+        # inside it (Codex round 5, C1 and H4).
+        late: dict = {}
         for e in events:
             chain = getattr(e, "log", None) or e.actor
-            if holder and _writer_of(chain) == base_writer(holder) and type(e.seq) is int:
-                frontier[chain] = min(max(frontier.get(chain, -1), e.seq), judged.get(chain, -1))
+            if not (holder and _writer_of(chain) == base_writer(holder) and type(e.seq) is int):
+                continue
+            frontier[chain] = max(frontier.get(chain, -1), e.seq)
+            p = e.payload if isinstance(e.payload, dict) else {}
+            if (e.type in ("item.complete", "item.release") and p.get("id") == item.id
+                    and p.get("attempt") == ref.get("attempt") and not self._is_judged(e, view, sealed)):
+                late[chain] = min(late.get(chain, e.seq), e.seq)
+        for chain, first in late.items():
+            frontier[chain] = min(frontier[chain], first - 1)
         return self.log.append("item.lease.expire", {
             "id": item.id, "holder": holder, "attempt": ref.get("attempt"), "expired_ms": now,
             "reason": reason, "frontier": dict(sorted(frontier.items())),
@@ -1694,58 +1756,53 @@ class Hub:
                                "a sealed decision is final")
         return out
 
-    def _check_compensate(self, event: Event, cfg: HubConfig) -> None:
-        """A forward correction (round 5) names a SEALED original exactly, with a
-        reason, written by the space's owner or the original's writer. An
-        unsealed original is still inside the correction window: reverse it."""
-        from actor_identity import base_writer
-        from .seal import as_sequencer, latest_seal
-        from .voids import log_stem
-        p = event.payload if isinstance(event.payload, dict) else {}
-        if not isinstance(p.get("reason"), str) or not p["reason"].strip():
-            raise HubRefused("bad_compensate", "a correction names its reason")
-        events, _ = self._state()
-        orig = next((e for e in events if log_stem(getattr(e, "log", None) or e.actor) == log_stem(str(p.get("log") or ""))
-                     and e.seq == p.get("seq")), None)
-        if orig is None or orig.hash != p.get("hash"):
-            raise HubRefused("bad_compensate", "a correction names an event this space holds (log, seq, hash)")
-        if base_writer(event.actor) not in {base_writer(cfg.owner or ""), base_writer(orig.actor)}:
-            raise HubRefused("bad_compensate", "only the space's owner or the original's writer corrects it")
-        try:
-            with as_sequencer(self._authority(cfg).active.grantor):
-                seal = latest_seal(events)
-        except ValueError:
-            seal = None
-        if seal is None or not seal.includes(orig):
-            raise HubRefused("bad_compensate", "the original is not sealed yet: it is still inside the correction "
-                             "window, where a reversal (ledger.void) corrects it")
+    def _correction_problem(self, event: Event, events, cfg: HubConfig):
+        """(code, why) when correction `event` may not take effect, else None --
+        the one rule (ledger.finality), judged now by this hub's clock. A
+        reversal already admitted here is judged at ITS admission time."""
+        from .finality import compensation_problem, reversal_problem
+        from .voids import VOID_TYPE
+        auth = self._authority(cfg)
+        if event.type == VOID_TYPE:
+            at = self._admitted_ms(event)
+            return reversal_problem(event, events, owner=auth.owner, sealers=auth.grantors,
+                                    admitted_ms=self._admitted_ms, now_ms=self.clock() if at is None else at)
+        return compensation_problem(event, events, owner=auth.owner, sealers=auth.grantors)
 
-    def _closed_reversals(self, candidates, events=None) -> dict:
-        """{hash: why} for each candidate reversal outside the correction window
-        (ledger.voids.closed_reversals), judged over admitted events with this
-        space's grantors as the sealers."""
-        from .voids import VOID_TYPE, closed_reversals
-        candidates = [e for e in candidates if e.type == VOID_TYPE]
-        if not candidates:
-            return {}
-        if events is None:
-            events, _ = self._state()
-        grantors = {a for g in self._fold_kwargs(self.config())["lease_grantors"].values() for a in g}
-        index = {e.hash for e in events}
-        return closed_reversals(events + [e for e in candidates if e.hash not in index], grantors, candidates)
+    def _admit_correction(self, event: Event, chain: str) -> None:
+        """The grantor's record that it admitted correction `event` (round 6)."""
+        from .finality import admit_payload, original
+        from .voids import VOID_TYPE
+        held, _ = self._state()
+        at = self._admitted_ms(_logged(event, chain))
+        target = original(held, event.payload)
+        self.log.append("ledger.admit", admit_payload(
+            event, chain, "reversal" if event.type == VOID_TYPE else "compensation",
+            admitted_ms=self.clock() if at is None else at,
+            target_admitted_ms=self._admitted_ms(target) if target is not None else None))
 
-    def _reject_closed_reversals(self) -> None:
-        """Reversals outside the window that reached the hub by git: the fold
-        already gives them no effect; the grantor records each as a rejected
-        proposal, before sealing, as it does for `sealed_late`."""
+    def _judge_corrections(self) -> None:
+        """Judge every correction that reached the hub by git (or whose record a
+        crash interrupted) by the same rule as the front door, and record the
+        decision -- before sealing, so a seal never covers an undecided one."""
+        if not self._active_grantor():
+            return
+        cfg = self.config()
         events, _ = self._state()
-        rejected = {h for (_, _, h) in self._rejected()}
-        pending = [e for e in events if e.hash not in rejected and e.actor != self.actor]
-        for h, why in sorted(self._closed_reversals(pending, events).items()):
-            e = next(x for x in pending if x.hash == h)
-            self._record_reject(getattr(e, "log", None) or e.actor,
-                                {"seq": e.seq, "hash": e.hash, "actor": e.actor, "type": e.type},
-                                "reversal_closed", why)
+        self._note_admissions(events)
+        grantors = self._authority(cfg).grantors
+        decided = {h for (_, _, h) in self._rejected()}
+        decided |= {(e.payload.get("event") or {}).get("hash") for e in events
+                    if e.type == "ledger.admit" and e.actor in grantors and isinstance(e.payload, dict)
+                    and isinstance(e.payload.get("event"), dict)}
+        for e in [x for x in events if x.type in _CORRECTIONS and x.actor not in grantors and x.hash not in decided]:
+            chain = getattr(e, "log", None) or e.actor
+            problem = self._correction_problem(e, events, cfg)
+            if problem is not None:
+                self._record_reject(chain, {"seq": e.seq, "hash": e.hash, "actor": e.actor, "type": e.type},
+                                    *problem)
+            else:
+                self._admit_correction(e, chain)
 
     def _reject_sealed_late(self) -> None:
         """The same rule for what reached the hub by git: rejected before sealing."""
@@ -1757,28 +1814,142 @@ class Hub:
             self._record_reject(getattr(e, "log", None) or e.actor,
                                 {"seq": e.seq, "hash": e.hash, "actor": e.actor, "type": e.type}, "sealed_late", why)
 
-    def _judged(self) -> dict:
+    def _read_judged(self):
+        """{"prefix": {log: seq}, "extra": {log: [seq]}} or None when missing or unreadable."""
         try:
             data = json.loads(self._judged_path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, ValueError):
-            return {}
-        return {str(k): v for k, v in data.items() if type(v) is int} if isinstance(data, dict) else {}
+        except (FileNotFoundError, ValueError, UnicodeDecodeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        if "prefix" not in data:                       # round-5 shape: {log: seq}
+            data = {"prefix": data, "extra": {}}
+        prefix, extra = data.get("prefix"), data.get("extra") or {}
+        if not isinstance(prefix, dict) or not isinstance(extra, dict):
+            return None
+        if any(not isinstance(k, str) or type(v) is not int for k, v in prefix.items()) or any(
+                not isinstance(k, str) or not isinstance(v, list) or any(type(x) is not int for x in v)
+                for k, v in extra.items()):
+            return None
+        return {"prefix": dict(prefix), "extra": {k: sorted(set(v)) for k, v in extra.items()}}
+
+    def _judged_view(self) -> dict:
+        """{log: (judged prefix, {seqs judged above it})} -- a CORRUPT record is a
+        lost one (Codex round 5, C1): rebuilt from the seals, never read as empty."""
+        data = self._read_judged()
+        if data is None:
+            self._restore_judged()
+            data = self._read_judged() or {"prefix": {}, "extra": {}}
+        logs = set(data["prefix"]) | set(data["extra"])
+        return {log: (data["prefix"].get(log, -1), set(data["extra"].get(log, ()))) for log in logs}
+
+    def _judged(self) -> dict:
+        """{log: judged prefix} (for status and older callers)."""
+        return {log: top for log, (top, _) in self._judged_view().items()}
+
+    def _is_judged(self, e, view: dict, sealed: dict) -> bool:
+        """Was `e` judged against its lease: in the judged prefix, judged on its
+        own at its append (Codex round 5, H4), or covered by a grantor's seal
+        (a sealed decision is final, C1)?"""
+        log = getattr(e, "log", None) or e.actor
+        top, extra = view.get(log, (-1, set()))
+        return type(e.seq) is int and (e.seq <= top or e.seq in extra or e.seq <= sealed.get(log, -1))
 
     def _mark_judged(self, events, chain: str | None = None, *, contiguous: bool = False) -> None:
-        """Advance the judged prefix of each log. `contiguous` (an append): only
-        when everything before the event is already judged -- an append never
-        vouches for an import below it it has not judged (Codex round 4: a
-        later unrelated append skipped an unjudged late completion)."""
+        """Record judgments; only the active grantor judges (a standby admits
+        appends but judges no lease, so its acceptance is no evidence).
+
+        `contiguous` (an append the grantor just judged): the event is judged
+        ON ITS OWN -- it never vouches for an import below it that nobody has
+        judged (Codex round 4), and its own timely judgment is not lost when
+        such an import sits below it (Codex round 5, H4). A sweep judges
+        everything it was given."""
         from file_utils import atomic_write_text
-        marks = self._judged()
+        if not self._active_grantor():
+            return
+        view = self._judged_view()
+        prefix = {log: top for log, (top, _) in view.items()}
+        extra = {log: set(xs) for log, (_, xs) in view.items()}
         for e in events:
             log = chain or getattr(e, "log", None) or e.actor
-            if type(e.seq) is not int or e.seq <= marks.get(log, -1):
+            if type(e.seq) is not int or e.seq <= prefix.get(log, -1):
                 continue
-            if contiguous and marks.get(log, -1) < e.seq - 1:
+            if contiguous:
+                extra.setdefault(log, set()).add(e.seq)
+            else:
+                prefix[log] = e.seq
+        for log in list(extra):
+            top = prefix.get(log, -1)
+            while top + 1 in extra[log]:
+                top += 1
+            if top >= 0:
+                prefix[log] = top
+            extra[log] = {x for x in extra[log] if x > top}
+        out = {"prefix": {k: v for k, v in prefix.items() if v >= 0},
+               "extra": {k: sorted(v) for k, v in extra.items() if v}}
+        atomic_write_text(self._judged_path, json.dumps(out, sort_keys=True))
+
+    # ── admission times (round 6, owner decision H1) ───────────────────────
+    def _admissions(self) -> dict:
+        """{"epoch", "seen": {log: seq}, "times": {log: {seq: [ms, hash]}}}.
+
+        Missing, unreadable, or written in another grantor epoch: a new
+        baseline in which every event already held was seen at an unknown time."""
+        try:
+            data = json.loads(self._admitted_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError, UnicodeDecodeError):
+            data = None
+        try:
+            epoch = self._authority(self.config()).active.epoch
+        except HubError:
+            epoch = None
+        ok = (isinstance(data, dict) and data.get("epoch") == epoch and isinstance(data.get("seen"), dict)
+              and isinstance(data.get("times"), dict)
+              and all(type(v) is int for v in data["seen"].values())
+              and all(isinstance(v, dict) for v in data["times"].values()))
+        if not ok:
+            data = {"epoch": epoch, "seen": {log: top["seq"] for log, top in _current_heads(self.space_dir).items()},
+                    "times": {}}
+            self._write_admissions(data)
+        return data
+
+    def _write_admissions(self, data: dict) -> None:
+        from file_utils import atomic_write_text
+        atomic_write_text(self._admitted_path, json.dumps(data, sort_keys=True))
+
+    def _note_admissions(self, events, *, now: int | None = None) -> None:
+        """Record the hub's clock as the admission time of every event it holds
+        and sees for the first time. Only the active grantor's times count."""
+        if not self._active_grantor():
+            return
+        data = self._admissions()
+        now = self.clock() if now is None else now
+        changed = False
+        for e in sorted(events, key=lambda x: x.seq if type(x.seq) is int else -1):
+            log = getattr(e, "log", None) or e.actor
+            if type(e.seq) is not int or e.seq <= data["seen"].get(log, -1):
                 continue
-            marks[log] = e.seq
-        atomic_write_text(self._judged_path, json.dumps(marks, sort_keys=True))
+            data["times"].setdefault(log, {})[str(e.seq)] = [now, e.hash]
+            data["seen"][log] = e.seq
+            changed = True
+        if changed:
+            self._write_admissions(data)
+
+    def _admitted_ms(self, e) -> int | None:
+        """When this hub admitted `e` (its clock), or None when it holds no record."""
+        rec = (self._admissions()["times"].get(getattr(e, "log", None) or e.actor) or {}).get(str(e.seq))
+        return rec[0] if isinstance(rec, list) and len(rec) == 2 and rec[1] == e.hash and type(rec[0]) is int \
+            else None
+
+    def _prune_admissions(self, watermarks: dict) -> None:
+        """Forget the times of events a seal now covers: past the window anyway."""
+        data = self._admissions()
+        for log, top in (watermarks or {}).items():
+            times = data["times"].get(log)
+            if isinstance(times, dict) and type(top) is int:
+                data["times"][log] = {k: v for k, v in times.items() if not (k.isdigit() and int(k) <= top)}
+        data["times"] = {k: v for k, v in data["times"].items() if v}
+        self._write_admissions(data)
 
     def _judge_arrivals(self) -> None:
         """Judge what reached this hub by git since it last looked (round 4,
@@ -1789,7 +1960,7 @@ class Hub:
         lease is live is simply judged in time."""
         from actor_identity import base_writer
         events, state = self._state()
-        judged, now = self._judged(), self.clock()
+        view, sealed, now = self._judged_view(), self._sealed_marks(events), self.clock()
         for item in sorted(state.items.values(), key=lambda i: i.id):
             ref = item.lease_ref or {}
             holder = ref.get("holder") or item.lease_holder
@@ -1800,7 +1971,7 @@ class Hub:
                         and isinstance(e.payload, dict) and e.payload.get("id") == item.id
                         and e.payload.get("attempt") == ref.get("attempt")
                         and base_writer(e.actor) == base_writer(holder) and type(e.seq) is int
-                        and e.seq > judged.get(getattr(e, "log", None) or e.actor, -1)]
+                        and not self._is_judged(e, view, sealed)]
             if unjudged:
                 self._expire(item, events, now, _item_floor(events, item.id), "expired")
         self._mark_judged(events)
@@ -1812,6 +1983,7 @@ class Hub:
         with self._mutex:
             self._writable(grant=True)
             self._judge_arrivals()
+            self._judge_corrections()
             events, state = self._state()
             now = self.clock()
             out = []
@@ -1865,7 +2037,7 @@ class Hub:
             cfg = self._writable(grant=True)
             self._judge_arrivals()
             self._reject_sealed_late()
-            self._reject_closed_reversals()
+            self._judge_corrections()
             events, _ = self._state()
             eps = self._authority(cfg).epochs
             if len(eps) > 1:
@@ -1896,6 +2068,7 @@ class Hub:
                 self._record_incidents()
                 return {"status": "unchanged", "seal": _event_dict(last), "log": self.log.log_name}
             event = self.log.append("ledger.seal", payload)
+            self._prune_admissions(payload["watermarks"])
             self._record_incidents()
             return {"status": "sealed", "seal": _event_dict(event), "log": self.log.log_name}
 
@@ -2115,7 +2288,7 @@ class HttpTransport:
 
 #: Refusals of an event for what it IS: already in a signed writer log, such an
 #: event is kept by the hub as a rejected proposal (finding 11).
-REJECTABLE = PROPOSAL_CODES | {"not_authorized"}
+REJECTABLE = PROPOSAL_CODES | {"not_authorized", "reversal_closed", "bad_compensate"}
 
 
 class HubWriter:
@@ -2480,7 +2653,7 @@ class HubWriter:
 
         # The hub seals its AUTHORITATIVE state; recompute it with the same
         # explicit inputs, over what admission lets in (findings 11, 12).
-        fold_kwargs = {"lease_grantors": sauth.lease_grantors(), "policy": self.policy}
+        fold_kwargs = sauth.fold_inputs(self.policy)
         admitted = admit(events, sauth, now_ms=self.clock()).events
         with as_sequencer(hub_actor):
             try:
@@ -2561,20 +2734,20 @@ class HubWriter:
         if seal is not None and verdict is True:
             sealed_events = [e for e in admitted if seal.includes(e)]
             settled = fold(sealed_events, **fold_kwargs)
-            # A VOIDED EVENT HAS NO EFFECT (round 4, void_receipt): the fold drops
-            # it, so it has no outcome at all -- which is not "applied".
-            # ... and only a reversal inside the correction window has any
-            # (round 5): the same rule as the fold, from the sealed records.
-            from .voids import closed_reversals, from_events
-            closed = closed_reversals(sealed_events, {a for g in fold_kwargs["lease_grantors"].values() for a in g})
-            voids = from_events([e for e in sealed_events if e.hash not in closed])
+            # A REVERSED EVENT HAS NO EFFECT (round 4, void_receipt): the fold
+            # drops it, so it has no outcome at all -- which is not "applied".
+            # Which reversals took effect is the fold's own answer, from the one
+            # correction rule (round 6, ledger.finality) -- never re-derived
+            # here, so the receipt and the settled view cannot disagree (C3).
+            voids = settled.finality.voids
             by_hash = {e.hash: e for e in sealed_events}
             for h in sorted(covered & needed):
                 e = by_hash.get(h)
                 if e is not None and voids.applies(getattr(e, "log", None) or e.actor, e):
-                    problems.append(f"{h[:12]}: sealed, but voided -- it has no effect")
-                elif (e is not None and settled.outcomes.get(h) is None and isinstance(e.payload, dict)
-                        and isinstance(e.payload.get("id"), str) and e.type.startswith("item.")):
+                    problems.append(f"{h[:12]}: sealed, but reversed -- it has no effect")
+                elif (e is not None and settled.outcomes.get(h) is None
+                        and (e.type in _CORRECTIONS or (isinstance(e.payload, dict)
+                             and isinstance(e.payload.get("id"), str) and e.type.startswith("item.")))):
                     problems.append(f"{h[:12]}: sealed, but the sealed state records no effect of it")
             for it in settled.items.values():
                 for h in covered & (set(it.lease_conflicts) | set(it.lease_unresolved)):
@@ -2598,6 +2771,9 @@ class HubWriter:
             return result("pending")
         return result("confirmed")
 
+
+#: The two corrections (round 6): decided by the grantor, once, by ledger.finality.
+_CORRECTIONS = frozenset({"ledger.void", "ledger.compensate"})
 
 #: Fold outcomes of a holder's result or release that do not report its attempt:
 #: refused at the front door, or a lease conflict (Hub._attempt_resolved).

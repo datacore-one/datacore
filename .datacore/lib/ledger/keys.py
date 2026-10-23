@@ -362,8 +362,11 @@ class RotationRefused(ValueError):
 
 def recorded_rotations(space_dir: Path, actor: str) -> list:
     """The `key.rotate` events for `actor` in a space's ledger, oldest first."""
+    from .hub import authoritative_events
     from .log import read_events
-    return [e for e in read_events(Path(space_dir))
+    # A hub space: only admitted records count (round 6, decision-reader guard).
+    events, _ = authoritative_events(Path(space_dir), read_events(Path(space_dir)))
+    return [e for e in events
             if e.type == "key.rotate" and isinstance(e.payload, dict) and e.payload.get("actor") == actor]
 
 

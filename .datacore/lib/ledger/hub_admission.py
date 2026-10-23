@@ -103,7 +103,7 @@ def check_space_protocol(space_dir) -> None:
         _PROTOCOL_CACHE[key] = declared
     require_protocol(declared, str(path.parent.parent))
 #: Written only by a hub's grantor, in its own log.
-HUB_ONLY_TYPES = HUB_EVENT_TYPES | {"ledger.seal", "hub.fence", "hub.start", "ledger.reject"}
+HUB_ONLY_TYPES = HUB_EVENT_TYPES | {"ledger.seal", "hub.fence", "hub.start", "ledger.reject", "ledger.admit"}
 #: Refusals that make a signed, chained event a REJECTED PROPOSAL rather than
 #: the end of its log, once the grantor has recorded it (`ledger.reject`,
 #: audit finding 11). The fold gives such an event no effect: a hub-only type
@@ -140,6 +140,17 @@ class Authority:
         if self.epochs:
             return {self.hub_id: {ep.grantor: ep.epoch for ep in self.epochs}}
         return {self.hub_id: self.grantors}
+
+    def reversers(self) -> frozenset:
+        """Who may reverse in this space (round 6, owner decision C5): the owner
+        the owner's own signed records name -- read from the ledger, never
+        from the local principal registry."""
+        return frozenset({self.owner}) if self.owner else frozenset()
+
+    def fold_inputs(self, policy) -> dict:
+        """The fold's explicit inputs for this space: lease authority, policy,
+        and who may reverse. Every reader of a hub space folds with these."""
+        return {"lease_grantors": self.lease_grantors(), "policy": policy, "reversers": self.reversers()}
 
     def epoch_of(self, grantor: str):
         return next((ep for ep in self.epochs if ep.grantor == grantor), None)

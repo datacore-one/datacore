@@ -293,7 +293,7 @@ def verify_seal(events: list[Event], fold_kwargs: dict | None = None) -> tuple[b
     if behind:
         return None, f"behind the seal for: {', '.join(sorted(behind))}"
 
-    if _chain_issue([event for event in events if seal.includes(event)]):
+    if _chain_issue([event for event in events if seal.includes(event)], fold_kwargs):
         return False, "SEAL MISMATCH: incomplete or invalid covered log chain"
     covered = _covered_events(events, seal)
     if _event_set_hash(covered) != seal.event_set_hash:
@@ -367,7 +367,7 @@ def build_seal_payload(events: list[Event], fold_kwargs: dict | None = None) -> 
     seals a seal — that would make the root depend on sealing history rather
     than on the work, and two sequencer runs over identical work would differ.
     """
-    if _self_consistent(events) or _chain_issue(events):
+    if _self_consistent(events) or _chain_issue(events, fold_kwargs):
         raise ValueError("cannot seal an incomplete or invalid log chain")
     work = [e for e in events if e.type != "ledger.seal"]
     return {
@@ -390,7 +390,7 @@ def _event_set_hash(events):
     return hashlib.sha256(canonical_bytes({"version": 2, "events": rows})).hexdigest()
 
 
-def _chain_issue(events):
+def _chain_issue(events, fold_kwargs=None):
     """Validate complete chain prefixes, including earlier seal events.
 
     Asks the one verifier (ledger.verify.chain_problems, Phase 2 V2; audit A#7):
@@ -400,4 +400,11 @@ def _chain_issue(events):
     refused a space whose bad event had been voided.
     """
     from .verify import chain_problems
+    if (fold_kwargs or {}).get("lease_grantors") is not None:
+        # A HUB space (round 6, C5): the caller folds admitted events --
+        # signed, domain-bound, chained -- so no void excuses anything, and
+        # the local principal registry can never make a recorded reversal
+        # read as a broken chain (and a confirmed seal as a mismatch).
+        from .voids import Voids
+        return bool(chain_problems(events, voids=Voids()))
     return bool(chain_problems(events))

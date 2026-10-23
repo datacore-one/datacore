@@ -143,6 +143,10 @@ class LedgerState:
     #: folded to a no-op is not a confirmation. Derived from the same fold, so
     #: deliberately outside `state_root` (it adds nothing a root must pin).
     outcomes: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
+    #: What `ledger.finality.resolve` decided about corrections for this fold
+    #: (which reversals took effect): receipts and verify read it from here,
+    #: never re-derive it. Outside `state_root`, like `outcomes`.
+    finality: object = field(default=None, repr=False, compare=False)
 
     def state_root(self) -> str:
         """One hash over the WHOLE folded state — items, spend and orphans.
@@ -200,7 +204,7 @@ class LedgerState:
         return h.hexdigest()
 
 
-def fold(events: list[Event], *, lease_grantors=None, policy=None) -> LedgerState:
+def fold(events: list[Event], *, lease_grantors=None, policy=None, reversers=None) -> LedgerState:
     """Reduce `events` (already merged + hlc-sorted) into a `LedgerState`.
 
     Pure and order-preserving: does not sort, does not mutate `events` or
@@ -228,22 +232,17 @@ def fold(events: list[Event], *, lease_grantors=None, policy=None) -> LedgerStat
     if policy is not None:
         from .hub_policy import authorize
 
-    # Events cancelled by an authorised in-ledger `ledger.void` do not exist for
-    # the fold (LED-4). Resolving who may void reads the principal registry
-    # (cached on its stat), the one input besides `events`; a space with no
-    # void pays nothing.
-    from .voids import VOID_TYPE, closed_reversals, from_events
-    closed: dict = {}
-    if any(e.type == VOID_TYPE for e in events):
-        # THE CORRECTION WINDOW (round 5): in a hub space (the caller passed the
-        # grantors) a reversal outside it has no effect, whatever else says so.
-        if lease_grantors is not None:
-            closed = closed_reversals(events, {a for grantors in lease_grantors.values() for a in grantors})
-        voids = from_events([e for e in events if e.hash not in closed])
-        if len(voids):
-            events = [e for e in events if not voids.applies(getattr(e, "log", e.actor), e)]
-        state.orphans.extend(f"{e.hlc} ledger.void no-op (outside the correction window)"
-                             for e in events if e.hash in closed)
+    # WHICH CORRECTIONS TAKE EFFECT is ONE rule for every reader (round 6,
+    # Codex round 5 C3): `ledger.finality.resolve`. In a hub space (the caller
+    # passed the grantors) it reads only the grantor's records -- rejected
+    # proposals first, so a refused reversal never removes its target -- and
+    # never the principal registry or a writer's timestamp; a space without a
+    # hub keeps the old rule (LED-4). Reversed events do not exist for the fold.
+    from . import finality
+    fin = finality.resolve(events, lease_grantors=lease_grantors, reversers=reversers)
+    state.finality = fin
+    if len(fin.voids):
+        events = [e for e in events if not fin.voids.applies(getattr(e, "log", e.actor), e)]
 
     # REJECTED PROPOSALS ARE NO-OPS (Codex re-audit, new defect 1). An event a
     # grantor recorded as rejected (`ledger.reject`, audit finding 11) was
@@ -251,7 +250,7 @@ def fold(events: list[Event], *, lease_grantors=None, policy=None) -> LedgerStat
     # (a claim backdated before a reassignment was). It is taken out before
     # lease planning and policy, in every copy, from authenticated grantor
     # events only -- so only when the caller passes the grantors.
-    rejected = _rejected_by_grantors(events, lease_grantors) if lease_grantors is not None else frozenset()
+    rejected = fin.rejected
 
     # Leases are resolved before anything is applied (audit finding 8).
     if any(e.type in _PLANNED_TYPES for e in events):
@@ -268,22 +267,9 @@ def fold(events: list[Event], *, lease_grantors=None, policy=None) -> LedgerStat
             state.outcomes[event.hash] = new[-1].split(": ", 1)[1] if ": " in new[-1] else new[-1]
         elif len(state.orphans) > orphans:
             state.outcomes[event.hash] = "orphan"
-
+    # A correction names no item: its outcome is the finality rule's.
+    state.outcomes.update(fin.outcomes)
     return state
-
-
-def _rejected_by_grantors(events, lease_grantors) -> frozenset:
-    """Hashes named by `ledger.reject` records a grantor wrote in its own log."""
-    out = set()
-    for e in events:
-        if e.type != "ledger.reject" or (getattr(e, "log", None) or e.actor) != e.actor:
-            continue
-        if e.actor not in lease_grantors.get(getattr(e, "hub", "") or "", ()):
-            continue
-        ref = (e.payload or {}).get("event") if isinstance(e.payload, dict) else None
-        if isinstance(ref, dict) and isinstance(ref.get("hash"), str):
-            out.add(ref["hash"])
-    return frozenset(out)
 
 
 def _step(state: LedgerState, event: Event, seen: dict, rejected, lease_grantors, authorize, policy) -> None:

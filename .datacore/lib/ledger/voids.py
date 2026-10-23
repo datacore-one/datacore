@@ -47,24 +47,19 @@ from .events import Event, body_dict, compute_hash, event_body, from_line
 VOID_TYPE = "ledger.void"
 COMPENSATE_TYPE = "ledger.compensate"
 
-# ── the correction window (round 5, owner decision 2026-10-23) ──────────────
+# ── the correction window (round 5; round 6 owner decisions, 2026-10-23) ────
 # In a HUB space a reversal (`ledger.void`) takes effect only inside the
-# correction window: written before the first grantor seal that covers the
-# reversed event, AND at most REVERSAL_MAX_AGE_MS after it (by the two events'
-# own HLCs), so a late seal does not keep the window open. Seal = block
-# finality; the window = before inclusion in a block. A reversal outside it is
-# refused at the hub's front door, and if one arrives anyway (git) the fold
-# gives it no effect -- decided from the ledger's own records only, the same on
-# every replica -- and the grantor records it as a rejected proposal. After the
-# seal the only correction is a forward `ledger.compensate`.
+# correction window: admitted by the hub before the first grantor seal that
+# covers the reversed event, AND at most REVERSAL_MAX_AGE_MS after the hub
+# admitted that event -- by the HUB'S clock (its admission times), never by a
+# timestamp a writer chose (Codex round 5, H1). Seal = block finality; the
+# window = before inclusion in a block. The hub decides at admission and
+# records the decision in its own log (`ledger.admit` or `ledger.reject`);
+# every reader takes the effect from those records alone (ledger.finality).
 #
-# The bound: the hub's nominal seal cadence times a small factor. The seal
-# cadence is the hub's own schedule (the default lease length is also 15
-# minutes); four intervals tolerate a missed seal or two without leaving
-# history open for long.
-SEAL_INTERVAL_S = 900
-CORRECTION_WINDOW_FACTOR = 4
-REVERSAL_MAX_AGE_MS = SEAL_INTERVAL_S * CORRECTION_WINDOW_FACTOR * 1000
+# A PLACEHOLDER for the pilot (owner, 2026-10-23): one hour, to be set later
+# from a study of how long errors take to be noticed. One named constant.
+REVERSAL_MAX_AGE_MS = 60 * 60 * 1000
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _RUN_SUFFIX = re.compile(r"-run-\d{4}-\d{2}-\d{2}$")
 
@@ -189,13 +184,17 @@ class Voids:
         return len(self.effective)
 
 
-def resolve(voids: list[tuple[str, Event]], lookup=None) -> Voids:
+def resolve(voids: list[tuple[str, Event]], lookup=None, authority=None) -> Voids:
     """Decide which void records take effect.
 
     Args:
         voids: (log stem, event) for every `ledger.void` event in one space.
         lookup: optional `(log_stem, seq) -> Event | None`; when given, a void
             naming no event with that stored hash is refused as such.
+        authority: optional `(void event, target log stem) -> reason | None`;
+            default `refusal` (the principal registry: spaces without a hub).
+            A hub space passes the rule from its owner records
+            (ledger.finality).
     """
     out = Voids()
     authorised: dict[tuple, tuple[Key, str | None]] = {}
@@ -212,7 +211,7 @@ def resolve(voids: list[tuple[str, Event]], lookup=None) -> Voids:
             out.refused[me] = f"ledger.void has no effect: {t}"
             continue
         key, pin = t
-        why = refusal(e.actor, key[0])
+        why = authority(e, key[0]) if authority is not None else refusal(e.actor, key[0])
         if why:
             out.refused[me] = f"ledger.void has no effect: {why}"
             continue
@@ -256,14 +255,23 @@ def _tolerant_events(raw: bytes) -> list[tuple[int, Event]]:
 _SPACE_CACHE: dict = {}
 
 
-def for_events_dir(events_dir: Path) -> Voids:
+def for_events_dir(events_dir: Path, registry_path=None) -> Voids:
     """Resolve every void in one space's `.datacore/events/` directory.
 
     Reads tolerantly (a damaged line is reported by verify, never here) and
     caches on the stat signature of every log, so verifying each log of a space
     in turn does not re-read the space once per log.
+
+    A HUB space (round 6, Codex round 5 H2): the same correction rule as every
+    other reader -- the admitted events and the grantor's records, through
+    `ledger.finality` -- so generic verification never excuses an event by a
+    reversal the hub refused, and the principal registry decides nothing. A
+    space without a hub keeps the old rule exactly (owner, 2026-10-23).
     """
     events_dir = Path(events_dir)
+    hub_voids = _hub_space_voids(events_dir, registry_path)
+    if hub_voids is not None:
+        return hub_voids
     files = sorted(events_dir.glob("*.jsonl")) if events_dir.is_dir() else []
     try:
         sig = tuple((p.name, p.stat().st_mtime_ns, p.stat().st_size) for p in files)
@@ -305,62 +313,29 @@ def for_events_dir(events_dir: Path) -> Voids:
     return result
 
 
+def _hub_space_voids(events_dir: Path, registry_path=None):
+    """The effective reversals of a hub space, or None for a space without a hub.
+
+    A hub space whose authority cannot be read excuses nothing (an empty set):
+    a reversal never gains force from a broken record."""
+    space = events_dir.parent.parent
+    try:
+        from .hub import load_config
+        cfg = load_config(space)
+    except Exception:  # noqa: BLE001 -- an unreadable opt-in: not a hub space this reader can judge
+        return Voids() if (space / ".datacore" / "ledger-hub.json").exists() else None
+    if cfg is None:
+        return None
+    try:
+        from .finality import resolve as resolve_finality
+        from .hub import authoritative_events
+        events, kw = authoritative_events(space, registry_path=registry_path)
+        fin = resolve_finality(events, lease_grantors=kw.get("lease_grantors"), reversers=kw.get("reversers"))
+    except Exception:  # noqa: BLE001 -- no verified authority: nothing is excused
+        return Voids()
+    return Voids(effective=dict(fin.voids.effective))
+
+
 def is_voided(events_dir: Path, log: str, event: Event) -> bool:
     """Is this stored event cancelled by an effective void in its space?"""
     return for_events_dir(events_dir).applies(log, event)
-
-
-def _seal_marks(e: Event):
-    """(version, {log: seq}) of a seal event, or None when malformed."""
-    p = e.payload if isinstance(e.payload, dict) else {}
-    wm = p.get("watermarks")
-    if not isinstance(wm, dict) or any(not isinstance(k, str) or type(v) is not int for k, v in wm.items()):
-        return None
-    return p.get("version", 1), wm
-
-
-def _sealed_by(marks, e: Event) -> bool:
-    version, wm = marks
-    key = (getattr(e, "log", None) or e.actor) if version == 2 else e.actor
-    return key in wm and type(e.seq) is int and e.seq <= wm[key]
-
-
-def _physical(hlc) -> int | None:
-    try:
-        return int(str(hlc).split(".", 1)[0])
-    except (ValueError, TypeError):
-        return None
-
-
-def closed_reversals(events: list[Event], sealers, candidates=None,
-                     max_age_ms: int = REVERSAL_MAX_AGE_MS) -> dict:
-    """{hash: why} for each reversal outside the correction window.
-
-    `events`: the space's (admitted) events, seals included. `sealers`: the
-    actors whose seals are finality here (a hub space: its grantors).
-    `candidates`: the reversals to judge (default every `ledger.void` in
-    `events`). Only the ledger's records are read: the target named by the
-    reversal, the sealers' seals and the two events' HLCs."""
-    sealers = set(sealers or ())
-    seals = [m for m in (_seal_marks(e) for e in events if e.type == "ledger.seal" and e.actor in sealers) if m]
-    index = {(log_stem(getattr(e, "log", None) or e.actor), e.seq): e for e in events}
-    out = {}
-    for v in (candidates if candidates is not None else events):
-        if v.type != VOID_TYPE:
-            continue
-        t = _target(v.payload)
-        if isinstance(t, str):
-            continue
-        (log, seq, digest), _ = t
-        e = index.get((log, seq))
-        if e is None or e.hash != digest:
-            continue
-        if any(_sealed_by(m, e) and not _sealed_by(m, v) for m in seals):
-            out[v.hash] = (f"reverses {log} seq {seq}, which a seal already covers; a sealed outcome never "
-                           "changes -- correct it with a forward ledger.compensate")
-            continue
-        te, tv = _physical(e.hlc), _physical(v.hlc)
-        if te is None or tv is None or tv - te > max_age_ms:
-            out[v.hash] = (f"reverses {log} seq {seq} more than {max_age_ms // 1000} s after it was written "
-                           "(the correction window); correct it with a forward ledger.compensate")
-    return out
