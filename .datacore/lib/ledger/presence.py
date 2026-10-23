@@ -103,19 +103,18 @@ def admitted_events(space_dir, now_ms: int, *, registry_path=None) -> list:
 
     A space without a hub has no admission rule; its events are read as they
     are, and `presence` still checks each check-in's signature."""
-    from .hub import authority, load_config
-    from .hub_admission import admit
+    from .finality import resolve
+    from .hub import authoritative_events
     from .log import read_events
-    from .fold import _rejected_by_grantors
-    events = read_events(space_dir)
-    cfg = load_config(space_dir)
-    if cfg is None:
+    events, kw = authoritative_events(space_dir, read_events(space_dir), registry_path=registry_path,
+                                      now_ms=now_ms)
+    if not kw:
         return events
-    auth = authority(space_dir, cfg, registry_path)
-    admitted = admit(events, auth, now_ms=now_ms).events
-    # A check-in the hub refused and kept as a rejected proposal is not one.
-    rejected = _rejected_by_grantors(admitted, auth.lease_grantors())
-    return [e for e in admitted if e.hash not in rejected]
+    # A check-in the hub refused and kept as a rejected proposal is not one --
+    # the one correction rule's answer (round 6, ledger.finality).
+    rejected = resolve(events, lease_grantors=kw.get("lease_grantors"), reversers=kw.get("reversers"),
+                       legacy_reversals=kw.get("legacy_reversals")).rejected
+    return [e for e in events if e.hash not in rejected]
 
 
 def state_of(age_s: float, interval_s: int) -> str:
