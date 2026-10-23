@@ -270,6 +270,10 @@ class Job:
     #: is circular: on 2026-09-22 box-autofix-escalation was delegated to
     #: Miles, dead-lettered after three attempts, and then listed itself.
     delegate: bool = True
+    #: "host": this job's failures are the machine's state (a detector whose
+    #: finding needs a person on the host), never code an agent can repair --
+    #: autofix escalates them to the owner once instead of filing repairs (W1).
+    repair: str = "agent"
     #: A visitor's session trigger (TRIGGERS); None on a resident.
     trigger: str | None = None
     #: An arrival duty's gate (EVERY, local "HH:MM"); None when ungated.
@@ -501,6 +505,10 @@ def _build_job(raw: object, index: int, errors: list[str], seen_names: set[str],
     if not isinstance(delegate, bool):
         errors.append(f"{ref}: field 'delegate' must be true or false (got {delegate!r})")
 
+    repair = raw.get("repair", "agent")
+    if repair not in ("agent", "host"):
+        errors.append(f"{ref}: field 'repair' must be agent or host (got {repair!r})")
+
     trigger = raw.get("trigger")
     if trigger is not None and trigger not in TRIGGERS:
         errors.append(f"{ref}: unknown trigger {trigger!r} "
@@ -532,6 +540,7 @@ def _build_job(raw: object, index: int, errors: list[str], seen_names: set[str],
         on_fail=on_fail,
         require_synced_repos=list(require_synced_repos),
         delegate=delegate,
+        repair=repair,
         trigger=trigger,
         every=every,
         after=after,

@@ -94,6 +94,240 @@ PR_REPOS = frozenset({"datacore-one/datacore"})
 FIX_CHECK = '"${DATACORE_ROOT:-$HOME/Data}/.datacore/lib/jobs/fix_check.py"'
 
 
+# ── why a job failed, and whether to try again (W1, 2026-10-23) ──────────────
+#
+# 676 failed repair attempts in two weeks, against about 43 successes: each day
+# filed a FRESH `autofix-<job>-<date>` item, so the three-attempt dead-letter
+# bounded one item and never the job, and the same 15 jobs were retried three
+# times a day for up to 30 days. About 60 attempts on 2026-10-21 failed on the
+# Claude weekly limit and were counted as failed repairs; host-state faults (a
+# store over its ceiling, a checkout behind upstream) went to an agent that
+# cannot fix them from a fresh copy. So a failure is classified first, and the
+# breaker is per JOB and per FINGERPRINT of what the job is, read from the
+# ledger every host shares -- not per item, and not a side file.
+
+USAGE_LIMIT, HOST_STATE, CODE_FAULT = "usage_limit", "host_state", "code_fault"
+
+#: Failure text that names the HOST, not the producer's code: a person (or a
+#: deploy) has to act on the machine, and no commit an agent makes in a fresh
+#: checkout changes it. Narrow and literal on purpose: every miss here is still
+#: caught by the breaker after three attempts, while a false hit sends a code
+#: fault to the owner instead of the repairer.
+HOST_STATE_MARKERS = (
+    "behind upstream",            # checks.check_repo_sync: the host has not pulled
+    "repo sync check failed",
+    "no space left on device",
+    "disk is full", "disk full",
+    "size ceiling", "over its ceiling",
+    "permission denied",
+    "stalelogerror", "already wrote seq",   # a rewound ledger: owner-only recovery
+    "differs from the deployed", "deploy drift",
+)
+
+#: Failed repair attempts on one job and fingerprint, summed across every item
+#: and day, after which no new repair is filed. DIP-0031's recurring threshold
+#: (and ledger_claim's MAX_ATTEMPTS): one number for one idea.
+from jobs.recurrence import RECURRING_AFTER as BREAK_AFTER  # noqa: E402
+
+#: Release kinds that are not an attempt at the repair (ledger_claim's
+#: NOT_AN_ATTEMPT plus the usage limit, which is the budget, not the code).
+NOT_AN_ATTEMPT = ("infrastructure", "waiting_on_owner", USAGE_LIMIT)
+
+#: How long a usage-limit failure pauses new repairs: the dispatcher's probe
+#: interval (claim_backoff.PROBE_AFTER), so the two pauses end together.
+USAGE_PAUSE_H = 6
+
+
+def classify_failure(text: str, job=None) -> str:
+    """usage_limit | host_state | code_fault for one failure's text.
+
+    A job may declare `repair: host` in the manifest: its failures are always
+    the host's (a detector whose finding is the machine's state)."""
+    if getattr(job, "repair", None) == "host":
+        return HOST_STATE
+    import claim_backoff
+    if claim_backoff.is_usage_limit(text):
+        return USAGE_LIMIT
+    low = (text or "").lower()
+    if any(m in low for m in HOST_STATE_MARKERS):
+        return HOST_STATE
+    return CODE_FAULT
+
+
+def _producer_files(job, root: Path) -> list[Path]:
+    """Files under the installation that the job's cmd names (its code)."""
+    import shlex
+    try:
+        tokens = shlex.split(str(getattr(job, "cmd", "") or ""))
+    except ValueError:
+        tokens = str(getattr(job, "cmd", "") or "").split()
+    out = []
+    for t in tokens:
+        if ".datacore/" not in t:
+            continue
+        p = root / t[t.index(".datacore/"):]
+        if p.is_file() and p not in out:
+            out.append(p)
+    return out
+
+
+def fingerprint(job, root: Path, manifest: Path | None = None) -> str:
+    """What the job IS: its contract plus the bytes of the code its cmd names.
+
+    The breaker is keyed by this, so changing the contract or the producer
+    reopens it, and nothing else does."""
+    import hashlib
+    h = hashlib.sha256((contract_sha(job.name, manifest or LIB / "jobs" / "manifest.yaml") or "").encode())
+    for p in _producer_files(job, root):
+        try:
+            h.update(str(p.relative_to(root)).encode() + b"\0" + p.read_bytes())
+        except OSError:
+            continue
+    return h.hexdigest()[:16]
+
+
+def _hlc_ms(hlc) -> float:
+    try:
+        return float(str(hlc).split(".")[0])
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def breaker(root: Path, job: str, fp: str, *, now_ms: float | None = None) -> dict:
+    """{'open', 'attempts', 'usage_pause', 'since'} for one job and fingerprint.
+
+    open         BREAK_AFTER or more failed repair attempts on items carrying
+                 this fingerprint since the job last passed verification;
+    usage_pause  the latest repair outcome anywhere was a usage limit, less than
+                 USAGE_PAUSE_H ago (nothing more runs until it resets).
+
+    Items from before fingerprints existed are not counted: what they repaired
+    cannot be told, so they neither open nor hold the breaker."""
+    from ledger.fold import fold
+    from ledger.log import read_events
+
+    now = now_ms if now_ms is not None else time.time() * 1000.0
+    try:
+        events = read_events(_space(root))
+        state = fold(events)
+    except Exception:  # noqa: BLE001 -- an unreadable ledger keeps today's behaviour
+        return {"open": False, "attempts": 0, "usage_pause": False, "since": None}
+    applied = {line.rsplit(" item.release: ", 1)[0]
+               for i in state.items.values() for line in i.history
+               if line.endswith(" item.release: applied")}
+    autofix_ids = {iid for iid, it in state.items.items()
+                   if (it.payload or {}).get("autofix") or iid.startswith(MARK)}
+    mine = {iid for iid in autofix_ids
+            if (state.items[iid].payload or {}).get("job") == job
+            and (state.items[iid].payload or {}).get("fingerprint") == fp}
+    last_pass = max((_hlc_ms(e.hlc) for e in events
+                     if (e.payload or {}).get("metric") == "job.verify"
+                     and (e.payload or {}).get("job") == job and (e.payload or {}).get("ok")),
+                    default=0.0)
+    attempts, last_outcome = 0, None
+    for e in events:
+        p = e.payload or {}
+        iid = p.get("id")
+        if iid not in autofix_ids:
+            continue
+        if e.type == "item.release" and f"{e.hlc} {e.actor}" in applied:
+            last_outcome = (p.get("kind"), _hlc_ms(e.hlc))
+            if iid in mine and p.get("kind") not in NOT_AN_ATTEMPT and _hlc_ms(e.hlc) > last_pass:
+                attempts += 1
+        elif e.type == "item.complete":
+            last_outcome = ("complete", _hlc_ms(e.hlc))
+    pause = bool(last_outcome and last_outcome[0] == USAGE_LIMIT
+                 and now - last_outcome[1] < USAGE_PAUSE_H * 3600_000)
+    return {"open": attempts >= BREAK_AFTER, "attempts": attempts, "usage_pause": pause,
+            "since": last_pass or None}
+
+
+def _state_dir() -> Path:
+    import os
+    return Path(os.environ.get("DATACORE_STATE") or Path.home() / ".datacore" / "state")
+
+
+def escalate_once(job: str, key: str) -> bool:
+    """True the first time `key` is escalated for `job` on this host, else False.
+
+    The job's own host is the one that verifies it and so the one that tells
+    the owner; a pass clears the job (clear_escalation), so a later, different
+    failure is news again."""
+    path = _state_dir() / "autofix-escalated.json"
+    try:
+        seen = json.loads(path.read_text())
+    except Exception:  # noqa: BLE001 -- a missing or broken file has seen nothing
+        seen = {}
+    if seen.get(job) == key:
+        return False
+    seen[job] = key
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.write_text(json.dumps(seen, indent=1, sort_keys=True))
+    except OSError:
+        pass
+    return True
+
+
+def clear_escalation(job: str) -> None:
+    path = _state_dir() / "autofix-escalated.json"
+    try:
+        seen = json.loads(path.read_text())
+        if seen.pop(job, None) is not None:
+            path.write_text(json.dumps(seen, indent=1, sort_keys=True))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def record_outcome(payload: dict, outcome: str, detail: str = "", *, actor: str = "",
+                   root: Path | None = None) -> None:
+    """One repair's outcome as a learning candidate. Never raises.
+
+    Into the store hooks.py already feeds (.datacore/state/learning_candidates.yaml,
+    status pending), so the learning pipeline sees "this job is not
+    agent-repairable" or "this fix worked" without a second queue.
+
+    outcome: fixed | failed | paused | waiting | gave_up"""
+    import os
+    from datetime import datetime, timezone
+    try:
+        from state_store import YamlStateStore
+        root = root or Path(os.environ.get("DATACORE_ROOT") or Path.home() / "Data")
+        job = payload.get("job") or ""
+        klass = "" if outcome in ("fixed", "waiting") else classify_failure(detail)
+        text = (f"Repair of job {job} on {payload.get('machine') or '?'}: {outcome}"
+                + (f" ({klass})" if klass else "")
+                + (f" -- {detail.strip()[:300]}" if detail.strip() else ""))
+        YamlStateStore("learning_candidates.yaml", default=[],
+                       data_root=root / ".datacore" / "state").append_to_list([{
+                           "agent": actor or payload.get("assignee") or "",
+                           "category": "repair_outcome", "source": "autofix",
+                           "item": payload.get("id", ""), "job": job,
+                           "fingerprint": payload.get("fingerprint") or payload.get("contract_sha") or "",
+                           "outcome": outcome, "failure_class": klass, "text": text,
+                           "timestamp": datetime.now(timezone.utc).isoformat(),
+                           "status": "pending"}])
+    except Exception:  # noqa: BLE001 -- learning must not break the dispatcher
+        pass
+
+
+def _artifact_tail(job, n: int = 12) -> str:
+    """The job's own last output lines -- the real error -- for the repairer."""
+    import datetime as _dt
+    import os
+    out = []
+    today = _dt.date.today().isoformat()
+    for a in getattr(job, "artifacts", []) or []:
+        raw = os.path.expanduser(str(a.path).replace("{today}", today))
+        try:
+            lines = Path(raw).read_text(errors="replace").rstrip().splitlines()[-n:]
+        except OSError:
+            continue
+        if lines:
+            out.append(f"{raw} (last {len(lines)} lines):\n" + "\n".join(f"    {ln[:300]}" for ln in lines))
+    return "\n".join(out)
+
+
 def _servers(roster: Path | None) -> dict:
     import yaml
 
@@ -160,6 +394,8 @@ def delegate(job, failures: list[str], rec: dict, *, root: Path,
     """Hand one failing job to `assignee`. Returns (state, detail).
 
     state: delegated | refused | exists | owner (a person's machine: a task, not a repair)
+           | escalate (host-state fault, or the breaker is open: tell the owner, once)
+           | paused (a usage limit: wait for it to reset; nobody is told again)
 
     REFUSED, BEFORE ANYTHING IS WRITTEN, when the repair cannot be checked
     where it would run. The done-condition is fix_check on `job.machine`'s
@@ -202,6 +438,22 @@ def delegate(job, failures: list[str], rec: dict, *, root: Path,
     sha = contract_sha(job.name, manifest)
     if not sha:
         return "refused", f"{job.name} is not in the manifest"
+
+    # CLASSIFY, THEN ASK THE BREAKER, BEFORE ANYTHING IS FILED (W1).
+    fp = fingerprint(job, root, manifest)
+    klass = classify_failure("\n".join(failures), job)
+    if klass == HOST_STATE:
+        return "escalate", (f"{job.name} on {job.machine} is failing on the HOST's state, which no "
+                            f"agent repair in a fresh checkout can change; it needs a person (the "
+                            f"owner) on {job.machine}")
+    gate = breaker(root, job.name, fp)
+    if gate["usage_pause"]:
+        return "paused", (f"repairs are paused: the last repair hit the model usage limit; nothing "
+                          f"is filed until it resets (about {USAGE_PAUSE_H}h)")
+    if gate["open"]:
+        return "escalate", (f"{job.name}: {gate['attempts']} repair attempts have failed since it last "
+                            f"passed; no new repair until its contract or code changes "
+                            f"(fingerprint {fp}) or it passes again -- it needs the owner")
 
     space = _space(root)
     actor = this_actor()
@@ -268,7 +520,8 @@ def delegate(job, failures: list[str], rec: dict, *, root: Path,
     payload = {"id": iid, "title": title, "assignee": assignee,
                "check": check, "body": body, "requested_by": actor,
                "autofix": True, "job": job.name, "machine": job.machine,
-               "contract_sha": sha, "stage": "merged" if then or check != verify else "verify",
+               "contract_sha": sha, "fingerprint": fp, "failure_class": klass,
+               "stage": "merged" if then or check != verify else "verify",
                # Repairing a producer is engineering, not research. The
                # title heuristics cannot know that and inferred the
                # default route, which framed the executing agent as a
@@ -308,6 +561,7 @@ def repair_body(job, failures: list[str], rec: dict, *, stage: str = "verify",
         "Failures this run:",
         *[f"  - {f}" for f in failures[:6]],
         "",
+        *(["The job's own last output (the real error):", tail, ""] if (tail := _artifact_tail(job)) else []),
         f"Producer: {getattr(job, 'cmd', '') or 'see manifest'}",
         f"Schedule: {getattr(job, 'schedule', '') or 'see manifest'}",
         "",
