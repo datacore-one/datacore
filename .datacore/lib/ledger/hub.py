@@ -894,6 +894,7 @@ class Hub:
             self._load_request_state()
             if self._read_judged() is None:
                 self._restore_judged()
+            self._rebaseline_admissions()
             self._mark_started()
             try:
                 self._complete_rejections()
@@ -1955,6 +1956,22 @@ class Hub:
                     "times": {}}
             self._write_admissions(data)
         return data
+
+    def _rebaseline_admissions(self) -> None:
+        """At start: every event already held that the record has no time for
+        is "time unknown" (Codex round 6, N2). Whatever reached the log while
+        this hub was not running -- an event written just before a crash, a
+        git arrival, or anything past a restored, older record -- was never
+        timed by it, so it is never given a fresh time that would reopen its
+        window. Times already recorded are kept."""
+        data = self._admissions()
+        changed = False
+        for log, top in _current_heads(self.space_dir).items():
+            if top["seq"] > data["seen"].get(log, -1):
+                data["seen"][log] = top["seq"]
+                changed = True
+        if changed:
+            self._write_admissions(data)
 
     def _write_admissions(self, data: dict) -> None:
         from file_utils import atomic_write_text
