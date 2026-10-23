@@ -39,8 +39,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .events import Event
-from .voids import (COMPENSATE_TYPE, REVERSAL_MAX_AGE_MS, VOID_TYPE, Voids, _target, _writer, from_events,
-                    log_stem, resolve as resolve_voids)
+from .voids import (COMPENSATE_TYPE, REVERSAL_MAX_AGE_MS, VOID_TYPE, Voids, _target, _writer, body_hash,
+                    from_events, log_stem, resolve as resolve_voids)
 
 ADMIT_TYPE = "ledger.admit"
 REJECT_TYPE = "ledger.reject"
@@ -130,18 +130,35 @@ def resolve(events: list[Event], *, lease_grantors=None, reversers=None, legacy_
         else:
             pending.append(e)
 
+    index = {(log_stem(getattr(e, "log", None) or e.actor), e.seq): e for e in events}
+    # A REVERSAL CANCELS EXACTLY THE BODY IT PINS (Codex round 6, N1): one
+    # whose pin is not the reversed event's body has no effect -- it may not
+    # be called applied, nor take another reversal's effect away.
+    kept = []
+    for v in pending:
+        t = _target(v.payload)
+        target = index.get(t[0][:2]) if not isinstance(t, str) else None
+        if not isinstance(t, str) and target is not None and t[1] is not None and t[1] != body_hash(target):
+            outcomes[v.hash] = "no-op (its body pin is not the reversed event's body)"
+        else:
+            kept.append(v)
+    pending = kept
+
     def authority(v: Event, target_log: str):
         if _writer(v.actor) not in owners:
             return f"{v.actor!r} is not the space's owner (owner records)"
         return None
 
-    index = {(log_stem(getattr(e, "log", None) or e.actor), e.seq): e for e in events}
     voids = resolve_voids([(getattr(v, "log", None) or v.actor, v) for v in pending],
                           lambda log, seq: index.get((log, seq)), authority=authority) if pending else Voids()
     for v in pending:
         why = voids.refusal_for(getattr(v, "log", None) or v.actor, v.seq)
+        t = _target(v.payload)
+        target = index.get(t[0][:2]) if not isinstance(t, str) else None
         if why:
             outcomes[v.hash] = f"no-op ({why})"
+        elif target is None or not voids.applies(getattr(target, "log", None) or target.actor, target):
+            outcomes[v.hash] = "no-op (it does not cancel the event it names)"
         else:
             p = v.payload
             outcomes[v.hash] = f"applied (reversal of {log_stem(p.get('log'))} seq {p.get('seq')})"
@@ -149,6 +166,18 @@ def resolve(events: list[Event], *, lease_grantors=None, reversers=None, legacy_
     # effect is a recorded no-op (its outcome), never a broken log.
     return Finality(rejected=rejected, voids=Voids(effective={**legacy_effect, **voids.effective}),
                     admitted=admitted, outcomes=outcomes)
+
+
+def effective_events(events: list[Event], fold_inputs: dict) -> list[Event]:
+    """`events` (admitted) without what has no effect by the one correction
+    rule: rejected proposals and reversed events. For readers that scan
+    rather than fold (job health, check-ins; Codex round 6, N4). A space
+    without a hub: the old rule's reversals."""
+    fin = resolve(events, lease_grantors=(fold_inputs or {}).get("lease_grantors"),
+                  reversers=(fold_inputs or {}).get("reversers"),
+                  legacy_reversals=(fold_inputs or {}).get("legacy_reversals"))
+    return [e for e in events if e.hash not in fin.rejected
+            and not fin.voids.applies(getattr(e, "log", None) or e.actor, e)]
 
 
 # ── the hub's decision, at admission, by its own clock ──────────────────────
@@ -195,7 +224,9 @@ def reversal_problem(v: Event, events: list[Event], *, owner: str, sealers, admi
         return "malformed", "the reversal names no event this space holds (log, seq, hash)"
     if _writer(target.actor) == _writer(v.actor):
         return "not_authorized", f"{v.actor!r} may not reverse its own event"
-    (log, seq, _), _ = t
+    (log, seq, _), pin = t
+    if pin is not None and pin != body_hash(target):
+        return "malformed", f"the reversal's body pin is not the body of {log} seq {seq}"
     if sealed(events, sealers, target):
         return "reversal_closed", (f"reverses {log} seq {seq}, which a seal already covers; a sealed outcome "
                                    "never changes -- correct it with a forward ledger.compensate")
