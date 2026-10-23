@@ -444,3 +444,107 @@ def test_r6_the_fold_seal_and_receipt_take_corrections_from_finality():
     from ledger import finality  # noqa: F401 -- the one function exists
     fold_src = (_LIB / "ledger/fold.py").read_text()
     assert "finality.resolve(" in fold_src or "from .finality import resolve" in fold_src
+
+
+# ── the round-6 independent audit (N1, N2, N4), turned around ────────────────
+# Codex round 6 (test_r6_probes.py): each passed on d3778523, i.e. the defect
+# was present; the assertions below are the corrected behaviour.
+
+def test_r6_n1_a_reversal_with_a_wrong_body_pin_is_refused_and_never_confirmed(env, monkeypatch):
+    h, own, wa, owner, done = _confirmed(env, monkeypatch)
+    v = T._signed_into(env, owner, "ledger.void", dict(_void(done), body_sha256="0" * 64))
+    with pytest.raises(H.HubRefused) as exc:
+        h.append(owner._submission(v))
+    assert exc.value.code == "malformed", exc.value
+    T.git_pull(owner.space_dir, env.hub_dir)                   # and by git: judged, never confirmed
+    published = T._published(env, h, [own, wa, owner])
+    state = H.authoritative_state(published, registry_path=env.registry, settled=True)
+    assert state.items["t"].status == "completed"
+    assert not state.outcomes[v.hash].startswith("applied"), state.outcomes[v.hash]
+    assert owner.receipt_check(published, required=[v.hash])["status"] != "confirmed"
+
+
+def test_r6_n1_an_applied_outcome_means_the_target_is_actually_reversed(env, monkeypatch):
+    """The finality rule itself: a reversal it calls applied cancels its target,
+    whatever pin a grantor's record carried (a second, wrongly pinned reversal
+    can neither be applied nor take the first one's effect away)."""
+    from ledger.finality import admit_payload, resolve
+    h, own, wa, owner, done = _confirmed(env, monkeypatch)
+    first, _ = owner.append("ledger.void", _void(done))
+    events, kw = H.authoritative_events(env.hub_dir, registry_path=env.registry)
+    from ledger.events import body_dict, compute_hash
+    body = body_dict(first.seq + 10, first.hlc, first.actor, "ledger.void", dict(_void(done), body_sha256="0" * 64),
+                     first.hash, hub=first.hub, domain=first.domain)
+    bad = replace(first, **{k: v for k, v in body.items()}, hash=compute_hash(body))
+    bad.log = T.OWNER
+    rec = replace(next(e for e in events if e.type == "ledger.admit"), hash="e" * 64,
+                  payload=admit_payload(bad, T.OWNER, "reversal", admitted_ms=env.clock()))
+    rec.log = rec.actor
+    fin = resolve(events + [bad, rec], lease_grantors=kw["lease_grantors"], reversers=kw["reversers"])
+    target = next(e for e in events if e.hash == done.hash)
+    assert fin.voids.applies("wa", target)
+    assert fin.outcomes[first.hash].startswith("applied")
+    assert not fin.outcomes[bad.hash].startswith("applied"), fin.outcomes[bad.hash]
+
+
+def test_r6_n2_a_stale_admission_record_never_reopens_the_window(env, monkeypatch):
+    import json
+    from ledger.voids import REVERSAL_MAX_AGE_MS
+    h, own, wa, owner, done = _confirmed(env, monkeypatch)
+    data = json.loads(h._admitted_path.read_text())
+    data["seen"]["wa"] = done.seq - 1                          # a valid copy from before the completion
+    del data["times"]["wa"][str(done.seq)]
+    h.close()
+    h._admitted_path.write_text(json.dumps(data))
+    env.clock.advance(REVERSAL_MAX_AGE_MS / 1000 + 60)
+    again = env.hub()
+    v = T._signed_into(env, owner, "ledger.void", _void(done))
+    with pytest.raises(H.HubRefused) as exc:
+        again.append(owner._submission(v))
+    assert exc.value.code == "reversal_closed", exc.value
+    assert again._state()[1].items["t"].status == "completed"
+
+
+def test_r6_n2_a_crash_before_the_admission_time_is_written_never_reopens_it(env, monkeypatch):
+    from ledger.voids import REVERSAL_MAX_AGE_MS
+    h, own, wa, owner, done = _confirmed(env, monkeypatch)
+
+    def crash(events, **kwargs):
+        raise RuntimeError("simulated crash before admission-time persistence")
+    monkeypatch.setattr(h, "_note_admissions", crash)
+    e = T._signed_into(env, wa, "item.create", {"id": "crash-target"})
+    with pytest.raises(RuntimeError):
+        h.append(wa._submission(e))
+    assert e.hash in {x.hash for x in read_events(env.hub_dir)}
+    h.close()
+    env.clock.advance(REVERSAL_MAX_AGE_MS / 1000 + 60)
+    again = env.hub()
+    v = T._signed_into(env, owner, "ledger.void", _void(e))
+    with pytest.raises(H.HubRefused) as exc:
+        again.append(owner._submission(v))
+    assert exc.value.code == "reversal_closed", exc.value
+
+
+def test_r6_n2_a_restart_keeps_the_admission_times_it_holds(env, monkeypatch):
+    """The control: a clean restart inside the window still lets the owner reverse."""
+    h, own, wa, owner, done = _confirmed(env, monkeypatch)
+    h.close()
+    env.clock.advance(60)
+    again = env.hub()
+    v = T._signed_into(env, owner, "ledger.void", _void(done))
+    assert again.append(owner._submission(v))["status"] == "accepted"
+
+
+def test_r6_n4_the_job_health_reader_never_uses_a_reversed_attestation(env, monkeypatch):
+    import actor_identity
+    import job_attestations
+    import ledger.keys as keys
+    h, own, wa, owner, done = _confirmed(env, monkeypatch)
+    monkeypatch.setattr(keys, "DEFAULT_REGISTRY_PATH", env.registry)
+    e, _ = wa.append("metric.attest", {"metric": "job.verify", "job": "critical-job", "ok": True, "failures": []})
+    target = next(x for x in h._state()[0] if x.hash == e.hash)
+    v, _ = owner.append("ledger.void", dict(_void(e), log=target.log))
+    published = T._published(env, h, [own, wa, owner])
+    assert owner.receipt_check(published, required=[v.hash])["status"] == "confirmed"
+    got = job_attestations.latest_jobs(published, env.clock() / 1000, registry=Path(actor_identity.PRINCIPALS))
+    assert "critical-job" not in got.get("wa", {}), got
