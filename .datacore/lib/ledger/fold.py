@@ -232,11 +232,18 @@ def fold(events: list[Event], *, lease_grantors=None, policy=None) -> LedgerStat
     # the fold (LED-4). Resolving who may void reads the principal registry
     # (cached on its stat), the one input besides `events`; a space with no
     # void pays nothing.
-    from .voids import VOID_TYPE, from_events
+    from .voids import VOID_TYPE, closed_reversals, from_events
+    closed: dict = {}
     if any(e.type == VOID_TYPE for e in events):
-        voids = from_events(events)
+        # THE CORRECTION WINDOW (round 5): in a hub space (the caller passed the
+        # grantors) a reversal outside it has no effect, whatever else says so.
+        if lease_grantors is not None:
+            closed = closed_reversals(events, {a for grantors in lease_grantors.values() for a in grantors})
+        voids = from_events([e for e in events if e.hash not in closed])
         if len(voids):
             events = [e for e in events if not voids.applies(getattr(e, "log", e.actor), e)]
+        state.orphans.extend(f"{e.hlc} ledger.void no-op (outside the correction window)"
+                             for e in events if e.hash in closed)
 
     # REJECTED PROPOSALS ARE NO-OPS (Codex re-audit, new defect 1). An event a
     # grantor recorded as rejected (`ledger.reject`, audit finding 11) was

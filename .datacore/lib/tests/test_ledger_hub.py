@@ -2358,13 +2358,133 @@ def test_r4_autofix_does_not_treat_an_inadmissible_item_as_an_existing_repair(en
     assert state != "exists", detail
 
 
+_ADMISSION = {"authoritative_state", "authoritative_events", "_authoritative", "admit", "seal_status",
+              "withdrawals"}
+_WRAPPERS: dict = {}
+
+
+def _fold_wrappers() -> dict:
+    """{function name: modules defining it} for every production helper that
+    folds (directly or through another such helper) what a caller passes it --
+    `verify_seal`, `build_seal_payload`, `settled_events`, ... (Codex round 4:
+    `verify_seal(read_events(space))` folded raw events and the guard did not
+    see it). The admission path itself is not a wrapper."""
+    import ast
+    if _WRAPPERS:
+        return _WRAPPERS
+    lib = Path(hubmod.__file__).resolve().parents[1]
+    funcs, imports = [], {}
+    for p in sorted(lib.rglob("*.py")):
+        if "tests" in p.parts:
+            continue
+        rel = p.relative_to(lib).with_suffix("").parts
+        mod = ".".join(rel)
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:
+            continue
+        pkg = rel[:-1]
+        names = {}                       # local name -> (module, attribute or None)
+        for n in ast.walk(tree):
+            if isinstance(n, ast.ImportFrom):
+                base = n.module or ""
+                if n.level:
+                    up = pkg[:len(pkg) - (n.level - 1)] if n.level > 1 else pkg
+                    base = ".".join([*up, *([base] if base else [])])
+                for a in n.names:
+                    names[a.asname or a.name] = (base, a.name)
+            elif isinstance(n, ast.Import):
+                for a in n.names:
+                    names[a.asname or a.name] = (a.name, None)
+        imports[mod] = names
+        for n in tree.body:
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name not in _ADMISSION:
+                funcs.append((mod, n))
+    local = {}
+    for mod, fn in funcs:
+        local.setdefault(mod, set()).add(fn.name)
+
+    def resolve(mod, func):
+        """(module, name) a call resolves to, or None."""
+        if isinstance(func, ast.Name):
+            if func.id in local.get(mod, ()):
+                return (mod, func.id)
+            got = imports[mod].get(func.id)
+            return (got[0], got[1]) if got and got[1] else None
+        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+            got = imports[mod].get(func.value.id)
+            if got:
+                return (got[0] if got[1] is None else f"{got[0]}.{got[1]}", func.attr)
+        return None
+
+    # Per function and PARAMETER, once: the resolved calls (and argument
+    # positions) that parameter reaches, through names assigned from it.
+    params_of = {(mod, fn.name): [a.arg for a in fn.args.args] for mod, fn in funcs}
+    facts = []
+    for mod, fn in funcs:
+        assigns = [a for a in ast.walk(fn) if isinstance(a, (ast.Assign, ast.AnnAssign, ast.For))
+                   and (a.iter if isinstance(a, ast.For) else a.value) is not None]
+        calls = [c for c in ast.walk(fn) if isinstance(c, ast.Call)]
+        for i, p in enumerate(a.arg for a in fn.args.args + fn.args.kwonlyargs):
+            tainted = {p}
+            for _ in range(3):       # names assigned from the parameter carry it
+                for a in assigns:
+                    value = a.iter if isinstance(a, ast.For) else a.value
+                    used = {x.id for x in ast.walk(value) if isinstance(x, ast.Name)}
+                    admitted = any(isinstance(x, ast.Call) and getattr(x.func, "id", getattr(x.func, "attr", None))
+                                   in _ADMISSION for x in ast.walk(value))
+                    if used & tainted and not admitted:
+                        targets = [a.target] if not isinstance(a, ast.Assign) else a.targets
+                        tainted |= {x.id for t in targets for x in ast.walk(t) if isinstance(x, ast.Name)}
+            reach = set()
+            for c in calls:
+                target = resolve(mod, c.func)
+                if not target or target == (mod, fn.name):
+                    continue
+                for j, arg in enumerate(c.args):
+                    if any(isinstance(x, ast.Name) and x.id in tainted for x in ast.walk(arg)):
+                        reach.add((target, j))
+                for k in c.keywords:
+                    if k.arg and any(isinstance(x, ast.Name) and x.id in tainted for x in ast.walk(k.value)):
+                        reach.add((target, k.arg))
+            if reach:
+                facts.append((mod, fn.name, i, p, reach))
+    # found: {name: {module: positions (index or parameter name) that are folded}}
+    found = {"fold": {"ledger.fold": {0, "events"}}}
+
+    def folds_at(target, pos) -> bool:
+        m, n = target
+        got = found.get(n, {}).get(m)
+        if not got:
+            return False
+        if pos in got:
+            return True
+        names = params_of.get(target, [])
+        return (isinstance(pos, int) and pos < len(names) and names[pos] in got) or (
+            isinstance(pos, str) and pos in names and names.index(pos) in got)
+
+    changed = True
+    while changed:
+        changed = False
+        for mod, name, i, p, reach in facts:
+            have = found.get(name, {}).get(mod, set())
+            if i in have:
+                continue
+            if any(folds_at(t, pos) for t, pos in reach):
+                found.setdefault(name, {}).setdefault(mod, set()).update({i, p})
+                changed = True
+    _WRAPPERS.update(found)
+    return _WRAPPERS
+
+
 def _raw_folds(path: Path, lib: Path) -> list[str]:
-    """Calls of `fold` (any alias) on events read with `read_events` (any alias),
-    directly or through names assigned from them, in one function or at module
-    level -- unless the value went through the admission path first."""
+    """Calls of `fold` (any alias) -- or of a helper that folds its argument
+    (round 5) -- on events read with `read_events` (any alias), directly or
+    through names assigned from them, in one function or at module level --
+    unless the value went through the admission path first."""
     import ast
     tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
-    admission = {"authoritative_state", "authoritative_events", "_authoritative", "admit"}
+    admission = _ADMISSION
 
     def bound(name: str) -> set:
         out = {name}
@@ -2373,12 +2493,37 @@ def _raw_folds(path: Path, lib: Path) -> list[str]:
                 out |= {a.asname or a.name for a in n.names if a.name == name}
         return out
 
+    def imported(name: str, modules: set) -> set:
+        """Local names under which the helper `name` of one of `modules` is
+        reachable: `from M import name [as x]`, or `M.name` via an imported module.
+        A same-named local function is not the helper."""
+        out = set()
+        stems = {m.rsplit(".", 1)[-1] for m in modules} | modules
+        for n in ast.walk(tree):
+            if isinstance(n, ast.ImportFrom) and n.module and (
+                    n.module.lstrip(".") in modules or n.module.rsplit(".", 1)[-1] in stems):
+                out |= {a.asname or a.name for a in n.names if a.name == name}
+            if isinstance(n, (ast.ImportFrom, ast.Import)):
+                for a in n.names:
+                    if a.name in stems or a.name.rsplit(".", 1)[-1] in stems:
+                        out.add(f"{a.asname or a.name}.{name}")
+        return out
+
     folds, reads = bound("fold"), bound("read_events")
+    #: helper call name -> the argument positions it folds (None: any argument)
+    positions: dict = {n: None for n in folds}
+    for helper, by_module in _fold_wrappers().items():
+        if helper != "fold":
+            for local_name in imported(helper, set(by_module)):
+                positions[local_name] = set().union(*by_module.values())
+    folds = set(positions)
 
     def called(expr, names):
         return [c for c in ast.walk(expr) if isinstance(c, ast.Call) and (
             (isinstance(c.func, ast.Name) and c.func.id in names)
-            or (isinstance(c.func, ast.Attribute) and c.func.attr in names))]
+            or (isinstance(c.func, ast.Attribute) and c.func.attr in names)
+            or (isinstance(c.func, ast.Attribute) and isinstance(c.func.value, ast.Name)
+                and f"{c.func.value.id}.{c.func.attr}" in names))]
 
     def body_nodes(scope):
         """Nodes of `scope`, not of the functions nested in it (they are scopes of their own)."""
@@ -2419,9 +2564,21 @@ def _raw_folds(path: Path, lib: Path) -> list[str]:
                         if isinstance(n, ast.Name) and n.id not in raw:
                             raw.add(n.id)
                             changed = True
+        def folded_args(call):
+            f = call.func
+            key = (f.id if isinstance(f, ast.Name) else
+                   f"{f.value.id}.{f.attr}" if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
+                   and f"{f.value.id}.{f.attr}" in positions else
+                   f.attr if isinstance(f, ast.Attribute) else None)
+            pos = positions.get(key, None) if key in positions else set()
+            if pos is None:
+                return list(call.args) + [k.value for k in call.keywords]
+            return ([a for j, a in enumerate(call.args) if j in pos]
+                    + [k.value for k in call.keywords if k.arg in pos])
+
         for n in nodes:
             if isinstance(n, ast.Call) and n in called(n, folds)[:1] and any(
-                    tainted(x) for x in list(n.args) + [k.value for k in n.keywords]):
+                    tainted(x) for x in folded_args(n)):
                 found.append(f"{path.relative_to(lib)}:{n.lineno}")
     return found
 
