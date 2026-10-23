@@ -159,6 +159,7 @@ def load_effects(path: Path | None = None) -> dict[str, dict]:
         if "per_transaction" in spec and not isinstance(spec["per_transaction"], bool):
             raise ValueError("per_transaction must be true or false")
         out[str(name)] = {
+            "scripts": _load_scripts(spec.get("scripts")),
             "tools": [str(t) for t in (spec.get("tools") or [])],
             "tool_patterns": [re.compile(str(r), re.I) for r in (spec.get("tool_patterns") or [])],
             "patterns": [re.compile(_fill(str(r)), re.I) for r in (spec.get("patterns") or [])],
@@ -215,9 +216,173 @@ def classify(tool_name: str, tool_input, effects: dict[str, dict] | None = None)
         if any(r.search(tool_name) for r in spec.get("tool_patterns") or []):
             hit.add(name)
             continue
+        if spec.get("scripts") and _runs_script(tool_name, tool_input, spec["scripts"]):
+            hit.add(name)
+            continue
         if text and any(r.search(text) for r in spec.get("patterns") or []):
             hit.add(name)
     return hit
+
+
+# ── scripts judged by action, not by name (task W5) ─────────────────────────
+#: Tools whose `command` field is a shell line.
+_SHELL_TOOLS = frozenset({"Bash", "exec", "terminal"})
+#: Commands that only read the files they are given. sed, rg, find and git are
+#: judged separately below, because each has a form that executes something.
+_VIEWERS = frozenset({"cat", "head", "tail", "less", "more", "wc", "ls", "stat", "file", "nl",
+                      "diff", "cmp", "grep", "egrep", "fgrep", "echo", "printf", "basename",
+                      "dirname", "realpath", "readlink", "md5sum", "shasum", "sha256sum"})
+_GIT_READ = frozenset({"log", "show", "diff", "blame", "status", "ls-files", "ls-tree", "cat-file",
+                       "rev-parse", "shortlog", "grep", "whatchanged"})
+_SED_SCRIPT = re.compile(r"^(\d+|\$|/[^/;]*/)(,(\d+|\$|/[^/;]*/))?p$")
+_PYTHON = re.compile(r"^python(\d+(\.\d+)?)?$")
+_PYTHON_SAFE_OPTS = frozenset({"-u", "-B", "-I", "-E", "-s", "-O", "-OO"})
+#: An interpreter or a command that runs another command.
+_RUNNERS = re.compile(r"^(python(\d+(\.\d+)?)?|pypy\d*|bash|sh|zsh|dash|ksh|fish|node|perl|ruby|uv|"
+                      r"poetry|pipenv|xargs|eval|exec|source|\.|env|sudo|nohup|timeout|nice|time|watch|"
+                      r"parallel|ssh)$")
+
+
+def _load_scripts(raw) -> dict[str, dict]:
+    """{script file name: {stem, read_only}} from an effect's `scripts:`."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("scripts must be a mapping of script name to its read-only flags")
+    out = {}
+    for script, spec in raw.items():
+        spec = spec or {}
+        flags = spec.get("read_only_flags") or {} if isinstance(spec, dict) else None
+        if (not isinstance(script, str) or not re.fullmatch(r"[\w.-]+\.py", script) or flags is None
+                or not isinstance(flags, dict)
+                or any(not str(f).startswith("--") or type(n) is not int or n not in (0, 1)
+                       for f, n in flags.items())):
+            raise ValueError(f"scripts entry {script!r} is malformed")
+        stem = script[:-3]
+        out[script] = {"stem": re.compile(rf"(?<![\w]){re.escape(stem)}(?![\w])"),
+                       "read_only": {str(f): int(n) for f, n in flags.items()}}
+    return out
+
+
+def _names(text: str, scripts: dict) -> bool:
+    return any(s["stem"].search(text) for s in scripts.values())
+
+
+def _is_redirect(tok: str) -> bool:
+    return bool(tok) and set(tok) <= set("<>&")
+
+
+def _read_only_run(args: list[str], read_only: dict[str, int]) -> bool:
+    """Every argument after the script is one of its read-only flags (with its
+    value); redirections are skipped. Anything else is not known to be harmless,
+    and neither is a script with no read-only form or a run with no arguments."""
+    if not read_only or not args:
+        return False
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if _is_redirect(tok):
+            i += 2                                   # the operator and its target (file or fd)
+            continue
+        if tok.isdigit() and i + 1 < len(args) and _is_redirect(args[i + 1]):
+            i += 1                                   # the fd of `2>&1`
+            continue
+        flag, eq, value = tok.partition("=")
+        if flag not in read_only:
+            return False
+        n = read_only[flag]
+        if eq:
+            if n != 1:
+                return False
+            i += 1
+        else:
+            i += 1 + n
+            if i > len(args):
+                return False
+    return True
+
+
+def _views(argv: list[str]) -> bool:
+    """A command that only reads the files it names."""
+    a0 = os.path.basename(argv[0])
+    rest = argv[1:]
+    if a0 in _VIEWERS:
+        return True
+    if a0 == "rg":
+        return not any(t == "--pre" or t.startswith("--pre=") or t == "--search-zip" for t in rest)
+    if a0 == "find":
+        return not any(t in ("-exec", "-execdir", "-ok", "-okdir", "-delete") or t.startswith("-fprint")
+                       or t == "-fls" for t in rest)
+    if a0 == "sed":
+        opts = [t for t in rest if t.startswith("-")]
+        if "-n" not in opts or any(o not in ("-n", "-E", "-r") for o in opts):
+            return False
+        script = next((t for t in rest if not t.startswith("-")), None)
+        return bool(script and _SED_SCRIPT.match(script))
+    if a0 == "git":
+        i = 0
+        while i < len(rest) and rest[i].startswith("-"):
+            if rest[i] != "-C" or i + 1 >= len(rest):
+                return False                         # -c and friends can run commands
+            i += 2
+        if i >= len(rest) or rest[i] not in _GIT_READ:
+            return False
+        return not any(t in ("-O", "--ext-diff", "--textconv") or t.startswith("--open-files-in-pager")
+                       for t in rest[i + 1:])
+    return False
+
+
+def _command_runs_script(argv: list[str], scripts: dict) -> bool:
+    """True when this one command (naming a script) may post."""
+    while argv and re.fullmatch(r"[A-Za-z_]\w*=\S*", argv[0]):
+        argv = argv[1:]                              # leading VAR=value assignments
+    if not argv:
+        return True
+    if _views(argv):
+        return False
+    a0 = os.path.basename(argv[0])
+    i = 0
+    if _PYTHON.match(a0):
+        i = 1
+        while i < len(argv) and argv[i] in _PYTHON_SAFE_OPTS:
+            i += 1
+    if i >= len(argv):
+        return True
+    script = scripts.get(os.path.basename(argv[i]))
+    if script is None:
+        return True                                  # -c, -m, a heredoc line, a wrapper: fail closed
+    return not _read_only_run(argv[i + 1:], script["read_only"])
+
+
+def _runs_script(tool_name: str, tool_input, scripts: dict) -> bool:
+    """Does this call RUN one of the posting scripts in a way that may post?
+
+    A shell command is read structurally (see tool_effects.yaml); any other
+    tool, or any field of the call besides `command`, that names a script
+    counts (fail closed)."""
+    if not (tool_name in _SHELL_TOOLS and isinstance(tool_input, dict)
+            and isinstance(tool_input.get("command"), str)):
+        return _names(call_text(tool_input, tool_name), scripts)
+    prose = _PROSE_FIELDS.get(tool_name, frozenset())
+    rest = {k: v for k, v in tool_input.items() if k != "command" and k not in prose}
+    if rest and _names(call_text(rest, tool_name), scripts):
+        return True
+    line = tool_input["command"]
+    if not _names(line, scripts):
+        return False
+    if "`" in line or "$(" in line or "<(" in line:
+        return True                                  # a substitution can feed it anywhere
+    commands = _split_commands(line)
+    if not commands:
+        return True
+    feeds = "|" in line or "<" in line
+    for argv in commands:
+        if _names(" ".join(argv), scripts):
+            if _command_runs_script(argv, scripts):
+                return True
+        elif feeds and argv and _RUNNERS.match(os.path.basename(argv[0])):
+            return True                              # `echo 'import x_poster' | python3`
+    return False
 
 
 # ── principals ──────────────────────────────────────────────────────────────

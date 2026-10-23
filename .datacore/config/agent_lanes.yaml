@@ -1,0 +1,43 @@
+# Agent lanes: which work each agent may claim, and how much per period.
+# Read by .datacore/lib/agent_lanes.py; applied by claim_gate.check_claim to
+# every ledger claim (task W5). This is the ONE place lane budgets live.
+#
+# The lane of an item is read from the item: an explicit `lane:`, its `role:`,
+# its `:AI:<kind>:` tags, or a `priority:` id listed below. An item with none
+# of these is the assignee's; an unaddressed one is nobody's. A role, tag or
+# priority id may be in one lane only. An agent not named here is not gated.
+#
+# Roles are the venture roles (venture.yaml `roles:`, owned per AGT-1:
+# cio -> tris, cmo/comms -> data, coo/cto -> miles) and the role templates in
+# .datacore/templates/roles/ that the role-pool work loads for an unaddressed
+# task; a lane is the set of roles one agent may take.
+#
+# `priorities:` maps the owner's quarterly priority ids to a lane. The ids
+# live in the owner's private priorities file and are NOT copied into this
+# public file: the owner adds the ones they want routed.
+owner_review: >-
+  Budgets below are shipped CONSERVATIVE and are the owner's to set (W5,
+  2026-10-23). They count claims per period, not money: the monthly spend
+  ceiling stays budget_monthly_usd in registry/principals.yaml. Measured
+  ledger claims in the week to 2026-10-23: Miles 23 to 51 a day,
+  Tris and Data none, so Miles's 20 WILL hold back some of
+  today's work -- by design until the owner sets it. Raise a number when a
+  lane is starved; 0 stops that agent claiming at all.
+version: 1
+period: day          # day (UTC) | week (ISO, from Monday) | month
+lanes:
+  miles:             # builds and runs systems
+    roles: [coo, cto, dev, dev.backend, dev.contracts, dev.qa, operator]
+    tags: [technical, pm, data, repair]
+    priorities: []
+    budget: {tasks: 20}
+  tris:              # research and cross-domain analysis
+    roles: [cio, researcher, scout]
+    tags: [research]
+    priorities: []
+    budget: {tasks: 4}
+  data:              # speaks to the outside world
+    roles: [cmo, comms, bizdev]
+    tags: [content, comms]
+    priorities: []
+    budget: {tasks: 4}

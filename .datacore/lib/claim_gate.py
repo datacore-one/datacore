@@ -108,6 +108,17 @@ def check_claim(actor: str, payload: dict | None, policy=None, space_dir: Path |
     ok, why = check_budget(actor, space_dir)
     if not ok:
         return False, why
+    # Lanes and claim budgets per period (agent_lanes.yaml, task W5): an agent
+    # claims only work in its own lane, and none once its period's budget is
+    # spent. Claims are counted across every space under this space's root;
+    # with no space named nothing is counted, as check_budget counts no spend.
+    from agent_lanes import check_lane
+    if space_dir:
+        ok, why = check_lane(actor, payload, root=Path(space_dir).parent)
+    else:
+        ok, why = check_lane(actor, payload, usage=lambda *_a, **_k: 0)
+    if not ok:
+        return False, why
     return True, f"{name} may claim"
 
 

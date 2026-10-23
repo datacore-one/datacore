@@ -86,8 +86,25 @@ effects:
     tools: *acting
     tool_patterns:
       - '(create|post|publish)_?(tweet|post|status)'
+    # Posting scripts are judged by what a shell command DOES with them, not
+    # by being named (task W5; on 2026-10-22 `sed -n 1,40p lib/x_poster.py`
+    # was refused as a post). In a shell command (Bash, exec, terminal):
+    # reading the script (cat, head, sed -n, grep, git log/show ...) is not a
+    # post; running it with nothing but its `read_only_flags` (flag: how many
+    # values it takes) is not a post; every other use is one -- the posting
+    # flag, an abbreviation, an unknown flag, a positional, `python3 -c` or a
+    # heredoc that imports it, a wrapper or substitution the classifier does
+    # not read (fail closed). Any other tool, or any other field of the call,
+    # that names a script (with or without `.py`) counts as a post.
+    scripts:
+      x_poster.py:
+        read_only_flags: {--account: 1, --whoami: 0, --recent: 1}
+      x_post.py: {}
+      engagement_post.py: {}
+      chrome_poster.py: {}
+      autonomous_poster.py: {}
+      post_today_thread.py: {}
     patterns:
-      - '\b(engagement_post|x_post(er)?|chrome_poster|autonomous_poster|post_today_thread)\.py\b'
       - '(-X\s*POST|--request\s+POST|--data\b|\s-d\s)[^\n]*api\.(x|twitter)\.com/(2/tweets|1\.1/statuses/update)'
       - 'api\.(x|twitter)\.com/(2/tweets|1\.1/statuses/update)\b[^\n]*(-X\s*POST|--request\s+POST|--data\b|\s-d\s)'
       - 'api\.linkedin\.com/(v2/ugcPosts|rest/posts)'
