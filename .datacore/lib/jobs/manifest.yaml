@@ -1581,6 +1581,32 @@ jobs:
         since: arrival
         max_age_hours: 48  # awake hours: an arrival is the first join of a session; two days awake without one is a stalled join -- OPS-1
 
+  # THE MORNING REVIEW BOARD (org task cedc45c3, owner: "for reviews, there
+  # should be a decision board generated in the morning"). Every task in REVIEW
+  # across the spaces, on one local decision board with its evidence, under
+  # ~/.datacore/state/decision-boards/ (owner-only, never published). Review
+  # rules in .datacore/config/review_rules.local.yaml; without that file nothing
+  # passes without the owner. It writes a board and nothing else: answers apply
+  # only through `gtd_decision_board.py apply`, after the owner says so.
+  - name: mac-review-board
+    scope: local
+    why_local: "the board is the owner's private page, read on this machine and never synced or published"
+    machine: mac
+    # Owner decision 2026-10-02: the mac is a visitor; its duties run when the
+    # owner arrives, never on a clock. Once a day, at the first arrival after 05:00.
+    trigger: arrival
+    every: day
+    after: "05:00"
+    schedule: "on arrival: visitor_join.py runs it at the first converged join or tick once its window opens (every day, not before its after hour)"
+    cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/review-board.log -- python3 ~/Data/.datacore/lib/review_board.py"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/review-board.log"
+        check: last_line_regex
+        arg: '^review-board: \d+ items \(\d+ passed by rules\) from \d+ files, \d+ skipped -> '
+        since: arrival
+        max_age_hours: 48  # awake hours: an arrival is the first join of a session; two days awake without one is a stalled join -- OPS-1
+
   # THE ESCALATION PATH FOR DELEGATED REPAIRS, and the reason withholding the
   # other alerts is safe. job_verify now hands a recurring failure to miles and
   # says nothing to the operator; if that were the whole change, a repair that

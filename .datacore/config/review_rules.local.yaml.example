@@ -1,0 +1,26 @@
+# Review rules for the morning review board (.datacore/lib/review_board.py).
+#
+# Copy to review_rules.local.yaml (gitignored) and edit there. Without that
+# file, or with this one as shipped, NOTHING passes without you: every item in
+# REVIEW comes to the board.
+#
+# auto_pass: review types that may pass without you, but only when BOTH hold
+# on the task:
+#   - its tests are green          (:TESTS: green, 41 passed)
+#   - a reviewer from a different model family passed it
+#                                  (:SECOND_REVIEW: pass, :SECOND_REVIEW_MODEL:
+#                                   compared with the producer's :MODEL:)
+# A task's type is its :REVIEW_TYPE: or :AI_TYPE: property, else its :AI:<type>:
+# tag (research, content, data, pm, technical), else "general".
+# Passed rows still appear on the board, in their own section, pre-set to
+# Accept; nothing is applied until you say so.
+#
+# Never passed without you, whatever is listed here: release, security,
+# money, credentials and public posts. Listing one is refused, and a task whose
+# type, tags or title touches one of them always comes to you.
+#
+# Example:
+# auto_pass:
+#   - research
+#   - data
+auto_pass: []

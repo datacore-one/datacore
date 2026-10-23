@@ -53,3 +53,19 @@ owner-only files and atomic replacement; symbolic/hardlinked artifacts and
 public output directories refuse. Scripts and styles are inline, no external
 fonts are requested, and the browser policy blocks network subresources.
 Reference links are explicit HTTP(S) only, without referrer/opener authority.
+
+## Morning review board
+
+`.datacore/lib/review_board.py` (job `mac-review-board`, first arrival of the
+day on the Mac) builds one board of every REVIEW task across the spaces through
+`gtd_decision_board.build`, so build identity, receipts and `apply` are the ones
+above. Rows offer Accept / Rework it / Drop / Already done and carry evidence in
+the meta line (report path, test result, second-model review) and as HTTP(S)
+links (PR, issue). Owner rules live in `.datacore/config/review_rules.local.yaml`
+(gitignored; the shipped `.example` passes nothing). A listed review type passes
+only with green tests and a passing reviewer from a different model family; such
+rows sit in their own section, pre-set to Accept, and the same choices are saved
+as an answers file that `apply` accepts. Nothing is applied by the job. Release,
+security, money, credentials and public posts never pass without the owner: the
+rules cannot name them, and a task whose type, tags or title touches one stays
+with the owner.
