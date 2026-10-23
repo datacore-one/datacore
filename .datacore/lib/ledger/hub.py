@@ -2510,9 +2510,13 @@ class Hub:
 
     def presence(self, agents=()) -> dict:
         """Who is checking in (ledger.presence), by the hub's clock."""
+        from .finality import effective_events
         from .presence import presence
         cfg = self.config()
         events, _ = self._state()
+        # Through the one correction rule, as the standalone reader reads it
+        # (round-8 audit, F8-4): a rejected or reversed check-in is not one.
+        events = effective_events(events, self._fold_kwargs(cfg))
         now = self.clock()
         return {"hub": cfg.hub_id, "now_ms": now,
                 "agents": presence(events, now, agents=agents, registry_path=self.registry_path)}
