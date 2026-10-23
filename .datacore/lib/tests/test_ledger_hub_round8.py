@@ -23,7 +23,7 @@ from dataclasses import replace
 import pytest
 
 from tests import test_ledger_hub as T
-from tests.test_ledger_hub_round5 import _replica
+from tests.test_ledger_hub_round5 import _replica, env  # noqa: F401
 from ledger import hub as H
 from ledger.events import to_line
 from ledger.log import EventLog, read_events
@@ -214,3 +214,90 @@ def test_r8_a_policy_admitted_while_a_sealed_log_is_missing_never_rejudges_it(pe
     h.seal()
     assert _status(own, env, event) == "confirmed", "a policy change re-judged a sealed creation"
     assert "t" in h._state()[1].items
+
+
+# ── the round-8 independent audit (Codex, test_r8_probes.py), turned around ─
+
+def test_r8_f8_1_a_successor_missing_predecessor_history_defers_a_policy_change(penv):
+    """F8-1: after a promotion, a copy that lost the old grantor's and a sealed
+    writer's logs must not admit a policy change with a frontier below what
+    the predecessor sealed; when the logs return, the sealed outcome stands."""
+    e = penv
+    first = e.hub()
+    own = e.writer("own", H.LocalTransport(first))
+    event, _ = own.append("item.create", {"id": "t", "effects": ["publish"]})
+    first.seal()
+    assert _status(own, e, event) == "confirmed"
+    first.fence("handover")
+    H.promote(e.hub_dir, "hubb", by=T.OWNER, reason="handover", keys_dir=e.keys_dir,
+              registry_path=e.registry, clock=e.clock)
+    saved = {}
+    for actor in (T.GRANTOR, "own"):
+        path = e.hub_dir / ".datacore/events" / f"{actor}.jsonl"
+        saved[path] = path.read_bytes()
+        path.unlink()
+    _set_policy(e, CHANGED)
+    successor = e.hub("hubb")
+    successor._judge_policies()
+    admits = [x for x in read_events(e.hub_dir) if x.type == "ledger.admit" and x.payload.get("kind") == "policy"]
+    assert all(a.payload["frontier"].get("own", -1) >= event.seq for a in admits), admits
+    for path, data in saved.items():
+        path.write_bytes(data)
+    successor.seal()
+    assert _status(own, e, event) == "confirmed", "a policy change re-judged the predecessor's sealed creation"
+    assert "t" in successor._state()[1].items
+
+
+def test_r8_f8_2_a_hub_never_seals_less_than_it_sealed_before(env):
+    """F8-2: a hub that lost a sealed claimant's log refuses to seal less than
+    its earlier seal covered, and an earlier-stamped rival accepted meanwhile
+    never displaces the sealed claim once the log returns."""
+    import time
+    h = env.hub()
+    own, wa, wb = [env.writer(a, H.LocalTransport(h)) for a in ("own", "wa", "wb")]
+    ms = int(time.time() * 1000)
+    h.append(own._submission(T._signed_into(env, own, "item.create", {"id": "t"}, hlc=f"{ms:013d}.0000.own")))
+    original = T._signed_into(env, wa, "item.claim", {"id": "t"}, hlc=f"{ms + 200:013d}.0000.wa")
+    h.append(wa._submission(original))
+    h.seal()
+    path = env.hub_dir / ".datacore/events/wa.jsonl"
+    saved = path.read_bytes()
+    path.unlink()
+    with pytest.raises(H.HubRefused) as exc:
+        h.seal()
+    assert exc.value.code == "behind_seal", exc.value
+    late = T._signed_into(env, wb, "item.claim", {"id": "t"}, hlc=f"{ms + 100:013d}.0000.wb")
+    try:
+        h.append(wb._submission(late))
+    except H.HubRefused:
+        pass
+    path.write_bytes(saved)
+    h.seal()
+    assert wa.receipt_check(env.hub_dir, required=[original.hash])["status"] == "confirmed"
+    assert wb.receipt_check(env.hub_dir, required=[late.hash])["status"] != "confirmed"
+    assert h._state()[1].items["t"].owner == "wa"
+
+
+def test_r8_f8_3_an_unadmitted_line_never_moves_the_policy_frontier(penv):
+    """F8-3: the frontier is what the hub ADMITTED, never a raw line: an
+    unsigned out-of-chain seq 1000 must not let a later valid event of that log
+    be judged by the superseded policy."""
+    from dataclasses import replace as _replace
+    e = penv
+    h = e.hub()
+    wa = e.writer("wa", H.LocalTransport(h))
+    seed = T._signed_into(e, wa, "item.create", {"id": "seed"})
+    h.append(wa._submission(seed))
+    path = e.hub_dir / ".datacore/events/wa.jsonl"
+    with path.open("a") as f:
+        f.write(to_line(_replace(seed, seq=1000, sig="")) + "\n")
+    _set_policy(e, CHANGED)
+    h._judge_policies()
+    admits = [x for x in read_events(e.hub_dir) if x.type == "ledger.admit" and x.payload.get("kind") == "policy"]
+    assert admits and admits[-1].payload["frontier"].get("wa") == seed.seq, admits
+    new = T._signed_into(e, wa, "item.create", {"id": "forbidden", "effects": ["publish"]})
+    with path.open("a") as f:
+        f.write(to_line(new) + "\n")
+    h.seal()
+    assert "forbidden" not in h._state()[1].items
+    assert wa.receipt_check(e.hub_dir, required=[new.hash])["status"] != "confirmed"

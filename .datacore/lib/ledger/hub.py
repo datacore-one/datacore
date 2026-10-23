@@ -1439,6 +1439,11 @@ class Hub:
                 if problem is not None:
                     self._record_reject(e.actor, ref, *problem)
                     continue
+                if self._missing_sealed_history(events, auth) is not None:
+                    # DEFERRED, not decided (round-8 audit, F8-1): a copy that
+                    # lacks settled history cannot say which events the earlier
+                    # policy judged. The change takes effect once it holds them.
+                    return
                 self._note_admissions(events)
                 self.log.append("ledger.admit", {"event": {"log": e.actor, **ref}, "kind": POLICY_ADMIT_KIND,
                                                  "frontier": self._policy_frontier(events, auth),
@@ -1451,7 +1456,9 @@ class Hub:
         lost a sealed log -- a restore, a promoted grantor on a partial copy --
         must not let a policy change re-judge that sealed history when the log
         comes back)."""
-        frontier = {chain: top["seq"] for chain, top in _current_heads(self.space_dir).items()}
+        # What this hub ADMITTED, never a raw line (round-8 audit, F8-3): an
+        # unadmitted line past a chain break never moves the frontier.
+        frontier = _admitted_heads(events)
         for chain, (seq, _) in (auth.legacy or {}).items():
             frontier[chain] = max(frontier.get(chain, -1), seq)
         for s in events:
@@ -1662,6 +1669,29 @@ class Hub:
                     if isinstance(k, str) and type(v) is int and v > out.get(k, -1):
                         out[k] = v
         return out
+
+    def _missing_sealed_history(self, events, auth) -> str | None:
+        """Why this copy holds less than some seal already settled, or None.
+
+        Every grantor seal it holds (its own earlier ones too) and the floor of
+        every earlier epoch say how far each log is settled; a copy whose
+        admitted head of a log is below that -- a restore that lost a log, a
+        promoted grantor on a partial copy -- does not hold the sealed history
+        a late-arrival check, a policy frontier or a new seal is judged
+        against (round-8 audit, F8-1, F8-2)."""
+        floor, problem = predecessor_seal_marks(events, auth, self.actor)
+        if problem:
+            return problem
+        marks = dict(self._sealed_marks(events))
+        for log, top in floor.items():
+            if type(top) is int and top > marks.get(log, -1):
+                marks[log] = top
+        heads = _admitted_heads(events)
+        short = sorted(log for log, top in marks.items() if heads.get(log, -1) < top)
+        if short:
+            return ("this copy holds less than a seal already settled for "
+                    f"{', '.join(short)}; restore those logs first")
+        return None
 
     def _active_grantor(self) -> bool:
         """Is this instance the space's active, unfenced grantor (it judges)?"""
@@ -2396,6 +2426,11 @@ class Hub:
             if short:
                 raise HubRefused("behind_predecessor", "this copy holds less than the predecessor's last seal "
                                  f"settled for {', '.join(short)}; pull those logs before sealing", logs=short)
+            behind = self._missing_sealed_history(events, self._authority(cfg))
+            if behind is not None:
+                # A SEAL NEVER SHRINKS (round-8 audit, F8-2): not even below
+                # this grantor's own earlier seal.
+                raise HubRefused("behind_seal", behind)
             last = next((e for e in reversed(events) if e.type == "ledger.seal" and e.actor == self.actor), None)
             if last is not None and last.payload == payload:
                 self._record_incidents()
@@ -2528,6 +2563,16 @@ def publish_own_log(space_dir, paths, message: str) -> str:
             raise HubRefused("publish_failed", f"git {cmd[0]} refused: {(r.stderr or r.stdout).strip()[:500]}")
     head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True)
     return head.stdout.strip()
+
+
+def _admitted_heads(events) -> dict:
+    """{chain: highest seq} over ADMITTED events (never a raw line of a log)."""
+    heads: dict = {}
+    for e in events:
+        chain = getattr(e, "log", None) or e.actor
+        if type(e.seq) is int and e.seq > heads.get(chain, -1):
+            heads[chain] = e.seq
+    return heads
 
 
 def _request_ref(req: dict) -> dict:
