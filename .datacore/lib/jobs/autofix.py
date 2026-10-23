@@ -354,8 +354,12 @@ def repairs(root: Path) -> list[dict]:
         # verdict): the claim/release scan below reads the same events as the
         # state, so a forged release in a hub space is no "waiting for you".
         from ledger.hub import authoritative_events
+        from ledger.finality import effective_events
         events, kw = authoritative_events(space)
         state = fold(events, **kw)
+        # The scan below reads events with effect only (round 8): a release the
+        # hub kept as a rejected proposal is no "waiting for you".
+        events = effective_events(events, kw)
     except Exception:  # noqa: BLE001 -- an unreadable ledger is not an escalation
         return []
     # WAITING FOR YOU (NS-9): the repairer finished and released the item as

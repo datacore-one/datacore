@@ -126,10 +126,11 @@ def creates_today(space_dir: Path | None, actor: str, today: dt.date | None = No
         return 0
     # Admitted events only: in a hub space a forged or tampered row is not a
     # create (Codex round-3 verdict, raw_gate_readers). No hub: every event.
-    from ledger.hub import authoritative_events
+    from ledger.hub import effective_authoritative_events
     principal, _ = principal_of(actor)
     today = today or dt.datetime.now(dt.timezone.utc).date()
-    events, _kw = authoritative_events(Path(space_dir))
+    # ... and with effect: a create the hub kept as a rejected proposal is none (round 8).
+    events, _kw = effective_authoritative_events(Path(space_dir))
     return sum(1 for event in events
                if principal_of(event.actor)[0] == principal and event.type == "item.create"
                and _event_date(event) == today)
@@ -224,13 +225,14 @@ def month_to_date_cents(space_dir: Path | None, writers: list[str], today: dt.da
     if not space_dir:
         return 0
     from ledger.fold import fold
-    from ledger.hub import authoritative_events
+    from ledger.hub import effective_authoritative_events
     from actor_identity import base_writer
     principals = {principal_of(writer)[0] or base_writer(writer) for writer in writers}
     today = today or dt.datetime.now(dt.timezone.utc).date()
     # Admitted spend only (Codex round-3 verdict, spend_reader): a tampered
     # row in a hub space is not money spent. No hub: every event, as before.
-    admitted, kw = authoritative_events(Path(space_dir))
+    # ... with effect (round 8): rejected or reversed spend is not money spent.
+    admitted, kw = effective_authoritative_events(Path(space_dir))
     events = [event for event in admitted
               if (principal_of(event.actor)[0] or base_writer(event.actor)) in principals and event.type == "spend.record"
               and (_event_date(event).year, _event_date(event).month) == (today.year, today.month)]
