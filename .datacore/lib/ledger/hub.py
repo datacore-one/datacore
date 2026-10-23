@@ -234,14 +234,24 @@ def load_config(space_dir) -> HubConfig | None:
 
 
 def signed_hub_records(events, registry_path=None) -> list:
-    """The `hub.enable` records in `events` that carry a valid signature by
-    their writer, bound to the space and hub they name (their signing domain).
+    """The `hub.enable` records in `events` that show THIS space moved to a hub.
 
     Read when the config is MISSING (Codex final audit, F2): the config is a
     cache of what the owner recorded, and losing it is not proof that the
-    space never moved to the hub. A bare unsigned line of that type proves
-    nothing and blocks nothing (no denial by forgery)."""
-    from .keys import verify
+    space never moved to the hub. A record counts when
+      * it is bound to this space: its cutover manifest names a log head this
+        copy holds exactly, or another event here is signed into the same
+        space and hub (a record copied from another space has neither -- no
+        denial by transplant, round-7 audit);
+      * it is signed and domain-bound to the space and hub it names;
+      * its signature verifies -- or cannot be checked because the writer's
+        key is not on this host (a lost key registry must not reopen the
+        plain fold, round-7 audit). A signature that a known key REFUSES
+        proves nothing.
+    A bare unsigned line of that type blocks nothing."""
+    from .keys import DEFAULT_REGISTRY_PATH, _registry_actors, key_history, verify
+    events = list(events)
+    held = {(getattr(x, "log", None) or x.actor, x.seq, x.hash) for x in events}
     out = []
     for e in events:
         if getattr(e, "type", None) != "hub.enable" or not getattr(e, "sig", ""):
@@ -252,13 +262,28 @@ def signed_hub_records(events, registry_path=None) -> list:
             continue
         if e.domain != signing_domain(space, hub, getattr(e, "log", None) or e.actor):
             continue
+        manifest = p.get("manifest") if isinstance(p.get("manifest"), dict) else {}
+        heads = [(log, h.get("seq"), h.get("head")) for log, h in manifest.items()
+                 if isinstance(h, dict) and type(h.get("seq")) is int and h.get("seq") >= 0]
+        bound = any(x in held for x in heads) or any(
+            x is not e and getattr(x, "domain", "") and x.hub == hub
+            and x.domain == signing_domain(space, hub, getattr(x, "log", None) or x.actor) for x in events)
+        if not bound:
+            continue                                    # another space's activation record
         try:
             ok = verify(e.actor, canonical_bytes(event_body(e)), e.sig, registry_path=registry_path,
                         at_ms=_physical_ms(e.hlc))
-        except Exception:  # noqa: BLE001 -- an unverifiable record is no record
-            ok = False
-        if ok:
-            out.append(e)
+        except Exception:  # noqa: BLE001 -- cannot be checked here
+            ok = None
+        if not ok:
+            try:
+                known = bool(key_history(e.actor)) or bool(
+                    _registry_actors(Path(registry_path) if registry_path else DEFAULT_REGISTRY_PATH).get(e.actor))
+            except Exception:  # noqa: BLE001 -- no readable registry: the key is not known here
+                known = False
+            if known:
+                continue                                # a known key refuses it: no record
+        out.append(e)
     return out
 
 
@@ -668,17 +693,26 @@ def predecessor_seal_marks(events, auth: Authority, grantor: str) -> tuple[dict,
     ep = auth.epoch_of(grantor)
     if ep is None or ep.epoch == 0:
         return {}, None
-    pred = auth.epochs[ep.epoch - 1]
-    if pred.last_seal is None:
-        return {}, None
-    seq, digest = pred.last_seal
-    seal = next((e for e in events if (getattr(e, "log", None) or e.actor) == pred.grantor and e.seq == seq), None)
-    if seal is None or seal.hash != digest or seal.type != "ledger.seal":
-        return {}, (f"this copy does not hold {pred.grantor}'s last seal (seq {seq}) that the promotion names")
-    marks = (seal.payload or {}).get("watermarks")
-    if not isinstance(marks, dict):
-        return {}, f"{pred.grantor}'s last seal (seq {seq}) names no frontier"
-    return {str(k): int(v) for k, v in marks.items() if type(v) is int}, None
+    # EVERY EARLIER EPOCH (round-7 audit): an epoch that never sealed names no
+    # last seal, and reading only the immediate predecessor let a third
+    # grantor drop what the first one sealed. The floor is the highest mark
+    # any earlier epoch's last seal set, per log.
+    out: dict = {}
+    for pred in auth.epochs[:ep.epoch]:
+        if pred.last_seal is None:
+            continue
+        seq, digest = pred.last_seal
+        seal = next((e for e in events if (getattr(e, "log", None) or e.actor) == pred.grantor and e.seq == seq),
+                    None)
+        if seal is None or seal.hash != digest or seal.type != "ledger.seal":
+            return {}, (f"this copy does not hold {pred.grantor}'s last seal (seq {seq}) that the promotion names")
+        marks = (seal.payload or {}).get("watermarks")
+        if not isinstance(marks, dict):
+            return {}, f"{pred.grantor}'s last seal (seq {seq}) names no frontier"
+        for k, v in marks.items():
+            if type(v) is int:
+                out[str(k)] = max(out.get(str(k), -1), v)
+    return out, None
 
 
 def resolve_attempt(space_dir, item_id: str, attempt: str, *, by: str, reason: str, keys_dir=None,
@@ -1224,6 +1258,12 @@ class Hub:
                 if ref.get("task_hash") and p.get("task_hash") != ref["task_hash"]:
                     continue
                 if state.outcomes.get(e.hash, "").startswith(_INEFFECTIVE):
+                    continue
+                # A reversed or rejected result resolves nothing (round-7 audit):
+                # the one correction rule says it has no effect.
+                fin = getattr(state, "finality", None)
+                if fin is not None and (e.hash in fin.rejected
+                                        or fin.voids.applies(getattr(e, "log", None) or e.actor, e)):
                     continue
                 return True
             if e.type == "hub.resolve" and owner and e.actor == owner:
@@ -1862,8 +1902,10 @@ class Hub:
         out = {}
         for e in candidates:
             item = e.payload.get("id") if isinstance(e.payload, dict) else None
+            # AT or before (round-7 audit): an equal stamp ties with the sealed
+            # event and may fold before it, so it reorders a sealed decision too.
             if (isinstance(item, str) and isinstance(e.hlc, str) and not sealed_by_any(e)
-                    and e.hlc < top.get(item, "")):
+                    and item in top and e.hlc <= top[item]):
                 out[e.hash] = (f"stamped {e.hlc}, before {item}'s sealed history (sealed up to {top[item]}); "
                                "a sealed decision is final")
         return out

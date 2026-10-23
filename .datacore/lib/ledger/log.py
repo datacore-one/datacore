@@ -77,6 +77,45 @@ class HubSigningRequired(RuntimeError):
     """An unsigned append in a space served by a hub; nothing was written."""
 
 
+class NotReversible(ValueError):
+    """A reversal naming a control record (owner, round 7): never written."""
+
+
+def _held_target(space_dir: Path, payload) -> "Event | None":
+    """The event a `ledger.void` names (log, seq, hash), if this space holds exactly it."""
+    if not isinstance(payload, dict) or type(payload.get("seq")) is not int or not isinstance(payload.get("log"), str):
+        return None
+    from .voids import log_stem
+    stem = log_stem(payload["log"])
+    root = Path(space_dir) / ".datacore"
+    for path in [root / "events" / f"{stem}.jsonl", *sorted((root / "telemetry").glob(f"{stem}*.jsonl"))]:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                e = from_line(line.strip())
+            except Exception:  # noqa: BLE001 -- a damaged line is not the target
+                continue
+            if log_stem(getattr(e, "log", None) or e.actor) == stem and e.seq == payload["seq"] \
+                    and e.hash == payload.get("hash"):
+                return e
+    return None
+
+
+def _records_a_hub(space_dir: Path) -> bool:
+    """Do this space's logs carry the owner's `hub.enable` (a config lost)?"""
+    d = Path(space_dir) / ".datacore" / "events"
+    for path in (d.glob("*.jsonl") if d.is_dir() else ()):
+        try:
+            if b'"hub.enable"' in path.read_bytes():
+                return True
+        except OSError:
+            continue
+    return False
+
+
 class StaleLogError(RuntimeError):
     """Raised when appending would reuse a seq because the log was rewound.
 
@@ -517,8 +556,25 @@ class EventLog:
             raise HubSigningRequired(
                 f"{self.space_dir} is served by a hub: every writer signs (DIP-0034 amendment D). "
                 f"Turn signing on for {self.actor!r} (DATACORE_LEDGER_SIGN=1) before writing here.")
+        if not self.hub_required and not self.sign and _records_a_hub(self.space_dir):
+            # The config is a cache of the owner's record (round-7 audit): a
+            # space whose logs record the move to a hub but whose config is
+            # lost is still a hub space; nothing unsigned is written into it.
+            raise HubSigningRequired(
+                f"{self.space_dir}: the ledger records a hub.enable but the hub config is missing; "
+                "restore it before writing (every writer of a hub space signs)")
         if type not in EVENT_TYPES:
             raise ValueError(f"unknown event type: {type!r} (expected one of {sorted(EVENT_TYPES)})")
+        if type == "ledger.void" and self.hub_required:
+            # CONTROL RECORDS ARE NEVER REVERSIBLE (owner, round 7): no writer
+            # of a hub space signs a reversal of one into its log when it holds
+            # the target. A space without a hub keeps the old rule exactly
+            # (owner, 2026-10-23) until its activation.
+            from .finality import reversible
+            target = _held_target(self.space_dir, payload)
+            if target is not None and not reversible(target.type):
+                raise NotReversible(f"{target.type} is a control record and is never reversible; correct it "
+                                    "with a new forward record; nothing was written")
         # NO NaN, NO INFINITY (owner decision L8). json writes them as the
         # non-JSON tokens NaN/Infinity, and NaN != NaN breaks every equality
         # the fold relies on: merge_values(NaN, NaN, x) raised "concurrent
