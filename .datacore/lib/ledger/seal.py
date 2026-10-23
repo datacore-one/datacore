@@ -307,11 +307,15 @@ def verify_seal(events: list[Event], fold_kwargs: dict | None = None) -> tuple[b
     # in-ledger void had cancelled (Phase 2 V2).
     # THE ROOT RULE IS THE SEAL'S OWN (round 6, H3), and it only moves forward:
     # once a seal hashed pool state, a later one that does not is refused.
-    # Every earlier seal counts here, not only the current sequencer's (Codex
-    # round 6, N3): a promoted grantor may not drop back either.
-    if not seal.pool_root and any(e.type == "ledger.seal" and e.hlc < seal.hlc
-                                  and isinstance(e.payload, dict) and e.payload.get("pool_root") is True
-                                  for e in events):
+    # Every earlier seal by one of the space's SEALERS counts here (Codex round
+    # 6, N3: a promoted grantor may not drop back either) -- in a hub space
+    # each grantor's seals in its own log, else the sequencer's. A seal-shaped
+    # event by anyone else (a writer's rejected proposal) never counts (re-check).
+    grantors = {a for g in ((fold_kwargs or {}).get("lease_grantors") or {}).values() for a in g}
+    sealers = [e for e in events if e.type == "ledger.seal" and (getattr(e, "log", None) or e.actor) == e.actor
+               and e.actor in grantors] if grantors else _seal_events(events)
+    if not seal.pool_root and any(e.hlc < seal.hlc and isinstance(e.payload, dict)
+                                  and e.payload.get("pool_root") is True for e in sealers):
         return False, ("SEAL DOWNGRADE: an earlier seal used the pool root rule (pool_root); this one "
                        "does not -- a root rule only moves forward")
     recomputed = fold(covered, **(fold_kwargs or {})).state_root(pool_root=seal.pool_root)

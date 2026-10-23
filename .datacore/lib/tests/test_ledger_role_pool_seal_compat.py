@@ -81,12 +81,27 @@ def test_r6_the_audit_probe_equal_roots_no_longer_hide_the_ownership_decision():
 def test_r6_n3_no_successor_downgrades_from_the_pool_rule():
     """Codex round 6 (N3): the downgrade guard looked only at the current
     sequencer's seals, so a promoted grantor could drop back to the older
-    rule. An earlier pool-rule seal by ANY sealer forbids it."""
+    rule. In a hub space an earlier pool-rule seal by ANY of its grantors
+    forbids it."""
     events = _readdressed()
     first = _ev(0, 1_700_000_000_100, "old", "ledger.seal", build_seal_payload(events))
     old = {k: v for k, v in build_seal_payload(events + [first]).items() if k != "pool_root"}
     old["state_root"] = fold(events).state_root(pool_root=False)
     later = _ev(0, 1_700_000_000_200, "new", "ledger.seal", old)
     with as_sequencer("new"):
-        ok, detail = verify_seal(events + [first, later])
+        ok, detail = verify_seal(events + [first, later], {"lease_grantors": {"": {"old": 0, "new": 1}}})
     assert ok is False and "pool" in detail, detail
+
+
+def test_r6_recheck_a_seal_by_a_non_sealer_never_counts_for_the_downgrade_rule():
+    """Codex round-6 re-check: the widened guard read ANY seal-shaped event, so
+    a writer's rejected `ledger.seal` with pool_root turned a confirmed
+    older-rule seal into a failure. Only the space's sealers' seals count."""
+    events = _readdressed()
+    stray = _ev(0, 1_700_000_000_050, "wb", "ledger.seal", {"pool_root": True})
+    old = {k: v for k, v in build_seal_payload(events).items() if k != "pool_root"}
+    old["state_root"] = fold(events).state_root(pool_root=False)
+    seal = _ev(0, 1_700_000_000_200, "seq", "ledger.seal", old)
+    with as_sequencer("seq"):
+        assert verify_seal(events + [stray, seal])[0] is True
+        assert verify_seal(events + [stray, seal], {"lease_grantors": {"": {"seq": 0}}})[0] is True
