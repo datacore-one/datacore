@@ -696,6 +696,22 @@ def _authoritative(space_dir, events, *, registry_path, policy, now_ms):
     return admitted, auth.fold_inputs(inputs), auth.active.grantor
 
 
+def policy_in_force(space_dir, events=None, *, registry_path=None, policy=None, now_ms: int | None = None):
+    """The policy a NEW event in this space is judged by (round 8, owner
+    decision 1): in a hub space, the latest version the ledger records (the
+    owner's records as the grantor admitted them); in a space without a hub,
+    `policy` (a `PolicyInputs`, a `ledger.policy.Policy`, or None for this
+    installation's file). For writer-side pre-checks, which must ask the same
+    question the hub will."""
+    from .hub_policy import PolicyInputs, PolicyLedger
+    admitted, kw, sealer = _authoritative(space_dir, events, registry_path=registry_path, policy=policy,
+                                          now_ms=now_ms)
+    pol = kw.get("policy") if kw else None
+    if isinstance(pol, PolicyLedger):
+        return pol.versions(admitted, kw.get("lease_grantors")).latest
+    return policy if isinstance(policy, PolicyInputs) else PolicyInputs.load(policy)
+
+
 def authoritative_state(space_dir, events=None, *, registry_path=None, policy=None, now_ms: int | None = None,
                         settled: bool = False):
     """THE state of a space for every reader that decides or displays (finding 2).
