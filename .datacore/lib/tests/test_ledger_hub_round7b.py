@@ -138,12 +138,17 @@ def _plain_space_with_older_history(env, name="unrelated-plain-space"):
     return plain
 
 
-def test_r7b_an_activation_record_from_another_space_does_not_block_a_plain_space(env):
+def test_r7b_an_activation_record_copied_into_a_plain_space_is_read_fail_closed(env):
+    """The availability cost of the coarse rule, stated as a test: a record
+    that does not belong refuses reads (with the reason) until removed."""
     foreign = next(e for e in read_events(env.hub_dir) if e.type == "hub.enable")
     plain = _plain_space_with_older_history(env)
-    (plain / ".datacore/events" / f"{foreign.actor}.jsonl").write_text(to_line(foreign) + "\n")
     assert H.authoritative_state(plain, registry_path=env.registry).items["local"].status == "created"
-    EventLog(plain, "wa", sign=False).append("item.update", {"id": "local", "title": "still writable"})
+    (plain / ".datacore/events" / f"{foreign.actor}.jsonl").write_text(to_line(foreign) + "\n")
+    with pytest.raises(H.HubUnavailable):
+        H.authoritative_state(plain, registry_path=env.registry)
+    (plain / ".datacore/events" / f"{foreign.actor}.jsonl").unlink()
+    assert H.authoritative_state(plain, registry_path=env.registry).items["local"].status == "created"
 
 
 def test_r7b_a_missing_key_registry_does_not_reopen_the_plain_fold(env):
@@ -255,33 +260,67 @@ def test_r7b_a_genuine_empty_activation_keeps_the_void_reader_closed(env, monkey
     assert not voids.for_events_dir(env.hub_dir / ".datacore/events", registry_path=env.registry).applies("wa", rotation)
 
 
-def test_r7b_an_unsigned_companion_does_not_make_a_foreign_activation_count(env):
-    from ledger.hub_admission import signing_domain
-    activation = next(e for e in read_events(env.hub_dir) if e.type == "hub.enable")
-    plain = _plain_space_with_older_history(env)
-    _put(plain, activation)
-    local = read_events(plain)[0]
-    _put(plain, _altered(local, actor="wb", type="item.update", hub=activation.hub,
-                         domain=signing_domain(activation.payload["space"], activation.hub, "wb")))
-    assert "local" in H.authoritative_state(plain, registry_path=env.registry).items
+@pytest.mark.parametrize("variant", ["stripped-signature", "older-imported-event", "partial-registry",
+                                     "whitespace-encoding", "escaped-key", "malformed-manifest"])
+def test_r7b_no_recovery_state_reopens_the_plain_fold(env, variant):
+    """Round-7 re-check D1-D3: each state that let a finer rule discard a
+    genuine activation is read fail-closed by the coarse rule."""
+    from ledger import voids
+    from ledger.events import Event, body_dict, compute_hash
+    h = env.hub()
+    own = env.writer("own", H.LocalTransport(h))
+    own.append("item.create", {"id": "t", "assignee": "wa"})
+    replica = _replica(env, env.hub_dir)
+    (replica / H.CONFIG).unlink()
+    owner_log = replica / ".datacore/events" / f"{T.OWNER}.jsonl"
+    registry = env.registry
+    text = owner_log.read_text()
+    if variant == "stripped-signature":
+        lines = text.splitlines()
+        lines[0] = lines[0].replace('"sig":"', '"sig":"x', 1).replace('"sig":"x', '"sig":"', 1)
+        import json as _j
+        obj = _j.loads(lines[0]); obj["sig"] = ""; lines[0] = _j.dumps(obj, sort_keys=True, separators=(",", ":"))
+        owner_log.write_text("\n".join(lines) + "\n")
+    elif variant == "older-imported-event":
+        body = body_dict(0, "1600000000000.0000.zz", "zz", "item.create", {"id": "old"}, "GENESIS")
+        (replica / ".datacore/events/zz.jsonl").write_text(to_line(Event(**body, hash=compute_hash(body), sig="")) + "\n")
+    elif variant == "partial-registry":
+        registry = env.tmp / "partial-registry.yaml"
+        registry.write_text("actors: {}\n")
+    elif variant == "whitespace-encoding":
+        owner_log.write_text(text.replace('"type":"hub.enable"', '"type": "hub.\\u0065nable"'))
+    elif variant == "escaped-key":
+        owner_log.write_text(text.replace('"type":"hub.enable"', '"\\u0074ype":"hub.enable"'))
+    else:
+        import json as _j
+        lines = text.splitlines()
+        obj = _j.loads(lines[0]); obj["payload"]["manifest"] = {"wa": {"seq": 0, "head": []}}
+        lines[0] = _j.dumps(obj, sort_keys=True, separators=(",", ":"))
+        owner_log.write_text("\n".join(lines) + "\n")
+    with pytest.raises(H.HubUnavailable):
+        H.authoritative_state(replica, registry_path=registry, policy=T.TEST_POLICY)
+    assert H.records_a_hub(replica, registry)
+    assert voids._hub_space_voids(replica / ".datacore" / "events", registry_path=registry) is not None
 
 
-def test_r7b_a_fake_signature_by_an_unknown_actor_counts_for_nothing(env):
-    from ledger.hub_admission import signing_domain
-    plain = env.tmp / "plain-fake"
-    local = EventLog(plain, "wa", sign=False).append("item.create", {"id": "local"})
-    template = next(e for e in read_events(env.hub_dir) if e.type == "hub.enable")
-    payload = dict(template.payload, manifest={"wa": {"seq": local.seq, "head": local.hash}})
-    _put(plain, _altered(template, actor="unknown", sig="not-a-signature", payload=payload,
-                         domain=signing_domain(payload["space"], template.hub, "unknown")))
-    assert "local" in H.authoritative_state(plain, registry_path=env.registry).items
+def test_r7b_a_writer_opened_before_the_config_was_lost_stops_writing(env):
+    from ledger.log import HubSigningRequired
+    h = env.hub()
+    log = EventLog(env.hub_dir, "wa", sign=True, keys_dir=env.keys_dir, registry_path=env.registry)
+    (env.hub_dir / H.CONFIG).unlink()
+    with pytest.raises(HubSigningRequired):
+        log.append("item.create", {"id": "t"})
 
 
-def test_r7b_a_malformed_manifest_does_not_crash_a_reader(env):
-    plain = _plain_space_with_older_history(env, "plain-malformed")
-    template = next(e for e in read_events(env.hub_dir) if e.type == "hub.enable")
-    _put(plain, _altered(template, sig="bad", payload=dict(template.payload, manifest={"wa": {"seq": 0, "head": []}})))
-    assert "local" in H.authoritative_state(plain, registry_path=env.registry).items
+def test_r7b_a_held_telemetry_control_record_is_refused_before_appending(env, monkeypatch):
+    from ledger.log import NotReversible
+    h, own, wa, owner, done = _confirmed(env, monkeypatch)
+    e, _ = wa.append("metric.attest", {"metric": "job.verify", "job": "j", "ok": True, "failures": []})
+    target = next(x for x in h._state()[0] if x.hash == e.hash)
+    assert target.log.endswith(".telemetry")
+    with pytest.raises(NotReversible):
+        EventLog(env.hub_dir, T.OWNER, sign=True, keys_dir=env.keys_dir, registry_path=env.registry).append(
+            "ledger.void", {"log": target.log, "seq": target.seq, "hash": target.hash, "reason": "review"})
 
 
 def test_r7b_a_json_escape_does_not_open_the_writer_gate(env):
@@ -338,15 +377,23 @@ def test_r7b_config_loss_does_not_reopen_a_local_control_reversal(env, monkeypat
                    for e in read_events(owner.space_dir))
 
 
-@pytest.mark.parametrize("marker", ["title", "unsigned_activation", "foreign_activation"])
-def test_r7b_ordinary_content_never_blocks_writing_in_a_plain_space(env, marker):
+def test_r7b_ordinary_content_never_blocks_writing_in_a_plain_space(env):
+    plain = _plain_space_with_older_history(env, "plain-title")
+    log = EventLog(plain, "wa", sign=False)
+    log.append("item.update", {"id": "local", "title": "hub.enable"})
+    log.append("item.update", {"id": "local", "title": "GitHub hub sync \u263a"})
+    log.append("item.update", {"id": "local", "title": "normal update"})
+    assert H.authoritative_state(plain, registry_path=env.registry).items["local"].payload["title"] == "normal update"
+
+
+@pytest.mark.parametrize("marker", ["unsigned_activation", "foreign_activation"])
+def test_r7b_a_hub_record_in_a_plain_space_stops_writes_too(env, marker):
+    from ledger.log import HubSigningRequired
     plain = _plain_space_with_older_history(env, f"plain-{marker}")
     log = EventLog(plain, "wa", sign=False)
-    if marker == "title":
-        log.append("item.update", {"id": "local", "title": "hub.enable"})
-    elif marker == "unsigned_activation":
+    if marker == "unsigned_activation":
         log.append("hub.enable", {"space": "fake", "hub": "fake"})
     else:
         _put(plain, next(e for e in read_events(env.hub_dir) if e.type == "hub.enable"))
-    log.append("item.update", {"id": "local", "title": "normal update"})
-    assert H.authoritative_state(plain, registry_path=env.registry).items["local"].payload["title"] == "normal update"
+    with pytest.raises(HubSigningRequired):
+        log.append("item.update", {"id": "local", "title": "normal update"})
