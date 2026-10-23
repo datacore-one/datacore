@@ -691,9 +691,24 @@ def _authoritative(space_dir, events, *, registry_path, policy, now_ms):
         return list(events), {}, None
     from .hub_policy import PolicyInputs
     auth = authority(space_dir, cfg, registry_path)
-    inputs = policy if isinstance(policy, PolicyInputs) else PolicyInputs.load(policy)
+    # The ledger's policy decides (round 8): the local file is not even read
+    # when the owner's record carries one, so a broken file blocks nothing.
+    inputs = None if auth.policy is not None else (
+        policy if isinstance(policy, PolicyInputs) else PolicyInputs.load(policy))
     admitted = admit(list(events), auth, now_ms=_wall_ms() if now_ms is None else now_ms).events
     return admitted, auth.fold_inputs(inputs), auth.active.grantor
+
+
+def effective_authoritative_events(space_dir, events=None, *, registry_path=None, policy=None,
+                                   now_ms: int | None = None) -> tuple[list, dict]:
+    """`authoritative_events` without what has no effect by the one correction
+    rule (rejected proposals, reversed events): for readers that SCAN events
+    rather than fold them -- spend, creation counts, repair scans, presence
+    (round-8 re-check). A space without a hub: the old rule's reversals."""
+    from .finality import effective_events
+    admitted, kw = authoritative_events(space_dir, events, registry_path=registry_path, policy=policy,
+                                        now_ms=now_ms)
+    return effective_events(admitted, kw), kw
 
 
 def policy_in_force(space_dir, events=None, *, registry_path=None, policy=None, now_ms: int | None = None):
@@ -894,6 +909,26 @@ def promote(space_dir, new_grantor: str, *, by: str, reason: str, keys_dir=None,
     else:
         raise HubRefused("unfenced", f"{old.grantor} has not fenced itself (`hub fence`), and the owner has "
                          "not attested that it is stopped: no promotion, leases stay paused")
+    if mode == "owner-attested":
+        # THE PREDECESSOR'S LOG MUST BE HELD (round-8 re-check): a copy without
+        # it would name no last seal and cut its sealed history off for good.
+        # The old grantor served if any admitted event of another log names
+        # this hub beyond the cutover manifest; then its own `hub.start` for
+        # its epoch must be in this copy, and every lease attempt a held
+        # result names must be one a held grantor log granted.
+        everything = admit(list(read_events(Path(space_dir))), auth, now_ms=now).events
+        served = any(getattr(e, "hub", "") == cfg.hub_id and (getattr(e, "log", None) or e.actor) not in auth.grantors
+                     and e.actor != cfg.owner for e in everything)
+        started = any(e.type == "hub.start" and (e.payload or {}).get("epoch") == old.epoch for e in admitted)
+        granted = {(e.payload or {}).get("attempt") for e in everything
+                   if e.type in ("item.lease", "item.lease.renew") and e.actor in auth.grantors}
+        named = {(e.payload or {}).get("attempt") for e in everything
+                 if e.type in ("item.complete", "item.release") and isinstance(e.payload, dict)
+                 and isinstance(e.payload.get("attempt"), str)}
+        if (served and not started) or (named - granted):
+            raise HubRefused("behind_predecessor", f"this copy does not hold {old.grantor}'s log as far as it "
+                             "served (its start record or the leases held results name); restore it before "
+                             "promoting, or the promotion would cut off what it sealed")
     upto = admitted[: admitted.index(last) + 1] if last is not None else []
     expiries = [e.payload["expires_ms"] for e in upto if e.type in ("item.lease", "item.lease.renew")
                 and type((e.payload or {}).get("expires_ms")) is int]
@@ -3314,7 +3349,14 @@ class HubWriter:
         sealer = sauth.epoch_of(hub_actor)
         if seal is not None and sealer is not None and sealer.epoch > 0:
             pred = sauth.epochs[sealer.epoch - 1]
-            if pred.fence_seq is not None and marks.get(pred.grantor, -1) < pred.fence_seq:
+            # A seal never covers a seal: the predecessor's frontier is met by
+            # covering its last NON-seal event at or below the fence (round 8:
+            # an owner-attested promotion whose frontier is the old grantor's
+            # last seal otherwise failed every receipt for good).
+            need = max((e.seq for e in admitted if (getattr(e, "log", None) or e.actor) == pred.grantor
+                        and type(e.seq) is int and e.seq <= (pred.fence_seq or -1) and e.type != "ledger.seal"),
+                       default=-1)
+            if pred.fence_seq is not None and marks.get(pred.grantor, -1) < need:
                 problems.append(f"the seal does not extend {pred.grantor}'s frontier (seq {pred.fence_seq})")
             # ... nor drop any writer prefix the predecessor's last seal settled
             # (Codex re-audit, finding 4): that would un-settle another writer's work.
