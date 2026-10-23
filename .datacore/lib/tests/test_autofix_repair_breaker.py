@@ -343,3 +343,25 @@ def test_each_repair_outcome_is_recorded_as_a_learning_candidate(fleet, monkeypa
 
 
 from tests.test_promise_NS_9_waiting_on_owner_is_not_a_failure import fleet, _events  # noqa: E402,F401
+
+
+# ── 6. the owner can reset a tripped breaker (owner decision, 2026-10-23) ─────
+
+def test_an_owner_reset_reopens_the_breaker_and_is_recorded(unit):
+    """A breaker otherwise reopens only on a change or a pass. After the owner
+    fixes the host by hand, one reset gives the job a fresh three attempts; the
+    reset is a ledger record, so every host sees it."""
+    from ledger.log import read_events
+    job = _job(unit.root)
+    fp = unit.autofix.fingerprint(job, unit.root)
+    for day in ("20261020", "20261021", "20261022"):
+        _failed_repair(unit, f"autofix-box-x-{day}", fp)
+    assert _delegate(unit, job)[0] == "escalate"
+
+    unit.autofix.reset_breaker(unit.root, "box-x", reason="host fixed by hand", actor="winston")
+
+    assert any((e.payload or {}).get("metric") == "job.breaker_reset"
+               and (e.payload or {}).get("job") == "box-x" for e in read_events(unit.space))
+    state, why = _delegate(unit, job)
+    assert state == "delegated", f"the owner reset the breaker but it stayed open: {why}"
+    assert unit.autofix.breaker(unit.root, "box-x", fp)["attempts"] == 0

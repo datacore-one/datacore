@@ -260,6 +260,9 @@ jobs:
   # fix while they are duplicates and unrepairable once regenerated, because
   # generate_id() is timestamped.
   - name: nightshift-id-churn
+    # A detector: its red is the machine's state, never a code fault an agent
+    # can repair from a fresh checkout (owner decision 2026-10-23).
+    repair: host
     # MOVED OFF THE LAPTOP 2026-09-21. This is a network duty with a clock-based
     # contract, and the mac is a visitor: it sleeps, changes networks and may be
     # shut for days, so every deadline it carried turned into an alert about the
@@ -488,6 +491,9 @@ jobs:
         max_age_hours: 26
 
   - name: box-deploy-drift
+    # A detector: its red is the machine's state, never a code fault an agent
+    # can repair from a fresh checkout (owner decision 2026-10-23).
+    repair: host
     machine: box
     # server/deploy.sh refuses to overwrite a box file that differs, but only
     # at the moment someone runs a deploy. Between deploys the divergence is

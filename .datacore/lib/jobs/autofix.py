@@ -220,9 +220,11 @@ def breaker(root: Path, job: str, fp: str, *, now_ms: float | None = None) -> di
     mine = {iid for iid in autofix_ids
             if (state.items[iid].payload or {}).get("job") == job
             and (state.items[iid].payload or {}).get("fingerprint") == fp}
+    # A pass, or the owner's reset (reset_breaker), starts the count again.
     last_pass = max((_hlc_ms(e.hlc) for e in events
-                     if (e.payload or {}).get("metric") == "job.verify"
-                     and (e.payload or {}).get("job") == job and (e.payload or {}).get("ok")),
+                     if (e.payload or {}).get("job") == job
+                     and (((e.payload or {}).get("metric") == "job.verify" and (e.payload or {}).get("ok"))
+                          or (e.payload or {}).get("metric") == "job.breaker_reset")),
                     default=0.0)
     attempts, last_outcome = 0, None
     for e in events:
@@ -240,6 +242,19 @@ def breaker(root: Path, job: str, fp: str, *, now_ms: float | None = None) -> di
                  and now - last_outcome[1] < USAGE_PAUSE_H * 3600_000)
     return {"open": attempts >= BREAK_AFTER, "attempts": attempts, "usage_pause": pause,
             "since": last_pass or None}
+
+
+def reset_breaker(root: Path, job: str, *, reason: str, actor: str | None = None) -> None:
+    """The owner's reset of a tripped breaker: a ledger record, so every host
+    sees it. The job gets a fresh BREAK_AFTER attempts, as after a pass."""
+    from ledger.log import EventLog
+    if not reason.strip():
+        raise ValueError("a breaker reset needs a reason")
+    if actor is None:
+        import actor_identity
+        actor = actor_identity.this_actor()
+    EventLog(_space(root), actor).append(
+        "metric.attest", {"metric": "job.breaker_reset", "job": job, "ok": True, "reason": reason})
 
 
 def _state_dir() -> Path:
@@ -805,10 +820,19 @@ def main() -> int:
                     help="stop escalating one repair you have dealt with "
                          "(silences the notification, not the problem: a job that "
                          "keeps failing gets a fresh repair and escalates again)")
+    ap.add_argument("--reset", metavar="JOB",
+                    help="reset JOB's repair breaker after you fixed its cause by hand "
+                         "(needs --reason; recorded in the ledger)")
+    ap.add_argument("--reason", default="")
     a = ap.parse_args()
 
     import os
     root = Path(a.root or os.environ.get("DATACORE_ROOT") or (Path.home() / "Data"))
+
+    if a.reset:
+        reset_breaker(root, a.reset, reason=a.reason)
+        print(f"breaker reset for {a.reset}; it gets a fresh {BREAK_AFTER} repair attempts")
+        return 0
 
     if a.ack:
         ack(a.ack)
