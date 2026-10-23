@@ -829,7 +829,8 @@ def resolve_attempt(space_dir, item_id: str, attempt: str, *, by: str, reason: s
 
 
 def promote(space_dir, new_grantor: str, *, by: str, reason: str, keys_dir=None, registry_path=None,
-            attest_stopped: bool = False, clock: Callable[[], int] | None = None) -> HubConfig:
+            attest_stopped: bool = False, clock: Callable[[], int] | None = None,
+            never_served: bool = False) -> HubConfig:
     """The owner's one command that moves lease granting to another hub (H).
 
     Explicit by design: nothing in this module calls it. It is recorded in the
@@ -893,10 +894,14 @@ def promote(space_dir, new_grantor: str, *, by: str, reason: str, keys_dir=None,
         named = {(e.payload or {}).get("attempt") for e in everything
                  if e.type in ("item.complete", "item.release") and isinstance(e.payload, dict)
                  and isinstance(e.payload.get("attempt"), str)}
-        if (served and not started) or (named - granted):
+        # A copy with no trace of the old grantor's start may have lost
+        # everything it served: the owner says so explicitly (`never_served`),
+        # or restores its log first (round-8 re-check).
+        if (served and not started) or (named - granted) or (not started and not never_served):
             raise HubRefused("behind_predecessor", f"this copy does not hold {old.grantor}'s log as far as it "
                              "served (its start record or the leases held results name); restore it before "
-                             "promoting, or the promotion would cut off what it sealed")
+                             "promoting, or the promotion would cut off what it sealed (if it truly never "
+                             "served, say so: --never-served)")
     upto = admitted[: admitted.index(last) + 1] if last is not None else []
     expiries = [e.payload["expires_ms"] for e in upto if e.type in ("item.lease", "item.lease.renew")
                 and type((e.payload or {}).get("expires_ms")) is int]
@@ -3321,6 +3326,8 @@ def main(argv=None) -> int:
     pr.add_argument("--reason", required=True)
     pr.add_argument("--attest-stopped", action="store_true",
                     help="the old grantor cannot fence itself; the owner states it is stopped")
+    pr.add_argument("--never-served", action="store_true",
+                    help="with --attest-stopped: the old grantor never started serving this space")
     rd = sub.add_parser("ready", help="this writer's host speaks the hub protocol (run before `enable`)")
     rd.add_argument("space")
     rd.add_argument("--actor", required=True)
@@ -3340,7 +3347,8 @@ def main(argv=None) -> int:
         cfg = enable(a.space, hub_id=a.hub_id, grantor=a.grantor, owner=a.owner, lease_ttl_s=a.lease_ttl_s,
                      clock_uncertainty_ms=a.clock_uncertainty_ms)
     elif a.cmd == "promote":
-        cfg = promote(a.space, a.grantor, by=a.by, reason=a.reason, attest_stopped=a.attest_stopped)
+        cfg = promote(a.space, a.grantor, by=a.by, reason=a.reason, attest_stopped=a.attest_stopped,
+                      never_served=a.never_served)
     elif a.cmd == "ready":
         print(json.dumps(declare_ready(a.space, a.actor), indent=2, sort_keys=True))
         return 0
