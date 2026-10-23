@@ -687,7 +687,10 @@ jobs:
       # contain a literal `*` -- expand_path() only globs when it sees one, so
       # a character class alone comes back as the literal pattern and reads as
       # "does not exist".
-      - path: "~/Data/0-personal/notes/journals/20*-*-*.md"
+      # Ends in the day of month: `20*-*-*.md` also matched the weekly plan page
+      # (2026-10-19-weekly-plan.md), which as the newest match was the file
+      # checked, and a complete briefing read as failed (2026-10-19).
+      - path: "~/Data/0-personal/notes/journals/20*-*-[0-3][0-9].md"
         check: regex
         # ASSERT WHAT THE PRODUCER GUARANTEES, NOT A TITLE THE MODEL CHOSE.
         # "Your Agenda" was a section in nightshift's /today template. When
@@ -914,7 +917,10 @@ jobs:
       # The template's evidence: today's journal carries the briefing section.
       # A glob (newest journal), not {today}: the run is at 04:00 and the hourly
       # verifier would otherwise read a missing file every night before it.
-      - path: "~/Data/0-personal/notes/journals/20*-*-*.md"
+      # Ends in the day of month: `20*-*-*.md` also matched the weekly plan page
+      # (2026-10-19-weekly-plan.md), which as the newest match was the file
+      # checked, and a complete briefing read as failed (2026-10-19).
+      - path: "~/Data/0-personal/notes/journals/20*-*-[0-3][0-9].md"
         check: regex
         arg: '^## Daily Briefing'
         max_age_hours: 26
