@@ -312,3 +312,82 @@ def test_r8_writer_pre_checks_ask_the_ledgers_policy(penv):
     _set_policy(env, CHANGED)
     h.seal()
     assert H.policy_in_force(env.hub_dir, registry_path=env.registry, policy=INITIAL) == CHANGED
+
+
+# ── the round-8 targeted re-check (Codex, test_r8_recheck.py), turned around ─
+
+@pytest.mark.parametrize("lost", ["grantor-only"])
+def test_r8e_an_attested_promotion_needs_the_predecessors_log(penv, lost):
+    """A promotion the owner attests from a copy that lacks the stopped
+    grantor's log would name no last seal and cut its sealed history off for
+    good; it is refused until the log is restored. (A copy that lost the
+    grantor's log AND every log it served holds no trace of the service; that
+    case rests on the owner's attestation and is reported, not tested.)"""
+    e = penv
+    first = e.hub()
+    own = e.writer("own", H.LocalTransport(first))
+    event, _ = own.append("item.create", {"id": "t", "effects": ["publish"]})
+    first.seal()
+    first.close()
+    actors = (T.GRANTOR, "own") if lost == "grantor-and-writer" else (T.GRANTOR,)
+    saved = {}
+    for actor in actors:
+        path = e.hub_dir / ".datacore/events" / f"{actor}.jsonl"
+        saved[path] = path.read_bytes()
+        path.unlink()
+    with pytest.raises(H.HubRefused) as exc:
+        H.promote(e.hub_dir, "hubb", by=T.OWNER, reason="recover a stopped hub from a partial copy",
+                  attest_stopped=True, keys_dir=e.keys_dir, registry_path=e.registry, clock=e.clock)
+    assert exc.value.code == "behind_predecessor", exc.value
+    for path, data in saved.items():
+        path.write_bytes(data)
+    H.promote(e.hub_dir, "hubb", by=T.OWNER, reason="recover a stopped hub", attest_stopped=True,
+              keys_dir=e.keys_dir, registry_path=e.registry, clock=e.clock)
+    e.clock.advance(1000)
+    _set_policy(e, CHANGED)
+    successor = e.hub("hubb")
+    successor.seal()
+    assert _status(own, e, event) == "confirmed"
+    assert "t" in successor._state()[1].items
+
+
+def test_r8e_scanning_readers_never_count_a_rejected_proposal(env, monkeypatch):
+    """Spend, the daily creation count and the autofix scan read events, not
+    the fold: a record the hub kept as a rejected proposal counts for none."""
+    import datetime as dt
+    import ledger.keys as keys
+    import claim_gate
+    from jobs import autofix
+    monkeypatch.setattr(keys, "DEFAULT_REGISTRY_PATH", env.registry)
+    monkeypatch.setattr(claim_gate, "principal_of", lambda actor: (actor, {}))
+    h = env.hub()
+    own, wa = [env.writer(a, H.LocalTransport(h)) for a in ("own", "wa")]
+    ms = T._real_ms()
+    h.append(own._submission(T._signed_into(env, own, "item.create", {"id": "t", "autofix": True},
+                                            hlc=f"{ms:013d}.0000.own")))
+    h.seal()
+    day = dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc).date()
+    for i, (type_, payload) in enumerate((("spend.record", {"id": "t", "cents": 12345}),
+                                          ("item.create", {"id": "t"}),
+                                          ("item.release", {"id": "t", "kind": "waiting_on_owner"}))):
+        # stamped at or before t's sealed history: the hub keeps each as a rejected proposal
+        bad = T._signed_into(env, wa, type_, payload, hlc=f"{ms - 2 + i:013d}.0000.own")
+        assert h.append(wa._submission(bad, chain="wa"))["status"] == "rejected"
+    assert claim_gate.month_to_date_cents(env.hub_dir, ["wa"], today=day) == 0
+    assert claim_gate.creates_today(env.hub_dir, "wa", today=day) == 0
+    monkeypatch.setattr(autofix, "_space", lambda root: env.hub_dir)
+    assert not any(r.get("waiting_on_owner") for r in autofix.repairs(env.tmp))
+
+
+def test_r8e_a_broken_local_policy_file_does_not_block_a_hub_space(penv, monkeypatch):
+    """In a hub space the policy is the ledger's; the local file is not read."""
+    from ledger import policy
+    e = penv
+    h = e.hub()
+    own = e.writer("own", H.LocalTransport(h))
+    own.append("item.create", {"id": "t"})
+    h.seal()
+    path = e.tmp / "bad-local-policy.yaml"
+    path.write_text("version: 1\napprover: []\ncosign_effects: []\n")
+    monkeypatch.setattr(policy, "DEFAULT_POLICY_PATH", path)
+    assert "t" in H.authoritative_state(e.hub_dir, registry_path=e.registry).items

@@ -207,13 +207,13 @@ def test_fold_rule_earliest_lease_wins_and_the_losers_completion_is_a_recorded_c
     owner = env.writer("own", ta)
     owner.append("item.create", {"id": "t1", "title": "pool task"})
     wa = env.writer("wa", ta)
-    lease_a = wa.request_lease("t1")
-
-    # Partition: a second checkout that never saw hub_a's lease is promoted by
-    # the owner (an explicit act) and grants the same item to wb.
+    # Partition: a second checkout taken BEFORE hub_a's lease (it never saw
+    # it) is promoted by the owner (an explicit act) and grants the same item
+    # to wb. (Round 8: an attested promotion needs the old grantor's log as
+    # far as the copy shows it served, so the copy keeps hub_a's start record.)
     b_dir = env.tmp / "hub-b-space"
     shutil.copytree(env.hub_dir, b_dir)
-    (b_dir / ".datacore" / "events" / f"{GRANTOR}.jsonl").unlink()
+    lease_a = wa.request_lease("t1")
     # Since audit finding 4 the promotion is the owner's signed record and the
     # new grantor waits out every lease the old one could have granted. Only a
     # wrong clock gets a second, overlapping grant out of it: the owner's clock
