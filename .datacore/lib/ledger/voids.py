@@ -313,6 +313,13 @@ def for_events_dir(events_dir: Path, registry_path=None) -> Voids:
     return result
 
 
+def _read_or_empty(path: Path) -> bytes:
+    try:
+        return path.read_bytes()
+    except OSError:
+        return b""
+
+
 def _hub_space_voids(events_dir: Path, registry_path=None):
     """The effective reversals of a hub space, or None for a space without a hub.
 
@@ -325,6 +332,17 @@ def _hub_space_voids(events_dir: Path, registry_path=None):
     except Exception:  # noqa: BLE001 -- an unreadable opt-in: not a hub space this reader can judge
         return Voids() if (space / ".datacore" / "ledger-hub.json").exists() else None
     if cfg is None:
+        # The config is a cache of the owner's record (Codex final audit, F2):
+        # a space whose logs carry a signed hub.enable but no config excuses
+        # nothing -- never the old rule.
+        files = sorted(events_dir.glob("*.jsonl")) if events_dir.is_dir() else []
+        if not any(b'"hub.enable"' in _read_or_empty(p) for p in files):
+            return None
+        try:
+            from .hub import require_config_or_no_hub
+            require_config_or_no_hub(space, registry_path=registry_path)
+        except Exception:  # noqa: BLE001 -- the ledger records a hub (or cannot tell): nothing is excused
+            return Voids()
         return None
     try:
         from .finality import resolve as resolve_finality
