@@ -66,3 +66,17 @@ def test_a_problem_the_extension_brings_still_refuses_and_is_named(tmp_path, mon
     assert path.read_text() == before
     out = capsys.readouterr().out
     assert "REFUSED" in out and "seq 3" in out and "True" not in out
+
+
+def test_find_on_a_writer_whose_log_is_missing_does_not_crash(tmp_path):
+    """2026-10-23: nightshift held a mark for operator.jsonl in 6-meridian but no
+    such file; --find died with FileNotFoundError instead of searching."""
+    import subprocess
+    import ledger_restore_prefix as rp
+    sp = tmp_path / "s"
+    EventLog(sp, "miles", sign=False).append("item.create", {"id": "a", "title": "t"})
+    subprocess.run(["git", "init", "-q", str(sp)], check=True)
+    subprocess.run(["git", "-C", str(sp), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(sp), "-c", "user.name=t", "-c", "user.email=t@t",
+                    "commit", "-q", "-m", "x"], check=True)
+    assert rp.find(sp, "operator", None) == []

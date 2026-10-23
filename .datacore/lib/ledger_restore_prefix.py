@@ -92,7 +92,9 @@ def find(space: Path, actor: str, since: str) -> list[tuple[str, int]]:
     branch on every remote, including ones this machine never fetched.
     """
     rel = log_path(space, actor)
-    current = tail_seq((space / rel).read_text(encoding='utf-8'))
+    log = space / rel
+    # A missing log is length -1: any copy in history runs further.
+    current = tail_seq(log.read_text(encoding='utf-8')) if log.exists() else -1
     tips = remote_tips(space)
     out = []
     for commit in git(space, 'rev-list', '--all', '--reflog', *tips,
