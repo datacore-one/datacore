@@ -20,9 +20,10 @@ owner_review: >-
   2026-10-23). They count claims per period, not money: the monthly spend
   ceiling stays budget_monthly_usd in registry/principals.yaml. Measured
   ledger claims in the week to 2026-10-23: Miles 23 to 51 a day,
-  Tris and Data none, so Miles's 20 WILL hold back some of
-  today's work -- by design until the owner sets it. Raise a number when a
-  lane is starved; 0 stops that agent claiming at all.
+  Tris and Data none. Miles is set to 60, above his measured maximum, so
+  the lanes do not slow today's work (owner direction 2026-10-23: automate and
+  parallelise as much as possible); Tris and Data have room to start. Lower a
+  number to cap a lane; 0 stops that agent claiming at all.
 version: 1
 period: day          # day (UTC) | week (ISO, from Monday) | month
 lanes:
@@ -30,14 +31,14 @@ lanes:
     roles: [coo, cto, dev, dev.backend, dev.contracts, dev.qa, operator]
     tags: [technical, pm, data, repair]
     priorities: []
-    budget: {tasks: 20}
+    budget: {tasks: 60}
   tris:              # research and cross-domain analysis
     roles: [cio, researcher, scout]
     tags: [research]
     priorities: []
-    budget: {tasks: 4}
+    budget: {tasks: 10}
   data:              # speaks to the outside world
     roles: [cmo, comms, bizdev]
     tags: [content, comms]
     priorities: []
-    budget: {tasks: 4}
+    budget: {tasks: 10}

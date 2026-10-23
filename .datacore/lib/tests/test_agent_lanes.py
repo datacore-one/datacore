@@ -211,8 +211,10 @@ def test_one_role_belongs_to_one_lane(lanes, tmp_path, monkeypatch):
 
 #: The venture lane roles (AGT-1): each is owned by exactly this agent.
 VENTURE_LANES = {"cio": "tris", "cmo": "data", "comms": "data", "coo": "miles", "cto": "miles"}
-#: Below Miles's measured 23-51 ledger claims a day (week to 2026-10-23).
-CONSERVATIVE_MAX_TASKS_PER_DAY = 20
+#: A sanity ceiling, not a target. The owner chose not to slow current work
+#: (2026-10-23: automate and parallelise), so Miles ships above his measured
+#: 23-51 ledger claims a day; a shipped number above this is a typo.
+CONSERVATIVE_MAX_TASKS_PER_DAY = 100
 
 
 def test_the_shipped_lanes_are_one_owner_edited_file_and_conservative():
