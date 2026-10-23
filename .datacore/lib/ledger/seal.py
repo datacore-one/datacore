@@ -307,8 +307,11 @@ def verify_seal(events: list[Event], fold_kwargs: dict | None = None) -> tuple[b
     # in-ledger void had cancelled (Phase 2 V2).
     # THE ROOT RULE IS THE SEAL'S OWN (round 6, H3), and it only moves forward:
     # once a seal hashed pool state, a later one that does not is refused.
-    if not seal.pool_root and any(e.hlc < seal.hlc and (e.payload or {}).get("pool_root") is True
-                                  for e in _seal_events(events)):
+    # Every earlier seal counts here, not only the current sequencer's (Codex
+    # round 6, N3): a promoted grantor may not drop back either.
+    if not seal.pool_root and any(e.type == "ledger.seal" and e.hlc < seal.hlc
+                                  and isinstance(e.payload, dict) and e.payload.get("pool_root") is True
+                                  for e in events):
         return False, ("SEAL DOWNGRADE: an earlier seal used the pool root rule (pool_root); this one "
                        "does not -- a root rule only moves forward")
     recomputed = fold(covered, **(fold_kwargs or {})).state_root(pool_root=seal.pool_root)
