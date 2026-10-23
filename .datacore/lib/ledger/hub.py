@@ -2692,17 +2692,19 @@ class HubWriter:
 
     def _pending(self, item_id: str, kind: str = "lease.request") -> dict | None:
         """A request sent whose answer never arrived: retried as is, so the hub
-        returns the same signed answer (finding 10). None once answered or stale."""
+        returns the same signed answer (finding 10), HOWEVER LATE: freshness
+        applies to new requests only (J8; round-7 audit R9). A stale request
+        the hub never answered is refused (`stale_request`) and `_ask` then
+        asks afresh. None once answered."""
         try:
             req = json.loads(self._pending_path(kind, item_id).read_text(encoding="utf-8"))
         except (FileNotFoundError, ValueError):
             return None
-        if not isinstance(req, dict) or abs(self.clock() - int(req.get("ts_ms", 0))) > REQUEST_WINDOW_MS:
-            return None
-        return req
+        return req if isinstance(req, dict) else None
 
-    def _ask(self, method: str, kind: str, item_id: str) -> dict:
-        req = self._pending(item_id, kind)
+    def _ask(self, method: str, kind: str, item_id: str, *, fresh: bool = False) -> dict:
+        req = None if fresh else self._pending(item_id, kind)
+        retried = req is not None
         if req is None:
             body = {"hub": self.cfg.hub_id, "space": self.cfg.space_id, "item": item_id}
             if kind == "lease.renew":
@@ -2716,8 +2718,10 @@ class HubWriter:
         except HubUnavailable:
             self._mark_outage()
             raise                                   # the request stays pending: retried as is
-        except HubRefused:
+        except HubRefused as exc:
             pending.unlink(missing_ok=True)
+            if retried and exc.code == "stale_request":
+                return self._ask(method, kind, item_id, fresh=True)   # never answered: ask afresh, once
             raise
         pending.unlink(missing_ok=True)
         if answer.get("status") in ("granted", "renewed"):
