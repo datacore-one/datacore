@@ -202,6 +202,13 @@ class LedgerState:
             if document.get('granted_by') is None and document.get('granted_at') is None:
                 document.pop('granted_by', None)
                 document.pop('granted_at', None)
+            # `pool_work` counts only once the item has been leased (round 5,
+            # amendment 9): before pools a role-only task could be created but
+            # never leased, so an unleased item hashes as an older seal saw it,
+            # in a space with pools off or on. The field itself stays on the
+            # item, so pool work created as such keeps its review rules.
+            if document.get('lease_ref') is None:
+                document['pool_work'] = False
             # Same rule for leases: a space that never leased hashes as before.
             if (document.get('lease_ref') is None and document.get('lease_holder') is None
                     and document.get('lease_expires_ms') is None and not document.get('lease_conflicts')):
