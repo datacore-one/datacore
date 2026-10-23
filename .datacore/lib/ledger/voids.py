@@ -313,13 +313,6 @@ def for_events_dir(events_dir: Path, registry_path=None) -> Voids:
     return result
 
 
-def _read_or_empty(path: Path) -> bytes:
-    try:
-        return path.read_bytes()
-    except OSError:
-        return b""
-
-
 def _hub_space_voids(events_dir: Path, registry_path=None):
     """The effective reversals of a hub space, or None for a space without a hub.
 
@@ -333,13 +326,14 @@ def _hub_space_voids(events_dir: Path, registry_path=None):
         return Voids() if (space / ".datacore" / "ledger-hub.json").exists() else None
     if cfg is None:
         # The config is a cache of the owner's record (Codex final audit, F2):
-        # a space whose logs carry a signed hub.enable but no config excuses
-        # nothing -- never the old rule.
-        files = sorted(events_dir.glob("*.jsonl")) if events_dir.is_dir() else []
-        # A JSON escape spells the type in other bytes (round-7 audit): any
-        # escaped line is parsed rather than trusted to the byte filter.
-        if not any(b'"hub.enable"' in raw or b"\\u" in raw for raw in map(_read_or_empty, files)):
-            return None
+        # a space whose logs carry the owner's activation record but no config
+        # excuses nothing -- never the old rule. One shared rule decides what
+        # counts (`ledger.hub.records_a_hub`, escape-proof, bound to this space).
+        try:
+            from .hub import records_a_hub
+            return Voids() if records_a_hub(space, registry_path) else None
+        except Exception:  # noqa: BLE001 -- cannot tell: nothing is excused
+            return Voids()
         try:
             from .hub import require_config_or_no_hub
             require_config_or_no_hub(space, registry_path=registry_path)
