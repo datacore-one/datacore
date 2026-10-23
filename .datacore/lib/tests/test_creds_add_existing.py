@@ -16,7 +16,7 @@ from creds import CredentialManager
 STORED = "stored-placeholder"
 
 
-def _install(tmp_path, env_text=f"PLUR_X_API_KEY={SECRET}\n"):
+def _install(tmp_path, env_text=f"PLUR_X_API_KEY={STORED}\n"):
     root = tmp_path / ".datacore/secrets"
     (root / "spaces").mkdir(parents=True)
     (root / "spaces/demo.env").write_text(env_text)
@@ -55,7 +55,7 @@ def test_indexes_a_variable_already_in_the_store_without_touching_it(tmp_path, c
     assert [(r["id"], r["var_name"], r["scope"], r["space"]) for r in rows] == [
         ("plur-x-api-key", "PLUR_X_API_KEY", "space", "demo")]
     out = capsys.readouterr()
-    assert SECRET not in out.out + out.err
+    assert STORED not in out.out + out.err
     assert "credential-index.yaml" in git("show", "--name-only", "--format=", "HEAD").stdout
 
 
@@ -69,7 +69,7 @@ def test_refuses_a_value_with_existing(tmp_path):
     root, _ = _install(tmp_path)
     assert _add(tmp_path, value="something") == 1
     assert _rows(root) == []
-    assert (root / "spaces/demo.env").read_text() == f"PLUR_X_API_KEY={SECRET}\n"
+    assert (root / "spaces/demo.env").read_text() == f"PLUR_X_API_KEY={STORED}\n"
 
 
 def test_refuses_a_variable_that_is_already_indexed(tmp_path):
@@ -80,7 +80,7 @@ def test_refuses_a_variable_that_is_already_indexed(tmp_path):
 
 
 def test_export_form_in_the_store_counts(tmp_path):
-    root, _ = _install(tmp_path, env_text=f"export PLUR_X_API_KEY={SECRET}\n")
+    root, _ = _install(tmp_path, env_text=f"export PLUR_X_API_KEY={STORED}\n")
     assert _add(tmp_path) == 0
     assert len(_rows(root)) == 1
 
