@@ -193,6 +193,32 @@ def escalations() -> list[dict]:
 _TRANSPORT = re.compile(r"^exception: (URLError|HTTPError|TimeoutError|timeout|Connection\w*|OSError|SSL\w*|"
                         r"RemoteDisconnected|IncompleteRead|gaierror)\b")
 
+# Evidence patterns that mean a refused git/remote login — nobody an agent can reach
+# will fix this; only the person who holds the credential can (MSG-10, L4 audit 2026-10-17).
+_AUTH_REFUSAL = re.compile(
+    r"Invalid username or token|authentication failed|NO ACCESS|"
+    r"remote: Invalid|could not read Username|Permission denied \(publickey\)",
+    re.IGNORECASE,
+)
+
+
+def _owner() -> str | None:
+    """The human principal with final decision authority; None when the registry names none."""
+    import roster
+    return roster.owner()
+
+
+def _needs_owner(f: dict) -> bool:
+    """True for findings the repairer cannot reach from a different host.
+
+    Unit failures require systemctl access on the host where the service runs.
+    Auth-refusal evidence (refused git login, NO ACCESS) requires the credential
+    holder — only the owner can rotate or restore it.
+    """
+    if f.get("kind") == "unit":
+        return True
+    return bool(_AUTH_REFUSAL.search(f.get("evidence", "")))
+
 
 def _undelivered_log() -> Path:
     return Path(os.environ.get("DATACORE_UNDELIVERED_LOG")
@@ -316,10 +342,16 @@ def delegate(f: dict, day: str) -> str:
                       "remediation did not clear it.", "", f"What: {f['title']}",
                       f"Evidence: {f.get('evidence', '')}", *(["Tried: " + f["tried"]] if f.get("tried") else []),
                       "", "Done means the sweep's 03:30 re-check no longer finds it.", "", PR_RULE])
+    # Unit and v2 findings require access to the root install (systemctl, .datacore/lib,
+    # module configs) — outside any individual space checkout. The claim job uses
+    # code_root to refuse a dev item it cannot reach from its own space.
+    extra: dict = {}
+    if f.get("kind") in ("unit", "v2"):
+        extra["code_root"] = str(ROOT)
     try:
         guarded_append(EventLog(_space(ROOT), this_actor()), "item.create",
                        {"id": iid, "title": f"Repair: {f['title']}", "assignee": f["assignee"], "route": "dev",
-                        "body": body, "requested_by": this_actor(), "morning_repair": True})
+                        "body": body, "requested_by": this_actor(), "morning_repair": True, **extra})
     except Exception as exc:  # noqa: BLE001 -- report, never crash the sweep
         f["delegation_error"] = f"{type(exc).__name__}: {exc}"[:200]
         return ""
@@ -370,6 +402,11 @@ def sweep() -> int:
             f["item"] = handed[f["id"]]    # already Miles's tonight: not a second hand-off
         elif f["id"] in still:
             if len(handed) + delegated < MAX_ITEMS:
+                # Unit failures need systemctl on this host; refused-login evidence needs
+                # the credential holder. Neither can be reached by an agent on another
+                # machine. Route to the owner; they will see it in their item inbox.
+                if not f.get("owner") and _needs_owner(f):
+                    f["owner"] = _owner()
                 f["item"] = delegate(f, day)
                 delegated += bool(f["item"])
             else:

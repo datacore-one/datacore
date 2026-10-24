@@ -144,6 +144,25 @@ def classify_route(text: str) -> tuple[str, str]:
     return DEFAULT_ROUTE, "no heuristic matched; default route"
 
 
+def _code_outside_space(payload: dict, space: Path) -> str:
+    """Non-empty refusal reason when a dev item's code_root is outside the space.
+
+    morning_repair.delegate() stamps unit and v2 findings with the root install
+    path as code_root. When the claim job runs in a sub-space (e.g., 2-datacore)
+    that path falls outside; claiming would succeed but the agent cannot reach the
+    files it needs to fix -- it will always report "not repairable from this sandbox"
+    (L4 audit, 2026-10-17). Refuse here before spending a model call on work that
+    cannot succeed.
+    """
+    code_root = (payload or {}).get("code_root")
+    if not code_root:
+        return ""
+    try:
+        Path(code_root).resolve().relative_to(space.resolve())
+        return ""
+    except ValueError:
+        return f"code lives at {code_root!r}, outside this checkout ({space})"
+
 
 def run_task(title: str, route: str, cwd: Path, item_id: str = "", hops: int = 0, actor: str = "") -> tuple[bool, str, dict]:
     """Execute one item. Returns (ok, detail).
@@ -753,6 +772,13 @@ def main() -> int:
             print(f"REFUSED  [{route}] {title[:70]} -- side effects {effects}, needs a human")
             refused += 1
             continue
+
+        if route == "dev":
+            outside = _code_outside_space(item.payload or {}, space)
+            if outside:
+                print(f"REFUSED  [{route}] {title[:70]}\n         -> {outside}")
+                refused += 1
+                continue
 
         check = (item.payload or {}).get("check")
 
