@@ -1642,6 +1642,14 @@ class Hub:
         why = authorize(event, state, {e.hash: e for e in events}, self._policy_now())
         if why:
             raise HubRefused("not_authorized", why)
+        from .events import CHECKIN_TYPE
+        if event.type == CHECKIN_TYPE:
+            # A check-in names its writer's own agent and a time its own hlc and
+            # the hub's clock agree with (Codex re-audit, new defect 7).
+            from .presence import checkin_problem
+            why = checkin_problem(event, self.clock())
+            if why:
+                raise HubRefused("not_authorized", f"not a check-in: {why}")
 
     def _check_submission(self, event: Event, log_name: str, cfg: HubConfig, *, proposal: bool = False) -> None:
         if not isinstance(log_name, str) or not _NAME.fullmatch(log_name):
@@ -2716,6 +2724,19 @@ class Hub:
             "policy": self._policy_status(events),
         }
 
+    def presence(self, agents=()) -> dict:
+        """Who is checking in (ledger.presence), by the hub's clock."""
+        from .finality import effective_events
+        from .presence import presence
+        cfg = self.config()
+        events, _ = self._state()
+        # Through the one correction rule, as the standalone reader reads it
+        # (round-8 audit, F8-4): a rejected or reversed check-in is not one.
+        events = effective_events(events, self._fold_kwargs(cfg))
+        now = self.clock()
+        return {"hub": cfg.hub_id, "now_ms": now,
+                "agents": presence(events, now, agents=agents, registry_path=self.registry_path)}
+
     def _policy_status(self, events) -> dict:
         """Which policy is in force (the ledger's) and whether the policy this
         hub was started with differs from it: a policy file edited without the
@@ -2833,6 +2854,9 @@ class LocalTransport:
     def status(self) -> dict:
         return self._hub().status()
 
+    def presence(self, agents=()) -> dict:
+        return self._hub().presence(agents)
+
     def seal_request(self, req: dict) -> dict:
         return self._hub().seal_request(req)
 
@@ -2881,6 +2905,11 @@ class HttpTransport:
 
     def status(self) -> dict:
         return self._call("GET", self.prefix + "/status")
+
+    def presence(self, agents=()) -> dict:
+        import urllib.parse
+        query = "?" + urllib.parse.urlencode({"agents": ",".join(agents)}) if agents else ""
+        return self._call("GET", self.prefix + "/presence" + query)
 
     def seal_request(self, req: dict) -> dict:
         return self._call("POST", self.prefix + "/seal", req)
@@ -3033,6 +3062,12 @@ class HubWriter:
             # Known-invalid operations are refused BEFORE the local append
             # (amendment B): a signed event in my log cannot be taken back.
             raise HubRefused("hub_only_type", f"{type} is written only by the hub or the owner; not appended")
+        from .events import CHECKIN_TYPE
+        if type == CHECKIN_TYPE:
+            from .presence import payload_problem
+            why = payload_problem(self.actor, payload, self.clock())
+            if why:
+                raise HubRefused("bad_checkin", f"not a check-in: {why}; not appended")
         if type == "ledger.void":
             # CONTROL RECORDS ARE NEVER REVERSIBLE (owner, round 7): refused
             # before the local append when this copy holds the target, so no

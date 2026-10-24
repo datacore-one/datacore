@@ -1,0 +1,14 @@
+# Cadence for agent-presence-check.service: every 6 hours. TEMPLATE ONLY.
+# An agent whose check-ins stop is named at the first run after it has been
+# quiet for twice its interval (a 30-minute heartbeat: after one hour), so
+# within one cycle.
+
+[Unit]
+Description=Every 6 hours, check that each agent is checking in
+
+[Timer]
+OnCalendar=*-*-* 00/6:17:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
