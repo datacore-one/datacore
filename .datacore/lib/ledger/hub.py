@@ -3438,9 +3438,20 @@ class HubWriter:
             sealed.setdefault(getattr(e, "log", None) or e.actor, {})[e.seq] = e
         # The hub's seal itself must be the hub's, in an intact hub chain.
         hub_chain = sorted(sealed.get(hub_actor, {}).values(), key=lambda e: e.seq)
+        # LEGACY HISTORY (activation over existing logs, 2026-10-24): the owner's
+        # cutover manifest names each log's prefix that stays valid unsigned.
+        # Inside it an unsigned line is history, not a defect; it is still
+        # compared byte for byte below and by the manifest's head hash.
+        def legacy_top(chain: str) -> int:
+            entry = sauth.legacy.get(chain)
+            return entry[0] if entry else -1
         for p in check_events(list(enumerate(hub_chain, 1)), registry_path=self.registry_path, strict=True):
-            if p.kind != "clock":
-                problems.append(f"hub log {hub_actor}: {p.text}")
+            if p.kind == "clock":
+                continue
+            if (p.text.endswith("unsigned event") and p.line is not None
+                    and 0 < p.line <= len(hub_chain) and hub_chain[p.line - 1].seq <= legacy_top(hub_actor)):
+                continue
+            problems.append(f"hub log {hub_actor}: {p.text}")
         # My events, line for line, as I signed them. A different event at my
         # seq is a problem whether or not a seal covers it yet.
         mine_all: list[str] = []
@@ -3455,6 +3466,8 @@ class HubWriter:
                     pending.append(f"{chain} seq {e.seq} not sealed yet")
                 elif s is None:
                     problems.append(f"{chain} seq {e.seq}: missing from the sealed log")
+                elif not s.sig and e.seq <= legacy_top(chain):
+                    covered.add(e.hash)                 # legacy history, identical to mine
                 elif not verify(self.actor, canonical_bytes(event_body(s)), s.sig, registry_path=self.registry_path,
                                 at_ms=_physical_ms(s.hlc)):
                     problems.append(f"{chain} seq {e.seq}: my signature does not verify in the sealed log")
