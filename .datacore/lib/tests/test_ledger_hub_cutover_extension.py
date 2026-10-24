@@ -117,3 +117,18 @@ def test_a_boundary_never_moves_back(env):
     cfg = hubmod.load_config(space)
     auth = hubmod.authority(space, cfg, env.registry)
     assert isinstance(auth, Authority) and auth.legacy["wa"][0] == 2
+
+
+def test_a_running_hub_seals_over_the_extension_without_a_restart(env):
+    """Found live: the box daemon's hub kept sealing below the in-flight
+    events until it was restarted. A running hub takes the owner's extension
+    the moment it is in the ledger."""
+    space = _activated(env, "running")
+    hub = env.hub(space=space)
+    inflight = _inflight(env, space, "wa", 2)
+    after = _stamped(env, space, "wa", "after")
+    hub.seal()
+    hubmod.extend_cutover(space, by=OWNER, reason="in flight", keys_dir=env.keys_dir, registry_path=env.registry)
+    hub.seal()
+    seal = [e for e in read_events(space) if e.type == "ledger.seal"][-1]
+    assert seal.payload["watermarks"].get("wa", -1) >= after.seq, (seal.payload["watermarks"], inflight[-1].seq)
