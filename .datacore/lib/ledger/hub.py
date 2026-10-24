@@ -373,7 +373,8 @@ def _iso_now() -> str:
 
 def enable(space_dir, *, hub_id: str, grantor: str, owner: str, lease_ttl_s: int = DEFAULT_LEASE_TTL_S,
            cutover_hlc: str | None = None, space_id: str | None = None, keys_dir=None, registry_path=None,
-           clock_uncertainty_ms: int = DEFAULT_CLOCK_UNCERTAINTY_MS, policy=None) -> HubConfig:
+           clock_uncertainty_ms: int = DEFAULT_CLOCK_UNCERTAINTY_MS, policy=None,
+           retired_writers=None) -> HubConfig:
     """The owner opts a space in. `hub_id` is a stable name, not a hostname (E).
 
     Also the owner's approval of the cutover: it records the cutover manifest
@@ -390,7 +391,18 @@ def enable(space_dir, *, hub_id: str, grantor: str, owner: str, lease_ttl_s: int
     in the same record (`policy`: a `PolicyInputs`, a `ledger.policy.Policy`,
     or None for this installation's policy file and principal registry, read
     now). Every later change is the owner's `set_policy`.
+
+    RETIRED WRITERS (owner, 2026-10-24): `retired_writers` ({writer: why};
+    None: the `retired_writers` section of registry/principals.yaml) are
+    writers that stopped for good. They are not asked for readiness, the
+    record names them, and admission refuses anything they write after the
+    cutover. The owner and the grantor are never retired.
     """
+    retired = sorted(_retired_writers() if retired_writers is None else dict(retired_writers))
+    if owner in retired or grantor in retired:
+        raise ValueError("the owner and the grantor are never retired writers")
+    if not all(isinstance(w, str) and _NAME.fullmatch(w) for w in retired):
+        raise ValueError("retired writers must be lowercase names")
     if not _NAME.fullmatch(hub_id) or not _NAME.fullmatch(grantor) or not _NAME.fullmatch(owner or ""):
         raise ValueError("hub_id, grantor and owner must be lowercase names")
     if owner == grantor:
@@ -416,7 +428,7 @@ def enable(space_dir, *, hub_id: str, grantor: str, owner: str, lease_ttl_s: int
         # A MIXED-VERSION SPACE IS NOT SWITCHED ON (finding 17): every writer of
         # the space has declared, from its own host, that its code speaks this
         # protocol (`declare_ready`), bound to its log's current history.
-        missing = _not_ready(space_dir, logs, registry_path)
+        missing = [w for w in _not_ready(space_dir, logs, registry_path) if w not in retired]
         if missing:
             raise HubRefused("not_ready", "these writers have not declared support for ledger protocol "
                              f"{PROTOCOL}: {', '.join(missing)} (run `python3 -m ledger.hub ready` on each "
@@ -437,8 +449,21 @@ def enable(space_dir, *, hub_id: str, grantor: str, owner: str, lease_ttl_s: int
             "hub.enable", {"space": space_id, "hub": hub_id, "epoch": 0, "grantor": grantor, "manifest": logs,
                            "manifest_sha256": cfg.cutover_sha256, "lease_ttl_s": lease_ttl_s,
                            "clock_uncertainty_ms": clock_uncertainty_ms, "protocol": PROTOCOL,
-                           "legacy_reversals": reversals or [], "policy": inputs.to_record()})
+                           "legacy_reversals": reversals or [], "policy": inputs.to_record(),
+                           "retired_writers": retired})
     return cfg
+
+
+def _retired_writers() -> dict:
+    """The owner's list of writers that stopped for good: registry/principals.yaml `retired_writers`."""
+    import yaml
+    from .keys import principals_path
+    try:
+        d = yaml.safe_load(principals_path().read_text(encoding="utf-8")) or {}
+    except FileNotFoundError:
+        return {}
+    r = d.get("retired_writers") if isinstance(d, dict) else None
+    return {str(k): str(v) for k, v in r.items()} if isinstance(r, dict) else {}
 
 
 def set_policy(space_dir, policy, *, by: str, reason: str, keys_dir=None, registry_path=None) -> Event:
@@ -629,7 +654,9 @@ def authority(space_dir, cfg: HubConfig, registry_path=None) -> Authority:
                          "record)") from None
     return Authority(space_id=cfg.space_id, hub_id=cfg.hub_id, grantors=frozenset(ep.grantor for ep in eps),
                      legacy=legacy, registry_path=registry_path, owner=cfg.owner, epochs=eps,
-                     legacy_reversals=_legacy_reversals(enabled.get("legacy_reversals")), policy=initial)
+                     legacy_reversals=_legacy_reversals(enabled.get("legacy_reversals")), policy=initial,
+                     retired=frozenset(w for w in enabled.get("retired_writers") or []
+                                       if isinstance(w, str) and w not in (cfg.owner, *(ep.grantor for ep in eps))))
 
 
 def _legacy_reversals(raw) -> tuple:

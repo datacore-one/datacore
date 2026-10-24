@@ -149,6 +149,10 @@ class Authority:
     #: with the policy file it was started with. None: an Authority built by
     #: hand (the activation dry run), which folds with the policy it is given.
     policy: object = None
+    #: RETIRED WRITERS (owner, 2026-10-24): writers the owner's `hub.enable`
+    #: names as stopped for good. Their manifest history stays valid; nothing
+    #: they write after the cutover is admitted.
+    retired: frozenset = frozenset()
 
     def lease_grantors(self) -> dict:
         """The fold's explicit lease authority (ledger.fold.fold): {hub: {grantor: epoch}}."""
@@ -248,6 +252,9 @@ def check_event(event: Event, chain: str, prior: Event | None, auth: Authority, 
         raise Refusal("unknown_type", f"unknown event type {event.type!r}")
     if _writer_of(chain) != base_writer(event.actor):
         raise Refusal("foreign_log", f"{event.actor!r} may append only to its own log, not {chain!r}")
+    if _writer_of(chain) in auth.retired:
+        raise Refusal("retired_writer", f"{_writer_of(chain)!r} is retired by the owner's activation record; "
+                                        "it writes nothing after the cutover")
     if event.type in HUB_ONLY_TYPES and not (event.actor in auth.grantors and chain == event.actor) \
             and not as_proposal:
         raise Refusal("hub_only_type", f"{event.type} is written only by this space's grantor "

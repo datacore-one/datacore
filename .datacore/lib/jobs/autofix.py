@@ -204,12 +204,14 @@ def breaker(root: Path, job: str, fp: str, *, now_ms: float | None = None) -> di
     Items from before fingerprints existed are not counted: what they repaired
     cannot be told, so they neither open nor hold the breaker."""
     from ledger.fold import fold
-    from ledger.log import read_events
+    from ledger.hub import authoritative_events
 
     now = now_ms if now_ms is not None else time.time() * 1000.0
     try:
-        events = read_events(_space(root))
-        state = fold(events)
+        # A hub space is read through admission and policy, like every other
+        # decision reader: a writer's unadmitted event never opens or holds it.
+        events, kw = authoritative_events(_space(root))
+        state = fold(events, **kw)
     except Exception:  # noqa: BLE001 -- an unreadable ledger keeps today's behaviour
         return {"open": False, "attempts": 0, "usage_pause": False, "since": None}
     applied = {line.rsplit(" item.release: ", 1)[0]
