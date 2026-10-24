@@ -83,3 +83,17 @@ def test_the_owner_and_the_grantor_are_never_retired(env, who):
     space = _space(env, f"retired-{who}")
     with pytest.raises(ValueError):
         _enable(env, space, retired_writers={who: "no"})
+
+
+def test_the_owner_names_retired_writers_on_the_enable_command(env, monkeypatch):
+    import ledger.keys as keys
+    space = _space(env, "retired-cli")
+    hubmod.declare_ready(space, "own", keys_dir=env.keys_dir, registry_path=env.registry)
+    monkeypatch.setattr(keys, "DEFAULT_KEYS_DIR", env.keys_dir)
+    monkeypatch.setattr(keys, "DEFAULT_REGISTRY_PATH", env.registry)
+    import ledger.hub_policy as hp
+    monkeypatch.setattr(hp.PolicyInputs, "load", classmethod(lambda cls, p=None: TEST_POLICY))
+    assert hubmod.main(["enable", str(space), "--hub-id", HUB_ID, "--grantor", GRANTOR, "--owner", OWNER,
+                        "--retired", "wa=dormant since the import"]) == 0
+    cfg = hubmod.load_config(space)
+    assert hubmod.owner_records(space, cfg, env.registry)[0].payload["retired_writers"] == ["wa"]

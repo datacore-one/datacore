@@ -3568,6 +3568,8 @@ def main(argv=None) -> int:
     en.add_argument("--owner", required=True, help="the owner who signs the hub.enable record")
     en.add_argument("--lease-ttl-s", type=int, default=DEFAULT_LEASE_TTL_S)
     en.add_argument("--clock-uncertainty-ms", type=int, default=DEFAULT_CLOCK_UNCERTAINTY_MS)
+    en.add_argument("--retired", action="append", metavar="WRITER=WHY",
+                    help="a writer that stopped for good (repeatable; default: principals.yaml retired_writers)")
     pr = sub.add_parser("promote", help="move lease granting to another hub (owner; never automatic)")
     pr.add_argument("space")
     pr.add_argument("grantor")
@@ -3596,8 +3598,16 @@ def main(argv=None) -> int:
     sh.add_argument("space")
     a = ap.parse_args(argv)
     if a.cmd == "enable":
+        retired = None
+        if a.retired:
+            retired = {}
+            for r in a.retired:
+                w, _, why = r.partition("=")
+                if not why.strip():
+                    ap.error(f"--retired {r!r}: say why, as WRITER=WHY")
+                retired[w.strip()] = why.strip()
         cfg = enable(a.space, hub_id=a.hub_id, grantor=a.grantor, owner=a.owner, lease_ttl_s=a.lease_ttl_s,
-                     clock_uncertainty_ms=a.clock_uncertainty_ms)
+                     clock_uncertainty_ms=a.clock_uncertainty_ms, retired_writers=retired)
     elif a.cmd == "pools":
         cfg = enable_pools(a.space, on=not a.off)
     elif a.cmd == "promote":
