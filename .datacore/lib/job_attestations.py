@@ -32,7 +32,17 @@ def latest_jobs(root: Path, now: float, *, registry: Path | None = None) -> dict
     root = Path(root)
     spaces = [root, *sorted(p for p in root.glob('[0-9]*-*') if p.is_dir())]  # 10-… too (SPC-9)
     for space in spaces:
-        events = read_events(space)
+        # A HUB space's evidence is what admission lets in (Codex round 5, C6):
+        # an unsigned or foreign line in a writer's file is not an attestation.
+        # A space without a hub reads exactly as before.
+        from ledger.hub import HubError, authoritative_events
+        try:
+            events, kw = authoritative_events(space, read_events(space))
+        except (HubError, ValueError) as exc:
+            raise CorruptLogError(f'{space.name}: the hub authority does not verify ({exc})') from exc
+        # ... and a reversed or refused record is no evidence (Codex round 6, N4).
+        from ledger.finality import effective_events
+        evidence = effective_events(events, kw)
         chains: dict[str, list] = {}
         for event in events:
             chains.setdefault(event.log, []).append(event)
@@ -62,7 +72,7 @@ def latest_jobs(root: Path, now: float, *, registry: Path | None = None) -> dict
             chain.sort(key=lambda event: event.seq)
             if verify_events(list(enumerate(chain, 1))):
                 raise CorruptLogError('invalid verification event chain')
-        for event in events:
+        for event in evidence:
             if event.type != 'metric.attest':
                 continue
             payload = event.payload

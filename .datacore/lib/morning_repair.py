@@ -440,7 +440,8 @@ def _dead_lettered(iid: str) -> bool:
         from ledger.fold import fold
         from ledger.log import read_events
         from jobs.autofix import _space
-        item = fold(read_events(_space(ROOT))).items.get(iid)
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        item = authoritative_state(_space(ROOT)).items.get(iid)
     except Exception:  # noqa: BLE001 -- unreadable: the 24-hour rule still catches it tomorrow
         return False
     return bool(item) and item.status == "dismissed" and item.closed_kind == "dropped"

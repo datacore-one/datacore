@@ -362,8 +362,17 @@ class RotationRefused(ValueError):
 
 def recorded_rotations(space_dir: Path, actor: str) -> list:
     """The `key.rotate` events for `actor` in a space's ledger, oldest first."""
+    from .hub import authoritative_events
     from .log import read_events
-    return [e for e in read_events(Path(space_dir))
+    # A hub space: only admitted records count (round 6, decision-reader guard).
+    events, kw = authoritative_events(Path(space_dir), read_events(Path(space_dir)))
+    # ... and through the ONE correction rule (Codex final audit, F4): a
+    # rejected or reversed record is no evidence. (A rotation is a control
+    # record and is never reversible, owner round 7; the filter is what keeps
+    # this reader in step with `ledger.finality` whatever that list says.)
+    from .finality import effective_events
+    events = effective_events(events, kw)
+    return [e for e in events
             if e.type == "key.rotate" and isinstance(e.payload, dict) and e.payload.get("actor") == actor]
 
 

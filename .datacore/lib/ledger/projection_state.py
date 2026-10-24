@@ -240,14 +240,16 @@ def sync_generated(space, state, actor, dry_run=False):
             event = log.append(kind, payload)
             appended.append((payload['id'], event.hash))
             if expected is not None:
-                item = fold(read_events(space)).items[payload['id']]
+                from .hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+                item = authoritative_state(space).items[payload['id']]
                 if event.hash in item.edit_conflicts:
                     raise ProjectionConflict('concurrent ledger edit refused the reviewed decision; reconcile its retained event')
 
         for payload in updates:
             _emit('item.update', payload)
         for identity, kind in dismissals:
-            current_item = fold(read_events(space)).items[identity]
+            from .hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+            current_item = authoritative_state(space).items[identity]
             _emit('item.dismiss', conditional_payload(current_item, {
                 'kind': kind, 'reason': 'authored terminal transition in generated Org'}, terminal=True,
                 version=2 if strict else 1))
@@ -278,7 +280,8 @@ def _advance_base(space, current_text, appended):
     from .log import read_events
     if load_base(space) is None:
         return  # no base yet: its first adoption is the projector's decision, not this one's
-    items = fold(read_events(space)).items
+    from .hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    items = authoritative_state(space).items
     if any(event_hash in (items[identity].edit_conflicts or {}) for identity, event_hash in appended):
         return
     path = Path(space) / STATE

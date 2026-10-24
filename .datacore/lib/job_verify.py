@@ -460,7 +460,8 @@ def _close_through_ledger(task_id: str) -> bool | None:
             return None
         from ledger.fold import fold
         from ledger.log import read_events
-        item = fold(read_events(space)).items.get(task_id)
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        item = authoritative_state(space).items.get(task_id)
         if item is None:
             # Still a capture the import has not admitted: it sits in the
             # inbox, an authored file, where the adapter may close it.

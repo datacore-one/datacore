@@ -161,7 +161,8 @@ def cmd_seed(args) -> int:
 def _seeded(space: Path, day: str):
     from ledger.fold import fold
     from ledger.log import read_events
-    state = fold(read_events(space))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space)
     return {iid: it for iid, it in state.items.items()
             if iid.startswith(f"{MARK}-{day}-")}
 

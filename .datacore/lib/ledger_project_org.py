@@ -84,7 +84,8 @@ def rendered(space: Path, *, as_of: float, state=None, remember: bool = False) -
     `remember` is the header's flip-time side effect; only the writer sets it.
     """
     if state is None:
-        state = fold(read_events(space))
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        state = authoritative_state(space)
     text = project(state, space=space.name, as_of=as_of).text
     return _with_org_header(space, space / ORG, text, remember=remember)
 

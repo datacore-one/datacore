@@ -1342,15 +1342,14 @@ def check_finality(rep: Report) -> None:
     # sequencer's claim disagrees with the events on this machine.
     sys.path.insert(0, str(LIB))
     try:
-        from ledger.log import read_events
-        from ledger.seal import verify_seal
+        from ledger.hub import seal_status
     except Exception as exc:  # noqa: BLE001
         rep.add("0042", "seals verify", None, f"import failed: {exc}")
         return
     bad, sealed, unsealed = [], 0, 0
     for s_ in spaces():
         try:
-            ok, _d = verify_seal(read_events(s_))
+            ok, _d = seal_status(s_)          # through admission (round 5, amendment 5)
         except Exception:  # noqa: BLE001
             continue
         if ok is True:

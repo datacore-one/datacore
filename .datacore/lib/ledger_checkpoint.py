@@ -191,7 +191,7 @@ def _fingerprint(state, space_filetags: set | None = None,
         # 0-personal as "altered" by a restore that preserved them exactly
         # (2026-08-30), the same false-alarm class as the timestamp and
         # filetag asymmetries above. A missing state MEANS TODO here.
-        rendered_state = "REVIEW" if item.status == "completed" else (p.get("state") or "TODO")
+        rendered_state = "REVIEW" if item.status in ("completed", "submitted") else (p.get("state") or "TODO")
         org = p.get('org') or {}
         created = org.get('created')
         genesis = p.get('genesis') or {}
@@ -217,7 +217,8 @@ def write(space: Path) -> Path:
     from ledger.events import to_line
     from ledger.verify import verify_space
     events = read_events(space)
-    state = fold(events)
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space, events)    # the snapshot below still keeps every event
     text = project(state, space=space.name).text
     dest, snapshot_path = checkpoint_paths(space)
     # Telemetry chains stay out (LED-8): the fold ignores them and git already
@@ -364,7 +365,8 @@ def round_trip(state, space_name: str, space_ft: set | None = None):
         (scratch / "org").mkdir()
         (scratch / "org" / "next_actions.org").write_text(fresh, encoding="utf-8")
         import_space(scratch, org_file=scratch / "org" / "next_actions.org")
-        restored = _fingerprint(fold(read_events(scratch)), space_ft, space=space_name)
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        restored = _fingerprint(authoritative_state(scratch), space_ft, space=space_name)
     return live, restored, fresh
 
 
@@ -400,7 +402,8 @@ def verify(space: Path) -> tuple[bool, str]:
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         return False, f'saved checkpoint cannot be restored ({type(exc).__name__})'
     detail = f'{len(restored.items)} item(s), including full payloads and history, restored from saved checkpoint'
-    if restored.state_root() != fold(read_events(space)).state_root():
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    if restored.state_root() != authoritative_state(space).state_root():
         detail += ' [valid older restore point; current ledger has changed — run: write]'
     return True, detail
 

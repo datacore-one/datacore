@@ -156,7 +156,9 @@ def materialize(
 
 
 def _materialize_locked(items, space_dir, actor, policy) -> MaterializeResult:
-    state = fold(read_events(space_dir))
+    from ledger.hub import authoritative_events  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    events, fold_inputs = authoritative_events(space_dir)
+    state = fold(events, **fold_inputs)
     seen_ids: set[str] = set(state.items.keys())
 
     log = EventLog(space_dir, actor)

@@ -129,7 +129,8 @@ def _sig_ok(e) -> bool:
     from ledger.events import body_dict, canonical_bytes
     from ledger.keys import verify as verify_sig
     try:
-        body = body_dict(e.seq, e.hlc, e.actor, e.type, e.payload, e.prev)
+        body = body_dict(e.seq, e.hlc, e.actor, e.type, e.payload, e.prev, hub=getattr(e, "hub", "") or "",
+                         domain=getattr(e, "domain", "") or "")
         return bool(e.sig) and verify_sig(e.actor, canonical_bytes(body), e.sig)
     except Exception:  # noqa: BLE001 -- an unverifiable record is not a signed one
         return False

@@ -120,7 +120,8 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
     from ledger_project_org import phase
     if phase(space) == 1:
         from ledger.projection_state import sync_generated
-        return sync_generated(space, fold(read_events(space)), actor or _this_actor(), dry_run)
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        return sync_generated(space, authoritative_state(space), actor or _this_actor(), dry_run)
     # File-level tags, parsed the way genesis does. Items created through the
     # adapter/ingest never recorded `filetags`, while genesis-imported ones
     # do — checkpoint-verify then compares unlike data and reports the same
@@ -136,7 +137,8 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
     except OSError:
         pass
     ws = SafeOrgWorkspace(); ws.load(str(org_file))
-    state = fold(read_events(space))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space)
     log = None
     dismissed = updated = 0
     for node in ws.all_nodes():
@@ -494,7 +496,8 @@ def _projected_duplicates(space: Path, files: list[Path]) -> set[str]:
         return set()
     from ledger.fold import fold
     from ledger.log import read_events
-    known = set(fold(read_events(space)).items)
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    known = set(authoritative_state(space).items)
     return {i for i in shared if i in known}
 
 

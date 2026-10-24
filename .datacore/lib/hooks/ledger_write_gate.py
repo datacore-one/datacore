@@ -45,6 +45,11 @@ from ledger.events import body_dict, canonical_bytes, compute_hash  # noqa: E402
 FUTURE_TOLERANCE_MS = 10 * 60 * 1000
 PATHSPEC = ".datacore/events/*.jsonl"
 FIELDS = {"seq", "hlc", "actor", "type", "payload", "prev", "hash", "sig"}
+#: Optional envelope fields of a hub space (DIP-0034 October amendment C, I):
+#: present only when set, inside the hashed and signed body. A line with them
+#: was refused as "not an event envelope", so no writer in a hub space could
+#: publish its own log through git (audit 2026-10-18, finding 15).
+OPTIONAL_FIELDS = {"hub", "domain"}
 ZERO = "0" * 40
 _RUN_SUFFIX = re.compile(r"-run-\d{4}-\d{2}-\d{2}$")
 
@@ -111,7 +116,8 @@ def check_change(path: str, old: bytes, new: bytes | None, now_ms: int | None = 
         except ValueError as exc:
             errors.append(f"{path} line {n}: not JSON ({exc})")
             continue
-        if not isinstance(d, dict) or set(d) != FIELDS:
+        if not isinstance(d, dict) or not (FIELDS <= set(d) <= FIELDS | OPTIONAL_FIELDS) or any(
+                not (isinstance(d[k], str) and d[k]) for k in OPTIONAL_FIELDS & set(d)):
             errors.append(f"{path} line {n}: not an event envelope (fields {sorted(d) if isinstance(d, dict) else type(d).__name__})")
             continue
         if raw != canonical_bytes(d):
@@ -124,7 +130,8 @@ def check_change(path: str, old: bytes, new: bytes | None, now_ms: int | None = 
         if d["prev"] != prev_hash:
             errors.append(f"{path} line {n}: prev does not link to the previous event's hash")
         try:
-            body = body_dict(d["seq"], d["hlc"], d["actor"], d["type"], d["payload"], d["prev"])
+            body = body_dict(d["seq"], d["hlc"], d["actor"], d["type"], d["payload"], d["prev"],
+                             hub=d.get("hub") or "", domain=d.get("domain") or "")
             if compute_hash(body) != d["hash"]:
                 errors.append(f"{path} line {n}: hash does not match the event body")
         except (TypeError, ValueError) as exc:

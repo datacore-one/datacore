@@ -480,9 +480,10 @@ def delegate(job, failures: list[str], rec: dict, *, root: Path,
     # allowance -- on 2026-09-27..30 winston spent 30 of its 50 a day on repeats
     # of four ids, and every new repair after that was refused.
     try:
-        from ledger.fold import fold as _fold
-        from ledger.log import read_events as _read_events
-        if (space / ".datacore" / "events").is_dir() and iid in _fold(_read_events(space)).items:
+        # The space's authoritative state: an inadmissible row in a hub space is
+        # not an existing repair (Codex round-3 verdict, autofix_reader).
+        from ledger.hub import authoritative_state
+        if (space / ".datacore" / "events").is_dir() and iid in authoritative_state(space).items:
             return "exists", f"{iid} is already in the ledger"
     except Exception:  # noqa: BLE001 -- an unreadable ledger falls through to the old path
         pass
@@ -615,12 +616,19 @@ def repairs(root: Path) -> list[dict]:
     meanings; "dropped" is the one that means the operator now has to look.
     """
     from ledger.fold import fold
-    from ledger.log import read_events
 
     space = _space(root)
     try:
-        events = read_events(space)
-        state = fold(events)
+        # Admitted events and their fold (Codex re-audit finding 2; round-3
+        # verdict): the claim/release scan below reads the same events as the
+        # state, so a forged release in a hub space is no "waiting for you".
+        from ledger.hub import authoritative_events
+        from ledger.finality import effective_events
+        events, kw = authoritative_events(space)
+        state = fold(events, **kw)
+        # The scan below reads events with effect only (round 8): a release the
+        # hub kept as a rejected proposal is no "waiting for you".
+        events = effective_events(events, kw)
     except Exception:  # noqa: BLE001 -- an unreadable ledger is not an escalation
         return []
     # WAITING FOR YOU (NS-9): the repairer finished and released the item as

@@ -91,6 +91,83 @@ EVENT_TYPES = frozenset(
 )
 
 
+# ── HUB (DIP-0034 October 2026 amendment, sections B and E) ─────────────────
+# Kept in one block so parallel additions to EVENT_TYPES above merge cleanly.
+#
+# Leases are written ONLY by the hub (ledger.hub): item.lease grants an item to
+# a holder until `expires_ms`, item.lease.renew extends it, and
+# item.lease.conflict makes a conflict the fold found durable and visible. The
+# fold rule (earliest hub sequence wins) is in ledger.fold.
+#
+# `hub` is an optional ENVELOPE field: a stable hub id, never a hostname. It is
+# part of the hashed and signed body when present and absent from both when not,
+# so every event written before it existed keeps its bytes, hash and signature
+# (invariant 6: readers ignore what is absent).
+#
+# `domain` (audit finding 6, 2026-10-18) is the same kind of optional envelope
+# field: `ledger/2 space=<id> hub=<id> log=<chain>`, stamped by every writer
+# in a hub space. It is inside the hashed and signed body, so a signature binds
+# the protocol version, the space, the hub and the exact log it was written
+# for: a captured event cannot be replayed into another space, another hub or
+# another of its writer's logs. Absent (protocol 1) on every older event, whose
+# bytes therefore do not change. ledger.hub_admission checks it.
+#
+# item.lease.expire (audit finding 9) ends one lease attempt explicitly,
+# written by the grantor before any regrant; it records the holder-log
+# frontier the grantor held, so a result admitted after it is told apart.
+HUB_EVENT_TYPES = frozenset({"item.lease", "item.lease.renew", "item.lease.expire", "item.lease.conflict"})
+#
+# THE OWNER'S RECORDS (audit finding 4). `hub.enable` (epoch 0: the grantor,
+# the cutover manifest) and `hub.promote` (epoch n+1: the new grantor, the
+# predecessor's fence and frontier) are signed by the space's owner in the
+# owner's own log; who grants is derived from them, never from a config file.
+# `hub.fence` is the grantor's own statement that it stopped: written in its
+# log, it is the last event of its epoch that counts.
+#
+# `hub.resolve` (Codex re-audit, new defect 4): the owner's decision on an
+# expired lease attempt whose holder never came back to say what happened. It
+# frees the item for another grant; nothing else does but the holder's own
+# release or result naming the attempt.
+OWNER_EVENT_TYPES = frozenset({"hub.enable", "hub.promote", "hub.resolve", "policy.set"})
+#
+# `ledger.reject` (audit finding 11): the grantor's record that a signed event
+# already in a writer's log is a REJECTED PROPOSAL -- kept so the chain stays
+# continuous, with no effect on state, until an authorised voider cancels it
+# with `ledger.void`. Nothing is deleted or re-signed.
+#
+# `hub.start` (round 5, amendment 7): the grantor's own statement, in its own
+# log, that it began serving this space for an epoch. Written durably before
+# its first answer, so a copy of the space taken at any later moment shows
+# that this grantor has served, whatever the writers' clocks say: a hub
+# without its private state that finds it runs the owner-cleared barrier, and
+# a genuine first start (none there) does not. Folds to nothing.
+#
+# `ledger.compensate` (round 5, owner decision 2026-10-23): a FORWARD correction
+# of an event a seal already covers. A sealed outcome never changes, so an
+# error found after the seal is not reversed: this record points to the
+# original (log, seq, hash) with a reason, and carries its own receipt; the
+# original stays confirmed. The fold gives it no effect on item state; an
+# effect in the world is a new action recorded as its own event.
+#
+# `ledger.admit` (round 6): the grantor's record that it admitted a correction
+# -- a reversal (`ledger.void`) inside the correction window by the hub's own
+# clock, or a valid `ledger.compensate` -- naming it, its original and the
+# hub's admission times. In a hub space a correction takes effect only when a
+# grantor's `ledger.admit` names it and no `ledger.reject` does
+# (ledger.finality), so every replica decides it from the same records.
+EVENT_TYPES = EVENT_TYPES | HUB_EVENT_TYPES | OWNER_EVENT_TYPES | {"hub.fence", "hub.start", "ledger.reject",
+                                                                   "ledger.compensate", "ledger.admit"}
+
+# ── ROLE POOLS (DIP-0034 October 2026 amendment, section G) ─────────────────
+# The role is named in the task (owner decision 2026-10-18); who may pick up an
+# unaddressed role task is decided by the hub, not by a membership record. The
+# one pool fact, in a hub's OWN log and written only by that hub:
+#   pool.budget  {role, space, cents_per_day} -- the role's daily spending cap
+# A writer submitting it is refused (ledger.hub HUB_ONLY_TYPES).
+POOL_EVENT_TYPES = frozenset({"pool.budget"})
+EVENT_TYPES = EVENT_TYPES | POOL_EVENT_TYPES
+
+
 @dataclass
 class Event:
     seq: int
@@ -101,15 +178,21 @@ class Event:
     prev: str
     hash: str
     sig: str
+    #: The hub this event belongs to ("" = none; see the HUB block above).
+    hub: str = ""
+    #: The signing domain ("" = protocol 1, none; see the HUB block above).
+    domain: str = ""
 
 
-def body_dict(seq: int, hlc: str, actor: str, type: str, payload: dict, prev: str) -> dict:
+def body_dict(seq: int, hlc: str, actor: str, type: str, payload: dict, prev: str,
+              hub: str = "", domain: str = "") -> dict:
     """Assemble the hashable body of an event (everything but `hash`/`sig`).
 
     `prev` is included so `compute_hash` over this body chains to the prior
-    event -- that is the entire mechanism of the hash chain.
+    event -- that is the entire mechanism of the hash chain. `hub` enters the
+    body only when set, so an event without one hashes exactly as before.
     """
-    return {
+    body = {
         "seq": seq,
         "hlc": hlc,
         "actor": actor,
@@ -117,6 +200,20 @@ def body_dict(seq: int, hlc: str, actor: str, type: str, payload: dict, prev: st
         "payload": payload,
         "prev": prev,
     }
+    if hub:
+        body["hub"] = hub
+    if domain:
+        body["domain"] = domain
+    return body
+
+
+def event_body(e) -> dict:
+    """The hashable body of an existing event (an `Event` or a parsed line dict)."""
+    if isinstance(e, dict):
+        return body_dict(e["seq"], e["hlc"], e["actor"], e["type"], e["payload"], e["prev"],
+                         hub=e.get("hub") or "", domain=e.get("domain") or "")
+    return body_dict(e.seq, e.hlc, e.actor, e.type, e.payload, e.prev, hub=getattr(e, "hub", "") or "",
+                     domain=getattr(e, "domain", "") or "")
 
 
 def canonical_bytes(d: dict) -> bytes:
@@ -132,8 +229,15 @@ def compute_hash(body: dict) -> str:
 
 
 def to_line(e: Event) -> str:
-    """Serialize an Event to a single canonical-JSON line (no trailing newline)."""
-    return canonical_bytes(asdict(e)).decode("utf-8")
+    """Serialize an Event to a single canonical-JSON line (no trailing newline).
+
+    An event without a hub serializes exactly as it did before the field existed.
+    """
+    d = asdict(e)
+    for optional in ("hub", "domain"):
+        if not d.get(optional):
+            d.pop(optional, None)
+    return canonical_bytes(d).decode("utf-8")
 
 
 def from_line(s: str) -> Event:
