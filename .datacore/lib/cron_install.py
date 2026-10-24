@@ -81,6 +81,10 @@ def invocation(line: str, *, reject_compound: bool = False) -> tuple[str, ...] |
     # is the difference (board D14, 2026-10-01).
     if program == 'promise_nightly.py':
         return (identity, ' '.join(args))
+    # Jimo's loop and fair-control instances share one wrapper; the instance
+    # and the job (`loop tick`, `ctrl dream`) are the job.
+    if program == 'run-instance.sh':
+        return (identity, ' '.join(args[:2]))
     if program == 'job_verify.py':
         return (identity, args[args.index('--machine') + 1] if '--machine' in args and args.index('--machine') + 1 < len(args) else '')
     return (identity,)
