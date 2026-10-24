@@ -148,3 +148,53 @@ def test_an_escalation_is_not_handed_back_to_miles(tmp_path, monkeypatch):
     monkeypatch.setattr(M, "delegate", lambda f, day: delegated.append(f["id"]) or "x")
     M.sweep()
     assert delegated == []
+
+
+def test_recheck_closes_repaired_ledger_item_and_leaves_failing_item_open(tmp_path, monkeypatch):
+    """recheck() dismisses the ledger item of a finding it no longer sees at 03:30,
+    and leaves the item of a still-failing finding open (class B, audit 2026-10-17)."""
+    from ledger.fold import fold
+    from ledger.log import EventLog, read_events
+
+    # set up a minimal space with two repair items
+    space = tmp_path / "2-datacore"
+    (space / ".datacore" / "events").mkdir(parents=True)
+    writer = EventLog(space, "morning-repair")
+    writer.append("item.create", {
+        "id": "repair-cadence-foo-20261001", "title": "Repair: cadence foo",
+        "assignee": "miles", "route": "dev", "morning_repair": True,
+        "body": "Done means 03:30 no longer finds it.", "requested_by": "morning-repair"})
+    writer.append("item.create", {
+        "id": "repair-unit-bar-20261001", "title": "Repair: unit bar failed",
+        "assignee": "miles", "route": "dev", "morning_repair": True,
+        "body": "Done means 03:30 no longer finds it.", "requested_by": "morning-repair"})
+
+    monkeypatch.setattr(M, "ROOT", tmp_path)
+    monkeypatch.setattr(M, "STATE", tmp_path / "state")
+    monkeypatch.setattr(M, "FRAGMENTS", tmp_path / "frag")
+    monkeypatch.setattr(M, "_pull_request", lambda iid: (True, ""))
+    monkeypatch.setattr(M, "_dead_lettered", lambda iid: False)
+    monkeypatch.setattr(M, "_alert_group", lambda text: None)
+
+    day = M.datetime.now(M.timezone.utc).date().isoformat()
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / f"{day}.json").write_text(json.dumps({"findings": [
+        {"id": "cadence-foo", "kind": "cadence", "title": "cadence foo is red",
+         "item": "repair-cadence-foo-20261001"},
+        {"id": "unit-bar", "kind": "unit", "title": "unit bar failed",
+         "item": "repair-unit-bar-20261001"},
+    ]}))
+
+    # at 03:30: cadence-foo is gone; unit-bar still failing
+    monkeypatch.setattr(M, "findings", lambda run_v2=True: [
+        {"id": "unit-bar", "kind": "unit", "title": "unit bar failed", "evidence": "still dead"}
+    ])
+
+    M.recheck()
+
+    state = fold(read_events(space))
+    assert state.items["repair-cadence-foo-20261001"].status == "dismissed", \
+        "repaired finding's item must be dismissed at 03:30"
+    assert state.items["repair-cadence-foo-20261001"].closed_kind == "done"
+    assert state.items["repair-unit-bar-20261001"].status != "dismissed", \
+        "still-failing finding's item must remain open"
