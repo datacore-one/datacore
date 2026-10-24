@@ -25,8 +25,9 @@ def test_status_reuses_the_build_until_a_log_changes(env, monkeypatch):
     assert len(calls) == 1, "an unchanged space was rebuilt"
     assert first["watermarks"] == second["watermarks"]
     writer.append("item.create", {"id": "t2", "title": "two"})
+    calls.clear()                      # the append itself reads the state
     third = hub.status()
-    assert len(calls) == 2 and third["watermarks"] != first["watermarks"]
+    assert len(calls) == 1 and third["watermarks"] != first["watermarks"]
 
 
 def test_the_cached_report_expires(env, monkeypatch):

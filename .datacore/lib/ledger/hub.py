@@ -1768,12 +1768,14 @@ class Hub:
         statement = {**statement, "signer": self.actor, "ts_ms": self.clock()}
         return {**statement, "sig": sign(self.actor, canonical_bytes(statement), keys_dir=self.keys_dir)}
 
-    def frontiers(self) -> dict:
+    def frontiers(self, events=None) -> dict:
         """A hub-signed statement of every log's frontier this hub holds
         ({log: {seq, head}}): what a replaying writer compares its own log
-        with before it skips anything (audit finding 11)."""
+        with before it skips anything (audit finding 11). `events`: the
+        admitted events when the caller already built them."""
         cfg = self.config()
-        events, _ = self._state()
+        if events is None:
+            events, _ = self._state()
         logs: dict = {}
         for e in events:
             chain = getattr(e, "log", None) or e.actor
@@ -2795,22 +2797,53 @@ class Hub:
             return publish_own_log(self.space_dir, [self.log.path, self.log.telemetry_path], message)
 
     # ── reports ────────────────────────────────────────────────────────────
+    #: How long the status report may reuse its build while no log changes.
+    STATUS_CACHE_MS = 60_000
+
+    def _logs_signature(self) -> tuple:
+        """(path, size, mtime) of every log and the hub config: what a build reads from disk."""
+        sig = []
+        for sub in ("events", "telemetry"):
+            d = Path(self.space_dir) / ".datacore" / sub
+            if d.is_dir():
+                for f in sorted(d.glob("*.jsonl")):
+                    st = f.stat()
+                    sig.append((sub, f.name, st.st_size, st.st_mtime_ns))
+        cfgp = Path(self.space_dir) / CONFIG
+        if cfgp.exists():
+            st = cfgp.stat()
+            sig.append(("config", st.st_size, st.st_mtime_ns))
+        return tuple(sig)
+
     def status(self) -> dict:
+        """The hub's report. The file-derived part (watermarks, frontiers,
+        leases, policy) is reused while no log changes, for at most
+        STATUS_CACHE_MS (1-datafund took 19 s to rebuild, 2026-10-24); the
+        time-dependent fields are computed on every call."""
         from .fold import lease_live
         from .seal import watermarks
         cfg = self.config()
-        events, state = self._state()
         now = self.clock()
+        sig = self._logs_signature()
+        cached = getattr(self, "_status_cache", None)
+        if cached is None or cached[0] != sig or now - cached[1] > self.STATUS_CACHE_MS:
+            events, state = self._state()
+            built = {"watermarks": watermarks(events), "frontiers": self.frontiers(events),
+                     "leases": {iid: (it.lease_holder, it.lease_expires_ms, it)
+                                for iid, it in sorted(state.items.items()) if it.lease_holder is not None},
+                     "policy": self._policy_status(events)}
+            cached = (sig, now, built)
+            self._status_cache = cached
+        built = cached[2]
         return {
             "hub": cfg.hub_id, "actor": self.actor, "grantor": cfg.grantor,
             "active": cfg.grantor == self.actor and self._lock_fh is not None and not self.closed,
             "started_ms": self.started_ms, "now_ms": now,
-            "watermarks": watermarks(events),
-            "frontiers": self.frontiers(),
-            "leases": {iid: {"holder": it.lease_holder, "expires_ms": it.lease_expires_ms,
-                             "live": lease_live(it, now)}
-                       for iid, it in sorted(state.items.items()) if it.lease_holder is not None},
-            "policy": self._policy_status(events),
+            "watermarks": built["watermarks"],
+            "frontiers": built["frontiers"],
+            "leases": {iid: {"holder": h, "expires_ms": exp, "live": lease_live(it, now)}
+                       for iid, (h, exp, it) in built["leases"].items()},
+            "policy": built["policy"],
         }
 
     def presence(self, agents=()) -> dict:
