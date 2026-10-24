@@ -488,6 +488,56 @@ def set_policy(space_dir, policy, *, by: str, reason: str, keys_dir=None, regist
         POLICY_TYPE, {"space": cfg.space_id, "hub": cfg.hub_id, "policy": inputs.to_record(), "reason": str(reason)})
 
 
+def extend_cutover(space_dir, *, by: str, reason: str, keys_dir=None, registry_path=None) -> Event | None:
+    """The owner extends the cutover over writes in flight at activation (2026-10-24).
+
+    Activation reaches each host by git; until a writer's host has pulled it,
+    the writer appends with no hub stamp, and admission refuses the first such
+    event and so every later one in that log. This records, per log, the run of
+    UNSTAMPED events directly after the current boundary, each verifying as
+    signed by its own writer (the run stops at the first stamped, unsigned,
+    wrongly signed, broken or retired-writer event), as an owner-signed
+    `hub.cutover`. None when nothing is in flight."""
+    from actor_identity import base_writer
+    from .hub_admission import _writer_of
+    from .keys import verify
+    from .log import EventLog, read_events
+    if not reason or not str(reason).strip():
+        raise ValueError("an extension says why")
+    cfg = load_config(space_dir)
+    if cfg is None:
+        raise HubRefused("hub_off", f"{space_dir} has not opted in to a hub ({CONFIG})")
+    if by != cfg.owner:
+        raise HubRefused("not_authorized", f"only the space's owner ({cfg.owner}) extends its cutover")
+    auth = authority(space_dir, cfg, registry_path)
+    chains: dict = {}
+    for e in read_events(Path(space_dir)):
+        if type(e.seq) is int:
+            chains.setdefault(getattr(e, "log", None) or e.actor, {})[e.seq] = e
+    logs = {}
+    for chain, by_seq in sorted(chains.items()):
+        writer = base_writer(_writer_of(chain))
+        if writer in auth.retired:
+            continue
+        top, prev = auth.legacy.get(chain, (-1, GENESIS))
+        head = None
+        seq = top + 1
+        while seq in by_seq:
+            e = by_seq[seq]
+            if (e.hub or e.domain or e.prev != prev or compute_hash(event_body(e)) != e.hash
+                    or base_writer(e.actor) != writer or not e.sig
+                    or not verify(e.actor, canonical_bytes(event_body(e)), e.sig, registry_path=registry_path,
+                                  at_ms=_physical_ms(e.hlc))):
+                break
+            head, prev, seq = e, e.hash, seq + 1
+        if head is not None:
+            logs[chain] = {"seq": head.seq, "head": head.hash}
+    if not logs:
+        return None
+    return EventLog(Path(space_dir), by, keys_dir=keys_dir, registry_path=registry_path, sign=True).append(
+        "hub.cutover", {"space": cfg.space_id, "hub": cfg.hub_id, "logs": logs, "reason": str(reason)})
+
+
 READY_DIR = ".datacore/hub-ready"
 
 
@@ -637,6 +687,18 @@ def authority(space_dir, cfg: HubConfig, registry_path=None) -> Authority:
     or ignored (its `grantor`)."""
     legacy = load_manifest(space_dir, cfg)
     records = owner_records(space_dir, cfg, registry_path)
+    # IN-FLIGHT WRITES (owner, 2026-10-24): each `hub.cutover` extends a log's
+    # legacy prefix to the head it names; a boundary never moves back.
+    for r in records:
+        if r.type != "hub.cutover":
+            continue
+        for chain, v in ((r.payload or {}).get("logs") or {}).items():
+            try:
+                seq, head = int(v["seq"]), str(v["head"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if seq > legacy.get(chain, (-1, ""))[0]:
+                legacy[chain] = (seq, head)
     eps = epochs_of(records)
     enabled = records[0].payload
     if enabled.get("manifest_sha256") != cfg.cutover_sha256 or enabled.get("manifest") != cfg.cutover_logs:
@@ -3607,6 +3669,10 @@ def main(argv=None) -> int:
     po.add_argument("space")
     po.add_argument("--by", required=True)
     po.add_argument("--reason", required=True)
+    xc = sub.add_parser("extend-cutover", help="cover writes in flight at activation (owner)")
+    xc.add_argument("space")
+    xc.add_argument("--by", required=True)
+    xc.add_argument("--reason", required=True)
     sh = sub.add_parser("show", help="print a space's hub config")
     sh.add_argument("space")
     a = ap.parse_args(argv)
@@ -3628,6 +3694,10 @@ def main(argv=None) -> int:
                       never_served=a.never_served)
     elif a.cmd == "ready":
         print(json.dumps(declare_ready(a.space, a.actor), indent=2, sort_keys=True))
+        return 0
+    elif a.cmd == "extend-cutover":
+        ev = extend_cutover(a.space, by=a.by, reason=a.reason)
+        print(json.dumps(_event_dict(ev) if ev is not None else {"extended": False}, indent=2, sort_keys=True))
         return 0
     elif a.cmd == "set-policy":
         print(json.dumps(_event_dict(set_policy(a.space, None, by=a.by, reason=a.reason)), indent=2, sort_keys=True))
