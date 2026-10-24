@@ -50,12 +50,15 @@ MERGE = [
     ".datacore/registry/principals.yaml",
     "install.yaml",
 ]
-NESTED = {"roles"}   # mappings merged key by key rather than as a whole
+NESTED = {"roles", "verify_keys"}   # mappings merged key by key rather than as a whole
 # Only these keys ever travel; a host's own modules, spaces, servers stay its own.
 ALLOWED = {
     ".datacore/registry/infrastructure.yaml": {"roles"},
     ".datacore/registry/principals.yaml": {"sprint_sync", "delegation_exercise", "cross_model_audit",
-                                           "testnet_dashboard"},
+                                           "testnet_dashboard",
+                                           # a writer's PROVEN public key (ledger_keys_collect); a host's
+                                           # own entry is never changed, a missing one is added
+                                           "verify_keys"},
     "install.yaml": {"roles"},
 }
 SPACE_ROLES_FILE = "install.yaml"   # its role values name space folders; keep only those the host has
