@@ -82,7 +82,7 @@ echo "$staged" | while IFS= read -r file; do
   blob=$(git show ":$file" 2>/dev/null) || continue
   # An archive repo (ARCHIVE_STORE, set by the githooks dispatcher) keeps old
   # files verbatim, markers and all; they are never parsed as live org files.
-  if [ "${ARCHIVE_STORE:-0}" != "1" ] && echo "$blob" | grep -qE '^(<{7}( |$)|={7}$|>{7}( |$))'; then
+  if [ "${ARCHIVE_STORE:-0}" != "1" ] && printf "%s\n" "$blob" | grep -qE '^(<{7}( |$)|={7}$|>{7}( |$))'; then
     printf "  %s (git conflict markers — committed markers corrupt org parsing)\n" "$file" >> "$sfile"
   fi
   # Test fixtures legitimately carry fake credential-shaped strings (e.g. a
@@ -98,7 +98,7 @@ echo "$staged" | while IFS= read -r file; do
   # The credential store (.datacore/secrets, set by the githooks dispatcher)
   # holds credentials by design; the checks above still ran for it.
   [ "${CREDENTIAL_STORE:-0}" = "1" ] && continue
-  if echo "$blob" | grep -qE "$cred_pattern"; then
+  if printf "%s\n" "$blob" | grep -qE "$cred_pattern"; then
     printf "  %s (credential pattern — move secrets to .datacore/env/)\n" "$file" >> "$sfile"
   fi
 done
