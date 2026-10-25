@@ -195,3 +195,109 @@ def test_a_bundle_without_head_restores_its_branches(home, tmp_path):
     r = run("restore", "--home", str(fresh), "--file", str(out))
     assert r.returncode == 0, r.stderr
     assert git(fresh / ".datacore/v2-runner", "rev-parse", "backup/side") == git(repo, "rev-parse", "backup/side")
+
+
+def test_a_bundle_needs_only_what_origin_has_now(home, tmp_path):
+    # Found on Data's comms module: the local origin/* refs held a commit that
+    # origin no longer has (a branch deleted or rewritten upstream). A bundle cut
+    # against the local refs then needs that commit, and a fresh clone lacks it.
+    repo = home / "Data"
+    bare = tmp_path / "remotes/data.git"
+    git(repo, "remote", "set-url", "origin", f"file://{bare}")  # a real transport, not a local copy
+    git(repo, "checkout", "-q", "-b", "gone")
+    commit(repo, "gone.md", "was on origin once")
+    git(repo, "push", "-q", "origin", "gone")
+    commit(repo, "more.md", "local only, on top of it")
+    git(bare, "branch", "-D", "gone")           # upstream deletes the branch
+    git(bare, "reflog", "expire", "--expire=now", "--all")
+    git(bare, "gc", "-q", "--prune=now")         # and the commit is gone from origin
+    git(repo, "checkout", "-q", "main")          # local origin/gone still points at it
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    r = run("restore", "--home", str(fresh), "--file", str(out))
+    assert r.returncode == 0, r.stderr
+    assert git(fresh / "Data", "rev-parse", "gone") == git(repo, "rev-parse", "gone")
+
+
+def test_resume_continues_a_partial_restore(home, tmp_path):
+    ws = home / ".openclaw/workspace"               # a whole repo: read-only git objects
+    ws.mkdir(parents=True)
+    git(ws, "init", "-q", "-b", "master")
+    commit(ws, "SOUL.md", "who I am")
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    assert run("restore", "--home", str(fresh), "--file", str(out)).returncode == 0
+    r = run("restore", "--home", str(fresh), "--file", str(out), "--resume")
+    assert r.returncode == 0, r.stderr
+    assert git(fresh / "Data", "rev-parse", "HEAD") == git(home / "Data", "rev-parse", "HEAD")
+
+
+def test_a_repo_whose_remote_cannot_be_read_travels_whole(home, tmp_path):
+    # Data's slides module: its GitHub repo no longer exists, so his copy is the only one.
+    repo = home / ".datacore/v2-runner"
+    git(repo, "remote", "set-url", "origin", f"file://{tmp_path}/remotes/gone.git")
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    r = run("restore", "--home", str(fresh), "--file", str(out))
+    assert r.returncode == 0, r.stderr
+    assert git(fresh / ".datacore/v2-runner", "rev-parse", "HEAD") == git(repo, "rev-parse", "HEAD")
+
+
+def test_bundles_ignore_refs_a_clone_never_fetches(home, tmp_path):
+    # GitHub lists refs/pull/*/head in ls-remote; a clone does not fetch them,
+    # so a bundle cut against one needs a commit the clone lacks.
+    repo = home / "Data"
+    bare = tmp_path / "remotes/data.git"
+    git(repo, "remote", "set-url", "origin", f"file://{bare}")
+    git(repo, "checkout", "-q", "-b", "feature")
+    commit(repo, "pr.md", "in a pull request")
+    git(repo, "push", "-q", "origin", "feature:refs/pull/1/head")
+    commit(repo, "more.md", "local only")
+    git(repo, "checkout", "-q", "main")
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    r = run("restore", "--home", str(fresh), "--file", str(out))
+    assert r.returncode == 0, r.stderr
+    assert git(fresh / "Data", "rev-parse", "feature") == git(repo, "rev-parse", "feature")
+
+
+def test_pushed_local_branches_come_back_as_local_branches(home, tmp_path):
+    repo = home / "Data"
+    git(repo, "checkout", "-q", "-b", "openclaw/adaptations")
+    commit(repo, "adapt.md", "pushed work")
+    git(repo, "push", "-q", "-u", "origin", "openclaw/adaptations")
+    git(repo, "checkout", "-q", "main")
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    assert run("restore", "--home", str(fresh), "--file", str(out)).returncode == 0
+    assert git(fresh / "Data", "rev-parse", "refs/heads/openclaw/adaptations") == git(repo, "rev-parse", "openclaw/adaptations")
+
+
+def test_extra_remotes_come_back_with_their_branches(home, tmp_path):
+    # Data's plur-public: a fork remote beside origin, with branches only there.
+    repo = home / "Data"
+    fork = tmp_path / "remotes/fork.git"
+    fork.mkdir()
+    git(fork, "init", "-q", "--bare", "-b", "main")
+    git(repo, "remote", "add", "fork", f"file://{fork}")
+    git(repo, "checkout", "-q", "-b", "readme-truth")
+    commit(repo, "fork.md", "only on the fork")
+    git(repo, "push", "-q", "-u", "fork", "readme-truth")
+    git(repo, "checkout", "-q", "main")
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    assert run("restore", "--home", str(fresh), "--file", str(out)).returncode == 0
+    assert git(fresh / "Data", "remote", "get-url", "fork") == f"file://{fork}"
+    assert git(fresh / "Data", "rev-parse", "refs/heads/readme-truth") == git(repo, "rev-parse", "readme-truth")

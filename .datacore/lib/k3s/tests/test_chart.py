@@ -134,6 +134,16 @@ def test_home_root_belongs_to_the_agent_and_is_not_world_writable():
         assert first["command"][-1].endswith("chmod 1777 /tmp")
         script = first["command"][-1]
         assert "chmod 00755 /var/lib/agent" in script and "chown 1000:1000 /var/lib/agent" in script
+        # The key directory too: the kubelet creates it root-owned to mount the
+        # key file into a fresh volume, and the ledger's key lock lives there
+        # (Data's first refusal could not be recorded, 2026-10-25).
+        # Root only gives back a key directory the kubelet created; it creates
+        # nothing (with only CHOWN it cannot write into the agent's home) and
+        # chmods nothing it does not own. The agent makes its own, below.
+        assert "for d in /var/lib/agent/.datacore /var/lib/agent/.datacore/keys" in script
+        assert "mkdir" not in script and "chmod 0700" not in script
+        prepare = next(c for c in pod["initContainers"] if c["name"] == "prepare")
+        assert 'mkdir -p -m 0700 "$HOME/.datacore/keys" && exec /usr/local/bin/agent-prepare' in prepare["command"][-1]
         assert "-R" not in script
 
 

@@ -61,7 +61,7 @@ source_tar() {  # source_tar PATHS... -> tar on stdout, from the old host or IDE
 }
 
 manifest() {  # manifest PATHS... -> the shell command that sums them (excludes applied)
-  echo "find $* $(prunes) -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum | sha256sum"
+  echo "find $* $(prunes) -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum"
 }
 
 source_sum() {

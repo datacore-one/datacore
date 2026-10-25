@@ -73,10 +73,10 @@ copy() {
   say "streaming $OLD_HOST:$OLD_HOME into volume $AGENT-home"
   old "tar -C $OLD_HOME ${EXCLUDES[*]} -cpf - ." | in_vol tar -C "$OLD_HOME" --no-overwrite-dir -xpf -
   say "comparing checksums of state that must arrive intact"
-  manifest='cd '$OLD_HOME' && find .hermes/state.db .hermes/sessions .hermes/cron .hermes/config.yaml .hermes/SOUL.md .datacore/identity.env .plur -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum | sha256sum'
+  manifest='cd '$OLD_HOME' && find .hermes/state.db .hermes/sessions .hermes/cron .hermes/config.yaml .hermes/SOUL.md .datacore/identity.env .plur -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum'
   a=$(old "$manifest"); b=$(in_vol sh -c "$manifest")
   [ "$a" = "$b" ] || die "checksum manifest differs: $a vs $b"
-  hwm='cd '$OLD_HOME'/Data && find . -path "*/.datacore/state/seq-hwm/*" -type f -print0 | sort -z | xargs -0 cat | sha256sum'
+  hwm='cd '$OLD_HOME'/Data && find . -path "*/.datacore/state/seq-hwm/*" -type f -print0 | LC_ALL=C sort -z | xargs -0 cat | sha256sum'
   [ "$(old "$hwm")" = "$(in_vol sh -c "$hwm")" ] || die "sequence high-water marks differ"
   for f in $NEVER_COPY; do
     in_vol test ! -e "$OLD_HOME/$f" || die "$f arrived in the volume although it must never be copied"

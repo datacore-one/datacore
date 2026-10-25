@@ -89,12 +89,14 @@ spec:
         runAsNonRoot: true
       initContainers:
         # The provisioner creates the volume root root-owned and 0777, and it
-        # is the agent's home. Give that one directory to the agent; nothing
-        # else is touched and nothing but CHOWN is granted.
+        # is the agent's home. Give that one directory to the agent, and a key
+        # directory the kubelet created root-owned to mount the key file (the
+        # ledger's key lock lives there); nothing is created, nothing else is
+        # touched and nothing but CHOWN is granted.
         - name: home-owner
           image: {{ $a.image }}
           imagePullPolicy: IfNotPresent
-          command: ["/bin/sh", "-c", {{ printf "{ [ \"$(stat -c %%u:%%a %s)\" = \"%v:755\" ] || { chmod 00755 %s && chown %v:%v %s; }; } && chmod 1777 /tmp" $a.home $a.uid $a.home $a.uid $a.uid $a.home | quote }}]
+          command: ["/bin/sh", "-c", {{ printf "{ [ \"$(stat -c %%u:%%a %s)\" = \"%v:755\" ] || { chmod 00755 %s && chown %v:%v %s; }; } && for d in %s/.datacore %s/.datacore/keys; do [ ! -d $d ] || [ \"$(stat -c %%u $d)\" = \"%v\" ] || chown %v:%v $d; done && chmod 1777 /tmp" $a.home $a.uid $a.home $a.uid $a.uid $a.home $a.home $a.home $a.uid $a.uid $a.uid | quote }}]
           securityContext:
             runAsUser: 0
             runAsNonRoot: false
@@ -126,7 +128,9 @@ spec:
         - name: prepare
           image: {{ $a.image }}
           imagePullPolicy: IfNotPresent
-          command: ["/usr/local/bin/agent-prepare"]
+          # The key directory is the agent's own, made before the kubelet
+          # mounts the key file into it (it would create it root-owned).
+          command: ["/bin/sh", "-c", "mkdir -p -m 0700 \"$HOME/.datacore/keys\" && exec /usr/local/bin/agent-prepare"]
           env:
             {{- include "fleet.agentEnv" (list $root $a) | nindent 12 }}
             {{- if eq ($a.mode | default "") "standby" }}
