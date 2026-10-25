@@ -100,3 +100,9 @@ def test_the_base_carries_the_kill_switch_for_an_agent_that_holds_it():
     assert "COPY bin/fleetctl /usr/local/bin/fleetctl" in df
     assert "ARG KUBECTL_VERSION=v1.31.4" in df and "dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" in df
     assert "${KUBECTL_SHA256}  /usr/local/bin/kubectl\" | sha256sum -c" in df
+
+
+def test_hermes_carries_claude_code_for_a_chief_of_staff():
+    # Winston's jobs (briefing, morning run, health digest) call `claude -p`;
+    # pinned to the version his host ran when he moved (2026-10-25).
+    assert "@anthropic-ai/claude-code@2.1.226" in (HERMES / "Dockerfile").read_text()

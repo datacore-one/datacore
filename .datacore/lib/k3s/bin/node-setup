@@ -8,7 +8,7 @@
 #   node-setup namespaces              team and shared namespaces
 #   node-setup images BUNDLE.tar.gz    import the agent and proxy images
 #   node-setup tools DIR               install fleetctl, fleet-backup and agent-state from DIR/bin
-#   node-setup backup-timer            nightly fleet-backup at 03:50 UTC
+#   node-setup backup-timer            nightly fleet-backup at 01:00 UTC (before any agent's morning work)
 #   node-setup killswitch USER         read-and-scale-only kubeconfig for USER (chat kill switch)
 set -eu
 K3S_VERSION=${K3S_VERSION:-v1.31.4+k3s1}
@@ -89,7 +89,7 @@ EOF
 [Unit]
 Description=Nightly agent volume backup
 [Timer]
-OnCalendar=*-*-* 03:50:00 UTC
+OnCalendar=*-*-* 01:00:00 UTC
 Persistent=true
 [Install]
 WantedBy=timers.target

@@ -163,7 +163,7 @@ setup() {
 
 mark() {
   if [ -n "${OLD_HOST:-}" ]; then
-    left=$(old "pgrep -u \$(id -u) -af '$PROCESS_PATTERN' | grep -v pgrep || true")
+    left=$(host_procs)
     [ -z "$left" ] || die "agent processes still running on $OLD_HOST: $left (run freeze)"
     mark_runs_nowhere_else "$OLD_HOST frozen"
   else

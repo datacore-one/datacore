@@ -20,8 +20,10 @@ http://egress.{{ .Values.sharedNamespace }}.svc.cluster.local:3128
 - {name: HTTP_PROXY, value: {{ $proxy | quote }}}
 - {name: https_proxy, value: {{ $proxy | quote }}}
 - {name: http_proxy, value: {{ $proxy | quote }}}
-- {name: NO_PROXY, value: "localhost,127.0.0.1,::1"}
-- {name: no_proxy, value: "localhost,127.0.0.1,::1"}
+{{- /* The API server directly, never through the proxy (an agent with the
+       kill switch reaches it; for any other the network policy refuses). */}}
+- {name: NO_PROXY, value: "localhost,127.0.0.1,::1,kubernetes.default.svc,10.43.0.1"}
+- {name: no_proxy, value: "localhost,127.0.0.1,::1,kubernetes.default.svc,10.43.0.1"}
 - {name: NODE_USE_ENV_PROXY, value: "1"}
 - {name: TMPDIR, value: /tmp}
 {{- end -}}
@@ -37,7 +39,3 @@ securityContext:
 - {name: home, mountPath: {{ printf "%s/.ssh" .imageHome }}, subPath: .ssh}
 {{- end }}
 {{- end }}
-
-{{- define "fleet.anyKillSwitch" -}}
-{{- range $n, $a := .Values.agents }}{{ if $a.killSwitch }}yes{{ end }}{{ end -}}
-{{- end -}}

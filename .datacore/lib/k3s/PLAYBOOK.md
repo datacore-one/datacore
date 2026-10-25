@@ -48,10 +48,10 @@ Images are built on an operator machine (no registry; that is why they are pinne
 
 ```sh
 docker build -f images/agent-base/Dockerfile -t agent-base:3 .
-docker build --build-arg BASE=agent-base:3 -t agent-hermes:0.19.0-5 images/agent-hermes
+docker build --build-arg BASE=agent-base:3 -t agent-hermes:0.19.0-6 images/agent-hermes
 docker build --build-arg BASE=agent-base:3 -t agent-openclaw:2026.9.3-3 images/agent-openclaw
 docker build -t agent-egress:0.1.0 images/egress
-docker save agent-hermes:0.19.0-5 agent-openclaw:2026.9.3-3 agent-egress:0.1.0 | gzip > fleet-images.tar.gz
+docker save agent-hermes:0.19.0-6 agent-openclaw:2026.9.3-3 agent-egress:0.1.0 | gzip > fleet-images.tar.gz
 ```
 
 Then the chart, with every agent at `running: false`:
@@ -106,7 +106,7 @@ rollback`; push any ledger events the pod wrote before the old host runs again.
 
 ## 4. Back up
 
-Nightly on the node (`fleet-backup.timer`, 03:50 UTC), or by hand:
+Nightly on the node (`fleet-backup.timer`, 01:00 UTC: each agent stops for its copy, so it runs clear of the morning briefing), or by hand:
 `fleet-backup [AGENT]`. It holds **what git does not**: files outside checkouts,
 files git does not track inside them (ignored config such as `.datacore/env`),
 a patch of uncommitted edits, a bundle of unpushed commits, and a manifest of

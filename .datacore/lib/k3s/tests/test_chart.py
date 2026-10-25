@@ -54,6 +54,9 @@ def test_every_agent_container_goes_through_the_proxy():
                 assert env.get(name) == "http://egress.shared.svc.cluster.local:3128", (c["name"], name)
             assert env.get("NODE_USE_ENV_PROXY") == "1", c["name"]
             assert "localhost" in env.get("NO_PROXY", ""), c["name"]
+            # The API server is never asked through the proxy (it refused
+            # Winston's kill switch: 403 from squid for 10.43.0.1:443).
+            assert "kubernetes.default.svc" in env["NO_PROXY"] and "10.43.0.1" in env["NO_PROXY"], c["name"]
 
 
 def test_python3_on_path_is_the_system_python():
@@ -144,6 +147,10 @@ def test_home_root_belongs_to_the_agent_and_is_not_world_writable():
         assert "mkdir" not in script and "chmod 0700" not in script
         prepare = next(c for c in pod["initContainers"] if c["name"] == "prepare")
         assert 'mkdir -p -m 0700 "$HOME/.datacore/keys" && exec /usr/local/bin/agent-prepare' in prepare["command"][-1]
+        # A home the agent already owns is the agent's to fix: root, with only
+        # CHOWN, cannot chmod it (Winston's restored volume was 1000:777).
+        assert '"$(stat -c %u /var/lib/agent)" = "1000"' in script
+        assert prepare["command"][-1].startswith('chmod go-w "$HOME"')
         assert "-R" not in script
 
 
@@ -342,7 +349,9 @@ def test_the_kill_switch_agent_may_only_scale_deployments_in_its_namespace():
     w, t = deps["winston"]["spec"]["template"]["spec"], deps["tris"]["spec"]["template"]["spec"]
     assert w["serviceAccountName"] == "winston-killswitch" and w["automountServiceAccountToken"] is True
     assert t["automountServiceAccountToken"] is False and "serviceAccountName" not in t
-    role = next(r for r in of_kind(docs, "Role") if r["metadata"]["name"] == "fleet-killswitch")
+    roles = [r for r in of_kind(docs, "Role") if r["metadata"]["name"] == "fleet-killswitch"]
+    assert len(roles) == 1, "one Role, shared with the host's kill-switch credential"
+    role = roles[0]
     verbs = {(tuple(r["resources"]), tuple(sorted(r["verbs"]))) for r in role["rules"]}
     assert verbs == {(("deployments",), ("get", "list", "patch")),
                      (("deployments/scale",), ("get", "patch", "update"))}

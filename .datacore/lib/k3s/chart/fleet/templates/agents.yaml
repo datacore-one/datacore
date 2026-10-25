@@ -99,7 +99,7 @@ spec:
         - name: home-owner
           image: {{ $a.image }}
           imagePullPolicy: IfNotPresent
-          command: ["/bin/sh", "-c", {{ printf "{ [ \"$(stat -c %%u:%%a %s)\" = \"%v:755\" ] || { chmod 00755 %s && chown %v:%v %s; }; } && for d in %s/.datacore %s/.datacore/keys; do [ ! -d $d ] || [ \"$(stat -c %%u $d)\" = \"%v\" ] || chown %v:%v $d; done && chmod 1777 /tmp" $a.home $a.uid $a.home $a.uid $a.uid $a.home $a.home $a.home $a.uid $a.uid $a.uid | quote }}]
+          command: ["/bin/sh", "-c", {{ printf "{ [ \"$(stat -c %%u %s)\" = \"%v\" ] || { chmod 00755 %s && chown %v:%v %s; }; } && for d in %s/.datacore %s/.datacore/keys; do [ ! -d $d ] || [ \"$(stat -c %%u $d)\" = \"%v\" ] || chown %v:%v $d; done && chmod 1777 /tmp" $a.home $a.uid $a.home $a.uid $a.uid $a.home $a.home $a.home $a.uid $a.uid $a.uid | quote }}]
           securityContext:
             runAsUser: 0
             runAsNonRoot: false
@@ -133,7 +133,7 @@ spec:
           imagePullPolicy: IfNotPresent
           # The key directory is the agent's own, made before the kubelet
           # mounts the key file into it (it would create it root-owned).
-          command: ["/bin/sh", "-c", "mkdir -p -m 0700 \"$HOME/.datacore/keys\" && exec /usr/local/bin/agent-prepare"]
+          command: ["/bin/sh", "-c", "chmod go-w \"$HOME\" && mkdir -p -m 0700 \"$HOME/.datacore/keys\" && exec /usr/local/bin/agent-prepare"]
           env:
             {{- include "fleet.agentEnv" (list $root $a) | nindent 12 }}
             {{- if eq ($a.mode | default "") "standby" }}
@@ -305,22 +305,6 @@ spec:
         {{- end }}
 ---
 {{- end }}
-{{- end }}
-{{- if (include "fleet.anyKillSwitch" .) }}
-# What the kill switch may do: list agents and scale them (fleetctl), no more.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: fleet-killswitch
-  namespace: {{ .Values.teamNamespace }}
-rules:
-  - apiGroups: [apps]
-    resources: [deployments]
-    verbs: [get, list, patch]
-  - apiGroups: [apps]
-    resources: [deployments/scale]
-    verbs: [get, update, patch]
----
 {{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

@@ -2,7 +2,7 @@
 """agent-state -- back up what git does not hold; restore it on any machine.
 
     agent-state backup  --home DIR --out FILE [--exclude P1,P2,...] [--no-bundles]
-    agent-state restore --home DIR --file FILE [--resume]
+    agent-state restore --home DIR --file FILE [--resume] [--reference-root ORIGINAL_HOME]
 
 An agent's home is mostly git checkouts, and origin already holds those. The
 backup carries everything else in the home -- conversation history, memory,
@@ -223,7 +223,7 @@ def writable(home: Path, members) -> None:
             os.chmod(t, 0o600)
 
 
-def restore(home: Path, file: Path, resume: bool = False) -> int:
+def restore(home: Path, file: Path, resume: bool = False, reference: Path | None = None) -> int:
     # Clones use the restored agent's own git credentials and ssh config.
     os.environ["HOME"] = str(home)
     present = [p.name for p in home.iterdir() if p.name not in ("lost+found",)] if home.exists() else []
@@ -261,7 +261,17 @@ def restore(home: Path, file: Path, resume: bool = False) -> int:
                     continue
                 if not (dest / ".git").exists():
                     dest.parent.mkdir(parents=True, exist_ok=True)
-                    cl = subprocess.run(["git", "clone", "-q", r["url"], str(dest)], capture_output=True, text=True)
+                    src = reference / r["path"] if reference else None
+                    if src is not None and (src / ".git").is_dir():
+                        # Beside the original on one filesystem: share its objects
+                        # (a local clone hardlinks them), then point at origin.
+                        cl = subprocess.run(["git", "-c", "safe.directory=*", "clone", "-q", "--local", str(src),
+                                             str(dest)], capture_output=True, text=True)
+                        if cl.returncode == 0:
+                            git(dest, "remote", "set-url", "origin", r["url"])
+                            subprocess.run(["git", "-C", str(dest), "fetch", "-q", "origin"], capture_output=True)
+                    else:
+                        cl = subprocess.run(["git", "clone", "-q", r["url"], str(dest)], capture_output=True, text=True)
                     if cl.returncode != 0:
                         print(f"agent-state: {r['path']}: clone failed: {cl.stderr.strip()}", file=sys.stderr)
                         failed += 1
@@ -294,6 +304,8 @@ def restore(home: Path, file: Path, resume: bool = False) -> int:
                               f"({fx.stderr.strip()[-160:]})", file=sys.stderr)
                 # Every local branch the agent had, at its commit (pushed ones from
                 # origin or another remote, local-only ones from the bundle).
+                if not r["branch"] or r["branch"] == "HEAD":
+                    git(dest, "checkout", "-q", "--detach", r["head"])  # free every branch to be set
                 current = git(dest, "rev-parse", "--abbrev-ref", "HEAD", check=False)
                 for name, sha in (r.get("branches") or {}).items():
                     if name not in (current, r["branch"]) and subprocess.run(
@@ -343,10 +355,11 @@ def main(argv: list[str]) -> int:
     r.add_argument("--home", type=Path, required=True)
     r.add_argument("--file", type=Path, required=True)
     r.add_argument("--resume", action="store_true", help="continue a partial restore into the same home")
+    r.add_argument("--reference-root", type=Path, help="the original home on the same filesystem: clone from it, sharing git objects")
     a = ap.parse_args(argv)
     if a.cmd == "backup":
         return backup(a.home, [s for s in a.exclude.split(",") if s], a.out, not a.no_bundles)
-    return restore(a.home, a.file, a.resume)
+    return restore(a.home, a.file, a.resume, a.reference_root)
 
 
 if __name__ == "__main__":

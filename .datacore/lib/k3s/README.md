@@ -66,9 +66,9 @@ curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=v1.31.4+k3s1 sh -s - \
 kubectl create namespace firm && kubectl create namespace shared
 # images (no registry): build on the operator machine, then
 docker build -f images/agent-base/Dockerfile -t agent-base:3 .
-docker build --build-arg BASE=agent-base:3 -t agent-hermes:0.19.0-5 images/agent-hermes
+docker build --build-arg BASE=agent-base:3 -t agent-hermes:0.19.0-6 images/agent-hermes
 docker build --build-arg BASE=agent-base:3 -t agent-openclaw:2026.9.3-3 images/agent-openclaw
-docker save agent-hermes:0.19.0-5 agent-openclaw:2026.9.3-3 agent-egress:0.1.0 | gzip > fleet-images.tar.gz
+docker save agent-hermes:0.19.0-6 agent-openclaw:2026.9.3-3 agent-egress:0.1.0 | gzip > fleet-images.tar.gz
 bin/node-setup images fleet-images.tar.gz   # on the node: imports and PINS them
 # Pinned because there is no registry: above 85% disk the kubelet deletes unused
 # images, and an agent scaled to 0 (kill switch, backup) could not start again.

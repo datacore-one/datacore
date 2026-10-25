@@ -301,3 +301,38 @@ def test_extra_remotes_come_back_with_their_branches(home, tmp_path):
     assert run("restore", "--home", str(fresh), "--file", str(out)).returncode == 0
     assert git(fresh / "Data", "remote", "get-url", "fork") == f"file://{fork}"
     assert git(fresh / "Data", "rev-parse", "refs/heads/readme-truth") == git(repo, "rev-parse", "readme-truth")
+
+
+def test_a_restore_beside_the_original_shares_git_objects(home, tmp_path):
+    # Winston's restore on his own box: the volume is on the same filesystem
+    # as his home, and 18 GB of history would not fit twice. Clones made from
+    # the original share its objects (hardlinks) and still point at origin.
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    r = run("restore", "--home", str(fresh), "--file", str(out), "--reference-root", str(home))
+    assert r.returncode == 0, r.stderr
+    assert git(fresh / "Data", "rev-parse", "HEAD") == git(home / "Data", "rev-parse", "HEAD")
+    assert git(fresh / "Data", "remote", "get-url", "origin") == str(tmp_path / "remotes/data.git")
+    objs = lambda root: {p.name: p.stat().st_ino for p in (root / ".git/objects/pack").glob("*.pack")} or \
+        {str(p.relative_to(root)): p.stat().st_ino for p in (root / ".git/objects").rglob("*") if p.is_file()}
+    shared = set(objs(home / "Data").values()) & set(objs(fresh / "Data").values())
+    assert shared, "objects are hardlinked from the original, not copied"
+
+
+def test_a_detached_head_keeps_every_branch_where_it_was(home, tmp_path):
+    # Winston's dips checkout: HEAD detached, local main behind origin/main.
+    repo = home / ".datacore/v2-runner"
+    first = git(repo, "rev-parse", "HEAD")
+    commit(repo, "more.md", "pushed later")
+    git(repo, "push", "-q")
+    git(repo, "reset", "-q", "--hard", first)    # local main stays behind
+    git(repo, "checkout", "-q", "--detach", first)
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    assert run("restore", "--home", str(fresh), "--file", str(out)).returncode == 0
+    assert git(fresh / ".datacore/v2-runner", "rev-parse", "refs/heads/main") == first
+    assert git(fresh / ".datacore/v2-runner", "rev-parse", "HEAD") == first

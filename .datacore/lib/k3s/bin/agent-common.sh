@@ -73,13 +73,27 @@ freeze_old() {
     [ "$i" = 60 ] && die "$CLAIM_UNIT still running after 10 minutes"
     sleep 10
   done
-  # Lines tagged `# datacore-job:` are the agent's; any other active line stops the run.
-  old "crontab -l > ~/.datacore/state/crontab.pre-k3s 2>/dev/null; sed -E 's/^([^#].*# datacore-job:)/# k3s-cutover # \1/' ~/.datacore/state/crontab.pre-k3s | crontab -"
-  left=$(old "crontab -l 2>/dev/null | grep -vE '^\s*(#|$)' || true")
+  if [ -n "${CRON_KEEP:-}" ]; then
+    # The old host keeps duties of its own (a chief of staff on his own box):
+    # every active job line is the agent's except those matching CRON_KEEP;
+    # environment lines (VAR=value) stay.
+    old "{ [ -s ~/.datacore/state/crontab.pre-k3s ] || crontab -l > ~/.datacore/state/crontab.pre-k3s 2>/dev/null; }; awk -v keep='$CRON_KEEP' '/^[[:space:]]*(#|\$)/ || /^[A-Za-z_][A-Za-z0-9_]*=/ || \$0 ~ keep {print; next} {print \"# k3s-cutover # \" \$0}' ~/.datacore/state/crontab.pre-k3s | crontab -"
+    left=$(old "crontab -l 2>/dev/null | grep -vE '^\s*(#|$)' | grep -vE '^[A-Za-z_][A-Za-z0-9_]*=' | grep -vE '$CRON_KEEP' || true")
+  else
+    # Lines tagged `# datacore-job:` are the agent's; any other active line stops the run.
+    old "{ [ -s ~/.datacore/state/crontab.pre-k3s ] || crontab -l > ~/.datacore/state/crontab.pre-k3s 2>/dev/null; }; sed -E 's/^([^#].*# datacore-job:)/# k3s-cutover # \1/' ~/.datacore/state/crontab.pre-k3s | crontab -"
+    left=$(old "crontab -l 2>/dev/null | grep -vE '^\s*(#|$)' || true")
+  fi
   [ -z "$left" ] || die "cron lines still active on $OLD_HOST: $left"
-  procs=$(old "pgrep -u \$(id -u) -af '$PROCESS_PATTERN' | grep -v pgrep || true")
+  procs=$(host_procs)
   [ -z "$procs" ] || die "agent processes still running on $OLD_HOST: $procs"
   say "frozen: no unit, cron line or process of $AGENT is left on $OLD_HOST"
+}
+
+# The agent's processes on its old host -- not those of agents already in pods
+# on that host (same uid; a chief of staff's box runs the cluster), and not this check.
+host_procs() {
+  old "for p in \$(pgrep -u \$(id -u) -f '$PROCESS_PATTERN'); do grep -q kubepods /proc/\$p/cgroup 2>/dev/null || ps -o pid=,args= -p \$p; done | grep -v -e pgrep -e 'for p in' || true"
 }
 
 thaw_old() {
