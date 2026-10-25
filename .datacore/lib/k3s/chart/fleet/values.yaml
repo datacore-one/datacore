@@ -1,0 +1,60 @@
+# Namespaces are created by the install runbook, never by this chart: a
+# `helm uninstall` must not be able to delete an agent's volume with its namespace.
+teamNamespace: firm
+sharedNamespace: shared
+
+egress:
+  image: agent-egress:0.1.0
+  # HTTPS (CONNECT to 443) is allowed only to these domains. A leading dot
+  # includes subdomains.
+  allowDomains: []
+  # Plain HTTP destinations (IP or name) with their ports, e.g. a tailnet relay.
+  allowHttp: []      # - {host: 192.0.2.20, port: 8080}
+  # SSH through the proxy (ssh ProxyCommand "nc -X connect -x egress...:3128 %h %p").
+  allowSsh: []       # - {host: github.com, port: 22}
+  # Research mode: any PUBLIC https destination is allowed (still logged), but
+  # never private, tailnet or link-local ranges. Off by default.
+  openHttps: false
+  denyNets:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 100.64.0.0/10
+    - 169.254.0.0/16
+    - 127.0.0.0/8
+    - fc00::/7
+    - fe80::/10
+  resources:
+    requests: {cpu: 50m, memory: 64Mi, ephemeral-storage: 64Mi}
+    limits: {memory: 256Mi, ephemeral-storage: 512Mi}
+
+# One entry per agent.
+agents: {}
+#  tris:
+#    image: agent-hermes:0.19.0-1
+#    (the agent's volume is mounted at defaults.home, its old home path)
+#    running: true
+#    signingKeySecret: tris-signing-key
+#    signingKeyName: tris.key
+#    storage: 30Gi
+#    crontab: |
+#      */30 * * * * /var/lib/agent/heartbeat.sh
+#    stream: {enabled: true}
+
+defaults:
+  home: /var/lib/agent
+  uid: 1000
+  gateway:
+    command: ["/opt/hermes-agent/venv/bin/python", "-m", "hermes_cli.main", "gateway", "run"]
+    resources:
+      requests: {cpu: 200m, memory: 512Mi, ephemeral-storage: 256Mi}
+      limits: {memory: 3Gi, ephemeral-storage: 2Gi}
+  cron:
+    resources:
+      requests: {cpu: 100m, memory: 256Mi, ephemeral-storage: 256Mi}
+      limits: {memory: 3Gi, ephemeral-storage: 2Gi}
+  stream:
+    resources:
+      requests: {cpu: 10m, memory: 32Mi, ephemeral-storage: 16Mi}
+      limits: {memory: 128Mi, ephemeral-storage: 128Mi}
+  tmpSize: 2Gi

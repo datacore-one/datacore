@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+# agent-cutover -- move one Hermes agent from its own host into its pod.
+#
+# Run from an operator machine that reaches the old host over ssh and the
+# cluster with kubectl. Each step is separate so a person checks the result
+# before the next one; nothing here deletes anything on the old host.
+#
+#   agent-cutover preflight     cluster, namespaces, volume, agent scaled to 0, ssh and sudo
+#   agent-cutover freeze        stop and DISABLE every unit and cron job on the old host
+#   agent-cutover sync          push the agent's ledger once more; report unpushed work, never stash
+#   agent-cutover key           signing key -> Secret, fingerprints compared
+#   agent-cutover copy          stream the home directory into the volume, then compare
+#   agent-cutover adjust        pod-specific edits inside the volume, write the frozen marker
+#   agent-cutover start         helm upgrade with the agent running, wait until ready
+#   agent-cutover rollback      scale to 0, remove the marker, re-enable the old host
+#
+# Settings come from the file named by CUTOVER_ENV (kept with the deployment's
+# private values): AGENT, OLD_HOST, OLD_HOME, NS, RELEASE, VALUES, IMAGE,
+# USER_UNITS, SYSTEM_UNITS, PROCESS_PATTERN, SYNC_CMD, NEVER_COPY (owner keys
+# and other files an agent's pod must not hold), ADJUST_EXTRA (shell run in
+# the volume after the generic edits).
+set -euo pipefail
+
+[ -n "${CUTOVER_ENV:-}" ] && [ -f "$CUTOVER_ENV" ] || { echo "agent-cutover: set CUTOVER_ENV to the deployment's settings file" >&2; exit 2; }
+# shellcheck disable=SC1090
+. "$CUTOVER_ENV"
+HERE=$(cd "$(dirname "$0")/.." && pwd)
+CHART=${CHART:-$HERE/chart/fleet}
+NS=${NS:-firm}
+RELEASE=${RELEASE:-fleet}
+NEVER_COPY=${NEVER_COPY:-}
+ADJUST_EXTRA=${ADJUST_EXTRA:-}
+for v in AGENT OLD_HOST OLD_HOME VALUES IMAGE USER_UNITS SYSTEM_UNITS PROCESS_PATTERN SYNC_CMD; do
+  [ -n "${!v:-}" ] || { echo "agent-cutover: $v is not set in $CUTOVER_ENV" >&2; exit 2; }
+done
+HELPER=$AGENT-copy
+
+# What does not move: install artefacts the image provides, caches, the
+# agent's signing key (it becomes a Secret) and everything in NEVER_COPY.
+EXCLUDES=(
+  --exclude=./.npm --exclude=./.cache/uv --exclude=./.cache/pip
+  --exclude=./.cache/node-gyp --exclude=./.cache/electron
+  --exclude=./.hermes/hermes-agent --exclude=./.hermes/node
+  --exclude=./.datacore/keys/$AGENT.key
+)
+for f in $NEVER_COPY; do EXCLUDES+=("--exclude=./$f"); done
+
+say() { printf '%s\n' "agent-cutover[$AGENT]: $*"; }
+die() { say "STOP: $*" >&2; exit 1; }
+old() { ssh -o BatchMode=yes "$OLD_HOST" "$@"; }
+kc() { kubectl -n "$NS" "$@"; }
+
+helper_up() {
+  kc get pod "$HELPER" >/dev/null 2>&1 && return
+  kc run "$HELPER" --image="$IMAGE" --restart=Never --image-pull-policy=IfNotPresent \
+    --overrides="{\"spec\":{\"securityContext\":{\"runAsUser\":1000,\"runAsGroup\":1000,\"fsGroup\":1000},
+      \"automountServiceAccountToken\":false,
+      \"containers\":[{\"name\":\"c\",\"image\":\"$IMAGE\",\"command\":[\"sleep\",\"infinity\"],
+      \"env\":[{\"name\":\"HOME\",\"value\":\"$OLD_HOME\"}],
+      \"volumeMounts\":[{\"name\":\"home\",\"mountPath\":\"$OLD_HOME\"}]}],
+      \"volumes\":[{\"name\":\"home\",\"persistentVolumeClaim\":{\"claimName\":\"$AGENT-home\"}}]}}" >/dev/null
+  kc wait --for=condition=Ready "pod/$HELPER" --timeout=180s >/dev/null
+}
+in_vol() { kc exec -i "$HELPER" -- "$@"; }
+
+preflight() {
+  kubectl version >/dev/null || die "kubectl cannot reach the cluster"
+  kubectl get ns "$NS" shared >/dev/null || die "namespaces $NS and shared must exist (install runbook)"
+  replicas=$(kc get deploy "$AGENT" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo missing)
+  [ "$replicas" = "0" ] || die "deployment $NS/$AGENT must exist with 0 replicas (now: $replicas)"
+  kc get pvc "$AGENT-home" >/dev/null || die "volume $AGENT-home missing"
+  old true || die "cannot reach $OLD_HOST over ssh"
+  old sudo -n true || die "need passwordless sudo on $OLD_HOST to stop its system units"
+  say "preflight ok"
+}
+
+freeze() {
+  say "stopping and disabling units on $OLD_HOST"
+  old "systemctl --user disable --now $USER_UNITS"
+  old "sudo systemctl disable --now $SYSTEM_UNITS"
+  # Let a claim tick in flight finish rather than killing it mid-task.
+  for i in $(seq 1 60); do
+    old "systemctl is-active --quiet ledger-claim.service" || break
+    [ "$i" = 60 ] && die "ledger-claim.service still running after 10 minutes"
+    sleep 10
+  done
+  old "crontab -l > ~/.datacore/state/crontab.pre-k3s && sed -E 's/^([^#].*# datacore-job:)/# k3s-cutover # \1/' ~/.datacore/state/crontab.pre-k3s | crontab -"
+  left=$(old "crontab -l | grep -vE '^\s*(#|$)' || true")
+  [ -z "$left" ] || die "cron lines still active on $OLD_HOST: $left"
+  procs=$(old "pgrep -u \$(id -u) -af '$PROCESS_PATTERN' | grep -v pgrep || true")
+  [ -z "$procs" ] || die "agent processes still running on $OLD_HOST: $procs"
+  say "frozen: no unit, cron line or process of $AGENT is left on $OLD_HOST"
+}
+
+sync() {
+  say "final ledger sync on $OLD_HOST"
+  old "$SYNC_CMD" || die "ledger sync failed; read the output above, do not force it"
+  # Report repositories with unpushed or uncommitted work; never stash, reset or force.
+  old "for r in $OLD_HOME/Data $OLD_HOME/Data/*/ $OLD_HOME/.datacore/*/ $OLD_HOME/.datacore/audit-src/*/; do
+         [ -e \"\$r/.git\" ] || continue
+         a=\$(git -C \"\$r\" rev-list --count @{u}..HEAD 2>/dev/null || echo '?')
+         d=\$(git -C \"\$r\" status --porcelain 2>/dev/null | wc -l)
+         echo \"\$r ahead=\$a dirty=\$d\"
+       done"
+  say "repositories above move with the volume exactly as they are"
+}
+
+key() {
+  if ! kc get secret "$AGENT-signing-key" >/dev/null 2>&1; then
+    old "cat $OLD_HOME/.datacore/keys/$AGENT.key" \
+      | kc create secret generic "$AGENT-signing-key" --from-file="$AGENT.key=/dev/stdin" >/dev/null
+  fi
+  src=$(old "sha256sum < $OLD_HOME/.datacore/keys/$AGENT.key" | cut -c1-16)
+  dst=$(kc get secret "$AGENT-signing-key" -o "jsonpath={.data.$AGENT\.key}" | base64 -d | sha256sum | cut -c1-16)
+  [ "$src" = "$dst" ] || die "key fingerprint differs: old $src, secret $dst"
+  say "signing key fingerprint $src identical on both sides"
+}
+
+copy() {
+  helper_up
+  say "streaming $OLD_HOST:$OLD_HOME into volume $AGENT-home"
+  old "tar -C $OLD_HOME ${EXCLUDES[*]} -cpf - ." | in_vol tar -C "$OLD_HOME" -xpf -
+  say "comparing checksums of state that must arrive intact"
+  manifest='cd '$OLD_HOME' && find .hermes/state.db .hermes/sessions .hermes/cron .hermes/config.yaml .hermes/SOUL.md .datacore/identity.env .plur -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum | sha256sum'
+  a=$(old "$manifest"); b=$(in_vol sh -c "$manifest")
+  [ "$a" = "$b" ] || die "checksum manifest differs: $a vs $b"
+  hwm='cd '$OLD_HOME'/Data && find . -path "*/.datacore/state/seq-hwm/*" -type f -print0 | sort -z | xargs -0 cat | sha256sum'
+  [ "$(old "$hwm")" = "$(in_vol sh -c "$hwm")" ] || die "sequence high-water marks differ"
+  for f in $NEVER_COPY; do
+    in_vol test ! -e "$OLD_HOME/$f" || die "$f arrived in the volume although it must never be copied"
+  done
+  say "copy verified (state checksums and sequence high-water marks identical; excluded files absent)"
+}
+
+adjust() {
+  helper_up
+  in_vol python3 - <<'PY'
+import pathlib
+home = pathlib.Path.home()
+# ssh leaves through the proxy: the pod has no other way out.
+cfg = home / ".ssh" / "config"
+text = cfg.read_text() if cfg.exists() else ""
+if "egress.shared.svc" not in text:
+    cfg.parent.mkdir(exist_ok=True)
+    cfg.write_text("Host *\n  ProxyCommand nc -X connect -x egress.shared.svc.cluster.local:3128 %h %p\n\n" + text)
+# A terminal tool that ran over ssh to the agent's own host runs locally in the pod.
+from ruamel.yaml import YAML
+y = YAML(); y.preserve_quotes = True
+p = home / ".hermes" / "config.yaml"
+c = y.load(p.read_text())
+if (c.get("terminal") or {}).get("backend") == "ssh":
+    c["terminal"]["backend"] = "local"
+    with p.open("w") as f:
+        y.dump(c, f)
+print("adjusted: ssh through the proxy, terminal backend local")
+PY
+  [ -n "$ADJUST_EXTRA" ] && in_vol sh -c "$ADJUST_EXTRA"
+  in_vol sh -c "printf '%s\n' \"$OLD_HOST frozen at $(date -u +%FT%TZ) by agent-cutover\" > $OLD_HOME/.datacore/state/k3s-cutover-frozen"
+  say "frozen marker written; the pod may start"
+}
+
+start() {
+  kc delete pod "$HELPER" --ignore-not-found --wait=true >/dev/null
+  helm upgrade "$RELEASE" "$CHART" -n "$NS" -f "$VALUES" --set "agents.$AGENT.running=true" >/dev/null
+  kc rollout status "deploy/$AGENT" --timeout=300s
+  say "pod running"
+}
+
+rollback() {
+  say "rolling back: agent to 0 replicas, old host re-enabled"
+  helm upgrade "$RELEASE" "$CHART" -n "$NS" -f "$VALUES" --set "agents.$AGENT.running=false" >/dev/null || true
+  kc wait --for=delete pod -l "app.kubernetes.io/name=$AGENT" --timeout=120s || true
+  helper_up
+  in_vol rm -f "$OLD_HOME/.datacore/state/k3s-cutover-frozen"
+  kc delete pod "$HELPER" --ignore-not-found >/dev/null
+  say "if the pod wrote ledger events, they must be pushed from the volume BEFORE the old host runs again"
+  old "crontab ~/.datacore/state/crontab.pre-k3s"
+  old "sudo systemctl enable --now $SYSTEM_UNITS"
+  old "systemctl --user enable --now $USER_UNITS"
+  say "old host running again"
+}
+
+case "${1:-}" in
+  preflight|freeze|sync|key|copy|adjust|start|rollback) "$1" ;;
+  *) sed -n '2,22p' "$0"; exit 2 ;;
+esac

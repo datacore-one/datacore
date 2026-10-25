@@ -1,0 +1,150 @@
+{{- $root := . -}}
+{{- $d := .Values.defaults -}}
+{{- range $name, $a := .Values.agents }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-home
+  namespace: {{ $root.Values.teamNamespace }}
+  annotations:
+    # The agent's whole state lives here; uninstalling the chart must not delete it.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: {{ $a.storage }}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-crontab
+  namespace: {{ $root.Values.teamNamespace }}
+data:
+  crontab: |
+{{ $a.crontab | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $root.Values.teamNamespace }}
+  labels:
+    datacore.one/agent: {{ $name }}
+    app.kubernetes.io/part-of: datacore-fleet
+spec:
+  replicas: {{ if $a.running }}1{{ else }}0{{ end }}
+  # Recreate, never RollingUpdate: two pods of one agent would be two writers
+  # on one ledger chain and two pollers on one Telegram bot.
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/name: {{ $name }}}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ $name }}
+        datacore.one/role: agent
+        datacore.one/agent: {{ $name }}
+      annotations:
+        checksum/crontab: {{ $a.crontab | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsUser: {{ $d.uid }}
+        runAsGroup: {{ $d.uid }}
+        fsGroup: {{ $d.uid }}
+        fsGroupChangePolicy: OnRootMismatch
+        runAsNonRoot: true
+      initContainers:
+        # Refuses to start unless the cutover recorded that the old host is
+        # frozen, then points the volume's runtime paths at the image.
+        - name: prepare
+          image: {{ $a.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/agent-prepare"]
+          env:
+            {{- include "fleet.agentEnv" (list $root) | nindent 12 }}
+          {{- include "fleet.containerSecurity" . | nindent 10 }}
+          resources: {{- toYaml $d.stream.resources | nindent 12 }}
+          volumeMounts:
+            - {name: home, mountPath: {{ $d.home }}}
+      containers:
+        - name: gateway
+          image: {{ $a.image }}
+          imagePullPolicy: IfNotPresent
+          command: {{ toJson (concat (list "/usr/local/bin/agent-run" "gateway") $d.gateway.command) }}
+          workingDir: {{ printf "%s/.hermes" $d.home }}
+          env:
+            {{- include "fleet.agentEnv" (list $root) | nindent 12 }}
+          {{- include "fleet.containerSecurity" . | nindent 10 }}
+          resources: {{- toYaml $d.gateway.resources | nindent 12 }}
+          volumeMounts:
+            - {name: home, mountPath: {{ $d.home }}}
+            - {name: tmp, mountPath: /tmp}
+            - {name: signing-key, mountPath: {{ printf "%s/.datacore/keys/%s" $d.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
+        - name: cron
+          image: {{ $a.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/agent-run", "cron", "/usr/local/bin/supercronic", "-passthrough-logs", "/etc/datacore/crontab"]
+          workingDir: {{ $d.home }}
+          env:
+            {{- include "fleet.agentEnv" (list $root) | nindent 12 }}
+          {{- include "fleet.containerSecurity" . | nindent 10 }}
+          resources: {{- toYaml $d.cron.resources | nindent 12 }}
+          volumeMounts:
+            - {name: home, mountPath: {{ $d.home }}}
+            - {name: tmp, mountPath: /tmp}
+            - {name: crontab, mountPath: /etc/datacore, readOnly: true}
+            - {name: signing-key, mountPath: {{ printf "%s/.datacore/keys/%s" $d.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
+        {{- if and $a.stream $a.stream.enabled }}
+        - name: stream
+          image: {{ $a.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/agent-run", "stream", "/bin/sh", "-c", "set -a; . {{ $d.home }}/.datacore/agent-stream-tail/config.env; set +a; exec python3 {{ $d.home }}/.datacore/agent-stream-tail/agent_stream_tail.py"]
+          env:
+            {{- include "fleet.agentEnv" (list $root) | nindent 12 }}
+          {{- include "fleet.containerSecurity" . | nindent 10 }}
+          resources: {{- toYaml $d.stream.resources | nindent 12 }}
+          volumeMounts:
+            - {name: home, mountPath: {{ $d.home }}}
+        {{- end }}
+      volumes:
+        - name: home
+          persistentVolumeClaim: {claimName: {{ $name }}-home}
+        - name: tmp
+          emptyDir: {sizeLimit: {{ $d.tmpSize }}}
+        - name: crontab
+          configMap: {name: {{ $name }}-crontab}
+        - name: signing-key
+          secret:
+            secretName: {{ $a.signingKeySecret }}
+            defaultMode: 0400
+---
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agents-egress-via-proxy
+  namespace: {{ .Values.teamNamespace }}
+spec:
+  podSelector:
+    matchLabels: {datacore.one/role: agent}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ .Values.sharedNamespace }}}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: egress}
+      ports:
+        - {protocol: TCP, port: 3128}
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}

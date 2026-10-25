@@ -1,0 +1,16 @@
+egress:
+  allowDomains:
+    - .openrouter.ai
+    - api.telegram.org
+  allowSsh:
+    - host: 192.0.2.10
+      port: 22
+agents:
+  tris:
+    image: registry.local/agent-hermes:test
+    running: true
+    signingKeySecret: tris-signing-key
+    signingKeyName: tris.key
+    storage: 1Gi
+    crontab: |
+      */30 * * * * /var/lib/agent/heartbeat.sh
