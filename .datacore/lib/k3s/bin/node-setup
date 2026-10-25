@@ -59,8 +59,14 @@ namespaces() {
 }
 
 images() {
+    # Pinned: there is no registry to pull from, and above 85% disk the kubelet
+    # deletes unused images -- an agent scaled to 0 (kill switch, backup) then
+    # cannot start again (seen on the first node, 2026-10-25).
     gunzip -c "$1" | k3s ctr images import -
-    k3s ctr images ls -q | grep -E 'agent-(hermes|egress)'
+    for i in $(k3s ctr images ls -q | grep -E 'agent-(hermes|egress)'); do
+        k3s ctr images label "$i" io.cri-containerd.pinned=pinned >/dev/null
+        echo "$i pinned"
+    done
 }
 
 tools() {
