@@ -81,6 +81,7 @@ spec:
           resources: {{- toYaml $d.gateway.resources | nindent 12 }}
           volumeMounts:
             - {name: home, mountPath: {{ $d.home }}}
+            {{- include "fleet.sshMount" $d | nindent 12 }}
             - {name: tmp, mountPath: /tmp}
             - {name: signing-key, mountPath: {{ printf "%s/.datacore/keys/%s" $d.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
         - name: cron
@@ -94,6 +95,7 @@ spec:
           resources: {{- toYaml $d.cron.resources | nindent 12 }}
           volumeMounts:
             - {name: home, mountPath: {{ $d.home }}}
+            {{- include "fleet.sshMount" $d | nindent 12 }}
             - {name: tmp, mountPath: /tmp}
             - {name: crontab, mountPath: /etc/datacore, readOnly: true}
             - {name: signing-key, mountPath: {{ printf "%s/.datacore/keys/%s" $d.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
@@ -108,6 +110,7 @@ spec:
           resources: {{- toYaml $d.stream.resources | nindent 12 }}
           volumeMounts:
             - {name: home, mountPath: {{ $d.home }}}
+            {{- include "fleet.sshMount" $d | nindent 12 }}
         {{- end }}
       volumes:
         - name: home

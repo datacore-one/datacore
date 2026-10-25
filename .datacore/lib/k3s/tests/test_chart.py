@@ -133,6 +133,20 @@ def test_signing_key_is_a_read_only_secret_mount():
     assert all(m["mountPath"] == "/var/lib/agent/.datacore/keys/tris.key" for m in mounts)
 
 
+def test_ssh_finds_the_agents_ssh_dir_when_home_is_moved():
+    # ssh reads ~/.ssh from the passwd home (the image's /var/lib/agent), not
+    # $HOME. With the volume at the old home path, every container must also
+    # see the volume's .ssh there, or the proxy line and deploy keys are ignored.
+    d = agent_deployments(render("--set", "defaults.home=/srv/oldhome"))[0]
+    pod = d["spec"]["template"]["spec"]
+    for c in pod["containers"]:
+        ssh = [m for m in c["volumeMounts"] if m["mountPath"] == "/var/lib/agent/.ssh"]
+        assert ssh == [{"name": "home", "mountPath": "/var/lib/agent/.ssh", "subPath": ".ssh"}], c["name"]
+    d = agent_deployments(render())[0]
+    mounts = [m["mountPath"] for c in d["spec"]["template"]["spec"]["containers"] for m in c["volumeMounts"]]
+    assert "/var/lib/agent/.ssh" not in mounts
+
+
 def test_kill_switch_is_a_replica_count():
     d = agent_deployments(render("--set", "agents.tris.running=false"))[0]
     assert d["spec"]["replicas"] == 0

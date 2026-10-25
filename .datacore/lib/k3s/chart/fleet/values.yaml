@@ -43,6 +43,9 @@ agents: {}
 
 defaults:
   home: /var/lib/agent
+  # The image user's passwd home. ssh reads ~/.ssh from here, not $HOME, so
+  # when home moves the volume's .ssh is mounted here as well.
+  imageHome: /var/lib/agent
   uid: 1000
   gateway:
     command: ["/opt/hermes-agent/venv/bin/python", "-m", "hermes_cli.main", "gateway", "run"]

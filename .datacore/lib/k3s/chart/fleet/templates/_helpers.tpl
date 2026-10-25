@@ -30,3 +30,9 @@ securityContext:
   allowPrivilegeEscalation: false
   capabilities: {drop: [ALL]}
 {{- end -}}
+
+{{- define "fleet.sshMount" -}}
+{{- if ne .home .imageHome }}
+- {name: home, mountPath: {{ printf "%s/.ssh" .imageHome }}, subPath: .ssh}
+{{- end }}
+{{- end }}
