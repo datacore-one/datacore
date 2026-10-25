@@ -53,8 +53,6 @@ spec:
       securityContext:
         runAsUser: {{ $d.uid }}
         runAsGroup: {{ $d.uid }}
-        fsGroup: {{ $d.uid }}
-        fsGroupChangePolicy: OnRootMismatch
         runAsNonRoot: true
       initContainers:
         # The provisioner creates the volume root root-owned and 0777, and it
@@ -73,6 +71,22 @@ spec:
           resources: {{- toYaml $d.stream.resources | nindent 12 }}
           volumeMounts:
             - {name: home, mountPath: {{ $d.home }}}
+        # The signing key, 0400 and owned by the agent, into memory. The Secret
+        # itself is root's (no fsGroup: it made the kubelet re-own the home).
+        - name: key-install
+          image: {{ $a.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", {{ printf "cp -f /run/secret/%s /run/agent-key/%s && chmod 0400 /run/agent-key/%s && chown %v:%v /run/agent-key/%s" $a.signingKeyName $a.signingKeyName $a.signingKeyName $d.uid $d.uid $a.signingKeyName | quote }}]
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL], add: [CHOWN]}
+          resources: {{- toYaml $d.stream.resources | nindent 12 }}
+          volumeMounts:
+            - {name: signing-key, mountPath: /run/secret, readOnly: true}
+            - {name: agent-key, mountPath: /run/agent-key}
         # Refuses to start unless the cutover recorded that the old host is
         # frozen, then points the volume's runtime paths at the image.
         - name: prepare
@@ -99,7 +113,7 @@ spec:
             - {name: home, mountPath: {{ $d.home }}}
             {{- include "fleet.sshMount" $d | nindent 12 }}
             - {name: tmp, mountPath: /tmp}
-            - {name: signing-key, mountPath: {{ printf "%s/.datacore/keys/%s" $d.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
+            - {name: agent-key, mountPath: {{ printf "%s/.datacore/keys/%s" $d.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
         - name: cron
           image: {{ $a.image }}
           imagePullPolicy: IfNotPresent
@@ -114,7 +128,7 @@ spec:
             {{- include "fleet.sshMount" $d | nindent 12 }}
             - {name: tmp, mountPath: /tmp}
             - {name: crontab, mountPath: /etc/datacore, readOnly: true}
-            - {name: signing-key, mountPath: {{ printf "%s/.datacore/keys/%s" $d.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
+            - {name: agent-key, mountPath: {{ printf "%s/.datacore/keys/%s" $d.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
         {{- if and $a.stream $a.stream.enabled }}
         - name: stream
           image: {{ $a.image }}
@@ -135,6 +149,8 @@ spec:
           emptyDir: {sizeLimit: {{ $d.tmpSize }}}
         - name: crontab
           configMap: {name: {{ $name }}-crontab}
+        - name: agent-key
+          emptyDir: {medium: Memory, sizeLimit: 1Mi}
         - name: signing-key
           secret:
             secretName: {{ $a.signingKeySecret }}

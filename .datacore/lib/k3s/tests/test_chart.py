@@ -143,12 +143,25 @@ def test_every_agent_container_holds_its_role_lock():
 
 
 def test_signing_key_is_a_read_only_secret_mount():
+    # The Secret is read only by one root step that installs the key, 0400 and
+    # owned by the agent, into memory; the agent's containers mount that copy
+    # read-only. No fsGroup: with it the kubelet re-owned the whole home
+    # (files 660, dirs 2770), which ssh and the private-state check refuse.
     d = agent_deployments(render())[0]
     pod = d["spec"]["template"]["spec"]
+    assert "fsGroup" not in pod["securityContext"]
     vols = {v["name"]: v for v in pod["volumes"]}
     assert vols["signing-key"]["secret"]["secretName"] == "tris-signing-key"
     assert vols["signing-key"]["secret"]["defaultMode"] == 0o400
-    mounts = [m for c in pod["containers"] for m in c["volumeMounts"] if m["name"] == "signing-key"]
+    assert vols["agent-key"]["emptyDir"]["medium"] == "Memory"
+    users = [c["name"] for c in pod["initContainers"] + pod["containers"]
+             if any(m["name"] == "signing-key" for m in c["volumeMounts"])]
+    assert users == ["key-install"]
+    ki = next(c for c in pod["initContainers"] if c["name"] == "key-install")
+    assert ki["securityContext"]["capabilities"] == {"drop": ["ALL"], "add": ["CHOWN"]}
+    script = ki["command"][-1]   # chown last: without FOWNER root cannot chmod the agent's file
+    assert script.index("chmod 0400") < script.index("chown 1000:1000")
+    mounts = [m for c in pod["containers"] for m in c["volumeMounts"] if m["name"] == "agent-key"]
     assert mounts and all(m["readOnly"] is True for m in mounts)
     assert all(m["mountPath"] == "/var/lib/agent/.datacore/keys/tris.key" for m in mounts)
 
