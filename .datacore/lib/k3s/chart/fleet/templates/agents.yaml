@@ -1,5 +1,8 @@
 {{- $root := . -}}
 {{- $d := .Values.defaults -}}
+{{- if and .Values.maxAgents (gt (len .Values.agents) (int .Values.maxAgents)) }}
+{{- fail (printf "%d agents but maxAgents (the licence cap) is %d; raising it is the owner's decision" (len .Values.agents) (int .Values.maxAgents)) }}
+{{- end }}
 {{- range $name, $agent := .Values.agents }}
 {{- if not $agent.runtime }}{{ fail (printf "agent %s: set runtime (one of: %s)" $name (keys $root.Values.runtimes | sortAlpha | join ", ")) }}{{ end }}
 {{- if not (hasKey $root.Values.runtimes $agent.runtime) }}{{ fail (printf "agent %s: unknown runtime %q (one of: %s)" $name $agent.runtime (keys $root.Values.runtimes | sortAlpha | join ", ")) }}{{ end }}

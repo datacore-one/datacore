@@ -62,6 +62,10 @@ kubeApi:
   cidrs: []
   ports: [6443, 443]
 
+# The licence cap: at most this many agents (0 = no cap). fleet-hire and the
+# chart both refuse one more; raising it is the owner's decision.
+maxAgents: 0
+
 # One entry per agent.
 agents: {}
 #  tris:

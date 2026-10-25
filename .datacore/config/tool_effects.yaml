@@ -154,6 +154,15 @@ effects:
       - '\btransfer(From)?\(address,\s*uint256\)'
       - '\b(send|transfer)\b[^\n]{0,40}\b(eth|usdc|usdt|btc|bzz|icp|sol|xdai)\b'
       - '\bdfx\s+(ledger\s+transfer|canister\s+call\s+\S+\s+(transfer|icrc1_transfer))'
+  agent.hire:
+    # Creating, changing or retiring an agent in the fleet (k3s): the hire
+    # controller and helm. An agent may PROPOSE a hire (`fleet-hire propose`);
+    # carrying one out waits for the owner's grant. The kill switch (fleetctl
+    # stop-all, a scale to zero) is deliberately not here: stopping never waits.
+    tools: ["Bash", "terminal", "execute_code", "delegate_task", "cronjob"]
+    patterns:
+      - '\bfleet-hire\s+(hire|retire)\b'
+      - '\bhelm\s+(install|upgrade|uninstall|rollback)\b'
   prod.deploy:
     # + OpenClaw's `gateway` tool updating its own runtime (update.run), which
     # the gate names `openclaw_gateway.<action>`; reading config stays open.

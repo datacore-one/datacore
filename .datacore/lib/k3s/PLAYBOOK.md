@@ -23,6 +23,7 @@ the deployment's private space, never here. Paths below are relative to
 | `bin/fleet-backup` | nightly backup on the node (uses agent-state) |
 | `bin/agent-restore` | restore one agent from a backup into an empty volume |
 | `bin/fleetctl` | kill switch: `stop-all`, `resume-all`, `status` |
+| `bin/fleet-hire` | hire or retire an agent, only on the owner's grant in the ledger |
 
 An agent is: a values entry (runtime, identity, schedule), a signing-key Secret
 (`<agent>-signing-key`), and a volume (`<agent>-home`). The pod runs three
@@ -165,3 +166,33 @@ the chief of staff. `fleetctl` needs the Kubernetes API. If the API itself does
 not answer, the hard stop is on the host, as root: `/usr/local/bin/k3s-killall.sh`
 stops every pod and k3s with them (start again with `systemctl start k3s`;
 agents that were running come back).
+
+## 8. Hire or retire an agent (`fleet-hire`)
+
+Hiring is the playbook's section 2, done by the controller and only on the
+owner's grant. An agent may propose; carrying a hire out is the co-sign effect
+`agent.hire` (`approvals_policy.yaml`, `tool_effects.yaml`).
+
+1. **Spec** (YAML): `name`, `runtime`, `role`, `storage`, `crontab`; optional
+   `charter`, `home`, `clones`, `setup`, `identity_dir`.
+2. **Propose:** `bin/fleet-hire propose spec.yaml --values <values> --out p.json`.
+   It refuses an unknown runtime, a taken name, and one agent over the licence
+   cap (`maxAgents`; the chart refuses it too). It prints the exact payload.
+3. **Owner approves** (on the owner's machine, signed as the approver):
+   `ledger_cli approve --space <space> --payload "$(cat p.json)"`.
+   The grant is bound to the payload's hash: an edited proposal needs a new one.
+4. **Hire:** `bin/fleet-hire hire --proposal p.json --space <space> --values <values> --actor <who records it>`.
+   It records the hire as a co-signed `item.create` (the ledger accepts it once),
+   adds the agent at `running: false`, installs it, makes the agent's signing
+   key (once; held only as its Secret), copies its identity, runs `clones` and
+   `setup`, writes the start marker, starts it and records `running: true`. If a
+   step fails, run the same command again: a recorded hire resumes.
+   Then add the printed verify key to `verify_keys` in `principals.yaml` on every
+   machine that verifies the agent's events, and declare the principal.
+5. **Retire:** `bin/fleet-hire retire <name> --space <space> --values <values> --out r.json`,
+   owner approves `r.json`, then the same command with `--proposal r.json --actor ...`.
+   The agent stops; its volume, key Secret and ledger are kept.
+
+Rehearsed on k3d, 2026-10-25: refused without a grant; approved, hired, running;
+a fourth agent refused by the cap of 3; retired on a second grant; the sandbox
+ledger verifies strictly.
