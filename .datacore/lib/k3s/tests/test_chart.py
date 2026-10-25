@@ -114,6 +114,26 @@ def test_single_writer_and_least_privilege():
             assert "memory" in c["resources"]["limits"], c["name"]
 
 
+def test_home_root_belongs_to_the_agent_and_is_not_world_writable():
+    # The provisioner creates the volume root root-owned and 0777, and the
+    # volume root IS the agent's home: the private-state check then refuses
+    # to run (found on the first live pod). One root step fixes only that
+    # directory, with nothing but CHOWN, before anything else starts.
+    for d in agent_deployments(render()):
+        pod = d["spec"]["template"]["spec"]
+        first = pod["initContainers"][0]
+        assert first["name"] == "home-owner"
+        sc = first["securityContext"]
+        assert sc["runAsUser"] == 0 and sc["runAsNonRoot"] is False
+        assert sc["allowPrivilegeEscalation"] is False
+        assert sc["readOnlyRootFilesystem"] is True
+        assert sc["capabilities"] == {"drop": ["ALL"], "add": ["CHOWN"]}
+        assert [m["name"] for m in first["volumeMounts"]] == ["home"]
+        script = first["command"][-1]
+        assert "chmod 00755 /var/lib/agent" in script and "chown 1000:1000 /var/lib/agent" in script
+        assert "-R" not in script
+
+
 def test_every_agent_container_holds_its_role_lock():
     # Even a hand-made second replica must not become a second writer: each
     # container runs under an exclusive lock for its role in the volume.

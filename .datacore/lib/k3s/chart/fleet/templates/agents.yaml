@@ -57,6 +57,22 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
         runAsNonRoot: true
       initContainers:
+        # The provisioner creates the volume root root-owned and 0777, and it
+        # is the agent's home. Give that one directory to the agent; nothing
+        # else is touched and nothing but CHOWN is granted.
+        - name: home-owner
+          image: {{ $a.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", {{ printf "[ \"$(stat -c %%u:%%a %s)\" = \"%v:755\" ] || { chmod 00755 %s && chown %v:%v %s; }" $d.home $d.uid $d.home $d.uid $d.uid $d.home | quote }}]
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL], add: [CHOWN]}
+          resources: {{- toYaml $d.stream.resources | nindent 12 }}
+          volumeMounts:
+            - {name: home, mountPath: {{ $d.home }}}
         # Refuses to start unless the cutover recorded that the old host is
         # frozen, then points the volume's runtime paths at the image.
         - name: prepare
