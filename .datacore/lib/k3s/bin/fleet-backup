@@ -1,19 +1,30 @@
 #!/bin/sh
-# fleet-backup -- nightly copy of every agent's volume, run as root on the node.
+# fleet-backup -- nightly backup of what git does not hold, for every agent, run
+# as root on the node.
 #
-#   fleet-backup                      back up every agent volume in $NS
-#   fleet-backup restore AGENT FILE   put a backup back into AGENT's volume
+#   fleet-backup              back up every agent in $NS
+#   fleet-backup AGENT        back up one agent
 #
-# The agent is stopped for the copy so its SQLite databases and git working
-# copies are consistent, then started again with the replica count it had. An
-# agent already stopped (kill switch, or off) is copied without being started.
-# Backups land in $DEST/<agent>/<UTC time>.tar.gz with a .sha256 beside them;
-# the newest $KEEP are kept. The signing key is NOT in the volume: it is a
-# Secret, backed up separately as $DEST/<agent>/signing-key.secret.yaml (root only).
+# Each agent's home is mostly git checkouts, which origin holds. agent-state
+# packs everything else: files outside checkouts (history, memory, ledger
+# sequence marks, credentials, scripts), the files git does not track inside
+# each checkout, a patch of uncommitted edits, a bundle of unpushed commits and
+# a manifest of every checkout -- caches and the runtime's install paths
+# (ConfigMap <agent>-agent, key backupExclude) skipped. It reports every
+# checkout that is not pushed.
+#
+# The agent is stopped for the copy so its SQLite databases are consistent,
+# then started again with the replica count it had; an agent already stopped
+# (kill switch) is copied without being started. Backups land in
+# $DEST/<agent>/<UTC time>.tar.gz with a .sha256 beside them; the newest $KEEP
+# are kept. The signing key is a Secret, saved as
+# $DEST/<agent>/signing-key.secret.yaml (root only). Restore: bin/agent-restore
+# from an operator machine (it clones through the agent's own proxy and creds).
 set -eu
 NS=${NS:-firm}
 DEST=${DEST:-/var/backups/fleet}
 KEEP=${KEEP:-7}
+STATE_TOOL=${STATE_TOOL:-/usr/local/sbin/agent-state}
 export KUBECONFIG=${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}
 K="kubectl -n $NS"
 
@@ -43,41 +54,30 @@ start_agent() {  # start_agent AGENT REPLICAS
 backup_one() {
     a=$1
     path=$(volume_path "$a")
+    exclude=$($K get configmap "$a-agent" -o jsonpath='{.data.backupExclude}')
     mkdir -p "$DEST/$a"; chmod 700 "$DEST" "$DEST/$a"
     ts=$(date -u +%Y%m%dT%H%M%SZ)
     out="$DEST/$a/$ts.tar.gz"
     was=$(stop_agent "$a")
     trap 'start_agent "$a" "$was"' EXIT
-    tar -C "$path" -czpf "$out.part" .
+    python3 "$STATE_TOOL" backup --home "$path" --exclude "$exclude" --out "$out" 2> "$DEST/$a/$ts.log" \
+        || { cat "$DEST/$a/$ts.log"; log "$a: backup FAILED"; exit 1; }
     start_agent "$a" "$was"; trap - EXIT
-    mv "$out.part" "$out"
     (cd "$DEST/$a" && sha256sum "$ts.tar.gz" > "$ts.tar.gz.sha256")
     $K get secret "$a-signing-key" -o yaml > "$DEST/$a/signing-key.secret.yaml"
-    chmod 600 "$out" "$DEST/$a/signing-key.secret.yaml"
-    ls -1t "$DEST/$a"/*.tar.gz | tail -n +$((KEEP + 1)) | while read -r old; do rm -f "$old" "$old.sha256"; done
-    log "$a: $out ($(du -h "$out" | cut -f1)), agent back to $was replica(s)"
-}
-
-restore_one() {
-    a=$1; file=$2
-    [ -f "$file" ] || { log "no such backup: $file"; exit 1; }
-    (cd "$(dirname "$file")" && sha256sum -c "$(basename "$file").sha256" >/dev/null) \
-        || { log "checksum mismatch: $file"; exit 1; }
-    path=$(volume_path "$a")
-    was=$(stop_agent "$a")
-    aside="$path.pre-restore-$(date -u +%Y%m%dT%H%M%SZ)"
-    mkdir "$aside"
-    find "$path" -mindepth 1 -maxdepth 1 -exec mv {} "$aside"/ \;
-    tar -C "$path" -xzpf "$file"
-    start_agent "$a" "$was"
-    log "$a restored from $file; previous content kept in $aside"
+    chmod 600 "$out" "$DEST/$a/$ts.log" "$DEST/$a/signing-key.secret.yaml"
+    ls -1t "$DEST/$a"/*.tar.gz | tail -n +$((KEEP + 1)) | while read -r old; do
+        rm -f "$old" "$old.sha256" "${old%.tar.gz}.log"
+    done
+    unpushed=$(grep -c "unpushed\|uncommitted" "$DEST/$a/$ts.log" || true)
+    log "$a: $out ($(du -h "$out" | cut -f1)), $unpushed checkout(s) not fully pushed (see $ts.log), agent back to $was replica(s)"
 }
 
 case "${1:-}" in
-    restore) restore_one "$2" "$3" ;;
+    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
     "")
-        for pvc in $($K get pvc -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep -- '-home$'); do
-            backup_one "${pvc%-home}"
+        for cm in $($K get configmap -l datacore.one/agent -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep -- '-agent$'); do
+            backup_one "${cm%-agent}"
         done ;;
-    *) sed -n '2,12p' "$0"; exit 2 ;;
+    *) backup_one "$1" ;;
 esac

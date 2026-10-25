@@ -1,5 +1,7 @@
 # Datacore agents on k3s
 
+**Operating the fleet: see [PLAYBOOK.md](PLAYBOOK.md)** (install, add an agent, import, back up, restore, move, stop).
+
 Datacore agents as pods on one k3s node: one Deployment per agent, every
 outbound connection through one proxy. A deployment's own values and cutover
 settings (host names, addresses, crontabs) live in the operator's private
@@ -63,10 +65,10 @@ curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=v1.31.4+k3s1 sh -s - \
   --tls-san <tailnet-ip> --write-kubeconfig-mode 600
 kubectl create namespace firm && kubectl create namespace shared
 # images (no registry): build on the operator machine, then
-docker build -t agent-base:1 images/agent-base
-docker build --build-arg BASE=agent-base:1 -t agent-hermes:0.19.0-3 images/agent-hermes
-docker build --build-arg BASE=agent-base:1 -t agent-openclaw:2026.9.3-1 images/agent-openclaw
-docker save agent-hermes:0.19.0-3 agent-openclaw:2026.9.3-1 agent-egress:0.1.0 | gzip > fleet-images.tar.gz
+docker build -t agent-base:2 images/agent-base
+docker build --build-arg BASE=agent-base:2 -t agent-hermes:0.19.0-4 images/agent-hermes
+docker build --build-arg BASE=agent-base:2 -t agent-openclaw:2026.9.3-2 images/agent-openclaw
+docker save agent-hermes:0.19.0-4 agent-openclaw:2026.9.3-2 agent-egress:0.1.0 | gzip > fleet-images.tar.gz
 bin/node-setup images fleet-images.tar.gz   # on the node: imports and PINS them
 # Pinned because there is no registry: above 85% disk the kubelet deletes unused
 # images, and an agent scaled to 0 (kill switch, backup) could not start again.

@@ -268,3 +268,34 @@ def test_an_agent_without_a_runtime_is_refused():
     r = subprocess.run(["helm", "template", "fleet", str(CHART), "-f", str(RUNTIMES),
                         "--set", "agents.x.storage=1Gi"], capture_output=True, text=True)
     assert r.returncode != 0 and "runtime" in r.stderr
+
+
+def test_node_scripts_learn_each_agents_runtime_home_and_backup_excludes():
+    out = subprocess.run(["helm", "template", "fleet", str(CHART), "-f", str(RUNTIMES)],
+                         check=True, capture_output=True, text=True).stdout
+    cms = {d["metadata"]["name"]: d for d in yaml.safe_load_all(out) if d and d["kind"] == "ConfigMap"}
+    tris, data = cms["tris-agent"]["data"], cms["data-agent"]["data"]
+    assert (tris["runtime"], tris["home"]) == ("hermes", "/srv/oldhome")
+    assert tris["backupExclude"] == ".hermes/hermes-agent,.hermes/node"
+    assert (data["runtime"], data["home"], data["backupExclude"]) == ("openclaw", "/var/lib/agent", "")
+    assert tris["image"].startswith("agent-hermes:")
+
+
+def test_an_upgrade_never_restarts_an_agent_the_kill_switch_stopped():
+    # fleetctl stop-all scales to 0 and remembers the count in an annotation;
+    # a later `helm upgrade` must keep 0 while that annotation is there.
+    tpl = (CHART / "templates" / "agents.yaml").read_text()
+    assert 'lookup "apps/v1" "Deployment"' in tpl and "datacore.one/resume-replicas" in tpl
+
+
+def test_standby_runs_nothing_of_the_agent():
+    # A restored copy is checked in standby: volume, env and runtime links
+    # as in production, but no gateway (Telegram), no schedule (pushes), no stream.
+    deps = render_runtimes("--set", "agents.tris.mode=standby")
+    pod = deps["tris"]["spec"]["template"]["spec"]
+    assert [c["name"] for c in pod["containers"]] == ["standby"]
+    c = pod["containers"][0]
+    assert c["command"][:2] == ["/usr/local/bin/agent-run", "standby"] and "sleep" in c["command"]
+    prepare = next(i for i in pod["initContainers"] if i["name"] == "prepare")
+    assert {"name": "AGENT_STANDBY", "value": "1"} in prepare["env"]
+    assert [x["name"] for x in _containers(deps["data"]).values()] == ["gateway", "cron"]

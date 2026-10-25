@@ -1,17 +1,28 @@
-# Throwaway-cluster rehearsal with a fixture actor: no real key, no bot token.
+# Throwaway-cluster rehearsal with fixture actors: no real key, no bot token.
 egress:
   image: agent-egress:0.1.0
   openHttps: true
   allowDomains: [.openrouter.ai, api.telegram.org, .github.com]
   allowSsh:
     - {host: github.com, port: 22}
+runtimes:
+  hermes: {image: agent-hermes:0.19.0-4}
+  openclaw: {image: agent-openclaw:2026.9.3-2}
 agents:
   tris:
-    image: agent-hermes:0.19.0-1
+    runtime: hermes
     running: false
     signingKeySecret: tris-signing-key
     signingKeyName: tris.key
     storage: 2Gi
     stream: {enabled: false}
+    crontab: |
+      * * * * * date -u >> /var/lib/agent/.datacore/state/fixture-cron.log
+  probe:
+    runtime: openclaw
+    running: true
+    signingKeySecret: probe-signing-key
+    signingKeyName: probe.key
+    storage: 2Gi
     crontab: |
       * * * * * date -u >> /var/lib/agent/.datacore/state/fixture-cron.log

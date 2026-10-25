@@ -27,6 +27,26 @@ data:
   crontab: |
 {{ $a.crontab | indent 4 }}
 ---
+# What node-side tools (fleet-backup) need to know about the agent.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-agent
+  namespace: {{ $root.Values.teamNamespace }}
+  labels:
+    datacore.one/agent: {{ $name }}
+data:
+  runtime: {{ $a.runtime | quote }}
+  home: {{ $a.home | quote }}
+  image: {{ $a.image | quote }}
+  uid: {{ $a.uid | quote }}
+  backupExclude: {{ join "," ($a.backupExclude | default list) | quote }}
+---
+{{- /* The kill switch (fleetctl stop-all) scales to 0 and remembers the count in
+       an annotation; an upgrade keeps 0 while it is there, so a chart change
+       never restarts an agent that was stopped. */}}
+{{- $live := lookup "apps/v1" "Deployment" $root.Values.teamNamespace $name }}
+{{- $stopped := and $live (hasKey (($live.metadata).annotations | default dict) "datacore.one/resume-replicas") }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -36,7 +56,7 @@ metadata:
     datacore.one/agent: {{ $name }}
     app.kubernetes.io/part-of: datacore-fleet
 spec:
-  replicas: {{ if $a.running }}1{{ else }}0{{ end }}
+  replicas: {{ if and $a.running (not $stopped) }}1{{ else }}0{{ end }}
   # Recreate, never RollingUpdate: two pods of one agent would be two writers
   # on one ledger chain and two pollers on one Telegram bot.
   strategy: {type: Recreate}
@@ -103,11 +123,31 @@ spec:
           command: ["/usr/local/bin/agent-prepare"]
           env:
             {{- include "fleet.agentEnv" (list $root $a) | nindent 12 }}
+            {{- if eq ($a.mode | default "") "standby" }}
+            - {name: AGENT_STANDBY, value: "1"}
+            {{- end }}
           {{- include "fleet.containerSecurity" . | nindent 10 }}
           resources: {{- toYaml $a.stream.resources | nindent 12 }}
           volumeMounts:
             - {name: home, mountPath: {{ $a.home }}}
       containers:
+        {{- if eq ($a.mode | default "") "standby" }}
+        # Standby: everything mounted as in production, none of the agent's processes.
+        - name: standby
+          image: {{ $a.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/agent-run", "standby", "sleep", "infinity"]
+          workingDir: {{ $a.home }}
+          env:
+            {{- include "fleet.agentEnv" (list $root $a) | nindent 12 }}
+          {{- include "fleet.containerSecurity" . | nindent 10 }}
+          resources: {{- toYaml $a.cron.resources | nindent 12 }}
+          volumeMounts:
+            - {name: home, mountPath: {{ $a.home }}}
+            {{- include "fleet.sshMount" $a | nindent 12 }}
+            - {name: tmp, mountPath: /tmp}
+            - {name: agent-key, mountPath: {{ printf "%s/.datacore/keys/%s" $a.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
+        {{- else }}
         - name: gateway
           image: {{ $a.image }}
           imagePullPolicy: IfNotPresent
@@ -149,6 +189,7 @@ spec:
           volumeMounts:
             - {name: home, mountPath: {{ $a.home }}}
             {{- include "fleet.sshMount" $a | nindent 12 }}
+        {{- end }}
         {{- end }}
       volumes:
         - name: home

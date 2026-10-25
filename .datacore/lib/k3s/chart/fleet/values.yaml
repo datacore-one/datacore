@@ -33,7 +33,7 @@ egress:
 # here. Any key may be overridden per agent (e.g. `image`, `home`).
 runtimes:
   hermes:
-    image: agent-hermes:0.19.0-3
+    image: agent-hermes:0.19.0-4
     gateway:
       command: ["/opt/hermes-agent/venv/bin/python", "-m", "hermes_cli.main", "gateway", "run"]
       workingDir: .hermes
@@ -43,17 +43,18 @@ runtimes:
       - {name: VIRTUAL_ENV, value: /opt/hermes-agent/venv}
     # Appended to PATH after the system tools: Hermes's own venv last.
     pathTail: /opt/node/bin:/opt/hermes-agent/venv/bin
-    # What git does not hold, relative to home (the state-only backup).
-    state: [.hermes/state.db, .hermes/sessions, .hermes/config.yaml, .hermes/.env, .hermes/skills, .hermes/cron, .plur, .datacore/state, .datacore/env, .datacore/secrets, .ssh, .git-credentials, .gitconfig]
+    # The backup holds what git does not (bin/agent-state): everything in the
+    # home outside checkouts, caches skipped, and these runtime install paths.
+    backupExclude: [.hermes/hermes-agent, .hermes/node]
   openclaw:
-    image: agent-openclaw:2026.9.3-1
+    image: agent-openclaw:2026.9.3-2
     gateway:
       command: ["openclaw", "gateway", "run", "--bind", "loopback"]
       workingDir: .openclaw
     env:
       - {name: OPENCLAW_STATE_DIR, value: "$(HOME)/.openclaw"}
     pathTail: /opt/node/bin
-    state: [.openclaw, .plur, .datacore/state, .datacore/env, .datacore/secrets, .ssh, .git-credentials, .gitconfig]
+    backupExclude: []
 
 # One entry per agent.
 agents: {}

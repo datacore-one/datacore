@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# agent-restore AGENT FILE [--live] -- put an agent back from a fleet-backup file.
+# agent-restore AGENT --mark-live    -- after a standby check: the original is
+#                                       stopped for good, this copy may start.
+#
+# Into the agent's EMPTY volume (a new machine, or a replaced volume): the
+# state goes back, every checkout is cloned as the agent through the proxy and
+# put at its recorded commit, unpushed commits and uncommitted edits are laid
+# back on top (bin/agent-state). The signing key Secret is created from
+# signing-key.secret.yaml beside FILE if it is missing.
+#
+# The restored agent can NOT start by itself: the start marker from the backup
+# is removed, because the original may still be running somewhere. Pass --live
+# only when the original is stopped for good (moving the fleet); otherwise
+# start it in standby (agents.<name>.mode=standby) to check it.
+#
+# Settings: VALUES (deployment values), NS, RELEASE; the agent's entry must be
+# installed with running: false so its volume exists.
+set -euo pipefail
+AGENT=${1:?usage: agent-restore AGENT FILE [--live] | AGENT --mark-live}
+FILE=${2:?usage: agent-restore AGENT FILE [--live] | AGENT --mark-live}
+LIVE=${3:-}
+[ "$FILE" = "--mark-live" ] || [ -f "$FILE" ] || { echo "agent-restore: no such file: $FILE" >&2; exit 2; }
+NS=${NS:-firm}
+AGENT_HOME=$(kubectl -n "$NS" get configmap "$AGENT-agent" -o jsonpath='{.data.home}')
+IMAGE=$(kubectl -n "$NS" get configmap "$AGENT-agent" -o jsonpath='{.data.image}')
+HELPER=$AGENT-restore
+# shellcheck source=agent-common.sh
+. "$(dirname "$0")/agent-common.sh"
+need AGENT_HOME IMAGE
+
+if [ "$FILE" = "--mark-live" ]; then
+  kc scale "deploy/$AGENT" --replicas=0 >/dev/null
+  kc wait --for=delete pod -l "app.kubernetes.io/name=$AGENT" --timeout=180s >/dev/null 2>&1 || true
+  mark_runs_nowhere_else "restored copy made live; original stopped for good"
+  helper_down
+  say "now: helm upgrade without mode=standby and with running: true"
+  exit 0
+fi
+cluster_ready
+if [ -f "$FILE.sha256" ]; then
+  (cd "$(dirname "$FILE")" && sha256sum -c "$(basename "$FILE").sha256" >/dev/null) || die "checksum mismatch: $FILE"
+fi
+secret="$(dirname "$FILE")/signing-key.secret.yaml"
+if ! kc get secret "$AGENT-signing-key" >/dev/null 2>&1; then
+  [ -f "$secret" ] || die "no Secret $AGENT-signing-key and no $secret beside the backup"
+  python3 - "$secret" "$NS" <<'PY' | kubectl apply -f - >/dev/null
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+m = d["metadata"]
+d["metadata"] = {"name": m["name"], "namespace": sys.argv[2]}
+print(yaml.safe_dump(d))
+PY
+  say "signing key Secret restored"
+fi
+helper_up
+kc cp "$HERE/bin/agent-state" "$HELPER:/tmp/agent-state" >/dev/null
+kc cp "$FILE" "$HELPER:/tmp/backup.tar.gz" >/dev/null
+in_vol python3 /tmp/agent-state restore --home "$AGENT_HOME" --file /tmp/backup.tar.gz
+in_vol rm -f /tmp/backup.tar.gz
+if [ "$LIVE" = "--live" ]; then
+  mark_runs_nowhere_else "restored from $(basename "$FILE"); original stopped for good"
+else
+  in_vol rm -f "$AGENT_HOME/.datacore/state/k3s-cutover-frozen"
+  say "restored; start marker removed -- start in standby to check, or rerun with --live once the original is stopped for good"
+fi
+helper_down

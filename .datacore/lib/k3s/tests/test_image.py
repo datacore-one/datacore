@@ -78,3 +78,16 @@ def test_hermes_hook_links_the_runtime_into_the_image():
     hook = (HERMES / "prepare.d" / "50-hermes").read_text()
     assert '"$HOME/.hermes/hermes-agent" /opt/hermes-agent' in hook
     assert '"$HOME/.hermes/node" /opt/node' in hook
+
+
+def test_standby_prepares_the_runtime_without_the_start_marker(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    hooks = tmp_path / "prepare.d"
+    hooks.mkdir()
+    (hooks / "10-mark").write_text('#!/bin/sh\ntouch "$HOME/hook-ran"\n')
+    (hooks / "10-mark").chmod(0o755)
+    env = dict(os.environ, HOME=str(home), AGENT_PREPARE_D=str(hooks), AGENT_STANDBY="1")
+    r = subprocess.run(["sh", str(BASE / "agent-prepare")], env=env, capture_output=True, text=True)
+    assert r.returncode == 0 and "standby" in r.stdout, r.stderr
+    assert (home / "hook-ran").exists()

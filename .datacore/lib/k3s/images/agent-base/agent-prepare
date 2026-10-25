@@ -10,12 +10,17 @@
 #    pointing the volume's runtime paths at the code in the image.
 set -eu
 FROZEN="$HOME/.datacore/state/k3s-cutover-frozen"
-if [ ! -s "$FROZEN" ]; then
+if [ "${AGENT_STANDBY:-}" = "1" ]; then
+    # Standby runs none of the agent's processes (no gateway, schedule or
+    # stream), so it may start without the marker -- to check a restored copy.
+    echo "agent-prepare: standby: the agent's processes will not run"
+elif [ ! -s "$FROZEN" ]; then
     echo "agent-prepare: refusing to start: $FROZEN is missing." >&2
     echo "agent-prepare: nothing has recorded that this agent runs nowhere else." >&2
     exit 1
+else
+    echo "agent-prepare: runs nowhere else: $(head -1 "$FROZEN")"
 fi
-echo "agent-prepare: runs nowhere else: $(head -1 "$FROZEN")"
 
 hooks="${AGENT_PREPARE_D:-/usr/local/lib/agent-prepare.d}"
 for hook in "$hooks"/*; do

@@ -7,7 +7,7 @@
 #   node-setup lockdown                API and kubelet reachable only from loopback, tailnet, pods
 #   node-setup namespaces              team and shared namespaces
 #   node-setup images BUNDLE.tar.gz    import the agent and proxy images
-#   node-setup tools DIR               install fleetctl and fleet-backup from DIR/bin
+#   node-setup tools DIR               install fleetctl, fleet-backup and agent-state from DIR/bin
 #   node-setup backup-timer            nightly fleet-backup at 03:50 UTC
 #   node-setup killswitch USER         read-and-scale-only kubeconfig for USER (chat kill switch)
 set -eu
@@ -72,7 +72,8 @@ images() {
 tools() {
     install -m 755 "$1/bin/fleetctl" /usr/local/bin/fleetctl
     install -m 750 "$1/bin/fleet-backup" /usr/local/sbin/fleet-backup
-    log "fleetctl and fleet-backup installed"
+    install -m 750 "$1/bin/agent-state" /usr/local/sbin/agent-state
+    log "fleetctl, fleet-backup and agent-state installed"
 }
 
 backup_timer() {
