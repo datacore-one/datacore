@@ -36,8 +36,15 @@ def urlopen(request, *, timeout=30, allow_loopback=False):
     if (parsed.scheme != 'https' and not local) or not parsed.hostname or parsed.username is not None or parsed.password is not None:
         raise ValueError('authenticated APIs require an HTTPS endpoint without userinfo')
     # Redirects and ambient proxies must not receive bearer/API-key headers.
+    # An HTTPS proxy is the exception: urllib tunnels through it with CONNECT,
+    # so it sees only host:port and the headers travel inside TLS. It is the
+    # only way out of an agent pod.
+    proxies = {}
+    https_proxy = urllib.request.getproxies().get('https')
+    if parsed.scheme == 'https' and https_proxy and not urllib.request.proxy_bypass(parsed.hostname):
+        proxies = {'https': https_proxy}
     try:
-        response = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({})).open(request, timeout=timeout)
+        response = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler(proxies)).open(request, timeout=timeout)
         return BoundedResponse(response)
     except urllib.error.HTTPError as error:
         code = error.code
