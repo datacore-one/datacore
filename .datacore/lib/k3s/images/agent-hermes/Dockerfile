@@ -29,6 +29,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl git openssh-client netcat-openbsd tini jq sqlite3 \
       procps rsync less xz-utils ffmpeg gh \
       python3 python3-pip python3-venv python3-yaml \
+      # Ubuntu's general Python libraries, as on the old host: the duties run on
+      # this Python (pytest needs pygments; promise evals failed without it).
+      python3-pygments python3-packaging python3-jinja2 python3-markupsafe \
+      python3-dateutil python3-tz python3-six python3-attr python3-jsonschema \
+      python3-typing-extensions python3-rich python3-markdown-it python3-mdurl \
+      python3-jwt python3-distro python3-babel python3-chardet python3-colorama \
+      python3-requests python3-click python3-icalendar python3-vobject \
+      python3-cryptography python3-openssl python3-socks python3-brotli \
+      python3-zstandard python3-setuptools python3-pyparsing python3-pexpect \
+      python3-uritemplate python3-httplib2 python3-oauthlib python3-boto3 \
       libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 \
       libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
       libgbm1 libpango-1.0-0 libcairo2 libasound2t64 libatspi2.0-0t64 \
