@@ -100,3 +100,14 @@ def test_in_a_pod_a_stopped_agent_and_an_unreachable_host_read_down(tmp_path):
     sb = _pod_sandbox(tmp_path, host_up=False, pod_running=False)
     out = _probe(sb)
     assert " beta DOWN " in out and " gamma DOWN " in out, out
+
+
+def test_on_the_host_a_pod_agent_is_asked_of_the_cluster_too(tmp_path):
+    # The box host probes Tris and Data, which are pods: an ssh handshake to
+    # their hostname (mapped to the box itself) read UP even with the pod down.
+    sb = _pod_sandbox(tmp_path, host_up=True, pod_running=False)
+    env = {k: v for k, v in sb["env"].items() if k != "HTTPS_PROXY"}
+    sb["env"] = env
+    (sb["net"] / "up.json").write_text(json.dumps({"beta": True, "gamma": True}))
+    out = _probe(sb)
+    assert " gamma DOWN " in out, out
