@@ -137,6 +137,14 @@ def test_home_root_belongs_to_the_agent_and_is_not_world_writable():
         assert "-R" not in script
 
 
+def test_pod_hostname_is_the_agent_name():
+    # Ledger guards map hostname -> actor through the roster; a pod's default
+    # hostname changes on every restart, and the push guard then refused the
+    # agent's own log as "another actor's" (first live pod, 2026-10-25).
+    for d in agent_deployments(render()):
+        assert d["spec"]["template"]["spec"]["hostname"] == d["metadata"]["name"]
+
+
 def test_every_agent_container_holds_its_role_lock():
     # Even a hand-made second replica must not become a second writer: each
     # container runs under an exclusive lock for its role in the volume.

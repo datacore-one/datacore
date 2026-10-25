@@ -47,6 +47,8 @@ spec:
       annotations:
         checksum/crontab: {{ $a.crontab | sha256sum }}
     spec:
+      # Stable: ledger guards map hostname -> actor through the roster.
+      hostname: {{ $name }}
       automountServiceAccountToken: false
       enableServiceLinks: false
       terminationGracePeriodSeconds: 90
