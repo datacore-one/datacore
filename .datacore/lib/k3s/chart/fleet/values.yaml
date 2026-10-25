@@ -28,11 +28,38 @@ egress:
     requests: {cpu: 50m, memory: 64Mi, ephemeral-storage: 64Mi}
     limits: {memory: 256Mi, ephemeral-storage: 512Mi}
 
+# Runtime templates. An agent names one (`runtime: hermes`) and supplies only
+# its identity and schedule; image, commands, paths and resources come from
+# here. Any key may be overridden per agent (e.g. `image`, `home`).
+runtimes:
+  hermes:
+    image: agent-hermes:0.19.0-3
+    gateway:
+      command: ["/opt/hermes-agent/venv/bin/python", "-m", "hermes_cli.main", "gateway", "run"]
+      workingDir: .hermes
+    # Extra environment; $(HOME) expands to the agent's home.
+    env:
+      - {name: HERMES_HOME, value: "$(HOME)/.hermes"}
+      - {name: VIRTUAL_ENV, value: /opt/hermes-agent/venv}
+    # Appended to PATH after the system tools: Hermes's own venv last.
+    pathTail: /opt/node/bin:/opt/hermes-agent/venv/bin
+    # What git does not hold, relative to home (the state-only backup).
+    state: [.hermes/state.db, .hermes/sessions, .hermes/config.yaml, .hermes/.env, .hermes/skills, .hermes/cron, .plur, .datacore/state, .datacore/env, .datacore/secrets, .ssh, .git-credentials, .gitconfig]
+  openclaw:
+    image: agent-openclaw:2026.9.3-1
+    gateway:
+      command: ["openclaw", "gateway", "run", "--bind", "loopback"]
+      workingDir: .openclaw
+    env:
+      - {name: OPENCLAW_STATE_DIR, value: "$(HOME)/.openclaw"}
+    pathTail: /opt/node/bin
+    state: [.openclaw, .plur, .datacore/state, .datacore/env, .datacore/secrets, .ssh, .git-credentials, .gitconfig]
+
 # One entry per agent.
 agents: {}
 #  tris:
-#    image: agent-hermes:0.19.0-1
-#    (the agent's volume is mounted at defaults.home, its old home path)
+#    runtime: hermes
+#    home: /home/gregor      # optional: an imported agent keeps its old home path
 #    running: true
 #    signingKeySecret: tris-signing-key
 #    signingKeyName: tris.key
@@ -48,7 +75,6 @@ defaults:
   imageHome: /var/lib/agent
   uid: 1000
   gateway:
-    command: ["/opt/hermes-agent/venv/bin/python", "-m", "hermes_cli.main", "gateway", "run"]
     resources:
       requests: {cpu: 200m, memory: 512Mi, ephemeral-storage: 256Mi}
       limits: {memory: 3Gi, ephemeral-storage: 2Gi}

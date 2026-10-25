@@ -6,7 +6,10 @@ settings (host names, addresses, crontabs) live in the operator's private
 space, never in this repository.
 
 ```
-images/agent-hermes/   runtime of a Hermes agent (code only; state is in the volume)
+images/agent-base/     what every agent image shares: OS, system Python, supercronic,
+                       the agent user, the role lock and the start guard
+images/agent-hermes/   Hermes runtime on the base (Tris, Winston)
+images/agent-openclaw/ OpenClaw runtime on the base (Data)
 images/egress/         squid, the agents' only way out
 chart/fleet/           Helm chart: agents, proxy, network policies
 bin/fleetctl           kill switch: stop-all, resume-all, status
@@ -60,12 +63,36 @@ curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=v1.31.4+k3s1 sh -s - \
   --tls-san <tailnet-ip> --write-kubeconfig-mode 600
 kubectl create namespace firm && kubectl create namespace shared
 # images (no registry): build on the operator machine, then
-docker save agent-hermes:0.19.0-2 agent-egress:0.1.0 | gzip > fleet-images.tar.gz
+docker build -t agent-base:1 images/agent-base
+docker build --build-arg BASE=agent-base:1 -t agent-hermes:0.19.0-3 images/agent-hermes
+docker build --build-arg BASE=agent-base:1 -t agent-openclaw:2026.9.3-1 images/agent-openclaw
+docker save agent-hermes:0.19.0-3 agent-openclaw:2026.9.3-1 agent-egress:0.1.0 | gzip > fleet-images.tar.gz
 bin/node-setup images fleet-images.tar.gz   # on the node: imports and PINS them
 # Pinned because there is no registry: above 85% disk the kubelet deletes unused
 # images, and an agent scaled to 0 (kill switch, backup) could not start again.
 helm install fleet chart/fleet -n firm -f <private values file>
 ```
+
+## Runtime templates
+
+An agent's values name a runtime and supply only what is the agent's own:
+
+```yaml
+agents:
+  data:
+    runtime: openclaw          # or hermes
+    signingKeySecret: data-signing-key
+    signingKeyName: data.key
+    storage: 20Gi
+    crontab: |
+      */15 * * * * ...
+    # home: /home/gregor       # only for an imported agent that keeps its old home path
+```
+
+Image, gateway command, runtime environment, PATH and the list of state that git
+does not hold come from `runtimes.<name>` in `values.yaml`; any of them can be
+overridden per agent. A new runtime is a new image on `agent-base` (with its own
+`prepare.d` steps) plus one `runtimes:` entry.
 
 ## Cutover (per agent)
 

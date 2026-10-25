@@ -1,6 +1,10 @@
 {{- $root := . -}}
 {{- $d := .Values.defaults -}}
-{{- range $name, $a := .Values.agents }}
+{{- range $name, $agent := .Values.agents }}
+{{- if not $agent.runtime }}{{ fail (printf "agent %s: set runtime (one of: %s)" $name (keys $root.Values.runtimes | sortAlpha | join ", ")) }}{{ end }}
+{{- if not (hasKey $root.Values.runtimes $agent.runtime) }}{{ fail (printf "agent %s: unknown runtime %q (one of: %s)" $name $agent.runtime (keys $root.Values.runtimes | sortAlpha | join ", ")) }}{{ end }}
+{{- /* The agent's settings: defaults, then its runtime template, then its own values. */}}
+{{- $a := mergeOverwrite (deepCopy $d) (deepCopy (index $root.Values.runtimes $agent.runtime)) (deepCopy $agent) }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -43,6 +47,7 @@ spec:
       labels:
         app.kubernetes.io/name: {{ $name }}
         datacore.one/role: agent
+        datacore.one/runtime: {{ $a.runtime }}
         datacore.one/agent: {{ $name }}
       annotations:
         checksum/crontab: {{ $a.crontab | sha256sum }}
@@ -53,8 +58,8 @@ spec:
       enableServiceLinks: false
       terminationGracePeriodSeconds: 90
       securityContext:
-        runAsUser: {{ $d.uid }}
-        runAsGroup: {{ $d.uid }}
+        runAsUser: {{ $a.uid }}
+        runAsGroup: {{ $a.uid }}
         runAsNonRoot: true
       initContainers:
         # The provisioner creates the volume root root-owned and 0777, and it
@@ -63,30 +68,30 @@ spec:
         - name: home-owner
           image: {{ $a.image }}
           imagePullPolicy: IfNotPresent
-          command: ["/bin/sh", "-c", {{ printf "{ [ \"$(stat -c %%u:%%a %s)\" = \"%v:755\" ] || { chmod 00755 %s && chown %v:%v %s; }; } && chmod 1777 /tmp" $d.home $d.uid $d.home $d.uid $d.uid $d.home | quote }}]
+          command: ["/bin/sh", "-c", {{ printf "{ [ \"$(stat -c %%u:%%a %s)\" = \"%v:755\" ] || { chmod 00755 %s && chown %v:%v %s; }; } && chmod 1777 /tmp" $a.home $a.uid $a.home $a.uid $a.uid $a.home | quote }}]
           securityContext:
             runAsUser: 0
             runAsNonRoot: false
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL], add: [CHOWN]}
-          resources: {{- toYaml $d.stream.resources | nindent 12 }}
+          resources: {{- toYaml $a.stream.resources | nindent 12 }}
           volumeMounts:
-            - {name: home, mountPath: {{ $d.home }}}
+            - {name: home, mountPath: {{ $a.home }}}
             - {name: tmp, mountPath: /tmp}
         # The signing key, 0400 and owned by the agent, into memory. The Secret
         # itself is root's (no fsGroup: it made the kubelet re-own the home).
         - name: key-install
           image: {{ $a.image }}
           imagePullPolicy: IfNotPresent
-          command: ["/bin/sh", "-c", {{ printf "cp -f /run/secret/%s /run/agent-key/%s && chmod 0400 /run/agent-key/%s && chown %v:%v /run/agent-key/%s" $a.signingKeyName $a.signingKeyName $a.signingKeyName $d.uid $d.uid $a.signingKeyName | quote }}]
+          command: ["/bin/sh", "-c", {{ printf "cp -f /run/secret/%s /run/agent-key/%s && chmod 0400 /run/agent-key/%s && chown %v:%v /run/agent-key/%s" $a.signingKeyName $a.signingKeyName $a.signingKeyName $a.uid $a.uid $a.signingKeyName | quote }}]
           securityContext:
             runAsUser: 0
             runAsNonRoot: false
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL], add: [CHOWN]}
-          resources: {{- toYaml $d.stream.resources | nindent 12 }}
+          resources: {{- toYaml $a.stream.resources | nindent 12 }}
           volumeMounts:
             - {name: signing-key, mountPath: /run/secret, readOnly: true}
             - {name: agent-key, mountPath: /run/agent-key}
@@ -97,59 +102,59 @@ spec:
           imagePullPolicy: IfNotPresent
           command: ["/usr/local/bin/agent-prepare"]
           env:
-            {{- include "fleet.agentEnv" (list $root) | nindent 12 }}
+            {{- include "fleet.agentEnv" (list $root $a) | nindent 12 }}
           {{- include "fleet.containerSecurity" . | nindent 10 }}
-          resources: {{- toYaml $d.stream.resources | nindent 12 }}
+          resources: {{- toYaml $a.stream.resources | nindent 12 }}
           volumeMounts:
-            - {name: home, mountPath: {{ $d.home }}}
+            - {name: home, mountPath: {{ $a.home }}}
       containers:
         - name: gateway
           image: {{ $a.image }}
           imagePullPolicy: IfNotPresent
-          command: {{ toJson (concat (list "/usr/local/bin/agent-run" "gateway") $d.gateway.command) }}
-          workingDir: {{ printf "%s/.hermes" $d.home }}
+          command: {{ toJson (concat (list "/usr/local/bin/agent-run" "gateway") $a.gateway.command) }}
+          workingDir: {{ printf "%s/%s" $a.home $a.gateway.workingDir }}
           env:
-            {{- include "fleet.agentEnv" (list $root) | nindent 12 }}
+            {{- include "fleet.agentEnv" (list $root $a) | nindent 12 }}
           {{- include "fleet.containerSecurity" . | nindent 10 }}
-          resources: {{- toYaml $d.gateway.resources | nindent 12 }}
+          resources: {{- toYaml $a.gateway.resources | nindent 12 }}
           volumeMounts:
-            - {name: home, mountPath: {{ $d.home }}}
-            {{- include "fleet.sshMount" $d | nindent 12 }}
+            - {name: home, mountPath: {{ $a.home }}}
+            {{- include "fleet.sshMount" $a | nindent 12 }}
             - {name: tmp, mountPath: /tmp}
-            - {name: agent-key, mountPath: {{ printf "%s/.datacore/keys/%s" $d.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
+            - {name: agent-key, mountPath: {{ printf "%s/.datacore/keys/%s" $a.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
         - name: cron
           image: {{ $a.image }}
           imagePullPolicy: IfNotPresent
           command: ["/usr/local/bin/agent-run", "cron", "/usr/local/bin/supercronic", "-passthrough-logs", "/etc/datacore/crontab"]
-          workingDir: {{ $d.home }}
+          workingDir: {{ $a.home }}
           env:
-            {{- include "fleet.agentEnv" (list $root) | nindent 12 }}
+            {{- include "fleet.agentEnv" (list $root $a) | nindent 12 }}
           {{- include "fleet.containerSecurity" . | nindent 10 }}
-          resources: {{- toYaml $d.cron.resources | nindent 12 }}
+          resources: {{- toYaml $a.cron.resources | nindent 12 }}
           volumeMounts:
-            - {name: home, mountPath: {{ $d.home }}}
-            {{- include "fleet.sshMount" $d | nindent 12 }}
+            - {name: home, mountPath: {{ $a.home }}}
+            {{- include "fleet.sshMount" $a | nindent 12 }}
             - {name: tmp, mountPath: /tmp}
             - {name: crontab, mountPath: /etc/datacore, readOnly: true}
-            - {name: agent-key, mountPath: {{ printf "%s/.datacore/keys/%s" $d.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
+            - {name: agent-key, mountPath: {{ printf "%s/.datacore/keys/%s" $a.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
         {{- if and $a.stream $a.stream.enabled }}
         - name: stream
           image: {{ $a.image }}
           imagePullPolicy: IfNotPresent
-          command: ["/usr/local/bin/agent-run", "stream", "/bin/sh", "-c", "set -a; . {{ $d.home }}/.datacore/agent-stream-tail/config.env; set +a; exec python3 {{ $d.home }}/.datacore/agent-stream-tail/agent_stream_tail.py"]
+          command: ["/usr/local/bin/agent-run", "stream", "/bin/sh", "-c", "set -a; . {{ $a.home }}/.datacore/agent-stream-tail/config.env; set +a; exec python3 {{ $a.home }}/.datacore/agent-stream-tail/agent_stream_tail.py"]
           env:
-            {{- include "fleet.agentEnv" (list $root) | nindent 12 }}
+            {{- include "fleet.agentEnv" (list $root $a) | nindent 12 }}
           {{- include "fleet.containerSecurity" . | nindent 10 }}
-          resources: {{- toYaml $d.stream.resources | nindent 12 }}
+          resources: {{- toYaml $a.stream.resources | nindent 12 }}
           volumeMounts:
-            - {name: home, mountPath: {{ $d.home }}}
-            {{- include "fleet.sshMount" $d | nindent 12 }}
+            - {name: home, mountPath: {{ $a.home }}}
+            {{- include "fleet.sshMount" $a | nindent 12 }}
         {{- end }}
       volumes:
         - name: home
           persistentVolumeClaim: {claimName: {{ $name }}-home}
         - name: tmp
-          emptyDir: {sizeLimit: {{ $d.tmpSize }}}
+          emptyDir: {sizeLimit: {{ $a.tmpSize }}}
         - name: crontab
           configMap: {name: {{ $name }}-crontab}
         - name: agent-key

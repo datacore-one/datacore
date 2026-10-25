@@ -7,6 +7,7 @@ egress:
       port: 22
 agents:
   tris:
+    runtime: hermes
     image: registry.local/agent-hermes:test
     running: true
     signingKeySecret: tris-signing-key

@@ -181,7 +181,7 @@ def test_ssh_finds_the_agents_ssh_dir_when_home_is_moved():
     # ssh reads ~/.ssh from the passwd home (the image's /var/lib/agent), not
     # $HOME. With the volume at the old home path, every container must also
     # see the volume's .ssh there, or the proxy line and deploy keys are ignored.
-    d = agent_deployments(render("--set", "defaults.home=/srv/oldhome"))[0]
+    d = agent_deployments(render("--set", "agents.tris.home=/srv/oldhome"))[0]
     pod = d["spec"]["template"]["spec"]
     for c in pod["containers"]:
         ssh = [m for m in c["volumeMounts"] if m["mountPath"] == "/var/lib/agent/.ssh"]
@@ -210,3 +210,61 @@ def test_crontab_comes_from_values():
     cms = [c for c in of_kind(render(), "ConfigMap") if c["metadata"]["name"] == "tris-crontab"]
     tab = cms[0]["data"]["crontab"]
     assert "*/30 * * * * /var/lib/agent/heartbeat.sh" in tab
+
+
+RUNTIMES = Path(__file__).resolve().parent / "fixtures" / "values-runtimes.yaml"
+
+
+def render_runtimes(*extra: str) -> dict[str, dict]:
+    out = subprocess.run(
+        ["helm", "template", "fleet", str(CHART), "-f", str(RUNTIMES), *extra],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    docs = [d for d in yaml.safe_load_all(out) if d]
+    return {d["metadata"]["name"]: d for d in agent_deployments(docs)}
+
+
+def _containers(dep):
+    return {c["name"]: c for c in dep["spec"]["template"]["spec"]["containers"]}
+
+
+def _env(c):
+    return {e["name"]: e.get("value") for e in c.get("env", [])}
+
+
+def test_each_agent_is_rendered_from_its_runtime_template():
+    # A new agent names a runtime; image, gateway command and runtime paths
+    # come from the template, so the fleet grows without copying chart code.
+    deps = render_runtimes()
+    tris, data = _containers(deps["tris"]), _containers(deps["data"])
+    assert tris["gateway"]["image"].startswith("agent-hermes:")
+    assert data["gateway"]["image"].startswith("agent-openclaw:")
+    assert "hermes_cli.main" in tris["gateway"]["command"]
+    assert data["gateway"]["command"][2:] == ["openclaw", "gateway", "run", "--bind", "loopback"]
+    assert _env(tris["gateway"])["HERMES_HOME"] == "/srv/oldhome/.hermes"
+    assert "HERMES_HOME" not in _env(data["gateway"])
+    assert _env(data["gateway"])["OPENCLAW_STATE_DIR"] == "/var/lib/agent/.openclaw"
+    assert "/opt/hermes-agent/venv/bin" not in _env(data["cron"])["PATH"]
+
+
+def test_each_agent_has_its_own_home():
+    # Tris keeps his old home path; a fresh agent lives at the image home.
+    deps = render_runtimes()
+    for name, home in (("tris", "/srv/oldhome"), ("data", "/var/lib/agent")):
+        for c in _containers(deps[name]).values():
+            mounts = {m["mountPath"] for m in c["volumeMounts"] if m["name"] == "home"}
+            assert home in mounts, (name, c["name"], mounts)
+            assert _env(c)["HOME"] == home, (name, c["name"])
+        owner = deps[name]["spec"]["template"]["spec"]["initContainers"][0]["command"][-1]
+        assert f"chown 1000:1000 {home}" in owner, name
+
+
+def test_an_agent_may_pin_its_own_image():
+    deps = render_runtimes("--set", "agents.data.image=agent-openclaw:pinned")
+    assert {c["image"] for c in _containers(deps["data"]).values()} == {"agent-openclaw:pinned"}
+
+
+def test_an_agent_without_a_runtime_is_refused():
+    r = subprocess.run(["helm", "template", "fleet", str(CHART), "-f", str(RUNTIMES),
+                        "--set", "agents.x.storage=1Gi"], capture_output=True, text=True)
+    assert r.returncode != 0 and "runtime" in r.stderr
