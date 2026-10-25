@@ -61,7 +61,7 @@ spec:
         - name: home-owner
           image: {{ $a.image }}
           imagePullPolicy: IfNotPresent
-          command: ["/bin/sh", "-c", {{ printf "[ \"$(stat -c %%u:%%a %s)\" = \"%v:755\" ] || { chmod 00755 %s && chown %v:%v %s; }" $d.home $d.uid $d.home $d.uid $d.uid $d.home | quote }}]
+          command: ["/bin/sh", "-c", {{ printf "{ [ \"$(stat -c %%u:%%a %s)\" = \"%v:755\" ] || { chmod 00755 %s && chown %v:%v %s; }; } && chmod 1777 /tmp" $d.home $d.uid $d.home $d.uid $d.uid $d.home | quote }}]
           securityContext:
             runAsUser: 0
             runAsNonRoot: false
@@ -71,6 +71,7 @@ spec:
           resources: {{- toYaml $d.stream.resources | nindent 12 }}
           volumeMounts:
             - {name: home, mountPath: {{ $d.home }}}
+            - {name: tmp, mountPath: /tmp}
         # The signing key, 0400 and owned by the agent, into memory. The Secret
         # itself is root's (no fsGroup: it made the kubelet re-own the home).
         - name: key-install

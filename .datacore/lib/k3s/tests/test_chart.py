@@ -128,7 +128,10 @@ def test_home_root_belongs_to_the_agent_and_is_not_world_writable():
         assert sc["allowPrivilegeEscalation"] is False
         assert sc["readOnlyRootFilesystem"] is True
         assert sc["capabilities"] == {"drop": ["ALL"], "add": ["CHOWN"]}
-        assert [m["name"] for m in first["volumeMounts"]] == ["home"]
+        assert [m["name"] for m in first["volumeMounts"]] == ["home", "tmp"]
+        # The emptyDir /tmp is 0777 without the sticky bit; the same check
+        # refuses that too (every promise eval using a temp dir went red).
+        assert first["command"][-1].endswith("chmod 1777 /tmp")
         script = first["command"][-1]
         assert "chmod 00755 /var/lib/agent" in script and "chown 1000:1000 /var/lib/agent" in script
         assert "-R" not in script
