@@ -37,9 +37,18 @@ tests/                 chart contract and kill-switch tests (pytest)
   With `openHttps: true` (research mode, Tris) any public https site is also
   allowed; every request is logged on the proxy's stdout. SSH leaves through
   the proxy via `ProxyCommand nc -X connect`.
-- **The signing key** is a Secret mounted read-only at its old path. Files
+- **The signing key** is a Secret that only the `key-install` init step reads
+  (root, CHOWN only). It copies the key into memory, 0400 and owned by the
+  agent, and the containers mount that copy read-only at its old path. Files
   listed in the cutover's `NEVER_COPY` (an owner's key found on the old host)
   are not copied: an agent's pod never holds them.
+- **Ownership stays as it was on the old host.** No `fsGroup`: with it, the
+  kubelet re-owns the whole home (files 660, dirs 2770), which ssh and
+  Datacore's private-state check refuse. The `home-owner` init step (root, CHOWN
+  only) gives the volume root to the agent at 0755, since the provisioner makes
+  it root-owned and 0777. It also sets `/tmp` to 1777 like a host's.
+- **ssh reads the passwd home**, not `$HOME`: when `defaults.home` differs from
+  the image user's home, the volume's `.ssh` is also mounted at `imageHome`.
 
 ## Install on the box (once)
 
@@ -51,7 +60,10 @@ curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=v1.31.4+k3s1 sh -s - \
   --tls-san <tailnet-ip> --write-kubeconfig-mode 600
 kubectl create namespace firm && kubectl create namespace shared
 # images (no registry): build on the operator machine, then
-docker save agent-hermes:0.19.0-1 agent-egress:0.1.0 | ssh box sudo k3s ctr images import -
+docker save agent-hermes:0.19.0-2 agent-egress:0.1.0 | gzip > fleet-images.tar.gz
+bin/node-setup images fleet-images.tar.gz   # on the node: imports and PINS them
+# Pinned because there is no registry: above 85% disk the kubelet deletes unused
+# images, and an agent scaled to 0 (kill switch, backup) could not start again.
 helm install fleet chart/fleet -n firm -f <private values file>
 ```
 
@@ -71,6 +83,12 @@ host is re-enabled, so the old host starts from the newest state.
 
 `bin/fleetctl stop-all` scales every agent to zero and remembers what ran;
 `bin/fleetctl resume-all` restores exactly that.
+
+## Backups
+
+`bin/fleet-backup` stops the agent, tars its volume (about 7 minutes for a
+7 GB volume) and starts it again. Keep the node's disk below 85%: a local copy
+is as large as the volume, and at 90% the kubelet starts evicting pods.
 
 ## Not yet here
 
