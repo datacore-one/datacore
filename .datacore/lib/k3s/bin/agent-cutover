@@ -18,7 +18,7 @@
 # private values): AGENT, OLD_HOST, OLD_HOME, NS, RELEASE, VALUES, IMAGE,
 # USER_UNITS, SYSTEM_UNITS, PROCESS_PATTERN, SYNC_CMD, NEVER_COPY (owner keys
 # and other files an agent's pod must not hold), ADJUST_EXTRA (shell run in
-# the volume after the generic edits).
+# the volume after the generic edits), SSH_OPTS, CLAIM_UNIT.
 set -euo pipefail
 
 [ -n "${CUTOVER_ENV:-}" ] && [ -f "$CUTOVER_ENV" ] || { echo "agent-cutover: set CUTOVER_ENV to the deployment's settings file" >&2; exit 2; }
@@ -30,6 +30,8 @@ NS=${NS:-firm}
 RELEASE=${RELEASE:-fleet}
 NEVER_COPY=${NEVER_COPY:-}
 ADJUST_EXTRA=${ADJUST_EXTRA:-}
+SSH_OPTS=${SSH_OPTS:-}
+CLAIM_UNIT=${CLAIM_UNIT:-ledger-claim.service}
 for v in AGENT OLD_HOST OLD_HOME VALUES IMAGE USER_UNITS SYSTEM_UNITS PROCESS_PATTERN SYNC_CMD; do
   [ -n "${!v:-}" ] || { echo "agent-cutover: $v is not set in $CUTOVER_ENV" >&2; exit 2; }
 done
@@ -47,7 +49,8 @@ for f in $NEVER_COPY; do EXCLUDES+=("--exclude=./$f"); done
 
 say() { printf '%s\n' "agent-cutover[$AGENT]: $*"; }
 die() { say "STOP: $*" >&2; exit 1; }
-old() { ssh -o BatchMode=yes "$OLD_HOST" "$@"; }
+# shellcheck disable=SC2086
+old() { ssh -o BatchMode=yes $SSH_OPTS "$OLD_HOST" "$@"; }
 kc() { kubectl -n "$NS" "$@"; }
 
 helper_up() {
@@ -80,8 +83,8 @@ freeze() {
   old "sudo systemctl disable --now $SYSTEM_UNITS"
   # Let a claim tick in flight finish rather than killing it mid-task.
   for i in $(seq 1 60); do
-    old "systemctl is-active --quiet ledger-claim.service" || break
-    [ "$i" = 60 ] && die "ledger-claim.service still running after 10 minutes"
+    old "systemctl is-active --quiet $CLAIM_UNIT" || break
+    [ "$i" = 60 ] && die "$CLAIM_UNIT still running after 10 minutes"
     sleep 10
   done
   old "crontab -l > ~/.datacore/state/crontab.pre-k3s && sed -E 's/^([^#].*# datacore-job:)/# k3s-cutover # \1/' ~/.datacore/state/crontab.pre-k3s | crontab -"
@@ -119,7 +122,7 @@ key() {
 copy() {
   helper_up
   say "streaming $OLD_HOST:$OLD_HOME into volume $AGENT-home"
-  old "tar -C $OLD_HOME ${EXCLUDES[*]} -cpf - ." | in_vol tar -C "$OLD_HOME" -xpf -
+  old "tar -C $OLD_HOME ${EXCLUDES[*]} -cpf - ." | in_vol tar -C "$OLD_HOME" --no-overwrite-dir -xpf -
   say "comparing checksums of state that must arrive intact"
   manifest='cd '$OLD_HOME' && find .hermes/state.db .hermes/sessions .hermes/cron .hermes/config.yaml .hermes/SOUL.md .datacore/identity.env .plur -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum | sha256sum'
   a=$(old "$manifest"); b=$(in_vol sh -c "$manifest")

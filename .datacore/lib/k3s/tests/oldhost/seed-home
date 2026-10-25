@@ -1,0 +1,28 @@
+#!/bin/sh
+# Fixture home of a Hermes agent on its old host.
+set -eu
+cd "$HOME"
+mkdir -p .hermes/sessions .hermes/cron .hermes/hermes-agent .datacore/keys .datacore/state \
+         .plur Data/1-datacore/.datacore/state/seq-hwm .npm .cache/uv .cache/ms-playwright
+printf 'terminal:\n  backend: ssh\n  cwd: .\nmodel:\n  default: fixture\n' > .hermes/config.yaml
+echo "soul" > .hermes/SOUL.md
+head -c 200000 /dev/urandom > .hermes/state.db
+echo '{"session": 1}' > .hermes/sessions/s1.jsonl
+echo '{"jobs": []}' > .hermes/cron/jobs.json
+echo "installed runtime, must not be copied" > .hermes/hermes-agent/marker
+echo "npm cache, must not be copied" > .npm/marker
+echo "browser engine, copied" > .cache/ms-playwright/marker
+head -c 32 /dev/urandom > .datacore/keys/tris.key
+head -c 32 /dev/urandom > .datacore/keys/gregor.key
+chmod 600 .datacore/keys/*.key
+printf 'DATACORE_ACTOR=tris\nDATACORE_LEDGER_SIGN=1\n' > .datacore/identity.env
+echo "engram store" > .plur/engrams.yaml
+echo 41 > Data/1-datacore/.datacore/state/seq-hwm/tris.seq
+printf 'Host github.com\n  User git\n' > .ssh/config
+cat > tris-sync.sh <<'EOF'
+R=$HOME/.datacore/v2-runner
+git -C "$R" fetch -q origin 2>/dev/null && git -C "$R" merge --ff-only origin/main -q 2>/dev/null
+echo "nested rc=0 root rc=0"
+EOF
+chmod 755 tris-sync.sh
+printf '17 * * * * echo refresh # datacore-job:runner-refresh\n0 8 * * * echo verify # datacore-job:job-verify\n' | crontab -
