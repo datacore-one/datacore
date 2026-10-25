@@ -6,7 +6,7 @@
 # The volume's ~/.hermes/hermes-agent and ~/.hermes/node become symlinks into
 # /opt (prepare.d/50-hermes), so every path the agent's config and scripts
 # already use keeps working unchanged.
-ARG BASE=agent-base:2
+ARG BASE=agent-base:3
 FROM ${BASE}
 
 ARG NODE_VERSION=22.22.2

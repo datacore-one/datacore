@@ -91,3 +91,12 @@ def test_standby_prepares_the_runtime_without_the_start_marker(tmp_path):
     r = subprocess.run(["sh", str(BASE / "agent-prepare")], env=env, capture_output=True, text=True)
     assert r.returncode == 0 and "standby" in r.stdout, r.stderr
     assert (home / "hook-ran").exists()
+
+
+def test_the_base_carries_the_kill_switch_for_an_agent_that_holds_it():
+    # Winston's /fleet_* chat commands run fleetctl inside his pod, with a
+    # ServiceAccount that may only scale deployments.
+    df = (BASE / "Dockerfile").read_text()
+    assert "COPY bin/fleetctl /usr/local/bin/fleetctl" in df
+    assert "ARG KUBECTL_VERSION=v1.31.4" in df and "dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" in df
+    assert "${KUBECTL_SHA256}  /usr/local/bin/kubectl\" | sha256sum -c" in df

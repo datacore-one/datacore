@@ -5,7 +5,7 @@
 # volume ($OPENCLAW_STATE_DIR, set by the chart); the Datacore tool gate is a
 # plugin linked from the agent's runner checkout, as on its old host, so the
 # runner's pinned commit decides the gate's code.
-ARG BASE=agent-base:2
+ARG BASE=agent-base:3
 FROM ${BASE}
 
 ARG NODE_VERSION=24.21.0

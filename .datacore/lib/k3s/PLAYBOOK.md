@@ -46,11 +46,11 @@ bin/node-setup killswitch <chief-of-staff-user>   # check: that user's fleetctl 
 Images are built on an operator machine (no registry; that is why they are pinned):
 
 ```sh
-docker build -t agent-base:2 images/agent-base
-docker build --build-arg BASE=agent-base:2 -t agent-hermes:0.19.0-4 images/agent-hermes
-docker build --build-arg BASE=agent-base:2 -t agent-openclaw:2026.9.3-2 images/agent-openclaw
+docker build -f images/agent-base/Dockerfile -t agent-base:3 .
+docker build --build-arg BASE=agent-base:3 -t agent-hermes:0.19.0-5 images/agent-hermes
+docker build --build-arg BASE=agent-base:3 -t agent-openclaw:2026.9.3-3 images/agent-openclaw
 docker build -t agent-egress:0.1.0 images/egress
-docker save agent-hermes:0.19.0-4 agent-openclaw:2026.9.3-2 agent-egress:0.1.0 | gzip > fleet-images.tar.gz
+docker save agent-hermes:0.19.0-5 agent-openclaw:2026.9.3-3 agent-egress:0.1.0 | gzip > fleet-images.tar.gz
 ```
 
 Then the chart, with every agent at `running: false`:

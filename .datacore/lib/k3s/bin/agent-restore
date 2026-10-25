@@ -56,8 +56,12 @@ fi
 helper_up
 kc cp "$HERE/bin/agent-state" "$HELPER:/tmp/agent-state" >/dev/null
 kc cp "$FILE" "$HELPER:/tmp/backup.tar.gz" >/dev/null
-in_vol python3 /tmp/agent-state restore --home "$AGENT_HOME" --file /tmp/backup.tar.gz
+# ssh clones, too, leave through the proxy: a pod has no other way out.
+in_vol env GIT_SSH_COMMAND="ssh -o ProxyCommand='nc -X connect -x egress.shared.svc.cluster.local:3128 %h %p'" \
+  python3 /tmp/agent-state restore --home "$AGENT_HOME" --file /tmp/backup.tar.gz
 in_vol rm -f /tmp/backup.tar.gz
+in_vol sh -c "mkdir -p $AGENT_HOME/.ssh && chmod 700 $AGENT_HOME/.ssh && touch $AGENT_HOME/.ssh/config && { grep -q egress.shared.svc $AGENT_HOME/.ssh/config || { printf 'Host *\n  ProxyCommand nc -X connect -x egress.shared.svc.cluster.local:3128 %%h %%p\n\n' | cat - $AGENT_HOME/.ssh/config > $AGENT_HOME/.ssh/config.new && mv $AGENT_HOME/.ssh/config.new $AGENT_HOME/.ssh/config && chmod 600 $AGENT_HOME/.ssh/config; }; }"
+say "ssh through the proxy in $AGENT_HOME/.ssh/config"
 if [ "$LIVE" = "--live" ]; then
   mark_runs_nowhere_else "restored from $(basename "$FILE"); original stopped for good"
 else

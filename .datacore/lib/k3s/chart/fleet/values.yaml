@@ -33,7 +33,7 @@ egress:
 # here. Any key may be overridden per agent (e.g. `image`, `home`).
 runtimes:
   hermes:
-    image: agent-hermes:0.19.0-4
+    image: agent-hermes:0.19.0-5
     gateway:
       command: ["/opt/hermes-agent/venv/bin/python", "-m", "hermes_cli.main", "gateway", "run"]
       workingDir: .hermes
@@ -47,7 +47,7 @@ runtimes:
     # home outside checkouts, caches skipped, and these runtime install paths.
     backupExclude: [.hermes/hermes-agent, .hermes/node]
   openclaw:
-    image: agent-openclaw:2026.9.3-2
+    image: agent-openclaw:2026.9.3-3
     gateway:
       command: ["openclaw", "gateway", "run", "--bind", "loopback"]
       workingDir: .openclaw
@@ -55,6 +55,12 @@ runtimes:
       - {name: OPENCLAW_STATE_DIR, value: "$(HOME)/.openclaw"}
     pathTail: /opt/node/bin
     backupExclude: []
+
+# The API server, for an agent with `killSwitch: true` (its chat commands
+# scale the fleet). Private: the node's address.
+kubeApi:
+  cidrs: []
+  ports: [6443, 443]
 
 # One entry per agent.
 agents: {}

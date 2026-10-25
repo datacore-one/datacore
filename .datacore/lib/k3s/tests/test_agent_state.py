@@ -131,3 +131,67 @@ def test_restore_never_overwrites_an_existing_home(home, tmp_path):
     run("backup", "--home", str(home), "--out", str(out))
     r = run("restore", "--home", str(home), "--file", str(out))
     assert r.returncode != 0 and "not empty" in r.stderr
+
+
+def test_an_excluded_path_is_neither_backed_up_nor_cloned(home, tmp_path):
+    # A second checkout of the same repo (Data's OpenClaw workspace copy) is
+    # dropped on purpose: excluding it must keep it out of the manifest too.
+    dup = home / ".openclaw/workspace/Data"
+    dup.parent.mkdir(parents=True)
+    git(tmp_path, "clone", "-q", str(tmp_path / "remotes/data.git"), str(dup))
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--exclude", ".openclaw/workspace/Data",
+               "--out", str(out)).returncode == 0
+    manifest = json.load(tarfile.open(out).extractfile("manifest.json"))
+    assert ".openclaw/workspace/Data" not in {r["path"] for r in manifest["repos"]}
+    assert not any("workspace/Data" in n for n in tarfile.open(out).getnames())
+
+
+def test_local_branches_no_remote_has_survive_a_restore(home, tmp_path):
+    # Found on Data's host: module repos with a local branch of 15-24 commits
+    # never pushed. A fresh clone gets only what origin has.
+    repo = home / "Data"
+    git(repo, "checkout", "-q", "-b", "pre-publish")
+    commit(repo, "draft.md", "local branch work")
+    git(repo, "checkout", "-q", "main")
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    r = run("restore", "--home", str(fresh), "--file", str(out))
+    assert r.returncode == 0, r.stderr
+    assert git(fresh / "Data", "rev-parse", "pre-publish") == git(repo, "rev-parse", "pre-publish")
+    assert git(fresh / "Data", "rev-parse", "--abbrev-ref", "HEAD") == "main"
+
+
+def test_a_repo_without_a_remote_travels_whole_with_its_history(home, tmp_path):
+    # Data's OpenClaw workspace is a local-only repo; nothing can clone it.
+    ws = home / ".openclaw/workspace"
+    ws.mkdir(parents=True)
+    git(ws, "init", "-q", "-b", "master")
+    commit(ws, "SOUL.md", "who I am")
+    commit(ws, "MEMORY.md", "what I remember")
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    r = run("restore", "--home", str(fresh), "--file", str(out))
+    assert r.returncode == 0, r.stderr
+    assert (fresh / ".openclaw/workspace/SOUL.md").read_text() == "who I am"
+    assert git(fresh / ".openclaw/workspace", "rev-parse", "HEAD") == git(ws, "rev-parse", "HEAD")
+
+
+def test_a_bundle_without_head_restores_its_branches(home, tmp_path):
+    # Data's 2-plur-space: the checked-out branch is pushed, a side branch is
+    # not -- the bundle then has no HEAD, and fetching HEAD must not be tried.
+    repo = home / ".datacore/v2-runner"
+    git(repo, "checkout", "-q", "-b", "backup/side")
+    commit(repo, "side.md", "only on a side branch")
+    git(repo, "checkout", "-q", "main")
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    r = run("restore", "--home", str(fresh), "--file", str(out))
+    assert r.returncode == 0, r.stderr
+    assert git(fresh / ".datacore/v2-runner", "rev-parse", "backup/side") == git(repo, "rev-parse", "backup/side")

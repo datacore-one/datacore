@@ -37,3 +37,7 @@ securityContext:
 - {name: home, mountPath: {{ printf "%s/.ssh" .imageHome }}, subPath: .ssh}
 {{- end }}
 {{- end }}
+
+{{- define "fleet.anyKillSwitch" -}}
+{{- range $n, $a := .Values.agents }}{{ if $a.killSwitch }}yes{{ end }}{{ end -}}
+{{- end -}}

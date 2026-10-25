@@ -39,6 +39,9 @@ helper_up() {
       \"volumeMounts\":[{\"name\":\"home\",\"mountPath\":\"$AGENT_HOME\"}]}],
       \"volumes\":[{\"name\":\"home\",\"persistentVolumeClaim\":{\"claimName\":\"$AGENT-home\"}}]}}" >/dev/null
   kc wait --for=condition=Ready "pod/$HELPER" --timeout=180s >/dev/null
+  # ssh reads ~/.ssh from the passwd home (the image's /var/lib/agent), not
+  # $HOME: point it at the agent's, as the chart does for the agent's pod.
+  [ "$AGENT_HOME" = /var/lib/agent ] || in_vol sh -c "[ -e /var/lib/agent/.ssh ] || ln -s $AGENT_HOME/.ssh /var/lib/agent/.ssh"
 }
 in_vol() { kc exec -i "$HELPER" -- "$@"; }
 helper_down() { kc delete pod "$HELPER" --ignore-not-found --wait=true >/dev/null; }

@@ -6,10 +6,15 @@
 # the images, state in the agent's volume mounted at the agent's HOME.
 # A runtime image (agent-hermes, agent-openclaw) adds its own Node and runtime,
 # and its own steps under /usr/local/lib/agent-prepare.d.
+#
+# Build context is .datacore/lib/k3s (it copies bin/fleetctl):
+#   docker build -f images/agent-base/Dockerfile -t agent-base:N .
 FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
 
 ARG SUPERCRONIC_VERSION=v0.2.33
 ARG SUPERCRONIC_SHA256=feefa310da569c81b99e1027b86b27b51e6ee9ab647747b49099645120cfc671
+ARG KUBECTL_VERSION=v1.31.4
+ARG KUBECTL_SHA256=298e19e9c6c17199011404278f0ff8168a7eca4217edad9097af577023a5620f
 
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8 \
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -52,8 +57,14 @@ RUN pip3 install --no-cache-dir --break-system-packages \
       defusedxml==0.7.1 youtube-transcript-api==1.2.4 yt-dlp==2026.10.21 \
       cryptography==50.0.2 markdown-it-py==4.2.0
 
-COPY agent-prepare agent-run /usr/local/bin/
-RUN chmod 755 /usr/local/bin/agent-prepare /usr/local/bin/agent-run \
+# The fleet kill switch, for an agent whose ServiceAccount may scale the fleet
+# (chart: killSwitch). Without that account it can do nothing.
+RUN curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl \
+    && echo "${KUBECTL_SHA256}  /usr/local/bin/kubectl" | sha256sum -c - \
+    && chmod 755 /usr/local/bin/kubectl
+COPY bin/fleetctl /usr/local/bin/fleetctl
+COPY images/agent-base/agent-prepare images/agent-base/agent-run /usr/local/bin/
+RUN chmod 755 /usr/local/bin/agent-prepare /usr/local/bin/agent-run /usr/local/bin/fleetctl \
     && mkdir -p /usr/local/lib/agent-prepare.d
 
 WORKDIR /var/lib/agent

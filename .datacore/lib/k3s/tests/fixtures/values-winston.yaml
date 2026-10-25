@@ -1,0 +1,32 @@
+# A chief-of-staff agent: an extra daemon container with a published port, and
+# the kill switch from inside the cluster.
+kubeApi:
+  cidrs: [192.0.2.1/32, 10.43.0.1/32]
+  ports: [6443, 443]
+agents:
+  winston:
+    runtime: hermes
+    home: /srv/oldhome
+    running: true
+    signingKeySecret: winston-signing-key
+    signingKeyName: winston.key
+    storage: 1Gi
+    killSwitch: true
+    crontab: |
+      */5 * * * * touch /srv/oldhome/.datacore/cos/heartbeat
+    extraContainers:
+      - name: daemon
+        command: ["/srv/oldhome/app/.venv/bin/python", "-m", "datacored"]
+        workingDir: /srv/oldhome/app
+        envFromSecret: winston-datacored-env
+        env:
+          - {name: DATACORED_PORT, value: "8787"}
+        ports: [{name: http, containerPort: 8787, hostPort: 8787}]
+  tris:
+    runtime: hermes
+    running: true
+    signingKeySecret: tris-signing-key
+    signingKeyName: tris.key
+    storage: 1Gi
+    crontab: |
+      * * * * * true

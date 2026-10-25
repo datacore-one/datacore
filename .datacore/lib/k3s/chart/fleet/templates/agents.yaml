@@ -74,7 +74,13 @@ spec:
     spec:
       # Stable: ledger guards map hostname -> actor through the roster.
       hostname: {{ $name }}
+      {{- if $a.killSwitch }}
+      # The fleet kill switch from chat: may only list and scale Deployments here.
+      serviceAccountName: {{ $name }}-killswitch
+      automountServiceAccountToken: true
+      {{- else }}
       automountServiceAccountToken: false
+      {{- end }}
       enableServiceLinks: false
       terminationGracePeriodSeconds: 90
       securityContext:
@@ -190,6 +196,36 @@ spec:
             - {name: home, mountPath: {{ $a.home }}}
             {{- include "fleet.sshMount" $a | nindent 12 }}
         {{- end }}
+        {{- range $x := ($a.extraContainers | default list) }}
+        # An extra process of the agent (e.g. a daemon), with the same mounts and env.
+        - name: {{ $x.name }}
+          image: {{ $a.image }}
+          imagePullPolicy: IfNotPresent
+          command: {{ toJson (concat (list "/usr/local/bin/agent-run" $x.name) $x.command) }}
+          workingDir: {{ $x.workingDir | default $a.home }}
+          {{- if $x.envFromSecret }}
+          envFrom:
+            - secretRef: {name: {{ $x.envFromSecret }}}
+          {{- end }}
+          env:
+            {{- include "fleet.agentEnv" (list $root $a) | nindent 12 }}
+            {{- range ($x.env | default list) }}
+            - {name: {{ .name }}, value: {{ .value | quote }}}
+            {{- end }}
+          {{- if $x.ports }}
+          ports:
+            {{- range $x.ports }}
+            - {name: {{ .name }}, containerPort: {{ .containerPort }}{{ if .hostPort }}, hostPort: {{ .hostPort }}{{ end }}, protocol: TCP}
+            {{- end }}
+          {{- end }}
+          {{- include "fleet.containerSecurity" $ | nindent 10 }}
+          resources: {{- toYaml ($x.resources | default $a.cron.resources) | nindent 12 }}
+          volumeMounts:
+            - {name: home, mountPath: {{ $a.home }}}
+            {{- include "fleet.sshMount" $a | nindent 12 }}
+            - {name: tmp, mountPath: /tmp}
+            - {name: agent-key, mountPath: {{ printf "%s/.datacore/keys/%s" $a.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
+        {{- end }}
         {{- end }}
       volumes:
         - name: home
@@ -204,6 +240,79 @@ spec:
           secret:
             secretName: {{ $a.signingKeySecret }}
             defaultMode: 0400
+---
+{{- $ports := list }}
+{{- range ($a.extraContainers | default list) }}{{- range (.ports | default list) }}{{- $ports = append $ports .containerPort }}{{- end }}{{- end }}
+{{- if $ports }}
+# The agent's published ports, and nothing else, may be reached from outside.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-ingress
+  namespace: {{ $root.Values.teamNamespace }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: {{ $name }}}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        {{- range $ports }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+---
+{{- end }}
+{{- if $a.killSwitch }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}-killswitch
+  namespace: {{ $root.Values.teamNamespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-killswitch
+  namespace: {{ $root.Values.teamNamespace }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: fleet-killswitch}
+subjects:
+  - {kind: ServiceAccount, name: {{ $name }}-killswitch, namespace: {{ $root.Values.teamNamespace }}}
+---
+# Only this agent reaches the API server, and only there (kubeApi in values).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-kube-api
+  namespace: {{ $root.Values.teamNamespace }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: {{ $name }}}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        {{- range ($root.Values.kubeApi.cidrs | default list) }}
+        - ipBlock: {cidr: {{ . }}}
+        {{- end }}
+      ports:
+        {{- range ($root.Values.kubeApi.ports | default list) }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+---
+{{- end }}
+{{- end }}
+{{- if (include "fleet.anyKillSwitch" .) }}
+# What the kill switch may do: list agents and scale them (fleetctl), no more.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: fleet-killswitch
+  namespace: {{ .Values.teamNamespace }}
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, patch]
+  - apiGroups: [apps]
+    resources: [deployments/scale]
+    verbs: [get, update, patch]
 ---
 {{- end }}
 apiVersion: networking.k8s.io/v1

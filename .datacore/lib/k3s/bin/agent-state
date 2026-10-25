@@ -76,10 +76,11 @@ def clean_url(url: str) -> str:
     return url
 
 
-def checkouts(home: Path):
-    """Every git working copy under home, outermost first; caches skipped."""
+def checkouts(home: Path, exclude: list[str] = ()):
+    """Every git working copy under home, outermost first; caches and excluded paths skipped."""
+    skip = {home / e for e in exclude}
     for root, dirs, _files in os.walk(home):
-        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and Path(root, d) not in skip)
         if ".git" in dirs or Path(root, ".git").is_file():
             yield Path(root)
             dirs[:] = [d for d in dirs if d != ".git"]
@@ -118,7 +119,7 @@ def state_files(home: Path, repos: list[Path], exclude: list[str]):
 
 
 def backup(home: Path, exclude: list[str], out: Path, bundles: bool) -> int:
-    found = list(checkouts(home))
+    found = list(checkouts(home, exclude))
     repos = [describe(home, r) for r in found]
     tmp = out.with_name(out.name + ".part")
     count = 0
@@ -127,16 +128,38 @@ def backup(home: Path, exclude: list[str], out: Path, bundles: bool) -> int:
             tar.add(p, arcname=f"state/{p.relative_to(home)}", recursive=False)
             count += 1
         for r in repos:
-            unpushed = r["ahead"] if r["upstream"] else None
-            if bundles and r["head"] and (unpushed is None or unpushed > 0):
+            # Every commit on a local branch (or HEAD) that no remote ref has --
+            # unpushed work on the checked-out branch and on any other branch.
+            local_only = git(home / r["path"], "rev-list", "--count", "--branches", "HEAD", "--not", "--remotes",
+                             check=False) if r["head"] else "0"
+            r["local_only"] = int(local_only or 0)
+            r["branches"] = [b for b in git(home / r["path"], "for-each-ref", "--format=%(refname:short)",
+                                            "refs/heads", check=False).splitlines() if b]
+            if bundles and r["local_only"] > 0 and r["url"]:
                 with tempfile.TemporaryDirectory() as d:
                     b = Path(d) / "b.bundle"
-                    span = f"{r['upstream']}..HEAD" if r["upstream"] else "HEAD"
-                    git(home / r["path"], "bundle", "create", str(b), span, check=False)
+                    git(home / r["path"], "bundle", "create", str(b), "--branches", "HEAD", "--not", "--remotes",
+                        check=False)
                     if b.exists():
                         tar.add(b, arcname=f"bundles/{r['path'].replace('/', '__')}.bundle")
                         r["bundle"] = True
+                print(f"agent-state: {r['path']}: {r['local_only']} commit(s) no remote has, carried as a bundle",
+                      file=sys.stderr)
             repo = home / r["path"]
+            if not r["url"]:
+                # Nothing can clone it: carry the whole repo, history included,
+                # minus checkouts nested inside it (they travel on their own).
+                nested = [f for f in found if f != repo and repo in f.parents]
+                for root, dirs, files in os.walk(repo):
+                    rp = Path(root)
+                    dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and rp / d not in nested)
+                    tar.add(rp, arcname=f"state/{rp.relative_to(home)}", recursive=False)
+                    for name in sorted(files) + [d for d in dirs if (rp / d).is_symlink()]:
+                        tar.add(rp / name, arcname=f"state/{(rp / name).relative_to(home)}", recursive=False)
+                        count += 1
+                r["whole"] = True
+                print(f"agent-state: {r['path']}: no remote, carried whole with its history", file=sys.stderr)
+                continue
             for name in untracked(repo):
                 tar.add(repo / name, arcname=f"state/{r['path']}/{name}", recursive=False)
                 count += 1
@@ -148,8 +171,6 @@ def backup(home: Path, exclude: list[str], out: Path, bundles: bool) -> int:
             if r["dirty"]:
                 print(f"agent-state: {r['path']}: {r['dirty']} uncommitted change(s) carried (untracked files, patch)",
                       file=sys.stderr)
-            if r["ahead"]:
-                print(f"agent-state: {r['path']}: {r['ahead']} unpushed commit(s) carried as a bundle", file=sys.stderr)
         manifest = {"version": 1, "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "exclude": exclude, "files": count, "repos": repos}
         add_bytes(tar, "manifest.json", json.dumps(manifest, indent=2).encode())
@@ -187,6 +208,8 @@ def restore(home: Path, file: Path) -> int:
             # 2. Clone every checkout and put it at its recorded commit.
             for r in sorted(manifest["repos"], key=lambda x: len(x["path"])):
                 dest = home / r["path"]
+                if r.get("whole"):
+                    continue  # it comes back with the state, history included
                 if not r["url"]:
                     print(f"agent-state: {r['path']}: no remote recorded, skipped", file=sys.stderr)
                     failed += 1
@@ -200,7 +223,16 @@ def restore(home: Path, file: Path) -> int:
                         continue
                 bundle = Path(bdir, "bundles", r["path"].replace("/", "__") + ".bundle")
                 if bundle.exists():
-                    git(dest, "fetch", "-q", str(bundle), "HEAD")
+                    heads = git(dest, "bundle", "list-heads", str(bundle), check=False).split()
+                    git(dest, "fetch", "-q", str(bundle), "+refs/heads/*:refs/bundle/*",
+                        *(["HEAD"] if "HEAD" in heads else []))
+                    current = git(dest, "rev-parse", "--abbrev-ref", "HEAD", check=False)
+                    for ref in git(dest, "for-each-ref", "--format=%(refname:short)", "refs/bundle",
+                                   check=False).splitlines():
+                        name = ref.split("/", 1)[1]
+                        if name != current:
+                            git(dest, "branch", "-q", "-f", name, f"refs/bundle/{name}")
+                        git(dest, "update-ref", "-d", f"refs/bundle/{name}")
                 if r["branch"] and r["branch"] != "HEAD":
                     git(dest, "checkout", "-q", "-B", r["branch"], r["head"])
                     if r["upstream"]:
@@ -214,7 +246,7 @@ def restore(home: Path, file: Path) -> int:
             tar.extractall(bdir, members=patches, filter="data")
             for r in manifest["repos"]:
                 patch = Path(bdir, "patches", r["path"].replace("/", "__") + ".patch")
-                if patch.exists() and (home / r["path"] / ".git").exists():
+                if patch.exists() and not r.get("whole") and (home / r["path"] / ".git").exists():
                     ap = subprocess.run(["git", "-C", str(home / r["path"]), "apply", "--whitespace=nowarn",
                                          str(patch)], capture_output=True, text=True)
                     if ap.returncode != 0:

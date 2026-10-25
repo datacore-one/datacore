@@ -3,10 +3,13 @@
 # identity is carried over (from an old host, or from local files).
 #
 #   agent-new preflight   cluster ready, deployment at 0, empty volume; old host reachable if any
+#   agent-new sync        old host only: SYNC_CMD, then every checkout must be pushed and clean
+#                         (fresh clones carry nothing else) unless its leftovers are in CARRY
 #   agent-new freeze      old host only: stop and DISABLE the agent's units, cron lines, processes
 #   agent-new key         signing key -> Secret (moved, never generated), fingerprints compared
 #   agent-new identity    copy exactly the IDENTITY paths into the volume, checksums compared
 #   agent-new clone       clone the CLONES checkouts as the agent, through the proxy
+#   agent-new carry       copy the CARRY paths (untracked work inside checkouts), checksums compared
 #   agent-new setup       run SETUP in the agent's volume (runtime config, plugin registration)
 #   agent-new mark        write the start marker: the agent runs nowhere else now
 #   agent-new start       helm upgrade with the agent running, wait until ready
@@ -17,7 +20,10 @@
 #
 # Settings come from the file named by NEW_ENV: AGENT, VALUES, IMAGE,
 # AGENT_HOME (default /var/lib/agent), NS, RELEASE; IDENTITY (paths relative to
-# the source home, space separated); CLONES (one "path url [branch]" per line,
+# the source home, space separated); IDENTITY_EXCLUDE (paths under those to
+# leave out); CARRY (paths inside checkouts that git does not hold, copied after
+# the clone); LEAVE (paths knowingly left on the old host, untouched there);
+# SYNC_CMD (old host); CLONES (one "path url [branch]" per line,
 # path relative to AGENT_HOME); SETUP (shell run in the volume as the agent);
 # NEVER_COPY (paths that must never arrive). With an old host: OLD_HOST,
 # OLD_HOME, SSH_OPTS, USER_UNITS, SYSTEM_UNITS ("-" for none), PROCESS_PATTERN.
@@ -33,22 +39,43 @@ AGENT_HOME=${AGENT_HOME:-/var/lib/agent}
 . "$(dirname "$0")/agent-common.sh"
 need AGENT VALUES IMAGE
 IDENTITY=${IDENTITY:-}
+IDENTITY_EXCLUDE=${IDENTITY_EXCLUDE:-}
+CARRY=${CARRY:-}
+LEAVE=${LEAVE:-}
+SYNC_CMD=${SYNC_CMD:-}
 CLONES=${CLONES:-}
 SETUP=${SETUP:-}
 NEVER_COPY=${NEVER_COPY:-}
 
-source_tar() {  # tar of the IDENTITY paths on stdout, from the old host or IDENTITY_DIR
+excludes() { for e in $IDENTITY_EXCLUDE; do printf -- '--exclude=%s ' "$e"; done; }
+prunes() { for e in $IDENTITY_EXCLUDE; do printf -- '-path %s -prune -o ' "$e"; done; }
+
+source_tar() {  # source_tar PATHS... -> tar on stdout, from the old host or IDENTITY_DIR
   if [ -n "${OLD_HOST:-}" ]; then
-    old "cd $OLD_HOME && tar -cpf - $IDENTITY"
+    old "cd $OLD_HOME && tar $(excludes) -cpf - $*"
   else
     need IDENTITY_DIR
-    tar -C "$IDENTITY_DIR" -cpf - $IDENTITY
+    # shellcheck disable=SC2046
+    tar -C "$IDENTITY_DIR" $(excludes) -cpf - "$@"
   fi
 }
 
-source_sum() {  # checksum manifest of the IDENTITY paths at the source
-  m="find $IDENTITY -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum | sha256sum"
+manifest() {  # manifest PATHS... -> the shell command that sums them (excludes applied)
+  echo "find $* $(prunes) -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum | sha256sum"
+}
+
+source_sum() {
+  m=$(manifest "$@")
   if [ -n "${OLD_HOST:-}" ]; then old "cd $OLD_HOME && $m"; else (cd "$IDENTITY_DIR" && sh -c "$m"); fi
+}
+
+copy_paths() {  # copy_paths LABEL PATHS... -- stream into the volume, compare checksums
+  label=$1; shift
+  helper_up
+  source_tar "$@" | in_vol tar -C "$AGENT_HOME" --no-overwrite-dir -xpf -
+  a=$(source_sum "$@"); b=$(in_vol sh -c "cd $AGENT_HOME && $(manifest "$@")")
+  [ "$a" = "$b" ] || die "$label checksums differ: $a vs $b"
+  say "$label copied, checksums identical: $*"
 }
 
 preflight() {
@@ -60,6 +87,35 @@ preflight() {
   say "preflight ok"
 }
 
+sync() {
+  [ -n "${OLD_HOST:-}" ] || { say "no old host: nothing to sync"; return; }
+  if [ -n "$SYNC_CMD" ]; then old "$SYNC_CMD" || die "SYNC_CMD failed; read the output above, do not force it"; fi
+  # Fresh clones carry only what origin has. Anything else must be pushed or named in CARRY.
+  report=$(old "cd $OLD_HOME && find . -maxdepth 5 -name .git -not -path './.cache/*' -not -path './.npm/*' 2>/dev/null | sed 's|/.git\$||' | sort | while read -r r; do
+      a=\$(git -C \"\$r\" rev-list --count @{u}..HEAD 2>/dev/null || echo '?')
+      git -C \"\$r\" status --porcelain 2>/dev/null | sed \"s|^...|\$r/|\" | sed 's|^\\./||' | while read -r f; do echo \"dirty \$f\"; done
+      [ \"\$a\" = 0 ] || echo \"ahead \$r \$a\"
+    done")
+  blocking=""
+  while read -r kind path rest; do
+    [ -n "${kind:-}" ] || continue
+    path=${path#./}
+    covered=""
+    for c in $CARRY $LEAVE; do case "$path" in "$c"|"$c"/*) covered=1;; esac; done
+    if [ -z "$covered" ]; then  # inside something IDENTITY carries (and does not exclude)?
+      for c in $IDENTITY; do case "$path" in "$c"|"$c"/*) covered=1;; esac; done
+      for e in $IDENTITY_EXCLUDE; do case "$path" in "$e"|"$e"/*) covered="";; esac; done
+    fi
+    [ -n "$covered" ] && continue
+    case "$kind" in
+      ahead) blocking="$blocking\n  $path: $rest unpushed commit(s)";;
+      dirty) blocking="$blocking\n  $path: not committed";;
+    esac
+  done <<< "$report"
+  [ -z "$blocking" ] || die "not in origin, IDENTITY, CARRY or LEAVE:$(printf "$blocking")"
+  say "every checkout on $OLD_HOST is pushed and clean, or covered by IDENTITY, CARRY or LEAVE"
+}
+
 freeze() {
   [ -n "${OLD_HOST:-}" ] || { say "no old host: nothing to freeze"; return; }
   freeze_old
@@ -69,15 +125,18 @@ key() { key_secret; }
 
 identity() {
   need IDENTITY
-  helper_up
   for f in $NEVER_COPY; do
     case " $IDENTITY " in *" $f "*) die "$f is in IDENTITY but must never be copied";; esac
   done
-  source_tar | in_vol tar -C "$AGENT_HOME" --no-overwrite-dir -xpf -
-  a=$(source_sum); b=$(in_vol sh -c "cd $AGENT_HOME && find $IDENTITY -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum | sha256sum")
-  [ "$a" = "$b" ] || die "identity checksums differ: $a vs $b"
+  # shellcheck disable=SC2086
+  copy_paths identity $IDENTITY
   for f in $NEVER_COPY; do in_vol test ! -e "$AGENT_HOME/$f" || die "$f arrived although it must never be copied"; done
-  say "identity copied, checksums identical: $IDENTITY"
+}
+
+carry() {
+  [ -n "$CARRY" ] || { say "no CARRY"; return; }
+  # shellcheck disable=SC2086
+  copy_paths carry $CARRY
 }
 
 clone() {
@@ -123,6 +182,6 @@ rollback() {
 }
 
 case "${1:-}" in
-  preflight|freeze|key|identity|clone|setup|mark|start|rollback) "$1" ;;
-  *) sed -n '2,29p' "$0"; exit 2 ;;
+  preflight|sync|freeze|key|identity|clone|carry|setup|mark|start|rollback) "$1" ;;
+  *) sed -n '2,34p' "$0"; exit 2 ;;
 esac

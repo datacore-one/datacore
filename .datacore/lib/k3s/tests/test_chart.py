@@ -299,3 +299,52 @@ def test_standby_runs_nothing_of_the_agent():
     prepare = next(i for i in pod["initContainers"] if i["name"] == "prepare")
     assert {"name": "AGENT_STANDBY", "value": "1"} in prepare["env"]
     assert [x["name"] for x in _containers(deps["data"]).values()] == ["gateway", "cron"]
+
+
+WINSTON = Path(__file__).resolve().parent / "fixtures" / "values-winston.yaml"
+
+
+def render_winston() -> list[dict]:
+    out = subprocess.run(["helm", "template", "fleet", str(CHART), "-f", str(WINSTON)],
+                         check=True, capture_output=True, text=True).stdout
+    return [d for d in yaml.safe_load_all(out) if d]
+
+
+def test_an_extra_container_runs_beside_the_agent_with_its_port_on_the_node():
+    docs = render_winston()
+    dep = {d["metadata"]["name"]: d for d in agent_deployments(docs)}["winston"]
+    c = _containers(dep)["daemon"]
+    assert c["command"][:2] == ["/usr/local/bin/agent-run", "daemon"], "daemon holds its role lock too"
+    assert c["ports"] == [{"name": "http", "containerPort": 8787, "hostPort": 8787, "protocol": "TCP"}]
+    assert c["envFrom"] == [{"secretRef": {"name": "winston-datacored-env"}}]
+    env = _env(c)
+    assert env["DATACORED_PORT"] == "8787" and env["HTTPS_PROXY"].startswith("http://egress.")
+    assert c["securityContext"]["allowPrivilegeEscalation"] is False
+    pols = {p["metadata"]["name"]: p for p in of_kind(docs, "NetworkPolicy")}
+    ing = pols["winston-ingress"]["spec"]
+    assert ing["podSelector"]["matchLabels"] == {"app.kubernetes.io/name": "winston"}
+    assert ing["ingress"] == [{"ports": [{"protocol": "TCP", "port": 8787}]}]
+
+
+def test_the_kill_switch_agent_may_only_scale_deployments_in_its_namespace():
+    docs = render_winston()
+    deps = {d["metadata"]["name"]: d for d in agent_deployments(docs)}
+    w, t = deps["winston"]["spec"]["template"]["spec"], deps["tris"]["spec"]["template"]["spec"]
+    assert w["serviceAccountName"] == "winston-killswitch" and w["automountServiceAccountToken"] is True
+    assert t["automountServiceAccountToken"] is False and "serviceAccountName" not in t
+    role = next(r for r in of_kind(docs, "Role") if r["metadata"]["name"] == "fleet-killswitch")
+    verbs = {(tuple(r["resources"]), tuple(sorted(r["verbs"]))) for r in role["rules"]}
+    assert verbs == {(("deployments",), ("get", "list", "patch")),
+                     (("deployments/scale",), ("get", "patch", "update"))}
+    rb = next(r for r in of_kind(docs, "RoleBinding") if r["metadata"]["name"] == "winston-killswitch")
+    assert rb["subjects"] == [{"kind": "ServiceAccount", "name": "winston-killswitch", "namespace": "firm"}]
+    api = {p["metadata"]["name"]: p for p in of_kind(docs, "NetworkPolicy")}["winston-kube-api"]["spec"]
+    assert api["podSelector"]["matchLabels"] == {"app.kubernetes.io/name": "winston"}
+    assert [b["ipBlock"]["cidr"] for b in api["egress"][0]["to"]] == ["192.0.2.1/32", "10.43.0.1/32"]
+    assert {p["port"] for p in api["egress"][0]["ports"]} == {6443, 443}
+
+
+def test_no_api_access_without_the_kill_switch_flag():
+    docs = render_winston()
+    names = {p["metadata"]["name"] for p in of_kind(docs, "NetworkPolicy")}
+    assert "tris-kube-api" not in names and "tris-ingress" not in names
