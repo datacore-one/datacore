@@ -97,3 +97,15 @@ def test_empty_profile_is_not_healthy(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(sys, 'argv', ['host_deps'])
     assert host_deps.main() == 1
     assert 'empty' in capsys.readouterr().err
+
+
+def test_briefing_profile_covers_the_mail_triage_the_box_runs():
+    # Winston's 03:30 email triage died on `import google` in his pod: the
+    # Google client was hand-installed on the old host and declared nowhere,
+    # and this profile never looked at the mail module.
+    names = [str(p.relative_to(host_deps.DATACORE_ROOT)) for p in host_deps.files_for('briefing')]
+    assert 'modules/mail/requirements.txt' in names
+
+
+def test_markdown_it_py_is_checked_under_its_import_name():
+    assert host_deps.IMPORT_NAME.get('markdown-it-py') == 'markdown_it'

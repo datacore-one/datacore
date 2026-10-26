@@ -44,13 +44,14 @@ DATACORE_ROOT = Path(__file__).resolve().parents[1]
 
 #: Requirement files whose contents a briefing host must be able to import.
 #: The box runs the morning pipeline: core lib, the health fragment, news,
-#: and the org/GTD read path. It does not run nightshift, forge or voice.
+#: email triage and the org/GTD read path. It does not run nightshift, forge or voice.
 PROFILES: dict[str, tuple[str, ...]] = {
     "briefing": (
         "lib/requirements.txt",
         "modules/health/requirements.txt",
         "modules/crm/requirements.txt",
         "modules/ventures/requirements.txt",
+        "modules/mail/requirements.txt",      # the 03:30 email triage
     ),
     "all": ("**/requirements.txt",),
 }
@@ -62,6 +63,7 @@ IMPORT_NAME = {
     "org-workspace": "org_workspace",
     "python-dateutil": "dateutil",
     "pillow": "PIL",
+    "markdown-it-py": "markdown_it",
     "python-louvain": "community",
     "python-telegram-bot": "telegram",
     "python-dotenv": "dotenv",
