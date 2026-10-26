@@ -1238,16 +1238,24 @@ class CredentialManager:
     def cmd_add(self, cred_id: str, var_name: str = None, value: str = None,
                 scope: str = None, space: str = None, project: str = None,
                 tier: str = None, category: str = None, provider: str = None,
-                description: str = None, existing: bool = False) -> int:
+                description: str = None, existing: bool = False,
+                overwrite: bool = False) -> int:
         """Add a credential to the secrets repo and index.
 
         existing=True indexes a variable already in the target store: no value
         is asked for or written, and the value is never read or printed.
+        overwrite=True replaces the value of a credential already indexed, in
+        the store its index row names; the index is not changed.
         """
         secrets_dir = self.data_dir / ".datacore" / "secrets"
         if not secrets_dir.exists():
             print("Secrets repo not found at .datacore/secrets/")
             return 1
+        if overwrite:
+            if existing:
+                print("Refusing: --overwrite writes a new value; --existing writes none.")
+                return 1
+            return self._overwrite(secrets_dir, cred_id, value)
 
         # Interactive prompts for missing fields
         if not var_name:
@@ -1366,6 +1374,45 @@ class CredentialManager:
             print("Credential stored durably, but Git commit failed; review the retained changes before retrying.", file=sys.stderr)
             return 1
         print("Committed the credential store and index to the secrets repo")
+        return self._sync_after_write()
+
+    def _overwrite(self, secrets_dir, cred_id: str, value: str = None) -> int:
+        """Replace an indexed credential's value in its declared store and commit it."""
+        from credential_store import overwrite_credential
+        index = yaml.safe_load((secrets_dir / "credential-index.yaml").read_text()) or {}
+        row = next((r for r in index.get("credentials") or [] if isinstance(r, dict) and r.get("id") == cred_id), None)
+        if not row:
+            print(f"Refusing: {cred_id} is not indexed; add it without --overwrite.", file=sys.stderr)
+            return 1
+        scope = row.get("scope")
+        env_file = {"global": secrets_dir / "global.env",
+                    "space": secrets_dir / "spaces" / f"{row.get('space')}.env",
+                    "project": secrets_dir / "projects" / f"{row.get('project')}.env"}.get(scope)
+        if env_file is None or not env_file.exists():
+            print(f"Refusing: {cred_id} has no store file for scope {scope!r}.", file=sys.stderr)
+            return 1
+        if not value:
+            import getpass
+            value = getpass.getpass(f"New value for {row.get('var_name')}: ")
+        try:
+            overwrite_credential(secrets_dir, env_file, row.get("var_name"), value)
+        except (OSError, ValueError) as exc:
+            print(f"Overwrite refused ({exc}); existing data preserved.", file=sys.stderr)
+            return 1
+        rel = str(env_file.resolve().relative_to(secrets_dir.resolve()))
+        print(f"Replaced {row.get('var_name')} in {rel}")
+        import subprocess
+        try:
+            subprocess.run(["git", "commit", "--only", "-m", f"chore: overwrite credential {cred_id}", "--", rel],
+                           cwd=str(secrets_dir), capture_output=True, check=True)
+        except (OSError, subprocess.CalledProcessError):
+            print("Value stored, but Git commit failed; review the retained change before retrying.", file=sys.stderr)
+            return 1
+        print("Committed the credential store to the secrets repo")
+        return self._sync_after_write()
+
+    def _sync_after_write(self) -> int:
+        secrets_dir = self.data_dir / ".datacore" / "secrets"
         # Assemble the env here: a value is not served by `get` until sync runs,
         # and a printed "Next: run creds sync" was skipped often enough that the
         # owner's first `get` failed on a credential just added (2026-10-14).
@@ -1469,6 +1516,8 @@ def main():
     add_p.add_argument("--description", help="Description")
     add_p.add_argument("--existing", action="store_true",
                        help="Index a variable already in the target store; no value is asked for or written")
+    add_p.add_argument("--overwrite", action="store_true",
+                       help="Replace the value of a credential already indexed; asks for it at a hidden prompt")
 
     # sync
     get_p = subparsers.add_parser(
@@ -1521,7 +1570,8 @@ def main():
             cred_id=args.id, var_name=args.var_name, value=args.value,
             scope=args.scope, space=args.space, project=args.project,
             tier=args.tier, category=args.category, provider=args.provider,
-            description=args.description, existing=args.existing)
+            description=args.description, existing=args.existing,
+            overwrite=args.overwrite)
     elif args.command == "get":
         return mgr.cmd_get(args.credential, consumer=args.consumer,
                            no_verify=args.no_verify, strict=args.strict)
