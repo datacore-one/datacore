@@ -162,6 +162,31 @@ def reconcile(space, current_text, proposed_text):
             if not _same(remote['items'].get(identity), fields, strict):
                 raise ProjectionConflict('no projection base and Org/ledger differ; reconciliation required')
         return remote
+    # A STALE BASE — one that holds items the current file does not, or lacks
+    # items the current file holds — cannot serve as a three-way merge ancestor.
+    # The base is supposed to be a snapshot of the file from the last successful
+    # projection, and the projector writes both atomically, so the two should
+    # always agree on which items exist. When they do not (the base drifted
+    # independently of the file), treating current as the new base is the only
+    # path that keeps the cycle running: the merge would otherwise refuse every
+    # added or removed item as a concurrent edit, the space would fail ingest,
+    # and no projection would ever update the base to close the gap.
+    #
+    # Observed 2026-10-02–2026-10-26 on 0-personal: 578 consecutive failures,
+    # each on a different item, because the base held items from an earlier
+    # projection that the file on disk had already moved past.
+    base_ids = set(base['items'])
+    current_ids = set(current['items'])
+    if base_ids != current_ids:
+        import org_transaction
+        from file_utils import atomic_write_text
+        path = Path(space) / STATE
+        document = base_document(current_text)
+        if org_transaction._current.get() is not None:
+            org_transaction.write_org_text(path, document)
+        else:
+            atomic_write_text(path, document)
+        base = current
     return _changes(base, current, remote, strict=strict)
 
 
