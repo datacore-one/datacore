@@ -440,3 +440,22 @@ def test_branches_match_exactly_with_head_on_a_feature_branch(home, tmp_path):
     refs = lambda p: git(p, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads")
     assert refs(fresh / ".datacore/v2-runner") == refs(repo)
     assert git(fresh / ".datacore/v2-runner", "rev-parse", "--abbrev-ref", "HEAD") == "feat/f"
+
+
+def test_resume_survives_a_restored_folder_it_cannot_enter(home, tmp_path):
+    # Winston's .hermes/lsp/bin came back with a mode that blocks looking inside;
+    # the resume pre-step crashed on it instead of carrying on.
+    locked = home / ".hermes/lsp"
+    (locked / "bin").mkdir(parents=True)
+    (locked / "bin/server").write_text("x")
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    assert run("restore", "--home", str(fresh), "--file", str(out)).returncode == 0
+    (fresh / ".hermes/lsp").chmod(0o000)
+    try:
+        r = run("restore", "--home", str(fresh), "--file", str(out), "--resume")
+        assert "Traceback" not in r.stderr, r.stderr
+    finally:
+        (fresh / ".hermes/lsp").chmod(0o755)

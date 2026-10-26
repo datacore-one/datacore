@@ -223,11 +223,23 @@ def backup(home: Path, exclude: list[str], out: Path, bundles: bool) -> int:
 
 
 def writable(home: Path, members) -> None:
-    """A resumed restore replaces files the first attempt wrote, some read-only (git objects)."""
+    """A resumed restore replaces files the first attempt wrote, some read-only (git
+    objects), inside folders the first attempt gave their archived, sometimes
+    restrictive mode (tarfile sets folder modes last, so only a resume meets them)."""
+    for m in sorted((m for m in members if m.isdir()), key=lambda m: m.name.count("/")):
+        d = home / m.name
+        try:
+            if d.is_dir() and not d.is_symlink() and not os.access(d, os.R_OK | os.W_OK | os.X_OK):
+                os.chmod(d, d.stat().st_mode | 0o700)
+        except OSError:
+            pass
     for m in members:
         t = home / m.name
-        if t.is_file() and not t.is_symlink() and not os.access(t, os.W_OK):
-            os.chmod(t, 0o600)
+        try:
+            if t.is_file() and not t.is_symlink() and not os.access(t, os.W_OK):
+                os.chmod(t, 0o600)
+        except OSError:
+            continue  # a folder above it blocks looking; extraction reports a real problem
 
 
 def restore(home: Path, file: Path, resume: bool = False, reference: Path | None = None) -> int:
