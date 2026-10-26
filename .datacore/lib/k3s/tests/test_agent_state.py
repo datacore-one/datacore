@@ -459,3 +459,36 @@ def test_resume_survives_a_restored_folder_it_cannot_enter(home, tmp_path):
         assert "Traceback" not in r.stderr, r.stderr
     finally:
         (fresh / ".hermes/lsp").chmod(0o755)
+
+
+def test_absolute_symlinks_come_back_as_they_were(home, tmp_path):
+    # Winston's virtualenvs: bin/python -> /usr/bin/python3.12, the same on every
+    # agent image. tarfile's tar filter refused it; names stay checked.
+    venv = home / ".datacore/eval-venv/bin"
+    venv.mkdir(parents=True)
+    (venv / "python").symlink_to("/usr/bin/python3")
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    r = run("restore", "--home", str(fresh), "--file", str(out))
+    assert r.returncode == 0, r.stderr
+    assert os.readlink(fresh / ".datacore/eval-venv/bin/python") == "/usr/bin/python3"
+    # ... and a resume, where the symlink is already there (Winston's case).
+    r = run("restore", "--home", str(fresh), "--file", str(out), "--resume")
+    assert r.returncode == 0 and "Traceback" not in r.stderr, r.stderr
+    assert os.readlink(fresh / ".datacore/eval-venv/bin/python") == "/usr/bin/python3"
+
+
+def test_a_member_name_escaping_the_home_is_refused(tmp_path):
+    import io
+    bad = tmp_path / "bad.tar.gz"
+    with tarfile.open(bad, "w:gz") as tar:
+        data = json.dumps({"version": 1, "repos": []}).encode()
+        info = tarfile.TarInfo("manifest.json"); info.size = len(data); tar.addfile(info, io.BytesIO(data))
+        evil = b"x"
+        info = tarfile.TarInfo("state/../../escaped.txt"); info.size = 1; tar.addfile(info, io.BytesIO(evil))
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    run("restore", "--home", str(fresh), "--file", str(bad))
+    assert not (tmp_path / "escaped.txt").exists()
