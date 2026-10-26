@@ -106,3 +106,13 @@ def test_hermes_carries_claude_code_for_a_chief_of_staff():
     # Winston's jobs (briefing, morning run, health digest) call `claude -p`;
     # pinned to the version his host ran when he moved (2026-10-25).
     assert "@anthropic-ai/claude-code@2.1.226" in (HERMES / "Dockerfile").read_text()
+
+
+def test_every_playbook_command_is_executable():
+    # Found by the portable proof on a second machine: `bin/node-setup ...`, the
+    # playbook's first command, failed with "command not found" (mode 644).
+    import stat
+    for p in (IMAGES.parent / "bin").iterdir():
+        if p.suffix == ".sh":
+            continue  # sourced, not run
+        assert p.stat().st_mode & stat.S_IXUSR, f"{p.name} is not executable"
