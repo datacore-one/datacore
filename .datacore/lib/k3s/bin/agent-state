@@ -223,20 +223,22 @@ def backup(home: Path, exclude: list[str], out: Path, bundles: bool) -> int:
 
 
 def our_filter(member: tarfile.TarInfo, dest: str):
-    """tarfile's tar filter (names must stay inside the home), except that a
-    symlink keeps an absolute target: a virtualenv's bin/python points at the
-    image's /usr/bin/python3.x, and our own checksummed backups carry it."""
-    if member.issym() and member.linkname.startswith("/"):
+    """tarfile's tar filter, except for symlinks: a symlink is judged by the
+    folder it lands in (inside the home), keeps its target as archived -- a
+    virtualenv's bin/python -> python3 -> /usr/bin/python3.x is the same on every
+    agent image -- and replaces a link a first pass already put there (a resume).
+    Regular files keep the full check, so nothing is written through a link that
+    leads out of the home."""
+    if member.issym():
         if member.name.startswith("/") or ".." in Path(member.name).parts:
             raise tarfile.OutsideDestinationError(member, member.name)
-        # Where the link itself lands, judged by its folder -- never by following
-        # a link a first pass already put there (a resume).
+        root = os.path.realpath(dest)
         parent = os.path.realpath(os.path.join(dest, os.path.dirname(member.name)))
-        if parent != os.path.realpath(dest) and not parent.startswith(os.path.realpath(dest) + os.sep):
+        if parent != root and not parent.startswith(root + os.sep):
             raise tarfile.OutsideDestinationError(member, parent)
         link = os.path.join(dest, member.name)
         if os.path.islink(link):
-            os.unlink(link)  # a resume: put the link back exactly as archived
+            os.unlink(link)
         return member
     return tarfile.tar_filter(member, dest)
 

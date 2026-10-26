@@ -466,18 +466,35 @@ def test_absolute_symlinks_come_back_as_they_were(home, tmp_path):
     # agent image. tarfile's tar filter refused it; names stay checked.
     venv = home / ".datacore/eval-venv/bin"
     venv.mkdir(parents=True)
-    (venv / "python").symlink_to("/usr/bin/python3")
+    (venv / "python3").symlink_to("/usr/bin/python3")
+    (venv / "python").symlink_to("python3")          # a relative link into an absolute one
     out = tmp_path / "b.tar.gz"
     assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
     fresh = tmp_path / "fresh"
     fresh.mkdir()
     r = run("restore", "--home", str(fresh), "--file", str(out))
     assert r.returncode == 0, r.stderr
-    assert os.readlink(fresh / ".datacore/eval-venv/bin/python") == "/usr/bin/python3"
+    assert os.readlink(fresh / ".datacore/eval-venv/bin/python3") == "/usr/bin/python3"
+    assert os.readlink(fresh / ".datacore/eval-venv/bin/python") == "python3"
     # ... and a resume, where the symlink is already there (Winston's case).
     r = run("restore", "--home", str(fresh), "--file", str(out), "--resume")
     assert r.returncode == 0 and "Traceback" not in r.stderr, r.stderr
-    assert os.readlink(fresh / ".datacore/eval-venv/bin/python") == "/usr/bin/python3"
+    assert os.readlink(fresh / ".datacore/eval-venv/bin/python") == "python3"
+
+
+def test_a_file_written_through_a_link_out_of_the_home_is_refused(tmp_path):
+    import io
+    bad = tmp_path / "bad.tar.gz"
+    with tarfile.open(bad, "w:gz") as tar:
+        data = json.dumps({"version": 1, "repos": []}).encode()
+        info = tarfile.TarInfo("manifest.json"); info.size = len(data); tar.addfile(info, io.BytesIO(data))
+        link = tarfile.TarInfo("state/out"); link.type = tarfile.SYMTYPE; link.linkname = str(tmp_path)
+        tar.addfile(link)
+        info = tarfile.TarInfo("state/out/escaped.txt"); info.size = 1; tar.addfile(info, io.BytesIO(b"x"))
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    run("restore", "--home", str(fresh), "--file", str(bad))
+    assert not (tmp_path / "escaped.txt").exists()
 
 
 def test_a_member_name_escaping_the_home_is_refused(tmp_path):
