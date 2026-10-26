@@ -323,14 +323,21 @@ def restore(home: Path, file: Path, resume: bool = False, reference: Path | None
                               f"({fx.stderr.strip()[-160:]})", file=sys.stderr)
                 # Every local branch the agent had, at its commit (pushed ones from
                 # origin or another remote, local-only ones from the bundle).
-                if not r["branch"] or r["branch"] == "HEAD":
-                    git(dest, "checkout", "-q", "--detach", r["head"], check=False)  # free every branch to be set
-                current = git(dest, "rev-parse", "--abbrev-ref", "HEAD", check=False)
-                for name, sha in (r.get("branches") or {}).items():
-                    if name not in (current, r["branch"]) and subprocess.run(
+                # Detach first so every branch can be set, then make the local
+                # branches exactly the agent's: each recorded one at its commit,
+                # none the clone made on its own (origin's default branch).
+                git(dest, "checkout", "-q", "--detach", r["head"], check=False)
+                recorded = r.get("branches")
+                for name, sha in (recorded or {}).items():
+                    if name != r["branch"] and subprocess.run(
                             ["git", "-C", str(dest), "cat-file", "-e", sha + "^{commit}"],
                             capture_output=True).returncode == 0:
                         git(dest, "branch", "-q", "-f", name, sha)
+                if recorded is not None:
+                    for name in git(dest, "for-each-ref", "--format=%(refname:short)", "refs/heads",
+                                    check=False).splitlines():
+                        if name and name not in recorded and name != r["branch"]:
+                            git(dest, "branch", "-q", "-D", name, check=False)
                 try:
                     if r["branch"] and r["branch"] != "HEAD":
                         git(dest, "checkout", "-q", "-B", r["branch"], r["head"])

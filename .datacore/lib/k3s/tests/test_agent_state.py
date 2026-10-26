@@ -416,3 +416,27 @@ def test_head_on_a_branch_deleted_upstream_is_carried(home, tmp_path):
     r = run("restore", "--home", str(fresh), "--file", str(out))
     assert r.returncode == 0, r.stderr
     assert git(fresh / "Data", "rev-parse", "HEAD") == git(repo, "rev-parse", "HEAD")
+
+
+def test_branches_match_exactly_with_head_on_a_feature_branch(home, tmp_path):
+    # Tris's datacore-ventures: HEAD on a feature branch, local main behind
+    # origin/main; and a clone's default branch the agent never had locally.
+    repo = home / ".datacore/v2-runner"
+    old = git(repo, "rev-parse", "HEAD")
+    commit(repo, "ahead.md", "origin moves on")
+    git(repo, "push", "-q")
+    git(repo, "reset", "-q", "--hard", old)          # local main stays behind
+    git(repo, "checkout", "-q", "-b", "feat/f")
+    commit(repo, "f.md", "feature")
+    git(repo, "push", "-q", "-u", "origin", "feat/f")
+    bare = tmp_path / "remotes/runner.git"
+    git(bare, "branch", "development", "main")
+    git(bare, "symbolic-ref", "HEAD", "refs/heads/development")   # origin's default branch
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    assert run("restore", "--home", str(fresh), "--file", str(out)).returncode == 0
+    refs = lambda p: git(p, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads")
+    assert refs(fresh / ".datacore/v2-runner") == refs(repo)
+    assert git(fresh / ".datacore/v2-runner", "rev-parse", "--abbrev-ref", "HEAD") == "feat/f"
