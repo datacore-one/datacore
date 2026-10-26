@@ -95,6 +95,7 @@ EXCLUDE = {
     "openwakeword": "voice-terminal wake word; the box has no microphone",
     "piper-tts": "voice-terminal local TTS; Kokoro is the box's path",
     "sounddevice": "voice-terminal audio I/O; the box has no sound device",
+    "anthropic": "voice-terminal spoken-script fallback, tried only with an API key; the box writes it through OpenRouter",
     "sqlcipher3": "health medical records; needs libsqlcipher, not used by the fragment",
     "pytesseract": "health OCR; needs the tesseract binary",
     "pydicom": "health imaging; not used by the fragment",
