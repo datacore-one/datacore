@@ -146,6 +146,10 @@ def state_files(home: Path, repos: list[Path], exclude: list[str]):
 
 
 def backup(home: Path, exclude: list[str], out: Path, bundles: bool) -> int:
+    # Ask origin with the agent's own git credentials: run as root on the node,
+    # git found none, every private repo looked unreachable and was carried
+    # whole (backups of 5-9 GB instead of under 1 GB, 2026-10-26).
+    os.environ["HOME"] = str(home)
     found = list(checkouts(home, exclude))
     repos = [describe(home, r) for r in found]
     tmp = out.with_name(out.name + ".part")
