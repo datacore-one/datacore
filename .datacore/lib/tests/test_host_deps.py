@@ -107,5 +107,10 @@ def test_briefing_profile_covers_the_mail_triage_the_box_runs():
     assert 'modules/mail/requirements.txt' in names
 
 
-def test_markdown_it_py_is_checked_under_its_import_name():
-    assert host_deps.IMPORT_NAME.get('markdown-it-py') == 'markdown_it'
+@pytest.mark.parametrize('dist,module', [
+    ('markdown-it-py', 'markdown_it'),
+    ('google-api-python-client', 'googleapiclient'),
+    ('google-auth', 'google.auth'),
+])
+def test_packages_are_checked_under_their_import_name(dist, module):
+    assert host_deps.IMPORT_NAME.get(dist) == module

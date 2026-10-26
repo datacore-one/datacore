@@ -64,6 +64,8 @@ IMPORT_NAME = {
     "python-dateutil": "dateutil",
     "pillow": "PIL",
     "markdown-it-py": "markdown_it",
+    "google-api-python-client": "googleapiclient",
+    "google-auth": "google.auth",
     "python-louvain": "community",
     "python-telegram-bot": "telegram",
     "python-dotenv": "dotenv",
