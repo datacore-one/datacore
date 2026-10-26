@@ -203,7 +203,15 @@ def backup(home: Path, exclude: list[str], out: Path, bundles: bool) -> int:
                         r["bundle"] = True
                 print(f"agent-state: {r['path']}: {r['local_only']} commit(s) no remote has, carried as a bundle",
                       file=sys.stderr)
-            for name in untracked(repo):
+            names = untracked(repo)
+            # Their folders too, parents first, so a restore keeps each folder's
+            # mode (module-data is 0700; recreated folders came back 0755).
+            folders = sorted({str(q) for n in names for q in Path(n).parents if str(q) != "."},
+                             key=lambda f: (f.count("/"), f))
+            for name in folders:
+                if not (repo / name).is_symlink():
+                    tar.add(repo / name, arcname=f"state/{r['path']}/{name}", recursive=False)
+            for name in names:
                 tar.add(repo / name, arcname=f"state/{r['path']}/{name}", recursive=False)
                 count += 1
             patch = subprocess.run(["git", "-c", "safe.directory=*", "-C", str(repo), "diff", "--binary", "HEAD"],

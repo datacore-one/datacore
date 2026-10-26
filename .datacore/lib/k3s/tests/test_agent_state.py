@@ -553,3 +553,24 @@ def test_resume_clones_into_a_folder_holding_only_laid_in_files(home, tmp_path):
     assert git(fresh / "Data", "rev-parse", "HEAD") == git(home / "Data", "rev-parse", "HEAD")
     assert (fresh / "Data/README").read_text() == "edited, not committed"
     assert (fresh / "Data/secret.env").read_text() == "TOKEN=ignored-by-git"
+
+
+def test_a_private_folder_inside_a_checkout_keeps_its_mode(home, tmp_path):
+    # Winston's module-data folders (ignored, 0700) came back 0755: only the files
+    # inside checkouts were carried, so the folders were recreated with the default
+    # mode, and the news module refused its data ("ownership or mode mismatch").
+    private = home / "Data/.datacore/module-data/news"
+    private.mkdir(parents=True)
+    (private / "seen.json").write_text("{}")
+    (home / "Data/.datacore/module-data").chmod(0o700)
+    private.chmod(0o700)
+    (home / "Data/.gitignore").write_text("secret.env\nnode_modules/\n.datacore/module-data/\n")
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    r = run("restore", "--home", str(fresh), "--file", str(out))
+    assert r.returncode == 0, r.stderr
+    for p in (fresh / "Data/.datacore/module-data", fresh / "Data/.datacore/module-data/news"):
+        assert p.stat().st_mode & 0o777 == 0o700, p
+    assert (fresh / "Data/.datacore/module-data/news/seen.json").read_text() == "{}"
