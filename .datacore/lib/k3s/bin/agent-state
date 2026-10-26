@@ -160,11 +160,6 @@ def backup(home: Path, exclude: list[str], out: Path, bundles: bool) -> int:
             tar.add(p, arcname=f"state/{p.relative_to(home)}", recursive=False)
             count += 1
         for r in repos:
-            # Every commit on a local branch (or HEAD) that no remote ref has --
-            # unpushed work on the checked-out branch and on any other branch.
-            local_only = git(home / r["path"], "rev-list", "--count", "--branches", "HEAD", "--not", "--remotes",
-                             check=False) if r["head"] else "0"
-            r["local_only"] = int(local_only or 0)
             r["branches"] = dict(line.split(" ", 1) for line in git(
                 home / r["path"], "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads",
                 check=False).splitlines() if " " in line)
@@ -172,6 +167,13 @@ def backup(home: Path, exclude: list[str], out: Path, bundles: bool) -> int:
             heads = remote_heads(repo) if r["url"] else None
             if r["url"] and heads is None:
                 r["unreadable"] = True
+            # Every commit on a local branch (or HEAD) that origin does not have
+            # NOW -- measured against its current heads, not the local origin/*
+            # refs, which keep commits of branches deleted upstream (Tris's
+            # ventures-tmp: HEAD on such a branch, no bundle, unrestorable).
+            local_only = git(repo, "rev-list", "--count", "--branches", "HEAD", *origin_has(repo, heads),
+                             check=False) if r["head"] and heads is not None else "0"
+            r["local_only"] = int(local_only or 0)
             if not r["url"] or r.get("unreadable"):
                 # Nothing can clone it: carry the whole repo, history included,
                 # minus checkouts nested inside it (they travel on their own).
@@ -322,19 +324,24 @@ def restore(home: Path, file: Path, resume: bool = False, reference: Path | None
                 # Every local branch the agent had, at its commit (pushed ones from
                 # origin or another remote, local-only ones from the bundle).
                 if not r["branch"] or r["branch"] == "HEAD":
-                    git(dest, "checkout", "-q", "--detach", r["head"])  # free every branch to be set
+                    git(dest, "checkout", "-q", "--detach", r["head"], check=False)  # free every branch to be set
                 current = git(dest, "rev-parse", "--abbrev-ref", "HEAD", check=False)
                 for name, sha in (r.get("branches") or {}).items():
                     if name not in (current, r["branch"]) and subprocess.run(
                             ["git", "-C", str(dest), "cat-file", "-e", sha + "^{commit}"],
                             capture_output=True).returncode == 0:
                         git(dest, "branch", "-q", "-f", name, sha)
-                if r["branch"] and r["branch"] != "HEAD":
-                    git(dest, "checkout", "-q", "-B", r["branch"], r["head"])
-                    if r["upstream"]:
-                        git(dest, "branch", "-q", "--set-upstream-to", r["upstream"], check=False)
-                else:
-                    git(dest, "checkout", "-q", r["head"])
+                try:
+                    if r["branch"] and r["branch"] != "HEAD":
+                        git(dest, "checkout", "-q", "-B", r["branch"], r["head"])
+                        if r["upstream"]:
+                            git(dest, "branch", "-q", "--set-upstream-to", r["upstream"], check=False)
+                    else:
+                        git(dest, "checkout", "-q", r["head"])
+                except RuntimeError as exc:  # report it; the other checkouts still restore
+                    print(f"agent-state: {r['path']}: could not check out {r['head'][:10]}: {exc}", file=sys.stderr)
+                    failed += 1
+                    continue
                 print(f"agent-state: {r['path']} at {r['head'][:10]}", file=sys.stderr)
             # 3. Then what git does not track inside each checkout, and its uncommitted edits.
             if resume:

@@ -394,3 +394,25 @@ def test_hardlinked_files_restore(home, tmp_path):
     r = run("restore", "--home", str(fresh), "--file", str(out))
     assert r.returncode == 0, r.stderr
     assert (fresh / ".hermes/cache/shot-b.png").read_bytes() == b"png"
+
+
+def test_head_on_a_branch_deleted_upstream_is_carried(home, tmp_path):
+    # Tris's ventures-tmp: HEAD on a branch origin deleted; the local
+    # origin/<branch> still had it, so nothing looked unpushed and no bundle
+    # was cut -- the restore could not check the commit out.
+    repo = home / "Data"
+    bare = tmp_path / "remotes/data.git"
+    git(repo, "remote", "set-url", "origin", f"file://{bare}")
+    git(repo, "checkout", "-q", "-b", "feat/x")
+    commit(repo, "x.md", "feature")
+    git(repo, "push", "-q", "-u", "origin", "feat/x")
+    git(bare, "branch", "-D", "feat/x")
+    git(bare, "reflog", "expire", "--expire=now", "--all")
+    git(bare, "gc", "-q", "--prune=now")
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    r = run("restore", "--home", str(fresh), "--file", str(out))
+    assert r.returncode == 0, r.stderr
+    assert git(fresh / "Data", "rev-parse", "HEAD") == git(repo, "rev-parse", "HEAD")
