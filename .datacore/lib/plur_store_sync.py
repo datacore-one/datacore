@@ -675,7 +675,8 @@ def _default_cli() -> str:
     if os.environ.get("DATACORE_PLUR_CLI"):
         return os.environ["DATACORE_PLUR_CLI"]
     found = shutil.which("plur") or next(
-        (c for c in ("/usr/local/bin/plur", "/opt/homebrew/bin/plur") if os.access(c, os.X_OK)), None)
+        (c for c in ("/usr/local/bin/plur", "/opt/homebrew/bin/plur",
+         os.path.expanduser("~/.hermes/node/bin/plur")) if os.access(c, os.X_OK)), None)
     if found:
         return found
     nvm = sorted(Path.home().glob(".nvm/versions/node/*/bin/plur"),
