@@ -336,3 +336,19 @@ def test_a_detached_head_keeps_every_branch_where_it_was(home, tmp_path):
     assert run("restore", "--home", str(fresh), "--file", str(out)).returncode == 0
     assert git(fresh / ".datacore/v2-runner", "rev-parse", "refs/heads/main") == first
     assert git(fresh / ".datacore/v2-runner", "rev-parse", "HEAD") == first
+
+
+def test_installed_packages_outside_checkouts_are_kept(home, tmp_path):
+    # OpenClaw's installed plugins (the Codex harness) live in
+    # ~/.openclaw/npm/.../node_modules; skipping every node_modules dropped them
+    # from Data's backups, and his restored copy had no Codex.
+    plugin = home / ".openclaw/npm/projects/codex/node_modules/@openclaw/codex/dist"
+    plugin.mkdir(parents=True)
+    (plugin / "index.js").write_text("export {}\n")
+    (home / "Data/node_modules/x").mkdir(parents=True, exist_ok=True)
+    (home / "Data/node_modules/x/i.js").write_text("cache")
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    names = tarfile.open(out).getnames()
+    assert "state/.openclaw/npm/projects/codex/node_modules/@openclaw/codex/dist/index.js" in names
+    assert not any(n.startswith("state/Data/node_modules") for n in names), "inside a checkout it is a cache"

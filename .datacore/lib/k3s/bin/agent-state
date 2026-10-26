@@ -36,11 +36,12 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
-# Never descended into when looking for checkouts, and never backed up.
-SKIP_DIRS = {".cache", ".npm", "node_modules", "lost+found"}
+# Never backed up. node_modules is NOT here: outside a checkout it holds
+# installed packages (OpenClaw's plugins, the Codex harness), not a cache.
+SKIP_DIRS = {".cache", ".npm", "lost+found"}
 # Regenerable directories inside a checkout's untracked files.
-CACHE_PARTS = SKIP_DIRS | {".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
-                           ".next", ".turbo", "dist", "build", ".tox"}
+CACHE_PARTS = SKIP_DIRS | {"node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache",
+                           ".ruff_cache", ".next", ".turbo", "dist", "build", ".tox"}
 
 
 def untracked(repo: Path) -> list[str]:
@@ -80,7 +81,7 @@ def checkouts(home: Path, exclude: list[str] = ()):
     """Every git working copy under home, outermost first; caches and excluded paths skipped."""
     skip = {home / e for e in exclude}
     for root, dirs, _files in os.walk(home):
-        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and Path(root, d) not in skip)
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS | {"node_modules"} and Path(root, d) not in skip)
         if ".git" in dirs or Path(root, ".git").is_file():
             yield Path(root)
             dirs[:] = [d for d in dirs if d != ".git"]
