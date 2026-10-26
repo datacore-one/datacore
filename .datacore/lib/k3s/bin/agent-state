@@ -28,6 +28,7 @@ import argparse
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -89,7 +90,7 @@ def checkouts(home: Path, exclude: list[str] = ()):
 
 def describe(home: Path, repo: Path) -> dict:
     rel = str(repo.relative_to(home))
-    url = git(repo, "remote", "get-url", "origin", check=False)
+    url = git(repo, "config", "--get", "remote.origin.url", check=False)
     branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD", check=False)
     head = git(repo, "rev-parse", "HEAD", check=False)
     upstream = git(repo, "rev-parse", "--abbrev-ref", "@{u}", check=False)
@@ -98,7 +99,7 @@ def describe(home: Path, repo: Path) -> dict:
     remotes = {}
     for name in git(repo, "remote", check=False).split():
         if name != "origin":
-            u = git(repo, "remote", "get-url", name, check=False)
+            u = git(repo, "config", "--get", f"remote.{name}.url", check=False)
             if u:
                 remotes[name] = clean_url(u)
     return {"path": rel, "url": clean_url(url) if url else None, "remotes": remotes, "branch": branch, "head": head,
@@ -284,8 +285,11 @@ def restore(home: Path, file: Path, resume: bool = False, reference: Path | None
         manifest = json.load(tar.extractfile("manifest.json"))
         roots = sorted((r["path"] for r in manifest["repos"]), key=len, reverse=True)
 
+        def owner(name: str) -> str | None:  # the innermost checkout holding it
+            return next((r for r in roots if name == r or name.startswith(r + "/")), None)
+
         def in_repo(name: str) -> bool:
-            return any(name == r or name.startswith(r + "/") for r in roots)
+            return owner(name) is not None
 
         members = [m for m in tar.getmembers() if m.name.startswith("state/")]
         for m in members:
@@ -294,6 +298,18 @@ def restore(home: Path, file: Path, resume: bool = False, reference: Path | None
                 m.linkname = m.linkname[len("state/"):]
         outside = [m for m in members if not in_repo(m.name)]
         inside = [m for m in members if in_repo(m.name)]
+        laid: set[str] = set()
+
+        def lay_in(path: str | None) -> None:
+            # What git does not track inside a checkout. Laid in right after that
+            # checkout, before the ones nested in it: an agent's credential helper
+            # may read ignored files there (Winston's secrets live in his Data).
+            todo = [m for m in inside if m.name not in laid and (path is None or owner(m.name) == path)]
+            tar.extractall(home, members=todo, filter=our_filter)
+            laid.update(m.name for m in todo)
+
+        if resume:
+            writable(home, inside)
         # 1. State outside checkouts first: it holds the credentials the clones use.
         if resume:
             writable(home, outside)
@@ -313,17 +329,30 @@ def restore(home: Path, file: Path, resume: bool = False, reference: Path | None
                     continue
                 if not (dest / ".git").exists():
                     dest.parent.mkdir(parents=True, exist_ok=True)
+                    # A folder already holding files (a resumed restore laid them in
+                    # after a failed clone): clone beside it and move the repo in.
+                    into = dest
+                    if dest.is_dir() and any(dest.iterdir()):
+                        into = Path(tempfile.mkdtemp(prefix=f".{dest.name}.clone-", dir=dest.parent))
+                        into.rmdir()
                     src = reference / r["path"] if reference else None
                     if src is not None and (src / ".git").is_dir():
                         # Beside the original on one filesystem: share its objects
                         # (a local clone hardlinks them), then point at origin.
-                        cl = subprocess.run(["git", "-c", "safe.directory=*", "clone", "-q", "--local", str(src),
-                                             str(dest)], capture_output=True, text=True)
+                        cl = subprocess.run(["git", "-c", "safe.directory=*", "clone", "-q", "--no-checkout",
+                                             "--local", str(src), str(into)], capture_output=True, text=True)
                         if cl.returncode == 0:
-                            git(dest, "remote", "set-url", "origin", r["url"])
-                            subprocess.run(["git", "-C", str(dest), "fetch", "-q", "origin"], capture_output=True)
+                            git(into, "remote", "set-url", "origin", r["url"])
+                            subprocess.run(["git", "-C", str(into), "fetch", "-q", "origin"], capture_output=True)
                     else:
-                        cl = subprocess.run(["git", "clone", "-q", r["url"], str(dest)], capture_output=True, text=True)
+                        cl = subprocess.run(["git", "clone", "-q", "--no-checkout", r["url"], str(into)],
+                                            capture_output=True, text=True)
+                    if cl.returncode == 0 and into != dest:
+                        (into / ".git").rename(dest / ".git")
+                        shutil.rmtree(into)
+                    if cl.returncode == 0:
+                        git(dest, "reset", "-q", check=False)         # index from HEAD; files stay
+                        git(dest, "checkout", "-q", "--", ".", check=False)
                     if cl.returncode != 0:
                         print(f"agent-state: {r['path']}: clone failed: {cl.stderr.strip()}", file=sys.stderr)
                         failed += 1
@@ -382,11 +411,10 @@ def restore(home: Path, file: Path, resume: bool = False, reference: Path | None
                     print(f"agent-state: {r['path']}: could not check out {r['head'][:10]}: {exc}", file=sys.stderr)
                     failed += 1
                     continue
+                lay_in(r["path"])
                 print(f"agent-state: {r['path']} at {r['head'][:10]}", file=sys.stderr)
-            # 3. Then what git does not track inside each checkout, and its uncommitted edits.
-            if resume:
-                writable(home, inside)
-            tar.extractall(home, members=inside, filter=our_filter)
+            # 3. The rest inside checkouts (whole repos, failed clones), and uncommitted edits.
+            lay_in(None)
             patches = [m for m in tar.getmembers() if m.name.startswith("patches/")]
             tar.extractall(bdir, members=patches, filter="data")
             for r in manifest["repos"]:

@@ -509,3 +509,47 @@ def test_a_member_name_escaping_the_home_is_refused(tmp_path):
     fresh.mkdir()
     run("restore", "--home", str(fresh), "--file", str(bad))
     assert not (tmp_path / "escaped.txt").exists()
+
+
+def test_a_credential_kept_inside_a_checkout_serves_the_clones_nested_in_it(home, tmp_path):
+    # Winston's git credential helper reads secrets that are ignored files in his
+    # Data checkout; his private repos nested under Data failed to clone because
+    # those files were laid in only after every clone.
+    nested_bare = tmp_path / "remotes/space.git"
+    nested_bare.mkdir(parents=True)
+    git(nested_bare, "init", "-q", "--bare", "-b", "main")
+    fake = "https://example.invalid/space.git"
+    (home / "Data/secret.gitconfig").write_text(f'[url "{nested_bare}"]\n\tinsteadOf = {fake}\n')
+    (home / ".gitconfig").write_text("[include]\n\tpath = Data/secret.gitconfig\n")
+    (home / "Data/.gitignore").write_text("secret.env\nsecret.gitconfig\nnode_modules/\n1-space/\n")
+    space = home / "Data/1-space"
+    space.mkdir()
+    git(space, "init", "-q", "-b", "main")
+    git(space, "remote", "add", "origin", str(nested_bare))
+    commit(space, "notes.org", "space")
+    git(space, "push", "-q", "-u", "origin", "main")
+    git(space, "remote", "set-url", "origin", fake)
+    out = tmp_path / "b.tar.gz"
+    r = run("backup", "--home", str(home), "--out", str(out), env={"GIT_CONFIG_GLOBAL": str(home / ".gitconfig")})
+    assert r.returncode == 0, r.stderr
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    r = run("restore", "--home", str(fresh), "--file", str(out), env={"GIT_CONFIG_GLOBAL": str(fresh / ".gitconfig")})
+    assert r.returncode == 0, r.stderr
+    assert git(fresh / "Data/1-space", "rev-parse", "HEAD") == git(space, "rev-parse", "HEAD")
+
+
+def test_resume_clones_into_a_folder_holding_only_laid_in_files(home, tmp_path):
+    # A first pass whose clone failed still laid the checkout's untracked files in;
+    # the resume's clone then refused the non-empty folder.
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    (fresh / "Data").mkdir(parents=True)
+    (fresh / "Data/secret.env").write_text("TOKEN=ignored-by-git")
+    (fresh / "Data/notes.md").write_text("untracked")
+    r = run("restore", "--home", str(fresh), "--file", str(out), "--resume")
+    assert r.returncode == 0, r.stderr
+    assert git(fresh / "Data", "rev-parse", "HEAD") == git(home / "Data", "rev-parse", "HEAD")
+    assert (fresh / "Data/README").read_text() == "edited, not committed"
+    assert (fresh / "Data/secret.env").read_text() == "TOKEN=ignored-by-git"
