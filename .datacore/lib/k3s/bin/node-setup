@@ -32,6 +32,11 @@ k3s_install() {
         --cluster-cidr 10.42.0.0/16 --service-cidr 10.43.0.0/16 \
         --tls-san "$tip" --write-kubeconfig-mode 600 \
         --secrets-encryption
+    # The node registers a few seconds after the service starts; `wait --all`
+    # on no nodes fails at once (seen on the second machine, 2026-10-26).
+    i=0; until kubectl get nodes -o name 2>/dev/null | grep -q .; do
+        i=$((i + 1)); [ "$i" -le 90 ] || { log "no node registered after 3 minutes"; exit 1; }; sleep 2
+    done
     kubectl wait --for=condition=Ready node --all --timeout=180s
     log "k3s $K3S_VERSION running"
 }
