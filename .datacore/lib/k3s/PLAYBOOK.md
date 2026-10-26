@@ -116,6 +116,11 @@ The agent stops for the copy (about 2 minutes for Tris) and restarts.
 Checks: `<UTC>.tar.gz` and `.sha256` in `/var/backups/fleet/<agent>/`; the
 `<UTC>.log` beside it lists every checkout not fully pushed.
 
+**After any change to these tools, run `bin/node-setup tools .` on every node
+again.** The nightly backup runs the node's installed copy of `agent-state`; the
+portable proof found tonight's backups cut by a copy installed hours before
+(repos without a reachable remote and local branches were not carried).
+
 Off the node: pull the directory to the operator machine every night, e.g.
 `rsync -a --rsync-path="sudo rsync" <node>:/var/backups/fleet/ ~/backups/fleet/`.
 
