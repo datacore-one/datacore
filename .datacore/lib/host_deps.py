@@ -44,7 +44,8 @@ DATACORE_ROOT = Path(__file__).resolve().parents[1]
 
 #: Requirement files whose contents a briefing host must be able to import.
 #: The box runs the morning pipeline: core lib, the health fragment, news,
-#: email triage and the org/GTD read path. It does not run nightshift, forge or voice.
+#: email triage, the spoken briefing and the org/GTD read path. It does not run
+#: nightshift or forge.
 PROFILES: dict[str, tuple[str, ...]] = {
     "briefing": (
         "lib/requirements.txt",
@@ -52,6 +53,7 @@ PROFILES: dict[str, tuple[str, ...]] = {
         "modules/crm/requirements.txt",
         "modules/ventures/requirements.txt",
         "modules/mail/requirements.txt",      # the 03:30 email triage
+        "modules/voice-terminal/requirements.txt",  # the spoken briefing (Kokoro)
     ),
     "all": ("**/requirements.txt",),
 }
@@ -91,7 +93,7 @@ EXCLUDE = {
     "playwright": "forge browser automation; needs a browser runtime",
     "faster-whisper": "voice-terminal STT; the box has no microphone",
     "openwakeword": "voice-terminal wake word; the box has no microphone",
-    "piper-tts": "voice-terminal local TTS; gTTS is the box's path",
+    "piper-tts": "voice-terminal local TTS; Kokoro is the box's path",
     "sounddevice": "voice-terminal audio I/O; the box has no sound device",
     "sqlcipher3": "health medical records; needs libsqlcipher, not used by the fragment",
     "pytesseract": "health OCR; needs the tesseract binary",

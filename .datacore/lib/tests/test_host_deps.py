@@ -114,3 +114,11 @@ def test_briefing_profile_covers_the_mail_triage_the_box_runs():
 ])
 def test_packages_are_checked_under_their_import_name(dist, module):
     assert host_deps.IMPORT_NAME.get(dist) == module
+
+
+def test_briefing_profile_covers_the_spoken_briefing():
+    # The box speaks the briefing with Kokoro (voice-terminal); cloud speech is
+    # off. kokoro_onnx was missing in Winston's pod on 2026-10-26 and the audio
+    # failed while the checker reported everything importable.
+    names = [str(p.relative_to(host_deps.DATACORE_ROOT)) for p in host_deps.files_for('briefing')]
+    assert 'modules/voice-terminal/requirements.txt' in names
