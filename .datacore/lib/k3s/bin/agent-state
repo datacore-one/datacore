@@ -255,6 +255,8 @@ def restore(home: Path, file: Path, resume: bool = False, reference: Path | None
         members = [m for m in tar.getmembers() if m.name.startswith("state/")]
         for m in members:
             m.name = m.name[len("state/"):]
+            if m.islnk() and m.linkname.startswith("state/"):  # a hardlink names its partner
+                m.linkname = m.linkname[len("state/"):]
         outside = [m for m in members if not in_repo(m.name)]
         inside = [m for m in members if in_repo(m.name)]
         # 1. State outside checkouts first: it holds the credentials the clones use.

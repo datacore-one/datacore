@@ -378,3 +378,19 @@ def test_a_home_with_real_files_is_still_refused(home, tmp_path):
     (fresh / ".hermes/state.db").write_text("someone's state")
     r = run("restore", "--home", str(fresh), "--file", str(out))
     assert r.returncode != 0 and "not empty" in r.stderr
+
+
+def test_hardlinked_files_restore(home, tmp_path):
+    # Tris's browser screenshots are hardlinks of each other; the archive
+    # names a hardlink's partner with the state/ prefix the restore strips.
+    a = home / ".hermes/cache/shot-a.png"
+    a.parent.mkdir(parents=True)
+    a.write_bytes(b"png")
+    os.link(a, home / ".hermes/cache/shot-b.png")
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    r = run("restore", "--home", str(fresh), "--file", str(out))
+    assert r.returncode == 0, r.stderr
+    assert (fresh / ".hermes/cache/shot-b.png").read_bytes() == b"png"
