@@ -215,5 +215,6 @@ echo "project rc=$prc"
 
 why=""
 [ "$FAILED_SPACES" != " " ] && why="converge failed:${FAILED_SPACES% }"
+[ "$irc" -ne 0 ] && why="${why:+$why; }ingest failed:${SKIP% }"
 finish "$rc" "$why"
 exit $?
