@@ -375,3 +375,31 @@ def test_an_agent_names_where_its_datacore_lib_is():
     deps = render_runtimes("--set", "agents.tris.datacoreLib=/srv/oldhome/Data/.datacore/lib")
     assert _env(_containers(deps["tris"])["gateway"])["DATACORE_LIB"] == "/srv/oldhome/Data/.datacore/lib"
     assert _env(_containers(deps["data"])["gateway"])["DATACORE_LIB"] == "/var/lib/agent/.datacore/v2-runner/.datacore/lib"
+
+
+def test_a_secret_file_reaches_every_container_of_the_agent_read_only():
+    # Winston's CoS scripts read /etc/datacored.env as a file (model routing, the
+    # daemon's token); only his daemon container had it, as env vars, so the
+    # morning run, news and questions ran without it in his pod.
+    dep = {d["metadata"]["name"]: d for d in agent_deployments(render_winston())}["winston"]
+    spec = dep["spec"]["template"]["spec"]
+    vols = {v["name"]: v for v in spec["volumes"]}
+    for name, c in _containers(dep).items():
+        m = [x for x in c["volumeMounts"] if x["mountPath"] == "/etc/datacored.env"]
+        assert len(m) == 1, name
+        assert m[0]["readOnly"] is True and m[0]["subPath"] == "datacored.env", name
+        sec = vols[m[0]["name"]]["secret"]
+        assert sec["secretName"] == "winston-datacored-envfile"
+        assert sec["items"] == [{"key": "datacored.env", "path": "datacored.env"}]
+        assert sec["defaultMode"] == 0o444      # root-owned in the pod; the agent reads it
+    tris = {d["metadata"]["name"]: d for d in agent_deployments(render_winston())}["tris"]
+    for c in _containers(tris).values():
+        assert all(x["mountPath"] != "/etc/datacored.env" for x in c["volumeMounts"])
+
+
+def test_standby_mounts_the_agents_secret_files_too():
+    out = subprocess.run(["helm", "template", "fleet", str(CHART), "-f", str(WINSTON),
+                          "--set", "agents.winston.mode=standby"], check=True, capture_output=True, text=True).stdout
+    dep = {d["metadata"]["name"]: d for d in agent_deployments([d for d in yaml.safe_load_all(out) if d])}["winston"]
+    c = _containers(dep)["standby"]
+    assert any(x["mountPath"] == "/etc/datacored.env" for x in c["volumeMounts"])

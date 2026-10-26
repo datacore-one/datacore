@@ -14,6 +14,8 @@ agents:
     killSwitch: true
     crontab: |
       */5 * * * * touch /srv/oldhome/.datacore/cos/heartbeat
+    secretFiles:
+      - {secret: winston-datacored-envfile, key: datacored.env, path: /etc/datacored.env}
     extraContainers:
       - name: daemon
         command: ["/srv/oldhome/app/.venv/bin/python", "-m", "datacored"]

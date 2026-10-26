@@ -36,6 +36,23 @@ securityContext:
   capabilities: {drop: [ALL]}
 {{- end -}}
 
+{{/* An agent's secret files (secretFiles: [{secret, key, path}]), read-only at their path. */}}
+{{- define "fleet.secretFileMounts" -}}
+{{- range $i, $f := (.secretFiles | default list) }}
+- {name: {{ printf "secret-file-%d" $i }}, mountPath: {{ $f.path }}, subPath: {{ $f.key }}, readOnly: true}
+{{- end }}
+{{- end }}
+
+{{- define "fleet.secretFileVolumes" -}}
+{{- range $i, $f := (.secretFiles | default list) }}
+- name: {{ printf "secret-file-%d" $i }}
+  secret:
+    secretName: {{ $f.secret }}
+    items: [{key: {{ $f.key }}, path: {{ $f.key }}}]
+    defaultMode: 0444
+{{- end }}
+{{- end }}
+
 {{- define "fleet.sshMount" -}}
 {{- if ne .home .imageHome }}
 - {name: home, mountPath: {{ printf "%s/.ssh" .imageHome }}, subPath: .ssh}

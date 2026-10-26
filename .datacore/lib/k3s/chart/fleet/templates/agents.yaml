@@ -160,6 +160,7 @@ spec:
             {{- include "fleet.sshMount" $a | nindent 12 }}
             - {name: tmp, mountPath: /tmp}
             - {name: agent-key, mountPath: {{ printf "%s/.datacore/keys/%s" $a.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
+            {{- include "fleet.secretFileMounts" $a | nindent 12 }}
         {{- else }}
         - name: gateway
           image: {{ $a.image }}
@@ -175,6 +176,7 @@ spec:
             {{- include "fleet.sshMount" $a | nindent 12 }}
             - {name: tmp, mountPath: /tmp}
             - {name: agent-key, mountPath: {{ printf "%s/.datacore/keys/%s" $a.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
+            {{- include "fleet.secretFileMounts" $a | nindent 12 }}
         - name: cron
           image: {{ $a.image }}
           imagePullPolicy: IfNotPresent
@@ -190,6 +192,7 @@ spec:
             - {name: tmp, mountPath: /tmp}
             - {name: crontab, mountPath: /etc/datacore, readOnly: true}
             - {name: agent-key, mountPath: {{ printf "%s/.datacore/keys/%s" $a.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
+            {{- include "fleet.secretFileMounts" $a | nindent 12 }}
         {{- if and $a.stream $a.stream.enabled }}
         - name: stream
           image: {{ $a.image }}
@@ -232,6 +235,7 @@ spec:
             {{- include "fleet.sshMount" $a | nindent 12 }}
             - {name: tmp, mountPath: /tmp}
             - {name: agent-key, mountPath: {{ printf "%s/.datacore/keys/%s" $a.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
+            {{- include "fleet.secretFileMounts" $a | nindent 12 }}
         {{- end }}
         {{- end }}
       volumes:
@@ -247,6 +251,7 @@ spec:
           secret:
             secretName: {{ $a.signingKeySecret }}
             defaultMode: 0400
+        {{- include "fleet.secretFileVolumes" $a | nindent 8 }}
 ---
 {{- $ports := list }}
 {{- range ($a.extraContainers | default list) }}{{- range (.ports | default list) }}{{- $ports = append $ports .containerPort }}{{- end }}{{- end }}
