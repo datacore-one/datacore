@@ -231,7 +231,17 @@ def writable(home: Path, members) -> None:
 def restore(home: Path, file: Path, resume: bool = False, reference: Path | None = None) -> int:
     # Clones use the restored agent's own git credentials and ssh config.
     os.environ["HOME"] = str(home)
-    present = [p.name for p in home.iterdir() if p.name not in ("lost+found",)] if home.exists() else []
+    def holds_files(p: Path) -> bool:
+        # A pod's start leaves directories and symlinks (key directory, runtime
+        # links, the ssh mount point) but no files: that is still an empty home.
+        if p.is_symlink():
+            return False
+        if p.is_file():
+            return True
+        return any(f.is_file() and not f.is_symlink() for f in p.rglob("*"))
+
+    present = [p.name for p in home.iterdir() if p.name not in ("lost+found",) and holds_files(p)] \
+        if home.exists() else []
     if present and not resume:
         print(f"agent-state: refusing: {home} is not empty ({', '.join(sorted(present)[:5])})", file=sys.stderr)
         return 1

@@ -352,3 +352,29 @@ def test_installed_packages_outside_checkouts_are_kept(home, tmp_path):
     names = tarfile.open(out).getnames()
     assert "state/.openclaw/npm/projects/codex/node_modules/@openclaw/codex/dist/index.js" in names
     assert not any(n.startswith("state/Data/node_modules") for n in names), "inside a checkout it is a cache"
+
+
+def test_a_pods_empty_skeleton_counts_as_an_empty_home(home, tmp_path):
+    # A pod that started on the volume (key directory, runtime links, the ssh
+    # mount point) leaves directories and symlinks but no files; the proof's
+    # restore of Tris refused such a volume as "not empty".
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--exclude", ".hermes/hermes-agent", "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    (fresh / ".datacore/keys").mkdir(parents=True)
+    (fresh / ".ssh").mkdir()
+    (fresh / ".hermes").mkdir()
+    (fresh / ".hermes/hermes-agent").symlink_to("/opt/hermes-agent")
+    r = run("restore", "--home", str(fresh), "--file", str(out))
+    assert r.returncode == 0, r.stderr
+    assert (fresh / ".hermes/state.db").exists()
+
+
+def test_a_home_with_real_files_is_still_refused(home, tmp_path):
+    out = tmp_path / "b.tar.gz"
+    assert run("backup", "--home", str(home), "--out", str(out)).returncode == 0
+    fresh = tmp_path / "fresh"
+    (fresh / ".hermes").mkdir(parents=True)
+    (fresh / ".hermes/state.db").write_text("someone's state")
+    r = run("restore", "--home", str(fresh), "--file", str(out))
+    assert r.returncode != 0 and "not empty" in r.stderr

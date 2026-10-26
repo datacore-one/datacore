@@ -44,7 +44,9 @@ bin/node-setup backup-timer                  # check: systemctl list-timers flee
 bin/node-setup killswitch <chief-of-staff-user>   # check: that user's fleetctl status works
 ```
 
-Images are built on an operator machine (no registry; that is why they are pinned):
+Images are built on an operator machine (no registry; that is why they are pinned).
+The bundle must hold **every image the values file pins** (an agent may pin an
+older one: the portable proof's restored Tris waited on `agent-hermes:0.19.0-5`):
 
 ```sh
 docker build -f images/agent-base/Dockerfile -t agent-base:3 .
