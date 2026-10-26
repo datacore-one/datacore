@@ -104,7 +104,15 @@ if (c.get("terminal") or {}).get("backend") == "ssh":
     c["terminal"]["backend"] = "local"
     with p.open("w") as f:
         y.dump(c, f)
-print("adjusted: ssh through the proxy, terminal backend local")
+# .hermes/.env overrides config.yaml: TERMINAL_ENV=ssh there kept every tool on
+# the old host (Tris's tools all failed in his pod until 2026-10-26).
+env = home / ".hermes" / ".env"
+if env.exists():
+    lines = env.read_text().splitlines(keepends=True)
+    fixed = ["TERMINAL_ENV=local\n" if l.strip() == "TERMINAL_ENV=ssh" else l for l in lines]
+    if fixed != lines:
+        env.write_text("".join(fixed))
+print("adjusted: ssh through the proxy, terminal backend local (config.yaml and .env)")
 PY
   [ -n "$ADJUST_EXTRA" ] && in_vol sh -c "$ADJUST_EXTRA"
   mark_runs_nowhere_else "$OLD_HOST frozen"

@@ -12,7 +12,9 @@ http://egress.{{ .Values.sharedNamespace }}.svc.cluster.local:3128
 {{- range $a.env }}
 - {name: {{ .name }}, value: {{ .value | replace "$(HOME)" $home | quote }}}
 {{- end }}
-- {name: DATACORE_LIB, value: {{ printf "%s/.datacore/v2-runner/.datacore/lib" $home | quote }}}
+{{- /* Where the agent's Datacore code is: its runner checkout by default, or
+       its own Data root (Winston) -- the Hermes gate imports from here. */}}
+- {name: DATACORE_LIB, value: {{ $a.datacoreLib | default (printf "%s/.datacore/v2-runner/.datacore/lib" $home) | quote }}}
 {{- /* System Python first: the agent's jobs import packages installed for
        /usr/bin/python3. The runtime's own tools come last (pathTail). */}}
 - {name: PATH, value: {{ printf "%s/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:%s" $home $a.pathTail | quote }}}

@@ -367,3 +367,11 @@ def test_no_api_access_without_the_kill_switch_flag():
     docs = render_winston()
     names = {p["metadata"]["name"] for p in of_kind(docs, "NetworkPolicy")}
     assert "tris-kube-api" not in names and "tris-ingress" not in names
+
+
+def test_an_agent_names_where_its_datacore_lib_is():
+    # Winston runs from his Data root, not a runner checkout; with the runner
+    # path his Hermes gate could not resolve his identity and refused every tool.
+    deps = render_runtimes("--set", "agents.tris.datacoreLib=/srv/oldhome/Data/.datacore/lib")
+    assert _env(_containers(deps["tris"])["gateway"])["DATACORE_LIB"] == "/srv/oldhome/Data/.datacore/lib"
+    assert _env(_containers(deps["data"])["gateway"])["DATACORE_LIB"] == "/var/lib/agent/.datacore/v2-runner/.datacore/lib"
