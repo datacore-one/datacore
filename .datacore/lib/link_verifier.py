@@ -147,10 +147,16 @@ class LinkVerifier:
             return True, details
 
         except HTTPError as e:
-            details['status_code'] = e.code
-            details['error'] = f"HTTP {e.code}: {e.reason}"
-            details['reason'] = f"HTTP error {e.code}"
-            return False, details
+            if _is_challenge(e):
+                details['status_code'] = e.code
+                details['error'] = "Cloudflare bot challenge: the page exists behind bot protection"
+                return True, details
+            if e.code not in (403, 429, 503):
+                details['status_code'] = e.code
+                details['error'] = f"HTTP {e.code}: {e.reason}"
+                details['reason'] = f"HTTP error {e.code}"
+                return False, details
+            return self._proxied_verdict(url, details)
 
         except URLError as e:
             details['error'] = f"URL error: {str(e.reason)}"
@@ -163,9 +169,54 @@ class LinkVerifier:
             return False, details
 
         except Exception as e:
+            if isinstance(e, ValueError):
+                # The strict probe refused the destination itself (a private or
+                # non-public address): never retry that another way.
+                details['error'] = f"Unexpected error: {str(e)}"
+                details['reason'] = "Verification failed"
+                return False, details
+            # The strict probe uses no proxy; an agent pod reaches the internet
+            # only through its egress proxy (Data's pod, 2026-10-27).
+            return self._proxied_verdict(url, details)
+
+    def _proxied_verdict(self, url: str, details: Dict) -> Tuple[bool, Dict]:
+        """Second opinion through the configured proxy, with a browser agent.
+
+        A Cloudflare challenge (403 + cf-mitigated: challenge) means the page
+        exists behind bot protection; anything else non-200 still fails.
+        Only for a public https/http host, by the strict probe's own rule."""
+        try:
+            from public_download import parse_public_url, public_addresses
+            parsed = parse_public_url(url)
+            public_addresses(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+        except Exception as e:  # noqa: BLE001 -- refused destination
             details['error'] = f"Unexpected error: {str(e)}"
             details['reason'] = "Verification failed"
             return False, details
+        try:
+            status, content_type = _proxied_status(url, self.TIMEOUT)
+        except HTTPError as e:
+            details['status_code'] = e.code
+            if _is_challenge(e):
+                details['error'] = "Cloudflare bot challenge: the page exists behind bot protection"
+                return True, details
+            details['error'] = f"HTTP {e.code}: {e.reason}"
+            details['reason'] = f"HTTP error {e.code}"
+            return False, details
+        except Exception as e:
+            details['error'] = f"Unexpected error: {str(e)}"
+            details['reason'] = "Verification failed"
+            return False, details
+        details['status_code'] = status
+        details['content_type'] = content_type
+        if status != 200:
+            details['reason'] = f"Non-200 status code: {status}"
+            return False, details
+        if not any((content_type or "").lower().startswith(a.lower()) for a in self.ALLOWED_CONTENT_TYPES):
+            details['reason'] = f"Non-user-facing content type: {content_type}"
+            return False, details
+        return True, details
+
 
     def verify_content(self, text: str, fast_fail: bool = False) -> Tuple[bool, List[Dict]]:
         """
@@ -229,6 +280,20 @@ class LinkVerifier:
 
 
 # Standalone CLI usage
+
+def _is_challenge(err: HTTPError) -> bool:
+    headers = getattr(err, "headers", None) or {}
+    return err.code == 403 and str(headers.get("cf-mitigated", "")).lower() == "challenge"
+
+
+def _proxied_status(url: str, timeout: float) -> Tuple[int, str]:
+    """GET through the environment's proxy settings; returns (status, content type)."""
+    from urllib.request import Request, build_opener, ProxyHandler
+    req = Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; DatacoreLinkCheck/1.0)"})
+    with build_opener(ProxyHandler()).open(req, timeout=timeout) as resp:
+        return resp.status, resp.headers.get("Content-Type", "")
+
+
 def main():
     """CLI interface for link verification."""
     import argparse
