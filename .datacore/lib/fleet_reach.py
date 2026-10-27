@@ -117,6 +117,20 @@ def containers(pl: Place) -> list[Place]:
     return [Place(pl.machine, "pod", pl.target, {**pl.k8s, "container": n}) for n in names]
 
 
+def container_ready(pl: Place, name: str) -> bool | None:
+    """Is this pod's container `name` ready? None when the pod has no such
+    container or the cluster could not be asked (could not tell)."""
+    cfg = os.environ.get("FLEET_KUBECONFIG") or os.path.expanduser(str(pl.k8s.get("kubeconfig") or ""))
+    dep = str(pl.k8s.get("deployment") or "")
+    r = subprocess.run(["kubectl"] + (["--kubeconfig", cfg] if cfg else [])
+                       + ["-n", str(pl.k8s.get("namespace") or "default"), "get", "pods",
+                          "-l", f"app.kubernetes.io/name={dep}", "-o",
+                          "jsonpath={range .items[*].status.containerStatuses[*]}{.name}={.ready} {end}"],
+                       capture_output=True, text=True, timeout=30)
+    states = dict(kv.split("=", 1) for kv in r.stdout.split() if "=" in kv) if r.returncode == 0 else {}
+    return None if name not in states else states[name] == "true"
+
+
 def run_at(pl: Place, cmd: str, timeout: int = 60) -> subprocess.CompletedProcess:
     return subprocess.run(argv(pl, cmd), capture_output=True, text=True, timeout=timeout)
 

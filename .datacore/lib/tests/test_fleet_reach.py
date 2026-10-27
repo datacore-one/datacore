@@ -97,6 +97,15 @@ def test_a_pod_expands_to_each_of_its_containers(roster, tmp_path, monkeypatch):
     assert fr.containers(host) == [host]
 
 
+def test_a_pods_container_readiness_is_asked_of_the_cluster(roster, tmp_path):
+    k = tmp_path / "bin" / "kubectl"
+    k.write_text('#!/bin/sh\necho "gateway=true cron=true daemon=false"\n')
+    pl = fr.place("box", roster)
+    assert fr.container_ready(pl, "gateway") is True
+    assert fr.container_ready(pl, "daemon") is False
+    assert fr.container_ready(pl, "nope") is None
+
+
 def test_every_place_a_machine_does_work(roster):
     assert [p.kind for p in fr.places("box", roster)] == ["pod", "host"]
     assert [p.kind for p in fr.places("hermes", roster)] == ["pod"]
