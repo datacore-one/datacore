@@ -67,6 +67,11 @@ def _local_name(entries: dict) -> str | None:
     return None
 
 
+def this_machine(path: Path | None = None) -> str | None:
+    """The roster name of the machine this runs on, or None."""
+    return _local_name(servers(path))
+
+
 def agent_machines(path: Path | None = None) -> list[str]:
     """Machines that do fleet work today: not retired."""
     return [n for n, e in servers(path).items() if isinstance(e, dict) and not e.get("retired")]
