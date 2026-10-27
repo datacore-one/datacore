@@ -86,6 +86,17 @@ fi
 ufw --force enable >/dev/null
 
 log "fail2ban"
-systemctl enable --now fail2ban >/dev/null
+# Tailnet addresses are the owner's own machines: one misconfigured job on one
+# of them (2026-10-25: a 5-second rsync as a user sshd does not allow) banned
+# the whole Mac. Strangers get ten tries per ten minutes before a ban.
+cat > /etc/fail2ban/jail.d/20-datacore.local <<EOF
+[DEFAULT]
+ignoreip = 127.0.0.1/8 ::1 100.64.0.0/10 fd7a:115c:a1e0::/48
+maxretry = 10
+findtime = 10m
+bantime = 10m
+EOF
+systemctl enable fail2ban >/dev/null
+systemctl restart fail2ban
 
 log "done: $(hostname), user $USER_NAME, ufw $(ufw status | head -1 | cut -d' ' -f2), tailscale $(tailscale status >/dev/null 2>&1 && echo up || echo 'installed, not logged in')"

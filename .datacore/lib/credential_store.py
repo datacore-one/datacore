@@ -95,3 +95,30 @@ def add_credential(secrets_dir, env_file, entry, value):
         write_org_text(index, yaml.safe_dump(document, default_flow_style=False, sort_keys=False))
     publish()
     return env_file, index
+
+
+def overwrite_credential(secrets_dir, env_file, var_name, value):
+    """Replace the one assignment of `var_name` in `env_file`; nothing else changes."""
+    import re
+    import shlex
+    from org_transaction import serialized, watch_file, write_org_text
+    root = Path(secrets_dir).resolve()
+    env_file = Path(env_file)
+    if env_file.is_symlink() or not env_file.resolve().is_relative_to(root):
+        raise ValueError('credential path escapes the secrets repository')
+    env_file = env_file.resolve()
+    if not isinstance(var_name, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', var_name):
+        raise ValueError('invalid credential variable name')
+    if not isinstance(value, str) or not value or any(c in value for c in '\r\n\0'):
+        raise ValueError('credential value must be a nonempty single line')
+
+    @serialized
+    def publish():
+        watch_file(env_file)
+        before = env_file.read_bytes().decode('utf-8')
+        pattern = re.compile(r'^(\s*(?:export\s+)?' + re.escape(var_name) + r'\s*=).*$', re.M)
+        if len(pattern.findall(before)) != 1:
+            raise ValueError('credential variable is not assigned exactly once in the target store')
+        write_org_text(env_file, pattern.sub(lambda m: m.group(1) + shlex.quote(value), before))
+    publish()
+    return env_file

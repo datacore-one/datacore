@@ -22,8 +22,11 @@ PROBE_AFTER = timedelta(hours=6)
 #: Provider phrases meaning "nothing will run until a person acts", beyond the
 #: login markers ops_markers already lists. Rate limits are transient and stay
 #: with the ordinary retry.
+#: "requires more credits" / "error code: 402" is OpenRouter's empty-account
+#: reply (2026-10-26: about 21.9 USD of retries ran until the account hit zero).
 CREDIT_MARKERS = ("no credits remaining", "insufficient_quota", "quota exceeded",
-                  "billing hard limit", "payment required")
+                  "billing hard limit", "payment required", "requires more credits",
+                  "error code: 402")
 
 
 #: A model usage limit -- the weekly or session allowance, not a transient rate

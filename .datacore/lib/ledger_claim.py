@@ -124,8 +124,28 @@ ROUTE_FRAMING = {
     "research": "You are a research assistant. Find and summarise what is known.",
     "strategic": "You are a project manager. Assess status, blockers and next step.",
     "trading": "You are a trading analyst. Report position and risk facts only.",
+    # Every framing above investigates; a delegated action needs one that acts
+    # (Data reported on an approved post instead of posting it, 2026-10-27).
+    "do": ("You are carrying out a task assigned to you. Do exactly what it says, using the "
+           "commands it names, once. Then say what you did and the result, or the exact "
+           "error if a step failed. Do nothing beyond the task."),
 }
 DEFAULT_ROUTE = "research"
+
+
+def _start_time_reached(not_before) -> bool:
+    """True when an item has no start time or it has passed; False when it is
+    still ahead or cannot be read (held rather than run early)."""
+    if not not_before:
+        return True
+    from datetime import datetime, timezone
+    try:
+        start = datetime.fromisoformat(str(not_before))
+    except ValueError:
+        return False
+    if start.tzinfo is None:
+        return False
+    return datetime.now(timezone.utc) >= start
 
 
 def classify_route(text: str) -> tuple[str, str]:
@@ -692,6 +712,12 @@ def main() -> int:
         print(f"DEADLETTER  {title}\n         -> {n} failed attempts; dismissed")
         _outcome(item.payload or {}, "gave_up", last_error.get(item.id, ""), args.actor)
     pending = [i for i in pending if attempts.get(i.id, 0) < MAX_ATTEMPTS]
+    # NOT BEFORE ITS TIME (2026-10-27, AGT-12): a post approved for 12:49 is
+    # delegated ahead and waits here. An unreadable time is held, never run.
+    later = [i for i in pending if not _start_time_reached((i.payload or {}).get("not_before"))]
+    for i in later:
+        print(f"NOT YET  {((i.payload or {}).get('title') or i.id)[:70]} -- starts {(i.payload or {}).get('not_before')}")
+    pending = [i for i in pending if i not in later]
     pending.sort(key=lambda i: i.id)
 
     mirror_note = f" ({mirrored} org-mirrored task(s) skipped -- not delegations)" if mirrored else ""
