@@ -29,7 +29,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
 
-DEFAULT_KEYS_DIR = Path.home() / ".datacore" / "keys"
+# DATACORE_KEYS_DIR lets a test suite give every process it starts a scratch key
+# folder (a module patch reaches only its own process; 2026-10-27).
+DEFAULT_KEYS_DIR = Path(os.environ.get("DATACORE_KEYS_DIR") or Path.home() / ".datacore" / "keys")
 DEFAULT_REGISTRY_PATH = DATACORE_ROOT / ".datacore" / "keys" / "registry.yaml"
 
 
