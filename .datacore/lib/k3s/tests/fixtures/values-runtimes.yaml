@@ -1,0 +1,22 @@
+# Two agents from the two runtime templates: each names its runtime, identity
+# and schedule, nothing else.
+egress:
+  allowDomains: [api.telegram.org]
+agents:
+  tris:
+    runtime: hermes
+    home: /srv/oldhome
+    running: true
+    signingKeySecret: tris-signing-key
+    signingKeyName: tris.key
+    storage: 1Gi
+    crontab: |
+      */30 * * * * /srv/oldhome/heartbeat.sh
+  data:
+    runtime: openclaw
+    running: true
+    signingKeySecret: data-signing-key
+    signingKeyName: data.key
+    storage: 1Gi
+    crontab: |
+      */15 * * * * echo tick

@@ -1,0 +1,30 @@
+#!/bin/sh
+# agent-prepare -- runs before the agent's containers start.
+#
+# 1. Single-writer guard: the start marker is written only once the agent runs
+#    nowhere else -- by agent-cutover after it has stopped and disabled the
+#    agent on its old host and confirmed no process is left, or by agent-new
+#    for an agent that never ran anywhere. Without it the pod refuses to start,
+#    so a half-done move can never run one agent in two places.
+# 2. Runs the runtime's own steps (prepare.d in the runtime image), e.g. Hermes
+#    pointing the volume's runtime paths at the code in the image.
+set -eu
+FROZEN="$HOME/.datacore/state/k3s-cutover-frozen"
+if [ "${AGENT_STANDBY:-}" = "1" ]; then
+    # Standby runs none of the agent's processes (no gateway, schedule or
+    # stream), so it may start without the marker -- to check a restored copy.
+    echo "agent-prepare: standby: the agent's processes will not run"
+elif [ ! -s "$FROZEN" ]; then
+    echo "agent-prepare: refusing to start: $FROZEN is missing." >&2
+    echo "agent-prepare: nothing has recorded that this agent runs nowhere else." >&2
+    exit 1
+else
+    echo "agent-prepare: runs nowhere else: $(head -1 "$FROZEN")"
+fi
+
+hooks="${AGENT_PREPARE_D:-/usr/local/lib/agent-prepare.d}"
+for hook in "$hooks"/*; do
+    [ -x "$hook" ] || continue
+    echo "agent-prepare: $(basename "$hook")"
+    "$hook"
+done

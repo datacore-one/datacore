@@ -1,0 +1,109 @@
+#!/bin/sh
+# fleet-backup -- nightly backup of what git does not hold, for every agent, run
+# as root on the node.
+#
+#   fleet-backup              back up every agent in $NS
+#   fleet-backup AGENT        back up one agent
+#
+# Each agent's home is mostly git checkouts, which origin holds. agent-state
+# packs everything else: files outside checkouts (history, memory, ledger
+# sequence marks, credentials, scripts), the files git does not track inside
+# each checkout, a patch of uncommitted edits, a bundle of unpushed commits and
+# a manifest of every checkout -- caches and the runtime's install paths
+# (ConfigMap <agent>-agent, key backupExclude) skipped. It reports every
+# checkout that is not pushed.
+#
+# The agent is stopped for the copy so its SQLite databases are consistent,
+# then started again with the replica count it had; an agent already stopped
+# (kill switch) is copied without being started. Backups land in
+# $DEST/<agent>/<UTC time>.tar.gz with a .sha256 beside them; the newest $KEEP
+# are kept, fewer when the disk needs it: before an agent is stopped, its oldest
+# backups (never the newest) are dropped until a copy the size of its last one
+# still leaves $FREE_FLOOR_PCT% of the disk free; if even that is not enough the
+# agent is skipped, left running, and the run fails. A full disk puts the node
+# under disk pressure and the kubelet evicts every agent (2026-10-26: all three
+# down for hours after a backup took the box to 97%). The signing key is a Secret, saved as
+# $DEST/<agent>/signing-key.secret.yaml (root only). Restore: bin/agent-restore
+# from an operator machine (it clones through the agent's own proxy and creds).
+set -eu
+NS=${NS:-firm}
+DEST=${DEST:-/var/backups/fleet}
+KEEP=${KEEP:-7}
+FREE_FLOOR_PCT=${FREE_FLOOR_PCT:-20}
+STATE_TOOL=${STATE_TOOL:-/usr/local/sbin/agent-state}
+export KUBECONFIG=${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}
+K="kubectl -n $NS"
+
+log() { echo "fleet-backup: $*"; }
+
+volume_path() {  # volume_path AGENT -> host directory of AGENT-home
+    pv=$($K get pvc "$1-home" -o jsonpath='{.spec.volumeName}')
+    p=$(kubectl get pv "$pv" -o jsonpath='{.spec.local.path}{.spec.hostPath.path}')
+    [ -n "$p" ] && [ -d "$p" ] || { log "no host directory for $1-home"; exit 1; }
+    echo "$p"
+}
+
+stop_agent() {  # prints the replica count it had
+    r=$($K get deploy "$1" -o jsonpath='{.spec.replicas}')
+    if [ "${r:-0}" -gt 0 ]; then
+        $K scale "deploy/$1" --replicas=0 >/dev/null
+        $K wait --for=delete pod -l "app.kubernetes.io/name=$1" --timeout=180s >/dev/null 2>&1 || true
+    fi
+    echo "${r:-0}"
+}
+
+start_agent() {  # start_agent AGENT REPLICAS
+    [ "$2" -gt 0 ] && $K scale "deploy/$1" --replicas="$2" >/dev/null
+    return 0
+}
+
+free_after_kb() {  # free_after_kb NEED_KB -> free KB left after writing NEED_KB, and the floor in KB
+    df -Pk "$DEST" | awk -v need="$1" -v pct="$FREE_FLOOR_PCT" 'NR==2 {print $4 - need, int($2 * pct / 100)}'
+}
+
+make_room() {  # make_room AGENT: drop its oldest backups until the next copy fits above the floor
+    newest=$(ls -1t "$DEST/$1"/*.tar.gz 2>/dev/null | head -1)
+    need=0; [ -n "$newest" ] && need=$(du -k "$newest" | cut -f1)
+    while :; do
+        set -- "$1" $(free_after_kb "$need")
+        [ "$2" -ge "$3" ] && return 0
+        oldest=$(ls -1t "$DEST/$1"/*.tar.gz 2>/dev/null | tail -n +2 | tail -1)
+        [ -n "$oldest" ] || return 1
+        log "$1: making room: dropping $(basename "$oldest")"
+        rm -f "$oldest" "$oldest.sha256" "${oldest%.tar.gz}.log"
+    done
+}
+
+backup_one() {
+    a=$1
+    mkdir -p "$DEST/$a"; chmod 700 "$DEST" "$DEST/$a"
+    make_room "$a" || { log "$a: SKIPPED, not enough disk: a copy like the last one would leave under $FREE_FLOOR_PCT% free; the agent keeps running"; return 1; }
+    path=$(volume_path "$a")
+    exclude=$($K get configmap "$a-agent" -o jsonpath='{.data.backupExclude}')
+    ts=$(date -u +%Y%m%dT%H%M%SZ)
+    out="$DEST/$a/$ts.tar.gz"
+    was=$(stop_agent "$a")
+    trap 'start_agent "$a" "$was"' EXIT
+    python3 "$STATE_TOOL" backup --home "$path" --exclude "$exclude" --out "$out" 2> "$DEST/$a/$ts.log" \
+        || { cat "$DEST/$a/$ts.log"; log "$a: backup FAILED"; exit 1; }
+    start_agent "$a" "$was"; trap - EXIT
+    (cd "$DEST/$a" && sha256sum "$ts.tar.gz" > "$ts.tar.gz.sha256")
+    $K get secret "$a-signing-key" -o yaml > "$DEST/$a/signing-key.secret.yaml"
+    chmod 600 "$out" "$DEST/$a/$ts.log" "$DEST/$a/signing-key.secret.yaml"
+    ls -1t "$DEST/$a"/*.tar.gz | tail -n +$((KEEP + 1)) | while read -r old; do
+        rm -f "$old" "$old.sha256" "${old%.tar.gz}.log"
+    done
+    unpushed=$(grep -c "unpushed\|uncommitted" "$DEST/$a/$ts.log" || true)
+    log "$a: $out ($(du -h "$out" | cut -f1)), $unpushed checkout(s) not fully pushed (see $ts.log), agent back to $was replica(s)"
+}
+
+case "${1:-}" in
+    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
+    "")
+        failed=0
+        for cm in $($K get configmap -l datacore.one/agent -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep -- '-agent$'); do
+            backup_one "${cm%-agent}" || failed=1
+        done
+        exit $failed ;;
+    *) backup_one "$1" ;;
+esac

@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# agent-cutover -- import one agent from its own host into its pod, home and all.
+#
+# Run from an operator machine that reaches the old host over ssh and the
+# cluster with kubectl. Each step is separate so a person checks the result
+# before the next one; nothing here deletes anything on the old host.
+#
+#   agent-cutover preflight     cluster, namespaces, volume, agent scaled to 0, ssh and sudo
+#   agent-cutover freeze        stop and DISABLE every unit and cron job on the old host
+#   agent-cutover sync          push the agent's ledger once more; report unpushed work, never stash
+#   agent-cutover key           signing key -> Secret, fingerprints compared
+#   agent-cutover copy          stream the home directory into the volume, then compare
+#   agent-cutover adjust        pod-specific edits inside the volume, write the frozen marker
+#   agent-cutover start         helm upgrade with the agent running, wait until ready
+#   agent-cutover rollback      scale to 0, remove the marker, re-enable the old host
+#
+# For an agent set up fresh from its runtime template, with only its identity
+# carried over, use agent-new instead.
+#
+# Settings come from the file named by CUTOVER_ENV (kept with the deployment's
+# private values): AGENT, OLD_HOST, OLD_HOME, NS, RELEASE, VALUES, IMAGE,
+# USER_UNITS, SYSTEM_UNITS, PROCESS_PATTERN, SYNC_CMD, NEVER_COPY (owner keys
+# and other files an agent's pod must not hold), ADJUST_EXTRA (shell run in
+# the volume after the generic edits), SSH_OPTS, CLAIM_UNIT.
+set -euo pipefail
+
+[ -n "${CUTOVER_ENV:-}" ] && [ -f "$CUTOVER_ENV" ] || { echo "agent-cutover: set CUTOVER_ENV to the deployment's settings file" >&2; exit 2; }
+# shellcheck disable=SC1090
+. "$CUTOVER_ENV"
+AGENT_HOME=${OLD_HOME:-}
+HELPER=${AGENT:-x}-copy
+# shellcheck source=agent-common.sh
+. "$(dirname "$0")/agent-common.sh"
+need AGENT OLD_HOST OLD_HOME VALUES IMAGE USER_UNITS SYSTEM_UNITS PROCESS_PATTERN SYNC_CMD
+NEVER_COPY=${NEVER_COPY:-}
+ADJUST_EXTRA=${ADJUST_EXTRA:-}
+
+# What does not move: install artefacts the image provides, caches, the
+# agent's signing key (it becomes a Secret) and everything in NEVER_COPY.
+EXCLUDES=(
+  --exclude=./.npm --exclude=./.cache/uv --exclude=./.cache/pip
+  --exclude=./.cache/node-gyp --exclude=./.cache/electron
+  --exclude=./.hermes/hermes-agent --exclude=./.hermes/node
+  --exclude=./.datacore/keys/$AGENT.key
+)
+for f in $NEVER_COPY; do EXCLUDES+=("--exclude=./$f"); done
+
+preflight() {
+  cluster_ready
+  old_ready
+  say "preflight ok"
+}
+
+freeze() { freeze_old; }
+
+sync() {
+  say "final ledger sync on $OLD_HOST"
+  old "$SYNC_CMD" || die "ledger sync failed; read the output above, do not force it"
+  # Report repositories with unpushed or uncommitted work; never stash, reset or force.
+  old "for r in $OLD_HOME/Data $OLD_HOME/Data/*/ $OLD_HOME/.datacore/*/ $OLD_HOME/.datacore/audit-src/*/; do
+         [ -e \"\$r/.git\" ] || continue
+         a=\$(git -C \"\$r\" rev-list --count @{u}..HEAD 2>/dev/null || echo '?')
+         d=\$(git -C \"\$r\" status --porcelain 2>/dev/null | wc -l)
+         echo \"\$r ahead=\$a dirty=\$d\"
+       done"
+  say "repositories above move with the volume exactly as they are"
+}
+
+key() { key_secret; }
+
+copy() {
+  helper_up
+  say "streaming $OLD_HOST:$OLD_HOME into volume $AGENT-home"
+  old "tar -C $OLD_HOME ${EXCLUDES[*]} -cpf - ." | in_vol tar -C "$OLD_HOME" --no-overwrite-dir -xpf -
+  say "comparing checksums of state that must arrive intact"
+  manifest='cd '$OLD_HOME' && find .hermes/state.db .hermes/sessions .hermes/cron .hermes/config.yaml .hermes/SOUL.md .datacore/identity.env .plur -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum'
+  a=$(old "$manifest"); b=$(in_vol sh -c "$manifest")
+  [ "$a" = "$b" ] || die "checksum manifest differs: $a vs $b"
+  hwm='cd '$OLD_HOME'/Data && find . -path "*/.datacore/state/seq-hwm/*" -type f -print0 | LC_ALL=C sort -z | xargs -0 cat | sha256sum'
+  [ "$(old "$hwm")" = "$(in_vol sh -c "$hwm")" ] || die "sequence high-water marks differ"
+  for f in $NEVER_COPY; do
+    in_vol test ! -e "$OLD_HOME/$f" || die "$f arrived in the volume although it must never be copied"
+  done
+  say "copy verified (state checksums and sequence high-water marks identical; excluded files absent)"
+}
+
+adjust() {
+  helper_up
+  in_vol python3 - <<'PY'
+import pathlib
+home = pathlib.Path.home()
+# ssh leaves through the proxy: the pod has no other way out.
+cfg = home / ".ssh" / "config"
+text = cfg.read_text() if cfg.exists() else ""
+if "egress.shared.svc" not in text:
+    cfg.parent.mkdir(exist_ok=True)
+    cfg.write_text("Host *\n  ProxyCommand nc -X connect -x egress.shared.svc.cluster.local:3128 %h %p\n\n" + text)
+# A terminal tool that ran over ssh to the agent's own host runs locally in the pod.
+from ruamel.yaml import YAML
+y = YAML(); y.preserve_quotes = True
+p = home / ".hermes" / "config.yaml"
+c = y.load(p.read_text())
+if (c.get("terminal") or {}).get("backend") == "ssh":
+    c["terminal"]["backend"] = "local"
+    with p.open("w") as f:
+        y.dump(c, f)
+# .hermes/.env overrides config.yaml: TERMINAL_ENV=ssh there kept every tool on
+# the old host (Tris's tools all failed in his pod until 2026-10-26).
+env = home / ".hermes" / ".env"
+if env.exists():
+    lines = env.read_text().splitlines(keepends=True)
+    fixed = ["TERMINAL_ENV=local\n" if l.strip() == "TERMINAL_ENV=ssh" else l for l in lines]
+    if fixed != lines:
+        env.write_text("".join(fixed))
+print("adjusted: ssh through the proxy, terminal backend local (config.yaml and .env)")
+PY
+  [ -n "$ADJUST_EXTRA" ] && in_vol sh -c "$ADJUST_EXTRA"
+  mark_runs_nowhere_else "$OLD_HOST frozen"
+}
+
+start() { start_agent; }
+
+rollback() {
+  say "rolling back: agent to 0 replicas, old host re-enabled"
+  stop_agent
+  helper_up
+  in_vol rm -f "$OLD_HOME/.datacore/state/k3s-cutover-frozen"
+  helper_down
+  say "if the pod wrote ledger events, they must be pushed from the volume BEFORE the old host runs again"
+  thaw_old
+}
+
+case "${1:-}" in
+  preflight|freeze|sync|key|copy|adjust|start|rollback) "$1" ;;
+  *) sed -n '2,25p' "$0"; exit 2 ;;
+esac

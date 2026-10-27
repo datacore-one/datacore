@@ -142,6 +142,40 @@ def test_one_space_failing_ingest_does_not_stop_the_others_projecting(tmp_path):
         'the cycle still fails: a space really is stuck and that has to stay visible'
 
 
+def test_an_alias_link_to_a_space_is_not_a_second_space(tmp_path):
+    """Tris's root carries `4-firm -> 3-firm`, a link left by a rename. The
+    cycle listed it as a space and the projector rightly refused a link
+    ("space must be an existing directory"), so every hourly cycle ended FAIL
+    with nothing stuck (26 times on hermes, then in his pod). The link's
+    target is converged and projected once, under its own name."""
+    scripts = tmp_path / 'scripts'
+    scripts.mkdir()
+    root = tmp_path / 'data'
+    space = root / '3-firm'
+    (space / '.datacore/events').mkdir(parents=True)
+    (space / '.git').mkdir()
+    (space / '.datacore/ledger-phase').write_text('1\n')
+    (root / '4-firm').symlink_to('3-firm')
+    state = tmp_path / 'state'
+    shutil.copyfile(LIB / 'ledger_phase1_cycle.sh', scripts / 'cycle.sh')
+    shutil.copyfile(LIB / 'runtime_shell.sh', scripts / 'runtime_shell.sh')
+    trace = tmp_path / 'trace'
+    stub = ("import os, sys\n"
+            "from pathlib import Path\n"
+            "open(os.environ['AUDIT_TRACE'], 'a').write(Path(sys.argv[0]).stem + ' ' + ' '.join(sys.argv[1:]) + '\\n')\n"
+            "print('ok')\n")
+    for name in ['ledger_transport', 'ledger_ingest_org', 'ledger_project_org']:
+        (scripts / f'{name}.py').write_text(stub)
+    env = dict(os.environ, DATACORE_ROOT=str(root), DATACORE_STATE=str(state),
+               DATACORE_PYTHON=sys.executable, AUDIT_TRACE=str(trace))
+    proc = subprocess.run(['bash', str(scripts / 'cycle.sh')], env=env,
+                          capture_output=True, text=True, timeout=60)
+    calls = trace.read_text()
+    assert '4-firm' not in calls, calls
+    assert 'ledger_project_org --space 3-firm' in calls, calls
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
 def test_an_ingest_that_names_no_space_still_stops_everything(tmp_path):
     """Failing without naming a space means the sweep itself did not run, so
     nothing is known to be safe to project."""

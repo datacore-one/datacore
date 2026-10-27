@@ -1,0 +1,466 @@
+#!/usr/bin/env python3
+"""agent-state -- back up what git does not hold; restore it on any machine.
+
+    agent-state backup  --home DIR --out FILE [--exclude P1,P2,...] [--no-bundles]
+    agent-state restore --home DIR --file FILE [--resume] [--reference-root ORIGINAL_HOME]
+
+An agent's home is mostly git checkouts, and origin already holds those. The
+backup carries everything else in the home -- conversation history, memory,
+ledger sequence marks, credentials, scripts and config that live only there --
+except regenerable caches and the runtime's install paths (--exclude, relative
+to home, added to the built-in cache list), plus a manifest of every
+checkout (path, remote without credentials, branch, commit, how far ahead of
+origin, how many uncommitted changes), a git bundle per checkout with commits
+origin does not have, the files git does not track inside each checkout
+(ignored config such as .datacore/env, untracked notes; caches skipped) and a
+patch of uncommitted edits. Nothing is stashed or committed on the agent's
+behalf; the checkout on disk is only read.
+
+restore refuses a home that is not empty, puts the state outside checkouts back,
+clones every checkout, fetches its bundle, checks out the recorded commit, then
+lays the untracked files and the uncommitted patch back on top. Run it as the
+agent (in a helper pod, through the proxy) so clones use the agent's own
+credentials from the restored state.
+"""
+from __future__ import annotations
+
+import argparse
+import io
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
+
+# Never backed up. node_modules is NOT here: outside a checkout it holds
+# installed packages (OpenClaw's plugins, the Codex harness), not a cache.
+SKIP_DIRS = {".cache", ".npm", "lost+found"}
+# Regenerable directories inside a checkout's untracked files.
+CACHE_PARTS = SKIP_DIRS | {"node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache",
+                           ".ruff_cache", ".next", ".turbo", "dist", "build", ".tox"}
+
+
+def untracked(repo: Path) -> list[str]:
+    """Files in a checkout that git does not track (ignored ones too), caches skipped."""
+    r = subprocess.run(["git", "-c", "safe.directory=*", "-C", str(repo), "ls-files", "-z", "--others"],
+                       capture_output=True)
+    out = []
+    for raw in r.stdout.split(b"\0"):
+        name = raw.decode("utf-8", "surrogateescape")
+        if not name or name.endswith("/") or name.endswith(".pyc"):
+            continue  # a trailing slash is a nested checkout, backed up on its own
+        if set(Path(name).parts) & CACHE_PARTS:
+            continue
+        p = repo / name
+        if p.is_file() or p.is_symlink():
+            out.append(name)
+    return out
+
+
+def git(repo: Path, *args: str, check: bool = True) -> str:
+    r = subprocess.run(["git", "-c", "safe.directory=*", "-C", str(repo), *args],
+                       capture_output=True, text=True)
+    if check and r.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} in {repo}: {r.stderr.strip()}")
+    return r.stdout.strip()
+
+
+def clean_url(url: str) -> str:
+    """A remote URL without user:password -- tokens never go into a backup."""
+    parts = urlsplit(url)
+    if parts.scheme in ("http", "https") and "@" in parts.netloc:
+        return urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[1]))
+    return url
+
+
+def checkouts(home: Path, exclude: list[str] = ()):
+    """Every git working copy under home, outermost first; caches and excluded paths skipped."""
+    skip = {home / e for e in exclude}
+    for root, dirs, _files in os.walk(home):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS | {"node_modules"} and Path(root, d) not in skip)
+        if ".git" in dirs or Path(root, ".git").is_file():
+            yield Path(root)
+            dirs[:] = [d for d in dirs if d != ".git"]
+
+
+def describe(home: Path, repo: Path) -> dict:
+    rel = str(repo.relative_to(home))
+    url = git(repo, "config", "--get", "remote.origin.url", check=False)
+    branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD", check=False)
+    head = git(repo, "rev-parse", "HEAD", check=False)
+    upstream = git(repo, "rev-parse", "--abbrev-ref", "@{u}", check=False)
+    ahead = int(git(repo, "rev-list", "--count", f"{upstream}..HEAD", check=False) or 0) if upstream else None
+    dirty = len([l for l in git(repo, "status", "--porcelain", check=False).splitlines() if l.strip()])
+    remotes = {}
+    for name in git(repo, "remote", check=False).split():
+        if name != "origin":
+            u = git(repo, "config", "--get", f"remote.{name}.url", check=False)
+            if u:
+                remotes[name] = clean_url(u)
+    return {"path": rel, "url": clean_url(url) if url else None, "remotes": remotes, "branch": branch, "head": head,
+            "upstream": upstream or None, "ahead": ahead, "dirty": dirty}
+
+
+def remote_heads(repo: Path) -> set[str] | None:
+    """Commits origin's branches and tags point at now -- what a clone fetches;
+    None if origin cannot be read (gone, or no access from here)."""
+    try:
+        r = subprocess.run(["git", "-c", "safe.directory=*", "-C", str(repo), "ls-remote", "--heads", "--tags",
+                            "origin"], capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return None
+    if r.returncode != 0:
+        return None
+    return {line.split()[0] for line in r.stdout.splitlines() if line.strip()}
+
+
+def origin_has(repo: Path, heads: set[str] | None) -> list[str]:
+    """`--not <sha>...` for origin's heads that exist locally; [] carries full history."""
+    present = [sha for sha in sorted(heads or ())
+               if subprocess.run(["git", "-c", "safe.directory=*", "-C", str(repo), "cat-file", "-e", sha + "^{commit}"],
+                                 capture_output=True).returncode == 0]
+    return ["--not", *present] if present else []
+
+
+def add_bytes(tar: tarfile.TarFile, name: str, data: bytes) -> None:
+    info = tarfile.TarInfo(name)
+    info.size, info.mtime, info.mode = len(data), int(time.time()), 0o600
+    tar.addfile(info, io.BytesIO(data))
+
+
+def state_files(home: Path, repos: list[Path], exclude: list[str]):
+    """Everything under home that is not in a checkout, a cache or an excluded path."""
+    skip = {home / r for r in repos} | {home / e for e in exclude}
+    for root, dirs, files in os.walk(home):
+        r = Path(root)
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and r / d not in skip)
+        if r != home:
+            yield r  # the directory itself, so its mode survives a restore
+        for name in sorted(files) + [d for d in dirs if (r / d).is_symlink()]:
+            p = r / name
+            if p not in skip:
+                yield p
+
+
+def backup(home: Path, exclude: list[str], out: Path, bundles: bool) -> int:
+    # Ask origin with the agent's own git credentials: run as root on the node,
+    # git found none, every private repo looked unreachable and was carried
+    # whole (backups of 5-9 GB instead of under 1 GB, 2026-10-26).
+    os.environ["HOME"] = str(home)
+    found = list(checkouts(home, exclude))
+    repos = [describe(home, r) for r in found]
+    tmp = out.with_name(out.name + ".part")
+    count = 0
+    with tarfile.open(tmp, "w:gz") as tar:
+        for p in state_files(home, [str(f.relative_to(home)) for f in found], exclude):
+            tar.add(p, arcname=f"state/{p.relative_to(home)}", recursive=False)
+            count += 1
+        for r in repos:
+            r["branches"] = dict(line.split(" ", 1) for line in git(
+                home / r["path"], "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads",
+                check=False).splitlines() if " " in line)
+            repo = home / r["path"]
+            heads = remote_heads(repo) if r["url"] else None
+            if r["url"] and heads is None:
+                r["unreadable"] = True
+            # Every commit on a local branch (or HEAD) that origin does not have
+            # NOW -- measured against its current heads, not the local origin/*
+            # refs, which keep commits of branches deleted upstream (Tris's
+            # ventures-tmp: HEAD on such a branch, no bundle, unrestorable).
+            local_only = git(repo, "rev-list", "--count", "--branches", "HEAD", *origin_has(repo, heads),
+                             check=False) if r["head"] and heads is not None else "0"
+            r["local_only"] = int(local_only or 0)
+            if not r["url"] or r.get("unreadable"):
+                # Nothing can clone it: carry the whole repo, history included,
+                # minus checkouts nested inside it (they travel on their own).
+                nested = [f for f in found if f != repo and repo in f.parents]
+                for root, dirs, files in os.walk(repo):
+                    rp = Path(root)
+                    dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and rp / d not in nested)
+                    tar.add(rp, arcname=f"state/{rp.relative_to(home)}", recursive=False)
+                    for name in sorted(files) + [d for d in dirs if (rp / d).is_symlink()]:
+                        tar.add(rp / name, arcname=f"state/{(rp / name).relative_to(home)}", recursive=False)
+                        count += 1
+                r["whole"] = True
+                why = "its remote cannot be read" if r["url"] else "no remote"
+                print(f"agent-state: {r['path']}: {why}, carried whole with its history", file=sys.stderr)
+                continue
+            if bundles and r["local_only"] > 0 and r["url"]:
+                with tempfile.TemporaryDirectory() as d:
+                    b = Path(d) / "b.bundle"
+                    # Cut against what origin has NOW: local origin/* refs can hold
+                    # commits origin dropped, and a fresh clone would lack them.
+                    # If origin cannot be asked, carry the branches' full history.
+                    git(home / r["path"], "bundle", "create", str(b), "--branches", "HEAD",
+                        *origin_has(home / r["path"], heads), check=False)
+                    if b.exists():
+                        tar.add(b, arcname=f"bundles/{r['path'].replace('/', '__')}.bundle")
+                        r["bundle"] = True
+                print(f"agent-state: {r['path']}: {r['local_only']} commit(s) no remote has, carried as a bundle",
+                      file=sys.stderr)
+            names = untracked(repo)
+            # Their folders too, parents first, so a restore keeps each folder's
+            # mode (module-data is 0700; recreated folders came back 0755).
+            folders = sorted({str(q) for n in names for q in Path(n).parents if str(q) != "."},
+                             key=lambda f: (f.count("/"), f))
+            for name in folders:
+                if not (repo / name).is_symlink():
+                    tar.add(repo / name, arcname=f"state/{r['path']}/{name}", recursive=False)
+            for name in names:
+                tar.add(repo / name, arcname=f"state/{r['path']}/{name}", recursive=False)
+                count += 1
+            patch = subprocess.run(["git", "-c", "safe.directory=*", "-C", str(repo), "diff", "--binary", "HEAD"],
+                                   capture_output=True).stdout
+            if patch:
+                add_bytes(tar, f"patches/{r['path'].replace('/', '__')}.patch", patch)
+                r["patch"] = True
+            if r["dirty"]:
+                print(f"agent-state: {r['path']}: {r['dirty']} uncommitted change(s) carried (untracked files, patch)",
+                      file=sys.stderr)
+        manifest = {"version": 1, "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "exclude": exclude, "files": count, "repos": repos}
+        add_bytes(tar, "manifest.json", json.dumps(manifest, indent=2).encode())
+    tmp.rename(out)
+    os.chmod(out, 0o600)
+    print(f"agent-state: {out}: {count} file(s) outside checkouts, {len(repos)} checkout(s)", file=sys.stderr)
+    return 0
+
+
+def our_filter(member: tarfile.TarInfo, dest: str):
+    """tarfile's tar filter, except for symlinks: a symlink is judged by the
+    folder it lands in (inside the home), keeps its target as archived -- a
+    virtualenv's bin/python -> python3 -> /usr/bin/python3.x is the same on every
+    agent image -- and replaces a link a first pass already put there (a resume).
+    Regular files keep the full check, so nothing is written through a link that
+    leads out of the home."""
+    if member.issym():
+        if member.name.startswith("/") or ".." in Path(member.name).parts:
+            raise tarfile.OutsideDestinationError(member, member.name)
+        root = os.path.realpath(dest)
+        parent = os.path.realpath(os.path.join(dest, os.path.dirname(member.name)))
+        if parent != root and not parent.startswith(root + os.sep):
+            raise tarfile.OutsideDestinationError(member, parent)
+        link = os.path.join(dest, member.name)
+        if os.path.islink(link):
+            os.unlink(link)
+        return member
+    return tarfile.tar_filter(member, dest)
+
+
+def writable(home: Path, members) -> None:
+    """A resumed restore replaces files the first attempt wrote, some read-only (git
+    objects), inside folders the first attempt gave their archived, sometimes
+    restrictive mode (tarfile sets folder modes last, so only a resume meets them)."""
+    for m in sorted((m for m in members if m.isdir()), key=lambda m: m.name.count("/")):
+        d = home / m.name
+        try:
+            if d.is_dir() and not d.is_symlink() and not os.access(d, os.R_OK | os.W_OK | os.X_OK):
+                os.chmod(d, d.stat().st_mode | 0o700)
+        except OSError:
+            pass
+    for m in members:
+        t = home / m.name
+        try:
+            if t.is_file() and not t.is_symlink() and not os.access(t, os.W_OK):
+                os.chmod(t, 0o600)
+        except OSError:
+            continue  # a folder above it blocks looking; extraction reports a real problem
+
+
+def restore(home: Path, file: Path, resume: bool = False, reference: Path | None = None) -> int:
+    # Clones use the restored agent's own git credentials and ssh config.
+    os.environ["HOME"] = str(home)
+    def holds_files(p: Path) -> bool:
+        # A pod's start leaves directories and symlinks (key directory, runtime
+        # links, the ssh mount point) but no files: that is still an empty home.
+        if p.is_symlink():
+            return False
+        if p.is_file():
+            return True
+        return any(f.is_file() and not f.is_symlink() for f in p.rglob("*"))
+
+    present = [p.name for p in home.iterdir() if p.name not in ("lost+found",) and holds_files(p)] \
+        if home.exists() else []
+    if present and not resume:
+        print(f"agent-state: refusing: {home} is not empty ({', '.join(sorted(present)[:5])})", file=sys.stderr)
+        return 1
+    with tarfile.open(file, "r:gz") as tar:
+        manifest = json.load(tar.extractfile("manifest.json"))
+        roots = sorted((r["path"] for r in manifest["repos"]), key=len, reverse=True)
+
+        def owner(name: str) -> str | None:  # the innermost checkout holding it
+            return next((r for r in roots if name == r or name.startswith(r + "/")), None)
+
+        def in_repo(name: str) -> bool:
+            return owner(name) is not None
+
+        members = [m for m in tar.getmembers() if m.name.startswith("state/")]
+        for m in members:
+            m.name = m.name[len("state/"):]
+            if m.islnk() and m.linkname.startswith("state/"):  # a hardlink names its partner
+                m.linkname = m.linkname[len("state/"):]
+        outside = [m for m in members if not in_repo(m.name)]
+        inside = [m for m in members if in_repo(m.name)]
+        laid: set[str] = set()
+
+        def lay_in(path: str | None) -> None:
+            # What git does not track inside a checkout. Laid in right after that
+            # checkout, before the ones nested in it: an agent's credential helper
+            # may read ignored files there (Winston's secrets live in his Data).
+            todo = [m for m in inside if m.name not in laid and (path is None or owner(m.name) == path)]
+            tar.extractall(home, members=todo, filter=our_filter)
+            laid.update(m.name for m in todo)
+
+        if resume:
+            writable(home, inside)
+        # 1. State outside checkouts first: it holds the credentials the clones use.
+        if resume:
+            writable(home, outside)
+        tar.extractall(home, members=outside, filter=our_filter)
+        with tempfile.TemporaryDirectory() as bdir:
+            bundles = [m for m in tar.getmembers() if m.name.startswith("bundles/")]
+            tar.extractall(bdir, members=bundles, filter="data")
+            failed = 0
+            # 2. Clone every checkout and put it at its recorded commit.
+            for r in sorted(manifest["repos"], key=lambda x: len(x["path"])):
+                dest = home / r["path"]
+                if r.get("whole"):
+                    continue  # it comes back with the state, history included
+                if not r["url"]:
+                    print(f"agent-state: {r['path']}: no remote recorded, skipped", file=sys.stderr)
+                    failed += 1
+                    continue
+                if not (dest / ".git").exists():
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    # A folder already holding files (a resumed restore laid them in
+                    # after a failed clone): clone beside it and move the repo in.
+                    into = dest
+                    if dest.is_dir() and any(dest.iterdir()):
+                        into = Path(tempfile.mkdtemp(prefix=f".{dest.name}.clone-", dir=dest.parent))
+                        into.rmdir()
+                    src = reference / r["path"] if reference else None
+                    if src is not None and (src / ".git").is_dir():
+                        # Beside the original on one filesystem: share its objects
+                        # (a local clone hardlinks them), then point at origin.
+                        cl = subprocess.run(["git", "-c", "safe.directory=*", "clone", "-q", "--no-checkout",
+                                             "--local", str(src), str(into)], capture_output=True, text=True)
+                        if cl.returncode == 0:
+                            git(into, "remote", "set-url", "origin", r["url"])
+                            subprocess.run(["git", "-C", str(into), "fetch", "-q", "origin"], capture_output=True)
+                    else:
+                        cl = subprocess.run(["git", "clone", "-q", "--no-checkout", r["url"], str(into)],
+                                            capture_output=True, text=True)
+                    if cl.returncode == 0 and into != dest:
+                        (into / ".git").rename(dest / ".git")
+                        shutil.rmtree(into)
+                    if cl.returncode == 0:
+                        git(dest, "reset", "-q", check=False)         # index from HEAD; files stay
+                        git(dest, "checkout", "-q", "--", ".", check=False)
+                    if cl.returncode != 0:
+                        print(f"agent-state: {r['path']}: clone failed: {cl.stderr.strip()}", file=sys.stderr)
+                        failed += 1
+                        continue
+                bundle = Path(bdir, "bundles", r["path"].replace("/", "__") + ".bundle")
+                if bundle.exists():
+                    heads = git(dest, "bundle", "list-heads", str(bundle), check=False).split()
+                    fetched = subprocess.run(["git", "-C", str(dest), "fetch", "-q", str(bundle),
+                                              "+refs/heads/*:refs/bundle/*", *(["HEAD"] if "HEAD" in heads else [])],
+                                             capture_output=True, text=True)
+                    if fetched.returncode != 0:
+                        print(f"agent-state: {r['path']}: bundle did not apply ({fetched.stderr.strip()[-200:]}); "
+                              f"its local-only commits are NOT restored", file=sys.stderr)
+                        failed += 1
+                        continue
+                    current = git(dest, "rev-parse", "--abbrev-ref", "HEAD", check=False)
+                    for ref in git(dest, "for-each-ref", "--format=%(refname:short)", "refs/bundle",
+                                   check=False).splitlines():
+                        name = ref.split("/", 1)[1]
+                        if name != current:
+                            git(dest, "branch", "-q", "-f", name, f"refs/bundle/{name}")
+                        git(dest, "update-ref", "-d", f"refs/bundle/{name}")
+                # Other remotes (a fork beside origin), fetched so branches on them resolve.
+                for name, u in (r.get("remotes") or {}).items():
+                    if name not in git(dest, "remote", check=False).split():
+                        git(dest, "remote", "add", name, u, check=False)
+                    fx = subprocess.run(["git", "-C", str(dest), "fetch", "-q", name], capture_output=True, text=True)
+                    if fx.returncode != 0:
+                        print(f"agent-state: {r['path']}: remote {name} could not be fetched "
+                              f"({fx.stderr.strip()[-160:]})", file=sys.stderr)
+                # Every local branch the agent had, at its commit (pushed ones from
+                # origin or another remote, local-only ones from the bundle).
+                # Detach first so every branch can be set, then make the local
+                # branches exactly the agent's: each recorded one at its commit,
+                # none the clone made on its own (origin's default branch).
+                git(dest, "checkout", "-q", "--detach", r["head"], check=False)
+                recorded = r.get("branches")
+                for name, sha in (recorded or {}).items():
+                    if name != r["branch"] and subprocess.run(
+                            ["git", "-C", str(dest), "cat-file", "-e", sha + "^{commit}"],
+                            capture_output=True).returncode == 0:
+                        git(dest, "branch", "-q", "-f", name, sha)
+                if recorded is not None:
+                    for name in git(dest, "for-each-ref", "--format=%(refname:short)", "refs/heads",
+                                    check=False).splitlines():
+                        if name and name not in recorded and name != r["branch"]:
+                            git(dest, "branch", "-q", "-D", name, check=False)
+                try:
+                    if r["branch"] and r["branch"] != "HEAD":
+                        git(dest, "checkout", "-q", "-B", r["branch"], r["head"])
+                        if r["upstream"]:
+                            git(dest, "branch", "-q", "--set-upstream-to", r["upstream"], check=False)
+                    else:
+                        git(dest, "checkout", "-q", r["head"])
+                except RuntimeError as exc:  # report it; the other checkouts still restore
+                    print(f"agent-state: {r['path']}: could not check out {r['head'][:10]}: {exc}", file=sys.stderr)
+                    failed += 1
+                    continue
+                lay_in(r["path"])
+                print(f"agent-state: {r['path']} at {r['head'][:10]}", file=sys.stderr)
+            # 3. The rest inside checkouts (whole repos, failed clones), and uncommitted edits.
+            lay_in(None)
+            patches = [m for m in tar.getmembers() if m.name.startswith("patches/")]
+            tar.extractall(bdir, members=patches, filter="data")
+            for r in manifest["repos"]:
+                patch = Path(bdir, "patches", r["path"].replace("/", "__") + ".patch")
+                if patch.exists() and not r.get("whole") and (home / r["path"] / ".git").exists():
+                    already = subprocess.run(["git", "-C", str(home / r["path"]), "apply", "--reverse", "--check",
+                                              str(patch)], capture_output=True).returncode == 0
+                    if already:
+                        continue  # a resumed restore: the edits are in place
+                    ap = subprocess.run(["git", "-C", str(home / r["path"]), "apply", "--whitespace=nowarn",
+                                         str(patch)], capture_output=True, text=True)
+                    if ap.returncode != 0:
+                        print(f"agent-state: {r['path']}: uncommitted patch did not apply: {ap.stderr.strip()}",
+                              file=sys.stderr)
+                        failed += 1
+    print(f"agent-state: restored {len(members)} state entr(ies) and {len(manifest['repos']) - failed} "
+          f"checkout(s) into {home}", file=sys.stderr)
+    return 1 if failed else 0
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    b = sub.add_parser("backup")
+    b.add_argument("--home", type=Path, required=True)
+    b.add_argument("--exclude", default="", help="comma-separated regenerable paths relative to home")
+    b.add_argument("--out", type=Path, required=True)
+    b.add_argument("--no-bundles", action="store_true")
+    r = sub.add_parser("restore")
+    r.add_argument("--home", type=Path, required=True)
+    r.add_argument("--file", type=Path, required=True)
+    r.add_argument("--resume", action="store_true", help="continue a partial restore into the same home")
+    r.add_argument("--reference-root", type=Path, help="the original home on the same filesystem: clone from it, sharing git objects")
+    a = ap.parse_args(argv)
+    if a.cmd == "backup":
+        return backup(a.home, [s for s in a.exclude.split(",") if s], a.out, not a.no_bundles)
+    return restore(a.home, a.file, a.resume, a.reference_root)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+# agent-new -- set up an agent fresh from its runtime template; only its
+# identity is carried over (from an old host, or from local files).
+#
+#   agent-new preflight   cluster ready, deployment at 0, empty volume; old host reachable if any
+#   agent-new sync        old host only: SYNC_CMD, then every checkout must be pushed and clean
+#                         (fresh clones carry nothing else) unless its leftovers are in CARRY
+#   agent-new freeze      old host only: stop and DISABLE the agent's units, cron lines, processes
+#   agent-new key         signing key -> Secret (moved, never generated), fingerprints compared
+#   agent-new identity    copy exactly the IDENTITY paths into the volume, checksums compared
+#   agent-new clone       clone the CLONES checkouts as the agent, through the proxy
+#   agent-new carry       copy the CARRY paths (untracked work inside checkouts), checksums compared
+#   agent-new setup       run SETUP in the agent's volume (runtime config, plugin registration)
+#   agent-new mark        write the start marker: the agent runs nowhere else now
+#   agent-new start       helm upgrade with the agent running, wait until ready
+#   agent-new rollback    scale to 0, remove the marker, re-enable the old host
+#
+# The agent's entry (runtime, signingKeySecret, crontab, ...) must already be in
+# VALUES with running: false, and installed, so its volume exists.
+#
+# Settings come from the file named by NEW_ENV: AGENT, VALUES, IMAGE,
+# AGENT_HOME (default /var/lib/agent), NS, RELEASE; IDENTITY (paths relative to
+# the source home, space separated); IDENTITY_EXCLUDE (paths under those to
+# leave out); CARRY (paths inside checkouts that git does not hold, copied after
+# the clone); LEAVE (paths knowingly left on the old host, untouched there);
+# SYNC_CMD (old host); CLONES (one "path url [branch]" per line,
+# path relative to AGENT_HOME); SETUP (shell run in the volume as the agent);
+# NEVER_COPY (paths that must never arrive). With an old host: OLD_HOST,
+# OLD_HOME, SSH_OPTS, USER_UNITS, SYSTEM_UNITS ("-" for none), PROCESS_PATTERN.
+# Without one: IDENTITY_DIR (a local directory laid out like a home) and
+# KEY_FILE.
+set -euo pipefail
+
+[ -n "${NEW_ENV:-}" ] && [ -f "$NEW_ENV" ] || { echo "agent-new: set NEW_ENV to the agent's settings file" >&2; exit 2; }
+# shellcheck disable=SC1090
+. "$NEW_ENV"
+AGENT_HOME=${AGENT_HOME:-/var/lib/agent}
+# shellcheck source=agent-common.sh
+. "$(dirname "$0")/agent-common.sh"
+need AGENT VALUES IMAGE
+IDENTITY=${IDENTITY:-}
+IDENTITY_EXCLUDE=${IDENTITY_EXCLUDE:-}
+CARRY=${CARRY:-}
+LEAVE=${LEAVE:-}
+SYNC_CMD=${SYNC_CMD:-}
+CLONES=${CLONES:-}
+SETUP=${SETUP:-}
+NEVER_COPY=${NEVER_COPY:-}
+
+excludes() { for e in $IDENTITY_EXCLUDE; do printf -- '--exclude=%s ' "$e"; done; }
+prunes() { for e in $IDENTITY_EXCLUDE; do printf -- '-path %s -prune -o ' "$e"; done; }
+
+source_tar() {  # source_tar PATHS... -> tar on stdout, from the old host or IDENTITY_DIR
+  if [ -n "${OLD_HOST:-}" ]; then
+    old "cd $OLD_HOME && tar $(excludes) -cpf - $*"
+  else
+    need IDENTITY_DIR
+    # shellcheck disable=SC2046
+    tar -C "$IDENTITY_DIR" $(excludes) -cpf - "$@"
+  fi
+}
+
+manifest() {  # manifest PATHS... -> the shell command that sums them (excludes applied)
+  echo "find $* $(prunes) -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum"
+}
+
+source_sum() {
+  m=$(manifest "$@")
+  if [ -n "${OLD_HOST:-}" ]; then old "cd $OLD_HOME && $m"; else (cd "$IDENTITY_DIR" && sh -c "$m"); fi
+}
+
+copy_paths() {  # copy_paths LABEL PATHS... -- stream into the volume, compare checksums
+  label=$1; shift
+  helper_up
+  source_tar "$@" | in_vol tar -C "$AGENT_HOME" --no-overwrite-dir -xpf -
+  a=$(source_sum "$@"); b=$(in_vol sh -c "cd $AGENT_HOME && $(manifest "$@")")
+  [ "$a" = "$b" ] || die "$label checksums differ: $a vs $b"
+  say "$label copied, checksums identical: $*"
+}
+
+preflight() {
+  cluster_ready
+  helper_up
+  present=$(in_vol sh -c "ls -A $AGENT_HOME | grep -vxE 'lost\+found|\.datacore' || true")
+  [ -z "$present" ] || die "volume $AGENT-home is not empty (found: $(echo $present | head -c 200)); use agent-cutover or agent-restore"
+  [ -z "${OLD_HOST:-}" ] || old_ready
+  say "preflight ok"
+}
+
+sync() {
+  [ -n "${OLD_HOST:-}" ] || { say "no old host: nothing to sync"; return; }
+  if [ -n "$SYNC_CMD" ]; then old "$SYNC_CMD" || die "SYNC_CMD failed; read the output above, do not force it"; fi
+  # Fresh clones carry only what origin has. Anything else must be pushed or named in CARRY.
+  report=$(old "cd $OLD_HOME && find . -maxdepth 5 -name .git -not -path './.cache/*' -not -path './.npm/*' 2>/dev/null | sed 's|/.git\$||' | sort | while read -r r; do
+      a=\$(git -C \"\$r\" rev-list --count @{u}..HEAD 2>/dev/null || echo '?')
+      git -C \"\$r\" status --porcelain 2>/dev/null | sed \"s|^...|\$r/|\" | sed 's|^\\./||' | while read -r f; do echo \"dirty \$f\"; done
+      [ \"\$a\" = 0 ] || echo \"ahead \$r \$a\"
+    done")
+  blocking=""
+  while read -r kind path rest; do
+    [ -n "${kind:-}" ] || continue
+    path=${path#./}
+    covered=""
+    for c in $CARRY $LEAVE; do case "$path" in "$c"|"$c"/*) covered=1;; esac; done
+    if [ -z "$covered" ]; then  # inside something IDENTITY carries (and does not exclude)?
+      for c in $IDENTITY; do case "$path" in "$c"|"$c"/*) covered=1;; esac; done
+      for e in $IDENTITY_EXCLUDE; do case "$path" in "$e"|"$e"/*) covered="";; esac; done
+    fi
+    [ -n "$covered" ] && continue
+    case "$kind" in
+      ahead) blocking="$blocking\n  $path: $rest unpushed commit(s)";;
+      dirty) blocking="$blocking\n  $path: not committed";;
+    esac
+  done <<< "$report"
+  [ -z "$blocking" ] || die "not in origin, IDENTITY, CARRY or LEAVE:$(printf "$blocking")"
+  say "every checkout on $OLD_HOST is pushed and clean, or covered by IDENTITY, CARRY or LEAVE"
+}
+
+freeze() {
+  [ -n "${OLD_HOST:-}" ] || { say "no old host: nothing to freeze"; return; }
+  freeze_old
+}
+
+key() { key_secret; }
+
+identity() {
+  need IDENTITY
+  for f in $NEVER_COPY; do
+    case " $IDENTITY " in *" $f "*) die "$f is in IDENTITY but must never be copied";; esac
+  done
+  # shellcheck disable=SC2086
+  copy_paths identity $IDENTITY
+  for f in $NEVER_COPY; do in_vol test ! -e "$AGENT_HOME/$f" || die "$f arrived although it must never be copied"; done
+}
+
+carry() {
+  [ -n "$CARRY" ] || { say "no CARRY"; return; }
+  # shellcheck disable=SC2086
+  copy_paths carry $CARRY
+}
+
+clone() {
+  helper_up
+  [ -n "$CLONES" ] || { say "no CLONES"; return; }
+  # ssh, too, leaves through the proxy: the pod has no other way out.
+  in_vol sh -c "mkdir -p $AGENT_HOME/.ssh && chmod 700 $AGENT_HOME/.ssh && touch $AGENT_HOME/.ssh/config && grep -q egress.shared.svc $AGENT_HOME/.ssh/config || { printf 'Host *\n  ProxyCommand nc -X connect -x egress.shared.svc.cluster.local:3128 %%h %%p\n\n' | cat - $AGENT_HOME/.ssh/config > $AGENT_HOME/.ssh/config.new && mv $AGENT_HOME/.ssh/config.new $AGENT_HOME/.ssh/config; }"
+  printf '%s\n' "$CLONES" | while read -r path url branch; do
+    [ -n "${path:-}" ] || continue
+    case "$path" in \#*) continue;; esac
+    if in_vol test -d "$AGENT_HOME/$path/.git"; then say "$path already cloned"; continue; fi
+    in_vol git clone -q ${branch:+--branch "$branch"} "$url" "$AGENT_HOME/$path" </dev/null \
+      || die "clone of $path failed"
+    say "cloned $path at $(in_vol git -C "$AGENT_HOME/$path" rev-parse --short HEAD </dev/null)"
+  done
+}
+
+setup() {
+  helper_up
+  [ -n "$SETUP" ] || { say "no SETUP"; return; }
+  in_vol sh -c "cd $AGENT_HOME && $SETUP"
+  say "setup done"
+}
+
+mark() {
+  if [ -n "${OLD_HOST:-}" ]; then
+    left=$(host_procs)
+    [ -z "$left" ] || die "agent processes still running on $OLD_HOST: $left (run freeze)"
+    mark_runs_nowhere_else "$OLD_HOST frozen"
+  else
+    mark_runs_nowhere_else "new agent, never ran elsewhere"
+  fi
+}
+
+start() { start_agent; }
+
+rollback() {
+  stop_agent
+  helper_up
+  in_vol rm -f "$AGENT_HOME/.datacore/state/k3s-cutover-frozen"
+  helper_down
+  [ -z "${OLD_HOST:-}" ] || { say "if the pod wrote ledger events, push them from the volume BEFORE the old host runs again"; thaw_old; }
+}
+
+case "${1:-}" in
+  preflight|sync|freeze|key|identity|clone|carry|setup|mark|start|rollback) "$1" ;;
+  *) sed -n '2,34p' "$0"; exit 2 ;;
+esac

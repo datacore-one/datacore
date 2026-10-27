@@ -1,0 +1,339 @@
+{{- $root := . -}}
+{{- $d := .Values.defaults -}}
+{{- if and .Values.maxAgents (gt (len .Values.agents) (int .Values.maxAgents)) }}
+{{- fail (printf "%d agents but maxAgents (the licence cap) is %d; raising it is the owner's decision" (len .Values.agents) (int .Values.maxAgents)) }}
+{{- end }}
+{{- range $name, $agent := .Values.agents }}
+{{- if not $agent.runtime }}{{ fail (printf "agent %s: set runtime (one of: %s)" $name (keys $root.Values.runtimes | sortAlpha | join ", ")) }}{{ end }}
+{{- if not (hasKey $root.Values.runtimes $agent.runtime) }}{{ fail (printf "agent %s: unknown runtime %q (one of: %s)" $name $agent.runtime (keys $root.Values.runtimes | sortAlpha | join ", ")) }}{{ end }}
+{{- /* The agent's settings: defaults, then its runtime template, then its own values. */}}
+{{- $a := mergeOverwrite (deepCopy $d) (deepCopy (index $root.Values.runtimes $agent.runtime)) (deepCopy $agent) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-home
+  namespace: {{ $root.Values.teamNamespace }}
+  annotations:
+    # The agent's whole state lives here; uninstalling the chart must not delete it.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: {{ $a.storage }}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-crontab
+  namespace: {{ $root.Values.teamNamespace }}
+data:
+  crontab: |
+{{ $a.crontab | indent 4 }}
+---
+# What node-side tools (fleet-backup) need to know about the agent.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-agent
+  namespace: {{ $root.Values.teamNamespace }}
+  labels:
+    datacore.one/agent: {{ $name }}
+data:
+  runtime: {{ $a.runtime | quote }}
+  home: {{ $a.home | quote }}
+  image: {{ $a.image | quote }}
+  uid: {{ $a.uid | quote }}
+  backupExclude: {{ join "," ($a.backupExclude | default list) | quote }}
+---
+{{- /* The kill switch (fleetctl stop-all) scales to 0 and remembers the count in
+       an annotation; an upgrade keeps 0 while it is there, so a chart change
+       never restarts an agent that was stopped. */}}
+{{- $live := lookup "apps/v1" "Deployment" $root.Values.teamNamespace $name }}
+{{- $stopped := and $live (hasKey (($live.metadata).annotations | default dict) "datacore.one/resume-replicas") }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $root.Values.teamNamespace }}
+  labels:
+    datacore.one/agent: {{ $name }}
+    app.kubernetes.io/part-of: datacore-fleet
+spec:
+  replicas: {{ if and $a.running (not $stopped) }}1{{ else }}0{{ end }}
+  # Recreate, never RollingUpdate: two pods of one agent would be two writers
+  # on one ledger chain and two pollers on one Telegram bot.
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/name: {{ $name }}}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ $name }}
+        datacore.one/role: agent
+        datacore.one/runtime: {{ $a.runtime }}
+        datacore.one/agent: {{ $name }}
+      annotations:
+        checksum/crontab: {{ $a.crontab | sha256sum }}
+    spec:
+      # Stable: ledger guards map hostname -> actor through the roster.
+      hostname: {{ $name }}
+      {{- if $a.killSwitch }}
+      # The fleet kill switch from chat: may only list and scale Deployments here.
+      serviceAccountName: {{ $name }}-killswitch
+      automountServiceAccountToken: true
+      {{- else }}
+      automountServiceAccountToken: false
+      {{- end }}
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsUser: {{ $a.uid }}
+        runAsGroup: {{ $a.uid }}
+        runAsNonRoot: true
+      initContainers:
+        # The provisioner creates the volume root root-owned and 0777, and it
+        # is the agent's home. Give that one directory to the agent, and a key
+        # directory the kubelet created root-owned to mount the key file (the
+        # ledger's key lock lives there); nothing is created, nothing else is
+        # touched and nothing but CHOWN is granted.
+        - name: home-owner
+          image: {{ $a.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", {{ printf "{ [ \"$(stat -c %%u %s)\" = \"%v\" ] || { chmod 00755 %s && chown %v:%v %s; }; } && for d in %s/.datacore %s/.datacore/keys; do [ ! -d $d ] || [ \"$(stat -c %%u $d)\" = \"%v\" ] || chown %v:%v $d; done && chmod 1777 /tmp" $a.home $a.uid $a.home $a.uid $a.uid $a.home $a.home $a.home $a.uid $a.uid $a.uid | quote }}]
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL], add: [CHOWN]}
+          resources: {{- toYaml $a.stream.resources | nindent 12 }}
+          volumeMounts:
+            - {name: home, mountPath: {{ $a.home }}}
+            - {name: tmp, mountPath: /tmp}
+        # The signing key, 0400 and owned by the agent, into memory. The Secret
+        # itself is root's (no fsGroup: it made the kubelet re-own the home).
+        - name: key-install
+          image: {{ $a.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", {{ printf "cp -f /run/secret/%s /run/agent-key/%s && chmod 0400 /run/agent-key/%s && chown %v:%v /run/agent-key/%s" $a.signingKeyName $a.signingKeyName $a.signingKeyName $a.uid $a.uid $a.signingKeyName | quote }}]
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL], add: [CHOWN]}
+          resources: {{- toYaml $a.stream.resources | nindent 12 }}
+          volumeMounts:
+            - {name: signing-key, mountPath: /run/secret, readOnly: true}
+            - {name: agent-key, mountPath: /run/agent-key}
+        # Refuses to start unless the cutover recorded that the old host is
+        # frozen, then points the volume's runtime paths at the image.
+        - name: prepare
+          image: {{ $a.image }}
+          imagePullPolicy: IfNotPresent
+          # The key directory is the agent's own, made before the kubelet
+          # mounts the key file into it (it would create it root-owned).
+          command: ["/bin/sh", "-c", "chmod go-w \"$HOME\" && mkdir -p -m 0700 \"$HOME/.datacore/keys\" && exec /usr/local/bin/agent-prepare"]
+          env:
+            {{- include "fleet.agentEnv" (list $root $a) | nindent 12 }}
+            {{- if eq ($a.mode | default "") "standby" }}
+            - {name: AGENT_STANDBY, value: "1"}
+            {{- end }}
+          {{- include "fleet.containerSecurity" . | nindent 10 }}
+          resources: {{- toYaml $a.stream.resources | nindent 12 }}
+          volumeMounts:
+            - {name: home, mountPath: {{ $a.home }}}
+      containers:
+        {{- if eq ($a.mode | default "") "standby" }}
+        # Standby: everything mounted as in production, none of the agent's processes.
+        - name: standby
+          image: {{ $a.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/agent-run", "standby", "sleep", "infinity"]
+          workingDir: {{ $a.home }}
+          env:
+            {{- include "fleet.agentEnv" (list $root $a) | nindent 12 }}
+          {{- include "fleet.containerSecurity" . | nindent 10 }}
+          resources: {{- toYaml $a.cron.resources | nindent 12 }}
+          volumeMounts:
+            - {name: home, mountPath: {{ $a.home }}}
+            {{- include "fleet.sshMount" $a | nindent 12 }}
+            - {name: tmp, mountPath: /tmp}
+            - {name: agent-key, mountPath: {{ printf "%s/.datacore/keys/%s" $a.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
+            {{- include "fleet.secretFileMounts" $a | nindent 12 }}
+        {{- else }}
+        - name: gateway
+          image: {{ $a.image }}
+          imagePullPolicy: IfNotPresent
+          command: {{ toJson (concat (list "/usr/local/bin/agent-run" "gateway") $a.gateway.command) }}
+          workingDir: {{ printf "%s/%s" $a.home $a.gateway.workingDir }}
+          env:
+            {{- include "fleet.agentEnv" (list $root $a) | nindent 12 }}
+          {{- include "fleet.containerSecurity" . | nindent 10 }}
+          resources: {{- toYaml $a.gateway.resources | nindent 12 }}
+          volumeMounts:
+            - {name: home, mountPath: {{ $a.home }}}
+            {{- include "fleet.sshMount" $a | nindent 12 }}
+            - {name: tmp, mountPath: /tmp}
+            - {name: agent-key, mountPath: {{ printf "%s/.datacore/keys/%s" $a.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
+            {{- include "fleet.secretFileMounts" $a | nindent 12 }}
+        - name: cron
+          image: {{ $a.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/agent-run", "cron", "/usr/local/bin/supercronic", "-passthrough-logs", "/etc/datacore/crontab"]
+          workingDir: {{ $a.home }}
+          env:
+            {{- include "fleet.agentEnv" (list $root $a) | nindent 12 }}
+          {{- include "fleet.containerSecurity" . | nindent 10 }}
+          resources: {{- toYaml $a.cron.resources | nindent 12 }}
+          volumeMounts:
+            - {name: home, mountPath: {{ $a.home }}}
+            {{- include "fleet.sshMount" $a | nindent 12 }}
+            - {name: tmp, mountPath: /tmp}
+            - {name: crontab, mountPath: /etc/datacore, readOnly: true}
+            - {name: agent-key, mountPath: {{ printf "%s/.datacore/keys/%s" $a.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
+            {{- include "fleet.secretFileMounts" $a | nindent 12 }}
+        {{- if and $a.stream $a.stream.enabled }}
+        - name: stream
+          image: {{ $a.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/agent-run", "stream", "/bin/sh", "-c", "set -a; . {{ $a.home }}/.datacore/agent-stream-tail/config.env; set +a; exec python3 {{ $a.home }}/.datacore/agent-stream-tail/agent_stream_tail.py"]
+          env:
+            {{- include "fleet.agentEnv" (list $root $a) | nindent 12 }}
+          {{- include "fleet.containerSecurity" . | nindent 10 }}
+          resources: {{- toYaml $a.stream.resources | nindent 12 }}
+          volumeMounts:
+            - {name: home, mountPath: {{ $a.home }}}
+            {{- include "fleet.sshMount" $a | nindent 12 }}
+        {{- end }}
+        {{- range $x := ($a.extraContainers | default list) }}
+        # An extra process of the agent (e.g. a daemon), with the same mounts and env.
+        - name: {{ $x.name }}
+          image: {{ $a.image }}
+          imagePullPolicy: IfNotPresent
+          command: {{ toJson (concat (list "/usr/local/bin/agent-run" $x.name) $x.command) }}
+          workingDir: {{ $x.workingDir | default $a.home }}
+          {{- if $x.envFromSecret }}
+          envFrom:
+            - secretRef: {name: {{ $x.envFromSecret }}}
+          {{- end }}
+          env:
+            {{- include "fleet.agentEnv" (list $root $a) | nindent 12 }}
+            {{- range ($x.env | default list) }}
+            - {name: {{ .name }}, value: {{ .value | quote }}}
+            {{- end }}
+          {{- if $x.ports }}
+          ports:
+            {{- range $x.ports }}
+            - {name: {{ .name }}, containerPort: {{ .containerPort }}{{ if .hostPort }}, hostPort: {{ .hostPort }}{{ end }}, protocol: TCP}
+            {{- end }}
+          {{- end }}
+          {{- include "fleet.containerSecurity" $ | nindent 10 }}
+          resources: {{- toYaml ($x.resources | default $a.cron.resources) | nindent 12 }}
+          volumeMounts:
+            - {name: home, mountPath: {{ $a.home }}}
+            {{- include "fleet.sshMount" $a | nindent 12 }}
+            - {name: tmp, mountPath: /tmp}
+            - {name: agent-key, mountPath: {{ printf "%s/.datacore/keys/%s" $a.home $a.signingKeyName }}, subPath: {{ $a.signingKeyName }}, readOnly: true}
+            {{- include "fleet.secretFileMounts" $a | nindent 12 }}
+        {{- end }}
+        {{- end }}
+      volumes:
+        - name: home
+          persistentVolumeClaim: {claimName: {{ $name }}-home}
+        - name: tmp
+          emptyDir: {sizeLimit: {{ $a.tmpSize }}}
+        - name: crontab
+          configMap: {name: {{ $name }}-crontab}
+        - name: agent-key
+          emptyDir: {medium: Memory, sizeLimit: 1Mi}
+        - name: signing-key
+          secret:
+            secretName: {{ $a.signingKeySecret }}
+            defaultMode: 0400
+        {{- include "fleet.secretFileVolumes" $a | nindent 8 }}
+---
+{{- $ports := list }}
+{{- range ($a.extraContainers | default list) }}{{- range (.ports | default list) }}{{- $ports = append $ports .containerPort }}{{- end }}{{- end }}
+{{- if $ports }}
+# The agent's published ports, and nothing else, may be reached from outside.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-ingress
+  namespace: {{ $root.Values.teamNamespace }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: {{ $name }}}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        {{- range $ports }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+---
+{{- end }}
+{{- if $a.killSwitch }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}-killswitch
+  namespace: {{ $root.Values.teamNamespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-killswitch
+  namespace: {{ $root.Values.teamNamespace }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: fleet-killswitch}
+subjects:
+  - {kind: ServiceAccount, name: {{ $name }}-killswitch, namespace: {{ $root.Values.teamNamespace }}}
+---
+# Only this agent reaches the API server, and only there (kubeApi in values).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-kube-api
+  namespace: {{ $root.Values.teamNamespace }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: {{ $name }}}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        {{- range ($root.Values.kubeApi.cidrs | default list) }}
+        - ipBlock: {cidr: {{ . }}}
+        {{- end }}
+      ports:
+        {{- range ($root.Values.kubeApi.ports | default list) }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+---
+{{- end }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agents-egress-via-proxy
+  namespace: {{ .Values.teamNamespace }}
+spec:
+  podSelector:
+    matchLabels: {datacore.one/role: agent}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ .Values.sharedNamespace }}}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: egress}
+      ports:
+        - {protocol: TCP, port: 3128}
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}

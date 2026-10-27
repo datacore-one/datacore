@@ -1,0 +1,19 @@
+#!/bin/sh
+# Hermes: point the volume's runtime paths at the code in this image, so every
+# path the agent's config and scripts already use keeps working unchanged.
+set -eu
+link() {  # link <path-in-volume> <target-in-image>
+    if [ -L "$1" ]; then
+        ln -sfn "$2" "$1"
+    elif [ -e "$1" ]; then
+        echo "agent-prepare: $1 is a real directory, moved to $1.pre-k3s" >&2
+        mv "$1" "$1.pre-k3s"
+        ln -s "$2" "$1"
+    else
+        mkdir -p "$(dirname "$1")"
+        ln -s "$2" "$1"
+    fi
+}
+link "$HOME/.hermes/hermes-agent" /opt/hermes-agent
+link "$HOME/.hermes/node" /opt/node
+echo "agent-prepare: hermes runtime linked into the image"
