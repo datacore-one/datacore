@@ -22,22 +22,28 @@ from pathlib import Path
 import pytest
 import yaml
 
+import fleet_reach
+
 ROOT = Path(__file__).resolve().parents[3]
 MANIFEST = ROOT / ".datacore" / "lib" / "jobs" / "manifest.yaml"
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
-HOSTS = {"box": "winston", "nightshift": "nightshift", "hermes": "hermes", "plur-claw": "plur-claw"}
+# Where each agent machine does its work (host or k3s pod) comes from the roster (fleet_reach).
+HOSTS = ("box", "nightshift", "hermes", "plur-claw")
 MODEL = r"(\bclaude\b[^\n#]*(-p\b|--print)|_run_claude|hermes chat|openclaw agent|codex exec|messages\.create)"
 
-# Prints "<script>\t<1 if it launches a model>" for every scheduled script on the machine.
-PROBE = (
-    "for f in $( (crontab -l 2>/dev/null; sudo -n crontab -l 2>/dev/null; "
-    "for u in $(systemctl list-timers --all --no-legend --plain 2>/dev/null | awk '{print $NF}'); do "
-    "systemctl cat \"$u\" 2>/dev/null | grep '^ExecStart'; "
-    "s=${u%.timer}.service; systemctl cat \"$s\" 2>/dev/null | grep '^ExecStart'; done) "
+
+
+def probe(listing: str) -> str:
+    """Prints "<script>\t<1 if it launches a model>" for every scheduled script a listing names."""
+    return (
+    "for f in $( " + listing + " "
     "| grep -v '^#' | grep -oE '/[^ ;\"]+\\.(sh|py)' | sort -u); do "
     "[ -f \"$f\" ] || continue; if grep -vE '^\\s*#' \"$f\" | grep -qE '" + MODEL.replace("'", "") + "'; "
     "then echo \"$f\t1\"; else echo \"$f\t0\"; fi; done; true"
-)
+    )
+
+
+PROBE = probe(fleet_reach.schedule_listing(fleet_reach.Place("mac", "local")))
 
 
 def undeclared(scripts: dict[str, bool], jobs: list[dict], machine: str) -> list[str]:
@@ -78,7 +84,8 @@ def test_the_mac_starts_models_only_for_named_duties():
 @pytest.mark.production
 @pytest.mark.parametrize("machine", list(HOSTS))
 def test_each_agent_host_starts_models_only_for_named_duties(machine):
-    r = subprocess.run([*SSH, HOSTS[machine], PROBE], capture_output=True, text=True, timeout=55)
-    assert r.returncode == 0, f"{machine}: could not read its schedules ({r.stderr.strip()[-160:]})"
-    bad = undeclared(_parse(r.stdout), _jobs(), machine)
-    assert not bad, f"{machine}: scheduled model runs that are no named duty: {bad}"
+    for pl in fleet_reach.places(machine):
+        r = fleet_reach.run_at(pl, probe(fleet_reach.schedule_listing(pl)), timeout=55)
+        assert r.returncode == 0, f"{machine} ({pl.kind}): could not read its schedules ({r.stderr.strip()[-160:]})"
+        bad = undeclared(_parse(r.stdout), _jobs(), machine)
+        assert not bad, f"{machine} ({pl.kind}): scheduled model runs that are no named duty: {bad}"

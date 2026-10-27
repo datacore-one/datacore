@@ -90,6 +90,37 @@ def place(machine: str, path: Path | None = None, host: bool = False, local: str
     return Place(machine, "host", alias)
 
 
+def places(machine: str, path: Path | None = None, local: str | None = None) -> list[Place]:
+    """Every place this machine does work: its pod, then its host when it has one too."""
+    out = [place(machine, path, local=local)]
+    if out[0].kind == "pod":
+        try:
+            out.append(place(machine, path, host=True, local=local))
+        except Unreachable:
+            pass
+    return out
+
+
+def containers(pl: Place) -> list[Place]:
+    """A pod as one place per container (a process scan sees only its own
+    container); any other place as itself. An unreadable pod raises Unreachable."""
+    if pl.kind != "pod":
+        return [pl]
+    cfg = os.environ.get("FLEET_KUBECONFIG") or os.path.expanduser(str(pl.k8s.get("kubeconfig") or ""))
+    r = subprocess.run(["kubectl"] + (["--kubeconfig", cfg] if cfg else [])
+                       + ["-n", str(pl.k8s.get("namespace") or "default"), "get", pl.target,
+                          "-o", "jsonpath={.spec.template.spec.containers[*].name}"],
+                       capture_output=True, text=True, timeout=30)
+    names = r.stdout.split() if r.returncode == 0 else []
+    if not names:
+        raise Unreachable(f"{pl.machine}: could not list the containers of {pl.target} ({r.stderr.strip()[-120:]})")
+    return [Place(pl.machine, "pod", pl.target, {**pl.k8s, "container": n}) for n in names]
+
+
+def run_at(pl: Place, cmd: str, timeout: int = 60) -> subprocess.CompletedProcess:
+    return subprocess.run(argv(pl, cmd), capture_output=True, text=True, timeout=timeout)
+
+
 def argv(pl: Place, cmd: str) -> list[str]:
     if pl.kind == "local":
         return ["sh", "-c", cmd]

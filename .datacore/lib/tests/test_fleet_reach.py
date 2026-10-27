@@ -86,6 +86,23 @@ def test_retired_and_unreachable_machines_are_not_agent_places(roster):
         fr.place("hermes-host", roster)
 
 
+def test_a_pod_expands_to_each_of_its_containers(roster, tmp_path, monkeypatch):
+    # A process scan in one container cannot see its siblings' processes.
+    k = tmp_path / "bin" / "kubectl"
+    k.write_text('#!/bin/sh\ncase "$*" in *jsonpath*) echo "gateway cron daemon" ;; *) echo "kubectl $*" ;; esac\n')
+    pods = fr.containers(fr.place("box", roster))
+    assert [p.k8s["container"] for p in pods] == ["gateway", "cron", "daemon"]
+    assert "-c daemon" in " ".join(fr.argv(pods[2], "true"))
+    host = fr.place("box", roster, host=True)
+    assert fr.containers(host) == [host]
+
+
+def test_every_place_a_machine_does_work(roster):
+    assert [p.kind for p in fr.places("box", roster)] == ["pod", "host"]
+    assert [p.kind for p in fr.places("hermes", roster)] == ["pod"]
+    assert [p.kind for p in fr.places("nightshift", roster)] == ["host"]
+
+
 def test_the_schedule_of_a_pod_is_its_supercronic_file(roster):
     assert "/etc/datacore/crontab" in fr.schedule_listing(fr.place("hermes", roster))
     host = fr.schedule_listing(fr.place("nightshift", roster))
