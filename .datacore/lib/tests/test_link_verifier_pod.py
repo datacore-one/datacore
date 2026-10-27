@@ -65,3 +65,11 @@ def test_a_strict_challenge_is_also_accepted(monkeypatch):
         _http_error(403, {"cf-mitigated": "challenge"})))
     ok, d = lv.LinkVerifier().verify_url(URL)
     assert ok, d
+
+
+def test_the_poster_entry_point_uses_the_proxied_verdict(monkeypatch):
+    # The poster calls verify_or_raise, not verify_url (the first fix moved
+    # module helpers into the class body and dropped it, 2026-10-27).
+    _strict_fails(monkeypatch)
+    monkeypatch.setattr(lv, "_proxied_status", lambda url, timeout: (200, "text/html"))
+    assert lv.LinkVerifier().verify_or_raise(f"post {URL}")

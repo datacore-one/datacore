@@ -218,18 +218,6 @@ class LinkVerifier:
         return True, details
 
 
-def _is_challenge(err: HTTPError) -> bool:
-    headers = getattr(err, "headers", None) or {}
-    return err.code == 403 and str(headers.get("cf-mitigated", "")).lower() == "challenge"
-
-
-def _proxied_status(url: str, timeout: float) -> Tuple[int, str]:
-    """GET through the environment's proxy settings; returns (status, content type)."""
-    from urllib.request import Request, build_opener, ProxyHandler
-    req = Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; DatacoreLinkCheck/1.0)"})
-    with build_opener(ProxyHandler()).open(req, timeout=timeout) as resp:
-        return resp.status, resp.headers.get("Content-Type", "")
-
     def verify_content(self, text: str, fast_fail: bool = False) -> Tuple[bool, List[Dict]]:
         """
         Verify all URLs in content.
@@ -292,6 +280,20 @@ def _proxied_status(url: str, timeout: float) -> Tuple[int, str]:
 
 
 # Standalone CLI usage
+
+def _is_challenge(err: HTTPError) -> bool:
+    headers = getattr(err, "headers", None) or {}
+    return err.code == 403 and str(headers.get("cf-mitigated", "")).lower() == "challenge"
+
+
+def _proxied_status(url: str, timeout: float) -> Tuple[int, str]:
+    """GET through the environment's proxy settings; returns (status, content type)."""
+    from urllib.request import Request, build_opener, ProxyHandler
+    req = Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; DatacoreLinkCheck/1.0)"})
+    with build_opener(ProxyHandler()).open(req, timeout=timeout) as resp:
+        return resp.status, resp.headers.get("Content-Type", "")
+
+
 def main():
     """CLI interface for link verification."""
     import argparse
