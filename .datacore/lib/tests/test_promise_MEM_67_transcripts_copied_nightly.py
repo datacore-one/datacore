@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+import fleet_reach
+
 ROOT = Path(__file__).resolve().parents[3]
 JOB = ROOT / ".datacore" / "lib" / "sync_traces.sh"
 MIRROR = ROOT / "0-personal" / "traces" / "claude-code"
@@ -67,16 +69,17 @@ def test_the_mac_mirror_holds_every_transcript_older_than_a_night():
 
 
 @pytest.mark.production
-@pytest.mark.parametrize("host", ["nightshift", "winston", "hermes", "plur-claw"])
+@pytest.mark.parametrize("host", ["nightshift", "box", "hermes", "plur-claw"])   # roster: host or k3s pod
 def test_every_host_with_sessions_copies_them_nightly(host):
-    r = subprocess.run([*SSH, host, "n=$(find ~/.claude/projects -name '*.jsonl' 2>/dev/null | wc -l); echo n=$n; "
-                        "(crontab -l 2>/dev/null; systemctl list-timers --all --no-pager 2>/dev/null; "
-                        "systemctl --user list-timers --all --no-pager 2>/dev/null) "
-                        "| grep -i -E 'sync_traces|transcript|claude/projects' || true"],
-                       capture_output=True, text=True, timeout=45)
-    assert r.returncode == 0, f"{host}: could not read ({r.stderr.strip()[-160:]})"
-    lines = r.stdout.splitlines()
-    n = int(lines[0].split("=", 1)[1]) if lines and lines[0].startswith("n=") else 0
-    if n == 0:
-        return   # no AI sessions on this host: nothing to copy
-    assert len(lines) > 1, f"{host} holds {n} session transcripts and no nightly job copies them"
+    for pl in fleet_reach.places(host):
+        listing = fleet_reach.schedule_listing(pl) if pl.kind == "pod" else (
+            "(crontab -l 2>/dev/null; systemctl list-timers --all --no-pager 2>/dev/null; "
+            "systemctl --user list-timers --all --no-pager 2>/dev/null)")
+        r = fleet_reach.run_at(pl, "n=$(find ~/.claude/projects -name '*.jsonl' 2>/dev/null | wc -l); echo n=$n; "
+                               + listing + " | grep -i -E 'sync_traces|transcript|claude/projects' || true", timeout=45)
+        assert r.returncode == 0, f"{host} ({pl.kind}): could not read ({r.stderr.strip()[-160:]})"
+        lines = r.stdout.splitlines()
+        n = int(lines[0].split("=", 1)[1]) if lines and lines[0].startswith("n=") else 0
+        if n == 0:
+            continue   # no AI sessions at this place: nothing to copy
+        assert len(lines) > 1, f"{host} ({pl.kind}) holds {n} session transcripts and no nightly job copies them"
