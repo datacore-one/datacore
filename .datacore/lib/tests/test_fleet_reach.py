@@ -1,0 +1,92 @@
+"""fleet_reach: one way to run a read-only command where a machine's work lives.
+
+Since 2026-10-25 three agents run as pods on the box (k3s, namespace firm), not
+on their own hosts. Every fleet eval kept its own host table and kept ssh-ing to
+droplets that no longer run anything, so they could only ever say "could not
+tell". The roster now says where each machine's work runs; this resolves it.
+"""
+from __future__ import annotations
+
+import os
+import stat
+from pathlib import Path
+
+import pytest
+
+import fleet_reach as fr
+
+ROSTER = """
+servers:
+  mac:
+    access: {actor: mac}
+  nightshift:
+    ssh_alias: nightshift
+    access: {actor: miles}
+  hermes:
+    ssh_alias: '-'
+    access:
+      actor: tris
+      k8s: {kubeconfig: KCFG, namespace: firm, deployment: tris, container: cron}
+  box:
+    ssh_alias: winston
+    access:
+      actor: winston
+      k8s: {kubeconfig: KCFG, namespace: firm, deployment: winston, container: cron}
+  hermes-host:
+    ssh_alias: hermes
+    retired: true
+    access: {}
+"""
+
+
+@pytest.fixture
+def roster(tmp_path, monkeypatch):
+    p = tmp_path / "infrastructure.yaml"
+    p.write_text(ROSTER.replace("KCFG", str(tmp_path / "kube.yaml")))
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    for tool in ("ssh", "kubectl"):
+        s = bin_ / tool
+        s.write_text(f'#!/bin/sh\necho "{tool} $*"\n')
+        s.chmod(s.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bin_}:{os.environ['PATH']}")
+    return p
+
+
+def test_a_pod_agent_is_reached_through_kubectl_exec(roster, tmp_path):
+    pl = fr.place("hermes", roster)
+    assert pl.kind == "pod"
+    r = fr.run("hermes", "echo hi", roster)
+    assert r.stdout.startswith("kubectl --kubeconfig " + str(tmp_path / "kube.yaml"))
+    assert "-n firm exec deploy/tris -c cron -- sh -c echo hi" in r.stdout
+
+
+def test_a_host_is_reached_through_ssh_batch_mode(roster):
+    r = fr.run("nightshift", "uptime", roster)
+    assert r.stdout.startswith("ssh -o BatchMode=yes")
+    assert r.stdout.rstrip().endswith("nightshift uptime")
+
+
+def test_a_host_with_pods_keeps_its_own_host_duties(roster):
+    # The box runs Winston's pod AND host duties (backups, the fleet probe).
+    assert fr.place("box", roster).kind == "pod"
+    assert fr.place("box", roster, host=True).kind == "host"
+    assert "winston uptime" in fr.run("box", "uptime", roster, host=True).stdout
+
+
+def test_the_local_machine_runs_locally(roster):
+    assert fr.place("mac", roster, local="mac").kind == "local"
+    assert fr.run("mac", "echo here", roster, local="mac").stdout == "here\n"
+
+
+def test_retired_and_unreachable_machines_are_not_agent_places(roster):
+    assert "hermes-host" not in fr.agent_machines(roster)
+    assert set(fr.agent_machines(roster)) == {"mac", "nightshift", "hermes", "box"}
+    with pytest.raises(fr.Unreachable):
+        fr.place("hermes-host", roster)
+
+
+def test_the_schedule_of_a_pod_is_its_supercronic_file(roster):
+    assert "/etc/datacore/crontab" in fr.schedule_listing(fr.place("hermes", roster))
+    host = fr.schedule_listing(fr.place("nightshift", roster))
+    assert "crontab -l" in host and "systemctl" in host
