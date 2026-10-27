@@ -30,6 +30,9 @@ TESTS = Path(__file__).resolve().parent
 LIB = TESTS.parent
 ROOT = TESTS.parents[2]
 sys.path.insert(0, str(LIB))
+# Winston's scripts live in the chief-of-staff module (server/lib), the copy git holds;
+# the box's setup installs them into .datacore/lib. Judge the source, not an install.
+sys.path.insert(0, str(LIB.parent / "modules" / "chief-of-staff" / "server" / "lib"))
 
 
 def _hooks(tool: str) -> list[str]:
