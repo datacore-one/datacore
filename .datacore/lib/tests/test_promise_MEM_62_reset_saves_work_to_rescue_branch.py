@@ -21,10 +21,13 @@ from pathlib import Path
 
 import pytest
 
+import fleet_reach
+
 import git_relay
 
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
-HOSTS = ["winston", "nightshift", "hermes", "plur-claw"]
+# Agent machines; where each works today (host, k3s pod, or both) comes from the roster (fleet_reach).
+HOSTS = ["box", "nightshift", "hermes", "plur-claw"]
 GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
            "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
 
@@ -92,13 +95,19 @@ def test_uncommitted_agent_work_survives_the_reset(repo):
 @pytest.mark.production
 @pytest.mark.parametrize("host", HOSTS)
 def test_no_scheduled_script_resets_without_rescue_and_alert(host):
-    cmd = ("for f in $( (crontab -l 2>/dev/null; sudo -n crontab -l 2>/dev/null; "
-           "systemctl cat $(systemctl list-timers --all --no-legend --plain 2>/dev/null | awk '{print $(NF-1)}') "
-           "2>/dev/null | grep ExecStart) | grep -oE '/[^ ;\"]+\\.(sh|py)' | sort -u); do "
+    host_listing = ("(crontab -l 2>/dev/null; sudo -n crontab -l 2>/dev/null; "
+                    "systemctl cat $(systemctl list-timers --all --no-legend --plain 2>/dev/null | awk '{print $(NF-1)}') "
+                    "2>/dev/null | grep ExecStart)")
+    for pl in fleet_reach.places(host):
+        _check_resets(host, pl, fleet_reach.schedule_listing(pl) if pl.kind == "pod" else host_listing)
+
+
+def _check_resets(host, pl, listing):
+    cmd = ("for f in $( " + listing + " | grep -oE '/[^ ;\"]+\\.(sh|py)' | sort -u); do "
            "[ -f \"$f\" ] || continue; "
            "if grep -qE '^[^#]*reset[^#]*--hard' \"$f\"; then "
            "r=$(grep -cE '^[^#]*rescue' \"$f\"); a=$(grep -cE '^[^#]*alert' \"$f\"); echo \"$f rescue=$r alert=$a\"; fi; done; true")
-    p = subprocess.run([*SSH, host, cmd], capture_output=True, text=True, timeout=50)
-    assert p.returncode == 0, f"{host}: could not read ({p.stderr.strip()[-160:]})"
+    p = fleet_reach.run_at(pl, cmd, timeout=50)
+    assert p.returncode == 0, f"{host} ({pl.kind}): could not read ({p.stderr.strip()[-160:]})"
     bad = [l for l in p.stdout.splitlines() if "rescue=0" in l or "alert=0" in l]
-    assert not bad, f"{host}: scheduled scripts hard-reset without a rescue branch and an alert: {bad}"
+    assert not bad, f"{host} ({pl.kind}): scheduled scripts hard-reset without a rescue branch and an alert: {bad}"

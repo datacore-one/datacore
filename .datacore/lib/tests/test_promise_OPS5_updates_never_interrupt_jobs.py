@@ -20,10 +20,15 @@ from pathlib import Path
 
 import pytest
 
+import fleet_reach
+
 DC = Path(__file__).resolve().parents[2]
 CONF = DC / "config" / "host" / "needrestart-datacore.conf"
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
-HOSTS = ["winston", "nightshift", "hermes", "plur-claw"]
+# The hosts that take OS updates and run scheduled jobs (roster). Tris's and Data's old
+# droplets are retired; their jobs run in k3s pods, whose images are never updated in place,
+# so the box node itself (host=True) is the host that matters for them.
+HOSTS = ["box", "nightshift"]
 VENDOR = {"droplet-agent-update.service"}  # the cloud provider's own agent, not a Datacore job
 
 
@@ -72,7 +77,7 @@ _LIVE = ("sha256sum /etc/needrestart/conf.d/datacore.conf 2>&1; echo ---; "
 def test_every_host_protects_every_installed_scheduled_job(host):
     want = hashlib.sha256(CONF.read_bytes()).hexdigest()
     try:
-        out = subprocess.run(SSH + [host, _LIVE], capture_output=True, text=True, timeout=45)
+        out = fleet_reach.run_at(fleet_reach.place(host, host=True), _LIVE, timeout=45)
     except subprocess.TimeoutExpired:
         pytest.fail(f"{host}: could not look (timeout) -- could not tell is not a pass")
     assert out.returncode == 0 and "---" in out.stdout, f"{host}: could not look: {out.stderr[-200:]}"
