@@ -224,6 +224,18 @@ SCHEDULED: <next-working-day>
 :END:
 ```
 
+3b. **Save what the session learned as engrams** — `plur_learn`, one call per
+   insight, correction or learning from this session (a user correction, a
+   convention found, an approach that worked or failed, a gotcha). Each engram is
+   knowledge someone could reuse on other work; never task status (what is done,
+   what is next, blockers), which belongs in the task's CURRENT_STATUS and BOOTSTRAP
+   fields and goes stale anywhere else. Set `scope` on every call by content: the
+   space or project scope for project details, the team scope for team
+   conventions, the default local scope for the owner's own preferences — never
+   omit it. Tag each with `continuation` and the space, and name the task's `:ID:`
+   in `source` so the lesson can be traced back. No learning this session → write
+   none; never invent one to fill the step. List the written ids in the confirmation.
+
 4. **Confirm to user:**
 
 ```
@@ -256,6 +268,7 @@ Triggered when the user says "create continuation task", "continuation task for 
 1. **Extract context from conversation** — same as save mode step 1
 2. **Determine next working day** — same as save mode step 2
 3. **Create continuation task** in `{space}/org/inbox.org` (the inbox of the space the work was in, as in save mode) using Rich Task Standard — same format as save mode step 3. **CRITICAL: Always include the `:continuation:` tag on the heading.**
+3b. **Save what the session learned as engrams** — same as save mode step 3b: `plur_learn` per insight, correction or learning, with an explicit `scope` chosen by content; never task status, which stays in the task.
 4. **Confirm to user:**
 
 ```
@@ -372,6 +385,28 @@ Blockers: [Any known blockers]
 
 Ready to continue. First step: [extracted from bootstrap]
 ```
+
+**Then recall memory twice** before the first step, and show both under the bootstrap:
+
+1. **For the task at hand** — `plur_recall_hybrid` with the task's title and
+   key terms from its BOOTSTRAP, `scope` set to the task's space or project. This
+   brings back what was learned on this same work: decisions, corrections,
+   conventions, the content's own context.
+2. **For lessons from similar work in other projects** — a second
+   `plur_recall_hybrid` on the *kind* of work, not its name (e.g. "release
+   checklist", "installer test", "GitHub App auth"), with no space scope, so
+   engrams learned on similar work in other projects and spaces come back.
+   Drop hits already shown by the first recall.
+
+```
+MEMORY
+──────
+This task:        [engram meaning, one line each]  (ENG-…)
+Similar work:     [lesson, and the project it came from]  (ENG-…)
+```
+
+An engram that contradicts what the files now show is stale: say so, trust the
+files, and give it negative `plur_feedback`. Nothing recalled → say "no memory found".
 
 ### 2b. If No Continuation Tasks Match — Fallback Search
 
