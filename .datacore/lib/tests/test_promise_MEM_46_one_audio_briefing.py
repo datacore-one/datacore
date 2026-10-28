@@ -233,7 +233,12 @@ def test_no_host_schedules_audio_outside_the_manifest():
             if p.returncode != 0:   # SCAN ends in `true`: any failure is the transport's
                 unreachable.append(f"{h} ({pl.kind})")
                 continue
-            found += [f"{h}: {l.strip()}" for l in p.stdout.splitlines() if l.strip()]
+            # Labelled by the machine's ssh alias, as second_senders() matches the
+            # declared catch-up's host (a 2026-10-27 re-point labelled by machine
+            # name, so the excused catch-up stopped matching).
+            from jobs.manifest import ssh_alias
+            label = ssh_alias(h) or h
+            found += [f"{label}: {l.strip()}" for l in p.stdout.splitlines() if l.strip()]
     mac = subprocess.run(["bash", "-c", "grep -lE 'cos_morning|winston_audio|winston_speak|speak_brief|today_orchestrator' "
                           "~/Library/LaunchAgents/*.plist 2>/dev/null; crontab -l 2>/dev/null | "
                           "grep -E 'cos_morning|winston_audio|winston_speak|speak_brief|today_orchestrator'; true"],
