@@ -116,6 +116,9 @@ def test_an_agent_living_as_a_user_on_another_machine_is_reached_as_that_user(ro
     local = fr.place("miles-host", p, local="here")
     assert local.kind == "local-user"
     assert fr.argv(local, "id")[:6] == ["sudo", "-n", "-u", "miles", "-H", "sh"]
+    # It starts in the user's home, as an ssh login would: the caller's folder is
+    # usually not readable by them, and git refuses to run there.
+    assert fr.argv(local, "id")[-1].startswith("cd ~ && ")
     remote = fr.place("miles-host", p, local="elsewhere")
     assert remote.kind == "host" and remote.target == "dayshift"
     assert fr.argv(remote, "id")[-1].startswith("sudo -n -u miles -H sh -lc")

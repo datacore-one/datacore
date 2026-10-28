@@ -158,7 +158,9 @@ def argv(pl: Place, cmd: str) -> list[str]:
     if pl.kind == "local-user":
         # Not -i: the login shell re-parses the command and expands $(...) and $vars
         # before sh sees them. -H plus sh -l gives the user's home and profile.
-        return ["sudo", "-n", "-u", pl.target, "-H", "sh", "-lc", cmd]
+        # Start in the user's home, as an ssh login does: the caller's folder is
+        # usually unreadable to them, and git refuses to run in it.
+        return ["sudo", "-n", "-u", pl.target, "-H", "sh", "-lc", "cd ~ && " + cmd]
     if pl.kind == "host":
         if pl.k8s.get("run_as"):
             return [*SSH, pl.target, f"sudo -n -u {pl.k8s['run_as']} -H sh -lc {shlex.quote(cmd)}"]
