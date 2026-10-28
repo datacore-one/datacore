@@ -93,7 +93,12 @@ EXEMPT = ("inbox.org",)
 
 
 def main(argv: list[str]) -> int:
-    files = [Path(a) for a in argv if a.endswith(".org") and Path(a).name not in EXEMPT]
+    # Archives too, as nightshift_parser skips them (any name containing
+    # "archive"): an archive holds no queued work. Gating one made the hook
+    # answer with a DuplicateIdError traceback on 0-personal's inbox_archive.org
+    # (2026-10-28), which held the file back from sync every day.
+    files = [Path(a) for a in argv if a.endswith(".org") and Path(a).name not in EXEMPT
+             and "archive" not in Path(a).name.lower()]
     if not files:
         return 0
 
@@ -102,7 +107,13 @@ def main(argv: list[str]) -> int:
     ws = OrgWorkspace()
     for f in files:
         if f.exists():
-            ws.load(f)
+            try:
+                ws.load(f)
+            except Exception as e:  # DuplicateIdError and parse errors: refuse in words
+                print(f"ai_task_gate: cannot read {f.name}: {type(e).__name__}: {e}. "
+                      "Settle it in the file (for a duplicate :ID:, keep one heading per id), "
+                      "then commit again.", file=sys.stderr)
+                return 1
 
     bad = []
     for node in ws.all_nodes():
