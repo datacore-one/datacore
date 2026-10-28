@@ -60,6 +60,17 @@ commands:
     - wrap-up
     - today
     - tomorrow
+  handover:
+    name: Handover
+    description: Move a running session to dayshift — commit, push, checkpoint; the owner runs one command and the conversation continues there
+    version: 1.0.0
+    status: active
+    source: .datacore/commands/handover.md
+    writes:
+    - ~/.datacore/state/handover/{session-id}.json
+    related:
+    - continue
+    - wrap-up
   tomorrow:
     name: Evening Wrap-Up
     description: End-of-day command that syncs repos, queues AI tasks, and prepares for tomorrow
