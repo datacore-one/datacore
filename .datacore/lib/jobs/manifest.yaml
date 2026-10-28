@@ -1447,55 +1447,23 @@ jobs:
   # is asserted by one job whose ordering cannot hide it, instead of two whose
   # ordering did.
 
-  # AGT-13 (owner 2026-10-28): every pair of agents allowed to hand each other
-  # work is checked round robin, each agent seeding its own round weekly on its
-  # own night, in the space all four claim from (each host's own folder for it).
-  # The giver creates a self-checking task for every other agent; their claim
-  # loops do it. delegation_fleet_exercise.py status reads the round back; the
-  # AGT-13 eval judges it from the ledgers. Never delegated: this IS the machinery.
+  # AGT-13 (owner 2026-10-28: Winston runs the weekly round): every pair of
+  # agents allowed to hand each other work is checked round robin. Winston seeds
+  # his own round and hands every other agent a task to seed theirs (only an
+  # agent's own log can hold its items, AGT-10); their claim loops carry it out,
+  # checked by `seeded`. Each round is self-checking work for every other agent,
+  # in the space all four claim from. The AGT-13 eval judges the rounds from the
+  # ledgers. Never delegated as a repair: this IS the delegation machinery.
   - name: box-delegation-round
     delegate: false
     machine: box
     schedule: "0 6 * * 1"
-    cmd: "DATACORE_ACTOR=winston python3 ~/Data/.datacore/lib/delegation_fleet_exercise.py seed --space ~/Data/2-datacore --day today >> ~/.datacore/state/delegation-round.log 2>&1"
+    cmd: "DATACORE_ACTOR=winston python3 ~/Data/.datacore/lib/delegation_fleet_exercise.py start --space ~/Data/2-datacore --day today >> ~/.datacore/state/delegation-round.log 2>&1"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/delegation-round.log"
         check: regex
-        arg: '^seeded \d+: '
-        max_age_hours: 170
-  - name: hermes-delegation-round
-    delegate: false
-    machine: hermes
-    schedule: "0 6 * * 2"
-    cmd: "DATACORE_ACTOR=tris python3 ~/.datacore/v2-runner/.datacore/lib/delegation_fleet_exercise.py seed --space ~/Data/1-datacore --day today >> ~/.datacore/state/delegation-round.log 2>&1"
-    on_fail: telegram
-    artifacts:
-      - path: "~/.datacore/state/delegation-round.log"
-        check: regex
-        arg: '^seeded \d+: '
-        max_age_hours: 170
-  - name: plur-claw-delegation-round
-    delegate: false
-    machine: plur-claw
-    schedule: "0 6 * * 3"
-    cmd: "DATACORE_ACTOR=data python3 ~/.datacore/v2-runner/.datacore/lib/delegation_fleet_exercise.py seed --space ~/Data/1-datacore-space --day today >> ~/.datacore/state/delegation-round.log 2>&1"
-    on_fail: telegram
-    artifacts:
-      - path: "~/.datacore/state/delegation-round.log"
-        check: regex
-        arg: '^seeded \d+: '
-        max_age_hours: 170
-  - name: nightshift-delegation-round
-    delegate: false
-    machine: nightshift
-    schedule: "0 6 * * 4"
-    cmd: "DATACORE_ACTOR=miles python3 ~/Data/.datacore/lib/delegation_fleet_exercise.py seed --space ~/Data/2-datacore --day today >> ~/.datacore/state/delegation-round.log 2>&1"
-    on_fail: telegram
-    artifacts:
-      - path: "~/.datacore/state/delegation-round.log"
-        check: regex
-        arg: '^seeded \d+: '
+        arg: '^started: '
         max_age_hours: 170
   - name: nightshift-ledger-invariants
     # MOVED OFF THE LAPTOP 2026-09-21. This is a network duty with a clock-based

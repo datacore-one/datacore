@@ -1,1 +1,2 @@
 seeded 3: winston -> miles, winston -> data, winston -> tris
+started: winston's own round, and handed 3 round(s): data, miles, tris

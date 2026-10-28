@@ -189,6 +189,65 @@ def cmd_status(args) -> int:
     return 0 if done == len(rows) else 1
 
 
+def _round_ids(frm: str, day: str) -> list[str]:
+    return [_item_id(frm, to, day) for to in RING.get(frm) or []]
+
+
+def cmd_seeded(args) -> int:
+    """Exit 0 when `--from` created its whole round for the day (the check of a
+    start task: did that agent really seed, under its own name?)."""
+    space = args.space.resolve()
+    want = _round_ids(args.from_, args.day)
+    if not want:
+        print(f"{args.from_} has no round in this exercise")
+        return 1
+    have = _seeded(space, args.day)
+    missing = [i for i in want if i not in have]
+    print(f"{args.from_}: {len(want) - len(missing)}/{len(want)} seeded" + (f"; missing {missing}" if missing else ""))
+    return 0 if not missing else 1
+
+
+#: How a start task names the exercise wherever the agent runs it: a satellite's
+#: code is its runner, every other host's is its Data root.
+_TOOL = ('L=$HOME/.datacore/v2-runner/.datacore/lib; [ -f "$L/delegation_fleet_exercise.py" ] '
+         '|| L="${DATACORE_ROOT:-$HOME/Data}/.datacore/lib"; python3 "$L/delegation_fleet_exercise.py"')
+
+
+def cmd_start(args) -> int:
+    """The coordinator's weekly round (AGT-13, owner 2026-10-28: Winston runs it).
+
+    Seeds the coordinator's own round, then hands every other agent in the ring
+    a task to seed theirs. An agent's items can only be written in its own log
+    (AGT-10), so the coordinator cannot seed for them; the hand-off is itself a
+    delegation, carried out by each agent's claim loop and checked by `seeded`.
+    """
+    from actor_identity import this_actor
+    from ledger.log import EventLog
+    from ledger.policy import guarded_append, PolicyError
+    actor = args.as_ or this_actor()
+    rc = cmd_seed(args)
+    if rc:
+        return rc
+    space = args.space.resolve()
+    handed = []
+    for to in sorted(a for a in RING if a != actor):
+        payload = {
+            "id": f"{MARK}-{args.day}-start-{to}",
+            "title": (f"Run your weekly delegation round now, as yourself, in this space: "
+                      f"{_TOOL} seed --space . --day {args.day}"),
+            "assignee": to, "route": "do", "drill": MARK, "requested_by": actor,
+            "check": f"{_TOOL} seeded --space . --day {args.day} --from {to}",
+        }
+        try:
+            guarded_append(EventLog(space, actor), "item.create", payload)
+            handed.append(to)
+        except PolicyError as exc:
+            print(f"REFUSED {actor} -> {to}: {exc}")
+            return 1
+    print(f"started: {actor}'s own round, and handed {len(handed)} round(s): {', '.join(handed) or 'none'}")
+    return 0
+
+
 def cmd_sweep(args) -> int:
     """Close anything the exercise left open, and say so in the log.
 
@@ -215,7 +274,7 @@ def cmd_sweep(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["seed", "status", "sweep"])
+    ap.add_argument("command", choices=["seed", "status", "sweep", "start", "seeded"])
     ap.add_argument("--space", required=True, type=Path)
     ap.add_argument("--as", dest="as_", help="act as this principal (default: this host's actor)")
     ap.add_argument("--day", required=True,
@@ -223,12 +282,14 @@ def main(argv: list[str] | None = None) -> int:
                          "(a schedule file need not escape a date command)")
     ap.add_argument("--assert-refusals", action="store_true",
                     help="also prove the policy still refuses the edge it forbids")
+    ap.add_argument("--from", dest="from_", help="seeded: whose round to look for")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     if a.day == "today":
         from datetime import datetime, timezone
         a.day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    return {"seed": cmd_seed, "status": cmd_status, "sweep": cmd_sweep}[a.command](a)
+    return {"seed": cmd_seed, "status": cmd_status, "sweep": cmd_sweep,
+            "start": cmd_start, "seeded": cmd_seeded}[a.command](a)
 
 
 if __name__ == "__main__":

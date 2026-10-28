@@ -1,1 +1,0 @@
-seeded 3: data -> winston, data -> miles, data -> tris
