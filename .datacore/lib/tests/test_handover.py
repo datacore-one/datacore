@@ -25,6 +25,7 @@ from handover import (
     session_is_live,
     title_sequence,
     tmux_name,
+    unversioned_blocks,
     valid_preview,
     write_checkpoint,
 )
@@ -66,6 +67,26 @@ def test_permission_args_refuses_bypass_the_mac_session_could_not_have():
         permission_args(["claude"], "bypassPermissions")
     assert permission_args(["claude", "--dangerously-skip-permissions"], "bypassPermissions")[0] == [
         "--dangerously-skip-permissions", "--permission-mode", "bypassPermissions"]
+    # launched straight into bypass, without a skip flag
+    assert permission_args(["claude", "--permission-mode", "bypassPermissions"], None)[0] == [
+        "--permission-mode", "bypassPermissions"]
+
+
+def test_permission_args_skip_flag_never_forces_bypass_over_another_mode():
+    # The Mac session was switched to auto; --dangerously-skip-permissions on dayshift could
+    # start it in bypass instead. Carry the "bypass is available" form.
+    assert permission_args(["claude", "--dangerously-skip-permissions"], "auto")[0] == [
+        "--allow-dangerously-skip-permissions", "--permission-mode", "auto"]
+
+
+def test_permission_args_refuses_any_flag_not_known_safe_to_drop():
+    # --tools, --strict-mcp-config, --setting-sources and the like restrict the session.
+    for argv in (["claude", "--tools", "Read"], ["claude", "--strict-mcp-config"],
+                 ["claude", "--setting-sources=user"]):
+        with pytest.raises(ValueError):
+            permission_args(argv, None)
+    assert permission_args(["claude", "--model", "opus", "--chrome", "-c"], None) == (
+        [], ["--model", "--chrome", "-c"])
 
 
 def test_permission_args_refuses_unknown_mode():
@@ -89,16 +110,20 @@ def test_session_is_live():
     # dayshift on another branch: never move that branch, even if it would fast-forward
     ((True, False, False, True), "stop:other-branch"),
     ((True, True, False, False), "stop:other-branch"),
+    # local edits there would block a commit coming in: stop before changing any repo
+    ((True, False, True, True, True), "stop:local-edits"),
+    ((True, True, True, False, True), "ok"),
 ])
 def test_repo_action(args, expected):
     assert repo_action(*args) == expected
 
 
 @pytest.mark.parametrize("args,expected", [
-    ((False, None, "h1"), "copy"),
-    ((False, "h1", "h1"), "skip"),          # same bytes already there: a rerun after a failed attach
-    ((False, "h2", "h1"), "stop:diverged"),  # dayshift's copy moved on: never overwrite it
-    ((True, "h1", "h1"), "stop:live"),       # already running there: a second copy would fork it
+    ((False, None, "h1", None), "copy"),
+    ((False, "h1", "h1", "h1"), "skip"),          # same bytes already there: a rerun after a failed attach
+    ((False, "p", "h1", "p"), "copy"),            # an interrupted copy: a prefix of the Mac file
+    ((False, "h2", "h1", "x"), "stop:diverged"),  # dayshift's copy moved on: never overwrite it
+    ((True, "h1", "h1", "h1"), "stop:live"),      # already running there: a second copy would fork it
 ])
 def test_remote_copy_action(args, expected):
     assert remote_copy_action(*args) == expected
@@ -119,12 +144,19 @@ def test_blocking_issues_from_finalize_report(tmp_path):
                          {"repo": "0-personal", "ok": True, "deleted_not_staged": ["gone.md"]}],
               "unversioned": [str(data / ".datacore/modules/m/lib/x.py")]}
     issues = blocking_issues(failed, data)
-    assert len(issues) == 3
+    assert len(issues) == 2                          # unversioned is judged by unversioned_blocks
     assert "2-datacore" in issues[0] and "push failed" in issues[0]
     assert "gone.md" in issues[1]
-    assert "x.py" in issues[2]
     assert blocking_issues({"error": "session not archived", "pushes": []}, data) == [
         "finalize: session not archived"]
+
+
+def test_unversioned_blocks_only_for_a_nested_repo_that_tracks_it():
+    data = Path("/d/Data")
+    assert unversioned_blocks(Path("/d/Data/.datacore/modules/m"), data, ignored=False) is True
+    assert unversioned_blocks(Path("/d/Data/.datacore/modules/m"), data, ignored=True) is False
+    assert unversioned_blocks(data, data, ignored=True) is False     # gitignored in the Data repo
+    assert unversioned_blocks(None, data, ignored=False) is False    # .claude/ behind a symlink, or gone
 
 
 def test_checkpoint_roundtrip(tmp_path):
@@ -185,6 +217,13 @@ def test_remote_preview_command_refuses_a_non_preview_target_inside_data(tmp_pat
     (data / "x.md").symlink_to(data / ".env")
     r = _sh(remote_preview_command(str(data / "x.md")), tmp_path)
     assert r.returncode != 0 and "KEY" not in r.stdout
+
+
+def test_remote_preview_command_accepts_uppercase_suffix(tmp_path):
+    data = tmp_path / "Data"
+    data.mkdir()
+    (data / "Shot.PNG").write_text("img")
+    assert _sh(remote_preview_command(str(data / "Shot.PNG")), tmp_path).stdout == "img"
 
 
 def test_opener():

@@ -51,49 +51,59 @@ SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
 
 SKIP_FLAGS = ("--allow-dangerously-skip-permissions", "--dangerously-skip-permissions")
 MODES = {"acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan", "default"}
-# Dropping these would loosen what the session may do, so they cannot be dropped.
-NARROWING_FLAGS = {"--settings", "--disallowedTools", "--disallowed-tools"}
+# Flags known not to affect what the session may do. Any other flag might
+# (--tools, --settings, --strict-mcp-config, --setting-sources, ...), and
+# leaving it behind could make dayshift's session wider, so it is refused.
+SAFE_TO_DROP = {"--chrome", "--no-chrome", "--resume", "-r", "--continue", "-c", "--fork-session",
+                "--session-id", "--model", "--verbose", "--debug", "-d", "--ide", "--name"}
 
 
 def permission_args(argv: list[str], mode: str | None) -> tuple[list[str], list[str]]:
     """The permission flags to start dayshift's session with, and the flags left behind.
 
-    Only the skip-permissions flags and the permission mode travel; everything
-    else on the Mac command line (--chrome, --resume, a first prompt, Mac paths)
-    is left behind and named. `ps` loses the original quoting, so values are
-    never carried — only these known flags are recognised. The mode is the one
-    the session was in (an in-session switch is not in argv), else the launch
-    mode. Raises ValueError for anything that would widen permissions.
+    Only the skip-permissions flag and the permission mode travel. Flags known
+    to be harmless to leave behind are named in `dropped`; positional words
+    (a first prompt, flag values -- `ps` loses their quoting) are ignored; any
+    other flag raises, as does a mode the Mac session could not have had. The
+    mode is the one the session was in (an in-session switch is not in argv),
+    else the launch mode.
     """
-    skips: list[str] = []
+    skip = False
     dropped: list[str] = []
     launch_mode = None
     args = argv[1:]
     i = 0
     while i < len(args):
         t = args[i]
+        flag = t.split("=", 1)[0]
         if t in SKIP_FLAGS:
-            if t not in skips:
-                skips.append(t)
+            skip = True
         elif t == "--permission-mode":
             if i + 1 < len(args) and not args[i + 1].startswith("-"):
                 launch_mode = args[i + 1]
                 i += 1
         elif t.startswith("--permission-mode="):
             launch_mode = t.split("=", 1)[1]
-        elif t.split("=", 1)[0] in NARROWING_FLAGS:
-            raise ValueError(f"{t.split('=', 1)[0]} restricts this session and cannot be carried "
-                             "to dayshift; start the session there by hand")
-        elif t.startswith("-") and t not in dropped:
-            dropped.append(t)
+        elif t.startswith("-"):
+            if flag not in SAFE_TO_DROP:
+                raise ValueError(f"{flag} may restrict this session and cannot be left behind; "
+                                 "start the session on dayshift by hand")
+            if t not in dropped:
+                dropped.append(t)
         i += 1
     mode = mode or launch_mode
-    keep = list(skips)
-    if mode:
-        if mode not in MODES:
-            raise ValueError(f"unknown permission mode {mode!r}")
-        if mode == "bypassPermissions" and not skips:
+    if mode and mode not in MODES:
+        raise ValueError(f"unknown permission mode {mode!r}")
+    if mode == "bypassPermissions":
+        if not skip and launch_mode != "bypassPermissions":
             raise ValueError("bypassPermissions was not available to the Mac session")
+        keep = (["--dangerously-skip-permissions"] if "--dangerously-skip-permissions" in argv
+                else ["--allow-dangerously-skip-permissions"] if skip else [])
+    else:
+        # --dangerously-skip-permissions could start dayshift in bypass while the Mac
+        # session was in another mode; the "available, not on" form cannot.
+        keep = ["--allow-dangerously-skip-permissions"] if skip else []
+    if mode:
         keep += ["--permission-mode", mode]
     return keep, dropped
 
@@ -106,17 +116,17 @@ def session_is_live(pid: int, cmdline_of: Callable[[int], str | None]) -> bool:
     return bool(cmd) and "claude" in cmd
 
 
-def repo_action(exists: bool, contains_sha: bool, on_branch: bool, can_ff: bool) -> str:
+def repo_action(exists: bool, contains_sha: bool, on_branch: bool, can_ff: bool,
+                local_edits: bool = False) -> str:
     """What `go` may do with one repo on dayshift.
 
     Only a fast-forward of the branch the session was on is done unasked;
     a missing repo, another checked-out branch or a diverged one stops the
     handover (no stash, reset, checkout or clone on anyone's behalf).
-    Uncommitted edits there do not block it: `git merge --ff-only` itself
-    refuses when an incoming commit touches a locally changed file and never
-    overwrites one. Observed 2026-10-28: dayshift's root repo carried a stray
-    package-lock.json edit that a clean-tree rule would have let block every
-    handover.
+    Uncommitted edits there block it only when an incoming commit touches one
+    of those files (`local_edits`), found before any repo is changed. Observed
+    2026-10-28: dayshift's root repo carried a stray package-lock.json edit that
+    a clean-tree rule would have let block every handover.
     """
     if not exists:
         return "stop:missing"
@@ -126,20 +136,27 @@ def repo_action(exists: bool, contains_sha: bool, on_branch: bool, can_ff: bool)
         return "ok"
     if not can_ff:
         return "stop:diverged"
+    if local_edits:
+        return "stop:local-edits"
     return "fast-forward"
 
 
-def remote_copy_action(live_there: bool, remote_hash: str | None, local_hash: str) -> str:
+def remote_copy_action(live_there: bool, remote_hash: str | None, local_hash: str,
+                       local_prefix_hash: str | None) -> str:
     """Whether `go` may put the Mac transcript on dayshift.
 
     A rerun (the attach failed, the terminal closed) must not overwrite a
     conversation that has carried on there, nor start a second copy of it.
+    `local_prefix_hash` hashes the Mac file's first N bytes, N being the size of
+    dayshift's copy: equal means an interrupted copy, safe to redo.
     """
     if live_there:
         return "stop:live"
     if remote_hash is None:
         return "copy"
-    return "skip" if remote_hash == local_hash else "stop:diverged"
+    if remote_hash == local_hash:
+        return "skip"
+    return "copy" if remote_hash == local_prefix_hash else "stop:diverged"
 
 
 def tmux_name(topic: str) -> str:
@@ -150,10 +167,9 @@ def tmux_name(topic: str) -> str:
 def blocking_issues(report: dict, data_root: Path) -> list[str]:
     """What in a wrap_up_mechanics finalize report would be missing on dayshift.
 
-    Code repos under 2-projects are checked separately (finalize lists their
-    files whether or not they are committed). Unversioned files outside the
-    Data tree (~/.zshrc) are reported, not blocking; inside it they are module
-    or DIP repos finalize does not push, so the session's work would stay here.
+    Code repos under 2-projects and unversioned files are judged separately:
+    finalize lists the first whether or not they are committed, and the second
+    mixes nested-repo files with ones git cannot see at all (unversioned_blocks).
     """
     issues: list[str] = []
     if report.get("error"):
@@ -164,12 +180,17 @@ def blocking_issues(report: dict, data_root: Path) -> list[str]:
         for f in p.get("deleted_not_staged") or []:
             issues.append(f"{p.get('repo')}/{f}: deleted this session but not committed — "
                           "commit the deletion or restore it, then rerun")
-    root = str(data_root) + os.sep
-    for f in report.get("unversioned") or []:
-        if str(f).startswith(root):
-            issues.append(f"{f}: in a repo finalize does not push (a module or DIP repo) — "
-                          "commit and push it there, then rerun")
     return issues
+
+
+def unversioned_blocks(toplevel: Path | None, data_root: Path, ignored: bool) -> bool:
+    """Whether an unversioned session file would be missing on dayshift.
+
+    Only when a nested repo (a module or DIP repo, which finalize does not push)
+    tracks it. A file ignored by git, behind the .claude symlink, deleted, or
+    outside every repo is something no commit can carry: reported, not blocking.
+    """
+    return toplevel is not None and toplevel != data_root and not ignored
 
 
 def write_checkpoint(session_id: str, claude_pid: int, mode: str | None, topic: str,
@@ -237,7 +258,8 @@ def remote_preview_command(path: str) -> str:
     return (f'r=$(readlink -f -- "$HOME/Data") || exit 3; '
             f'p=$(readlink -f -- {shlex.quote(path)}) || exit 3; [ -f "$p" ] || exit 3; '
             f'case "$p" in "$r"/*) ;; *) exit 3;; esac; '
-            f'case "$p" in {pats}) cat -- "$p";; *) exit 4;; esac')
+            f'l=$(printf %s "$p" | tr "[:upper:]" "[:lower:]"); '
+            f'case "$l" in {pats}) cat -- "$p";; *) exit 4;; esac')
 
 
 def opener(local: Path) -> list[str]:
@@ -299,6 +321,12 @@ def _die(lines: list[str]) -> None:
     sys.exit(1)
 
 
+def _existing_parent(p: Path) -> Path:
+    while not p.is_dir() and p != p.parent:
+        p = p.parent
+    return p
+
+
 def _transcript(session_id: str) -> Path | None:
     hits = sorted((Path.home() / ".claude" / "projects").glob(f"*/{session_id}.jsonl"))
     return hits[0] if hits else None
@@ -358,7 +386,7 @@ def cmd_checkpoint(a: argparse.Namespace) -> None:
     # Code repos: finalize lists their files whether committed or not. Block only
     # on what is really not pushed, and bring the repo along on dayshift.
     for f in report.get("skipped_project_repos") or []:
-        top = _git(Path(f).parent, "rev-parse", "--show-toplevel")
+        top = _git(_existing_parent(Path(f)), "rev-parse", "--show-toplevel")
         if not top:
             issues.append(f"{f}: not in a git repo")
             continue
@@ -368,6 +396,15 @@ def cmd_checkpoint(a: argparse.Namespace) -> None:
         e = _repo_entry(Path(top), issues)
         if e:
             repos[e["path"]] = e
+    unversioned_here: list[str] = []
+    for f in report.get("unversioned") or []:
+        d = _existing_parent(Path(f))
+        top = _git(d, "rev-parse", "--show-toplevel")
+        ignored = _run(["git", "check-ignore", "-q", "--", f], cwd=d).returncode == 0 if top else False
+        if unversioned_blocks(Path(top) if top else None, DATA, ignored):
+            issues.append(f"{f}: in {top}, a repo finalize does not push — commit and push it there, then rerun")
+        else:
+            unversioned_here.append(f)
     if issues:
         _die(issues)
 
@@ -378,7 +415,7 @@ def cmd_checkpoint(a: argparse.Namespace) -> None:
               if p.get("left_for_other_sessions")}
     print(json.dumps({"checkpoint": str(path), "repos": list(repos.values()),
                       "left_for_other_sessions": others,
-                      "unversioned_outside_data": report.get("unversioned") or []}, indent=2))
+                      "on_this_mac_only": unversioned_here}, indent=2))
     print(f"\nExit Claude, then run:\n\n    handover {sid}\n")
 
 
@@ -390,22 +427,29 @@ def _probe(r: dict) -> str:
               f"b=0; [ \"$(git rev-parse --abbrev-ref HEAD)\" = {q(r['branch'])} ] && b=1; "
               f"c=0; git merge-base --is-ancestor {q(r['sha'])} HEAD 2>/dev/null && c=1; "
               f"f=0; git merge-base --is-ancestor HEAD {q(r['sha'])} 2>/dev/null && f=1; "
-              f"echo $c $b $f")
+              f"e=0; git diff --name-only HEAD {q(r['sha'])} 2>/dev/null > /tmp/handover-in.$$; "
+              f"git status --porcelain --untracked-files=no | cut -c4- | grep -qxF -f /tmp/handover-in.$$ && e=1; "
+              f"rm -f /tmp/handover-in.$$; echo $c $b $f $e")
     out = _remote(script).stdout.strip()
     if out == "missing":
         return repo_action(False, False, False, False)
     try:
-        c, b, f = (x == "1" for x in out.split())
+        c, b, f, e = (x == "1" for x in out.split())
     except ValueError:
         return f"stop:unreadable ({out!r})"
-    return repo_action(True, c, b, f)
+    return repo_action(True, c, b, f, e)
 
 
-def _sha256(p: Path) -> str:
+def _sha256(p: Path, limit: int | None = None) -> str:
     h = hashlib.sha256()
+    left = p.stat().st_size if limit is None else limit
     with p.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
+        while left > 0:
+            chunk = f.read(min(1 << 20, left))
+            if not chunk:
+                break
             h.update(chunk)
+            left -= len(chunk)
     return h.hexdigest()
 
 
@@ -446,9 +490,17 @@ def _go(sid: str) -> None:
     remote_cwd = home + cwd[len(str(Path.home())):] if cwd.startswith(str(Path.home())) else f"{home}/Data"
 
     q = shlex.quote
-    live = _remote(f"pgrep -f -- {q('--resume ' + sid)} >/dev/null").returncode == 0
-    rh = _remote(f"sha256sum -- {q(remote_file)} 2>/dev/null | cut -d' ' -f1").stdout.strip() or None
-    copy = remote_copy_action(live, rh, _sha256(transcript))
+    # "[-]-resume" so the pattern does not match the shell running pgrep, whose
+    # own command line contains it (observed 2026-10-28: the plain pattern
+    # always matched, so every handover would have stopped as "already running").
+    live = _remote(f"pgrep -f -- {q('[-]-resume ' + sid)} >/dev/null").returncode == 0
+    remote = _remote(f"[ -f {q(remote_file)} ] && stat -c %s -- {q(remote_file)} && "
+                     f"sha256sum -- {q(remote_file)} | cut -d' ' -f1").stdout.split()
+    rh, prefix = None, None
+    if len(remote) == 2:
+        rh = remote[1]
+        prefix = _sha256(transcript, int(remote[0]))
+    copy = remote_copy_action(live, rh, _sha256(transcript), prefix)
     if copy == "stop:live":
         _die([f"this conversation is already running on {HOST} — attach with ds"])
     if copy == "stop:diverged":
@@ -470,13 +522,15 @@ def _go(sid: str) -> None:
 
     _remote(f"mkdir -p {q(remote_project)} ~/.datacore/state/handover")
     copies = [["scp", "-q", str(cp_path), f"{HOST}:.datacore/state/handover/"]]
-    if copy == "copy":
-        copies.insert(0, ["scp", "-q", str(transcript), f"{HOST}:{remote_project}/"])
-        if (transcript.parent / sid).is_dir():                # subagent transcripts
-            copies.append(["scp", "-qr", str(transcript.parent / sid), f"{HOST}:{remote_project}/"])
+    if (transcript.parent / sid).is_dir():                    # subagent transcripts
+        copies.append(["scp", "-qr", str(transcript.parent / sid), f"{HOST}:{remote_project}/"])
+    if copy == "copy":                                        # via .part: an interrupted copy is never mistaken for the real one
+        copies.insert(0, ["scp", "-q", str(transcript), f"{HOST}:{remote_file}.part"])
     for c in copies:
         if _run(c, timeout=600).returncode != 0:
             _die([f"copy failed: {' '.join(c)}"])
+    if copy == "copy" and _remote(f"mv -f -- {q(remote_file + '.part')} {q(remote_file)}").returncode != 0:
+        _die([f"could not move the copied conversation into place on {HOST}"])
 
     name = tmux_name(cp["topic"])
     if _remote(f"tmux has-session -t ={q(name)}").returncode == 0:
@@ -489,11 +543,14 @@ def _go(sid: str) -> None:
     start = _remote(f"tmux new -d -s {q(name)} -c {q(remote_cwd)} {q(claude)}")
     if start.returncode != 0:
         _die([f"tmux start failed: {start.stderr[-300:]}"])
-    time.sleep(4)
-    alive = _remote(f"tmux list-panes -t ={q(name)} -F '#{{pane_dead}}' 2>/dev/null").stdout.strip()
-    if alive != "0":
-        _die([f"claude exited right after starting on {HOST} (tmux session '{name}'); "
-              f"try by hand: ssh -t {HOST} {q(claude)}"])
+    # claude can take several seconds to fail ("No conversation found"); the
+    # checkpoint is only marked done once it has stayed up.
+    for _ in range(15):
+        time.sleep(1)
+        alive = _remote(f"tmux list-panes -t ={q(name)} -F '#{{pane_dead}}' 2>/dev/null").stdout.strip()
+        if alive != "0":
+            _die([f"claude exited right after starting on {HOST} (tmux session '{name}'); "
+                  f"try by hand: ssh -t {HOST} {q('cd ' + q(remote_cwd) + ' && ' + claude)}"])
     cp_path.rename(STATE / f"{sid}.done.json")
     print(f"resumed on {HOST} as tmux session '{name}'"
           + (f" (left behind: {', '.join(dropped)})" if dropped else ""))
