@@ -218,11 +218,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("command", choices=["seed", "status", "sweep"])
     ap.add_argument("--space", required=True, type=Path)
     ap.add_argument("--as", dest="as_", help="act as this principal (default: this host's actor)")
-    ap.add_argument("--day", required=True, help="YYYY-MM-DD tag, so a rerun cannot collide")
+    ap.add_argument("--day", required=True,
+                    help="YYYY-MM-DD tag, so a rerun cannot collide; 'today' is the UTC date "
+                         "(a schedule file need not escape a date command)")
     ap.add_argument("--assert-refusals", action="store_true",
                     help="also prove the policy still refuses the edge it forbids")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
+    if a.day == "today":
+        from datetime import datetime, timezone
+        a.day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return {"seed": cmd_seed, "status": cmd_status, "sweep": cmd_sweep}[a.command](a)
 
 
