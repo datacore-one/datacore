@@ -156,10 +156,12 @@ def argv(pl: Place, cmd: str) -> list[str]:
     if pl.kind == "local":
         return ["sh", "-c", cmd]
     if pl.kind == "local-user":
-        return ["sudo", "-n", "-u", pl.target, "-i", "sh", "-c", cmd]
+        # Not -i: the login shell re-parses the command and expands $(...) and $vars
+        # before sh sees them. -H plus sh -l gives the user's home and profile.
+        return ["sudo", "-n", "-u", pl.target, "-H", "sh", "-lc", cmd]
     if pl.kind == "host":
         if pl.k8s.get("run_as"):
-            return [*SSH, pl.target, f"sudo -n -u {pl.k8s['run_as']} -i sh -c {shlex.quote(cmd)}"]
+            return [*SSH, pl.target, f"sudo -n -u {pl.k8s['run_as']} -H sh -lc {shlex.quote(cmd)}"]
         return [*SSH, pl.target, cmd]
     cfg = os.environ.get("FLEET_KUBECONFIG") or os.path.expanduser(str(pl.k8s.get("kubeconfig") or ""))
     out = ["kubectl"] + (["--kubeconfig", cfg] if cfg else [])

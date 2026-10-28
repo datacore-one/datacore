@@ -115,10 +115,10 @@ def test_an_agent_living_as_a_user_on_another_machine_is_reached_as_that_user(ro
                  "  here:\n    ssh_alias: here\n    access: {}\n")
     local = fr.place("miles-host", p, local="here")
     assert local.kind == "local-user"
-    assert fr.argv(local, "id")[:5] == ["sudo", "-n", "-u", "miles", "-i"]
+    assert fr.argv(local, "id")[:6] == ["sudo", "-n", "-u", "miles", "-H", "sh"]
     remote = fr.place("miles-host", p, local="elsewhere")
     assert remote.kind == "host" and remote.target == "dayshift"
-    assert fr.argv(remote, "id")[-1].startswith("sudo -n -u miles -i")
+    assert fr.argv(remote, "id")[-1].startswith("sudo -n -u miles -H sh -lc")
 
 
 def test_every_place_a_machine_does_work(roster):
