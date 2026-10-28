@@ -43,6 +43,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+
+import fleet_reach
 import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -98,7 +100,10 @@ def _job_machines() -> dict:
     used = {j.machine for j in jobs}
     reg = yaml.safe_load((ROOT / ".datacore" / "registry" / "infrastructure.yaml").read_text())
     servers = {k: v for k, v in (reg.get("servers") or {}).items() if isinstance(v, dict)}
-    return {k: v for k, v in servers.items() if k in used or v.get("manifest_machine") in used}
+    here = fleet_reach.this_machine()
+    # A retired machine runs nothing; another workstation checks itself on its own run.
+    return {k: v for k, v in servers.items() if (k in used or v.get("manifest_machine") in used)
+            and not v.get("retired") and (v.get("kind") != "workstation" or k == here)}
 
 
 def _probe(name: str, cfg: dict, slug: str) -> tuple[str, str]:
@@ -108,19 +113,22 @@ def _probe(name: str, cfg: dict, slug: str) -> tuple[str, str]:
              f"core={access.get('runner') or '~/.datacore/v2-runner'}"]
     script = PROBE.replace("__SLUG__", slug).replace(
         "__DIRS__", " ".join(f"'{s}'" for s in dict.fromkeys(specs)))
-    alias = cfg.get("ssh_alias")
-    local = alias in (None, "", "-")
-    if local and not workstation:
-        return name, "UNREACHABLE the roster gives no ssh alias"
-    cmd = ["bash", "-c", script] if local else \
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", str(alias), script]
+    # Every place the machine runs code (roster, fleet_reach): its host, its k3s
+    # pod, or both (the box). Each place's checkouts are judged the same way.
+    out = []
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
-    except subprocess.TimeoutExpired:
-        return name, "UNREACHABLE timeout"
-    if r.returncode != 0 or "PROBE-OK" not in r.stdout:
-        return name, f"UNREACHABLE rc={r.returncode}"
-    return name, r.stdout
+        places = fleet_reach.places(name)
+    except fleet_reach.Unreachable as e:
+        return name, f"UNREACHABLE {e}"
+    for pl in places:
+        try:
+            r = fleet_reach.run_at(pl, script, timeout=90)
+        except subprocess.TimeoutExpired:
+            return name, f"UNREACHABLE timeout ({pl.kind})"
+        if r.returncode != 0 or "PROBE-OK" not in r.stdout:
+            return name, f"UNREACHABLE rc={r.returncode} ({pl.kind})"
+        out.append(r.stdout)
+    return name, "\n".join(out)
 
 
 @pytest.mark.production

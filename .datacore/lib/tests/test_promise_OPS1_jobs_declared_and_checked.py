@@ -21,6 +21,8 @@ import time
 from pathlib import Path
 
 import pytest
+
+import fleet_reach
 import yaml
 
 import job_verify
@@ -120,13 +122,17 @@ def _cron_jobs(text: str) -> list[str]:
 
 @pytest.mark.production
 def test_every_box_cron_job_is_declared_and_verified_daily():
-    try:
-        out = subprocess.run(SSH + ["winston", "crontab -l"], capture_output=True,
-                             text=True, timeout=30)
-    except subprocess.TimeoutExpired:
-        pytest.fail("could not read the box crontab (timeout) -- could not tell is not a pass")
-    assert out.returncode == 0, f"could not read the box crontab: {out.stderr[-200:]}"
-    lines = _cron_jobs(out.stdout)
+    # The box schedules jobs in two places (roster, fleet_reach): Winston's k3s pod
+    # (its supercronic file) and the node's own crontab (backups, the fleet probe).
+    lines = []
+    for pl in fleet_reach.places("box"):
+        cmd = fleet_reach.schedule_listing(pl) if pl.kind == "pod" else "crontab -l"
+        try:
+            out = fleet_reach.run_at(pl, cmd, timeout=30)
+        except subprocess.TimeoutExpired:
+            pytest.fail(f"could not read the box schedule ({pl.kind}, timeout) -- could not tell is not a pass")
+        assert out.returncode == 0, f"could not read the box schedule ({pl.kind}): {out.stderr[-200:]}"
+        lines += _cron_jobs(out.stdout)
     assert any("job_verify" in l for l in lines), "the verifier is not scheduled on the box"
     missing = _undeclared(lines, "box")
     assert missing == [], "box jobs scheduled but not in the manifest:\n" + "\n".join(missing)

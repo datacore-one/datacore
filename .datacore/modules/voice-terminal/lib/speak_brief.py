@@ -103,14 +103,17 @@ def find_journal(date_str=None):
         print(f"No journal found for {date_str}")
         sys.exit(1)
 
+    # Today's journal only. Falling back to yesterday's spoke yesterday's sleep
+    # and readiness as this morning's (MEM-44); an older briefing is asked for
+    # by date.
     today = date.today()
-    for d in [today, today - timedelta(days=1)]:
-        p = JOURNAL_DIR / f"{d.isoformat()}.md"
-        if p.exists():
-            print(f"Using journal: {d.isoformat()}")
-            return p
+    p = JOURNAL_DIR / f"{today.isoformat()}.md"
+    if p.exists():
+        print(f"Using journal: {today.isoformat()}")
+        return p
 
-    print("No journal found for today or yesterday.")
+    print(f"No journal for today ({today.isoformat()}) yet: nothing spoken, "
+          "so yesterday's readings are not presented as today's.")
     sys.exit(1)
 
 

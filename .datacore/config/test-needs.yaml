@@ -336,10 +336,18 @@ tests:
     only: [test_agent_does_not_reach_and_writes_it_up]
     needs: [agent]
     why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_AGT12_delegated_task_is_done.py
+    only: [test_what_the_chief_of_staff_delegated_this_week_was_done_by_the_agent]
+    needs: [file:.datacore/registry/principals.yaml, file:install.yaml]
+    why: who the chief of staff is comes from the install's registry, the firm and system spaces from its space roster
   - test: .datacore/lib/tests/test_promise_AGT11_every_unattended_run_guarded.py
     only: [test_a_real_unattended_run_is_stopped_from_discarding_work]
     needs: [agent]
     why: a real unattended claude -p run (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_AGT13_round_robin_handoff.py
+    only: [test_every_pair_of_agents_allowed_to_hand_work_over_has_a_fresh_completed_round]
+    needs: [file:.datacore/registry/principals.yaml, file:.datacore/config/approvals_policy.local.yaml]
+    why: which agents may hand work to which is the install's own registry and policy; reads its live ledgers
   - test: .datacore/lib/tests/test_promise_MEM_02_irreversible_needs_trial_run.py
     only: [test_agent_shows_a_one_item_trial_before_mass_cancel]
     needs: [agent]

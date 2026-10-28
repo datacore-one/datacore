@@ -768,10 +768,16 @@ def main() -> int:
         # route is honoured only when it names a framing that exists; an
         # unknown one falls back rather than dispatching with no framing at all.
         declared = (item.payload or {}).get("route")
+        check = (item.payload or {}).get("check")
         if declared in ROUTE_FRAMING:
             route, why = declared, "route declared by the item's creator"
         else:
             route, why = classify_route(title)
+            # A task that carries its own check names a result someone can
+            # verify: it is to be carried out. Defaulting it to "research" framed
+            # Data to report on an approved post instead of posting it (AGT-12).
+            if check and why.endswith("default route"):
+                route, why = "do", "a delegated task with a check is carried out (no route declared)"
 
         if effects:
             # Gated at creation against a grant; that is not consent to run it
@@ -779,8 +785,6 @@ def main() -> int:
             print(f"REFUSED  [{route}] {title[:70]} -- side effects {effects}, needs a human")
             refused += 1
             continue
-
-        check = (item.payload or {}).get("check")
 
         if not args.execute:
             gate = f"check: {check}" if check else "NO CHECK -> cannot auto-complete"

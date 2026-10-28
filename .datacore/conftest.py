@@ -78,6 +78,17 @@ def _isolated_ledger_keys(tmp_path_factory, monkeypatch):
     except Exception:  # noqa: BLE001 -- suites that never import the ledger are unaffected
         return
     root = tmp_path_factory.mktemp("dc-keys-root")
+    # Processes a test starts (ledger_cli.py and the like) read this; the patches
+    # below reach only this process.
+    monkeypatch.setenv("DATACORE_KEYS_DIR", str(root / ".datacore" / "keys"))
+    # A host declares its actor and its signing in identity.env (dayshift signs).
+    # Tests and the processes they start would inherit both and sign where they
+    # expect the default; they get an empty identity instead. A test that needs
+    # an actor or signing sets it itself.
+    ident = root / "identity.env"
+    ident.write_text("")
+    monkeypatch.setenv("DATACORE_IDENTITY_FILE", str(ident))
+    monkeypatch.delenv("DATACORE_LEDGER_SIGN", raising=False)
     monkeypatch.setattr(keys, "DATACORE_ROOT", root)
     monkeypatch.setattr(keys, "DEFAULT_KEYS_DIR", root / ".datacore" / "keys")
     monkeypatch.setattr(keys, "DEFAULT_REGISTRY_PATH", root / ".datacore" / "keys" / "registry.yaml")

@@ -43,6 +43,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+import fleet_reach
 import yaml
 
 TESTS = Path(__file__).resolve().parent
@@ -50,7 +52,7 @@ ROOT = TESTS.parents[2]
 DC = ROOT / ".datacore"
 MANIFEST = DC / "lib" / "jobs" / "manifest.yaml"
 PRODUCERS = re.compile(r"cos_morning\.sh|winston_audio\.sh|winston_speak")
-HOSTS = ("winston", "nightshift", "hermes", "plur-claw")
+HOSTS = ("box", "nightshift", "hermes", "plur-claw")   # roster: host or k3s pod (fleet_reach)
 CATCHUP_ENTRY = re.compile(r"cos_morning_run\.py\s+catch-up\b")
 MARKER = re.compile(r"#\s*datacore-job:([\w.-]+)")
 CATCHUP_CODE = DC / "modules" / "chief-of-staff" / "server" / "lib" / "cos_morning_run.py"
@@ -221,16 +223,22 @@ SCAN = ("crontab -l 2>/dev/null | grep -v '^#' | grep -E 'cos_morning|winston_au
 def test_no_host_schedules_audio_outside_the_manifest():
     found, unreachable = [], []
     for h in HOSTS:
-        try:
-            p = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", h, SCAN],
-                               capture_output=True, text=True, timeout=30)
-        except subprocess.TimeoutExpired:
-            unreachable.append(h)
-            continue
-        if p.returncode == 255:
-            unreachable.append(h)
-            continue
-        found += [f"{h}: {l.strip()}" for l in p.stdout.splitlines() if l.strip()]
+        for pl in fleet_reach.places(h):
+            scan = SCAN if pl.kind != "pod" else SCAN.replace("crontab -l 2>/dev/null", fleet_reach.schedule_listing(pl), 1)
+            try:
+                p = fleet_reach.run_at(pl, scan, timeout=30)
+            except subprocess.TimeoutExpired:
+                unreachable.append(f"{h} ({pl.kind})")
+                continue
+            if p.returncode != 0:   # SCAN ends in `true`: any failure is the transport's
+                unreachable.append(f"{h} ({pl.kind})")
+                continue
+            # Labelled by the machine's ssh alias, as second_senders() matches the
+            # declared catch-up's host (a 2026-10-27 re-point labelled by machine
+            # name, so the excused catch-up stopped matching).
+            from jobs.manifest import ssh_alias
+            label = ssh_alias(h) or h
+            found += [f"{label}: {l.strip()}" for l in p.stdout.splitlines() if l.strip()]
     mac = subprocess.run(["bash", "-c", "grep -lE 'cos_morning|winston_audio|winston_speak|speak_brief|today_orchestrator' "
                           "~/Library/LaunchAgents/*.plist 2>/dev/null; crontab -l 2>/dev/null | "
                           "grep -E 'cos_morning|winston_audio|winston_speak|speak_brief|today_orchestrator'; true"],

@@ -29,7 +29,7 @@ set -eu
 NS=${NS:-firm}
 DEST=${DEST:-/var/backups/fleet}
 KEEP=${KEEP:-7}
-FREE_FLOOR_PCT=${FREE_FLOOR_PCT:-20}
+FREE_FLOOR_PCT=${FREE_FLOOR_PCT:-15}  # k3s evicts at 5% free and reclaims to 15%; 20 skipped every agent on a merely busy box
 STATE_TOOL=${STATE_TOOL:-/usr/local/sbin/agent-state}
 export KUBECONFIG=${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}
 K="kubectl -n $NS"
@@ -64,6 +64,14 @@ free_after_kb() {  # free_after_kb NEED_KB -> free KB left after writing NEED_KB
 make_room() {  # make_room AGENT: drop its oldest backups until the next copy fits above the floor
     newest=$(ls -1t "$DEST/$1"/*.tar.gz 2>/dev/null | head -1)
     need=0; [ -n "$newest" ] && need=$(du -k "$newest" | cut -f1)
+    # Drop nothing unless dropping every older backup would be enough: a copy
+    # lost and none made is worse than either (2026-10-27).
+    droppable=0
+    for old in $(ls -1t "$DEST/$1"/*.tar.gz 2>/dev/null | tail -n +2); do
+        droppable=$((droppable + $(du -k "$old" | cut -f1)))
+    done
+    set -- "$1" $(free_after_kb "$need")
+    [ $(($2 + droppable)) -ge "$3" ] || return 1
     while :; do
         set -- "$1" $(free_after_kb "$need")
         [ "$2" -ge "$3" ] && return 0

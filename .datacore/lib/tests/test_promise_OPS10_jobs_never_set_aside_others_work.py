@@ -55,6 +55,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+
+import fleet_reach
 import yaml
 
 HERE = Path(__file__).resolve().parent
@@ -517,24 +519,28 @@ echo PROBE-OK'''
 def _always_on() -> dict:
     reg = yaml.safe_load((ROOT / ".datacore" / "registry" / "infrastructure.yaml").read_text())
     servers = {k: v for k, v in (reg.get("servers") or {}).items() if isinstance(v, dict)}
-    return {k: v for k, v in servers.items() if v.get("kind") != "workstation"}
+    return {k: v for k, v in servers.items() if v.get("kind") != "workstation" and not v.get("retired")}
 
 
 def _probe(name: str, cfg: dict) -> tuple[str, str]:
     access = cfg.get("access") or {}
     dirs = [access.get("data_root") or "~/Data", access.get("runner") or "~/.datacore/v2-runner"]
     script = PROBE.replace("__DIRS__", " ".join(f"'{d}'" for d in dict.fromkeys(dirs)))
-    alias = cfg.get("ssh_alias")
-    if alias in (None, "", "-"):
-        return name, "UNREACHABLE the roster gives no ssh alias"
+    # Every place the machine works (roster, fleet_reach): its host, its k3s pod, or both.
+    out = []
     try:
-        r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", str(alias), script],
-                           capture_output=True, text=True, timeout=60)
-    except subprocess.TimeoutExpired:
-        return name, "UNREACHABLE timeout"
-    if r.returncode != 0 or "PROBE-OK" not in r.stdout:
-        return name, f"UNREACHABLE rc={r.returncode}"
-    return name, r.stdout
+        places = fleet_reach.places(name)
+    except fleet_reach.Unreachable as e:
+        return name, f"UNREACHABLE {e}"
+    for pl in places:
+        try:
+            r = fleet_reach.run_at(pl, script, timeout=60)
+        except subprocess.TimeoutExpired:
+            return name, f"UNREACHABLE timeout ({pl.kind})"
+        if r.returncode != 0 or "PROBE-OK" not in r.stdout:
+            return name, f"UNREACHABLE rc={r.returncode} ({pl.kind})"
+        out.append(r.stdout)
+    return name, "\n".join(out)
 
 
 @pytest.mark.production
