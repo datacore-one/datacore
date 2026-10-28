@@ -397,6 +397,21 @@ jobs:
         # the point.
         max_age_hours: 3
 
+  - name: dayshift-phase1-cycle
+    # The owner's session server never sleeps, so it runs the cycle on a clock
+    # like the box, not on join like the mac. Until 2026-10-28 it had no
+    # schedule at all: its task lists did not exist and its copies fell
+    # hundreds of commits behind without any alert.
+    machine: dayshift
+    schedule: "cron 25 * * * * on dayshift"
+    cmd: "~/Data/.datacore/lib/ledger_phase1_cycle.sh"   # dayshift
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/phase1-cycle-status.txt"
+        check: regex
+        arg: "^OK phase1-cycle"
+        max_age_hours: 3
+
   # ── /today registration wiring ─────────────────────────────────────────
   # Every briefing section must have exactly one producer, and every agent a
   # module names must exist. On 2026-09-08 `briefing.yaml` listed eight
