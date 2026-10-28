@@ -23,6 +23,7 @@ overrides the roster's kubeconfig (the box itself uses k3s's own).
 from __future__ import annotations
 
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -42,7 +43,7 @@ class Unreachable(Exception):
 @dataclass
 class Place:
     machine: str
-    kind: str                       # local | host | pod
+    kind: str                       # local | local-user | host | pod
     target: str = ""                # ssh alias, or deploy/<name>
     k8s: dict = field(default_factory=dict)
 
@@ -87,6 +88,17 @@ def place(machine: str, path: Path | None = None, host: bool = False, local: str
     k8s = (e.get("access") or {}).get("k8s") or {}
     if k8s.get("deployment") and not host:
         return Place(machine, "pod", f"deploy/{k8s['deployment']}", dict(k8s))
+    # An agent living as a Unix user on another machine (Miles on dayshift,
+    # 2026-10-28): run as that user there -- sudo -u from that machine, ssh to it
+    # from anywhere else.
+    acc = e.get("access") or {}
+    if acc.get("run_as") and acc.get("host_machine"):
+        here = local if local is not None else _local_name(entries)
+        user = str(acc["run_as"])
+        if acc["host_machine"] == here:
+            return Place(machine, "local-user", user)
+        alias = str(e.get("ssh_alias") or acc["host_machine"])
+        return Place(machine, "host", alias, {"run_as": user})
     if machine == (local if local is not None else _local_name(entries)):
         return Place(machine, "local")
     alias = str(e.get("ssh_alias") or machine)
@@ -143,7 +155,11 @@ def run_at(pl: Place, cmd: str, timeout: int = 60) -> subprocess.CompletedProces
 def argv(pl: Place, cmd: str) -> list[str]:
     if pl.kind == "local":
         return ["sh", "-c", cmd]
+    if pl.kind == "local-user":
+        return ["sudo", "-n", "-u", pl.target, "-i", "sh", "-c", cmd]
     if pl.kind == "host":
+        if pl.k8s.get("run_as"):
+            return [*SSH, pl.target, f"sudo -n -u {pl.k8s['run_as']} -i sh -c {shlex.quote(cmd)}"]
         return [*SSH, pl.target, cmd]
     cfg = os.environ.get("FLEET_KUBECONFIG") or os.path.expanduser(str(pl.k8s.get("kubeconfig") or ""))
     out = ["kubectl"] + (["--kubeconfig", cfg] if cfg else [])

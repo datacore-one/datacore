@@ -106,6 +106,21 @@ def test_a_pods_container_readiness_is_asked_of_the_cluster(roster, tmp_path):
     assert fr.container_ready(pl, "nope") is None
 
 
+def test_an_agent_living_as_a_user_on_another_machine_is_reached_as_that_user(roster, tmp_path):
+    # Miles runs on dayshift as the Unix user `miles` (2026-10-28), not on the
+    # old nightshift host: from dayshift itself that is sudo -u, elsewhere ssh.
+    p = tmp_path / "infrastructure.yaml"
+    p.write_text(p.read_text() + "  miles-host:\n    ssh_alias: dayshift\n"
+                 "    access: {actor: miles, host_machine: here, run_as: miles}\n"
+                 "  here:\n    ssh_alias: here\n    access: {}\n")
+    local = fr.place("miles-host", p, local="here")
+    assert local.kind == "local-user"
+    assert fr.argv(local, "id")[:5] == ["sudo", "-n", "-u", "miles", "-i"]
+    remote = fr.place("miles-host", p, local="elsewhere")
+    assert remote.kind == "host" and remote.target == "dayshift"
+    assert fr.argv(remote, "id")[-1].startswith("sudo -n -u miles -i")
+
+
 def test_every_place_a_machine_does_work(roster):
     assert [p.kind for p in fr.places("box", roster)] == ["pod", "host"]
     assert [p.kind for p in fr.places("hermes", roster)] == ["pod"]
