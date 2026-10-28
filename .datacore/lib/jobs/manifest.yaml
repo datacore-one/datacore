@@ -896,6 +896,20 @@ jobs:
   # tagged `# datacore-job:sync-traces` on every host and the box's entry carries
   # that exact name. sync_traces.sh stamps one line per run into
   # ~/.datacore/state/sync-traces.last (the redirected log is not the artifact).
+  # Dayshift, the owner's day machine, keeps its own AI session transcripts
+  # nightly too (MEM-67; owner 2026-10-28). Its only declared job: dayshift
+  # stays the owner's, and no agent duty runs under the owner's user here.
+  - name: dayshift-sync-traces
+    machine: dayshift
+    schedule: "20 0 * * *"
+    cmd: "TRACES_DEST=~/.datacore/traces/claude-code bash ~/Data/.datacore/lib/sync_traces.sh >> ~/.datacore/state/sync-traces.log 2>&1"
+    on_fail: log
+    artifacts:
+      - path: "~/.datacore/state/sync-traces.last"
+        check: regex
+        arg: 'sync_traces: \d+ transcript'
+        max_age_hours: 26
+
   - name: sync-traces
     machine: box
     schedule: "10 0 * * *"
