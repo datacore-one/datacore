@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+import fleet_reach
+
 LIB = Path(__file__).resolve().parents[1]
 DC = LIB.parent
 HOST = DC / "modules" / "tab-capture" / "lib" / "host.py"
@@ -106,10 +108,14 @@ def test_the_same_issue_on_two_unsynced_hosts_is_one_task(tmp_path):
 
 
 def _ssh(host: str, cmd: str) -> str:
-    r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, cmd],
-                       capture_output=True, text=True, timeout=30)
-    assert r.returncode == 0, f"could not read {host}: {r.stderr.strip()[:200]}"
-    return r.stdout
+    """Sum of the probe's count at every place the machine runs (roster: host, user or k3s pod)."""
+    total = 0
+    for pl in fleet_reach.places(host):
+        probe = cmd if pl.kind != "pod" else cmd.replace("crontab -l", fleet_reach.schedule_listing(pl))
+        r = fleet_reach.run_at(pl, probe, timeout=30)
+        assert r.returncode == 0, f"could not read {host} ({pl.kind}): {r.stderr.strip()[:200]}"
+        total += int(r.stdout.strip().splitlines()[-1] or 0) if r.stdout.strip() else 0
+    return str(total)
 
 
 @pytest.mark.production
@@ -119,7 +125,7 @@ def test_github_triage_is_scheduled_once_in_the_fleet():
              "  s=${t%.timer}.service; "
              "  if systemctl cat \"$s\" 2>/dev/null | grep -q triage_github && systemctl is-enabled \"$t\" >/dev/null 2>&1; "
              "  then n=$((n+1)); fi; done; echo $n")
-    counts = {h: int(_ssh(h, probe).strip() or 0) for h in ("nightshift", "winston", "hermes")}
+    counts = {h: int(_ssh(h, probe).strip() or 0) for h in ("nightshift", "box", "hermes", "plur-claw")}
     local = subprocess.run(["bash", "-c", "crontab -l 2>/dev/null | grep -v '^\\s*#' | grep -c triage_github; "
                             "grep -ls triage_github ~/Library/LaunchAgents/*.plist 2>/dev/null | wc -l"],
                            capture_output=True, text=True, timeout=30).stdout.split()

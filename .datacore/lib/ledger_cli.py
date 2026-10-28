@@ -227,9 +227,29 @@ def cmd_stopped(args: argparse.Namespace) -> None:
         if stop["hwm"] is None or tail < stop["hwm"]:
             stopped.append(f"{_shown(log)}: appends stopped since {stop.get('at', '?')} -- the log "
                            f"ends at seq {tail}, this machine wrote seq {stop['hwm']}")
+    # A log the hub stops admitting is stopped too: nothing written after the
+    # refused event counts. On 2026-10-28 Winston's log stopped at a retired
+    # `task.create` written by a stale library, and this command said nothing.
+    stopped.extend(_admission_refusals(space))
     for line in stopped:
         print(line)
     sys.exit(3 if stopped else 0)
+
+
+def _admission_refusals(space: Path) -> list[str]:
+    """One line per log hub admission stops, with the reason; [] without a hub."""
+    from ledger.log import read_events
+    from ledger import hub
+    try:
+        events = list(read_events(space))
+        cfg = hub.require_config_or_no_hub(space, events, None)
+        if cfg is None:
+            return []
+        refused = hub.admit(events, hub.authority(space, cfg, None), now_ms=hub._wall_ms()).refused
+    except Exception as exc:  # noqa: BLE001 -- unreadable admission is not "all clear"
+        return [f"{_shown(space)}: hub admission could not be read ({type(exc).__name__}: {exc})"]
+    return [f"{log}.jsonl: hub admission stops this log at {why} -- nothing written after it counts"
+            for log, why in sorted(refused.items())]
 
 
 def cmd_items(args: argparse.Namespace) -> None:

@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+import fleet_reach
+
 LIB = Path(__file__).resolve().parent.parent
 ROOT = LIB.parent.parent
 sys.path.insert(0, str(LIB))
@@ -90,12 +92,16 @@ def test_the_same_scan_twice_on_one_host_is_one_task(tmp_path, monkeypatch):
     assert len(_ids_for((space / "5-evals/org/inbox.org").read_text(), "gh-plur-42")) == 1
 
 
-def _ssh(host: str, cmd: str) -> str:
-    r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, cmd],
-                       capture_output=True, text=True, timeout=40)
-    if r.returncode not in (0, 1):
-        pytest.fail(f"could not read {host} (ssh exit {r.returncode}): could not tell is not a pass")
-    return r.stdout
+def _ssh(host: str, cmd: str) -> list[str]:
+    """The probe's output at every place the machine runs (roster: host, user or k3s pod)."""
+    outs = []
+    for pl in fleet_reach.places(host):
+        probe = cmd if pl.kind != "pod" else cmd.replace("crontab -l", fleet_reach.schedule_listing(pl))
+        r = fleet_reach.run_at(pl, probe, timeout=40)
+        if r.returncode not in (0, 1):
+            pytest.fail(f"could not read {host} ({pl.kind}, exit {r.returncode}): could not tell is not a pass")
+        outs.append(r.stdout)
+    return outs
 
 
 @pytest.mark.production
@@ -106,9 +112,10 @@ def test_github_triage_is_scheduled_exactly_once_in_the_fleet():
             "(systemctl is-enabled $n.timer 2>/dev/null; systemctl --user is-enabled $n.timer 2>/dev/null)"
             " | grep -q enabled && echo TIMER $n; done")
     schedulers = []
-    for host in ("nightshift", "winston"):
-        out = _ssh(host, read).split("\n")
-        crons = int(out[0].strip() or 0) if out and out[0].strip().isdigit() else 0
-        schedulers += [f"{host}:cron"] * crons
-        schedulers += [f"{host}:{line}" for line in out[1:] if line.startswith("TIMER")]
+    for host in ("nightshift", "box", "hermes", "plur-claw"):
+        for text in _ssh(host, read):
+            out = text.split("\n")
+            crons = int(out[0].strip() or 0) if out and out[0].strip().isdigit() else 0
+            schedulers += [f"{host}:cron"] * crons
+            schedulers += [f"{host}:{line}" for line in out[1:] if line.startswith("TIMER")]
     assert len(schedulers) == 1, f"triage_github.sh is scheduled {len(schedulers)} times: {schedulers}"

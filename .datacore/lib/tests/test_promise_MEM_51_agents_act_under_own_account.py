@@ -17,6 +17,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
+import fleet_reach
 import yaml
 
 from actor_identity import email_hash
@@ -24,7 +26,8 @@ from actor_identity import email_hash
 ROOT = Path(__file__).resolve().parents[3]
 REGISTRY = ROOT / ".datacore" / "registry" / "principals.yaml"
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
-HOST_OF = {"winston": "winston", "miles": "nightshift", "tris": "hermes", "data": "plur-claw"}
+# The roster machine each agent works on; fleet_reach finds its host or k3s pod.
+HOST_OF = {"winston": "box", "miles": "nightshift", "tris": "hermes", "data": "plur-claw"}
 
 
 def _principals(doc=None):
@@ -65,7 +68,7 @@ def test_the_check_catches_an_agent_on_the_owners_account():
 
 
 def _remote(host: str, cmd: str) -> str:
-    r = subprocess.run([*SSH, host, cmd], capture_output=True, text=True, timeout=45)
+    r = fleet_reach.run(host, cmd, timeout=45)
     assert r.returncode in (0, 1), f"{host}: could not read ({r.stderr.strip()[-160:]})"
     return (r.stdout + r.stderr).strip()
 

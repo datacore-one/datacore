@@ -3,7 +3,7 @@ honorifics, and runs about two and a half minutes.
 
 Kind: deterministic + production contract (read-only ssh to the box).
 Only Winston sends the audio briefing (owner decision), so its script writer
-is the thing tested: .datacore/lib/winston_speak.py.
+is the thing tested: winston_speak.py (chief-of-staff server/lib; the box installs it in .datacore/lib).
   * the spoken-script instruction (_SPOKEN_PROMPT, the path used every
     morning) asks for a plain "Good morning" opening, forbids honorifics, and
     targets about 2.5 minutes (a word budget whose midpoint is 300-450 words
@@ -25,8 +25,13 @@ from pathlib import Path
 
 import pytest
 
+import fleet_reach
+
 LIB = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LIB))
+# Winston's scripts live in the chief-of-staff module (server/lib), the copy git holds;
+# the box's setup installs them into .datacore/lib. Judge the source, not an install.
+sys.path.insert(0, str(LIB.parent / "modules" / "chief-of-staff" / "server" / "lib"))
 
 HONORIFICS = re.compile(r"\b(sir|ma'?am|madam|mister|boss|your (honou?r|excellency|majesty))\b", re.I)
 
@@ -65,8 +70,8 @@ def test_the_last_audio_briefing_lasts_about_two_and_a_half_minutes():
     cmd = ("f=/tmp/winston_brief.ogg; [ -f $f ] && [ $(( $(date +%s) - $(stat -c %Y $f) )) -lt 93600 ] "
            "&& ffprobe -v error -show_entries format=duration -of csv=p=0 $f")
     try:
-        p = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "winston", cmd],
-                           capture_output=True, text=True, timeout=40)
+        # Winston's morning run happens in his k3s pod's cron container (roster, fleet_reach).
+        p = fleet_reach.run("box", cmd, timeout=40)
     except subprocess.TimeoutExpired:
         pytest.fail("could not tell: the box did not answer")
     out = p.stdout.strip()

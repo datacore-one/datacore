@@ -24,7 +24,7 @@ done
 # The code tree each host runs. Satellites run from a separate runner checkout;
 # the box (winston) has none and runs straight from ~/Data, so for it the
 # "runner" is ~/Data itself -- the same refresh and drift check then apply.
-if [ "$HOST" = box ]; then
+if [ "$HOST" = box ] || [ "$HOST" = dayshift ]; then  # dayshift: a workstation runs its own working copy, no runner
   RUNNER="${DATACORE_RUNNER:-$HOME/Data}"
 else
   RUNNER="${DATACORE_RUNNER:-$HOME/.datacore/v2-runner}"
@@ -138,6 +138,13 @@ case "$PROFILE" in
     # --alert command: Tris's machine sends its own alerts through its own bot
     # (owner decision 2026-09-30): ~/.datacore/alerts.yaml runs agent_alert.py --bot tris-telegram-bot.
     CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine $HOST --manifest $LIB/jobs/manifest.yaml --alert command >> $STATE/job_verify.log 2>&1")
+    ;;
+  dayshift)
+    # The owner's session server never sleeps, so it cycles on a clock like the
+    # box rather than on join like the mac. It had no schedule until 2026-10-28:
+    # no task lists, and copies hundreds of commits behind with no alert.
+    CRON_KEYS=(phase1-cycle)
+    CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
     ;;
 esac
 

@@ -73,3 +73,26 @@ def test_an_agent_is_skipped_and_left_running_when_no_room_can_be_made(tmp_path)
     assert "not enough disk" in r.stdout
     assert (dest / "winston/20261020T010000Z.tar.gz").exists(), "the newest backup is never dropped"
     assert "scale" not in (calls.read_text() if calls.exists() else "")
+
+
+def test_no_backup_is_dropped_when_dropping_cannot_make_room(tmp_path):
+    # 2026-10-27 on the box: the guard dropped Data's and Tris's older backups,
+    # then skipped them anyway -- a copy lost and none made. Two 10 MB backups,
+    # 75 MB used elsewhere: even with the older one gone the next copy leaves 5%.
+    dest, calls, env = setup(tmp_path, [10, 10], total_mb=100, other_used_mb=75)
+    r = subprocess.run(["sh", str(TOOL), "winston"], capture_output=True, text=True, env=env)
+    assert r.returncode != 0
+    assert "not enough disk" in r.stdout
+    left = sorted(p.name for p in (dest / "winston").glob("*.tar.gz"))
+    assert left == ["20261020T010000Z.tar.gz", "20261021T010000Z.tar.gz"], left
+    assert "dropping" not in r.stdout
+
+
+def test_the_default_floor_sits_above_the_kubelets_eviction_threshold_not_far_above_it():
+    # k3s's kubelet evicts at 5% free and then reclaims 10 points more, to 15%
+    # (configz on the box, 2026-10-27). A floor far above that skips every agent
+    # every night on a box that is merely busy (2026-10-27: 17% free, all three
+    # skipped); one under 15% lets a backup land in the eviction zone.
+    src = TOOL.read_text()
+    floor = int(src.split("FREE_FLOOR_PCT=${FREE_FLOOR_PCT:-")[1].split("}")[0])
+    assert floor == 15, floor

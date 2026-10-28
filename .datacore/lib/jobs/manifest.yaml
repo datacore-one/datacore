@@ -397,6 +397,21 @@ jobs:
         # the point.
         max_age_hours: 3
 
+  - name: dayshift-phase1-cycle
+    # The owner's session server never sleeps, so it runs the cycle on a clock
+    # like the box, not on join like the mac. Until 2026-10-28 it had no
+    # schedule at all: its task lists did not exist and its copies fell
+    # hundreds of commits behind without any alert.
+    machine: dayshift
+    schedule: "cron 25 * * * * on dayshift"
+    cmd: "~/Data/.datacore/lib/ledger_phase1_cycle.sh"   # dayshift
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/phase1-cycle-status.txt"
+        check: regex
+        arg: "^OK phase1-cycle"
+        max_age_hours: 3
+
   # ── /today registration wiring ─────────────────────────────────────────
   # Every briefing section must have exactly one producer, and every agent a
   # module names must exist. On 2026-09-08 `briefing.yaml` listed eight
@@ -896,6 +911,20 @@ jobs:
   # tagged `# datacore-job:sync-traces` on every host and the box's entry carries
   # that exact name. sync_traces.sh stamps one line per run into
   # ~/.datacore/state/sync-traces.last (the redirected log is not the artifact).
+  # Dayshift, the owner's day machine, keeps its own AI session transcripts
+  # nightly too (MEM-67; owner 2026-10-28). Its only declared job: dayshift
+  # stays the owner's, and no agent duty runs under the owner's user here.
+  - name: dayshift-sync-traces
+    machine: dayshift
+    schedule: "20 0 * * *"
+    cmd: "TRACES_DEST=~/.datacore/traces/claude-code bash ~/Data/.datacore/lib/sync_traces.sh >> ~/.datacore/state/sync-traces.log 2>&1"
+    on_fail: log
+    artifacts:
+      - path: "~/.datacore/state/sync-traces.last"
+        check: regex
+        arg: 'sync_traces: \d+ transcript'
+        max_age_hours: 26
+
   - name: sync-traces
     machine: box
     schedule: "10 0 * * *"
@@ -1447,6 +1476,40 @@ jobs:
   # is asserted by one job whose ordering cannot hide it, instead of two whose
   # ordering did.
 
+  # AGT-13 (owner 2026-10-28: Winston runs the weekly round): every pair of
+  # agents allowed to hand each other work is checked round robin. Winston seeds
+  # his own round and hands every other agent a task to seed theirs (only an
+  # agent's own log can hold its items, AGT-10); their claim loops carry it out,
+  # checked by `seeded`. Each round is self-checking work for every other agent,
+  # in the space all four claim from. The AGT-13 eval judges the rounds from the
+  # ledgers. Never delegated as a repair: this IS the delegation machinery.
+  # MEM-57 / TSK-5 (owner 2026-10-28): Winston's daily review of machine-made
+  # tasks, which the overnight gate requires before any AI runs them. It ran
+  # inside nightshift's /today pipeline as Miles until the morning briefing moved
+  # to the box (2026-10-08) and then nowhere. Nightly, before Miles's overnight
+  # runs. Never delegated: it IS the review.
+  - name: box-delegation-review
+    delegate: false
+    machine: box
+    schedule: "30 23 * * *"
+    cmd: "cd ~/Data/.datacore/modules/chief-of-staff && DATACORE_ACTOR=winston python3 -m lib.cli review --data-dir ~/Data >> ~/.datacore/state/delegation-review.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "~/Data/2-datacore/.datacore/reviews/cos-lastrun.json"
+        check: regex
+        arg: '"status": "complete"'
+        max_age_hours: 26
+  - name: box-delegation-round
+    delegate: false
+    machine: box
+    schedule: "0 6 * * 1"
+    cmd: "DATACORE_ACTOR=winston python3 ~/Data/.datacore/lib/delegation_fleet_exercise.py start --space ~/Data/2-datacore --day today >> ~/.datacore/state/delegation-round.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/delegation-round.log"
+        check: regex
+        arg: '^started: '
+        max_age_hours: 170
   - name: nightshift-ledger-invariants
     # MOVED OFF THE LAPTOP 2026-09-21. This is a network duty with a clock-based
     # contract, and the mac is a visitor: it sleeps, changes networks and may be

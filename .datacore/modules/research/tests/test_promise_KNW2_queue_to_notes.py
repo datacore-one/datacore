@@ -19,6 +19,9 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "lib"))
+import fleet_reach  # noqa: E402
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _research_harness as H  # noqa: E402
 
@@ -83,8 +86,7 @@ def test_last_overnight_run_on_winston_processed_the_queue():
     """The overnight run is cos_research.sh on winston at 05:30 (crontab)."""
     cmd = ("grep -nE '^\\[research\\] (Starting research processing for|Processed:|"
            "No TODO items found)' " + LOG + " | tail -4")
-    r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "winston", cmd],
-                       capture_output=True, text=True, timeout=45)
+    r = fleet_reach.run("box", cmd, timeout=45)   # Winston's k3s pod (roster), his home volume
     assert r.returncode == 0, f"could not read {LOG} on winston: {r.stderr.strip()[:200]}"
     lines = r.stdout.strip().splitlines()
     starts = [i for i, l in enumerate(lines) if "Starting research processing for" in l]
