@@ -28,7 +28,9 @@ import sys
 #: Lines that begin a failure block.
 _BLOCK_START = "job '"
 #: Decision lines that END a block. The first token decides.
-_QUIET = ("alert withheld:", "delegated repair of", "alert suppressed:")
+#: "repairs paused for" (model usage limit): missing here, it was relayed to The
+#: Firm on every run of 2026-10-28, each copy ending "operator not alerted".
+_QUIET = ("alert withheld:", "delegated repair of", "alert suppressed:", "repairs paused for")
 _LOUD = ("alert:",)
 #: Lines inside or beside a block that carry no decision.
 #: "recovered: task ... closed" is bookkeeping -- the repair task of a failure the
