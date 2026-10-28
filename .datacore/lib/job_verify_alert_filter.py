@@ -36,7 +36,7 @@ _LOUD = ("alert:",)
 #: "recovered: task ... closed" is bookkeeping -- the repair task of a failure the
 #: operator was never told about. Relayed alone it arrived as "job_verify FAILED
 #: on mac" (2026-09-25) for a job that had just come right.
-_NOISE = ("recurrence: forgot ", "recurring: filed task ", "could NOT delegate ", "sent ", "recovered: task ")
+_NOISE = ("not yet due: ", "first-seen record not saved", "recurrence: forgot ", "recurring: filed task ", "could NOT delegate ", "sent ", "recovered: task ")
 
 
 def operator_facing(text: str) -> str:
