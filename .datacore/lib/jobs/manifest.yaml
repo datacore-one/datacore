@@ -1454,6 +1454,22 @@ jobs:
   # checked by `seeded`. Each round is self-checking work for every other agent,
   # in the space all four claim from. The AGT-13 eval judges the rounds from the
   # ledgers. Never delegated as a repair: this IS the delegation machinery.
+  # MEM-57 / TSK-5 (owner 2026-10-28): Winston's daily review of machine-made
+  # tasks, which the overnight gate requires before any AI runs them. It ran
+  # inside nightshift's /today pipeline as Miles until the morning briefing moved
+  # to the box (2026-10-08) and then nowhere. Nightly, before Miles's overnight
+  # runs. Never delegated: it IS the review.
+  - name: box-delegation-review
+    delegate: false
+    machine: box
+    schedule: "30 23 * * *"
+    cmd: "cd ~/Data/.datacore/modules/chief-of-staff && DATACORE_ACTOR=winston python3 -m lib.cli review --data-dir ~/Data >> ~/.datacore/state/delegation-review.log 2>&1"
+    on_fail: telegram
+    artifacts:
+      - path: "~/Data/2-datacore/.datacore/reviews/cos-lastrun.json"
+        check: regex
+        arg: '"status": "complete"'
+        max_age_hours: 26
   - name: box-delegation-round
     delegate: false
     machine: box
