@@ -23,6 +23,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -142,6 +143,65 @@ def write_checkpoint(session_id: str, claude_pid: int, mode: str | None, topic: 
         "repos": repos,
     }, indent=2) + "\n")
     return path
+
+
+# --- previews: a dayshift session shows the owner a file on the Mac ----------
+#
+# Pull only: the Mac holds one ssh to dayshift and reads a queue file there.
+# Nothing on dayshift can reach into the Mac (its sshd is off and stays off).
+
+PREVIEW_SUFFIXES = {".md", ".markdown", ".html", ".htm", ".pdf", ".png", ".jpg", ".jpeg", ".svg"}
+TYPORA_SUFFIXES = {".md", ".markdown"}
+QUEUES = ".datacore/state/previews"                 # relative to home, on dayshift
+CURSORS = Path.home() / ".datacore" / "state" / "previews"
+PREVIEW_CACHE = Path.home() / "Library" / "Caches" / "dayshift-previews"
+
+
+def valid_preview(path: str, data_root: Path) -> Path | None:
+    """The existing file under data_root that `path` names, if it may be shown."""
+    if "\n" in path or "\r" in path:
+        return None
+    p = Path(path).resolve()
+    root = data_root.resolve()
+    if root not in p.parents or p.suffix.lower() not in PREVIEW_SUFFIXES or not p.is_file():
+        return None
+    return p
+
+
+def local_preview_path(remote: Path, remote_root: Path, cache: Path) -> Path:
+    """Where the Mac keeps its read-only copy; refuses anything outside the root."""
+    norm = Path(os.path.normpath(remote))
+    if remote_root not in norm.parents or norm.suffix.lower() not in PREVIEW_SUFFIXES:
+        raise ValueError(f"not a previewable path under {remote_root}: {remote}")
+    return cache / norm.relative_to(remote_root)
+
+
+def opener(local: Path) -> list[str]:
+    if local.suffix.lower() in TYPORA_SUFFIXES:
+        return ["open", "-a", "Typora", str(local)]
+    return ["open", str(local)]
+
+
+def new_entries(lines: list[str], cursor: int) -> tuple[list[str], int]:
+    """Queue lines not yet opened. A cursor past the end means the queue was reset."""
+    if cursor > len(lines):
+        cursor = 0
+    return lines[cursor:], len(lines)
+
+
+def group_of(list_sessions_output: str, name: str) -> str | None:
+    """The tmux group (or session name) `tmux attach -t name` would land in.
+
+    Sessions here are grouped clones (plur-new-7 in group plur-new); the queue is
+    per group so every clone of one session shares its previews.
+    """
+    rows = [line.split(" ", 1) for line in list_sessions_output.splitlines() if line.strip()]
+    rows = [(r[0], r[1].strip() if len(r) > 1 else "") for r in rows]
+    for match in (lambda s: s == name, lambda s: s.startswith(name)):
+        for sess, group in rows:
+            if match(sess):
+                return group or sess
+    return None
 
 
 # --- side effects -----------------------------------------------------------
@@ -275,6 +335,91 @@ def cmd_go(a: argparse.Namespace) -> None:
     os.execvp("ssh", ["ssh", "-t", HOST, f"tmux attach -t ={shlex.quote(name)}"])
 
 
+def cmd_mac_open(a: argparse.Namespace) -> None:
+    """On dayshift: queue a file for the owner's Mac."""
+    p = valid_preview(a.path, DATA)
+    if not p:
+        _die([f"not shown: {a.path} (must be an existing {', '.join(sorted(PREVIEW_SUFFIXES))} file under {DATA})"])
+    group = "default"
+    if os.environ.get("TMUX"):
+        r = _run(["tmux", "display", "-p", "#{?session_group,#{session_group},#{session_name}}"])
+        group = r.stdout.strip() or group
+    q = Path.home() / QUEUES / f"{group}.queue"
+    q.parent.mkdir(parents=True, exist_ok=True)
+    with q.open("a") as f:
+        f.write(f"{p}\n")
+    print(f"queued for the Mac: {p} — opens there while `ds {group}` is attached")
+
+
+def _show(line: str, remote_root: Path) -> None:
+    try:
+        local = local_preview_path(Path(line), remote_root, PREVIEW_CACHE)
+    except ValueError as e:
+        print(f"skipped: {e}", file=sys.stderr)
+        return
+    local.parent.mkdir(parents=True, exist_ok=True)
+    with local.open("wb") as out:                     # cat, not scp: no remote glob or quoting rules
+        r = subprocess.run(SSH + [f"cat -- {shlex.quote(line)}"], stdout=out, timeout=120)
+    if r.returncode == 0:
+        subprocess.run(opener(local))
+
+
+def cmd_listen(a: argparse.Namespace) -> None:
+    """On the Mac: open what a dayshift tmux group queues, until killed."""
+    queue = f"{QUEUES}/{a.group}.queue"
+    home = _remote('printf %s "$HOME"').stdout.strip()
+    remote_root = Path(home) / "Data"
+    cur_file = CURSORS / f"{a.group}.cursor"
+    cur_file.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        cursor = int(cur_file.read_text())
+    except (OSError, ValueError):
+        cursor = 0
+    lines = _remote(f"cat {queue} 2>/dev/null").stdout.splitlines()
+    todo, cursor = new_entries(lines, cursor)
+    for line in todo:                                  # queued while no terminal was attached
+        _show(line, remote_root)
+    cur_file.write_text(str(cursor))
+    # One long-lived connection: dayshift's fail2ban bans rapid repeated logins.
+    tail = subprocess.Popen(SSH + [f"mkdir -p {QUEUES} && touch {queue} && tail -n +{cursor + 1} -F {queue}"],
+                            stdout=subprocess.PIPE, text=True)
+
+    # The ssh child outlives a killed listener unless closed here: observed
+    # 2026-10-28, a terminated listener left `ssh … tail -F` running on both
+    # machines, which every `ds` would have leaked one more of.
+    def _stop(*_):
+        tail.terminate()
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGHUP, _stop)
+    try:
+        for line in tail.stdout:
+            _show(line.rstrip("\n"), remote_root)
+            cursor += 1
+            cur_file.write_text(str(cursor))
+    finally:
+        tail.terminate()
+
+
+def cmd_ds(a: argparse.Namespace) -> None:
+    """Attach to (or create) a dayshift tmux session, with its preview listener."""
+    sessions = _remote("tmux list-sessions -F '#{session_name} #{session_group}' 2>/dev/null").stdout
+    group = group_of(sessions, a.name) or a.name
+    log = CURSORS / f"{group}.listener.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("a") as lf:
+        listener = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "listen", group],
+                                    stdout=lf, stderr=lf, start_new_session=True)
+    try:
+        q = shlex.quote(a.name)
+        subprocess.run(["ssh", "-t", HOST, f"tmux attach -t {q} 2>/dev/null || tmux new -s {q} -c ~/Data"])
+    finally:
+        try:
+            os.killpg(listener.pid, signal.SIGTERM)    # the listener and its ssh child
+        except ProcessLookupError:
+            pass
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -284,8 +429,15 @@ def main() -> None:
     c.add_argument("--inflight", help="JSON file: [{what, progress, relaunch}]")
     g = sub.add_parser("go", help="owner, after exiting Claude: move the session to dayshift")
     g.add_argument("session_id")
+    m = sub.add_parser("mac-open", help="on dayshift: show a file to the owner on the Mac")
+    m.add_argument("path")
+    li = sub.add_parser("listen", help="on the Mac: open files a dayshift tmux group queues")
+    li.add_argument("group")
+    d = sub.add_parser("ds", help="on the Mac: attach to a dayshift tmux session, with previews")
+    d.add_argument("name", nargs="?", default="dev")
     a = ap.parse_args()
-    {"checkpoint": cmd_checkpoint, "go": cmd_go}[a.cmd](a)
+    {"checkpoint": cmd_checkpoint, "go": cmd_go, "mac-open": cmd_mac_open,
+     "listen": cmd_listen, "ds": cmd_ds}[a.cmd](a)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,3 @@
+#!/bin/sh
+# On dayshift: show a file to the owner on the Mac. See lib/handover.py.
+exec python3 "$HOME/Data/.datacore/lib/handover.py" mac-open "$@"

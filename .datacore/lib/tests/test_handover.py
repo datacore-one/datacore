@@ -9,12 +9,19 @@ import json
 
 import pytest
 
+from pathlib import Path
+
 from handover import (
     blocking_issues,
+    group_of,
+    local_preview_path,
+    new_entries,
+    opener,
     permission_args,
     repo_action,
     session_is_live,
     tmux_name,
+    valid_preview,
     write_checkpoint,
 )
 
@@ -83,3 +90,45 @@ def test_checkpoint_roundtrip(tmp_path):
     assert data["mode"] == "auto"
     assert data["repos"][0]["sha"] == "f00"
     assert data["inflight"][0]["relaunch"] == "c"
+
+
+# --- previews: files a dayshift session opens appear on the Mac -------------
+
+def test_valid_preview(tmp_path):
+    (tmp_path / "a b;$(x).md").write_text("x")
+    (tmp_path / "run.sh").write_text("x")
+    assert valid_preview(str(tmp_path / "a b;$(x).md"), tmp_path) == tmp_path / "a b;$(x).md"
+    assert valid_preview(str(tmp_path / ".." / "etc.md"), tmp_path) is None
+    assert valid_preview(str(tmp_path / "run.sh"), tmp_path) is None
+    assert valid_preview(str(tmp_path / "missing.md"), tmp_path) is None
+    assert valid_preview(str(tmp_path / "a b;$(x).md") + "\n", tmp_path) is None
+
+
+def test_local_preview_path():
+    assert local_preview_path(Path("/home/user/Data/0-personal/n.md"), Path("/home/user/Data"),
+                              Path("/c")) == Path("/c/0-personal/n.md")
+
+
+def test_local_preview_path_refuses_outside_root():
+    with pytest.raises(ValueError):
+        local_preview_path(Path("/home/user/Data/../.ssh/id.md"), Path("/home/user/Data"), Path("/c"))
+
+
+def test_opener():
+    assert opener(Path("/c/n.md")) == ["open", "-a", "Typora", "/c/n.md"]
+    assert opener(Path("/c/b.html")) == ["open", "/c/b.html"]
+
+
+def test_new_entries_replays_once():
+    lines = ["a", "b", "c"]
+    assert new_entries(lines, 1) == (["b", "c"], 3)
+    assert new_entries(lines, 3) == ([], 3)
+    assert new_entries(lines, 9) == (["a", "b", "c"], 3)   # queue was reset: replay it
+
+
+def test_group_of():
+    out = "dev \nplur-new-7 plur-new\nnowva-8 nowva\n"
+    assert group_of(out, "plur-new") == "plur-new"
+    assert group_of(out, "plur-new-7") == "plur-new"
+    assert group_of(out, "dev") == "dev"
+    assert group_of(out, "zzz") is None

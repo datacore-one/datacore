@@ -1,0 +1,3 @@
+#!/bin/sh
+# Attach to (or create) a dayshift tmux session, with its preview listener. See lib/handover.py.
+exec python3 "$HOME/Data/.datacore/lib/handover.py" ds "$@"
