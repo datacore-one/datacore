@@ -64,3 +64,17 @@ def test_a_recovery_alone_is_not_an_operator_alert():
            "job 'mac-suite-audit' FAILED:\n  - suite-audit.log: last line does not match\n"
            "alert withheld: mac-suite-audit failed on the same artifact already counted (21x)\n")
     assert operator_facing(out).strip() == ""
+
+
+PAUSED = """\
+job 'nightshift-github-triage' FAILED:
+  - ~/.datacore/state/github-triage/latest.log: stale (age 30.1h exceeds max_age_hours=26)
+repairs paused for nightshift-github-triage (repairs are paused: the last repair hit the model usage limit; nothing is filed until it resets (about 6h)); operator not alerted
+"""
+
+
+def test_paused_repairs_are_not_relayed():
+    """The Firm got 'repairs paused ...; operator not alerted' every run on 2026-10-28:
+    the decision line was not in the quiet list, so it read as the verifier failing."""
+    assert operator_facing(PAUSED) == ""
+    assert operator_facing(PAUSED.split("\n", 2)[2]) == ""   # the line alone, outside a block
