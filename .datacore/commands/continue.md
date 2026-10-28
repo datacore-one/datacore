@@ -292,7 +292,7 @@ python3 ~/Data/.datacore/lib/focus_mode.py detect
 2. Find the contributor's `## @{contributor}` section
 3. Extract the `**Continuation:**` block
 4. Present continuation context to the user
-5. Also check `{org_path}/next_actions.org` for `:continuation:` tasks assigned to the contributor
+5. Also run `.datacore/venv/bin/python .datacore/lib/continuation_tasks.py --json` and keep the parent space's tasks assigned to the contributor (ledger first, then inbox — see below)
 
 **If `mode: full` or `mode: none`:**
 - Proceed as normal (current behavior — scan personal org files)
@@ -306,44 +306,28 @@ Scanning for continuation tasks...
 [Search term: {search_term or "all"}]
 ```
 
-**Use org-workspace to query tasks as structured objects — NEVER grep raw org files:**
+**Search the ledger first, then the inbox files — one command, NEVER grep raw org files:**
 
-```python
-from org_workspace import OrgWorkspace, Query
-
-ws = OrgWorkspace()
-# Load all space org files
-for space_dir in glob('[0-9]-*/org/'):
-    for f in ['inbox.org', 'next_actions.org']:
-        path = space_dir / f
-        if path.exists():
-            ws.load(path)
-
-q = Query(ws)
-continuation_tasks = q.by_tag('continuation')
-todo_only = [n for n in continuation_tasks if n.todo == 'TODO']
-
-# Filter by search term if provided
-if search_term:
-    todo_only = [n for n in todo_only if search_term.lower() in n.heading.lower()]
-```
-
-**Shortcut CLI** (equivalent):
 ```bash
-python3 .datacore/lib/org_workspace_adapter.py list \
-  --file [space]/org/inbox.org --tags continuation --states TODO
+.datacore/venv/bin/python .datacore/lib/continuation_tasks.py [search_term] --json
 ```
 
-Each task is a **NodeView object** with structured access to:
-- `n.heading`, `n.todo`, `n.tags`, `n.scheduled`, `n.deadline`, `n.priority`
-- `n.properties` (dict), `n.get_property('BOOTSTRAP')`, `n.get_property('CONTEXT')`
-- `n.body`, `n.parent`, `n.children`, `n.id()`
+Tasks live in each space's ledger (DIP-0046). `org/next_actions.org` is only its
+projection: on a host whose phase-1 cycle has not run it does not exist, and a
+stale one misses recent tasks, so the search never reads it. The script folds
+every space's ledger (open = TODO, NEXT, WAITING, REVIEW, tagged `:continuation:`),
+then reads each `[space]/org/inbox.org`, where a task saved by `--save` sits
+until the next ingest; an inbox task the ledger already holds is listed once.
+Each result carries `source` (`ledger`/`inbox`), `space`, `id`, `state`, `title`,
+`scheduled` and `bootstrap`. Without `--json` it prints one line per task.
 
-**Search locations:**
-- `0-personal/org/inbox.org`
-- `0-personal/org/next_actions.org`
-- `[space]/org/inbox.org`
-- `[space]/org/next_actions.org`
+Use the venv interpreter: the inbox half needs `org_workspace`. Under a plain
+`python3` that lacks it, the script still returns the ledger tasks and says on
+stderr that the inbox files were NOT searched — report that, never "none found".
+
+**Search order:**
+1. Every space's ledger (`[space]/.datacore/events/`)
+2. `[space]/org/inbox.org`, all spaces
 
 ### 2a. If Continuation Tasks Found
 
@@ -397,7 +381,7 @@ This handles the common case: user says `/continue megaphone` but the task exist
 
 **Fallback search order:**
 1. Search `:continuation:` tagged tasks (exact match) ← already done in 2a
-2. **Search ALL tasks** in next_actions.org and inbox.org matching the search term (title, properties, body)
+2. **Search ALL tasks** matching the search term, ledger first: `python3 .datacore/lib/ledger_cli.py items --space [space]` for every space (open items are those whose `status` is not `dismissed`), then each `[space]/org/inbox.org` (title, properties, body)
 3. If matches found → display them and offer to load context (same as 2a but note "no :continuation: tag")
 4. If still no matches → fall back to system analysis below
 
@@ -418,7 +402,7 @@ RELATED TASKS FOUND
 │ # │ Task                           │ Status     │ Location     │
 ├───┼────────────────────────────────┼────────────┼──────────────┤
 │ 1 │ Megaphone SaaS architecture    │ TODO       │ inbox.org    │
-│ 2 │ Evaluate Megaphone templates   │ NEXT       │ next_actions │
+│ 2 │ Evaluate Megaphone templates   │ NEXT       │ ledger       │
 └───┴────────────────────────────────┴────────────┴──────────────┘
 
 Select task to continue (1-2), or Enter for most recent:
@@ -569,8 +553,8 @@ The `:BOOTSTRAP:` property contains session-specific resumption context. Rich Ta
 ## Files Referenced
 
 **Read:**
+- The ledger, `.datacore/events/` (all spaces) — via `continuation_tasks.py`
 - `org/inbox.org` (all spaces)
-- `org/next_actions.org` (all spaces)
 - Recent journal entries (last 7 days)
 - Git status across repos
 
