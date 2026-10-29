@@ -134,3 +134,25 @@ def test_the_schedule_of_a_pod_is_its_supercronic_file(roster):
     assert "/etc/datacore/crontab" in fr.schedule_listing(fr.place("hermes", roster))
     host = fr.schedule_listing(fr.place("nightshift", roster))
     assert "crontab -l" in host and "systemctl" in host
+
+
+def test_a_pod_is_reached_through_its_host_when_no_kubeconfig_is_kept_here(tmp_path, monkeypatch):
+    # 2026-10-29: the owner's machines reach the pods through the box's own login
+    # (ssh, then the box's k3s), so no copy of the cluster credential is kept on
+    # them. On the box itself the same roster runs k3s locally.
+    p = tmp_path / "infrastructure.yaml"
+    p.write_text("servers:\n  box:\n    ssh_alias: winston\n    access:\n"
+                 "      k8s: {via: box, namespace: firm, deployment: winston, container: cron}\n"
+                 "  hermes:\n    ssh_alias: '-'\n    access:\n"
+                 "      k8s: {via: box, namespace: firm, deployment: tris, container: cron}\n")
+    monkeypatch.delenv("FLEET_KUBECONFIG", raising=False)
+    remote = fr.argv(fr.place("hermes", p, local="mac"), "echo 'a b'")
+    assert remote[:3] == ["ssh", "-o", "BatchMode=yes"] and remote[-2] == "winston"
+    import shlex
+    inner = shlex.split(remote[-1])
+    assert inner[:4] == ["sudo", "-n", "k3s", "kubectl"]
+    assert inner[4:] == ["-n", "firm", "exec", "deploy/tris", "-c", "cron", "--", "sh", "-c", "echo 'a b'"]
+    here = fr.argv(fr.place("hermes", p, local="box"), "true")
+    assert here[:4] == ["sudo", "-n", "k3s", "kubectl"]
+    # The host's own duties are still plain ssh.
+    assert fr.argv(fr.place("box", p, host=True, local="mac"), "uptime")[-2:] == ["winston", "uptime"]

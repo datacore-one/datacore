@@ -17,6 +17,11 @@ that also holds pods (the box: backups, the fleet probe) keeps its own host
 duties: pass host=True to reach the host instead of the pod. FLEET_KUBECONFIG
 overrides the roster's kubeconfig (the box itself uses k3s's own).
 
+A pod whose `k8s.via` names the machine hosting the cluster is reached through
+that machine's ordinary ssh login and its k3s (`sudo -n k3s kubectl`), so no copy
+of the cluster credential is kept anywhere else (2026-10-29). On the via machine
+itself the same roster runs k3s locally.
+
     fleet_reach.py place  <machine>
     fleet_reach.py run    <machine> <shell command> [--host]
 """
@@ -87,7 +92,18 @@ def place(machine: str, path: Path | None = None, host: bool = False, local: str
         raise Unreachable(f"{machine}: retired in the roster")
     k8s = (e.get("access") or {}).get("k8s") or {}
     if k8s.get("deployment") and not host:
-        return Place(machine, "pod", f"deploy/{k8s['deployment']}", dict(k8s))
+        k8s = dict(k8s)
+        via = k8s.get("via")
+        if via:
+            here = local if local is not None else _local_name(entries)
+            if via == here:
+                k8s["k3s"] = "local"
+            else:
+                alias = str((entries.get(via) or {}).get("ssh_alias") or via)
+                if alias in ("-", ""):
+                    raise Unreachable(f"{machine}: its cluster host {via} has no ssh alias")
+                k8s["k3s"] = alias
+        return Place(machine, "pod", f"deploy/{k8s['deployment']}", k8s)
     # An agent living as a Unix user on another machine (Miles on dayshift,
     # 2026-10-28): run as that user there -- sudo -u from that machine, ssh to it
     # from anywhere else.
@@ -118,15 +134,25 @@ def places(machine: str, path: Path | None = None, local: str | None = None) -> 
     return out
 
 
+def _kubectl(pl: Place, args: list[str]) -> list[str]:
+    """The argv running `kubectl <args>` for this pod: through its cluster host
+    (k8s.via), or with a kubeconfig kept here."""
+    cfg = os.environ.get("FLEET_KUBECONFIG")
+    via = pl.k8s.get("k3s")
+    if via and not cfg:
+        k3s = ["sudo", "-n", "k3s", "kubectl", *args]
+        return k3s if via == "local" else [*SSH, via, shlex.join(k3s)]
+    cfg = cfg or os.path.expanduser(str(pl.k8s.get("kubeconfig") or ""))
+    return ["kubectl"] + (["--kubeconfig", cfg] if cfg else []) + args
+
+
 def containers(pl: Place) -> list[Place]:
     """A pod as one place per container (a process scan sees only its own
     container); any other place as itself. An unreadable pod raises Unreachable."""
     if pl.kind != "pod":
         return [pl]
-    cfg = os.environ.get("FLEET_KUBECONFIG") or os.path.expanduser(str(pl.k8s.get("kubeconfig") or ""))
-    r = subprocess.run(["kubectl"] + (["--kubeconfig", cfg] if cfg else [])
-                       + ["-n", str(pl.k8s.get("namespace") or "default"), "get", pl.target,
-                          "-o", "jsonpath={.spec.template.spec.containers[*].name}"],
+    r = subprocess.run(_kubectl(pl, ["-n", str(pl.k8s.get("namespace") or "default"), "get", pl.target,
+                                     "-o", "jsonpath={.spec.template.spec.containers[*].name}"]),
                        capture_output=True, text=True, timeout=30)
     names = r.stdout.split() if r.returncode == 0 else []
     if not names:
@@ -137,12 +163,10 @@ def containers(pl: Place) -> list[Place]:
 def container_ready(pl: Place, name: str) -> bool | None:
     """Is this pod's container `name` ready? None when the pod has no such
     container or the cluster could not be asked (could not tell)."""
-    cfg = os.environ.get("FLEET_KUBECONFIG") or os.path.expanduser(str(pl.k8s.get("kubeconfig") or ""))
     dep = str(pl.k8s.get("deployment") or "")
-    r = subprocess.run(["kubectl"] + (["--kubeconfig", cfg] if cfg else [])
-                       + ["-n", str(pl.k8s.get("namespace") or "default"), "get", "pods",
-                          "-l", f"app.kubernetes.io/name={dep}", "-o",
-                          "jsonpath={range .items[*].status.containerStatuses[*]}{.name}={.ready} {end}"],
+    r = subprocess.run(_kubectl(pl, ["-n", str(pl.k8s.get("namespace") or "default"), "get", "pods",
+                                     "-l", f"app.kubernetes.io/name={dep}", "-o",
+                                     "jsonpath={range .items[*].status.containerStatuses[*]}{.name}={.ready} {end}"]),
                        capture_output=True, text=True, timeout=30)
     states = dict(kv.split("=", 1) for kv in r.stdout.split() if "=" in kv) if r.returncode == 0 else {}
     return None if name not in states else states[name] == "true"
@@ -165,12 +189,10 @@ def argv(pl: Place, cmd: str) -> list[str]:
         if pl.k8s.get("run_as"):
             return [*SSH, pl.target, f"sudo -n -u {pl.k8s['run_as']} -H sh -lc {shlex.quote(cmd)}"]
         return [*SSH, pl.target, cmd]
-    cfg = os.environ.get("FLEET_KUBECONFIG") or os.path.expanduser(str(pl.k8s.get("kubeconfig") or ""))
-    out = ["kubectl"] + (["--kubeconfig", cfg] if cfg else [])
-    out += ["-n", str(pl.k8s.get("namespace") or "default"), "exec", pl.target]
+    out = ["-n", str(pl.k8s.get("namespace") or "default"), "exec", pl.target]
     if pl.k8s.get("container"):
         out += ["-c", str(pl.k8s["container"])]
-    return out + ["--", "sh", "-c", cmd]
+    return _kubectl(pl, out + ["--", "sh", "-c", cmd])
 
 
 def run(machine: str, cmd: str, path: Path | None = None, host: bool = False, local: str | None = None,
