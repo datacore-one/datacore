@@ -255,6 +255,22 @@ if [ -n "$_forced" ]; then
   fail=1
 fi
 
+# The ledger's generated projection, added or edited, whether or not it is
+# tracked. The check above only sees force-added ignored files; 5-plur still
+# tracked its projection when ec889ce6 committed a copy (2026-10-29), so an edit
+# went through and every host that pulled stopped importing the space. The
+# projection's own header identifies it; untracking (a deletion) still passes.
+_gen=""
+for _f in $(git diff --cached --name-only --diff-filter=AM | grep -E '(^|/)org/next_actions\.org$' || true); do
+  git show ":$_f" 2>/dev/null | head -5 | grep -q "Generated from the ledger" && _gen="$_gen $_f"
+done
+if [ -n "$_gen" ]; then
+  printf "\n\033[1;31mGENERATED PROJECTION COMMITTED\033[0m — rebuilt from the ledger on every host; a committed copy stops other hosts' task import:\n"
+  printf '%s\n' $_gen | sed 's/^/  /'
+  printf "Unstage with: git restore --staged <path> (or untrack: git rm --cached <path>). Change tasks through the task tools.\n"
+  fail=1
+fi
+
 [ "$fail" = "1" ] && { printf "\nTo bypass (emergency): git commit --no-verify\n"; exit 1; }
 
 exit 0
