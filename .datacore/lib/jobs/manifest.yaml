@@ -649,7 +649,8 @@ jobs:
 
   - name: box-briefing
     machine: box
-    schedule: "0 4 * * *"
+    # 06:15 UTC, held by the health gate until 08:15 Ljubljana (owner, 2026-10-29).
+    schedule: "15 6 * * *"
     cmd: "~/Data/.datacore/lib/cos_morning.sh"
     # Staleness gate: 0-personal holds the journal file asserted below.
     # If Winston's checkout is behind upstream, the journal on disk may be
@@ -755,7 +756,10 @@ jobs:
   # cos-server-setup.sh's pipeline step. Its log keeps one verdict line per run.
   - name: box-briefing-catchup
     machine: box
-    schedule: "30 4-8 * * *"
+    # After the 06:15 start, never before it: a catch-up before the start would
+    # read "never started" and run the briefing early. Until 10:45 UTC it also
+    # re-reads a health reading that landed after the gate gave up (09:00 local).
+    schedule: "45 6-10 * * *"
     cmd: "/usr/bin/python3 ~/Data/.datacore/modules/chief-of-staff/server/lib/cos_morning_run.py catch-up >> ~/.datacore/cos/morning-catchup.log 2>&1"
     on_fail: telegram
     artifacts:
@@ -827,7 +831,8 @@ jobs:
   # never have been noticed. Artifacts are what each run actually writes.
   - name: box-verify-morning
     machine: box
-    schedule: "0 8 * * *"
+    # After the latest the briefing can finish: gate gives up 09:00 local (08:00 UTC in winter).
+    schedule: "45 8 * * *"
     cmd: "~/Data/.datacore/lib/cos_verify_morning.sh >> ~/.datacore/cos/verify.log 2>&1"
     on_fail: telegram
     artifacts:
@@ -945,7 +950,7 @@ jobs:
   # box-weekly-plan, whose cron lines these cadences replaced.
   - name: cadence-firm-cos-briefing
     machine: box
-    schedule: "0 4 * * *"
+    schedule: "15 6 * * *"
     cmd: "DATACORE_ROOT=~/Data /usr/bin/python3 ~/Data/.datacore/modules/ventures/lib/cadence_run.py cadence-firm-cos-briefing >> ~/.datacore/state/cadence-run.log 2>&1"
     on_fail: telegram
     artifacts:
