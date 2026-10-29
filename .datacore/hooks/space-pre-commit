@@ -241,6 +241,20 @@ if [ -n "$_staged_org" ]; then
   fi
 fi
 
+# A newly added file that .gitignore excludes got past it with `git add -f`.
+# 2026-10-29: an agent's GEO refresh force-added 5-plur's generated
+# org/next_actions.org (ignored, untracked since c275bf4b); every host that
+# pulled took that copy as its task list and the hourly import refused the
+# space. Only additions are refused: files tracked before they were ignored
+# stay committable.
+_forced=$(git diff --cached --name-only --diff-filter=A -z | xargs -0 git ls-files --cached --ignored --exclude-standard -- 2>/dev/null || true)
+if [ -n "$_forced" ]; then
+  printf "\n\033[1;31mIGNORED FILE FORCE-ADDED\033[0m — .gitignore excludes these, so they are generated or local:\n"
+  printf '%s\n' "$_forced" | sed 's/^/  /'
+  printf "Unstage with: git rm --cached <path>. Tasks go to org/inbox.org through the task tools.\n"
+  fail=1
+fi
+
 [ "$fail" = "1" ] && { printf "\nTo bypass (emergency): git commit --no-verify\n"; exit 1; }
 
 exit 0
