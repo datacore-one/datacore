@@ -815,13 +815,20 @@ def main() -> int:
                       f"\n         -> commit or discard it, then dispatch again")
                 break
 
-        if item.id in waiting and check:
+        # A RETRY CHECKS FIRST. An item released before may have done its work
+        # and failed only its check -- Datafund P7 was posted, the check misread
+        # the live text, and each retry posted again (three posts, 2026-10-29).
+        # Work with an effect outside the repo cannot be undone, so on a retry
+        # the check runs before the agent: passed -> complete on that evidence.
+        is_waiting = item.id in waiting
+        if check and (is_waiting or attempts.get(item.id, 0) > 0):
             # Only the check, never the agent: its part is done. Still waiting
             # -> nothing written; passed -> claim and complete on the check's
             # evidence; anything else (the PR was closed unmerged, the job still
-            # fails after the merge) -> back to the agent as an ordinary attempt.
+            # fails after the merge, a retry's check still fails) -> to the
+            # agent as an ordinary attempt.
             rc, sha = _isolated_check_rc(space, check)
-            if rc == WAITING_ON_OWNER:
+            if is_waiting and rc == WAITING_ON_OWNER:
                 print(f"WAITING  [{route}] {title[:70]}\n         -> still waiting for you "
                       f"(the owner merges); the agent is not re-run")
                 waiting_n += 1
@@ -835,18 +842,21 @@ def main() -> int:
                 try:
                     guarded_append(EventLog(space, args.actor), "item.claim",
                                    {"id": item.id, "owner": args.actor, "route": route,
-                                    "reason": "the owner acted on a repair that was waiting for them",
+                                    "reason": ("the owner acted on a repair that was waiting for them"
+                                               if is_waiting else
+                                               "retry: the check already passes; the agent is not re-run"),
                                     "payload_hash": approval_payload_hash(item.payload)})
                 except PolicyError as exc:
                     print(f"REFUSED  {title[:70]}: {exc}")
                     refused += 1
                     continue
+                why_done = "the owner acted" if is_waiting else "already done; the agent was not re-run"
                 act(space, item.id, "complete", args.actor, detail={
-                    "owner": args.actor, "route": route, "check": check,
-                    "artifact_commit": sha, "waited_on": "owner"})
-                journal_lines.append(f"DONE `{item.id[:12]}` {title[:70]} — the owner acted; "
+                    "owner": args.actor, "route": route, "check": check, "artifact_commit": sha,
+                    **({"waited_on": "owner"} if is_waiting else {"done_before_retry": True})})
+                journal_lines.append(f"DONE `{item.id[:12]}` {title[:70]} — {why_done}; "
                                      f"check passed @ `{sha[:10]}`")
-                print(f"DONE     [{route}] {title[:70]}\n         -> the owner acted; check passed "
+                print(f"DONE     [{route}] {title[:70]}\n         -> {why_done}; check passed "
                       f"@ {sha[:10]}")
                 dispatched += 1
                 continue
