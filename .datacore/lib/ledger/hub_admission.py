@@ -376,7 +376,15 @@ def admit(events: list[Event], auth: Authority, *, now_ms: int) -> Admission:
     # writer events are kept as rejected proposals (audit finding 11).
     for chain in sorted(chains, key=lambda c: (c not in auth.grantors, c)):
         ordered = sorted(chains[chain], key=lambda e: e.seq if type(e.seq) is int else -1)
-        n, why = admit_chain(chain, ordered, auth, now_ms=now_ms, rejected=frozenset(rejected))
+        # A GRANTOR'S OWN LOG: the grantor is the authority that writes the
+        # `ledger.reject` records, and its log is admitted before any is read,
+        # so an event it would refuse for what it is (PROPOSAL_CODES) could
+        # never be rescued and ended the grantor's chain for good -- every
+        # later lease, claim and seal with it (2-datacore, 2026-10-28: a stale
+        # library wrote `task.create` into winston.jsonl). Such an event stays
+        # in the chain as a rejected proposal, with no effect; the chain goes on.
+        own = frozenset((chain, e.seq, e.hash) for e in ordered) if chain in auth.grantors else frozenset()
+        n, why = admit_chain(chain, ordered, auth, now_ms=now_ms, rejected=frozenset(rejected) | own)
         keep.update(id(e) for e in ordered[:n])
         if why:
             refused[chain] = why
