@@ -1492,10 +1492,11 @@ jobs:
     delegate: false
     machine: box
     schedule: "30 23 * * *"
-    cmd: "cd ~/Data/.datacore/modules/chief-of-staff && DATACORE_ACTOR=winston python3 -m lib.cli review --data-dir ~/Data >> ~/.datacore/state/delegation-review.log 2>&1"
+    # The actor comes from the box's own identity.env (INS-3: no agent of ours named here).
+    cmd: "cd ~/Data/.datacore/modules/chief-of-staff && python3 -m lib.cli review --data-dir ~/Data >> ~/.datacore/state/delegation-review.log 2>&1"
     on_fail: telegram
     artifacts:
-      - path: "~/Data/2-datacore/.datacore/reviews/cos-lastrun.json"
+      - path: "~/Data/*/.datacore/reviews/cos-lastrun.json"   # newest match: the system space's
         check: regex
         arg: '"status": "complete"'
         max_age_hours: 26
@@ -1503,7 +1504,7 @@ jobs:
     delegate: false
     machine: box
     schedule: "0 6 * * 1"
-    cmd: "DATACORE_ACTOR=winston python3 ~/Data/.datacore/lib/delegation_fleet_exercise.py start --space ~/Data/2-datacore --day today >> ~/.datacore/state/delegation-round.log 2>&1"
+    cmd: 'python3 ~/Data/.datacore/lib/delegation_fleet_exercise.py start --space ~/Data/"$(python3 ~/Data/.datacore/lib/spaces.py role system)" --day today >> ~/.datacore/state/delegation-round.log 2>&1'
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/delegation-round.log"

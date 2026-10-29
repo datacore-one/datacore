@@ -68,6 +68,7 @@ def lanes(tmp_path, monkeypatch):
     cfg = tmp_path / "agent_lanes.yaml"
     cfg.write_text(LANES)
     monkeypatch.setattr(agent_lanes, "DEFAULT_LANES_FILE", cfg)
+    monkeypatch.setattr(agent_lanes, "install_lanes_file", lambda: None)  # never this machine's own
     return cfg
 
 
@@ -217,10 +218,36 @@ VENTURE_LANES = {"cio": "tris", "cmo": "data", "comms": "data", "coo": "miles", 
 CONSERVATIVE_MAX_TASKS_PER_DAY = 100
 
 
-def test_the_shipped_lanes_are_one_owner_edited_file_and_conservative():
+INSTALL_LANES = agent_lanes.install_lanes_file()
+
+
+def test_the_shipped_file_names_no_agent_of_ours():
+    """INS-3: shipped config names no machine or agent of this fleet. The named
+    lanes are the install's own and live in its firm space (2026-10-29)."""
     raw = yaml.safe_load(SHIPPED.read_text(encoding="utf-8"))
+    assert raw.get("version") == 1 and raw.get("lanes") == {}, raw.get("lanes")
+    assert agent_lanes.load_lanes(SHIPPED)["lanes"] == {}
+
+
+def test_the_firm_space_file_is_read_before_the_shipped_one(tmp_path, monkeypatch):
+    root = tmp_path / "Data"
+    firm = root / "4-crew"
+    (firm / ".datacore" / "config").mkdir(parents=True)
+    (root / "install.yaml").write_text("roles:\n  firm: 4-crew\n")
+    (firm / ".datacore" / "config" / "agent_lanes.yaml").write_text(LANES)
+    monkeypatch.setenv("DATACORE_ROOT", str(root))
+    assert agent_lanes.install_lanes_file() == firm / ".datacore" / "config" / "agent_lanes.yaml"
+    assert set(agent_lanes.load_lanes()["lanes"]) == {"miles", "tris", "data"}
+    (firm / ".datacore" / "config" / "agent_lanes.yaml").unlink()
+    assert agent_lanes.install_lanes_file() is None
+    assert agent_lanes.load_lanes()["lanes"] == {}, "no install file: the shipped (empty) file"
+
+
+@pytest.mark.skipif(INSTALL_LANES is None, reason="this install has no firm-space lane file")
+def test_this_installs_lanes_are_one_owner_edited_file_and_conservative():
+    raw = yaml.safe_load(INSTALL_LANES.read_text(encoding="utf-8"))
     assert raw.get("owner_review"), "the budgets must be marked for the owner to set"
-    cfg = agent_lanes.load_lanes(SHIPPED)
+    cfg = agent_lanes.load_lanes(INSTALL_LANES)
     assert cfg["period"] == "day"
     assert set(cfg["lanes"]) >= {"miles", "tris", "data"}
     for agent in ("miles", "tris", "data"):
@@ -230,11 +257,12 @@ def test_the_shipped_lanes_are_one_owner_edited_file_and_conservative():
         assert cfg["role_owner"].get(role) == agent, (role, cfg["role_owner"].get(role))
 
 
-def test_the_shipped_lane_roles_are_real_roles():
+@pytest.mark.skipif(INSTALL_LANES is None, reason="this install has no firm-space lane file")
+def test_this_installs_lane_roles_are_real_roles():
     """Lane roles are the names the role-pool work loads from
     `.datacore/templates/roles/<role>.md`, or a venture lane role."""
     templates = SHIPPED.parents[1] / "templates" / "roles"
-    cfg = agent_lanes.load_lanes(SHIPPED)
+    cfg = agent_lanes.load_lanes(INSTALL_LANES)
     unknown = [r for r in cfg["role_owner"]
                if r not in VENTURE_LANES and r != "cos" and not (templates / f"{r}.md").exists()]
     assert not unknown, unknown

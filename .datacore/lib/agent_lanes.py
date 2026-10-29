@@ -35,11 +35,34 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import sys
 from pathlib import Path
 
 LIB = Path(__file__).resolve().parent
 DEFAULT_LANES_FILE = LIB.parent / "config" / "agent_lanes.yaml"
 PERIODS = ("day", "week", "month")
+
+
+def install_lanes_file() -> Path | None:
+    """This install's own lane file, kept in its firm space (install.yaml
+    `roles: firm`) at `.datacore/config/agent_lanes.yaml`, or None.
+
+    The lanes name this install's agents, and shipped config names none of ours
+    (INS-3), so the shipped file carries an empty `lanes:` and the named ones
+    live in the space that every host running the claim loop already syncs
+    (2026-10-29). A host without the firm space falls back to the shipped file,
+    under which no agent is gated."""
+    if str(LIB) not in sys.path:
+        sys.path.insert(0, str(LIB))
+    try:
+        from spaces import space_for
+        firm = space_for("firm", _root())
+    except Exception:  # noqa: BLE001 - no roles, no install file
+        return None
+    if not firm:
+        return None
+    path = _root() / firm / ".datacore" / "config" / "agent_lanes.yaml"
+    return path if path.exists() else None
 
 
 def load_lanes(path: Path | None = None) -> dict | None:
@@ -49,7 +72,7 @@ def load_lanes(path: Path | None = None) -> dict | None:
     "role_owner", "tag_owner", "priority_owner"}. Raises ValueError for a
     file that exists but cannot be trusted."""
     import yaml
-    p = Path(path or DEFAULT_LANES_FILE)
+    p = Path(path or install_lanes_file() or DEFAULT_LANES_FILE)
     if not p.exists():
         return None
     try:

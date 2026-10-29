@@ -1,4 +1,16 @@
 # Agent lanes: which work each agent may claim, and how much per period.
+#
+# THIS SHIPPED FILE NAMES NO AGENTS (INS-3). An install keeps its own lanes in
+# its firm space -- the space install.yaml names as `roles: firm` -- at
+# <firm space>/.datacore/config/agent_lanes.yaml, same format; agent_lanes.py
+# reads that file first and falls back to this one, under which no agent is
+# gated. Example entry (an agent principal named `builder`):
+#   lanes:
+#     builder:
+#       roles: [coo, cto, dev, operator]
+#       tags: [technical, pm]
+#       priorities: []
+#       budget: {tasks: 20}
 # Read by .datacore/lib/agent_lanes.py; applied by claim_gate.check_claim to
 # every ledger claim (task W5). This is the ONE place lane budgets live.
 #
@@ -15,30 +27,6 @@
 # `priorities:` maps the owner's quarterly priority ids to a lane. The ids
 # live in the owner's private priorities file and are NOT copied into this
 # public file: the owner adds the ones they want routed.
-owner_review: >-
-  Budgets below are shipped CONSERVATIVE and are the owner's to set (W5,
-  2026-10-23). They count claims per period, not money: the monthly spend
-  ceiling stays budget_monthly_usd in registry/principals.yaml. Measured
-  ledger claims in the week to 2026-10-23: Miles 23 to 51 a day,
-  Tris and Data none. Miles is set to 60, above his measured maximum, so
-  the lanes do not slow today's work, and Tris and Data have 30 each to grow into (owner direction 2026-10-23: automate and
-  parallelise as much as possible). Lower a
-  number to cap a lane; 0 stops that agent claiming at all.
 version: 1
 period: day          # day (UTC) | week (ISO, from Monday) | month
-lanes:
-  miles:             # builds and runs systems
-    roles: [coo, cto, dev, dev.backend, dev.contracts, dev.qa, operator]
-    tags: [technical, pm, data, repair]
-    priorities: []
-    budget: {tasks: 60}
-  tris:              # research and cross-domain analysis
-    roles: [cio, researcher, scout]
-    tags: [research]
-    priorities: []
-    budget: {tasks: 30}
-  data:              # speaks to the outside world
-    roles: [cmo, comms, bizdev]
-    tags: [content, comms]
-    priorities: []
-    budget: {tasks: 30}
+lanes: {}
