@@ -220,3 +220,38 @@ class TestEmitTargets:
         assert not (tmp_context / "AGENTS.md").exists()
         assert (tmp_context / "GEMINI.md").exists()
         assert any("AGENTS.md" in n and ".gitignore" in n for n in notes)
+
+
+class TestRegistryDrift:
+    """The root CLAUDE.md also carries tables generated from .datacore/registry/.
+
+    On 2026-10-25 a server was added to infrastructure.yaml after the root
+    CLAUDE.md had last been rebuilt (10-23). Only the layer files' mtimes were
+    compared, so the composed file was called "hand-edited", which the
+    SessionStart `check --fix` hook only reports -- and the stale table stayed.
+    """
+
+    def _component(self, root):
+        import time
+        (root / ".datacore" / "registry").mkdir(parents=True)
+        infra = root / ".datacore" / "registry" / "infrastructure.yaml"
+        infra.write_text("servers:\n  alpha:\n    purpose: first host\n")
+        _write(root, "CLAUDE", "base", "# Base\n\n<!-- REGISTRY:infrastructure -->\n")
+        ok, msgs = rebuild_context(root, "CLAUDE")
+        assert ok, msgs
+        infra.write_text("servers:\n  alpha:\n    purpose: first host\n"
+                         "  beta:\n    purpose: second host\n")
+        later = time.time() + 5
+        os.utime(infra, (later, later))
+        return root
+
+    def test_a_changed_registry_makes_the_composed_file_stale_not_hand_edited(self, tmp_path):
+        from context_merge import composed_drift
+        drift = composed_drift(self._component(tmp_path))
+        assert drift and " is stale" in drift, drift
+
+    def test_check_fix_rebuilds_after_a_registry_change(self, tmp_path):
+        from context_merge import check_installation
+        root = self._component(tmp_path)
+        assert check_installation(root, fix=True) == []
+        assert "beta" in (root / "CLAUDE.md").read_text()

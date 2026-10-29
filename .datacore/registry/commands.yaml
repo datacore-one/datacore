@@ -1972,3 +1972,10 @@ module_commands:
     source: .datacore/modules/trading/skills/prediction-tracker/SKILL.md
     module: trading
     type: skill
+  provenance:
+    name: provenance
+    description: Verify an agent receipt, or check the receipt queue
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/provenance/commands/provenance.md
+    module: provenance

@@ -133,6 +133,14 @@ suites:
     reason: Passing locally (9). Owns a separate .venv.
     reviewed: 2026-09-19
     state: green
+  - path: .datacore/modules/provenance/tests
+    reason: >
+      Agent receipts module, its own repository (datacore-provenance), so the core
+      CI checkout does not contain it. Passing locally on 2026-10-29 (116 passed,
+      2 skipped) with test_own_stamp.py left out: that file needs eth_account,
+      which the daemon venv does not install, so it errors at collection there.
+    reviewed: 2026-10-29
+    state: green
   - path: .datacore/modules/chief-of-staff/server/lib
     reason: >
       Three scripts, none of them pytest. test_cos_route.py and

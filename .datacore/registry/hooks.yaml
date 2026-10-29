@@ -56,6 +56,11 @@ claude_code:
       scope: user
       installed_by: "install_redaction_guards.py --only context"
       timeout: 20
+    - type: command
+      command: "~/.config/iterm2/cc-status"
+      purpose: "iTerm2 tab status: show the session state in the terminal"
+      scope: user
+      installed_by: "hand-wired"
 
   UserPromptSubmit:
     - type: command
@@ -96,6 +101,18 @@ claude_code:
       scope: user
       installed_by: "install_redaction_guards.py --only redaction"
       timeout: 5
+    - type: command
+      command: "~/.config/iterm2/cc-status"
+      purpose: "iTerm2 tab status: show the session state in the terminal"
+      scope: user
+      installed_by: "hand-wired"
+    - type: command
+      command: "python3 ~/Data/.datacore/modules/provenance/lib/receipt_hook.py --turn-start"
+      purpose: "Provenance: snapshot dirty repo files at turn start"
+      scope: user
+      installed_by: "hand-wired (modules/provenance/README.md snippet)"
+      timeout: 15
+      async: true
 
   PreToolUse:
     - matcher: "EnterPlanMode"
@@ -268,6 +285,11 @@ claude_code:
       scope: user
       installed_by: "agent_host_setup.sh (install_redaction_guards.py --only policy)"
       timeout: 8
+    - type: command
+      command: "~/.config/iterm2/cc-status"
+      purpose: "iTerm2 tab status: show the session state in the terminal"
+      scope: user
+      installed_by: "hand-wired"
 
   SubagentStart:
     - matcher: ".*"
@@ -350,6 +372,11 @@ claude_code:
       scope: user
       installed_by: "install_redaction_guards.py --only redaction"
       timeout: 5
+    - type: command
+      command: "~/.config/iterm2/cc-status"
+      purpose: "iTerm2 tab status: show the session state in the terminal"
+      scope: user
+      installed_by: "hand-wired"
 
   SessionEnd:
     - type: command
@@ -370,6 +397,11 @@ claude_code:
       scope: user
       installed_by: "plur init"
       timeout: 5
+    - type: command
+      command: "~/.config/iterm2/cc-status"
+      purpose: "iTerm2 tab status: show the session state in the terminal"
+      scope: user
+      installed_by: "hand-wired"
 
   Stop:
     - matcher: "*"
@@ -400,12 +432,65 @@ claude_code:
       scope: user
       installed_by: "hand-wired"
       timeout: 5
+    - type: command
+      command: "~/.config/iterm2/cc-status"
+      purpose: "iTerm2 tab status: show the session state in the terminal"
+      scope: user
+      installed_by: "hand-wired"
+    - type: command
+      command: "python3 ~/Data/.datacore/lib/hooks/medical_review_gate.py"
+      purpose: "Refuse a medical-record reply that has no Verification status block"
+      scope: user
+      installed_by: "hand-wired"
+      timeout: 20
+    - type: command
+      command: "python3 ~/Data/.datacore/modules/provenance/lib/receipt_hook.py"
+      purpose: "Provenance: queue an agent receipt for the turn (Stop)"
+      scope: user
+      installed_by: "hand-wired (modules/provenance/README.md snippet)"
+      timeout: 10
+      async: true
 
   PostToolUseFailure:
     - matcher: "mcp__*"
       type: command
       command: "CLAUDE_HOOK_EVENT_NAME=PostToolUseFailure python3 ~/Data/.datacore/lib/hooks/mcp_health_check.py"
       purpose: "Report a failing MCP server after a tool failure"
+      scope: user
+      installed_by: "hand-wired"
+
+  SubagentStop:
+    - type: command
+      command: "~/.config/iterm2/cc-status"
+      purpose: "iTerm2 tab status: show the session state in the terminal"
+      scope: user
+      installed_by: "hand-wired"
+    - type: command
+      command: "python3 ~/Data/.datacore/modules/provenance/lib/receipt_hook.py"
+      purpose: "Provenance: queue an agent receipt for the turn (SubagentStop)"
+      scope: user
+      installed_by: "hand-wired (modules/provenance/README.md snippet)"
+      timeout: 10
+      async: true
+
+  Notification:
+    - type: command
+      command: "~/.config/iterm2/cc-status"
+      purpose: "iTerm2 tab status: show the session state in the terminal"
+      scope: user
+      installed_by: "hand-wired"
+
+  PermissionRequest:
+    - type: command
+      command: "~/.config/iterm2/cc-status"
+      purpose: "iTerm2 tab status: show the session state in the terminal"
+      scope: user
+      installed_by: "hand-wired"
+
+  StopFailure:
+    - type: command
+      command: "~/.config/iterm2/cc-status"
+      purpose: "iTerm2 tab status: show the session state in the terminal"
       scope: user
       installed_by: "hand-wired"
 

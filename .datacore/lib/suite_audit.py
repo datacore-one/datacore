@@ -42,7 +42,9 @@ NOT_SOURCE = (
 def is_source(path: Path) -> bool:
     s = f"/{path.as_posix()}/"
     # .datacore/state/ is gitignored runtime state; it can hold backup checkouts.
-    if s.startswith("/state/"):
+    # .datacore/worktrees/ holds git worktrees of other repositories (a trading
+    # branch was parked there on 2026-10-28); their tests are that repo's copy.
+    if s.startswith(("/state/", "/worktrees/")):
         return False
     return not any(x in s for x in NOT_SOURCE)
 
