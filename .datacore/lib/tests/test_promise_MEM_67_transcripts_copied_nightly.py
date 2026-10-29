@@ -7,7 +7,9 @@ Kind: deterministic + production contract.
     that session's subagent transcripts (<session>/subagents/agent-*.jsonl, where Claude
     Code writes them): every one lands in the mirror.
   * production (mac, read-only): every transcript under ~/.claude/projects older than 26 h
-    has a copy in 0-personal/traces/claude-code, and the job is scheduled.
+    has a copy in 0-personal/traces/claude-code, and the job is scheduled: a cron line,
+    or (the mac runs its duties on arrival since 2026-10-02, owner) the arrival job's
+    stamp written within 48 h. Eval amended with the owner's approval, 2026-10-29.
   * production (fleet, read-only ssh): a host whose ~/.claude/projects holds transcripts
     (agents run Claude sessions there too) has a nightly job copying them.
 
@@ -27,6 +29,19 @@ ROOT = Path(__file__).resolve().parents[3]
 JOB = ROOT / ".datacore" / "lib" / "sync_traces.sh"
 MIRROR = ROOT / "0-personal" / "traces" / "claude-code"
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+# The arrival job's stamp (jobs/manifest.yaml mac-sync-traces, max_age_hours 48).
+STAMP = Path.home() / ".datacore" / "state" / "sync-traces.last"
+STAMP_MAX_AGE = 48 * 3600
+
+
+def _scheduled(cron: str, stamp: Path, now: float) -> bool:
+    """A live cron line runs the copy, or the arrival job ran it within 48 h."""
+    if any("sync_traces.sh" in l and not l.lstrip().startswith("#") for l in cron.splitlines()):
+        return True
+    try:
+        return now - stamp.stat().st_mtime <= STAMP_MAX_AGE and "sync_traces:" in stamp.read_text()
+    except OSError:
+        return False
 
 
 def _run_job(home: Path, job: Path = JOB):
@@ -56,11 +71,25 @@ def test_every_transcript_including_subagents_reaches_the_mirror(tmp_path):
     assert not missing, f"the nightly copy skips these transcripts: {missing}"
 
 
+def test_an_arrival_run_counts_as_scheduled_only_while_its_stamp_is_fresh(tmp_path):
+    """Since 2026-10-02 the mac runs its duties on arrival (visitor_join.py), not on a
+    clock, so the copy is scheduled either by a cron line or by a fresh stamp from the
+    manifest's arrival job. Seeded failure: no cron line and a stale stamp -> red."""
+    stamp = tmp_path / "sync-traces.last"
+    stamp.write_text("2026-10-29T10:33:57Z sync_traces: 5 transcript(s) in x\n")
+    now = time.time()
+    assert _scheduled("", stamp, now)
+    os.utime(stamp, (now - 49 * 3600, now - 49 * 3600))
+    assert not _scheduled("", stamp, now)
+    assert _scheduled("0 0 * * * ~/Data/.datacore/lib/sync_traces.sh\n", stamp, now)
+    assert not _scheduled("# 0 0 * * * ~/Data/.datacore/lib/sync_traces.sh\n", tmp_path / "none", now)
+
+
 @pytest.mark.production
 def test_the_mac_mirror_holds_every_transcript_older_than_a_night():
     cron = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=30).stdout
-    assert any("sync_traces.sh" in l and not l.lstrip().startswith("#") for l in cron.splitlines()), \
-        "no scheduled nightly transcript copy on this machine"
+    assert _scheduled(cron, STAMP, time.time()), \
+        "no scheduled transcript copy on this machine (no cron line, and the arrival job's stamp is missing or older than 48 h)"
     src = Path.home() / ".claude" / "projects"
     cutoff = time.time() - 26 * 3600
     missing = [str(p.relative_to(src)) for p in src.rglob("*.jsonl")
