@@ -24,7 +24,10 @@
 set -uo pipefail
 
 DATA_DIR="${DATA_DIR:-$HOME/Data}"
-REMOTE="${REMOTE:-nightshift}"
+# The remote is opt-in. It defaulted to "nightshift"; that host was retired
+# (2026-10) and the job then failed two ssh timeouts every 5 minutes. With no
+# REMOTE the mirror is skipped and only the v2-runner refresh below runs.
+REMOTE="${REMOTE:-}"
 LOG_FILE="${LOG_FILE:-$HOME/.datacore/state-sync.log}"
 
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -40,6 +43,9 @@ log() { printf '[%s] %s\n' "$(ts)" "$*" >> "$LOG_FILE"; }
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=2)
 RSYNC=(rsync -a --timeout=120 -e "ssh ${SSH_OPTS[*]}")
 
+if [[ -z "$REMOTE" ]]; then
+  log "no remote configured (REMOTE unset) -- state mirror skipped"
+else
 log "begin sync from $REMOTE"
 
 # 1) Crew agent state (single directory, fixed location)
@@ -117,6 +123,8 @@ log "end sync"
 if [[ -t 1 ]]; then
   echo "Synced from $REMOTE: crew state + $synced venture heartbeats ($failed failed)"
   echo "Log: $LOG_FILE"
+fi
+
 fi
 
 # ── keep the v2-runner checkout current ──────────────────────────────────────
