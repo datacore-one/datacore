@@ -308,15 +308,25 @@ def _actor_is_agent(requested_by=None):
     review, and a fresh install without a registry has no agents."""
     try:
         _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import actor_identity
         from actor_identity import principal_of, resolve
         actor, _source = resolve()
         if not actor:
             return False
-        _name, entry = principal_of(actor)
+        # An explicit DATACORE_ROOT with no registry of its own yet (actor_identity
+        # never borrows one for it since 2026-10-08) would make every agent look
+        # unknown, and its :AI: tasks run unreviewed (MEM-57). For this read-only
+        # check, and only then, the registry beside this code answers: the stamp
+        # only ever ADDS a review.
+        path = None
+        if not Path(actor_identity.PRINCIPALS).exists():
+            beside = Path(__file__).resolve().parents[1] / "registry" / "principals.yaml"
+            path = beside if beside.exists() else None
+        _name, entry = principal_of(actor, path)
         if (entry or {}).get("kind") != "agent":
             return False
         if requested_by:
-            _who, requester = principal_of(str(requested_by))
+            _who, requester = principal_of(str(requested_by), path)
             if (requester or {}).get("kind") == "human":
                 return False
         return True
