@@ -501,18 +501,13 @@ listed (a report that arrived meanwhile waits for tomorrow):
 python3 .datacore/lib/inbox_reports.py file --space [N]-trading --to 1-tracks/trading/reports <each listed path>
 ```
 
-**Learning-loop wake reports** (owner decision 2026-10-29). Agents that learn through
-Project Hippocampus write a wake report each night: what the night replayed, what it
-changed and why. Reference each in the briefing with one line per agent: the report's
-path, and how many changes were applied (or "skipped" and why). Do not paste the report.
-- **Jimo** (Meridian's paper-trading agent): published by his nightly dream to
-  `6-meridian/0-inbox/reports/jimo-wake/jimo-wake-YYYY-MM-DD.md`, so the `list` above
-  already includes it; it goes in the trading section and is filed with the others.
-  A night with no file: write "No Jimo wake report for today", reason not verified.
-- **John** (The Practice): a local file on this Mac,
-  `~/.hippo/john/loop/john/reports/YYYY-MM-DD-dream.md`. Give its path and the count
-  of changes only; never quote it into the journal (it stays out of every repo). Until
-  John's night is switched on there is no file, and the line is left out.
+**Learning-loop wake reports.** An agent with a nightly learning loop writes a wake
+report: what the night replayed, what it changed and why. The agents and their report
+paths are listed under `wake_reports` in `.datacore/settings.local.yaml` (private;
+`{date}` is today). Reference each in its `section` with one line: the path, and how
+many changes were applied (or "skipped" and why). Never paste a report; for a
+`local_only` entry give the path and the count only. A missing file gets the entry's
+`missing` line, or no line when that is null.
 
 If there is still no report for today, write that in the trading section:
 "No market-phase report for today yet." Add the reason when you can find it:
