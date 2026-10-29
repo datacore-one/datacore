@@ -639,6 +639,48 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> 
         print(f"alert: {message}", file=sys.stderr)
 
 
+def _not_yet_due(jobs) -> dict[str, tuple[float, float]]:
+    """OPS-15: jobs this verifier first saw less than one freshness window ago.
+
+    A job is judged once the longest max_age_hours of its artifacts (26 h when
+    none is set) has passed since this host's verifier first listed it --
+    before that it cannot have run on schedule. 2026-10-28: box-delegation-review
+    was declared at 10:28 for 23:30 and alerted within the hour on a file from
+    10-25. The first run of this bookkeeping (no state file) records every job
+    it already knows as old, so installing it hides nothing. {name: (age_h, window_h)}.
+    """
+    if _NO_EMIT:
+        return {}
+    import json as _json
+    path = Path(os.environ.get("DATACORE_STATE", Path.home() / ".datacore" / "state")) \
+        / "job-verify-first-seen.json"
+    try:
+        seen = _json.loads(path.read_text())
+        seeding = not isinstance(seen, dict)
+    except (OSError, ValueError):
+        seen, seeding = None, True
+    seen = seen if isinstance(seen, dict) else {}
+    now = time.time()
+    new = [j.name for j in jobs if j.name not in seen]
+    for name in new:
+        seen[name] = 0 if seeding else now
+    if new:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(_json.dumps(seen, indent=1, sort_keys=True))
+            os.replace(tmp, path)
+        except OSError as exc:  # bookkeeping must not stop verification
+            print(f"first-seen record not saved: {exc}", file=sys.stderr)
+    out = {}
+    for j in jobs:
+        window = max([a.max_age_hours or 0 for a in j.artifacts] or [0]) or 26
+        age = (now - float(seen.get(j.name, 0))) / 3600
+        if age < window:
+            out[j.name] = (age, window)
+    return out
+
+
 def _check_job(job: Job) -> list[str]:
     """Run every artifact check for `job`, collecting failure strings.
 
@@ -823,7 +865,13 @@ def main(argv: list[str] | None = None) -> None:
 
     total_artifacts = 0
     any_failed = False
+    pending = _not_yet_due(machine_jobs)
     for job in machine_jobs:
+        if job.name in pending:
+            age, window = pending[job.name]
+            print(f"not yet due: job '{job.name}' first seen {age:.1f}h ago; judged once its "
+                  f"first {window:g}h window has passed (OPS-15)", file=sys.stderr)
+            continue
         failures = _check_job(job)
         total_artifacts += len(job.artifacts)
         ok = not failures
