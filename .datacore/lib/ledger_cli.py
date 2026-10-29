@@ -69,7 +69,7 @@ def _default_actor() -> str:
 
 
 #: Subcommands that append, and so need a writer identity.
-WRITERS = ("append", "approve", "void")
+WRITERS = ("append", "approve", "close", "void")
 
 
 def _json_dict(raw: str) -> dict:
@@ -123,6 +123,39 @@ def cmd_approve(args):
     event = guarded_append(EventLog(Path(args.space), actor), "approval.grant",
         {"item": item_id, "payload_hash": approval_payload_hash(args.payload)}, policy=policy)
     print(json.dumps({"approval_ref": event.hash, "payload_hash": event.payload["payload_hash"]}))
+
+
+def cmd_close(args: argparse.Namespace) -> None:
+    """Close one task in the ledger: the conditional `item.dismiss` org ingest writes.
+
+    For when the space's projection cannot be edited (its ingest is stopped, or
+    the file is stale or missing): on 2026-10-29 25 closes in 5-plur had to be
+    hand-written. Pinned to the item's current payload like an ingested close,
+    and written through the write guard.
+    """
+    from ledger.edits import EditConflict, conditional_payload, require_edit_protocol
+    from ledger.hub import authoritative_state
+    space = _require_space(args.space)
+    try:
+        version = require_edit_protocol(space)
+    except EditConflict as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    item = authoritative_state(space).items.get(args.id)
+    if item is None:
+        print(f"error: no item {args.id} in {space}", file=sys.stderr)
+        sys.exit(1)
+    if item.status in ("dismissed", "archived", "verified"):
+        print(f"error: {args.id} is already closed ({item.status})", file=sys.stderr)
+        sys.exit(1)
+    payload = conditional_payload(item, {"kind": args.kind, "reason": args.reason}, terminal=True,
+                                  version=version)
+    try:
+        event = guarded_append(EventLog(space, args.actor or _default_actor()), "item.dismiss", payload)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps({"hash": event.hash, "hlc": event.hlc, "closed": args.id, "kind": args.kind}))
 
 
 def cmd_void(args: argparse.Namespace) -> None:
@@ -334,6 +367,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("stopped", help="List logs the ledger stopped (exit 3 when any)")
     p.add_argument("--space", required=True, help="Space directory root")
 
+    p = sub.add_parser("close", help="Close one task in the ledger when its org projection cannot be edited")
+    p.add_argument("--space", required=True, help="Space directory root")
+    p.add_argument("--id", required=True, help="The item's id")
+    p.add_argument("--kind", required=True, choices=("done", "dropped"), help="done = finished, dropped = cancelled")
+    p.add_argument("--reason", required=True, help="Why it closed (recorded in the ledger)")
+    p.add_argument("--actor", default=None, help="Actor id (default: this machine's declared actor)")
+
     p = sub.add_parser("void", help="Cancel one bad event with an in-ledger void record")
     p.add_argument("--space", required=True, help="Space directory root")
     p.add_argument("--log", required=True, help="The voided event's log file (e.g. agent-a.jsonl)")
@@ -372,6 +412,7 @@ COMMANDS = {
     "approve": cmd_approve,
     "verify": cmd_verify,
     "stopped": cmd_stopped,
+    "close": cmd_close,
     "void": cmd_void,
     "items": cmd_items,
     "balances": cmd_balances,

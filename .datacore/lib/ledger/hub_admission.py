@@ -339,18 +339,35 @@ def _legacy_prefix(chain: str, events: list[Event], entry, excused=None) -> int:
 
 
 def admit_chain(chain: str, events: list[Event], auth: Authority, *, now_ms: int,
-                rejected=frozenset()) -> tuple[int, str | None]:
+                rejected=frozenset(), own_grantor_log: bool = False) -> tuple[int, str | None]:
     """(how many leading events of `chain` are admitted, why the next is not -- or None).
 
     `events` in seq order, as they lie in the log file. `rejected`: the
     (chain, seq, hash) the grantor recorded as rejected proposals; such an
-    event stays in the chain (no effect on state) instead of ending it."""
+    event stays in the chain (no effect on state) instead of ending it.
+
+    `own_grantor_log`: `chain` is a grantor's own log. The grantor writes the
+    `ledger.reject` records, and its log is admitted before any is read, so an
+    event of an UNKNOWN type there could never be rescued and ended the
+    grantor's chain for good -- every later lease, claim and seal with it
+    (2-datacore, 2026-10-28: a stale library wrote unsigned `task.create`
+    events into winston.jsonl). Such an event stays in the chain with no
+    effect -- the fold ignores types it does not know -- as long as it holds
+    its place: the next seq, the previous event's hash, its own hash. Every
+    known type, and every writer's log, keeps the rules above."""
     n, prior = 0, None
     try:
         if chain in auth.legacy:
             n = _legacy_prefix(chain, events, auth.legacy[chain], auth.excused())
             prior = events[n - 1] if n else None
         for e in events[n:]:
+            if own_grantor_log and isinstance(e.type, str) and e.type not in EVENT_TYPES:
+                expected_seq = prior.seq + 1 if prior is not None else 0
+                expected_prev = prior.hash if prior is not None else GENESIS
+                if e.seq != expected_seq or e.prev != expected_prev or compute_hash(event_body(e)) != e.hash:
+                    raise Refusal("bad_chain", f"{chain} seq {e.seq}: an unknown-type event out of place")
+                n, prior = n + 1, e
+                continue
             try:
                 check_event(e, chain, prior, auth, now_ms=now_ms)
             except Refusal as exc:
@@ -376,7 +393,8 @@ def admit(events: list[Event], auth: Authority, *, now_ms: int) -> Admission:
     # writer events are kept as rejected proposals (audit finding 11).
     for chain in sorted(chains, key=lambda c: (c not in auth.grantors, c)):
         ordered = sorted(chains[chain], key=lambda e: e.seq if type(e.seq) is int else -1)
-        n, why = admit_chain(chain, ordered, auth, now_ms=now_ms, rejected=frozenset(rejected))
+        n, why = admit_chain(chain, ordered, auth, now_ms=now_ms, rejected=frozenset(rejected),
+                             own_grantor_log=chain in auth.grantors)
         keep.update(id(e) for e in ordered[:n])
         if why:
             refused[chain] = why

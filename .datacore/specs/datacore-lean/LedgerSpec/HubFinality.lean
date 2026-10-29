@@ -8,6 +8,11 @@ as of round 8a (policy versions). Abstract, branch for branch where it matters:
   `admit(events)`, never the raw events. `admitted adm L = L.filter adm`, the
   admission oracle `adm` standing for signature, domain, chain and grantor
   checks (proved in their own right elsewhere; here any oracle).
+  Reviewed 2026-10-28 against `hub_admission.admit_chain`: an event of an
+  unknown type in a grantor's own log (signed or not) now stays in its chain,
+  with no effect, when it holds its place (seq, prev, hash), instead of ending
+  it. That changes which events the oracle admits, not how admitted events are
+  folded (the fold ignores unknown types), so nothing here changes.
 * **The fold order** (`log.read_events`): events sorted by HLC, ties broken by
   file name and line -- one total order. `key` is an event's position in it
   and is distinct per event (`KeyInj`). The canonical scan `pick` walks keys
