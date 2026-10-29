@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
@@ -74,7 +75,10 @@ def home(tmp_path):
 
 
 def run(*args, env=None):
-    return subprocess.run(["python3", str(TOOL), *args], capture_output=True, text=True,
+    # sys.executable, not "python3" from PATH: the nightly suite runs under a
+    # launchd PATH where python3 is macOS's 3.9, whose tarfile has no filter=
+    # (the tool targets the pods' Ubuntu 24.04 python 3.12).
+    return subprocess.run([sys.executable, str(TOOL), *args], capture_output=True, text=True,
                           env={**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", **(env or {})})
 
 

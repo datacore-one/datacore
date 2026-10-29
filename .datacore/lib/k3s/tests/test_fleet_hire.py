@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -131,6 +132,7 @@ def test_the_agent_entry_is_rendered_from_the_proposal(values):
                      "signingKeyName": "scout.key", "storage": "10Gi", "crontab": "*/30 * * * * true\n"}
 
 
+@pytest.mark.skipif(shutil.which("helm") is None, reason="helm not installed (as test_chart.py)")
 def test_the_chart_refuses_more_agents_than_the_cap():
     chart = K3S / "chart" / "fleet"
     r = subprocess.run(["helm", "template", "fleet", str(chart), "-f", str(K3S / "tests/fixtures/values-runtimes.yaml"),
