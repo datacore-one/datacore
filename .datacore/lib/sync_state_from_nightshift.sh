@@ -2,7 +2,9 @@
 # sync_state_from_nightshift.sh — Pull venture/crew state from the nightshift
 # server (the authoritative source) onto the local Mac.
 #
-# Why: nightshift owns the heartbeat. Local writes are NOT authoritative.
+# Why: the overnight agent's host owns the heartbeat (since 2026-10-28 Miles on
+# dayshift, as the user miles; the launchd plist sets REMOTE and REMOTE_USER).
+# Local writes are NOT authoritative.
 # The Mac desktop app reads filesystem files, so we mirror the relevant
 # state subset from nightshift periodically.
 #
@@ -28,6 +30,10 @@ DATA_DIR="${DATA_DIR:-$HOME/Data}"
 # (2026-10) and the job then failed two ssh timeouts every 5 minutes. With no
 # REMOTE the mirror is skipped and only the v2-runner refresh below runs.
 REMOTE="${REMOTE:-}"
+# The Unix user that writes the state on the remote, when it is not the ssh login:
+# Miles runs on dayshift as `miles`, whose home the login cannot read (2026-10-29).
+# Every remote read then runs as that user there (sudo -n -u), from their Data.
+REMOTE_USER="${REMOTE_USER:-}"
 LOG_FILE="${LOG_FILE:-$HOME/.datacore/state-sync.log}"
 
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -42,6 +48,13 @@ log() { printf '[%s] %s\n' "$(ts)" "$*" >> "$LOG_FILE"; }
 # rsync --timeout: a stalled transfer fails after 120 s of no I/O.
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=2)
 RSYNC=(rsync -a --timeout=120 -e "ssh ${SSH_OPTS[*]}")
+RDATA="Data"
+AS=""
+if [[ -n "$REMOTE_USER" ]]; then
+  RDATA="~$REMOTE_USER/Data"
+  AS="sudo -n -u $REMOTE_USER "
+  RSYNC+=(--rsync-path="sudo -n -u $REMOTE_USER rsync")
+fi
 
 if [[ -z "$REMOTE" ]]; then
   log "no remote configured (REMOTE unset) -- state mirror skipped"
@@ -51,7 +64,7 @@ log "begin sync from $REMOTE"
 # 1) Crew agent state (single directory, fixed location)
 mkdir -p "$DATA_DIR/.datacore/state/agents"
 if "${RSYNC[@]}" --include='*.json' --exclude='*' \
-    "$REMOTE:Data/.datacore/state/agents/" \
+    "$REMOTE:$RDATA/.datacore/state/agents/" \
     "$DATA_DIR/.datacore/state/agents/" 2>>"$LOG_FILE"; then
   log "crew state ok"
 else
@@ -74,9 +87,9 @@ if ! held_spaces=$(python3 "$(dirname "${BASH_SOURCE[0]}")/spaces.py" role held 
 fi
 synced=0
 failed=0
-if remote_spaces=$(ssh "${SSH_OPTS[@]}" "$REMOTE" \
-      'cd Data && for d in [1-9]-*/.datacore/state; do [ -d "$d" ] && echo "${d%%/*}"; done; true' \
-      2>>"$LOG_FILE"); then
+list_cmd="cd $RDATA && for d in [1-9]-*/.datacore/state; do [ -d \"\$d\" ] && echo \"\${d%%/*}\"; done; true"
+[[ -n "$AS" ]] && list_cmd="${AS}sh -c $(printf '%q' "$list_cmd")"
+if remote_spaces=$(ssh "${SSH_OPTS[@]}" "$REMOTE" "$list_cmd" 2>>"$LOG_FILE"); then
   for space_dir in "$DATA_DIR"/[1-9]-*/; do
     [[ -n "${held_unknown:-}" ]] && break
     space_name=$(basename "$space_dir")
@@ -102,7 +115,7 @@ if remote_spaces=$(ssh "${SSH_OPTS[@]}" "$REMOTE" \
     mkdir -p "$space_dir.datacore/state"
     if "${RSYNC[@]}" --include='heartbeat.json' --include='decisions-pending.json' \
           --exclude='*' \
-          "$REMOTE:Data/$remote_name/.datacore/state/" \
+          "$REMOTE:$RDATA/$remote_name/.datacore/state/" \
           "$space_dir.datacore/state/" 2>>"$LOG_FILE"; then
       synced=$((synced + 1))
     else
