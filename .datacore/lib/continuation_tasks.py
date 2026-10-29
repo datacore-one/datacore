@@ -17,8 +17,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ledger.fold import fold, org_task_state  # noqa: E402
-from ledger.log import read_events  # noqa: E402
+from ledger.fold import org_task_state  # noqa: E402
+from ledger.hub import authoritative_state  # noqa: E402
 
 OPEN = {"TODO", "NEXT", "WAITING", "REVIEW"}
 TAG = "continuation"
@@ -26,7 +26,7 @@ TAG = "continuation"
 
 def from_ledger(space: Path) -> list[dict]:
     found = []
-    for item in fold(read_events(space)).items.values():
+    for item in authoritative_state(space).items.values():
         p = item.payload or {}
         state = org_task_state(item)
         if TAG not in (p.get("tags") or []) or state not in OPEN:
