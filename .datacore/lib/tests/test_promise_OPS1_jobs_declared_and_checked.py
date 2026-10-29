@@ -157,6 +157,18 @@ def test_every_mac_datacore_job_is_declared_and_verified_daily():
             continue  # a daemon, not a scheduled job
         args = " ".join(d.get("ProgramArguments") or [d.get("Program", "")])
         lines.append(f"launchd {label}: {args}")
-    assert any("job_verify" in l for l in lines), "the verifier is not scheduled on the mac"
+    # Owner decision 2026-10-07: the mac runs no clock jobs; its verifier is a
+    # join duty (trigger join|wake|arrival in the manifest), run by the
+    # io.datacore.join launchd tick. That counts as scheduled -- but only while
+    # the tick that runs it is itself scheduled. (Eval amended 2026-10-29 with
+    # the owner's approval; it predated the decision.)
+    from jobs.manifest import effective_doc
+    verifier_duty = any(
+        j.get("machine") == "mac" and j.get("trigger") in ("join", "wake", "arrival")
+        and "job_verify" in " ".join(str(j.get(k, "")) for k in ("cmd", "command", "name")).replace("-", "_")
+        for j in (effective_doc(MANIFEST) or {}).get("jobs") or [])
+    join_tick = any(l.startswith("launchd io.datacore.join:") and "visitor_join" in l for l in lines)
+    assert any("job_verify" in l for l in lines) or (verifier_duty and join_tick), \
+        "the verifier is not scheduled on the mac (no clock job, and no join duty run by a scheduled join tick)"
     missing = _undeclared(lines, "mac")
     assert missing == [], "mac jobs scheduled but not in the manifest:\n" + "\n".join(missing)
