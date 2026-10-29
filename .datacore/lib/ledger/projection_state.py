@@ -162,7 +162,54 @@ def reconcile(space, current_text, proposed_text):
             if not _same(remote['items'].get(identity), fields, strict):
                 raise ProjectionConflict('no projection base and Org/ledger differ; reconciliation required')
         return remote
+    base = _repair_stale_base(space, base, current, remote, strict)
     return _changes(base, current, remote, strict=strict)
+
+
+REPAIRS = Path('.datacore/state/projection/base-repairs.jsonl')
+
+
+def _repair_stale_base(space, base, current, remote, strict):
+    """Repair the ancestor for items the base cannot speak for; leave the rest alone.
+
+    Ingest admits a capture to the ledger without moving the base, so the base
+    can lack an item the file and the ledger both hold, or still hold one the
+    file has moved past. If the ledger's copy has since moved on, the merge
+    reads the difference as a concurrent edit and refuses it on every cycle
+    (0-personal, 578 failures 2026-10-02..26). Only for those items does the
+    ledger win:
+      - in file and ledger, not in base, copies differ: the file's copy becomes
+        the ancestor, so the ledger's newer rendering is taken;
+      - in base and ledger, not in file, ledger changed it since the base: it
+        leaves the ancestor, so it comes back as the ledger has it.
+    A capture (not in the ledger) stays a local addition and waits for ingest;
+    a deletion of an item the ledger did not change keeps its refusal. Adopting
+    the whole file as the base (Winston's pod fix 6fc982f8) erased captures and
+    resurrected deletions. Each repair is appended to base-repairs.jsonl so the
+    owner can see which items followed the ledger.
+    """
+    items = dict(base['items'])
+    repaired = []
+    for identity in current['items'].keys() & remote['items'].keys() - items.keys():
+        if not _same(current['items'][identity], remote['items'][identity], strict):
+            items[identity] = current['items'][identity]
+            repaired.append((identity, 'base lacked it; ledger copy taken'))
+    for identity in items.keys() & remote['items'].keys() - current['items'].keys():
+        if not _same(items[identity], remote['items'][identity], strict):
+            del items[identity]
+            repaired.append((identity, 'file lacked it; ledger copy restored'))
+    if not repaired:
+        return base
+    try:
+        path = Path(space) / REPAIRS
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('a', encoding='utf-8') as stream:
+            at = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+            for identity, action in sorted(repaired):
+                stream.write(json.dumps({'at': at, 'id': identity, 'action': action}) + '\n')
+    except OSError:
+        pass  # the record is a courtesy; the merge must not fail on it
+    return {**base, 'items': items}
 
 
 def guard_projection(space, current_text, proposed_text):
