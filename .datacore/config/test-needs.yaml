@@ -507,5 +507,7 @@ tests:
     why: reads other machines over ssh
   - test: .datacore/lib/tests/ledger_upgrade/test_p0v_void_is_the_only_cancel.py
     only: [test_the_formerly_excepted_events_are_voided_in_ledger]
-    needs: [file:6-meridian/.datacore/events, file:5-plur/.datacore/events]
+    # The trading space is the first `held` space in install.yaml, the PLUR space
+    # the `product` one: needs name roles, never a space of ours (INS-3).
+    needs: [role:held/.datacore/events, role:product/.datacore/events]
     why: reads the live voids in the two spaces whose events the retired exceptions file named

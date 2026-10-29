@@ -89,7 +89,7 @@ def send(space_dir, *, agent: str, interval_s: int, transport, actor: str | None
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python3 -m ledger.checkin", description=__doc__.split("\n")[0])
     ap.add_argument("--space", required=True, help="the space directory whose hub carries check-ins")
-    ap.add_argument("--agent", required=True, help="the agent's name: miles, tris, data, winston")
+    ap.add_argument("--agent", required=True, help="the agent's name, as the roster and principals registry name it")
     ap.add_argument("--interval", type=int, required=True, help="seconds between this agent's check-ins")
     ap.add_argument("--actor", default=None, help="the ledger writer (default: this host's declared actor)")
     ap.add_argument("--hub-url", default=os.environ.get("DATACORE_HUB_URL"))

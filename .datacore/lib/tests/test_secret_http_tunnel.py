@@ -5,6 +5,7 @@ every keyed call fail there ("API connection failed"). Through a CONNECT
 tunnel the proxy sees only the host and port; the key travels inside TLS.
 Plain-HTTP calls and NO_PROXY hosts still never touch a proxy.
 """
+import re
 import socket
 import threading
 import urllib.error
@@ -49,7 +50,9 @@ def test_https_call_goes_through_the_proxy_as_a_tunnel_and_the_key_stays_inside(
     with pytest.raises(urllib.error.URLError):
         secret_http.urlopen(req, timeout=3)
     t.join(3)
-    assert seen and seen[0].startswith(b"CONNECT api.example.invalid:443 HTTP/1.1")
+    # http.client writes the CONNECT line as HTTP/1.0 up to Python 3.11 and as
+    # HTTP/1.1 from 3.12; either is the tunnel this test is about.
+    assert seen and re.match(rb"CONNECT api\.example\.invalid:443 HTTP/1\.[01]\r\n", seen[0])
     assert b"SYNTHETIC-KEY" not in seen[0] and b"Authorization" not in seen[0]
 
 
