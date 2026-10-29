@@ -1,8 +1,11 @@
-"""CAD-6: A missed or failed duty shows red within its window. Its agent gets a repair
-job, and I hear about it only if the repair fails three times or takes 24 hours.
+"""MSG-13: a failure held back because "the repair path owns it" still reaches me, once,
+when that path is paused, has given up, or has run past its window.
 
-This file guards one way that promise breaks (the existing CAD-6 evals cover the
-cadence repair chain): a failure the repairer cannot take on is never told to me.
+Split from CAD-6 on 2026-10-28: CAD-6 is green in the committed baseline (its cadence
+evals pass), and this is a different path through job_verify, found in the 7-day fleet
+log review (Winston: no backup for 3.7 days, 60 failures, 0 messages).
+
+Today a failure the repairer cannot take on is never told to me.
 
 Kind: deterministic. The real verifier (job_verify.main, with its recurrence and
 dedup bookkeeping in the suite's tmp state) judges one job whose artifact keeps
