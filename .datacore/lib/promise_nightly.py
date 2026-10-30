@@ -336,6 +336,27 @@ def load_history(state: Path, before: str) -> list[dict]:
     return out
 
 
+def last_reason(history: list[dict], pid: str) -> tuple[str, str] | None:
+    """(why, date) of the newest night this promise was red with a reason recorded."""
+    for h in history:
+        e = (h.get("promises") or {}).get(pid) or {}
+        if e.get("state") == RED and e.get("why"):
+            why = str(e["why"])
+            m = re.search(r" \(last seen (\d{4}-\d{2}-\d{2})\)$", why)
+            return (why[:m.start()], m.group(1)) if m else (why, str(h.get("date") or ""))
+    return None
+
+
+def carry_reasons(board: dict, history: list[dict]) -> None:
+    """A red not rerun tonight (already reported) keeps the last reason on record, dated,
+    so every red on the board says why (owner, 2026-10-30: 53 of 65 reds had none)."""
+    for pid, e in (board.get("promises") or {}).items():
+        if e.get("state") == RED and not e.get("why"):
+            last = last_reason(history, pid)
+            if last:
+                e["why"] = f"{last[0]} (last seen {last[1]})"
+
+
 def baseline_green() -> set[str]:
     try:
         return {_norm(x) for x in json.loads(Path(BASELINE).read_text()).get("green", [])}
@@ -551,6 +572,8 @@ def main(argv: list[str] | None = None) -> int:
         judged = next((x for x in past if x.get("state") in (GREEN, RED)), {})
         if judged.get("state") == RED and SKIPPED in str(judged.get("why") or ""):
             return True   # recorded red from a skip by the old rule: judge it again
+        if judged.get("state") == RED and not last_reason(history, pid):
+            return True   # red with no reason on record: run it once more for one
         return judged.get("state") != RED
 
     try:
@@ -561,6 +584,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             raw = run_board(rerun)
         board = build_board(raw, unmet, promise_texts(), date=night)
+        carry_reasons(board, history)
     except Exception as exc:  # noqa: BLE001 -- the contract line must say it failed
         print(f"{label}: FAILED to run ({type(exc).__name__}: {str(exc)[:200]})")
         return 1

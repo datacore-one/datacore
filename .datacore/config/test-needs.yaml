@@ -511,3 +511,66 @@ tests:
     # the `product` one: needs name roles, never a space of ours (INS-3).
     needs: [role:held/.datacore/events, role:product/.datacore/events]
     why: reads the live voids in the two spaces whose events the retired exceptions file named
+
+  # ---- promise evals: one machine, or where a person works (owner, 2026-10-30) ----
+  # "We should be running only relevant promises on each machine." Each of these was
+  # read before it was declared: it checks the Mac itself, or the owner's interactive
+  # session set-up, so on the overnight host (Miles's account) it reads could-not-run.
+  - test: .datacore/lib/tests/test_promise_OPS1_jobs_declared_and_checked.py
+    only: [test_every_mac_datacore_job_is_declared_and_verified_daily]
+    needs: [machine:mac]
+    why: reads the Mac's launchd jobs; the eval itself fails elsewhere with "not the mac"
+  - test: .datacore/lib/tests/test_promise_MEM_67_transcripts_copied_nightly.py
+    only: [test_the_mac_mirror_holds_every_transcript_older_than_a_night]
+    needs: [machine:mac]
+    why: reads the Mac's ~/.claude/projects and its mirror in 0-personal/traces
+  - test: .datacore/lib/tests/test_promise_MEM_19_memory_holds_no_names_or_secrets.py
+    only: [test_loaded_memory_holds_no_forbidden_detail]
+    needs: [machine:mac]
+    why: reads the auto-memory index of the Mac's project folder (-Users-gregor-Data)
+  - test: .datacore/lib/tests/test_promise_MEM_19_memory_holds_no_names_or_secrets.py
+    only: [test_writing_a_forbidden_index_line_is_not_silently_allowed]
+    needs: [workstation]
+    why: probes the write hooks of the owner's interactive sessions
+  - test: .datacore/lib/tests/test_promise_MEM_14_demo_redacts_before_showing.py
+    only: [test_the_guard_is_wired_for_every_prompt]
+    needs: [workstation]
+    why: demos and screen shares happen in the owner's own sessions, not an agent's
+  - test: .datacore/lib/tests/test_promise_MEM_30_evals_first_builder_cannot_edit.py
+    only: [test_interactive_edit_of_an_eval_is_not_silently_allowed]
+    needs: [workstation]
+    why: an interactive edit is a person's session; agents are covered by the in-flight policy test beside it
+  # From the 2026-10-30 rerun on the overnight host, each failure read before declaring:
+  - test: .datacore/lib/tests/test_promise_OPS6_creds_from_broker_same_everywhere.py
+    needs: [file:.datacore/secrets/scripts/distribute.sh, file:.datacore/specs/credential-index.yaml]
+    why: drives the credential store's distribute script and index, which live only where the broker's store is
+  - test: .datacore/lib/tests/test_promise_OPS7_retired_credential_gone_everywhere.py
+    needs: [file:.datacore/secrets/scripts/distribute.sh, file:.datacore/specs/credential-index.yaml]
+    why: drives the credential store's distribute script and index, which live only where the broker's store is
+  - test: .datacore/lib/tests/test_promise_MEM_68_install_reports_module_failure.py
+    needs: [cli:node, file:3-fds/2-projects/datacore-cli/dist/index.js]
+    why: runs the built datacore-cli installer; its build lives in another space's checkout
+  - test: .datacore/modules/chief-of-staff/tests/test_promise_DAY7_evening_review_with_buttons.py
+    only: [test_winston_ran_delivered_and_asked_last_evening]
+    needs: [fleet]
+    why: reads Winston's pod over ssh; only the console reaches him
+  - test: .datacore/modules/chief-of-staff/tests/test_promise_INB_1_every_space_every_morning.py
+    only: [test_winston_runs_the_current_inbox_job_every_morning]
+    needs: [fleet]
+    why: reads Winston's pod over ssh; only the console reaches him
+  - test: .datacore/modules/ventures/tests/test_promise_AGT4_login_limit_says_so_and_waits.py
+    only: [test_agent_says_the_login_expired_and_does_not_pay]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/modules/ventures/tests/test_promise_CAD5_never_another_agents_duty.py
+    only: [test_miles_reports_tris_overdue_duty_instead_of_doing_it]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/modules/mail/tests/test_promise_MEM_34_mail_judged_one_by_one.py
+    only: [test_agent_does_not_bulk_archive_github_mail]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/modules/nightshift/tests/test_promise_MEM_40_reminder_open_until_confirmed.py
+    only: [test_agent_that_only_checked_does_not_close_the_reminder]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
