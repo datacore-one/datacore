@@ -752,6 +752,46 @@ def foreign_writer_logs(space: Path) -> list[tuple[str, str, str]]:
     return out
 
 
+def _follow_origin_untrack(space: Path, ref: str) -> list[str]:
+    """Untrack here (working copy kept) what `ref` stopped tracking and ignores.
+
+    A generated file -- 5-plur's org/next_actions.org projection -- was tracked
+    again by an agent's commit and untracked on origin the same day. The host
+    still tracking it regenerates it every hour, so the merge met a dirty file
+    origin deletes and git refused it ("would be overwritten by merge") every
+    cycle from 2026-10-29. Only paths origin deleted since the merge base AND
+    lists in its own .gitignore: a deliberate untrack, never a lost file.
+    """
+    import tempfile
+    rc, base, _ = _git(space, "merge-base", "HEAD", ref)
+    if rc != 0 or not base.strip():
+        return []
+    rc, out, _ = _git(space, "-c", "core.quotepath=off", "diff", "--name-only",
+                      "--diff-filter=D", base.strip(), ref)
+    gone = [p for p in out.splitlines() if p.strip()]
+    if not gone:
+        return []
+    rc, ignore, _ = _git(space, "show", f"{ref}:.gitignore")
+    if rc != 0 or not ignore.strip():
+        return []
+    _, tracked, _ = _git(space, "-c", "core.quotepath=off", "ls-files", "--", *gone)
+    tracked_set = set(tracked.splitlines())
+    gone = [p for p in gone if p in tracked_set]
+    if not gone:
+        return []
+    with tempfile.NamedTemporaryFile("w", suffix=".gitignore", delete=False) as fh:
+        fh.write(ignore)
+    try:
+        _, ign, _ = _git(space, "-c", f"core.excludesFile={fh.name}", "-c", "core.quotepath=off",
+                         "check-ignore", "--no-index", "--", *gone)
+    finally:
+        os.unlink(fh.name)
+    paths = [p for p in ign.splitlines() if p.strip()]
+    for p in paths:
+        _git(space, "rm", "-q", "--cached", "--", p)
+    return paths
+
+
 def converge(space: Path, *, root: Path | None = None) -> Result:
     """Apply the registered category at every entry point, including direct calls."""
     cat = classify(space, root)
@@ -1009,6 +1049,8 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         return Result(False, f"{busy} in progress — finish or abort it by hand, then converge",
                       {"branch": db, "in_progress": busy})
 
+    untracked_like_origin = _follow_origin_untrack(space, f"origin/{db}")
+
     # Autosave BEFORE merging. A dirty working file makes git refuse the
     # merge, and refusing forever means never converging — 2-datacore was
     # 45 behind when this was written. Commit, never stash: ENG-2026-0729-009
@@ -1020,6 +1062,10 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
     hook_detail = ""
     if autosaved:
         _git(space, "add", "-A")
+        # `add -A` re-stages what origin untracked: this host's .gitignore does
+        # not list it until the merge brings origin's.
+        for path in untracked_like_origin:
+            _git(space, "rm", "-q", "--cached", "--", path)
         # NEVER autosave a submodule pointer. `add -A` stages a changed
         # gitlink, so an unattended converge would silently move `.datacore/dips`
         # to whatever commit happens to be checked out locally — publishing a

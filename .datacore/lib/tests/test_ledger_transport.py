@@ -841,3 +841,34 @@ def test_everything_published_still_says_so(monkeypatch, tmp_path):
     lt = _rows(monkeypatch, [{"actor": "mac", "local_seq": 4, "remote_seq": 4, "gap": 0, "pending": 0}])
     result = lt.gaps(tmp_path)
     assert result.ok and result.reason == "all published"
+
+
+def test_a_generated_file_origin_untracked_is_untracked_here_too(repo_pair: Path, tmp_path: Path):
+    """Origin stopped tracking a generated file; this host still tracks it and
+    has regenerated it. Git refused the merge forever ("your local changes would
+    be overwritten"), so the space never converged again (Winston's 5-plur,
+    2026-10-29..30). Follow origin's untrack, keep the working copy."""
+    (repo_pair / "next_actions.org").write_text("old projection\n")
+    git(repo_pair, "add", "-A")
+    git(repo_pair, "commit", "-qm", "an agent tracked the projection")
+    git(repo_pair, "push", "-q", "origin", "main")
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", str(tmp_path / "origin.git"), str(other)], check=True)
+    git(other, "config", "user.email", "o@o")
+    git(other, "config", "user.name", "o")
+    (other / ".gitignore").write_text("next_actions.org\n")
+    git(other, "rm", "-q", "--cached", "next_actions.org")
+    git(other, "add", ".gitignore")
+    git(other, "commit", "-qm", "untrack the generated projection")
+    git(other, "push", "-q", "origin", "main")
+    hook = repo_pair / ".git" / "hooks" / "pre-commit"   # the real hook refuses a generated projection
+    hook.write_text("#!/bin/sh\ngit diff --cached --name-only --diff-filter=AM | grep -q next_actions.org && exit 1\nexit 0\n")
+    hook.chmod(0o755)
+    (repo_pair / "next_actions.org").write_text("regenerated projection, much longer\n")
+
+    res = converge(repo_pair)
+
+    assert res.ok, res
+    assert (repo_pair / "next_actions.org").read_text() == "regenerated projection, much longer\n"
+    assert git(repo_pair, "ls-files", "next_actions.org").stdout.strip() == ""
+    assert git(repo_pair, "status", "--porcelain").stdout.strip() == ""
