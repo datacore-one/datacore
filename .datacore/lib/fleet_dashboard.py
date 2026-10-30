@@ -809,7 +809,7 @@ $("save").innerHTML=I("save")+"SAVE";
 function rowHTML(r,i){const s=S[r.id]||{};
  const age=r.days==null?"":`<span class="tag age${r.days>=7?" old":""}">${I("clock")}${r.days>=29?"30+":r.days}d</span>`;
  const tip=[r.title,r.severity==="red"?"CRITICAL":KIND[r.weight||1]||"",r.why,r.how,r.asked_by?"Asked by the crew.":""].filter(Boolean).join("\n\n");
- const opts=r.options.map(o=>`<button class="opt${o.value===r.suggested?" sug":""}${s.choice===o.value?" on":""}" data-row="${i}" data-v="${esc(o.value)}"${tipAttr((o.value===r.suggested?"Suggested. ":"")+(o.consequence||o.label))}>${esc(o.label)}</button>`).join("");
+ const opts=r.options.map(o=>`<button class="opt${o.value===r.suggested?" sug":""}${s.choice===o.value?" on":""}" data-row="${i}" data-v="${esc(o.value)}"${tipAttr((o.value===r.suggested?"Suggested. ":"")+o.label+(o.consequence?" — "+o.consequence:""))}>${esc(o.label.length>20?o.label.slice(0,19)+"…":o.label)}</button>`).join("");
  const cp=r.command?`<button class="ib" data-copy="${i}" data-kind="command"${tipAttr("Copy command:\n"+r.command)}>${I("term")}</button>`
    :r.brief?`<button class="ib" data-copy="${i}" data-kind="brief"${tipAttr("Copy brief for Claude:\n"+r.brief)}>${I("brief")}</button>`:"";
  return `<div class="row ${r.severity}${r.asked_by?" crew":""}${s.choice?" done":""}" id="r${i}"><span class="sv">${I(r.asked_by?"ask":"alert")}</span>
@@ -842,7 +842,7 @@ $("save").onclick=()=>{const dec={};R.forEach(r=>{const s=S[r.id]||{};if(s.choic
 
 // crew log
 const L=D.crewlog||[];
-$("lsum").textContent=L.length?`${L.filter(f=>f.verified&&!f.still_failing).length} fixed and verified · last 48 h`:"fixed by the crew, last 48 h";
+$("lsum").textContent=L.length?`${L.filter(f=>f.verified).length} verified · ${L.filter(f=>f.verified&&f.still_failing).length} awaiting the checker's rerun · ${L.filter(f=>!f.verified).length} not verified`:"fixed by the crew, last 48 h";
 $("log").innerHTML=L.map(f=>{const st=!f.verified?["no","xc","not verified"]:f.still_failing?["wait","clock","fixed; the job checker has not rerun yet"]:["ok","okc","fixed and verified"];
  const tip=[`${f.machine} · ${f.title}`,st[2],f.what,f.evidence?"Evidence: "+f.evidence:"",f.at?"Logged "+f.at:""].filter(Boolean).join("\n\n");
  return `<li${tipAttr(tip)}><span class="s ${st[0]}">${I(st[1])}</span><span class="tag">${esc(f.machine)}</span><span class="t">${esc(f.title)}</span><span class="tm">${esc((f.at||"").slice(11,16))}</span></li>`}).join("")
