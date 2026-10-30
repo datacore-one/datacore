@@ -67,3 +67,31 @@ def test_a_copy_that_does_not_match_is_not_success(tmp_path, monkeypatch):
     ok, msg = A.ServerArchiver(_Config()).archive_item(item)
     assert not ok, "a truncated copy must never let the caller delete the original"
     assert "checksum" in msg
+
+
+def test_an_archive_repo_ignores_private_context_layers(monkeypatch, tmp_path):
+    """SPC-3: every repository on a machine ignores CLAUDE.local.md, archive repos included.
+    The archives on the executor host were created by a bare `git init` and ignored nothing."""
+    remote_home = tmp_path / "home"
+    remote_home.mkdir()
+    real_run = subprocess.run
+    _fake_remote(monkeypatch, remote_home)
+    arch = A.ServerArchiver(_Config())
+    existing = remote_home / "Data" / "1-a-archive"
+    for repo_exists in (False, True):
+        if repo_exists:  # an archive created before this rule: still gets the ignore line, once
+            (existing / ".gitignore").write_text("*.tmp\n")
+        assert arch.ensure_repo_exists("1-a")
+        assert arch.ensure_repo_exists("1-a")
+        r = real_run(["git", "-C", str(existing), "check-ignore", "-q", "CLAUDE.local.md"])
+        assert r.returncode == 0
+        assert (existing / ".gitignore").read_text().count("CLAUDE.local.md") == 1
+
+
+def test_a_local_archive_repo_ignores_private_context_layers(tmp_path):
+    cfg = type("C", (), {"local_archive_path": tmp_path})()
+    arch = A.LocalArchiver(cfg)
+    assert arch.ensure_repo_exists("1-a") and arch.ensure_repo_exists("1-a")
+    repo = tmp_path / "1-a-archive"
+    assert subprocess.run(["git", "-C", str(repo), "check-ignore", "-q", "CLAUDE.local.md"]).returncode == 0
+    assert (repo / ".gitignore").read_text().count("CLAUDE.local.md") == 1

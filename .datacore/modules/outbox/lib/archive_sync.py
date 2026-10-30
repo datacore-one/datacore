@@ -169,6 +169,10 @@ class ArchiveScanner:
         return items
 
 
+#: The private context layer (DIP-0002); no repository may track it (SPC-3).
+PRIVATE_IGNORE = "CLAUDE.local.md"
+
+
 class ServerArchiver:
     """Archives content to server-based repos."""
 
@@ -225,6 +229,10 @@ class ServerArchiver:
             # file loose and unversioned.
             self._ssh_command(f"mkdir -p ~/{shlex.quote(repo_path)} && git -C ~/{shlex.quote(repo_path)} init")
             success, _ = self._ssh_command(f"test -d ~/{shlex.quote(repo_path)}")
+        if success:
+            # SPC-3: an archive is a repository like any other; it never takes a private layer.
+            gi = f"~/{shlex.quote(repo_path)}/.gitignore"
+            self._ssh_command(f"grep -qxF {PRIVATE_IGNORE} {gi} 2>/dev/null || echo {PRIVATE_IGNORE} >> {gi}")
         return success
 
     def list_archived_files(self, space: str) -> set:
@@ -356,6 +364,10 @@ class LocalArchiver:
             repo_path.mkdir(parents=True)
             # Initialize git repo
             subprocess.run(["git", "init"], cwd=repo_path, capture_output=True, timeout=30)
+        gi = repo_path / ".gitignore"
+        lines = gi.read_text().splitlines() if gi.exists() else []
+        if PRIVATE_IGNORE not in lines:
+            gi.write_text("\n".join([*lines, PRIVATE_IGNORE]) + "\n")
         return True
 
     def list_archived_files(self, space: str) -> set:
