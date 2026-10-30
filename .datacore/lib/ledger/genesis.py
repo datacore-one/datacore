@@ -67,6 +67,35 @@ CLOSED_KINDS = {"DONE": "done", "CANCELLED": "dropped"}
 GENESIS_FALLBACK = "1970-01-01"
 
 
+def space_label(space_dir: Path) -> str:
+    """The space an admitted item is labelled with: the registry's name for it.
+
+    Was `space_dir.name`, which is the folder a clone happens to sit in. Tris's
+    clone of the PLUR space is ~/Data/2-plur, so his creates said "2-plur" and
+    every other host's projection filtered them out as foreign (2026-10-30).
+    A folder that is a registry key keeps its own name; a clone elsewhere takes
+    the key of the entry for its origin repository; anything unresolvable keeps
+    the folder name, as before.
+    """
+    space_dir = Path(space_dir)
+    try:
+        import sys
+        lib = Path(__file__).resolve().parents[1]
+        if str(lib) not in sys.path:
+            sys.path.insert(0, str(lib))
+        from ledger_transport import _registry
+        entries = _registry(space_dir.parent)
+    except Exception:  # noqa: BLE001 -- no readable registry: the folder is all we know
+        return space_dir.name
+    if not entries or space_dir.name in entries:
+        return space_dir.name
+    r = subprocess.run(["git", "-C", str(space_dir), "config", "--get", "remote.origin.url"],
+                       capture_output=True, text=True)
+    repo = r.stdout.strip().rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1].removesuffix(".git")
+    keys = [k for k, e in entries.items() if "/" not in k and e.get("repo") == repo] if repo else []
+    return keys[0] if len(keys) == 1 else space_dir.name
+
+
 @dataclass
 class ScanResult:
     """What an import WOULD do, computed without writing anything."""
@@ -336,7 +365,7 @@ def scan(space_dir: Path, org_file: Path | None = None) -> ScanResult:
             filetags = sorted(t for t in line.split(":", 1)[1].split(":") if t.strip())
             break
     repo, rel = space_dir, str(org_file.relative_to(space_dir))
-    space = space_dir.name
+    space = space_label(space_dir)
 
     for node in ws.all_nodes():
         state = node.todo

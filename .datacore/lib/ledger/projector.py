@@ -448,8 +448,20 @@ def projected_items(state: LedgerState, *, space: str | None = None,
             or (item.status in CLOSED_STATUSES
                 and _closed_within(item, CLOSED_RETENTION_DAYS, as_of)
                 and closure_kind(item) != "housekeeping"))
-        and (space is None or (item.payload or {}).get("space", space) == space)
+        and (space is None or same_space((item.payload or {}).get("space", space), space))
     ]
+
+
+def _bare(label) -> str:
+    head, _, tail = str(label).partition("-")
+    return tail if head.isdigit() and tail else str(label)
+
+
+def same_space(label, space: str) -> bool:
+    """One space under two hosts' local number prefixes (2-plur, 5-plur) is one
+    space (ENG-2026-08-03-047); only a different name is foreign. Items Tris
+    admitted from his 2-plur clone were dropped as foreign until 2026-10-30."""
+    return label == space or _bare(label) == _bare(space)
 
 
 def project(state: LedgerState, *, space: str | None = None,
@@ -462,7 +474,8 @@ def project(state: LedgerState, *, space: str | None = None,
     renamed, producing diff noise that hides real change.
     """
     if any(item.edit_conflicts for item in state.items.values()
-           if space is None or item.payload.get('space') in (None, space)):
+           if space is None or item.payload.get('space') is None
+           or same_space(item.payload.get('space'), space)):
         from .edits import EditConflict
         raise EditConflict('unresolved replicated edits; preserve the file and reconcile event conflicts')
     # An ABSENT space means "this space", not "no space".
