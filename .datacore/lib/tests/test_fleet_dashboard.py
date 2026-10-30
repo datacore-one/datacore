@@ -179,3 +179,12 @@ def test_a_torn_log_line_is_skipped_not_fatal(tmp_path):
     p = tmp_path / "fixes.jsonl"
     p.write_text('{"job": "a"}\n{"job": \n\n{"job": "b"}\n')
     assert [r["job"] for r in fd.read_jsonl(p)] == ["a", "b"]
+
+
+def test_a_crew_question_about_a_job_replaces_its_generic_row_and_keeps_its_age():
+    orders = [{"severity": "amber", "title": "WINSTON: Self-test", "brief": "x", "machine": "WINSTON",
+               "job": "bridge-v2-verify", "days": 30}]
+    extra = [{"id": "v2-conformance", "title": "Schedule the v2 fixes", "machine": "WINSTON", "job": "bridge-v2-verify",
+              "suggested": "crew-task", "options": [{"value": "crew-task", "label": "Crew"}, {"value": "accept", "label": "Accept"}]}]
+    rows = fd.decision_rows(orders, extra)
+    assert [r["id"] for r in rows] == ["v2-conformance"] and rows[0]["days"] == 30

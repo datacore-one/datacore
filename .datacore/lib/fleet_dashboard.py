@@ -413,7 +413,11 @@ def merge_fixes(orders: list, fixes: list) -> tuple[list, list]:
 
 def decision_rows(orders: list, extra: list) -> list:
     rows = []
+    asked = {(d.get("machine"), d.get("job")) for d in extra if d.get("job")}
+    age = {(o.get("machine"), o.get("job")): o.get("days") for o in orders}
     for o in orders:
+        if (o.get("machine"), o.get("job")) in asked:
+            continue  # the crew asked a sharper question about this job
         slug = re.sub(r"[^a-z0-9]+", "-", f"{o.get('machine', '')}-{o.get('job') or o['title']}".lower()).strip("-")
         cmd = bool(o.get("command"))
         rows.append({"id": slug, "title": o["title"], "severity": o["severity"], "weight": o.get("weight"),
@@ -426,7 +430,7 @@ def decision_rows(orders: list, extra: list) -> list:
             continue
         sug = d.get("suggested") if d.get("suggested") in [o["value"] for o in opts] else opts[0]["value"]
         rows.append({"id": str(d.get("id") or d["title"])[:60], "title": d["title"], "severity": d.get("severity", "amber"),
-                     "machine": d.get("machine"), "days": None, "why": d.get("context", ""), "how": "",
+                     "machine": d.get("machine"), "days": age.get((d.get("machine"), d.get("job"))), "why": d.get("context", ""), "how": "",
                      "command": d.get("command"), "brief": None, "options": opts, "suggested": sug, "asked_by": "crew"})
     return rows
 
