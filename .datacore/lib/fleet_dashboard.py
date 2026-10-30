@@ -322,16 +322,18 @@ def owner_orders(box: dict, dcd: dict, vessels: list, today: str) -> list:
                        "why": f"No copy of Winston, Tris or Data since {newest or 'unknown'}: a lost volume loses that work."
                               f" The nightly run skips because the box disk is too full.{gb}",
                        "since": newest, "days": _days(newest, today), "owner": "you", "command": CMD_BACKUP,
+                       "machine": "BOX HOST", "job": "fleet-backup",
                        "how": "Clears 15 GB of leftovers (temp audit folders, a worker folder unused since 09-14), then runs the backup."})
     tools = dcd.get("tools") or {}
     down = [k for k in ("datacore", "plur") if tools.get(k) and tools.get(k) != "connected"]
     if dcd.get("status") == "unreachable":
         orders.append({"severity": "red", "title": "Winston's app server is unreachable", "why": dcd.get("error") or "",
-                       "owner": "you", "brief": "Winston's datacored on the box does not answer its health check. Find out why."})
+                       "owner": "you", "machine": "WINSTON", "job": "datacored",
+                       "brief": "Winston's datacored on the box does not answer its health check. Find out why."})
     elif down:
         orders.append({"severity": "red", "title": "Winston's app server has no tools",
                        "why": f"It reports ok, but its {' and '.join(down)} links are down: the app's chat cannot read your tasks or memory.",
-                       "owner": "you", "command": CMD_TOOLS,
+                       "owner": "you", "command": CMD_TOOLS, "machine": "WINSTON", "job": "datacored-tools",
                        "how": "Fixes two paths in his tool config, then restarts his pod (about a minute)."})
     good = next((POD_DEPLOY[v["key"]] for v in vessels
                  if v.get("key") in POD_DEPLOY and v.get("checker") == "checked today"), None)
@@ -339,7 +341,7 @@ def owner_orders(box: dict, dcd: dict, vessels: list, today: str) -> list:
         if str(v.get("checker", "")).startswith("checker crashes"):
             o = {"severity": "red", "title": f"{v['label']}'s job checker crashes",
                  "why": f"Every run is rejected ({v['checker'][17:]}), so none of {v['label']}'s jobs are being verified.",
-                 "owner": "you"}
+                 "owner": "you", "machine": v["label"], "job": "job-checker"}
             if v.get("key") in POD_DEPLOY and good and good != POD_DEPLOY[v["key"]]:
                 o["command"] = cmd_roster(POD_DEPLOY[v["key"]], good)
                 o["how"] = f"Copies {good.title()}'s complete machine list over {v['label']}'s, keeping a backup."
@@ -348,7 +350,7 @@ def owner_orders(box: dict, dcd: dict, vessels: list, today: str) -> list:
             orders.append(o)
         elif not v.get("reachable", True):
             orders.append({"severity": "red", "title": f"{v['label']} is unreachable", "why": v.get("error") or "",
-                           "owner": "you", "brief": f"The fleet console cannot reach {v['label']}: {v.get('error')}. Find out why."})
+                           "owner": "you", "machine": v["label"], "job": "reach", "brief": f"The fleet console cannot reach {v['label']}: {v.get('error')}. Find out why."})
     for v in vessels:
         for f in v.get("faults", []):
             if f.get("bucket") != "you":
@@ -358,11 +360,81 @@ def owner_orders(box: dict, dcd: dict, vessels: list, today: str) -> list:
                            "why": (f"{lost} " if lost else "") + f"{f['detail'][:1].upper()}{f['detail'][1:]}. "
                                   f"{f['note'][:1].upper()}{f['note'][1:]}.",
                            "since": f.get("first") or None, "days": _days(f.get("first"), today), "owner": "you",
+                           "machine": v["label"], "job": f["job"],
                            "brief": (f"On the Datacore fleet, the job '{f['job']}' on {v['label']} has been failing since "
                                      f"{f.get('first') or 'today'}: {f['detail']} ({f['note']}). Find the root cause and fix it. "
                                      f"Owner rules apply: tests first, and pod or box writes go to the owner as commands.")})
     rank = {"red": 0, "amber": 1}
     return sorted(orders, key=lambda o: (rank.get(o["severity"], 2), -o.get("weight", 9), -(o.get("days") or 0)))
+
+
+# -- v3: crew log and decision board ----------------------------------------------
+
+FIXES = ROOT / ".datacore" / "state" / "fleet-fixes.jsonl"
+DECISIONS = ROOT / ".datacore" / "state" / "fleet-decisions.jsonl"
+BOARD = "fleet-console"
+CREW_OPTIONS = [
+    {"value": "crew", "label": "Crew fix", "consequence": "An agent takes the brief; the result shows in the crew log."},
+    {"value": "retire", "label": "Retire", "consequence": "The job contract leaves the manifest and is no longer checked."},
+    {"value": "snooze", "label": "Snooze 7d", "consequence": "Off the console for a week, then back if still failing."},
+    {"value": "me", "label": "Mine", "consequence": "Stays on your list until you act."},
+]
+RUN_OPTIONS = [
+    {"value": "run", "label": "I run it", "consequence": "Copy the command and paste it in a terminal on the Mac."},
+    {"value": "grant", "label": "Crew runs it", "consequence": "Allow Claude to run box and pod commands from this Mac; the crew runs it and logs the result."},
+    {"value": "later", "label": "Later", "consequence": "Stays red on the console."},
+]
+
+
+def read_jsonl(path: Path) -> list:
+    rows = []
+    try:
+        lines = Path(path).read_text().splitlines()
+    except OSError:
+        return rows
+    for line in lines:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(r, dict):
+            rows.append(r)
+    return rows
+
+
+def merge_fixes(orders: list, fixes: list) -> tuple[list, list]:
+    """Take what the crew fixed off the owner's list; keep it in the log, flagged if the checker still sees it."""
+    open_ = {(o.get("machine"), o.get("job")) for o in orders}
+    done = {(f.get("machine"), f.get("job")) for f in fixes}
+    log = [dict(f, still_failing=(f.get("machine"), f.get("job")) in open_)
+           for f in sorted(fixes, key=lambda f: f.get("at") or "", reverse=True)]
+    return [o for o in orders if (o.get("machine"), o.get("job")) not in done], log
+
+
+def decision_rows(orders: list, extra: list) -> list:
+    rows = []
+    for o in orders:
+        slug = re.sub(r"[^a-z0-9]+", "-", f"{o.get('machine', '')}-{o.get('job') or o['title']}".lower()).strip("-")
+        cmd = bool(o.get("command"))
+        rows.append({"id": slug, "title": o["title"], "severity": o["severity"], "weight": o.get("weight"),
+                     "machine": o.get("machine"), "days": o.get("days"), "why": o.get("why", ""), "how": o.get("how", ""),
+                     "command": o.get("command"), "brief": o.get("brief"),
+                     "options": RUN_OPTIONS if cmd else CREW_OPTIONS, "suggested": "run" if cmd else "crew"})
+    for d in extra:
+        opts = [o for o in d.get("options") or [] if o.get("value")][:4]
+        if len(opts) < 2:
+            continue
+        sug = d.get("suggested") if d.get("suggested") in [o["value"] for o in opts] else opts[0]["value"]
+        rows.append({"id": str(d.get("id") or d["title"])[:60], "title": d["title"], "severity": d.get("severity", "amber"),
+                     "machine": d.get("machine"), "days": None, "why": d.get("context", ""), "how": "",
+                     "command": d.get("command"), "brief": None, "options": opts, "suggested": sug, "asked_by": "crew"})
+    return rows
+
+
+def board_build(rows: list) -> str:
+    import hashlib
+    sig = [[r["id"], [o["value"] for o in r["options"]]] for r in rows]
+    return hashlib.sha256(json.dumps(sig).encode()).hexdigest()[:12]
 
 
 # -- collection -----------------------------------------------------------------
@@ -504,7 +576,10 @@ def collect() -> dict:
             v["status"] = "amber" if c["you"] <= 2 else "red"
         vessels.append(v)
     box = raw.get("box") or {}
-    orders = owner_orders(box, dcd, vessels, today)
+    since2 = (now - timedelta(days=2)).strftime("%Y-%m-%d")
+    orders, crewlog = merge_fixes(owner_orders(box, dcd, vessels, today),
+                                  [f for f in read_jsonl(FIXES) if (f.get("at") or "") >= since2])
+    rows = decision_rows(orders, [d for d in read_jsonl(DECISIONS) if (d.get("at") or "") >= since2])
     cur = _counts((raw.get("nightshift") or {}).get("_promises") or "")
     prev = _counts((raw.get("nightshift") or {}).get("_promises_prev") or "")
     size, used = float(box.get("disk_size") or 0), float(box.get("disk_used") or 0)
@@ -520,8 +595,11 @@ def collect() -> dict:
         "broken_delta": (cur.get("red", 0) - prev.get("red", 0)) if prev else None,
     }
     return {"generated": now.strftime("%Y-%m-%d %H:%M UTC"), "stardate": stardate(now), "today": today,
-            "orders": orders, "handled": handled, "noise": noise, "prs": prs_f.result(), "vitals": vitals,
-            "crew": [{k: v[k] for k in ("label", "role", "status", "checker", "counts", "code")} for v in vessels]}
+            "orders": orders, "rows": rows, "board": BOARD, "build": board_build(rows), "crewlog": crewlog,
+            "handled": handled, "noise": noise, "prs": prs_f.result(), "vitals": vitals,
+            "crew": [{**{k: v.get(k) for k in ("label", "role", "kind", "status", "checker", "counts", "code")},
+                      "faults": [{"title": job_title(f["job"]), "bucket": f["bucket"], "note": f.get("note", ""),
+                                  "detail": f.get("detail", "")} for f in v["faults"]]} for v in vessels]}
 
 
 def render(data: dict) -> str:
@@ -554,144 +632,233 @@ TEMPLATE = r"""<!doctype html>
 <link href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#000;--orange:#ff9900;--peach:#ffcc99;--lilac:#cc99cc;--peri:#9999ff;--blue:#99ccff;--red:#ff5555;
---amber:#ffbb33;--ok:#66ccff;--dim:#2c2c44;--card:#0d0d1a;--text:#ffcc99;--ink:#000}
+--amber:#ffbb33;--ok:#66ddaa;--dim:#2c2c44;--card:#0f0f1e;--text:#f3e3cf;--sub:#c4c4e6;--ink:#000}
 *{box-sizing:border-box;margin:0;padding:0}[hidden]{display:none!important}
 html,body{height:100%;background:var(--bg);color:var(--text);font-family:Antonio,"Arial Narrow",sans-serif;overflow:hidden}
-body{display:grid;grid-template-columns:clamp(60px,6.5vw,120px) 1fr;grid-template-rows:auto 1fr auto;gap:.7vh .6vw;height:100vh;padding:1vh 1vw}
+body{display:grid;grid-template-columns:clamp(54px,5.5vw,104px) 1fr;grid-template-rows:auto 1fr auto;gap:.8vh .7vw;height:100vh;padding:1vh 1vw}
+svg.i{width:1em;height:1em;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;vertical-align:-.12em;flex:none}
 .side{grid-row:1/4;display:flex;flex-direction:column;gap:.6vh}
 .side div{flex:1;background:var(--lilac);color:var(--ink);display:flex;align-items:flex-end;justify-content:flex-end;padding:.4vh .5vw;font-size:1.4vh;font-weight:600;letter-spacing:.06em;text-align:right}
 .side .cap{flex:0 0 7vh;background:var(--orange);border-radius:3vh 0 0 0}.side .ft{flex:0 0 7vh;border-radius:0 0 0 3vh}
 .side div:nth-child(3){background:var(--peri)}.side div:nth-child(4){background:var(--peach)}.side div:nth-child(5){background:var(--blue)}
-header{display:flex;align-items:center;gap:.8vw}
-header h1{font-size:3.8vh;letter-spacing:.12em;color:var(--orange);white-space:nowrap}
+header{display:flex;align-items:center;gap:.9vw}
+header h1{font-size:3.9vh;letter-spacing:.12em;color:var(--orange);white-space:nowrap}
 header .bar{flex:1;height:2.6vh;background:var(--orange);border-radius:0 1.3vh 1.3vh 0}
-header .cond{font-size:2.4vh;font-weight:700;letter-spacing:.1em;padding:.2vh .8vw;border-radius:1.4vh;color:var(--ink);white-space:nowrap}
+.cond{font-size:2.4vh;font-weight:700;letter-spacing:.1em;padding:.2vh .9vw;border-radius:1.4vh;color:var(--ink);white-space:nowrap}
 .cond.red{background:var(--red)}.cond.amber{background:var(--amber)}.cond.green{background:var(--ok)}
-header .sd{font-size:2vh;color:var(--peri);white-space:nowrap}
-main{display:grid;grid-template-columns:1.55fr 1fr;gap:.8vh .8vw;min-height:0}
-.col{display:flex;flex-direction:column;gap:.8vh;min-height:0}
+header .sd{font-size:2.1vh;color:var(--peri);white-space:nowrap}
+main{display:grid;grid-template-columns:1.5fr 1fr;grid-template-rows:auto 1fr;gap:.9vh .8vw;min-height:0}
+.fleet{grid-column:1/3;display:grid;grid-template-columns:repeat(7,1fr);gap:.6vw}
+.ves{background:var(--card);border-radius:1.6vh 0 0 1.6vh;border-left:1vh solid var(--ok);padding:.7vh .7vw;display:grid;grid-template-columns:auto 1fr;grid-template-rows:auto auto auto;column-gap:.6vw;cursor:default}
+.ves.amber{border-left-color:var(--amber)}.ves.red{border-left-color:var(--red)}
+.ves .k{grid-row:1/3;font-size:3.6vh;color:var(--peri);align-self:center}
+.ves .nm{font-size:2.4vh;font-weight:700;letter-spacing:.06em;color:var(--peach);line-height:1.05}
+.ves .rl{font-size:1.5vh;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ves .ct{grid-column:1/3;display:flex;gap:.8vw;font-size:2vh;margin-top:.4vh;font-weight:600}
+.ct span{display:flex;align-items:center;gap:.25vw}.ct .y{color:var(--red)}.ct .a{color:var(--ok)}.ct .n{color:#77779a}.ct .z{opacity:.28}
 .panel{border-left:.9vw solid var(--peri);border-top:.45vh solid var(--peri);border-radius:1.8vh 0 0 0;padding:.6vh .7vw;display:flex;flex-direction:column;min-height:0;overflow:hidden}
-.panel h2{font-size:1.85vh;letter-spacing:.14em;color:var(--peri);margin-bottom:.5vh;font-weight:600;display:flex;justify-content:space-between;gap:1vw}
-.panel h2 small{font-size:1.5vh;color:var(--lilac);letter-spacing:.04em;white-space:nowrap}
-.p-orders{flex:1;border-color:var(--orange)}.p-orders h2{color:var(--orange)}
-.orders{display:flex;flex-direction:column;gap:.6vh;overflow:hidden;flex:1}
-.order{display:grid;grid-template-columns:3.2vh 1fr auto;gap:.3vh .6vw;background:var(--card);border-radius:1.2vh;padding:.6vh .6vw;border-left:.7vh solid var(--amber)}
-.order.red{border-left-color:var(--red)}
-.order .n{grid-row:1/4;font-size:3vh;font-weight:700;color:var(--peri);text-align:center}
-.order .t{font-size:2.05vh;font-weight:700;color:var(--peach);letter-spacing:.02em}
-.order .meta{font-size:1.45vh;display:flex;gap:.5vw;align-items:center;white-space:nowrap}
-.chip{padding:.1vh .45vw;border-radius:.9vh;color:var(--ink);font-weight:600}
-.chip.days{background:var(--lilac)}.chip.red{background:var(--red)}.chip.amber{background:var(--amber)}
-.order .w{grid-column:2/4;font-size:1.5vh;color:var(--blue);line-height:1.25}
-.order .act{grid-column:2/4;display:flex;gap:.5vw;align-items:center}
-.order code{flex:1;min-width:0;font-family:ui-monospace,Menlo,monospace;font-size:1.25vh;color:var(--peach);background:#000;border:1px solid var(--dim);border-radius:.6vh;padding:.3vh .4vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.order .how{color:var(--lilac)}
-button{font-family:inherit;font-size:1.45vh;font-weight:700;letter-spacing:.08em;border:0;border-radius:1vh;padding:.35vh .7vw;cursor:pointer;color:var(--ink);background:var(--orange);white-space:nowrap}
-button.brief{background:var(--peri)}button:hover{filter:brightness(1.15)}button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
-button.done{background:var(--ok)}
-.more{font-size:1.45vh;color:var(--lilac);line-height:1.3}
-.row2{display:grid;grid-template-columns:1fr 1fr;gap:.8vw;flex:0 0 23vh;min-height:0}
-.list{list-style:none;font-size:1.48vh;display:flex;flex-direction:column;gap:.35vh;overflow:hidden}
-.list li{display:flex;justify-content:space-between;gap:.5vw;border-bottom:1px dotted var(--dim);padding-bottom:.2vh}
-.list li>span:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.list li>span:last-child{color:var(--lilac);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:55%;text-align:right}
-.list a{color:var(--blue);text-decoration:none;white-space:nowrap}.list a:hover{text-decoration:underline}
-.p-noise{border-color:var(--dim)}.p-noise h2{color:var(--lilac)}
-.vitals{display:grid;grid-template-columns:1fr 1fr;gap:.6vh .6vw}
-.vital{background:var(--card);border-radius:1.2vh;padding:.6vh .7vw;border-top:.6vh solid var(--ok)}
+.panel h2{font-size:2vh;letter-spacing:.14em;color:var(--peri);margin-bottom:.6vh;font-weight:600;display:flex;align-items:center;gap:.8vw}
+.panel h2 small{font-size:1.6vh;color:var(--sub);letter-spacing:.04em;white-space:nowrap;font-weight:400}
+.panel h2 .sp{flex:1}
+.p-dec{border-color:var(--orange)}.p-dec h2{color:var(--orange)}
+.rows{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:.5vh;padding-right:.3vw;scrollbar-width:thin;scrollbar-color:var(--dim) transparent}
+.row{display:grid;grid-template-columns:3vh minmax(0,1fr) auto auto;align-items:center;gap:.3vh .6vw;background:var(--card);border-radius:1.1vh;padding:.55vh .6vw;border-left:.6vh solid var(--amber)}
+.row.red{border-left-color:var(--red)}.row.done{opacity:.62}.row.done:hover{opacity:1}
+.row .sv{font-size:2.5vh;color:var(--amber)}.row.red .sv{color:var(--red)}.row.crew .sv{color:var(--peri)}
+.row .tt{font-size:2.15vh;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:.5vw;min-width:0}
+.row .tt .x{overflow:hidden;text-overflow:ellipsis}
+.tag{font-size:1.45vh;font-weight:600;letter-spacing:.06em;padding:.05vh .45vw;border-radius:.8vh;color:var(--ink);background:var(--lilac);flex:none}
+.tag.age{background:transparent;color:var(--sub);border:1px solid var(--dim);display:flex;align-items:center;gap:.25vw}
+.tag.age.old{color:var(--amber);border-color:#5a4410}
+.opts{display:flex;gap:.3vw}
+.opt{font-family:inherit;font-size:1.55vh;font-weight:600;letter-spacing:.05em;border:1px solid #4a4a70;background:transparent;color:var(--sub);border-radius:1vh;padding:.3vh .55vw;cursor:pointer;white-space:nowrap;position:relative}
+.opt.sug::after{content:"";position:absolute;top:-.35vh;right:-.35vh;width:.9vh;height:.9vh;border-radius:50%;background:var(--orange)}
+.opt.on{background:var(--orange);border-color:var(--orange);color:var(--ink)}
+.opt:hover{border-color:var(--peach);color:var(--peach)}.opt.on:hover{color:var(--ink)}
+.ib{font-size:2.1vh;background:transparent;border:0;color:var(--peri);cursor:pointer;padding:.2vh .25vw;border-radius:.6vh;display:flex}
+.ib:hover{color:var(--peach)}.ib.has{color:var(--orange)}.ib.ok{color:var(--ok)}
+.tools{display:flex;gap:.1vw}
+.nt{grid-column:2/5;font-family:-apple-system,"Segoe UI",sans-serif;font-size:1.6vh;background:#000;color:var(--text);border:1px solid var(--dim);border-radius:.6vh;padding:.4vh .5vw}
+.nt:focus{outline:1px solid var(--peri)}
+.save{font-family:inherit;font-size:1.8vh;font-weight:700;letter-spacing:.1em;border:0;border-radius:1.1vh;padding:.35vh .9vw;cursor:pointer;color:var(--ink);background:var(--orange);display:flex;align-items:center;gap:.4vw}
+.save:hover{filter:brightness(1.15)}
+.lnk{font-family:inherit;font-size:1.6vh;background:none;border:0;color:var(--blue);cursor:pointer;letter-spacing:.04em;text-decoration:underline dotted}
+.prog{font-size:1.75vh;color:var(--peach);white-space:nowrap}.st{font-size:1.5vh;color:var(--ok);white-space:nowrap}
+.col{display:flex;flex-direction:column;gap:.9vh;min-height:0}
+.vitals{display:grid;grid-template-columns:repeat(5,1fr);gap:.5vw}
+.vital{background:var(--card);border-radius:1.2vh;padding:.7vh .5vw;border-top:.6vh solid var(--ok);text-align:center;cursor:default}
 .vital.red{border-top-color:var(--red)}.vital.amber{border-top-color:var(--amber)}
-.vital .k{font-size:1.45vh;color:var(--peri);letter-spacing:.1em}
-.vital .v{font-size:3.4vh;font-weight:700;line-height:1.05}
+.vital .ic{font-size:2.6vh;color:var(--peri)}
+.vital .v{font-size:3.3vh;font-weight:700;line-height:1.05}
 .vital.red .v{color:var(--red)}.vital.amber .v{color:var(--amber)}.vital.green .v{color:var(--ok)}
-.vital .s{font-size:1.35vh;color:var(--lilac)}
-.crew{width:100%;border-collapse:collapse;font-size:1.5vh}
-.crew td,.crew th{padding:.22vh .3vw;border-bottom:1px dotted var(--dim);white-space:nowrap}
-.crew th{font-weight:400;color:var(--lilac);font-size:1.3vh;text-align:right}.crew th:first-child,.crew th:nth-child(2){text-align:left}
-.crew td:first-child{font-weight:700;color:var(--peach)}
-.dot{display:inline-block;width:1.2vh;height:1.2vh;border-radius:50%;margin-right:.4vw;vertical-align:middle}
-.dot.green{background:var(--ok)}.dot.amber{background:var(--amber)}.dot.red{background:var(--red)}
-.num{text-align:right}.num b{color:var(--orange)}.muted{color:var(--lilac)}
-.p-crew{border-color:var(--lilac)}.p-crew h2{color:var(--lilac)}
-.p-handled{flex:0 0 auto;max-height:16vh;border-color:var(--ok)}.p-handled h2{color:var(--ok)}
-.p-also{flex:1;border-color:var(--amber)}.p-also h2{color:var(--amber)}
-.also li{align-items:center}.also li .k{font-size:1.2vh;padding:0 .35vw;border-radius:.7vh;color:var(--ink);background:var(--lilac);margin-right:.4vw}
-.also li .k.w3{background:var(--red)}.also li .k.w2{background:var(--amber)}
-.also button{font-size:1.15vh;padding:.15vh .45vw}
-.also li>span:last-child{display:flex;gap:.4vw;align-items:center;max-width:none}
-.also .k{display:inline-block}
+.vital .k{font-size:1.4vh;color:var(--sub);letter-spacing:.1em}
+.meter{height:.6vh;background:var(--dim);border-radius:.3vh;margin:.4vh .3vw 0;display:flex;overflow:hidden}
+.meter i{display:block;height:100%}
+.p-vit{flex:none;border-color:var(--blue)}.p-vit h2{color:var(--blue)}
+.p-log{flex:1;border-color:var(--ok)}.p-log h2{color:var(--ok)}
+.log{list-style:none;overflow-y:auto;display:flex;flex-direction:column;gap:.45vh;scrollbar-width:thin;scrollbar-color:var(--dim) transparent}
+.log li{display:grid;grid-template-columns:2.6vh auto minmax(0,1fr) auto;gap:.5vw;align-items:center;font-size:1.95vh;padding:.3vh .2vw;border-bottom:1px dotted var(--dim);cursor:default}
+.log .s{font-size:2.2vh}.log .s.ok{color:var(--ok)}.log .s.wait{color:var(--amber)}.log .s.no{color:var(--red)}
+.log .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
+.log .tm{color:var(--sub);font-size:1.55vh}
+.empty{font-size:1.8vh;color:var(--sub);padding:.5vh 0}
+.strip{flex:none;display:grid;grid-template-columns:repeat(3,1fr);gap:.5vw}
+.chipx{background:var(--card);border-radius:1.2vh;padding:.6vh .6vw;display:flex;align-items:center;gap:.6vw;cursor:default;color:var(--sub);text-decoration:none;border:1px solid transparent}
+.chipx:hover{border-color:var(--dim)}
+.chipx .ic{font-size:2.6vh;color:var(--peri)}.chipx b{font-size:3vh;color:var(--peach);line-height:1}.chipx span{font-size:1.45vh;letter-spacing:.08em;line-height:1.1}
 footer{display:flex;align-items:center;gap:.8vw}
 footer .bar{flex:1;height:2vh;background:var(--lilac);border-radius:0 1vh 1vh 0}
 footer .q{font-size:2.2vh;color:var(--orange);letter-spacing:.1em;white-space:nowrap}
-footer .t{font-size:1.35vh;color:var(--peri);white-space:nowrap}
+footer .t{font-size:1.4vh;color:var(--peri);white-space:nowrap}
+#tip{position:fixed;z-index:9;max-width:min(460px,80vw);background:#0b0b18;border:1px solid var(--peri);border-left:6px solid var(--orange);border-radius:10px;padding:10px 12px;
+font:13px/1.45 -apple-system,"Segoe UI",sans-serif;color:var(--text);white-space:pre-line;pointer-events:none;box-shadow:0 8px 30px #000c}
 .blink{animation:b 1.2s ease-in-out infinite alternate}@keyframes b{to{opacity:.45}}
 @media (prefers-reduced-motion:reduce){.blink{animation:none}}
 @media (max-width:820px){html,body{overflow:auto}body{grid-template-columns:1fr;height:auto;padding:12px 16px}.side{display:none}
-main{grid-template-columns:1fr}.row2{grid-template-columns:1fr;flex:none}header{flex-wrap:wrap}header h1{font-size:22px}}
+main{grid-template-columns:1fr}.fleet{grid-column:1;grid-template-columns:repeat(2,1fr)}.vitals{grid-template-columns:repeat(3,1fr)}
+.row{grid-template-columns:3vh minmax(0,1fr)}.opts,.tools{grid-column:2/3;flex-wrap:wrap}header{flex-wrap:wrap}header h1{font-size:22px}}
 </style></head><body>
 <nav class="side" aria-hidden="true"><div class="cap"></div><div id="sd1"></div><div>FLEET OPS</div><div>LCARS 47</div><div>PICARD 4-7-ALPHA</div><div class="ft"></div></nav>
 <header><h1>CAPTAIN'S CONSOLE</h1><div class="cond" id="cond"></div><div class="bar"></div><div class="sd" id="sd"></div></header>
 <main>
+ <section class="fleet" id="fleet" aria-label="Fleet"></section>
+ <section class="panel p-dec"><h2>BRIDGE DECISIONS <small id="dsum"></small><span class="sp"></span>
+  <span class="prog" id="prog"></span><button class="lnk" id="sugg">use suggestions for the rest</button><span class="st" id="st"></span>
+  <button class="save" id="save"></button></h2>
+  <div class="rows" id="rows"></div></section>
  <div class="col">
-  <section class="panel p-orders"><h2>CAPTAIN'S ORDERS <small id="osum"></small></h2><div class="orders" id="orders"></div></section>
-  <div class="row2">
-   <section class="panel"><h2>YOUR REVIEW <small id="prc"></small></h2><ul class="list" id="prs"></ul></section>
-   <section class="panel p-noise"><h2>NOISE TO RETIRE <small id="nc"></small></h2><ul class="list" id="noise"></ul></section>
-  </div>
- </div>
- <div class="col">
-  <section class="panel"><h2>VITAL SIGNS</h2><div class="vitals" id="vitals"></div></section>
-  <section class="panel p-crew"><h2>CREW</h2><table class="crew" id="crew"></table></section>
-  <section class="panel p-handled" id="hp" hidden><h2>NUMBER ONE HAS IT <small>repairs agents are running</small></h2><ul class="list" id="handled"></ul></section>
-  <section class="panel p-also"><h2>ALSO ON YOUR LIST <small id="asum"></small></h2><ul class="list also" id="also"></ul></section>
+  <section class="panel p-vit"><h2>VITAL SIGNS</h2><div class="vitals" id="vitals"></div></section>
+  <section class="panel p-log"><h2>CREW LOG <small id="lsum"></small></h2><ul class="log" id="log"></ul></section>
+  <section class="strip" id="strip"></section>
  </div>
 </main>
 <footer><div class="q">“MAKE IT SO.”</div><div class="bar"></div><div class="t" id="gen"></div><div class="t">Dedicated to Sir Patrick Stewart · Jean-Luc Picard</div></footer>
+<div id="tip" role="tooltip" hidden></div>
+<script type="application/json" id="data">/*DATA*/null</script>
 <script>
-const D=/*DATA*/null;
+const D=JSON.parse(document.getElementById("data").textContent);
 const $=id=>document.getElementById(id), esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const P={alert:'<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+wrench:'<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+mute:'<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>',
+clock:'<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+disk:'<line x1="22" y1="12" x2="2" y2="12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" y1="16" x2="6.01" y2="16"/><line x1="10" y1="16" x2="10.01" y2="16"/>',
+db:'<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>',
+mail:'<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
+zap:'<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+shield:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+okc:'<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
+xc:'<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>',
+pr:'<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/>',
+term:'<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
+brief:'<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+note:'<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>',
+save:'<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
+visitor:'<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>',
+host:'<rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>',
+pod:'<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
+user:'<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+ask:'<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>'};
+const I=n=>`<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${P[n]||""}</svg>`;
+const tipAttr=s=>` data-tip="${esc(s)}"`;
 $("sd").textContent="STARDATE "+D.stardate; $("sd1").textContent="SD "+D.stardate;
 $("gen").textContent="SENSOR SWEEP "+D.generated+" · refresh: fleet_dashboard.py --open";
-const O=D.orders||[], reds=O.filter(o=>o.severity==="red").length;
-$("cond").className="cond "+(reds?"red blink":O.length?"amber":"green");
-$("cond").textContent=reds?`RED ALERT · ${reds} CRITICAL`:O.length?"YELLOW ALERT":"ALL CLEAR";
-$("osum").textContent=`${O.length} need you · ranked by what is lost, then by age`;
-const SHOW=5, KIND={3:"WORK AT RISK",2:"DEGRADED",1:"HYGIENE"};
-$("orders").innerHTML=O.slice(0,SHOW).map((o,i)=>{
- const dl=d=>d>=29?"30+ DAYS":d===0?"TODAY":d+" DAY"+(d===1?"":"S");
- const days=o.days!=null?`<span class="chip days">${dl(o.days)}</span>`:`<span class="chip days">SINCE ?</span>`;
- const act=o.command?`<code title="${esc(o.command)}">${esc(o.command.split("\n")[0])}${o.command.includes("\n")?"  (+"+(o.command.split("\n").length-1)+" more)":""}</code><button data-copy="${i}" data-kind="command">COPY COMMAND</button>`
-  :`<code title="${esc(o.brief||"")}">${esc(o.brief||"")}</code><button class="brief" data-copy="${i}" data-kind="brief">COPY BRIEF FOR CLAUDE</button>`;
- return `<div class="order ${o.severity}"><div class="n">${i+1}</div><div class="t">${esc(o.title)}</div>
- <div class="meta">${days}<span class="chip ${o.severity}">${o.severity==="red"?"CRITICAL":KIND[o.weight||1]}</span></div>
- <div class="w">${esc(o.why)}${o.how?` <span class="how">${esc(o.how)}</span>`:""}</div><div class="act">${act}</div></div>`}).join("")
- +(O.length?"":"<div class='more'>Nothing needs you. Engage.</div>");
-document.addEventListener("click",async e=>{const b=e.target.closest("button[data-copy]");if(!b)return;
- const txt=O[+b.dataset.copy][b.dataset.kind]||"";
- try{await navigator.clipboard.writeText(txt)}catch(_){const t=document.createElement("textarea");t.value=txt;document.body.appendChild(t);t.select();document.execCommand("copy");t.remove()}
- const old=b.textContent;b.textContent="COPIED";b.classList.add("done");setTimeout(()=>{b.textContent=old;b.classList.remove("done")},1600)});
-const P=D.prs||[];
-$("prc").textContent=P.length+" open, newest first"+(P.length>6?" (6 shown)":"");
-$("prs").innerHTML=P.slice(0,6).map(p=>`<li><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.repo)} #${p.number}</a><span title="${esc(p.title)}">${esc(p.title)}</span></li>`).join("")||"<li>None open.</li>";
-const N=D.noise||[];
-$("nc").textContent=`${N.length} checks look in the wrong place`;
-$("noise").innerHTML=N.slice(0,6).map(n=>`<li><span title="${esc(n.job)}">${esc(n.label)}: ${esc(n.title)}</span><span>${esc(n.note)}</span></li>`).join("")||"<li>None.</li>";
-const V=D.vitals||{}, tl=V.tools||{}, toolsOk=["datacore","plur"].every(k=>tl[k]==="connected");
+
+// fleet strip
+const BK={you:"needs you",agent:"crew repairing",paused:"repair paused",noise:"noise"};
+$("fleet").innerHTML=(D.crew||[]).map(c=>{const n=c.counts||{},fx=(c.faults||[]);
+ const tip=[`${c.label} · ${c.role}`,`Job checker: ${c.checker||"?"}`,c.code?`Code: ${c.code}`:"",
+  fx.length?"\n"+fx.map(f=>`${f.bucket==="you"?"▲":f.bucket==="noise"?"·":"⚙"} ${f.title} (${BK[f.bucket]||f.bucket})${f.detail?"\n   "+f.detail:""}`).join("\n"):"\nNo job faults."].filter(Boolean).join("\n");
+ const ct=(cls,ic,v,lab)=>`<span class="${cls}${v?"":" z"}" title="${lab}">${I(ic)}${v||0}</span>`;
+ return `<div class="ves ${c.status}"${tipAttr(tip)}><span class="k">${I(c.kind)}</span><div class="nm">${esc(c.label)}</div><div class="rl">${esc(c.role)}</div>
+ <div class="ct">${ct("y","alert",n.you,"needs you")}${ct("a","wrench",(n.agent||0)+(n.paused||0),"crew repairing")}${ct("n","mute",n.noise,"noise")}</div></div>`}).join("");
+
+// vital signs
+const V=D.vitals||{}, tl=V.tools||{}, tup=["datacore","plur"].filter(k=>tl[k]==="connected").length;
 const sgn=n=>n==null?"":" ("+(n>0?"+"+n:n)+")";
+const pk=V.total?Math.round(100*(V.kept||0)/V.total):null;
 const vit=[
- ["BACKUP",V.backup_ok?"OK":(V.backup_days!=null?V.backup_days+" DAYS OLD":"UNKNOWN"),V.backup_ok?"green":"red",V.backup_ok?"copied last night":"last good copy "+(V.backup_newest||"?")],
- ["BOX DISK",V.disk_pct!=null?V.disk_pct+"%":"?",V.disk_pct>=88?"red":V.disk_pct>=80?"amber":"green",V.disk_free_gb!=null?V.disk_free_gb+" GB free":""],
- ["BRIEFING",V.briefing==="yes"?"DELIVERED":"MISSING",V.briefing==="yes"?"green":"red",(V.app==="ok"&&toolsOk)?"Winston fully equipped":"Winston's app: "+(V.app==="ok"?"no tools":(V.app||"?"))],
- ["PROMISES",V.total?Math.round(100*(V.kept||0)/V.total)+"% KEPT":"?",V.total&&V.kept/V.total>=.9?"green":"amber",V.total?`${V.kept} kept${sgn(V.kept_delta)} · ${V.broken} broken${sgn(V.broken_delta)} · ${V.untested} untested`:""],
+ ["db","BACKUP",V.backup_ok?"OK":(V.backup_days!=null?V.backup_days+"d":"?"),V.backup_ok?"green":"red",
+  V.backup_ok?"Agent volumes copied last night.":`No agent backup since ${V.backup_newest||"?"}.\nThe nightly run skips while the box disk is too full.`,""],
+ ["disk","DISK",V.disk_pct!=null?V.disk_pct+"%":"?",V.disk_pct>=88?"red":V.disk_pct>=80?"amber":"green",
+  `Box disk ${V.disk_pct??"?"}% used, ${V.disk_free_gb??"?"} GB free.\nBackups need about 20% free.`,
+  V.disk_pct!=null?`<div class="meter"><i style="width:${V.disk_pct}%;background:${V.disk_pct>=88?"var(--red)":"var(--amber)"}"></i></div>`:""],
+ ["mail","BRIEFING",V.briefing==="yes"?"✓":"✗",V.briefing==="yes"?"green":"red",V.briefing==="yes"?"Today's morning briefing was delivered.":"No briefing folder for today on Winston.",""],
+ ["zap","TOOLS",`${tup}/2`,V.app!=="ok"?"red":tup===2?"green":"red",
+  `Winston's app server: ${V.app||"?"}\nDatacore link: ${tl.datacore||"?"}\nPLUR link: ${tl.plur||"?"}`,""],
+ ["shield","PROMISES",pk!=null?pk+"%":"?",pk>=90?"green":"amber",
+  V.total?`${V.kept} kept${sgn(V.kept_delta)}\n${V.broken} broken${sgn(V.broken_delta)}\n${V.untested} could not be tested\nof ${V.total} promises (last night's scoreboard)`:"No scoreboard.",
+  V.total?`<div class="meter"><i style="width:${100*V.kept/V.total}%;background:var(--ok)"></i><i style="width:${100*V.broken/V.total}%;background:var(--red)"></i></div>`:""],
 ];
-$("vitals").innerHTML=vit.map(([k,v,c,s])=>`<div class="vital ${c}"><div class="k">${k}</div><div class="v">${esc(v)}</div><div class="s">${esc(s)}</div></div>`).join("");
-$("crew").innerHTML=`<tr><th>AGENT</th><th>JOB CHECKER</th><th>NEEDS YOU</th><th>AGENTS FIXING</th><th>NOISE</th></tr>`+(D.crew||[]).map(c=>`<tr><td><span class="dot ${c.status}"></span>${esc(c.label)}</td><td class="muted">${esc(c.checker)}</td>
-<td class="num"><b>${c.counts.you||0}</b></td><td class="num">${(c.counts.agent||0)+(c.counts.paused||0)}</td><td class="num muted">${c.counts.noise||0}</td></tr>`).join("");
-const R=O.slice(SHOW);
-$("asum").textContent=R.length?[3,2,1].map(w=>[w,R.filter(o=>(o.weight||1)===w).length]).filter(x=>x[1]).map(([w,n])=>n+" "+KIND[w].toLowerCase()).join(" · "):"";
-$("also").innerHTML=R.map((o,j)=>`<li><span title="${esc(o.why)}"><span class="k w${o.weight||1}">${o.severity==="red"?"CRITICAL":KIND[o.weight||1]}</span>${esc(o.title)}</span>
-<span><span class="muted">${o.days==null?"?":o.days>=29?"30+ d":o.days+" d"}</span><button class="${o.command?"":"brief"}" data-copy="${SHOW+j}" data-kind="${o.command?"command":"brief"}">${o.command?"COPY CMD":"COPY BRIEF"}</button></span></li>`).join("")||"<li>Nothing else.</li>";
-const H=D.handled||[]; $("hp").hidden=!H.length;
-$("handled").innerHTML=H.slice(0,8).map(h=>`<li><span>${esc(h.label)}: ${esc(h.title)}</span><span>${esc(h.note)}</span></li>`).join("")||"<li>No repairs in flight: everything open is on the orders list.</li>";
+$("vitals").innerHTML=vit.map(([ic,k,v,c,t,m])=>`<div class="vital ${c}"${tipAttr(t)}><div class="ic">${I(ic)}</div><div class="v">${esc(v)}</div>${m}<div class="k">${k}</div></div>`).join("");
+
+// decision board (decision-board skill behaviour, LCARS look)
+const R=D.rows||[], KEY=`dboard:${D.board}:${D.build}`;
+let S={}; try{S=JSON.parse(localStorage.getItem(KEY)||"{}")||{}}catch(_){S={}}
+const persist=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch(_){}};
+const KIND={3:"WORK AT RISK",2:"DEGRADED",1:"HYGIENE"};
+const reds=R.filter(r=>r.severity==="red").length;
+$("cond").className="cond "+(reds?"red blink":R.length?"amber":"green");
+$("cond").textContent=reds?`RED ALERT · ${reds} CRITICAL`:R.length?"YELLOW ALERT":"ALL CLEAR";
+$("dsum").textContent=R.length?`${R.length} need your word`:"";
+$("save").innerHTML=I("save")+"SAVE";
+function rowHTML(r,i){const s=S[r.id]||{};
+ const age=r.days==null?"":`<span class="tag age${r.days>=7?" old":""}">${I("clock")}${r.days>=29?"30+":r.days}d</span>`;
+ const tip=[r.title,r.severity==="red"?"CRITICAL":KIND[r.weight||1]||"",r.why,r.how,r.asked_by?"Asked by the crew.":""].filter(Boolean).join("\n\n");
+ const opts=r.options.map(o=>`<button class="opt${o.value===r.suggested?" sug":""}${s.choice===o.value?" on":""}" data-row="${i}" data-v="${esc(o.value)}"${tipAttr((o.value===r.suggested?"Suggested. ":"")+(o.consequence||o.label))}>${esc(o.label)}</button>`).join("");
+ const cp=r.command?`<button class="ib" data-copy="${i}" data-kind="command"${tipAttr("Copy command:\n"+r.command)}>${I("term")}</button>`
+   :r.brief?`<button class="ib" data-copy="${i}" data-kind="brief"${tipAttr("Copy brief for Claude:\n"+r.brief)}>${I("brief")}</button>`:"";
+ return `<div class="row ${r.severity}${r.asked_by?" crew":""}${s.choice?" done":""}" id="r${i}"><span class="sv">${I(r.asked_by?"ask":"alert")}</span>
+ <div class="tt"${tipAttr(tip)}><span class="x">${esc(r.machine&&r.title.startsWith(r.machine+": ")?r.title.slice(r.machine.length+2):r.title)}</span>${r.machine?`<span class="tag">${esc(r.machine)}</span>`:""}${age}</div>
+ <div class="opts">${opts}</div><div class="tools">${cp}<button class="ib${s.note?" has":""}" data-note="${i}"${tipAttr("Note for Claude")}>${I("note")}</button></div>
+ <input class="nt" data-nt="${i}" placeholder="Note for Claude" value="${esc(s.note||"")}"${s.note?"":" hidden"}></div>`}
+function draw(){
+ $("rows").innerHTML=R.map(rowHTML).join("")||`<div class="empty">Nothing needs your word. The crew has the conn.</div>`;
+ const n=R.filter(r=>(S[r.id]||{}).choice).length;
+ $("prog").textContent=R.length?`${n} OF ${R.length} DECIDED`:""; $("sugg").hidden=!R.length||n===R.length; $("save").hidden=!R.length;
+}
+draw();
+document.addEventListener("click",async e=>{
+ const o=e.target.closest(".opt[data-row]");
+ if(o){const r=R[+o.dataset.row];S[r.id]=Object.assign(S[r.id]||{},{choice:o.dataset.v});persist();draw();$("st").textContent="";return}
+ const nb=e.target.closest("[data-note]");
+ if(nb){const f=document.querySelector(`[data-nt="${nb.dataset.note}"]`);f.hidden=false;f.focus();return}
+ const b=e.target.closest("[data-copy]");
+ if(b){const txt=R[+b.dataset.copy][b.dataset.kind]||"";
+  try{await navigator.clipboard.writeText(txt)}catch(_){const t=document.createElement("textarea");t.value=txt;document.body.appendChild(t);t.select();document.execCommand("copy");t.remove()}
+  b.classList.add("ok");setTimeout(()=>b.classList.remove("ok"),1500);$("st").textContent="Copied";return}
+});
+document.addEventListener("input",e=>{const f=e.target.closest("[data-nt]");if(!f)return;const r=R[+f.dataset.nt];
+ S[r.id]=Object.assign(S[r.id]||{},{note:f.value});persist();f.previousElementSibling.querySelector("[data-note]").classList.toggle("has",!!f.value)});
+$("sugg").onclick=()=>{R.forEach(r=>{if(!(S[r.id]||{}).choice)S[r.id]=Object.assign(S[r.id]||{},{choice:r.suggested})});persist();draw()};
+$("save").onclick=()=>{const dec={};R.forEach(r=>{const s=S[r.id]||{};if(s.choice||s.note)dec[r.id]={choice:s.choice||"",note:s.note||""}});
+ const blob=new Blob([JSON.stringify({board:D.board,build:D.build,savedAt:new Date().toISOString(),decisions:dec},null,1)],{type:"application/json"});
+ const a=document.createElement("a"),f=`${D.board}.decisions.json`;a.href=URL.createObjectURL(blob);a.download=f;document.body.appendChild(a);a.click();
+ setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500);$("st").textContent=`Saved to Downloads as ${f}`};
+
+// crew log
+const L=D.crewlog||[];
+$("lsum").textContent=L.length?`${L.filter(f=>f.verified&&!f.still_failing).length} fixed and verified · last 48 h`:"fixed by the crew, last 48 h";
+$("log").innerHTML=L.map(f=>{const st=!f.verified?["no","xc","not verified"]:f.still_failing?["wait","clock","fixed; the job checker has not rerun yet"]:["ok","okc","fixed and verified"];
+ const tip=[`${f.machine} · ${f.title}`,st[2],f.what,f.evidence?"Evidence: "+f.evidence:"",f.at?"Logged "+f.at:""].filter(Boolean).join("\n\n");
+ return `<li${tipAttr(tip)}><span class="s ${st[0]}">${I(st[1])}</span><span class="tag">${esc(f.machine)}</span><span class="t">${esc(f.title)}</span><span class="tm">${esc((f.at||"").slice(11,16))}</span></li>`}).join("")
+ ||`<li class="empty">No fixes logged yet.</li>`;
+
+// strip: review, in flight, noise
+const PR=D.prs||[], H=D.handled||[], N=D.noise||[];
+$("strip").innerHTML=
+ `<a class="chipx" href="https://github.com/pulls" target="_blank" rel="noopener"${tipAttr(PR.length?"Your open pull requests, newest first:\n"+PR.slice(0,12).map(p=>`${p.repo} #${p.number} · ${p.title}`).join("\n"):"No open pull requests.")}><span class="ic">${I("pr")}</span><b>${PR.length}</b><span>YOUR<br>REVIEW</span></a>`+
+ `<div class="chipx"${tipAttr(H.length?"Repairs agents are running:\n"+H.map(h=>`${h.label}: ${h.title} — ${h.note}`).join("\n"):"No repairs in flight.")}><span class="ic">${I("wrench")}</span><b>${H.length}</b><span>REPAIRS<br>IN FLIGHT</span></div>`+
+ `<div class="chipx"${tipAttr(N.length?"Checks that look in the wrong place:\n"+N.map(n=>`${n.label}: ${n.title} — ${n.note}`).join("\n"):"No noise.")}><span class="ic">${I("mute")}</span><b>${N.length}</b><span>NOISE<br>TO RETIRE</span></div>`;
+
+// one tooltip for every [data-tip]
+const tip=$("tip");
+function showTip(t,x,y){tip.textContent=t.dataset.tip;tip.hidden=false;place(x,y)}
+function place(x,y){const w=tip.offsetWidth,h=tip.offsetHeight;tip.style.left=Math.min(x+14,innerWidth-w-8)+"px";tip.style.top=(y+18+h>innerHeight?y-h-12:y+18)+"px"}
+document.addEventListener("mouseover",e=>{const t=e.target.closest("[data-tip]");if(t)showTip(t,e.clientX,e.clientY);else tip.hidden=true});
+document.addEventListener("mousemove",e=>{if(!tip.hidden)place(e.clientX,e.clientY)});
+document.addEventListener("focusin",e=>{const t=e.target.closest("[data-tip]");if(t){const r=t.getBoundingClientRect();showTip(t,r.left,r.bottom)}});
+document.addEventListener("focusout",()=>{tip.hidden=true});
 </script></body></html>
 """
 

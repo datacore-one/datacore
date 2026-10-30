@@ -143,3 +143,39 @@ def test_orders_rank_by_what_is_lost_before_how_old_it_is():
     orders = fd.owner_orders({}, {"status": "ok", "tools": {}}, [v], today="2026-10-30")
     assert [o["title"] for o in orders] == ["WINSTON: Repo sync cycle", "WINSTON: Knowledge link check"]
     assert orders[0]["why"].startswith("Work on this machine is not syncing")
+
+
+# -- v3: the crew reports what it fixed; the owner gets decisions, not chores ----
+
+def test_a_job_the_crew_fixed_leaves_the_orders_and_shows_in_the_crew_log():
+    orders = [{"severity": "amber", "title": "WINSTON: Repo sync cycle", "machine": "WINSTON", "job": "box-phase1-cycle"},
+              {"severity": "amber", "title": "MILES: GitHub triage", "machine": "MILES", "job": "nightshift-github-triage"}]
+    fixes = [{"at": "2026-10-30T12:00:00Z", "machine": "WINSTON", "job": "box-phase1-cycle", "title": "Repo sync cycle",
+              "what": "x", "verified": True}]
+    left, log = fd.merge_fixes(orders, fixes)
+    assert [o["job"] for o in left] == ["nightshift-github-triage"]
+    assert log[0]["job"] == "box-phase1-cycle" and log[0]["still_failing"] is True  # the checker has not rerun yet
+
+
+def test_every_decision_row_has_options_and_its_suggestion_is_one_of_them():
+    orders = [{"severity": "red", "title": "A", "command": "ssh x", "machine": "BOX HOST", "job": "backup"},
+              {"severity": "amber", "title": "B", "brief": "fix it", "machine": "MILES", "job": "j"}]
+    extra = [{"id": "lens-db", "title": "C", "context": "c", "suggested": "keep",
+              "options": [{"value": "keep", "label": "Keep"}, {"value": "move", "label": "Move"}]}]
+    rows = fd.decision_rows(orders, extra)
+    assert len(rows) == 3 and len({r["id"] for r in rows}) == 3
+    for r in rows:
+        values = [o["value"] for o in r["options"]]
+        assert 2 <= len(values) <= 4 and r["suggested"] in values
+
+
+def test_the_board_build_changes_when_its_rows_change():
+    a = fd.decision_rows([{"severity": "amber", "title": "B", "brief": "x", "machine": "M", "job": "j"}], [])
+    b = fd.decision_rows([{"severity": "amber", "title": "B", "brief": "x", "machine": "M", "job": "k"}], [])
+    assert fd.board_build(a) != fd.board_build(b) and fd.board_build(a) == fd.board_build(list(a))
+
+
+def test_a_torn_log_line_is_skipped_not_fatal(tmp_path):
+    p = tmp_path / "fixes.jsonl"
+    p.write_text('{"job": "a"}\n{"job": \n\n{"job": "b"}\n')
+    assert [r["job"] for r in fd.read_jsonl(p)] == ["a", "b"]
