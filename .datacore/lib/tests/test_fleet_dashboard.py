@@ -1,7 +1,10 @@
-"""fleet_dashboard: a value it could not read is never shown as green.
+"""fleet_dashboard: every red item says what to do, who owns it, and since when.
 
-The checks it summarises have reported "ok" over broken parts (2026-10-30), so
-the console must show a silent or crashing checker as a fault, not a pass.
+Owner, 2026-10-30, on the first version: "it doesn't really provide me
+actionable info". A fault is sorted into one of four piles -- needs you, an
+agent is repairing it, auto-repair is paused, or noise (a check that looks for
+work in a place it no longer runs) -- and a value it could not read is never
+shown as green.
 """
 import json
 
@@ -9,6 +12,67 @@ import fleet_dashboard as fd
 
 HOME = "/" + "home/someone/"  # built at runtime: the pre-commit path scan refuses literal home paths
 
+
+# -- plain language -------------------------------------------------------
+
+def test_a_stale_artifact_reads_as_days_without_output():
+    assert fd.plain_failure("~/.datacore/cos/backup.log: stale (age 125.60h exceeds max_age_hours=26)") \
+        == "no fresh output for 5 days"
+
+
+def test_a_missing_artifact_reads_as_never_written():
+    assert "never" in fd.plain_failure("~/x.log: does not exist ([Errno 2] No such file)")
+
+
+def test_a_regex_failure_quotes_what_the_job_actually_said():
+    d = "~/x.log: regex '^0 file' did not match -- last line: '2 file(s) differ'"
+    assert fd.plain_failure(d) == "reports: 2 file(s) differ"
+
+
+def test_job_names_become_plain_titles():
+    assert fd.job_title("box-phase1-cycle") == "Repo sync cycle"
+    assert fd.job_title("nightshift-github-triage-report") == "GitHub triage report"
+    assert fd.job_title("box-something-new") == "Something new"
+
+
+# -- who owns it ----------------------------------------------------------
+
+LOG = """job 'box-a' FAILED:
+  - x
+alert withheld: box-a was already escalated to the owner (box-a: 3 repair attempts have failed)
+job 'box-b' FAILED:
+delegated repair of box-b (autofix-box-b-20261030 -> tris); operator not alerted
+job 'box-c' FAILED:
+delegated repair of box-c (autofix-box-c-20261025 -> tris); operator not alerted
+alert withheld: box-c failed on the same artifact already counted (5x); nothing new to report
+job 'box-d' FAILED:
+repairs paused for box-d (repairs are paused: the last repair hit the model usage limit)
+job 'box-e' FAILED:
+alert withheld: box-e failed on the same artifact already counted (4x); nothing new to report
+"""
+
+
+def test_decisions_are_read_per_job():
+    d = fd.decisions(LOG, today="2026-10-30")
+    assert d["box-a"]["owner"] == "you" and "escalated" in d["box-a"]["note"]
+    assert d["box-b"] == {"owner": "agent", "agent": "tris", "note": "tris is repairing it (since 2026-10-30)"}
+    assert d["box-c"]["owner"] == "you" and "stuck" in d["box-c"]["note"]   # a 5-day-old repair is not "handled"
+    assert d["box-d"]["owner"] == "paused"
+    assert d["box-e"]["owner"] == "you" and "nobody" in d["box-e"]["note"]  # quiet is the dangerous case
+
+
+def test_a_check_for_work_that_is_not_scheduled_here_is_noise():
+    job = {"name": "box-reconcile-timers", "cmd": "~/Data/.datacore/lib/ops_reconcile_timers.sh >> x"}
+    here = "0 8 * * * python3 job_verify.py"
+    elsewhere = {"box host": "20 * * * * " + HOME + "Data/.datacore/lib/ops_reconcile_timers.sh"}
+    n = fd.noise_reason(job, here, elsewhere)
+    assert n == "runs on box host, checked here"
+    assert fd.noise_reason({"name": "box-backup", "cmd": "~/x/cos_backup.sh"}, here, {"box host": "# 30 2 * * * cos_backup.sh"}) \
+        == "not scheduled anywhere (retired?)"
+    assert fd.noise_reason(job, "20 * * * * ops_reconcile_timers.sh", {}) is None
+
+
+# -- vessels never show an unread value as green ----------------------------
 
 def test_unreachable_is_red():
     assert fd.assess("box", "host", {"_error": "timed out"})["status"] == "red"
@@ -19,10 +83,6 @@ def test_a_silent_checker_is_not_green():
     assert v["status"] == "amber" and "silent" in v["checker"]
 
 
-def test_no_checker_is_not_green():
-    assert fd.assess("dayshift", "host", {"head": "abc"})["status"] == "amber"
-
-
 def test_a_crashing_checker_is_red_even_when_its_last_line_looks_harmless():
     kv = {"jvage": "60", "jvlast": "job 'x': unknown machine 'dayshift'",
           "jverr": "error: invalid manifest " + HOME + "x/manifest.yaml: job"}
@@ -30,15 +90,56 @@ def test_a_crashing_checker_is_red_even_when_its_last_line_looks_harmless():
     assert v["status"] == "red" and "/home/" not in v["checker"]
 
 
-def test_faults_are_counted_and_home_paths_hidden():
-    jobs = {"jobs": {f"j{i}": {"failed_runs": i, "last_detail": HOME + ".datacore/x.log: stale"} for i in range(5)}}
-    v = fd.assess("box@pod", "pod", {"jvage": "60", "jvlast": "relay", "jv": json.dumps(jobs)})
-    assert v["status"] == "red" and len(v["faults"]) == 5 and v["faults"][0]["detail"].startswith("~/")
+# -- orders ---------------------------------------------------------------
+
+def test_a_failed_backup_is_the_first_order_and_carries_its_command():
+    box = {"bk_result": "exit-code", "bk_newest": "2026-10-26", "disk_pct": "91%",
+           "disk_size": str(150 * 1048576), "disk_used": str(137 * 1048576),
+           "bk_why": "SKIPPED, not enough disk: a copy would leave under 20% free"}
+    orders = fd.owner_orders(box, {"status": "ok", "tools": {}}, [], today="2026-10-30")
+    first = orders[0]
+    assert first["severity"] == "red" and first["since"] == "2026-10-26" and first["days"] == 4
+    assert "fleet-backup" in first["command"] and "GB" in first["why"]
 
 
-def test_a_failed_backup_raises_the_first_alert():
-    alerts, orders = fd.alerts_and_orders([], {"bk_result": "exit-code", "bk_newest": "2026-10-26",
-                                               "bk_why": "SKIPPED, not enough disk: would leave under 20% free",
-                                               "disk_pct": "91%"}, {"status": "ok", "tools": {}}, {})
-    assert alerts[0][0] == "red" and "2026-10-26" in alerts[0][1]
-    assert "20% free" in alerts[1][2]
+def test_a_job_fault_that_needs_you_becomes_an_order_with_a_claude_brief():
+    v = {"label": "WINSTON", "key": "box@pod", "faults": [
+        {"job": "box-phase1-cycle", "detail": "reports: converge failed", "owner": "you", "note": "nobody is repairing it",
+         "first": "2026-10-25", "bucket": "you"}]}
+    orders = fd.owner_orders({}, {"status": "ok", "tools": {}}, [v], today="2026-10-30")
+    o = [x for x in orders if "Repo sync cycle" in x["title"]][0]
+    assert o["days"] == 5 and "box-phase1-cycle" in o["brief"] and not o.get("command")
+
+
+def test_render_embeds_the_data_safely():
+    html = fd.render({"x": "</script><b>"})
+    assert "</script><b>" not in html and json.dumps({"x": "<\\/script><b>"})[:5] in html
+
+
+def test_a_repair_on_a_job_broken_for_days_is_not_handled():
+    dd = {"owner": "agent", "agent": "winston", "note": "winston is repairing it (since 2026-10-30)"}
+    s = fd.settle(dd, first="2026-09-30", today="2026-10-30")
+    assert s["owner"] == "you" and "2026-09-30" in s["note"]
+    assert fd.settle(dd, first="2026-10-29", today="2026-10-30")["owner"] == "agent"
+
+
+def test_the_full_detail_comes_from_the_log_not_the_truncated_history():
+    log = ("job 'box-knowledge-lint' FAILED:\n"
+           "  - ~/k.log: last line does not match 'x' -- last line: '2026-10-25T06:15:01 knowledge-lint: 7687 broken links (6 new)'\n")
+    assert fd.details(log)["box-knowledge-lint"].endswith("(6 new)'")
+    assert fd.plain_failure(fd.details(log)["box-knowledge-lint"]) == "reports: knowledge-lint: 7687 broken links (6 new)"
+
+
+def test_an_unreadable_quote_falls_back_to_plain_words():
+    assert fd.plain_failure("~/c.json: regex 'x' did not match -- last line: '}'") == "its output is not what the check expects"
+    assert fd.plain_failure("~/p.log: last line does not match 'preflight: 0 space") == "its output is not what the check expects"
+
+
+def test_orders_rank_by_what_is_lost_before_how_old_it_is():
+    def fault(job, first):
+        return {"job": job, "detail": "reports: x", "note": "nobody is repairing it", "first": first, "bucket": "you"}
+    v = {"label": "WINSTON", "key": "box@pod", "faults": [fault("box-knowledge-lint", "2026-09-30"),
+                                                         fault("box-phase1-cycle", "2026-10-28")]}
+    orders = fd.owner_orders({}, {"status": "ok", "tools": {}}, [v], today="2026-10-30")
+    assert [o["title"] for o in orders] == ["WINSTON: Repo sync cycle", "WINSTON: Knowledge link check"]
+    assert orders[0]["why"].startswith("Work on this machine is not syncing")
