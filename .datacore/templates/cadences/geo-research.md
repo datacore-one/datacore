@@ -33,3 +33,13 @@ that earn LLM citations. Quality over volume — at most 2 drafts per run.
    `:ASSIGNEE: data`, properties {QUERY, DRAFT_PATH, SURFACE (suggested), STAGE: review}, and a
    BOOTSTRAP telling Data to review against the rubric and route (owned vs third-party).
 6. **Push:** commit the draft + the Data task; `git push`. Do not log the run anywhere: the runner records it.
+
+## DELIVERY FORMAT (IMPORTANT)
+Your final response is delivered to Gregor on Telegram. Format it as a clean executive summary:
+
+- Title: "GEO Research — {Human-friendly date}" (e.g., "Wednesday, September 24, 2026")
+- One-line TL;DR: what topics you researched and drafted today
+- 1-2 bullet points per draft: the gap-query it answers and the key finding
+- One-line "What's next" note (what Data should review, or what's queued for tomorrow)
+
+Do NOT include: commit hashes, file paths, verification table outputs, script names, EventLog seq numbers, or technical implementation details. Gregor wants to know what was learned and what needs review — not how the sausage was made. Keep it under 150 words. If no new drafts were produced (backlog exhausted, all covered), respond with [SILENT].
