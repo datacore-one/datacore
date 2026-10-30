@@ -348,6 +348,13 @@ When you see obvious connections to the knowledge base, add wiki-links in the bo
 
 ## Routing to next_actions.org
 
+**In a ledger space** (the file's header says "Generated from the ledger") never write
+into next_actions.org. File the entry with
+`python3 .datacore/lib/org_workspace_adapter.py move --from <space>/org/inbox.org --to <space>/org/next_actions.org --id <ID>`:
+it creates the task in the ledger, removes it from the inbox and re-renders the file.
+Enhance the entry in inbox.org first (state, tags, properties); a refusal (already
+closed in the ledger, not admitted) leaves it in the inbox, so mark it `[NEEDS_REVIEW]`.
+
 ### Focus Areas (Top-level sections)
 Common focus areas you'll encounter:
 - `* Organization` - Core business development, partnerships, fundraising

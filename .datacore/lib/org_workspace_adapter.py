@@ -1115,9 +1115,13 @@ def cmd_move(args):
     from_path = Path(args.source).resolve()
     to_path = Path(args.target).resolve()
 
-    # A move is not a ledger event. Into a Phase 1 space's generated file it is
-    # a heading the ledger has never seen (the projection refuses the space);
-    # out of one it is a removal the projection puts back (a duplicate).
+    # Out of a Phase 1 space's generated file a move is a removal the projection
+    # puts back (a duplicate), so it stays refused. INTO one it is admission:
+    # the task is created in the ledger and the file re-rendered from it (owner,
+    # fleet console 2026-10-30) -- refused, the nightly inbox run could never
+    # file a single next action and left it in the inbox every night.
+    if _generated_target(to_path) and not _generated_target(from_path):
+        return _admit_to_generated(args, from_path, to_path)
     for end in (from_path, to_path):
         if _generated_target(end):
             return {"error": f"{end} is generated from the ledger (Phase 1, DIP-0046); a move "
@@ -1181,6 +1185,54 @@ def cmd_move(args):
         "to": str(to_path),
         "parent": parent_heading,
     }
+
+
+def _admit_to_generated(args, from_path, to_path):
+    """Move a capture into a generated next_actions.org through the ledger.
+
+    Created in the ledger when it is not there yet (a hand- or mail-written
+    capture), kept as it is when it is live (captured through `add`), refused
+    when the ledger already closed it. Only after the ledger holds it live does
+    it leave the source file, and the projection is re-rendered from the ledger,
+    as `_add_to_generated` does for a new task.
+    """
+    from org_space import ledger_space_for_file
+    from ledger_project_org import project_space
+    from ledger.hub import authoritative_state
+    ws = _load_ws(args.source)
+    node = ws.find_by_id(args.id) if getattr(args, "id", None) else None
+    if node is None and getattr(args, "title", None):
+        search = args.title.lower()
+        node = next((n for n in ws.all_nodes()
+                     if n.path == from_path and n.todo and search in n.heading.lower()), None)
+    if node is None or node.path != from_path:
+        return {"error": f"Task not found in {args.source}: '{args.id or args.title}'"}
+    tid = node.id()
+    if not tid:
+        return {"error": "the task has no :ID:; run ensure-ids on the source first"}
+    space = ledger_space_for_file(to_path)
+    item = authoritative_state(space).items.get(tid)
+    if item is not None and item.status in ("dismissed", "archived", "verified"):
+        return {"error": f"{tid} is already closed in the ledger ({item.status}); left in {from_path.name}"}
+    if item is None:
+        from ledger.genesis import task_payload, valid_time
+        created_date, rung = valid_time(node)
+        payload = task_payload(node, from_path.parent.parent.name, created_date, rung)
+        # Its place in the inbox is not its place in the projection: a generated
+        # file has no sections, so the task is top level unless a parent is named.
+        payload.update(parent=getattr(args, "parent_id", None), level=None, outline=[])
+        _ledger_emit(to_path, "item.create", payload)
+        item = authoritative_state(space).items.get(tid)
+        if item is None:
+            return {"error": f"the ledger did not admit {tid}; left in {from_path.name}"}
+    ws.remove_node(node)
+    ws.save(from_path)
+    line = project_space(space)
+    out = {"moved": True, "admitted": True, "id": tid, "heading": node.heading,
+           "from": str(from_path), "to": str(to_path)}
+    if line.startswith("REFUSED"):
+        out["projection"] = "deferred: " + line
+    return out
 
 
 # ---------------------------------------------------------------------------
