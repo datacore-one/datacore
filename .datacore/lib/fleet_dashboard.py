@@ -435,6 +435,54 @@ def decision_rows(orders: list, extra: list) -> list:
     return rows
 
 
+ANSWERS = Path.home() / ".datacore" / "state" / "decision-boards" / "answers"
+CREW_HOLD_DAYS = 3  # a crew handoff still failing after this comes back to the owner
+CREW_CHOICES = ("crew", "retire", "snooze")
+
+
+def saved_answers(folder: Path = ANSWERS) -> dict:
+    """{row id: {choice, note, at}} from every saved console answer; the newest save wins per row."""
+    out: dict = {}
+    saves = []
+    for p in Path(folder).glob("*fleet-console*.decisions.json"):
+        try:
+            d = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        if d.get("board") == BOARD:
+            saves.append(d)
+    for d in sorted(saves, key=lambda d: d.get("savedAt") or ""):
+        for rid, a in (d.get("decisions") or {}).items():
+            if isinstance(a, dict) and a.get("choice"):
+                out[rid] = {"choice": a["choice"], "note": a.get("note", ""), "at": d.get("savedAt") or ""}
+    return out
+
+
+def apply_saved(rows: list, saved: dict, now: str) -> tuple[list, list]:
+    """The owner decides once. A row handed to the crew leaves the board (for CREW_HOLD_DAYS while
+    its job still fails); a row the owner kept stays, already chosen. A choice the row no longer
+    offers is a stale answer and is ignored."""
+    left, crew = [], []
+    t_now = datetime.fromisoformat(now.replace("Z", "+00:00"))
+    for r in rows:
+        a = saved.get(r["id"])
+        if not a or a["choice"] not in [o["value"] for o in r["options"]]:
+            left.append(r)
+            continue
+        if a["choice"] in CREW_CHOICES:
+            try:
+                age = (t_now - datetime.fromisoformat(a["at"].replace("Z", "+00:00"))).days
+            except ValueError:
+                age = 0
+            if age < CREW_HOLD_DAYS:
+                crew.append(dict(r, choice=a["choice"], since=a["at"][:10]))
+                continue
+            left.append(dict(r, why=f"The crew had it {age} days and it still fails. " + (r.get("why") or "")))
+            continue
+        left.append(dict(r, decided=a["choice"]))
+    return left, crew
+
+
 def board_build(rows: list) -> str:
     import hashlib
     sig = [[r["id"], [o["value"] for o in r["options"]]] for r in rows]
@@ -584,6 +632,9 @@ def collect() -> dict:
     orders, crewlog = merge_fixes(owner_orders(box, dcd, vessels, today),
                                   [f for f in read_jsonl(FIXES) if (f.get("at") or "") >= since2])
     rows = decision_rows(orders, [d for d in read_jsonl(DECISIONS) if (d.get("at") or "") >= since2])
+    rows, crew_rows = apply_saved(rows, saved_answers(), now.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    handled += [{"label": r.get("machine") or "CREW", "title": r["title"],
+                 "note": f"crew has it since {r['since']} (your call: {r['choice']})", "first": r["since"]} for r in crew_rows]
     cur = _counts((raw.get("nightshift") or {}).get("_promises") or "")
     prev = _counts((raw.get("nightshift") or {}).get("_promises_prev") or "")
     size, used = float(box.get("disk_size") or 0), float(box.get("disk_used") or 0)
@@ -800,6 +851,7 @@ $("vitals").innerHTML=vit.map(([ic,k,v,c,t,m])=>`<div class="vital ${c}"${tipAtt
 const R=D.rows||[], KEY=`dboard:${D.board}:${D.build}`;
 let S={}; try{S=JSON.parse(localStorage.getItem(KEY)||"{}")||{}}catch(_){S={}}
 const persist=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch(_){}};
+R.forEach(r=>{if(r.decided&&!(S[r.id]&&S[r.id].choice))S[r.id]={choice:r.decided,note:(S[r.id]||{}).note||""}});
 const KIND={3:"WORK AT RISK",2:"DEGRADED",1:"HYGIENE"};
 const reds=R.filter(r=>r.severity==="red").length;
 $("cond").className="cond "+(reds?"red blink":R.length?"amber":"green");

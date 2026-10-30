@@ -188,3 +188,41 @@ def test_a_crew_question_about_a_job_replaces_its_generic_row_and_keeps_its_age(
               "suggested": "crew-task", "options": [{"value": "crew-task", "label": "Crew"}, {"value": "accept", "label": "Accept"}]}]
     rows = fd.decision_rows(orders, extra)
     assert [r["id"] for r in rows] == ["v2-conformance"] and rows[0]["days"] == 30
+
+
+# -- a saved answer is remembered: the owner decides once ------------------------
+
+def _row(rid, cmd=False):
+    return {"id": rid, "title": rid, "severity": "amber", "machine": "M", "job": rid, "command": "x" if cmd else None,
+            "options": fd.RUN_OPTIONS if cmd else fd.CREW_OPTIONS, "suggested": "run" if cmd else "crew"}
+
+
+def test_a_row_handed_to_the_crew_leaves_the_owners_decisions():
+    rows = [_row("a"), _row("b"), _row("c", cmd=True)]
+    saved = {"a": {"choice": "crew", "at": "2026-10-30T16:36:15Z"}, "c": {"choice": "run", "at": "2026-10-30T16:36:15Z"}}
+    left, crew = fd.apply_saved(rows, saved, now="2026-10-30T18:00:00Z")
+    assert [r["id"] for r in left] == ["b", "c"] and [c["id"] for c in crew] == ["a"]
+    assert left[1]["decided"] == "run" and "decided" not in left[0]   # your own command stays, already chosen
+
+
+def test_a_crew_handoff_comes_back_after_three_days_if_still_failing():
+    saved = {"a": {"choice": "crew", "at": "2026-10-26T10:00:00Z"}}
+    left, crew = fd.apply_saved([_row("a")], saved, now="2026-10-30T18:00:00Z")
+    assert [r["id"] for r in left] == ["a"] and not crew and "crew had it" in left[0]["why"]
+
+
+def test_a_saved_choice_no_longer_offered_is_ignored():
+    saved = {"a": {"choice": "investigate", "at": "2026-10-30T16:00:00Z"}}
+    left, crew = fd.apply_saved([_row("a")], saved, now="2026-10-30T18:00:00Z")
+    assert [r["id"] for r in left] == ["a"] and "decided" not in left[0] and not crew
+
+
+def test_the_newest_saved_answer_per_row_wins(tmp_path):
+    (tmp_path / "2026-10-30-fleet-console.decisions.json").write_text(json.dumps(
+        {"board": "fleet-console", "savedAt": "2026-10-30T16:16:00Z", "decisions": {"a": {"choice": "me"}}}))
+    (tmp_path / "2026-10-30-fleet-console.20261030T163615.decisions.json").write_text(json.dumps(
+        {"board": "fleet-console", "savedAt": "2026-10-30T16:36:15Z", "decisions": {"a": {"choice": "crew"}}}))
+    (tmp_path / "2026-10-30-other.decisions.json").write_text(json.dumps(
+        {"board": "other", "savedAt": "2026-10-30T17:00:00Z", "decisions": {"a": {"choice": "x"}}}))
+    s = fd.saved_answers(tmp_path)
+    assert s["a"]["choice"] == "crew" and s["a"]["at"] == "2026-10-30T16:36:15Z"
