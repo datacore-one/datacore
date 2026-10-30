@@ -247,7 +247,10 @@ fi
 # pulled took that copy as its task list and the hourly import refused the
 # space. Only additions are refused: files tracked before they were ignored
 # stay committable.
-_forced=$(git diff --cached --name-only --diff-filter=A -z | xargs -0 git ls-files --cached --ignored --exclude-standard -- 2>/dev/null || true)
+# -r: with nothing added, GNU xargs (the Linux agent hosts) otherwise runs
+# ls-files with no paths, which lists every tracked-but-ignored file and
+# refused every commit in such a space (2026-10-30; macOS xargs skips empty input).
+_forced=$(git diff --cached --name-only --diff-filter=A -z | xargs -0 -r git ls-files --cached --ignored --exclude-standard -- 2>/dev/null || true)
 if [ -n "$_forced" ]; then
   printf "\n\033[1;31mIGNORED FILE FORCE-ADDED\033[0m — .gitignore excludes these, so they are generated or local:\n"
   printf '%s\n' "$_forced" | sed 's/^/  /'

@@ -56,3 +56,48 @@ def test_an_ordinary_new_file_still_commits(tmp_path):
     _git(repo, "add", "README.md", env=env)
     r = _git(repo, "commit", "-q", "-m", "notes", env=env)
     assert r.returncode == 0, (r.stdout + r.stderr)[-400:]
+
+
+def _gnu_xargs(tmp_path):
+    """A PATH shim with GNU xargs' empty-input behaviour: without -r it runs the command once.
+
+    macOS xargs skips empty input, so the bug below never showed on the Mac.
+    """
+    bin_dir = tmp_path / "gnu-bin"
+    bin_dir.mkdir()
+    shim = bin_dir / "xargs"
+    shim.write_text(
+        "#!/bin/sh\n"
+        "input=$(cat | tr -d '\\000')\n"
+        "skip=0; args=''\n"
+        "for a in \"$@\"; do case \"$a\" in -r|--no-run-if-empty) skip=1;; esac; done\n"
+        "if [ -z \"$input\" ]; then\n"
+        "  [ $skip = 1 ] && exit 0\n"
+        "  while [ $# -gt 0 ]; do case \"$1\" in -*) shift;; *) break;; esac; done\n"
+        "  exec \"$@\"\n"
+        "fi\n"
+        "printf '%s' \"$input\" | tr '\\n' '\\000' | /usr/bin/xargs \"$@\"\n"
+    )
+    shim.chmod(0o755)
+    return bin_dir
+
+
+def test_a_tracked_then_ignored_file_does_not_block_an_unrelated_commit_on_gnu_xargs(tmp_path):
+    """2026-10-30: with no file added, GNU xargs ran `git ls-files --ignored` with no paths,
+    which lists every tracked-but-ignored file, so every commit in such a space was refused
+    on the Linux agent hosts (dayshift: 0-personal and 2-datacore sat out the overnight run,
+    cadence triage failed)."""
+    repo, env = _space(tmp_path)
+    (repo / "org" / "seen-issues.txt").write_text("state written by a job, tracked before it was ignored\n")
+    _git(repo, "add", "org/seen-issues.txt", env=env)
+    r = _git(repo, "commit", "-q", "-m", "job state", env=env)
+    assert r.returncode == 0, (r.stdout + r.stderr)[-400:]
+    (repo / ".gitignore").write_text("org/next_actions.org\norg/seen-issues.txt\n")
+    _git(repo, "add", ".gitignore", env=env)
+    assert _git(repo, "commit", "-q", "-m", "ignore job state", env=env).returncode == 0
+
+    env = {**env, "PATH": f"{_gnu_xargs(tmp_path)}{os.pathsep}{env['PATH']}"}
+    (repo / ".gitignore").write_text("org/next_actions.org\norg/seen-issues.txt\n# edited\n")
+    _git(repo, "add", ".gitignore", env=env)
+    r = _git(repo, "commit", "-q", "-m", "journal edit (nothing added)", env=env)
+    assert r.returncode == 0, (r.stdout + r.stderr)[-400:]
