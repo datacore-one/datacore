@@ -1024,6 +1024,24 @@ def check_transport(rep: Report) -> None:
 
 
 # ── The APPLICATION layer: the part that was never watched ─────────────────
+def hostname_fallback(actor: str, host: str) -> bool:
+    """Is `actor` the hostname standing in for an identity nobody declared?
+
+    The DIP-0044 trap is a FALLBACK: the registry lookup failed and the
+    hostname became the actor. Equal names alone are not it -- in the pods the
+    hostname IS the agent's name (Winston's pod is `winston`, the writer his
+    principal declares), and both identity checks failed on that correct
+    identity on 2026-10-30. A name a principal declares is not a fallback.
+    """
+    if actor != host or actor in ("mac",):
+        return False
+    try:
+        from actor_identity import principal_of
+        return principal_of(actor)[0] is None
+    except Exception:  # noqa: BLE001 -- no registry: cannot clear it, keep the old answer
+        return True
+
+
 def check_declared_identity(rep: Report) -> None:
     """Is this machine's ledger identity DECLARED, or still being guessed?
 
@@ -1050,7 +1068,7 @@ def check_declared_identity(rep: Report) -> None:
     actor = _actor()
     host = socket.gethostname().split(".")[0].lower()
     declared = bool(_identity().get("DATACORE_ACTOR"))
-    if actor == host and actor not in ("mac",):
+    if hostname_fallback(actor, host):
         rep.add("0044", "identity declared", False,
                 f"actor={actor} equals hostname — events filed under the wrong writer")
     elif declared:
@@ -1178,7 +1196,7 @@ def check_app(rep: Report) -> None:
         # An actor equal to the hostname is the DIP-0044 trap: it means the
         # registry lookup failed and events would be filed under the wrong
         # writer. Two of five machines were doing exactly that until caught.
-        ok = actor != host or actor in ("mac",)
+        ok = not hostname_fallback(actor, host)
         rep.add("app", "agents can attest actions", ok,
                 f"actor={actor}" + ("" if ok else f" — equals hostname; registry lookup failed"))
     except Exception as exc:  # noqa: BLE001
