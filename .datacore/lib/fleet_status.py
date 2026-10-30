@@ -118,7 +118,7 @@ echo "org_workspace=$("$PY3" -c 'import org_workspace as o;print(getattr(o,"__ve
 # hoping the login shell exports it.
 for c in datacore "$HOME/.hermes/node/bin/datacore" "$HOME/.local/bin/datacore" \
          /usr/local/bin/datacore /usr/bin/datacore; do
-  command -v "$c" >/dev/null 2>&1 && { echo "cli=$("$c" --version 2>&1 | head -1)"; break; }
+  command -v "$c" >/dev/null 2>&1 && { echo "cli=$("$c" --version 2>/dev/null | head -1)"; break; }
 done
 '''
 
@@ -150,12 +150,23 @@ def probe(name: str, cfg: dict) -> dict:
     if svc and ssh_user and svc != ssh_user:
         inner = f"sudo -u {svc} bash -lc 'echo {b64} | base64 -d | bash'"
 
-    if alias == "-" or name == "mac":
+    out = {"machine": name, "reachable": False}
+    # A pod, or an agent living as a user on a shared host, is reached the way
+    # fleet_reach resolves it. Treating ssh_alias '-' as "run it here" printed
+    # the Mac's versions under Tris's and Data's names (2026-10-30).
+    if access.get("k8s", {}).get("deployment") and alias == "-" or access.get("host_machine"):
+        import fleet_reach
+        try:
+            pl = fleet_reach.place(name, ROOT / ".datacore/registry/infrastructure.yaml")
+        except fleet_reach.Unreachable as exc:
+            out["error"] = str(exc)[:70]
+            return out
+        cmd = fleet_reach.argv(pl, f"echo {b64} | base64 -d | bash")
+    elif alias == "-" or name == "mac":
         cmd = ["bash", "-lc", inner]
     else:
         cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", alias, inner]
 
-    out = {"machine": name, "reachable": False}
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
     except (OSError, subprocess.TimeoutExpired) as exc:
