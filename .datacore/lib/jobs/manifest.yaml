@@ -971,8 +971,12 @@ jobs:
     cmd: "DATACORE_ROOT=~/Data /usr/bin/python3 ~/Data/.datacore/modules/ventures/lib/cadence_run.py cadence-firm-cos-weekly-plan >> ~/.datacore/state/cadence-run.log 2>&1"
     on_fail: telegram
     artifacts:
-      # The template's evidence: the plan page written into the owner's space.
-      - path: "~/Data/0-personal/notes/pages/weekly-plan-*.md"
+      # The template's evidence: the plan draft written into the owner's space.
+      # Draft only: the checker reads a glob's NEWEST match, and the Friday
+      # close-out page (weekly-plan-<week>-closeout.md, "# Friday Close-Out")
+      # and the Saturday skeleton share the prefix -- the close-out turned this
+      # red on a written plan from Friday to Sunday (2026-10-30).
+      - path: "~/Data/0-personal/notes/pages/weekly-plan-*-draft.md"
         check: regex
         # "Weekly Plan — 2026-W40" (the template) or "Weekly Plan: 2026-W40" (the
         # owner's own W40 run, 2026-09-28): the page is the evidence, not its dash.
