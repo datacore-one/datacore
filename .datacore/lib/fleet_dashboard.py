@@ -114,6 +114,42 @@ def cmd_roster(broken: str, good: str) -> str:
             f"&& {k} deploy/{good} -c cron -- sh -c 'cat {ROSTER}' | {k} -i deploy/{broken} -c cron -- sh -c 'cat > {ROSTER}'\"")
 
 
+# What you lose while a job is broken, and how much it matters (3 = work or
+# data at risk, 2 = something you rely on is degraded, 1 = hygiene).
+IMPACT = {
+    "phase1-cycle": (3, "Work on this machine is not syncing with the others."),
+    "cadence-liveness": (3, "Scheduled agent duties are not running on time."),
+    "inbox": (3, "Captured items are not being filed out of the inboxes."),
+    "ledger-invariants": (3, "The task ledger has inconsistencies that agents may act on."),
+    "ledger-ingest": (3, "New ledger events are not being ingested."),
+    "creds-sync": (2, "This machine may hold out-of-date credentials."),
+    "github-triage": (2, "The briefing's GitHub section is empty."),
+    "github-triage-report": (2, "The briefing's GitHub section is empty."),
+    "cos-briefing": (2, "The briefing cadence reports trouble (the briefing itself can still arrive)."),
+    "preflight": (2, "Some spaces sit out the overnight run."),
+    "v2-verify": (2, "This machine's own self-test is failing."),
+    "tomorrow": (2, "The evening review did not happen."),
+    "autofix-escalation": (1, "Repairs the agents gave up on are queued for you."),
+    "cos-cadence-triage": (1, "Chief-of-staff cadence triage has stopped."),
+    "audit-nightly-miles": (1, "The cross-model audit of agent work has stopped."),
+    "audit-calibration-miles": (1, "The cross-model audit calibration has stopped."),
+    "audit-calibration-tris": (1, "The cross-model audit calibration has stopped."),
+    "delegation-canary": (1, "Delegation between agents is not being exercised."),
+    "delegation-review": (1, "Delegated work is not being reviewed."),
+    "delegation-round": (1, "The weekly delegation round is not running."),
+    "knowledge-lint": (1, "Broken links in the knowledge base are not being tracked down."),
+    "deploy-drift": (1, "Files on the box differ from main."),
+    "id-churn": (1, "Task IDs keep changing in one space."),
+}
+
+
+def _key(name: str) -> str:
+    for p in PREFIXES:
+        if name.startswith(p):
+            return name[len(p):]
+    return name
+
+
 # -- plain language -----------------------------------------------------------
 
 def job_title(name: str) -> str:
