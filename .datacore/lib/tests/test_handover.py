@@ -14,6 +14,7 @@ import pytest
 from handover import (
     blocking_issues,
     split_left,
+    drop_left_repos,
     group_of,
     local_preview_path,
     new_entries,
@@ -292,3 +293,12 @@ def test_split_left_moves_only_the_named_repos_issues():
 
 def test_split_left_with_nothing_named_keeps_everything():
     assert split_left(["a: b"], [], Path("/d/Data")) == (["a: b"], [])
+
+
+def test_a_left_repo_is_not_asked_of_dayshift():
+    repos = [{"path": "2-datacore", "branch": "main", "sha": "a"},
+             {"path": "1-datafund/2-projects/website", "branch": "main", "sha": "b"}]
+    kept, left = drop_left_repos(repos, ["1-datafund/2-projects/website/"])
+    assert [r["path"] for r in kept] == ["2-datacore"]
+    assert left == ["1-datafund/2-projects/website"]
+    assert drop_left_repos(repos, []) == (repos, [])

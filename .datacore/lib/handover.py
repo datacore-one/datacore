@@ -208,6 +208,12 @@ def split_left(issues: list[str], leave: list[str], data_root: Path) -> tuple[li
     return [i for i in issues if i not in left], left
 
 
+def drop_left_repos(repos: list[dict], leave: list[str]) -> tuple[list[dict], list[str]]:
+    """(repos dayshift must have, repo paths left on the Mac): a left repo is not asked of dayshift."""
+    named = {r.strip("/") for r in leave}
+    return [r for r in repos if r["path"] not in named], [r["path"] for r in repos if r["path"] in named]
+
+
 def write_checkpoint(session_id: str, claude_pid: int, mode: str | None, topic: str,
                      inflight: list[dict], repos: list[dict], state_dir: Path,
                      argv: list[str] | None = None, cwd: str | None = None) -> Path:
@@ -427,12 +433,14 @@ def cmd_checkpoint(a: argparse.Namespace) -> None:
     if issues:
         _die(issues)
 
+    kept_repos, left_repos = drop_left_repos(list(repos.values()), a.leave or [])
+    left_on_mac += [f"{r}: not asked of dayshift" for r in left_repos]
     t = _transcript(sid)
-    path = write_checkpoint(sid, int(pid), a.mode, a.topic, inflight, list(repos.values()), STATE,
+    path = write_checkpoint(sid, int(pid), a.mode, a.topic, inflight, kept_repos, STATE,
                             argv, _session_cwd(t) if t else None)
     others = {p["repo"]: p["left_for_other_sessions"] for p in report.get("pushes", [])
               if p.get("left_for_other_sessions")}
-    print(json.dumps({"checkpoint": str(path), "repos": list(repos.values()),
+    print(json.dumps({"checkpoint": str(path), "repos": kept_repos,
                       "left_for_other_sessions": others,
                       "on_this_mac_only": unversioned_here,
                       "left_on_mac_by_owner": left_on_mac}, indent=2))
