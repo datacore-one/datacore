@@ -13,6 +13,7 @@ import pytest
 
 from handover import (
     blocking_issues,
+    split_left,
     group_of,
     local_preview_path,
     new_entries,
@@ -264,3 +265,30 @@ def test_permission_args_refuses_to_drop_flags_that_restrict_the_session():
     for argv in (["claude", "--settings", "x.json"], ["claude", "--disallowedTools=Bash"]):
         with pytest.raises(ValueError):
             permission_args(argv, None)
+
+
+# --- the owner names repos that stay on the Mac (owner, 2026-10-31: "i'm not doing a
+# handover for Jimo but for this datacore session") ----------------------------------
+
+def test_a_committed_and_pushed_file_in_a_module_repo_does_not_block():
+    data = Path("/d/Data")
+    m = Path("/d/Data/.datacore/modules/m")
+    assert unversioned_blocks(m, data, ignored=False, pushed=True) is False
+    assert unversioned_blocks(m, data, ignored=False, pushed=False) is True
+
+
+def test_split_left_moves_only_the_named_repos_issues():
+    data = Path("/d/Data")
+    issues = [
+        "2-datacore/2-projects/app: 1 commit(s) not pushed — push them, then rerun",
+        "/d/Data/.datacore/modules/trading/lib/x.py: in /d/Data/.datacore/modules/trading, a repo finalize does not push",
+        "/d/Data/.datacore/modules/trading-extra/y.py: in /d/Data/.datacore/modules/trading-extra, a repo finalize does not push",
+        "2-datacore: 1 commit(s) not pushed — push them, then rerun",
+    ]
+    kept, left = split_left(issues, [".datacore/modules/trading", "2-datacore/2-projects/app"], data)
+    assert left == issues[:2]
+    assert kept == issues[2:]          # a sibling with a longer name, and a repo not named, still block
+
+
+def test_split_left_with_nothing_named_keeps_everything():
+    assert split_left(["a: b"], [], Path("/d/Data")) == (["a: b"], [])

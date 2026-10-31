@@ -60,6 +60,12 @@ no new terminal window, no subprocess that does it for you.
    repos under `2-projects/` are never committed by it: commit and push those
    (or open the PR) first, then rerun.
 
+   A long session may have touched repos that have nothing to do with the work
+   being handed over. When the owner says such a repo stays on the Mac, rerun
+   with `--leave <repo path under Data>` (repeatable): its unpushed work is
+   listed under `left_on_mac_by_owner`, not blocking. Only a repo the owner has
+   named — never one you decide is irrelevant.
+
 5. **Hand over.** Tell the owner, in this order:
    - what was stopped and will be relaunched on dayshift;
    - anything it reported as unversioned (exists on the Mac only);

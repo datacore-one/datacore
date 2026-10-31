@@ -183,14 +183,29 @@ def blocking_issues(report: dict, data_root: Path) -> list[str]:
     return issues
 
 
-def unversioned_blocks(toplevel: Path | None, data_root: Path, ignored: bool) -> bool:
+def unversioned_blocks(toplevel: Path | None, data_root: Path, ignored: bool, pushed: bool = False) -> bool:
     """Whether an unversioned session file would be missing on dayshift.
 
     Only when a nested repo (a module or DIP repo, which finalize does not push)
-    tracks it. A file ignored by git, behind the .claude symlink, deleted, or
-    outside every repo is something no commit can carry: reported, not blocking.
+    tracks it and it is not already committed and pushed there. A file ignored by
+    git, behind the .claude symlink, deleted, or outside every repo is something no
+    commit can carry: reported, not blocking.
     """
-    return toplevel is not None and toplevel != data_root and not ignored
+    return toplevel is not None and toplevel != data_root and not ignored and not pushed
+
+
+def split_left(issues: list[str], leave: list[str], data_root: Path) -> tuple[list[str], list[str]]:
+    """(still blocking, left on the Mac): the issues of the repos the owner named with --leave.
+
+    An issue names its repo either relative to Data ("2-datacore/2-projects/app: ...") or
+    by absolute file path; a named repo matches only itself, never a sibling with a longer name.
+    """
+    heads = []
+    for r in leave:
+        r = r.strip("/")
+        heads += [f"{r}:", f"{r}/", f"{data_root / r}:", f"{data_root / r}/"]
+    left = [i for i in issues if any(i.startswith(h) for h in heads)]
+    return [i for i in issues if i not in left], left
 
 
 def write_checkpoint(session_id: str, claude_pid: int, mode: str | None, topic: str,
@@ -401,10 +416,14 @@ def cmd_checkpoint(a: argparse.Namespace) -> None:
         d = _existing_parent(Path(f))
         top = _git(d, "rev-parse", "--show-toplevel")
         ignored = _run(["git", "check-ignore", "-q", "--", f], cwd=d).returncode == 0 if top else False
-        if unversioned_blocks(Path(top) if top else None, DATA, ignored):
+        pushed = bool(top) and not _git(Path(top), "status", "--porcelain", "--", f) \
+            and _run(["git", "rev-parse", "@{u}"], cwd=top).returncode == 0 \
+            and not _git(Path(top), "log", "--format=%h", "@{u}..HEAD", "--", f)
+        if unversioned_blocks(Path(top) if top else None, DATA, ignored, pushed):
             issues.append(f"{f}: in {top}, a repo finalize does not push — commit and push it there, then rerun")
         else:
             unversioned_here.append(f)
+    issues, left_on_mac = split_left(issues, a.leave or [], DATA)
     if issues:
         _die(issues)
 
@@ -415,7 +434,8 @@ def cmd_checkpoint(a: argparse.Namespace) -> None:
               if p.get("left_for_other_sessions")}
     print(json.dumps({"checkpoint": str(path), "repos": list(repos.values()),
                       "left_for_other_sessions": others,
-                      "on_this_mac_only": unversioned_here}, indent=2))
+                      "on_this_mac_only": unversioned_here,
+                      "left_on_mac_by_owner": left_on_mac}, indent=2))
     print(f"\nExit Claude, then run:\n\n    handover {sid}\n")
 
 
@@ -679,6 +699,9 @@ def main() -> None:
     c.add_argument("--topic", required=True)
     c.add_argument("--mode", help="the session's current permission mode, e.g. auto")
     c.add_argument("--inflight", help="JSON file: [{what, progress, relaunch}]")
+    c.add_argument("--leave", action="append", metavar="REPO",
+                   help="a repo (path under Data) the owner says stays on the Mac: its unpushed work "
+                        "is reported, not blocking; only when the owner names it")
     g = sub.add_parser("go", help="owner, after exiting Claude: move the session to dayshift")
     g.add_argument("session_id")
     m = sub.add_parser("mac-open", help="on dayshift: show a file to the owner on the Mac")
