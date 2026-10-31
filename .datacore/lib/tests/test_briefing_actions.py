@@ -51,7 +51,7 @@ def _grant(space_dir, approver, item_id, title):
     """Append an `approval.grant` for `item_id`, signed by `approver`, via
     a plain EventLog -- mirrors how ledger.policy tests seed grants.
     """
-    grant_log = EventLog(space_dir, approver, sign=False)
+    grant_log = EventLog(space_dir, approver, sign=True)
     from ledger.policy import approval_payload_hash
     return grant_log.append("approval.grant", {"item": item_id, "payload_hash": approval_payload_hash({"id": item_id, "title": title, "effects": ["email.send"]})})
 

@@ -464,11 +464,14 @@ class EventLog:
         # The switch lives with the identity (DIP-0044 §6): a cron or a unit
         # rarely exports it, and on 2026-09-06 three hosts had declared signing
         # in identity.env while every event they appended stayed unsigned.
+        # Signing is always on (owner, 2026-10-31; DIP-0034 amendment): only an
+        # explicit "0", in the environment or identity.env, turns it off, and a
+        # hub space refuses an unsigned writer regardless (append, below).
         if sign is None:
             env = os.environ.get("DATACORE_LEDGER_SIGN")
             if env is None:
                 env = _identity_file_value("DATACORE_LEDGER_SIGN")
-            sign = env == "1"
+            sign = env != "0"
         self.sign = sign
         # VALIDATE THE ACTOR NAME. It becomes a filename, so "../x" writes
         # <space>/x.jsonl — inside the space, but OUTSIDE events/, where

@@ -140,10 +140,11 @@ def test_read_events_flags_a_malformed_middle_line_and_withholds_the_tail(tmp_pa
 
 
 def test_default_no_signing_touches_no_key_material(tmp_path, monkeypatch):
-    """Default EventLog (no `sign=` arg, no env var) must not sign events and
-    must not touch key material at all -- no ensure_keypair call, so neither
-    the keys_dir nor the registry file should ever be created."""
-    monkeypatch.delenv("DATACORE_LEDGER_SIGN", raising=False)
+    """With signing turned off (DATACORE_LEDGER_SIGN=0; signing is on by default
+    since 2026-10-31), EventLog must not sign events and must not touch key
+    material at all -- no ensure_keypair call, so neither the keys_dir nor the
+    registry file should ever be created."""
+    monkeypatch.setenv("DATACORE_LEDGER_SIGN", "0")
     keys_dir = tmp_path / "keys"
     registry_path = tmp_path / "registry.yaml"
 
@@ -198,6 +199,7 @@ def test_signed_and_unsigned_events_coexist_in_one_file(tmp_path, monkeypatch):
         "mac",
         keys_dir=tmp_path / "keys",
         registry_path=tmp_path / "registry.yaml",
+        sign=False,
     )
     e2 = unsigned_log.append("item.claim", {"id": "t1"})
 
